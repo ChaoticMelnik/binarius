@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { decimalScale, DEMO_STAKE_MIN_SCALE, DemoStakeRefusal } from './demo-stake';
+import { StakeRefusal, stakeScale } from './stake';
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import {
   createTradeIntentRequestSchema,
@@ -84,21 +84,18 @@ export function stakeSettingsFor(minTradeAmount: DecimalString): {
   return { baseStake: decimalStringSchema.parse(canonical), stakeScale: fraction.length };
 }
 
-// The session's stake from the user's saved demo stake (#297). NULL keeps stakeSettingsFor's
-// answer exactly; a saved stake also widens the scale by its own fraction length, so a stake
-// saved under a finer minimum stays on the grid that settings v1 and the sizer use.
-export function demoStakeSettings(
-  demoStake: DecimalString | null,
+// The session's stake from the user's saved stake of the session's mode (#297, #326). NULL keeps
+// stakeSettingsFor's answer exactly; a saved stake takes the minimum's grid (stakeScale). The
+// caller ran checkStake against the same minimum first (the start route's step 6a before 6), so
+// a saved stake never has more fraction digits than that grid.
+export function stakeSettingsFrom(
+  stake: DecimalString | null,
   minTradeAmount: DecimalString,
 ): { baseStake: DecimalString; stakeScale: number } {
-  if (demoStake === null) return stakeSettingsFor(minTradeAmount);
+  if (stake === null) return stakeSettingsFor(minTradeAmount);
   return {
-    baseStake: decimalStringSchema.parse(normalizeDecimal(demoStake)),
-    stakeScale: Math.max(
-      DEMO_STAKE_MIN_SCALE,
-      decimalScale(minTradeAmount),
-      decimalScale(demoStake),
-    ),
+    baseStake: decimalStringSchema.parse(normalizeDecimal(stake)),
+    stakeScale: stakeScale(minTradeAmount),
   };
 }
 
@@ -151,10 +148,10 @@ export const TradingSessionErrorCode = {
   CatalogUnavailable: 'catalog_unavailable',
   NotFound: 'not_found',
   SessionNotActive: 'session_not_active',
-  // the session's stake against the account's snapshot (#297, checkDemoStake)
-  StakePrecision: DemoStakeRefusal.Precision,
-  StakeBelowMinimum: DemoStakeRefusal.BelowMinimum,
-  InsufficientDemoBalance: DemoStakeRefusal.AboveAvailable,
+  // the session's stake against the account's snapshot (#297, checkStake)
+  StakePrecision: StakeRefusal.Precision,
+  StakeBelowMinimum: StakeRefusal.BelowMinimum,
+  InsufficientBalance: StakeRefusal.AboveAvailable,
 } as const;
 export type TradingSessionErrorCode =
   (typeof TradingSessionErrorCode)[keyof typeof TradingSessionErrorCode];

@@ -42,9 +42,11 @@ export const users = pgTable(
       .$type<NotificationLevel>()
       .notNull()
       .default(NotificationLevel.All),
-    // The user's demo stake (#297): NULL = the broker's minimum at each trade. Written only by
-    // setDemoStake; its bounds are checked by checkDemoStake (@binarius/shared), not here.
+    // The user's stake of each mode (#297 demo, #326 real): NULL = the broker's minimum at each
+    // trade. Written only by setStake; the bounds are checked by checkStake (@binarius/shared)
+    // against that mode's balance, not here.
     demoStake: money('demo_stake'),
+    realStake: money('real_stake'),
     // The mode of the user's next single trade (#121, docs/trading-mode.md). Written only by
     // setTradingMode; a real intent is created only while it is `real` (createInTransaction's
     // reserve UPDATE), a session through the route only while it is `demo`
@@ -75,6 +77,7 @@ export const users = pgTable(
       sql`(${t.acquisitionSource} is null) = (${t.acquiredAt} is null)`,
     ),
     nullablePositiveNumeric('users_demo_stake_check', t.demoStake),
+    nullablePositiveNumeric('users_real_stake_check', t.realStake),
     check('users_token_balance_check', sql`${t.tokenBalance} >= 0`),
     check(
       'users_token_reserved_check',

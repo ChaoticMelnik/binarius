@@ -20,7 +20,7 @@ import {
 import { internalBearerAuth } from '../auth/internal';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import { registerTradingAccess, type TradingAccessDeps } from './access';
-import { registerDemoStake } from './demo-stake';
+import { registerStake } from './stake';
 import { registerTradingMode } from './trading-mode';
 
 export interface TradingRoutesDeps {
@@ -68,7 +68,7 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
   registerTradingAccess(app, { db, balance });
-  registerDemoStake(app, { db });
+  registerStake(app, { db });
   registerTradingMode(app, { db, demoOnly });
 
   app.post('/trading/intents', async (request, reply) => {
@@ -78,9 +78,9 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
     }
     let result;
     try {
-      // the only caller that asks for the demo-stake bounds (#297, Rule 29)
+      // the only caller that asks for the stake bounds, in either mode (#297, #326, Rule 29)
       result = await createTradeIntent(db, parsed.data, undefined, {
-        checkDemoStake: true,
+        checkStake: true,
         demoOnly,
       });
     } catch (error) {

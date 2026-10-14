@@ -552,6 +552,8 @@ export const userPage = (
         <dd>${TEXTS.notificationLevel[user.notificationLevel]}</dd>
         <dt>${TEXTS.fieldDemoStake}</dt>
         <dd>${user.demoStake ?? TEXTS.demoStakeDefault}</dd>
+        <dt>${TEXTS.fieldRealStake}</dt>
+        <dd>${user.realStake ?? TEXTS.demoStakeDefault}</dd>
         <dt>${TEXTS.columnUserCreatedAt}</dt>
         <dd>${when(user.createdAt)}</dd>
         <dt>${TEXTS.columnUpdatedAt}</dt>

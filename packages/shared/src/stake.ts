@@ -6,26 +6,28 @@ import {
   type DecimalString,
 } from './money';
 
-// The user's demo stake (#297, users.demo_stake): its scale, its bounds against the account's
-// balance snapshot and the picker's presets. The one source for the backend (save, intents,
-// sessions) and the bot (presets, input). Arithmetic is bigint at scale 8, never a JS number
-// (Rule 2). This module imports money.ts only: trading.ts and trading-session.ts spell their
-// error codes from DemoStakeRefusal.
+// The user's stake in either mode (#297 users.demo_stake, #326 users.real_stake): its scale, its
+// bounds against the account's balance snapshot and the picker's presets. The module knows no
+// mode: each caller puts that mode's balance into `available`. The one source for the backend
+// (save, intents, sessions) and the bot (presets, input). Arithmetic is bigint at scale 8, never
+// a JS number (Rule 2). This module imports money.ts only: trading.ts and trading-session.ts
+// spell their error codes from StakeRefusal.
 
 // cents are always allowed, whatever the broker's minimum looks like
-export const DEMO_STAKE_MIN_SCALE = 2;
-export const DEMO_STAKE_PRESET_MULTIPLIERS = [1, 2, 5, 10] as const;
+export const STAKE_MIN_SCALE = 2;
+export const STAKE_PRESET_MULTIPLIERS = [1, 2, 5, 10] as const;
 
-export const DemoStakeRefusal = {
+export const StakeRefusal = {
   Precision: 'stake_precision',
   BelowMinimum: 'stake_below_minimum',
-  AboveAvailable: 'insufficient_demo_balance',
+  AboveAvailable: 'insufficient_balance',
 } as const;
-export type DemoStakeRefusal = (typeof DemoStakeRefusal)[keyof typeof DemoStakeRefusal];
+export type StakeRefusal = (typeof StakeRefusal)[keyof typeof StakeRefusal];
 
-export interface DemoStakeLimits {
+// available: the balance of the stake's mode (demo.available or real.available)
+export interface StakeLimits {
   minTradeAmount: DecimalString;
-  demoAvailable: DecimalString;
+  available: DecimalString;
 }
 
 const UNIT_SCALE = 10n ** BigInt(NUMERIC_FRACTION_DIGITS);
@@ -48,22 +50,20 @@ function fromUnits(value: bigint): DecimalString {
   return decimalStringSchema.parse(normalizeDecimal(`${integer}.${fraction}`));
 }
 
-// max(DEMO_STAKE_MIN_SCALE, fraction digits of the canonical minTradeAmount)
-export const demoStakeScale = (minTradeAmount: DecimalString): number =>
-  Math.max(DEMO_STAKE_MIN_SCALE, decimalScale(minTradeAmount));
+// max(STAKE_MIN_SCALE, fraction digits of the canonical minTradeAmount)
+export const stakeScale = (minTradeAmount: DecimalString): number =>
+  Math.max(STAKE_MIN_SCALE, decimalScale(minTradeAmount));
 
-// Fixed order: precision, then >= the minimum, then <= the demo balance; null = within bounds.
+// Fixed order: precision, then >= the minimum, then <= the available balance; null = within
+// bounds.
 // The precision check runs first, so units() never sees more than 8 fraction digits.
-export function checkDemoStake(
-  amount: DecimalString,
-  limits: DemoStakeLimits,
-): DemoStakeRefusal | null {
-  if (decimalScale(amount) > demoStakeScale(limits.minTradeAmount)) {
-    return DemoStakeRefusal.Precision;
+export function checkStake(amount: DecimalString, limits: StakeLimits): StakeRefusal | null {
+  if (decimalScale(amount) > stakeScale(limits.minTradeAmount)) {
+    return StakeRefusal.Precision;
   }
   const value = units(amount);
-  if (value < units(limits.minTradeAmount)) return DemoStakeRefusal.BelowMinimum;
-  if (value > units(limits.demoAvailable)) return DemoStakeRefusal.AboveAvailable;
+  if (value < units(limits.minTradeAmount)) return StakeRefusal.BelowMinimum;
+  if (value > units(limits.available)) return StakeRefusal.AboveAvailable;
   return null;
 }
 
@@ -73,12 +73,12 @@ export const decimalLessThan = (a: DecimalString, b: DecimalString): boolean => 
 
 const MAX_UNITS = 10n ** BigInt(NUMERIC_INTEGER_DIGITS) * UNIT_SCALE;
 
-// min × k for every multiplier, canonical, only those positive, <= demoAvailable and inside
+// min × k for every multiplier, canonical, only those positive, <= available and inside
 // numeric(20,8); a minimum of 0 offers none
-export function demoStakePresets(limits: DemoStakeLimits): DecimalString[] {
+export function stakePresets(limits: StakeLimits): DecimalString[] {
   const min = units(limits.minTradeAmount);
-  const available = units(limits.demoAvailable);
-  return DEMO_STAKE_PRESET_MULTIPLIERS.map((k) => min * BigInt(k))
+  const available = units(limits.available);
+  return STAKE_PRESET_MULTIPLIERS.map((k) => min * BigInt(k))
     .filter((value) => value > 0n && value <= available && value < MAX_UNITS)
     .map(fromUnits);
 }
@@ -88,8 +88,8 @@ const INPUT_PATTERN = new RegExp(
 );
 
 // What the user typed: one ',' or '.' as the separator, digits only, > 0, canonical. The scale
-// and the bounds are the backend's (checkDemoStake), so «1.234» parses here.
-export function parseDemoStakeInput(text: string): DecimalString | undefined {
+// and the bounds are the backend's (checkStake), so «1.234» parses here.
+export function parseStakeInput(text: string): DecimalString | undefined {
   const trimmed = text.trim();
   const separators = trimmed.match(/[.,]/g)?.length ?? 0;
   if (separators > 1) return undefined;

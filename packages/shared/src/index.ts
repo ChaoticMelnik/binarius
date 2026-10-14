@@ -30,7 +30,7 @@ export * from './catalog';
 export * from './signal';
 export * from './trading-session';
 export * from './trading-switch';
-export * from './demo-stake';
+export * from './stake';
 export * from './bot-text-template';
 export * from './bot-text-format';
 export * from './bot-text-vars';

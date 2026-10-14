@@ -39,7 +39,7 @@ describe('the command menu', () => {
       stopSession: () => Promise.reject(new Error('not used here')),
       claimSessionSummary: () => Promise.reject(new Error('not used here')),
       stopSessions: () => Promise.reject(new Error('not used here')),
-      setDemoStake: () => Promise.reject(new Error('not used here')),
+      setStake: () => Promise.reject(new Error('not used here')),
       readBotTexts: () => Promise.reject(new Error('not used here')),
     };
     const bot = createBot({

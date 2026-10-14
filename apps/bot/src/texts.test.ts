@@ -107,6 +107,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   stake: null,
   minStake: d('1'),
   demoAvailable: d('9990'),
+  realAvailable: d('100'),
   age: 75,
   amount: text,
   count: text,
@@ -221,7 +222,7 @@ describe('texts', () => {
     );
 
     it('names the selected level in bold', () => {
-      expect(settingsText(NotificationLevel.Reduced, null, 'Ada').value).toContain(
+      expect(settingsText(NotificationLevel.Reduced, null, null, 'Ada').value).toContain(
         'Сейчас выбрано: <b>🔕 Реже</b>',
       );
     });
@@ -561,6 +562,7 @@ describe('the variables of the texts', () => {
         brokerUnavailable:
           broker === null ? BrokerBalanceUnavailableReason.BrokerUnavailable : null,
         demoStake: null,
+        realStake: null,
       }),
     );
   const LINE = '{firstName}, у тебя {tokens} токенов и {demoBalance} на демо';
@@ -589,9 +591,25 @@ describe('the variables of the texts', () => {
   it('B5 prints the name, the level and the stake, or the minimum, in /settings', () => {
     withTexts({ settings: '{firstName}: {level}, ставка {stake}' });
     const text = (stake: DecimalString | null) =>
-      plainTextOf(settingsText(NotificationLevel.Off, stake, 'Ада')).split('\n')[0];
+      plainTextOf(settingsText(NotificationLevel.Off, stake, null, 'Ада')).split('\n')[0];
     expect(text(decimalStringSchema.parse('5'))).toBe('Ада: ❌ Выключить, ставка $5.00');
     expect(text(null)).toBe('Ада: ❌ Выключить, ставка минимальная ставка брокера');
+  });
+
+  // #326: each stake line takes its own mode's stake as {stake}
+  it('B5b gives each /settings stake line its own mode’s stake', () => {
+    const lines = plainTextOf(settingsText(NotificationLevel.Off, d('2.5'), d('7'), 'Ада')).split(
+      '\n',
+    );
+    expect(lines.slice(-2)).toEqual([
+      '💵 Сумма демо-сделки: $2.50',
+      '💼 Сумма реальной сделки: $7.00',
+    ]);
+    expect(
+      plainTextOf(settingsText(NotificationLevel.Off, d('2.5'), null, 'Ада'))
+        .split('\n')
+        .at(-1),
+    ).toBe('💼 Сумма реальной сделки: минимальная ставка брокера');
   });
 
   it('B3 keeps the default card free of the new variables', () => {
@@ -618,6 +636,7 @@ describe('the status card', () => {
       broker: ACCESS_VIEW.broker,
       brokerUnavailable: ACCESS_VIEW.brokerUnavailable,
       demoStake: null,
+      realStake: null,
       ...patch,
     });
   const noSnapshot = (reason: BrokerBalanceUnavailableReason) =>
@@ -1431,7 +1450,8 @@ describe('the facades over the catalog', () => {
         'sessionShareButton',
         'sessionStopButton',
         'settingsCommand',
-        'settingsStakeButton',
+        'settingsStakeDemoButton',
+        'settingsStakeRealButton',
         'stakeBackAnalysisButton',
         'stakeBackButton',
         'stakeBackSettingsButton',
@@ -1454,15 +1474,16 @@ describe('the facades over the catalog', () => {
 describe('the text source', () => {
   afterEach(() => setBotTextSource(defaultBotTextSource));
 
-  // Plan Update 4 (Minor 3): `{stake}` is the amount a trade stakes in the user's mode
-  it('gives the card {stake} as the minimum in real mode and the demo stake in demo', () => {
+  // Plan Update 4 (Minor 3): `{stake}` is the amount a trade stakes in the user's mode; #326: the
+  // saved real stake in real mode, the minimum without one
+  it('gives the card {stake} as the real stake in real mode and the demo stake in demo', () => {
     setBotTextSource({
       sourceOf: (key) =>
         key === 'statusHint' || key === 'statusHintReal'
           ? 'ставка {stake}'
           : defaultBotTextSource.sourceOf(key),
     });
-    const card = (mode: TradeMode) =>
+    const card = (mode: TradeMode, realStake: DecimalString | null = null) =>
       plainTextOf(
         statusCard({
           firstName: 'Ада',
@@ -1471,10 +1492,12 @@ describe('the text source', () => {
           broker: brokerBalance({ minTradeAmount: d('1') }),
           brokerUnavailable: null,
           demoStake: d('2.5'),
+          realStake,
         }),
       );
     expect(card(TradeMode.Real)).toMatch(/ставка \$1\.00$/);
-    expect(card(TradeMode.Demo)).toMatch(/ставка \$2\.50$/);
+    expect(card(TradeMode.Real, d('7'))).toMatch(/ставка \$7\.00$/);
+    expect(card(TradeMode.Demo, d('7'))).toMatch(/ставка \$2\.50$/);
   });
 
   it('shows a live status line from the source in place', () => {

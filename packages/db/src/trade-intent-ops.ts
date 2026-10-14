@@ -10,7 +10,7 @@ import {
   TradeMode,
   TradingSessionStatus,
   canTransition,
-  checkDemoStake,
+  checkStake,
   isClosedTrade,
   normalizeDecimal,
   type BrokerTrade,
@@ -80,10 +80,11 @@ export interface IntentSession {
 }
 
 export interface CreateTradeIntentOptions {
-  // Only POST /trading/intents passes it (#297, stated): the demo stake's bounds against the
-  // account's stored snapshot. The orchestrator's session intents rely on the sizer (Rule 23); a
-  // future non-session creator of demo intents must pass it too.
-  checkDemoStake?: true;
+  // Only POST /trading/intents passes it (#297, #326, stated): the stake's bounds against the
+  // account's stored snapshot, by the intent's mode (demo_available or real_available). The
+  // orchestrator's session intents rely on the sizer (Rule 23); a future non-session creator of
+  // intents must pass it too.
+  checkStake?: true;
   // the process runs DEMO_ONLY (#396): a real intent is refused. Both creators pass it
   // (POST /trading/intents, createSessionIntent); absent is off.
   demoOnly?: boolean;
@@ -154,16 +155,20 @@ async function createInTransaction(
   // back; before the reserve, so a refusal writes nothing. A plain read with no row lock: the
   // snapshot's writers are not in the lock order (Rule 5), and a stored snapshot of any age serves
   // (#297)
-  if (input.mode === TradeMode.Demo && options?.checkDemoStake === true) {
+  if (options?.checkStake === true) {
     const [snapshot] = await tx
       .select({
         minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
         demoAvailable: brokerBalanceSnapshots.demoAvailable,
+        realAvailable: brokerBalanceSnapshots.realAvailable,
       })
       .from(brokerBalanceSnapshots)
       .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId));
     if (snapshot === undefined) throw new TradeIntentError(TradeIntentErrorCode.BalanceUnavailable);
-    const refusal = checkDemoStake(input.amount, snapshot);
+    const refusal = checkStake(input.amount, {
+      minTradeAmount: snapshot.minTradeAmount,
+      available: input.mode === TradeMode.Real ? snapshot.realAvailable : snapshot.demoAvailable,
+    });
     if (refusal !== null) throw new TradeIntentError(refusal);
   }
 

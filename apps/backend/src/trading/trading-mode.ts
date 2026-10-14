@@ -12,7 +12,7 @@ import { readBalanceSnapshot, resolveBalanceAccount, setTradingMode, type Db } f
 // directions. Back to demo is never refused but for a missing user. Real is refused on a
 // DEMO_ONLY process before any read, then needs the single active account's stored snapshot of
 // any age (no broker call) with real.available at least the broker's minimum. Read, then write,
-// not atomic by choice, as POST /trading/demo-stake: the bound is a UX gate, and the broker refuses
+// not atomic by choice, as POST /trading/stake: the bound is a UX gate, and the broker refuses
 // a real order above the balance. users.status and the kill-switch are not read: a blocked user's
 // trades and a closed switch are refused at creation. Registered inside tradingRoutes, whose
 // bearer hook covers it.

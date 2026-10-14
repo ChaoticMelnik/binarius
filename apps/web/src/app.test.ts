@@ -1009,6 +1009,9 @@ describe('the read pages (#107)', () => {
 
     expect(calls.user).toEqual([[TOKEN, SAMPLE_USER_ID]]);
     expect(response.body).toContain(TEXTS.demoStakeDefault);
+    expect(response.body).toContain(
+      `<dt>${TEXTS.fieldRealStake}</dt>\n        <dd>${TEXTS.demoStakeDefault}</dd>`,
+    );
     expect(response.body).toContain('broker-7');
     expect(response.body).toContain(`<dd>${SAMPLE_USER.user.tokens.available}</dd>`);
     // the shared accounts table (#342): the account id first, no owner column on the card; the

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { AccountHaltReason } from '@binarius/shared';
+import { AccountHaltReason, TradeMode, type DecimalString } from '@binarius/shared';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   closeTradingSwitch,
@@ -8,7 +8,14 @@ import {
   seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { brokerAccounts, findTradeIntent, openTrading, tradeIntents, users } from '@binarius/db';
+import {
+  brokerAccounts,
+  findTradeIntent,
+  openTrading,
+  setStake,
+  tradeIntents,
+  users,
+} from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 import {
@@ -387,15 +394,28 @@ describe('POST /trading/intents: DEMO_ONLY (#396)', () => {
     expect(replayed.statusCode).toBe(200);
     expect(replayed.json().intent.id).toBe(created.json().intent.id);
   });
+
+  // #326: the flag is checked before the stake bound, so the bound never answers first
+  it('answers demo_only for a real intent at the saved real stake above real_available, ahead of the bound', async () => {
+    const s = await seed(5n, 'real');
+    const stake = '150' as DecimalString;
+    await setStake(tmp.db, BigInt(s.telegramUserId), TradeMode.Real, stake);
+    const response = await postDemoOnly(body(s.telegramUserId, { mode: 'real', amount: stake }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'demo_only' });
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, s.userId)),
+    ).toEqual([]);
+  });
 });
 
-describe('POST /trading/intents: the demo-stake bounds (#297)', () => {
+describe('POST /trading/intents: the stake bounds (#297, #326)', () => {
   const intentsOf = (userId: string) =>
     tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, userId));
 
   it.each([
     ['0.5', 'stake_below_minimum'],
-    ['10000.01', 'insufficient_demo_balance'],
+    ['10000.01', 'insufficient_balance'],
     ['1.001', 'stake_precision'],
   ])('answers 409 for a demo amount of %s with %s and creates nothing', async (amount, code) => {
     const s = await seed();
@@ -418,6 +438,22 @@ describe('POST /trading/intents: the demo-stake bounds (#297)', () => {
   it('creates the amount equal to the demo balance', async () => {
     const s = await seed();
     expect((await post(body(s.telegramUserId, { amount: '10000' }))).statusCode).toBe(201);
+  });
+
+  // the snapshot's real balance is 100, the demo one 10000: the real bound reads real_available
+  it('answers 409 insufficient_balance for a real amount above the real balance', async () => {
+    const s = await seed(5n, 'real');
+    const response = await post(body(s.telegramUserId, { mode: 'real', amount: '100.01' }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'insufficient_balance' });
+    expect(await intentsOf(s.userId)).toEqual([]);
+  });
+
+  it('creates the real amount equal to the real balance', async () => {
+    const s = await seed(5n, 'real');
+    const response = await post(body(s.telegramUserId, { mode: 'real', amount: '100' }));
+    expect(response.statusCode).toBe(201);
+    expect(response.json().intent).toMatchObject({ mode: 'real', amount: '100.00000000' });
   });
 });
 

@@ -1827,6 +1827,7 @@ describe('the read pages (#107)', () => {
       'telegramBlockedAt',
       'notificationLevel',
       'demoStake',
+      'realStake',
       'tokens',
       'createdAt',
       'updatedAt',
@@ -1854,6 +1855,7 @@ describe('the read pages (#107)', () => {
       acquiredAt: null,
       telegramBlockedAt: null,
       demoStake: null,
+      realStake: null,
     });
     expect(body.brokerAccounts[0]).toMatchObject({
       id: target.accountId,

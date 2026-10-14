@@ -36,6 +36,7 @@ describe('BOT_TEXT_VARS', () => {
     expect(BOT_TEXT_VARS.reservedTokens.format('3', texts)).toBe('3');
     expect(BOT_TEXT_VARS.minStake.format(money('0.005'), texts)).toBe('$0.005');
     expect(BOT_TEXT_VARS.demoAvailable.format(money('9990'), texts)).toBe(formatStake('9990'));
+    expect(BOT_TEXT_VARS.realAvailable.format(money('100.5'), texts)).toBe(formatStake('100.5'));
     expect(BOT_TEXT_VARS.mode.format('demo', texts)).toBe(MODE_LABELS.demo);
     expect(BOT_TEXT_VARS.mode.format('real', texts)).toBe('REAL');
     expect(BOT_TEXT_VARS.level.format('all', texts)).toBe('«levelAll»');

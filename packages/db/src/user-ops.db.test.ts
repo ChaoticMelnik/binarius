@@ -19,13 +19,7 @@ import { setNotificationLevel } from './delivery-ops';
 import { confirmBrokerAccount, linkBrokerAccount } from './oauth-ops';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
 import { auditLog, brokerAccounts, referralCodes, referrals, users } from './schema/index';
-import {
-  readDemoStake,
-  recordUserStart,
-  setDemoStake,
-  setTradingMode,
-  toUserStartView,
-} from './user-ops';
+import { readStakes, recordUserStart, setStake, setTradingMode, toUserStartView } from './user-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -360,6 +354,7 @@ describe('toUserStartView', () => {
       'hasActiveBrokerAccount',
       'notificationLevel',
       'pendingBrokerAccounts',
+      'realStake',
       'status',
       'telegramUserId',
     ]);
@@ -422,51 +417,73 @@ describe('toUserStartView', () => {
   });
 });
 
-describe('setDemoStake / readDemoStake (#297)', () => {
+describe('setStake / readStakes (#297, #326)', () => {
   const stake = (value: string) => value as DecimalString;
 
-  it('starts at NULL, stores a stake canonically and resets it', async () => {
+  it("starts at NULL, stores each mode's stake canonically in its own column and resets it", async () => {
     const telegramUserId = nextTelegramUserId();
     await start(telegramUserId);
-    expect(await readDemoStake(tmp.db, telegramUserId)).toBeNull();
+    expect(await readStakes(tmp.db, telegramUserId)).toEqual({ demoStake: null, realStake: null });
 
-    expect(await setDemoStake(tmp.db, telegramUserId, stake('2.50'))).toEqual({ demoStake: '2.5' });
-    expect(await readDemoStake(tmp.db, telegramUserId)).toBe('2.5');
+    expect(await setStake(tmp.db, telegramUserId, TradeMode.Demo, stake('2.50'))).toEqual({
+      mode: TradeMode.Demo,
+      stake: '2.5',
+    });
+    expect(await readStakes(tmp.db, telegramUserId)).toEqual({ demoStake: '2.5', realStake: null });
+    expect(await setStake(tmp.db, telegramUserId, TradeMode.Real, stake('7.000'))).toEqual({
+      mode: TradeMode.Real,
+      stake: '7',
+    });
+    expect(await readStakes(tmp.db, telegramUserId)).toEqual({ demoStake: '2.5', realStake: '7' });
+
     const { row, hasActiveBrokerAccount, pendingBrokerAccounts } = await start(telegramUserId);
-    expect(toUserStartView(row, hasActiveBrokerAccount, pendingBrokerAccounts).demoStake).toBe(
-      '2.5',
-    );
+    const view = toUserStartView(row, hasActiveBrokerAccount, pendingBrokerAccounts);
+    expect([view.demoStake, view.realStake]).toEqual(['2.5', '7']);
     expect(await setNotificationLevel(tmp.db, telegramUserId, NotificationLevel.Off)).toEqual({
       level: NotificationLevel.Off,
       demoStake: '2.5',
+      realStake: '7',
       canceledJobs: 0,
     });
 
-    expect(await setDemoStake(tmp.db, telegramUserId, null)).toEqual({ demoStake: null });
-    expect(await readDemoStake(tmp.db, telegramUserId)).toBeNull();
+    expect(await setStake(tmp.db, telegramUserId, TradeMode.Real, null)).toEqual({
+      mode: TradeMode.Real,
+      stake: null,
+    });
+    expect(await readStakes(tmp.db, telegramUserId)).toEqual({ demoStake: '2.5', realStake: null });
+    expect(await setStake(tmp.db, telegramUserId, TradeMode.Demo, null)).toEqual({
+      mode: TradeMode.Demo,
+      stake: null,
+    });
+    expect(await readStakes(tmp.db, telegramUserId)).toEqual({ demoStake: null, realStake: null });
   });
 
   it('answers undefined for an unknown user and writes nothing', async () => {
     const telegramUserId = nextTelegramUserId();
-    expect(await setDemoStake(tmp.db, telegramUserId, stake('5'))).toBeUndefined();
-    expect(await readDemoStake(tmp.db, telegramUserId)).toBeUndefined();
+    for (const mode of [TradeMode.Demo, TradeMode.Real]) {
+      expect(await setStake(tmp.db, telegramUserId, mode, stake('5'))).toBeUndefined();
+    }
+    expect(await readStakes(tmp.db, telegramUserId)).toBeUndefined();
     expect(
       await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId)),
     ).toEqual([]);
   });
 
-  it('touches only demo_stake and updated_at', async () => {
+  it.each([
+    [TradeMode.Demo, 'demoStake'],
+    [TradeMode.Real, 'realStake'],
+  ] as const)('a %s save touches only %s and updated_at', async (mode, field) => {
     const telegramUserId = nextTelegramUserId();
     await start(telegramUserId, { startPayload: 'src_stake' });
     const before = (
       await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId))
     )[0]!;
-    await setDemoStake(tmp.db, telegramUserId, stake('7'));
+    await setStake(tmp.db, telegramUserId, mode, stake('7'));
     const after = (
       await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId))
     )[0]!;
-    expect({ ...after, demoStake: before.demoStake, updatedAt: before.updatedAt }).toEqual(before);
-    expect(after.demoStake).toBe('7.00000000');
+    expect({ ...after, [field]: before[field], updatedAt: before.updatedAt }).toEqual(before);
+    expect(after[field]).toBe('7.00000000');
   });
 });
 

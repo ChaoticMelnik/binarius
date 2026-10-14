@@ -61,10 +61,11 @@ import {
   userContextOf,
 } from './texts';
 
-const pickerContext = () => ({
-  ...userContextOf(USER.first_name, TradeMode.Demo, accessView()),
+const pickerContext = (mode: TradeMode = TradeMode.Demo) => ({
+  ...userContextOf(USER.first_name, mode, accessView()),
   minStake: d('1'),
   demoAvailable: d('1'),
+  realAvailable: d('1'),
 });
 
 interface Button {
@@ -75,13 +76,13 @@ interface Button {
 const SETTINGS: StakeOrigin = { kind: 'settings' };
 const ANALYSIS: StakeOrigin = { kind: 'analysis', assetId: 101, durationSec: 5 };
 const PAIR: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 };
-const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: SETTINGS };
+const ON_STAKE_STEP: LoginDialogState = { step: 'stake', mode: TradeMode.Demo, origin: SETTINGS };
 const d = (value: string): DecimalString => decimalStringSchema.parse(value);
 
 function setup(
   options: {
     readTradingAccess?: BackendClient['readTradingAccess'];
-    setDemoStake?: BackendClient['setDemoStake'];
+    setStake?: BackendClient['setStake'];
     readPairs?: BackendClient['readPairs'];
     recordStart?: BackendClient['recordStart'];
     dialog?: LoginDialogState;
@@ -90,8 +91,8 @@ function setup(
   const readTradingAccess = vi.fn(
     options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
   );
-  const setDemoStake = vi.fn<BackendClient['setDemoStake']>(
-    options.setDemoStake ?? ((_id, amount) => Promise.resolve({ saved: amount })),
+  const setStake = vi.fn<BackendClient['setStake']>(
+    options.setStake ?? ((_id, _mode, amount) => Promise.resolve({ saved: amount })),
   );
   const recordStart = vi.fn(options.recordStart ?? (() => Promise.resolve(userView())));
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -100,7 +101,7 @@ function setup(
   if (options.dialog !== undefined) loginDialog.set(USER.id, options.dialog);
   const bot = createBot({
     token: '123456:AA-bot-token',
-    backend: fakeBackend({ readTradingAccess, setDemoStake, recordStart, readPairs }),
+    backend: fakeBackend({ readTradingAccess, setStake, recordStart, readPairs }),
     logger,
     botInfo: BOT_INFO,
     loginDialog,
@@ -117,7 +118,7 @@ function setup(
     logger,
     loginDialog,
     readTradingAccess,
-    setDemoStake,
+    setStake,
     recordStart,
     readPairs,
     ...api,
@@ -129,15 +130,19 @@ const lastPayload = (calls: readonly ApiCall[]) =>
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
   (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
 const button = (text: string, callback_data: string): Button => ({ text, callback_data });
-const preset = (amount: string, label: string, origin: StakeOrigin = SETTINGS) =>
-  button(label, stakePresetCallbackData(amount, origin));
+const preset = (
+  amount: string,
+  label: string,
+  origin: StakeOrigin = SETTINGS,
+  mode: TradeMode = TradeMode.Demo,
+) => button(label, stakePresetCallbackData(amount, mode, origin));
 const BACK_SETTINGS = [button(LABELS.stakeBackSettingsButton, SETTINGS_CALLBACK_DATA)];
 const BACK_ANALYSIS = [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(101, 5))];
-const CUSTOM = (origin: StakeOrigin = SETTINGS) => [
-  button(LABELS.stakeCustomButton, stakeCustomCallbackData(origin)),
+const CUSTOM = (origin: StakeOrigin = SETTINGS, mode: TradeMode = TradeMode.Demo) => [
+  button(LABELS.stakeCustomButton, stakeCustomCallbackData(mode, origin)),
 ];
 const RETRY_SETTINGS = [
-  [button(LABELS.stakeMenuButton, stakeOpenCallbackData(SETTINGS))],
+  [button(LABELS.stakeMenuButton, stakeOpenCallbackData(TradeMode.Demo, SETTINGS))],
   BACK_SETTINGS,
 ];
 const httpError = (status: number, reason?: string) =>
@@ -153,14 +158,16 @@ const warnings = (logger: ReturnType<typeof fakeLogger>) =>
 describe('the stake picker', () => {
   it('offers the presets of the minimum, the current one marked, then custom and back', async () => {
     const { press, calls } = setup();
-    await press(stakeOpenCallbackData(SETTINGS));
+    await press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     const edit = lastPayload(calls);
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(edit?.text).toBe(
       stakePickerText({
         user: userContextOf(USER.first_name, TradeMode.Demo, accessView()),
+        mode: TradeMode.Demo,
         minTradeAmount: d('1.00000000'),
         demoAvailable: d('10000.00000000'),
+        realAvailable: d('100.00000000'),
         presets: 4,
       }).value,
     );
@@ -183,7 +190,7 @@ describe('the stake picker', () => {
           }),
         ),
     });
-    await press(stakeOpenCallbackData(ANALYSIS));
+    await press(stakeOpenCallbackData(TradeMode.Demo, ANALYSIS));
     const edit = lastPayload(calls);
     expect(edit?.text).toContain('Сейчас: $5.00');
     expect(rowsOf(edit)).toEqual([
@@ -193,7 +200,7 @@ describe('the stake picker', () => {
         preset('5', '$5.00 ✅', ANALYSIS),
       ],
       CUSTOM(ANALYSIS),
-      [button(LABELS.stakeResetButton, stakeResetCallbackData(ANALYSIS))],
+      [button(LABELS.stakeResetButton, stakeResetCallbackData(TradeMode.Demo, ANALYSIS))],
       BACK_ANALYSIS,
     ]);
   });
@@ -207,7 +214,7 @@ describe('the stake picker', () => {
           }),
         ),
     });
-    await press(stakeOpenCallbackData(SETTINGS));
+    await press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     const edit = lastPayload(calls);
     expect(edit?.text).toContain(plainTextOf(TEXTS.stakePickerNoPresets(pickerContext())));
     expect(rowsOf(edit)).toEqual([CUSTOM(), BACK_SETTINGS]);
@@ -244,7 +251,7 @@ describe('the stake picker', () => {
     ],
   ])('says what the stake press would for %s', async (_case, access, text, rows) => {
     const { press, calls } = setup({ readTradingAccess: () => Promise.resolve(access) });
-    await press(stakeOpenCallbackData(SETTINGS));
+    await press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     expect(lastPayload(calls)?.text).toBe(text.value);
     expect(rowsOf(lastPayload(calls))).toEqual(rows);
   });
@@ -253,7 +260,7 @@ describe('the stake picker', () => {
     const { press, calls, logger } = setup({
       readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
-    await press(stakeOpenCallbackData(SETTINGS));
+    await press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     expect(lastPayload(calls)?.text).toBe(TEXTS.unavailable.value);
     expect(warnings(logger)).toEqual(['trading access not read for the stake picker']);
   });
@@ -265,7 +272,7 @@ describe('the stake picker', () => {
       error_code: 400,
       description: 'Bad Request: message to edit not found',
     });
-    await press(stakeOpenCallbackData(SETTINGS));
+    await press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     expect(calls.map((call) => call.method)).toEqual([
       'answerCallbackQuery',
       'editMessageText',
@@ -273,24 +280,31 @@ describe('the stake picker', () => {
     ]);
   });
 
-  it.each(['stk:o:a:0:5', 'stk:o:a:101:6', 'stk:s:0:s', 'stk:z:a:0:5', 'stk:c:a:0:5'])(
-    'stops the spinner and calls nothing for the forged %s',
-    async (data) => {
-      const { press, calls, readTradingAccess, setDemoStake } = setup();
-      await press(data);
-      expect(readTradingAccess).not.toHaveBeenCalled();
-      expect(setDemoStake).not.toHaveBeenCalled();
-      expect(calls.map((call) => call.method)).toEqual(
-        data === 'stk:o:a:101:6' ? [] : ['answerCallbackQuery'],
-      );
-    },
-  );
+  it.each([
+    'stk:o:d:a:0:5',
+    'stk:o:r:a:101:6',
+    'stk:o:x:s',
+    'stk:s:0:d:s',
+    'stk:z:r:a:0:5',
+    'stk:c:d:a:0:5',
+  ])('stops the spinner and calls nothing for the forged %s', async (data) => {
+    const { press, calls, readTradingAccess, setStake } = setup();
+    await press(data);
+    expect(readTradingAccess).not.toHaveBeenCalled();
+    expect(setStake).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.method)).toEqual(
+      ['stk:o:r:a:101:6', 'stk:o:x:s'].includes(data) ? [] : ['answerCallbackQuery'],
+    );
+  });
 
   it('keeps every picker datum inside the Bot API 64 bytes and reads its origin back', () => {
     const longest: StakeOrigin = { kind: 'analysis', assetId: 2_147_483_647, durationSec: 15 };
-    const data = stakePresetCallbackData('999999999999.99999999', longest);
-    expect(Buffer.byteLength(data, 'utf8')).toBe(43);
-    expect(stakeMenuCallbackData(101, 5)).toBe(stakeOpenCallbackData(ANALYSIS));
+    const data = stakePresetCallbackData('999999999999.99999999', TradeMode.Real, longest);
+    expect(Buffer.byteLength(data, 'utf8')).toBe(45);
+    expect(data).toBe('stk:s:999999999999.99999999:r:a:2147483647:15');
+    expect(stakeMenuCallbackData(TradeMode.Demo, 101, 5)).toBe(
+      stakeOpenCallbackData(TradeMode.Demo, ANALYSIS),
+    );
     expect(stakeOriginOf('a:2147483647:15')).toEqual(longest);
     expect(stakeOriginOf('s')).toEqual(SETTINGS);
     expect(stakeOriginOf('a:0:5')).toBeUndefined();
@@ -298,13 +312,15 @@ describe('the stake picker', () => {
   });
 
   it('reads the launch origin back from the data the launch screen draws', () => {
-    const longest = stakePresetCallbackData('999999999999.99999999', {
+    const longest = stakePresetCallbackData('999999999999.99999999', TradeMode.Real, {
       kind: 'pair',
       assetId: 2_147_483_647,
       durationSec: 15,
     });
-    expect(Buffer.byteLength(longest, 'utf8')).toBe(43);
-    expect(launchStakeCallbackData(PAIR_EURUSD.id, 15)).toBe(stakeOpenCallbackData(PAIR));
+    expect(Buffer.byteLength(longest, 'utf8')).toBe(45);
+    expect(launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15)).toBe(
+      stakeOpenCallbackData(TradeMode.Demo, PAIR),
+    );
     expect(stakeOriginOf(`p:${PAIR_EURUSD.id}:15`)).toEqual(PAIR);
     expect(stakeOriginOf('p:101:5')).toEqual({ kind: 'pair', assetId: 101, durationSec: 5 });
     expect(stakeOriginOf('p:0:15')).toBeUndefined();
@@ -325,12 +341,12 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       firstName: USER.first_name,
       symbol,
       amount,
-      saved: { amount },
+      saved: { amount, mode: TradeMode.Demo },
     });
 
   it('leads back to the launch screen', async () => {
     const { press, calls } = setup();
-    await press(stakeOpenCallbackData(PAIR));
+    await press(stakeOpenCallbackData(TradeMode.Demo, PAIR));
     expect(rowsOf(lastPayload(calls))).toEqual([
       [
         preset('1', '$1.00 ✅', PAIR),
@@ -344,9 +360,9 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   });
 
   it('returns to the launch screen in place with the saved amount', async () => {
-    const { press, calls, setDemoStake, readPairs } = setup();
-    await press(stakePresetCallbackData('5', PAIR));
-    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), '5']]);
+    const { press, calls, setStake, readPairs } = setup();
+    await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
+    expect(setStake.mock.calls).toEqual([[String(USER.id), TradeMode.Demo, '5']]);
     expect(readPairs).toHaveBeenCalledTimes(1);
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const screen = savedLaunch(d('5'));
@@ -363,18 +379,18 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   it('keeps the duration of the launch screen it returns to (#382)', async () => {
     const at5: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 };
     const { press, calls } = setup();
-    await press(stakePresetCallbackData('5', at5));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, at5));
     expect(lastPayload(calls)?.text).toContain(`${PAIR_EURUSD.symbol} · ⏱ 5 с`);
     expect(rowsOf(lastPayload(calls))).toEqual([
       [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5`)],
-      [button(LABELS.stakeChangeButton, `stk:o:p:${String(PAIR_EURUSD.id)}:5`)],
+      [button(LABELS.stakeChangeButton, `stk:o:d:p:${String(PAIR_EURUSD.id)}:5`)],
       [button(LABELS.backToListButton, 'demo:sig:5')],
     ]);
   });
 
   it('names the minimum after the reset', async () => {
     const { press, calls } = setup();
-    await press(stakeResetCallbackData(PAIR));
+    await press(stakeResetCallbackData(TradeMode.Demo, PAIR));
     expect(lastPayload(calls)?.text).toBe(savedLaunch(null).text.value);
     expect(lastPayload(calls)?.text).toContain(
       TEXTS.launchStakeMinimum({ firstName: USER.first_name, stake: null }).value,
@@ -382,7 +398,9 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   });
 
   it('returns to the launch screen as a new message after a typed amount', async () => {
-    const { type, calls, loginDialog } = setup({ dialog: { step: 'stake', origin: PAIR } });
+    const { type, calls, loginDialog } = setup({
+      dialog: { step: 'stake', mode: TradeMode.Demo, origin: PAIR },
+    });
     await type('2,5');
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(lastPayload(calls)?.text).toBe(savedLaunch(d('2.5')).text.value);
@@ -394,16 +412,16 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const { press, calls, readTradingAccess } = setup({
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
-    await press(stakePresetCallbackData('5', PAIR));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     expect(readTradingAccess.mock.calls).toEqual([[String(USER.id)]]);
     const screen = launchScreen({
       assetId: PAIR_EURUSD.id,
       durationSec: 15,
       firstName: USER.first_name,
       symbol: PAIR_EURUSD.symbol,
-      // the broker's minimum the real trade stakes, the saved demo stake only in its own line
+      // the real stake in force (none saved: the minimum); the saved demo stake only in its line
       amount: d('1'),
-      saved: { amount: d('5') },
+      saved: { amount: d('5'), mode: TradeMode.Demo },
       mode: TradeMode.Real,
     });
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
@@ -417,7 +435,8 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     ]);
   });
 
-  // Plan Update 4 (Major 2): `{stake}` of the real launch is the minimum, not the saved demo stake
+  // Plan Update 4 (Major 2): `{stake}` of the real launch is the real stake in force (here the
+  // minimum), not the saved demo stake
   it('gives an overridden launch header the minimum as {stake} in real mode', async () => {
     setBotTextSource({
       sourceOf: (key) =>
@@ -427,7 +446,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       const { press, calls } = setup({
         readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
       });
-      await press(stakePresetCallbackData('5', PAIR));
+      await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
       expect(plainTextOf(lastPayload(calls)?.text as string)).toContain(
         `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с $1.00`,
       );
@@ -440,7 +459,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const { press, calls, logger } = setup({
       readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
-    await press(stakePresetCallbackData('5', PAIR));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     expect(lastPayload(calls)?.text).toBe(savedLaunch(d('5')).text.value);
     expect(warnings(logger)).toEqual(['trading access not read for the launch screen']);
   });
@@ -449,7 +468,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const { press, calls, logger } = setup({
       readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
-    await press(stakePresetCallbackData('5', PAIR));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     const screen = savedLaunch(d('5'), null);
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
     expect(lastPayload(calls)?.text).not.toContain(PAIR_EURUSD.symbol);
@@ -464,7 +483,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       readPairs: () => Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
-    await press(stakePresetCallbackData('5', PAIR));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     const text = plainTextOf(lastPayload(calls)?.text as string);
     expect(text).toContain('✅ Демо-ставка сохранена: $5.00');
     expect(text).toContain(plainTextOf(TEXTS.launchRealMode));
@@ -480,7 +499,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
         readPairs: () =>
           Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
       });
-      await press(stakePresetCallbackData('5', { ...PAIR, durationSec }));
+      await press(stakePresetCallbackData('5', TradeMode.Demo, { ...PAIR, durationSec }));
       expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
         `✅ Демо-ставка сохранена: $5.00\n\n🚫 ${PAIR_EURUSD.symbol}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
       );
@@ -498,14 +517,14 @@ describe('the stake picker opened from a launch screen (#320)', () => {
         readPairs: () =>
           Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 80 }] })),
       });
-      await press(stakePresetCallbackData('5', { ...PAIR, durationSec }));
+      await press(stakePresetCallbackData('5', TradeMode.Demo, { ...PAIR, durationSec }));
       const screen = launchScreen({
         assetId: PAIR_EURUSD.id,
         durationSec,
         firstName: USER.first_name,
         symbol: PAIR_EURUSD.symbol,
         amount: d('5'),
-        saved: { amount: d('5') },
+        saved: { amount: d('5'), mode: TradeMode.Demo },
       });
       const payload = lastPayload(calls);
       expect({ text: payload?.text, firstRow: rowsOf(payload)[0] }).toEqual({
@@ -522,17 +541,17 @@ describe('the stake picker opened from a launch screen (#320)', () => {
 
   it('offers another try and the way back to the launch on a refusal, reading no catalog', async () => {
     const { press, calls, readPairs } = setup({
-      setDemoStake: () =>
+      setStake: () =>
         Promise.resolve({
           refused: {
             error: 'stake_below_minimum',
-            limits: { minTradeAmount: d('1'), demoAvailable: d('50'), scale: 2 },
+            limits: { minTradeAmount: d('1'), available: d('50'), scale: 2 },
           },
         }),
     });
-    await press(stakePresetCallbackData('5', PAIR));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(PAIR))],
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(TradeMode.Demo, PAIR))],
       BACK_LAUNCH,
     ]);
     expect(readPairs).not.toHaveBeenCalled();
@@ -541,18 +560,24 @@ describe('the stake picker opened from a launch screen (#320)', () => {
 
 describe('saving a stake', () => {
   it.each([
-    ['a preset', stakePresetCallbackData('5', ANALYSIS), '5', '$5.00', BACK_ANALYSIS],
+    [
+      'a preset',
+      stakePresetCallbackData('5', TradeMode.Demo, ANALYSIS),
+      '5',
+      '$5.00',
+      BACK_ANALYSIS,
+    ],
     [
       'the reset',
-      stakeResetCallbackData(SETTINGS),
+      stakeResetCallbackData(TradeMode.Demo, SETTINGS),
       null,
       'минимальная ставка брокера',
       BACK_SETTINGS,
     ],
   ])('saves %s and shows it with the way back', async (_case, data, amount, label, back) => {
-    const { press, calls, setDemoStake } = setup();
+    const { press, calls, setStake } = setup();
     await press(data);
-    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), amount]]);
+    expect(setStake.mock.calls).toEqual([[String(USER.id), TradeMode.Demo, amount]]);
     const saved = TEXTS.stakeSaved({
       stake: amount === null ? null : d(amount),
       firstName: USER.first_name,
@@ -569,17 +594,17 @@ describe('saving a stake', () => {
     ],
     ['stake_below_minimum', TEXTS.stakeBelowMinimum({ minStake: d('1') })],
     [
-      'insufficient_demo_balance',
+      'insufficient_balance',
       TEXTS.stakeAboveAvailableAmount({ demoAvailable: d('50'), minStake: d('1') }),
     ],
   ] as const)('words the refusal %s from its limits', async (error, text) => {
     const { press, calls, logger } = setup({
-      setDemoStake: () =>
+      setStake: () =>
         Promise.resolve({
-          refused: { error, limits: { minTradeAmount: d('1'), demoAvailable: d('50'), scale: 2 } },
+          refused: { error, limits: { minTradeAmount: d('1'), available: d('50'), scale: 2 } },
         }),
     });
-    await press(stakePresetCallbackData('5', SETTINGS));
+    await press(stakePresetCallbackData('5', TradeMode.Demo, SETTINGS));
     expect(lastPayload(calls)?.text).toBe(text.value);
     expect(rowsOf(lastPayload(calls))).toEqual(RETRY_SETTINGS);
     expect(warnings(logger)).toEqual([]);
@@ -589,18 +614,18 @@ describe('saving a stake', () => {
 describe('a typed stake', () => {
   it('opens the prompt in place and puts the user on the stake step, replacing a login', async () => {
     const { press, calls, loginDialog } = setup({ dialog: { step: 'email' } });
-    await press(stakeCustomCallbackData(SETTINGS));
+    await press(stakeCustomCallbackData(TradeMode.Demo, SETTINGS));
     expect(loginDialog.get(USER.id)).toEqual(ON_STAKE_STEP);
     expect(lastPayload(calls)?.text).toBe(TEXTS.stakeInputPrompt.value);
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.stakeBackButton, stakeOpenCallbackData(SETTINGS))],
+      [button(LABELS.stakeBackButton, stakeOpenCallbackData(TradeMode.Demo, SETTINGS))],
     ]);
   });
 
   it('saves a typed amount canonically as a new message and ends the step', async () => {
-    const { type, calls, loginDialog, setDemoStake } = setup({ dialog: ON_STAKE_STEP });
+    const { type, calls, loginDialog, setStake } = setup({ dialog: ON_STAKE_STEP });
     await type(' 2,50 ');
-    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), '2.5']]);
+    expect(setStake.mock.calls).toEqual([[String(USER.id), TradeMode.Demo, '2.5']]);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(lastPayload(calls)?.text).toBe(
       TEXTS.stakeSaved({ stake: d('2.5'), firstName: USER.first_name }).value,
@@ -611,9 +636,9 @@ describe('a typed stake', () => {
   it.each(['abc', '-5', '0', '1 000', 'ada@example.test'])(
     'refuses %j as not an amount, saves nothing and keeps the step',
     async (text) => {
-      const { type, calls, loginDialog, setDemoStake } = setup({ dialog: ON_STAKE_STEP });
+      const { type, calls, loginDialog, setStake } = setup({ dialog: ON_STAKE_STEP });
       await type(text);
-      expect(setDemoStake).not.toHaveBeenCalled();
+      expect(setStake).not.toHaveBeenCalled();
       expect(lastPayload(calls)?.text).toBe(TEXTS.stakeInputInvalid.value);
       expect(rowsOf(lastPayload(calls))).toEqual([BACK_SETTINGS]);
       expect(loginDialog.get(USER.id)).toEqual(ON_STAKE_STEP);
@@ -623,11 +648,11 @@ describe('a typed stake', () => {
   it('keeps the step for a refusal before the write, so the user types again', async () => {
     const { type, loginDialog } = setup({
       dialog: ON_STAKE_STEP,
-      setDemoStake: () =>
+      setStake: () =>
         Promise.resolve({
           refused: {
             error: 'stake_precision',
-            limits: { minTradeAmount: d('1'), demoAvailable: d('50'), scale: 2 },
+            limits: { minTradeAmount: d('1'), available: d('50'), scale: 2 },
           },
         }),
     });
@@ -638,7 +663,7 @@ describe('a typed stake', () => {
   it('keeps the step and says there is no balance yet on balance_unavailable', async () => {
     const { type, calls, loginDialog } = setup({
       dialog: ON_STAKE_STEP,
-      setDemoStake: () => Promise.reject(httpError(409, 'balance_unavailable')),
+      setStake: () => Promise.reject(httpError(409, 'balance_unavailable')),
     });
     await type('5');
     expect(lastPayload(calls)?.text).toBe(TEXTS.stakeBalanceMissing.value);
@@ -652,13 +677,13 @@ describe('a typed stake', () => {
   ])('keeps the step and offers another try when the outcome is %s', async (_case, error) => {
     const { type, calls, loginDialog, logger } = setup({
       dialog: ON_STAKE_STEP,
-      setDemoStake: () => Promise.reject(error),
+      setStake: () => Promise.reject(error),
     });
     await type('5');
     expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaveUnknown.value);
     expect(rowsOf(lastPayload(calls))).toEqual(RETRY_SETTINGS);
     expect(loginDialog.get(USER.id)).toEqual(ON_STAKE_STEP);
-    expect(warnings(logger)).toEqual(['demo stake save outcome unknown']);
+    expect(warnings(logger)).toEqual(['stake save outcome unknown']);
   });
 
   it.each([
@@ -668,21 +693,21 @@ describe('a typed stake', () => {
   ] as const)('ends the step and says unavailable on %s', async (_case, error, level) => {
     const { type, calls, loginDialog, logger } = setup({
       dialog: ON_STAKE_STEP,
-      setDemoStake: () => Promise.reject(error),
+      setStake: () => Promise.reject(error),
     });
     await type('5');
     expect(lastPayload(calls)?.text).toBe(TEXTS.unavailable.value);
     expect(loginDialog.get(USER.id)).toBeUndefined();
-    expect(level === 'warn' ? warnings(logger) : errors(logger)).toEqual(['demo stake not saved']);
+    expect(level === 'warn' ? warnings(logger) : errors(logger)).toEqual(['stake not saved']);
   });
 
   it("ends the stake step on the prompt's way back, but leaves a login alone", async () => {
     const stake = setup({ dialog: ON_STAKE_STEP });
-    await stake.press(stakeOpenCallbackData(SETTINGS));
+    await stake.press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     expect(stake.loginDialog.get(USER.id)).toBeUndefined();
 
     const login = setup({ dialog: { step: 'email' } });
-    await login.press(stakeOpenCallbackData(SETTINGS));
+    await login.press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     expect(login.loginDialog.get(USER.id)).toEqual({ step: 'email' });
   });
 
@@ -695,21 +720,25 @@ describe('a typed stake', () => {
 });
 
 describe('/settings', () => {
-  it('shows the stake line and «💵 Изменить» under the levels', async () => {
+  it('shows both stake lines and «💵 Демо» «💼 Реал» under the levels', async () => {
     const { type, calls } = setup({
-      recordStart: () => Promise.resolve(userView({ demoStake: d('2.5') })),
+      recordStart: () => Promise.resolve(userView({ demoStake: d('2.5'), realStake: d('7') })),
     });
     await type('/settings');
     const sent = lastPayload(calls);
-    expect(sent?.text).toBe(settingsText(NotificationLevel.All, d('2.5'), USER.first_name).value);
+    expect(sent?.text).toBe(
+      settingsText(NotificationLevel.All, d('2.5'), d('7'), USER.first_name).value,
+    );
     expect(sent?.text).toContain('Сумма демо-сделки: <b>$2.50</b>');
+    expect(sent?.text).toContain('Сумма реальной сделки: <b>$7.00</b>');
     expect(rowsOf(sent).at(-1)).toEqual([
-      button(LABELS.settingsStakeButton, stakeOpenCallbackData(SETTINGS)),
+      button(LABELS.settingsStakeDemoButton, 'stk:o:d:s'),
+      button(LABELS.settingsStakeRealButton, 'stk:o:r:s'),
     ]);
   });
 
   it('names the broker minimum when no stake is saved', () => {
-    expect(settingsText(NotificationLevel.All, null, USER.first_name).value).toContain(
+    expect(settingsText(NotificationLevel.All, null, null, USER.first_name).value).toContain(
       'Сумма демо-сделки: <b>минимальная ставка брокера</b>',
     );
   });
@@ -722,7 +751,7 @@ describe('/settings', () => {
     expect(recordStart).toHaveBeenCalledTimes(1);
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(lastPayload(calls)?.text).toBe(
-      settingsText(NotificationLevel.Off, null, USER.first_name).value,
+      settingsText(NotificationLevel.Off, null, null, USER.first_name).value,
     );
   });
 
@@ -743,4 +772,215 @@ describe('/settings', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
     expect(lastPayload(calls)?.text).toBe(text.value);
   });
+});
+
+// #326: the picker of the real stake, its saves and the old mode-less data
+describe('the real stake picker', () => {
+  const R = TradeMode.Real;
+  // a real balance far from the demo one, so a picker reading the other balance draws other presets
+  const REAL_BALANCE = brokerBalance({
+    real: { available: d('7'), held: d('0'), total: d('7') },
+  });
+  const realAccess = (realStake: DecimalString | null = null) =>
+    accessView({ broker: REAL_BALANCE, demoStake: d('2'), realStake });
+  const BACK_ANALYSIS_ROW = BACK_ANALYSIS;
+  const ON_REAL_STEP: LoginDialogState = { step: 'stake', mode: R, origin: SETTINGS };
+
+  it.each([
+    ['/settings', SETTINGS, BACK_SETTINGS],
+    ['the analysis', ANALYSIS, BACK_ANALYSIS_ROW],
+  ] as const)(
+    'opened from %s offers presets of the real balance under the real header',
+    async (_case, origin, back) => {
+      const { press, calls } = setup({ readTradingAccess: () => Promise.resolve(realAccess()) });
+      await press(stakeOpenCallbackData(R, origin));
+      const edit = lastPayload(calls);
+      expect(edit?.text).toBe(
+        stakePickerText({
+          user: { ...userContextOf(USER.first_name, R, realAccess()), stake: null },
+          mode: R,
+          minTradeAmount: d('1.00000000'),
+          demoAvailable: d('10000.00000000'),
+          realAvailable: d('7'),
+          presets: 3,
+        }).value,
+      );
+      const text = plainTextOf(edit?.text as string);
+      expect(text).toContain('💼 Сумма реальной сделки');
+      expect(text).toContain('Реальный баланс: $7.00');
+      expect(text).toContain('Сейчас: минимальная ставка брокера ($1.00)');
+      expect(text).not.toMatch(/демо/i);
+      expect(rowsOf(edit)).toEqual([
+        [
+          preset('1', '$1.00 ✅', origin, R),
+          preset('2', '$2.00', origin, R),
+          preset('5', '$5.00', origin, R),
+        ],
+        CUSTOM(origin, R),
+        back,
+      ]);
+    },
+  );
+
+  it('marks the saved real stake, not the demo one, and offers the real reset', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.resolve(realAccess(d('5'))),
+    });
+    await press(stakeOpenCallbackData(R, SETTINGS));
+    const edit = lastPayload(calls);
+    expect(plainTextOf(edit?.text as string)).toContain('Сейчас: $5.00');
+    expect(rowsOf(edit)).toEqual([
+      [
+        preset('1', '$1.00', SETTINGS, R),
+        preset('2', '$2.00', SETTINGS, R),
+        preset('5', '$5.00 ✅', SETTINGS, R),
+      ],
+      CUSTOM(SETTINGS, R),
+      [button(LABELS.stakeResetButton, stakeResetCallbackData(R, SETTINGS))],
+      BACK_SETTINGS,
+    ]);
+  });
+
+  it('says the real balance covers not even the minimum', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(
+          accessView({
+            broker: brokerBalance({ real: { available: d('0.5'), held: d('0'), total: d('0.5') } }),
+          }),
+        ),
+    });
+    await press(stakeOpenCallbackData(R, SETTINGS));
+    const edit = lastPayload(calls);
+    expect(edit?.text).toContain(plainTextOf(TEXTS.stakePickerNoPresetsReal(pickerContext(R))));
+    expect(rowsOf(edit)).toEqual([CUSTOM(SETTINGS, R), BACK_SETTINGS]);
+  });
+
+  it.each([
+    ['a preset', stakePresetCallbackData('5', R, SETTINGS), '5'],
+    ['the reset', stakeResetCallbackData(R, SETTINGS), null],
+  ])('saves %s in the real mode and words it as the real stake', async (_case, data, amount) => {
+    const { press, calls, setStake } = setup();
+    await press(data);
+    expect(setStake.mock.calls).toEqual([[String(USER.id), R, amount]]);
+    expect(lastPayload(calls)?.text).toBe(
+      TEXTS.stakeSavedReal({
+        stake: amount === null ? null : d(amount),
+        firstName: USER.first_name,
+      }).value,
+    );
+    expect(rowsOf(lastPayload(calls))).toEqual([BACK_SETTINGS]);
+  });
+
+  it('prompts for a real amount and saves the typed one in the real mode', async () => {
+    const { press, type, calls, loginDialog, setStake } = setup();
+    await press(stakeCustomCallbackData(R, SETTINGS));
+    expect(loginDialog.get(USER.id)).toEqual(ON_REAL_STEP);
+    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeInputPromptReal.value);
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.stakeBackButton, stakeOpenCallbackData(R, SETTINGS))],
+    ]);
+    await type('2,50');
+    expect(setStake.mock.calls).toEqual([[String(USER.id), R, '2.5']]);
+    expect(lastPayload(calls)?.text).toBe(
+      TEXTS.stakeSavedReal({ stake: d('2.5'), firstName: USER.first_name }).value,
+    );
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'stake_precision',
+      TEXTS.stakePrecisionDigitsReal({ digits: '2', minStake: d('1'), realAvailable: d('7') }),
+    ],
+    ['stake_below_minimum', TEXTS.stakeBelowMinimum({ minStake: d('1') })],
+    [
+      'insufficient_balance',
+      TEXTS.stakeAboveAvailableAmountReal({ realAvailable: d('7'), minStake: d('1') }),
+    ],
+  ] as const)('words the real refusal %s from its limits', async (error, text) => {
+    const { press, calls } = setup({
+      setStake: () =>
+        Promise.resolve({
+          refused: { error, limits: { minTradeAmount: d('1'), available: d('7'), scale: 2 } },
+        }),
+    });
+    await press(stakePresetCallbackData('10', R, SETTINGS));
+    expect(lastPayload(calls)?.text).toBe(text.value);
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(R, SETTINGS))],
+      BACK_SETTINGS,
+    ]);
+  });
+
+  it('names the real balance in the over-balance refusal', () => {
+    expect(
+      plainTextOf(TEXTS.stakeAboveAvailableAmountReal({ realAvailable: d('7'), minStake: d('1') })),
+    ).toBe('⚠️ На реальном счёте доступно $7.00. Выбери сумму поменьше.');
+  });
+
+  it('keeps the real step and offers the real picker again when the outcome is unknown', async () => {
+    const { type, calls, loginDialog, logger } = setup({
+      dialog: ON_REAL_STEP,
+      setStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await type('5');
+    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaveUnknown.value);
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(R, SETTINGS))],
+      BACK_SETTINGS,
+    ]);
+    expect(loginDialog.get(USER.id)).toEqual(ON_REAL_STEP);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ mode: R });
+    expect(warnings(logger)).toEqual(['stake save outcome unknown']);
+  });
+
+  // a launch screen's picker is the demo cycle's; a saved line names the mode of the saved stake
+  it.each([
+    [TradeMode.Demo, '✅ Демо-ставка сохранена: $5.00'],
+    [R, '✅ Реальная ставка сохранена: $5.00'],
+  ] as const)(
+    'returns a %s save from a launch screen under the line of its mode',
+    async (mode, line) => {
+      const { press, calls } = setup();
+      await press(stakePresetCallbackData('5', mode, PAIR));
+      const text = plainTextOf(lastPayload(calls)?.text as string);
+      expect(text.split('\n')[0]).toBe(line);
+      // a demo user's launch names the demo stake: a real save leaves it at the minimum
+      expect(text).toContain(mode === R ? '💵 Ставка: минимальная брокера' : '💵 Ставка: $5.00');
+    },
+  );
+
+  it('trades the saved real stake on the real launch after a real save', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ tradingMode: R, realStake: d('5'), demoStake: d('2') })),
+    });
+    await press(stakePresetCallbackData('5', R, PAIR));
+    const screen = launchScreen({
+      assetId: PAIR_EURUSD.id,
+      durationSec: 15,
+      firstName: USER.first_name,
+      symbol: PAIR_EURUSD.symbol,
+      amount: d('5'),
+      saved: { amount: d('5'), mode: R },
+      mode: R,
+    });
+    expect(lastPayload(calls)?.text).toBe(screen.text.value);
+  });
+});
+
+// #326: data drawn before the mode segment existed loses its keyboard and saves nothing
+describe('a stake picker datum without a mode', () => {
+  it.each(['stk:o:s', 'stk:s:5:a:101:5', `stk:z:p:${PAIR_EURUSD.id}:15`, 'stk:c:s'])(
+    'removes the keyboard of %s and saves nothing',
+    async (data) => {
+      const { press, calls, readTradingAccess, setStake, loginDialog } = setup();
+      await press(data);
+      expect(calls.map((call) => call.method)).toContain('editMessageReplyMarkup');
+      expect(readTradingAccess).not.toHaveBeenCalled();
+      expect(setStake).not.toHaveBeenCalled();
+      expect(loginDialog.get(USER.id)).toBeUndefined();
+    },
+  );
 });

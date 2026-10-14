@@ -94,7 +94,7 @@ interface Scenario {
   evaluateSignal?: BackendClient['evaluateSignal'];
   createIntent?: BackendClient['createIntent'];
   readIntent?: BackendClient['readIntent'];
-  setDemoStake?: BackendClient['setDemoStake'];
+  setStake?: BackendClient['setStake'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -114,7 +114,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
     setNotificationLevel:
       scenario.setNotificationLevel ??
-      ((_telegramUserId, level) => Promise.resolve({ level, demoStake: null })),
+      ((_telegramUserId, level) => Promise.resolve({ level, demoStake: null, realStake: null })),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
     readSignals: scenario.readSignals ?? (() => Promise.reject(new Error('not used here'))),
@@ -126,8 +126,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
-    setDemoStake:
-      scenario.setDemoStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
+    setStake: scenario.setStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
@@ -563,7 +562,7 @@ describe('what the bot writes about the settings edit', () => {
       'sendMessage',
     ]);
     expect(calls[2]?.payload.text).toBe(
-      settingsText(NotificationLevel.Off, null, USER.first_name).value,
+      settingsText(NotificationLevel.Off, null, null, USER.first_name).value,
     );
   });
 
@@ -694,15 +693,35 @@ describe('what the bot writes about the demo', () => {
   it('names a catalog the launch screen did not get by error and code, without the user or the amount', async () => {
     const { lines } = await linesFrom({
       update: callbackUpdate(
-        stakePresetCallbackData('5', { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 }),
+        stakePresetCallbackData('5', TradeMode.Demo, {
+          kind: 'pair',
+          assetId: PAIR_EURUSD.id,
+          durationSec: 15,
+        }),
       ),
       level: 'trace',
-      setDemoStake: (_id, amount) => Promise.resolve({ saved: amount }),
+      setStake: (_id, _mode, amount) => Promise.resolve({ saved: amount }),
       readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
     expect(lineWith(lines, 'pairs not read for the launch screen')).toMatchObject({
       level: 40,
       err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(fieldsOf(lines)).not.toContain('$5.00');
+  });
+
+  // #326: the save's mode names which column the unknown outcome is about
+  it('names a real stake save of unknown outcome by error, code and mode, without the user or the amount', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(stakePresetCallbackData('5', TradeMode.Real, { kind: 'settings' })),
+      level: 'trace',
+      setStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    expect(lineWith(lines, 'stake save outcome unknown')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+      mode: TradeMode.Real,
     });
     expect(fieldsOf(lines)).not.toContain(String(USER.id));
     expect(fieldsOf(lines)).not.toContain('$5.00');

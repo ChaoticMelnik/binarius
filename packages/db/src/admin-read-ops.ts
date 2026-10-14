@@ -120,6 +120,7 @@ export type AdminUserRow = Pick<
   | 'telegramBlockedAt'
   | 'notificationLevel'
   | 'demoStake'
+  | 'realStake'
   | 'tokenBalance'
   | 'tokenReserved'
   | 'createdAt'
@@ -184,6 +185,7 @@ export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUse
       telegramBlockedAt: users.telegramBlockedAt,
       notificationLevel: users.notificationLevel,
       demoStake: users.demoStake,
+      realStake: users.realStake,
       tokenBalance: users.tokenBalance,
       tokenReserved: users.tokenReserved,
       createdAt: users.createdAt,
@@ -309,6 +311,7 @@ export function toAdminUserDetail(row: AdminUserRow): AdminUserDetail {
     notificationLevel: row.notificationLevel,
     // numeric string-mode as stored: shown, never computed with (Rule 29)
     demoStake: row.demoStake,
+    realStake: row.realStake,
     tokens: {
       balance: row.tokenBalance.toString(),
       reserved: row.tokenReserved.toString(),

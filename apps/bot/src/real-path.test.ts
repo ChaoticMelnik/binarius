@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decimalStringSchema,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -19,9 +20,14 @@ import {
   sessionStartCallbackData,
   stakeCallbackData,
   stakeFingerprint,
+  stakeMenuCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
-import { stakePresetCallbackData } from './stake-picker';
+import {
+  stakeCustomCallbackData,
+  stakePresetCallbackData,
+  stakeResetCallbackData,
+} from './stake-picker';
 import {
   BOT_INFO,
   BROKER_BALANCE,
@@ -61,12 +67,14 @@ const DEMO_WORDING =
 const NOW = 1_790_000_000_000;
 const REAL = accessView({ tradingMode: TradeMode.Real });
 const BELOW_FLOOR = PAIR_OTHER_TYPE;
+const ANALYSIS = { kind: 'analysis', assetId: PAIR_EURUSD.id, durationSec: 15 } as const;
 
 interface Scene {
   name: string;
   update: ReturnType<typeof callbackUpdate>;
   evaluateSignal?: typeof SIGNAL_DECIDED;
   signals?: ReturnType<typeof signalsResponse>;
+  access?: TradingAccessResponse;
 }
 
 const press = (name: string, data: string, patch: Partial<Scene> = {}): Scene => ({
@@ -86,11 +94,19 @@ const SCENES: Scene[] = [
   press('the launch below the cycle floor', demoLaunchCallbackData(BELOW_FLOOR.id, 15)),
   press(
     'a save from the launch',
-    stakePresetCallbackData('5', { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 }),
+    stakePresetCallbackData('5', TradeMode.Demo, {
+      kind: 'pair',
+      assetId: PAIR_EURUSD.id,
+      durationSec: 15,
+    }),
   ),
   press(
     'a save from the launch below the cycle floor',
-    stakePresetCallbackData('5', { kind: 'pair', assetId: BELOW_FLOOR.id, durationSec: 15 }),
+    stakePresetCallbackData('5', TradeMode.Demo, {
+      kind: 'pair',
+      assetId: BELOW_FLOOR.id,
+      durationSec: 15,
+    }),
   ),
   press('the types', 'demo:g'),
   press('a type', demoPageCallbackData('currency', 0)),
@@ -123,6 +139,26 @@ const SCENES: Scene[] = [
   ),
   press('the refresh of a settled real trade', intentCallbackData(INTENT_ID)),
   press('a session button of an earlier render', sessionStartCallbackData(PAIR_EURUSD.id, 15)),
+  // #326: the real picker opened from a real expansion, without and with a saved real stake.
+  // /settings is no scene: it names both modes by the owner's decision 1.
+  ...[null, decimalStringSchema.parse('5')].flatMap((realStake) => {
+    const access = accessView({ tradingMode: TradeMode.Real, realStake });
+    const at = `, the real stake ${realStake ?? 'unset'}`;
+    return [
+      press(
+        `«💵 Сумма» of a real expansion${at}`,
+        stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+        { access },
+      ),
+      press(`a real preset${at}`, stakePresetCallbackData('5', TradeMode.Real, ANALYSIS), {
+        access,
+      }),
+      press(`the real reset${at}`, stakeResetCallbackData(TradeMode.Real, ANALYSIS), { access }),
+      press(`the real custom prompt${at}`, stakeCustomCallbackData(TradeMode.Real, ANALYSIS), {
+        access,
+      }),
+    ];
+  }),
 ];
 
 async function shown(scene: Scene, access: TradingAccessResponse): Promise<string[]> {
@@ -136,7 +172,7 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
       readPairs: () => Promise.resolve(PAIRS_RESPONSE),
       readSignals: () => Promise.resolve(scene.signals ?? signalsResponse(NOW)),
       evaluateSignal: () => Promise.resolve(scene.evaluateSignal ?? SIGNAL_DECIDED),
-      setDemoStake: (_id, amount) => Promise.resolve({ saved: amount }),
+      setStake: (_id, _mode, amount) => Promise.resolve({ saved: amount }),
       createIntent: (request) => Promise.resolve(intentView({ mode: request.mode })),
       readIntent: () =>
         Promise.resolve(intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled })),
@@ -171,7 +207,7 @@ function wordsOf({ payload }: ApiCall): string[] {
 
 describe('the real path (#121)', () => {
   it.each(SCENES)('$name never calls the trade a demo', async (scene) => {
-    const words = await shown(scene, REAL);
+    const words = await shown(scene, scene.access ?? REAL);
     expect(words.length, 'the scene sent or edited nothing').toBeGreaterThan(0);
     for (const word of words) expect(word).not.toMatch(DEMO_WORDING);
   });

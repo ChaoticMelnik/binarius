@@ -1,14 +1,14 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   BrokerBalanceUnavailableReason,
-  DemoStakeErrorCode,
-  DemoStakeRefusal,
-  demoStakePresets,
   errorLogFields,
   formatStake,
   normalizeDecimal,
   pairPayoutAccepted,
-  parseDemoStakeInput,
+  parseStakeInput,
+  StakeErrorCode,
+  StakeRefusal,
+  stakePresets,
   tradeAmountSchema,
   TradeMode,
   UserStatus,
@@ -22,7 +22,7 @@ import {
   BackendErrorCode,
   backendErrorFields,
   type BackendClient,
-  type SetDemoStakeResult,
+  type SetStakeResult,
 } from './backend-client';
 import {
   assetIdOf,
@@ -31,6 +31,7 @@ import {
   durationOf,
   effectiveStake,
   launchScreen,
+  MODE_TOKENS,
   payoutTooLowScreen,
   removeLegacyKeyboard,
   STAKE_PICKER_PREFIX,
@@ -45,13 +46,15 @@ import { telegramErrorFields, type Logger } from './logging';
 import { supportKeyboard } from './keyboards';
 import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml } from './send';
-import { LABELS, stakePickerText, TEXTS, userContextOf } from './texts';
+import { LABELS, stakePickerText, stakeSavedLine, TEXTS, userContextOf } from './texts';
 
-// The demo stake picker (#297, docs/bot-demo-trade.md -> The stake): presets from the broker's
-// minimum, a typed amount, a reset to the minimum, and the way back to where it was opened from —
-// /settings, an analysis screen or a launch screen (#320). The bounds are the backend's (POST
-// /trading/demo-stake): the bot sends a preset or a parsed input and shows the answer, so a forged
-// amount gets the same refusal as a typed one.
+// The stake picker of one mode (#297 demo, #326 real; docs/bot-demo-trade.md -> The stake):
+// presets from the broker's minimum, a typed amount, a reset to the minimum, and the way back to
+// where it was opened from — /settings, an analysis screen or a launch screen (#320). The mode is
+// the picker's, carried in every callback, not the user's trading mode: either stake is a
+// preference saved in any mode. The bounds are the backend's (POST /trading/stake): the bot sends
+// a preset or a parsed input and shows the answer, so a forged amount gets the same refusal as a
+// typed one.
 
 // Where the picker was opened, carried in every callback as `s`, `a:<assetId>:<durationSec>` or
 // `p:<assetId>:<durationSec>` (the launch screen's duration since #382).
@@ -76,29 +79,45 @@ function originData(origin: StakeOrigin): string {
   }
 }
 
-// Bot API allows 1-64 bytes; the longest, `stk:s:999999999999.99999999:a:2147483647:15`, is 43.
-export const stakeOpenCallbackData = (origin: StakeOrigin): string =>
-  `${STAKE_PICKER_PREFIX}o:${originData(origin)}`;
-export const stakePresetCallbackData = (amount: string, origin: StakeOrigin): string =>
-  `${STAKE_PICKER_PREFIX}s:${amount}:${originData(origin)}`;
-export const stakeResetCallbackData = (origin: StakeOrigin): string =>
-  `${STAKE_PICKER_PREFIX}z:${originData(origin)}`;
-export const stakeCustomCallbackData = (origin: StakeOrigin): string =>
-  `${STAKE_PICKER_PREFIX}c:${originData(origin)}`;
+// The picker's mode after the action letter (#326): `<action>:<d|r>:<origin>`, the tokens of
+// demo.ts's MODE_TOKENS. Bot API allows 1-64 bytes; the longest,
+// `stk:s:999999999999.99999999:r:a:2147483647:15`, is 45.
+const pickerData = (action: string, mode: TradeMode, origin: StakeOrigin): string =>
+  `${STAKE_PICKER_PREFIX}${action}:${MODE_TOKENS[mode]}:${originData(origin)}`;
+export const stakeOpenCallbackData = (mode: TradeMode, origin: StakeOrigin): string =>
+  pickerData('o', mode, origin);
+export const stakePresetCallbackData = (
+  amount: string,
+  mode: TradeMode,
+  origin: StakeOrigin,
+): string => pickerData(`s:${amount}`, mode, origin);
+export const stakeResetCallbackData = (mode: TradeMode, origin: StakeOrigin): string =>
+  pickerData('z', mode, origin);
+export const stakeCustomCallbackData = (mode: TradeMode, origin: StakeOrigin): string =>
+  pickerData('c', mode, origin);
 
-// The four shapes over an origin. The legacy origins: an analysis of a duration from before #313
-// (/settings carries none), and a launch screen from before #382, which carried no duration.
-const pickerPatterns = (origin: string) => ({
-  open: new RegExp(`^${STAKE_PICKER_PREFIX}o:${origin}$`),
-  preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(\\d{1,12}(?:\\.\\d{1,8})?):${origin}$`),
-  reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${origin}$`),
-  custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${origin}$`),
+// The four shapes over an optional mode group and an origin. The legacy shapes: every action
+// without a mode, from before #326 (a demo picker), over today's origins; an analysis of a
+// duration from before #313 (/settings carries none), and a launch screen from before #382, which
+// carried no duration.
+const pickerPatterns = (mode: string, origin: string) => ({
+  open: new RegExp(`^${STAKE_PICKER_PREFIX}o:${mode}${origin}$`),
+  preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(\\d{1,12}(?:\\.\\d{1,8})?):${mode}${origin}$`),
+  reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${mode}${origin}$`),
+  custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${mode}${origin}$`),
 });
-const PICKER = pickerPatterns(`(s|[ap]:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`);
+const ORIGIN_PATTERN = `(s|[ap]:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`;
+const PICKER = pickerPatterns(`(${Object.values(MODE_TOKENS).join('|')}):`, ORIGIN_PATTERN);
 const LEGACY_PICKER_PATTERNS = [
-  ...Object.values(pickerPatterns(`(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`)),
-  ...Object.values(pickerPatterns('(p:\\d{1,10})')),
+  ...Object.values(pickerPatterns('', ORIGIN_PATTERN)),
+  ...Object.values(pickerPatterns('', `(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`)),
+  ...Object.values(pickerPatterns('', '(p:\\d{1,10})')),
 ];
+
+// undefined for anything but a token of MODE_TOKENS: a forged datum gets only the answer
+export function stakeModeOf(raw: string | undefined): TradeMode | undefined {
+  return Object.values(TradeMode).find((mode) => MODE_TOKENS[mode] === raw);
+}
 
 // undefined when forged: the asset id the backend would refuse, or a malformed origin
 export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined {
@@ -113,9 +132,47 @@ export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined 
   return undefined;
 }
 
+// what every picker callback carries, and the typed amount's dialog step (login-dialog.ts)
+export interface StakeStep {
+  mode: TradeMode;
+  origin: StakeOrigin;
+}
+
+const stepOf = (mode: string | undefined, origin: string | undefined): StakeStep | undefined => {
+  const stakeMode = stakeModeOf(mode);
+  const stakeOrigin = stakeOriginOf(origin);
+  return stakeMode === undefined || stakeOrigin === undefined
+    ? undefined
+    : { mode: stakeMode, origin: stakeOrigin };
+};
+
+// A bounds refusal of a save, in the save's mode: only that mode's balance is in the limits.
+function refusalText(
+  mode: TradeMode,
+  { error, limits }: Extract<SetStakeResult, { refused: unknown }>['refused'],
+): TelegramHtml {
+  const real = mode === TradeMode.Real;
+  const minStake = limits.minTradeAmount;
+  const digits = String(limits.scale);
+  switch (error) {
+    case StakeRefusal.Precision:
+      return real
+        ? TEXTS.stakePrecisionDigitsReal({ digits, minStake, realAvailable: limits.available })
+        : TEXTS.stakePrecisionDigits({ digits, minStake, demoAvailable: limits.available });
+    case StakeRefusal.BelowMinimum:
+      return TEXTS.stakeBelowMinimum({ minStake });
+    case StakeRefusal.AboveAvailable:
+      return real
+        ? TEXTS.stakeAboveAvailableAmountReal({ realAvailable: limits.available, minStake })
+        : TEXTS.stakeAboveAvailableAmount({ demoAvailable: limits.available, minStake });
+    default:
+      return error satisfies never;
+  }
+}
+
 export interface StakePickerDeps {
   // readPairs: the symbol of the launch screen a save returns to (#320)
-  backend: Pick<BackendClient, 'readTradingAccess' | 'setDemoStake' | 'readPairs'>;
+  backend: Pick<BackendClient, 'readTradingAccess' | 'setStake' | 'readPairs'>;
   logger: Logger;
   dialog: LoginDialog;
   // the welcome's connect button, for a user with no account to trade on
@@ -153,10 +210,10 @@ function backTo(keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard {
   }
 }
 const backKeyboard = (origin: StakeOrigin) => backTo(new InlineKeyboard(), origin);
-// «💵 Сумма» to try again, then the way back
-const retryKeyboard = (origin: StakeOrigin) =>
+// «💵 Сумма» of the same mode to try again, then the way back
+const retryKeyboard = (mode: TradeMode, origin: StakeOrigin) =>
   backTo(
-    new InlineKeyboard().text(LABELS.stakeMenuButton, stakeOpenCallbackData(origin)).row(),
+    new InlineKeyboard().text(LABELS.stakeMenuButton, stakeOpenCallbackData(mode, origin)).row(),
     origin,
   );
 
@@ -167,7 +224,7 @@ export function createStakePicker<C extends Context>({
   connectKeyboard,
 }: StakePickerDeps): {
   composer: Composer<C>;
-  onStakeText: (ctx: Context, origin: StakeOrigin, text: string) => Promise<void>;
+  onStakeText: (ctx: Context, step: StakeStep, text: string) => Promise<void>;
 } {
   const composer = new Composer<C>();
 
@@ -175,8 +232,8 @@ export function createStakePicker<C extends Context>({
 
   // also the custom input's «↩️ Назад», so it ends a stake step left open
   composer.callbackQuery(PICKER.open, async (ctx) => {
-    const origin = stakeOriginOf(ctx.match[1]);
-    if (origin === undefined) {
+    const step = stepOf(ctx.match[1], ctx.match[2]);
+    if (step === undefined) {
       await answer(ctx);
       return;
     }
@@ -185,60 +242,64 @@ export function createStakePicker<C extends Context>({
       answer(ctx),
       settle(backend.readTradingAccess(String(ctx.from.id))),
     ]);
-    const screen = pickerScreen(access, origin, ctx.from.first_name);
+    const screen = pickerScreen(access, step, ctx.from.first_name);
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
   composer.callbackQuery(PICKER.preset, async (ctx) => {
     const amount = tradeAmountSchema.safeParse(ctx.match[1]);
-    const origin = stakeOriginOf(ctx.match[2]);
-    if (!amount.success || origin === undefined) {
+    const step = stepOf(ctx.match[2], ctx.match[3]);
+    if (!amount.success || step === undefined) {
       await answer(ctx);
       return;
     }
-    await saveInPlace(ctx, amount.data, origin);
+    await saveInPlace(ctx, amount.data, step);
   });
 
   composer.callbackQuery(PICKER.reset, async (ctx) => {
-    const origin = stakeOriginOf(ctx.match[1]);
-    if (origin === undefined) {
+    const step = stepOf(ctx.match[1], ctx.match[2]);
+    if (step === undefined) {
       await answer(ctx);
       return;
     }
-    await saveInPlace(ctx, null, origin);
+    await saveInPlace(ctx, null, step);
   });
 
   // The prompt in place of the picker; the typed amount comes to onStakeText through bot.ts's
   // text handler. Setting the step replaces a login step the user had open.
   composer.callbackQuery(PICKER.custom, async (ctx) => {
-    const origin = stakeOriginOf(ctx.match[1]);
-    if (origin === undefined) {
+    const step = stepOf(ctx.match[1], ctx.match[2]);
+    if (step === undefined) {
       await answer(ctx);
       return;
     }
-    dialog.set(ctx.from.id, { step: 'stake', origin });
+    dialog.set(ctx.from.id, { step: 'stake', ...step });
     await answer(ctx);
     await editOrReply(
       ctx,
-      TEXTS.stakeInputPrompt,
-      new InlineKeyboard().text(LABELS.stakeBackButton, stakeOpenCallbackData(origin)),
+      step.mode === TradeMode.Real ? TEXTS.stakeInputPromptReal : TEXTS.stakeInputPrompt,
+      new InlineKeyboard().text(
+        LABELS.stakeBackButton,
+        stakeOpenCallbackData(step.mode, step.origin),
+      ),
     );
   });
 
   // A typed amount: a new reply, the picker message stays as it was (the bot keeps no message id).
-  async function onStakeText(ctx: Context, origin: StakeOrigin, text: string): Promise<void> {
+  // It is saved in the step's mode.
+  async function onStakeText(ctx: Context, step: StakeStep, text: string): Promise<void> {
     const from = ctx.from;
     if (from === undefined) return;
-    const amount = parseDemoStakeInput(text);
+    const amount = parseStakeInput(text);
     if (amount === undefined) {
       keepStakeStep(from.id);
-      await replyHtml(ctx, TEXTS.stakeInputInvalid, { reply_markup: backKeyboard(origin) });
+      await replyHtml(ctx, TEXTS.stakeInputInvalid, { reply_markup: backKeyboard(step.origin) });
       return;
     }
     const screen = await savedScreen(
       from,
-      await settle(backend.setDemoStake(String(from.id), amount)),
-      origin,
+      await settle(backend.setStake(String(from.id), step.mode, amount)),
+      step,
     );
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
   }
@@ -246,20 +307,21 @@ export function createStakePicker<C extends Context>({
   async function saveInPlace(
     ctx: Context & { from: { id: number; first_name: string } },
     amount: DecimalString | null,
-    origin: StakeOrigin,
+    step: StakeStep,
   ): Promise<void> {
     const [, saved] = await Promise.all([
       answer(ctx),
-      settle(backend.setDemoStake(String(ctx.from.id), amount)),
+      settle(backend.setStake(String(ctx.from.id), step.mode, amount)),
     ]);
-    const screen = await savedScreen(ctx.from, saved, origin);
+    const screen = await savedScreen(ctx.from, saved, step);
     await editOrReply(ctx, screen.text, screen.keyboard);
   }
 
-  // The access read's refusals say what the stake press would say (demo-trade.ts amountOf).
+  // The access read's refusals say what the stake press would say (demo-trade.ts amountOf), the
+  // same in both modes.
   function pickerScreen(
     access: Settled<TradingAccessResponse>,
-    origin: StakeOrigin,
+    { mode, origin }: StakeStep,
     firstName: string,
   ): Screen {
     if (!access.ok) {
@@ -269,7 +331,7 @@ export function createStakePicker<C extends Context>({
       );
       return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
     }
-    const { status, broker, brokerUnavailable, demoStake } = access.value;
+    const { status, broker, brokerUnavailable } = access.value;
     if (status === UserStatus.Blocked) {
       // the support link, as for every blocked user (#350), then the picker's way back
       return { text: TEXTS.blocked, keyboard: backTo(supportKeyboard().row(), origin) };
@@ -286,23 +348,31 @@ export function createStakePicker<C extends Context>({
         keyboard: backKeyboard(origin),
       };
     }
-    const limits = { minTradeAmount: broker.minTradeAmount, demoAvailable: broker.demo.available };
-    const presets = demoStakePresets(limits);
-    const current = normalizeDecimal(demoStake ?? broker.minTradeAmount);
+    const real = mode === TradeMode.Real;
+    const saved = real ? access.value.realStake : access.value.demoStake;
+    const presets = stakePresets({
+      minTradeAmount: broker.minTradeAmount,
+      available: real ? broker.real.available : broker.demo.available,
+    });
+    const current = normalizeDecimal(saved ?? broker.minTradeAmount);
     const keyboard = new InlineKeyboard();
     for (const preset of presets) {
       const label = preset === current ? `${formatStake(preset)} ✅` : formatStake(preset);
-      keyboard.text(label, stakePresetCallbackData(preset, origin));
+      keyboard.text(label, stakePresetCallbackData(preset, mode, origin));
     }
     if (presets.length > 0) keyboard.row();
-    keyboard.text(LABELS.stakeCustomButton, stakeCustomCallbackData(origin)).row();
-    if (demoStake !== null) {
-      keyboard.text(LABELS.stakeResetButton, stakeResetCallbackData(origin)).row();
+    keyboard.text(LABELS.stakeCustomButton, stakeCustomCallbackData(mode, origin)).row();
+    if (saved !== null) {
+      keyboard.text(LABELS.stakeResetButton, stakeResetCallbackData(mode, origin)).row();
     }
     return {
       text: stakePickerText({
-        user: userContextOf(firstName, TradeMode.Demo, access.value),
-        ...limits,
+        // the saved stake of the picker's mode, null without one: «Сейчас:» names the minimum
+        user: { ...userContextOf(firstName, mode, access.value), stake: saved },
+        mode,
+        minTradeAmount: broker.minTradeAmount,
+        demoAvailable: broker.demo.available,
+        realAvailable: broker.real.available,
         presets: presets.length,
       }),
       keyboard: backTo(keyboard, origin),
@@ -315,48 +385,40 @@ export function createStakePicker<C extends Context>({
   // opened from a launch screen returns to it with the saved amount (#320).
   async function savedScreen(
     from: { id: number; first_name: string },
-    saved: Settled<SetDemoStakeResult>,
-    origin: StakeOrigin,
+    saved: Settled<SetStakeResult>,
+    { mode, origin }: StakeStep,
   ): Promise<Screen> {
     const { id, first_name: firstName } = from;
+    const real = mode === TradeMode.Real;
     if (saved.ok && 'saved' in saved.value) {
       endStakeStep(id);
       switch (origin.kind) {
         case 'settings':
-        case 'analysis':
+        case 'analysis': {
+          const context = { stake: saved.value.saved, firstName };
           return {
-            text: TEXTS.stakeSaved({ stake: saved.value.saved, firstName }),
+            text: real ? TEXTS.stakeSavedReal(context) : TEXTS.stakeSaved(context),
             keyboard: backKeyboard(origin),
           };
+        }
         case 'pair':
-          return savedLaunchScreen(origin, saved.value.saved, from);
+          return savedLaunchScreen(origin, { amount: saved.value.saved, mode }, from);
         default:
           return origin satisfies never;
       }
     }
     if (saved.ok && 'refused' in saved.value) {
       keepStakeStep(id);
-      const { error, limits } = saved.value.refused;
-      const text =
-        error === DemoStakeRefusal.Precision
-          ? TEXTS.stakePrecisionDigits({
-              digits: String(limits.scale),
-              minStake: limits.minTradeAmount,
-              demoAvailable: limits.demoAvailable,
-            })
-          : error === DemoStakeRefusal.BelowMinimum
-            ? TEXTS.stakeBelowMinimum({ minStake: limits.minTradeAmount })
-            : TEXTS.stakeAboveAvailableAmount({
-                demoAvailable: limits.demoAvailable,
-                minStake: limits.minTradeAmount,
-              });
-      return { text, keyboard: retryKeyboard(origin) };
+      return {
+        text: refusalText(mode, saved.value.refused),
+        keyboard: retryKeyboard(mode, origin),
+      };
     }
     if (saved.ok) throw new Error('unreachable: a save result is saved or refused');
     const { error } = saved;
-    const fields = { ...errorLogFields(error), ...backendErrorFields(error) };
+    const fields = { ...errorLogFields(error), ...backendErrorFields(error), mode };
     const http = error instanceof BackendError && error.code === BackendErrorCode.HttpStatus;
-    if (http && error.reason === DemoStakeErrorCode.BalanceUnavailable) {
+    if (http && error.reason === StakeErrorCode.BalanceUnavailable) {
       keepStakeStep(id);
       return { text: TEXTS.stakeBalanceMissing, keyboard: backKeyboard(origin) };
     }
@@ -364,14 +426,14 @@ export function createStakePicker<C extends Context>({
     // again is harmless, and the picker's «Сейчас:» line shows what is saved
     if (error instanceof BackendError && (!http || (error.status ?? 0) >= 500)) {
       keepStakeStep(id);
-      logger.warn(fields, 'demo stake save outcome unknown');
-      return { text: TEXTS.stakeSaveUnknown, keyboard: retryKeyboard(origin) };
+      logger.warn(fields, 'stake save outcome unknown');
+      return { text: TEXTS.stakeSaveUnknown, keyboard: retryKeyboard(mode, origin) };
     }
     endStakeStep(id);
     // no users row: before the first /start; anything else here is the bot's own bug
-    if (http && error.reason === DemoStakeErrorCode.UserNotFound)
-      logger.warn(fields, 'demo stake not saved');
-    else logger.error(fields, 'demo stake not saved');
+    if (http && error.reason === StakeErrorCode.UserNotFound)
+      logger.warn(fields, 'stake not saved');
+    else logger.error(fields, 'stake not saved');
     return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
   }
 
@@ -384,7 +446,7 @@ export function createStakePicker<C extends Context>({
   // backend refuses for a real-mode user (mode_not_allowed).
   async function savedLaunchScreen(
     { assetId, durationSec }: { assetId: number; durationSec: DemoDurationSec },
-    amount: DecimalString | null,
+    saved: { amount: DecimalString | null; mode: TradeMode },
     { id, first_name: firstName }: { id: number; first_name: string },
   ): Promise<Screen> {
     const [catalog, access] = await Promise.all([
@@ -412,7 +474,7 @@ export function createStakePicker<C extends Context>({
     if (real === undefined && pair !== undefined && !pairPayoutAccepted(pair)) {
       const refusal = payoutTooLowScreen(pair, durationSec);
       return {
-        text: telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: amount })}
+        text: telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
 
 ${refusal.text}`,
         keyboard: refusal.keyboard,
@@ -423,9 +485,17 @@ ${refusal.text}`,
       durationSec,
       firstName,
       symbol: pair?.symbol ?? null,
-      // in real mode the launch names the broker's minimum the real trade stakes (decision 22)
-      amount: real === undefined ? amount : effectiveStake(real),
-      saved: { amount },
+      // the amount of the user's mode: in real the real trade's stake; in demo the demo stake,
+      // which a real save (#326) did not change
+      amount:
+        real !== undefined
+          ? effectiveStake(real)
+          : saved.mode === TradeMode.Demo
+            ? saved.amount
+            : access.ok
+              ? access.value.demoStake
+              : null,
+      saved,
       mode: real === undefined ? TradeMode.Demo : TradeMode.Real,
     });
   }

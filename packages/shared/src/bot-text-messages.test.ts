@@ -135,6 +135,7 @@ describe('the assembled messages', () => {
         'levelReduced',
         'levelOff',
         'settingsStake',
+        'settingsStakeReal',
         'stakeMinimumLabel',
       ]),
     );

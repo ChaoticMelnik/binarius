@@ -98,7 +98,7 @@ export const BOT_TEXT_VARS = {
   }),
   stake: variable({
     description:
-      'Сумма сделки: в карточке и на экране запуска — в режиме пользователя (демо — сохранённая, реальный — минимальная ставка брокера); в выборе суммы, /settings и строках сохранения — демо-ставка',
+      'Сумма сделки: в карточке и на экране запуска — в режиме пользователя (реальный — сохранённая реальная или минимум брокера); на экране суммы, в строке сохранения и /settings — ставка своего режима',
     sample: '$5.00',
     format: (stake: DecimalString | null, texts) =>
       stake === null ? texts('stakeMinimumLabel') : formatStake(stake),
@@ -111,6 +111,11 @@ export const BOT_TEXT_VARS = {
   demoAvailable: variable({
     description: 'Доступно на демо-счёте, как на экране суммы',
     sample: formatStake('9990'),
+    format: (amount: DecimalString) => formatStake(amount),
+  }),
+  realAvailable: variable({
+    description: 'Доступно на реальном счёте, как на экране суммы',
+    sample: formatStake('100'),
     format: (amount: DecimalString) => formatStake(amount),
   }),
   age: variable({

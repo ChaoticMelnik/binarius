@@ -1006,6 +1006,7 @@ describe('body size', () => {
         telegramBlockedAt: AT,
         notificationLevel: longest(NotificationLevel),
         demoStake: MONEY,
+        realStake: MONEY,
         tokens: { balance: INT8, reserved: '0', available: INT8 },
         createdAt: AT,
         updatedAt: AT,

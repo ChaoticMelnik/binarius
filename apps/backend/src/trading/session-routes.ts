@@ -17,8 +17,8 @@ import {
   safeParseReadTradingSessionQuery,
   safeParseStopTradingSessionRequest,
   sessionFitsDeadline,
-  checkDemoStake,
-  demoStakeSettings,
+  checkStake,
+  stakeSettingsFrom,
   tradingSessionSettingsSchema,
   type TradingSessionErrorCode as ErrorCode,
 } from '@binarius/shared';
@@ -29,7 +29,7 @@ import {
   createTradingSession,
   readActiveTradingSessionView,
   readBalanceSnapshot,
-  readDemoStake,
+  readStakes,
   readTradingSessionAccount,
   readTradingSessionView,
   stopTradingSession,
@@ -76,7 +76,7 @@ const STATUS_OF = {
   session_not_active: 409,
   stake_precision: 409,
   stake_below_minimum: 409,
-  insufficient_demo_balance: 409,
+  insufficient_balance: 409,
   catalog_unavailable: 503,
 } as const satisfies Record<ErrorCode, 404 | 409 | 503>;
 
@@ -218,10 +218,10 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
 
     // the user's saved stake, or the broker's minimum without one (#297), checked against the
     // same snapshot before any row is written
-    const demoStake = (await readDemoStake(db, BigInt(telegramUserId))) ?? null;
-    const stakeRefusal = checkDemoStake(demoStake ?? snapshot.minTradeAmount, {
+    const demoStake = (await readStakes(db, BigInt(telegramUserId)))?.demoStake ?? null;
+    const stakeRefusal = checkStake(demoStake ?? snapshot.minTradeAmount, {
       minTradeAmount: snapshot.minTradeAmount,
-      demoAvailable: snapshot.demo.available,
+      available: snapshot.demo.available,
     });
     if (stakeRefusal !== null) return refuse(reply, stakeRefusal);
 
@@ -232,7 +232,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       assetId,
       durationSec,
       trades,
-      stake: demoStakeSettings(demoStake, snapshot.minTradeAmount),
+      stake: stakeSettingsFrom(demoStake, snapshot.minTradeAmount),
     });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');

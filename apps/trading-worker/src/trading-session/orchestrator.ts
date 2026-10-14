@@ -111,8 +111,8 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.ActiveIntentExists]: { kind: 'reschedule' },
   // the step key exists with other terms: the next attempt reads that intent in the history
   [TradeIntentErrorCode.ClientRequestIdConflict]: { kind: 'reschedule' },
-  // the demo-stake bounds (#297): only POST /trading/intents asks for them, so a session intent
-  // never gets these; were it to, they mean what the sizer's own stop means
+  // the stake bounds of either mode (#297, #326): only POST /trading/intents asks for them, so a
+  // session intent never gets these; were it to, they mean what the sizer's own stop means
   [TradeIntentErrorCode.BalanceUnavailable]: {
     kind: 'stop',
     reason: TradingSessionStopReason.BalanceUnavailable,
@@ -125,7 +125,7 @@ const CREATE_REFUSALS = {
     kind: 'stop',
     reason: TradingSessionStopReason.StakeStop,
   },
-  [TradeIntentErrorCode.InsufficientDemoBalance]: {
+  [TradeIntentErrorCode.InsufficientBalance]: {
     kind: 'stop',
     reason: TradingSessionStopReason.StakeStop,
   },

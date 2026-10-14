@@ -223,7 +223,7 @@ export async function closeTradingSwitch(db: Db): Promise<void> {
     .set({ tradingEnabled: false, source: TradingSwitchSource.Operator, reason: 'test' });
 }
 
-// The account's balance snapshot with the two numbers the demo-stake bounds read (#297); the
+// The account's balance snapshot with the numbers the stake bounds read (#297, #326); the
 // rest is a fixed broker user. Written through the real writer, so the domain checks apply.
 export async function seedBalanceSnapshot(
   db: Db,

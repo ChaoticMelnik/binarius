@@ -32,7 +32,7 @@ let tmp: TempDatabase;
 let app: FastifyInstance;
 let demoOnlyApp: FastifyInstance;
 
-// the tradingRoutes plugin on a bare Fastify, as demo-stake.db.test.ts does; a second one on a
+// the tradingRoutes plugin on a bare Fastify, as stake.db.test.ts does; a second one on a
 // DEMO_ONLY process (#396). The balance reconciler is never called: the route reads the stored
 // snapshot only.
 const appOf = async (demoOnly: boolean) => {

@@ -68,7 +68,7 @@ import {
   users,
 } from './schema/index';
 import { openTrading } from './trading-switch-ops';
-import { setTradingMode } from './user-ops';
+import { setStake, setTradingMode } from './user-ops';
 
 // Integration tests on a temporary migrated database (README → Database). Rows are committed
 // for real: concurrency cases need separate connections, and token_ledger is append-only.
@@ -742,8 +742,8 @@ describe('createTradeIntent: the global trading switch (#144)', () => {
   });
 });
 
-describe('createTradeIntent: the demo-stake bounds (#297)', () => {
-  const checked = { checkDemoStake: true } as const;
+describe('createTradeIntent: the stake bounds (#297, #326)', () => {
+  const checked = { checkStake: true } as const;
   const amount = (value: string) => value as DecimalString;
 
   async function refusedWithoutTrace(
@@ -773,7 +773,7 @@ describe('createTradeIntent: the demo-stake bounds (#297)', () => {
 
   it.each([
     ['0.99', 'stake_below_minimum'],
-    ['50.01', 'insufficient_demo_balance'],
+    ['50.01', 'insufficient_balance'],
     ['1.234', 'stake_precision'],
   ])('B3 refuses %s with %s and leaves no trace', async (value, code) => {
     const s = await seedUserWithAccount(tmp.db);
@@ -802,10 +802,17 @@ describe('createTradeIntent: the demo-stake bounds (#297)', () => {
     },
   );
 
-  it('B5 does not check a real intent', async () => {
+  it('B5 checks a real intent against real_available, both ends included', async () => {
     const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
-    const input = intentRequest(s.telegramUserId, { mode: TradeMode.Real });
-    expect((await createTradeIntent(tmp.db, input, undefined, checked)).created).toBe(true);
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, {
+      minTradeAmount: '1',
+      realAvailable: '50',
+    });
+    const real = (value: string) =>
+      intentRequest(s.telegramUserId, { mode: TradeMode.Real, amount: amount(value) });
+    await refusedWithoutTrace(s, real('50.01'), 'insufficient_balance');
+    await refusedWithoutTrace(s, real('0.99'), 'stake_below_minimum');
+    expect((await createTradeIntent(tmp.db, real('50'), undefined, checked)).created).toBe(true);
   });
 
   it('B6 replays a committed intent after the balance dropped below its amount', async () => {
@@ -827,6 +834,33 @@ describe('createTradeIntent: the demo-stake bounds (#297)', () => {
     } finally {
       await openTrading(tmp.db);
     }
+  });
+
+  it('B8 refuses a real intent above real_available that the demo balance would cover', async () => {
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, {
+      realAvailable: '10',
+      demoAvailable: '10000',
+    });
+    const input = intentRequest(s.telegramUserId, { mode: TradeMode.Real, amount: amount('20') });
+    await refusedWithoutTrace(s, input, 'insufficient_balance');
+  });
+
+  it('B9 refuses a demo intent above demo_available that the real balance would cover', async () => {
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, {
+      realAvailable: '10000',
+      demoAvailable: '10',
+    });
+    const input = intentRequest(s.telegramUserId, { amount: amount('20') });
+    await refusedWithoutTrace(s, input, 'insufficient_balance');
+  });
+
+  // B1's twin for real: the orchestrator's real session intents (#327) pass no option (Rule 23)
+  it('B10 without the option creates a real intent with no snapshot', async () => {
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    const input = intentRequest(s.telegramUserId, { mode: TradeMode.Real });
+    expect((await createTradeIntent(tmp.db, input)).created).toBe(true);
   });
 });
 
@@ -896,6 +930,26 @@ describe('createTradeIntent: DEMO_ONLY (#396)', () => {
     const again = await createTradeIntent(tmp.db, input, undefined, demoOnly);
     expect(again.created).toBe(false);
     expect(again.intent.id).toBe(first.intent.id);
+  });
+
+  // #326: the stake bound runs after the flag, so a saved real stake above the real balance
+  // still reads demo_only on a DEMO_ONLY process
+  it('F5 answers demo_only ahead of the stake bound', async () => {
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, { realAvailable: '10' });
+    const stake = '20' as DecimalString;
+    await setStake(tmp.db, BigInt(s.telegramUserId), TradeMode.Real, stake);
+    await failsWith(
+      createTradeIntent(
+        tmp.db,
+        intentRequest(s.telegramUserId, { mode: TradeMode.Real, amount: stake }),
+        undefined,
+        { checkStake: true, demoOnly: true },
+      ),
+      'demo_only',
+    );
+    expect(await intentsOf(s.userId)).toEqual([]);
+    expect(await tokenReservedOf(s.userId)).toBe(0n);
   });
 });
 

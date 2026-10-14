@@ -94,6 +94,7 @@ export const USER_VIEW: UserStartView = {
   pendingBrokerAccounts: [],
   notificationLevel: NotificationLevel.All,
   demoStake: null,
+  realStake: null,
 };
 
 export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({
@@ -165,6 +166,7 @@ export const ACCESS_VIEW: TradingAccessResponse = {
   brokerUnavailable: null,
   tradingOpen: true,
   demoStake: null,
+  realStake: null,
   tradingMode: TradeMode.Demo,
 };
 export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingAccessResponse => ({
@@ -423,7 +425,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     stopSession: unused,
     claimSessionSummary: unused,
     stopSessions: unused,
-    setDemoStake: unused,
+    setStake: unused,
     readBotTexts: unused,
     ...patch,
   };

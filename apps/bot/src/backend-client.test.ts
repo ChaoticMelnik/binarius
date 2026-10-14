@@ -4,7 +4,7 @@ import {
   BOT_TEXT_CATALOG,
   botTextOverridesResponseSchema,
   BrokerAccountStatus,
-  DemoStakeRefusal,
+  StakeRefusal,
   INT4_MAX,
   LinkBonusSkipReason,
   MAX_SESSION_TRADES,
@@ -16,7 +16,7 @@ import {
   RULE_REFUSAL_REASONS,
   safeParseChatMemberResponse,
   safeParseConfirmLoginResponse,
-  safeParseDemoStakeRefusal,
+  safeParseStakeRefusal,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
@@ -35,6 +35,7 @@ import {
   SIGNAL_SCAN_INTERVALS,
   SignalFeedOutcome,
   SignalKind,
+  STAKE_PATH,
   TELEGRAM_MESSAGE_LIMIT,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -444,11 +445,11 @@ describe('recordChatMember', () => {
 describe('setNotificationLevel', () => {
   it('posts the id and the level under the bearer and returns the answer', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {
-      json(reply, 200, { level: 'off', demoStake: '2.5' });
+      json(reply, 200, { level: 'off', demoStake: '2.5', realStake: '7' });
     });
     expect(
       await createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'off'),
-    ).toEqual({ level: 'off', demoStake: '2.5' });
+    ).toEqual({ level: 'off', demoStake: '2.5', realStake: '7' });
     expect(capture.url).toBe('/users/notification-level');
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', level: 'off' });
@@ -456,7 +457,7 @@ describe('setNotificationLevel', () => {
 
   it('reports an unknown level in the answer as a contract violation', async () => {
     const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 200, { level: 'daily', demoStake: null });
+      json(reply, 200, { level: 'daily', demoStake: null, realStake: null });
     });
     const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'reduced'),
@@ -479,48 +480,70 @@ describe('setNotificationLevel', () => {
   });
 });
 
-describe('setDemoStake (#297)', () => {
-  const LIMITS = { minTradeAmount: '1', demoAvailable: '50', scale: 2 };
+describe('setStake (#297, #326)', () => {
+  const LIMITS = { minTradeAmount: '1', available: '50', scale: 2 };
 
-  it.each([['2.5'], [null]])(
-    'posts %s under the bearer and returns the saved stake',
-    async (amount) => {
-      const { baseUrl, capture } = await serve((_request, reply) => {
-        json(reply, 200, { demoStake: amount });
-      });
-      expect(
-        await createBackendClient({ baseUrl, token: TOKEN }).setDemoStake(
-          '4242',
-          amount as DecimalString | null,
-        ),
-      ).toEqual({ saved: amount });
-      expect(capture.url).toBe('/trading/demo-stake');
-      expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
-      expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', amount });
-    },
-  );
+  it.each([
+    [TradeMode.Demo, '2.5'],
+    [TradeMode.Real, '2.5'],
+    [TradeMode.Real, null],
+  ])('posts a %s stake of %s under the bearer and returns it', async (mode, amount) => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { mode, stake: amount });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).setStake(
+        '4242',
+        mode,
+        amount as DecimalString | null,
+      ),
+    ).toEqual({ saved: amount });
+    expect(capture.url).toBe(STAKE_PATH);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', mode, amount });
+  });
+
+  // the path is relative, as every other route's: a leading slash would drop the prefix
+  it('keeps a path prefix on the base URL', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { mode: TradeMode.Real, stake: '5' });
+    });
+    await createBackendClient({ baseUrl: `${baseUrl}/api`, token: TOKEN }).setStake(
+      '4242',
+      TradeMode.Real,
+      '5' as DecimalString,
+    );
+    expect(capture.url).toBe('/api/trading/stake');
+  });
 
   it('returns a bounds refusal with its limits', async () => {
     const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 409, { error: 'stake_below_minimum', limits: LIMITS });
+      json(reply, 409, { error: 'insufficient_balance', limits: LIMITS });
     });
     expect(
-      await createBackendClient({ baseUrl, token: TOKEN }).setDemoStake(
+      await createBackendClient({ baseUrl, token: TOKEN }).setStake(
         '4242',
-        '0.5' as DecimalString,
+        TradeMode.Real,
+        '60' as DecimalString,
       ),
-    ).toEqual({ refused: { error: 'stake_below_minimum', limits: LIMITS } });
+    ).toEqual({ refused: { error: 'insufficient_balance', limits: LIMITS } });
   });
 
   it.each([
     ['a bounds refusal without its limits', 409, { error: 'stake_precision' }],
-    ['a 200 without the stake', 200, {}],
+    ['a 200 without the stake', 200, { mode: TradeMode.Real }],
+    ['a 200 for the other mode', 200, { mode: TradeMode.Demo, stake: '5' }],
+    ['a 200 of the old demo route', 200, { demoStake: '5' }],
   ])('reports %s as a contract violation', async (_case, status, body) => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, status, body);
     });
     const error = await rejectionOf(
-      createBackendClient({ baseUrl, token: TOKEN }).setDemoStake('4242', '5' as DecimalString),
+      createBackendClient({ baseUrl, token: TOKEN }).setStake(
+        '4242',
+        TradeMode.Real,
+        '5' as DecimalString,
+      ),
     );
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation, status });
   });
@@ -534,7 +557,11 @@ describe('setDemoStake (#297)', () => {
       json(reply, status, { error: reason, limits: LIMITS, issues: ['x'] });
     });
     const error = await rejectionOf(
-      createBackendClient({ baseUrl, token: TOKEN }).setDemoStake('4242', '5' as DecimalString),
+      createBackendClient({ baseUrl, token: TOKEN }).setStake(
+        '4242',
+        TradeMode.Demo,
+        '5' as DecimalString,
+      ),
     );
     expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
   });
@@ -1547,6 +1574,7 @@ describe('body size', () => {
             })),
             notificationLevel: longest(Object.values(NotificationLevel)),
             demoStake: DECIMAL,
+            realStake: DECIMAL,
           },
         },
       },
@@ -1580,7 +1608,11 @@ describe('body size', () => {
       recordChatMember: { parse: safeParseChatMemberResponse, sample: { recorded: false } },
       setNotificationLevel: {
         parse: safeParseNotificationLevelResponse,
-        sample: { level: longest(Object.values(NotificationLevel)), demoStake: DECIMAL },
+        sample: {
+          level: longest(Object.values(NotificationLevel)),
+          demoStake: DECIMAL,
+          realStake: DECIMAL,
+        },
       },
       readTradingAccess: {
         parse: safeParseTradingAccessResponse,
@@ -1603,6 +1635,7 @@ describe('body size', () => {
           brokerUnavailable: null,
           tradingOpen: false,
           demoStake: DECIMAL,
+          realStake: DECIMAL,
           tradingMode: longest(Object.values(TradeMode)),
         },
       },
@@ -1688,11 +1721,11 @@ describe('body size', () => {
         },
       },
       // the bounds 409: larger than the 2xx's lone stake
-      setDemoStake: {
-        parse: safeParseDemoStakeRefusal,
+      setStake: {
+        parse: safeParseStakeRefusal,
         sample: {
-          error: longest(Object.values(DemoStakeRefusal)),
-          limits: { minTradeAmount: DECIMAL, demoAvailable: DECIMAL, scale: NONNEGATIVE_INT },
+          error: longest(Object.values(StakeRefusal)),
+          limits: { minTradeAmount: DECIMAL, available: DECIMAL, scale: NONNEGATIVE_INT },
         },
       },
       // Reds when the catalog grows to about 500 keys: then the ceiling is revisited, not the

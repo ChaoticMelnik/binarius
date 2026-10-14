@@ -55,7 +55,6 @@ import * as brokerBalance from './broker-balance';
 import * as audit from './audit';
 import * as brokerBudget from './broker-budget';
 import * as catalog from './catalog';
-import * as demoStake from './demo-stake';
 import * as env from './env';
 import * as exhaustive from './exhaustive';
 import * as httpBody from './http-body';
@@ -71,6 +70,7 @@ import * as processModule from './process';
 import * as referral from './referral';
 import * as signal from './signal';
 import * as socket from './socket';
+import * as stake from './stake';
 import * as telegramHtml from './telegram-html';
 import * as time from './time';
 import * as trading from './trading';
@@ -161,6 +161,7 @@ describe('contract coverage (issue #6)', () => {
         | null;
       tradingOpen: boolean;
       demoStake: DecimalString | null;
+      realStake: DecimalString | null;
       tradingMode: 'demo' | 'real';
     }>();
   });
@@ -429,7 +430,7 @@ describe('contract coverage (issue #6)', () => {
       | 'session_not_active'
       | 'stake_precision'
       | 'stake_below_minimum'
-      | 'insufficient_demo_balance'
+      | 'insufficient_balance'
     >();
   });
 
@@ -486,7 +487,7 @@ describe('contract coverage (issue #6)', () => {
       linkConfirmation,
       telegramHtml,
       catalog,
-      demoStake,
+      stake,
       signal,
       tradingSession,
       botTextTemplate,

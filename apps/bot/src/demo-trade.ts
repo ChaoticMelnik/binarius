@@ -100,7 +100,9 @@ export interface DemoTradeDeps {
 interface Refusal {
   text: BotStaticHtmlKey;
   connect?: true;
-  // «💵 Сумма» under the text: a refusal of the amount itself (#297)
+  // the text of a real press, where it differs (#326)
+  real?: BotStaticHtmlKey;
+  // «💵 Сумма» of the press's mode under the text: a refusal of the amount itself (#297)
   stakeMenu?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
@@ -130,12 +132,17 @@ const CREATE_REFUSALS = {
   // a real press whose user went back to demo between the access read and the POST (#121); an
   // older render is refused by the fingerprint first
   [TradeIntentErrorCode.RealModeOff]: { text: 'stakeRealModeOff' },
-  // the demo-stake bounds against the account's snapshot (#297); stake_below_minimum names the
-  // minimum when this press's access read had it (replyCreateFailure)
+  // the stake bounds against the account's snapshot, by the press's mode (#297, #326);
+  // stake_below_minimum names the minimum when this press's access read had it
+  // (replyCreateFailure)
   [TradeIntentErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },
   [TradeIntentErrorCode.StakePrecision]: { text: 'stakePrecision', stakeMenu: true },
   [TradeIntentErrorCode.StakeBelowMinimum]: { text: 'stakeBelowBrokerMinimum', stakeMenu: true },
-  [TradeIntentErrorCode.InsufficientDemoBalance]: { text: 'stakeAboveAvailable', stakeMenu: true },
+  [TradeIntentErrorCode.InsufficientBalance]: {
+    text: 'stakeAboveAvailable',
+    real: 'stakeAboveAvailableReal',
+    stakeMenu: true,
+  },
 } as const satisfies Record<TradeIntentErrorCode, Refusal>;
 
 const isCreateRefusal = (reason: string | undefined): reason is TradeIntentErrorCode =>
@@ -170,8 +177,8 @@ export function createDemoTradeComposer<C extends Context>({
 
   // The order of the checks: the catalog read at this press (the pair can close or vanish
   // between the analysis and the press), the access (the user's mode, #121; the amount is the
-  // broker's minimum in real mode, in demo the saved demo stake or the broker's minimum without
-  // one, a string as the backend sent it — never computed, Rule 2), the button's fingerprint
+  // saved stake of that mode or the broker's minimum without one, #297, #326, a string as the
+  // backend sent it — never computed, Rule 2), the button's fingerprint
   // against that amount and mode (#297, #121), then the POST in that mode.
   // The key is the mode and the button's own nonce: the same button pressed again — a double tap,
   // an old message, a press after a restart — replays the same intent and never opens a second
@@ -221,7 +228,7 @@ export function createDemoTradeComposer<C extends Context>({
     let created = await create(request);
     if (!created.ok && created.unknown) created = await create(request);
     if (!created.ok) {
-      await replyCreateFailure(ctx, created, stake, amount.minTradeAmount);
+      await replyCreateFailure(ctx, created, stake, amount);
       return;
     }
     await sendStatus(ctx, trade.pair, created.intent);
@@ -321,7 +328,7 @@ export function createDemoTradeComposer<C extends Context>({
     ctx: Context,
     failure: Extract<CreateOutcome, { ok: false }>,
     stake: StakeData,
-    minTradeAmount: DecimalString,
+    { minTradeAmount, mode }: { minTradeAmount: DecimalString; mode: TradeMode },
   ): Promise<void> {
     const reason = failure.error instanceof BackendError ? failure.error.reason : undefined;
     const refusal: Refusal =
@@ -337,7 +344,7 @@ export function createDemoTradeComposer<C extends Context>({
     const text =
       !failure.unknown && reason === TradeIntentErrorCode.StakeBelowMinimum
         ? TEXTS.stakeBelowMinimum({ minStake: minTradeAmount })
-        : textOf(refusal.text);
+        : textOf(mode === TradeMode.Real ? (refusal.real ?? refusal.text) : refusal.text);
     const reply_markup =
       refusal.text === 'blocked'
         ? supportKeyboard()
@@ -346,7 +353,7 @@ export function createDemoTradeComposer<C extends Context>({
           : refusal.stakeMenu === true
             ? new InlineKeyboard().text(
                 LABELS.stakeMenuButton,
-                stakeMenuCallbackData(stake.assetId, stake.durationSec),
+                stakeMenuCallbackData(mode, stake.assetId, stake.durationSec),
               )
             : backToAnalysisKeyboard(stake.assetId, stake.durationSec);
     await replyHtml(ctx, text, { reply_markup });

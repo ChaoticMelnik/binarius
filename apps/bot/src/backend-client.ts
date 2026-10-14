@@ -1,14 +1,15 @@
 import {
-  DemoStakeRefusal,
+  StakeRefusal,
   safeParseChatMemberResponse,
-  safeParseDemoStakeRefusal,
-  safeParseSetDemoStakeResponse,
+  safeParseSetStakeResponse,
+  safeParseStakeRefusal,
   safeParseConfirmLoginResponse,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
   safeParsePairsCatalogResponse,
   BOT_TEXTS_PATH,
+  STAKE_PATH,
   botTextOverridesResponseSchema,
   readBody,
   type BotTextOverride,
@@ -31,7 +32,7 @@ import {
   type CreateTradeIntentRequest,
   type CreateTradingSessionRequest,
   type DecimalString,
-  type DemoStakeRefusalBody,
+  type StakeRefusalBody,
   type EmailLoginResponse,
   type EmailSendCodeResponse,
   type NotificationLevel,
@@ -42,6 +43,7 @@ import {
   type SignalInterval,
   type TelegramChatMemberStatus,
   type TradeIntentView,
+  type TradeMode,
   type TradingAccessResponse,
   type TradingSessionView,
   type TradingSignalResponse,
@@ -134,17 +136,21 @@ export interface BackendClient {
   claimSessionSummary(id: string, telegramUserId: string): Promise<SessionSummary | null>;
   // every active session of the user, stopped (#122); empty when there was none
   stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
-  // the saved stake, or a bounds refusal with the limits it was checked against (#297); any other
-  // failure throws as from every method
-  setDemoStake(telegramUserId: string, amount: DecimalString | null): Promise<SetDemoStakeResult>;
+  // the saved stake of the mode, or a bounds refusal with the limits it was checked against (#297,
+  // #326); any other failure throws as from every method
+  setStake(
+    telegramUserId: string,
+    mode: TradeMode,
+    amount: DecimalString | null,
+  ): Promise<SetStakeResult>;
   // every text override, as stored: the refresher resolves them (#299)
   readBotTexts(): Promise<BotTextOverride[]>;
 }
 
-export type SetDemoStakeResult =
-  { saved: DecimalString | null } | { refused: Extract<DemoStakeRefusalBody, { limits: unknown }> };
+export type SetStakeResult =
+  { saved: DecimalString | null } | { refused: Extract<StakeRefusalBody, { limits: unknown }> };
 
-const DEMO_STAKE_REFUSALS: ReadonlySet<string> = new Set(Object.values(DemoStakeRefusal));
+const STAKE_REFUSALS: ReadonlySet<string> = new Set(Object.values(StakeRefusal));
 
 export type StartSessionResult =
   { started: TradingSessionView } | { active: TradingSessionView | null };
@@ -358,20 +364,25 @@ export function createBackendClient({
     },
     // Only the parsed body and the error code leave this method, as from request(): a bounds 409
     // is read for its limits alone.
-    async setDemoStake(telegramUserId, amount) {
-      const { ok, status, payload } = await send('POST', 'trading/demo-stake', {
+    // An answer for another mode than asked is a contract violation.
+    async setStake(telegramUserId, mode, amount) {
+      // relative, as BOT_TEXTS_PATH: a leading slash would drop a base URL's path prefix
+      const { ok, status, payload } = await send('POST', STAKE_PATH.slice(1), {
         telegramUserId,
+        mode,
         amount,
       });
       if (ok) {
-        const parsed = safeParseSetDemoStakeResponse(payload);
-        if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation, { status });
-        return { saved: parsed.data.demoStake };
+        const parsed = safeParseSetStakeResponse(payload);
+        if (!parsed.success || parsed.data.mode !== mode) {
+          throw new BackendError(BackendErrorCode.ContractViolation, { status });
+        }
+        return { saved: parsed.data.stake };
       }
-      if (status !== 409 || !DEMO_STAKE_REFUSALS.has(errorCodeOf(payload) ?? '')) {
+      if (status !== 409 || !STAKE_REFUSALS.has(errorCodeOf(payload) ?? '')) {
         throw httpStatusError(status, payload);
       }
-      const parsed = safeParseDemoStakeRefusal(payload);
+      const parsed = safeParseStakeRefusal(payload);
       if (!parsed.success || !('limits' in parsed.data)) {
         throw new BackendError(BackendErrorCode.ContractViolation, { status });
       }

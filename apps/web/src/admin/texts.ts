@@ -99,6 +99,7 @@ export const TEXTS = {
   fieldTelegramBlockedAt: 'Бот недоступен с',
   fieldNotificationLevel: 'Уведомления',
   fieldDemoStake: 'Демо-ставка',
+  fieldRealStake: 'Реальная ставка',
   demoStakeDefault: 'минимальная ставка брокера',
   fieldBalance: 'Баланс',
   fieldReserved: 'В резерве',

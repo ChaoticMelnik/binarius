@@ -16,6 +16,7 @@ import {
   OAuthErrorCode,
   startPayloadSchema,
   TelegramChatMemberStatus,
+  TradeMode,
   userStartRequestSchema,
   UserErrorCode,
   UserStatus,
@@ -279,6 +280,7 @@ export function createBot({
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
       demoStake: access.demoStake,
+      realStake: access.realStake,
     });
     const reply_markup = statusCardKeyboard(access.tradingMode);
     const sent = await sendWithTextFallback(
@@ -351,9 +353,11 @@ export function createBot({
       await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
-    await replyHtml(ctx, settingsText(user.notificationLevel, user.demoStake, from.first_name), {
-      reply_markup: levelKeyboard(user.notificationLevel),
-    });
+    await replyHtml(
+      ctx,
+      settingsText(user.notificationLevel, user.demoStake, user.realStake, from.first_name),
+      { reply_markup: levelKeyboard(user.notificationLevel) },
+    );
   }
 
   // The stake picker's way back (#297): /settings' own read, then the message in place of the
@@ -383,6 +387,7 @@ export function createBot({
       ctx,
       read.value.notificationLevel,
       read.value.demoStake,
+      read.value.realStake,
       ctx.from.first_name,
     );
   });
@@ -406,7 +411,13 @@ export function createBot({
       await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
       return;
     }
-    await showSettings(ctx, set.value.level, set.value.demoStake, ctx.from.first_name);
+    await showSettings(
+      ctx,
+      set.value.level,
+      set.value.demoStake,
+      set.value.realStake,
+      ctx.from.first_name,
+    );
   });
 
   privateChats.callbackQuery(LEVEL_CURRENT_CALLBACK_DATA, async (ctx) => {
@@ -578,9 +589,10 @@ export function createBot({
     const state = loginDialog.get(from.id);
     if (state === undefined) return;
 
-    // a typed demo stake (#297): an address typed now is a stake too, refused as invalid
+    // a typed stake of the step's mode (#297, #326): an address typed now is a stake too, refused
+    // as invalid
     if (state.step === 'stake') {
-      await stakePicker.onStakeText(ctx, state.origin, text);
+      await stakePicker.onStakeText(ctx, state, text);
       return;
     }
 
@@ -798,9 +810,10 @@ export function createBot({
     ctx: Context,
     level: NotificationLevel,
     demoStake: DecimalString | null,
+    realStake: DecimalString | null,
     firstName: string,
   ): Promise<void> {
-    const text = settingsText(level, demoStake, firstName);
+    const text = settingsText(level, demoStake, realStake, firstName);
     const reply_markup = levelKeyboard(level);
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });
@@ -949,7 +962,7 @@ function accountKeyboard(accounts: readonly LinkedAccountView[]): InlineKeyboard
 }
 
 // one row of the three levels, the selected one marked and doing nothing when pressed; then the
-// demo stake's picker (#297)
+// picker of each mode's stake (#297, #326)
 function levelKeyboard(current: NotificationLevel): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   for (const level of Object.values(NotificationLevel)) {
@@ -958,7 +971,14 @@ function levelKeyboard(current: NotificationLevel): InlineKeyboard {
   }
   return keyboard
     .row()
-    .text(LABELS.settingsStakeButton, stakeOpenCallbackData({ kind: 'settings' }));
+    .text(
+      LABELS.settingsStakeDemoButton,
+      stakeOpenCallbackData(TradeMode.Demo, { kind: 'settings' }),
+    )
+    .text(
+      LABELS.settingsStakeRealButton,
+      stakeOpenCallbackData(TradeMode.Real, { kind: 'settings' }),
+    );
 }
 
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {

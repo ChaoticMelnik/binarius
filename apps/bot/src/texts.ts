@@ -154,7 +154,7 @@ export interface UserTextContext {
   stake: DecimalString | null;
 }
 
-type AccessForTexts = Pick<TradingAccessResponse, 'tokens' | 'broker' | 'demoStake'>;
+type AccessForTexts = Pick<TradingAccessResponse, 'tokens' | 'broker' | 'demoStake' | 'realStake'>;
 
 // a balance with the freshness the backend judged (isBalanceFresh); null with no snapshot
 export const balanceOf = (
@@ -163,12 +163,12 @@ export const balanceOf = (
 ): BotTextBalance =>
   broker === null ? null : { amount: broker[side].available, fresh: broker.fresh };
 
-// `mode` is the user's trading mode (#121) where the caller read it, DEMO for the stake picker,
-// which saves the demo stake whatever the mode
+// `mode` is the user's trading mode (#121) where the caller read it, the picker's own mode for the
+// stake picker, which saves that mode's stake whatever the user's mode (#326)
 export const userContextOf = (
   firstName: string,
   mode: TradeMode,
-  { tokens, broker, demoStake }: AccessForTexts,
+  { tokens, broker, demoStake, realStake }: AccessForTexts,
 ): UserTextContext => ({
   firstName,
   tokens: tokens.available,
@@ -176,9 +176,9 @@ export const userContextOf = (
   demoBalance: balanceOf(broker, TradeMode.Demo),
   realBalance: balanceOf(broker, TradeMode.Real),
   mode,
-  // the amount a trade stakes in that mode: the broker's minimum in real (#121), null without a
-  // snapshot (the text prints «минимальная ставка брокера»)
-  stake: mode === TradeMode.Real ? (broker?.minTradeAmount ?? null) : demoStake,
+  // the amount a trade stakes in that mode: the saved stake; in real without one the broker's
+  // minimum (#326), null without a snapshot either (the text prints «минимальная ставка брокера»)
+  stake: mode === TradeMode.Real ? (realStake ?? broker?.minTradeAmount ?? null) : demoStake,
 });
 
 // The /help message: the three blocks, then one line per command in the menu's order.
@@ -269,7 +269,7 @@ function bonusOf(
 // tradingMode (#121): the header and the hint follow it.
 export type StatusCardInput = Pick<
   TradingAccessResponse,
-  'tokens' | 'broker' | 'brokerUnavailable' | 'demoStake'
+  'tokens' | 'broker' | 'brokerUnavailable' | 'demoStake' | 'realStake'
 > & {
   firstName: string;
   mode: TradeMode;
@@ -704,9 +704,9 @@ export const signalButtonLabel = (symbol: string, action: TradeAction, payout: n
 
 // The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
-// give reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset
-// to the minimum. In real mode (#121) the stake and cycle lines give way to the single trade's:
-// cycles are demo only, and `amount` is the broker's minimum the real trade stakes.
+// give reads as the broker's minimum; `saved` is what the picker has just saved and in which mode,
+// null for the reset to the minimum. In real mode (#121) the stake and cycle lines give way to the
+// single trade's: cycles are demo only.
 export function launchText({
   firstName,
   durationSec,
@@ -721,7 +721,7 @@ export function launchText({
   symbol: string | null;
   amount: DecimalString | null;
   trades: number;
-  saved?: { amount: DecimalString | null };
+  saved?: { amount: DecimalString | null; mode: TradeMode };
   mode?: TradeMode;
 }): TelegramHtml {
   const context = { firstName, stake: amount };
@@ -745,7 +745,7 @@ export function launchText({
         ]),
   ];
   if (saved === undefined) return joinLines(lines);
-  return telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: saved.amount })}
+  return telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
 
 ${joinLines(lines)}`;
 }
@@ -753,31 +753,47 @@ ${joinLines(lines)}`;
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button
 export const currentLevelLabel = (level: NotificationLevel): string => `${levelLabel(level)} ✅`;
+// /settings: the level block, then the stake of each mode (#297, #326)
 export const settingsText = (
   level: NotificationLevel,
   demoStake: DecimalString | null,
+  realStake: DecimalString | null,
   firstName: string,
 ): TelegramHtml => {
   const context = { level, stake: demoStake, firstName };
   return telegramHtml`${TEXTS.settings(context)}
 
-${TEXTS.settingsStake(context)}`;
+${TEXTS.settingsStake(context)}
+${TEXTS.settingsStakeReal({ ...context, stake: realStake })}`;
 };
 
-// The stake picker (#297, stake-picker.ts): the saved stake, or the broker's minimum named as
-// such, then the two bounds the backend checks it against.
+// the line over a screen after a save, in the saved stake's mode (#326)
+export const stakeSavedLine = (
+  mode: TradeMode,
+  context: { firstName: string; stake: DecimalString | null },
+): TelegramHtml =>
+  mode === TradeMode.Real ? TEXTS.stakeSavedLineReal(context) : TEXTS.stakeSavedLine(context);
+
+// The stake picker (#297, #326, stake-picker.ts) of one mode: the saved stake, or the broker's
+// minimum named as such, then the two bounds the backend checks it against — the minimum and
+// that mode's balance. `user.stake` is the picker's mode's saved stake.
 export function stakePickerText({
   user,
+  mode,
   minTradeAmount,
   demoAvailable,
+  realAvailable,
   presets,
 }: {
   user: UserTextContext;
+  mode: TradeMode;
   minTradeAmount: DecimalString;
   demoAvailable: DecimalString;
+  realAvailable: DecimalString;
   presets: number;
 }): TelegramHtml {
-  const context = { ...user, minStake: minTradeAmount, demoAvailable };
+  const context = { ...user, minStake: minTradeAmount, demoAvailable, realAvailable };
+  const real = mode === TradeMode.Real;
   const amount =
     user.stake === null
       ? `${plain.stakeMinimumLabel} (${formatStake(minTradeAmount)})`
@@ -785,10 +801,12 @@ export function stakePickerText({
   const lines = [
     TEXTS.stakePickerCurrent({ ...context, amount }),
     TEXTS.stakePickerMinimum(context),
-    TEXTS.stakePickerAvailable(context),
-    ...(presets === 0 ? [TEXTS.stakePickerNoPresets(context)] : []),
+    real ? TEXTS.stakePickerAvailableReal(context) : TEXTS.stakePickerAvailable(context),
+    ...(presets === 0
+      ? [real ? TEXTS.stakePickerNoPresetsReal(context) : TEXTS.stakePickerNoPresets(context)]
+      : []),
   ];
-  return telegramHtml`${TEXTS.stakePickerHeader(context)}
+  return telegramHtml`${real ? TEXTS.stakePickerHeaderReal(context) : TEXTS.stakePickerHeader(context)}
 ${joinLines(lines)}`;
 }
 

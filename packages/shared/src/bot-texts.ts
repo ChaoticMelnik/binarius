@@ -100,7 +100,8 @@ const plain = <const G extends string, const V extends readonly BotTextVarName[]
 const g = BotTextGroup;
 const caption = { limit: TELEGRAM_CAPTION_LIMIT };
 // What a status card's handler holds: the access read and the user's first_name (docs/bot-texts.md
-// → Variables); the stake picker's adds the two bounds it shows.
+// → Variables); the stake picker's adds the minimum and both balances, so either mode's picker
+// prints the bound it shows (#326).
 const user = [
   'firstName',
   'tokens',
@@ -110,7 +111,7 @@ const user = [
   'mode',
   'stake',
 ] as const;
-const picker = [...user, 'minStake', 'demoAvailable'] as const;
+const picker = [...user, 'minStake', 'demoAvailable', 'realAvailable'] as const;
 
 export const BOT_TEXT_CATALOG = {
   // ---- Вход и подключение -------------------------------------------------------------------
@@ -400,8 +401,8 @@ export const BOT_TEXT_CATALOG = {
   ),
   statusHintReal: html(
     g.Menu,
-    '/menu: подсказка внизу карточки в реальном режиме (#121).',
-    `⚠️ Реальный режим: сделки идут на реальные деньги по минимальной ставке брокера.`,
+    '/menu: подсказка внизу карточки в реальном режиме (#121), с действующей реальной ставкой (#326).',
+    `⚠️ Реальный режим: сделки идут на реальные деньги на сумму {stake}.`,
     { ...caption, vars: user },
   ),
   balanceUnavailable: plain(
@@ -445,9 +446,15 @@ export const BOT_TEXT_CATALOG = {
     `💵 Сумма демо-сделки: <b>{stake}</b>`,
     { vars: ['level', 'stake', 'firstName'] },
   ),
+  settingsStakeReal: html(
+    g.Settings,
+    '/settings: строка с суммой реальной сделки под строкой демо-суммы (#326).',
+    `💼 Сумма реальной сделки: <b>{stake}</b>`,
+    { vars: ['level', 'stake', 'firstName'] },
+  ),
   stakeMinimumLabel: plain(
     g.Settings,
-    'Сумма демо-сделки не выбрана: так она называется в /settings, на экране суммы и после сброса.',
+    'Сумма сделки (демо или реальной) не выбрана: так она называется в /settings, на экране суммы и после сброса.',
     'минимальная ставка брокера',
   ),
 
@@ -1048,11 +1055,22 @@ export const BOT_TEXT_CATALOG = {
     'Кнопка сделки и старт сессии: сумма больше доступного демо-баланса.',
     `⚠️ На демо-счёте недостаточно средств для этой суммы. Выбери сумму поменьше.`,
   ),
+  stakeAboveAvailableReal: html(
+    g.Trade,
+    'Кнопка реальной сделки: сумма больше доступного реального баланса (#326).',
+    `⚠️ На реальном счёте недостаточно средств для этой суммы. Выбери сумму поменьше.`,
+  ),
   stakeAboveAvailableAmount: html(
     g.Trade,
     'Сохранение суммы: сумма больше доступного демо-баланса.',
     `⚠️ На демо-счёте доступно {demoAvailable}. Выбери сумму поменьше.`,
     { vars: ['demoAvailable', 'minStake'] },
+  ),
+  stakeAboveAvailableAmountReal: html(
+    g.Trade,
+    'Сохранение реальной суммы: сумма больше доступного реального баланса (#326).',
+    `⚠️ На реальном счёте доступно {realAvailable}. Выбери сумму поменьше.`,
+    { vars: ['realAvailable', 'minStake'] },
   ),
   stakePrecision: html(
     g.Trade,
@@ -1065,9 +1083,22 @@ export const BOT_TEXT_CATALOG = {
     `❌ Не больше {digits} знаков после запятой.`,
     { vars: ['digits', 'minStake', 'demoAvailable'] },
   ),
+  // its own key: a refusal carries only the balance of its mode (#326)
+  stakePrecisionDigitsReal: html(
+    g.Trade,
+    'Сохранение реальной суммы: слишком много знаков после запятой, с допустимым числом (#326).',
+    `❌ Не больше {digits} знаков после запятой.`,
+    { vars: ['digits', 'minStake', 'realAvailable'] },
+  ),
   stakePickerHeader: html(g.Trade, 'Экран суммы: заголовок.', `💵 <b>Сумма демо-сделки</b>`, {
     vars: picker,
   }),
+  stakePickerHeaderReal: html(
+    g.Trade,
+    'Экран реальной суммы: заголовок (#326).',
+    `💼 <b>Сумма реальной сделки</b>`,
+    { vars: picker },
+  ),
   stakePickerCurrent: html(g.Trade, 'Экран суммы: выбранная сейчас сумма.', `Сейчас: {amount}`, {
     vars: ['amount', ...picker],
   }),
@@ -1085,16 +1116,33 @@ export const BOT_TEXT_CATALOG = {
       vars: picker,
     },
   ),
+  stakePickerAvailableReal: html(
+    g.Trade,
+    'Экран реальной суммы: доступный реальный баланс (#326).',
+    `Реальный баланс: {realAvailable}`,
+    { vars: picker },
+  ),
   stakePickerNoPresets: html(
     g.Trade,
     'Экран суммы: демо-баланса не хватает даже на минимальную ставку.',
     `На демо-счёте недостаточно средств даже для минимальной ставки.`,
     { vars: picker },
   ),
+  stakePickerNoPresetsReal: html(
+    g.Trade,
+    'Экран реальной суммы: реального баланса не хватает даже на минимальную ставку (#326).',
+    `На реальном счёте недостаточно средств даже для минимальной ставки.`,
+    { vars: picker },
+  ),
   stakeInputPrompt: html(
     g.Trade,
     'Экран суммы: просьба прислать свою сумму текстом.',
     `✏️ Пришли сумму демо-сделки числом, например 5 или 2,50.`,
+  ),
+  stakeInputPromptReal: html(
+    g.Trade,
+    'Экран реальной суммы: просьба прислать свою сумму текстом (#326).',
+    `✏️ Пришли сумму реальной сделки числом, например 5 или 2,50.`,
   ),
   stakeInputInvalid: html(
     g.Trade,
@@ -1104,10 +1152,24 @@ export const BOT_TEXT_CATALOG = {
   stakeSaved: html(g.Trade, 'Демо-ставка сохранена.', `✅ Демо-ставка: {stake}`, {
     vars: ['stake', 'firstName'],
   }),
+  stakeSavedReal: html(
+    g.Trade,
+    'Реальная ставка сохранена (#326).',
+    `✅ Реальная ставка: {stake}`,
+    {
+      vars: ['stake', 'firstName'],
+    },
+  ),
   stakeSavedLine: html(
     g.Trade,
     'Экран ставки: строка над экраном после сохранения суммы демо-ставки.',
     `✅ Демо-ставка сохранена: {stake}`,
+    { vars: ['stake', 'firstName'] },
+  ),
+  stakeSavedLineReal: html(
+    g.Trade,
+    'Экран ставки: строка над экраном после сохранения суммы реальной ставки (#326).',
+    `✅ Реальная ставка сохранена: {stake}`,
     { vars: ['stake', 'firstName'] },
   ),
   stakeSaveUnknown: html(
@@ -1501,10 +1563,15 @@ export const BOT_TEXT_CATALOG = {
     '↩️ Назад к настройкам',
   ),
   stakeBackButton: plain(g.Buttons, 'Своя сумма: назад к экрану суммы.', '↩️ Назад'),
-  settingsStakeButton: plain(
+  settingsStakeDemoButton: plain(
     g.Buttons,
     '/settings: кнопка смены суммы демо-сделки.',
-    '💵 Изменить',
+    '💵 Демо',
+  ),
+  settingsStakeRealButton: plain(
+    g.Buttons,
+    '/settings: кнопка смены суммы реальной сделки (#326).',
+    '💼 Реал',
   ),
 
   tradeButton: plain(

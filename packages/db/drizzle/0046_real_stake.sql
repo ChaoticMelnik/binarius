@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN "real_stake" numeric(20, 8);--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_real_stake_check" CHECK ("users"."real_stake" is null or ("users"."real_stake" > 0 and "users"."real_stake" <> 'NaN'::numeric));

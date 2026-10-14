@@ -205,6 +205,7 @@ export const SAMPLE_USER: AdminUserResponse = {
     telegramBlockedAt: null,
     notificationLevel: NotificationLevel.All,
     demoStake: null,
+    realStake: null,
     tokens: { balance: '5', reserved: '2', available: '3' },
     createdAt: AT,
     updatedAt: AT,

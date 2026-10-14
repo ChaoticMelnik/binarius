@@ -105,15 +105,19 @@ const statusCards = (): TelegramHtml[] => {
     broker: StatusCardInput['broker'],
     brokerUnavailable: StatusCardInput['brokerUnavailable'],
   ) =>
-    Object.values(TradeMode).map((mode) =>
-      statusCard({
-        firstName: NAME,
-        mode,
-        tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
-        broker,
-        brokerUnavailable,
-        demoStake: STAKE,
-      }),
+    Object.values(TradeMode).flatMap((mode) =>
+      // a saved real stake, or none: the real hint's {stake} is then the minimum or its label
+      [null, STAKE].map((realStake) =>
+        statusCard({
+          firstName: NAME,
+          mode,
+          tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
+          broker,
+          brokerUnavailable,
+          demoStake: STAKE,
+          realStake,
+        }),
+      ),
     );
   const big = { available: USD, held: USD, total: USD };
   return [
@@ -333,28 +337,45 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   settings: () =>
     Object.values(NotificationLevel).flatMap((level) =>
-      [null, STAKE].map((stake) => settingsText(level, stake, NAME)),
+      [null, STAKE].flatMap((stake) =>
+        [null, STAKE].map((realStake) => settingsText(level, stake, realStake, NAME)),
+      ),
     ),
+  // by the picker's mode (#326)
   stakePicker: () =>
-    [null, STAKE].flatMap((stake) =>
-      [0, 1].map((presets) =>
-        stakePickerText({
-          user: userContextOf(NAME, TradeMode.Demo, {
-            tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
-            broker: null,
-            demoStake: stake,
+    Object.values(TradeMode).flatMap((mode) =>
+      [null, STAKE].flatMap((stake) =>
+        [0, 1].map((presets) =>
+          stakePickerText({
+            user: {
+              ...userContextOf(NAME, mode, {
+                tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
+                broker: null,
+                demoStake: stake,
+                realStake: stake,
+              }),
+              stake,
+            },
+            mode,
+            minTradeAmount: STAKE,
+            demoAvailable: STAKE,
+            realAvailable: STAKE,
+            presets,
           }),
-          minTradeAmount: STAKE,
-          demoAvailable: STAKE,
-          presets,
-        }),
+        ),
       ),
     ),
   demoSummary: () =>
     DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) => demoSummary(pair, durationSec)),
   // the three plurals, each at the widest count
   demoLaunch: () =>
-    [undefined, { amount: null }, { amount: STAKE }].flatMap((saved) =>
+    [
+      undefined,
+      ...Object.values(TradeMode).flatMap((mode) => [
+        { amount: null, mode },
+        { amount: STAKE, mode },
+      ]),
+    ].flatMap((saved) =>
       [null, STAKE].flatMap((amount) =>
         [999, 992, 991].flatMap((trades) =>
           DEMO_DURATIONS_SEC.flatMap((durationSec: DemoDurationSec) =>
@@ -415,6 +436,7 @@ describe('the assembled messages, against the real assembly', () => {
     const texts = {
       settings: 'Привет, {firstName}! Сейчас: {level}, ставка {stake}',
       settingsStake: '{firstName}: {stake} ({level})',
+      settingsStakeReal: '{level}: {stake}, {firstName}',
     };
     const message = ASSEMBLED.find((m) => m.id === 'settings')!;
     setBotTextSource(recording(texts).source);
