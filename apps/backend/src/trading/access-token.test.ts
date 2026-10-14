@@ -15,6 +15,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from './testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const ACCOUNT = '0b8f3c62-7a1e-4d2b-9a55-3c1f2e4d5a6b';
 const SECRET = 'live-access-token-must-not-reach-a-log';
@@ -25,6 +26,7 @@ let lines: string[] = [];
 
 function appWith(answer: AccessTokenResult): FastifyInstance {
   app = buildApp({
+    deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     // the most verbose level: a body that reached any line would show here

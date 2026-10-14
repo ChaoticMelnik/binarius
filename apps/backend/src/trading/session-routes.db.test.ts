@@ -70,6 +70,7 @@ import {
   unusedSignalDeps,
   unusedSignalsDeps,
 } from './testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -152,6 +153,7 @@ function appWith(
     return options.refresh(accountId).then(() => options.outcome ?? ('ok' as const));
   };
   app = buildApp({
+    deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'trace',

@@ -18,6 +18,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from '../trading/testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -33,6 +34,7 @@ let app: ReturnType<typeof buildApp>;
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
   app = buildApp({
+    deposit: unusedDepositDeps(),
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),

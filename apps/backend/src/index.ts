@@ -19,7 +19,7 @@ import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { createMailingEngine } from './mailing/engine';
 import { setBotTextSource } from './auth/texts';
-import { INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
+import { DEPOSIT_INIT_DATA_MAX_AGE_MS, INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
 import { ensureFreshAccessToken } from './auth/token-service';
 import { createBalanceReconciler } from './broker/balance-reconciler';
@@ -157,8 +157,8 @@ const adminBot = createAdminBot({
 // mailings (auth/client-push.ts).
 const clientPush = createClientPush({ token: env.telegramBotToken });
 
-// One function, two consumers: the worker's token route (#90) and the balance reconciler. The app's
-// logger is read at call time, after buildApp.
+// One function, three consumers: the worker's token route (#90), the balance reconciler and the
+// cashier's widget session (#11). The app's logger is read at call time, after buildApp.
 const accessToken: TradingRoutesDeps['accessToken'] = (accountId, options) =>
   ensureFreshAccessToken({ db, broker, cipher, logger: app.log }, accountId, options);
 
@@ -220,6 +220,20 @@ const app = buildApp({
     adminWebToken: env.adminWebToken,
     telegram: adminBot,
     botProfileApi: createBotProfileApi({ token: env.telegramBotToken }),
+  },
+  deposit: {
+    db,
+    accessToken,
+    rest: brokerRest,
+    initDataVerifier: createInitDataVerifier({
+      botToken: env.telegramBotToken,
+      maxAgeMs: DEPOSIT_INIT_DATA_MAX_AGE_MS,
+    }),
+    demoOnly: env.demoOnly,
+    webOrigin: env.webPublicUrl,
+    platformOrigin: new URL(env.brokerOauthAuthorizeUrl).origin,
+    clientId: env.brokerClientId,
+    widgetOrigins: env.depositWidgetOrigins,
   },
   postbacks:
     env.postbackUrlSecret === undefined ? undefined : { db, secret: env.postbackUrlSecret },

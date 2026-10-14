@@ -75,8 +75,11 @@ export interface Env {
   adminWebToken: string;
   // the origin of apps/web: the staff bot sends a login link under it (#448)
   webPublicUrl: string;
-  // the demo-only fuse (#396): read once at start, refuses real intents and real sessions
+  // the demo-only fuse (#396): read once at start, refuses real intents and real sessions, and the
+  // cashier's widget session (#11)
   demoOnly: boolean;
+  // the origins the cashier widget may be served from (#11); default: the broker platform's origin
+  depositWidgetOrigins: string[];
   // the postback route's path secret (#141); absent = the route is not registered
   postbackUrlSecret?: string;
 }
@@ -136,6 +139,7 @@ export function parseEnv(source: EnvSource): Env {
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
     webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
     demoOnly: parseDemoOnlyEnv(source),
+    depositWidgetOrigins: parseDepositWidgetOrigins(source),
     // readEnv refuses '', while an absent variable leaves the route off
     postbackUrlSecret:
       source.POSTBACK_URL_SECRET === undefined
@@ -165,6 +169,31 @@ function parseRedirectUri(source: EnvSource): string {
   }
   assertOriginSpelling(value, 'BROKER_OAUTH_REDIRECT_URI', OAUTH_CALLBACK_PATH);
   return value;
+}
+
+// The cashier page's CSP frame-src and its postMessage check name these in advance (#111), so a
+// widget the broker serves from anywhere else is refused (docs/deposit.md). Absent: the origin of
+// BROKER_OAUTH_AUTHORIZE_URL, the platform the fallback widget URL is built on. Present: a
+// comma-separated list of https origins, each spelled as WEB_PUBLIC_URL is.
+function parseDepositWidgetOrigins(source: EnvSource): string[] {
+  const name = 'DEPOSIT_WIDGET_ORIGINS';
+  if (source[name] === undefined) {
+    return [new URL(readEnv(source, 'BROKER_OAUTH_AUTHORIZE_URL')).origin];
+  }
+  const origins = readEnv(source, name)
+    .split(',')
+    .map((item) => {
+      if (item === '') throw new Error(`Env ${name} must not list an empty item`);
+      const origin = parseOriginEnv(item, name);
+      if (new URL(origin).protocol !== 'https:') {
+        throw new Error(`Env ${name} must list https origins`);
+      }
+      return origin;
+    });
+  if (new Set(origins).size !== origins.length) {
+    throw new Error(`Env ${name} must not list an origin twice`);
+  }
+  return origins;
 }
 
 // Both bearers this process accepts, validated together because what matters is the pair.

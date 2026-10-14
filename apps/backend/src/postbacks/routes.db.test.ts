@@ -14,6 +14,7 @@ import {
   unusedSignalsDeps,
 } from '../trading/testing';
 import type { PostbackRoutesDeps } from './routes';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -33,6 +34,7 @@ const linesOf = (msg: string) => lines.filter((line) => line.msg === msg);
 
 const testApp = (postbacks: Omit<PostbackRoutesDeps, 'db'> | undefined) =>
   buildApp({
+    deposit: unusedDepositDeps(),
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
@@ -353,6 +355,8 @@ describe('the proxy guard', () => {
       '/admin/users/:id',
       '/trading/intents/:id',
       '/admin/sessions/:id/revoke',
+      // public by initData, but reached from web on the internal network only (#11)
+      '/deposit/widget-session',
       '/postbacks/binodex/:secret',
     ]) {
       expect(urls).toContain(url);

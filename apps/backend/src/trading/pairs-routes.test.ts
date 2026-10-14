@@ -21,6 +21,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from './testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const pair: BinaryPair = {
   id: 101,
@@ -39,6 +40,7 @@ let app: FastifyInstance | undefined;
 
 function appWith(view: PairsCatalogView | undefined): FastifyInstance {
   app = buildApp({
+    deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',

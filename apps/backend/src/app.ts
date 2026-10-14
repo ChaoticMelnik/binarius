@@ -24,6 +24,7 @@ import { signalsRoutes, type SignalsRoutesDeps } from './trading/signals-routes'
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 import { botTextsRoutes } from './bot-texts/routes';
 import { postbackRoutes, type PostbackRoutesDeps } from './postbacks/routes';
+import { depositRoutes, type DepositRoutesDeps } from './deposit/routes';
 
 type DependencyCheck = () => Promise<unknown>;
 
@@ -40,6 +41,8 @@ export interface AppDeps {
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
   admin: AdminRoutesDeps;
+  // the cashier's widget session (#11)
+  deposit: DepositRoutesDeps;
   // the broker's postbacks (#141): present only while POSTBACK_URL_SECRET is set, so the route
   // does not exist otherwise and its path answers the not-found handler's 404
   postbacks?: PostbackRoutesDeps;
@@ -192,6 +195,7 @@ export function buildApp({
   auth,
   users,
   admin,
+  deposit,
   postbacks,
   logDestination,
 }: AppDeps): FastifyInstance {
@@ -253,6 +257,7 @@ export function buildApp({
   void app.register(usersRoutes, users);
   void app.register(botTextsRoutes, users);
   void app.register(adminRoutes, admin);
+  void app.register(depositRoutes, deposit);
   if (postbacks !== undefined) void app.register(postbackRoutes, postbacks);
 
   // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL

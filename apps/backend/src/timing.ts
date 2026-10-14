@@ -16,6 +16,7 @@ import {
   BROKER_BALANCE_SLA_MS,
   TRADING_ACCESS_BUDGET_MS,
 } from '@binarius/shared/broker-balance';
+import { DEPOSIT_WIDGET_SESSION_BUDGET_MS } from '@binarius/shared/deposit';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import {
   SIGNAL_CHART_INTERVAL_MS,
@@ -144,6 +145,12 @@ export const BALANCE_STALLED_RETRY_MS = 300_000;
 // The one broker GET POST /trading/access may wait for (the route's signal; the client ends at
 // the earlier of it and BROKER_REST_TIMEOUT_MS).
 export const TRADING_ACCESS_REFRESH_BUDGET_MS = 3_000;
+
+// --- POST /deposit/widget-session (#11) ---------------------------------------------------------
+// docs/deposit.md -> Budgets. The broker call the route waits for, passed as the call's signal, so
+// it ends before the REST client's own timeout and reads as aborted, not as the broker's outage.
+// The token exchange before it is bounded by BROKER_HTTP_TIMEOUT_MS.
+export const DEPOSIT_BROKER_CALL_BUDGET_MS = 3_000;
 
 // --- POST /trading/signal (#258) ---------------------------------------------------------------
 // docs/signal.md -> Budgets. The one chart GET the route may wait for: the cache's own deadline on
@@ -290,6 +297,11 @@ export const TIMING_CHAIN_HOLDS =
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the cashier's widget session (#11): an exchange, then the broker call, inside the contract
+  // constant web sizes its forward above (#111), and inside phase 1
+  BROKER_HTTP_TIMEOUT_MS + DEPOSIT_BROKER_CALL_BUDGET_MS <= DEPOSIT_WIDGET_SESSION_BUDGET_MS &&
+  DEPOSIT_BROKER_CALL_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
+  DEPOSIT_WIDGET_SESSION_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // a load ends before the next one starts, and inside phase 1
   BOT_TEXTS_LOAD_BUDGET_MS < BOT_TEXTS_REFRESH_MS &&
   BOT_TEXTS_LOAD_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

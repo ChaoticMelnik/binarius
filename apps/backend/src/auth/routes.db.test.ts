@@ -52,6 +52,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from '../trading/testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -121,6 +122,7 @@ const telegramId = () => String(800_000 + ++seq);
 
 const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
   buildApp({
+    deposit: unusedDepositDeps(),
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),

@@ -47,6 +47,7 @@ describe('parseEnv', () => {
       adminWebToken: valid.ADMIN_WEB_TOKEN,
       webPublicUrl: valid.WEB_PUBLIC_URL,
       demoOnly: false,
+      depositWidgetOrigins: ['https://binodex.app'],
     });
   });
 
@@ -209,6 +210,34 @@ describe('parseEnv', () => {
 
   it.each(['30000', '60000'])('accepts the BROKER_PAIRS_TTL_MS boundary %s', (value) => {
     expect(parseEnv({ ...valid, BROKER_PAIRS_TTL_MS: value }).brokerPairsTtlMs).toBe(Number(value));
+  });
+});
+
+describe('DEPOSIT_WIDGET_ORIGINS (#11)', () => {
+  const origins = (value: string | undefined) =>
+    parseEnv({ ...valid, DEPOSIT_WIDGET_ORIGINS: value }).depositWidgetOrigins;
+
+  it('defaults to the origin of the broker authorize URL', () => {
+    expect(origins(undefined)).toEqual(['https://binodex.app']);
+  });
+
+  it('reads a comma-separated list of origins', () => {
+    expect(origins('https://binodex.app,https://pay.binodex.app:8443')).toEqual([
+      'https://binodex.app',
+      'https://pay.binodex.app:8443',
+    ]);
+  });
+
+  it.each([
+    ['', /must not be empty/],
+    ['https://binodex.app,', /empty item/],
+    [',https://binodex.app', /empty item/],
+    ['http://localhost:3000', /https origins/],
+    ['https://binodex.app/embed', /origin without a path/],
+    ['https://binodex.app, https://pay.binodex.app', /whitespace/],
+    ['https://binodex.app,https://binodex.app', /twice/],
+  ])('refuses %j', (value, message) => {
+    expect(() => origins(value)).toThrow(message);
   });
 });
 
