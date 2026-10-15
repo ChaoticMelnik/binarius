@@ -266,7 +266,8 @@ decision checked by `signalDecisionSchema`/`signalDecisionV1Schema`. A line fail
 - For each file, the rows are compared with the cache rows of the same asset and timestamps. An
   equal file counts `price_series_match`. Any OHLC difference counts `price_series_revised`,
   printed with the first differing timestamp. Rows the cache lacks are `not_in_cache`, not
-  revisions.
+  revisions. A file's first row is not compared: it is its answer's first row, whose `open` is
+  the window's first tick (The cache → the first-row rule).
 - A price comes from the cache first. When the cache lacks the row, it comes from the session
   files (`priced_from_session_file`). With neither, the trade is `unpriced`.
 
@@ -286,7 +287,7 @@ line is `unmatched`. For each matched trade, the stand checks:
   trade's (`replayed` / `replay_mismatch`).
 - The line's closed candles equal the cache's interval rows at the same timestamps
   (`series_match` / `series_revised`). The forming row is skipped because it was not final when
-  logged.
+  logged, and so is the first row, the first row of the feed's answer.
 - The delays `open_timestamp − created_at` and `open_timestamp − nowMs`.
 
 **The pass rule.** Exit 0 needs all three gates:
