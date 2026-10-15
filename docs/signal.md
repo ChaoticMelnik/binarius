@@ -14,7 +14,8 @@ cache. The worker never calls the feed itself: the session orchestrator (#287,
 [trading-session.md](trading-session.md)) asks `POST /trading/signal`.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
-tuned and no backtest was run.
+tuned; the stand (#381, [signal-stand.md](signal-stand.md)) backtests it on the broker's candle
+history, and its report goes to the issue.
 
 **v2 (#379)** adds two rule gates to v1's, from the owner's seven demo sessions of 2026-10-07…08
 (8 wins in 30): an ATR floor in quote steps (`minAtrTicks`, session `2e25e081`: every move one
@@ -197,7 +198,7 @@ shape the decider produces back through it. v1's shapes stay beside it for the r
 are checked when `config.ts` is imported, so a default edited out of its rules fails at import.
 `DEFAULT_SIGNAL_PARAMS_V1` and `assertSignalParamsV1` are v1's ten fields and rules; v2's assert
 runs v1's and adds the two rows above (`config.test.ts` K11–K15). The two v2 values are expert
-ones (owner, 2026-10-09); the backtest stand (#381) tunes them. `minAtrTicks` 5 may refuse quiet
+ones (owner, 2026-10-09); the backtest stand (#381, [signal-stand.md](signal-stand.md)) tunes them. `minAtrTicks` 5 may refuse quiet
 5 s candles on majors (EUR/USD at 5 digits: a step is 0.1 pip) — the owner's choice with that
 consequence named; the journal shows the rate.
 
@@ -667,7 +668,9 @@ stays empty until a slack per interval is added; the rest of the feature stands.
 
 The broker counts every request from one IP against one window of 600 a minute
 (`x-ratelimit-limit`, also on the public `GET /v1/broker/chart`, 2026-10-08). Three loops share it,
-each bounded on its own. The table lives in `packages/shared/src/broker-budget.ts`:
+each bounded on its own. The table lives in `packages/shared/src/broker-budget.ts`. The backtest
+stand (#381) is not one of them: it runs from another IP under its own cap
+([signal-stand.md → The budget](signal-stand.md#the-budget)).
 
 | Constant | Value | Whose |
 |---|---|---|
@@ -709,7 +712,12 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
 
 - It gives no probability and no confidence score. The decision is the direction or the reason,
   plus the features (owner's decision 2026-10-03).
-- It does no tuning or backtesting and makes no profitability claim.
+- It does no tuning or backtesting and makes no profitability claim — the stand (#381) does,
+  outside the processes.
+- **The stand (#381).** The backtest lives in `packages/signal-stand`
+  ([signal-stand.md](signal-stand.md)): a CLI that replays this decider and `chartWindow`
+  unchanged on cached broker candles. No process imports it, and it has its own
+  request cap outside [The budget](#the-budget)'s three loops (it runs from another IP).
 - The decider makes no network calls, writes no logs and contains no user-facing text (the feed
   does the fetching and the logging). The Russian wording of a reason belongs to the bot (#126).
 - It does not read volume or price ticks. It works from the chart and the pair's `digits` only.

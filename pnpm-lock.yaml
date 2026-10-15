@@ -237,6 +237,25 @@ importers:
         specifier: ^10.3.1
         version: 10.3.1
 
+  packages/signal-stand:
+    dependencies:
+      '@binarius/broker-rest':
+        specifier: workspace:*
+        version: link:../broker-rest
+      '@binarius/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@binarius/signal':
+        specifier: workspace:*
+        version: link:../signal
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@binarius/mock-broker':
+        specifier: workspace:*
+        version: link:../mock-broker
+
 packages:
 
   '@cacheable/memory@2.2.0':
