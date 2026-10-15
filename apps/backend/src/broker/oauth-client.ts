@@ -1,5 +1,9 @@
 import {
+  DeadlineError,
+  errorLogFields,
   readBody,
+  withinDeadline,
+  type FetchDeadlineLogger,
   safeParseBrokerEmailSendCodeResponse,
   safeParseOAuthTokenResponse,
   safeParseRefreshTokenResponse,
@@ -9,7 +13,8 @@ import {
   type RefreshedTokens,
 } from '@binarius/shared';
 
-// One attempt per exchange, bounded by a real transport abort. Retrying is not an option:
+// One attempt per exchange, bounded by a real transport abort, and by a deadline that holds even
+// when fetch ignores that abort (withinDeadline, #481). Retrying is not an option:
 // both the authorization code and the refresh token are single-use, so a repeat after a
 // timeout either loses the pair the broker already issued or looks like a replayed token.
 export const BROKER_HTTP_TIMEOUT_MS = 5_000;
@@ -62,6 +67,8 @@ export interface BrokerOAuthClientOptions {
   clientId: string;
   clientSecret: string;
   timeoutMs?: number;
+  // where an abandoned or late-settled call is logged; without one only the thrown error tells
+  logger?: FetchDeadlineLogger;
 }
 
 // One row per broker endpoint: where it lives and the status it answers when it refuses the
@@ -95,9 +102,54 @@ export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): Brok
     ]),
   ) as Record<BrokerEndpoint, string>;
 
+  // The fetch, the error body's release and the body read run inside one deadline; a call cut
+  // there is an unknown outcome, the same as a timeout the abort settles.
   async function post(
     endpoint: BrokerEndpoint,
     request: { contentType: string; body: string },
+  ): Promise<unknown> {
+    const { logger } = options;
+    try {
+      return await withinDeadline(
+        timeoutMs,
+        undefined,
+        (signal) => attempt(endpoint, request, signal),
+        {
+          onAbandoned: () =>
+            logger?.error(
+              {
+                endpoint,
+                timeoutMs,
+                ...errorLogFields(new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable)),
+              },
+              'broker oauth request abandoned',
+            ),
+          onSettledLate: (late) =>
+            logger?.warn(
+              late.ok
+                ? { endpoint, lateMs: late.lateMs, outcome: 'ok' }
+                : {
+                    endpoint,
+                    lateMs: late.lateMs,
+                    outcome: 'error',
+                    ...errorLogFields(late.error),
+                  },
+              'broker oauth request settled late',
+            ),
+        },
+      );
+    } catch (error) {
+      if (error instanceof DeadlineError) {
+        throw new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable);
+      }
+      throw error;
+    }
+  }
+
+  async function attempt(
+    endpoint: BrokerEndpoint,
+    request: { contentType: string; body: string },
+    signal: AbortSignal,
   ): Promise<unknown> {
     let response: Response;
     try {
@@ -107,7 +159,7 @@ export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): Brok
         body: request.body,
         // aborts the request itself: a bare timer would leave the socket open past the
         // handler and past the shutdown budget
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
     } catch {
       throw new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable);

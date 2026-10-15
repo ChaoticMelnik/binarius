@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import Fastify, { type FastifyReply } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { safeParseOAuthTokenResponse } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { startOAuthStub, type OAuthStub } from './testing/oauth-stub';
@@ -512,6 +512,60 @@ describe('transport failures', () => {
     } finally {
       await odd.close();
     }
+  });
+});
+
+// #481: a fetch that never settles and ignores its signal
+describe('a fetch that ignores its abort signal', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const stuckClient = (logger = { error: vi.fn(), warn: vi.fn() }) => ({
+    logger,
+    stuck: createBrokerOAuthClient({
+      baseUrl: stub.url,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      timeoutMs: 50,
+      logger,
+    }),
+  });
+
+  it('reports a refresh as unavailable at its own deadline and logs it abandoned', async () => {
+    vi.stubGlobal('fetch', () => new Promise<Response>(() => undefined));
+    const { logger, stuck } = stuckClient();
+    expect(await codeOf(stuck.refresh({ refreshToken: 'r' }))).toBe(
+      BrokerOAuthErrorCode.Unavailable,
+    );
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      {
+        endpoint: 'refresh',
+        timeoutMs: 50,
+        err: { name: 'BrokerOAuthError', code: BrokerOAuthErrorCode.Unavailable },
+      },
+      'broker oauth request abandoned',
+    );
+  });
+
+  it('reports a code exchange whose answer settles late as unavailable, then logs it', async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => (answer = resolve)));
+    const { logger, stuck } = stuckClient();
+    expect(await codeOf(stuck.exchangeCode({ code: 'c', redirectUri: REDIRECT_URI }))).toBe(
+      BrokerOAuthErrorCode.Unavailable,
+    );
+    answer(new Response('{}', { status: 500 }));
+    await until('the late answer to be logged', () => logger.warn.mock.calls.length === 1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        endpoint: 'token',
+        lateMs: expect.any(Number) as number,
+        outcome: 'error',
+        err: { name: 'BrokerOAuthError', code: BrokerOAuthErrorCode.Unavailable },
+      },
+      'broker oauth request settled late',
+    );
   });
 });
 

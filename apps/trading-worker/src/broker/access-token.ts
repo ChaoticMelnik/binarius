@@ -8,6 +8,8 @@ import {
   readBody,
   safeParseAccessTokenRefusalResponse,
   safeParseAccessTokenResponse,
+  withinDeadline,
+  type FetchDeadlineLogger,
 } from '@binarius/shared';
 
 // The worker's broker access token comes from the backend (#90): the worker holds neither the
@@ -97,6 +99,8 @@ export interface BackendAccessTokenSourceOptions {
   baseUrl: string;
   token: string;
   timeoutMs?: number;
+  // where an abandoned or late-settled request is logged
+  logger?: FetchDeadlineLogger;
 }
 
 // The ceiling on the route's body, 2xx or not (Architecture Rule 26): the longest answer the
@@ -126,25 +130,54 @@ export function createBackendAccessTokenSource({
   baseUrl,
   token,
   timeoutMs = ACCESS_TOKEN_ROUTE_BUDGET_MS,
+  logger,
 }: BackendAccessTokenSourceOptions): AccessTokenSource {
   return {
     async accessToken(brokerAccountId, { signal, mayRefresh = true, refusedToken } = {}) {
-      const timeout = AbortSignal.timeout(timeoutMs);
       let status: number;
       let text: string | undefined;
       try {
-        const response = await fetch(new URL(accessTokenPath(brokerAccountId), baseUrl), {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-            accept: 'application/json',
+        // the deadline holds even when fetch ignores its abort (#481); a cut call, settled or
+        // abandoned, is the same unreachable backend
+        ({ status, text } = await withinDeadline(
+          timeoutMs,
+          signal,
+          async (combined) => {
+            const response = await fetch(new URL(accessTokenPath(brokerAccountId), baseUrl), {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${token}`,
+                'content-type': 'application/json',
+                accept: 'application/json',
+              },
+              body: JSON.stringify({ mayRefresh, refusedToken }),
+              signal: combined,
+            });
+            return {
+              status: response.status,
+              text: await readBody(response, MAX_BACKEND_BODY_BYTES),
+            };
           },
-          body: JSON.stringify({ mayRefresh, refusedToken }),
-          signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
-        });
-        status = response.status;
-        text = await readBody(response, MAX_BACKEND_BODY_BYTES);
+          {
+            onAbandoned: (error) =>
+              logger?.error(
+                { brokerAccountId, timeoutMs, ...errorLogFields(error) },
+                'backend request abandoned',
+              ),
+            onSettledLate: (late) =>
+              logger?.warn(
+                late.ok
+                  ? { brokerAccountId, lateMs: late.lateMs, outcome: 'ok' }
+                  : {
+                      brokerAccountId,
+                      lateMs: late.lateMs,
+                      outcome: 'error',
+                      ...errorLogFields(late.error),
+                    },
+                'backend request settled late',
+              ),
+          },
+        ));
       } catch {
         return unavailable(AccessTokenUnavailable.BackendUnreachable);
       }
