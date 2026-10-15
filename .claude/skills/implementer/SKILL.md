@@ -172,8 +172,11 @@ Same stop-point rule as the initial-implementation workflow:
 git status
 git add <specific files>
 git commit -m "#N: address review comments"
+# the per-commit check of Step 5 on this commit (its own worktree) before the push
 git push
 ```
+
+A rebase-only task (tech-lead → «Mergeability right before the merge») runs the same per-commit check on every rewritten commit before its force-push.
 
 PR updates automatically — no new PR needed.
 
