@@ -45,6 +45,7 @@ import {
   ACCOUNT_VIEW,
   REFERRAL_VIEW,
   BOT_INFO,
+  CASHIER_URL,
   CARD_MESSAGE_ID,
   CODE,
   CODE_SENT,
@@ -125,6 +126,8 @@ function setup(
     welcomeVideoFileId?: string;
     dialog?: LoginDialogState;
     now?: () => number;
+    // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
+    cashierUrl?: string | null;
   } = {},
 ) {
   const backend: BackendClient = {
@@ -172,6 +175,7 @@ function setup(
     ...(options.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: options.welcomeVideoFileId }),
+    ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
   });
   const { calls, apiErrors, answers } = captureApi(bot);
   answers.set('sendPhoto', messageAnswer(CARD_MESSAGE_ID));
@@ -411,17 +415,21 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // the demo, then the invite in a row of its own (#115), then the purchase (#117)
+  // the demo, then the invite in a row of its own (#115), the purchase (#117) and the deposit
+  // (#27), the cashier Mini App
+  const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
   const CARD_ROWS = [
     [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
     [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
+    DEPOSIT_ROW,
   ];
-  // in real mode the entry reads «🚀 Торговать» (#121); the purchase in both modes (#117)
+  // in real mode the entry reads «🚀 Торговать» (#121); the purchase and the deposit in both modes
   const REAL_CARD_ROWS = [
     [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
     [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
+    DEPOSIT_ROW,
   ];
   // the line's default holds none of its variables
   const NO_SNAPSHOT = () =>
@@ -486,6 +494,19 @@ describe('the status card', () => {
       plainTextOf(TEXTS.statusHint(userContextOf(USER.first_name, TradeMode.Demo, real))),
     );
     expect(inlineRows(photo)).toEqual(REAL_CARD_ROWS);
+  });
+
+  // #27: an origin that is not https gives the bot no cashier URL, and the card no deposit row
+  it('draws the card without the deposit when the bot has no cashier URL', async () => {
+    for (const mode of [TradeMode.Demo, TradeMode.Real]) {
+      const access = accessView({ tradingMode: mode });
+      const { calls } = await home({
+        readTradingAccess: () => Promise.resolve(access),
+        cashierUrl: null,
+      });
+      const rows = mode === TradeMode.Real ? REAL_CARD_ROWS : CARD_ROWS;
+      expect(inlineRows(sentPayload(calls, 'sendPhoto')), mode).toEqual(rows.slice(0, -1));
+    }
   });
 
   it('sends the card as text with the same button and pins it when the photo is refused', async () => {
@@ -716,6 +737,7 @@ describe('«🏠 В меню» (#350)', () => {
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
+      { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
     ]);
   });
 

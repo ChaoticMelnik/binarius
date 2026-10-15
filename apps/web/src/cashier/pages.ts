@@ -2,7 +2,6 @@ import { html, layout, type SafeHtml } from '../html';
 import { TELEGRAM_SDK_URL } from '../mini-app';
 import { CASHIER_TEXTS } from './texts';
 
-export const CASHIER_PAGE_PATH = '/cashier';
 export const CASHIER_SCRIPT_PATH = '/cashier/static/app.js';
 export const CASHIER_SESSION_PATH = '/cashier/session';
 export const CASHIER_CREDITED_PATH = '/cashier/credited';

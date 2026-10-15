@@ -40,6 +40,7 @@ import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
   BOT_INFO,
+  CASHIER_URL,
   INTENT_ID,
   INTENT_VIEW,
   PAIR_CLOSED,
@@ -72,6 +73,7 @@ const REFRESH = intentCallbackData(INTENT_ID);
 interface Button {
   text: string;
   callback_data?: string;
+  web_app?: { url: string };
 }
 
 function setup(
@@ -81,6 +83,8 @@ function setup(
     createIntent?: BackendClient['createIntent'];
     readIntent?: BackendClient['readIntent'];
     dialog?: LoginDialogState;
+    // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
+    cashierUrl?: string | null;
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -106,6 +110,7 @@ function setup(
     now: () => NOW,
     intentTracker,
     sessionTracker: stubSessionTracker(),
+    ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -142,8 +147,13 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
-// for want of tokens, the purchase above the way back (#117)
-const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
+// for want of tokens, the purchase, then the deposit (#27), above the way back (#117)
+const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
+const BUY_ROWS = [
+  [button(LABELS.buyButton, BUY_CALLBACK_DATA)],
+  [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }],
+  ...BACK_ROWS,
+];
 // the end of the path (#350): the analysis of the same pair and duration, the signals, the menu
 const END_ROWS = [
   [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
@@ -570,6 +580,26 @@ describe('the stake button', () => {
       expect(rowsOf(sent)).toEqual(BACK_ROWS);
       expect(warnings(logger)).toEqual([]);
     });
+
+    // #27: the deposit under the purchase of a real refusal for want of tokens too
+    it('answers insufficient_tokens with the purchase, the deposit and the way back', async () => {
+      const { press, calls } = setup({
+        readTradingAccess: real,
+        createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.InsufficientTokens)),
+      });
+      await press(REAL_STAKE);
+      expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(BUY_ROWS);
+    });
+  });
+
+  // #27: an origin that is not https gives the bot no cashier URL, and the refusal no deposit row
+  it('answers insufficient_tokens without the deposit when the bot has no cashier URL', async () => {
+    const { press, calls } = setup({
+      createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.InsufficientTokens)),
+      cashierUrl: null,
+    });
+    await press(STAKE);
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(BUY_ONLY_ROWS);
   });
 
   // the refusal names its text by key and reads it when it answers (#240)

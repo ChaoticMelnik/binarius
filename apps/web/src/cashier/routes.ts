@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import type { FastifyError, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import {
+  CASHIER_PAGE_PATH,
   createKeyedWindow,
   DEPOSIT_BODY_LIMIT_BYTES,
   DepositErrorCode,
@@ -15,7 +16,6 @@ import { CASHIER_CLIENT_JS } from './client';
 import { ipKey } from './ip-key';
 import {
   CASHIER_CREDITED_PATH,
-  CASHIER_PAGE_PATH,
   CASHIER_READY,
   CASHIER_SCRIPT_PATH,
   CASHIER_SESSION_PATH,
