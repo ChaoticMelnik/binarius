@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEPOSIT_BODY_LIMIT_BYTES,
+  type DepositCreditedRequest,
+  type DepositCreditedResponse,
   type DepositWidgetSessionRequest,
   type DepositWidgetSessionResponse,
 } from '@binarius/shared';
@@ -9,7 +11,8 @@ import { buildWebApp } from '../app';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
 import { TELEGRAM_SDK_URL } from '../mini-app';
 import { CASHIER_CLIENT_JS } from './client';
-import { CashierState } from './pages';
+import { CashierNotice, CashierState } from './pages';
+import { CASHIER_TEXTS } from './texts';
 
 const ORIGIN = 'https://binarius.example';
 const WIDGET_ORIGINS = ['https://binodex.app', 'https://pay.binodex.app'];
@@ -31,11 +34,15 @@ let app: FastifyInstance;
 let forwarded: DepositWidgetSessionRequest[];
 let lines: string[];
 let answer: () => Promise<DepositWidgetSessionResponse>;
+let creditedForwarded: DepositCreditedRequest[];
+let creditedAnswer: () => Promise<DepositCreditedResponse>;
 
 beforeEach(() => {
   forwarded = [];
   lines = [];
   answer = () => Promise.resolve(ANSWER);
+  creditedForwarded = [];
+  creditedAnswer = () => Promise.resolve({ outcome: 'refreshed' });
   const unused = () => Promise.reject(new Error('unused'));
   const backend: BackendClient = {
     login: unused,
@@ -67,6 +74,10 @@ beforeEach(() => {
     depositWidgetSession: (request) => {
       forwarded.push(request);
       return answer();
+    },
+    depositCredited: (request) => {
+      creditedForwarded.push(request);
+      return creditedAnswer();
     },
   };
   app = buildWebApp({
@@ -128,6 +139,11 @@ describe('GET /cashier (W1)', () => {
     for (const state of Object.values(CashierState)) {
       expect(body).toMatch(new RegExp(`<p data-state="${state}" hidden>[^<]+</p>`));
     }
+    for (const notice of Object.values(CashierNotice)) {
+      expect(body).toMatch(new RegExp(`<p data-notice="${notice}" role="status" hidden>[^<]+</p>`));
+    }
+    expect(body).toContain(CASHIER_TEXTS.credited);
+    expect(body).toContain(CASHIER_TEXTS.widgetError);
     expect(body).toContain('<button id="retry" type="button" hidden>');
     expect(body).toContain('<button id="close" type="button" hidden>');
   });
@@ -374,5 +390,118 @@ describe('a POST from another origin (W10)', () => {
     const response = await mint({ origin: 'https://evil.example' });
     expect(response.statusCode).toBe(403);
     expect(forwarded).toEqual([]);
+  });
+});
+
+const credited = ({ body, payload, peer, forwardedFor, origin = ORIGIN }: MintOptions = {}) =>
+  app.inject({
+    method: 'POST',
+    url: '/cashier/credited',
+    ...(peer === undefined ? {} : { remoteAddress: peer }),
+    headers: {
+      origin,
+      'content-type': 'application/json',
+      ...(forwardedFor === undefined ? {} : { 'x-forwarded-for': forwardedFor }),
+    },
+    payload: payload ?? JSON.stringify(body ?? { initData: INIT_DATA }),
+  });
+
+describe('POST /cashier/credited (#112)', () => {
+  // W12
+  it('forwards initData alone and answers 204 with no body', async () => {
+    const response = await credited({ forwardedFor: '203.0.113.7' });
+    expect(response.statusCode).toBe(204);
+    expect(response.body).toBe('');
+    expect(creditedForwarded).toEqual([{ initData: INIT_DATA }]);
+    expect(Object.keys(creditedForwarded[0] ?? {})).toEqual(['initData']);
+    expect(forwarded).toEqual([]);
+  });
+
+  // W13
+  it.each([
+    ['no initData', { body: {} }],
+    ['an empty initData', { body: { initData: '' } }],
+    ['the widget amount', { body: { initData: INIT_DATA, amount: 100 } }],
+    ['an extra key', { body: { initData: INIT_DATA, clientIp: '203.0.113.7' } }],
+    ['a body that is not JSON', { payload: 'initData=x' }],
+    ['a body over the limit', { body: { initData: 'x'.repeat(DEPOSIT_BODY_LIMIT_BYTES) } }],
+  ])('refuses %s with 400, without a forward', async (_label, options) => {
+    const response = await credited(options);
+    expect(response.statusCode).toBe(400);
+    expect(creditedForwarded).toEqual([]);
+  });
+
+  // W14
+  it.each([
+    ['the session route', () => mint({ forwardedFor: '203.0.113.7' })],
+    ['the credited route', () => credited({ forwardedFor: '203.0.113.7' })],
+  ])('shares the per-IP window with the session: then %s is refused', async (_label, next) => {
+    for (let index = 0; index < 30; index += 1) {
+      expect((await mint({ forwardedFor: '203.0.113.7' })).statusCode).toBe(200);
+      expect((await credited({ forwardedFor: '203.0.113.7' })).statusCode).toBe(204);
+    }
+    expect((await next()).statusCode).toBe(429);
+    expect(forwarded).toHaveLength(30);
+    expect(creditedForwarded).toHaveLength(30);
+  });
+
+  // W15
+  it.each([
+    ['refreshed', () => Promise.resolve({ outcome: 'refreshed' as const }), undefined],
+    ['pending', () => Promise.resolve({ outcome: 'pending' as const }), undefined],
+    ['401 invalid_telegram_auth', () => Promise.reject(refusal(401, 'invalid_telegram_auth')), 40],
+    ['429 too_many_requests', () => Promise.reject(refusal(429, 'too_many_requests')), 40],
+    ['409 demo_only', () => Promise.reject(refusal(409, 'demo_only')), 40],
+    ['409 no_active_account', () => Promise.reject(refusal(409, 'no_active_account')), 40],
+    ['409 user_blocked', () => Promise.reject(refusal(409, 'user_blocked')), 40],
+    ['400 validation', () => Promise.reject(refusal(400, 'validation')), 50],
+    ['500 internal', () => Promise.reject(refusal(500, 'internal')), 50],
+    ['409 an unknown code', () => Promise.reject(refusal(409, 'something_new')), 50],
+    ['502 broker_unavailable', () => Promise.reject(refusal(502, 'broker_unavailable')), 50],
+    [
+      'a 2xx outside the contract',
+      () => Promise.reject(new BackendError(BackendErrorCode.ContractViolation)),
+      50,
+    ],
+    [
+      'no answer',
+      () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.Unreachable, { cause: new Error(INIT_DATA) }),
+        ),
+      50,
+    ],
+    ['a throw', () => Promise.reject(new Error(INIT_DATA)), 50],
+  ])('backend %s -> 204 and its log level', async (_label, outcome, level) => {
+    creditedAnswer = outcome as () => Promise<DepositCreditedResponse>;
+    const response = await credited();
+    expect(response.statusCode).toBe(204);
+    const lines_ = logged().filter((line) => String(line.msg).includes('credited'));
+    if (level === undefined) {
+      expect(lines_).toEqual([]);
+    } else {
+      expect(lines_.map((line) => line.level)).toEqual([level]);
+    }
+    expect(lines.join('\n')).not.toContain(INIT_DATA);
+  });
+
+  it('logs a known refusal with its status and reason', async () => {
+    creditedAnswer = () => Promise.reject(refusal(429, 'too_many_requests'));
+    await credited();
+    expect(logged()).toContainEqual(
+      expect.objectContaining({
+        level: 40,
+        msg: 'the backend refused a cashier credited event',
+        status: 429,
+        reason: 'too_many_requests',
+      }),
+    );
+  });
+
+  // W16
+  it('refuses a POST from another origin before the cashier sees it', async () => {
+    const response = await credited({ origin: 'https://evil.example' });
+    expect(response.statusCode).toBe(403);
+    expect(creditedForwarded).toEqual([]);
   });
 });

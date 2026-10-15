@@ -37,6 +37,7 @@ import {
   unusedSignalsDeps,
 } from '../trading/testing';
 import type { DepositRoutesDeps } from './routes';
+import { unusedDepositDeps } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -97,6 +98,8 @@ function depositDeps(overrides: Partial<DepositRoutesDeps> = {}): DepositRoutesD
     platformOrigin: PLATFORM,
     clientId: CLIENT_ID,
     widgetOrigins: [PLATFORM, PAY],
+    balance: unusedDepositDeps().balance,
+    clientPush: unusedDepositDeps().clientPush,
     ...overrides,
   };
 }

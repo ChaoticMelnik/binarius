@@ -14,6 +14,7 @@ import { miniAppCsp } from '../mini-app';
 import { CASHIER_CLIENT_JS } from './client';
 import { ipKey } from './ip-key';
 import {
+  CASHIER_CREDITED_PATH,
   CASHIER_PAGE_PATH,
   CASHIER_READY,
   CASHIER_SCRIPT_PATH,
@@ -24,7 +25,8 @@ import {
 
 const SCRIPT_MAX_AGE_S = 3600;
 
-// The per-IP window in front of the forward. The backend's route ceiling (600/min) is global and
+// The per-IP window in front of both forwards (the session and the credited event, #112: one
+// object, so neither route adds to what one address may send). The backend's route ceiling (600/min) is global and
 // taken before initData is checked, so one address could fill it for everybody; 60 is ~20 people
 // behind one address re-minting about once a minute, and filling the backend's ceiling then takes
 // ten addresses (or ten IPv6 /64s). Per process and in memory, like every window here.
@@ -74,6 +76,12 @@ export const cashierRoutes: FastifyPluginAsync<CashierRoutesOptions> = async (
     CASHIER_SESSION_WINDOW_MS,
     CASHIER_SESSION_MAX_KEYS,
   );
+  // after the app's Origin check, before the body is read; a slot is never given back
+  const takePerIp = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!perIp.take(ipKey(request.ip))) return undefined;
+    request.log.warn('the cashier per-IP window is full');
+    return reply.code(429).send({ outcome: CashierState.Busy });
+  };
 
   // Set before the handler, so an error page Fastify sends for these routes carries them too.
   // strict-origin, not the OAuth pages' no-referrer: this URL carries no secret (Telegram's launch
@@ -98,12 +106,7 @@ export const cashierRoutes: FastifyPluginAsync<CashierRoutesOptions> = async (
     CASHIER_SESSION_PATH,
     {
       bodyLimit: DEPOSIT_BODY_LIMIT_BYTES,
-      // after the app's Origin check, before the body is read; a slot is never given back
-      onRequest: async (request, reply) => {
-        if (!perIp.take(ipKey(request.ip))) return undefined;
-        request.log.warn('the cashier per-IP window is full');
-        return reply.code(429).send({ outcome: CashierState.Busy });
-      },
+      onRequest: takePerIp,
       // a body Fastify itself refuses — over the limit, not JSON — is the page's drift, not an
       // outage: the page shows «Повторить» either way, and the app's HTML error page would not parse
       errorHandler: (error: FastifyError, request, reply) => {
@@ -155,6 +158,39 @@ export const cashierRoutes: FastifyPluginAsync<CashierRoutesOptions> = async (
     },
   );
 
+  // The widget's credited event (#112, docs/deposit.md -> After a deposit): initData alone goes on
+  // to the backend, which reads the balance from the broker. The page reads nothing of this
+  // answer, so it is 204 whatever the forward did; only the log tells the outcomes apart.
+  app.post(
+    CASHIER_CREDITED_PATH,
+    {
+      bodyLimit: DEPOSIT_BODY_LIMIT_BYTES,
+      onRequest: takePerIp,
+      errorHandler: (error: FastifyError, request, reply) => {
+        const { statusCode } = error;
+        if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+          request.log.warn({ code: error.code }, 'a cashier credited request was refused');
+          return reply.code(400).send();
+        }
+        request.log.error(errorLogFields(error), 'unhandled cashier credited error');
+        return reply.code(500).send();
+      },
+    },
+    async (request, reply) => {
+      const parsed = pageRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        request.log.warn('a cashier credited request was refused');
+        return reply.code(400).send();
+      }
+      try {
+        await backend.depositCredited({ initData: parsed.data.initData });
+      } catch (error) {
+        logCreditedFailure(request, error);
+      }
+      return reply.code(204).send();
+    },
+  );
+
   // An answered request the table names gets its state. Anything else — no answer, a 2xx outside
   // the contract, the backend refusing our own body, a status the table does not list — is logged
   // by name and status and shown as «Касса недоступна» with «Повторить».
@@ -172,3 +208,31 @@ export const cashierRoutes: FastifyPluginAsync<CashierRoutesOptions> = async (
     return reply.code(500).send({ outcome: CashierState.Unavailable });
   }
 };
+
+// A refusal the backend's contract names (401, 409, 429 with a DepositErrorCode) is an ordinary
+// day — a stale initData, the per-user window, an account gone; anything else is a drift or an
+// outage.
+const CREDITED_REFUSAL_STATUSES: ReadonlySet<number | undefined> = new Set([401, 409, 429]);
+const DEPOSIT_ERROR_CODES: ReadonlySet<string | undefined> = new Set(
+  Object.values(DepositErrorCode),
+);
+
+function logCreditedFailure(request: FastifyRequest, error: unknown): void {
+  if (!(error instanceof BackendError)) {
+    request.log.error(errorLogFields(error), 'the cashier credited event could not be forwarded');
+    return;
+  }
+  const answered = { status: error.status, reason: error.reason };
+  if (
+    error.code === BackendErrorCode.HttpStatus &&
+    CREDITED_REFUSAL_STATUSES.has(error.status) &&
+    DEPOSIT_ERROR_CODES.has(error.reason)
+  ) {
+    request.log.warn(answered, 'the backend refused a cashier credited event');
+    return;
+  }
+  request.log.error(
+    { ...errorLogFields(error), ...answered },
+    'the cashier credited event could not be forwarded',
+  );
+}

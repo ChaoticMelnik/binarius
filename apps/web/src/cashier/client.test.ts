@@ -1,7 +1,7 @@
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import { CASHIER_CLIENT_JS } from './client';
-import { CASHIER_RETRY_STATES, CashierState } from './pages';
+import { CASHIER_RETRY_STATES, CashierNotice, CashierState } from './pages';
 
 const INIT_DATA = 'query_id=AA%2BBB&user=%7B%22first_name%22%3A%22A+B%22%7D&auth_date=1&hash=ff';
 const WIDGET_ORIGIN = 'https://binodex.app';
@@ -25,35 +25,64 @@ const ready = (session: string, expiresInSec = 600): Answer => ({
 interface FakeElement {
   hidden: boolean;
   state?: string;
+  notice?: string;
   listeners: Record<string, () => void>;
   getAttribute(name: string): string | null;
   addEventListener(type: string, listener: () => void): void;
 }
 
-const element = (init: { hidden: boolean; state?: string }): FakeElement => {
+const element = (init: { hidden: boolean; state?: string; notice?: string }): FakeElement => {
   const listeners: Record<string, () => void> = {};
   return {
     ...init,
     listeners,
-    getAttribute: (name) => (name === 'data-state' ? (init.state ?? null) : null),
+    getAttribute: (name) =>
+      name === 'data-state'
+        ? (init.state ?? null)
+        : name === 'data-notice'
+          ? (init.notice ?? null)
+          : null,
     addEventListener: (type, listener) => {
       listeners[type] = listener;
     },
   };
 };
 
+// 'defer': the answer is held until the test settles it through `deferred`
+type Scripted = Answer | 'reject' | 'not-json' | 'defer';
+
 interface Options {
   // undefined: the SDK never loaded, so there is no Telegram global at all
   initData?: string;
-  // answers of POST /cashier/session in order; a function answers with a rejected fetch
-  answers?: (Answer | 'reject' | 'not-json')[];
+  // answers of POST /cashier/session in order
+  answers?: Scripted[];
+  // answers of POST /cashier/credited in order; 204 when the list is spent
+  creditedAnswers?: Scripted[];
 }
+
+const respond = (next: Answer | 'reject' | 'not-json') => {
+  if (next === 'reject') return Promise.reject(new Error('network'));
+  if (next === 'not-json') {
+    return Promise.resolve({ ok: false, json: () => Promise.reject(new Error('not json')) });
+  }
+  const status = next.status ?? 200;
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    json: () => Promise.resolve(next.body),
+  });
+};
 
 function run(options: Options) {
   const order: string[] = [];
   let now = 1_000_000;
   const answers = [...(options.answers ?? [ready('S1')])];
+  const creditedAnswers = [...(options.creditedAnswers ?? [])];
   const blocks = Object.values(CashierState).map((state) => element({ hidden: true, state }));
+  const notices = Object.values(CashierNotice).map((notice) => element({ hidden: true, notice }));
+  // every request the script made, in order
+  const requests: { url: string; body: string }[] = [];
+  // the held answers, oldest first; settle one with its answer
+  const deferred: ((answer: Answer | 'reject' | 'not-json') => void)[] = [];
   const posted: { message: unknown; target: unknown }[] = [];
   const widgetWindow = {
     postMessage: vi.fn((message: unknown, target: unknown) => {
@@ -84,18 +113,19 @@ function run(options: Options) {
   const webApp = { initData: options.initData, ready: vi.fn(), close: vi.fn() };
   const fetch = vi.fn((url: string, init: { method: string; headers: unknown; body: string }) => {
     order.push('fetch');
-    void init;
-    const next = answers.shift();
+    requests.push({ url, body: init.body });
+    const queue = url === '/cashier/credited' ? creditedAnswers : answers;
+    const next =
+      queue.shift() ?? (url === '/cashier/credited' ? { status: 204, body: null } : undefined);
     if (next === undefined) throw new Error(`unexpected fetch of ${url}`);
-    if (next === 'reject') return Promise.reject(new Error('network'));
-    if (next === 'not-json') {
-      return Promise.resolve({ ok: false, json: () => Promise.reject(new Error('not json')) });
+    if (next === 'defer') {
+      return new Promise((resolve, reject) => {
+        deferred.push((answer) => {
+          respond(answer).then(resolve, reject);
+        });
+      });
     }
-    const status = next.status ?? 200;
-    return Promise.resolve({
-      ok: status >= 200 && status < 300,
-      json: () => Promise.resolve(next.body),
-    });
+    return respond(next);
   });
   const listeners: ((event: unknown) => void)[] = [];
   const parent = { postMessage: vi.fn() };
@@ -105,7 +135,8 @@ function run(options: Options) {
     document: {
       body: { getAttribute: (name: string) => (name === 'data-page' ? 'cashier' : null) },
       getElementById: (id: string) => elements[id] ?? null,
-      querySelectorAll: (selector: string) => (selector === '[data-state]' ? blocks : []),
+      querySelectorAll: (selector: string) =>
+        selector === '[data-state]' ? blocks : selector === '[data-notice]' ? notices : [],
     },
     addEventListener: (type: string, listener: (event: unknown) => void) => {
       if (type === 'message') {
@@ -133,6 +164,12 @@ function run(options: Options) {
     }
   };
   const shown = () => blocks.filter((block) => !block.hidden).map((block) => block.state);
+  const noticed = () => notices.filter((block) => !block.hidden).map((block) => block.notice);
+  // what the script wrote into the page besides `hidden` and the frame's own fields
+  const written = () =>
+    [...blocks, ...notices, ...Object.values(elements)].flatMap((target) =>
+      Object.keys(target).filter((key) => key === 'textContent' || key === 'innerHTML'),
+    );
   const advance = (ms: number) => {
     now += ms;
   };
@@ -141,6 +178,10 @@ function run(options: Options) {
     frame,
     shown,
     fetch,
+    requests,
+    deferred,
+    noticed,
+    written,
     webApp,
     posted,
     assigned,
@@ -349,35 +390,23 @@ describe('resize (C7)', () => {
   });
 });
 
-describe('close (C8) and the events of #112 (C9)', () => {
+describe('close (C8)', () => {
   it('closes the Mini App once on close', async () => {
     const { deliver, webApp } = await loaded();
     deliver({ type: 'binodex-embed:close' });
     expect(webApp.close).toHaveBeenCalledOnce();
   });
-
-  it.each(['binodex-embed:credited', 'binodex-embed:error', 'binodex-embed:reauth-required'])(
-    '%s changes nothing yet',
-    async (type) => {
-      const { deliver, posted, fetch, shown, frame, webApp } = await loaded();
-      deliver({ type, session: 'x', amount: 1 });
-      await settle();
-      expect(posted).toEqual([]);
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(shown()).toEqual([]);
-      expect(frame.hidden).toBe(false);
-      expect(webApp.close).not.toHaveBeenCalled();
-    },
-  );
 });
 
 describe('the states (C11)', () => {
   it.each(Object.values(CashierState).filter((state) => state !== 'open_from_telegram'))(
     'shows %s with its button, the iframe hidden',
     async (state) => {
+      const answer = { status: state === 'busy' ? 429 : 200, body: { outcome: state } };
+      // unavailable is asked once more at once (C20)
       const { shown, frame, elements } = await loaded({
         initData: INIT_DATA,
-        answers: [{ status: state === 'busy' ? 429 : 200, body: { outcome: state } }],
+        answers: state === 'unavailable' ? [answer, answer] : [answer],
       });
       expect(shown()).toEqual([state]);
       expect(frame.hidden).toBe(true);
@@ -399,31 +428,50 @@ describe('the states (C11)', () => {
     expect(elements.close?.hidden).toBe(true);
   });
 
+  it('shows unavailable for an unknown outcome, without asking again', async () => {
+    const { shown, frame, elements, fetch } = await loaded({
+      initData: INIT_DATA,
+      answers: [{ status: 200, body: { outcome: 'something_new' } }],
+    });
+    expect(shown()).toEqual(['unavailable']);
+    expect(frame.hidden).toBe(true);
+    expect(elements.retry?.hidden).toBe(false);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it.each([
-    ['an unknown outcome', { status: 200, body: { outcome: 'something_new' } }],
+    ['the route', { status: 500, body: { outcome: 'unavailable' } }],
     ['a ready answer without a session', { body: { ...(ready('S1').body as object), session: 1 } }],
     ['no outcome', { body: { ok: true } }],
     ['a JSON null', { body: null }],
     ['a body that is not JSON', 'not-json' as const],
     ['a rejected fetch', 'reject' as const],
-  ])('shows unavailable for %s', async (_label, answer) => {
-    const { shown, frame, elements } = await loaded({ initData: INIT_DATA, answers: [answer] });
+  ])('shows unavailable from %s after the second answer', async (_label, answer) => {
+    const { shown, frame, elements, fetch } = await loaded({
+      initData: INIT_DATA,
+      answers: [answer, answer],
+    });
     expect(shown()).toEqual(['unavailable']);
     expect(frame.hidden).toBe(true);
     expect(elements.retry?.hidden).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('«Повторить» runs the load again', async () => {
     const { elements, fetch, frame, shown } = await loaded({
       initData: INIT_DATA,
-      answers: [{ status: 500, body: { outcome: 'unavailable' } }, ready('S1')],
+      answers: [
+        { status: 500, body: { outcome: 'unavailable' } },
+        { status: 500, body: { outcome: 'unavailable' } },
+        ready('S1'),
+      ],
     });
     expect(shown()).toEqual(['unavailable']);
     elements.retry?.listeners.click?.();
     expect(elements.working?.hidden).toBe(false);
     expect(shown()).toEqual([]);
     await settle();
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect(frame.src).toBe(WIDGET_URL);
     expect(frame.hidden).toBe(false);
   });
@@ -459,5 +507,215 @@ describe('the session never in a URL (C12)', () => {
     expect(location.replace).not.toHaveBeenCalled();
     expect(location.assign).not.toHaveBeenCalled();
     expect(location.href).toBe('https://binarius.example/cashier');
+  });
+});
+
+const BUSY: Answer = { status: 429, body: { outcome: 'busy' } };
+const UNAVAILABLE: Answer = { status: 500, body: { outcome: 'unavailable' } };
+const sessionsPosted = (posted: { message: unknown }[]) =>
+  posted.map((entry) => (entry.message as { session: string }).session);
+
+describe('credited (C15, C16)', () => {
+  it('C15 shows the credited notice, keeps the widget and posts initData alone', async () => {
+    const { deliver, noticed, frame, requests, posted, shown } = await loaded();
+    deliver({ type: 'binodex-embed:credited', amount: 100, currency: 'USD' });
+    await settle();
+    expect(noticed()).toEqual(['credited']);
+    expect(shown()).toEqual([]);
+    expect(frame.hidden).toBe(false);
+    expect(requests.slice(1)).toEqual([
+      { url: '/cashier/credited', body: JSON.stringify({ initData: INIT_DATA }) },
+    ]);
+    expect(posted).toEqual([]);
+  });
+
+  it.each([
+    ['a rejected fetch', 'reject' as const],
+    ['a 500', { status: 500, body: null }],
+    ['a 429', { status: 429, body: { outcome: 'busy' } }],
+  ])('C16 changes nothing else on %s', async (_label, answer) => {
+    const { deliver, noticed, frame, posted, shown, elements, fetch } = await loaded({
+      initData: INIT_DATA,
+      creditedAnswers: [answer],
+    });
+    deliver({ type: 'binodex-embed:credited' });
+    await settle();
+    expect(noticed()).toEqual(['credited']);
+    expect(shown()).toEqual([]);
+    expect(frame.hidden).toBe(false);
+    expect(elements.retry?.hidden).toBe(true);
+    expect(posted).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('error (C17)', () => {
+  it('shows the fixed notice over the widget and never reads the message', async () => {
+    const message = '<img src=x onerror=alert(1)>';
+    const { deliver, noticed, frame, written, requests, shown } = await loaded();
+    deliver({ type: 'binodex-embed:credited' });
+    deliver({ type: 'binodex-embed:error', message });
+    await settle();
+    expect(noticed()).toEqual(['widget_error']);
+    expect(shown()).toEqual([]);
+    expect(frame.hidden).toBe(false);
+    expect(written()).toEqual([]);
+    for (const request of requests) expect(request.body).not.toContain('onerror');
+  });
+});
+
+describe('reauth-required (C18, C19, C22)', () => {
+  it('C18 posts a fresh session to the same frame without a reload, and drops the load session', async () => {
+    const { deliver, posted, fetch, assigned } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), ready('S2'), ready('S3')],
+    });
+    deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(posted).toEqual([
+      { message: { type: 'binodex-embed:init', session: 'S2' }, target: WIDGET_ORIGIN },
+    ]);
+    expect(assigned).toEqual([WIDGET_URL]);
+
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    expect(sessionsPosted(posted)).toEqual(['S2', 'S3']);
+    expect(assigned).toEqual([WIDGET_URL]);
+  });
+
+  it.each([
+    ['two reauth-required', ['binodex-embed:reauth-required', 'binodex-embed:reauth-required']],
+    ['a ready and a reauth-required', ['binodex-embed:ready', 'binodex-embed:reauth-required']],
+  ])('C19 coalesces %s while a mint is in flight: one POST, one init', async (_label, types) => {
+    const { deliver, posted, fetch, deferred } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), 'defer'],
+    });
+    deliver({ type: 'binodex-embed:reauth-required' });
+    for (const type of types) deliver({ type });
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    deferred[0]?.(ready('S2'));
+    await settle();
+    expect(sessionsPosted(posted)).toEqual(['S2']);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('C22 shows busy from a reauth mint without asking again, hiding the notice', async () => {
+    const { deliver, shown, fetch, posted, noticed, frame } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), BUSY],
+    });
+    deliver({ type: 'binodex-embed:credited' });
+    deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    expect(shown()).toEqual(['busy']);
+    expect(noticed()).toEqual([]);
+    expect(frame.hidden).toBe(true);
+    expect(posted).toEqual([]);
+    expect(fetch.mock.calls.filter(([url]) => url === '/cashier/session')).toHaveLength(2);
+  });
+});
+
+describe('one more mint on unavailable (C20)', () => {
+  it('on the load: the second answer loads the widget', async () => {
+    const { deliver, frame, posted, fetch, shown } = await loaded({
+      initData: INIT_DATA,
+      answers: [UNAVAILABLE, ready('S1')],
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(shown()).toEqual([]);
+    expect(frame.src).toBe(WIDGET_URL);
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    expect(sessionsPosted(posted)).toEqual(['S1']);
+  });
+
+  it.each([
+    ['a fresh ready', 'binodex-embed:ready', 'not-json' as const],
+    ['reauth-required', 'binodex-embed:reauth-required', 'reject' as const],
+  ])('on %s: the second answer is posted', async (_label, type, failure) => {
+    const { deliver, posted, fetch, shown } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), failure, ready('S2')],
+    });
+    if (type === 'binodex-embed:ready') {
+      deliver({ type });
+      await settle();
+    }
+    deliver({ type });
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(shown()).toEqual([]);
+    expect(sessionsPosted(posted).at(-1)).toBe('S2');
+  });
+
+  it('shows unavailable after two, posting nothing', async () => {
+    const { deliver, posted, fetch, shown } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), UNAVAILABLE, UNAVAILABLE],
+    });
+    deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    expect(shown()).toEqual(['unavailable']);
+    expect(posted).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('the order of mint results (C21)', () => {
+  // a fresh mint in flight, then «Повторить» starts a new load that shows its widget
+  const reloadedDuringMint = async () => {
+    const page = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), 'defer', ready('S3')],
+    });
+    page.deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    page.elements.retry?.listeners.click?.();
+    await settle();
+    expect(page.assigned).toEqual([WIDGET_URL, WIDGET_URL]);
+    return page;
+  };
+
+  it('a: drops a failure of the older load', async () => {
+    const { deferred, shown, frame, elements } = await reloadedDuringMint();
+    deferred[0]?.(BUSY);
+    await settle();
+    expect(shown()).toEqual([]);
+    expect(frame.hidden).toBe(false);
+    expect(elements.retry?.hidden).toBe(true);
+  });
+
+  it('b: posts no session of the older load', async () => {
+    const { deferred, posted, deliver } = await reloadedDuringMint();
+    deferred[0]?.(ready('S2'));
+    await settle();
+    expect(posted).toEqual([]);
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    expect(sessionsPosted(posted)).toEqual(['S3']);
+  });
+
+  it('c: shows the widget again when a fresh mint succeeds after one failed', async () => {
+    const { deliver, posted, frame, shown, elements } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), BUSY, ready('S2')],
+    });
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    expect(shown()).toEqual(['busy']);
+    expect(frame.hidden).toBe(true);
+
+    deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    expect(frame.hidden).toBe(false);
+    expect(shown()).toEqual([]);
+    expect(elements.retry?.hidden).toBe(true);
+    expect(elements.close?.hidden).toBe(true);
+    expect(sessionsPosted(posted)).toEqual(['S1', 'S2']);
   });
 });

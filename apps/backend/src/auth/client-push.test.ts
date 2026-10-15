@@ -2,11 +2,17 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
-import { defaultBotTextSource, telegramHtml } from '@binarius/shared';
+import {
+  defaultBotTextSource,
+  formatUsd,
+  telegramHtml,
+  type DecimalString,
+} from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
 import {
   createClientPush,
+  type ClientPush,
   LinkPushKind,
   linkPushMessage,
   type LinkPushOutcome,
@@ -152,6 +158,42 @@ describe('the mailing push', () => {
     expect(inlineButtons(payload)).toEqual([
       { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
     ]);
+  });
+});
+
+describe('the deposit push', () => {
+  const money = (value: string) => value as DecimalString;
+  const sent = async (balance: Parameters<ClientPush['sendDepositCredited']>[1]) => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    await push.sendDepositCredited(TELEGRAM_USER_ID, balance);
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    const payload = sentPayload(calls, 'sendMessage');
+    expect(payload?.chat_id).toBe('9007199254740993');
+    expect(payload?.parse_mode).toBe('HTML');
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+    ]);
+    return payload;
+  };
+
+  it('prints a fresh real balance from its DecimalString, with the menu button', async () => {
+    const payload = await sent({ amount: money('1234.50000000'), fresh: true });
+    expect(payload?.text).toBe(
+      `💳 <b>Пополнение получено</b>\nРеальный баланс: ${formatUsd('1234.50000000')}`,
+    );
+    expect(payload?.text).toMatch(/\$1\D234\.50$/);
+  });
+
+  it('says there is no fresh data for a stale or missing snapshot', async () => {
+    const stale = await sent({ amount: money('1234.5'), fresh: false });
+    expect(stale?.text).toBe(
+      CLIENT_TEXTS.depositCredited({ realBalance: { amount: money('1234.5'), fresh: false } })
+        .value,
+    );
+    expect(stale?.text).not.toContain('1234');
+    const missing = await sent(null);
+    expect(missing?.text).toBe(stale?.text);
   });
 });
 

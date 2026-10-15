@@ -6,11 +6,21 @@
 //
 // The handshake follows the broker's own cashier (broker-web pay-embed.tsx): a session is minted on
 // load and the widget's first `ready` takes it while it is young; every later `ready` (the widget
-// reloaded itself) gets a fresh one. The session lives only in this closure, in the POST answer and
-// in postMessage — never in a URL, never in storage.
+// reloaded itself) and every `reauth-required` gets a fresh one, posted to the same frame without a
+// reload (#112). The session lives only in this closure, in the POST answer and in postMessage —
+// never in a URL, never in storage.
+//
+// Mint results are ordered (#112, docs/deposit.md -> The page): a load bumps the generation, and a
+// result of an older one is dropped whole; at most one fresh mint is in flight, and an event that
+// needs one while it is coalesces into it. Any mint answering `unavailable` is repeated once at
+// once: the page cannot tell a broker 401 (the next call exchanges the token) from an outage.
+//
+// `credited` and `error` show a notice above the widget, which stays. Neither event's payload is
+// read: the credited POST carries initData alone, and the widget's error message is never shown.
 export const CASHIER_CLIENT_JS = `(function () {
   'use strict';
   var SESSION_PATH = '/cashier/session';
+  var CREDITED_PATH = '/cashier/credited';
   var SESSION_REUSE_MS = 45000;
   var HEIGHT_MIN = 520;
   var HEIGHT_MAX = 900;
@@ -32,11 +42,29 @@ export const CASHIER_CLIENT_JS = `(function () {
   // what the backend answered for the frame on screen; null until then, and every message is
   // ignored while it is
   var widgetOrigin = null;
-  // the session minted on load, until the first ready takes it
+  // the session minted on load, until the first ready takes it or a reauth drops it
   var pending = null;
+  // bumped by every load; a mint result of an older generation is dropped
+  var generation = 0;
+  // a fresh mint (ready, reauth-required) is in flight
+  var minting = false;
 
   function closeApp() {
     if (webApp && typeof webApp.close === 'function') webApp.close();
+  }
+
+  function showNotice(notice) {
+    var notices = window.document.querySelectorAll('[data-notice]');
+    for (var index = 0; index < notices.length; index += 1) {
+      notices[index].hidden = notices[index].getAttribute('data-notice') !== notice;
+    }
+  }
+
+  function hideStates() {
+    var blocks = window.document.querySelectorAll('[data-state]');
+    for (var index = 0; index < blocks.length; index += 1) blocks[index].hidden = true;
+    if (retry) retry.hidden = true;
+    if (close) close.hidden = true;
   }
 
   function showState(state) {
@@ -54,14 +82,20 @@ export const CASHIER_CLIENT_JS = `(function () {
     var retryable = RETRY_STATES[shown] === true;
     if (retry) retry.hidden = !retryable;
     if (close) close.hidden = retryable || shown === 'open_from_telegram';
+    showNotice(null);
   }
 
   function showWorking() {
-    var blocks = window.document.querySelectorAll('[data-state]');
-    for (var index = 0; index < blocks.length; index += 1) blocks[index].hidden = true;
-    if (retry) retry.hidden = true;
-    if (close) close.hidden = true;
+    hideStates();
+    showNotice(null);
     if (working) working.hidden = false;
+  }
+
+  // the widget back on screen, whatever an earlier failure hid
+  function showWidget() {
+    hideStates();
+    if (working) working.hidden = true;
+    frame.hidden = false;
   }
 
   // Resolves to the route's answer: { outcome: 'ready', ... } with every field the page uses, or
@@ -98,8 +132,33 @@ export const CASHIER_CLIENT_JS = `(function () {
       );
   }
 
+  // One mint, and a second at once when the first answers unavailable, unless a load has started
+  // since; the second answer is the answer.
+  function mintOnceMore(started) {
+    return mint().then(function (answer) {
+      if (answer.outcome !== 'unavailable' || started !== generation) return answer;
+      return mint();
+    });
+  }
+
   function postInit(session) {
     frame.contentWindow.postMessage({ type: 'binodex-embed:init', session: session }, widgetOrigin);
+  }
+
+  function freshMint() {
+    if (minting) return;
+    minting = true;
+    var started = generation;
+    mintOnceMore(started).then(function (answer) {
+      if (started !== generation) return;
+      minting = false;
+      if (answer.outcome !== 'ready') {
+        showState(answer.outcome);
+        return;
+      }
+      showWidget();
+      postInit(answer.session);
+    });
   }
 
   function onReady() {
@@ -109,13 +168,28 @@ export const CASHIER_CLIENT_JS = `(function () {
       postInit(held.session);
       return;
     }
-    mint().then(function (answer) {
-      if (answer.outcome !== 'ready') {
-        showState(answer.outcome);
-        return;
-      }
-      postInit(answer.session);
-    });
+    freshMint();
+  }
+
+  function onReauthRequired() {
+    pending = null;
+    freshMint();
+  }
+
+  // Fire and forget: the deposit happened at the broker whatever this POST meets, so its answer
+  // changes nothing here.
+  function onCredited() {
+    showNotice('credited');
+    window
+      .fetch(CREDITED_PATH, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ initData: initData }),
+      })
+      .then(
+        function () {},
+        function () {},
+      );
   }
 
   function onResize(height) {
@@ -145,10 +219,14 @@ export const CASHIER_CLIENT_JS = `(function () {
       case 'binodex-embed:close':
         closeApp();
         return;
-      // #112 handles these three; until then they change nothing
-      case 'binodex-embed:credited':
-      case 'binodex-embed:error':
       case 'binodex-embed:reauth-required':
+        onReauthRequired();
+        return;
+      case 'binodex-embed:credited':
+        onCredited();
+        return;
+      case 'binodex-embed:error':
+        showNotice('widget_error');
         return;
       default:
         return;
@@ -156,6 +234,12 @@ export const CASHIER_CLIENT_JS = `(function () {
   });
 
   function load() {
+    generation += 1;
+    var started = generation;
+    pending = null;
+    minting = false;
+    // messages of the frame on screen are ignored until this load's answer names its origin
+    widgetOrigin = null;
     if (initData === '') {
       showState('open_from_telegram');
       return;
@@ -165,7 +249,8 @@ export const CASHIER_CLIENT_JS = `(function () {
       return;
     }
     showWorking();
-    mint().then(function (answer) {
+    mintOnceMore(started).then(function (answer) {
+      if (started !== generation) return;
       if (answer.outcome !== 'ready') {
         showState(answer.outcome);
         return;
@@ -176,9 +261,8 @@ export const CASHIER_CLIENT_JS = `(function () {
         mintedAt: Date.now(),
         reuseMs: Math.min(SESSION_REUSE_MS, answer.expiresInSec * 1000),
       };
-      if (working) working.hidden = true;
       frame.style.height = HEIGHT_INITIAL + 'px';
-      frame.hidden = false;
+      showWidget();
       frame.src = answer.widgetUrl;
     });
   }

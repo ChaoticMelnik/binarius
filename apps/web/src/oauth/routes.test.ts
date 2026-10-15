@@ -63,6 +63,7 @@ beforeEach(() => {
       return answer();
     },
     depositWidgetSession: unused,
+    depositCredited: unused,
   };
   app = buildWebApp({
     backend,

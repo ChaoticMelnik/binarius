@@ -34,6 +34,7 @@ import {
   safeParseAdminUsersResponse,
   safeParseChangePasswordResponse,
   safeParseOAuthCallbackResponse,
+  safeParseDepositCreditedResponse,
   safeParseDepositWidgetSessionResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminLinkInspectResponse,
@@ -70,6 +71,8 @@ import {
   type ChangePasswordResponse,
   type LogoutResponse,
   type OAuthCallbackRequest,
+  type DepositCreditedRequest,
+  type DepositCreditedResponse,
   type DepositWidgetSessionRequest,
   type DepositWidgetSessionResponse,
   readBody,
@@ -79,6 +82,7 @@ import {
 } from '@binarius/shared';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
+  DEPOSIT_CREDITED_REQUEST_TIMEOUT_MS,
   DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS,
   OAUTH_CALLBACK_REQUEST_TIMEOUT_MS,
 } from './timing';
@@ -187,6 +191,8 @@ export interface BackendClient {
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
   /** the backend's public cashier widget session (#11, #111); carries no bearer */
   depositWidgetSession(request: DepositWidgetSessionRequest): Promise<DepositWidgetSessionResponse>;
+  /** the backend's public credited trigger (#112); carries no bearer */
+  depositCredited(request: DepositCreditedRequest): Promise<DepositCreditedResponse>;
 }
 
 export interface BackendClientOptions {
@@ -195,6 +201,7 @@ export interface BackendClientOptions {
   timeoutMs?: number;
   oauthCallbackTimeoutMs?: number;
   depositWidgetSessionTimeoutMs?: number;
+  depositCreditedTimeoutMs?: number;
 }
 
 type Parse<T> = (input: unknown) => { success: true; data: T } | { success: false };
@@ -205,6 +212,7 @@ export function createBackendClient({
   timeoutMs = BACKEND_REQUEST_TIMEOUT_MS,
   oauthCallbackTimeoutMs = OAUTH_CALLBACK_REQUEST_TIMEOUT_MS,
   depositWidgetSessionTimeoutMs = DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS,
+  depositCreditedTimeoutMs = DEPOSIT_CREDITED_REQUEST_TIMEOUT_MS,
 }: BackendClientOptions): BackendClient {
   // a trailing slash, so a base URL with a path prefix keeps it: `new URL('/x', 'http://h/api')`
   // would drop `/api`
@@ -457,6 +465,16 @@ export function createBackendClient({
           body: request,
           bearer: false,
           timeoutMs: depositWidgetSessionTimeoutMs,
+        }),
+      );
+    },
+    async depositCredited(request) {
+      return parsed(
+        safeParseDepositCreditedResponse,
+        await call('POST', 'deposit/credited', {
+          body: request,
+          bearer: false,
+          timeoutMs: depositCreditedTimeoutMs,
         }),
       );
     },

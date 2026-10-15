@@ -58,8 +58,41 @@ export type DepositErrorCode = (typeof DepositErrorCode)[keyof typeof DepositErr
 
 export const depositRefusalSchema = z.strictObject({ error: z.enum(DepositErrorCode) });
 
+// POST /deposit/credited (#112, docs/deposit.md -> After a deposit): the cashier widget said a
+// deposit went through. A trigger, not data: the body is the Mini App's initData alone, the
+// widget's amount never leaves the page, and the only effect is a broker balance read for the
+// caller's own account.
+export const DEPOSIT_CREDITED_PATH = '/deposit/credited';
+
+// How long the backend may hold the credited route: the balance refresh, then the Telegram push.
+// apps/web's forward waits longer than it.
+export const DEPOSIT_CREDITED_BUDGET_MS = 8_000;
+
+export const depositCreditedRequestSchema = z.strictObject({
+  initData: z.string().min(1).max(INIT_DATA_MAX_LENGTH),
+});
+export type DepositCreditedRequest = z.infer<typeof depositCreditedRequestSchema>;
+
+export const DepositCreditedOutcome = {
+  // the balance snapshot was written from the broker within the budget
+  Refreshed: 'refreshed',
+  // nothing was written within the budget; the balance tick catches up
+  Pending: 'pending',
+} as const;
+export type DepositCreditedOutcome =
+  (typeof DepositCreditedOutcome)[keyof typeof DepositCreditedOutcome];
+
+export const depositCreditedResponseSchema = z.strictObject({
+  outcome: z.enum(DepositCreditedOutcome),
+});
+export type DepositCreditedResponse = z.infer<typeof depositCreditedResponseSchema>;
+
 export const safeParseDepositWidgetSessionRequest = (input: unknown) =>
   depositWidgetSessionRequestSchema.safeParse(input);
 export const safeParseDepositWidgetSessionResponse = (input: unknown) =>
   depositWidgetSessionResponseSchema.safeParse(input);
 export const safeParseDepositRefusal = (input: unknown) => depositRefusalSchema.safeParse(input);
+export const safeParseDepositCreditedRequest = (input: unknown) =>
+  depositCreditedRequestSchema.safeParse(input);
+export const safeParseDepositCreditedResponse = (input: unknown) =>
+  depositCreditedResponseSchema.safeParse(input);

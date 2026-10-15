@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DepositCreditedOutcome,
   DepositErrorCode,
+  safeParseDepositCreditedRequest,
+  safeParseDepositCreditedResponse,
   safeParseDepositRefusal,
   safeParseDepositWidgetSessionRequest,
   safeParseDepositWidgetSessionResponse,
@@ -56,5 +59,34 @@ describe('deposit refusal', () => {
       expect(safeParseDepositRefusal({ error }).success).toBe(true);
     }
     expect(safeParseDepositRefusal({ error: 'internal' }).success).toBe(false);
+  });
+});
+
+describe('deposit credited request', () => {
+  it('takes initData alone', () => {
+    expect(safeParseDepositCreditedRequest({ initData: 'a=1' }).success).toBe(true);
+  });
+
+  it.each([
+    {},
+    { initData: '' },
+    { initData: 'x'.repeat(INIT_DATA_MAX_LENGTH + 1) },
+    // the widget's amount never reaches the backend: a body carrying it is refused
+    { initData: 'a=1', amount: 100 },
+    { initData: 'a=1', clientIp: '203.0.113.7' },
+  ])('refuses %j', (value) => {
+    expect(safeParseDepositCreditedRequest(value).success).toBe(false);
+  });
+});
+
+describe('deposit credited response', () => {
+  it('names every outcome and nothing else', () => {
+    for (const outcome of Object.values(DepositCreditedOutcome)) {
+      expect(safeParseDepositCreditedResponse({ outcome }).success).toBe(true);
+    }
+    expect(safeParseDepositCreditedResponse({ outcome: 'credited' }).success).toBe(false);
+    expect(safeParseDepositCreditedResponse({ outcome: 'refreshed', amount: '1' }).success).toBe(
+      false,
+    );
   });
 });

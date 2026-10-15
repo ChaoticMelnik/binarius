@@ -17,7 +17,10 @@ import {
   BROKER_RATE_LIMIT_PER_MINUTE,
   DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
-import { DEPOSIT_WIDGET_SESSION_BUDGET_MS } from '@binarius/shared/deposit';
+import {
+  DEPOSIT_CREDITED_BUDGET_MS,
+  DEPOSIT_WIDGET_SESSION_BUDGET_MS,
+} from '@binarius/shared/deposit';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import {
   SIGNAL_CHART_INTERVAL_MS,
@@ -42,6 +45,7 @@ import {
   BOT_TEXTS_LOAD_BUDGET_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   DEPOSIT_BROKER_CALL_BUDGET_MS,
+  DEPOSIT_CREDITED_REFRESH_BUDGET_MS,
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
   MAILING_PLAN_TICK_MS,
   MAILING_SEND_BATCH,
@@ -123,6 +127,15 @@ describe('backend shutdown timing', () => {
     expect(
       composeServiceEnvValue(composeYaml, 'trading-worker', 'POSTBACK_URL_SECRET'),
     ).toBeUndefined();
+  });
+});
+
+describe('the cashier credited timing (#112)', () => {
+  it('fits the refresh and the push inside the route budget, inside phase 1', () => {
+    expect(
+      DEPOSIT_CREDITED_REFRESH_BUDGET_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
+    ).toBeLessThanOrEqual(DEPOSIT_CREDITED_BUDGET_MS);
+    expect(DEPOSIT_CREDITED_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 });
 

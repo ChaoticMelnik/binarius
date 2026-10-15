@@ -35,6 +35,7 @@ export const BotTextGroup = {
   Analysis: 'analysis',
   Trade: 'trade',
   Session: 'session',
+  Deposit: 'deposit',
   Mailing: 'mailing',
   Buttons: 'buttons',
   Commands: 'commands',
@@ -55,6 +56,7 @@ export const BOT_TEXT_GROUP_TITLES = {
   [BotTextGroup.Analysis]: 'Анализ',
   [BotTextGroup.Trade]: 'Демо-сделка',
   [BotTextGroup.Session]: 'Сессия',
+  [BotTextGroup.Deposit]: 'Пополнение',
   [BotTextGroup.Mailing]: 'Напоминания',
   [BotTextGroup.Buttons]: 'Кнопки',
   [BotTextGroup.Commands]: 'Команды: описания',
@@ -1409,6 +1411,16 @@ export const BOT_TEXT_CATALOG = {
     `🏁 {symbol}: {result}
 🤖 https://t.me/{botUsername}?start=share`,
     { ...caption, vars: ['symbol', 'result', 'botUsername'] },
+  ),
+
+  // ---- Пополнение (#112, docs/deposit.md) -------------------------------------------------
+  // Sent by the backend only, after the cashier's credited event, with the «menuButton» button.
+  depositCredited: html(
+    g.Deposit,
+    'Push после пополнения в кассе: реальный баланс из снимка брокера, с кнопкой меню.',
+    `💳 <b>Пополнение получено</b>
+Реальный баланс: {realBalance}`,
+    { vars: ['realBalance'] },
   ),
 
   // ---- Напоминания (#202, docs/mailing.md) -------------------------------------------------
