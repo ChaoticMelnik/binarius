@@ -1,7 +1,11 @@
-import { MIN_CYCLE_PAYOUT_PCT, PAIR_TYPE_GROUPS, pairTypeGroupOf } from '@binarius/shared';
-import { MIN_IN_SAMPLE_TRADES, OPEN_DELAY_GRID_MS, POOLED_BREAK_EVEN_PAYOUT } from './config';
 import {
   breakEvenPct,
+  MIN_CYCLE_PAYOUT_PCT,
+  PAIR_TYPE_GROUPS,
+  pairTypeGroupOf,
+} from '@binarius/shared';
+import { MIN_IN_SAMPLE_TRADES, OPEN_DELAY_GRID_MS, POOLED_BREAK_EVEN_PAYOUT } from './config';
+import {
   decided,
   emptyTally,
   intervalOf,
@@ -86,6 +90,24 @@ function table(head: readonly string[], rows: readonly (readonly (string | numbe
   return [line(head), line(head.map(() => '---')), ...rows.map(line)].join('\n');
 }
 
+const rowHead = [
+  'interval',
+  'variant',
+  'params',
+  'pause',
+  'delay ms',
+  'scope',
+  'trades',
+  'W',
+  'L',
+  'T',
+  'win %',
+  '95 % CI',
+  'break-even %',
+  'verdict',
+  'PnL',
+];
+
 const sameCell = (a: Cell, b: Omit<Cell, 'perAsset'>) =>
   a.variant === b.variant &&
   a.interval === b.interval &&
@@ -137,6 +159,8 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
 
   const intervals = [...new Set(data.cells.map((cell) => cell.interval))];
   const headline: Row[] = [];
+  // table (a) in order: a headline row, or the line of a variant with no point to show
+  const headlineLines: (Row | readonly (string | number)[])[] = [];
   const perPair: Row[] = [];
   const delays: Row[] = [];
   const pauses: Row[] = [];
@@ -148,7 +172,12 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
     decisions: number;
     shares: Record<string, number>;
   }[] = [];
-  const selections: { variant: string; interval: string; selected: string }[] = [];
+  const selections: {
+    variant: string;
+    interval: string;
+    selected: string;
+    bestInSampleTrades: number;
+  }[] = [];
 
   for (const interval of intervals) {
     for (const variant of VARIANTS.filter((v) => v.intervals.includes(interval))) {
@@ -161,32 +190,48 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
         grid.push(row(cell, 'in-sample, pooled', tally, POOLED_BREAK_EVEN_PAYOUT));
       }
       const selected = selectPoint(candidates, MIN_IN_SAMPLE_TRADES);
+      const best = Math.max(0, ...candidates.map(({ tally }) => tally.trades));
       selections.push({
         variant: variant.name,
         interval,
         selected: selected === undefined ? 'none' : pointLabel(selected),
+        bestInSampleTrades: best,
       });
-      const shown = [...(selected === undefined ? [] : [selected])];
+      const none = `no point with >= ${MIN_IN_SAMPLE_TRADES} in-sample trades (best: ${best})`;
+      const shown: { point: GridPoint; scope: string }[] = [];
+      if (selected !== undefined) shown.push({ point: selected, scope: 'selected' });
+      else if (variant.grid.length === 1)
+        shown.push({ point: variant.grid[0], scope: `only point, ${none}` });
+      else {
+        headlineLines.push([
+          interval,
+          variant.name,
+          '-',
+          variant.headlinePause ? 'on' : 'off',
+          data.headlineDelayMs,
+          none,
+          ...Array<string>(rowHead.length - 6).fill('-'),
+        ]);
+      }
       if (
         variant.name === 'v2' &&
-        !shown.some((point) => pointLabel(point) === pointLabel(V2_PRODUCTION_POINT))
+        !shown.some(({ point }) => pointLabel(point) === pointLabel(V2_PRODUCTION_POINT))
       ) {
-        shown.push(V2_PRODUCTION_POINT);
+        shown.push({ point: V2_PRODUCTION_POINT, scope: 'production' });
       }
-      for (const point of shown) {
-        const scope = point === selected ? 'selected' : 'production';
+      for (const { point, scope } of shown) {
         const at = (pause: boolean, openDelayMs: number) =>
           find({ ...base, point, pause, openDelayMs });
         const main = at(variant.headlinePause, data.headlineDelayMs);
         if (main === undefined) continue;
-        headline.push(
-          row(
-            main,
-            `${scope}, out-of-sample, pooled`,
-            pooled(main, 'outOfSample'),
-            POOLED_BREAK_EVEN_PAYOUT,
-          ),
+        const headlineRow = row(
+          main,
+          `${scope}, out-of-sample, pooled`,
+          pooled(main, 'outOfSample'),
+          POOLED_BREAK_EVEN_PAYOUT,
         );
+        headline.push(headlineRow);
+        headlineLines.push(headlineRow);
         for (const [id, asset] of Object.entries(main.perAsset)) {
           const pair = pairOf.get(Number(id));
           if (pair === undefined) continue;
@@ -260,23 +305,6 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
       a.scope.localeCompare(b.scope),
   );
 
-  const rowHead = [
-    'interval',
-    'variant',
-    'params',
-    'pause',
-    'delay ms',
-    'scope',
-    'trades',
-    'W',
-    'L',
-    'T',
-    'win %',
-    '95 % CI',
-    'break-even %',
-    'verdict',
-    'PnL',
-  ];
   const cells = (r: Row) => [
     r.interval,
     r.variant,
@@ -294,7 +322,10 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
     r.verdict,
     r.pnl.toFixed(2),
   ];
-  const headlineTable = table(rowHead, headline.map(cells));
+  const headlineTable = table(
+    rowHead,
+    headlineLines.map((line) => ('variant' in line ? cells(line) : line)),
+  );
   const excluded = data.pairs.filter((pair) => !pooledIds.has(pair.id));
 
   const markdown = [

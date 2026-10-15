@@ -20,9 +20,13 @@ export const TRADE_INTERVALS = {
 export type TradeInterval = keyof typeof TRADE_INTERVALS;
 export const FETCH_INTERVALS = [PRICE_INTERVAL, '5s', '15s', '1m'] as const;
 
+// openDelay counts from the decision moment D (a boundary + DECISION_SLACK_MS): 0 is the open
+// inside D's own second (the expected case), 1 000 the open in the next second, 3 000 a late entry
+// kept as a sensitivity point, never the expected headline
 export const OPEN_DELAY_GRID_MS = [0, 1_000, 3_000] as const;
-// the plan's live estimate (2 s slack + 0.5-1 s open), used when calibrate has not run
-export const FALLBACK_HEADLINE_DELAY_MS = 3_000;
+// used when calibrate has not run: the live open is D + 0.4 s (median, p95 0.93 s), inside D's 1 s
+// bucket; calibrate chooses from the grid
+export const FALLBACK_HEADLINE_DELAY_MS = 0;
 
 // Copied from apps/trading-worker/src/trading-session/config.ts, which a package cannot import:
 // TRADING_SESSION_CANDLE_SLACK_MS, TRADING_SESSION_TICK_MS.

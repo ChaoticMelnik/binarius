@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { main } from './main';
 import { cacheWith, PAIR, secondsPath, T0, tempDir } from './testing';
@@ -21,6 +22,8 @@ describe('the stand CLI', () => {
     [['fetch', '--days', '31'], '--days must be an integer from 1 to 30'],
     [['fetch', '--assets', '1,x'], '--assets: "x" is not an id'],
     [['fetch', '--intervals', '1s,2s'], '--intervals: 2s is not a stand interval'],
+    [['fetch', '--intervals', 'constructor'], '--intervals: constructor is not a stand interval'],
+    [['fetch', '--intervals', '__proto__'], '--intervals: __proto__ is not a stand interval'],
     [['run', '--headline-delay', '500'], '--headline-delay must be one of 0, 1000, 3000'],
   ])('refuses %j with exit 2 and the usage', async (argv, message) => {
     const { code, err } = await call(argv);
@@ -51,6 +54,14 @@ describe('the stand CLI', () => {
     const { code, err } = await call(['run', '--assets', '7']);
     expect(code).toBe(1);
     expect(err).toBe('run: asset 7 is not in pairs.json; fetch it');
+  });
+
+  it('ends a damaged pairs.json with exit 1 and its message', async () => {
+    const dir = tempDir();
+    writeFileSync(`${dir}/pairs.json`, '[{"id": 16');
+    const { code, err } = await call(['run'], { STAND_DIR: dir });
+    expect(code).toBe(1);
+    expect(err).toBe(`${dir}/pairs.json: not a pairs snapshot`);
   });
 
   it('runs a backtest end to end', async () => {

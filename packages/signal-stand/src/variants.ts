@@ -18,7 +18,7 @@ import type { TradeInterval } from './config';
 export type GridPoint = Readonly<Record<string, number>>;
 
 // a trade, or the reason there is none
-export type Verdict = { action: TradeAction } | { refusal: string };
+export type VariantDecision = { action: TradeAction } | { refusal: string };
 
 // the decisions a variant may read at one moment, each made by a production decider
 export interface DecisionContext {
@@ -33,7 +33,7 @@ export interface Variant {
   grid: readonly GridPoint[];
   // the overlay production runs with (Rule 28): the headline rows use it
   headlinePause: boolean;
-  decide(ctx: DecisionContext, point: GridPoint): Verdict;
+  decide(ctx: DecisionContext, point: GridPoint): VariantDecision;
 }
 
 export interface V2Point {
@@ -64,7 +64,7 @@ export function v2Decider(point: V2Point = V2_PRODUCTION_POINT): SignalDecider {
 }
 export const v1Decider = createSignalDeciderV1(DEFAULT_SIGNAL_PARAMS_V1);
 
-const verdictOf = (decision: SignalDecision | SignalDecisionV1): Verdict =>
+const decisionOf = (decision: SignalDecision | SignalDecisionV1): VariantDecision =>
   decision.kind === SignalKind.Signal ? { action: decision.action } : { refusal: decision.reason };
 
 const asV2Point = (point: GridPoint): V2Point => ({
@@ -84,14 +84,14 @@ export const VARIANTS: readonly Variant[] = [
     intervals: ['5s', '15s'],
     grid: [{}],
     headlinePause: false,
-    decide: (ctx) => verdictOf(ctx.v1()),
+    decide: (ctx) => decisionOf(ctx.v1()),
   },
   {
     name: 'v2',
     intervals: ['5s', '15s'],
     grid: V2_GRID,
     headlinePause: true,
-    decide: (ctx, point) => verdictOf(ctx.v2(asV2Point(point))),
+    decide: (ctx, point) => decisionOf(ctx.v2(asV2Point(point))),
   },
   {
     // against the rush: v2's own data and volatility refusals stand, the EMA trend is ignored
