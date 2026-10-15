@@ -8,10 +8,10 @@ import {
   TradingSessionStopReason,
   type BinaryPair,
   type DecimalString,
+  type TradingSessionSettings,
   type TradingSessionView,
 } from '@binarius/shared';
 import type { ClaimedSessionTrade } from '@binarius/db';
-import { sessionSettings } from '@binarius/db/testing';
 import { inlineButtons } from '../admin/testing';
 import { CLIENT_LABELS } from '../auth/texts';
 import { pairOf, sessionSummaryMessage, sessionTradeMessage } from './session-notice-messages';
@@ -31,7 +31,13 @@ const claimed = (results: SessionTradeResult[], amount = '5'): ClaimedSessionTra
   },
   results,
 });
-const settings = sessionSettings({ stake: { baseStake: d('5'), stakeScale: 0 } });
+const settings: TradingSessionSettings = {
+  version: 1,
+  assetId: 101,
+  durationSec: 60,
+  trades: 5,
+  stake: { baseStake: d('5'), stakeScale: 0 },
+};
 
 describe('sessionTradeMessage (#464)', () => {
   it('numbers each trade of a fixed session as its own cycle at step 1', () => {
