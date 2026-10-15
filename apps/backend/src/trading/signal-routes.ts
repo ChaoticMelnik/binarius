@@ -25,6 +25,7 @@ export function toTradingSignalResponse(evaluation: SignalEvaluation): TradingSi
       outcome: SignalFeedOutcome.Decided,
       params: evaluation.entry.params,
       decision: evaluation.entry.decision,
+      ...(evaluation.indicators === undefined ? {} : { indicators: evaluation.indicators }),
     };
   }
   return {
