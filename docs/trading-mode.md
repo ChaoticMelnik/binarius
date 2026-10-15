@@ -133,26 +133,28 @@ POST) → «⚠️ Реальный режим выключен — открой
 message's header is «💼 Реальная сделка» for a real view, and a finished real trade offers a real
 session («🚀 Сессия из 5 сделок · REAL», #327).
 
-**The launch screen** in real mode (#327) is the demo one drawn by the mode: «💵 Ставка: $X» with
-the real stake in force, «🤖 Бот проведёт 5 сделок подряд… Реальный режим: сделки идут на реальные
+**The launch screen** in real mode (#327) is the one demo drew before #476, drawn by the mode
+(demo now draws the amount screen, [bot-demo.md](bot-demo.md#the-amount-screen-476)): «💵 Ставка:
+$X» with the real stake in force, «🤖 Бот проведёт 5 сделок подряд… Реальный режим: сделки идут на реальные
 деньги.» (`launchCycleReal`), «🚀 Запустить цикл · REAL» (`real:sess:…`), «💵 Изменить ставку» of
 the real picker (`stk:o:r:p:…`) and «↩️ К списку»; a pair below the cycle floor gets the floor's
 refusal as in demo. The single real trade stays on the manual path. A stake saved from a launch
 screen reads the mode the same way and draws the same screen under the saved line of the saved
-stake's mode. A failed access read keeps the demo screen: a real user's cycle press there gets
-`mode_not_allowed` → «⚠️ Режим или сумма сделки изменились — открой анализ заново.».
+stake's mode. A failed access read draws the amount screen's refusal («⚠️ Сервис временно
+недоступен…» with «🔄 Повторить», #476): without the read no screen of either mode can be drawn.
 
-**Sessions** (#327): every session door carries the mode it was drawn in (`<mode>:sess:…`,
-[bot-session.md](bot-session.md)), its label `· REAL` in real mode, and the status message is
-headed «💼 Реальная сессия» for a real session.
+**Sessions** (#327): every real session door carries `real:sess:…`
+([bot-session.md](bot-session.md)), its label `· REAL`, and the status message is headed
+«💼 Реальная сессия» for a real session. The demo doors open the amount screen (#476) and carry
+`demo:l:…`; an amount starts a demo session.
 
 **`/stop`** (#122) is unchanged: it stops the sessions and leaves the mode. Returning the user to
 demo from it is #473 (part 2 of #121, split off by the size rule).
 
 ## Timing
 
-`HANDLER_CALLS`: `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418,
-under the 50 s shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
+`HANDLER_CALLS`: `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418
+and `cycleStakePreset` since #476, under the 50 s shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
 every terminal branch.
 
 ## Logs

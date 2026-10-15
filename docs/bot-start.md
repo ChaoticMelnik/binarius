@@ -806,7 +806,8 @@ the edit refused, the message sent anew), the selected level one Bot API call, `
 old duration button are declared in the same table (bot-demo-trade.md, bot-session.md,
 bot-demo.md); and a text on the code step two backend calls (the login and the recheck) and up to
 four Bot API calls (the same card), 42 s. The longest is «📊 Анализ», with «🚀 Запустить цикл»
-since #418 (the launch screen deleted, or stripped, after the status), 3 × 5 000 + 4 × 8 000 =
+since #418 (the launch screen deleted, or stripped, after the status) and an amount of the amount
+screen since #476 (the start in one attempt, the screen deleted after it), 3 × 5 000 + 4 × 8 000 =
 **47 s**, inside the **50 s** shutdown budget, inside the **55 s** `stop_grace_period` of the
 compose service. The usual path is far shorter — the answer, the «⏳» edit and the result's edit
 beside three short reads — and the 47 s needs three backend calls and four Bot API calls each to

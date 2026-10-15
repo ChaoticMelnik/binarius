@@ -121,7 +121,7 @@ no repeat.
 | the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены · 💳 Пополнить (#27, https only) · ↩️ Назад к анализу · 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
-| demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged); the launch screen is deleted once the session's status is sent (#418) |
+| demo screens, the signals and launch screens (#320), the amount screen (#476), the picker | their own keyboards (unchanged); the launch screen and the amount screen are deleted once the session's status is sent (#418) |
 | the analysis (#360) | 🚀 Сессия из 5 сделок on every `decided` answer · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ Длительность ↩️ Типы; «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
 | the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню |
