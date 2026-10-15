@@ -3040,10 +3040,10 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **Manager Phase 0: compare the shared test DB's `drizzle.__drizzle_migrations` (count and hash) with `packages/db/drizzle/*.sql`; a mismatch → an owner step in the report** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 4**
-2. **Implementer → «Доказательства мутаций»: mutations only on committed work, each reverted by restoring that one file; never `git checkout --` over uncommitted changes** — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5 (Quiet runs)**
+1. **Manager Phase 0: compare the shared test DB's `drizzle.__drizzle_migrations` (count and hash) with `packages/db/drizzle/*.sql`; a mismatch → an owner step in the report** — **внедрено в #504: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 4**
+2. **Implementer → «Доказательства мутаций»: mutations only on committed work, each reverted by restoring that one file; never `git checkout --` over uncommitted changes** — **внедрено в #504: `.claude/skills/implementer/SKILL.md` → Step 5 (Quiet runs)**
 3. **Manager Phase 0: probe the Codex limit with a short `task` call, not only `status` — the limit was found at the first final pass** — **открыто (2026-10-14, владелец)**
-4. **Manager: an Opus limit that stops the main context leaves the night without a final report; write the expected owner step «если отчёт не завершён — `/manager продолжить` после сброса лимита» in the report header at the start** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 8**
+4. **Manager: an Opus limit that stops the main context leaves the night without a final report; write the expected owner step «если отчёт не завершён — `/manager продолжить` после сброса лимита» in the report header at the start** — **внедрено в #504: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 8**
 5. **Remaining Minor** — **вынесено в #477 (#470), #478 (#471), #479 (#472); splits #473, #474**
 
 ---
@@ -3095,11 +3095,11 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **Manager Phase 0 шаг 4: Docker-демон остановлен → `colima start`, затем `up -d redis`; сверка `drizzle.__drizzle_migrations` общей тестовой БД с `packages/db/drizzle/*.sql` (количество и хэши)** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 4**
-2. **Manager Claim: перед каждым захватом `git diff --stat HEAD origin/main -- .claude/`, при расхождении — pull и применение правил со следующего спавна; всё время — из `TZ=Europe/Moscow date +%H:%M`** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task selection → Claim**
-3. **Implementer Step 5: каждый коммит — typecheck и тесты затронутых пакетов на его дереве, не только typecheck** — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5**
+1. **Manager Phase 0 шаг 4: Docker-демон остановлен → `colima start`, затем `up -d redis`; сверка `drizzle.__drizzle_migrations` общей тестовой БД с `packages/db/drizzle/*.sql` (количество и хэши)** — **внедрено в #504: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 4**
+2. **Manager Claim: перед каждым захватом `git diff --stat HEAD origin/main -- .claude/`, при расхождении — pull и применение правил со следующего спавна; всё время — из `TZ=Europe/Moscow date +%H:%M`** — **внедрено в #504: `.claude/skills/manager/SKILL.md` → Task selection → Claim**
+3. **Implementer Step 5: каждый коммит — typecheck и тесты затронутых пакетов на его дереве, не только typecheck** — **внедрено в #504: `.claude/skills/implementer/SKILL.md` → Step 5**
 4. **Ночью разрешить `--force-with-lease` на своей ветке до открытия PR (чтобы чинить историю коммитов)** — **открыто (2026-10-15, владелец)**
 5. **Architect Step 4a: для задач с леджером/платежами оценка тестов ×1,5 (у #117 тесты 2 027 против ~1 300)** — **открыто (2026-10-15, владелец)**
 6. **Переиндексировать CodeGraph и убрать stale worktree `rosy-singing-fiddle`; manager Phase 0 — проверка свежести индекса** — **открыто (2026-10-15, владелец)**
-7. **`.claude/CLAUDE.md` инвариант 2: «шесть писателей леджера»** — **внедрено в #<PR>: `.claude/CLAUDE.md` → Планирование задач → Доменные инварианты, п. 2**
+7. **`.claude/CLAUDE.md` инвариант 2: «шесть писателей леджера»** — **внедрено в #504: `.claude/CLAUDE.md` → Планирование задач → Доменные инварианты, п. 2**
 8. **Remaining Minor** — **вынесено в #496 (#486), #497 (#488), #498 (#489), #499 (#491), #500 (#492), #501 (#493), #503 (#495, #494)**
