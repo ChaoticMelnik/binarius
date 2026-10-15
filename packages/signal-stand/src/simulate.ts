@@ -57,6 +57,11 @@ export function decisionContext(
     v1: (): SignalDecisionV1 => v1Decider.decide({ candles: candles(), intervalMs, nowMs }),
     v2: (point): SignalDecision =>
       v2Decider(point).decide({ candles: candles(), intervalMs, nowMs, digits }),
+    v2OneMinute: (): SignalDecision => {
+      const minuteMs = TRADE_INTERVALS['1m'].intervalMs;
+      const minute = seriesAt(market.series['1m'] ?? [], minuteMs, nowMs);
+      return v2Decider().decide({ candles: minute, intervalMs: minuteMs, nowMs, digits });
+    },
   };
 }
 

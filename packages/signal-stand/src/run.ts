@@ -1,6 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { MIN_CYCLE_PAYOUT_PCT } from '@binarius/shared';
+import { z } from 'zod';
 import {
   firstTimestamp,
   lastTimestamp,
@@ -22,6 +23,13 @@ import { buildReport, type AssetCell, type Cell, type RunData, type SeriesInfo }
 import { simulate, type Market, type SimTrade } from './simulate';
 import { addTrade, emptyTally, splitAt } from './stats';
 import { pointLabel, VARIANTS } from './variants';
+
+export const calibrationPath = (dir: string): string => path.join(dir, 'calibration.json');
+
+export const calibrationSchema = z.object({
+  headlineDelayMs: z.int(),
+  calibratedAt: z.number(),
+});
 
 // a trade belongs to the sample its decision fell in
 export function splitTrades(trades: readonly SimTrade[], split: number, payout: number) {
@@ -58,12 +66,29 @@ export interface RunOptions {
   io: { out: (line: string) => void; err: (line: string) => void };
 }
 
-// the flag, else the plan's fallback; the report names which
+// the flag first, then calibrate's choice, then the plan's fallback; the report names which
 function headlineDelay(options: RunOptions): { ms: number; source: string } {
   if (options.headlineDelayMs !== undefined) {
     return { ms: options.headlineDelayMs, source: '--headline-delay' };
   }
-  return { ms: FALLBACK_HEADLINE_DELAY_MS, source: 'fallback: no --headline-delay' };
+  const file = calibrationPath(options.dir);
+  if (existsSync(file)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      throw new StandError(`${file}: not a calibration result`);
+    }
+    const parsed = calibrationSchema.safeParse(value);
+    if (!parsed.success || !OPEN_DELAY_GRID_MS.some((ms) => ms === parsed.data.headlineDelayMs)) {
+      throw new StandError(`${file}: not a calibration result`);
+    }
+    return {
+      ms: parsed.data.headlineDelayMs,
+      source: `calibrate, ${new Date(parsed.data.calibratedAt).toISOString()}`,
+    };
+  }
+  return { ms: FALLBACK_HEADLINE_DELAY_MS, source: 'fallback: calibrate has not run' };
 }
 
 export function runBacktest(options: RunOptions): number {

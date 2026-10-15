@@ -6,6 +6,8 @@ import {
   STAND_ASSET_IDS,
   STAND_CHAIN_HOLDS,
   STAND_DEFAULT_GETS_PER_MINUTE,
+  V2_FIRST_CLEAN_AT,
+  V2_MERGED_AT,
 } from './config';
 
 describe('stand config', () => {
@@ -21,8 +23,9 @@ describe('stand config', () => {
     expect(OPEN_DELAY_GRID_MS).toContain(FALLBACK_HEADLINE_DELAY_MS);
   });
 
-  it('K4 28 distinct pairs', () => {
+  it('K4 28 distinct pairs, and the v2 era starts after the merge', () => {
     expect(new Set(STAND_ASSET_IDS).size).toBe(28);
     expect(STAND_ASSET_IDS).toHaveLength(28);
+    expect(V2_MERGED_AT).toBeLessThan(V2_FIRST_CLEAN_AT);
   });
 });

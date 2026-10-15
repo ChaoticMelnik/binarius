@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { TradeAction } from '@binarius/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { rangeWarning, runBacktest, splitTrades } from './run';
+import { calibrationPath, rangeWarning, runBacktest, splitTrades } from './run';
 import { appendRows, seriesPath } from './cache';
 import { cacheWith, PAIR, quiet, secondsPath, T0 } from './testing';
 import { VARIANTS } from './variants';
@@ -50,29 +50,29 @@ describe('run', () => {
     };
     const markdown = readFileSync(path.join(out, 'report.md'), 'utf8');
     expect(json.headlineDelayMs).toBe(1_000);
-    expect(json.grid.length).toBe(2 * 1 + 2 * 9 + 2 * 3);
+    expect(json.grid.length).toBe(3 * 1 + 3 * 9 + 2 * 3 + 2 * 1);
     for (const row of json.grid) {
       expect(markdown).toContain(`| ${row.interval} | ${row.variant} | ${row.params} |`);
       expect(markdown).toContain(`| ${row.trades} |`);
     }
   });
 
-  it('S9 without --headline-delay the headline delay is the fallback 0, and the report says so', () => {
+  it('S9 without --headline-delay or calibration.json the headline delay is the fallback 0, and the report says so', () => {
     const { out } = run(dir);
     const markdown = readFileSync(path.join(out, 'report.md'), 'utf8');
-    expect(markdown).toContain('Headline openDelay 0 ms (fallback: no --headline-delay)');
+    expect(markdown).toContain('Headline openDelay 0 ms (fallback: calibrate has not run)');
     const json = JSON.parse(readFileSync(path.join(out, 'report.json'), 'utf8')) as {
       headlineDelayMs: number;
       headlineDelaySource: string;
       headline: { openDelayMs: number }[];
     };
     expect(json.headlineDelayMs).toBe(0);
-    expect(json.headlineDelaySource).toBe('fallback: no --headline-delay');
+    expect(json.headlineDelaySource).toBe('fallback: calibrate has not run');
     expect(json.headline.length).toBeGreaterThan(0);
     for (const row of json.headline) expect(row.openDelayMs).toBe(0);
   });
 
-  it('R4 a variant short of 100 in-sample trades keeps its table (a) line: v1 with its numbers, the rest named', () => {
+  it('R4 a variant short of 100 in-sample trades keeps its table (a) line: a single-point variant with its numbers, the rest named', () => {
     const { out } = run(cacheWith(secondsPath(T0, 15 * 60)));
     const json = JSON.parse(readFileSync(path.join(out, 'report.json'), 'utf8')) as {
       selections: {
@@ -98,11 +98,13 @@ describe('run', () => {
     const tableA = markdown.slice(markdown.indexOf('## (a)'), markdown.indexOf('## (b)'));
     for (const { variant, interval, bestInSampleTrades } of json.selections) {
       const none = `no point with >= 100 in-sample trades (best: ${bestInSampleTrades})`;
-      if (variant === 'v1') {
-        const row = json.headline.find((r) => r.variant === 'v1' && r.interval === interval);
+      const spec = VARIANTS.find((v) => v.name === variant);
+      if (spec?.grid.length === 1) {
+        const row = json.headline.find((r) => r.variant === variant && r.interval === interval);
+        const pause = spec.headlinePause ? 'on' : 'off';
         expect(row?.scope).toBe(`only point, ${none}, out-of-sample, pooled`);
         expect(tableA).toContain(
-          `| ${interval} | v1 | - | off | ${delay} | ${row?.scope} | ${row?.trades} |`,
+          `| ${interval} | ${variant} | - | ${pause} | ${delay} | ${row?.scope} | ${row?.trades} |`,
         );
       } else {
         expect(tableA).toContain(`| ${interval} | ${variant} | - | on | ${delay} | ${none} | - |`);
@@ -141,15 +143,28 @@ describe('run', () => {
     },
   );
 
-  it('R3 nothing is written outside --out', () => {
+  it('R3 nothing is written outside --out; calibrate choice is read from calibration.json', () => {
     const before = readdirSync(dir, { recursive: true })
       .filter((f) => !String(f).startsWith('out'))
       .sort();
-    run(dir);
+    writeFileSync(
+      calibrationPath(dir),
+      JSON.stringify({ headlineDelayMs: 1_000, calibratedAt: T0 }),
+    );
+    const { out } = run(dir);
     const after = readdirSync(dir, { recursive: true })
-      .filter((f) => !String(f).startsWith('out'))
+      .filter((f) => !String(f).startsWith('out') && f !== 'calibration.json')
       .sort();
-    expect(after).toEqual(before);
+    expect(after).toEqual(before.filter((f) => f !== 'calibration.json'));
+    expect(readFileSync(path.join(out, 'report.md'), 'utf8')).toContain(
+      `Headline openDelay 1000 ms (calibrate, ${new Date(T0).toISOString()})`,
+    );
+  });
+
+  it("R6 a truncated calibration.json is the stand's refusal, not a parse crash", () => {
+    const own = cacheWith(secondsPath(T0, 600));
+    writeFileSync(calibrationPath(own), '{"headlineDelayMs": 10');
+    expect(() => run(own)).toThrow(`${calibrationPath(own)}: not a calibration result`);
   });
 
   it('S7 a trade is in-sample iff its decision is before the split', () => {
