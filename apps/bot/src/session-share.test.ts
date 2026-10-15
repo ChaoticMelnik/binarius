@@ -1,6 +1,7 @@
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -112,7 +113,7 @@ describe('the inline share answer (#321)', () => {
     const answers = answersOf(scene.calls);
     expect(answers).toHaveLength(1);
     const caption = sessionShareCaption(
-      PAIR_EURUSD.symbol,
+      pairLabel(PAIR_EURUSD),
       PAIR_EURUSD.id,
       DONE.trades,
       BOT_INFO.username,
@@ -130,7 +131,7 @@ describe('the inline share answer (#321)', () => {
       is_personal: true,
     });
     expect(answers[0]?.cache_time).toBeUndefined();
-    expect(caption).toContain(PAIR_EURUSD.symbol);
+    expect(caption).toContain('🏁 EUR/USD OTC: ');
     expect(caption).toContain('5 сделок — 3 в плюс, 2 в минус');
     expect(caption).toContain(`https://t.me/${BOT_INFO.username}?start=share`);
     expect(caption).not.toContain('$');
@@ -190,7 +191,7 @@ describe('the inline share answer (#321)', () => {
     const result = (answersOf(scene.calls)[0]?.results as { caption?: string }[])[0];
     expect(result?.caption).toBe(
       sessionShareCaption(
-        PAIRS_RESPONSE.pairs.find((pair) => pair.id === bare.lastIntent!.assetId)?.symbol ?? null,
+        pairLabel(PAIR_EURUSD),
         bare.lastIntent!.assetId,
         DONE.trades,
         BOT_INFO.username,

@@ -41,6 +41,7 @@ import {
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import {
   PAIR_EURUSD,
+  PAIR_EURUSD_REGULAR,
   SIGNAL_CARD,
   SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
@@ -181,6 +182,10 @@ MA200         цена ниже 1.08612
       '<pre>Пара          EUR/USD OTC\nRSI           нейтрально 62.3\n',
     );
     expect(screenOf(SIGNAL_CARD).text.value).toContain('⬆️ ВВЕРХ 🟢</pre>\n💰');
+    // the regular twin of the same symbol (#428): no « OTC»
+    const regular = linesOf(SIGNAL_CARD, PAIR_EURUSD_REGULAR);
+    expect(regular[0]).toBe('📊 Анализ: EUR/USD · ⏱ 5 с');
+    expect(rowOf(regular, 'Пара')).toBe('EUR/USD');
     expect(screenOf(SIGNAL_CARD).photo).toBe(TradeAction.Up);
     const down = screenOf(
       tradingSignalResponseSchema.parse({ ...SIGNAL_CARD, decision: SIGNAL_DECISION_DOWN }),

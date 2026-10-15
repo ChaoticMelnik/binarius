@@ -78,7 +78,8 @@ const PUSH_TOKEN = '123456:AA-session-notice-token';
 const ASSET = 101;
 const pair: BinaryPair = {
   id: ASSET,
-  symbol: 'EUR/USD OTC',
+  symbol: 'EUR/USD',
+  isOtc: true,
   type: 'forex',
   digits: 5,
   payout: 85,

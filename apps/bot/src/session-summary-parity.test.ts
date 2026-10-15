@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  pairLabel,
   TradeIntentStatus,
   TradeMode,
   TradingSessionStatus,
@@ -26,10 +27,10 @@ const TRADES: TradingSessionView['trades'][] = [
 
 // what follows the status message's header and settings line, and the blank line under them
 const statusBody = (view: TradingSessionView): string[] =>
-  sessionStatusText(PAIR_EURUSD.symbol, view).value.split('\n').slice(3);
+  sessionStatusText(pairLabel(PAIR_EURUSD), view).value.split('\n').slice(3);
 const summaryBody = (view: TradingSessionView): string[] =>
   sessionTexts
-    .sessionSummaryText(PAIR_EURUSD.symbol, PAIR_EURUSD.id, view)
+    .sessionSummaryText(pairLabel(PAIR_EURUSD), PAIR_EURUSD.id, view)
     .value.split('\n')
     .slice(1);
 

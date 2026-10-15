@@ -2,6 +2,7 @@ import { HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   BrokerBalanceUnavailableReason,
   PairsCatalogErrorCode,
   TradeAction,
@@ -184,7 +185,7 @@ const httpError = (status: number, reason?: string) =>
     ...(reason === undefined ? {} : { reason }),
   });
 const statusOf = (view = INTENT_VIEW, sessionOffer = false) =>
-  intentStatusText(PAIR_EURUSD.symbol, view, { sessionOffer }).value;
+  intentStatusText(pairLabel(PAIR_EURUSD), view, { sessionOffer }).value;
 
 const EDIT_GONE: ApiError = {
   ok: false,
@@ -235,7 +236,7 @@ describe('the stake button', () => {
     expect(intentTracker.track.mock.calls[0]?.[0]).toMatchObject({
       intentId: INTENT_ID,
       telegramUserId: String(USER.id),
-      symbol: PAIR_EURUSD.symbol,
+      label: 'EUR/USD OTC',
       payoutAccepted: true,
       view: INTENT_VIEW,
     });
@@ -707,14 +708,14 @@ describe('the stake button', () => {
       'the pair is closed',
       catalogOf({ pairs: [PAIR_CLOSED] }),
       stakeCallbackData(PAIR_CLOSED.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
-      TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }),
+      TEXTS.demoPairClosed({ symbol: pairLabel(PAIR_CLOSED) }),
       [[BACK_GROUPS]],
     ],
     [
       "the duration is outside the pair's bounds",
       catalogOf({ pairs: [{ ...PAIR_EURUSD, maxTimeframe: 10 }] }),
       stakeCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
-      TEXTS.demoDurationUnsupported({ symbol: PAIR_EURUSD.symbol }),
+      TEXTS.demoDurationUnsupported({ symbol: pairLabel(PAIR_EURUSD) }),
       [[BACK_DURATIONS, BACK_GROUPS]],
     ],
   ])('creates nothing and says why when %s', async (_case, readPairs, data, text, rows) => {

@@ -1,4 +1,5 @@
 import { formatPrice, formatUsd } from './bot-text-format';
+import type { PairLabel } from './catalog';
 import type { BotHtmlTexts, BotPlainTexts, BotStaticHtmlKey } from './bot-texts';
 import type { DecimalString } from './money';
 import { SessionTradeResult } from './session-steps';
@@ -15,9 +16,6 @@ import {
 // (#464, docs/bot-session.md): one source, so the summary the backend sends cannot drift from the
 // status message's final lines. Every builder takes the catalog it prints with, so each side's
 // overrides apply (Rule 30).
-
-// The broker's symbol is an unbounded wire string: at most this many characters are printed.
-export const INTENT_SYMBOL_LIMIT = 64;
 
 // A session's stop reasons but completed, by key (#284). kill_switch reads the single
 // trade's own refusal of the closed switch; no_signal_timeout's line carries the limit (#509).
@@ -106,11 +104,9 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   const resultOf = (trades: TradingSessionView['trades']): string =>
     `${tradesCount(trades.settled)} — ${scoreOf(trades)}`;
 
-  // the session's pair as the catalog spells it, or the asset's id when the catalog could not say
-  const sessionAssetLabel = (symbol: string | null, assetId: number): string =>
-    symbol === null
-      ? plain.intentAssetFallback({ assetId: String(assetId) })
-      : symbol.slice(0, INTENT_SYMBOL_LIMIT);
+  // the session's pair label, or the asset's id when the catalog could not say
+  const sessionAssetLabel = (label: PairLabel | null, assetId: number): string =>
+    label ?? plain.intentAssetFallback({ assetId: String(assetId) });
 
   // A stopped session's result and the balance after it (#337): nothing before the first closed
   // trade. The balance is the snapshot's in the session's mode, with its age when the backend
@@ -149,12 +145,12 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
 
   // The summary message (#464): the pair, then the closing lines.
   const sessionSummaryText = (
-    symbol: string | null,
+    label: PairLabel | null,
     assetId: number,
     view: SessionClosingView,
   ): TelegramHtml =>
     joinHtmlLines([
-      html.sessionSummarySymbol({ symbol: sessionAssetLabel(symbol, assetId) }),
+      html.sessionSummarySymbol({ symbol: sessionAssetLabel(label, assetId) }),
       ...sessionClosingLines(view),
     ]);
 

@@ -7,6 +7,7 @@ import {
   MIN_CYCLE_PAYOUT_PCT,
   MomentumDirection,
   NoSignalReason,
+  pairLabel,
   pairPayoutAccepted,
   SignalFeedOutcome,
   SignalKind,
@@ -153,7 +154,7 @@ export const formatAtrPct = (value: number): string => value.toFixed(3);
 export const formatAtrTicks = (value: number): string => value.toFixed(1);
 
 export const analysisSubject = (pair: PairView, durationSec: DemoDurationSec): string =>
-  `${pair.symbol} · ${DEMO_DURATION_LABELS[durationSec]}`;
+  `${pairLabel(pair)} · ${DEMO_DURATION_LABELS[durationSec]}`;
 
 export interface AnalysisScreen {
   text: TelegramHtml;
@@ -286,7 +287,7 @@ function cardRows(
     ? `${MACD_WORDS[MACD_CROSS_WORDS[macd.cross] ?? sideOf(macd.histogram, 0)]} ${formatPrice(macd.histogram, pair.digits + 1)}`
     : indicatorShortText(macd.closedCandles, macd.required);
   return [
-    [CARD_ROWS.pair, pair.symbol],
+    [CARD_ROWS.pair, pairLabel(pair)],
     [CARD_ROWS.rsi, `${rsiWord} ${formatRsi(features.rsi)}`],
     [CARD_ROWS.macd, macdValue],
     [CARD_ROWS.ma50, maValue(ma50, pair)],

@@ -4,6 +4,7 @@ import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   BrokerRestErrorCode,
   confirmCallbackData,
   logOptions,
@@ -1472,7 +1473,7 @@ describe('what the bot writes about a demo trade', () => {
       tracker.track({
         intentId: INTENT_ID,
         telegramUserId: String(USER.id),
-        symbol: PAIR_EURUSD.symbol,
+        label: pairLabel(PAIR_EURUSD),
         payoutAccepted: true,
         view: INTENT_VIEW,
         edit: () =>

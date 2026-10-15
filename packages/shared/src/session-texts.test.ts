@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createBotTexts, defaultBotTextSource } from './bot-texts';
+import { pairLabel, type PairLabel } from './catalog';
 import type { DecimalString } from './money';
 import { SessionTradeResult } from './session-steps';
 import {
@@ -97,8 +98,10 @@ describe('sessionTradeText (#464)', () => {
 });
 
 describe('sessionSummaryText (#464)', () => {
-  const lines = (closing: SessionClosingView, symbol: string | null = 'EUR/USD OTC') =>
-    session.sessionSummaryText(symbol, 42, closing).value.split('\n');
+  const lines = (
+    closing: SessionClosingView,
+    symbol: PairLabel | null = pairLabel({ symbol: 'EUR/USD', isOtc: true }),
+  ) => session.sessionSummaryText(symbol, 42, closing).value.split('\n');
 
   it('a completed session: the pair, the completion line, the result and the balance', () => {
     expect(lines(view())).toEqual([

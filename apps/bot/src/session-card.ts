@@ -1,6 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
-import { formatSignedUsd, type DecimalString, type SessionSummary } from '@binarius/shared';
+import {
+  formatSignedUsd,
+  type DecimalString,
+  type PairLabel,
+  type SessionSummary,
+} from '@binarius/shared';
 import {
   sessionAssetLabel,
   sessionCardFooter,
@@ -41,7 +46,7 @@ const toneOf = (amount: DecimalString): SessionCardTone =>
 
 export function sessionCardModel(
   summary: SessionSummary,
-  symbol: string | null,
+  symbol: PairLabel | null,
   assetId: number,
 ): SessionCardModel {
   const labels = sessionCardLabels();

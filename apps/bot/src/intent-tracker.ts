@@ -3,6 +3,7 @@ import {
   errorLogFields,
   TRADE_INTENT_TRANSITIONS,
   TradeIntentStatus,
+  type PairLabel,
   type TelegramHtml,
   type TradeIntentFailureReason,
   type TradeIntentView,
@@ -61,8 +62,8 @@ export type TrackEnd = 'not_found' | 'deadline';
 export interface IntentTrackRequest {
   intentId: string;
   telegramUserId: string;
-  // the pair's symbol as the catalog spelled it at the press
-  symbol: string;
+  // the pair's label as the catalog gave it at the press
+  label: PairLabel;
   // the pair's payout against the cycle floor as the catalog had it at the press (#379)
   payoutAccepted: boolean;
   // what the message shows now
@@ -235,7 +236,7 @@ export function createIntentTracker({
     if (key !== entry.rendered) {
       const goOn = await editTo(
         entry,
-        intentStatusText(entry.symbol, view, {
+        intentStatusText(entry.label, view, {
           sessionOffer: sessionOfferOf(view, entry.payoutAccepted) !== undefined,
         }),
         key,
@@ -265,7 +266,7 @@ export function createIntentTracker({
     await editTo(
       entry,
       intentStatusText(
-        entry.symbol,
+        entry.label,
         entry.view,
         stopped
           ? { sessionOffer: sessionOfferOf(entry.view, entry.payoutAccepted) !== undefined }

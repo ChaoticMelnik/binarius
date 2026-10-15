@@ -3,6 +3,7 @@ import {
   createBotTexts,
   createSessionTexts,
   defaultBotTextSource,
+  pairLabel,
   SessionTradeResult,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -17,6 +18,7 @@ import { CLIENT_LABELS } from '../auth/texts';
 import { pairOf, sessionSummaryMessage, sessionTradeMessage } from './session-notice-messages';
 
 const d = (value: string) => value as DecimalString;
+const LABEL = pairLabel({ symbol: 'EUR/USD', isOtc: true });
 const shared = createSessionTexts(createBotTexts(defaultBotTextSource));
 const { Won: W, Lost: L, Tied: T } = SessionTradeResult;
 
@@ -88,8 +90,8 @@ describe('sessionSummaryMessage (#464)', () => {
   };
 
   it('is the shared summary of the view under the menu button', () => {
-    const message = sessionSummaryMessage(view, 'EUR/USD OTC');
-    expect(message.text.value).toBe(shared.sessionSummaryText('EUR/USD OTC', 101, view).value);
+    const message = sessionSummaryMessage(view, LABEL);
+    expect(message.text.value).toBe(shared.sessionSummaryText(LABEL, 101, view).value);
     expect(inlineButtons({ reply_markup: message.reply_markup })).toEqual([
       { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
     ]);
@@ -108,7 +110,7 @@ describe('sessionSummaryMessage (#464)', () => {
           stopReason: TradingSessionStopReason.NoSignalTimeout,
           settings: { ...settings, durationSec },
         },
-        'EUR/USD OTC',
+        LABEL,
       );
       expect(inlineButtons({ reply_markup: message.reply_markup })).toEqual([
         { text: CLIENT_LABELS.otherPairButton, callback_data: data },
@@ -139,11 +141,11 @@ describe('sessionSummaryMessage (#464)', () => {
 });
 
 describe('pairOf', () => {
-  const pair = { id: 101, symbol: 'EUR/USD OTC', digits: 5 } as BinaryPair;
-  it('reads the symbol and digits of the asset, null for each without it', () => {
+  const pair = { id: 101, symbol: 'EUR/USD', isOtc: true, digits: 5 } as BinaryPair;
+  it('reads the label (#428) and digits of the asset, null for each without it', () => {
     const catalog = { pairs: [pair], fetchedAt: 0, ageMs: 0, fresh: false };
-    expect(pairOf(catalog, 101)).toEqual({ symbol: 'EUR/USD OTC', digits: 5 });
-    expect(pairOf(catalog, 7)).toEqual({ symbol: null, digits: null });
-    expect(pairOf(undefined, 101)).toEqual({ symbol: null, digits: null });
+    expect(pairOf(catalog, 101)).toEqual({ label: 'EUR/USD OTC', digits: 5 });
+    expect(pairOf(catalog, 7)).toEqual({ label: null, digits: null });
+    expect(pairOf(undefined, 101)).toEqual({ label: null, digits: null });
   });
 });

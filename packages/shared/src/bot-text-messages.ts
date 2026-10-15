@@ -1,7 +1,7 @@
 import { USER_ACCOUNT_LIST_LIMIT } from './account';
 import { BOT_COMMANDS } from './bot-commands';
 import { REFERRAL_CODE_LENGTH, REFERRAL_PAYLOAD_PREFIX } from './referral';
-import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
+import { MIN_CYCLE_PAYOUT_PCT, PAIR_LABEL_MAX_LENGTH } from './catalog';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_TEXT_CATALOG,
@@ -52,8 +52,8 @@ export const BOT_TEXT_WIDTHS = {
   age: 9,
   // MODE_LABELS: DEMO, REAL
   mode: 4,
-  // the broker's symbol, unbounded on the wire; assumed as INTENT_SYMBOL_LIMIT
-  symbol: 64,
+  // the pair's label (pairLabel): the symbol cut to PAIR_SYMBOL_LIMIT, then " OTC"
+  symbol: PAIR_LABEL_MAX_LENGTH,
   payout: 6,
   // formatBreakEven: 0.0-100.0, or a dash
   breakEven: 5,

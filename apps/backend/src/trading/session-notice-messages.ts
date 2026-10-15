@@ -3,9 +3,11 @@ import {
   createSessionTexts,
   DEMO_SIGNALS_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
+  pairLabel,
   sessionTradeSteps,
   signalsCallbackDataFor,
   TradingSessionStopReason,
+  type PairLabel,
   type PairsCatalogView,
   type SessionStakeStrategy,
   type TelegramHtml,
@@ -24,13 +26,17 @@ const notices = createSessionTexts({ html: CLIENT_TEXTS, plain: CLIENT_LABELS })
 // Settings v1 carry no strategy: every session is fixed (Rule 23). #450 passes the session's.
 const SESSION_STAKE_STRATEGY: SessionStakeStrategy = 'fixed';
 
-// the pair's symbol and digits from the catalog the routes read; null each when it cannot say
+// the pair's label (pairLabel, #428) and digits from the catalog the routes read; null each when
+// it cannot say
 export function pairOf(
   catalog: PairsCatalogView | undefined,
   assetId: number,
-): { symbol: string | null; digits: number | null } {
+): { label: PairLabel | null; digits: number | null } {
   const pair = catalog?.pairs.find((candidate) => candidate.id === assetId);
-  return { symbol: pair?.symbol ?? null, digits: pair?.digits ?? null };
+  return {
+    label: pair === undefined ? null : pairLabel(pair),
+    digits: pair?.digits ?? null,
+  };
 }
 
 // A settled trade's message: its cycle and step over the session's trades up to it, and the
@@ -61,7 +67,7 @@ export function sessionTradeMessage(
 // settings, so the last intent names the asset when the settings could not be read.
 export function sessionSummaryMessage(
   view: TradingSessionView,
-  symbol: string | null,
+  label: PairLabel | null,
 ): ClientPushMessage {
   const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
   if (assetId === undefined) throw new Error('a summarized session names no asset');
@@ -77,7 +83,7 @@ export function sessionSummaryMessage(
       .row();
   }
   return {
-    text: notices.sessionSummaryText(symbol, assetId, view),
+    text: notices.sessionSummaryText(label, assetId, view),
     reply_markup: keyboard.text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
   };
 }
