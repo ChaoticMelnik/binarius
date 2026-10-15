@@ -23,7 +23,13 @@ import { LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
 import { tokenLedger, users } from './schema/index';
 import { adjustTokens } from './token-adjustment-ops';
-import { creditStarPayment, StarsCreditSource } from './star-payment-ops';
+import {
+  creditStarPayment,
+  recordStarRefund,
+  StarsCreditSource,
+  StarsRefundEvidence,
+  StarsRefundSource,
+} from './star-payment-ops';
 import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
 import {
   TOKENS_PER_INTENT,
@@ -266,6 +272,39 @@ describe('readTokenBalance', () => {
     const again = await tmp.db.transaction((tx) => creditStarPayment(tx, payment));
     expect(again.outcome).toBe('already_recorded');
     expect(await read(user)).toMatchObject({ balance: 57n, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+  });
+
+  // Rule 2's seventh writer (#118): the refund row and the cache in one transaction
+  it('follows a Stars refund and its repeated record, equal to the ledger', async () => {
+    const user = await creditedUser(7n);
+    const charge = `charge-refund-${user.userId}`;
+    await tmp.db.transaction((tx) =>
+      creditStarPayment(tx, {
+        telegramPaymentChargeId: charge,
+        providerPaymentChargeId: null,
+        packageCode: 'p50',
+        userId: user.userId,
+        currency: 'XTR',
+        totalAmount: 100,
+        payerTelegramUserId: BigInt(user.telegramUserId),
+        paidAt: new Date(),
+        source: StarsCreditSource.Bot,
+      }),
+    );
+    const input = {
+      telegramPaymentChargeId: charge,
+      source: StarsRefundSource.Cli,
+      telegramAnswer: StarsRefundEvidence.Refunded,
+    };
+    const first = await tmp.db.transaction((tx) => recordStarRefund(tx, input));
+    expect(first).toMatchObject({ outcome: 'refunded', taken: 50n });
+    expect(await read(user)).toMatchObject({ balance: 7n, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+
+    const again = await tmp.db.transaction((tx) => recordStarRefund(tx, input));
+    expect(again.outcome).toBe('already_recorded');
+    expect(await read(user)).toMatchObject({ balance: 7n, reserved: 0n });
     await expectCacheEqualsLedger(user);
   });
 

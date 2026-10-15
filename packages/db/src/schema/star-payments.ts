@@ -36,6 +36,11 @@ export const starPayments = pgTable(
     totalAmount: integer('total_amount').notNull(),
     // credited tokens; the package's (or none) on a held payment
     tokens: bigint('tokens', { mode: 'bigint' }),
+    // The Telegram user who paid, and the one a refund goes to (refundStarPayment refunds the
+    // payer). Not always the users row's own account: a forwarded invoice is held with reason
+    // `payer` (#118). Rows before 0048 were backfilled from their stars_purchased /
+    // stars_payment_held audit row, whose actor is the payer.
+    payerTelegramUserId: bigint('payer_telegram_user_id', { mode: 'bigint' }).notNull(),
     status: text('status').$type<StarPaymentStatus>().notNull(),
     paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
     refundedAt: timestamp('refunded_at', { withTimezone: true }),
@@ -50,6 +55,7 @@ export const starPayments = pgTable(
       sql`char_length(${t.telegramPaymentChargeId}) between 1 and ${sql.raw(String(STAR_CHARGE_ID_MAX))}`,
     ),
     check('star_payments_total_amount_check', sql`${t.totalAmount} > 0`),
+    check('star_payments_payer_check', sql`${t.payerTelegramUserId} > 0`),
     check('star_payments_tokens_check', sql`${t.tokens} is null or ${t.tokens} > 0`),
     inList('star_payments_status_check', t.status, StarPaymentStatus),
     // a credited payment names its tokens and is in Stars; status is NOT NULL, so this never passes

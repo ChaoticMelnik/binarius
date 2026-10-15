@@ -161,3 +161,16 @@ export const starsPaidResponseSchema = z.discriminatedUnion('outcome', [
   z.object({ outcome: z.literal(StarsCreditOutcome.Held) }),
 ]);
 export type StarsPaidResponse = z.infer<typeof starsPaidResponseSchema>;
+
+// --- Refunds (#118, docs/stars.md → Refunds) -----------------------------------------------------
+
+// The staff member's reason for `stars refund`, kept in the audit row: the kill switch's rule, code
+// points without control characters.
+export const STAR_REFUND_REASON_MAX = 200;
+const REFUND_REASON_SHAPE = new RegExp(`^[^\\p{Cc}]{1,${STAR_REFUND_REASON_MAX}}$`, 'u');
+export const starRefundReasonSchema = z
+  .string()
+  .trim()
+  .regex(REFUND_REASON_SHAPE, {
+    error: `expected 1-${STAR_REFUND_REASON_MAX} characters without control characters`,
+  });

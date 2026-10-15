@@ -10,6 +10,7 @@ export * from './broker-trades';
 export * from './broker-balance-snapshots';
 export * from './deposit-events';
 export * from './star-payments';
+export * from './star-refund-requests';
 export * from './postback-deliveries';
 export * from './bonus-rules';
 export * from './notification-jobs';
