@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
 import { chartWindow, createSignalFeed, type SignalEvaluation } from './feed';
-import { SIGNAL_CHART_LIMIT } from './feed-config';
+import { SIGNAL_CHART_LIMIT, SIGNAL_FETCH_LIMIT } from './feed-config';
 import { replaySignalJournalEntry, type SignalJournalEntry } from './journal';
 import { closedNow, INTERVAL_MS, mildRise, seriesFrom, tickSeries, trending } from './testing';
 
@@ -67,10 +67,10 @@ describe('createSignalFeed', () => {
 
     const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 }));
 
-    const { startTime } = chartWindow(T, I, SIGNAL_CHART_LIMIT);
-    expect(entry.fetch).toMatchObject({ startTime, limit: SIGNAL_CHART_LIMIT });
+    const { startTime } = chartWindow(T, I, SIGNAL_FETCH_LIMIT);
+    expect(entry.fetch).toMatchObject({ startTime, limit: SIGNAL_FETCH_LIMIT });
     // the fixture includes the forming candle, as the live chart does
-    expect(entry.fetch.rows).toBe(SIGNAL_CHART_LIMIT);
+    expect(entry.fetch.rows).toBe(SIGNAL_FETCH_LIMIT);
     expect(entry.series).toHaveLength(SIGNAL_CHART_LIMIT);
     expect(entry.series.at(-1)?.[0]).toBe(B);
     expect(entry.series[0]?.[0]).toBe(B - (SIGNAL_CHART_LIMIT - 1) * I);
@@ -85,7 +85,7 @@ describe('createSignalFeed', () => {
       query: {
         asset_id: '101',
         interval: '1m',
-        limit: String(SIGNAL_CHART_LIMIT),
+        limit: String(SIGNAL_FETCH_LIMIT),
         start_time: String(startTime),
       },
     });
@@ -105,7 +105,7 @@ describe('createSignalFeed', () => {
   });
 
   // #313: the demo's 5 and 15 s trades are analysed on their own candles; the window still
-  // counts candles, so it spans SIGNAL_CHART_LIMIT steps of the short interval
+  // counts candles, so it spans SIGNAL_FETCH_LIMIT steps of the short interval
   it.each(['5s', '15s'] as const)(
     'F2b on the mock broker a %s evaluation asks %s candles and is decided',
     async (interval) => {
@@ -120,7 +120,7 @@ describe('createSignalFeed', () => {
 
       const entry = decided(await feed.evaluate({ assetId: 202, interval, digits: 2 }));
 
-      const { startTime } = chartWindow(now, step, SIGNAL_CHART_LIMIT);
+      const { startTime } = chartWindow(now, step, SIGNAL_FETCH_LIMIT);
       expect(broker.rest.journal[0]?.query).toMatchObject({
         asset_id: '202',
         interval,
@@ -164,7 +164,7 @@ describe('createSignalFeed', () => {
         interval: '1m',
         intervalMs: I,
         nowMs: T,
-        ...chartWindow(T, I, SIGNAL_CHART_LIMIT),
+        ...chartWindow(T, I, SIGNAL_FETCH_LIMIT),
       };
       expect(result).toStrictEqual({
         outcome: 'fetch_failed',
@@ -360,5 +360,59 @@ describe('createSignalFeed', () => {
       RangeError,
     );
     expect(getChart).not.toHaveBeenCalled();
+  });
+
+  // #482: the broker is asked SIGNAL_FETCH_LIMIT rows; the decision and its journal series are the
+  // last SIGNAL_CHART_LIMIT of them, as a fetch of that many would have returned
+  it('F12 a 300-row response decides on its last 60 rows; indicators read all of them', async () => {
+    const rows = mildRise(SIGNAL_FETCH_LIMIT - 45);
+    expect(rows).toHaveLength(SIGNAL_FETCH_LIMIT);
+    const nowMs = closedNow(rows);
+    const tail = rows.slice(-SIGNAL_CHART_LIMIT);
+    const feed = (candles: readonly Candle[]) =>
+      createSignalFeed({ rest: stubRest(candles), logger: sink(), now: () => nowMs });
+
+    const result = await feed(rows).evaluate({ assetId: 101, interval: '1m', digits: 5 });
+    const entry = decided(result);
+    const onTail = decided(await feed(tail).evaluate({ assetId: 101, interval: '1m', digits: 5 }));
+
+    expect(entry.decision).toStrictEqual(onTail.decision);
+    expect(entry.series).toStrictEqual(onTail.series);
+    expect(entry.series).toHaveLength(SIGNAL_CHART_LIMIT);
+    expect(entry.fetch).toMatchObject({ limit: SIGNAL_FETCH_LIMIT, rows: SIGNAL_FETCH_LIMIT });
+    expect(result).toMatchObject({
+      indicators: { ma200: { ok: true, lastClose: rows.at(-1)?.close } },
+    });
+    expect(onTail).not.toHaveProperty('indicators.ma200.value');
+  });
+
+  it('F13 118 rows with a forming one: MA200 is short 117 of 200, MA50 and MACD have values', async () => {
+    const rows = mildRise(118 - 45);
+    const nowMs = closedNow(rows.slice(0, -1));
+    const feed = createSignalFeed({ rest: stubRest(rows), logger: sink(), now: () => nowMs });
+
+    const result = await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 });
+
+    expect(result).toMatchObject({
+      indicators: {
+        macd: { ok: true },
+        ma50: { ok: true },
+        ma200: { ok: false, closedCandles: 117, required: 200 },
+      },
+    });
+  });
+
+  it('F14 a gap in the early rows gives no indicators and leaves the decision on the last 60', async () => {
+    const rows = mildRise(SIGNAL_FETCH_LIMIT - 45 + 1).filter((_, i) => i !== 10);
+    const nowMs = closedNow(rows);
+
+    const result = await createSignalFeed({
+      rest: stubRest(rows),
+      logger: sink(),
+      now: () => nowMs,
+    }).evaluate({ assetId: 101, interval: '1m', digits: 5 });
+
+    expect(result).not.toHaveProperty('indicators');
+    expect(decided(result).decision).toMatchObject({ kind: 'signal' });
   });
 });

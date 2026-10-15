@@ -4,11 +4,18 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
   type BrokerRestErrorCode,
+  type SignalIndicators,
   type SignalInterval,
 } from '@binarius/shared';
 import { assertSignalClock } from './candles';
 import { assertDigits, createSignalDecider, type SignalDecider } from './decide';
-import { assertFeedLimit, SIGNAL_CHART_LIMIT } from './feed-config';
+import { displayIndicators } from './display';
+import {
+  assertFeedLimit,
+  assertFetchLimit,
+  SIGNAL_CHART_LIMIT,
+  SIGNAL_FETCH_LIMIT,
+} from './feed-config';
 import { toJournalCandle, type SignalJournalEntry } from './journal';
 
 export interface SignalFeedRequest {
@@ -28,7 +35,12 @@ export interface SignalFetchFacts {
 }
 
 export type SignalEvaluation =
-  | { outcome: typeof SignalFeedOutcome.Decided; entry: SignalJournalEntry }
+  | {
+      outcome: typeof SignalFeedOutcome.Decided;
+      entry: SignalJournalEntry;
+      // absent when the whole response did not pass the candle checks
+      indicators?: SignalIndicators;
+    }
   | {
       outcome: typeof SignalFeedOutcome.FetchFailed;
       request: SignalFetchFacts;
@@ -73,6 +85,7 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
   const { rest, logger, now = Date.now } = deps;
   const decider = deps.decider ?? createSignalDecider();
   assertFeedLimit(SIGNAL_CHART_LIMIT, decider.params);
+  assertFetchLimit(SIGNAL_FETCH_LIMIT, decider.params);
 
   return {
     decider,
@@ -85,7 +98,7 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
       // a broken clock or digits cost no broker call
       assertSignalClock(intervalMs, nowMs);
       assertDigits(digits);
-      const window = chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT);
+      const window = chartWindow(nowMs, intervalMs, SIGNAL_FETCH_LIMIT);
       const request: SignalFetchFacts = { assetId, interval, intervalMs, nowMs, ...window };
 
       const started = performance.now();
@@ -112,7 +125,10 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
       }
       const durationMs = Math.round(performance.now() - started);
 
-      const decision = decider.decide({ candles, intervalMs, nowMs, digits });
+      // the same rows a limit of SIGNAL_CHART_LIMIT with the same right edge returns: the decision,
+      // its journal series and the #381 stand do not change with the longer fetch
+      const decisionCandles = candles.slice(-SIGNAL_CHART_LIMIT);
+      const decision = decider.decide({ candles: decisionCandles, intervalMs, nowMs, digits });
       const entry: SignalJournalEntry = {
         assetId,
         interval,
@@ -122,11 +138,16 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
         fetch: { ...window, rows: candles.length, durationMs },
         version: decider.version,
         params: decider.params,
-        series: candles.map(toJournalCandle),
+        series: decisionCandles.map(toJournalCandle),
         decision,
       };
       logger.info({ signal: entry }, 'signal decision');
-      return { outcome: SignalFeedOutcome.Decided, entry };
+      const indicators = displayIndicators(candles, intervalMs, nowMs, decider.params);
+      return {
+        outcome: SignalFeedOutcome.Decided,
+        entry,
+        ...(indicators === undefined ? {} : { indicators }),
+      };
     },
   };
 }

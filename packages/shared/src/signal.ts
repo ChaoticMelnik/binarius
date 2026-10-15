@@ -238,6 +238,48 @@ export const signalDecisionSchema = decisionSchema(
 );
 export type SignalDecision = z.infer<typeof signalDecisionSchema>;
 
+// --- Display indicators (#482) ---------------------------------------------------------------
+
+// Shown on the analysis card, never read by the decision (MACD and MA join it only after #483's
+// backtest). The one source of the periods: the feed computes with them and the card prints them.
+export const DISPLAY_INDICATOR_PARAMS = {
+  macdFast: 12,
+  macdSlow: 26,
+  macdSignal: 9,
+  maShort: 50,
+  maLong: 200,
+} as const;
+
+export const MacdCross = { Up: 'up', Down: 'down', None: 'none' } as const;
+export type MacdCross = (typeof MacdCross)[keyof typeof MacdCross];
+
+const indicatorShortSchema = z.strictObject({
+  ok: z.literal(false),
+  closedCandles: z.int().nonnegative(),
+  required: z.int().positive(),
+});
+
+const movingAverageIndicatorSchema = z.discriminatedUnion('ok', [
+  z.strictObject({ ok: z.literal(true), value: z.number(), lastClose: z.number() }),
+  indicatorShortSchema,
+]);
+
+export const signalIndicatorsSchema = z.strictObject({
+  macd: z.discriminatedUnion('ok', [
+    z.strictObject({
+      ok: z.literal(true),
+      macd: z.number(),
+      signal: z.number(),
+      histogram: z.number(),
+      cross: z.enum(MacdCross),
+    }),
+    indicatorShortSchema,
+  ]),
+  ma50: movingAverageIndicatorSchema,
+  ma200: movingAverageIndicatorSchema,
+});
+export type SignalIndicators = z.infer<typeof signalIndicatorsSchema>;
+
 // --- POST /trading/signal (#258) --------------------------------------------------------------
 
 export const TRADING_SIGNAL_PATH = '/trading/signal';
@@ -271,6 +313,8 @@ export const tradingSignalResponseSchema = z.discriminatedUnion('outcome', [
     outcome: z.literal(SignalFeedOutcome.Decided),
     params: signalParamsSchema,
     decision: signalDecisionSchema,
+    // absent when the whole response did not pass the candle checks (docs/signal.md)
+    indicators: signalIndicatorsSchema.optional(),
   }),
   z.strictObject({
     outcome: z.literal(SignalFeedOutcome.FetchFailed),

@@ -1,6 +1,6 @@
 import type { Candle } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { atr, ema, rsi, trueRange } from './indicators';
+import { atr, ema, macd, rsi, sma, trueRange } from './indicators';
 
 const bar = (high: number, low: number, close: number): Candle => ({
   timestamp: 0,
@@ -53,5 +53,38 @@ describe('indicators', () => {
 
   it('I8 atr on a series shorter than the seed throws RangeError', () => {
     expect(() => atr([bar(2, 1, 1), bar(2, 1, 1), bar(2, 1, 1)], 3)).toThrow(RangeError);
+  });
+
+  it('I9 sma([1, 2, 4, 8, 16], 3) = [7/3, 14/3, 28/3]', () => {
+    const values = sma([1, 2, 4, 8, 16], 3);
+    expect(values).toHaveLength(3);
+    expect(values[0]).toBeCloseTo(7 / 3, 10);
+    expect(values[1]).toBeCloseTo(14 / 3, 10);
+    expect(values[2]).toBeCloseTo(28 / 3, 10);
+  });
+
+  // ema2 = [3/2, 19/6, 115/18, 691/54, 4147/162], ema3 = [7/3, 31/6, 127/12, 511/24];
+  // line = [5/6, 11/9, 239/108, 2791/648]; signal = ema2(line) = [37/36, 589/324, 845/243]
+  it('I10 macd([1, 2, 4, 8, 16, 32], 2, 3, 2) by hand', () => {
+    const { macd: line, signal, histogram } = macd([1, 2, 4, 8, 16, 32], 2, 3, 2);
+    const expected = {
+      line: [11 / 9, 239 / 108, 2791 / 648],
+      signal: [37 / 36, 589 / 324, 845 / 243],
+    };
+    expect(line).toHaveLength(3);
+    expect(signal).toHaveLength(3);
+    expect(histogram).toHaveLength(3);
+    expected.line.forEach((value, j) => {
+      expect(line[j]).toBeCloseTo(value, 10);
+      expect(signal[j]).toBeCloseTo(expected.signal[j], 10);
+      expect(histogram[j]).toBeCloseTo(value - expected.signal[j], 10);
+    });
+  });
+
+  it('I11 sma and macd shorter than the seed throw RangeError, as does fast >= slow', () => {
+    expect(() => sma([1, 2], 3)).toThrow(RangeError);
+    expect(() => macd([1, 2, 4], 2, 3, 2)).toThrow(RangeError);
+    expect(() => macd([1, 2, 4, 8], 2, 3, 2)).not.toThrow();
+    expect(() => macd([1, 2, 4, 8, 16, 32], 3, 3, 2)).toThrow(RangeError);
   });
 });
