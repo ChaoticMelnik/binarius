@@ -77,6 +77,7 @@ import * as referral from './referral';
 import * as signal from './signal';
 import * as socket from './socket';
 import * as stake from './stake';
+import * as stars from './stars';
 import * as telegramHtml from './telegram-html';
 import * as time from './time';
 import * as trading from './trading';
@@ -494,6 +495,7 @@ describe('contract coverage (issue #6)', () => {
       adminTrading,
       adminBotTexts,
       ledger,
+      stars,
       audit,
       money,
       time,

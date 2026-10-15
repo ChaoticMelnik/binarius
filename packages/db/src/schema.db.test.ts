@@ -23,6 +23,7 @@ import {
   outboxEvents,
   referralCodes,
   referrals,
+  starPayments,
   staff,
   staffLoginChallenges,
   staffLoginLinks,
@@ -523,7 +524,7 @@ describe('enum and uniqueness constraints', () => {
     });
   });
 
-  // these six cannot be violated by an insert — a composite unique on (id, …) is unreachable
+  // these seven cannot be violated by an insert — a composite unique on (id, …) is unreachable
   // while id is the PK — so they are covered by asserting the catalog, and registered in the
   // coverage set only once that assertion has passed
   it('keeps the composite FK targets in place', async () => {
@@ -531,6 +532,7 @@ describe('enum and uniqueness constraints', () => {
       'broker_accounts_id_broker_user_id_key',
       'broker_accounts_id_user_id_key',
       'deposit_events_id_user_key',
+      'star_payments_id_user_key',
       'trade_intents_id_account_mode_key',
       'trade_intents_id_user_key',
       'trading_sessions_id_account_mode_key',
@@ -3315,6 +3317,217 @@ describe('referral_codes and referrals (#115)', () => {
     await rolledBack(async (tx) => {
       const userId = await seedUser(tx);
       await rejectsWith(insert(tx, userId, randomUUID()), '23503', constraint);
+    });
+  });
+});
+
+// --- star_payments and the Stars purchase rows of the ledger (#117) ---------------------------
+
+const starPayment = (userId: string, patch: Record<string, unknown> = {}) => ({
+  userId,
+  telegramPaymentChargeId: `charge-${++seq}`,
+  packageCode: 'p50',
+  currency: 'XTR',
+  totalAmount: 100,
+  tokens: 50n,
+  status: 'paid' as const,
+  paidAt: sql`now()`,
+  ...patch,
+});
+
+async function seedStarPayment(tx: Tx, userId: string): Promise<string> {
+  const [row] = await tx
+    .insert(starPayments)
+    .values(starPayment(userId))
+    .returning({ id: starPayments.id });
+  return row!.id;
+}
+
+describe('star_payments', () => {
+  it.each([
+    ['a paid payment', {}],
+    [
+      'a held payment with no tokens and another currency',
+      { status: 'held', tokens: null, currency: 'USD' },
+    ],
+    ['a refunded payment with its time', { status: 'refunded', refundedAt: sql`now()` }],
+    ['a charge id of 255 characters', { telegramPaymentChargeId: 'c'.repeat(255) }],
+  ])('accepts %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await expect(
+        tx.insert(starPayments).values(starPayment(seed.userId, patch)),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  it.each([
+    ['an empty charge id', { telegramPaymentChargeId: '' }, 'star_payments_charge_id_check'],
+    [
+      'a charge id of 256 characters',
+      { telegramPaymentChargeId: 'c'.repeat(256) },
+      'star_payments_charge_id_check',
+    ],
+    ['a zero amount', { totalAmount: 0 }, 'star_payments_total_amount_check'],
+    ['zero tokens', { tokens: 0n }, 'star_payments_tokens_check'],
+    ['negative tokens', { tokens: -1n }, 'star_payments_tokens_check'],
+    ['a status outside the list', { status: 'pending' }, 'star_payments_status_check'],
+    ['a paid payment without tokens', { tokens: null }, 'star_payments_paid_check'],
+    ['a paid payment in another currency', { currency: 'USD' }, 'star_payments_paid_check'],
+    ['a refund without its time', { status: 'refunded' }, 'star_payments_refund_pair_check'],
+    [
+      'a paid payment with a refund time',
+      { refundedAt: sql`now()` },
+      'star_payments_refund_pair_check',
+    ],
+  ])('rejects %s', async (_label, patch, constraint) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(starPayments).values(starPayment(seed.userId, patch)),
+        '23514',
+        constraint,
+      );
+    });
+  });
+
+  // the pair CHECK compares a boolean with a boolean, so a NULL status would pass it: NOT NULL
+  // is what keeps it from doing so
+  it('rejects a NULL status by the column itself', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const error = await tx
+        .insert(starPayments)
+        .values(starPayment(seed.userId, { status: null }))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'status' });
+    });
+  });
+
+  it('records one row per charge', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      const first = starPayment(seed.userId);
+      await tx.insert(starPayments).values(first);
+      await rejectsWith(
+        tx
+          .insert(starPayments)
+          .values(
+            starPayment(other.userId, { telegramPaymentChargeId: first.telegramPaymentChargeId }),
+          ),
+        '23505',
+        'star_payments_charge_key',
+      );
+    });
+  });
+
+  it('rejects a payment of a user with no row', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(starPayments).values(starPayment(randomUUID())),
+        '23503',
+        'star_payments_user_id_users_id_fk',
+      );
+    });
+  });
+});
+
+describe('token_ledger: the Stars purchase (#117)', () => {
+  it('accepts a purchase naming its Stars payment', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await expect(
+        tx
+          .insert(tokenLedger)
+          .values({
+            userId: seed.userId,
+            kind: 'purchase',
+            balanceDelta: 50n,
+            starPaymentId: payment,
+          }),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  it('credits one Stars payment only once per kind', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      const row = {
+        userId: seed.userId,
+        kind: 'purchase' as const,
+        balanceDelta: 50n,
+        starPaymentId: payment,
+      };
+      await tx.insert(tokenLedger).values(row);
+      await rejectsWith(
+        tx.insert(tokenLedger).values(row),
+        '23505',
+        'token_ledger_star_payment_idx',
+      );
+    });
+  });
+
+  it('rejects a credit for another user’s Stars payment', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await rejectsWith(
+        tx
+          .insert(tokenLedger)
+          .values({
+            userId: other.userId,
+            kind: 'purchase',
+            balanceDelta: 50n,
+            starPaymentId: payment,
+          }),
+        '23503',
+        'token_ledger_star_payment_owner_fk',
+      );
+    });
+  });
+
+  // S6: the purchase branch takes exactly one of a deposit and a Stars payment, and nothing else
+  it.each([
+    ['a purchase naming both a deposit and a Stars payment', 'purchase', ['deposit']],
+    ['a purchase with a Stars payment and a broker account', 'purchase', ['account']],
+    ['a purchase with a Stars payment and an intent', 'purchase', ['intent']],
+    ['a purchase with a Stars payment and a manual reference', 'purchase', ['ref']],
+    ['a reserve naming a Stars payment', 'reserve', ['intent']],
+    ['a bonus naming a Stars payment', 'bonus', []],
+    ['an adjustment naming a Stars payment', 'adjustment', []],
+  ] as const)('rejects %s', async (_label, kind, extras) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      const values: Record<string, unknown> = {
+        userId: seed.userId,
+        kind,
+        starPaymentId: payment,
+        ...(kind === 'reserve' ? { reservedDelta: 1n } : { balanceDelta: 10n }),
+        ...(kind === 'adjustment' ? { note: 'n' } : {}),
+      };
+      for (const extra of extras) {
+        if (extra === 'deposit') values.depositEventId = await seedDeposit(tx, seed);
+        if (extra === 'account') values.brokerAccountId = seed.accountId;
+        if (extra === 'intent') {
+          values.intentId = (
+            await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning()
+          )[0]!.id;
+        }
+        if (extra === 'ref') Object.assign(values, { refType: 'manual', refId: randomUUID() });
+      }
+      await rejectsWith(
+        tx.insert(tokenLedger).values(values as typeof tokenLedger.$inferInsert),
+        '23514',
+        'token_ledger_reference_check',
+      );
     });
   });
 });

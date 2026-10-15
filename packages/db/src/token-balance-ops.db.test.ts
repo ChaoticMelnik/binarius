@@ -23,6 +23,7 @@ import { LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
 import { tokenLedger, users } from './schema/index';
 import { adjustTokens } from './token-adjustment-ops';
+import { creditStarPayment, StarsCreditSource } from './star-payment-ops';
 import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
 import {
   TOKENS_PER_INTENT,
@@ -240,6 +241,31 @@ describe('readTokenBalance', () => {
     expect(result).toMatchObject({ ok: true, grant: { granted: true } });
 
     expect(await read(user)).toMatchObject({ balance: LINK_BONUS_TOKENS, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+  });
+
+  // Rule 2's sixth writer (#117): the purchase row and the cache in one transaction
+  it('follows a Stars purchase and its repeated delivery, equal to the ledger', async () => {
+    const user = await creditedUser(7n);
+    const payment = {
+      telegramPaymentChargeId: `charge-${user.userId}`,
+      providerPaymentChargeId: null,
+      packageCode: 'p50',
+      userId: user.userId,
+      currency: 'XTR',
+      totalAmount: 100,
+      payerTelegramUserId: BigInt(user.telegramUserId),
+      paidAt: new Date(),
+      source: StarsCreditSource.Bot,
+    };
+    const first = await tmp.db.transaction((tx) => creditStarPayment(tx, payment));
+    expect(first.outcome).toBe('credited');
+    expect(await read(user)).toMatchObject({ balance: 57n, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+
+    const again = await tmp.db.transaction((tx) => creditStarPayment(tx, payment));
+    expect(again.outcome).toBe('already_recorded');
+    expect(await read(user)).toMatchObject({ balance: 57n, reserved: 0n });
     await expectCacheEqualsLedger(user);
   });
 

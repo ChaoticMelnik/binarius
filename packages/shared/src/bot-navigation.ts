@@ -19,6 +19,13 @@ export type RetryCommand = (typeof RETRY_COMMANDS)[number];
 export const commandRetryCallbackData = (command: RetryCommand): string => `cmd:${command}`;
 export const COMMAND_RETRY_PATTERN = new RegExp(`^cmd:(${RETRY_COMMANDS.join('|')})$`);
 
+// «⭐ Купить токены» (#117, docs/stars.md): the package screen. Under the status card, under the
+// `insufficient_tokens` refusals and #123's nudges, which the backend sends; a package's button is
+// `buy:<code>`, a read that asks the backend for the invoice. The longest, `buy:p150`, is 8 bytes.
+export const BUY_CALLBACK_DATA = 'buy';
+export const buyPackageCallbackData = (code: string): string => `${BUY_CALLBACK_DATA}:${code}`;
+export const BUY_PACKAGE_PATTERN = /^buy:([a-z0-9]{1,16})$/;
+
 // Where /support leads (#120). A temporary personal account: #220 replaces it, and this is the one
 // line to change.
 export const SUPPORT_TELEGRAM_USERNAME = 'dimmelya';

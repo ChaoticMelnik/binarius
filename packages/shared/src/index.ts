@@ -16,6 +16,7 @@ export * from './access-token';
 export * from './admin';
 export * from './admin-trading';
 export * from './ledger';
+export * from './stars';
 export * from './postback';
 export * from './deposit';
 export * from './audit';

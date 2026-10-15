@@ -559,6 +559,7 @@ describe('token ledger contracts (#109)', () => {
     intentId: '00000000-0000-4000-8000-000000000030',
     depositEventId: null,
     brokerAccountId: null,
+    starPaymentId: null,
     refType: null,
     refId: null,
     note: null,
@@ -583,7 +584,7 @@ describe('token ledger contracts (#109)', () => {
     expect(adminLedgerEntrySchema.safeParse(manual).success).toBe(true);
   });
 
-  it('carries exactly the thirteen wire keys of a ledger row', () => {
+  it('carries exactly the fourteen wire keys of a ledger row', () => {
     expect(Object.keys(adminLedgerEntrySchema.shape)).toEqual([
       'id',
       'userId',
@@ -594,6 +595,7 @@ describe('token ledger contracts (#109)', () => {
       'intentId',
       'depositEventId',
       'brokerAccountId',
+      'starPaymentId',
       'refType',
       'refId',
       'note',
@@ -1273,6 +1275,7 @@ describe('token adjustment contracts (#246)', () => {
     intentId: null,
     depositEventId: null,
     brokerAccountId: null,
+    starPaymentId: null,
     refType: null,
     refId: null,
     note: 'Компенсация',

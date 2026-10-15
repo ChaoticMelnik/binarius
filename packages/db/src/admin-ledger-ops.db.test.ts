@@ -242,6 +242,7 @@ describe('toAdminLedgerEntry', () => {
       intentId: null,
       depositEventId: null,
       brokerAccountId: null,
+      starPaymentId: null,
       refType: null,
       refId: null,
       note: 'seed <script>',
