@@ -90,8 +90,9 @@ most `available`. The bounds are inclusive.
 Chart rules: the candles start at `start_time` rounded down to the step and are spaced one step
 apart. No candle starts after now, and the forming candle is included (observed live
 2026-10-06, as is the rounding of `start_time` down to the step). `limit` defaults to 100, and
-anything above 5000 is cut to 5000. A step below 5 s, or a `start_time` below `1e11` (seconds
-rather than ms), answers `[]`. `M` is 30 days. A candle's close equals the next candle's open,
+anything above 5000 is cut to 5000. A step below 1 s, or a `start_time` below `1e11` (seconds
+rather than ms), answers `[]` (`1s` answered 5 000 rows live on 2026-10-09, `500ms` answered `[]`
+on 2026-10-03). `M` is 30 days. A candle's close equals the next candle's open,
 and `low <= min(open, close) <= max(open, close) <= high`. Every value is rounded to the pair's `digits`.
 
 Every response carries `x-ratelimit-limit` (`options.rateLimit`, default 600),
@@ -118,7 +119,7 @@ limit. A client classifies by status, never by text. All 4xx and 5xx responses u
 | chart missing or non-numeric `start_time` | 400 | `Validation failed: "start_time" (ms epoch) is required` | observed (non-numeric: fixture rule) |
 | chart missing `interval` | 400 | `Validation failed: "interval" is required` | fixture rule |
 | chart order: interval, then asset, then start_time | | | observed |
-| chart step below 5 s, `start_time` in seconds | 200 | `[]` | observed (the 5 s threshold is an approximation) |
+| chart step below 1 s, `start_time` in seconds | 200 | `[]` | observed (`1s` answers rows, 2026-10-09; the 1 s threshold is an approximation) |
 | trade body field missing | 400 | `Validation failed: "<field>" is required` | fixture rule, in the observed `"code" is required` form |
 | trade body field present but wrong (a JSON-number `amount`, `"0.00"`, `"1."`, an unknown `action`, …) | 400 | `Validation failed: "<field>" is invalid` | fixture rule |
 | trade amount with more than 2 decimals | 400 | `Validation failed: "amount" must have at most 2 decimal places` | fixture rule |

@@ -95,8 +95,16 @@ describe('validateChartQuery', () => {
     });
   });
 
-  it.each(['0m', '500ms', '4s'])('answers [] for a step below 5 s (%j)', (interval) => {
+  it.each(['0m', '500ms', '999ms'])('answers [] for a step below 1 s (%j)', (interval) => {
     expect(validateChartQuery({ ...valid, interval }, findPair)).toEqual({ ok: true, empty: true });
+  });
+
+  it('M1 answers 1s rows one second apart', () => {
+    const query = validateChartQuery({ ...valid, interval: '1s', limit: '3' }, findPair);
+    expect(query).toMatchObject({ ok: true, empty: false, stepMs: 1_000, limit: 3 });
+    if (!query.ok || query.empty) throw new Error('unreachable');
+    const rows = buildCandles(query.pair, query.stepMs, START, query.limit, START + 60_000);
+    expect(rows.map(([ts]) => ts)).toEqual([START, START + 1_000, START + 2_000]);
   });
 
   it('answers [] for a start_time in seconds', () => {

@@ -17,8 +17,9 @@ const UNIT_MS = {
 
 const INTERVAL = /^(\d+)(ms|s|m|h|d|w|M)$/;
 
-// observed: 500ms and 0m answer [], 5s answers data; the exact threshold is an approximation
-export const MIN_CANDLE_STEP_MS = 5_000;
+// observed: 1s answers 5 000 rows (2026-10-09), 500ms and 0m answer [] (2026-10-03); the exact
+// threshold between them is an approximation
+export const MIN_CANDLE_STEP_MS = 1_000;
 // below this a start_time is in seconds, which the live broker answers with []
 const MS_EPOCH_THRESHOLD = 1e11;
 export const DEFAULT_CHART_LIMIT = 100;
