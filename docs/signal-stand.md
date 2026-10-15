@@ -30,6 +30,11 @@ pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timesta
 | `fetch` | `--assets <id,…>` (`STAND_ASSET_IDS`, the 28 below), `--days <1-30>` (`STAND_DEFAULT_DAYS` 14), `--intervals` (`1s,5s,15s,1m`) | `BROKER_API_BASE_URL` (https, or http to localhost); `STAND_MAX_GETS_PER_MINUTE` (1..600, default 120) |
 | `run` | `--assets` (the 28), `--out <dir>` (`$STAND_DIR/out/<ISO time>`), `--headline-delay <0\|1000\|3000>` | — |
 
+`--days` bounds only a series' first fetch. A later fetch continues from the cache's last row and
+never extends a series backwards: to widen the range, fetch into an empty `$STAND_DIR`. `run`
+warns on stderr, naming the pairs, when the pooled pairs' `1s` ranges differ by more than a day
+(`run.test.ts` R5).
+
 The exit codes are:
 - 0: done.
 - 1: a refusal. This covers a failed fetch, a damaged cache and an asset missing from
@@ -130,11 +135,22 @@ Outcomes work as follows:
 - The rate is `wins / (wins + losses)`.
 - PnL at stake 1 is `+payout/100` per win, `−1` per loss and 0 per tie. It is illustrative only.
 
-`openDelay` takes values from the grid `OPEN_DELAY_GRID_MS = [0, 1000, 3000]`. With `openDelay`
-0, the entry is the close of the last closed candle, which is the interval-candle model
-(`price.test.ts` P3). The headline delay is `--headline-delay`, or 3 000 ms (the plan's live
-estimate: 2 s slack plus 0.5-1 s to open). The second part's `calibrate` chooses it from the live
-trades.
+`openDelay` counts from the decision moment `D`, the boundary plus `DECISION_SLACK_MS`. A trade
+enters at `priceAt(D + openDelay)` and exits at `priceAt(D + openDelay + duration)`. The stand
+never enters at the last closed candle's close: at `openDelay` 0 the entry is the close of the
+`1s` row at `D`, about 2 s after that candle closed (`price.test.ts` P3, through `simulate`).
+
+The grid is `OPEN_DELAY_GRID_MS = [0, 1000, 3000]`:
+- 0 is the open inside `D`'s own second, the expected case.
+- 1 000 is the open in the next second: a slow open, or the `1s` label shift (148 of 495 live
+  trades, see Observed live).
+- 3 000 is a late entry, about 2.4 s later than live. It is a sensitivity point, never the
+  expected headline.
+
+The headline delay is `--headline-delay`, or the fallback `FALLBACK_HEADLINE_DELAY_MS`, 0
+(`run.test.ts` S9). The live open is `D` + 397 ms at the median and `D` + 927 ms at the p95, so
+it falls in `D`'s own one-second bucket in most trades. The second part's `calibrate` chooses the
+headline delay from the grid by the live trades.
 
 ## Variants
 
@@ -182,7 +198,10 @@ variant needing a longer history, such as #483's MA200, plugs in without touchin
 W/L/T, win %, its interval, break-even, verdict and PnL.
 
 - **(a) Headline.** The selected point of each variant and interval, out-of-sample, pooled. `v2`
-  also gets the production point.
+  also gets the production point. A variant with no point at 100 in-sample trades keeps a line:
+  `v1`, a single point, is shown with its numbers, and the others get a line
+  `no point with >= 100 in-sample trades (best: N)`, `N` being the most in-sample trades of any
+  of its points (`run.test.ts` R4).
 - **(b) Per pair**, grouped by pair type (`PAIR_TYPE_GROUPS`). These rows use the pair's own
   payout and break-even. The scope column also gives the pair's trade count over the whole range.
   Acceptance criterion 1 reads this column: at least 300 trades per pair and interval.
@@ -194,7 +213,7 @@ W/L/T, win %, its interval, break-even, verdict and PnL.
 - **(g)** The pairs snapshot (`fetchedAt`), and each series' rows, first and last timestamp.
 
 The header names the range, the split, the headline delay and where that delay came from: the
-`--headline-delay` flag or the fallback 3 000 ms. It also names the pairs left out of pooling.
+`--headline-delay` flag or the fallback 0 ms. It also names the pairs left out of pooling.
 
 ## Pairs
 
