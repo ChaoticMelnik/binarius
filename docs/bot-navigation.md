@@ -147,6 +147,8 @@ no repeat.
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 🔄 Обновить · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔄 Обновить · 🔀 Выбрать другую пару · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню |
 | `/stop` (#122), one session stopped | the session's status keyboard (the two rows above) |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
+| `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
+| `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
 | the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 
