@@ -35,7 +35,11 @@ import {
   StarsErrorCode,
   StarsPreCheckoutRefusal,
 } from '@binarius/shared';
-import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
+import {
+  composeDurationMs,
+  composeServiceEnvValue,
+  composeServiceValue,
+} from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
   LEVEL_CURRENT_CALLBACK_DATA,
@@ -2997,6 +3001,13 @@ describe('the bounds this project does not own', () => {
     expect(composeDurationMs(composeServiceValue(composeYaml, 'bot', 'stop_grace_period'))).toBe(
       COMPOSE_STOP_GRACE_PERIOD_MS,
     );
+  });
+
+  // the cashier button's origin (#27): the page web serves, so one value for both
+  it('gives the bot the same WEB_PUBLIC_URL as web', () => {
+    const bot = composeServiceEnvValue(composeYaml, 'bot', 'WEB_PUBLIC_URL');
+    expect(bot).toMatch(/^\$\{WEB_PUBLIC_URL:-[^}]+\}$/);
+    expect(bot).toBe(composeServiceEnvValue(composeYaml, 'web', 'WEB_PUBLIC_URL'));
   });
 
   it('matches the sleep grammY takes after a failed getUpdates', () => {

@@ -5,6 +5,7 @@ const base = {
   TELEGRAM_BOT_TOKEN: '123456:AA-bot-token',
   INTERNAL_API_TOKEN: 'internal-token-for-tests',
   BACKEND_URL: 'http://backend:3000',
+  WEB_PUBLIC_URL: 'https://Web.Example:443',
 };
 
 describe('parseEnv', () => {
@@ -15,10 +16,11 @@ describe('parseEnv', () => {
       backendUrl: 'http://backend:3000',
       logLevel: 'info',
       welcomeVideoFileId: undefined,
+      webPublicUrl: 'https://web.example',
     });
   });
 
-  it.each(['TELEGRAM_BOT_TOKEN', 'INTERNAL_API_TOKEN', 'BACKEND_URL'])(
+  it.each(['TELEGRAM_BOT_TOKEN', 'INTERNAL_API_TOKEN', 'BACKEND_URL', 'WEB_PUBLIC_URL'])(
     'refuses a missing %s',
     (name) => {
       const source: Record<string, string> = { ...base };
@@ -27,7 +29,7 @@ describe('parseEnv', () => {
     },
   );
 
-  it.each(['TELEGRAM_BOT_TOKEN', 'INTERNAL_API_TOKEN', 'BACKEND_URL'])(
+  it.each(['TELEGRAM_BOT_TOKEN', 'INTERNAL_API_TOKEN', 'BACKEND_URL', 'WEB_PUBLIC_URL'])(
     'refuses an empty %s',
     (name) => {
       expect(() => parseEnv({ ...base, [name]: '' })).toThrow(`Env ${name} must not be empty`);
@@ -55,6 +57,21 @@ describe('parseEnv', () => {
     ['http://[::1]:3000', 'Env BACKEND_URL: IPv6 literal hosts are not supported, use a hostname'],
   ])('refuses BACKEND_URL=%s', (url, message) => {
     expect(() => parseEnv({ ...base, BACKEND_URL: url })).toThrow(message);
+  });
+
+  // the cashier's origin (#27): the shared parser web and backend read it with
+  it.each([
+    ['https://web.example/cashier', 'Env WEB_PUBLIC_URL must be an origin without a path'],
+    ['https://web.example?a=1', 'Env WEB_PUBLIC_URL must be an origin without a path'],
+    ['https://user:pass@web.example', 'Env WEB_PUBLIC_URL must not carry credentials'],
+  ])('refuses WEB_PUBLIC_URL=%s', (url, message) => {
+    expect(() => parseEnv({ ...base, WEB_PUBLIC_URL: url })).toThrow(message);
+  });
+
+  it('keeps a loopback http origin, on which the bot shows no cashier button', () => {
+    expect(parseEnv({ ...base, WEB_PUBLIC_URL: 'http://127.0.0.1:3001' }).webPublicUrl).toBe(
+      'http://127.0.0.1:3001',
+    );
   });
 
   it('refuses an unknown log level and accepts a known one', () => {

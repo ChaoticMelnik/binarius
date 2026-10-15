@@ -50,6 +50,7 @@ import { sessionCardKeyboard } from './trading-session';
 import {
   ACCESS_VIEW,
   BOT_INFO,
+  CASHIER_URL,
   PAIR_15S_ONLY,
   PAIR_CLOSED,
   PAIR_EURUSD,
@@ -2229,7 +2230,10 @@ describe('a press under the session card (a photo)', () => {
   // the card's buttons that edit the pressed message: «🔁 Ещё сессия» replies (K7 in
   // trading-session.test.ts) and «🏠 В меню» replies too
   const editingButtons = (durationSec: number) =>
-    sessionCardKeyboard(sessionView({ settings: { ...SESSION_VIEW.settings!, durationSec } }))
+    sessionCardKeyboard(
+      sessionView({ settings: { ...SESSION_VIEW.settings!, durationSec } }),
+      CASHIER_URL,
+    )
       .inline_keyboard.flat()
       .map((key) => ('callback_data' in key ? key.callback_data : undefined))
       .filter(

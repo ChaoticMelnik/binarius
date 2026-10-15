@@ -45,22 +45,42 @@ export const buyButton = (): InlineKeyboardButton.CallbackButton => ({
   callback_data: BUY_CALLBACK_DATA,
 });
 
-// The status card's: the entry, then the invite (#115), then the purchase (#117). In real mode the
-// entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA: the path is the same up to the stake
-// button (#121). The account card keeps demoKeyboard.
-export const statusCardKeyboard = (mode: TradeMode): InlineKeyboard =>
-  (mode === TradeMode.Real
-    ? new InlineKeyboard().text(LABELS.tradeButton, DEMO_CALLBACK_DATA)
-    : demoKeyboard()
-  )
-    .row()
-    .add(inviteButton())
-    .row()
-    .add(buyButton());
+// «💳 Пополнить» (#27, docs/deposit.md): the cashier as a Mini App, so the page gets initData.
+// The only builders of the button: `cashierUrl` is cashierUrlOf's, and without one (an origin that
+// is not https) there is no row at all.
+export const depositButton = (cashierUrl: string): InlineKeyboardButton.WebAppButton => ({
+  text: LABELS.depositButton,
+  web_app: { url: cashierUrl },
+});
+export const depositRows = (cashierUrl: string | undefined): InlineKeyboardButton[][] =>
+  cashierUrl === undefined ? [] : [[depositButton(cashierUrl)]];
 
-// The purchase above `keyboard`'s rows: the `insufficient_tokens` refusals (#117)
-export const withBuy = (keyboard: InlineKeyboard): InlineKeyboard =>
-  new InlineKeyboard([[buyButton()], ...keyboard.inline_keyboard.filter((row) => row.length > 0)]);
+// The status card's: the entry, then the invite (#115), the purchase (#117) and the deposit
+// (#27). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA: the path is the
+// same up to the stake button (#121). The account card keeps demoKeyboard.
+export const statusCardKeyboard = (
+  mode: TradeMode,
+  cashierUrl: string | undefined,
+): InlineKeyboard =>
+  new InlineKeyboard([
+    [
+      mode === TradeMode.Real
+        ? button(LABELS.tradeButton, DEMO_CALLBACK_DATA)
+        : button(LABELS.demoButton, DEMO_CALLBACK_DATA),
+    ],
+    [inviteButton()],
+    [buyButton()],
+    ...depositRows(cashierUrl),
+  ]);
+
+// The purchase, then the deposit (#27), above `keyboard`'s rows: the `insufficient_tokens`
+// refusals (#117)
+export const withBuy = (keyboard: InlineKeyboard, cashierUrl: string | undefined): InlineKeyboard =>
+  new InlineKeyboard([
+    [buyButton()],
+    ...depositRows(cashierUrl),
+    ...keyboard.inline_keyboard.filter((row) => row.length > 0),
+  ]);
 
 // /buy's screen: a row per package, then the menu
 export const buyPackagesKeyboard = (): InlineKeyboard => {
@@ -71,11 +91,15 @@ export const buyPackagesKeyboard = (): InlineKeyboard => {
   return keyboard.text(LABELS.menuButton, MENU_CALLBACK_DATA);
 };
 
-// the invite row, then the menu row, under `keyboard`'s rows; an empty keyboard gets no empty
-// first row
-export const withInvite = (keyboard: InlineKeyboard): InlineKeyboard =>
+// the deposit row (#27), the invite row, then the menu row, under `keyboard`'s rows; an empty
+// keyboard gets no empty first row
+export const withInvite = (
+  keyboard: InlineKeyboard,
+  cashierUrl: string | undefined,
+): InlineKeyboard =>
   new InlineKeyboard([
     ...keyboard.inline_keyboard.filter((row) => row.length > 0),
+    ...depositRows(cashierUrl),
     [inviteButton()],
     [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
   ]);

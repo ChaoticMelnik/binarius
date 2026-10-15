@@ -27,6 +27,7 @@ import {
 import {
   appendEndOfPath,
   backToAnalysisKeyboard,
+  depositRows,
   inviteButton,
   menuKeyboard,
   supportKeyboard,
@@ -67,6 +68,7 @@ export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${UUID}$`);
 // demo no longer offers has no such button.
 export const sessionKeyboard = (
   view: Pick<TradingSessionView, 'id' | 'mode' | 'status' | 'settings'>,
+  cashierUrl: string | undefined,
 ): InlineKeyboard => {
   const keyboard = new InlineKeyboard().text(
     LABELS.sessionRefreshButton,
@@ -75,17 +77,19 @@ export const sessionKeyboard = (
   if (view.status !== TradingSessionStatus.Stopped) {
     return keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
   }
-  return appendSessionEnd(keyboard, view);
+  return appendSessionEnd(keyboard, view, cashierUrl);
 };
 
 // A stopped session's next steps under `keyboard`'s rows: the again button while the demo offers
-// its duration, then the end of the path with «👥 Пригласить друга» right above the menu (#115);
-// the invite and the menu alone when its settings could not be read.
+// its duration, then the end of the path with «💳 Пополнить» (#27) and «👥 Пригласить друга»
+// (#115) right above the menu; the deposit, the invite and the menu alone when its settings could
+// not be read.
 function appendSessionEnd(
   keyboard: InlineKeyboard,
   { mode, settings }: Pick<TradingSessionView, 'mode' | 'settings'>,
+  cashierUrl: string | undefined,
 ): InlineKeyboard {
-  if (settings === null) return withInvite(keyboard);
+  if (settings === null) return withInvite(keyboard, cashierUrl);
   const durationSec = durationOf(String(settings.durationSec));
   if (durationSec !== undefined) {
     keyboard
@@ -95,7 +99,10 @@ function appendSessionEnd(
         sessionStartCallbackData(mode, settings.assetId, durationSec),
       );
   }
-  return appendEndOfPath(keyboard, settings.assetId, settings.durationSec, [[inviteButton()]]);
+  return appendEndOfPath(keyboard, settings.assetId, settings.durationSec, [
+    ...depositRows(cashierUrl),
+    [inviteButton()],
+  ]);
 }
 
 // Under the summary card (#318): the stopped status's next steps without «🔄 Обновить», which
@@ -104,7 +111,8 @@ function appendSessionEnd(
 // answered anew (screen.ts).
 export const sessionCardKeyboard = (
   view: Pick<TradingSessionView, 'mode' | 'settings'>,
-): InlineKeyboard => appendSessionEnd(new InlineKeyboard(), view);
+  cashierUrl: string | undefined,
+): InlineKeyboard => appendSessionEnd(new InlineKeyboard(), view, cashierUrl);
 
 export interface TradingSessionDeps {
   backend: Pick<
@@ -120,6 +128,8 @@ export interface TradingSessionDeps {
   sessionTracker: Pick<SessionTracker, 'track'>;
   // the welcome's connect button, for a press with no account to trade on
   connectKeyboard: () => InlineKeyboard;
+  // «💳 Пополнить»'s page (#27): cashierUrlOf's; none, no button
+  cashierUrl?: string;
 }
 
 interface Refusal {
@@ -217,6 +227,7 @@ export function createTradingSessionComposer<C extends Context>({
   logger,
   sessionTracker,
   connectKeyboard,
+  cashierUrl,
 }: TradingSessionDeps): Composer<C> {
   const composer = new Composer<C>();
 
@@ -257,7 +268,7 @@ export function createTradingSessionComposer<C extends Context>({
     }
     const symbol = symbolOf(catalog, view);
     const sent = await replyHtml(ctx, sessionStatusText(symbol, view), {
-      reply_markup: sessionKeyboard(view),
+      reply_markup: sessionKeyboard(view, cashierUrl),
     });
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
     if (data.launch) await removeLaunchScreen(ctx);
@@ -340,7 +351,7 @@ export function createTradingSessionComposer<C extends Context>({
     }
     const symbol = symbolOf(catalog, view);
     const sent = await replyHtml(ctx, sessionStatusText(symbol, view), {
-      reply_markup: sessionKeyboard(view),
+      reply_markup: sessionKeyboard(view, cashierUrl),
     });
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
   });
@@ -384,7 +395,7 @@ export function createTradingSessionComposer<C extends Context>({
                 stakeMenuCallbackData(mode, assetId, durationSec),
               )
             : refusal.buy === true
-              ? withBuy(backToAnalysisKeyboard(assetId, durationSec))
+              ? withBuy(backToAnalysisKeyboard(assetId, durationSec), cashierUrl)
               : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
@@ -424,7 +435,7 @@ export function createTradingSessionComposer<C extends Context>({
     view: TradingSessionView,
   ): Promise<void> {
     const text = sessionStatusText(symbol, view);
-    const reply_markup = sessionKeyboard(view);
+    const reply_markup = sessionKeyboard(view, cashierUrl);
     const chatId = ctx.chat?.id;
     const messageId = ctx.callbackQuery?.message?.message_id;
     try {
@@ -514,7 +525,7 @@ export function createTradingSessionComposer<C extends Context>({
       view,
       edit: (text, current, end) =>
         editMessageTextByIdHtml(ctx.api, chatId, messageId, text, {
-          reply_markup: end === 'not_found' ? menuKeyboard() : sessionKeyboard(current),
+          reply_markup: end === 'not_found' ? menuKeyboard() : sessionKeyboard(current, cashierUrl),
         }),
       card: (current) => sendCard(ctx, chatId, telegramUserId, symbol, botUsername, current),
     });
@@ -539,7 +550,7 @@ export function createTradingSessionComposer<C extends Context>({
       const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
       if (assetId === undefined) throw new Error('a claimed session names no asset');
       const png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
-      const keyboard = sessionCardKeyboard(view);
+      const keyboard = sessionCardKeyboard(view, cashierUrl);
       const sent = await sendPhotoByIdHtml(
         ctx.api,
         chatId,

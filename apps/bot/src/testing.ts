@@ -67,6 +67,9 @@ export const stubTextSource = (...keys: BotTextKey[]): BotTextSource<BotTextKey>
   sourceOf: (key) => (keys.includes(key) ? stubText(key) : defaultBotTextSource.sourceOf(key)),
 });
 
+// «💳 Пополнить»'s page in the tests (#27): an https origin's cashierUrlOf
+export const CASHIER_URL = 'https://web.example/cashier';
+
 export const BOT_INFO: UserFromGetMe = {
   id: 1,
   is_bot: true,

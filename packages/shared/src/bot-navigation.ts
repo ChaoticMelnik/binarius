@@ -30,3 +30,10 @@ export const BUY_PACKAGE_PATTERN = /^buy:([a-z0-9]{1,16})$/;
 // line to change.
 export const SUPPORT_TELEGRAM_USERNAME = 'dimmelya';
 export const supportUrl = (): string => `https://t.me/${SUPPORT_TELEGRAM_USERNAME}`;
+
+// The cashier page (#11, docs/deposit.md): apps/web serves it, the bot's «💳 Пополнить» (#27)
+// opens it as a Mini App. Telegram takes a `web_app` button's URL over https only, so on any other
+// origin there is no URL and no button. `origin` is already normalised by parseOriginEnv.
+export const CASHIER_PAGE_PATH = '/cashier';
+export const cashierUrlOf = (origin: string): string | undefined =>
+  new URL(origin).protocol === 'https:' ? `${origin}${CASHIER_PAGE_PATH}` : undefined;

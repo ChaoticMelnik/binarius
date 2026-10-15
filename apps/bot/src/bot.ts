@@ -109,6 +109,8 @@ export interface CreateBotOptions {
   backend: BackendClient;
   logger: Logger;
   welcomeVideoFileId?: string;
+  // «💳 Пополнить»'s page (#27): cashierUrlOf(WEB_PUBLIC_URL); none (not https), no button
+  cashierUrl?: string;
   // the two seams the tests need: a bot that must not call getMe, and a client pointed at a
   // local server so the configured timeout can be observed rather than assumed
   botInfo?: UserFromGetMe;
@@ -129,6 +131,7 @@ export function createBot({
   backend,
   logger,
   welcomeVideoFileId,
+  cashierUrl,
   botInfo,
   apiRoot,
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
@@ -283,7 +286,7 @@ export function createBot({
       demoStake: access.demoStake,
       realStake: access.realStake,
     });
-    const reply_markup = statusCardKeyboard(access.tradingMode);
+    const reply_markup = statusCardKeyboard(access.tradingMode, cashierUrl);
     const sent = await sendWithTextFallback(
       ctx,
       {
@@ -464,6 +467,7 @@ export function createBot({
       now,
       intentTracker,
       connectKeyboard: welcomeKeyboard,
+      cashierUrl,
     }),
   );
 
@@ -484,6 +488,7 @@ export function createBot({
       logger,
       sessionTracker,
       connectKeyboard: welcomeKeyboard,
+      cashierUrl,
     }),
   );
 

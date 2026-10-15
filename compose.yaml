@@ -198,7 +198,7 @@ services:
     # above the bot's shutdown budget (50 s, apps/bot/src/timing.ts): a SIGTERM lets the update
     # in flight finish instead of killing it mid-handler
     stop_grace_period: 55s
-    # not the shared anchor: env.ts reads exactly these five names, and the Postgres password
+    # not the shared anchor: env.ts reads exactly these six names, and the Postgres password
     # and the Redis URL have no business inside a process that never opens either connection
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -208,6 +208,9 @@ services:
       BACKEND_URL: http://backend:3000
       # valueless: the welcome video is optional and passes through only when set
       WELCOME_VIDEO_FILE_ID:
+      # the cashier's origin for «💳 Пополнить» (#27): web's value, tied by a test; https only, the
+      # bot shows no button on any other
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
     develop:
       watch:
         - path: ./apps/bot/src

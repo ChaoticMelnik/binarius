@@ -1444,6 +1444,7 @@ describe('the facades over the catalog', () => {
         'analysisMoreButton',
         'backToListButton',
         'buyButton',
+        'depositButton',
         'demoManualButton',
         'demoSignalsRefreshButton',
         'launchCycleButton',
