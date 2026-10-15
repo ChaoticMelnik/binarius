@@ -5,6 +5,7 @@ import { confirmCallbackData, NotificationLevel, TradeAction, TradeMode } from '
 import { levelCallbackData, RESEND_CALLBACK_DATA } from './bot';
 import { cycleStakeCallbackData, sessionStartCallbackData, stakeCallbackData } from './demo';
 import { stakePresetCallbackData, stakeResetCallbackData } from './stake-picker';
+import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
 import { sessionStopCallbackData } from './trading-session';
 import {
   BOT_INFO,
@@ -117,6 +118,8 @@ describe('WRITE_CALLBACK_PREFIXES', () => {
     ['the session stop', sessionStopCallbackData('9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d')],
     ['the login confirm', confirmCallbackData('3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01')],
     ['the code resend', RESEND_CALLBACK_DATA],
+    ['the switch to real', MODE_REAL_CALLBACK_DATA],
+    ['the switch back to demo', MODE_DEMO_CALLBACK_DATA],
     ['a stake preset', stakePresetCallbackData('5', TradeMode.Demo, SETTINGS)],
     ['the stake reset', stakeResetCallbackData(TradeMode.Demo, SETTINGS)],
     ['a notification level', levelCallbackData(NotificationLevel.All)],

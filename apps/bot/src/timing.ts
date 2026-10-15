@@ -190,6 +190,17 @@ export const HANDLER_CALLS = {
   // /stop (#122): stopSessions ∥ readPairs — counted as sequential, as in confirm — then
   // sendMessage
   stop: { backend: 2, telegram: 1 },
+  // the mode screen (#474, trading-mode.ts) from the card: answerCallbackQuery ∥
+  // readTradingAccess — counted as sequential — then sendMessage
+  modeOpen: { backend: 1, telegram: 2 },
+  // its confirm step: answerCallbackQuery ∥ readTradingAccess, then editMessageText refused as
+  // gone → sendMessage
+  modeConfirm: { backend: 1, telegram: 3 },
+  // the screen redrawn in place (`mode:x`: «↩️ Отмена», «⚙️ Режим»): the same calls
+  modeInPlace: { backend: 1, telegram: 3 },
+  // a switch: answerCallbackQuery ∥ setTradingMode, readTradingAccess on an unknown outcome, then
+  // editMessageText refused as gone → sendMessage
+  modeSet: { backend: 2, telegram: 3 },
   // /buy (#117): readAccount, then sendMessage — the package screen, or the refusal
   buy: { backend: 1, telegram: 1 },
   // «⭐ Купить токены»: answerCallbackQuery, then /buy's path

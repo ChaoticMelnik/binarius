@@ -39,7 +39,7 @@ import {
 
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import { SETTINGS_CALLBACK_DATA } from './stake-picker';
-import { INVITE_CALLBACK_DATA } from './keyboards';
+import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
@@ -155,6 +155,7 @@ function setup(
     claimSessionSummary: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
     setStake: vi.fn(() => Promise.reject(new Error('not used here'))),
+    setTradingMode: vi.fn(() => Promise.reject(new Error('not used here'))),
     readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
     createStarsInvoice: vi.fn(() => Promise.reject(new Error('not used here'))),
     checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('not used here'))),
@@ -420,15 +421,23 @@ describe('the status card', () => {
   // the demo, then the invite in a row of its own (#115), the purchase (#117) and the deposit
   // (#27), the cashier Mini App
   const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
+  // the entry and the mode screen share the first row (#474)
   const CARD_ROWS = [
-    [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
+    [
+      { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
+      { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
+    ],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
     [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
     DEPOSIT_ROW,
   ];
-  // in real mode the entry reads «🚀 Торговать» (#121); the purchase and the deposit in both modes
+  // in real mode the entry reads «🚀 Торговать» (#121) and the mode button «🎮 Вернуться в демо»,
+  // which opens the mode screen (#474); the purchase and the deposit in both modes
   const REAL_CARD_ROWS = [
-    [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
+    [
+      { text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA },
+      { text: LABELS.modeBackDemoButton, callback_data: MODE_CALLBACK_DATA },
+    ],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
     [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
     DEPOSIT_ROW,
@@ -737,6 +746,7 @@ describe('«🏠 В меню» (#350)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
     expect(inlineButtons(sentPayload(calls, 'sendPhoto'))).toEqual([
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
+      { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
       { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
@@ -1574,6 +1584,7 @@ describe('the account card', () => {
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setStake: vi.fn(() => Promise.reject(new Error('unused'))),
+          setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
           createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
           checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1629,6 +1640,7 @@ describe('the account card', () => {
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setStake: vi.fn(() => Promise.reject(new Error('unused'))),
+          setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
           createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
           checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -2766,6 +2778,7 @@ describe('the Bot API timeout', () => {
         claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
         stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
         setStake: vi.fn(() => Promise.reject(new Error('unused'))),
+        setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
         readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
         checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),

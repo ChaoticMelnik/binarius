@@ -27,6 +27,7 @@ import {
   safeParseChatMemberResponse,
   safeParseConfirmLoginResponse,
   safeParseStakeRefusal,
+  safeParseSetTradingModeResponse,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
@@ -674,6 +675,60 @@ describe('setStake (#297, #326)', () => {
         TradeMode.Demo,
         '5' as DecimalString,
       ),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
+  });
+});
+
+describe('setTradingMode (#474)', () => {
+  it.each([
+    [TradeMode.Real, true, 0],
+    [TradeMode.Demo, false, 2],
+  ] as const)(
+    'posts %s under the bearer and returns the answer',
+    async (mode, changed, stoppedSessions) => {
+      const { baseUrl, capture } = await serve((_request, reply) => {
+        json(reply, 200, { tradingMode: mode, changed, stoppedSessions });
+      });
+      expect(
+        await createBackendClient({ baseUrl, token: TOKEN }).setTradingMode('4242', mode),
+      ).toEqual({ tradingMode: mode, changed, stoppedSessions });
+      expect(capture.url).toBe('/trading/mode');
+      expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', mode });
+    },
+  );
+
+  // #327: the count of stopped sessions is part of the contract
+  it.each([
+    ['without stoppedSessions', { tradingMode: 'real', changed: true }],
+    [
+      'with a negative stoppedSessions',
+      { tradingMode: 'real', changed: true, stoppedSessions: -1 },
+    ],
+    ['with an unknown mode', { tradingMode: 'paper', changed: true, stoppedSessions: 0 }],
+  ])('reports a 200 %s as a contract violation', async (_case, body) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, body);
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setTradingMode('4242', TradeMode.Real),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it.each([
+    [409, 'real_balance_below_minimum'],
+    [409, 'balance_unavailable'],
+    [409, 'demo_only'],
+    [404, 'user_not_found'],
+    [400, 'validation'],
+  ])('throws a %i %s with its reason', async (status, reason) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, status, { error: reason, issues: ['x'] });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setTradingMode('4242', TradeMode.Real),
     );
     expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
   });
@@ -1832,6 +1887,15 @@ describe('body size', () => {
               closePrice: NUMBER,
             })),
           },
+        },
+      },
+      // the 2xx: every refusal carries its code alone
+      setTradingMode: {
+        parse: safeParseSetTradingModeResponse,
+        sample: {
+          tradingMode: longest(Object.values(TradeMode)),
+          changed: false,
+          stoppedSessions: NONNEGATIVE_INT,
         },
       },
       // the bounds 409: larger than the 2xx's lone stake

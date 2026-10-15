@@ -52,19 +52,28 @@ export const depositButton = (cashierUrl: string): InlineKeyboardButton.WebAppBu
 export const depositRows = (cashierUrl: string | undefined): InlineKeyboardButton[][] =>
   cashierUrl === undefined ? [] : [[depositButton(cashierUrl)]];
 
-// The status card's: the entry, then the invite (#115), the purchase (#117) and the deposit
-// (#27). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA: the path is the
-// same up to the stake button (#121). The account card keeps demoKeyboard.
+// The mode screen (#474, trading-mode.ts), opened from the status card as a new message
+export const MODE_CALLBACK_DATA = 'mode';
+
+// The status card's: the entry and the mode screen, then the invite (#115), the purchase (#117)
+// and the deposit (#27). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA:
+// the path is the same up to the stake button (#121); the mode button reads «🎮 Вернуться в демо»
+// there and opens the screen too, it never switches by itself (#474). The account card keeps
+// demoKeyboard.
 export const statusCardKeyboard = (
   mode: TradeMode,
   cashierUrl: string | undefined,
 ): InlineKeyboard =>
   new InlineKeyboard([
-    [
-      mode === TradeMode.Real
-        ? button(LABELS.tradeButton, DEMO_CALLBACK_DATA)
-        : button(LABELS.demoButton, DEMO_CALLBACK_DATA),
-    ],
+    mode === TradeMode.Real
+      ? [
+          button(LABELS.tradeButton, DEMO_CALLBACK_DATA),
+          button(LABELS.modeBackDemoButton, MODE_CALLBACK_DATA),
+        ]
+      : [
+          button(LABELS.demoButton, DEMO_CALLBACK_DATA),
+          button(LABELS.modeButton, MODE_CALLBACK_DATA),
+        ],
     [inviteButton()],
     [buyButton()],
     ...depositRows(cashierUrl),

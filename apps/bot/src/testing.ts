@@ -457,6 +457,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     claimSessionSummary: unused,
     stopSessions: unused,
     setStake: unused,
+    setTradingMode: unused,
     readBotTexts: unused,
     createStarsInvoice: unused,
     checkStarsPreCheckout: unused,
@@ -712,6 +713,9 @@ export const WRITE_CALLBACK_PREFIXES = [
   'level:',
   // a refund request from /paysupport (#118)
   'ps:r:',
+  // the mode switches (#474): «✅ Подтверждаю» and «🎮 Вернуться в демо» of the mode screen
+  'mode:r:ok',
+  'mode:d',
 ] as const;
 
 // Every message a scene sends goes through here, so no scene can send a repeat of a write
