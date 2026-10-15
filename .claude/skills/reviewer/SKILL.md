@@ -12,7 +12,7 @@ Two modes:
 1. **Task Review** — a specific PR for an issue In Review.
 2. **Project Review** — full codebase, no specific issue named.
 
-Post findings immediately, no additional approval needed. Codex runs only in Step 6-pre, on a round that ends in a merge (`.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем). Project Review runs without Codex.
+Post findings immediately, no additional approval needed. Codex runs only in Step 6-pre, on a round that ends in a merge (`.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем). Project Review and a `/manager` session run without Codex.
 
 **How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "reviewer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/reviewer` directly. The review sub-agents of Steps 3b-3d are this agent's own nested spawns, each with an explicit `model` — never inherited. A spawned reviewer has no `AskUserQuestion`: the merge question goes back to tech-lead (Step 6b). Spawned by `/manager` (`.claude/skills/manager/SKILL.md`) the same way: questions and the merge request go back to the spawner, which answers by the rules of `.claude/CLAUDE.md` → Режим manager.
 
@@ -83,7 +83,7 @@ Merge the agents' results, collapse duplicates. Discard findings that just resta
 
 ### Step 6-pre: Final Codex pass (before any LGTM)
 
-Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found. The round comes from the spawn prompt (tech-lead → Phases run as spawned agents, item 7); invoked directly, `gh pr view <N> --json reviews --jq '[.reviews[].body | select(startswith("## Review round "))] | length'` + 1 (PR reviews, not issue comments; each round's review opens with the Step 6a heading). The companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
+Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found — never in a `/manager` session (`.claude/CLAUDE.md` → Режим manager → «Codex ночью не запускается»): there items 1-3 are not run, and the round's review or the ready-to-merge comment carries the manager line of item 4 instead. The round comes from the spawn prompt (tech-lead → Phases run as spawned agents, item 7); invoked directly, `gh pr view <N> --json reviews --jq '[.reviews[].body | select(startswith("## Review round "))] | length'` + 1 (PR reviews, not issue comments; each round's review opens with the Step 6a heading). The companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
   1. Fill `.claude/codex-review-prompt.md` into a file (issue, goal, the plan's "Accepted risks" with the instruction not to re-raise them). For a diff that touches `.claude/**` or `audits.md`, inline `~/.claude/CLAUDE.md` into its Process-docs block — the Codex sandbox cannot read it.
   2. Build the prompt file and start the job with the marker `Whole-feature pass`:
      ```bash
@@ -108,8 +108,8 @@ Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found. 
   3. `node "$COMPANION" status <job-id> --wait --timeout-ms 540000` (repeat until the job leaves `running`), then `node "$COMPANION" result <job-id>`. Consolidate as in Step 4; a Blocker/Major goes to Step 6a (on round 3, together with the round's findings), and the next round runs Codex again only when it, too, reaches this step.
   4. **Usage limit** — the job's summary contains `hit your usage limit … try again at <time>` (match from `hit`: the apostrophe in "You’ve" is U+2019), or the spawn prompt's preflight line names a limit whose reset time has not passed: no second attempt, no question. Any other failure: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner); on the owner's skip, the owner's-skip line below. The skip line goes into the round's review (Step 6a) or into the ready-to-merge comment (Step 6b). This item is the only place that holds the skip-line texts:
      - usage limit: «Codex пропущен: лимит до ДД.ММ HH:MM (job <id>), правило 2026-10-08»;
-     - the owner's explicit skip (by day after two other failures, or tech-lead's morning «мержить без него», where `<сбой>` and the job are taken from the night's line): «Codex пропущен: решение владельца ДД.ММ.ГГГГ после <сбой> (job <id>)»;
-     - at night (manager only, `.claude/CLAUDE.md` → «Codex ночью»): «Codex пропущен: сбой <ошибка> после двух попыток, решение владельца 2026-10-10».
+     - the owner's explicit skip (by day after two other failures): «Codex пропущен: решение владельца ДД.ММ.ГГГГ после <сбой> (job <id>)»;
+     - a `/manager` session, no run at all (`.claude/CLAUDE.md` → «Codex ночью не запускается»): «Codex не запускался: PR сессии менеджера, решение владельца 2026-10-15».
 
 The run must be at the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`): if commits land after it, run it again. No LGTM, and no round-3 verdict, without a completed run at the current head or the skip line — tech-lead's audit re-hashes the diff from the marker (`tech-lead` → Mode 1).
 
