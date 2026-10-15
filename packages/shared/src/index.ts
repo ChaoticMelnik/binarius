@@ -43,4 +43,5 @@ export * from './bot-text-overrides';
 export * from './admin-bot-texts';
 export * from './exhaustive';
 export * from './http-body';
+export * from './fetch-deadline';
 export * from './rate-window';

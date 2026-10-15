@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashToken } from '@binarius/db';
 import {
   accessTokenPath,
@@ -181,6 +181,42 @@ describe('createBackendAccessTokenSource (#90)', () => {
       expect(text).not.toContain(BEARER);
       expect(text).not.toContain('127.0.0.1');
     }
+  });
+});
+
+// #481: a fetch that never settles and ignores its signal
+describe('a fetch that ignores its abort signal', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('answers backend_unreachable at its own deadline and logs the request abandoned', async () => {
+    vi.stubGlobal('fetch', () => new Promise<Response>(() => undefined));
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    const stuck = createBackendAccessTokenSource({ baseUrl, token: BEARER, timeoutMs: 50, logger });
+    expect(await stuck.accessToken(ACCOUNT)).toEqual({ ok: false, reason: 'backend_unreachable' });
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      {
+        brokerAccountId: ACCOUNT,
+        timeoutMs: 50,
+        err: { name: 'DeadlineError', code: 'timeout' },
+      },
+      'backend request abandoned',
+    );
+  });
+
+  it("answers backend_unreachable when the caller's signal fires first", async () => {
+    vi.stubGlobal('fetch', () => new Promise<Response>(() => undefined));
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    const stuck = createBackendAccessTokenSource({ baseUrl, token: BEARER, logger });
+    const controller = new AbortController();
+    const pending = stuck.accessToken(ACCOUNT, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 10);
+    expect(await pending).toEqual({ ok: false, reason: 'backend_unreachable' });
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ err: { name: 'DeadlineError', code: 'aborted' } }),
+      'backend request abandoned',
+    );
   });
 });
 

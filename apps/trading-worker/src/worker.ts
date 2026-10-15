@@ -142,10 +142,14 @@ export function createWorker({
 
   // The broker's REST API for the trade lists and the REST open, and the backend's token route for
   // the token: the worker holds no broker credentials of its own (#90)
-  const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl });
+  const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl, logger });
   const tokens =
     testing.tokens ??
-    createBackendAccessTokenSource({ baseUrl: env.backendUrl, token: env.internalApiToken });
+    createBackendAccessTokenSource({
+      baseUrl: env.backendUrl,
+      token: env.internalApiToken,
+      logger,
+    });
 
   // The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order
   // goes over REST. A writer that throws leaves its event in the consumers' dead-letter queue (#92):
