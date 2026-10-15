@@ -74,6 +74,7 @@ export function toAdminLedgerEntry(row: AdminLedgerRow): AdminLedgerEntry {
     intentId: row.intentId,
     depositEventId: row.depositEventId,
     brokerAccountId: row.brokerAccountId,
+    starPaymentId: row.starPaymentId,
     refType: row.refType,
     refId: row.refId,
     note: row.note,

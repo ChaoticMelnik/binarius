@@ -69,6 +69,9 @@ export const AuditAction = {
   StaffLoginLinkCompleted: 'staff_login_link_completed',
   // a user's users.trading_mode switched through POST /trading/mode (#121)
   TradingModeChanged: 'trading_mode_changed',
+  // a Stars payment credited, or recorded and held for a staff member (#117)
+  StarsPurchased: 'stars_purchased',
+  StarsPaymentHeld: 'stars_payment_held',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);
@@ -85,6 +88,7 @@ export const AuditEntityType = {
   BotText: 'bot_text',
   User: 'user',
   TradeIntent: 'trade_intent',
+  StarPayment: 'star_payment',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 export const auditEntityTypeSchema = z.enum(AuditEntityType);

@@ -330,6 +330,13 @@
       "when": 1792002214504,
       "tag": "0046_real_stake",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1792041647538,
+      "tag": "0047_stars_purchase",
+      "breakpoints": true
     }
   ]
 }

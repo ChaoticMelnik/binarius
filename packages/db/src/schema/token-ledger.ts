@@ -4,6 +4,7 @@ import { TOKEN_LEDGER_NOTE_MAX, TokenLedgerKind, TokenLedgerRefType } from '@bin
 import { brokerAccounts } from './broker-accounts';
 import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
+import { starPayments } from './star-payments';
 import { tradeIntents } from './trade-intents';
 import { users } from './users';
 
@@ -26,8 +27,8 @@ const kind = (value: TokenLedgerKind) => literal(value);
 // the partial uniques give at-most-once, not at-least-once.
 //
 // Dedupe keys by kind: reserve/release/settle are keyed by intent, purchase and a
-// deposit-linked bonus by (deposit, kind), the starter pack (a bonus naming a broker account)
-// by user. A bonus that names neither — a promo — has NO database-level dedupe key, and #13 must bring one when it defines those; an
+// deposit-linked bonus by (deposit, kind), a Stars purchase by (star payment, kind) (#117), the
+// starter pack (a bonus naming a broker account) by user. A bonus that names neither — a promo — has NO database-level dedupe key, and #13 must bring one when it defines those; an
 // `adjustment` is a deliberate manual act and carries a mandatory `note`
 // (token_ledger_adjustment_note_check); its writer is adjustTokens (token-adjustment-ops.ts, #246),
 // and its only dedupe is the writer's `expectedBalance`. The ledger is not self-protecting for
@@ -45,6 +46,7 @@ export const tokenLedger = pgTable(
     intentId: uuid('intent_id'),
     depositEventId: uuid('deposit_event_id'),
     brokerAccountId: uuid('broker_account_id'),
+    starPaymentId: uuid('star_payment_id'),
     refType: text('ref_type').$type<TokenLedgerRefType>(),
     refId: uuid('ref_id'),
     note: text('note'),
@@ -68,24 +70,33 @@ export const tokenLedger = pgTable(
       columns: [t.brokerAccountId, t.userId],
       foreignColumns: [brokerAccounts.id, brokerAccounts.userId],
     }),
+    foreignKey({
+      name: 'token_ledger_star_payment_owner_fk',
+      columns: [t.starPaymentId, t.userId],
+      foreignColumns: [starPayments.id, starPayments.userId],
+    }),
     inList('token_ledger_kind_check', t.kind, TokenLedgerKind),
     inList('token_ledger_ref_type_check', t.refType, TokenLedgerRefType),
     check('token_ledger_delta_check', sql`${t.balanceDelta} <> 0 or ${t.reservedDelta} <> 0`),
     check('token_ledger_ref_pair_check', sql`(${t.refType} is null) = (${t.refId} is null)`),
-    // exactly which reference each kind may carry, and no kind may carry two
+    // exactly which reference each kind may carry, and no kind may carry two. A purchase is paid
+    // either by a deposit or by Telegram Stars (#117), never both and never neither; #118 adds the
+    // Stars refund on top of this text.
     check(
       'token_ledger_reference_check',
       sql`case
             when ${t.kind} in (${sqlLiteralList(INTENT_LEDGER_KINDS)})
               then ${t.intentId} is not null and ${t.depositEventId} is null
                 and ${t.brokerAccountId} is null and ${t.refId} is null
+                and ${t.starPaymentId} is null
             when ${t.kind} = ${kind(TokenLedgerKind.Purchase)}
-              then ${t.depositEventId} is not null and ${t.intentId} is null
-                and ${t.brokerAccountId} is null and ${t.refId} is null
+              then ${t.intentId} is null and ${t.brokerAccountId} is null and ${t.refId} is null
+                and (${t.depositEventId} is not null) <> (${t.starPaymentId} is not null)
             when ${t.kind} = ${kind(TokenLedgerKind.Bonus)}
-              then ${t.intentId} is null and ${t.refId} is null
+              then ${t.intentId} is null and ${t.refId} is null and ${t.starPaymentId} is null
                 and not (${t.depositEventId} is not null and ${t.brokerAccountId} is not null)
             else ${t.intentId} is null and ${t.depositEventId} is null and ${t.brokerAccountId} is null
+              and ${t.starPaymentId} is null
           end`,
     ),
     // each kind moves its deltas in the direction its name promises; settle leaves
@@ -129,6 +140,12 @@ export const tokenLedger = pgTable(
     uniqueIndex('token_ledger_deposit_event_idx')
       .on(t.depositEventId, t.kind)
       .where(sql`${t.depositEventId} is not null`),
+    // One row per Stars payment per kind (#117): the purchase now, #118's refund in the second
+    // slot. The bot's credit, its retry and the reconciler's are already serialized by
+    // star_payments_charge_key; this is the database's own guard on the ledger side.
+    uniqueIndex('token_ledger_star_payment_idx')
+      .on(t.starPaymentId, t.kind)
+      .where(sql`${t.starPaymentId} is not null`),
     // One starter pack per user, whichever of their accounts earned it: the slot is a user's,
     // so linking a second account does not pay out again (link-bonus-ops.ts).
     uniqueIndex('token_ledger_link_bonus_user_idx')

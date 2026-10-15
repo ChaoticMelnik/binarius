@@ -1089,6 +1089,7 @@ describe('body size', () => {
       intentId: UUID,
       depositEventId: UUID,
       brokerAccountId: UUID,
+      starPaymentId: UUID,
       refType: longest(TokenLedgerRefType),
       refId: UUID,
       // the adjustment's note, TOKEN_LEDGER_NOTE_MAX code points (the CHECK of 0036)
