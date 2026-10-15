@@ -1,7 +1,7 @@
 # The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
-first row on every `decided` answer, a signal or none (#360); a finished single trade's message
+first row on a signal (#360; since #509 never on «сигнала нет»); a finished single trade's message
 draws the same button under its result (#360,
 [bot-demo-trade.md](bot-demo-trade.md#the-status-message)); the launch screen of the signals list
 in real mode (#320, #327, [bot-demo.md](bot-demo.md#the-launch-screen-in-real-mode-327)) draws
@@ -119,10 +119,10 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 
 ## The button
 
-- On the analysis it is drawn on every `decided` answer (#360) — a signal or «сигнала нет», since
-  the orchestrator asks for a signal before each trade itself — as the first row, above «➕ Ещё»;
-  not on `fetch_failed` or a failed signal call, where its first trade would wait on the same
-  failure, and not on a pair paying below the cycle floor (`pairPayoutAccepted`, #379; the screen
+- On the analysis it is drawn on a signal only (#360, #509: before #509 «сигнала нет» drew it too,
+  and the session waited for a signal itself; the owner wants no session on a pair without one) —
+  as the first row, above «➕ Ещё»; not on «сигнала нет», `fetch_failed` or a failed signal call,
+  and not on a pair paying below the cycle floor (`pairPayoutAccepted`, #379; the screen
   says why, and «➕ Ещё» carries the verdict in its datum). It is drawn only where `sessionFits(durationSec)` holds: 5 × (5 + 120) s and 5 × (15 + 120) s fit the worker's hour, so
   after #313 every duration of the set has the button; the guard stays, in the keyboard and in
   `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_TRADES` with
@@ -176,6 +176,8 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `payout_too_low` | the same: the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80, #379) — an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell; the bot's own screens offer no session there | «🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.» (`sessionPayoutTooLow`) + the way back to the analysis, which, re-read, shows the note and no session button |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
+| 409 `no_signal` | the same (#509): the pair's signal on the current candle is «сигнала нет» — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig:<sec>`) and «🏠 В меню» |
+| 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
 | any other 5xx, no answer, a broken body (a 409 `active_session_exists` whose body is not the contract's included) | unknown: the session may have been committed | one more `startSession` with the same request. A committed first attempt answers 409 with its session; otherwise the session is created once. Still unknown → «⚠️ Не удалось узнать, запущена ли сессия…» and `warn` `trading session not started` |
@@ -301,8 +303,10 @@ A finished one (#337):
 | `invalid_settings` | ⚠️ Сессия остановлена из-за ошибки настроек — напиши в поддержку: /support |
 | `user_stopped` | ⏹ Сессия остановлена по твоей команде. |
 | `kill_switch` | the single trade's `tradingPaused`: ⏸ Торговля временно приостановлена, попробуйте позже. |
+| `no_signal_timeout` (#509) | ⏳ Сессия остановлена: 2 мин по паре не было сигнала. Выбери другую пару. (`sessionStopNoSignalTimeout`, the minutes from `SESSION_NO_SIGNAL_TIMEOUT_MS`) |
 
-The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed'>, …>`.
+The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed' | 'no_signal_timeout'>, …>`;
+`no_signal_timeout`'s line carries a variable, so `sessionClosingLines` builds it beside the map.
 
 **Keyboards.** A live session: [«🔄 Обновить»][«⏹ Остановить сессию»]. A stopped one: «🔄 Обновить»,
 because its last trade can still settle, and under it «🔁 Ещё сессия» (#320) on the same pair and
@@ -311,7 +315,10 @@ duration — drawn only when the view has `settings` and its duration is one the
 ([bot-navigation.md](bot-navigation.md))): «📊 Новый анализ» on the same pair and duration (when the demo still offers
 it), «📡 К сигналам», «💳 Пополнить» (#27, [deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is
 https), «👥 Пригласить друга» (#115, [referrals.md](referrals.md)), «🏠 В меню»; without `settings`
-only «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню». The tracker's edits redraw
+only «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню». A session stopped by the no-signal limit
+(`no_signal_timeout`, #509) offers another pair, not the same one again: no «🔁 Ещё сессия» and no
+«📊 Новый анализ», and «🔀 Выбрать другую пару» in place of «📡 К сигналам», on the same data
+(`demo:sig:<sec>`; `appendEndOfPath(…, { otherPair: true })`). The tracker's edits redraw
 the keyboard from the view they show, so the stop button goes away and the rest appears when the
 session stops. A failed start, `sessionJustEnded`, leads back to the analysis and the menu; a failed
 refresh or stop offers the refresh and the menu, never the stop again.
@@ -491,7 +498,13 @@ endings below lose.
   completed session, otherwise the stop line and «📊 Итог: …», then «💰 Результат» (the SQL sum,
   #337), the balance of the session's mode and its age line when it predates the last trade. Its
   balance is read as the route reads it (`readFinishedSessionView`): at most one broker GET per
-  session, `mayRefresh: false`. Under it «🏠 В меню».
+  session, `mayRefresh: false`. Under it «🏠 В меню»; under a `no_signal_timeout` stop (#509)
+  «🔀 Выбрать другую пару» above it — `demo:sig:<sec>` when the duration is one the scanner lists
+  (`signalsCallbackDataFor`, `packages/shared/src/bot-navigation.ts`), `demo:sig` otherwise (D10,
+  D12).
+- **Without a trade** no summary is sent — the session's mark alone — except for a
+  `no_signal_timeout` stop (#509, D10, D11): the user learns why the session stood, with sound,
+  from the pair line and the stop line.
 - **When.** The trades as they settle, within `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing; the
   summary once the session is finished — stopped and no intent of it outside the terminal statuses
   (`isTradingSessionFinished`) — and every settled trade was claimed first. A trade on manual
@@ -586,7 +599,8 @@ Telegram's own forwarding.
   a photo has a caption): «🔁 Ещё сессия» while the demo offers the duration, «📊 Новый анализ»,
   «📡 К сигналам», «💳 Пополнить» (#27, https only), «👥 Пригласить друга» (#115), «🏠 В меню»;
   «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню» alone without `settings`
-  (`sessionCardKeyboard`). «📤 Поделиться» comes on top of these rows by
+  (`sessionCardKeyboard`); under a `no_signal_timeout` stop «🔀 Выбрать другую пару» in place of the
+  first three (#509). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321).
   «📡 К сигналам» edits the pressed message; under the card Telegram refuses that with «there is
   no text in the message to edit», `editRefusal` (`screen.ts`) reads it as gone, and the screen
@@ -722,6 +736,14 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     70 min after the start); «🔄 Обновить» later gives it once the mark is set.
 32. **Sessions running at the deploy** (#464) get their later trades and their summary; the trades
     settled before it are not sent. Sessions that ended before it get no summary.
+33. **Doors drawn without reading the signal** (#509): «🔁 Ещё сессия» after another stop, the offer
+    under a single trade and the real launch screen after a saved stake show their button on a
+    pair whose signal may be gone by the press; the press refuses with the reason — the amount
+    screen's node `demo:l` reads the signal at the press in either mode, the start route's step 4c
+    in real — and a session never starts on «сигнала нет».
+34. **A signal gone right after the start** (#509): the start saw a signal, the orchestrator's
+    first attempt a few seconds later sees «сигнала нет»; the session waits up to the no-signal
+    limit and stops with no trade. That is the limit, by the owner's decision.
 
 ## Running it locally
 
@@ -744,7 +766,8 @@ signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5
 - **#450** — the martingale strategy: it passes the session's strategy to `sessionTradeSteps` (the
   sender passes `fixed` today), and the adaptive line then appears on the raised steps.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
-- **#360** — the button first on every `decided` analysis, and under a finished single trade.
+- **#360** — the button first on every `decided` analysis, and under a finished single trade;
+  since **#509** on a signal only, and every door's press or start checks the pair's signal.
 - **#321** — «📤 Поделиться» under the summary card ([Sharing the card](#sharing-the-card-321)); a
   referral link in its caption in place of `?start=share` is the owner's open question.
 - **#121**, **#327** — real mode and real sessions ([trading-mode.md](trading-mode.md)); **#473**
