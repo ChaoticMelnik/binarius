@@ -830,7 +830,8 @@ from every line this application or `SafeLogController` writes.
 
 Backend only, never the worker (the worker neither exchanges grants nor decrypts tokens);
 `TELEGRAM_BOT_TOKEN` is the one the `bot` service reads as well, and `BROKER_OAUTH_AUTHORIZE_URL`
-and `WEB_PUBLIC_URL` are read by `web` (`WEB_PUBLIC_URL` by `backend` as well, #448):
+and `WEB_PUBLIC_URL` are read by `web` (`WEB_PUBLIC_URL` by `backend` as well, #448, and by
+`bot`, #27):
 
 | Variable                                   | Meaning                                                                                                    |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |

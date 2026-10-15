@@ -175,6 +175,7 @@ reconciler is the only protection against that paid-but-not-credited case.
 - **#118** — refunds (`refundStarPayment` by a staff member, the `refund` ledger kind on the second
   slot of `token_ledger_star_payment_idx`, `held` payments too) and `/paysupport`.
 - **#123** — the buy row under the 80 % / 100 % nudges, when it merges.
-- **#27** — «💳 Пополнить» next to the buy rows.
+- **#27** (done) — «💳 Пополнить» right under the buy row of the status card and of the two
+  `insufficient_tokens` refusals (`docs/deposit.md` → The chain).
 - **#13** — bonuses on purchases; its migration rewrites `token_ledger_reference_check` on top of
   this one's text.

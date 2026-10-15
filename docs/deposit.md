@@ -12,7 +12,7 @@ Designed together on 2026-10-08 (owner's answers on #11); each issue ships one p
 so that no button opens a page that does not work yet.
 
 ```
-bot (#27): «💳 Пополнить» web_app button → WEB_PUBLIC_URL/cashier
+bot (#27): «💳 Пополнить» web_app button → cashierUrlOf(WEB_PUBLIC_URL) = WEB_PUBLIC_URL/cashier, https only
 web (#111): GET /cashier — Mini App page; the widget in an iframe; postMessage handshake
 web (#111): POST /cashier/session — same-origin, per-IP window, forwards {initData, clientIp?} to backend
 web (#112): POST /cashier/credited — same-origin, the same per-IP window, forwards {initData} to backend
@@ -24,6 +24,18 @@ backend (#112): POST /deposit/credited {initData} → DEMO_ONLY → initData →
                → the single active account → balance refresh (requested, mayRefresh: true)
                → on a write: push «Реальный баланс: $X» with «🏠 В меню», once a minute per user
 ```
+
+The bot's button (#27, `apps/bot/src/keyboards.ts` → `depositButton`/`depositRows`, the only
+builders) stands at three entries, in both trading modes: the last row of the status card (under
+«⭐ Купить токены»); under «⭐ Купить токены» in the two «не хватает токенов» refusals (a trade, a
+session start), above the way back; at the end of a session, on the stopped status and on the
+summary card, right above «👥 Пригласить друга» (the menu stays last). Its URL is
+`cashierUrlOf(WEB_PUBLIC_URL)` (`packages/shared/src/bot-navigation.ts`, with `CASHIER_PAGE_PATH`,
+the path `web` serves): Telegram opens a `web_app` URL over https only, so on any other origin
+(local dev's `http://127.0.0.1:3001`) the bot shows no such button and logs one warning at
+startup, «cashier button off: WEB_PUBLIC_URL is not https». The bot does not read `DEMO_ONLY`: on a
+demo-only stand the button opens a page that says «Пополнение на этом сервере отключено». A deposit
+credits no tokens yet (#386).
 
 The session reaches the iframe only through `postMessage` (`binodex-embed:ready` → `init`), never
 through a URL. The reference is the broker's own cashier, the public repository
@@ -258,8 +270,8 @@ The script maps an unknown outcome, a non-JSON body and a rejected fetch to `una
 2. Log in to the admin pages and open «Сессии»: the new session's IP is your public address, not
    `127.x`/`172.x`. A `172.x` there means `web` did not get Caddy's header: the per-IP window would
    then be one window for everybody.
-3. End to end in Telegram (with #27's button, or a Mini App link to `WEB_PUBLIC_URL/cashier` set in
-   BotFather): the widget loads, the payment form and a payment method's next screen open, and the
+3. End to end in Telegram (with #27's button «💳 Пополнить» under the status card, or a Mini App
+   link to `WEB_PUBLIC_URL/cashier` set in BotFather): the widget loads, the payment form and a payment method's next screen open, and the
    webview console shows no CSP violation. With `DEMO_ONLY=true` the page says «Пополнение на этом
    сервере отключено» — expected.
 
@@ -415,8 +427,8 @@ Exit code 0 on `ok`, 1 otherwise.
 - #112 (done, After a deposit above): `reauth-required` re-mints through `POST /cashier/session`
   unchanged; every `unavailable` mint is retried once; `POST /cashier/credited` takes the same
   per-IP window object.
-- #27: offer the button whatever the user's `trading_mode`; it opens `WEB_PUBLIC_URL/cashier` (no
-  query).
+- #27 (done, The chain above): the button in both trading modes; it opens `WEB_PUBLIC_URL/cashier`
+  (no query).
 
 ## Boundaries
 
