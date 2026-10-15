@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import {
   SessionTradeResult,
   TradeIntentStatus,
@@ -204,6 +204,27 @@ export async function claimSessionFinalNotice(
         isNull(tradingSessions.finalNoticeSentAt),
         finishedSql,
         sql`${tradingSessions.notifiedTrades} = ${settledCountSql}`,
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+// Takes the summary mark back after a send Telegram certainly did not deliver (429, a definite
+// refusal), so the summary goes again: only while the card (#318), which waits for the mark, has
+// not been claimed on it. False otherwise, and the summary stays sent as far as the cursor goes.
+export async function releaseSessionFinalNotice(
+  db: Db,
+  { sessionId }: { sessionId: string },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ finalNoticeSentAt: null })
+    .where(
+      and(
+        eq(tradingSessions.id, sessionId),
+        isNotNull(tradingSessions.finalNoticeSentAt),
+        isNull(tradingSessions.summarySentAt),
       ),
     )
     .returning({ id: tradingSessions.id });

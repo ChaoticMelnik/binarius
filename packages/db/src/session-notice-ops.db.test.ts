@@ -17,6 +17,7 @@ import {
   claimSessionFinalNotice,
   claimSessionTradeNotice,
   listPendingSessionNotices,
+  releaseSessionFinalNotice,
   releaseSessionTradeNotice,
 } from './session-notice-ops';
 import {
@@ -294,6 +295,24 @@ describe('claimSessionFinalNotice', () => {
     });
     expect(await finalClaim(target.session)).toBe(true);
     expect(await pendingOf(target.session)).toBeUndefined();
+  });
+});
+
+describe('releaseSessionFinalNotice', () => {
+  it('N9 takes the summary mark back only while the card was not claimed on it', async () => {
+    const target = await seedSession();
+    await stop(target.session, TradingSessionStopReason.UserStopped);
+    expect(await releaseSessionFinalNotice(tmp.db, { sessionId: target.session.id })).toBe(false);
+    await finalClaim(target.session);
+    expect(await releaseSessionFinalNotice(tmp.db, { sessionId: target.session.id })).toBe(true);
+    expect((await rowOf(target.session)).finalNoticeSentAt).toBeNull();
+    await finalClaim(target.session);
+    await tmp.db
+      .update(tradingSessions)
+      .set({ summarySentAt: sql`now()` })
+      .where(eq(tradingSessions.id, target.session.id));
+    expect(await releaseSessionFinalNotice(tmp.db, { sessionId: target.session.id })).toBe(false);
+    expect((await rowOf(target.session)).finalNoticeSentAt).toBeInstanceOf(Date);
   });
 });
 

@@ -161,6 +161,33 @@ describe('the mailing push', () => {
   });
 });
 
+describe('the session notices (#464)', () => {
+  it('sends a trade as Telegram HTML without sound and without a keyboard', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    await push.sendSessionTrade(TELEGRAM_USER_ID, telegramHtml`<pre>a &amp; b</pre>`);
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    expect(sentPayload(calls, 'sendMessage')).toEqual({
+      chat_id: '9007199254740993',
+      text: '<pre>a &amp; b</pre>',
+      parse_mode: 'HTML',
+      disable_notification: true,
+    });
+  });
+
+  it('sends the summary with its keyboard and with sound', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.menuButton, 'menu');
+    await push.sendSessionSummary(TELEGRAM_USER_ID, { text: telegramHtml`итог`, reply_markup });
+    const payload = sentPayload(calls, 'sendMessage');
+    expect(payload?.disable_notification).toBeUndefined();
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+    ]);
+  });
+});
+
 describe('the deposit push', () => {
   const money = (value: string) => value as DecimalString;
   const sent = async (balance: Parameters<ClientPush['sendDepositCredited']>[1]) => {

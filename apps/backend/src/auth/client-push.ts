@@ -97,6 +97,12 @@ export interface ClientPush {
   sendLink(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
   sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
   sendDepositCredited(telegramUserId: bigint, balance: BotTextBalance): Promise<void>;
+  // A settled trade of a session (#464, docs/bot-session.md → Trade messages): without sound and
+  // without a keyboard, the one exception of this seam (docs/bot-navigation.md → Exceptions,
+  // `session_trade`). It takes the text alone, so no other message can drop its keyboard here.
+  sendSessionTrade(telegramUserId: bigint, text: TelegramHtml): Promise<void>;
+  // the finished session's summary (#464): with sound and its next step
+  sendSessionSummary(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
 }
 
 export interface CreateClientPushOptions {
@@ -126,11 +132,19 @@ export function createClientPush({
   const send = async (telegramUserId: bigint, { text, reply_markup }: ClientPushMessage) => {
     await api.sendMessage(String(telegramUserId), text.value, { parse_mode: 'HTML', reply_markup });
   };
+  const sendSessionTrade = async (telegramUserId: bigint, text: TelegramHtml) => {
+    await api.sendMessage(String(telegramUserId), text.value, {
+      parse_mode: 'HTML',
+      disable_notification: true,
+    });
+  };
   return {
     api,
     sendLink: (telegramUserId, outcome) => send(telegramUserId, linkPushMessage(outcome)),
     sendMailing: send,
     sendDepositCredited: (telegramUserId, balance) =>
       send(telegramUserId, depositCreditedMessage(balance)),
+    sendSessionTrade,
+    sendSessionSummary: send,
   };
 }

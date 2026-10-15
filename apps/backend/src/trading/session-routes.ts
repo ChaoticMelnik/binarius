@@ -10,7 +10,6 @@ import {
   TradingSessionStopReason,
   errorLogFields,
   isPairOpen,
-  isTradingSessionFinished,
   pairAcceptsDuration,
   pairPayoutAccepted,
   safeParseCreateTradingSessionRequest,
@@ -30,7 +29,6 @@ import {
   readActiveTradingSessionView,
   readBalanceSnapshot,
   readStakes,
-  readTradingSessionAccount,
   readTradingSessionView,
   stopTradingSession,
   stopUserSessions,
@@ -43,6 +41,7 @@ import { internalBearerAuth } from '../auth/internal';
 import { ACCESS_SKEW_MS } from '../auth/token-service';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
 import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
+import { readFinishedSessionView } from './session-view';
 
 export interface TradingSessionRoutesDeps {
   db: Db;
@@ -121,32 +120,10 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       session: (await readActiveTradingSessionView(db, brokerAccountId, telegramUserId)) ?? null,
     });
 
-  // The status the bot prints as final must carry the balance after the last trade (#337): once
-  // nothing of the session can move and the stored snapshot predates its last settlement, the
-  // broker is asked once more inside TRADING_ACCESS_REFRESH_BUDGET_MS. mayRefresh: false - the
-  // bot's poll is a timer, and a timer exchanges no token (Rule 12); no `requested` - a poll does
-  // not keep the account in work. After one 'ok' the snapshot is current for good, so a session
-  // costs at most one broker GET. A thrown refresh reaches the opaque 500, as in /trading/access.
-  const viewForReply = async (id: string, telegramUserId: string) => {
-    const view = await readTradingSessionView(db, id, telegramUserId);
-    if (
-      view === undefined ||
-      !isTradingSessionFinished(view) ||
-      view.trades.settled === 0 ||
-      view.balance?.current === true
-    ) {
-      return view;
-    }
-    const account = await readTradingSessionAccount(db, id, telegramUserId);
-    if (account === undefined) return view;
-    const outcome = await balance.refresh(account.brokerAccountId, {
-      signal: AbortSignal.timeout(TRADING_ACCESS_REFRESH_BUDGET_MS),
-      mayRefresh: false,
-    });
-    return outcome === 'ok'
-      ? ((await readTradingSessionView(db, id, telegramUserId)) ?? view)
-      : view;
-  };
+  // the status the bot prints as final carries the balance after the last trade (#337); a thrown
+  // refresh reaches the opaque 500, as in /trading/access
+  const viewForReply = (id: string, telegramUserId: string) =>
+    readFinishedSessionView({ db, balance }, id, telegramUserId);
 
   app.post(TRADING_SESSIONS_PATH, async (request, reply) => {
     const parsed = safeParseCreateTradingSessionRequest(request.body);
