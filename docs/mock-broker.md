@@ -78,7 +78,12 @@ does the fixture.
 Opening a trade moves the stake from `available` to `held` in the trade's mode.
 `potential_profit = floor(amount * payout / 100)`, in cents. `settle` releases the stake from
 `held`. A win credits `available` with the stake plus `potential_profit` and records `profit =
-potential_profit`. A loss records `profit = -amount`. Without `closePrice`, the close price
+potential_profit`. A loss records `profit = -amount`. The live broker differs here: its `profit`
+is `amount * payout / 100` unrounded (1.3485 on 1.55 at 87 %), and its `potential_profit` is a
+display value rounded to cents (the live probe of 2026-10-15, docs/stake.md -> Live probe). A
+suite with a fractional stake sees a profit up to a cent below the live one, the stake formula's
+own worst case; the fixture's balances stay in cents. The fixture has no tie outcome: a suite that
+needs `profit = 0` sets it on the stored trade (`orchestrator.db.test.ts` G2). Without `closePrice`, the close price
 agrees with the outcome: it lies on the side of `open_price` the outcome needs, at least one tick
 away. An explicit `closePrice` is used as given, even when it contradicts the outcome.
 

@@ -23,7 +23,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 
 | Piece | Where | What |
 |---|---|---|
-| Settings v1, statuses, stop reasons | `packages/shared/src/trading-session.ts` (`@binarius/shared/trading-session`) | `tradingSessionSettingsSchema`, `TradingSessionStatus`, `TradingSessionStopReason`, `stakeSettingsFor`, `MAX_SESSION_TRADES` 20, `DEFAULT_SESSION_TRADES` 5 |
+| Settings v1/v2, statuses, stop reasons | `packages/shared/src/trading-session.ts` (`@binarius/shared/trading-session`) | `tradingSessionSettingsSchema`, `buildSessionSettings`, `sessionStakeParams`, `martingaleLimitsFor` (#450), `TradingSessionStatus`, `TradingSessionStopReason`, `stakeSettingsFor`, `MAX_SESSION_TRADES` 20, `DEFAULT_SESSION_TRADES` 5 |
 | Wire contracts (#283) | the same file | the routes' request, view and refusal schemas, `TradingSessionErrorCode`, `sessionFitsDeadline`, `SESSION_MAX_DURATION_MS`, `TRADING_SESSION_START_BUDGET_MS` |
 | Pair predicates (#283) | `packages/shared/src/catalog.ts` | `isPairOpen`, `pairAcceptsDuration`; the bot's demo checks and the start route both call them |
 | Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318), `POST /trading/sessions/stop` (#122) behind the internal bearer |
@@ -40,7 +40,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | Column | Meaning |
 |---|---|
 | `status` | `active` → `stopped`; `paused` exists in the status list and nothing writes it |
-| `settings` | jsonb object (CHECK `trading_sessions_settings_object_check`), settings v1 below; the column default `'{}'` is not valid v1 |
+| `settings` | jsonb object (CHECK `trading_sessions_settings_object_check`), settings v2 (v1 read) below; the column default `'{}'` is valid in neither |
 | `stop_reason` | one of `TradingSessionStopReason` (CHECK `trading_sessions_stop_reason_check`) |
 | `started_at`, `ended_at` | the insert's `now()`; the stop's `now()` |
 | `last_decision_at` | the runnable scan's order key; NULL until the orchestrator first reached an ending |
@@ -62,26 +62,57 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
   `trade_intents_session_account_fk (trading_session_id, broker_account_id, mode)`: a demo session
   cannot parent a real intent, nor an intent of another account.
 
-## Settings v1
+## Settings
+
+Version 2 is the one written (#450). The stake carries the strategy, and martingale its limits:
+
+```json
+{ "version": 2, "assetId": 101, "durationSec": 60, "trades": 5,
+  "stake": { "strategy": "martingale", "baseStake": "1.55", "stakeScale": 2,
+             "limits": { "maxSteps": 4, "maxStake": "18.6", "maxSessionLoss": "31",
+                         "maxSessionDurationMs": 3600000 } } }
+```
+
+`stake` is `{ strategy: 'fixed', baseStake, stakeScale }` or `{ strategy: 'martingale', baseStake,
+stakeScale, limits }`, a union on `strategy`: a fixed stake with `limits` and a martingale one
+without are refused. `limits.maxSteps` is an integer ≥ 2, `maxStake` and `maxSessionLoss` amounts
+inside `numeric(20,8)`, `maxSessionDurationMs` an integer ≥ 1; the rules against `baseStake` are
+the sizer's `assertStakeParams`, which the CLI and the orchestrator run.
+
+Version 1, the rows of before #450, is still read:
 
 ```json
 { "version": 1, "assetId": 101, "durationSec": 60, "trades": 5,
   "stake": { "baseStake": "1", "stakeScale": 0 } }
 ```
 
-A strict object: an unknown key or version is refused. `assetId` and `durationSec` are the intent
-request's own schemas; `trades` is 1–20; `stake` is the fixed strategy only (Rule 23), with
-`baseStake` in `numeric(20,8)` and `stakeScale` 0–8. The column is checked when it is read, not
-when it is written: the orchestrator parses it and stops a session whose settings fail as
-`invalid_settings`, so a row written by hand is a boundary too. The bot's view and the admin list
-([admin-pages.md](admin-pages.md), #330) show such settings as null.
+It has no strategy and reads as `fixed`: `sessionStakeParams(settings)` turns either version into
+the sizer's parameters, and the orchestrator and the trade messages read the strategy only
+through it. So a session started before the deploy trades on as it started.
+
+Both are strict objects: an unknown key or version is refused. `assetId` and `durationSec` are the
+intent request's own schemas; `trades` is 1–20; `baseStake` is in `numeric(20,8)` and `stakeScale`
+0–8. The column is checked when it is read, not when it is written: the orchestrator parses it and
+stops a session whose settings fail as `invalid_settings`, so a row written by hand is a boundary
+too. The bot's view and the admin list ([admin-pages.md](admin-pages.md), #330) show such settings
+as null.
+
+**The strategy is frozen at the start.** Both writers, the start route and the `session-start`
+CLI, build the row with `buildSessionSettings({ assetId, durationSec, trades, stake, strategy })`
+from `SESSION_STAKE_STRATEGY` (`parseSessionStakeStrategyEnv`: `martingale` or `fixed`, unset
+`martingale`, anything else stops the process at start; compose forwards it valueless through
+`x-broker-environment`, so `backend` and `trading-worker` read one value of `.env`). For
+`martingale` it adds `martingaleLimitsFor(baseStake)` ([stake.md](stake.md#defaults): 4 steps,
+12 × B, 20 × B, 1 h). The orchestrator never reads the variable, so switching it changes new
+sessions only (`session-routes.db.test.ts` R41, `orchestrator.db.test.ts` G7). After a change,
+`docker compose up -d backend trading-worker`.
 
 `stakeSettingsFor(minTradeAmount)` derives the fixed stake from the account's broker minimum:
 the canonical spelling (leading and trailing zeros stripped, as `normalizeDecimal` in
 `@binarius/db`; `trading-session-ops.db.test.ts` holds the two equal) and its own fraction length
 as the scale — `'1.00000000'` → `{ '1', 0 }`, `'0.50000000'` → `{ '0.5', 1 }`, `'0.00000001'` →
 `{ '0.00000001', 8 }`. Every positive minimum therefore passes the sizer's parameter check. A
-stored minimum of 0 is valid in the snapshot but gives `baseStake '0'`, which v1 refuses: the start
+stored minimum of 0 is valid in the snapshot but gives `baseStake '0'`, which the settings refuse: the start
 route answers `balance_unavailable` and the CLI `zero_min_trade_amount`, both before writing (#130
 review n1).
 
@@ -102,7 +133,8 @@ keeps the broker minimum.
 | `manual_review` | the account is halted, or an intent of the session is in `manual_review` | `stopHaltedSessions`; the orchestrator's attempt on `account_halted` |
 | `rejected_twice` | the last two intents of the session are `rejected` | the orchestrator (#287) |
 | `timeout` | `started_at` + the maximum duration passed (database clock) | `stopExpiredSessions` |
-| `stake_stop` | the stake sizer answered stop | the orchestrator (#287) |
+| `stake_stop` | the stake sizer answered stop with a data, minimum or balance code (in the log line) | the orchestrator (#287) |
+| `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded`, `session_duration_exceeded` | the sizer's martingale limit of the same name ([stake.md](stake.md#defaults)); `session_duration_exceeded` is the hour on the worker's clock, which `timeout` on the database's clock usually ends first | the orchestrator (#450, `STAKE_STOP_REASONS`) |
 | `account_unavailable` | intent creation refused for a durable reason | the orchestrator (#287) |
 | `pair_unavailable` | the pair left the catalog or refuses the duration | the orchestrator (#287) |
 | `balance_unavailable` | no balance snapshot row for the account | the orchestrator (#287) |
@@ -120,7 +152,7 @@ session trades on its signals ([The payout floor](#the-payout-floor-379)).
 |---|---|---|
 | `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first, before any read (`demo_only`); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`) and compares the session's mode with `users.trading_mode` in the same statement's row (`mode_not_allowed`, #327: a switch committed before the lock is seen, one after it waits for the creation and then stops the session), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
-| `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail v1 read as `null` with `planned: 0` |
+| `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail both versions read as `null` with `planned: 0` |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
 | `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw, `last_signal_action` with the row |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
@@ -165,7 +197,7 @@ All four sit behind the internal bearer (`internalBearerAuth`, an encapsulated p
 
 Body `{ telegramUserId, brokerAccountId?, mode, assetId, durationSec, trades? }` (strict; `mode`
 is required, `demo` or `real`, the mode the bot's button was drawn in, #327; `trades` defaults to
-`DEFAULT_SESSION_TRADES`, 1–20 like settings v1). The steps in order; every refusal
+`DEFAULT_SESSION_TRADES`, 1–20 like the settings). The steps in order; every refusal
 comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 
 | # | Step | Refusal |
@@ -181,7 +213,7 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
 | 6a | `checkStake(savedStake ?? minTradeAmount, { minTradeAmount, available })` on the same snapshot (#297): the saved stake and `available` of the session's mode, `demo_stake`/`demo.available` or `real_stake`/`real.available` (#327) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_balance`; without a saved stake, a minimum above that mode's balance is refused here rather than as `stake_stop` on the first trade |
-| 6 | settings v1 with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which v1 refuses), with a `warn` line |
+| 6 | `buildSessionSettings` with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450): settings v2, for martingale with the limits of that stake | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
 | 7 | `createTradingSession(…, mode)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand) |
 | 8 | 201 `{ session }` | — |
 
@@ -328,7 +360,7 @@ keeps the first reason.
 
 | Step | Outcome | Ending |
 |---|---|---|
-| `settings` (`safeParseTradingSessionSettings`), the sizer from `{ strategy: 'fixed', ...stake }` | fails | stop `invalid_settings` |
+| `settings` (`safeParseTradingSessionSettings`), the sizer from `sessionStakeParams(settings)` (#450: the row's strategy and limits) | fails | stop `invalid_settings` |
 | `readSessionHistory` (with `waitExpired`, [the no-signal limit](#the-no-signal-limit-509)) | the row is gone (a race with a delete) | hold back `TRADING_SESSION_RETRY_MS` |
 | | `expired`: the deadline passed since the scan (database clock) | stop `timeout`, before any backend call (E7c) |
 | | an intent of the session is live (a race with the scan) | reschedule |
@@ -349,7 +381,7 @@ keeps the first reason.
 | | `signal` in the paused direction while `last_signal_action` holds it, and `waitExpired` | stop `no_signal_timeout`, `waited: paused` (W4) |
 | | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal`; `last_signal_action` stays the action (P1) |
 | | `signal` | the action |
-| the sizer (`nowMs = max(now, started_at)`, E11) | `stop` | stop `stake_stop`, the code in the line (E3) |
+| the sizer (`nowMs = max(now, started_at)`, E11) | `stop` | a martingale limit: stop with its own reason (#450, G3–G6); any other code: stop `stake_stop` (E3, G8); the code in the line |
 | | `stake` | the amount |
 | `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` was written by the intent's own transaction (D6) |
 | | `created: false` (a replay) | reschedule (E9g) |
@@ -619,12 +651,14 @@ with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR
 | `DURATION_SEC` | default 15 (#313: the demo's set is 5 and 15 s), 1 – int4 max |
 | `TRADES` | default `DEFAULT_SESSION_TRADES` (5), 1 – 20 |
 | `DEMO_ONLY` | optional, `true` or `false` (default `false`), as the worker reads it (#396); passed to `createTradingSession`. The CLI creates demo sessions only, so the flag refuses nothing; a user in real mode is refused `mode_not_allowed` (#327) |
+| `SESSION_STAKE_STRATEGY` | optional, `martingale` or `fixed` (default `martingale`), the start route's variable (#450); written into the session's settings |
 
 Steps: the user's accounts (`readUserAccounts`); with `ACCOUNT_ID` that one if it is in the list,
 else `account_not_found`; without it the only active one, two or more → refused with each `<id> <status>` on stderr (no email); the balance snapshot (none → refused:
 open the trade screen in the bot once, `POST /trading/access` writes it); `planSessionStart`
-(`sessionFitsDeadline` → `session_too_long`; a minimum of 0 → `zero_min_trade_amount`; settings v1
-from `stakeSettingsFor`); `createTradingSession(…, mode: demo)`. The session id goes to stdout,
+(`sessionFitsDeadline` → `session_too_long`; a minimum of 0 → `zero_min_trade_amount`; settings v2
+from `buildSessionSettings` with `stakeSettingsFor` and the strategy, then `assertStakeParams`; a
+failure of either → `invalid_settings`); `createTradingSession(…, mode: demo)`. The session id goes to stdout,
 exit 0. Every refusal goes to stderr with exit 1 and writes nothing: one Russian line, except the
 two-accounts refusal (a Russian line, then one `<id> <status>` line per account) and an env error
 (one English line naming the variable, as every env check of the repository prints). A
