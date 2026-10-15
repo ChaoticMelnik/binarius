@@ -75,6 +75,9 @@ import {
   settingsText,
   stakePickerText,
   statusCard,
+  tradingModeConfirm,
+  tradingModeResult,
+  tradingModeScreen,
   TEXTS,
   botCommands,
   userContextOf,
@@ -465,6 +468,39 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       [null, STAKE].flatMap((stake) =>
         [null, STAKE].map((realStake) => settingsText(level, stake, realStake, NAME)),
       ),
+    ),
+  // the mode screen (#474): either mode, with no snapshot or the widest one, fresh or not, the
+  // paused line or not
+  tradingMode: () =>
+    Object.values(TradeMode).flatMap((mode) =>
+      [
+        null,
+        ...[true, false].map((fresh) =>
+          brokerBalance({
+            real: { available: USD, held: USD, total: USD },
+            minTradeAmount: STAKE,
+            fresh,
+          }),
+        ),
+      ].flatMap((broker) =>
+        [true, false].map((tradingOpen) =>
+          tradingModeScreen({ mode, broker, realStake: STAKE, tradingOpen }),
+        ),
+      ),
+    ),
+  tradingModeConfirm: () =>
+    [false, true].map((outOfBounds) =>
+      tradingModeConfirm({
+        stake: STAKE,
+        minTradeAmount: STAKE,
+        realAvailable: STAKE,
+        outOfBounds,
+      }),
+    ),
+  // the session line from one stopped session on (#327)
+  tradingModeResult: () =>
+    Object.values(TradeMode).flatMap((tradingMode) =>
+      [0, 3].map((stoppedSessions) => tradingModeResult({ tradingMode, stoppedSessions })),
     ),
   // by the picker's mode (#326)
   stakePicker: () =>

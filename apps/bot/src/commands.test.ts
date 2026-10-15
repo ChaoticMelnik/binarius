@@ -40,6 +40,7 @@ describe('the command menu', () => {
       claimSessionSummary: () => Promise.reject(new Error('not used here')),
       stopSessions: () => Promise.reject(new Error('not used here')),
       setStake: () => Promise.reject(new Error('not used here')),
+      setTradingMode: () => Promise.reject(new Error('not used here')),
       readBotTexts: () => Promise.reject(new Error('not used here')),
       createStarsInvoice: () => Promise.reject(new Error('not used here')),
       checkStarsPreCheckout: () => Promise.reject(new Error('not used here')),

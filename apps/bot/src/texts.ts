@@ -880,6 +880,72 @@ export function stakePickerText({
 ${joinLines(lines)}`;
 }
 
+// The mode screen (#474, trading-mode.ts): the mode now; with a balance snapshot the real balance
+// (as fresh as the card's) and the amount a real trade stakes — the saved real stake or the
+// broker's minimum, whatever the mode now; the warning and the session line; the paused line
+// while the switch is closed.
+export function tradingModeScreen({
+  mode,
+  broker,
+  realStake,
+  tradingOpen,
+}: {
+  mode: TradeMode;
+  broker: TradingAccessResponse['broker'];
+  realStake: DecimalString | null;
+  tradingOpen: boolean;
+}): TelegramHtml {
+  const lines = [
+    TEXTS.modeCurrent({ mode }),
+    ...(broker === null
+      ? []
+      : [
+          TEXTS.modeRealBalance({ realBalance: balanceOf(broker, TradeMode.Real) }),
+          TEXTS.modeRealStake({ stake: realStake ?? broker.minTradeAmount }),
+        ]),
+  ];
+  const paused = tradingOpen ? [] : [telegramHtml`\n${TEXTS.modePaused}`];
+  return telegramHtml`${TEXTS.modeHeader}
+${joinLines(lines)}
+
+${TEXTS.modeWarning}
+${TEXTS.modeStopsSession}${paused}`;
+}
+
+// The confirm of real mode: the amount a real trade stakes; the out-of-bounds line when that amount
+// fails checkStake against the snapshot (trading-mode.ts decides it); the session line.
+export function tradingModeConfirm({
+  stake,
+  minTradeAmount,
+  realAvailable,
+  outOfBounds,
+}: {
+  stake: DecimalString;
+  minTradeAmount: DecimalString;
+  realAvailable: DecimalString;
+  outOfBounds: boolean;
+}): TelegramHtml {
+  const warning = outOfBounds
+    ? [
+        telegramHtml`\n${TEXTS.modeStakeOutOfBounds({ stake, realAvailable, minStake: minTradeAmount })}`,
+      ]
+    : [];
+  return telegramHtml`${TEXTS.modeConfirm({ stake })}${warning}
+${TEXTS.modeStopsSession}`;
+}
+
+// A switch's result, by the mode the server answered; the session line when it stopped any (#327)
+export function tradingModeResult({
+  tradingMode,
+  stoppedSessions,
+}: {
+  tradingMode: TradeMode;
+  stoppedSessions: number;
+}): TelegramHtml {
+  const stopped = stoppedSessions >= 1 ? [telegramHtml`\n${TEXTS.modeSessionStopped}`] : [];
+  return telegramHtml`${tradingMode === TradeMode.Real ? TEXTS.modeEnabled : TEXTS.modeDisabled}${stopped}`;
+}
+
 // The command menu (packages/shared/src/bot-commands.ts) with the descriptions in effect now: the
 // menu published at start and /help's lines (#301).
 export const botCommands = (): BotCommand[] => botCommandsOf(plain);

@@ -300,6 +300,11 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionTradeTied: tradeNoticeWidths,
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
+  // the mode screen names the real stake, the saved one or the broker's minimum: never the label
+  // (#474)
+  modeRealStake: { stake: () => w.stake },
+  modeConfirm: { stake: () => w.stake },
+  modeStakeOutOfBounds: { stake: () => w.stake },
   // the offer under a finished trade names the session its row starts, always
   // DEFAULT_SESSION_TRADES — 5, «сделок» (texts.ts → intentStatusText, #360)
   intentSessionOffer: {
@@ -622,6 +627,46 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     title: '/settings',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [k('settings'), '\n\n', k('settingsStake'), '\n', k('settingsStakeReal')],
+  },
+  // the mode screen (#474): the balance and the real stake only with a snapshot, the paused line
+  // only while the switch is closed
+  {
+    id: 'tradingMode',
+    title: 'Экран режима',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      k('modeHeader'),
+      '\n',
+      k('modeCurrent'),
+      oneOf([], ['\n', k('modeRealBalance'), '\n', k('modeRealStake')]),
+      '\n\n',
+      k('modeWarning'),
+      '\n',
+      k('modeStopsSession'),
+      oneOf([], ['\n', k('modePaused')]),
+    ],
+  },
+  {
+    id: 'tradingModeConfirm',
+    title: 'Экран режима: подтверждение',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      k('modeConfirm'),
+      // only when the real stake fails checkStake against the snapshot
+      oneOf([], ['\n', k('modeStakeOutOfBounds')]),
+      '\n',
+      k('modeStopsSession'),
+    ],
+  },
+  {
+    id: 'tradingModeResult',
+    title: 'Экран режима: итог переключения',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      anyOf('modeEnabled', 'modeDisabled'),
+      // only when the switch stopped an active session (#327)
+      oneOf([], ['\n', k('modeSessionStopped')]),
+    ],
   },
   {
     id: 'stakePicker',

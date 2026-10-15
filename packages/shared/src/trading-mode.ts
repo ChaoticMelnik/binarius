@@ -18,6 +18,7 @@ export const setTradingModeResponseSchema = z.strictObject({
   // the user's active sessions this switch stopped, user_stopped in its transaction (#327)
   stoppedSessions: z.int().min(0),
 });
+export type SetTradingModeResponse = z.infer<typeof setTradingModeResponseSchema>;
 
 export const TradingModeErrorCode = {
   UserNotFound: 'user_not_found',

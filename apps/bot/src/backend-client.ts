@@ -2,6 +2,7 @@ import {
   StakeRefusal,
   safeParseChatMemberResponse,
   safeParseSetStakeResponse,
+  safeParseSetTradingModeResponse,
   safeParseStakeRefusal,
   safeParseConfirmLoginResponse,
   safeParseEmailLoginResponse,
@@ -24,6 +25,7 @@ import {
   safeParseTradingSignalsResponse,
   TRADING_SIGNALS_PATH,
   TRADING_SESSIONS_STOP_PATH,
+  TRADING_MODE_PATH,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
   starsInvoiceResponseSchema,
@@ -56,6 +58,7 @@ import {
   type TelegramChatMemberStatus,
   type TradeIntentView,
   type TradeMode,
+  type SetTradingModeResponse,
   type TradingAccessResponse,
   type TradingSessionView,
   type TradingSignalResponse,
@@ -155,6 +158,10 @@ export interface BackendClient {
     mode: TradeMode,
     amount: DecimalString | null,
   ): Promise<SetStakeResult>;
+  // the user's trading mode (#474, docs/trading-mode.md): the mode now and the active sessions
+  // the switch stopped; a refusal (409 demo_only, balance_unavailable, real_balance_below_minimum,
+  // 404 user_not_found) throws as from every method, with its code
+  setTradingMode(telegramUserId: string, mode: TradeMode): Promise<SetTradingModeResponse>;
   // every text override, as stored: the refresher resolves them (#299)
   readBotTexts(): Promise<BotTextOverride[]>;
   // The Stars purchase (#117, docs/stars.md). The invoice's payload for a package: a read, every
@@ -476,6 +483,14 @@ export function createBackendClient({
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data.outcome;
+    },
+    async setTradingMode(telegramUserId, mode) {
+      // relative, as BOT_TEXTS_PATH: a leading slash would drop a base URL's path prefix
+      const parsed = safeParseSetTradingModeResponse(
+        await post(TRADING_MODE_PATH.slice(1), { telegramUserId, mode }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
     },
     async stopSessions(telegramUserId) {
       const parsed = safeParseTradingSessionsStoppedResponse(

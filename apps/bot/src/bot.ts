@@ -55,6 +55,7 @@ import { createDemoTradeComposer } from './demo-trade';
 import { createSessionShareComposer } from './session-share';
 import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
+import { createTradingModeComposer } from './trading-mode';
 import { createTradingSessionComposer } from './trading-session';
 import { createCycleStakeComposer } from './cycle-stake';
 import type { IntentTracker } from './intent-tracker';
@@ -509,6 +510,11 @@ export function createBot({
   });
   privateChats.use(cycleStake.composer);
   privateChats.use(tradingSession.composer);
+
+  // the mode screen behind the status card's mode button (#474, docs/trading-mode.md)
+  privateChats.use(
+    createTradingModeComposer({ backend, logger, connectKeyboard: welcomeKeyboard }),
+  );
 
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
