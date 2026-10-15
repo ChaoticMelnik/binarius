@@ -20,13 +20,13 @@ import {
   supportUrl,
   DEMO_CALLBACK_DATA,
   BUY_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
 } from '@binarius/shared';
 import { telegramHtml } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
-  DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoLaunchCallbackData,

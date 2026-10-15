@@ -464,6 +464,8 @@ describe('contract coverage (issue #6)', () => {
       | 'pair_unavailable'
       | 'payout_too_low'
       | 'catalog_unavailable'
+      | 'no_signal'
+      | 'signal_unavailable'
       | 'not_found'
       | 'session_not_active'
       | 'stake_precision'

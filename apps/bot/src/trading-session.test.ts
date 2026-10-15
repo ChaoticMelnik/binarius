@@ -17,12 +17,12 @@ import {
   MENU_CALLBACK_DATA,
   supportUrl,
   BUY_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
   cycleStakeCallbackData,
-  DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoLaunchCallbackData,
   sessionStartCallbackData,
@@ -37,6 +37,7 @@ import {
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   SESSION_ID,
+  SIGNAL_DECIDED,
   SESSION_VIEW,
   TEXT_CARD_MESSAGE_ID,
   USER,
@@ -104,8 +105,13 @@ function setup(
     // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
     cashierUrl?: string | null;
     readTradingAccess?: BackendClient['readTradingAccess'];
+    // the pair's signal at a cycle door's press (#509): a signal by default
+    evaluateSignal?: BackendClient['evaluateSignal'];
   } = {},
 ) {
+  const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
+    options.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
+  );
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
   // the amount screen behind a demo «🔁 Ещё сессия» (#476)
   const readTradingAccess = vi.fn<BackendClient['readTradingAccess']>(
@@ -138,6 +144,7 @@ function setup(
       claimSessionSummary,
       stopSessions,
       readTradingAccess,
+      evaluateSignal,
     }),
     logger,
     botInfo: BOT_INFO,
@@ -165,6 +172,7 @@ function setup(
     stopSession,
     claimSessionSummary,
     stopSessions,
+    evaluateSignal,
     ...api,
   };
 }
@@ -226,6 +234,11 @@ const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_RO
 const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], DEPOSIT, ...BACK_ROWS];
 // a failed read of the session, after the refresh or the stop: its refresh, never the stop again
 const SESSION_REFRESH_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], MENU_ROW];
+// #509: no signal on the pair, the signals of the same duration and the menu
+const OTHER_PAIR_ROWS = [
+  [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:5`)],
+  MENU_ROW,
+];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
@@ -311,7 +324,11 @@ describe('the session button', () => {
   it.each(
     (Object.keys(START_REFUSALS) as TradingSessionErrorCode[]).map((code) => [code] as const),
   )('answers the refusal %s with its text, once, untracked', async (code) => {
-    const status = code === TradingSessionErrorCode.CatalogUnavailable ? 503 : 409;
+    const status =
+      code === TradingSessionErrorCode.CatalogUnavailable ||
+      code === TradingSessionErrorCode.SignalUnavailable
+        ? 503
+        : 409;
     const { press, calls, startSession, sessionTracker, logger } = setup({
       startSession: () => Promise.reject(httpError(status, code)),
     });
@@ -321,6 +338,7 @@ describe('the session button', () => {
       connect?: true;
       stakeMenu?: true;
       buy?: true;
+      otherPair?: true;
       log?: true;
     } = START_REFUSALS[code];
     const sent = payloadOf(calls, 'sendMessage');
@@ -334,7 +352,9 @@ describe('the session button', () => {
             ? STAKE_MENU_ROWS
             : refusal.buy === true
               ? BUY_ROWS
-              : BACK_ROWS,
+              : refusal.otherPair === true
+                ? OTHER_PAIR_ROWS
+                : BACK_ROWS,
     );
     // only the refusal for want of tokens offers the purchase (#117)
     expect(
@@ -440,6 +460,19 @@ describe('the session button', () => {
     await press(START);
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.demoCatalogUnavailable.value);
+  });
+
+  // #509: the start route answers it before createTradingSession, as catalog_unavailable
+  it('does not retry the 503 signal_unavailable: one POST, its own text', async () => {
+    const { press, calls, startSession } = setup({
+      startSession: () => Promise.reject(httpError(503, TradingSessionErrorCode.SignalUnavailable)),
+    });
+    await press(START);
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionSignalUnavailable.value);
+    expect(sessionOutcomeUnknown(httpError(503, TradingSessionErrorCode.SignalUnavailable))).toBe(
+      false,
+    );
   });
 
   it('counts any other 5xx, no answer and a broken body as unknown', () => {
@@ -786,6 +819,19 @@ describe('«🔁 Ещё сессия»', () => {
       INVITE,
       MENU,
     ]);
+    // #509: a session the no-signal limit stopped offers another pair: no «🔁 Ещё сессия», no
+    // analysis of that pair, «🔀 Выбрать другую пару» on the signals of its duration
+    const noSignal = sessionView({
+      ...STOPPED,
+      stopReason: TradingSessionStopReason.NoSignalTimeout,
+    });
+    expect(rows(noSignal)).toEqual([
+      [button(LABELS.sessionRefreshButton, REFRESH)],
+      [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
+      DEPOSIT,
+      INVITE,
+      MENU,
+    ]);
     // S5: the live session's keyboard has no invite
     expect(rows(SESSION_VIEW)).toEqual(LIVE_ROWS);
     expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
@@ -885,6 +931,15 @@ describe('the summary card (#318)', () => {
     expect(
       rows(sessionView({ ...DONE, settings: { ...DONE.settings!, durationSec: 60 } })),
     ).toEqual([TO_DURATIONS, DEPOSIT, INVITE, MENU]);
+    // #509: under a no_signal_timeout card, another pair instead of the same one again
+    expect(
+      rows(sessionView({ ...DONE, stopReason: TradingSessionStopReason.NoSignalTimeout })),
+    ).toEqual([
+      [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
+      DEPOSIT,
+      INVITE,
+      MENU,
+    ]);
   });
 
   it('K2 claims, then sends one PNG to the status chat with its caption and keyboard', async () => {

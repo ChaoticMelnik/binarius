@@ -9,6 +9,7 @@ import {
   TradingSessionErrorCode,
   TradingSessionStopReason,
   errorLogFields,
+  intervalForDuration,
   isPairOpen,
   pairAcceptsDuration,
   pairPayoutAccepted,
@@ -16,6 +17,8 @@ import {
   safeParseReadTradingSessionQuery,
   safeParseStopTradingSessionRequest,
   sessionFitsDeadline,
+  SignalFeedOutcome,
+  SignalKind,
   checkStake,
   stakeSettingsFrom,
   tradingSessionSettingsSchema,
@@ -37,6 +40,7 @@ import {
   type TradingSessionDbErrorCode,
 } from '@binarius/db';
 import type { PairsCatalog } from '@binarius/broker-rest';
+import type { CachedSignalFeed } from '@binarius/signal';
 import { internalBearerAuth } from '../auth/internal';
 import { ACCESS_SKEW_MS } from '../auth/token-service';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
@@ -47,6 +51,9 @@ export interface TradingSessionRoutesDeps {
   db: Db;
   catalog: Pick<PairsCatalog, 'read'>;
   balance: Pick<BalanceReconciler, 'refresh'>;
+  // the analysis's cached feed (#509): a start right after the analysis, in the same candle, asks
+  // the broker nothing
+  signals: Pick<CachedSignalFeed, 'evaluate'>;
   internalApiToken: string;
   // the process runs DEMO_ONLY (#396): createTradingSession refuses a real session
   demoOnly: boolean;
@@ -76,7 +83,9 @@ const STATUS_OF = {
   stake_precision: 409,
   stake_below_minimum: 409,
   insufficient_balance: 409,
+  no_signal: 409,
   catalog_unavailable: 503,
+  signal_unavailable: 503,
 } as const satisfies Record<ErrorCode, 404 | 409 | 503>;
 
 // createTradingSession's refusals under its locks; a db code added without a wire code fails the
@@ -104,7 +113,7 @@ const refuse = (reply: FastifyReply, code: Exclude<ErrorCode, 'active_session_ex
 // way may have written the account's snapshot.
 export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> = async (
   app,
-  { db, catalog, balance, internalApiToken, demoOnly, now = Date.now },
+  { db, catalog, balance, signals, internalApiToken, demoOnly, now = Date.now },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -170,11 +179,36 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       return refuse(reply, TradingSessionErrorCode.PayoutTooLow);
     }
 
+    // The pair's signal on the current candle (#509): no session starts on a pair without one. A
+    // broker failure or a throw is a refusal too, never a start on a signal nobody read.
+    const readSignal = async (): Promise<
+      | typeof TradingSessionErrorCode.NoSignal
+      | typeof TradingSessionErrorCode.SignalUnavailable
+      | null
+    > => {
+      try {
+        const evaluation = await signals.evaluate({
+          assetId,
+          interval: intervalForDuration(durationSec),
+          digits: pair.digits,
+        });
+        if (evaluation.outcome === SignalFeedOutcome.FetchFailed) {
+          return TradingSessionErrorCode.SignalUnavailable;
+        }
+        return evaluation.entry.decision.kind === SignalKind.Signal
+          ? null
+          : TradingSessionErrorCode.NoSignal;
+      } catch (error) {
+        request.log.error({ assetId, ...errorLogFields(error) }, 'session start signal threw');
+        return TradingSessionErrorCode.SignalUnavailable;
+      }
+    };
     // keeps the account in work for the backend's reconcile tick and the worker's sessions;
     // a stored snapshot of any age serves: the sizer checks the balance before every trade
-    await touchBalanceRequested(db, brokerAccountId);
-    let snapshot = await readBalanceSnapshot(db, brokerAccountId);
-    if (snapshot === undefined) {
+    const readSnapshot = async () => {
+      await touchBalanceRequested(db, brokerAccountId);
+      const stored = await readBalanceSnapshot(db, brokerAccountId);
+      if (stored !== undefined) return stored;
       // the same comparison as POST /trading/access: an exchange would not fit the budget, so it
       // runs in the background and the caller retries
       if (eligible.accessTokenExpiresAt.getTime() <= Date.now() + ACCESS_SKEW_MS) {
@@ -184,15 +218,19 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
             'balance refresh threw',
           );
         });
-        return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
+        return undefined;
       }
       await balance.refresh(brokerAccountId, {
         signal: AbortSignal.timeout(TRADING_ACCESS_REFRESH_BUDGET_MS),
         requested: true,
       });
-      snapshot = await readBalanceSnapshot(db, brokerAccountId);
-      if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
-    }
+      return readBalanceSnapshot(db, brokerAccountId);
+    };
+    // in parallel, so the start's budget holds the longer of the two, not their sum; the signal's
+    // refusal answers first
+    const [signalRefusal, snapshot] = await Promise.all([readSignal(), readSnapshot()]);
+    if (signalRefusal !== null) return refuse(reply, signalRefusal);
+    if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
 
     // the user's saved stake of the session's mode, or the broker's minimum without one (#297,
     // #327), checked against that mode's balance of the same snapshot before any row is written

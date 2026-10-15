@@ -57,6 +57,7 @@ import {
   uniqueViolation,
   type ManualReviewReason,
   type TradeIntentRow,
+  type Tx,
 } from './trade-intent-ops';
 import {
   brokerAccounts,
@@ -164,13 +165,10 @@ describe('createTradeIntent', () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
     const first = await createTradeIntent(tmp.db, input);
-    const second = await createTradeIntent(
-      tmp.db,
-      {
-        ...input,
-        amount: '10.000' as DecimalString,
-      },
-    );
+    const second = await createTradeIntent(tmp.db, {
+      ...input,
+      amount: '10.000' as DecimalString,
+    });
 
     expect(second.created).toBe(false);
     expect(second.intent.id).toBe(first.intent.id);
@@ -219,9 +217,7 @@ describe('createTradeIntent', () => {
     const withoutAccount = intentRequest(s.telegramUserId, {
       clientRequestId: input.clientRequestId,
     });
-    expect((await createTradeIntent(tmp.db, withoutAccount)).intent.id).toBe(
-      first.intent.id,
-    );
+    expect((await createTradeIntent(tmp.db, withoutAccount)).intent.id).toBe(first.intent.id);
     expect(await tokenReservedOf(s.userId)).toBe(TOKENS_PER_INTENT);
     expect(await ledgerOf(first.intent.id)).toHaveLength(1);
   });
@@ -254,10 +250,7 @@ describe('createTradeIntent', () => {
   it('refuses a blocked user through the reserve guard', async () => {
     const user = await seedUser(tmp.db, { status: 'blocked' });
     await seedBrokerAccount(tmp.db, user.userId);
-    await failsWith(
-      createTradeIntent(tmp.db, intentRequest(user.telegramUserId)),
-      'user_blocked',
-    );
+    await failsWith(createTradeIntent(tmp.db, intentRequest(user.telegramUserId)), 'user_blocked');
     expect(await tokenReservedOf(user.userId)).toBe(0n);
   });
 
@@ -273,7 +266,11 @@ describe('createTradeIntent', () => {
 
   it.each([
     ['revoked', { status: 'revoked' as const }, 'account_revoked'],
-    ['halted', { tradingHalted: true, haltedReason: AccountHaltReason.ReconciliationAmbiguous }, 'account_halted'],
+    [
+      'halted',
+      { tradingHalted: true, haltedReason: AccountHaltReason.ReconciliationAmbiguous },
+      'account_halted',
+    ],
     // linked but not confirmed in the bot: a distinct answer, because the user can fix it
     ['pending', { status: 'pending' as const }, 'account_not_confirmed'],
   ])('refuses a %s account', async (_label, patch, code) => {
@@ -312,10 +309,7 @@ describe('createTradeIntent', () => {
   });
 
   it('classifies lookups: unknown user, no account, foreign account, ambiguous account', async () => {
-    await failsWith(
-      createTradeIntent(tmp.db, intentRequest('999999999')),
-      'user_not_found',
-    );
+    await failsWith(createTradeIntent(tmp.db, intentRequest('999999999')), 'user_not_found');
 
     const lonely = await seedUser(tmp.db);
     await failsWith(
@@ -366,9 +360,7 @@ describe('createTradeIntent', () => {
   it('lets exactly one of concurrent different requests through', async () => {
     const s = await seedUserWithAccount(tmp.db);
     const settled = await Promise.allSettled(
-      Array.from({ length: 4 }, () =>
-        createTradeIntent(tmp.db, intentRequest(s.telegramUserId)),
-      ),
+      Array.from({ length: 4 }, () => createTradeIntent(tmp.db, intentRequest(s.telegramUserId))),
     );
     const fulfilled = settled.filter((r) => r.status === 'fulfilled');
     const rejected = settled.filter((r) => r.status === 'rejected');
@@ -538,9 +530,7 @@ describe('transitions', () => {
     expect(await ledgerOf(intent.id)).toHaveLength(2);
 
     // the account is free again
-    expect(
-      (await createTradeIntent(tmp.db, intentRequest(s.telegramUserId))).created,
-    ).toBe(true);
+    expect((await createTradeIntent(tmp.db, intentRequest(s.telegramUserId))).created).toBe(true);
   });
 
   it('refuses to release below the cached reserve instead of desynchronizing', async () => {
@@ -657,10 +647,7 @@ describe('getTradeIntentView', () => {
   it("reads another user's intent as undefined, like a missing one (#127)", async () => {
     const owner = await seedUserWithAccount(tmp.db);
     const other = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(
-      tmp.db,
-      intentRequest(owner.telegramUserId),
-    );
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(owner.telegramUserId));
     expect(await getTradeIntentView(tmp.db, intent.id, BigInt(owner.telegramUserId))).toMatchObject(
       {
         id: intent.id,
@@ -726,9 +713,9 @@ describe('createTradeIntent: the global trading switch (#144)', () => {
   it('P4 creates demo and real intents while open', async () => {
     const demo = await seedUserWithAccount(tmp.db);
     const realSeed = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
-    expect((await createTradeIntent(tmp.db, intentRequest(demo.telegramUserId))).intent).toMatchObject(
-      { mode: 'demo', status: 'queued' },
-    );
+    expect(
+      (await createTradeIntent(tmp.db, intentRequest(demo.telegramUserId))).intent,
+    ).toMatchObject({ mode: 'demo', status: 'queued' });
     expect((await createTradeIntent(tmp.db, real(realSeed.telegramUserId))).intent).toMatchObject({
       mode: 'real',
       status: 'queued',
@@ -955,7 +942,7 @@ describe('createTradeIntent: DEMO_ONLY (#396)', () => {
 
 // The real-mode gate in the reserve UPDATE (#121, Rule 36): a real intent only for a user whose
 // users.trading_mode is real; a demo intent is never refused by the mode.
-describe('createTradeIntent: the user\'s trading mode (#121)', () => {
+describe("createTradeIntent: the user's trading mode (#121)", () => {
   const real = (telegramUserId: string) => intentRequest(telegramUserId, { mode: TradeMode.Real });
   const intentsOf = (userId: string) =>
     tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, userId));
@@ -1595,7 +1582,7 @@ describe('readHeldExposure (#92)', () => {
 });
 
 describe('listLinkedBrokerTradeIds (#90)', () => {
-  it("answers which of the given trade ids back an intent of this account", async () => {
+  it('answers which of the given trade ids back an intent of this account', async () => {
     const linked = await acceptedIntent();
     const foreign = await acceptedIntent();
     const ids = [linked.open.id, foreign.open.id, 'never-seen'];
@@ -1691,6 +1678,39 @@ describe('startReconciling (#89)', () => {
       await startReconciling(tmp.db, { id: intent.id, expectedVersion: intent.version }),
     ).toBeUndefined();
     expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'queued' });
+  });
+});
+
+// #509: a session's no-signal limit counts from updated_at, so both UPDATEs of trade_intents write
+// the database's clock (now(), the transaction's start), not the process's $onUpdate date
+describe('updated_at on the database clock (#509)', () => {
+  async function afterSleep<T>(write: (tx: Tx) => Promise<T>): Promise<{ now: Date; row: T }> {
+    return tmp.db.transaction(async (tx) => {
+      const { rows } = await tx.execute<{ now: Date }>(sql`select now() as now`);
+      await tx.execute(sql`select pg_sleep(0.3)`);
+      return { now: new Date(rows[0]!.now), row: await write(tx) };
+    });
+  }
+
+  it('T-clock transitionIntent writes now() of its transaction', async () => {
+    const { intent } = await seedUnknownIntent(tmp.db);
+    const { now, row } = await afterSleep((tx) =>
+      transitionIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.Unknown,
+        to: TradeIntentStatus.Reconciling,
+        expectedVersion: intent.version,
+      }),
+    );
+    expect(row!.updatedAt.getTime()).toBe(now.getTime());
+  });
+
+  it('T-clock claimReconciling writes now() of its transaction', async () => {
+    const { intent } = await reconcilingIntent();
+    const { now, row } = await afterSleep((tx) =>
+      claimReconciling(tx, { id: intent.id, retryMs: RETRY_MS }),
+    );
+    expect(row!.updatedAt.getTime()).toBe(now.getTime());
   });
 });
 

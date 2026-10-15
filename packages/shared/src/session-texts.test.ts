@@ -125,6 +125,13 @@ describe('sessionSummaryText (#464)', () => {
     },
   );
 
+  // #509: the line carries the limit in minutes, from the constant the worker stops by
+  it('the stop reason no_signal_timeout prints the limit in minutes', () => {
+    expect(lines(view({ stopReason: TradingSessionStopReason.NoSignalTimeout }))[1]).toBe(
+      '⏳ Сессия остановлена: 2 мин по паре не было сигнала. Выбери другую пару.',
+    );
+  });
+
   it('a real session prints the real balance; a balance read before the last trade, its age', () => {
     expect(
       lines(

@@ -95,6 +95,40 @@ describe('sessionSummaryMessage (#464)', () => {
     ]);
   });
 
+  it.each([
+    [15, 'demo:sig:15'],
+    [5, 'demo:sig:5'],
+    [60, 'demo:sig'],
+  ] as const)(
+    'a no_signal_timeout stop (#509) at %i s offers another pair (%s) above the menu',
+    (durationSec, data) => {
+      const message = sessionSummaryMessage(
+        {
+          ...view,
+          stopReason: TradingSessionStopReason.NoSignalTimeout,
+          settings: { ...settings, durationSec },
+        },
+        'EUR/USD OTC',
+      );
+      expect(inlineButtons({ reply_markup: message.reply_markup })).toEqual([
+        { text: CLIENT_LABELS.otherPairButton, callback_data: data },
+        { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+      ]);
+    },
+  );
+
+  it('a no_signal_timeout stop without settings offers the duration screen', () => {
+    const lastIntent = { assetId: 77 } as TradingSessionView['lastIntent'];
+    const message = sessionSummaryMessage(
+      { ...view, stopReason: TradingSessionStopReason.NoSignalTimeout, settings: null, lastIntent },
+      null,
+    );
+    expect(inlineButtons({ reply_markup: message.reply_markup })[0]).toEqual({
+      text: CLIENT_LABELS.otherPairButton,
+      callback_data: 'demo:sig',
+    });
+  });
+
   it('names the asset by the last trade without settings, and refuses a session naming none', () => {
     const lastIntent = { assetId: 77 } as TradingSessionView['lastIntent'];
     expect(sessionSummaryMessage({ ...view, settings: null, lastIntent }, null).text.value).toBe(

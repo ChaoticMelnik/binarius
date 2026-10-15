@@ -38,6 +38,7 @@ import {
   AccessTokenRefusal,
   logOptions,
   SESSION_MAX_DURATION_MS,
+  SESSION_NO_SIGNAL_TIMEOUT_MS,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -105,6 +106,7 @@ const TUNING: Partial<WorkerTuning> = {
     retryMs: 1_000,
     candleSlackMs: 0,
     maxDurationMs: SESSION_MAX_DURATION_MS,
+    noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
   },
   // above the held submit of H3 (HELD_REST_MS): the sweeper never overtakes a call still in flight
   staleSubmittingMs: 3_000,

@@ -37,6 +37,8 @@ import {
   paysupportRefundCallbackData,
   StarsRefundErrorCode,
   StarsPreCheckoutRefusal,
+  DEMO_SIGNALS_CALLBACK_DATA,
+  demoSignalsCallbackData,
 } from '@binarius/shared';
 import {
   composeDurationMs,
@@ -54,11 +56,9 @@ import {
 import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
-  DEMO_SIGNALS_CALLBACK_DATA,
   cycleCustomCallbackData,
   cycleStakeCallbackData,
   demoLaunchCallbackData,
-  demoSignalsCallbackData,
   analysisMoreCallbackData,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
@@ -896,33 +896,49 @@ const DEMO_SIGNALS = demoScreenBranches(
   signalsBranches(() => callbackUpdate(demoSignalsCallbackData(15)), 2),
   2,
 );
-// the launch screen (#320): the pair checked at the data's duration, the amount from access
+// the launch screen (#320): the pair checked at the data's duration, the amount from access; since
+// #509 the pair's signal read beside them, three reads in parallel counted as sequential
 const DEMO_LAUNCH = demoScreenBranches(
   demoLaunchCallbackData(PAIR_EURUSD.id, 15),
   'demo:l:0:15',
   pairBranches(
     [
-      { ...unsupported, expected: { backend: 2, telegram: 2 } },
+      { ...unsupported, expected: { backend: 3, telegram: 2 } },
       {
         label: 'access is not read',
         readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-        expected: { backend: 2, telegram: 2 },
+        expected: { backend: 3, telegram: 2 },
       },
       {
         label: 'a user in real mode gets the launch screen',
         readTradingAccess: () => Promise.resolve({ ...ACCESS_VIEW, tradingMode: TradeMode.Real }),
-        expected: { backend: 2, telegram: 2 },
+        expected: { backend: 3, telegram: 2 },
+      },
+      {
+        label: 'the pair has no signal now (#509)',
+        evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
+        expected: { backend: 3, telegram: 2 },
+      },
+      {
+        label: 'the signal is fetch_failed (#509)',
+        evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
+        expected: { backend: 3, telegram: 2 },
+      },
+      {
+        label: 'the signal is not read (#509)',
+        evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+        expected: { backend: 3, telegram: 2 },
       },
     ],
-    2,
+    3,
   ),
-  2,
+  3,
 );
 // #476: a door under a trade or a session sends the screen at once, shorter than the edit
 DEMO_LAUNCH.branches.push({
   label: 'a door under a trade or a session sends the screen as a new message',
   update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
-  expected: { backend: 2, telegram: 2 },
+  expected: { backend: 3, telegram: 2 },
 });
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary — or sent at once under a
 // photo (#482) — the signal, then a text result in place of «⏳» or the card as a photo with «⏳»

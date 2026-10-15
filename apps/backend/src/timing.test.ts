@@ -195,6 +195,10 @@ describe('broker balance timing', () => {
     expect(TRADING_SESSION_START_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
+  it('fits the signal GET inside the session start budget beside the balance GET (#509)', () => {
+    expect(SIGNAL_FETCH_BUDGET_MS).toBeLessThan(TRADING_SESSION_START_BUDGET_MS);
+  });
+
   it('fits the balance GET inside the session view budget and the budget inside phase 1 (#337)', () => {
     expect(TRADING_ACCESS_REFRESH_BUDGET_MS).toBeLessThan(TRADING_SESSION_VIEW_BUDGET_MS);
     expect(TRADING_SESSION_VIEW_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);

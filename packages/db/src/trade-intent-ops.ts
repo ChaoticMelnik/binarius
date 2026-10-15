@@ -420,7 +420,8 @@ export interface TransitionOptions {
 
 // The one CAS every status change goes through: `status = from`, optionally `version = expected`
 // and an extra predicate, all in the UPDATE itself, so a duplicate or late caller gets zero rows
-// instead of overwriting a newer state.
+// instead of overwriting a newer state. updated_at is the database's clock, not the column's
+// $onUpdate: a session's no-signal limit counts from it (#509, readSessionHistory).
 export async function transitionIntent(
   exec: DbExecutor,
   { id, from, to, expectedVersion, patch, where }: TransitionOptions,
@@ -428,7 +429,12 @@ export async function transitionIntent(
   if (!canTransition(from, to)) throw new Error(`illegal trade intent transition ${from} -> ${to}`);
   const [row] = await exec
     .update(tradeIntents)
-    .set({ ...patch, status: to, version: sql`${tradeIntents.version} + 1` })
+    .set({
+      ...patch,
+      status: to,
+      version: sql`${tradeIntents.version} + 1`,
+      updatedAt: sql`now()`,
+    })
     .where(
       and(
         eq(tradeIntents.id, id),
@@ -1010,7 +1016,11 @@ export async function claimReconciling(
 ): Promise<TradeIntentRow | undefined> {
   const [row] = await exec
     .update(tradeIntents)
-    .set({ reconcileClaimedAt: sql`now()`, version: sql`${tradeIntents.version} + 1` })
+    .set({
+      reconcileClaimedAt: sql`now()`,
+      version: sql`${tradeIntents.version} + 1`,
+      updatedAt: sql`now()`,
+    })
     .where(
       and(
         eq(tradeIntents.id, id),

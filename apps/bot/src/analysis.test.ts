@@ -465,14 +465,16 @@ MA200         цена ниже 1.08612
   });
 
   // #360: the session row on every decided answer, never where the candles were not read
-  it('offers the session on every decided answer, a signal or none, and never without candles', () => {
+  it('offers the session on a signal only: never on «сигнала нет» (#509) nor without candles', () => {
+    for (const response of [signalOf(TradeAction.Up), signalOf(TradeAction.Down)]) {
+      expect(screenOf(response).session).toBe(true);
+    }
+    // a rule refusal carries the features, a data refusal does not: both branches
     for (const response of [
-      signalOf(TradeAction.Up),
-      signalOf(TradeAction.Down),
       ...RULE_REFUSAL_REASONS.map((reason) => ruleRefusalOf(reason)),
       ...DATA_REFUSAL_REASONS.map(dataRefusalOf),
     ]) {
-      expect(screenOf(response).session).toBe(true);
+      expect(screenOf(response).session).toBe(false);
     }
     for (const response of [
       SIGNAL_FETCH_FAILED,

@@ -17,6 +17,9 @@ import {
   type PairView,
   UserStatus,
   DEMO_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
+  demoSignalsCallbackData,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -28,9 +31,7 @@ import {
   cycleCustomCallbackData,
   cycleStakeCallbackData,
   DEMO_GROUPS_CALLBACK_DATA,
-  DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,
-  demoSignalsCallbackData,
   effectiveStake,
   launchStakeCallbackData,
   demoAnalysisCallbackData,
@@ -670,9 +671,80 @@ describe('the amount screen (#476)', () => {
     expect(labels).not.toContain(LABELS.launchCycleButton);
     expect(labels).not.toContain(LABELS.stakeChangeButton);
     expect(labels).not.toContain(LABELS.stakeResetButton);
-    // the signal is not read again: the cycle asks for it before each trade
+    // #509: the pair's own signal is read at the press, the list is not read again
     expect(readSignals).not.toHaveBeenCalled();
-    expect(evaluateSignal).not.toHaveBeenCalled();
+    expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '15s']]);
+  });
+
+  // #509: every cycle door reads the pair's signal at its press; none opens on a pair without one
+  describe("the pair's signal at the press (#509)", () => {
+    const OTHER_PAIR = (durationSec: 5 | 15) => [
+      [button(LABELS.otherPairButton, demoSignalsCallbackData(durationSec))],
+      [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
+    ];
+    const UNAVAILABLE = (data: string) => [
+      [button(LABELS.demoRetryButton, data)],
+      [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
+    ];
+
+    it('L-sig1 no signal refuses with «🔀 Выбрать другую пару» and the menu, no amounts', async () => {
+      const { press, calls } = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
+      await press(LAUNCH);
+      const edited = payloadOf(calls, 'editMessageText');
+      expect(edited?.text).toBe(TEXTS.sessionNoSignal.value);
+      expect(rowsOf(edited)).toEqual(OTHER_PAIR(15));
+    });
+
+    it('L-sig2 a fetch_failed signal is «недоступно» with the same press again, never the amounts', async () => {
+      const { press, calls, logger } = setup({
+        evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
+      });
+      await press(LAUNCH);
+      const edited = payloadOf(calls, 'editMessageText');
+      expect(edited?.text).toBe(TEXTS.sessionSignalUnavailable.value);
+      expect(rowsOf(edited)).toEqual(UNAVAILABLE(LAUNCH));
+      // rate_limited is the broker's ordinary answer
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('L-sig3 a signal read that throws is the same «недоступно», logged', async () => {
+      const { press, calls, logger } = setup({
+        evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      });
+      await press(LAUNCH);
+      const edited = payloadOf(calls, 'editMessageText');
+      expect(edited?.text).toBe(TEXTS.sessionSignalUnavailable.value);
+      expect(rowsOf(edited)).toEqual(UNAVAILABLE(LAUNCH));
+      expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+        'launch signal not evaluated',
+      ]);
+    });
+
+    it('L-sig4/L-sig5 a signal opens the amounts; the read is for the duration of the press', async () => {
+      const { press, calls, evaluateSignal } = setup();
+      await press(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
+      expect(payloadOf(calls, 'editMessageText')?.text).toContain('Выбери сумму сделки 👇');
+      expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '5s']]);
+    });
+
+    it('L-sig6 a door under a trade or a session answers the refusal as a new message', async () => {
+      const { press, calls } = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
+      await press(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'));
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+      const sent = payloadOf(calls, 'sendMessage');
+      expect(sent?.text).toBe(TEXTS.sessionNoSignal.value);
+      expect(rowsOf(sent)).toEqual(OTHER_PAIR(15));
+    });
+
+    it('a pair below the floor keeps its own refusal before the signal', async () => {
+      const { press, calls } = setup({
+        readPairs: () =>
+          Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
+        evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
+      });
+      await press(LAUNCH);
+      expect(payloadOf(calls, 'editMessageText')?.text).not.toBe(TEXTS.sessionNoSignal.value);
+    });
   });
 
   it('keeps the 5 s of its data in the amounts, the custom amount, the way back and the subject (#382)', async () => {
@@ -848,13 +920,17 @@ describe('the amount screen (#476)', () => {
   });
 
   // door «analysis row opens the amount screen» (#476)
-  // in demo a signal's card draws the amounts themselves (#482); the row stays under a refusal
+  // in demo a signal's card draws the amounts themselves (#482); the row stays where they cannot
+  // be drawn (no snapshot), and since #509 never under a refusal
   it('is what the analysis session row opens in demo; in real the row starts at once', async () => {
-    const demo = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
+    const demo = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ broker: null, brokerUnavailable: 'refreshing' })),
+    });
     await demo.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
-    expect(
-      rowsOf(demo.calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload)[0],
-    ).toEqual([button('🚀 Сессия из 5 сделок', `demo:l:${String(PAIR_EURUSD.id)}:15:a`)]);
+    expect(rowsOf(payloadOf(demo.calls, 'sendPhoto'))[0]).toEqual([
+      button('🚀 Сессия из 5 сделок', `demo:l:${String(PAIR_EURUSD.id)}:15:a`),
+    ]);
     const real = setup({
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
@@ -1613,10 +1689,11 @@ describe('the analysis', () => {
     }
   });
 
-  // #284: a session of five fits the worker's hour at every duration of the set (#313)
+  // #284: a session of five fits the worker's hour at every duration of the set (#313); #509: a
+  // rule refusal offers none at either
   it.each([
-    [5, true],
-    [15, true],
+    [5, false],
+    [15, false],
   ] as const)(
     'offers the session first at %i s on a rule refusal: %s',
     async (durationSec, shown) => {
@@ -1720,12 +1797,13 @@ describe('the analysis', () => {
     expect(cardOf(calls)?.caption).toBe(resultOf());
   });
 
-  // #379: a refusal below the floor draws no session row either; the note is the last line
+  // #379: a refusal below the floor carries the note as its last line; #509: no refusal draws the
+  // session row, at the floor or below it
   it.each([
     ['a rule refusal', 79, false, SIGNAL_NO_SIGNAL],
-    ['a rule refusal', 80, true, SIGNAL_NO_SIGNAL],
+    ['a rule refusal', 80, false, SIGNAL_NO_SIGNAL],
     ['a data refusal', 79, false, SIGNAL_DATA_REFUSAL],
-    ['a data refusal', 80, true, SIGNAL_DATA_REFUSAL],
+    ['a data refusal', 80, false, SIGNAL_DATA_REFUSAL],
   ] as const)(
     'on %s at %i percent offers the session: %s',
     async (_case, payout, offered, response) => {
@@ -1745,7 +1823,7 @@ describe('the analysis', () => {
         analysisScreen({ mode: TradeMode.Demo, pair, durationSec: 5, response, chooseAmount: true })
           .text,
       );
-      if (offered) expect(text).not.toContain(note);
+      if (payout >= 80) expect(text).not.toContain(note);
       else expect(text.endsWith(`\n${note}`)).toBe(true);
       expect(rowsOf(result)).toEqual([
         ...(offered ? [[SESSION]] : []),
@@ -1798,14 +1876,14 @@ describe('the analysis', () => {
     });
   });
 
-  // #360: no signal still offers the session, which waits for a signal itself; candles not read
-  // offer none, since its first trade would wait on the same failure
+  // #509: no signal offers no session either (before it the session waited for one itself);
+  // candles not read offer none, as before
   it.each([
-    ['a rule refusal', SIGNAL_NO_SIGNAL, true],
-    ['a data refusal', SIGNAL_DATA_REFUSAL, true],
+    ['a rule refusal', SIGNAL_NO_SIGNAL, false],
+    ['a data refusal', SIGNAL_DATA_REFUSAL, false],
     ['the broker rate-limiting the candles', SIGNAL_FETCH_FAILED, false],
   ])(
-    'shows %s with no «➕ Ещё», the session row only where the candles were read, and no warning',
+    'shows %s with no «➕ Ещё», no session row and no warning',
     async (_case, response, session) => {
       const { press, calls, logger } = setup({ evaluateSignal: () => Promise.resolve(response) });
       await press(DATA);
@@ -1821,11 +1899,11 @@ describe('the analysis', () => {
     },
   );
 
-  it('says under a rule refusal that the session waits for a signal itself', async () => {
+  it('says under a rule refusal that no trade and no session are offered without a signal', async () => {
     const { press, calls } = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
     await press(DATA);
     expect(edits(calls).at(-1)?.payload.text).toContain(
-      'Без сигнала разовую сделку бот не предлагает. Автосессия дождётся сигнала сама — или повтори анализ позже.',
+      'Без сигнала бот не предлагает ни сделку, ни сессию. Повтори анализ позже или выбери другую пару.',
     );
   });
 
@@ -1872,7 +1950,7 @@ describe('the analysis', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
     const result = payloadOf(calls, 'sendMessage');
     expect(result?.text).toBe(resultOf(SIGNAL_NO_SIGNAL));
-    expect(rowsOf(result)[1]).toEqual([REPEAT]);
+    expect(rowsOf(result)[0]).toEqual([REPEAT]);
     expect(evaluateSignal).toHaveBeenCalledTimes(1);
   });
 

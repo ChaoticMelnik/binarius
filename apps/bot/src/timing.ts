@@ -78,9 +78,10 @@ export const HANDLER_CALLS = {
   // counted as sequential, as in confirm — then editMessageText refused as gone → sendMessage
   demoSignals: { backend: 2, telegram: 3 },
   // a pair of the list (#320) and every demo door of a cycle (#476): answerCallbackQuery ∥
-  // readPairs ∥ readTradingAccess — counted the same way — then editMessageText refused as gone →
-  // sendMessage; a door under a trade or a session sends at once, shorter
-  demoLaunch: { backend: 2, telegram: 3 },
+  // readPairs ∥ readTradingAccess ∥ evaluateSignal (#509) — counted the same way — then
+  // editMessageText refused as gone → sendMessage; a door under a trade or a session sends at
+  // once, shorter
+  demoLaunch: { backend: 3, telegram: 3 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration):
   // answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
   demoGroups: { backend: 1, telegram: 3 },

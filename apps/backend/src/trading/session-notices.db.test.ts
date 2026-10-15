@@ -608,3 +608,63 @@ describe('every way a send ends (#464)', () => {
     expect(sendsTo(captured.calls, target)).toHaveLength(4);
   });
 });
+
+// #509: a session the no-signal limit stopped tells why, trades or not
+describe('the summary of a no_signal_timeout stop (#509)', () => {
+  const OTHER_PAIR = (data: string) => ({
+    text: CLIENT_LABELS.otherPairButton,
+    callback_data: data,
+  });
+  const MENU = { text: CLIENT_LABELS.menuButton, callback_data: 'menu' };
+  const STOP_LINE = '⏳ Сессия остановлена: 2 мин по паре не было сигнала. Выбери другую пару.';
+
+  async function seedOf(durationSec: number): Promise<Target> {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      settings: sessionSettings({ assetId: ASSET, durationSec }),
+    });
+    return { seed, session, step: 0 };
+  }
+
+  it('D10 without a trade: one summary with sound, the reason and «🔀 Выбрать другую пару» of its duration', async () => {
+    const target = await seedOf(15);
+    await stop(target, TradingSessionStopReason.NoSignalTimeout);
+    const { notices, captured } = sender();
+    await notices.tick();
+    const sends = sendsTo(captured.calls, target);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.payload.disable_notification).toBeUndefined();
+    expect(String(sends[0]!.payload.text).split('\n')).toEqual(['📈 EUR/USD OTC', STOP_LINE]);
+    expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig:15'), MENU]);
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+  });
+
+  it('D11 without a trade, another reason sends nothing and marks the session', async () => {
+    const target = await seedOf(15);
+    await stop(target, TradingSessionStopReason.UserStopped);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(0);
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+  });
+
+  it('D12 with a trade: the summary carries the reason, the total and the same keyboard', async () => {
+    const target = await seedOf(60);
+    await settled(target, '4.6');
+    await stop(target, TradingSessionStopReason.NoSignalTimeout);
+    const { notices, captured } = sender();
+    await notices.tick();
+    const sends = sendsTo(captured.calls, target);
+    expect(sends).toHaveLength(2);
+    const summary = sends[1]!;
+    expect(String(summary.payload.text).split('\n').slice(0, 3)).toEqual([
+      '📈 EUR/USD OTC',
+      STOP_LINE,
+      '📊 Итог: 1 сделка — 1 в плюс, 0 в минус',
+    ]);
+    // 60 s is no duration the scanner lists: the duration screen
+    expect(inlineButtons(summary.payload)).toEqual([OTHER_PAIR('demo:sig'), MENU]);
+  });
+});
