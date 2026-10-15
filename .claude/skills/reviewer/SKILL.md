@@ -41,7 +41,7 @@ Check diff size first: `gh pr diff <N> | wc -l`.
 
 **Which agents by the diff's content** (owner 2026-10-14, `.claude/CLAUDE.md` → Экономия токенов): 3c always. **3b** only when the diff touches a security surface — authentication, sessions, OAuth, staff login, the bearer between services; money, tokens, stakes, balances; the DB schema or migrations; HTTP routes or their validation; env, compose, CI or secrets; anything that sends to the broker — and not on a diff of tests, docs, `.claude/**` or bot texts alone. **3d** only when the diff adds more than ~300 lines of code (tests and docs not counted). The review comment names which agents ran and why the others did not.
 
-**Order of launch.** One message carries the `Agent` spawns 3b-3d, so they run in parallel. Spawn them with `run_in_background: false`: calls in one message still run concurrently, and the message returns only when all three have reported — background spawns let the harness end the reviewer's turn first and force a hand-back without a verdict (#163, #10: twice each). Then wait for 3b-3d to finish. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
+**Order of launch.** One message carries the `Agent` spawns 3b-3d, so they run in parallel. Spawn them with `run_in_background: false`: calls in one message still run concurrently, and the message returns only when all three have reported — background spawns let the harness end the reviewer's turn first and force a hand-back without a verdict (#163, #10: twice each). Then wait for 3b-3d to finish. Only then Step 4. Never run a local test while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief. The CI watch of the Runtime check is remote and may run at any time.
 
 **3b. Security review agent** *(by the diff's content, above)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
 
@@ -73,9 +73,13 @@ Merge the agents' results, collapse duplicates. Discard findings that just resta
 
 **Process docs consistency** — when the diff touches `.claude/**` or `audits.md`: (a) the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`) describe the same status transition, step order and check command the same way; (b) they agree with `.claude/CLAUDE.md`; (c) `.claude/CLAUDE.md` against `~/.claude/CLAUDE.md` — where they differ the project section governs, so a (c) finding does not block the merge but goes into the proposed edit of the global file. Done by hand here and by Codex through the prompt's Process-docs block (6-pre).
 
-**Quoted evidence** — every command output the PR or an evidence comment quotes is re-run at the approved head before it is accepted. #68 carried output from an earlier tree twice (m16, n3); both times the claim held and the quoted numbers did not.
+**Quoted evidence** — every command output the PR or an evidence comment quotes is re-run at the approved head before it is accepted. #68 carried output from an earlier tree twice (m16, n3); both times the claim held and the quoted numbers did not. Quoted test runs are covered by CI at the head (Runtime check). The mutation table (`.claude/CLAUDE.md` → «Доказательства мутаций», decision of the owner 2026-10-15, #511):
+- Its header line (written by `tooling/mutations.ts`) has `head=` equal to the PR's current `headRefOid`.
+- Save the list JSON from the comment's `<details>` block to `$SCRATCH/mutations.json`; `shasum -a 256 "$SCRATCH/mutations.json"` equals the header's `list-sha256=`.
+- Re-run, in one call, only the mutations that carry a finding or a doubt: `node tooling/mutations.ts "$SCRATCH/mutations.json" --out "$SCRATCH/mut" --only <ids> > "$SCRATCH/mut.log" 2>&1; echo "exit=$?"; cat "$SCRATCH/mut.log"`, on a checkout of the PR head.
+- A table without the script's header, no list, or mutations run one at a time by hand → a Minor process deviation in the review report.
 
-**Runtime check** — after every spawned agent has finished: `pnpm check` on the PR branch under the project's Node (`eval "$(fnm env)" && fnm use`), exit code as the verdict. State explicitly if Playwright E2E could not be run locally.
+**Runtime check** — CI, not a local `pnpm check` (`.claude/CLAUDE.md` → Экономия токенов → «Тесты — только в спавн-агентах»). One Bash call with `timeout: 600000`: `gh pr checks <N> --watch > "$SCRATCH/ci.log" 2>&1; echo "exit=$?"` (it reports the checks of the PR's current head; exit 0 only when they all passed). Red, or no checks at the current head (not started, a conflict that blocks the `pull_request` merge ref, still missing) → **Blocker**, named with the failing checks and the run link; no rerun. Locally the reviewer runs only the test files needed to verify a specific finding — quiet, one call. State explicitly if Playwright E2E could not be run.
 
 ### Step 6-pre: Final Codex pass (before any LGTM)
 
@@ -126,7 +130,7 @@ The same on round 3, the last one (`.claude/skills/tech-lead/SKILL.md` → Phase
 
 ### Step 6b: PR is clean — notify, merge only after an explicit yes
 
-Before posting LGTM, check `gh pr checks <N>` — if still running, wait; if red, that's a finding (name the failing checks, link the run), post it, move back to Todo per Step 6a — even if every manual/agent check passed.
+Before posting LGTM, the Runtime check's CI result (Step 5) must be green at the head being approved; a new push since then means a new `gh pr checks <N> --watch`. Red or missing → a Blocker (name the failing checks, link the run), post it, move back to Todo per Step 6a — even if every manual/agent check passed.
 
 ```bash
 gh pr comment <N> --repo ChaoticMelnik/binarius --body "Review passed. LGTM — ready to merge. <the skip line, when Codex was skipped>"
@@ -174,8 +178,8 @@ Check against `.claude/skills/architect/SKILL.md` → Architecture Rules to Enfo
 
 ## Severity Guide (both modes)
 
-- **Blocker** — security issue, data corruption risk, broken authorization. Must fix before merge/release.
-- **Major** — a defect in behaviour: logic bug, unhandled edge case, uncovered domain entity, build/type errors, red CI. Must fix.
+- **Blocker** — security issue, data corruption risk, broken authorization; red or missing CI at the PR head (Runtime check, decision of the owner 2026-10-15, #511). Must fix before merge/release.
+- **Major** — a defect in behaviour: logic bug, unhandled edge case, uncovered domain entity, build/type errors. Must fix.
 - **Minor** — style issue, non-critical naming, cosmetic duplication. Note it, don't block for it alone.
 
 **Evidence quality is Minor by default** (owner's rule, 2026-09-30): a test or oracle that could not fail, a proof that is neighbouring rather than isolating, a comment/doc/PR sentence worded stronger than the code, missing mutation evidence — while the code itself behaves correctly. It becomes Major only when that test or check is the **sole** enforcement of an invariant from `.claude/skills/architect/SKILL.md` → Architecture Rules, or of a Blocker-class property (security, authorization, money, data integrity). State which one when labelling it Major.
