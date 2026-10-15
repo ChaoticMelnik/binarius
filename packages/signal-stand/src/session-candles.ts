@@ -13,13 +13,13 @@ const sessionFileSchema = z.object({
   rows: candlesWireSchema,
 });
 
-export interface SessionFile {
+interface SessionFile {
   name: string;
   assetId: number;
   candles: Candle[];
 }
 
-export interface SessionFiles {
+interface SessionFiles {
   files: SessionFile[];
   malformed: string[];
 }
@@ -59,15 +59,19 @@ export function mergedRows(files: readonly SessionFile[]): Candle[] {
   return [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
-export interface SeriesComparison {
+interface SeriesComparison {
   compared: number;
   notInCache: number;
   revised: number;
   firstRevisedAt?: number;
 }
 
-// Rows the cache lacks are not revisions; any OHLC difference on a shared timestamp is. The
-// first row is skipped: an answer's first row opens at the requested window's first tick
+const sameOhlc = (a: Candle, b: Candle): boolean =>
+  a.open === b.open && a.high === b.high && a.low === b.low && a.close === b.close;
+
+// The one revision rule of calibrate's gate 1, for session files and journal lines alike. Rows
+// the cache lacks are not revisions; any OHLC difference on a shared timestamp is. The first row
+// is skipped: an answer's first row opens at the requested window's first tick
 // (docs/signal-stand.md -> The cache), so its open is not the candle's.
 export function compareRows(rows: readonly Candle[], cache: readonly Candle[]): SeriesComparison {
   const result: SeriesComparison = { compared: 0, notInCache: 0, revised: 0 };
@@ -78,12 +82,7 @@ export function compareRows(rows: readonly Candle[], cache: readonly Candle[]): 
       continue;
     }
     result.compared++;
-    if (
-      found.open !== row.open ||
-      found.high !== row.high ||
-      found.low !== row.low ||
-      found.close !== row.close
-    ) {
+    if (!sameOhlc(found, row)) {
       result.revised++;
       result.firstRevisedAt ??= row.timestamp;
     }

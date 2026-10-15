@@ -26,7 +26,7 @@ import { pointLabel, VARIANTS } from './variants';
 
 export const calibrationPath = (dir: string): string => path.join(dir, 'calibration.json');
 
-export const calibrationSchema = z.object({
+const calibrationSchema = z.object({
   headlineDelayMs: z.int(),
   calibratedAt: z.number(),
 });
