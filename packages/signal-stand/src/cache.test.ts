@@ -76,7 +76,7 @@ describe('cache', () => {
     expect(readFileSync(`${dir}/pairs.json`, 'utf8')).toContain('"digits": 5');
   });
 
-  it("F8 a truncated pairs.json is the stand's refusal, not a parse crash", () => {
+  it("F11 a truncated pairs.json is the stand's refusal, not a parse crash", () => {
     const dir = tempDir();
     writePairs(dir, [PAIR]);
     const text = readFileSync(`${dir}/pairs.json`, 'utf8');
