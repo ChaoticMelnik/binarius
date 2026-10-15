@@ -141,10 +141,12 @@ describe('the mode screen (#474)', () => {
         '💵 Реальный баланс: $100.00',
         '💼 Сумма реальной сделки: $7.00',
         '',
-        '⚠️ В реальном режиме сделки и сессии идут на реальные деньги. В сессии ставка растёт после проигрыша.',
+        '⚠️ В реальном режиме сделки и сессии идут на реальные деньги. В сессии ставка растёт после проигрыша. Вернуться в демо можно здесь же или командой /stop.',
         STOPS_SESSION,
       ].join('\n'),
     );
+    // the way back out of real (#473)
+    expect(lastText(calls)).toContain('Вернуться в демо можно здесь же или командой /stop.');
     expect(rowsOf(sent)).toEqual([
       [button(LABELS.modeEnableButton, MODE_CONFIRM_CALLBACK_DATA)],
       MENU,

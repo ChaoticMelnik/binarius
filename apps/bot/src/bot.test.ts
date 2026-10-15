@@ -2723,12 +2723,15 @@ describe('/stop (#122)', () => {
   it('B8 answers /stop in the middle of the dialog without ending it', async () => {
     const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
     await bot.handleUpdate(textUpdate('/stop'));
-    // the setup's stub refuses the stop, so the answer is the failure's: what matters is that the
-    // command answered and the step stayed
+    // the setup's stubs refuse the stop and the switch to demo (#473), so the answers are the
+    // failures': what matters is that the command answered and the step stayed
     const sends = calls.filter((call) => call.method === 'sendMessage');
-    expect(sends).toHaveLength(1);
-    expect(sends[0]?.payload.text).toBe(TEXTS.unavailable.value);
+    expect(sends.map((call) => call.payload.text)).toEqual([
+      TEXTS.modeOutcomeUnknown.value,
+      TEXTS.unavailable.value,
+    ]);
     expect(backend.stopSessions).toHaveBeenCalledWith('4242');
+    expect(backend.setTradingMode).toHaveBeenCalledWith('4242', TradeMode.Demo);
     expect(backend.emailLogin).not.toHaveBeenCalled();
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
 
