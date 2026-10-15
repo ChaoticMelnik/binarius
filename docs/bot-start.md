@@ -748,8 +748,9 @@ The bot's name and avatar are not registered: they stay with @BotFather (`setMyN
 | `BACKEND_URL`           | yes         | `http:`/`https:`, `http://backend:3000` under compose                 |
 | `LOG_LEVEL`             | no (`info`) | pino level                                                            |
 | `WELCOME_VIDEO_FILE_ID` | no          | `file_id` of the welcome video, no whitespace; absent means text only |
+| `WEB_PUBLIC_URL`        | yes         | `web`'s origin, the same value and parser as `web`'s (compose gives the same default); «💳 Пополнить» opens `<origin>/cashier`, https only, otherwise no button and one startup warning (#27, [deposit.md](deposit.md)) |
 
-Under compose the `bot` service is given only these five names, not the shared environment
+Under compose the `bot` service is given only these six names, not the shared environment
 anchor the other services take: the Postgres password and the Redis URL have no business in a
 process that opens neither, and `WELCOME_VIDEO_FILE_ID` is passed only when it is set.
 Nothing in this repository guards that today. `env.test.ts` used to scan `compose.yaml` line by

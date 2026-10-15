@@ -143,7 +143,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `active_session_exists` with `null` | that session ended between the backend's check and its read | «⏳ Предыдущая сессия только что завершилась. Нажми кнопку ещё раз.» |
 | 404 `broker_account_not_found`, 409 `account_revoked` | refusal before the side effect | `accountNone` / `accountRevoked` + the connect button |
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
-| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) above the way back |
+| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «⭐ Купить токены» (#117, [stars.md](stars.md)), then «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) above the way back |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
 | 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396): a real door pressed by a user left in real mode; the bot does not know the flag | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
@@ -279,8 +279,9 @@ because its last trade can still settle, and under it «🔁 Ещё сессия
 duration — drawn only when the view has `settings` and its duration is one the demo still offers
 (`durationOf`), so a session of before #313 gets none — then the end of the path (#350,
 ([bot-navigation.md](bot-navigation.md))): «📊 Новый анализ» on the same pair and duration (when the demo still offers
-it), «📡 К сигналам», «👥 Пригласить друга» (#115, [referrals.md](referrals.md)), «🏠 В меню»;
-without `settings` only «👥 Пригласить друга» and «🏠 В меню». The tracker's edits redraw
+it), «📡 К сигналам», «💳 Пополнить» (#27, [deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is
+https), «👥 Пригласить друга» (#115, [referrals.md](referrals.md)), «🏠 В меню»; without `settings`
+only «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню». The tracker's edits redraw
 the keyboard from the view they show, so the stop button goes away and the rest appears when the
 session stops. A failed start, `sessionJustEnded`, leads back to the analysis and the menu; a failed
 refresh or stop offers the refresh and the menu, never the stop again.
@@ -443,8 +444,9 @@ Telegram's own forwarding.
   the bot's `ctx.me.username` from the press that started tracking.
 - **The keyboard** is the stopped status's without «🔄 Обновить» (which edits a message's text, and
   a photo has a caption): «🔁 Ещё сессия» while the demo offers the duration, «📊 Новый анализ»,
-  «📡 К сигналам», «👥 Пригласить друга» (#115), «🏠 В меню»; «👥 Пригласить друга» and «🏠 В меню»
-  alone without `settings` (`sessionCardKeyboard`). «📤 Поделиться» comes on top of these rows by
+  «📡 К сигналам», «💳 Пополнить» (#27, https only), «👥 Пригласить друга» (#115), «🏠 В меню»;
+  «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню» alone without `settings`
+  (`sessionCardKeyboard`). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321).
   «📊 Новый анализ» and «📡 К сигналам» edit the pressed message; under the card Telegram refuses
   that with «there is no text in the message to edit», `editRefusal` (`screen.ts`) reads it as
