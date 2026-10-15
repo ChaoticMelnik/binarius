@@ -425,7 +425,10 @@ describe('contract coverage (issue #6)', () => {
       | 'trades'
       | 'lastIntent'
       | 'balance'
+      | 'noticesDone'
     >();
+    // #464: the backend's summary message went out
+    expectTypeOf<TradingSessionView['noticesDone']>().toEqualTypeOf<boolean>();
     expectTypeOf<TradingSessionView['status']>().toEqualTypeOf<'active' | 'paused' | 'stopped'>();
     expectTypeOf<TradingSessionView['trades']>().toEqualTypeOf<{
       planned: number;

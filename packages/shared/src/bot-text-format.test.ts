@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { formatAge, formatCount, formatSignedUsd, formatStake, formatUsd } from './bot-text-format';
+import {
+  formatAge,
+  formatCount,
+  formatPrice,
+  formatSignedStake,
+  formatSignedUsd,
+  formatStake,
+  formatUsd,
+} from './bot-text-format';
 
 const NBSP = ' ';
 const spaced = (text: string) => text.replaceAll(' ', NBSP);
@@ -85,5 +93,27 @@ describe('formatAge', () => {
     [7200, '120 мин'],
   ])('prints %i seconds as %s', (seconds, printed) => {
     expect(formatAge(seconds)).toBe(printed);
+  });
+});
+
+describe('formatSignedStake (#464)', () => {
+  it.each([
+    ['9.6', '+$9.60'],
+    ['9.60000000', '+$9.60'],
+    ['-5', '-$5.00'],
+    ['-5.00000000', '-$5.00'],
+    ['0.005', '+$0.005'],
+    ['1000.5', '+$1 000.50'],
+  ])('prints %s as %s', (amount, printed) => {
+    expect(formatSignedStake(amount)).toBe(spaced(printed));
+  });
+});
+
+describe('formatPrice', () => {
+  it('prints the pair’s digits and clamps them to the catalog’s bounds', () => {
+    expect(formatPrice(1.085604, 2)).toBe('1.09');
+    expect(formatPrice(1.085604, 7)).toBe('1.0856040');
+    expect(formatPrice(1.085604, 11)).toBe('1.0856040000');
+    expect(formatPrice(1.085604, -1)).toBe('1');
   });
 });

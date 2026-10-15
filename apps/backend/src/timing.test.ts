@@ -52,6 +52,7 @@ import {
   MAILING_SEND_BATCH,
   MAILING_SEND_PER_SECOND,
   MAILING_SEND_TICK_MS,
+  SESSION_NOTICE_SEND_PER_SECOND,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
   MAX_SIGNAL_SCAN_PER_MINUTE,
@@ -297,6 +298,16 @@ describe('broker balance timing', () => {
     );
     expect(MAILING_SEND_PER_SECOND).toBeLessThan(TELEGRAM_BOT_SENDS_PER_SECOND);
     expect(MAILING_PLAN_TICK_MS).toBeLessThan(MAILING_MIN_OFFSET_HOURS * 3_600_000);
+    // #464: the session notices share the bot's rate with the mailings; stop() waits for the gap,
+    // a summary's balance refresh and its send
+    expect(MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND).toBeLessThan(
+      TELEGRAM_BOT_SENDS_PER_SECOND,
+    );
+    expect(
+      1000 / SESSION_NOTICE_SEND_PER_SECOND +
+        TRADING_ACCESS_REFRESH_BUDGET_MS +
+        CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
+    ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it.each([

@@ -1635,6 +1635,7 @@ describe('body size', () => {
       },
       lastIntent: INTENT,
       balance: { available: DECIMAL, ageSec: NONNEGATIVE_INT, current: false },
+      noticesDone: false,
     };
     const PAIR = {
       id: INT,

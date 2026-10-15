@@ -45,6 +45,8 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | `started_at`, `ended_at` | the insert's `now()`; the stop's `now()` |
 | `last_decision_at` | the runnable scan's order key; NULL until the orchestrator first reached an ending |
 | `summary_sent_at` | NULL until the session's summary card is claimed (#318): set once by `claimSessionSummary`'s CAS, never cleared; no CHECK and no index (the claim updates by primary key) |
+| `notified_trades` | the session notices' cursor (#464, [bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): how many of the session's settled trades, in creation order, the backend's sender claimed for sending; NOT NULL default 0, CHECK `trading_sessions_notified_trades_check` (`>= 0`); raised by one by `claimSessionTradeNotice`'s CAS, lowered by one only by `releaseSessionTradeNotice` |
+| `final_notice_sent_at` | NULL until the session's summary message is claimed (#464): set by `claimSessionFinalNotice`'s CAS, taken back only by `releaseSessionFinalNotice` while `summary_sent_at` is NULL; `trading_sessions_notice_pending_idx (created_at) where final_notice_sent_at is null` is the sender's scan |
 | `last_signal_action` | `up`/`down` (CHECK `trading_sessions_last_signal_action_check` from `TradeAction`) or NULL: the direction the last deciding attempt saw — the traded action, the paused one — and NULL after a `no_signal` or before any decision ([The pause after two losses](#the-pause-after-two-losses-379), #379) |
 
 - **One active session per account:** `trading_sessions_active_account_idx`, unique on
@@ -203,7 +205,9 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 `not_found` with the same body (Rule 13); a missing `telegramUserId` is 400.
 
 The view is an allowlist built key by key: `{ id, mode, status, stopReason, settings, startedAt,
-endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIntent, balance }` —
+endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIntent, balance,
+noticesDone }` — `noticesDone` is `final_notice_sent_at is not null` (#464: the bot's card waits
+for it);
 `planned` is `settings.trades`, `lastIntent` the same view `GET /trading/intents/:id` answers, or
 `null`. Bounded: counters, one settings object, one intent; no list.
 
@@ -215,7 +219,8 @@ endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIn
   of the newest observation, `greatest(rest_observed_at, <mode>_event_at)`, by the database clock;
   `current` is true when no `settle` row of `token_ledger` for the session's intents is newer than
   that observation (true with no settlement at all). The account id stays out of the view.
-- **The refresh** (`viewForReply` in `session-routes.ts`, #337): when the view is finished
+- **The refresh** (`readFinishedSessionView` in `session-view.ts`, which the routes' `viewForReply`
+  and the session notices' summary (#464) both call, #337): when the view is finished
   (`isTradingSessionFinished`: stopped, and the last intent has no transition left), `settled > 0`
   and `balance.current` is not true, the route reads the session's account
   (`readTradingSessionAccount`, owner-scoped) and calls `balance.refresh(accountId, { signal:
@@ -243,13 +248,14 @@ finishes on its own path.
 Body `{ telegramUserId }` (`stopTradingSessionRequestSchema`). `claimSessionSummary` runs one
 `UPDATE trading_sessions SET summary_sent_at = now() … RETURNING` whose WHERE holds: the owner
 (`broker_accounts` → `users.telegram_user_id`, Rule 13), `status = 'stopped'`,
-`summary_sent_at is null`, no intent of the session outside `TERMINAL_TRADE_INTENT_STATUSES`, and at
+`summary_sent_at is null`, `final_notice_sent_at is not null` (the card follows the backend's
+summary message, #464), no intent of the session outside `TERMINAL_TRADE_INTENT_STATUSES`, and at
 least one `settled` intent with its broker trade. In the same transaction it reads the settled
 intents' trades in creation order (`profit`, `open_price`, `close_price`) and their sum by
 `sessionProfitSumSql` — the fragment the view's `trades.profit` is — over the same rows. 200
 `{ summary: { result, trades: [{ profit, openPrice, closePrice }] } }`, built field by field. Every
-miss — not the owner's or missing, not stopped, a trade still able to move, no settled trade, sent
-already — and a non-uuid id are one 409 `{ error: 'summary_unavailable' }` that writes nothing. A
+miss — not the owner's or missing, not stopped, the summary message not sent yet, a trade still
+able to move, no settled trade, sent already — and a non-uuid id are one 409 `{ error: 'summary_unavailable' }` that writes nothing. A
 bad body is 400. No broker call. Terminal intents and a stopped session cannot change, so the rows
 read after the claim are the ones it checked. Two claims at once: the row lock serialises them and
 the second re-checks `summary_sent_at is null`, so one wins. A lost answer after the commit loses

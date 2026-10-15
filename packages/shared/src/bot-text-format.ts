@@ -1,3 +1,5 @@
+import { MAX_PAIR_DIGITS } from './broker';
+
 // How the bot texts print the backend's numbers (#24), for the bot and the variables of
 // bot-text-vars.ts (#358). Text in, text out: an amount is a decimal string and a count an
 // integer string, and going through Number would lose digits a numeric(20,8) or a bigint holds
@@ -36,6 +38,18 @@ export function formatStake(amount: string): string {
 }
 
 export const formatCount = (count: string): string => groupDigits(count);
+
+// A trade's figure after «→» in its message (#464): '9.6' → '+$9.60', '-5' → '-$5.00', every
+// fraction digit as formatStake. The value is a stake or a payout, never zero (the session's
+// messages print a tie as its returned stake).
+export function formatSignedStake(amount: string): string {
+  return amount.startsWith('-') ? `-${formatStake(amount.slice(1))}` : `+${formatStake(amount)}`;
+}
+
+// A price is not money: a broker's double, printed with the pair's digits. A value outside the sane
+// range is printed at the nearest bound rather than failing the message.
+export const formatPrice = (value: number, digits: number): string =>
+  value.toFixed(Math.min(Math.max(Math.trunc(digits), 0), MAX_PAIR_DIGITS));
 
 // A Stars payment's time (#118, /paysupport): Moscow time, which has had no DST since 2014, so a
 // fixed +3 h. 1790000000 → '21.09.2026 17:13'

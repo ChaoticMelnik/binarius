@@ -19,6 +19,7 @@ import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { createMailingEngine } from './mailing/engine';
+import { createSessionNoticeSender } from './trading/session-notices';
 import { createStarReconciler } from './payments/star-reconciler';
 import { setBotTextSource } from './auth/texts';
 import { DEPOSIT_INIT_DATA_MAX_AGE_MS, INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
@@ -295,6 +296,17 @@ const balanceReconciler = createBalanceReconciler({
   },
 });
 
+// docs/bot-session.md → Trade messages (#464): every settled trade of a session as its own silent
+// message and the finished session's summary; started with the other loops after listen(),
+// stopped in phase 1
+const sessionNotices = createSessionNoticeSender({
+  db,
+  push: clientPush,
+  catalog: pairsCatalog,
+  balance: balanceReconciler,
+  logger: app.log,
+});
+
 // docs/signal.md -> The budget: the defaults fit the broker's per-IP window (checked at import);
 // ceilings raised over it are the operator's choice, said once here
 const brokerGets = brokerGetsPerMinute({
@@ -344,6 +356,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
       () => mailing.stop(),
+      () => sessionNotices.stop(),
       () => starReconciler.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
@@ -388,6 +401,7 @@ if (!shuttingDown) {
   for (const scanner of signalScanners) scanner.start();
   botTexts.start();
   mailing.start();
+  sessionNotices.start();
   starReconciler.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.

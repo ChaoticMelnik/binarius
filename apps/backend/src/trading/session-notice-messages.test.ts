@@ -1,0 +1,115 @@
+import { describe, expect, it } from 'vitest';
+import {
+  createBotTexts,
+  createSessionTexts,
+  defaultBotTextSource,
+  SessionTradeResult,
+  TradingSessionStatus,
+  TradingSessionStopReason,
+  type BinaryPair,
+  type DecimalString,
+  type TradingSessionSettings,
+  type TradingSessionView,
+} from '@binarius/shared';
+import type { ClaimedSessionTrade } from '@binarius/db';
+import { inlineButtons } from '../admin/testing';
+import { CLIENT_LABELS } from '../auth/texts';
+import { pairOf, sessionSummaryMessage, sessionTradeMessage } from './session-notice-messages';
+
+const d = (value: string) => value as DecimalString;
+const shared = createSessionTexts(createBotTexts(defaultBotTextSource));
+const { Won: W, Lost: L, Tied: T } = SessionTradeResult;
+
+const claimed = (results: SessionTradeResult[], amount = '5'): ClaimedSessionTrade => ({
+  trade: {
+    amount: d(amount),
+    outcome: d('9.6'),
+    result: results.at(-1)!,
+    openPrice: 1.08765,
+    closePrice: 1.08712,
+    assetId: 101,
+  },
+  results,
+});
+const settings: TradingSessionSettings = {
+  version: 1,
+  assetId: 101,
+  durationSec: 60,
+  trades: 5,
+  stake: { baseStake: d('5'), stakeScale: 0 },
+};
+
+describe('sessionTradeMessage (#464)', () => {
+  it('numbers each trade of a fixed session as its own cycle at step 1', () => {
+    expect(sessionTradeMessage(claimed([L, L, W, T]), settings, 5).value).toBe(
+      shared.sessionTradeText({
+        ...claimed([T]).trade,
+        digits: 5,
+        cycle: 4,
+        step: 1,
+        baseStake: d('5'),
+      }).value,
+    );
+    expect(
+      sessionTradeMessage(claimed([W]), settings, 5).value.startsWith('⚡ Цикл 1 Шаг 1\n'),
+    ).toBe(true);
+  });
+
+  it('never prints the adaptive line under the v1 settings: the stake is the base stake', () => {
+    for (const result of [W, L, T]) {
+      expect(sessionTradeMessage(claimed([result]), settings, 5).value).not.toContain('🔄');
+    }
+    // a stake above the base, as #450's steps will have
+    expect(sessionTradeMessage(claimed([W], '11.5'), settings, 5).value).toContain(
+      '🔄 Адаптивная ставка включена\n⚡',
+    );
+  });
+
+  it('prints the prices as the broker sent them when the catalog has no digits', () => {
+    expect(sessionTradeMessage(claimed([W]), null, null).value).toContain(
+      '📊 Цена: 1.08765 → 1.08712',
+    );
+  });
+});
+
+describe('sessionSummaryMessage (#464)', () => {
+  const view: TradingSessionView = {
+    id: '00000000-0000-4000-8000-000000000001',
+    mode: 'demo',
+    status: TradingSessionStatus.Stopped,
+    stopReason: TradingSessionStopReason.UserStopped,
+    settings,
+    startedAt: '2026-10-07T10:00:00.000Z',
+    endedAt: '2026-10-07T10:05:00.000Z',
+    trades: { planned: 5, settled: 2, rejected: 0, won: 1, lost: 1, tied: 0, profit: d('-0.4') },
+    lastIntent: null,
+    balance: null,
+    noticesDone: false,
+  };
+
+  it('is the shared summary of the view under the menu button', () => {
+    const message = sessionSummaryMessage(view, 'EUR/USD OTC');
+    expect(message.text.value).toBe(shared.sessionSummaryText('EUR/USD OTC', 101, view).value);
+    expect(inlineButtons({ reply_markup: message.reply_markup })).toEqual([
+      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+    ]);
+  });
+
+  it('names the asset by the last trade without settings, and refuses a session naming none', () => {
+    const lastIntent = { assetId: 77 } as TradingSessionView['lastIntent'];
+    expect(sessionSummaryMessage({ ...view, settings: null, lastIntent }, null).text.value).toBe(
+      shared.sessionSummaryText(null, 77, view).value,
+    );
+    expect(() => sessionSummaryMessage({ ...view, settings: null }, null)).toThrow();
+  });
+});
+
+describe('pairOf', () => {
+  const pair = { id: 101, symbol: 'EUR/USD OTC', digits: 5 } as BinaryPair;
+  it('reads the symbol and digits of the asset, null for each without it', () => {
+    const catalog = { pairs: [pair], fetchedAt: 0, ageMs: 0, fresh: false };
+    expect(pairOf(catalog, 101)).toEqual({ symbol: 'EUR/USD OTC', digits: 5 });
+    expect(pairOf(catalog, 7)).toEqual({ symbol: null, digits: null });
+    expect(pairOf(undefined, 101)).toEqual({ symbol: null, digits: null });
+  });
+});

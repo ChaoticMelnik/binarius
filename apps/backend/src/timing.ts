@@ -104,6 +104,19 @@ export const TELEGRAM_BOT_SENDS_PER_SECOND = 30;
 export const MAILING_RETRY_MS = 300_000;
 export const MAILING_MAX_ATTEMPTS = 3;
 
+// --- The session notices (#464) ----------------------------------------------------------------
+// docs/bot-session.md → Trade messages. The sender's tick: a settled trade's message comes at most
+// this much after the settle, plus the pacing.
+export const SESSION_NOTICE_TICK_MS = 3_000;
+// the sessions one tick looks at, oldest first, each with something to send
+export const SESSION_NOTICE_SCAN = 200;
+// the notices a second, on the same bot token as the mailings: both together stay under
+// Telegram's limit (checked below)
+export const SESSION_NOTICE_SEND_PER_SECOND = 9;
+// a send Telegram refused (not 403 or 429) is tried again on later ticks, up to the attempts, then
+// left claimed, so a deterministic refusal cannot hold the session's later trades forever
+export const SESSION_NOTICE_MAX_ATTEMPTS = 3;
+
 // --- The Stars reconciler (#117) --------------------------------------------------------------
 // docs/stars.md → Reconciliation. Long polling confirms an update's offset even when its handler
 // failed, so a successful_payment the backend never heard of is lost to the bot; the reconciler
@@ -352,6 +365,13 @@ export const TIMING_CHAIN_HOLDS =
   (MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND <= MAILING_SEND_TICK_MS &&
   MAILING_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
   MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_HOURS * 3_600_000 &&
+  // the session notices (#464): with the mailings under Telegram's rate for one bot; stop() waits
+  // for the send in flight - the pace's gap, then a summary's balance refresh and its one send
+  MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
+  1000 / SESSION_NOTICE_SEND_PER_SECOND +
+    TRADING_ACCESS_REFRESH_BUDGET_MS +
+    CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <
+    SHUTDOWN_PHASE1_BUDGET_MS &&
   // the pre-checkout route reads only, inside phase 1 (the bot's chain holds it under Telegram's
   // 10 s, apps/bot/src/timing.ts)
   STARS_PRECHECKOUT_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

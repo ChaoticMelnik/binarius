@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -619,6 +619,7 @@ export async function readTradingSessionView(
           available: sessionAvailable,
           ageSec: nullableAgeSec(sessionObservedAt),
           current: sessionBalanceCurrent,
+          noticesDone: sql<boolean>`${tradingSessions.finalNoticeSentAt} is not null`,
         })
         .from(tradingSessions)
         .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -676,6 +677,7 @@ export async function readTradingSessionView(
           session.available === null || session.ageSec === null
             ? null
             : { available: session.available, ageSec: session.ageSec, current: session.current },
+        noticesDone: session.noticesDone,
       };
     },
     { isolationLevel: 'repeatable read', accessMode: 'read only' },
@@ -686,9 +688,10 @@ export async function readTradingSessionView(
 // summary card). One CAS UPDATE sets summary_sent_at only when every condition holds: the
 // owner's session (Rule 13, a foreign id reads as a missing one), stopped, not sent before, no
 // intent of it outside the terminal statuses, and at least one settled intent with its broker
-// trade. Any miss is undefined and writes nothing. The rows the card draws are read after it in
-// the same transaction; they cannot change any more: terminal intents have no edges and a
-// stopped session never runs again.
+// trade, and the session's summary message already sent (#464: the card follows the summary,
+// docs/bot-session.md → The summary card). Any miss is undefined and writes nothing. The rows the
+// card draws are read after it in the same transaction; they cannot change any more: terminal
+// intents have no edges and a stopped session never runs again.
 export async function claimSessionSummary(
   db: Db,
   { id, telegramUserId }: { id: string; telegramUserId: string },
@@ -706,6 +709,7 @@ export async function claimSessionSummary(
           eq(tradingSessions.id, id),
           eq(tradingSessions.status, TradingSessionStatus.Stopped),
           isNull(tradingSessions.summarySentAt),
+          isNotNull(tradingSessions.finalNoticeSentAt),
           sql`exists (
             select 1 from ${brokerAccounts}
               join ${users} on ${users.id} = ${brokerAccounts.userId}

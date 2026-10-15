@@ -22,6 +22,7 @@ import {
   type SignalDataRefusal,
   type SignalDecision,
   type TradingSignalResponse,
+  formatPrice,
 } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
 import {
@@ -29,7 +30,6 @@ import {
   analysisUnavailableScreen,
   formatAtrPct,
   formatAtrTicks,
-  formatPrice,
   formatRsi,
   NO_SIGNAL_REASON_TEXT,
 } from './analysis';

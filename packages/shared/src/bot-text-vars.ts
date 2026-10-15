@@ -1,6 +1,7 @@
 import {
   formatAge,
   formatCount,
+  formatSignedStake,
   formatPaymentDate,
   formatSignedUsd,
   formatStake,
@@ -125,7 +126,7 @@ export const BOT_TEXT_VARS = {
   }),
   stake: variable({
     description:
-      'Сумма сделки: в карточке и на экране запуска — в режиме пользователя (реальный — сохранённая реальная или минимум брокера); на экране суммы, в строке сохранения и /settings — ставка своего режима',
+      'Сумма сделки: в карточке и на экране запуска — в режиме пользователя (реальный — своя или минимум брокера); на экране суммы, при сохранении и в /settings — своего режима; в сделке сессии — её ставка',
     sample: '$5.00',
     format: (stake: DecimalString | null, texts) =>
       stake === null ? texts('stakeMinimumLabel') : formatStake(stake),
@@ -167,7 +168,16 @@ export const BOT_TEXT_VARS = {
   line: shown('Строка сделки или сессии', 'EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00'),
   assetId: shown('Номер актива у брокера', '42'),
   digits: shown('Допустимое число знаков после запятой', '2'),
-  step: shown('Номер сделки из всех', '3 из 5'),
+  step: shown('Номер сделки из всех («3 из 5»); в сообщении сделки сессии — шаг серии', '3 из 5'),
+  cycle: shown('Номер цикла сделок сессии: серия до выигрыша', '3'),
+  outcome: variable({
+    description:
+      'Сделка сессии после «→»: выигрыш — вся выплата, проигрыш — потеря, ничья — вернувшаяся ставка; со знаком',
+    sample: formatSignedStake('22.08'),
+    format: (amount: DecimalString) => formatSignedStake(amount),
+  }),
+  openPrice: shown('Цена открытия сделки, со знаками пары', '0.49803'),
+  closePrice: shown('Цена закрытия сделки, со знаками пары', '0.49820'),
   score: shown('Счёт сессии', '1 в плюс, 1 в минус, 1 в ноль'),
   profit: variable({
     description: 'Результат сессии в $, со знаком',

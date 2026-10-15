@@ -209,6 +209,8 @@ export const tradingSessionViewSchema = z.strictObject({
   lastIntent: tradeIntentViewSchema.nullable(),
   // null while the account has no snapshot
   balance: tradingSessionBalanceSchema.nullable(),
+  // the backend's summary message of the session went out (#464): the bot's card waits for it
+  noticesDone: z.boolean(),
 });
 export type TradingSessionView = z.infer<typeof tradingSessionViewSchema>;
 

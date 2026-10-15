@@ -127,7 +127,8 @@ for another caller's exchange on the row lock
 - The background tick (below): `mayRefresh: false`.
 - **The session view** (#337): `GET /trading/sessions/:id` and the final read of
   `POST /trading/sessions/:id/stop` and of `POST /trading/sessions/stop` (#122, one per stopped
-  session, in parallel) (`viewForReply` in `apps/backend/src/trading/session-routes.ts`).
+  session, in parallel), and the session notices' summary (#464) (`readFinishedSessionView` in
+  `apps/backend/src/trading/session-view.ts`).
   Only for a finished session (`isTradingSessionFinished`) with `settled > 0` whose snapshot is
   not `current` — older than the session's last `settle` row of `token_ledger` (`readTradingSessionView`).
   `mayRefresh: false` (the bot's poll is a timer, Rule 12), no `requested` (a poll does not keep the

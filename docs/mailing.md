@@ -126,7 +126,8 @@ after a 403 (`engine.db.test.ts` → a settle that fails).
 
 **Rate.** One pacer for every kind spaces the sends `1000 / MAILING_SEND_PER_SECOND` ms apart:
 20 a second, under Telegram's limit of about 30 a second for one bot's messages to different
-users (stated, not measured; M10). A batch at that rate takes its tick exactly (100 × 50 ms = 5 s,
+users (stated, not measured; M10); the session notices' 9 a second (#464,
+[bot-session.md](bot-session.md#rate-and-timing)) come on top, and the two together stay under it. A batch at that rate takes its tick exactly (100 × 50 ms = 5 s,
 `TIMING_CHAIN_HOLDS` holds with equality, no headroom), so the claims and sends push a full batch
 past it; the tick that overlaps it is a no-op. The gaps and Telegram's pause run on a monotonic clock
 (`performance.now`): a wall-clock step neither stretches nor cuts them.

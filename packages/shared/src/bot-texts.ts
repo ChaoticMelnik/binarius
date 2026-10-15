@@ -79,13 +79,14 @@ type CatalogOptions<V extends readonly BotTextVarName[]> = Omit<
   vars?: V;
 };
 
-const variablesOf = <V extends readonly BotTextVarName[]>(
-  names: V | undefined,
-): Pick<BotTextVars, V[number]> =>
-  Object.fromEntries((names ?? []).map((name) => [name, BOT_TEXT_VARS[name]])) as Pick<
-    BotTextVars,
-    V[number]
-  >;
+// Pick's own mapped type, spelled out: a Pick of the registry's typeof is written into the .d.ts
+// with the whole registry inlined for every key, which put the catalog past what tsc serializes
+// (#464); this form lists only the key's own variables.
+type VariablesOf<V extends readonly BotTextVarName[]> = {
+  readonly [K in V[number]]: BotTextVars[K];
+};
+const variablesOf = <V extends readonly BotTextVarName[]>(names: V | undefined): VariablesOf<V> =>
+  Object.fromEntries((names ?? []).map((name) => [name, BOT_TEXT_VARS[name]])) as VariablesOf<V>;
 
 const html = <const G extends string, const V extends readonly BotTextVarName[] = readonly []>(
   group: G,
@@ -102,6 +103,8 @@ const plain = <const G extends string, const V extends readonly BotTextVarName[]
 ) => botPlainText(group, description, source, { ...options, variables: variablesOf(vars) });
 
 const g = BotTextGroup;
+// what the backend holds when it prints a session's trade (#464)
+const tradeNotice = ['cycle', 'step', 'stake', 'outcome', 'openPrice', 'closePrice'] as const;
 const caption = { limit: TELEGRAM_CAPTION_LIMIT };
 // What a status card's handler holds: the access read and the user's first_name (docs/bot-texts.md
 // → Variables); the stake picker's adds the minimum and both balances, so either mode's picker
@@ -117,7 +120,7 @@ const user = [
 ] as const;
 const picker = [...user, 'minStake', 'demoAvailable', 'realAvailable'] as const;
 
-const BOT_TEXT_CORE = {
+export const BOT_TEXT_CATALOG = {
   // ---- Вход и подключение -------------------------------------------------------------------
   welcome: html(
     g.Start,
@@ -1490,6 +1493,44 @@ const BOT_TEXT_CORE = {
     { ...caption, vars: ['symbol', 'result', 'botUsername'] },
   ),
 
+  // Sent by the backend only (#464, docs/bot-session.md → Trade messages): a message per settled
+  // trade of a session, without sound and without buttons, and the summary once it is finished.
+  sessionTradeWon: html(
+    g.Session,
+    'Сообщение сделки сессии, выигрыш: цикл и шаг, ставка → выплата, цена открытия → закрытия. Без звука и без кнопок.',
+    `⚡ Цикл {cycle} Шаг {step}
+<pre>🟢 Ставка: {stake} → {outcome}
+📊 Цена: {openPrice} → {closePrice}</pre>`,
+    { vars: tradeNotice },
+  ),
+  sessionTradeLost: html(
+    g.Session,
+    'Сообщение сделки сессии, проигрыш: ставка → потеря со знаком минус.',
+    `⚡ Цикл {cycle} Шаг {step}
+<pre>🔴 Ставка: {stake} → {outcome}
+📊 Цена: {openPrice} → {closePrice}</pre>`,
+    { vars: tradeNotice },
+  ),
+  sessionTradeTied: html(
+    g.Session,
+    'Сообщение сделки сессии, ничья: ставка → та же ставка, она вернулась.',
+    `⚡ Цикл {cycle} Шаг {step}
+<pre>⚪ Ставка: {stake} → {outcome}, ставка вернулась
+📊 Цена: {openPrice} → {closePrice}</pre>`,
+    { vars: tradeNotice },
+  ),
+  sessionAdaptiveStake: html(
+    g.Session,
+    'Первая строка сообщения сделки, когда ставка этой сделки выше базовой.',
+    `🔄 Адаптивная ставка включена`,
+  ),
+  sessionSummarySymbol: html(
+    g.Session,
+    'Итоговое сообщение сессии (со звуком): первая строка — актив; под ней строки итога из сообщения сессии.',
+    `📈 {symbol}`,
+    { vars: ['symbol'] },
+  ),
+
   // ---- Пополнение (#112, docs/deposit.md) -------------------------------------------------
   // Sent by the backend only, after the cashier's credited event, with the «menuButton» button.
   depositCredited: html(
@@ -1772,12 +1813,18 @@ const BOT_TEXT_CORE = {
     '🚀 Автосессии на Binodex прямо в Telegram: бот сам торгует демо по сигналу, ты смотришь результат',
     { limit: SHORT_DESCRIPTION_LIMIT },
   ),
-};
-
-// /paysupport: the Stars payments and the refund request (#118, docs/stars.md). Declared apart from
-// the rest: the one literal of the whole catalog would pass what tsc serializes into a .d.ts
-// (TS7056), and the annotation below keeps each part's type its own.
-const PAYSUPPORT_TEXTS = {
+  cycleStakeChoose: html(
+    g.Demo,
+    'Экран суммы демо-цикла (#476): под строкой цикла, над кнопками сумм.',
+    `Выбери сумму сделки 👇`,
+    { vars: ['firstName'] },
+  ),
+  stakeRiskButton: plain(
+    g.Demo,
+    'Экран суммы демо-цикла (#476): кнопка суммы от $10 — сумма (с ✅, если она в силе) и пометка риска.',
+    `{amount} · риск`,
+    { vars: ['amount'] },
+  ),
   paysupportScreen: html(
     g.Stars,
     '/paysupport: заголовок над последними оплатами Stars.',
@@ -1844,31 +1891,6 @@ const PAYSUPPORT_TEXTS = {
     'После заявки на возврат: назад к списку оплат.',
     '↩️ К списку оплат',
   ),
-};
-
-// The demo cycle's amount screen (#476), apart from BOT_TEXT_CORE for the same TS7056 as
-// PAYSUPPORT_TEXTS.
-const CYCLE_STAKE_TEXTS = {
-  cycleStakeChoose: html(
-    g.Demo,
-    'Экран суммы демо-цикла (#476): под строкой цикла, над кнопками сумм.',
-    `Выбери сумму сделки 👇`,
-    { vars: ['firstName'] },
-  ),
-  stakeRiskButton: plain(
-    g.Demo,
-    'Экран суммы демо-цикла (#476): кнопка суммы от $10 — сумма (с ✅, если она в силе) и пометка риска.',
-    `{amount} · риск`,
-    { vars: ['amount'] },
-  ),
-};
-
-export const BOT_TEXT_CATALOG: typeof BOT_TEXT_CORE &
-  typeof CYCLE_STAKE_TEXTS &
-  typeof PAYSUPPORT_TEXTS = {
-  ...BOT_TEXT_CORE,
-  ...CYCLE_STAKE_TEXTS,
-  ...PAYSUPPORT_TEXTS,
 };
 
 type Catalog = typeof BOT_TEXT_CATALOG;

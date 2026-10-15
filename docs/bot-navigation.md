@@ -19,7 +19,9 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   `editMessageTextHtmlWithoutNextStep`, which take a `NoNextStepReason` from `NO_NEXT_STEP_REASONS`
   (the exception list below). The reason is not sent; its type makes every such call name an entry.
 - `apps/backend/src/auth/client-push.ts`: `ClientPushMessage.reply_markup` is required, for the link
-  push and for every mailing ([mailing.md](mailing.md)).
+  push, every mailing ([mailing.md](mailing.md)) and the session's summary (#464); its one message
+  without a keyboard is `sendSessionTrade`, which takes the text alone (exception `session_trade`
+  below).
 - `send.typecheck.ts` holds the rule: a call without `reply_markup`, with it `undefined`, with a
   reply keyboard, and a reason outside the list each fail `tsc` (an `@ts-expect-error` that starts
   compiling fails `pnpm check`).
@@ -34,6 +36,12 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 | `NoNextStepReason` | Where | Why |
 |---|---|---|
 | `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`, an edit, or a new message when the summary is gone) | the result replaces it with its keyboard within the signal's budget; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the summary above it and /menu remain |
+
+The backend's push has one exception of its own, by its method's type rather than a reason:
+
+| Exception | Where | Why |
+|---|---|---|
+| `session_trade` (#464) | `sendSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); its type takes only the text | a settled trade of a running session, one of up to 60 in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the session's status message right above carries «🔄 Обновить» and «⏹ Остановить сессию», and the summary at the end «🏠 В меню»; a keyboard under every trade would repeat them up to 60 times |
 
 One more exception is not a `NoNextStepReason`, because it is not a message in the user's own
 chat with the bot:
