@@ -348,8 +348,15 @@ refresh or stop offers the refresh and the menu, never the stop again.
 `/stop` (in the command menu and `/help`, after `/menu`) stops every active session of the user in
 one request, `POST /trading/sessions/stop`
 ([trading-session.md](trading-session.md#post-tradingsessionsstop-122)), with no confirmation and
-no retry, as the stop button. `readPairs` runs beside it for the symbol only; its failure names the
-asset by its id. One message answers, always with a keyboard (Rule 31):
+no retry, as the stop button. Then, never beside it, `POST /trading/mode` to demo (#473): a switch
+out of real stops the sessions itself (#327), so it comes second, and it is asked whatever the stop
+answered. `readPairs` runs beside the two for the symbol only; its failure names the asset by its
+id. When the mode changed or the switch failed, its line comes first
+([trading-mode.md](trading-mode.md#the-bot) → `/stop`): «🎮 Режим: DEMO — следующие сделки пойдут
+на демо.» with «🏠 В меню» on `changed: true`; nothing in demo already or on 404 `user_not_found`;
+«⚠️ Режим не переключён — открой /menu.» on another 4xx; `modeOutcomeUnknown` with «⚙️ Режим» and
+«🏠 В меню» on anything else. Telegram refusing the line logs `trading mode line not sent` and the
+message below goes on. Then one message answers, always with a keyboard (Rule 31):
 
 | The route answered | The message | Keyboard | Tracking |
 |---|---|---|---|
@@ -419,8 +426,8 @@ One entry per session id, in process memory, like the intent tracker
 - `HANDLER_CALLS.sessionRefresh` = 2 / 3: the edit refused as gone, then sent anew: 34 s.
 - `HANDLER_CALLS.sessionStop` = 3 / 3: `stopSession`, the read after a 409, the edit refused as
   gone and sent anew: 39 s.
-- `HANDLER_CALLS.stop` = 2 / 1 (#122): `stopSessions` beside `readPairs` (counted as sequential),
-  then the message: 18 s.
+- `HANDLER_CALLS.stop` = 3 / 2 (#122, #473): `stopSessions`, then `setTradingMode`, beside
+  `readPairs` (counted as sequential), then the mode line and the message: 31 s.
 - `HANDLER_CALLS.sessionShare` = 2 / 1 (#321): `readSession` beside `readPairs` (counted as
   sequential), then `answerInlineQuery`: 18 s. `HANDLER_CALLS.sessionShared` = 0 / 0: a log line.
 - All stay at or below the longest path (`demoAnalysis` and, since #418, `sessionStart`, 47 s —
@@ -444,6 +451,10 @@ id or the symbol.
 - `trading session status not read`
 - `trading session not stopped`
 - `trading sessions not stopped` (`/stop`, #122)
+- `trading mode not reset` (`/stop`, #473): the switch to demo refused with a 4xx other than 404
+- `trading mode outcome unknown` (`/stop`, #473): the switch may have committed
+- `trading mode line not sent` (`/stop`, #473): Telegram refused the mode line (`method`,
+  `telegramErrorCode`)
 - `trading session message not edited`
 - `the launch screen was not deleted` (#418): the delete refused other than gone or forbidden, or
   failed in transport (`method: deleteMessage`, `telegramErrorCode` or `transportError`, `updateId`)
@@ -782,6 +793,6 @@ signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5
 - **#321** — «📤 Поделиться» under the summary card ([Sharing the card](#sharing-the-card-321)); a
   referral link in its caption in place of `?start=share` is the owner's open question.
 - **#121**, **#327** — real mode and real sessions ([trading-mode.md](trading-mode.md)); **#473**
-  extends `/stop` with the switch back to demo, **#474**'s mode screen tells the sessions a switch
-  stopped.
+  (shipped) extends `/stop` with the switch back to demo, **#474**'s mode screen tells the sessions
+  a switch stopped.
   **#201** — levels and rewards.

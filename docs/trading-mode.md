@@ -2,10 +2,10 @@
 
 A user trades either demo or real, one mode at a time (#121). The mode is a persisted user
 state, `users.trading_mode`, switched only by `POST /trading/mode`, which the bot calls from its
-mode screen (#474); `/stop` returning the user to demo is #473. In real mode the bot's single trade goes to the
-broker with real money at the user's real stake (#326: the saved real stake, the broker's minimum
-without one), and a session runs in the user's mode (#327): a real session trades real money at
-the real stake.
+mode screen (#474) and from `/stop`, which returns the user to demo (#473). In real mode the bot's
+single trade goes to the broker with real money at the user's real stake (#326: the saved real
+stake, the broker's minimum without one), and a session runs in the user's mode (#327): a real
+session trades real money at the real stake.
 
 ## Components
 
@@ -116,7 +116,7 @@ an `error` line and nothing more, anything else → `bot.catch`). The screen:
 💵 Реальный баланс: $X                 — with a snapshot; «нет свежих данных» when it is not fresh
 💼 Сумма реальной сделки: $Y           — with a snapshot; Y = realStake ?? minTradeAmount
 (a blank line)
-⚠️ В реальном режиме сделки и сессии идут на реальные деньги. В сессии ставка растёт после проигрыша.
+⚠️ В реальном режиме сделки и сессии идут на реальные деньги. В сессии ставка растёт после проигрыша. Вернуться в демо можно здесь же или командой /stop.
 ⏹ Смена режима останавливает активную сессию.
 ⏸ Торговля сейчас приостановлена — …   — only while the switch is closed
 ```
@@ -218,12 +218,32 @@ stake's mode. A failed access read draws the amount screen's refusal («⚠️ �
 «💼 Реальная сессия» for a real session. The demo doors open the amount screen (#476) and carry
 `demo:l:…`; an amount starts a demo session.
 
-**`/stop`** (#122) is unchanged: it stops the sessions and leaves the mode. Returning the user to
-demo from it is #473 (part 2 of #121, split off by the size rule).
+**`/stop`** (#122, #473) stops the sessions and returns the user to demo. The calls are
+`stopSessions`, **then** `setTradingMode(demo)` — in sequence, not side by side: a switch out of real
+stops the sessions itself (#327), so a stop that came second would answer «Активных сессий нет.»
+about sessions the switch ended; `readPairs` runs beside the two. The switch is asked whatever the
+stop answered, and its `stoppedSessions` is not read: the stop before it answered for the
+sessions. A line goes before the message of #122 ([bot-session.md](bot-session.md#stop-122)):
+
+| The switch | The line | Keyboard | Log |
+| --- | --- | --- | --- |
+| 200 `changed: true` | «🎮 Режим: DEMO — следующие сделки пойдут на демо.» (`modeStopReset`) | 🏠 В меню | — |
+| 200 `changed: false` (in demo already) | none | — | — |
+| 404 `user_not_found` (no users row) | none | — | — |
+| another 4xx (a refusal before the write; on demo the route answers only 200 or 404, so this is a bug) | «⚠️ Режим не переключён — открой /menu.» (`modeNotReset`) | 🏠 В меню | `warn` `trading mode not reset` |
+| 5xx, no answer, a 2xx off the contract, any other throw | `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read) · 🏠 В меню | `warn` `trading mode outcome unknown` |
+
+Unlike the mode screen's `outcomeUnknown`, which sends a throw that is not a `BackendError` to
+`unavailable`, `/stop` says «не переключён» only for a proven 4xx: everything else may have
+committed. No re-read and no retry. The line is sent with its own `.catch`: Telegram refusing it
+logs `warn` `trading mode line not sent` (`method`, `telegramErrorCode`), and the message of #122
+and its tracking go on. No keyboard of `/stop` carries `mode:r:ok` or `mode:d`
+(`trading-session.test.ts` ST1–ST9).
 
 ## Timing
 
-`HANDLER_CALLS`: `modeOpen` 1 / 2, `modeConfirm` 1 / 3, `modeInPlace` 1 / 3, `modeSet` 2 / 3
+`HANDLER_CALLS`: `stop` 3 / 2 (#473: the switch after the stop, the mode line before the message),
+`modeOpen` 1 / 2, `modeConfirm` 1 / 3, `modeInPlace` 1 / 3, `modeSet` 2 / 3
 (the access read on an unknown outcome: 2 × 5 s + 3 × 8 s = 34 s), `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418
 and `cycleStakePreset` since #476, under the 50 s shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
 every terminal branch.
@@ -232,8 +252,10 @@ every terminal branch.
 
 `trading access not read for the mode screen` (warn), `trading mode not changed` (warn for
 `user_not_found`, error otherwise), `trading mode outcome unknown` (warn), `trading access not read
-for the launch screen` (warn): `errorLogFields` and `backendErrorFields`, never the Telegram id or
-an amount (`logging.test.ts`).
+for the launch screen` (warn), and from `/stop` (#473) `trading mode not reset` and `trading mode
+outcome unknown` (warn): `errorLogFields` and `backendErrorFields`, never the Telegram id or an
+amount. `trading mode line not sent` (warn, `/stop`): `errorLogFields` and `method` with
+`telegramErrorCode`, nothing of the text (`logging.test.ts`).
 
 ## Running it locally
 
@@ -264,10 +286,13 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
    and a session button pressed by a user left in real answers «Реальные сделки на этом сервере
    отключены»; on the mode screen «✅ Подтверждаю» answers «⚠️ Реальные сделки на этом сервере
    отключены…» and the way back to demo stays open.
+5. `/stop` back to demo (#473): switch to real again, start a real session, send `/stop` → «🎮
+   Режим: DEMO — следующие сделки пойдут на демо.», then the stopped session's status; `/menu`
+   shows DEMO; a second `/stop` → «Активных сессий нет.» alone.
 
 ## Boundaries
 
-- **#473** — `/stop` returning the user to demo, after #474 (it calls the bot's `setTradingMode`).
+- **#473** (shipped) — `/stop` returns the user to demo ([/stop](#the-bot) above).
 - **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)).
   **#327** (shipped) — real sessions.
 - **#450** — the Martingale of a session: #450 merged first, so #474 added «В сессии ставка
