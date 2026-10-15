@@ -5,7 +5,7 @@ import { buildApp, withoutSecrets, type AppDeps } from './app';
 import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 import type { UsersRoutesDeps } from './users/routes';
-import { unusedAdminDeps } from './admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from './admin/testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -59,6 +59,7 @@ async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
     ...deps,
     logLevel: 'silent',
     checkTimeoutMs: 20,
@@ -142,6 +143,7 @@ describe('what reaches the log', () => {
       signal: unusedSignalDeps(),
       signals: unusedSignalsDeps(),
       admin: unusedAdminDeps(),
+      payments: unusedPaymentsDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'info',
@@ -371,6 +373,7 @@ describe('request logging', () => {
       signal: unusedSignalDeps(),
       signals: unusedSignalsDeps(),
       admin: unusedAdminDeps(),
+      payments: unusedPaymentsDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'silent',
@@ -402,6 +405,7 @@ describe('error handler', () => {
       signal: unusedSignalDeps(),
       signals: unusedSignalsDeps(),
       admin: unusedAdminDeps(),
+      payments: unusedPaymentsDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'silent',

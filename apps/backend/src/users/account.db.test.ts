@@ -9,7 +9,7 @@ import {
 } from '@binarius/db/testing';
 import { brokerAccounts, users } from '@binarius/db';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -40,6 +40,7 @@ beforeAll(async () => {
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',

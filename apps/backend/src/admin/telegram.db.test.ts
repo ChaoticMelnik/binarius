@@ -774,3 +774,44 @@ describe('polling', () => {
     await expect(failing.stop()).resolves.toBeUndefined();
   });
 });
+
+// #118: the notice of a refund request from /paysupport
+describe('notifyStaff', () => {
+  it('P8 sends the text to every active staff member and to no disabled one', async () => {
+    const first = await seedStaff(tmp.db);
+    const second = await seedStaff(tmp.db);
+    const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
+    await admin.notifyStaff('notice');
+    const chats = callsTo(api.calls, 'sendMessage').map((call) => String(call.payload.chat_id));
+    expect(chats).toEqual(
+      expect.arrayContaining([first, second].map((s) => String(s.telegramUserId))),
+    );
+    expect(chats).not.toContain(String(disabled.telegramUserId));
+    for (const call of callsTo(api.calls, 'sendMessage')) {
+      expect(call.payload).toEqual({ chat_id: call.payload.chat_id, text: 'notice' });
+    }
+  });
+
+  it('P8 warns for a recipient Telegram refuses and still tells the next one', async () => {
+    const refusing = await seedStaff(tmp.db);
+    const next = await seedStaff(tmp.db);
+    api.answers.set('sendMessage', (payload) => {
+      if (String(payload.chat_id) === String(refusing.telegramUserId)) {
+        throw new GrammyError(
+          'Call to sendMessage failed',
+          { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+          'sendMessage',
+          payload,
+        );
+      }
+      return true;
+    });
+    await expect(admin.notifyStaff('notice')).resolves.toBeUndefined();
+    const chats = callsTo(api.calls, 'sendMessage').map((call) => String(call.payload.chat_id));
+    expect(chats).toContain(String(next.telegramUserId));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.objectContaining({ name: 'GrammyError' }) as unknown }),
+      'the staff notice could not be delivered',
+    );
+  });
+});

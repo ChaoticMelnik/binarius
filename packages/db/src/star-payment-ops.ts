@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
   AuditAction,
   AuditActorType,
@@ -10,6 +10,8 @@ import {
   TokenLedgerKind,
   UserStatus,
   starPackageOf,
+  STARS_PAYSUPPORT_LIST_LIMIT,
+  type StarPaymentView,
 } from '@binarius/shared';
 import type { Db } from './client';
 import { auditLog } from './schema/audit-log';
@@ -437,6 +439,84 @@ export async function listStarChargesToRefund(
       ),
     );
   return new Set(rows.map((row) => row.id));
+}
+
+// /paysupport's list: the payer's newest payments (Rule 13: scoped by the payer, not by the users
+// row, so a forwarded invoice's payer sees the payment they made).
+export async function listStarPaymentsForPayer(
+  db: Db,
+  payerTelegramUserId: bigint,
+): Promise<StarPaymentView[]> {
+  const rows = await db
+    .select({
+      id: starPayments.id,
+      paidAt: starPayments.paidAt,
+      packageCode: starPayments.packageCode,
+      totalAmount: starPayments.totalAmount,
+      status: starPayments.status,
+      requestId: starRefundRequests.id,
+    })
+    .from(starPayments)
+    .leftJoin(starRefundRequests, eq(starRefundRequests.starPaymentId, starPayments.id))
+    .where(eq(starPayments.payerTelegramUserId, payerTelegramUserId))
+    .orderBy(desc(starPayments.paidAt), desc(starPayments.id))
+    .limit(STARS_PAYSUPPORT_LIST_LIMIT);
+  return rows.map((row) => ({
+    id: row.id,
+    paidAt: Math.floor(row.paidAt.getTime() / 1000),
+    packageCode: row.packageCode,
+    totalAmount: row.totalAmount,
+    status: row.status,
+    requested: row.requestId !== null,
+  }));
+}
+
+export type StarRefundRequestResult =
+  | { outcome: 'requested'; payment: StarPaymentRow }
+  | { outcome: 'already_requested' }
+  | { outcome: 'already_refunded' }
+  // no payment by that id, or another payer's: one answer for both (Rule 13)
+  | { outcome: 'not_found' };
+
+// The «Нужен возврат» button. One statement decides who may ask: the INSERT … SELECT matches only
+// the payer's own payment that is not refunded, and the unique key keeps one request per payment.
+// The audit row is written with the request, in its transaction.
+export async function requestStarRefund(
+  db: Db,
+  { telegramUserId, paymentId }: { telegramUserId: bigint; paymentId: string },
+): Promise<StarRefundRequestResult> {
+  return db.transaction(async (tx) => {
+    const { rows } = await tx.execute<{ id: string }>(sql`
+      insert into ${starRefundRequests} (star_payment_id, requested_by_telegram_user_id)
+      select ${starPayments.id}, ${telegramUserId} from ${starPayments}
+       where ${starPayments.id} = ${paymentId}
+         and ${starPayments.payerTelegramUserId} = ${telegramUserId}
+         and ${starPayments.status} <> ${StarPaymentStatus.Refunded}
+      on conflict (star_payment_id) do nothing
+      returning id`);
+    const [payment] = await tx
+      .select(starPaymentColumns)
+      .from(starPayments)
+      .where(
+        and(eq(starPayments.id, paymentId), eq(starPayments.payerTelegramUserId, telegramUserId)),
+      );
+    if (rows[0] === undefined) {
+      if (payment === undefined) return { outcome: 'not_found' };
+      if (payment.status === StarPaymentStatus.Refunded) return { outcome: 'already_refunded' };
+      return { outcome: 'already_requested' };
+    }
+    // unreachable: the insert selected this row
+    if (payment === undefined) throw new Error('star refund request without its payment');
+    await tx.insert(auditLog).values({
+      actorType: AuditActorType.User,
+      actorId: telegramUserId.toString(),
+      action: AuditAction.StarsRefundRequested,
+      entityType: AuditEntityType.StarPayment,
+      entityId: payment.id,
+      payload: { userId: payment.userId, status: payment.status, requestId: rows[0].id },
+    });
+    return { outcome: 'requested', payment };
+  });
 }
 
 export interface OpenStarRefundRequest {

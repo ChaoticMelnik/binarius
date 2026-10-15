@@ -19,6 +19,7 @@ import {
   sentPayload,
   staffUser,
   unusedAdminDeps,
+  unusedPaymentsDeps,
   type CapturedApi,
 } from './testing';
 import {
@@ -97,6 +98,7 @@ beforeAll(async () => {
       initDataVerifier: {} as never,
     },
     users: { db: tmp.db, internalApiToken: 'internal' },
+    payments: unusedPaymentsDeps(),
     admin: {
       ...unusedAdminDeps(),
       db: tmp.db,

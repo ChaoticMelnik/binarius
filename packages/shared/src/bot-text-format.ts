@@ -37,6 +37,15 @@ export function formatStake(amount: string): string {
 
 export const formatCount = (count: string): string => groupDigits(count);
 
+// A Stars payment's time (#118, /paysupport): Moscow time, which has had no DST since 2014, so a
+// fixed +3 h. 1790000000 → '21.09.2026 17:13'
+const MOSCOW_OFFSET_S = 3 * 3600;
+const two = (value: number) => String(value).padStart(2, '0');
+export function formatPaymentDate(unixSeconds: number): string {
+  const at = new Date((unixSeconds + MOSCOW_OFFSET_S) * 1000);
+  return `${two(at.getUTCDate())}.${two(at.getUTCMonth() + 1)}.${String(at.getUTCFullYear())} ${two(at.getUTCHours())}:${two(at.getUTCMinutes())}`;
+}
+
 // whole seconds under a minute, whole minutes (floor) from one
 export const formatAge = (seconds: number): string =>
   seconds < 60 ? `${seconds} с` : `${Math.floor(seconds / 60)} мин`;

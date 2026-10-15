@@ -117,7 +117,7 @@ const user = [
 ] as const;
 const picker = [...user, 'minStake', 'demoAvailable', 'realAvailable'] as const;
 
-export const BOT_TEXT_CATALOG = {
+const BOT_TEXT_CORE = {
   // ---- Вход и подключение -------------------------------------------------------------------
   welcome: html(
     g.Start,
@@ -1732,6 +1732,12 @@ export const BOT_TEXT_CATALOG = {
   supportCommand: plain(g.Commands, 'Описание /support в меню команд и в /help.', 'Поддержка', {
     limit: COMMAND_LIMIT,
   }),
+  paysupportCommand: plain(
+    g.Commands,
+    'Описание /paysupport в меню команд и в /help.',
+    'Вопросы по оплате Stars и возврат',
+    { limit: COMMAND_LIMIT },
+  ),
 
   // ---- Профиль бота -------------------------------------------------------------------------
   profileDescription: plain(
@@ -1753,6 +1759,83 @@ export const BOT_TEXT_CATALOG = {
     '🚀 Автосессии на Binodex прямо в Telegram: бот сам торгует демо по сигналу, ты смотришь результат',
     { limit: SHORT_DESCRIPTION_LIMIT },
   ),
+};
+
+// /paysupport: the Stars payments and the refund request (#118, docs/stars.md). Declared apart from
+// the rest: the one literal of the whole catalog would pass what tsc serializes into a .d.ts
+// (TS7056), and the annotation below keeps each part's type its own.
+const PAYSUPPORT_TEXTS = {
+  paysupportScreen: html(
+    g.Stars,
+    '/paysupport: заголовок над последними оплатами Stars.',
+    `⭐ <b>Оплаты Telegram Stars</b>
+Последние оплаты. Нужен возврат — нажми кнопку под оплатой: заявку рассмотрит сотрудник поддержки и вернёт Stars. Токены, которые уже потрачены, не возвращаются.`,
+  ),
+  paysupportLinePaid: html(
+    g.Stars,
+    '/paysupport: строка оплаты, по которой начислены токены.',
+    `✅ {paymentDate} — {stars} ⭐, оплачено`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportLineHeld: html(
+    g.Stars,
+    '/paysupport: строка оплаты, которую проверяет поддержка (токены не начислены).',
+    `⏳ {paymentDate} — {stars} ⭐, на проверке`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportLineRequested: html(
+    g.Stars,
+    '/paysupport: строка оплаты, по которой уже есть заявка на возврат.',
+    `📨 {paymentDate} — {stars} ⭐, заявка на возврат принята`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportLineRefunded: html(
+    g.Stars,
+    '/paysupport: строка возвращённой оплаты.',
+    `↩️ {paymentDate} — {stars} ⭐, возвращено`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportEmpty: html(
+    g.Stars,
+    '/paysupport без оплат Stars: под текстом кнопка поддержки.',
+    `Оплат Telegram Stars нет. Вопрос по оплате — напиши в поддержку.`,
+  ),
+  paysupportRequested: html(
+    g.Stars,
+    'После «Нужен возврат»: заявка принята.',
+    `📨 Заявка на возврат принята. Сотрудник поддержки проверит оплату и вернёт Stars — Telegram пришлёт уведомление о возврате.`,
+  ),
+  paysupportAlreadyRequested: html(
+    g.Stars,
+    'После «Нужен возврат»: по этой оплате заявка уже есть.',
+    `Заявка на возврат этой оплаты уже есть — сотрудник поддержки её рассмотрит.`,
+  ),
+  paysupportAlreadyRefunded: html(
+    g.Stars,
+    'После «Нужен возврат»: оплата уже возвращена.',
+    `Эта оплата уже возвращена.`,
+  ),
+  paysupportNotFound: html(
+    g.Stars,
+    'После «Нужен возврат»: оплата не найдена.',
+    `Оплата не найдена. Открой список заново.`,
+  ),
+  paysupportRefundButton: plain(
+    g.Stars,
+    '/paysupport: кнопка заявки на возврат под оплатой.',
+    '↩️ Нужен возврат: {paymentDate}',
+    { vars: ['paymentDate'] },
+  ),
+  paysupportListButton: plain(
+    g.Stars,
+    'После заявки на возврат: назад к списку оплат.',
+    '↩️ К списку оплат',
+  ),
+};
+
+export const BOT_TEXT_CATALOG: typeof BOT_TEXT_CORE & typeof PAYSUPPORT_TEXTS = {
+  ...BOT_TEXT_CORE,
+  ...PAYSUPPORT_TEXTS,
 };
 
 type Catalog = typeof BOT_TEXT_CATALOG;

@@ -1,4 +1,11 @@
-import { formatAge, formatCount, formatSignedUsd, formatStake, formatUsd } from './bot-text-format';
+import {
+  formatAge,
+  formatCount,
+  formatPaymentDate,
+  formatSignedUsd,
+  formatStake,
+  formatUsd,
+} from './bot-text-format';
 import type { BotTextVariable } from './bot-text-template';
 import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import type { DecimalString } from './money';
@@ -92,6 +99,11 @@ export const BOT_TEXT_VARS = {
     description: 'Цена пакета в Telegram Stars',
     sample: '250',
     format: (count: string) => formatCount(count),
+  }),
+  paymentDate: variable({
+    description: 'Дата и время оплаты Stars (МСК)',
+    sample: '15.10.2026 10:57',
+    format: (unixSeconds: number) => formatPaymentDate(unixSeconds),
   }),
   demoBalance: balance(
     'Демобаланс Binodex; без свежего снимка — «нет свежих данных»',

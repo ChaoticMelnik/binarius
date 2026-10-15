@@ -4,7 +4,7 @@ import { POSTBACK_URL_SECRET_MAX_LENGTH, postbackResponseSchema } from '@binariu
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { depositEvents, postbackDeliveries } from '@binarius/db';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -40,6 +40,7 @@ const testApp = (postbacks: Omit<PostbackRoutesDeps, 'db'> | undefined) =>
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'trace',

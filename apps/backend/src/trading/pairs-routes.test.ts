@@ -8,7 +8,7 @@ import {
   type PairsCatalogView,
 } from '@binarius/shared';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { TradingRoutesDeps } from './routes';
 import type { UsersRoutesDeps } from '../users/routes';
@@ -60,6 +60,7 @@ function appWith(view: PairsCatalogView | undefined): FastifyInstance {
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
   });
   return app;
 }

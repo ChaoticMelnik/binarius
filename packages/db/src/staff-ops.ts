@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from './client';
 import { hashToken } from './oauth-ops';
 import { millisecondsAgo, millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
@@ -1285,4 +1285,15 @@ export async function resetStaffPassword(
     });
     return counts;
   });
+}
+
+// Who the staff bot tells about a refund request from /paysupport (#118): every active staff
+// member's Telegram id.
+export async function listActiveStaffTelegramIds(db: Db): Promise<bigint[]> {
+  const rows = await db
+    .select({ telegramUserId: staff.telegramUserId })
+    .from(staff)
+    .where(eq(staff.status, StaffStatus.Active))
+    .orderBy(asc(staff.createdAt));
+  return rows.map((row) => row.telegramUserId);
 }

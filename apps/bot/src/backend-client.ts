@@ -28,7 +28,11 @@ import {
   safeParseUserStartResponse,
   starsInvoiceResponseSchema,
   starsPaidResponseSchema,
+  starsPaymentsResponseSchema,
   starsPreCheckoutResponseSchema,
+  starsRefundResponseSchema,
+  type StarPaymentView,
+  type StarsRefundRequestOutcome,
   type StarsInvoiceResponse,
   type StarsPaidRequest,
   type StarsPaidResponse,
@@ -161,6 +165,11 @@ export interface BackendClient {
   checkStarsPreCheckout(request: StarsPreCheckoutRequest): Promise<StarsPreCheckoutResponse>;
   // successful_payment: the credit's outcome, the same for a repeated delivery
   reportStarsPaid(request: StarsPaidRequest): Promise<StarsPaidResponse>;
+  // /paysupport (#118): the payer's newest payments, a read
+  listStarsPayments(telegramUserId: string): Promise<StarPaymentView[]>;
+  // «Нужен возврат»: a write, once per payment; 404 payment_not_found and 409 already_refunded are
+  // refusals before any write
+  requestStarsRefund(telegramUserId: string, paymentId: string): Promise<StarsRefundRequestOutcome>;
 }
 
 export type SetStakeResult =
@@ -453,6 +462,20 @@ export function createBackendClient({
       const parsed = starsPaidResponseSchema.safeParse(await post('payments/stars/paid', paid));
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
+    },
+    async listStarsPayments(telegramUserId) {
+      const parsed = starsPaymentsResponseSchema.safeParse(
+        await post('payments/stars/list', { telegramUserId }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.payments;
+    },
+    async requestStarsRefund(telegramUserId, paymentId) {
+      const parsed = starsRefundResponseSchema.safeParse(
+        await post('payments/stars/refund-request', { telegramUserId, paymentId }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.outcome;
     },
     async stopSessions(telegramUserId) {
       const parsed = safeParseTradingSessionsStoppedResponse(

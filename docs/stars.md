@@ -1,10 +1,10 @@
-# Buying tokens for Telegram Stars (#117) and refunds (#118)
+# Buying tokens for Telegram Stars (#117), refunds and /paysupport (#118)
 
 A user with an active Binodex account buys a package of automation tokens in the bot and pays in
 Telegram Stars. A payment credits its tokens exactly once, whoever reports it: the bot's
 `successful_payment`, its retry, or the reconciler. A staff member refunds a payment with
-`stars refund` ([Refunds](#refunds)); `/paysupport`, where the user asks for one, is the second
-part of #118.
+`stars refund`; the user asks for one from `/paysupport` ([Refunds](#refunds),
+[/paysupport](#paysupport)).
 
 ## Packages
 
@@ -57,6 +57,8 @@ the user confirms in Telegram is not a broker operation).
 | `POST /payments/stars/invoice` `{ telegramUserId, packageCode }` | 200 `{ payload, package }`; 404 `user_not_found`; 409 `user_blocked`, `no_active_account`, `package_unknown` | nothing |
 | `POST /payments/stars/pre-checkout` `{ telegramUserId, invoicePayload, currency, totalAmount }` | 200 `{ ok: true }` or `{ ok: false, reason }`: `payload`, `package`, `currency`, `amount`, `user_not_found`, `payer` (the payload names another user), `user_blocked`, `no_active_account` | nothing |
 | `POST /payments/stars/paid` `{ telegramUserId, telegramPaymentChargeId, providerPaymentChargeId, invoicePayload, currency, totalAmount, paidAt }` | 200 `{ outcome: credited \| already_credited, tokens, balance }` or `{ outcome: held }`; 409 `payload_unknown` (not ours, or no users row: no row can own it; logged by the charge id and the amount only) | the credit below |
+| `POST /payments/stars/list` `{ telegramUserId }` (#118) | 200 `{ payments: [{ id, paidAt, packageCode, totalAmount, status, requested }] }`, at most 5, newest first, by `payer_telegram_user_id`; a Telegram id with no users row is allowed | nothing |
+| `POST /payments/stars/refund-request` `{ telegramUserId, paymentId }` (#118) | 200 `{ outcome: requested \| already_requested }`; 404 `payment_not_found` (no such payment, or another payer's — not told apart, Rule 13); 409 `already_refunded` | one `star_refund_requests` row and its audit row, then the staff notice |
 
 Every 4xx of the invoice comes before any side effect, so the package screen stays and a press is
 the retry. The pre-checkout's budget is `STARS_PRECHECKOUT_BUDGET_MS` (2 s), its reads only.
@@ -103,7 +105,7 @@ user paid (the owner's decision of 2026-10-08).
 - `star_refund_requests` (#118): `star_payment_id` unique (`star_refund_requests_payment_key`), FK
   to `star_payments` on delete restrict, `requested_by_telegram_user_id > 0`, `requested_at`. No
   writer updates or deletes a row; no trigger enforces that. A request is a notice: its resolution
-  is the payment's status. `/paysupport` (the second part of #118) writes it.
+  is the payment's status.
 - The admin ledger page prints the payment's id as the row's reference
   ([admin-pages.md](admin-pages.md)).
 
@@ -143,7 +145,7 @@ Every refund goes through a staff member, by the charge id (the owner's answer o
 Telegram refunds the whole charge; nothing refunds automatically.
 
 ```bash
-pnpm --filter @binarius/backend stars requests                          # the open refund requests
+pnpm --filter @binarius/backend stars requests                          # /paysupport's open requests
 pnpm --filter @binarius/backend stars refund <charge id> --reason "…"   # refund and record
 ```
 
@@ -195,13 +197,37 @@ documents none). Not observed live. If the text differs, a repeat lands in the �
 GrammyError» row — nothing written, exit 1 — and the reconciler records the refund: a wrong guess
 costs a printed error, never a second ledger row.
 
+## /paysupport
+
+Telegram expects a bot that sells in Stars to answer `/paysupport`. The command (in the menu after
+`/support`) and «↩️ К списку оплат» (`ps:l`, a read) call `POST /payments/stars/list` and show the
+payer's five newest payments, a line per state (paid, on hold, a request made, refunded), with
+«↩️ Нужен возврат: <date>» (`ps:r:<payment id>`) under each one neither refunded nor requested, the
+support chat and «🏠 В меню». No payment → `paysupportEmpty` with the support chat. A failed read →
+`unavailable` with «🔄 Повторить» (`ps:l`).
+
+«Нужен возврат» is a write (`ps:r:` in `WRITE_CALLBACK_PREFIXES`): `POST
+/payments/stars/refund-request` inserts the request by `INSERT … SELECT` matching the payment id,
+the presser as its payer and a status other than `refunded`, `on conflict do nothing`, with the
+audit row `stars_refund_requested` (actor the user). The answers — `paysupportRequested`,
+`paysupportAlreadyRequested`, `paysupportAlreadyRefunded` (409), `paysupportNotFound` (404), and
+`unavailable` for anything else (the request may be recorded; the list shows it on the re-read) —
+all carry «↩️ К списку оплат» and the menu, never the press again.
+
+After the commit, and only when a row was inserted, the staff bot (`AdminBot.notifyStaff`, plain
+text from `ADMIN_TEXTS.refundRequested`) tells every active staff member the charge id, the
+package, the amount, the status, the payer's Telegram id and the command. The reply does not wait;
+a failed send is a `warn` per recipient, not repeated, and a notice lost by a shutdown leaves the
+request in `stars requests`.
+
 ## Timing (Rule 10)
 
 - Bot (`apps/bot/src/timing.ts`): `STARS_PRECHECKOUT_BUDGET_MS` (2 s) ≤
   `STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS` (3 s) ≤ `BACKEND_REQUEST_TIMEOUT_MS`, and
   `STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS` (2 s) <
   `TELEGRAM_PRECHECKOUT_DEADLINE_MS` (10 s). `HANDLER_CALLS`: `buy` 1 / 1, `buyButton` 1 / 2,
-  `buyPackage` 1 / 2, `preCheckout` 1 / 1, `paid` 1 / 1; none moves `HANDLER_BUDGET_MS`.
+  `buyPackage` 1 / 2, `preCheckout` 1 / 1, `paid` 1 / 1, and #118's `paysupport` 1 / 1,
+  `paysupportList` 1 / 2, `paysupportRequest` 1 / 2; none moves `HANDLER_BUDGET_MS`.
 - Backend (`apps/backend/src/timing.ts`): the pre-checkout budget and a reconciler stop (one call
   and one push) inside phase 1; `MAX_PAGES × STARS_TELEGRAM_API_TIMEOUT_MS < STARS_RECONCILE_TICK_MS
   < STARS_RECONCILE_WINDOW_S`.
@@ -215,13 +241,12 @@ costs a printed error, never a second ledger row.
 2. **The scan ceiling.** A tick reads at most 5 000 transactions. Falsifiable: the bot has fewer
    than 5 000 Stars transactions in all; the ceiling's error line comes first, and a cursor is the
    follow-up.
-3. **No `/paysupport` until the second part of #118.** Telegram expects it from a bot that sells
-   in Stars: the purchase entries go live together with it, or the owner accepts the gap.
-4. **A blocked user is credited** (the user paid).
-5. **Tokens already spent are not recovered by a refund** (the owner, 2026-10-08); the audit row says
+3. **A blocked user is credited** (the user paid).
+4. **Tokens already spent are not recovered by a refund** (the owner, 2026-10-08); the audit row says
    how many.
-6. **Between a refund and its record**, when the command's record fails: at most one reconciler tick
+5. **Between a refund and its record**, when the command's record fails: at most one reconciler tick
    (5 min). Falsifiable: the reconciler runs (started after `listen()`) and assumption 1 holds.
+6. **A staff notice lost by a shutdown**: the request stays listed by `stars requests`.
 7. **The refund's audit actor is `system`**: the staff member who ran the command is not identified
    (#510 brings the admin button and the staff identity).
 
@@ -235,8 +260,9 @@ costs a printed error, never a second ledger row.
      where star_payment_id is not null order by created_at desc limit 1;
    ```
 
-   Within the next 5 minutes the reconciler adds no second row for the same charge. Refund it
-   (the charge id from `star_payments`):
+   Within the next 5 minutes the reconciler adds no second row for the same charge. Then
+   `/paysupport` → «Нужен возврат»: each active staff member gets the staff bot's notice, and
+   `stars requests` lists it. Refund it:
 
    ```bash
    pnpm --filter @binarius/backend stars refund <charge id> --reason "проверка"
@@ -266,8 +292,6 @@ costs a printed error, never a second ledger row.
 
 ## Boundaries
 
-- **#118, the second part** — `/paysupport`: the payer's payments, the refund request, the staff
-  notice.
 - **#510** — the refund button and the requests page in the admin, with the staff member's identity
   in the audit row.
 - **#246** — crediting a `held` payment, by the manual adjustment.

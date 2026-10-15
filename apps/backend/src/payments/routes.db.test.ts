@@ -9,6 +9,9 @@ import {
   starsInvoiceResponseSchema,
   starsPaidResponseSchema,
   starsPreCheckoutResponseSchema,
+  starsPaymentsResponseSchema,
+  StarsRefundErrorCode,
+  AuditAction,
 } from '@binarius/shared';
 import {
   createTempDatabase,
@@ -17,7 +20,16 @@ import {
   seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { starPayments, tokenLedger } from '@binarius/db';
+import {
+  auditLog,
+  recordStarRefund,
+  starPayments,
+  starRefundRequests,
+  StarsRefundEvidence,
+  StarsRefundSource,
+  tokenLedger,
+} from '@binarius/db';
+import { until } from '@binarius/shared/testing';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 import { unusedDepositDeps } from '../deposit/testing';
@@ -38,6 +50,9 @@ if (baseUrl === undefined || baseUrl === '') {
 }
 
 const TOKEN = 'internal-token-for-tests';
+const notices: string[] = [];
+let notifyFailure: Error | undefined;
+const logLines: string[] = [];
 let tmp: TempDatabase;
 let app: ReturnType<typeof buildApp>;
 
@@ -49,10 +64,19 @@ beforeAll(async () => {
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    payments: {
+      db: tmp.db,
+      internalApiToken: TOKEN,
+      notifyStaff: (text) => {
+        notices.push(text);
+        return notifyFailure === undefined ? Promise.resolve() : Promise.reject(notifyFailure);
+      },
+    },
+    logDestination: { write: (line: string) => void logLines.push(line) },
     deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
-    logLevel: 'silent',
+    logLevel: 'warn',
     checkTimeoutMs: 20,
     trading: {
       db: tmp.db,
@@ -100,13 +124,16 @@ const paymentCount = async (userId: string) =>
 let seq = 0;
 
 describe('the payments routes', () => {
-  it.each(['/payments/stars/invoice', '/payments/stars/pre-checkout', '/payments/stars/paid'])(
-    'refuses %s without the internal bearer',
-    async (url) => {
-      const response = await post(url, {}, null);
-      expect(response.statusCode).toBe(401);
-    },
-  );
+  it.each([
+    '/payments/stars/invoice',
+    '/payments/stars/pre-checkout',
+    '/payments/stars/paid',
+    '/payments/stars/list',
+    '/payments/stars/refund-request',
+  ])('refuses %s without the internal bearer', async (url) => {
+    const response = await post(url, {}, null);
+    expect(response.statusCode).toBe(401);
+  });
 });
 
 describe('POST /payments/stars/invoice', () => {
@@ -280,5 +307,161 @@ describe('POST /payments/stars/paid', () => {
       { error: StarsErrorCode.PayloadUnknown },
     ]);
     expect(await paymentCount(seed.userId)).toBe(0);
+  });
+});
+
+// --- /paysupport (#118) -------------------------------------------------------------------------
+
+describe('POST /payments/stars/list and /payments/stars/refund-request', () => {
+  // a paid payment through the route, as the bot reports it; its row
+  async function paidPayment(
+    seed: { userId: string; telegramUserId: string },
+    paidAt = 1_790_000_000,
+  ) {
+    const chargeId = `paysupport-charge-${++seq}`;
+    const response = await post('/payments/stars/paid', {
+      telegramUserId: seed.telegramUserId,
+      telegramPaymentChargeId: chargeId,
+      providerPaymentChargeId: '',
+      invoicePayload: starsInvoicePayload('p50', seed.userId),
+      currency: 'XTR',
+      totalAmount: 100,
+      paidAt,
+    });
+    expect(response.statusCode).toBe(200);
+    const [row] = await tmp.db
+      .select()
+      .from(starPayments)
+      .where(eq(starPayments.telegramPaymentChargeId, chargeId));
+    return row!;
+  }
+  const list = (telegramUserId: string) => post('/payments/stars/list', { telegramUserId });
+  const ask = (telegramUserId: string, paymentId: string) =>
+    post('/payments/stars/refund-request', { telegramUserId, paymentId });
+  const requestsOf = (paymentId: string) =>
+    tmp.db.select().from(starRefundRequests).where(eq(starRefundRequests.starPaymentId, paymentId));
+
+  it('P1 lists the payer’s five newest payments, newest first', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const rows = [];
+    for (let i = 0; i < 6; i += 1) rows.push(await paidPayment(seed, 1_790_000_000 + i));
+    const response = await list(seed.telegramUserId);
+    expect(response.statusCode).toBe(200);
+    const body = starsPaymentsResponseSchema.parse(response.json());
+    expect(body.payments.map((p) => p.id)).toEqual(
+      rows
+        .slice(1)
+        .reverse()
+        .map((r) => r.id),
+    );
+    expect(body.payments[0]).toEqual({
+      id: rows[5]!.id,
+      paidAt: 1_790_000_005,
+      packageCode: 'p50',
+      totalAmount: 100,
+      status: 'paid',
+      requested: false,
+    });
+  });
+
+  it('P2 lists none of them for another Telegram id, one with no users row included', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    await paidPayment(seed);
+    expect((await list('8888888')).json()).toEqual({ payments: [] });
+  });
+
+  it('P3 records a request with its audit row and tells the staff once', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const row = await paidPayment(seed);
+    notices.length = 0;
+    const response = await ask(seed.telegramUserId, row.id);
+    expect([response.statusCode, response.json()]).toEqual([200, { outcome: 'requested' }]);
+    expect(await requestsOf(row.id)).toHaveLength(1);
+    const audits = await tmp.db.select().from(auditLog).where(eq(auditLog.entityId, row.id));
+    expect(audits.map((a) => a.action)).toContain(AuditAction.StarsRefundRequested);
+    await until('the staff notice', () => Promise.resolve(notices.length === 1));
+    expect(notices[0]).toContain(row.telegramPaymentChargeId);
+    expect(notices[0]).toContain(`stars refund ${row.telegramPaymentChargeId}`);
+    expect(notices[0]).toContain(seed.telegramUserId);
+    expect((await list(seed.telegramUserId)).json()).toMatchObject({
+      payments: [{ id: row.id, requested: true }],
+    });
+  });
+
+  it('P4 answers a repeat already_requested and tells nobody again', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const row = await paidPayment(seed);
+    await ask(seed.telegramUserId, row.id);
+    await until('the first notice', () => Promise.resolve(notices.length > 0));
+    notices.length = 0;
+    const again = await ask(seed.telegramUserId, row.id);
+    expect([again.statusCode, again.json()]).toEqual([200, { outcome: 'already_requested' }]);
+    expect(await requestsOf(row.id)).toHaveLength(1);
+    // the notice of an insert is sent before the reply returns from the route's tick; none came
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(notices).toEqual([]);
+  });
+
+  it('P5 answers 404 for another payer’s payment and for no payment, and records nothing', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const row = await paidPayment(seed);
+    const stranger = await ask('8888889', row.id);
+    expect([stranger.statusCode, stranger.json()]).toEqual([
+      404,
+      { error: StarsRefundErrorCode.PaymentNotFound },
+    ]);
+    const missing = await ask(seed.telegramUserId, '00000000-0000-4000-8000-00000000beef');
+    expect([missing.statusCode, missing.json()]).toEqual([
+      404,
+      { error: StarsRefundErrorCode.PaymentNotFound },
+    ]);
+    expect(await requestsOf(row.id)).toEqual([]);
+  });
+
+  it('P6 answers 409 already_refunded for a refunded payment', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const row = await paidPayment(seed);
+    await tmp.db.transaction((tx) =>
+      recordStarRefund(tx, {
+        telegramPaymentChargeId: row.telegramPaymentChargeId,
+        source: StarsRefundSource.Cli,
+        telegramAnswer: StarsRefundEvidence.Refunded,
+      }),
+    );
+    const response = await ask(seed.telegramUserId, row.id);
+    expect([response.statusCode, response.json()]).toEqual([
+      409,
+      { error: StarsRefundErrorCode.AlreadyRefunded },
+    ]);
+  });
+
+  it('P7 keeps the request and answers 200 when the staff cannot be told, with a warn line', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const row = await paidPayment(seed);
+    notifyFailure = Object.assign(new Error('secret text'), { code: 'ECONNRESET' });
+    logLines.length = 0;
+    try {
+      const response = await ask(seed.telegramUserId, row.id);
+      expect([response.statusCode, response.json()]).toEqual([200, { outcome: 'requested' }]);
+      await until('the warn line', () =>
+        Promise.resolve(logLines.some((line) => line.includes('the staff were not told'))),
+      );
+    } finally {
+      notifyFailure = undefined;
+    }
+    expect(await requestsOf(row.id)).toHaveLength(1);
+    const warn = JSON.parse(logLines.find((line) => line.includes('the staff were not told'))!) as {
+      level: number;
+      err: unknown;
+      starPaymentId: string;
+    };
+    expect(warn).toMatchObject({ level: 40, starPaymentId: row.id, err: { code: 'ECONNRESET' } });
+    // Rule 8: the error by name and code, never its message
+    expect(logLines.join('\n')).not.toContain('secret text');
+  });
+
+  it('refuses a payment id that is not a uuid with 400', async () => {
+    const response = await ask('42', 'not-a-uuid');
+    expect(response.statusCode).toBe(400);
   });
 });

@@ -20,7 +20,7 @@ import {
 } from '@binarius/db/testing';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import { DEPOSIT_INIT_DATA_MAX_AGE_MS } from '../auth/oauth-timing';
@@ -127,6 +127,7 @@ function testApp(deposit: DepositRoutesDeps): FastifyInstance {
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
   });
 }
 

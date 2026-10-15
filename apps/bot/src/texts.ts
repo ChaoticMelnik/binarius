@@ -15,6 +15,7 @@ import {
   LinkBonusSkipReason,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
+  StarPaymentStatus,
   telegramHtml,
   TradeAction,
   TRADE_INTENT_TRANSITIONS,
@@ -37,6 +38,7 @@ import {
   type LinkedAccountView,
   type PairTypeGroup,
   type PairView,
+  type StarPaymentView,
   type TelegramHtml,
   type TradeIntentView,
   type TradingAccessResponse,
@@ -632,6 +634,35 @@ export const LABELS: Omit<Pick<BotPlainTexts, LabelKey>, keyof LabelOverrides> &
 
 // what «📤 Поделиться» puts beside the link in the chat the user picks (#115); plain, as a label
 export const inviteShareText = (): string => plain.inviteShareText;
+
+// /paysupport (#118, docs/stars.md → /paysupport): the header, then a line per payment in the order
+// given (newest first), by its state — a request already made reads as such until the refund.
+export function paysupportText(payments: readonly StarPaymentView[]): TelegramHtml {
+  const lines = payments.map(paysupportLine);
+  // a hole holding an array is joined without a separator, so the newlines are written here
+  const joined = lines.slice(1).reduce(
+    (all, line) => telegramHtml`${all}
+${line}`,
+    lines[0] ?? telegramHtml``,
+  );
+  return telegramHtml`${TEXTS.paysupportScreen}
+
+${joined}`;
+}
+
+function paysupportLine({ paidAt, totalAmount, status, requested }: StarPaymentView): TelegramHtml {
+  const context = { paymentDate: paidAt, stars: String(totalAmount) };
+  if (status === StarPaymentStatus.Refunded) return TEXTS.paysupportLineRefunded(context);
+  if (requested) return TEXTS.paysupportLineRequested(context);
+  return status === StarPaymentStatus.Held
+    ? TEXTS.paysupportLineHeld(context)
+    : TEXTS.paysupportLinePaid(context);
+}
+
+// plain, as every button label
+export const paysupportRefundLabel = (paidAt: number): string =>
+  plain.paysupportRefundButton({ paymentDate: paidAt });
+export const paysupportListLabel = (): string => plain.paysupportListButton;
 
 // The Stars purchase (#117, docs/stars.md): Telegram parses none of these, so they are plain like
 // the labels — the package and pay buttons, the invoice's title and description, and the

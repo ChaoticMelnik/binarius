@@ -215,6 +215,7 @@ describe('the bot texts catalog', () => {
         'startCommand',
         'stopCommand',
         'supportCommand',
+        'paysupportCommand',
       ].sort(),
     );
   });
