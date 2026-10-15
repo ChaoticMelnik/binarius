@@ -142,9 +142,11 @@ the broker's minimum without one.
 **The picker** (`stake-picker.ts`) is the picker of one mode, carried in its data, not of the
 user's trading mode. It opens from «💵 Сумма» beside the stake button (drawn by «➕ Ещё», #360,
 in the mode of the expansion: demo or REAL), from «💵 Демо» and «💼 Реал» in /settings
-([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the launch screen (#320, the demo
-cycle's stake, [bot-demo.md](bot-demo.md#the-launch-screen-320)) and from the stake refusals, in
-the refused press's mode. It edits the message it was opened from:
+([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the real launch screen (#320, #327,
+[bot-demo.md](bot-demo.md#the-launch-screen-in-real-mode-327)) and on demo launch screens sent
+before #476, and from the stake refusals, in the refused press's mode. In demo the amount screen of
+a cycle (#476, [bot-demo.md](bot-demo.md#the-amount-screen-476)) offers the same presets and saves
+through the same route, without the picker. It edits the message it was opened from:
 
 ```text
 💵 Сумма демо-сделки                  real: 💼 Сумма реальной сделки
@@ -183,18 +185,22 @@ origin's is the same length. The three switches over the origin (`originData`, `
 handles it; the parser `stakeOriginOf` and the `PICKER` pattern are extended by hand.
 
 **The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
-reset or a typed amount) returns to that screen, not to «✅ Сумма»: the saved line in the saved
-stake's mode — «✅ Демо-ставка сохранена: $5.00», or «✅ Реальная ставка сохранена: $5.00» for a
-real save (#326) — above the three lines, with «💵 Ставка» at the demo stake (after the reset,
-«минимальная брокера») and the screen's three buttons; a user in real mode gets the real launch,
-whose amount is the real stake in force. One read gives the symbol and the payout: `readPairs`, any
-catalog, a stale one included, as the session start reads it. A pair in it paying below the cycle
-floor (`!pairPayoutAccepted`, #379) gets, under the saved line, the launch press's refusal
-`demoPayoutTooLow` with «↩️ К списку» and «🧭 Выбрать пару вручную» instead of «🚀 Запустить цикл»
-(`stake-picker.test.ts`, at 79 and 80 % on 15 and 5 s). Without a catalog the symbol line is
-dropped and `warn` `pairs not read for the launch screen` is logged; without a catalog or without
-the pair in it the launch stays, since the start checks the pair itself. A preset or the reset edits in place, a typed amount sends the screen as a new message. A
-refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску», and reads no catalog.
+reset or a typed amount) returns to the screen of the user's mode now, not to «✅ Сумма»: the saved
+line in the saved stake's mode — «✅ Демо-ставка сохранена: $5.00», or «✅ Реальная ставка
+сохранена: $5.00» for a real save (#326) — above it. A user in real mode gets the real launch, whose
+amount is the real stake in force; a user in demo gets the amount screen (#476,
+[bot-demo.md](bot-demo.md#the-amount-screen-476)) with its amounts from the same access read, ✅
+on the demo stake (after the reset, on the minimum), and its refusals (a failed read: «⚠️ Сервис
+временно недоступен…» with «🔄 Повторить» `demo:l:<assetId>:<sec>` and «↩️ К списку»). One read
+gives the symbol and the payout: `readPairs`, any catalog, a stale one included, as the session
+start reads it. A pair in it paying below the cycle floor (`!pairPayoutAccepted`, #379) gets,
+under the saved line, the launch press's refusal `demoPayoutTooLow` with «↩️ К списку» and «🧭
+Выбрать пару вручную» instead of the screen (`stake-picker.test.ts`, at 79 and 80 % on 15 and
+5 s). Without a catalog the symbol line is dropped and `warn` `pairs not read for the launch screen`
+is logged; without a catalog or without the pair in it the screen stays, since the start checks the
+pair itself. A preset or the reset edits in place, a typed amount sends the screen as a new
+message. A refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску» (`demo:l`, which
+opens the screen of the mode now), and reads no catalog.
 
 **The custom input** is a step of the login dialog store (`login-dialog.ts`): one entry per user,
 so the email login and the stake input replace each other. The step carries the picker's mode, and
@@ -332,7 +338,8 @@ gets `warn` and nothing more. This press never starts tracking.
 - `HANDLER_CALLS.demoAnalysis` is 3 / 4 = 47 s since #121: the access read for the mode, beside
   the catalog, decides the session row; `HANDLER_CALLS.analysisMore` = 1 / 2 = 21 s. It is the
   longest path, tied since #418 with `sessionStart` (3 / 4: the launch screen's delete and strip
-  after the status, bot-session.md → Timing); the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
+  after the status, bot-session.md → Timing) and since #476 with `cycleStakePreset` (3 / 4, the
+  start in one attempt); the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
 - `INTENT_TRACK_FIRST_POLL_MS` = 1 s, `INTENT_TRACK_POLL_MS` = 3 s, `INTENT_TRACK_DEADLINE_MS` =
   120 s. The deadline is the worker's `INTENT_MAX_AGE_MS` (60 s) plus `SUBMIT_ACK_TIMEOUT_MS`
   (10 s), with room. That relation is stated, not checked, because the worker's constants cannot

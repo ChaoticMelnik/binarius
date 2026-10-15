@@ -235,7 +235,7 @@ compile.
 | `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
-| `stake` | on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one | `formatStake` | `stakeMinimumLabel` |
+| `stake` | on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one | `formatStake` | `stakeMinimumLabel` |
 | `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |

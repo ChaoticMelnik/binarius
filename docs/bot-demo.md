@@ -1,10 +1,11 @@
-# The demo: the signals, an asset, a duration and the analysis on a fresh catalog (issues #125, #126, #320, #382)
+# The demo: the signals, an asset, a duration and the analysis on a fresh catalog (issues #125, #126, #320, #382, #476)
 
 The status card's «🎮 Демо-торговля» button (#24, [bot-menu.md](bot-menu.md)) opens the choice of
 the trade's duration, «⏱ 15 с» or «⏱ 5 с» (#382, [The duration screen](#the-duration-screen-382)),
 and the duration opens «Сигналы сейчас» (#320, [The signals screen](#the-signals-screen-320)): the
 pairs with a signal on the last closed candle of that duration's backend scanner, each leading to
-the launch of a cycle of trades at that duration. Both screens have
+the amount of a cycle of trades at that duration (#476, [The amount screen](#the-amount-screen-476)),
+whose press starts the cycle. Both screens have
 «🧭 Выбрать пару вручную», which leads to five more screens in one message: the asset types, one type's
 pairs by page, the durations of a pair, the summary of the choice with «📊 Анализ», and the
 analysis. Every screen reads the broker's pairs again through
@@ -25,17 +26,26 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `openPairsOf`, `pageOf`, `pageIndexOf`, `durationOptions`, `checkDemoPair`, `checkDemoTrade`,
   `checkDemoCycle` (#379),
   `readDemoCatalog`, `readDemoTrade`, `readDemoCycle` (#379).
-- `apps/bot/src/demo.ts` — `createDemoComposer({ backend, logger, now })`: the nine handlers,
-  the callback data builders (`DEMO_CALLBACK_DATA`, `DEMO_SIGNALS_CALLBACK_DATA`,
-  `demoSignalsCallbackData`, `demoLaunchCallbackData`, `launchStakeCallbackData`, `DEMO_GROUPS_CALLBACK_DATA`,
+- `apps/bot/src/demo.ts` — `createDemoComposer({ backend, logger, now, dialog, connectKeyboard })`:
+  the nine handlers, the callback data builders (`DEMO_CALLBACK_DATA`, `DEMO_SIGNALS_CALLBACK_DATA`,
+  `demoSignalsCallbackData`, `demoLaunchCallbackData` with its origin (#476),
+  `cycleStakeCallbackData`, `cycleCustomCallbackData` and their patterns (#476),
+  `launchStakeCallbackData`, `DEMO_GROUPS_CALLBACK_DATA`,
   `demoPageCallbackData`, `demoAssetCallbackData`, `demoDurationCallbackData`,
   `demoAnalysisCallbackData`, `analysisMoreCallbackData` (#360), `stakeCallbackData`),
   `ANALYSIS_MORE_PATTERN` and `analysisMoreDataOf` (#360), `STAKE_CALLBACK_PATTERN`, `stakeDataOf`
   and `newStakeNonce` (#127), `durationsScreen` (#382), `signalsScreen` and `launchScreen` (#320,
-  the latter drawn by the stake picker too), the keyboards, `editOrReply`, which returns its
+  in real mode), `cycleStakeAmounts`, `cycleStakeScreen` and `demoCycleScreen` (#476; the last two
+  drawn by the stake picker too), the keyboards, `editOrReply`, which returns its
   outcome, and `editKeyboard` («➕ Ещё»'s edit of the keyboard alone, #360). `bot.ts`
   mounts it once under its private-chat filter, after `/help` and before the text handler, and
   mounts #127's `createDemoTradeComposer` (the stake press) right after it.
+- `apps/bot/src/cycle-stake.ts` — `createCycleStakeComposer({ backend, logger, dialog,
+  startSession })` (#476): an amount's press, «✏️ Своя сумма» and `onText`, the typed amount
+  `bot.ts`'s text handler routes on the `cycleStake` step; the start is trading-session.ts's
+  `startSession`. `bot.ts` mounts it before the session composer.
+- `apps/bot/src/stake-access.ts` — `stakeAccess` (#476): the access read's refusals before any
+  amount, shared by the picker and the amount screen.
 - `apps/bot/src/analysis.ts` — the analysis screen as a pure function (#126): `analysisScreen`,
   `analysisUnavailableScreen`, `analysisSubject`, `NO_SIGNAL_REASON_TEXT`, `TREND_WORDS`,
   `MOMENTUM_WORDS`, `VOLATILITY_WORDS` (maps to catalog keys, [bot-texts.md](bot-texts.md)),
@@ -52,12 +62,13 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `demoDurationsScreen`, `demoSummary`, `DEMO_GROUP_LABELS`, `DEMO_DURATION_LABELS`,
   `groupButtonLabel`, `pairButtonLabel`, and the `demo*Button` labels; the `analysis*`,
   `analyzing` entries, `ACTION_LABELS`, `stakeButtonLabel` and
-  `LABELS.repeatAnalysisButton` (#126); `signalButtonLabel` and `launchText` (#320); the texts
+  `LABELS.repeatAnalysisButton` (#126); `signalButtonLabel` and `launchText` (#320);
+  `cycleStakeText` and `cycleStakeLabel` (#476); the texts
   are catalog entries
   ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.demo`, `.demoDurations`, `.demoSignals`, `.demoLaunch`,
   `.demoGroups`, `.demoPage`, `.demoAsset`, `.demoDuration`, `.demoAnalysis`, `.analysisMore`
-  (#360); the link
+  (#360), `.cycleStakePreset`, `.cycleStakeCustom`, `.cycleStakeText` (#476); the link
   `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
 - `packages/broker-rest/src/pairs-catalog.ts` and `packages/shared/src/catalog.ts` — the `fresh`
   flag of the catalog ([Fresh](#fresh)).
@@ -72,9 +83,13 @@ demo:sig                  («↩️ Длительность»; every old «🔄
 demo:sig:<sec>            (a duration, «🔄 Обновить», «↩️ К списку», «📡 К сигналам»)
   bot  → answerCallbackQuery ∥ GET /trading/signals ∥ GET /trading/pairs
   bot  → editMessageText: «Сигналы сейчас · ⏱ <sec> с», the pairs with a signal two a row, «🔄 Обновить» «↩️ Длительность» in one row, «🧭 Выбрать пару вручную»
-demo:l:<assetId>:<sec>    (a pair of the list, «↩️ К запуску»)
+demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoCycle(<sec>) ∥ POST /trading/access
-  bot  → editMessageText: the launch screen
+  bot  → editMessageText (sendMessage for :n): the amount screen in demo, the launch screen in real
+demo:sa:<assetId>:<sec>:<amount>:<l|a>  (an amount of the amount screen, #476)
+  bot  → answerCallbackQuery ∥ POST /trading/stake (demo, <amount>) ∥ GET /trading/pairs
+  bot  → on a save: POST /trading/sessions, one attempt → the session's status; the amount screen deleted
+demo:sc:<assetId>:<sec>:<l|a>  («✏️ Своя сумма», #476) → the prompt in place; the typed amount saves and starts the same way
 demo:g                    («🧭 Выбрать пару вручную», «↩️ Типы»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs
   bot  → editMessageText: the types present, each «💱 Валюты · 46» with its count of open pairs
@@ -91,8 +106,8 @@ demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
-<mode>:sess:<assetId>:<sec>[:l]              (the session button, «🚀 Запустить цикл» with :l (#418), «🔁 Ещё сессия», the row under a finished trade; <mode> demo or real, #327) → the session, bot-session.md
-stk:o:d:p:<assetId>:<sec>                     («💵 Изменить ставку») → the demo picker, bot-demo-trade.md
+<mode>:sess:<assetId>:<sec>[:l]              (the session button: in real the analysis's row, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия», the row under a finished trade, #327; in demo the buttons sent before #476) → the session, bot-session.md
+stk:o:<d|r>:p:<assetId>:<sec>                 («💵 Изменить ставку» of the real launch screen, and of demo launch screens sent before #476) → the picker, bot-demo-trade.md
 demo:d|an|stake|sess and stk:… with a <sec> of before #313 → the keyboard removed, nothing sent
 demo:l:<assetId> and stk:…:p:<assetId> from before #382 → the keyboard removed, nothing sent
 ```
@@ -106,7 +121,8 @@ device lead to the same screen.
 
 The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789ab:0a1b2c`), inside
 the Bot API 64.
-`demo:sig` is 8 bytes, `demo:sig:15` 11, `demo:l:2147483647:15` 20 and
+`demo:sig` is 8 bytes, `demo:sig:15` 11, `demo:l:2147483647:15` 20, `demo:l:2147483647:15:n` 22,
+`demo:sc:2147483647:15:a` 23, `demo:sa:2147483647:15:999999999999.99999999:a` 45 (#476) and
 `demo:more:2147483647:15:down:n:r` 32 (#360, #379, #121).
 `<group>` is one of `PAIR_TYPE_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
@@ -176,7 +192,7 @@ one row, and «🧭 Выбрать пару вручную» (`demo:g`) in its o
 The list is a snapshot of the duration's candle that closed last: «Сигнал держится одну свечу
 (⏱ 15 с); перед каждой сделкой бот проверяет его заново». A press never reads the signal again — the session's
 orchestrator asks for it before every trade (#287), so a stale pick costs a «сигнала нет» wait, not a
-trade against the signal. The button's arrow is the scanner's at `asOf`; the launch screen shows no
+trade against the signal. The button's arrow is the scanner's at `asOf`; the amount screen shows no
 direction, since the session decides it per trade.
 
 | Outcome | What the bot shows |
@@ -191,27 +207,82 @@ The catalog's failure is shown first when both fail. `readSignals` logs `trading
 the catalog logs as in [The check](#the-check): only `backend_failed`, since the backend logs a
 missing or stale snapshot itself.
 
-## The launch screen (#320)
+## The amount screen (#476)
 
-`demo:l:<assetId>:<sec>` reads the catalog and access together: `readDemoCycle(backend, assetId,
-sec, now)` on the catalog read at this press, and the user's mode with the amount the cycle trades
-(`effectiveStake`: the saved stake of the user's mode, or the broker's minimum). Three lines —
-«🎯 {symbol} · ⏱ {sec} с», «💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and three rows:
-«🚀 Запустить цикл» (`<mode>:sess:<assetId>:<sec>:l`, the session button's data with the launch
-token: the start, its refusals and the 409 are the same, and once the session's status is sent the
-start deletes this screen,
-[bot-session.md](bot-session.md#the-launch-screen-after-the-start-418)), «💵 Изменить
-ставку» (`stk:o:<d|r>:p:<assetId>:<sec>`, the picker of the user's mode whose way back is this
-screen,
-[bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)), «↩️ К списку» (`demo:sig:<sec>`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
-`warn` `trading access not read for the stake label`; access's refusals (no account, blocked) are
-left to the start, which answers them. A pair refused by the check is the table below, as on the
-manual path; a pair whose payout fell below the floor since the list was drawn (`payout_too_low`,
-#379) says «🚫 {symbol}: выплата {payout}% — ниже 80%, цикл на этой паре не запускается.
-Безубыточность при такой выплате — {breakEven}% верных прогнозов.» (`demoPayoutTooLow`) with
-«↩️ К списку» (`demo:sig:<sec>`) and «🧭 Выбрать пару вручную» (`demo:g`), whose single trade the floor
-does not restrict. Access is read in parallel as on every launch press, its amount unused. The screen writes nothing: the stake is read where it is shown and the start reads it
-again (Rule 29).
+`demo:l:<assetId>:<sec>[:a|:n]` reads the catalog and access together: `readDemoCycle(backend,
+assetId, sec, now)` on the catalog read at this press, and the user's mode, the demo stake and the
+broker snapshot. In demo it draws the amount screen (`cycleStakeScreen`), in real the launch screen
+([below](#the-launch-screen-in-real-mode-327)). Four doors open it in demo: a pair of the signals
+list (no token, edited in place), the analysis's session row (`:a`, edited in place, #360), the
+row under a finished demo trade and «🔁 Ещё сессия» of a stopped demo session (`:n`, sent as a new
+message, so the trade's or the session's message stays). The way back is «↩️ К списку»
+(`demo:sig:<sec>`) from the list and «↩️ Назад к анализу» (`demo:an:<assetId>:<sec>`) otherwise;
+a screen drawn by `:n` carries `a` in its own buttons, since its presses edit it. Old `demo:sess:…`
+buttons in messages sent before #476 still start a session at once.
+
+Text: «🎯 {symbol} · ⏱ {sec} с», «🤖 Бот проведёт 5 сделок подряд…», then «Выбери сумму сделки 👇»
+(`cycleStakeChoose`). Keyboard:
+
+- the amounts (`cycleStakeAmounts`): the picker's presets (`stakePresets`: the broker's minimum
+  × 1, 2, 5, 10 within the demo balance), plus the saved demo stake when it is within the bounds
+  (`checkStake`) and not a preset, ascending; ✅ on the amount in effect (the saved demo stake, or
+  the broker's minimum without one); a saved stake above the balance now has no button and no ✅;
+- amounts from `STAKE_RISK_THRESHOLD` ($10, inclusive, `stakeIsRisky`) are labelled
+  «$10.00 · риск» (`stakeRiskButton`); the others go three a row, the risky ones two a row below
+  them (#475 colours them);
+- «✏️ Своя сумма» (`demo:sc:<assetId>:<sec>:<l|a>`) and the way back in the last row.
+
+No «🚀 Запустить цикл», «💵 Изменить ставку» or «🔁 Минимальная брокера»: an amount starts the
+cycle, and «✏️ Своя сумма» covers any other. With no amount (the demo balance below the broker's
+minimum) the text ends with `stakePickerNoPresets` and the keyboard is the way back only. Access's
+refusals are the picker's (`stake-access.ts`): blocked, no account, an ambiguous account, no balance
+snapshot, each with its keyboard and the way back. A failed access read says «⚠️ Сервис временно
+недоступен…» with «🔄 Повторить» (`demo:l:…`, a read; `:n` becomes `:a`, so the retry edits the
+refusal in place) and the way back, and logs `warn` `trading access not read for the amount
+screen`. A press of `demo:l` ends a typed amount's step left open. A pair refused by the check is
+the table below, as on the manual path; a pair whose payout fell below the floor since the list was
+drawn (`payout_too_low`, #379) says «🚫 {symbol}: выплата {payout}% — ниже 80%, цикл на этой паре
+не запускается. Безубыточность при такой выплате — {breakEven}% верных прогнозов.»
+(`demoPayoutTooLow`) with «↩️ К списку» (`demo:sig:<sec>`) and «🧭 Выбрать пару вручную»
+(`demo:g`), whose single trade the floor does not restrict, in either mode.
+
+**An amount** (`demo:sa:<assetId>:<sec>:<amount>:<l|a>`, `cycle-stake.ts`) is a write
+(`WRITE_CALLBACK_PREFIXES`). The press saves the amount as the demo stake (`POST /trading/stake`,
+beside the catalog read), and only on `{ saved }` starts the cycle (`POST /trading/sessions`, mode
+demo, `DEFAULT_SESSION_TRADES`), which reads the saved stake itself (Rule 29). The two requests are
+not atomic: a stake saved from another device in between is the cycle's, and a refused start leaves
+the amount saved. The amount in the data is the one saved, as the picker's preset: the backend
+bounds it. A refused save («💵 Сумма» opens the amount screen anew as a new message, then the way
+back), `balance_unavailable`, an unknown outcome (`warn` `stake save outcome unknown`, nothing
+starts) and the other failures (`stake not saved`) are replies, so the screen stays. The start is
+the session button's path ([bot-session.md](bot-session.md#the-button)) with one attempt: an
+unknown outcome says `sessionOutcomeUnknown` and keeps the screen, and pressing again is safe (the
+save is idempotent, the start answers 409 with the session if the first committed). Once the
+session's status is sent the screen is deleted as the launch screen is
+([bot-session.md](bot-session.md#the-launch-screen-after-the-start-418)). A second press while the
+cycle runs saves its amount and shows the running session: the session keeps the amount it started
+with (`trading_sessions.settings`, Rule 28).
+
+**«✏️ Своя сумма»** puts the user on the `cycleStake` dialog step (login-dialog.ts, replacing a
+login or a picker step) and edits the screen into `stakeInputPrompt` with «↩️ Назад» to the screen.
+The typed amount is parsed as the picker's (`parseStakeInput`), saved and started the same way, with
+the start's one retry on an unknown outcome, as a new reply: the bot keeps no id of the prompt, so
+nothing is deleted. A text that is no amount, a bounds refusal, `balance_unavailable` and an unknown
+save keep the step; a save and a refusal the bot cannot act on end it. The step lives up to
+`LOGIN_DIALOG_TTL_MS` (10 min): a number typed within it starts a cycle even after other presses,
+unless one of them was `demo:l`.
+
+### The launch screen in real mode (#327)
+
+In real mode `demo:l` draws the launch screen with the real stake in force (`effectiveStake`):
+three lines — «🎯 {symbol} · ⏱ {sec} с», «💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and
+three rows: «🚀 Запустить цикл · REAL» (`real:sess:<assetId>:<sec>:l`, the session button's data
+with the launch token: the start, its refusals and the 409 are the same, and once the session's
+status is sent the start deletes this screen,
+[bot-session.md](bot-session.md#the-launch-screen-after-the-start-418)), «💵 Изменить ставку»
+(`stk:o:r:p:<assetId>:<sec>`, the real picker whose way back is this screen,
+[bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)), «↩️ К списку» (`demo:sig:<sec>`). The
+screen writes nothing: the stake is read where it is shown and the start reads it again (Rule 29).
 
 ## The check
 
@@ -231,7 +302,7 @@ check. A cycle's entries — the signals list, the launch and the analysis's ses
 | `pair_missing` | the id is not in the catalog (delisted, or forged data) | «❌ Этот актив больше не доступен…» + «↩️ Типы» |
 | `pair_closed` | `scheduledUntil > now` on the bot's clock | «🔒 {symbol} сейчас закрыт по расписанию…» + «↩️ Активы» + «↩️ Типы» |
 | `duration_unsupported` | the duration is not one of `DEMO_DURATIONS_SEC` (#125 review m5: it arrives from callback data), or is outside `[minTimeframe, maxTimeframe]` | «❌ Эта длительность не подходит для {symbol}…» + «↩️ Длительность» + «↩️ Типы» |
-| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the launch, and the launch screen after a stake save (`pairPayoutAccepted` on the save's catalog, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)): `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
+| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the amount or launch screen, and the screen after a stake save (`pairPayoutAccepted` on the save's catalog, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)): `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
 
 «🔄 Повторить» carries the pressed data again, so a retry after `demo:d:…` lands on the summary
 once the catalog is back. A retry is always safe: nothing in the demo writes anything.
@@ -289,8 +360,12 @@ not a fresh catalog.
   «🔄 Обновить» and «↩️ Длительность» in one row and «🧭 Выбрать пару вручную» in its own. At most
   `SIGNALS_LIST_SIZE` = 12 pairs (#460) — 6 + 2 rows; at 5 s the scanner covers 4 pairs by
   default — 2 + 2 (Telegram allows 100 buttons, 8 a row).
-- **Launch (#320).** «🚀 Запустить цикл», «💵 Изменить ставку», «↩️ К списку», one a row; each carries
-  the duration. The screen is deleted after the start, once the session's status is sent (#418).
+- **Amounts (#476, demo).** The amounts three a row, the risky ones («· риск») two a row, then
+  «✏️ Своя сумма» and the way back in one row; each carries the duration. The screen is deleted
+  after an amount's start, once the session's status is sent (#418).
+- **Launch (#320, real).** «🚀 Запустить цикл · REAL», «💵 Изменить ставку», «↩️ К списку», one a
+  row; each carries the duration. The screen is deleted after the start, once the session's status
+  is sent (#418).
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
 - **Analysis (#360).** On every `decided` answer — a signal or «сигнала нет» — «🚀 Сессия из 5
   сделок» alone in the first row where `sessionFitsDeadline(5, sec)` holds, at every duration of
@@ -306,7 +381,8 @@ not a fresh catalog.
   message, only its keyboard edited. «🔄 Повторить анализ» draws the collapsed form again.
 - **Real mode (#121, [trading-mode.md](trading-mode.md)).** The analysis reads access for the
   user's mode beside the catalog: in real mode the session row is «🚀 Сессия из 5 сделок · REAL»
-  with `real:sess:<assetId>:<sec>` (#327), the disclaimer is `analysisDisclaimerReal` («…Реальный
+  with `real:sess:<assetId>:<sec>` (#327; in demo `demo:l:<assetId>:<sec>:a`, the amount screen,
+  #476), the disclaimer is `analysisDisclaimerReal` («…Реальный
   режим: сделка идёт на реальные деньги.»), and the hint and the `analysisCycleUnavailable` line
   are the demo ones (the floor is the session's, #327). A failed read draws the demo text and
   keyboard. «➕ Ещё» carries the mode the
@@ -315,10 +391,10 @@ not a fresh catalog.
   «🔄 Повторить анализ» and the way back. In real mode the expansion draws «🚀 Открыть
   сделку: ⬆️ Вверх · $1.00 · REAL» at the real stake in force (the saved real stake, the broker's
   minimum without one, #326), its fingerprint over `real:<amount>`, and «💵 Сумма» of the real
-  picker (`stk:o:r:a:<assetId>:<sec>`), under the real session row (#327). The launch screen in
-  real mode (#327) is the demo one by the mode: the real stake in force, `launchCycleReal`
-  («…Реальный режим: сделки идут на реальные деньги.»), «🚀 Запустить цикл · REAL» and the real
-  picker; a pair below the cycle floor gets the floor's refusal as in demo.
+  picker (`stk:o:r:a:<assetId>:<sec>`), under the real session row (#327). A pair opens, in real
+  mode, the launch screen (#327): the real stake in force, `launchCycleReal` («…Реальный режим:
+  сделки идут на реальные деньги.»), «🚀 Запустить цикл · REAL» and the real picker, where demo
+  draws the amount screen (#476); a pair below the cycle floor gets the floor's refusal in both.
 - **The shared screens** — the signals, the types, a type's pairs and the summary — read no mode,
   so their default texts hold in both (#121): «📡 Сигналы сейчас … Выбери пару.», «🧭 Выбор
   пары», «Дальше — анализ свечей: бот покажет сигнал и что можно сделать по нему.». The demo note
@@ -495,9 +571,17 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
   `the analysis keyboard was not expanded` (`warn`), `the analysis keyboard edit failed in
   transport, sending nothing more` (`error`, with the update id): the method
   (`editMessageReplyMarkup`) and the Telegram error code, never the description.
-- `trading access not read for the stake label` (`warn`) — written by «➕ Ещё» (#360), the
-  launch screen (#320) and the analysis (#121): `err` with the `BackendError`'s name and code, `backendStatus`,
+- `trading access not read for the stake label` (`warn`) — written by «➕ Ещё» (#360) and the
+  analysis (#121): `err` with the `BackendError`'s name and code, `backendStatus`,
   `backendReason`; no Telegram id, no amount.
+- `trading access not read for the amount screen` (`warn`, #476) — the amount screen's access
+  read: `err` with the `BackendError`'s name and code, `backendStatus`, `backendReason`; no
+  Telegram id, no amount (`logging.test.ts`).
+- `stake save outcome unknown` (`warn`) and `stake not saved` (`warn` for `user_not_found`,
+  `error` otherwise) — an amount of the amount screen or its typed amount (#476), as the picker
+  writes them: `err`, the backend fields and `mode: demo`; no Telegram id, no amount.
+- `the amount prompt edit failed in transport, sending nothing more` (`error`, #476) — the method
+  and the Telegram error code.
 - `answering the callback query failed` (`warn`) — the method and the code; from an old button
   (#313, #314) also its `callbackData`.
 - `the keyboard of an old button was not removed` (`info`) — the method, the code and the pressed
