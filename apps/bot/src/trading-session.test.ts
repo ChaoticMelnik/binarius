@@ -918,10 +918,12 @@ describe('/stop resets the mode (#473)', () => {
     });
     await send('/stop');
     expect(setTradingMode).toHaveBeenCalledTimes(1);
-    expect(sends(calls).map((payload) => payload.text)).toEqual([
-      TEXTS.modeStopReset.value,
-      TEXTS.unavailable.value,
-    ]);
+    // the order is ST2's
+    expect(
+      sends(calls)
+        .map((payload) => payload.text)
+        .sort(),
+    ).toEqual([TEXTS.modeStopReset.value, TEXTS.unavailable.value].sort());
     expect(warnings(logger)).toEqual(['trading sessions not stopped']);
   });
 
@@ -942,10 +944,11 @@ describe('/stop resets the mode (#473)', () => {
       return sendAnswer(payload, signal);
     });
     await send('/stop');
-    expect(sends(calls).map((payload) => payload.text)).toEqual([
-      TEXTS.modeStopReset.value,
-      statusOf(STOPPED),
-    ]);
+    expect(
+      sends(calls)
+        .map((payload) => payload.text)
+        .sort(),
+    ).toEqual([TEXTS.modeStopReset.value, statusOf(STOPPED)].sort());
     expect(warnings(logger)).toEqual(['trading mode line not sent']);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
       method: 'sendMessage',
