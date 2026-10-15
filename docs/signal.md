@@ -411,7 +411,7 @@ docker compose logs --no-log-prefix --since 1h backend | grep -F '"msg":"signal 
 
 ### Observed live (2026-10-06)
 
-- The architect made three public chart GETs (asset 237831086, NZD/USD OTC, `1m`). The rows are
+- The architect made three public chart GETs (asset 237831086, NZD/USD with `is_otc`, `1m`). The rows are
   5-tuples, strictly ascending and one step apart in all three answers. `start_time` is rounded
   down to the step. The answer is the rows from that start, capped by `limit`. The forming candle
   is included. The mock does the same.
