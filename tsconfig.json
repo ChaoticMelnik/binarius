@@ -10,6 +10,7 @@
     { "path": "packages/mock-broker" },
     { "path": "packages/shared" },
     { "path": "packages/signal" },
+    { "path": "packages/signal-stand" },
     { "path": "tooling" }
   ]
 }
