@@ -1,6 +1,5 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
-  BrokerBalanceUnavailableReason,
   errorLogFields,
   formatStake,
   normalizeDecimal,
@@ -11,7 +10,6 @@ import {
   stakePresets,
   tradeAmountSchema,
   TradeMode,
-  UserStatus,
   telegramHtml,
   type DecimalString,
   type TelegramHtml,
@@ -27,6 +25,7 @@ import {
 import {
   assetIdOf,
   demoAnalysisCallbackData,
+  demoCycleScreen,
   demoLaunchCallbackData,
   durationOf,
   effectiveStake,
@@ -43,8 +42,8 @@ import {
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { supportKeyboard } from './keyboards';
 import { editRefusal } from './screen';
+import { stakeAccess } from './stake-access';
 import { editMessageTextHtml, replyHtml } from './send';
 import { LABELS, stakePickerText, stakeSavedLine, TEXTS, userContextOf } from './texts';
 
@@ -146,8 +145,9 @@ const stepOf = (mode: string | undefined, origin: string | undefined): StakeStep
     : { mode: stakeMode, origin: stakeOrigin };
 };
 
-// A bounds refusal of a save, in the save's mode: only that mode's balance is in the limits.
-function refusalText(
+// A bounds refusal of a save, in the save's mode: only that mode's balance is in the limits. The
+// amount screen of a demo cycle (#476, cycle-stake.ts) says the same.
+export function refusalText(
   mode: TradeMode,
   { error, limits }: Extract<SetStakeResult, { refused: unknown }>['refused'],
 ): TelegramHtml {
@@ -331,23 +331,13 @@ export function createStakePicker<C extends Context>({
       );
       return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
     }
-    const { status, broker, brokerUnavailable } = access.value;
-    if (status === UserStatus.Blocked) {
-      // the support link, as for every blocked user (#350), then the picker's way back
-      return { text: TEXTS.blocked, keyboard: backTo(supportKeyboard().row(), origin) };
-    }
-    if (broker === null) {
-      if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
-        return { text: TEXTS.accountNone, keyboard: backTo(connectKeyboard().row(), origin) };
-      }
-      return {
-        text:
-          brokerUnavailable === BrokerBalanceUnavailableReason.AmbiguousAccount
-            ? TEXTS.statusAmbiguous
-            : TEXTS.stakeBalanceMissing,
-        keyboard: backKeyboard(origin),
-      };
-    }
+    const checked = stakeAccess(
+      access.value,
+      (keyboard) => backTo(keyboard, origin),
+      connectKeyboard,
+    );
+    if ('refusal' in checked) return checked.refusal;
+    const { broker } = checked;
     const real = mode === TradeMode.Real;
     const saved = real ? access.value.realStake : access.value.demoStake;
     const presets = stakePresets({
@@ -442,8 +432,8 @@ export function createStakePicker<C extends Context>({
   // the session start would refuse (#379). Without a catalog, or without the pair in it, the
   // screen drops its symbol line and the launch stays, since the session start checks the pair.
   // The access read gives the user's mode (#121): a save from a launch screen drawn before a switch
-  // draws the launch screen of the mode now (#327); a failed read draws the demo one, whose cycle
-  // press the backend refuses for a real-mode user (mode_not_allowed).
+  // draws the screen of the mode now (#327) — in real the launch screen, in demo the amount screen
+  // (#476), whose amounts come from that read; a failed read draws the amount screen's refusal.
   async function savedLaunchScreen(
     { assetId, durationSec }: { assetId: number; durationSec: DemoDurationSec },
     saved: { amount: DecimalString | null; mode: TradeMode },
@@ -480,23 +470,24 @@ ${refusal.text}`,
         keyboard: refusal.keyboard,
       };
     }
-    return launchScreen({
-      assetId,
-      durationSec,
+    if (real !== undefined) {
+      return launchScreen({
+        assetId,
+        durationSec,
+        firstName,
+        symbol: pair?.symbol ?? null,
+        amount: effectiveStake(real),
+        saved,
+        mode: TradeMode.Real,
+      });
+    }
+    return demoCycleScreen({
+      step: { assetId, durationSec, back: 'l' },
       firstName,
       symbol: pair?.symbol ?? null,
-      // the amount of the user's mode: in real the real cycle's stake; in demo the demo stake,
-      // which a real save (#326) did not change
-      amount:
-        real !== undefined
-          ? effectiveStake(real)
-          : saved.mode === TradeMode.Demo
-            ? saved.amount
-            : access.ok
-              ? access.value.demoStake
-              : null,
+      access: access.ok ? access.value : null,
+      connectKeyboard,
       saved,
-      mode: real === undefined ? TradeMode.Demo : TradeMode.Real,
     });
   }
 

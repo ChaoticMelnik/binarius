@@ -18,6 +18,7 @@ import {
   type StartSessionResult,
 } from './backend-client';
 import {
+  demoLaunchCallbackData,
   durationOf,
   SESSION_START_PATTERN,
   sessionStartCallbackData,
@@ -53,7 +54,8 @@ import {
 // The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
 // buttons start one through POST /trading/sessions, one status message follows it
 // (session-tracker.ts), and its buttons read the session again or stop it. The trades themselves
-// are the worker's (#287). The launch screen's button (#418) is deleted once the status is sent.
+// are the worker's (#287). The launch screen (#418) and the amount screen of a demo cycle (#476) are
+// deleted once the status is sent.
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 // `session:<uuid>` is 44 bytes and `session:stop:<uuid>` 49, inside the Bot API 64.
@@ -64,7 +66,8 @@ export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${UUID}$`);
 
 // A live session gets both buttons; a stopped one the refresh, since its last trade can still
 // settle and move the counters, and «🔁 Ещё сессия» on its own pair, duration and mode (#320,
-// #327), the session button's data, so the start handler checks it as any other. A duration the
+// #327): in real the session button's data, so the start handler checks it as any other; in demo
+// the amount screen (#476). A duration the
 // demo no longer offers has no such button.
 export const sessionKeyboard = (
   view: Pick<TradingSessionView, 'id' | 'mode' | 'status' | 'settings'>,
@@ -92,11 +95,14 @@ function appendSessionEnd(
   if (settings === null) return withInvite(keyboard, cashierUrl);
   const durationSec = durationOf(String(settings.durationSec));
   if (durationSec !== undefined) {
+    // a demo session's again opens the amount screen (#476) as a new message, so this one stays
     keyboard
       .row()
       .text(
         sessionAgainButtonLabel(mode),
-        sessionStartCallbackData(mode, settings.assetId, durationSec),
+        mode === TradeMode.Demo
+          ? demoLaunchCallbackData(settings.assetId, durationSec, 'n')
+          : sessionStartCallbackData(mode, settings.assetId, durationSec),
       );
   }
   return appendEndOfPath(keyboard, settings.assetId, settings.durationSec, [
@@ -206,7 +212,7 @@ export const sessionOutcomeUnknown = (error: unknown): boolean =>
 type StartOutcome =
   { ok: true; result: StartSessionResult } | { ok: false; unknown: boolean; error: unknown };
 
-type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+export type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
   promise.then(
     (value) => ({ ok: true, value }),
@@ -222,13 +228,27 @@ const symbolOf = (
     ? (catalog.value.pairs.find((pair) => pair.id === view.settings?.assetId)?.symbol ?? null)
     : null;
 
+// What a session start needs (#476): the session button's data, the catalog read beside it (the
+// status's symbol), whether an unknown outcome is asked once more, and whether the pressed message
+// is a screen to delete once the status is sent (#418).
+export type SessionStartData = Pick<
+  NonNullable<ReturnType<typeof sessionStartDataOf>>,
+  'mode' | 'assetId' | 'durationSec'
+>;
+export type StartSession = (
+  ctx: Context,
+  data: SessionStartData,
+  catalog: Settled<PairsCatalogResponse>,
+  options: { retryUnknown: boolean; removeScreen: boolean },
+) => Promise<void>;
+
 export function createTradingSessionComposer<C extends Context>({
   backend,
   logger,
   sessionTracker,
   connectKeyboard,
   cashierUrl,
-}: TradingSessionDeps): Composer<C> {
+}: TradingSessionDeps): { composer: Composer<C>; startSession: StartSession } {
   const composer = new Composer<C>();
 
   composer.callbackQuery(SESSION_START_PATTERN, async (ctx) => {
@@ -237,8 +257,21 @@ export function createTradingSessionComposer<C extends Context>({
       await answer(ctx);
       return;
     }
-    const telegramUserId = String(ctx.from.id);
     const [, catalog] = await Promise.all([answer(ctx), settle(backend.readPairs())]);
+    await startSession(ctx, data, catalog, { retryUnknown: true, removeScreen: data.launch });
+  });
+
+  // The one start path: the session button, and the amount screen's press and typed amount
+  // (cycle-stake.ts, #476).
+  async function startSession(
+    ctx: Context,
+    data: SessionStartData,
+    catalog: Settled<PairsCatalogResponse>,
+    { retryUnknown, removeScreen }: { retryUnknown: boolean; removeScreen: boolean },
+  ): Promise<void> {
+    const from = ctx.from;
+    if (from === undefined) return;
+    const telegramUserId = String(from.id);
     // trades sent explicitly, so the button's label, its check and the request use one number
     const request: CreateTradingSessionRequest = {
       telegramUserId,
@@ -248,9 +281,10 @@ export function createTradingSessionComposer<C extends Context>({
       trades: DEFAULT_SESSION_TRADES,
     };
     // One more ask on an unknown outcome: a committed first attempt answers 409 with its session,
-    // otherwise the session is created once.
+    // otherwise the session is created once. The amount press asks once (#476): its delete of the
+    // screen leaves no room for a second ask in HANDLER_CALLS, and pressing it again is safe.
     let started = await start(request);
-    if (!started.ok && started.unknown) started = await start(request);
+    if (retryUnknown && !started.ok && started.unknown) started = await start(request);
     if (!started.ok) {
       await replyStartFailure(ctx, started, data);
       return;
@@ -271,8 +305,8 @@ export function createTradingSessionComposer<C extends Context>({
       reply_markup: sessionKeyboard(view, cashierUrl),
     });
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
-    if (data.launch) await removeLaunchScreen(ctx);
-  });
+    if (removeScreen) await removeLaunchScreen(ctx);
+  }
 
   composer.callbackQuery(SESSION_REFRESH_PATTERN, async (ctx) => {
     const sessionId = ctx.match[1] ?? '';
@@ -367,7 +401,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function replyStartFailure(
     ctx: Context,
     failure: Extract<StartOutcome, { ok: false }>,
-    { mode, assetId, durationSec }: NonNullable<ReturnType<typeof sessionStartDataOf>>,
+    { mode, assetId, durationSec }: SessionStartData,
   ): Promise<void> {
     const reason = failure.error instanceof BackendError ? failure.error.reason : undefined;
     const known =
@@ -589,5 +623,5 @@ export function createTradingSessionComposer<C extends Context>({
     });
   }
 
-  return composer;
+  return { composer, startSession };
 }

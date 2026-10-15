@@ -4,7 +4,9 @@ import {
   checkStake,
   decimalLessThan,
   parseStakeInput,
+  STAKE_RISK_THRESHOLD,
   StakeRefusal,
+  stakeIsRisky,
   stakePresets,
   stakeScale,
   type StakeLimits,
@@ -221,5 +223,24 @@ describe('decimalLessThan', () => {
     ['123456789012.5', '123456789012.50000001', true],
   ])('%s < %s is %s', (a, b, expected) => {
     expect(decimalLessThan(d(a), d(b))).toBe(expected);
+  });
+});
+
+// #476: the «· риск» mark from $10 inclusive, compared in bigint at scale 8 (Rule 2)
+describe('stakeIsRisky', () => {
+  it('marks from $10, inclusive', () => {
+    expect(STAKE_RISK_THRESHOLD).toBe('10');
+    expect(stakeIsRisky(d('10'))).toBe(true);
+    expect(stakeIsRisky(d('10.00000000'))).toBe(true);
+  });
+
+  it.each([
+    ['9.99', false],
+    ['9.99999999', false],
+    ['10.00000001', true],
+    ['999999999999.99999999', true],
+    ['1', false],
+  ])('%s is risky: %s', (amount, expected) => {
+    expect(stakeIsRisky(d(amount))).toBe(expected);
   });
 });

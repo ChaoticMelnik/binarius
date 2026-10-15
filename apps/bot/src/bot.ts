@@ -56,6 +56,7 @@ import { createSessionShareComposer } from './session-share';
 import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingSessionComposer } from './trading-session';
+import { createCycleStakeComposer } from './cycle-stake';
 import type { IntentTracker } from './intent-tracker';
 import {
   createLoginDialog,
@@ -458,7 +459,15 @@ export function createBot({
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
-  privateChats.use(createDemoComposer({ backend, logger, now }));
+  privateChats.use(
+    createDemoComposer({
+      backend,
+      logger,
+      now,
+      dialog: loginDialog,
+      connectKeyboard: welcomeKeyboard,
+    }),
+  );
 
   // the stake button under the analysis and the refresh button under the status (#127)
   privateChats.use(
@@ -483,15 +492,23 @@ export function createBot({
   privateChats.use(stakePicker.composer);
 
   // the session button under the analysis and the buttons under the session's status (#284)
-  privateChats.use(
-    createTradingSessionComposer({
-      backend,
-      logger,
-      sessionTracker,
-      connectKeyboard: welcomeKeyboard,
-      cashierUrl,
-    }),
-  );
+  const tradingSession = createTradingSessionComposer({
+    backend,
+    logger,
+    sessionTracker,
+    connectKeyboard: welcomeKeyboard,
+    cashierUrl,
+  });
+  // the amounts of a demo cycle's amount screen (#476), which start through the session's path;
+  // its typed amount arrives through the text handler below
+  const cycleStake = createCycleStakeComposer({
+    backend,
+    logger,
+    dialog: loginDialog,
+    startSession: tradingSession.startSession,
+  });
+  privateChats.use(cycleStake.composer);
+  privateChats.use(tradingSession.composer);
 
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
@@ -607,6 +624,11 @@ export function createBot({
     // as invalid
     if (state.step === 'stake') {
       await stakePicker.onStakeText(ctx, state, text);
+      return;
+    }
+    // the typed amount of a demo cycle (#476): saved, then the cycle starts
+    if (state.step === 'cycleStake') {
+      await cycleStake.onText(ctx, state, text);
       return;
     }
 

@@ -20,9 +20,11 @@ import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot, levelCallbackData } from './bot';
 import {
+  cycleStakeCallbackData,
   DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
+  demoLaunchCallbackData,
   analysisMoreCallbackData,
   stakeCallbackData,
 } from './demo';
@@ -730,6 +732,40 @@ describe('what the bot writes about the demo', () => {
     });
     expect(fieldsOf(lines)).not.toContain(String(USER.id));
     expect(fieldsOf(lines)).not.toContain('$5.00');
+  });
+
+  // #476: the amount screen's access read and an amount's save
+  it('names an access read the amount screen did not get by error, code, status and reason, without the user', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+      level: 'trace',
+      readTradingAccess: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 500, reason: 'internal' }),
+        ),
+    });
+    expect(lineWith(lines, 'trading access not read for the amount screen')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+      backendReason: 'internal',
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+  });
+
+  it('names an amount saved with an unknown outcome by error, code and mode, without the user or the amount', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 15, '7', 'l')),
+      level: 'trace',
+      setStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    expect(lineWith(lines, 'stake save outcome unknown')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+      mode: TradeMode.Demo,
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(fieldsOf(lines)).not.toContain('$7.00');
   });
 
   // #126

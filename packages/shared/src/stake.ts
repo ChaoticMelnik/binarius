@@ -71,6 +71,12 @@ export function checkStake(amount: DecimalString, limits: StakeLimits): StakeRef
 // balance against the broker's minimum when real mode is switched on (#121)
 export const decimalLessThan = (a: DecimalString, b: DecimalString): boolean => units(a) < units(b);
 
+// The «· риск» mark of a stake button (#476; #475 colours it): an amount at or above it, in the
+// account's currency with no conversion. Only a label: the bounds of a stake are checkStake's.
+export const STAKE_RISK_THRESHOLD: DecimalString = decimalStringSchema.parse('10');
+export const stakeIsRisky = (amount: DecimalString): boolean =>
+  !decimalLessThan(amount, STAKE_RISK_THRESHOLD);
+
 const MAX_UNITS = 10n ** BigInt(NUMERIC_INTEGER_DIGITS) * UNIT_SCALE;
 
 // min × k for every multiplier, canonical, only those positive, <= available and inside
