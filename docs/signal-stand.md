@@ -1,14 +1,14 @@
 # Signal stand (#381)
 
 `packages/signal-stand` backtests the Signal decider on the broker's candle history. It is a CLI
-with two commands. `fetch` caches candles from the public chart API. `run` replays the variants
-below on that cache and writes a report. The second part of #381 adds `calibrate`, which checks the
-stand against the live sessions' trades and journal, together with the `v2+1m` and 60 s variants.
-No process imports the package: no `apps/*` manifest names it, and
+with three commands. `fetch` caches candles from the public chart API. `run` replays the variants
+below on that cache and writes a report. `calibrate` checks the stand against the live sessions'
+trades and journal. No process imports the package: no `apps/*` manifest names it, and
 `grep -rn signal-stand apps/` is empty. It reuses production code unchanged:
 - `createBrokerRestClient().getChart`/`listPairs`, with the wire parser;
 - `chartWindow` and `SIGNAL_CHART_LIMIT`;
 - `createSignalDecider`/`createSignalDeciderV1`;
+- `replaySignalJournalEntry`;
 - `breakEvenPct`, `MIN_CYCLE_PAYOUT_PCT` and `PAIR_TYPE_GROUPS`.
 
 The stand computes no indicator of its own. Every variant reads a production decider's decision.
@@ -22,6 +22,10 @@ From the repository root, under the project's Node (`eval "$(fnm env)" && fnm us
 ```bash
 export STAND_DIR=~/binarius-stand/stand            # required; missing or empty is a usage error
 BROKER_API_BASE_URL=https://api.binodex.app pnpm --filter @binarius/signal-stand stand fetch
+pnpm --filter @binarius/signal-stand stand calibrate \
+  --journal ~/binarius-stand/live/journal-381.jsonl \
+  --trades ~/binarius-stand/live/trades-381.json \
+  --session-candles ~/binarius-stand/candles
 pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timestamp>/report.md
 ```
 
@@ -29,6 +33,7 @@ pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timesta
 |---|---|---|
 | `fetch` | `--assets <id,…>` (`STAND_ASSET_IDS`, the 28 below), `--days <1-30>` (`STAND_DEFAULT_DAYS` 14), `--intervals` (`1s,5s,15s,1m`) | `BROKER_API_BASE_URL` (https, or http to localhost); `STAND_MAX_GETS_PER_MINUTE` (1..600, default 120) |
 | `run` | `--assets` (the 28), `--out <dir>` (`$STAND_DIR/out/<ISO time>`), `--headline-delay <0\|1000\|3000>` | — |
+| `calibrate` | `--journal` (`$STAND_DIR/live/journal-381.jsonl`), `--trades` (`$STAND_DIR/live/trades-381.json`), `--session-candles` (`$STAND_DIR/candles-sessions`) | — |
 
 `--days` bounds only a series' first fetch. A later fetch continues from the cache's last row and
 never extends a series backwards: to widen the range, fetch into an empty `$STAND_DIR`. `run`
@@ -36,15 +41,18 @@ warns on stderr, naming the pairs, when the pooled pairs' `1s` ranges differ by 
 (`run.test.ts` R5, R5b).
 
 The exit codes are:
-- 0: done.
-- 1: a refusal. This covers a failed fetch, a damaged cache and an asset missing from
-  `pairs.json`.
+- 0: done; for `calibrate`, every gate passed.
+- 1: a refusal. This covers a failed fetch, a damaged cache, an asset missing from `pairs.json`
+  and a failed `calibrate` gate.
 - 2: a usage error. This covers an unknown command or option, a value out of range and a missing
   env.
 
 Progress and refusals go to stderr as plain lines. A broker error is printed as its name, code,
 status and `retryAfterSec`, never with its URL or body (Rule 8). The chart and pairs endpoints take
 no token, and the stand reads none.
+
+`calibrate` reads the owner's files and writes only `$STAND_DIR/calibration.json`. Run with the
+explicit flags above, it writes nothing next to them.
 
 ## The budget
 
@@ -73,6 +81,7 @@ about 120 MB, so 28 pairs take about 3.4 GB (measured on NZD/USD, 2026-10-15).
 $STAND_DIR/
   pairs.json                      the catalog snapshot of the fetched pairs: id, symbol, type, digits, payout, minTimeframe, fetchedAt
   candles/<assetId>/<interval>.jsonl   one [timestamp, open, high, low, close] per line, ascending
+  calibration.json                calibrate's choice of the headline delay
   out/<run>/report.md, report.json
 ```
 
@@ -102,6 +111,7 @@ package cannot import:
 |---|---|---|
 | `DECISION_SLACK_MS` | 2 000 | `TRADING_SESSION_CANDLE_SLACK_MS` |
 | `SETTLE_TICK_MS` | 5 000 | `TRADING_SESSION_TICK_MS` |
+| `ATTEMPT_WINDOW_MS` | 10 000 | `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 
 The simulation runs as follows (`simulate.ts`):
 1. The first decision falls at the first interval boundary after the range start, plus the slack.
@@ -114,8 +124,7 @@ The simulation runs as follows (`simulate.ts`):
    exit plus `SETTLE_TICK_MS`, so trades never overlap.
 5. The range ends when a trade's exit would pass its end.
 
-The trade intervals and their durations are `5s` with 5 s and `15s` with 15 s. `fetch` also
-caches `1m`, which the second part's `v2+1m` and 60 s variants read.
+The trade intervals and their durations are `5s` with 5 s, `15s` with 15 s, and `1m` with 60 s.
 
 **The pause overlay** is Rule 28's rule, `pausedDirection` in the orchestrator. Suppose the last
 two priced trades lost in one direction, and the last decision was that same direction. A new
@@ -147,20 +156,22 @@ The grid is `OPEN_DELAY_GRID_MS = [0, 1000, 3000]`:
 - 3 000 is a late entry, about 2.4 s later than live. It is a sensitivity point, never the
   expected headline.
 
-The headline delay is `--headline-delay`, or the fallback `FALLBACK_HEADLINE_DELAY_MS`, 0
-(`run.test.ts` S9). The live open is `D` + 397 ms at the median and `D` + 927 ms at the p95, so
-it falls in `D`'s own one-second bucket in most trades. The second part's `calibrate` chooses the
-headline delay from the grid by the live trades.
+The headline delay is `--headline-delay`, else `calibrate`'s choice from `calibration.json` (see
+Calibration), else the fallback `FALLBACK_HEADLINE_DELAY_MS`, 0 (`run.test.ts` S9). The live open
+is `D` + 397 ms at the median and `D` + 927 ms at the p95, so it falls in `D`'s own one-second
+bucket in most trades.
 
 ## Variants
 
 | Variant | Intervals | Grid | Headline pause |
 |---|---|---|---|
-| `v1` | 5s, 15s | — | off (v1 had none) |
-| `v2` | 5s, 15s | `rsiExtremeBand` {10, 15, 20} × `minAtrTicks` {3, 5, 8} | on (production) |
+| `v1` | 5s, 15s, 1m | — | off (v1 had none) |
+| `v2` | 5s, 15s, 1m | `rsiExtremeBand` {10, 15, 20} × `minAtrTicks` {3, 5, 8} | on (production) |
 | `revert` | 5s, 15s | `band` {10, 15, 20} | on |
+| `v2+1m` | 5s, 15s | — | on |
 
-- **`v1`** is `createSignalDeciderV1(DEFAULT_SIGNAL_PARAMS_V1)`, the reference.
+- **`v1`** is `createSignalDeciderV1(DEFAULT_SIGNAL_PARAMS_V1)`. It is the reference and the v1
+  era's comparison.
 - **`v2`** is `createSignalDecider({ ...DEFAULT_SIGNAL_PARAMS, rsiExtremeBand, minAtrTicks })`,
   with `digits` from `pairs.json`. Every grid point passes `assertSignalParams` (V9). The point
   15/5 is production: it is always reported, selected or not. At that point the stand's decision
@@ -169,6 +180,12 @@ headline delay from the grid by the live trades.
   refusal or a volatility refusal (`volatility_too_low/high`, `volatility_below_tick_floor`)
   means no trade. Otherwise `rsi ≥ 50 + band` means `down` and `rsi ≤ 50 − band` means `up`; the
   EMA trend is ignored.
+- **`v2+1m`** is #380's first variant. It takes `v2`'s action only when the `1m` decision (v2,
+  default point, same `nowMs`) has `features.trend` equal to the action. A `1m` data refusal means
+  no trade.
+- **60 s trades** are `v1` and `v2` on the `1m` interval, where the cadence runs on minute
+  boundaries.
+
 A variant's window length is `seriesAt`'s `limit` parameter (default `SIGNAL_CHART_LIMIT`). A
 variant needing a longer history, such as #483's MA200, plugs in without touching the simulator.
 
@@ -199,7 +216,7 @@ W/L/T, win %, its interval, break-even, verdict and PnL.
 
 - **(a) Headline.** The selected point of each variant and interval, out-of-sample, pooled. `v2`
   also gets the production point. A variant with no point at 100 in-sample trades keeps a line:
-  `v1`, a single point, is shown with its numbers, and the others get a line
+  a single-point variant (`v1`, `v2+1m`) is shown with its numbers, and the others get a line
   `no point with >= 100 in-sample trades (best: N)`, `N` being the most in-sample trades of any
   of its points (`run.test.ts` R4).
 - **(b) Per pair**, grouped by pair type (`PAIR_TYPE_GROUPS`). These rows use the pair's own
@@ -213,7 +230,87 @@ W/L/T, win %, its interval, break-even, verdict and PnL.
 - **(g)** The pairs snapshot (`fetchedAt`), and each series' rows, first and last timestamp.
 
 The header names the range, the split, the headline delay and where that delay came from: the
-`--headline-delay` flag or the fallback 0 ms. It also names the pairs left out of pooling.
+`--headline-delay` flag, `calibration.json`, or the fallback 0 ms when `calibrate` has not
+run. It also names the pairs left out of pooling.
+
+## Calibration
+
+The owner exports two files from the pilot's compose directory. The plan's commands are below;
+the 2026-10-15 export used them through `~/binarius-stand/export_trades.sh` and a journal tailer.
+
+```bash
+docker compose logs --no-log-prefix --since 2026-10-06T00:00:00Z backend \
+  | grep -F '"msg":"signal decision"' > journal-381.jsonl
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -q' > trades-381.json <<'SQL'
+select coalesce(json_agg(t order by t.created_at_ms), '[]'::json) from (
+  select ti.trading_session_id, bt.asset_id, bt.action, ti.duration_sec,
+         (extract(epoch from ti.created_at) * 1000)::bigint as created_at_ms,
+         (extract(epoch from ti.submitted_at) * 1000)::bigint as submitted_at_ms,
+         bt.open_timestamp_ms, bt.open_price, bt.close_timestamp_ms, bt.close_price,
+         bt.profit::text as profit, bt.payout
+  from broker_trades bt
+  join trade_intents ti on ti.id = bt.intent_id
+  where ti.trading_session_id is not null
+) t;
+SQL
+```
+
+**Journal lines.** A line is a pino line whose `signal` key holds a journal entry. A bare entry is
+accepted too. The entry is validated against the fields of `SignalJournalEntry`/`…V1`, with the
+decision checked by `signalDecisionSchema`/`signalDecisionV1Schema`. A line failing that is
+`malformed_line`, and a `version` that is neither v1 nor v2 is `unsupported_version`.
+
+**Session files** (`--session-candles`) are the owner's raw `1s` rows per session:
+`{session, asset_id, interval, start_time, limit, rows}`. A file failing `candlesWireSchema` is
+`malformed_session_file`. These files are a second source of prices:
+- For each file, the rows are compared with the cache rows of the same asset and timestamps. An
+  equal file counts `price_series_match`. Any OHLC difference counts `price_series_revised`,
+  printed with the first differing timestamp. Rows the cache lacks are `not_in_cache`, not
+  revisions.
+- A price comes from the cache first. When the cache lacks the row, it comes from the session
+  files (`priced_from_session_file`). With neither, the trade is `unpriced`.
+
+**Version eras.** A trade's era is set by its `created_at`:
+- `v1` before `V2_MERGED_AT` (#379's merge, 2026-10-09 16:13 UTC).
+- `ambiguous` before `V2_FIRST_CLEAN_AT` (2026-10-10 00:00 UTC). The deploy time is unknown, so
+  these trades are counted and left out of every comparison.
+- `v2` from then on.
+
+A matched line whose version is not its trade's era counts `version_mismatch`.
+
+**Matching.** For each trade, the stand takes the latest journal line of the same `assetId` and
+`intervalForDuration(duration_sec)` whose `nowMs` is at or before `created_at` and within
+`ATTEMPT_WINDOW_MS`. This may be the scanner's line for the same candle. A trade with no such
+line is `unmatched`. For each matched trade, the stand checks:
+- `replaySignalJournalEntry(entry)` deep-equals the logged decision, and its action is the
+  trade's (`replayed` / `replay_mismatch`).
+- The line's closed candles equal the cache's interval rows at the same timestamps
+  (`series_match` / `series_revised`). The forming row is skipped because it was not final when
+  logged.
+- The delays `open_timestamp − created_at` and `open_timestamp − nowMs`.
+
+**The pass rule.** Exit 0 needs all three gates:
+1. `series_revised` = 0 and `price_series_revised` = 0. A revised history invalidates the stand.
+2. The outcome match is at least `CALIBRATE_MIN_OUTCOME_MATCH_PCT` (85 %) of the priced trades.
+   The match is the sign of `close − open`, priced at the trade's own timestamps shifted by `k`,
+   in the trade's direction, against the sign of `profit`. `k` is in `{−1000, 0, +1000}`, and the
+   best `k` counts.
+3. For each era × duration with at least `CALIBRATE_MIN_ERA_TRADES` (30) live trades, the live
+   win rate lies inside the Wilson interval of the stand's own rate. The stand's rate comes from
+   v1, or v2 at 15/5 with the pause, simulated inside each session's window: from its first
+   `created_at` to its last `close_timestamp`. Smaller rows are reported, not gated.
+
+The totals print in this order: revisions, outcome match, per-era comparison, the delay choice,
+the delay distributions, the price error in ticks per `k` (`× 10^digits`, needs `pairs.json`),
+and the counters.
+
+**The headline delay.** For every priced, non-ambiguous trade and each `openDelay` in the grid,
+the stand prices `entry = created_at + openDelay` and `exit = entry + duration`. It then compares
+the simulated outcome with the sign of `profit`. `created_at` stands in for the decision moment:
+the intent is created right after the decision, and the gap between them is not in the export.
+The delay with the highest match share wins, and a tie goes to the smaller delay. A trade
+unpriced at one delay leaves only that delay's denominator. `calibrate` writes the choice to
+`$STAND_DIR/calibration.json`, which `run` reads. The choice gates nothing.
 
 ## Pairs
 
@@ -278,16 +375,19 @@ out of pooling.
   - The outcome from the `1s` row at `floor(ts)` matched the sign of `profit` in 443 of 494
     trades.
   - `open_timestamp − created_at` has a median of 397 ms and a p95 of 927 ms.
+  - The journal's `nowMs` falls about 0.5 s after the candle boundary (the backend feed's moment).
+- **2026-10-15, journal shape.** Every line is a pino line with `signal`, and every entry is `v2`
+  with `digits`.
 
 ## Accepted risks
 
-1. **Copied constants.** The two worker constants above are copies. This is falsifiable:
-   `grep -n 'TRADING_SESSION_CANDLE_SLACK_MS\|TRADING_SESSION_TICK_MS' apps/trading-worker/src/trading-session/config.ts`
+1. **Copied constants.** The three worker constants above are copies. This is falsifiable:
+   `grep -n 'TRADING_SESSION_CANDLE_SLACK_MS\|TRADING_SESSION_TICK_MS\|TRADING_SESSION_ATTEMPT_TIMEOUT_MS' apps/trading-worker/src/trading-session/config.ts`
    would show other values.
-2. **The `1s` price is a one-second bucket, not the broker's tick.** The second part's
-   `calibrate` measures the error against the live trades.
-3. **The broker may revise history.** The second part's `calibrate` compares the cache with the
-   live journal and the owner's session files.
+2. **The `1s` price is a one-second bucket, not the broker's tick.** `calibrate` prints the error
+   in ticks per `k`.
+3. **The broker may revise history.** Revisions are the first total, and any revision fails
+   `calibrate`.
 4. **Sessions of five are not modelled.** The pause streak runs across what would be session
    boundaries, and the stake is a fixed 1. PnL is illustrative.
 5. **Payout at fetch time.** Pooling and the per-pair break-even use `pairs.json`'s payout, not
@@ -302,7 +402,11 @@ out of pooling.
    would count correlated, overlapping trades as independent.
 10. **One row may be lost after a long gap** (the first-row rule above). That row then shows up
     as a `candle_gap` or an unpriced trade, never as a guessed value.
-11. **The mock broker pages differently.** It caps a page by rows, not by the time window. The
+11. **The era cut is the merge time, not the deploy time.** A v2 deploy later than 10-10 00:00
+    UTC would mislabel v1 trades as v2.
+12. **The 85 % floor comes from one sample** (443/494). A sample below it fails `calibrate`, and
+    the floor is not lowered silently.
+13. **The mock broker pages differently.** It caps a page by rows, not by the time window. The
     pager's next-window rule is right under both: `fetch.test.ts` F1 runs on the mock, and F1b
     runs on a time-window fake with a long gap.
 
@@ -310,7 +414,8 @@ out of pooling.
 
 - #379 (merged): v2 and its two parameters. The stand tunes them, and the change of production's
   values is #379's follow-up, not here.
-- #380: `v2+1m` and the 60 s trades are its two variants, in the second part.
+- #380: `v2+1m` and the 60 s trades are its two variants.
 - #392: socket candles could fill the same cache format later.
 - #483: more variants (MACD, MA50/MA200) through `seriesAt`'s `limit`.
-- #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`.
+- #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`. `v2+1m` adds the
+  `1m` trend as a confirmation, not as the analysis interval.

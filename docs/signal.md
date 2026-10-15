@@ -715,8 +715,8 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
 - It does no tuning or backtesting and makes no profitability claim — the stand (#381) does,
   outside the processes.
 - **The stand (#381).** The backtest lives in `packages/signal-stand`
-  ([signal-stand.md](signal-stand.md)): a CLI that replays this decider and `chartWindow`
-  unchanged on cached broker candles. No process imports it, and it has its own
+  ([signal-stand.md](signal-stand.md)): a CLI that replays this decider, `chartWindow` and the
+  journal replay unchanged on cached broker candles. No process imports it, and it has its own
   request cap outside [The budget](#the-budget)'s three loops (it runs from another IP).
 - The decider makes no network calls, writes no logs and contains no user-facing text (the feed
   does the fetching and the logging). The Russian wording of a reason belongs to the bot (#126).
