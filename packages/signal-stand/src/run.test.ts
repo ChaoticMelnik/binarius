@@ -81,8 +81,18 @@ describe('run', () => {
         bestInSampleTrades: number;
       }[];
       headline: { variant: string; interval: string; scope: string; trades: number }[];
+      grid: { variant: string; interval: string; trades: number }[];
+      headlineDelayMs: number;
     };
+    const delay = json.headlineDelayMs;
     expect(json.selections.every((s) => s.selected === 'none')).toBe(true);
+    expect(json.selections.some((s) => s.bestInSampleTrades > 0)).toBe(true);
+    for (const { variant, interval, bestInSampleTrades } of json.selections) {
+      const trades = json.grid
+        .filter((r) => r.variant === variant && r.interval === interval)
+        .map((r) => r.trades);
+      expect(bestInSampleTrades).toBe(Math.max(...trades));
+    }
     const markdown = readFileSync(path.join(out, 'report.md'), 'utf8');
     const tableA = markdown.slice(markdown.indexOf('## (a)'), markdown.indexOf('## (b)'));
     for (const { variant, interval, bestInSampleTrades } of json.selections) {
@@ -91,10 +101,10 @@ describe('run', () => {
         const row = json.headline.find((r) => r.variant === 'v1' && r.interval === interval);
         expect(row?.scope).toBe(`only point, ${none}, out-of-sample, pooled`);
         expect(tableA).toContain(
-          `| ${interval} | v1 | - | off | 0 | ${row?.scope} | ${row?.trades} |`,
+          `| ${interval} | v1 | - | off | ${delay} | ${row?.scope} | ${row?.trades} |`,
         );
       } else {
-        expect(tableA).toContain(`| ${interval} | ${variant} | - | on | 0 | ${none} | - |`);
+        expect(tableA).toContain(`| ${interval} | ${variant} | - | on | ${delay} | ${none} | - |`);
       }
     }
   });
