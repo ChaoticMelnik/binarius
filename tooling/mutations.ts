@@ -24,9 +24,11 @@ import { parseArgs, stripVTControlCharacters } from 'node:util';
 //      "edits": [{ "file": "<repo-relative>", "old": "<exact text>", "new": "<text>" }],
 //      "tests": ["<repo-relative test file>"],
 //      "expect": ["<substring of the vitest fullName of a test that must fail>"] }]
-// Each `old` must occur exactly once in its file (after the mutation's earlier edits). The edited
-// files must be committed and clean: the runner restores them from memory and then compares them
-// byte for byte with HEAD, and it never touches git's index, stash or checkout (#460).
+// Each `old` must occur exactly once in its file (after the mutation's earlier edits). The working
+// tree must be clean (`git status --porcelain` empty), so `head=` certifies exactly that commit;
+// keep the list and --out outside it or ignored. The runner restores the edited files from memory
+// and then compares them byte for byte with HEAD, and it never touches git's index, stash or
+// checkout (#460).
 //
 // Output: <dir>/table.md (a header line with the head and the list's sha256, then the table),
 // <dir>/<id>.json and <dir>/<id>.log per mutation, one summary line on stdout. The environment
@@ -34,10 +36,12 @@ import { parseArgs, stripVTControlCharacters } from 'node:util';
 //
 // Result per row: red (only the expected tests failed, each expect matched), red+extra (a test
 // outside expect failed too - not discriminating), red-partial (some expect matched no failure),
-// green (the mutation survived), load-error (a test file failed without a failed test),
-// no-report (vitest wrote no JSON report), error (an `old` did not occur exactly once).
+// green (the mutation survived: exit 0, every `tests` entry ran, nothing failed), load-error (a
+// test file failed without a failed test), not-run (a `tests` entry matched no test file, or
+// vitest exited non-zero without a failed test), no-report (vitest wrote no JSON report, or one
+// that is not JSON), error (an `old` did not occur exactly once).
 //
-// Exit codes: 0 every row red; 1 any other row; 2 bad usage, bad list or an edited file that is
+// Exit codes: 0 every row red; 1 any other row; 2 bad usage, bad list or a working tree that is
 // not clean (nothing touched); 3 the runner itself failed, including a file that did not come
 // back to HEAD; 130 interrupted by SIGINT/SIGTERM, after the mutation in flight was put back.
 
@@ -82,7 +86,7 @@ export type Runner = (
 ) => Promise<RunnerResult>;
 
 export type Kind =
-  'red' | 'red+extra' | 'red-partial' | 'green' | 'load-error' | 'no-report' | 'error';
+  'red' | 'red+extra' | 'red-partial' | 'green' | 'load-error' | 'not-run' | 'no-report' | 'error';
 
 export interface Row {
   id: string;
@@ -169,9 +173,22 @@ function firstLineOf(message: string | undefined): string {
 }
 
 export function classify(
-  report: VitestReport,
-  expect: string[],
+  { exit, report, stderrTail }: RunnerResult,
+  { tests, expect }: Pick<Mutation, 'tests' | 'expect'>,
 ): { kind: Kind; detail: string; firstLine: string } {
+  if (report === undefined) {
+    return { kind: 'no-report', detail: `exit ${exit}, ${stderrTail}`, firstLine: '' };
+  }
+  const unmatchedTests = tests.filter(
+    (t) => !report.testResults.some((file) => (file.name ?? '').includes(t)),
+  );
+  if (unmatchedTests.length > 0) {
+    return {
+      kind: 'not-run',
+      detail: `no test file matched ${unmatchedTests.join('; ')}`,
+      firstLine: '',
+    };
+  }
   const loadFailed = report.testResults.filter(
     (file) => file.status === 'failed' && !file.assertionResults.some((a) => a.status === 'failed'),
   );
@@ -186,6 +203,13 @@ export function classify(
   const failed = report.testResults.flatMap((file) =>
     file.assertionResults.filter((a) => a.status === 'failed'),
   );
+  if (failed.length === 0 && exit !== 0) {
+    return {
+      kind: 'not-run',
+      detail: `exit ${exit} without a failed test, ${stderrTail}`,
+      firstLine: '',
+    };
+  }
   if (failed.length === 0) return { kind: 'green', detail: '', firstLine: '' };
   const firstLine = firstLineOf(failed[0]?.failureMessages?.[0]);
   const extra = failed.filter((a) => !expect.some((x) => a.fullName.includes(x)));
@@ -227,21 +251,46 @@ export function defaultRunner(root: string): Runner {
         cwd: root,
         stdio: ['ignore', fd, fd],
       });
+      // a throw inside a listener is an uncaught exception that skips runMutations' finally (#511
+      // M1), and Node emits 'close' after 'error' too: settle once, close the fd once
+      let settled = false;
+      const settle = (outcome: () => RunnerResult): void => {
+        if (settled) return;
+        settled = true;
+        try {
+          closeSync(fd);
+          resolve(outcome());
+        } catch (error) {
+          reject(error as Error);
+        }
+      };
       child.on('error', (error) => {
-        closeSync(fd);
-        reject(error);
+        settle(() => {
+          throw error;
+        });
       });
       child.on('close', (code, signal) => {
-        closeSync(fd);
-        const report = existsSync(reportFile)
-          ? (JSON.parse(readFileSync(reportFile, 'utf8')) as VitestReport)
-          : undefined;
-        const stderrTail = stripVTControlCharacters(readFileSync(logFile, 'utf8'))
-          .trim()
-          .split('\n')
-          .slice(-3)
-          .join(' / ');
-        resolve({ exit: code ?? (signal === null ? 1 : 128), report, stderrTail });
+        settle(() => {
+          let report: VitestReport | undefined;
+          let note = '';
+          if (existsSync(reportFile)) {
+            try {
+              report = JSON.parse(readFileSync(reportFile, 'utf8')) as VitestReport;
+            } catch {
+              note = 'report is not JSON';
+            }
+          }
+          const tail = stripVTControlCharacters(readFileSync(logFile, 'utf8'))
+            .trim()
+            .split('\n')
+            .slice(-3)
+            .join(' / ');
+          return {
+            exit: code ?? (signal === null ? 1 : 128),
+            report,
+            stderrTail: [note, tail].filter((part) => part !== '').join(', '),
+          };
+        });
       });
     });
 }
@@ -289,12 +338,9 @@ export async function runMutations({
   if (unknown.length > 0) throw new MutationsError(`--only: unknown id ${unknown.join(', ')}`, 2);
   const selected = only === undefined ? list : list.filter((m) => only.includes(m.id));
 
-  const files = [...new Set(selected.flatMap((m) => m.edits.map((e) => e.file)))];
-  const dirty = git(root, ['status', '--porcelain', '--', ...files])
-    .toString('utf8')
-    .trim();
+  const dirty = git(root, ['status', '--porcelain']).toString('utf8').trim();
   if (dirty !== '') {
-    throw new MutationsError(`edited files must be committed and clean:\n${dirty}`, 2);
+    throw new MutationsError(`the working tree must be clean:\n${dirty}`, 2);
   }
   const head = git(root, ['rev-parse', 'HEAD']).toString('utf8').trim();
   mkdirSync(out, { recursive: true });
@@ -338,20 +384,7 @@ export async function runMutations({
           reportFile,
           path.join(out, `${mutation.id}.log`),
         );
-        row =
-          result.report === undefined
-            ? {
-                id: mutation.id,
-                expect: mutation.expect,
-                kind: 'no-report',
-                detail: `exit ${result.exit}, ${result.stderrTail}`,
-                firstLine: '',
-              }
-            : {
-                id: mutation.id,
-                expect: mutation.expect,
-                ...classify(result.report, mutation.expect),
-              };
+        row = { id: mutation.id, expect: mutation.expect, ...classify(result, mutation) };
       }
     } finally {
       for (const [file, original] of originals) writeFileSync(path.join(root, file), original);
@@ -384,7 +417,7 @@ export async function runMutations({
     `extra=${count('red+extra')}`,
     `partial=${count('red-partial')}`,
     `green=${count('green')}`,
-    `errors=${count('load-error', 'no-report', 'error')}`,
+    `errors=${count('load-error', 'not-run', 'no-report', 'error')}`,
     `table=${tablePath}`,
   ].join(' ');
   const exitCode = rows.length > 0 && count('red') === rows.length ? 0 : 1;
@@ -436,5 +469,6 @@ if (import.meta.main) {
   };
   process.on('SIGINT', interrupt);
   process.on('SIGTERM', interrupt);
+  process.on('uncaughtException', fail);
   main().catch(fail);
 }
