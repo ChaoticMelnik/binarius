@@ -88,8 +88,8 @@ node tooling/mutations.ts "$SCRATCH/mutations-<N>.json" --out "$SCRATCH/mut" > "
 ```
 
 - The list format, the result kinds and the exit codes are in the script's header comment.
-- The script refuses edited files that are not committed and clean. It restores every file from memory and checks it byte for byte against HEAD; it never uses `git checkout`, `git stash` or the index (#460: `git checkout --` over uncommitted changes wiped three files of work).
-- Exit 0 means every row is `red`. A `red+extra` row is not discriminating (Step 5.5): narrow that mutation. A `green` row means the test cannot catch it. Then re-run the whole list in one call.
+- The script refuses unless `git status --porcelain` of the whole tree is empty, so `head=` certifies exactly that commit. The list and `--out` live in `$SCRATCH`. It restores every file from memory and checks it byte for byte against HEAD; it never uses `git checkout`, `git stash` or the index (#460: `git checkout --` over uncommitted changes wiped three files of work).
+- Exit 0 means every row is `red`. A `red+extra` row is not discriminating (Step 5.5): narrow that mutation. A `green` row means the test cannot catch it. A `not-run` row means the test did not run (a `tests` entry matched no file, or vitest failed without a failed test): fix the list, it is not evidence. Then re-run the whole list in one call.
 - A re-take after new commits is also one call, on the new head.
 - The PR comment is one separate comment: `<out>/table.md` as is (its header line carries `head=` and `list-sha256=`), then the list JSON in a collapsed `<details>` block, so the reviewer can save it and re-run `--only <ids>` (reviewer Step 5 → Quoted evidence).
 - Mutations run one at a time by hand, or a table without the script's header, are a process deviation, and the reviewer names it in the report.
