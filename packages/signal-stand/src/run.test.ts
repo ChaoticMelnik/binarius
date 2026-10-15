@@ -3,7 +3,8 @@ import path from 'node:path';
 import { TradeAction } from '@binarius/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { rangeWarning, runBacktest, splitTrades } from './run';
-import { cacheWith, PAIR, secondsPath, T0 } from './testing';
+import { appendRows, seriesPath } from './cache';
+import { cacheWith, PAIR, quiet, secondsPath, T0 } from './testing';
 import { VARIANTS } from './variants';
 
 function run(dir: string, headlineDelayMs?: number) {
@@ -117,6 +118,22 @@ describe('run', () => {
       'run: pooled 1s ranges differ by more than a day: B 1.0 d, against 14.0 d',
     );
     expect(rangeWarning([])).toBeUndefined();
+  });
+
+  it('R5b run warns on stderr about the short pooled pair, not about an unpooled one', () => {
+    const day = 86_400_000;
+    const dir = cacheWith(secondsPath(T0, 600));
+    cacheWith(secondsPath(T0, 600), { ...PAIR, id: 7, symbol: 'SHORT' }, dir);
+    cacheWith(secondsPath(T0, 600), { ...PAIR, id: 8, symbol: 'LOWPAY', payout: 55 }, dir);
+    appendRows(seriesPath(dir, PAIR.id, '1s'), secondsPath(T0 + 2 * day, 1), quiet);
+    const io = { out: vi.fn(), err: vi.fn() };
+    runBacktest({ dir, assets: [PAIR.id, 7, 8], out: path.join(dir, 'o'), io });
+    const warnings = io.err.mock.calls
+      .map(([line]) => String(line))
+      .filter((l) => l.includes('ranges'));
+    expect(warnings).toEqual([
+      'run: pooled 1s ranges differ by more than a day: SHORT (7) 0.0 d, against 2.0 d',
+    ]);
   });
 
   it('R3 nothing is written outside --out', () => {

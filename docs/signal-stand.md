@@ -33,7 +33,7 @@ pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timesta
 `--days` bounds only a series' first fetch. A later fetch continues from the cache's last row and
 never extends a series backwards: to widen the range, fetch into an empty `$STAND_DIR`. `run`
 warns on stderr, naming the pairs, when the pooled pairs' `1s` ranges differ by more than a day
-(`run.test.ts` R5).
+(`run.test.ts` R5, R5b).
 
 The exit codes are:
 - 0: done.
