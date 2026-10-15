@@ -840,6 +840,21 @@ describe('«🔁 Ещё сессия»', () => {
     expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
   });
 
+  // #450: a martingale limit's stop prints its own line and keeps the stopped session's keyboard
+  it.each([
+    [TradingSessionStopReason.MaxStepsExceeded, 'лимита повышений ставки'],
+    [TradingSessionStopReason.MaxStakeExceeded, 'лимит размера ставки'],
+    [TradingSessionStopReason.MaxSessionLossExceeded, 'лимит убытка сессии'],
+    [TradingSessionStopReason.SessionDurationExceeded, 'истёк час на сессию'],
+  ])('shows the stop %s with its text', (stopReason, words) => {
+    const view = sessionView({ ...STOPPED, stopReason });
+    expect(statusOf(view)).toContain(words);
+    expect(statusOf(view)).not.toContain(TEXTS.sessionStopStakeStop.value);
+    expect(sessionKeyboard(view, CASHIER_URL).inline_keyboard).toEqual(
+      sessionKeyboard(STOPPED, CASHIER_URL).inline_keyboard,
+    );
+  });
+
   // #27: «💳 Пополнить» at the end of a real session too, and nowhere without a cashier
   it('ends a stopped session of either mode with the deposit, the invite and the menu', () => {
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });

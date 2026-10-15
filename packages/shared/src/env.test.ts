@@ -14,6 +14,7 @@ import {
   parseLoopbackOrHttpsUrlEnv,
   parseNoWhitespaceEnv,
   parseOriginEnv,
+  parseSessionStakeStrategyEnv,
   parseUrlEnv,
   readEnv,
 } from './env';
@@ -114,6 +115,28 @@ describe('parseDemoOnlyEnv', () => {
   it('refuses 1', () => {
     expect(() => parseDemoOnlyEnv({ DEMO_ONLY: '1' })).toThrow(
       'Env DEMO_ONLY must be one of: true false',
+    );
+  });
+});
+
+describe('parseSessionStakeStrategyEnv (#450)', () => {
+  it('is martingale when the variable is absent', () => {
+    expect(parseSessionStakeStrategyEnv({})).toBe('martingale');
+  });
+
+  it.each(['fixed', 'martingale'])('takes %s', (value) => {
+    expect(parseSessionStakeStrategyEnv({ SESSION_STAKE_STRATEGY: value })).toBe(value);
+  });
+
+  it('refuses an empty value', () => {
+    expect(() => parseSessionStakeStrategyEnv({ SESSION_STAKE_STRATEGY: '' })).toThrow(
+      'Env SESSION_STAKE_STRATEGY must not be empty',
+    );
+  });
+
+  it.each(['Martingale', 'x'])('refuses %s', (value) => {
+    expect(() => parseSessionStakeStrategyEnv({ SESSION_STAKE_STRATEGY: value })).toThrow(
+      'Env SESSION_STAKE_STRATEGY must be one of: fixed martingale',
     );
   });
 });

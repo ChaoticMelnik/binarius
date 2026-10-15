@@ -80,13 +80,51 @@ describe('session-start (#287)', () => {
     expect(session).toMatchObject({
       mode: TradeMode.Demo,
       settings: {
-        version: 1,
+        version: 2,
         assetId: 101,
         durationSec: 15,
         trades: 3,
-        stake: { baseStake: '1', stakeScale: 0 },
+        // #450: SESSION_STAKE_STRATEGY unset is martingale, with the limits of the base stake
+        stake: {
+          strategy: 'martingale',
+          baseStake: '1',
+          stakeScale: 0,
+          limits: {
+            maxSteps: 4,
+            maxStake: '12',
+            maxSessionLoss: '20',
+            maxSessionDurationMs: 3_600_000,
+          },
+        },
       },
     });
+  });
+
+  it('takes SESSION_STAKE_STRATEGY=fixed and refuses an unknown strategy before any read (#450)', async () => {
+    const user = await seedUser(tmp.db);
+    const brokerAccountId = await account(user.userId);
+    const unknown = await run({
+      TELEGRAM_USER_ID: user.telegramUserId,
+      SESSION_STAKE_STRATEGY: 'Martingale',
+    });
+    expect(unknown).toMatchObject({
+      code: 1,
+      out: [],
+      err: ['Env SESSION_STAKE_STRATEGY must be one of: fixed martingale'],
+    });
+    expect(await sessionsOf(brokerAccountId)).toEqual([]);
+
+    const fixed = await run({
+      TELEGRAM_USER_ID: user.telegramUserId,
+      SESSION_STAKE_STRATEGY: 'fixed',
+    });
+    expect(fixed.code).toBe(0);
+    const [session] = await sessionsOf(brokerAccountId);
+    expect(session?.settings).toMatchObject({
+      version: 2,
+      stake: { strategy: 'fixed', baseStake: '1', stakeScale: 0 },
+    });
+    expect(session?.settings).not.toHaveProperty('stake.limits');
   });
 
   it('refuses two active accounts and lists their ids, writing nothing', async () => {

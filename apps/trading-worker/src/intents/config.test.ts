@@ -220,6 +220,17 @@ describe('the worker environment for the token route and the trade lists', () =>
     }
   });
 
+  // #450: the start route and the session-start CLI read one value of .env
+  it('forwards SESSION_STAKE_STRATEGY through the broker anchor as a valueless entry', () => {
+    expect(brokerAnchorValue(composeYaml, 'SESSION_STAKE_STRATEGY')).toBe('');
+    for (const service of ['backend', 'trading-worker']) {
+      expect(environmentMerge(composeYaml, service)).toContain('*broker-environment');
+      expect(
+        composeServiceEnvValue(composeYaml, service, 'SESSION_STAKE_STRATEGY'),
+      ).toBeUndefined();
+    }
+  });
+
   it('gives the worker the internal token the backend checks, with no default', () => {
     const worker = composeServiceEnvValue(composeYaml, 'trading-worker', 'INTERNAL_API_TOKEN');
     expect(worker).toBe(composeServiceEnvValue(composeYaml, 'backend', 'INTERNAL_API_TOKEN'));

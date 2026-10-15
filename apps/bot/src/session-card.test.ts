@@ -81,9 +81,11 @@ describe('sessionCardModel', () => {
     expect(model.trades.every((t) => t.tone === 'loss')).toBe(true);
   });
 
-  it('C3 a profit that prints as $0.00 is still a win, as the view counts it', () => {
+  // #450: every fraction digit is printed, so a sub-cent profit is shown as the win it is
+  it('C3 a sub-cent profit is a win, printed with its digits, as the view counts it', () => {
     const model = sessionCardModel({ result: d('0.001'), trades: [trade('0.001')] }, OTC_LABEL, 42);
-    expect(model.trades[0]).toMatchObject({ profit: '$0.00', tone: 'win' });
+    expect(model.trades[0]).toMatchObject({ profit: '+$0.001', tone: 'win' });
+    expect(model.result).toBe('+$0.001');
     expect(model.resultTone).toBe('win');
     expect(model.footer).toBe('1 сделка · 1 в плюс, 0 в минус');
   });

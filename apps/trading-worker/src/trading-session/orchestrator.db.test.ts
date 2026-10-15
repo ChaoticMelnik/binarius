@@ -8,7 +8,9 @@ import { createBrokerRestClient, TradeListStatus } from '@binarius/broker-rest';
 import { MockTradeOutcome, startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import {
   AccountHaltReason,
+  buildSessionSettings,
   isClosedTrade,
+  SessionStakeStrategy,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_TIMEOUT_MS,
   SIGNAL_CHART_INTERVAL_MS,
@@ -157,12 +159,14 @@ function orchestratorOf({
   db = tmp.db,
   config = {},
   demoOnly = false,
+  clockOf = now,
 }: {
   signals?: SignalSource;
   pairs?: PairsSource;
   db?: Db;
   config?: Partial<SessionOrchestratorConfig>;
   demoOnly?: boolean;
+  clockOf?: () => number;
 } = {}) {
   return createSessionOrchestrator({
     db,
@@ -171,7 +175,7 @@ function orchestratorOf({
     logger,
     config: { ...CONFIG, ...config },
     demoOnly,
-    now,
+    now: clockOf,
   });
 }
 
@@ -1784,6 +1788,186 @@ describe('restart recovery (#131)', () => {
     await b.tick();
     expect(await intentsOf(seed.session.id)).toHaveLength(1);
     await b.stop();
+  });
+});
+
+// #450: the strategy and the limits come from the session's row (settings v2), the default
+// limits of a base stake of 1 at stakeScale 2 (docs/stake.md -> Defaults). The signal alternates,
+// so a series of losses is never the pause of #379.
+describe('martingale (#450)', () => {
+  const settingsOf = (strategy: SessionStakeStrategy, trades = 5) => {
+    const built = buildSessionSettings({
+      assetId: 101,
+      durationSec: 60,
+      trades,
+      stake: { baseStake: '1' as DecimalString, stakeScale: 2 },
+      strategy,
+    });
+    if (!built.success) throw new Error('the test settings fail the schema');
+    return built.data;
+  };
+  const martingale = (trades = 5) => settingsOf(SessionStakeStrategy.Martingale, trades);
+  const alternating = () => {
+    let calls = 0;
+    return signalsOf(() => ({
+      ok: true,
+      response: signalAnswer(
+        (calls++ % 2 === 0 ? TradeAction.Up : TradeAction.Down) as TradeAction,
+      ),
+    }));
+  };
+  const at = (payout: number) =>
+    orchestratorOf({ signals: alternating(), pairs: pairsOf(fresh([eurUsd({ payout })])) });
+  const amountsOf = async (sessionId: string) =>
+    (await intentsOf(sessionId)).map((intent) => intent.amount);
+  const losses = async (
+    orchestrator: ReturnType<typeof orchestratorOf>,
+    seed: Awaited<ReturnType<typeof seedSession>>,
+    count: number,
+  ) => {
+    for (let i = 0; i < count; i += 1) await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+  };
+  const expectStopped = async (
+    seed: Awaited<ReturnType<typeof seedSession>>,
+    stopReason: TradingSessionStopReason,
+    sizerCode: string,
+  ) => {
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason,
+    });
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ msg: 'trading session stopped', stopReason: sizerCode }),
+    );
+    expect(await reservedOf(seed.userId)).toBe(0n);
+  };
+
+  it('G1 a loss raises the next stake by the formula, a win brings back the base stake', async () => {
+    const seed = await seedSession({ settings: martingale() });
+    const orchestrator = at(80);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await orchestrator.tick();
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '1.00000000']);
+    await orchestrator.stop();
+  });
+
+  it('G2 a tie leaves the series as it is: the next stake is the same step', async () => {
+    const seed = await seedSession({ settings: martingale() });
+    const orchestrator = at(80);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    const second = await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    // the mock broker has no tie: its stored profit is set to the live broker's tie, 0 (#450 probe)
+    await tmp.db
+      .update(brokerTrades)
+      .set({ profit: '0.00000000' as DecimalString })
+      .where(eq(brokerTrades.intentId, second.id));
+    await orchestrator.tick();
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '2.25000000']);
+    await orchestrator.stop();
+  });
+
+  it('G3 four losses in a row at 80 % stop it as max_steps_exceeded before a fifth stake', async () => {
+    const seed = await seedSession({ settings: martingale() });
+    const orchestrator = at(80);
+    await losses(orchestrator, seed, 4);
+    await orchestrator.tick();
+    expect(await amountsOf(seed.session.id)).toEqual([
+      '1.00000000',
+      '2.25000000',
+      '5.07000000',
+      '11.40000000',
+    ]);
+    await expectStopped(seed, TradingSessionStopReason.MaxStepsExceeded, 'max_steps_exceeded');
+    await orchestrator.stop();
+  });
+
+  it('G4 at 79 % the fourth stake would pass 20×B: max_session_loss_exceeded after three losses', async () => {
+    const seed = await seedSession({ settings: martingale() });
+    const orchestrator = at(79);
+    await losses(orchestrator, seed, 3);
+    await orchestrator.tick();
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.27000000', '5.14000000']);
+    await expectStopped(
+      seed,
+      TradingSessionStopReason.MaxSessionLossExceeded,
+      'max_session_loss_exceeded',
+    );
+    await orchestrator.stop();
+  });
+
+  it('G5 at 77 % the fourth stake would pass 12×B: max_stake_exceeded after three losses', async () => {
+    const seed = await seedSession({ settings: martingale() });
+    const orchestrator = at(77);
+    await losses(orchestrator, seed, 3);
+    await orchestrator.tick();
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.30000000', '5.29000000']);
+    await expectStopped(seed, TradingSessionStopReason.MaxStakeExceeded, 'max_stake_exceeded');
+    await orchestrator.stop();
+  });
+
+  it("G6 the worker's clock past the session's hour stops it as session_duration_exceeded", async () => {
+    const seed = await seedSession({ settings: martingale() });
+    // the database's deadline has not passed, so the scan still lists the session
+    const late = seed.session.startedAt.getTime() + SESSION_MAX_DURATION_MS + 1_000;
+    const orchestrator = orchestratorOf({ clockOf: () => late });
+    await orchestrator.tick();
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    await expectStopped(
+      seed,
+      TradingSessionStopReason.SessionDurationExceeded,
+      'session_duration_exceeded',
+    );
+    await orchestrator.stop();
+  });
+
+  it.each<[string, () => unknown]>([
+    ['settings v2 fixed', () => settingsOf(SessionStakeStrategy.Fixed)],
+    [
+      'settings v1',
+      () => sessionSettings({ stake: { baseStake: '1' as DecimalString, stakeScale: 2 } }),
+    ],
+  ])('G7 %s keep the base stake after a loss', async (_, settings) => {
+    const seed = await seedSession({ settings: settings() });
+    const orchestrator = at(80);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await orchestrator.tick();
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '1.00000000']);
+    await orchestrator.stop();
+  });
+
+  it('G8 a real session raises its stake against the real balance', async () => {
+    const seed = await seedSession({
+      mode: TradeMode.Real,
+      real: '4.00',
+      demo: '10000.00',
+      settings: martingale(),
+    });
+    const orchestrator = at(80);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await orchestrator.tick();
+    // the third stake, 5.07, is above the real snapshot's 4.00 though the demo one holds 10000
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000']);
+    expect((await intentsOf(seed.session.id)).map((intent) => intent.mode)).toEqual([
+      TradeMode.Real,
+      TradeMode.Real,
+    ]);
+    await expectStopped(seed, TradingSessionStopReason.StakeStop, 'insufficient_balance');
+    await orchestrator.stop();
+  });
+
+  it('G9 the N-th trade completes the session in the middle of a series', async () => {
+    const seed = await seedSession({ settings: martingale(2) });
+    const orchestrator = at(80);
+    await losses(orchestrator, seed, 2);
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+    });
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000']);
+    await orchestrator.stop();
   });
 });
 

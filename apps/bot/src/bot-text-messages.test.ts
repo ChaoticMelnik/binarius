@@ -291,6 +291,7 @@ const sessionTexts = (
                       stopReason,
                       settings: {
                         ...SESSION_VIEW.settings!,
+                        version: 1,
                         assetId: INT4_MAX,
                         durationSec,
                         stake: { baseStake: STAKE, stakeScale: 8 },

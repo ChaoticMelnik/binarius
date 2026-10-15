@@ -23,6 +23,7 @@ import {
   isPairOpen,
   pairAcceptsDuration,
   safeParseTradingSessionSettings,
+  sessionStakeParams,
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
   SignalKind,
@@ -34,7 +35,7 @@ import {
   type TradingSessionSettings,
 } from '@binarius/shared';
 import type { Logger } from '../intents/processor';
-import { SessionTradeKind, StakeKind, StakeStrategy } from '../stake/codes';
+import { SessionTradeKind, StakeKind, StopReason } from '../stake/codes';
 import { parseAmount } from '../stake/money';
 import { createStakeSizer, type SessionTrade, type StakeSizer } from '../stake/size';
 import type { PairsSource, SignalSource } from './backend';
@@ -64,6 +65,21 @@ export interface SessionOrchestrator {
   // aborts the attempt's backend call and waits for the running tick
   stop(): Promise<void>;
 }
+
+// The sizer's stop codes as the session's stop_reason (#450): a martingale limit is its own, every
+// other code (bad history, the minimum, the balance) is stake_stop; the log line keeps the code
+const STAKE_STOP_REASONS = {
+  [StopReason.MaxStepsExceeded]: TradingSessionStopReason.MaxStepsExceeded,
+  [StopReason.MaxStakeExceeded]: TradingSessionStopReason.MaxStakeExceeded,
+  [StopReason.MaxSessionLossExceeded]: TradingSessionStopReason.MaxSessionLossExceeded,
+  [StopReason.SessionDurationExceeded]: TradingSessionStopReason.SessionDurationExceeded,
+  [StopReason.UnresolvedTrade]: TradingSessionStopReason.StakeStop,
+  [StopReason.InvalidTrade]: TradingSessionStopReason.StakeStop,
+  [StopReason.InvalidAmount]: TradingSessionStopReason.StakeStop,
+  [StopReason.InvalidPayout]: TradingSessionStopReason.StakeStop,
+  [StopReason.BelowMinTradeAmount]: TradingSessionStopReason.StakeStop,
+  [StopReason.InsufficientBalance]: TradingSessionStopReason.StakeStop,
+} as const satisfies Record<StopReason, TradingSessionStopReason>;
 
 // A hold must say whether the pause's memory (last_signal_action, #379) is cleared (null after a
 // no_signal) or kept (the paused action). The traded action travels with the intent row
@@ -206,8 +222,9 @@ export function createSessionOrchestrator({
     for (const row of rows) logStop(row, reason);
   }
 
+  // the strategy and its limits frozen in the session's row at the start, never the process's env
   function sizerOf(settings: TradingSessionSettings): StakeSizer {
-    return createStakeSizer({ strategy: StakeStrategy.Fixed, ...settings.stake });
+    return createStakeSizer(sessionStakeParams(settings));
   }
 
   async function attempt(session: RunnableSession, signal: AbortSignal): Promise<Ending> {
@@ -365,7 +382,7 @@ export function createSessionOrchestrator({
     if (decision.kind === StakeKind.Stop) {
       return {
         kind: 'stop',
-        reason: TradingSessionStopReason.StakeStop,
+        reason: STAKE_STOP_REASONS[decision.reason],
         fields: { stopReason: decision.reason, detail: decision.detail },
       };
     }

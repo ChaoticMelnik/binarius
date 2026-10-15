@@ -39,8 +39,8 @@ export interface SessionCardModel {
   footer: string;
 }
 
-// by the exact decimal, as the view counts won/lost/tied: a profit of 0.001 is a win even though
-// it prints as $0.00
+// by the exact decimal, as the view counts won/lost/tied: a profit of 0.001 is a win, printed
+// +$0.001 (formatSignedUsd keeps every digit, #450)
 const toneOf = (amount: DecimalString): SessionCardTone =>
   !/[1-9]/.test(amount) ? 'tie' : amount.startsWith('-') ? 'loss' : 'win';
 

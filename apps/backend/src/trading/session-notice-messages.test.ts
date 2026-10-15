@@ -67,6 +67,44 @@ describe('sessionTradeMessage (#464)', () => {
     );
   });
 
+  // #450: the steps follow the session's own strategy, read from its settings
+  it('numbers the trades of a martingale session by its series', () => {
+    const martingale: TradingSessionSettings = {
+      version: 2,
+      assetId: 101,
+      durationSec: 60,
+      trades: 5,
+      stake: {
+        strategy: 'martingale',
+        baseStake: d('5'),
+        stakeScale: 2,
+        limits: {
+          maxSteps: 4,
+          maxStake: d('60'),
+          maxSessionLoss: d('100'),
+          maxSessionDurationMs: 3_600_000,
+        },
+      },
+    };
+    const third = sessionTradeMessage(claimed([L, L, W], '24.5'), martingale, 5).value;
+    expect(third.startsWith('🔄 Адаптивная ставка включена\n⚡ Цикл 1 Шаг 3\n')).toBe(true);
+    expect(
+      sessionTradeMessage(claimed([L, L, W, W]), martingale, 5).value.startsWith(
+        '⚡ Цикл 2 Шаг 1\n',
+      ),
+    ).toBe(true);
+    // a v2 fixed session and a row whose settings cannot be read count every trade as step 1
+    const fixed: TradingSessionSettings = {
+      ...martingale,
+      stake: { strategy: 'fixed', baseStake: d('5'), stakeScale: 2 },
+    };
+    for (const read of [fixed, settings, null]) {
+      expect(
+        sessionTradeMessage(claimed([L, L, W]), read, 5).value.startsWith('⚡ Цикл 3 Шаг 1\n'),
+      ).toBe(true);
+    }
+  });
+
   it('prints the prices as the broker sent them when the catalog has no digits', () => {
     expect(sessionTradeMessage(claimed([W]), null, null).value).toContain(
       '📊 Цена: 1.08765 → 1.08712',

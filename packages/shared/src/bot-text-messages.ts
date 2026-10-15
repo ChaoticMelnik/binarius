@@ -36,6 +36,8 @@ export const BOT_TEXT_WIDTHS = {
   email: 254,
   // formatUsd over numeric(20,8): -$999 999 999 999.99
   usd: 20,
+  // formatSignedUsd over numeric(20,8), every fraction digit: -$999 999 999 999.99999999 (#450)
+  signedUsd: 26,
   // formatUsd('0'), both amounts of a card with no balance
   zeroUsd: 5,
   // formatStake over an unsigned numeric(20,8): $999 999 999 999.99999999 — either saved stake, the
@@ -230,8 +232,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   // «3 из 5»
   step: () => w.sessionCount + ' из '.length + w.sessionCount,
   score,
-  // a session's result: '-$999 999 999 999.99' or '+$…', both w.usd (formatSignedUsd)
-  profit: () => w.usd,
+  // a session's result: '-$999 999 999 999.99999999' or '+$…' (formatSignedUsd)
+  profit: () => w.signedUsd,
   result,
   // «5 сделок»
   trades: (m) => w.sessionCount + 1 + trades(m),
@@ -458,6 +460,10 @@ const sessionStopLines = [
   'sessionStopRejectedTwice',
   'sessionStopTimeout',
   'sessionStopStakeStop',
+  'sessionStopMaxSteps',
+  'sessionStopMaxStake',
+  'sessionStopMaxSessionLoss',
+  'sessionStopSessionDuration',
   'sessionStopAccountUnavailable',
   'sessionStopPairUnavailable',
   'sessionStopBalanceUnavailable',

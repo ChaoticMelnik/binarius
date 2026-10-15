@@ -14,6 +14,9 @@ x-broker-environment: &broker-environment
   # the demo-only fuse (#396): forwarded only when set; true refuses every real intent and real
   # session in this process; see README -> Demo-only stand
   DEMO_ONLY:
+  # the stake strategy of new sessions (#450): forwarded only when set; unset is martingale, read
+  # by the backend's start route and the worker's session-start CLI; see docs/stake.md -> Defaults
+  SESSION_STAKE_STRATEGY:
 
 x-app: &app
   build: .

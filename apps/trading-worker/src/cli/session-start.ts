@@ -15,11 +15,13 @@ import {
   MAX_SESSION_TRADES,
   parseBoundedIntegerEnv,
   parseDemoOnlyEnv,
+  parseSessionStakeStrategyEnv,
   parseUrlEnv,
   readEnv,
   telegramUserIdSchema,
   TradeMode,
   UUID_PATTERN,
+  type SessionStakeStrategy,
 } from '@binarius/shared';
 import {
   pickSessionAccount,
@@ -41,6 +43,7 @@ interface CliEnv {
   durationSec: number;
   trades: number;
   demoOnly: boolean;
+  stakeStrategy: SessionStakeStrategy;
 }
 
 export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
@@ -71,6 +74,8 @@ export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
     ),
     // the same fuse as the worker's (#396): a future real mode of this CLI meets the guard
     demoOnly: parseDemoOnlyEnv(source),
+    // the start route's own variable (#450): a CLI session gets the stand's strategy too
+    stakeStrategy: parseSessionStakeStrategyEnv(source),
   };
 }
 
@@ -132,6 +137,7 @@ export async function runSessionStartCli(
       durationSec: env.durationSec,
       trades: env.trades,
       minTradeAmount: snapshot.minTradeAmount,
+      strategy: env.stakeStrategy,
     });
     if (!plan.ok) {
       err(PLAN_REFUSALS[plan.reason]);

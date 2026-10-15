@@ -1,7 +1,7 @@
 // Test-only fixtures for the trading routes. Compiled by `tsc -b` alongside the *.test.ts files
 // next to it and imported by no runtime module.
 
-import type { PairsCatalogView } from '@binarius/shared';
+import { SessionStakeStrategy, type PairsCatalogView } from '@binarius/shared';
 import type { SignalEvaluation } from '@binarius/signal';
 import type { PairsRoutesDeps } from './pairs-routes';
 import type { TradingRoutesDeps } from './routes';
@@ -85,4 +85,5 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
   },
   internalApiToken: PAIRS_TEST_TOKEN,
   demoOnly: false,
+  stakeStrategy: SessionStakeStrategy.Martingale,
 });

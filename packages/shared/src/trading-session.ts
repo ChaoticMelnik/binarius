@@ -1,5 +1,6 @@
 import * as z from 'zod';
-import { StakeRefusal, stakeScale } from './stake';
+import { SessionStakeStrategy } from './session-steps';
+import { multiplyDecimal, StakeRefusal, stakeScale } from './stake';
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import {
   createTradeIntentRequestSchema,
@@ -10,27 +11,78 @@ import {
   tradeModeSchema,
 } from './trading';
 
-// trading_sessions.settings, version 1 (docs/trading-session.md -> Settings). The column is
-// checked at read, not at write: a row written by hand is a boundary too.
-export const TRADING_SESSION_SETTINGS_VERSION = 1;
+// trading_sessions.settings (docs/trading-session.md -> Settings). The column is checked at read,
+// not at write: a row written by hand is a boundary too. Version 2 is the only one written
+// (#450); a version 1 row reads as the fixed strategy (sessionStakeParams).
+export const TRADING_SESSION_SETTINGS_VERSION = 2;
 export const MAX_SESSION_TRADES = 20;
 // the CLI's and the start route's default; the schema itself requires the field
 export const DEFAULT_SESSION_TRADES = 5;
 const MAX_STAKE_SCALE = 8;
 
-export const tradingSessionSettingsSchema = z.strictObject({
-  version: z.literal(TRADING_SESSION_SETTINGS_VERSION),
+const sessionSettingsFields = {
   assetId: createTradeIntentRequestSchema.shape.assetId,
   durationSec: createTradeIntentRequestSchema.shape.durationSec,
   trades: z.int().min(1).max(MAX_SESSION_TRADES),
-  // the fixed strategy only (Rule 23): the orchestrator builds { strategy: 'fixed', ...stake }
-  stake: z.strictObject({
-    baseStake: tradeAmountSchema,
-    stakeScale: z.int().min(0).max(MAX_STAKE_SCALE),
-  }),
+};
+
+const stakeFields = {
+  baseStake: tradeAmountSchema,
+  stakeScale: z.int().min(0).max(MAX_STAKE_SCALE),
+};
+
+// the rules against baseStake are the worker's assertStakeParams (apps/trading-worker/src/stake/
+// config.ts), which planSessionStart and the orchestrator run
+export const martingaleLimitsSchema = z.strictObject({
+  maxSteps: z.int().min(2),
+  maxStake: tradeAmountSchema,
+  // the sizer parses every limit inside numeric(20,8) (parseAmount); a larger one fails here, at
+  // the writer, rather than as invalid_settings on the session's first attempt
+  maxSessionLoss: tradeAmountSchema,
+  maxSessionDurationMs: z.int().min(1),
 });
+export type MartingaleLimits = z.infer<typeof martingaleLimitsSchema>;
+
+const settingsV1Schema = z.strictObject({
+  version: z.literal(1),
+  ...sessionSettingsFields,
+  stake: z.strictObject(stakeFields),
+});
+
+const settingsV2Schema = z.strictObject({
+  version: z.literal(2),
+  ...sessionSettingsFields,
+  stake: z.discriminatedUnion('strategy', [
+    z.strictObject({ strategy: z.literal(SessionStakeStrategy.Fixed), ...stakeFields }),
+    z.strictObject({
+      strategy: z.literal(SessionStakeStrategy.Martingale),
+      ...stakeFields,
+      limits: martingaleLimitsSchema,
+    }),
+  ]),
+});
+
+export const tradingSessionSettingsSchema = z.discriminatedUnion('version', [
+  settingsV1Schema,
+  settingsV2Schema,
+]);
 export type TradingSessionSettings = z.infer<typeof tradingSessionSettingsSchema>;
 
+// The session's stake strategy and its parameters, frozen in its row at the start: v1 is fixed.
+// The worker's sizer takes this shape (StakeParams); every reader of the strategy goes through it.
+export type SessionStakeParams = Extract<TradingSessionSettings, { version: 2 }>['stake'];
+export function sessionStakeParams(settings: TradingSessionSettings): SessionStakeParams {
+  if (settings.version === 1) return { strategy: SessionStakeStrategy.Fixed, ...settings.stake };
+  return settings.stake;
+}
+
+// The default martingale limits from the session's base stake B (#450; docs/stake.md -> Defaults):
+// at most three raises in a row, one stake at most 12×B, the session's loss at most 20×B, the
+// session's hour. 12× rather than the owner's «~10×» lets the fourth stake through at every
+// payout from the start's 80 % floor; 10n here brings the owner's figure back.
+export const MARTINGALE_MAX_STEPS = 4;
+export const MARTINGALE_MAX_STAKE_MULTIPLIER = 12n;
+export const MARTINGALE_MAX_SESSION_LOSS_MULTIPLIER = 20n;
 export const safeParseTradingSessionSettings = (input: unknown) =>
   tradingSessionSettingsSchema.safeParse(input);
 
@@ -51,8 +103,16 @@ export const TradingSessionStopReason = {
   RejectedTwice: 'rejected_twice',
   // started_at + the maximum duration passed, on the database clock
   Timeout: 'timeout',
-  // the stake sizer answered stop; its code is in the log line
+  // the stake sizer answered stop with a code other than the four below; the code is in the log
+  // line
   StakeStop: 'stake_stop',
+  // the martingale limits of the session's settings (#450): the sizer's codes of the same name
+  MaxStepsExceeded: 'max_steps_exceeded',
+  MaxStakeExceeded: 'max_stake_exceeded',
+  MaxSessionLossExceeded: 'max_session_loss_exceeded',
+  // the sizer's maxSessionDurationMs on the worker's clock; the database clock's timeout above
+  // usually ends the session first
+  SessionDurationExceeded: 'session_duration_exceeded',
   // the intent creation refused for a durable reason; the code is in the log line
   AccountUnavailable: 'account_unavailable',
   // the pair left the catalog or refuses the duration
@@ -76,7 +136,7 @@ export const tradingSessionStopReasonSchema = z.enum(TradingSessionStopReason);
 
 // The fixed stake of a session from the account's min_trade_amount: the canonical spelling
 // (normalizeDecimal) and its own fraction length as the scale, so every positive numeric(20,8)
-// minimum passes assertStakeParams. A minimum of 0 gives baseStake '0', which settings v1 refuse:
+// minimum passes assertStakeParams. A minimum of 0 gives baseStake '0', which the settings refuse:
 // the start route answers balance_unavailable and the CLI zero_min_trade_amount (#130 n1).
 export function stakeSettingsFor(minTradeAmount: DecimalString): {
   baseStake: DecimalString;
@@ -109,6 +169,36 @@ export const SESSION_MAX_DURATION_MS = 3_600_000;
 // to + CATCHUP_TICK_MS (5 s) after its close, and a held-back attempt adds up to
 // CATCHUP_STALLED_RETRY_MS (30 s); 120 keeps room (stated: shared cannot import the worker)
 export const SESSION_SETTLE_SLACK_SEC = 120;
+
+export const martingaleLimitsFor = (baseStake: DecimalString): MartingaleLimits => ({
+  maxSteps: MARTINGALE_MAX_STEPS,
+  maxStake: multiplyDecimal(baseStake, MARTINGALE_MAX_STAKE_MULTIPLIER),
+  maxSessionLoss: multiplyDecimal(baseStake, MARTINGALE_MAX_SESSION_LOSS_MULTIPLIER),
+  maxSessionDurationMs: SESSION_MAX_DURATION_MS,
+});
+
+// The settings both writers store (the start route and the session-start CLI): v2 with the
+// strategy of the process (SESSION_STAKE_STRATEGY) and, for martingale, the default limits. A
+// stake the schema refuses (a zero minimum, a limit outside numeric(20,8)) is the caller's refusal.
+export function buildSessionSettings(input: {
+  assetId: number;
+  durationSec: number;
+  trades: number;
+  stake: { baseStake: DecimalString; stakeScale: number };
+  strategy: SessionStakeStrategy;
+}) {
+  const { strategy, stake } = input;
+  return tradingSessionSettingsSchema.safeParse({
+    version: TRADING_SESSION_SETTINGS_VERSION,
+    assetId: input.assetId,
+    durationSec: input.durationSec,
+    trades: input.trades,
+    stake:
+      strategy === SessionStakeStrategy.Martingale
+        ? { strategy, ...stake, limits: martingaleLimitsFor(stake.baseStake) }
+        : { strategy, ...stake },
+  });
+}
 
 // A session that waits this long for a signal stops with no_signal_timeout (#509, owner): counted
 // from the later of started_at and its last intent's change, on the database clock
@@ -173,9 +263,9 @@ export const createTradingSessionRequestSchema = z.strictObject({
   brokerAccountId: z.uuid().optional(),
   // required (#327): the bot's button carries the mode it was drawn in
   mode: tradeModeSchema,
-  assetId: tradingSessionSettingsSchema.shape.assetId,
-  durationSec: tradingSessionSettingsSchema.shape.durationSec,
-  trades: tradingSessionSettingsSchema.shape.trades.default(DEFAULT_SESSION_TRADES),
+  assetId: sessionSettingsFields.assetId,
+  durationSec: sessionSettingsFields.durationSec,
+  trades: sessionSettingsFields.trades.default(DEFAULT_SESSION_TRADES),
 });
 export type CreateTradingSessionRequest = z.infer<typeof createTradingSessionRequestSchema>;
 
@@ -212,7 +302,7 @@ export const tradingSessionViewSchema = z.strictObject({
   mode: tradeModeSchema,
   status: tradingSessionStatusSchema,
   stopReason: tradingSessionStopReasonSchema.nullable(),
-  // null only for a row whose settings fail v1, which only a hand-written row can
+  // null only for a row whose settings fail both versions, which only a hand-written row can
   settings: tradingSessionSettingsSchema.nullable(),
   startedAt: z.iso.datetime({ offset: true }),
   endedAt: z.iso.datetime({ offset: true }).nullable(),

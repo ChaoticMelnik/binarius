@@ -4,8 +4,8 @@
 export const StakeKind = { Stake: 'stake', Stop: 'stop' } as const;
 export type StakeKind = (typeof StakeKind)[keyof typeof StakeKind];
 
-export const StakeStrategy = { Fixed: 'fixed', Martingale: 'martingale' } as const;
-export type StakeStrategy = (typeof StakeStrategy)[keyof typeof StakeStrategy];
+// one source with the sessions' settings v2 and the trade messages' steps (#450)
+export { SessionStakeStrategy as StakeStrategy } from '@binarius/shared';
 
 export const SessionTradeKind = {
   Settled: 'settled',

@@ -47,6 +47,7 @@ describe('parseEnv', () => {
       adminWebToken: valid.ADMIN_WEB_TOKEN,
       webPublicUrl: valid.WEB_PUBLIC_URL,
       demoOnly: false,
+      sessionStakeStrategy: 'martingale',
       depositWidgetOrigins: ['https://binodex.app'],
     });
   });
@@ -61,8 +62,10 @@ describe('parseEnv', () => {
       BALANCE_RECONCILE_INTERVAL_MS: '30000',
       BALANCE_POLL_MAX_PER_MINUTE: '150',
       DEMO_ONLY: 'true',
+      SESSION_STAKE_STRATEGY: 'fixed',
     });
     expect(env.demoOnly).toBe(true);
+    expect(env.sessionStakeStrategy).toBe('fixed');
     expect(env.balanceReconcileIntervalMs).toBe(30_000);
     expect(env.balancePollMaxPerMinute).toBe(150);
     expect(env.port).toBe(8080);

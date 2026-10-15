@@ -1,15 +1,15 @@
 import { TradingSessionDbErrorCode } from '@binarius/db';
 import {
   BrokerAccountStatus,
+  buildSessionSettings,
   normalizeDecimal,
   sessionFitsDeadline,
+  sessionStakeParams,
   stakeSettingsFor,
-  tradingSessionSettingsSchema,
-  TRADING_SESSION_SETTINGS_VERSION,
   type DecimalString,
+  type SessionStakeStrategy,
   type TradingSessionSettings,
 } from '@binarius/shared';
-import { StakeStrategy } from '../stake/codes';
 import { assertStakeParams } from '../stake/config';
 
 // The session-start CLI's pure part (docs/trading-session.md -> The CLI): which account, which
@@ -59,6 +59,8 @@ export function planSessionStart(input: {
   durationSec: number;
   trades: number;
   minTradeAmount: DecimalString;
+  // SESSION_STAKE_STRATEGY of the CLI's env (#450)
+  strategy: SessionStakeStrategy;
 }): SessionPlan {
   if (!sessionFitsDeadline(input.trades, input.durationSec)) {
     return { ok: false, reason: 'session_too_long' };
@@ -67,16 +69,16 @@ export function planSessionStart(input: {
   if (normalizeDecimal(input.minTradeAmount) === '0') {
     return { ok: false, reason: 'zero_min_trade_amount' };
   }
-  const parsed = tradingSessionSettingsSchema.safeParse({
-    version: TRADING_SESSION_SETTINGS_VERSION,
+  const parsed = buildSessionSettings({
     assetId: input.assetId,
     durationSec: input.durationSec,
     trades: input.trades,
     stake: stakeSettingsFor(input.minTradeAmount),
+    strategy: input.strategy,
   });
   if (!parsed.success) return { ok: false, reason: 'invalid_settings' };
   try {
-    assertStakeParams({ strategy: StakeStrategy.Fixed, ...parsed.data.stake });
+    assertStakeParams(sessionStakeParams(parsed.data));
   } catch (error) {
     if (error instanceof RangeError) return { ok: false, reason: 'invalid_settings' };
     throw error;

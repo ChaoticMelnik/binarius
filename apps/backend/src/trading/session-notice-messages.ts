@@ -4,12 +4,13 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   pairLabel,
+  SessionStakeStrategy,
+  sessionStakeParams,
   sessionTradeSteps,
   signalsCallbackDataFor,
   TradingSessionStopReason,
   type PairLabel,
   type PairsCatalogView,
-  type SessionStakeStrategy,
   type TelegramHtml,
   type TradingSessionSettings,
   type TradingSessionView,
@@ -22,9 +23,6 @@ import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 // voice through the catalog (Rule 30): the shared builders of session-texts.ts, so the summary's
 // lines are the bot's status message's own. Built when sent, so an override reaches them.
 const notices = createSessionTexts({ html: CLIENT_TEXTS, plain: CLIENT_LABELS });
-
-// Settings v1 carry no strategy: every session is fixed (Rule 23). #450 passes the session's.
-const SESSION_STAKE_STRATEGY: SessionStakeStrategy = 'fixed';
 
 // the pair's label (pairLabel, #428) and digits from the catalog the routes read; null each when
 // it cannot say
@@ -39,14 +37,17 @@ export function pairOf(
   };
 }
 
-// A settled trade's message: its cycle and step over the session's trades up to it, and the
-// adaptive line when its stake is above the session's base stake.
+// A settled trade's message: its cycle and step over the session's trades up to it, by the
+// session's own strategy (#450; settings that cannot be read count as fixed), and the adaptive
+// line when its stake is above the session's base stake.
 export function sessionTradeMessage(
   { trade, results }: ClaimedSessionTrade,
   settings: TradingSessionSettings | null,
   digits: number | null,
 ): TelegramHtml {
-  const position = sessionTradeSteps(results, SESSION_STAKE_STRATEGY).at(-1);
+  const strategy =
+    settings === null ? SessionStakeStrategy.Fixed : sessionStakeParams(settings).strategy;
+  const position = sessionTradeSteps(results, strategy).at(-1);
   if (position === undefined) throw new Error('a claimed trade has no position in its session');
   return notices.sessionTradeText({
     amount: trade.amount,
