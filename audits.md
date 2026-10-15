@@ -3103,3 +3103,38 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 6. **Переиндексировать CodeGraph и убрать stale worktree `rosy-singing-fiddle`; manager Phase 0 — проверка свежести индекса** — **открыто (2026-10-15, владелец)**
 7. **`.claude/CLAUDE.md` инвариант 2: «шесть писателей леджера»** — **внедрено в #504: `.claude/CLAUDE.md` → Планирование задач → Доменные инварианты, п. 2**
 8. **Remaining Minor** — **вынесено в #496 (#486), #497 (#488), #498 (#489), #499 (#491), #500 (#492), #501 (#493), #503 (#495, #494)**
+
+---
+
+## #511 — Процесс: меньше ходов на тесты - не в главной сессии, мутации одним скриптом, CI вместо локального check у reviewer (2026-10-15)
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Codex готов, лимита нет; `.claude/CLAUDE.md` = `origin/main`; пересечений с открытыми PR нет (#512, #435 правят только Architecture Rules). Проверка «Лимиты до спавна» дала совпадение на собственном транскрипте сессии — правило печатает что-то всегда (находка 2); реальный отказ Fable 2026-10-10 подтверждён jq по `<synthetic>`-сообщениям → первичный план на Opus. Предупреждение: 3 предложения прошлой записи `открыто`. |
+| Architect | план | Opus, строка «план на Opus (лимит Fable 10.10)»; clarify — 5 вопросов, все ответы рекомендуемые, кроме п. 5 (замер — предложение в `audits.md`, не задача); оценка 550–650, факт первого PR ~790. Plan Update круга 1 — Opus, «новых развилок нет», все 5 Minor включены. |
+| Implementer | круг 0 / 1 | Свой worktree `impl-511`, коммиты `#511: …` (код / процесс), полный `pnpm check` на голове, проверка каждого коммита во временном worktree, таблица мутаций одним вызовом скрипта (9/9, затем 15/15). Свежий спавн на круг исправлений; первый коммит круга 1 упал на `test-timing` F1 — переписан до push, красного коммита нет. В worktree нет `TEST_DATABASE_URL`/`REDIS_URL` — потерян прогон (находка 3). |
+| Reviewer | круг 1 | Первый спавн умер на API 403, ничего не опубликовав (проверено по GitHub); повторный — 1 Major, 5 Minor, → Todo. 3b пропущен по содержанию diff. |
+| Reviewer | круг 2 | Чисто, 3 Minor; `--only M5,M11,M12` перезапущены по новому правилу; Codex — лимит до 15.10 14:12 (job `task-mv9crrg3-m4l9tl`, статус `failed`/usage limit проверен tech-lead'ом из worktree ревью). |
+| Tech Lead | Merge | Вопрос владельцу, «да», `mergeable` перепроверен, `gh pr merge 515 --rebase --delete-branch` → MERGED 09:47:46Z; #511 → Done; Minor → #516 (Backlog). Модели: все фазы — `claude-opus-5-5`, 3d — `claude-sonnet-5-5`; `<synthetic>` — умерший reviewer круга 1 и один 3c, который продолжил работу. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| M1: `defaultRunner` бросает внутри обработчиков дочернего процесса (обрезанный JSON, двойной `closeSync`) → uncaught, без отката, exit 1 = вердикт, мутированный файл в дереве | Major | unverified-claim | Тесты T1–T14 шли только через подменённый runner; путь реального процесса (сбой spawn, битый вывод, сигнал) не проверялся | Architect plan (тест-план) / Implementer Step 5 «An instrument is not exempt» |
+| m1–m5 круга 1 (нет совпавшего файла → `green`; нет `pnpm install` в worktree ревью; чистота только правимых файлов; нет теста отката через процесс; две severity у красного CI) | Minor | other, single-source (m5) | — | Architect plan |
+| m1–m3 круга 2 (отсутствующий файл → exit 3 без таблицы; `./path` → `not-run`; M11 не доказывает откат бэкстопом) | Minor → #516 | other, unverified-claim (m3) | — | Implementer |
+| Проверка «Лимиты до спавна» совпадает с собственным текстом правила, загруженным в каждую сессию (47 файлов за неделю), — печатает что-то всегда и сводит правило к «всегда Opus» | Process | unverified-claim | Команда правила не проверялась на транскрипте без отказа | `.claude/CLAUDE.md` → Экономия токенов (2026-10-14) |
+| В worktree нет `TEST_DATABASE_URL`/`REDIS_URL` | Process | env-parity | Основной `.env` их не содержит, Step 7 этого не называл | tech-lead Step 7 |
+
+### Process improvement proposals
+
+1. **Implementer Step 5: инструмент, который правит и откатывает файлы вокруг дочернего процесса, тестируется и через реальный процесс (сбой spawn, битый вывод, сигнал)** — **внедрено в #DOCS: `.claude/skills/implementer/SKILL.md` → Step 5, «An instrument is not exempt»**
+2. **«Лимиты до спавна»: jq по `<synthetic>`-сообщениям вместо grep по тексту отказа** — **внедрено в #DOCS: `.claude/CLAUDE.md` → Экономия токенов → «Лимиты до спавна»**
+3. **tech-lead Step 7: спавн-промпт называет `TEST_DATABASE_URL`/`REDIS_URL` для worktree** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own worktree**
+4. **Повторный замер через 5–10 задач тем же скриптом (комментарий владельца в #511): доля ходов на тесты у implementer ≤ 8 %, в главной сессии ≈ 0** — **открыто (2026-10-15, владелец)**
+5. **Remaining Minor круга 2** — **вынесено в #516**
