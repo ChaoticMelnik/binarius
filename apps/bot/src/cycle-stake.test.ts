@@ -195,9 +195,9 @@ describe('an amount of the amount screen', () => {
   });
 
   it.each([
-    ['a user before /start', httpError(404, StakeErrorCode.UserNotFound), 'warn'],
-    ['an answer the bot never provokes', httpError(400, 'invalid_request'), 'error'],
-  ] as const)('says unavailable for %s and logs it at %s', async (_label, error, level) => {
+    ['a user before /start', 'warn', httpError(404, StakeErrorCode.UserNotFound)],
+    ['an answer the bot never provokes', 'error', httpError(400, 'invalid_request')],
+  ] as const)('says unavailable for %s and logs it at %s', async (_label, level, error) => {
     const { press, startSession, calls, logger } = setup({ setStake: () => Promise.reject(error) });
     await press(PRESS);
     expect(startSession).not.toHaveBeenCalled();
