@@ -63,17 +63,36 @@ Follow the plan's steps in order. When the plan says to create issues (follow-up
 
 Format only the files you change (`prettier --write <files>`), never the whole repo: the tree is not prettier-clean, and a repo-wide pass in #107 reflowed untouched code in `apps/backend` and `apps/web`, which took a separate revert commit.
 
-### Step 5: Run the project's check command
+### Step 5: Test runs — targeted while working, the full check once at the head
+
+Every test run is a turn that re-reads the whole context, so the number of runs is what costs (`.claude/CLAUDE.md` → Экономия токенов → «Тесты — только в спавн-агентах», #511).
+
+**During work — targeted runs only**: the test files of what you touched, never the full suite. While debugging, the edit and the run go in one Bash call: `<edit command> && pnpm exec vitest run <files> > "$SCRATCH/t.log" 2>&1; echo "exit=$?"`.
+
+**Quiet runs**: the full output goes to a file in your scratch dir, only the verdict enters the context. On a non-zero exit read `grep -nE 'FAIL|Error|✗' "$SCRATCH/<log>" | head -40` and the tail, not the whole log.
+
+**Every commit builds and passes its own tests** (`.claude/CLAUDE.md` → Постоянные ответы владельца → «Доказательства мутаций»: no red commits). After each commit and before any push — every new commit, the head included — check out that commit alone in a throwaway worktree (`git worktree add "$SCRATCH/c-<sha>" <sha>`, then `pnpm install --offline --frozen-lockfile` in it — a worktree has no `node_modules`, so `tsc` and `vitest` would not start; removed afterwards with `git worktree remove --force "$SCRATCH/c-<sha>"`) and run there the typecheck **and** the test files of the packages it touches. The working tree with unstaged changes is not the commit; a failing commit is reworked before anything is pushed. A typecheck alone is not enough: #493's first commit typechecked and failed a timing test, and #492 got two non-building commits from a staged `git mv` landing in the wrong commit (2026-10-14; both were squash-merged because history cannot be rewritten at night).
+
+**The full check — once, at the head, before the push**, on a clean tree (`git status --porcelain` prints nothing; run the shared-resource guard of tech-lead Step 7 first):
 
 ```bash
-pnpm check
+pnpm check > "$SCRATCH/check.log" 2>&1; echo "exit=$?"
 ```
 
-The one check command (`.claude/CLAUDE.md` → CI): `tsc -b --clean` first, so the tests run on a tree without `dist/`, then the tests, the build and lint. It can run before `git add`: the manifest test also counts files that are not staged yet, as long as they are not ignored. Its **exit code is the verdict**: never pipe it through `grep`/`tail` in front of `&& git commit` — a pipeline exits with the last command's status, and a commit once landed on a red suite that way. The same goes for joining the check and the commit with `;` instead of `&&`: `;` runs the commit whatever the check returned (#200: commit 2 was made on a red check that way, caught before the push). Fix all new errors before proceeding.
+The one check command (`.claude/CLAUDE.md` → CI): `tsc -b --clean` first, so the tests run on a tree without `dist/`, then the tests, the build and lint. Its **exit code is the verdict**: never pipe it through `grep`/`tail` in front of `&& git commit` or `&& git push` — a pipeline exits with the last command's status, and a commit once landed on a red suite that way. The same goes for joining the check and the next step with `;` instead of `&&`: `;` runs it whatever the check returned (#200: commit 2 was made on a red check that way, caught before the push). A red check is fixed in a new commit, which gets its own per-commit check, and the full check runs again on the new head.
 
-**Quiet runs** (`.claude/CLAUDE.md` → Экономия токенов): the full output goes to a file in your scratch dir, only the verdict enters the context — `pnpm check > "$SCRATCH/check.log" 2>&1; echo "exit=$?"`; on a non-zero exit read `grep -nE 'FAIL|Error|✗' "$SCRATCH/check.log" | head -40` and the tail, not the whole log. The same for targeted vitest runs. Mutation evidence is produced by a script that applies each mutation, runs its test into a per-mutation log, records `mutation | expected test | result | first failing line` in one table file and reverts; the PR comment is built from that file, so hundreds of runs never pass through the conversation. Mutations run on committed work only, each reverted by restoring that one file; never `git checkout --` over uncommitted changes (#460: three files of work were wiped that way).
+**Mutation evidence — one call for the whole list** (`.claude/CLAUDE.md` → «Доказательства мутаций»). Write the plan's mutations as a JSON list and run:
 
-**Every commit builds and passes its own tests** (`.claude/CLAUDE.md` → Постоянные ответы владельца → «Доказательства мутаций»: no red commits): after each commit and before any push, check out that commit alone in a throwaway worktree (`git worktree add "$SCRATCH/c-<sha>" <sha>`, then `pnpm install --offline --frozen-lockfile` in it — a worktree has no `node_modules`, so `tsc` and `vitest` would not start; removed afterwards with `git worktree remove --force "$SCRATCH/c-<sha>"`) and run there the typecheck **and** the test files of the packages it touches — the working tree with unstaged changes is not the commit; a failing commit is reworked before anything is pushed; the full `pnpm check` on the head at the end. A typecheck alone is not enough: #493's first commit typechecked and failed a timing test, and #492 got two non-building commits from a staged `git mv` landing in the wrong commit (2026-10-14; both were squash-merged because history cannot be rewritten at night).
+```bash
+node tooling/mutations.ts "$SCRATCH/mutations-<N>.json" --out "$SCRATCH/mut" > "$SCRATCH/mut.log" 2>&1; echo "exit=$?"; cat "$SCRATCH/mut.log"
+```
+
+- The list format, the result kinds and the exit codes are in the script's header comment.
+- The script refuses edited files that are not committed and clean. It restores every file from memory and checks it byte for byte against HEAD; it never uses `git checkout`, `git stash` or the index (#460: `git checkout --` over uncommitted changes wiped three files of work).
+- Exit 0 means every row is `red`. A `red+extra` row is not discriminating (Step 5.5): narrow that mutation. A `green` row means the test cannot catch it. Then re-run the whole list in one call.
+- A re-take after new commits is also one call, on the new head.
+- The PR comment is one separate comment: `<out>/table.md` as is (its header line carries `head=` and `list-sha256=`), then the list JSON in a collapsed `<details>` block, so the reviewer can save it and re-run `--only <ids>` (reviewer Step 5 → Quoted evidence).
+- Mutations run one at a time by hand, or a table without the script's header, are a process deviation, and the reviewer names it in the report.
 
 ### Step 5.5: Self-review checklist
 
@@ -93,7 +112,7 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 - [ ] A change to what reaches the logs is covered by a test that reads the log itself, not the HTTP response
 - [ ] Integration tests in a shared temp database key their latches and counters to their own rows (`intentId`), not to processing order
 - [ ] A clarify answer that changed a plan constraint is named, with the affected invariant, in the PR's "Deviations" section
-- [ ] **Every assertion added or changed was shown to fail** — the unit is the assertion, not the test. Break the code each one guards, read the failure, revert, quote the printed failure in the PR. A test that reddens for *some* reason says nothing about the assertions inside it that cannot redden for any: #159 shipped a `revoked_at >= created_at` check that compares JS `Date`s at millisecond resolution against a microsecond inversion, so on the real bug pair it returned true while the test went red through the DDL CHECK beside it. A passing test is not evidence it can fail — #22 shipped three Majors past suites that were green by construction
+- [ ] **Every assertion added or changed was shown to fail** — the unit is the assertion, not the test. Each one gets a mutation that breaks the code it guards in the list for `tooling/mutations.ts` (Step 5); the PR quotes the script's table with the printed failures. A test that reddens for *some* reason says nothing about the assertions inside it that cannot redden for any: #159 shipped a `revoked_at >= created_at` check that compares JS `Date`s at millisecond resolution against a microsecond inversion, so on the real bug pair it returned true while the test went red through the DDL CHECK beside it. A passing test is not evidence it can fail — #22 shipped three Majors past suites that were green by construction
 - [ ] The mutation used as that evidence is **discriminating, not neighbouring**: it must redden the new check alone. If an assertion that already existed also goes red, the experiment proves nothing about the new one and a narrower mutation is needed
 - [ ] A check written *this round to close a review finding* is held to the two items above as well — that is the oracle the previous round's rule always misses
 - [ ] **An instrument is not exempt either.** A script, generator or ledger whose output *is* the round's evidence is held to the same rule as a test — #68 rested a whole round on `assertion-ledger.sh`, which silently dropped deletion-only hunks and globbed zero files. A completeness check whose two sides come from the same generator proves nothing
@@ -160,9 +179,9 @@ If none exists yet, do not start — Architect must clarify first.
 
 Do not create a new branch. Before the first edit, list every place of each finding's class — the search command and its result — and fix all of them; the Plan Update's "All occurrences of the class" section is the starting point, not the limit.
 
-### Step 4: Run the check command
+### Step 4: Test runs
 
-`pnpm check`, exit code as the verdict. Fix all errors before committing.
+As in the initial workflow's Step 5: targeted runs of the touched files while fixing, the per-commit check of every new commit, one full `pnpm check` at the head before the push, and the mutation table re-taken whole on the new head by one call of `tooling/mutations.ts`.
 
 ### Step 5: Commit, push, update PR
 
@@ -172,11 +191,11 @@ Same stop-point rule as the initial-implementation workflow:
 git status
 git add <specific files>
 git commit -m "#N: address review comments"
-# the per-commit check of Step 5 on this commit (its own worktree) before the push
+# the per-commit check of Step 5 on this commit (its own worktree), then one full pnpm check at the head
 git push
 ```
 
-A rebase-only task (tech-lead → «Mergeability right before the merge») runs the same per-commit check on every rewritten commit before its force-push.
+A rebase-only task (tech-lead → «Mergeability right before the merge», and the stacked rebase of tech-lead → «A PR left In Review by a manager session», step 1) runs the same per-commit check on every rewritten commit before its force-push, and re-takes the mutation table on the new head by one call of `tooling/mutations.ts`.
 
 PR updates automatically — no new PR needed.
 
@@ -190,7 +209,7 @@ Via `/github` skill ("Update Pipeline Status" → In Review), then a PR comment 
 
 - Never push to `main` or merge a PR — out of scope for this role regardless of stop-point settings.
 - Never use `git add .` or `git add -A` — stage specific files by name.
-- Never skip the check command before committing, and never judge it by piped output.
+- Never push without the per-commit check of every new commit and one full `pnpm check` at the head, and never judge either by piped output.
 - Never skip `git status` before committing — committing to the wrong branch means a cherry-pick and wasted work.
 - Never deviate from the Architect's plan without flagging the discrepancy explicitly.
 - Never start fixing review findings before the Architect has posted a "Plan Update" comment.
