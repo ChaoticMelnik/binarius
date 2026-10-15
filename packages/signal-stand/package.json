@@ -1,0 +1,18 @@
+{
+  "name": "@binarius/signal-stand",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "stand": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@binarius/broker-rest": "workspace:*",
+    "@binarius/shared": "workspace:*",
+    "@binarius/signal": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@binarius/mock-broker": "workspace:*"
+  }
+}
