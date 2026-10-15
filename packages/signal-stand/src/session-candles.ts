@@ -66,10 +66,12 @@ export interface SeriesComparison {
   firstRevisedAt?: number;
 }
 
-// rows the cache lacks are not revisions; any OHLC difference on a shared timestamp is
+// Rows the cache lacks are not revisions; any OHLC difference on a shared timestamp is. The
+// first row is skipped: an answer's first row opens at the requested window's first tick
+// (docs/signal-stand.md -> The cache), so its open is not the candle's.
 export function compareRows(rows: readonly Candle[], cache: readonly Candle[]): SeriesComparison {
   const result: SeriesComparison = { compared: 0, notInCache: 0, revised: 0 };
-  for (const row of rows) {
+  for (const row of rows.slice(1)) {
     const found = cache[lowerBound(cache, row.timestamp)] as Candle | undefined;
     if (found?.timestamp !== row.timestamp) {
       result.notInCache++;

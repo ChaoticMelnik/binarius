@@ -163,11 +163,12 @@ function matchLine(
   return found;
 }
 
-// the closed rows of the line against the cache; the forming row was not final when logged
+// The closed rows of the line against the cache. The forming row was not final when logged, and
+// the first row of the feed's answer opens at its window (as compareRows' first row).
 function seriesRevised(entry: StoredSignalJournalEntry, cache: readonly Candle[]) {
   let revised = false;
   let notInCache = 0;
-  for (const [timestamp, open, high, low, close] of entry.series) {
+  for (const [timestamp, open, high, low, close] of entry.series.slice(1)) {
     if (timestamp + entry.intervalMs > entry.nowMs) continue;
     const found = cache[lowerBound(cache, timestamp)] as Candle | undefined;
     if (found?.timestamp !== timestamp) {

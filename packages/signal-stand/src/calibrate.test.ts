@@ -47,6 +47,9 @@ function liveSession(count: number) {
     // the forming candle was not final when the feed logged it
     const [ts, o, h, l, c] = series[series.length - 1];
     series[series.length - 1] = [ts, o, h + 0.0001, l, c + 0.0001];
+    // and the answer's first row opened at the window's first tick
+    const [t0, o0, h0, l0, c0] = series[0];
+    series[0] = [t0, o0 - 0.00002, h0, Math.min(l0, o0 - 0.00002), c0];
     const signal = {
       assetId: PAIR.id,
       interval: '5s',
@@ -262,6 +265,8 @@ describe('calibrate', () => {
     const rows = seconds
       .slice(600, 1_200)
       .map((c) => [c.timestamp, c.open, c.high, c.low, c.close]);
+    // the first row of the owner's answer opened at the window's first tick: not a revision
+    rows[0] = [rows[0][0], rows[0][1] + 0.0003, rows[0][2] + 0.0003, rows[0][3], rows[0][4]];
     writeJson(path.join(sessionDir, 'a_1s.json'), {
       session: 'a',
       asset_id: PAIR.id,
