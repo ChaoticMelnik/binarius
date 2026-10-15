@@ -59,6 +59,7 @@ import {
 } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import {
+  cycleStakeLabel,
   ACTION_LABELS,
   accountCard,
   accountStatus,
@@ -1589,5 +1590,20 @@ describe('the text source', () => {
       description: stubText('profileDescription'),
       shortDescription: stubText('profileShortDescription'),
     });
+  });
+});
+
+// #476: the amount screen's labels; the composition lives in cycleStakeLabel only
+describe('cycleStakeLabel', () => {
+  const d = (value: string) => decimalStringSchema.parse(value);
+
+  it.each([
+    ['9.99', false, '$9.99'],
+    ['9.99', true, '$9.99 ✅'],
+    ['10', false, '$10.00 · риск'],
+    ['10', true, '$10.00 ✅ · риск'],
+    ['15', true, '$15.00 ✅ · риск'],
+  ])('labels %s (in effect: %s) as %s', (amount, current, label) => {
+    expect(cycleStakeLabel(d(amount), current)).toBe(label);
   });
 });

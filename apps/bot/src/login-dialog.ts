@@ -1,8 +1,10 @@
+import type { CycleStakeStep } from './demo';
 import type { StakeStep } from './stake-picker';
 
 // The text dialog of each Telegram user: the email login — waiting for an address, then for the
-// code sent to it — or a typed stake of one mode (#297, #326, stake-picker.ts). One entry per
-// user, so the login and the stake input exclude each other: opening one replaces the other. The
+// code sent to it — a typed stake of one mode (#297, #326, stake-picker.ts), or the typed amount of
+// a demo cycle (#476, cycle-stake.ts). One entry per user, so the login and the inputs exclude
+// each other: opening one replaces the other. The
 // module keeps the login's name. In process memory by the owner's decision (#162): a restart drops
 // the step and the user presses the button again. The address lives here and nowhere else in the
 // bot — never logged — and leaves with the entry.
@@ -11,8 +13,11 @@ export const LOGIN_DIALOG_TTL_MS = 10 * 60_000;
 export const LOGIN_DIALOG_MAX_ENTRIES = 10_000;
 
 export type LoginDialogState =
-  { step: 'email' } | { step: 'code'; email: string } | ({ step: 'stake' } & StakeStep);
-export type LoginStep = Exclude<LoginDialogState['step'], 'stake'>;
+  | { step: 'email' }
+  | { step: 'code'; email: string }
+  | ({ step: 'stake' } & StakeStep)
+  | ({ step: 'cycleStake' } & CycleStakeStep);
+export type LoginStep = Exclude<LoginDialogState['step'], 'stake' | 'cycleStake'>;
 
 export interface LoginDialog {
   get(telegramUserId: number): LoginDialogState | undefined;

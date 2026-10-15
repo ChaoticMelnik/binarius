@@ -661,6 +661,8 @@ export const WRITE_CALLBACK_PREFIXES = [
   'demo:stake:',
   'demo:sess:',
   'real:sess:',
+  // an amount of the amount screen (#476): saves the stake, then starts a session
+  'demo:sa:',
   'session:stop:',
   'confirm:',
   'resend',

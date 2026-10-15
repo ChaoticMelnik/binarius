@@ -61,6 +61,7 @@ import {
   demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
+  cycleStakeText,
   launchText,
   helpText,
   intentStatusText,
@@ -390,6 +391,38 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   demoSummary: () =>
     DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) => demoSummary(pair, durationSec)),
+  // #476: the amount screen, with and without the saved line, the amounts or none
+  demoCycleStake: () =>
+    [
+      undefined,
+      ...Object.values(TradeMode).flatMap((mode) => [
+        { amount: null, mode },
+        { amount: STAKE, mode },
+      ]),
+    ].flatMap((saved) =>
+      [false, true].flatMap((empty) =>
+        [999, 992, 991].flatMap((trades) =>
+          DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) =>
+            cycleStakeText({
+              firstName: NAME,
+              durationSec,
+              symbol: pair.symbol,
+              stake: STAKE,
+              access: {
+                tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
+                broker: brokerBalance(),
+                demoStake: STAKE,
+                realStake: STAKE,
+              },
+              broker: brokerBalance(),
+              empty,
+              trades,
+              ...(saved === undefined ? {} : { saved }),
+            }),
+          ),
+        ),
+      ),
+    ),
   // the three plurals, each at the widest count
   demoLaunch: () =>
     [

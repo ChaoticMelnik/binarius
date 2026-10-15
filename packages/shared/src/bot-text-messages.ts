@@ -618,6 +618,23 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     ],
   },
   {
+    // the amount screen of a demo cycle (#476, texts.ts → cycleStakeText)
+    id: 'demoCycleStake',
+    title: 'Демо: выбор суммы цикла',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      // only after a save in the stake picker opened from an old launch screen, in its mode
+      anyOf('stakeSavedLine', 'stakeSavedLineReal'),
+      '\n\n',
+      k('launchHeader'),
+      '\n',
+      k('launchCycle'),
+      '\n\n',
+      // no amount to offer: the demo balance is below the broker's minimum
+      anyOf('cycleStakeChoose', 'stakePickerNoPresets'),
+    ],
+  },
+  {
     id: 'demoPairs',
     title: 'Демо: список активов',
     limit: TELEGRAM_MESSAGE_LIMIT,

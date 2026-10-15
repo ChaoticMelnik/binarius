@@ -10,6 +10,7 @@ import {
   defaultBotTextSource,
   formatStake,
   formatUsd,
+  stakeIsRisky,
   isPendingLink,
   MODE_LABELS,
   LinkBonusSkipReason,
@@ -33,6 +34,7 @@ import {
   type BotTextKey,
   type BotTextKeyOfGroup,
   type BotTextSource,
+  type BrokerBalanceView,
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
@@ -805,6 +807,68 @@ export function launchText({
 
 ${joinLines(lines)}`;
 }
+
+// The amount screen of a demo cycle (#476, demo.ts → cycleStakeScreen): the pair, the cycle, then
+// the call to choose an amount, or the picker's line when the demo balance is below the broker's
+// minimum. `stake` is the amount in effect; after a picker save the saved line leads, as on the
+// launch screen.
+export function cycleStakeText({
+  firstName,
+  durationSec,
+  symbol,
+  stake,
+  access,
+  broker,
+  empty,
+  saved,
+  trades = DEFAULT_SESSION_TRADES,
+}: {
+  firstName: string;
+  durationSec: DemoDurationSec;
+  symbol: string | null;
+  stake: DecimalString;
+  access: AccessForTexts;
+  broker: BrokerBalanceView;
+  empty: boolean;
+  saved?: { amount: DecimalString | null; mode: TradeMode };
+  // a parameter so the length test reaches the widest plural, as launchText's
+  trades?: number;
+}): TelegramHtml {
+  const context = { firstName, stake };
+  const lines = [
+    ...(symbol === null
+      ? []
+      : [
+          TEXTS.launchHeader({
+            ...context,
+            subject: `${symbol} · ${DEMO_DURATION_LABELS[durationSec]}`,
+          }),
+        ]),
+    TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
+  ];
+  const choose = empty
+    ? TEXTS.stakePickerNoPresets({
+        ...userContextOf(firstName, TradeMode.Demo, access),
+        minStake: broker.minTradeAmount,
+        demoAvailable: broker.demo.available,
+        realAvailable: broker.real.available,
+      })
+    : TEXTS.cycleStakeChoose({ firstName });
+  const body = telegramHtml`${joinLines(lines)}
+
+${choose}`;
+  if (saved === undefined) return body;
+  return telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
+
+${body}`;
+}
+
+// An amount's button on that screen: ✅ on the amount in effect, «· риск» from
+// STAKE_RISK_THRESHOLD (#476)
+export const cycleStakeLabel = (amount: DecimalString, current: boolean): string => {
+  const shown = current ? `${formatStake(amount)} ✅` : formatStake(amount);
+  return stakeIsRisky(amount) ? plain.stakeRiskButton({ amount: shown }) : shown;
+};
 
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button

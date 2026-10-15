@@ -2,8 +2,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   BrokerRestErrorCode,
+  checkStake,
   comparePairsByPayout,
   createTradeIntentRequestSchema,
+  decimalLessThan,
+  decimalStringSchema,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
   normalizeDecimal,
@@ -14,9 +17,14 @@ import {
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
   SignalFeedOutcome,
+  stakeIsRisky,
+  stakePresets,
+  telegramHtml,
   TradeAction,
   TradeMode,
+  tradeAmountSchema,
   tradeModeSchema,
+  type BrokerBalanceView,
   type DecimalString,
   type PairsCatalogResponse,
   type PairTypeGroup,
@@ -52,6 +60,7 @@ import {
   type DemoDurationSec,
   type DemoTradeRead,
 } from './demo-catalog';
+import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import {
@@ -62,7 +71,10 @@ import {
   replyHtmlWithoutNextStep,
   type NoNextStepReason,
 } from './send';
+import { stakeAccess } from './stake-access';
 import {
+  cycleStakeLabel,
+  cycleStakeText,
   DEMO_DURATION_LABELS,
   demoDurationsScreen,
   demoPairsScreen,
@@ -76,25 +88,53 @@ import {
   sessionStartButtonLabel,
   signalButtonLabel,
   stakeButtonLabel,
+  stakeSavedLine,
   TEXTS,
   DEMO_GROUP_LABELS,
 } from './texts';
 
 // The demo's screens (#125, docs/bot-demo.md): the duration of the main path (#382), the pairs
-// with a signal now for it and the launch of a cycle on one (#320); the asset types, one type's
-// pairs by page, the durations of a pair, the summary, the analysis behind «📊 Анализ» (#126) and
-// the single trade behind its «➕ Ещё» (#360). The bot keeps no state for them: what the user chose
-// travels in the callback data, so a restart, an old message and a second device all lead to the
-// same screen, and every screen reads the catalog anew.
+// with a signal now for it and the amount of a cycle on one (#476; the launch of #320 in real); the
+// asset types, one type's pairs by page, the durations of a pair, the summary, the analysis behind
+// «📊 Анализ» (#126) and the single trade behind its «➕ Ещё» (#360). The bot keeps no state for
+// them: what the user chose travels in the callback data, so a restart, an old message and a second
+// device all lead to the same screen, and every screen reads the catalog anew.
 
 // Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
-// `demo:l:2147483647:15` 20 and `demo:sig:15` 11. `demo:sig` is the main path's duration screen
+// `demo:l:2147483647:15:n` 22 and `demo:sig:15` 11. `demo:sig` is the main path's duration screen
 // (#382): every old «🔄 Обновить», «↩️ К списку» and «📡 К сигналам» lands there.
 export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
 export const demoSignalsCallbackData = (durationSec: DemoDurationSec): string =>
   `${DEMO_SIGNALS_CALLBACK_DATA}:${durationSec}`;
-export const demoLaunchCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
-  `demo:l:${assetId}:${durationSec}`;
+// Where the amount screen of a demo cycle (#476) was opened: `l` the signal list (no token in the
+// data, as before #476), `a` the analysis, `n` the offer under a finished trade or «🔁 Ещё сессия».
+// `l` and `a` edit the pressed message; `n` sends the screen as a new message, so the trade's or
+// the session's message stays, and the screen it draws carries `a`: its own presses edit it.
+export type CycleOrigin = 'l' | 'a' | 'n';
+// the way back of the amount screen: to the list, or to the pair's analysis
+export type CycleBack = Exclude<CycleOrigin, 'n'>;
+export const cycleBackOf = (origin: CycleOrigin): CycleBack => (origin === 'l' ? 'l' : 'a');
+export const demoLaunchCallbackData = (
+  assetId: number,
+  durationSec: DemoDurationSec,
+  origin: CycleOrigin = 'l',
+): string => `demo:l:${assetId}:${durationSec}${origin === 'l' ? '' : `:${origin}`}`;
+// An amount of the amount screen (#476): the press saves it as the demo stake, then starts the
+// cycle (cycle-stake.ts). The amount in the data is the one saved, as the picker's preset: a stale
+// button saves what it shows, bounded by the backend. The longest,
+// `demo:sa:2147483647:15:999999999999.99999999:a`, is 45 bytes.
+export const cycleStakeCallbackData = (
+  assetId: number,
+  durationSec: DemoDurationSec,
+  amount: string,
+  back: CycleBack,
+): string => `demo:sa:${assetId}:${durationSec}:${amount}:${back}`;
+// «✏️ Своя сумма» of the amount screen: the prompt, then the typed amount starts the cycle
+export const cycleCustomCallbackData = (
+  assetId: number,
+  durationSec: DemoDurationSec,
+  back: CycleBack,
+): string => `demo:sc:${assetId}:${durationSec}:${back}`;
 export const DEMO_GROUPS_CALLBACK_DATA = 'demo:g';
 export const demoPageCallbackData = (group: PairTypeGroup, page: number): string =>
   `demo:t:${group}:${page}`;
@@ -177,9 +217,10 @@ export const launchStakeCallbackData = (
   durationSec: DemoDurationSec,
 ): string => `${STAKE_PICKER_PREFIX}o:${MODE_TOKENS[mode]}:p:${assetId}:${durationSec}`;
 // The session button (#284, trading-session.ts) of the analysis screen, of a finished single trade
-// (#360, demo-trade.ts), of the launch screen (#320) and «🔁 Ещё сессия». It carries the mode it
-// was drawn in (#327), which the backend compares with the user's: a demo button is byte for byte
-// the one before #327. No nonce, by the owner's decision: an old button starts a new session once
+// (#360, demo-trade.ts), of the launch screen (#320) and «🔁 Ещё сессия», in real mode; in demo
+// these doors open the amount screen since #476, and a demo datum is a button sent before it. It
+// carries the mode it was drawn in (#327), which the backend compares with the user's: a demo
+// button is byte for byte the one before #327. No nonce, by the owner's decision: an old button starts a new session once
 // the previous one has ended, and while one is active the backend answers with it. The launch
 // screen's adds SESSION_START_LAUNCH_TOKEN (#418): the bot keeps no state, so the token is how the
 // start learns the pressed message is a launch screen, which it deletes once the session's status
@@ -224,7 +265,12 @@ const sessionStartPattern = (durations: string) =>
     `^(${Object.values(TradeMode).join('|')}):sess:(\\d{1,10}):(${durations})(?::(${SESSION_START_LAUNCH_TOKEN}))?$`,
   );
 const DEMO_SIGNALS_PATTERN = new RegExp(`^demo:sig:(${DURATIONS})$`);
-const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})$`);
+const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})(?::(a|n))?$`);
+// the amount as the picker's preset (stake-picker.ts), parsed by tradeAmountSchema
+export const CYCLE_STAKE_PATTERN = new RegExp(
+  `^demo:sa:(\\d{1,10}):(${DURATIONS}):(\\d{1,12}(?:\\.\\d{1,8})?):(l|a)$`,
+);
+export const CYCLE_CUSTOM_PATTERN = new RegExp(`^demo:sc:(\\d{1,10}):(${DURATIONS}):(l|a)$`);
 // the floor's token is optional: a button #360 drew before #379 has none
 export const ANALYSIS_MORE_PATTERN = new RegExp(
   `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})(?::(s|n)(?::(d|r))?)?$`,
@@ -365,6 +411,49 @@ export function sessionStartDataOf(
   };
 }
 
+// What the amount screen's presses carry (#476), and the typed amount's dialog step
+// (login-dialog.ts)
+export interface CycleStakeStep {
+  assetId: number;
+  durationSec: DemoDurationSec;
+  back: CycleBack;
+}
+
+const cycleBackOfData = (raw: string | undefined): CycleBack | undefined =>
+  raw === 'l' || raw === 'a' ? raw : undefined;
+
+// «✏️ Своя сумма»'s data from a CYCLE_CUSTOM_PATTERN match, undefined when forged
+export function cycleCustomDataOf(match: RegExpMatchArray | string): CycleStakeStep | undefined {
+  if (typeof match === 'string') return undefined;
+  const assetId = assetIdOf(match[1]);
+  const durationSec = durationOf(match[2]);
+  const back = cycleBackOfData(match[3]);
+  if (assetId === undefined || durationSec === undefined || back === undefined) return undefined;
+  return { assetId, durationSec, back };
+}
+
+// An amount's data from a CYCLE_STAKE_PATTERN match, undefined when forged or when the duration
+// does not fit a session
+export function cycleStakeDataOf(
+  match: RegExpMatchArray | string,
+): (CycleStakeStep & { amount: DecimalString }) | undefined {
+  if (typeof match === 'string') return undefined;
+  const assetId = assetIdOf(match[1]);
+  const durationSec = durationOf(match[2]);
+  const amount = tradeAmountSchema.safeParse(match[3]);
+  const back = cycleBackOfData(match[4]);
+  if (
+    assetId === undefined ||
+    durationSec === undefined ||
+    !amount.success ||
+    back === undefined ||
+    !sessionFits(durationSec)
+  ) {
+    return undefined;
+  }
+  return { assetId, durationSec, amount: amount.data, back };
+}
+
 // The main path's first screen (#382): the durations of SIGNALS_DURATIONS_SEC in one row, then the
 // manual choice. It reads nothing: the list behind each button reads anew.
 export function durationsScreen(): DemoScreen {
@@ -464,8 +553,8 @@ export function signalsScreen(
 // The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
 // The picker draws it too, after a save, unless the pair pays below the cycle floor
-// (stake-picker.ts). Drawn in the user's mode (#327): in real mode the cycle button is marked REAL
-// and starts a real session, the picker is the real one.
+// (stake-picker.ts). Since #476 it is drawn in real mode only (#327): the cycle button is marked
+// REAL and starts a real session, the picker is the real one; demo draws the amount screen.
 export function launchScreen({
   assetId,
   durationSec,
@@ -506,6 +595,156 @@ export function launchScreen({
   };
 }
 
+// The amounts of the amount screen (#476): the picker's presets of the demo balance, plus the saved
+// demo stake when it is within the bounds and not a preset, ascending. A saved stake out of the
+// bounds now (above the balance) gets no button: the backend would refuse it.
+export function cycleStakeAmounts({
+  minTradeAmount,
+  available,
+  saved,
+}: {
+  minTradeAmount: DecimalString;
+  available: DecimalString;
+  saved: DecimalString | null;
+}): DecimalString[] {
+  const presets = stakePresets({ minTradeAmount, available });
+  if (saved === null || checkStake(saved, { minTradeAmount, available }) !== null) return presets;
+  const own = decimalStringSchema.parse(normalizeDecimal(saved));
+  if (presets.includes(own)) return presets;
+  return [...presets, own].sort((a, b) => (decimalLessThan(a, b) ? -1 : 1));
+}
+
+// small amounts three a row, the risky ones two a row below them, as the owner's example (#476)
+const CALM_PER_ROW = 3;
+const RISKY_PER_ROW = 2;
+
+// the amount screen's way back: to the signal list, or to the pair's analysis
+export function appendCycleBack(
+  keyboard: InlineKeyboard,
+  { assetId, durationSec, back }: CycleStakeStep,
+): InlineKeyboard {
+  return back === 'l'
+    ? keyboard.text(LABELS.backToListButton, demoSignalsCallbackData(durationSec))
+    : keyboard.text(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(assetId, durationSec));
+}
+
+// The amount screen of a demo cycle of DEFAULT_SESSION_TRADES (#476, docs/bot-demo.md → The amount
+// screen), in place of the launch screen in demo: the amounts, ✅ on the one in effect (the saved
+// demo stake, or the broker's minimum without one), then «✏️ Своя сумма» and the way back. No
+// amount (the balance is below the minimum): the picker's line and the way back only.
+export function cycleStakeScreen({
+  step,
+  firstName,
+  symbol,
+  access,
+  broker,
+  saved,
+}: {
+  step: CycleStakeStep;
+  firstName: string;
+  symbol: string | null;
+  access: Pick<TradingAccessResponse, 'tokens' | 'broker' | 'demoStake' | 'realStake'>;
+  broker: BrokerBalanceView;
+  saved?: { amount: DecimalString | null; mode: TradeMode };
+}): DemoScreen {
+  const { assetId, durationSec, back } = step;
+  const current = decimalStringSchema.parse(
+    normalizeDecimal(access.demoStake ?? broker.minTradeAmount),
+  );
+  const amounts = cycleStakeAmounts({
+    minTradeAmount: broker.minTradeAmount,
+    available: broker.demo.available,
+    saved: access.demoStake,
+  });
+  const keyboard = new InlineKeyboard();
+  const appendRows = (group: DecimalString[], perRow: number) => {
+    group.forEach((amount, index) => {
+      if (index > 0 && index % perRow === 0) keyboard.row();
+      keyboard.text(
+        cycleStakeLabel(amount, amount === current),
+        cycleStakeCallbackData(assetId, durationSec, amount, back),
+      );
+    });
+    if (group.length > 0) keyboard.row();
+  };
+  appendRows(
+    amounts.filter((amount) => !stakeIsRisky(amount)),
+    CALM_PER_ROW,
+  );
+  appendRows(amounts.filter(stakeIsRisky), RISKY_PER_ROW);
+  if (amounts.length > 0) {
+    keyboard.text(LABELS.stakeCustomButton, cycleCustomCallbackData(assetId, durationSec, back));
+  }
+  return {
+    text: cycleStakeText({
+      firstName,
+      durationSec,
+      symbol,
+      stake: current,
+      access,
+      broker,
+      empty: amounts.length === 0,
+      ...(saved === undefined ? {} : { saved }),
+    }),
+    keyboard: appendCycleBack(keyboard, step),
+  };
+}
+
+// The amount screen from an access read (#476): its refusals (stake-access.ts) under the same way
+// back, or the amounts. `access` null is a failed read: «🔄 Повторить» reads it again — the data
+// opens a screen, nothing is written — and the way back. The press of a pair and a picker save
+// from an old launch screen (stake-picker.ts) draw it; a user in real mode gets the launch
+// screen instead, from both.
+export function demoCycleScreen({
+  step,
+  firstName,
+  symbol,
+  access,
+  connectKeyboard,
+  saved,
+}: {
+  step: CycleStakeStep;
+  firstName: string;
+  symbol: string | null;
+  access: TradingAccessResponse | null;
+  connectKeyboard: () => InlineKeyboard;
+  saved?: { amount: DecimalString | null; mode: TradeMode };
+}): DemoScreen {
+  const back = (keyboard: InlineKeyboard) => appendCycleBack(keyboard, step);
+  const underSaved = (screen: DemoScreen): DemoScreen =>
+    saved === undefined
+      ? screen
+      : {
+          text: telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
+
+${screen.text}`,
+          keyboard: screen.keyboard,
+        };
+  if (access === null) {
+    return underSaved({
+      text: TEXTS.unavailable,
+      keyboard: back(
+        new InlineKeyboard()
+          .text(
+            LABELS.demoRetryButton,
+            demoLaunchCallbackData(step.assetId, step.durationSec, step.back),
+          )
+          .row(),
+      ),
+    });
+  }
+  const checked = stakeAccess(access, back, connectKeyboard);
+  if ('refusal' in checked) return underSaved(checked.refusal);
+  return cycleStakeScreen({
+    step,
+    firstName,
+    symbol,
+    access,
+    broker: checked.broker,
+    ...(saved === undefined ? {} : { saved }),
+  });
+}
+
 // A launch refused for a pair below the cycle floor (#379): the way back to the list and to the
 // manual path, whose single trade the floor does not restrict. The launch press draws it, and so
 // does the picker after a save (stake-picker.ts).
@@ -531,12 +770,18 @@ export interface DemoComposerDeps {
   >;
   logger: Logger;
   now: () => number;
+  // the typed amount's step of the amount screen (#476), which a press of a pair ends
+  dialog: LoginDialog;
+  // the welcome's connect button, for a user with no account to trade on
+  connectKeyboard: () => InlineKeyboard;
 }
 
 export function createDemoComposer<C extends Context>({
   backend,
   logger,
   now,
+  dialog,
+  connectKeyboard,
 }: DemoComposerDeps): Composer<C> {
   const composer = new Composer<C>();
 
@@ -565,8 +810,10 @@ export function createDemoComposer<C extends Context>({
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
-  // The pair is checked against the catalog read at this press, never the one the list was drawn
-  // from; the signal is not read again, the cycle asks for it before each trade.
+  // A pair of the list, and since #476 every demo door of a cycle: the amount screen in demo, the
+  // launch screen in real (#327). The pair is checked against the catalog read at this press, never
+  // the one the list was drawn from; the signal is not read again, the cycle asks for it before
+  // each trade. The press ends a typed amount's step left open: its prompt's «↩️ Назад» is one.
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -574,22 +821,29 @@ export function createDemoComposer<C extends Context>({
       await answerOnly(ctx);
       return;
     }
-    const [read, stake] = await answerAnd(
+    const origin: CycleOrigin = ctx.match[3] === 'a' ? 'a' : ctx.match[3] === 'n' ? 'n' : 'l';
+    if (dialog.get(ctx.from.id)?.step === 'cycleStake') dialog.delete(ctx.from.id);
+    const [read, access] = await answerAnd(
       ctx,
-      Promise.all([readDemoCycle(backend, assetId, durationSec, now), stakeAmount(ctx.from.id)]),
+      Promise.all([readDemoCycle(backend, assetId, durationSec, now), readAccess(ctx.from.id)]),
     );
-    const launch = (pair: PairView) =>
-      launchScreen({
-        assetId,
-        durationSec,
-        firstName: ctx.from.first_name,
-        symbol: pair.symbol,
-        amount: stake.amount,
-        mode: stake.mode,
-      });
-    // a pair below the cycle floor gets the floor's refusal in either mode (#327)
-    const screen = read.ok ? launch(read.pair) : launchFailure(ctx, read, assetId, durationSec);
-    await editOrReply(ctx, screen.text, screen.keyboard);
+    const firstName = ctx.from.first_name;
+    const step = { assetId, durationSec, back: cycleBackOf(origin) };
+    const screen = !read.ok
+      ? // a pair below the cycle floor gets the floor's refusal in either mode (#327)
+        launchFailure(ctx, read, assetId, durationSec)
+      : access?.tradingMode === TradeMode.Real
+        ? launchScreen({
+            assetId,
+            durationSec,
+            firstName,
+            symbol: read.pair.symbol,
+            amount: effectiveStake(access),
+            mode: TradeMode.Real,
+          })
+        : demoCycleScreen({ step, firstName, symbol: read.pair.symbol, access, connectKeyboard });
+    if (origin === 'n') await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
+    else await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
   composer.callbackQuery(DEMO_GROUPS_CALLBACK_DATA, async (ctx) => {
@@ -768,8 +1022,21 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
+  // the amount screen's access read (#476): null when it failed, which that screen says
+  async function readAccess(telegramUserId: number): Promise<TradingAccessResponse | null> {
+    try {
+      return await backend.readTradingAccess(String(telegramUserId));
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error) },
+        'trading access not read for the amount screen',
+      );
+      return null;
+    }
+  }
+
   // The amount for the stake button's label (#297) and the user's mode (#121), drawn by «➕ Ещё»
-  // (#360), the analysis (its session row) and the launch screen (#320). A failed read drops the
+  // (#360) and the analysis (its session row). A failed read drops the
   // amount and reads as demo: the signal or the pair decides the screen, and the press reads
   // access again anyway.
   async function stakeAmount(
@@ -853,10 +1120,13 @@ export function createDemoComposer<C extends Context>({
     mode: TradeMode,
   ): InlineKeyboard {
     if (!sessionFits(durationSec) || !payoutAccepted) return keyboard;
+    // in demo the amount screen first (#476), edited in place of the analysis
     return keyboard
       .text(
         sessionStartButtonLabel(DEFAULT_SESSION_TRADES, mode),
-        sessionStartCallbackData(mode, assetId, durationSec),
+        mode === TradeMode.Demo
+          ? demoLaunchCallbackData(assetId, durationSec, 'a')
+          : sessionStartCallbackData(mode, assetId, durationSec),
       )
       .row();
   }

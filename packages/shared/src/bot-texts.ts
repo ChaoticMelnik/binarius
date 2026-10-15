@@ -655,9 +655,14 @@ const BOT_TEXT_CORE = {
     `📡 Для {label} сигналов сейчас нет — обнови через несколько секунд, выбери другую длительность или пару вручную.`,
     { vars: ['label'] },
   ),
-  launchHeader: html(g.Demo, 'Экран ставки: пара и длительность цикла.', `🎯 <b>{subject}</b>`, {
-    vars: ['subject', 'firstName', 'stake'],
-  }),
+  launchHeader: html(
+    g.Demo,
+    'Экран ставки и экран суммы демо-цикла (#476): пара и длительность цикла.',
+    `🎯 <b>{subject}</b>`,
+    {
+      vars: ['subject', 'firstName', 'stake'],
+    },
+  ),
   launchStake: html(g.Demo, 'Экран ставки: сумма каждой сделки цикла.', `💵 Ставка: {stake}`, {
     vars: ['stake', 'firstName'],
   }),
@@ -669,7 +674,7 @@ const BOT_TEXT_CORE = {
   ),
   launchCycle: html(
     g.Demo,
-    'Экран ставки: что сделает цикл, с числом сделок.',
+    'Экран ставки и экран суммы демо-цикла (#476): что сделает цикл, с числом сделок.',
     `🤖 Бот проведёт {trades} подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.`,
     { vars: ['trades', 'firstName', 'stake'] },
   ),
@@ -1578,11 +1583,19 @@ const BOT_TEXT_CORE = {
   ),
   launchCycleButton: plain(
     g.Buttons,
-    'Экран ставки: запуск цикла сделок; в реальном режиме бот дописывает « · REAL».',
+    'Экран ставки (реальный режим; в демо — экран суммы, #476): запуск цикла сделок, бот дописывает « · REAL».',
     '🚀 Запустить цикл',
   ),
-  stakeChangeButton: plain(g.Buttons, 'Экран ставки: открыть выбор суммы.', '💵 Изменить ставку'),
-  backToListButton: plain(g.Buttons, 'Экран ставки: назад к сигналам.', '↩️ К списку'),
+  stakeChangeButton: plain(
+    g.Buttons,
+    'Экран ставки (реальный режим; в демо — экран суммы, #476): открыть выбор суммы.',
+    '💵 Изменить ставку',
+  ),
+  backToListButton: plain(
+    g.Buttons,
+    'Экран ставки и экран суммы цикла: назад к сигналам.',
+    '↩️ К списку',
+  ),
   stakeBackLaunchButton: plain(g.Buttons, 'Экран суммы: назад к экрану ставки.', '↩️ К запуску'),
   sessionAgainButton: plain(
     g.Buttons,
@@ -1833,8 +1846,28 @@ const PAYSUPPORT_TEXTS = {
   ),
 };
 
-export const BOT_TEXT_CATALOG: typeof BOT_TEXT_CORE & typeof PAYSUPPORT_TEXTS = {
+// The demo cycle's amount screen (#476), apart from BOT_TEXT_CORE for the same TS7056 as
+// PAYSUPPORT_TEXTS.
+const CYCLE_STAKE_TEXTS = {
+  cycleStakeChoose: html(
+    g.Demo,
+    'Экран суммы демо-цикла (#476): под строкой цикла, над кнопками сумм.',
+    `Выбери сумму сделки 👇`,
+    { vars: ['firstName'] },
+  ),
+  stakeRiskButton: plain(
+    g.Demo,
+    'Экран суммы демо-цикла (#476): кнопка суммы от $10 — сумма (с ✅, если она в силе) и пометка риска.',
+    `{amount} · риск`,
+    { vars: ['amount'] },
+  ),
+};
+
+export const BOT_TEXT_CATALOG: typeof BOT_TEXT_CORE &
+  typeof CYCLE_STAKE_TEXTS &
+  typeof PAYSUPPORT_TEXTS = {
   ...BOT_TEXT_CORE,
+  ...CYCLE_STAKE_TEXTS,
   ...PAYSUPPORT_TEXTS,
 };
 

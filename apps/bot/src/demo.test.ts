@@ -2,6 +2,7 @@ import { BotError, GrammyError, HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BrokerBalanceUnavailableReason,
   BrokerRestErrorCode,
   createTradeIntentRequestSchema,
   decimalStringSchema,
@@ -14,6 +15,7 @@ import {
   TradeMode,
   type PairsCatalogResponse,
   type PairView,
+  UserStatus,
   DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
@@ -23,6 +25,8 @@ import {
   ANALYSIS_MORE_PATTERN,
   analysisMoreCallbackData,
   analysisMoreDataOf,
+  cycleCustomCallbackData,
+  cycleStakeCallbackData,
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,
@@ -68,6 +72,7 @@ import {
   TEXT_CARD_MESSAGE_ID,
   USER,
   accessView,
+  brokerBalance,
   callbackUpdate,
   captureApi,
   fakeBackend,
@@ -90,7 +95,6 @@ import {
   demoPairsScreen,
   demoSummary,
   LABELS,
-  launchText,
   sessionStartButtonLabel,
   signalButtonLabel,
   stakeButtonLabel,
@@ -604,86 +608,265 @@ describe('the signals screen', () => {
   });
 });
 
-describe('the launch screen', () => {
+// #476: in demo a pair of the list, the analysis's session row, the offer under a finished trade
+// and «🔁 Ещё сессия» open the amount screen; in real the launch screen stays (#327)
+describe('the amount screen (#476)', () => {
   const LAUNCH = demoLaunchCallbackData(PAIR_EURUSD.id, 15);
-  const LAUNCH_ROWS = [
-    [
-      button(
-        LABELS.launchCycleButton,
-        sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15, true),
-      ),
-    ],
-    [button(LABELS.stakeChangeButton, launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15))],
-    [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
+  const amount = (value: string, label: string, back: 'l' | 'a' = 'l', durationSec: 5 | 15 = 15) =>
+    button(label, cycleStakeCallbackData(PAIR_EURUSD.id, durationSec, value, back));
+  const CUSTOM = button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 15, 'l'));
+  const BACK_LIST = button(LABELS.backToListButton, demoSignalsCallbackData(15));
+  const BACK_ANALYSIS = button(
+    LABELS.stakeBackAnalysisButton,
+    demoAnalysisCallbackData(PAIR_EURUSD.id, 15),
+  );
+  const DEFAULT_ROWS = [
+    [amount('1', '$1.00 ✅'), amount('2', '$2.00'), amount('5', '$5.00')],
+    [amount('10', '$10.00 · риск')],
+    [CUSTOM, BACK_LIST],
   ];
-
-  it('shows the pair at 15 s, the amount in effect and the cycle, in place of the list', async () => {
-    const { press, calls, readSignals, evaluateSignal } = setup({
+  const withStake = (demoStake: string | null) =>
+    setup({
       readTradingAccess: () =>
-        Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
+        Promise.resolve(
+          accessView({
+            demoStake: demoStake === null ? null : decimalStringSchema.parse(demoStake),
+          }),
+        ),
     });
+  const shownRows = async (demoStake: string | null) => {
+    const { press, calls } = withStake(demoStake);
+    await press(LAUNCH);
+    return rowsOf(payloadOf(calls, 'editMessageText'));
+  };
+
+  it('shows the pair at 15 s, the cycle and the amounts in place of the list, without «🚀 Запустить цикл» (D-screen)', async () => {
+    const { press, calls, readSignals, evaluateSignal } = setup();
     await press(LAUNCH);
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(
-      launchText({
-        firstName: USER.first_name,
-        durationSec: 15,
-        symbol: PAIR_EURUSD.symbol,
-        amount: decimalStringSchema.parse('2.5'),
-        trades: 5,
-      }).value,
+    expect(plainTextOf(edited?.text as string)).toBe(
+      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
     );
-    expect(
-      plainTextOf(
-        launchText({
-          firstName: USER.first_name,
-          durationSec: 15,
-          symbol: 'EUR/USD OTC',
-          amount: decimalStringSchema.parse('2.5'),
-          trades: 5,
-        }),
-      ),
-    ).toBe(
-      '🎯 EUR/USD OTC · ⏱ 15 с\n💵 Ставка: $2.50\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.',
-    );
-    expect(rowsOf(edited)).toEqual(LAUNCH_ROWS);
+    expect(rowsOf(edited)).toEqual(DEFAULT_ROWS);
+    const labels = rowsOf(edited)
+      .flat()
+      .map((key) => key.text);
+    expect(labels).not.toContain(LABELS.launchCycleButton);
+    expect(labels).not.toContain(LABELS.stakeChangeButton);
+    expect(labels).not.toContain(LABELS.stakeResetButton);
     // the signal is not read again: the cycle asks for it before each trade
     expect(readSignals).not.toHaveBeenCalled();
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
-  it('keeps the 5 s of its data in the session, the picker, the way back and the subject (#382)', async () => {
-    const { press, calls } = setup({
-      readTradingAccess: () =>
-        Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
-    });
+  it('keeps the 5 s of its data in the amounts, the custom amount, the way back and the subject (#382)', async () => {
+    const { press, calls } = setup();
     await press(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
-
     const edited = payloadOf(calls, 'editMessageText');
     expect(rowsOf(edited)).toEqual([
-      [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5:l`)],
-      [button(LABELS.stakeChangeButton, `stk:o:d:p:${String(PAIR_EURUSD.id)}:5`)],
-      [button(LABELS.backToListButton, 'demo:sig:5')],
+      [amount('1', '$1.00 ✅', 'l', 5), amount('2', '$2.00', 'l', 5), amount('5', '$5.00', 'l', 5)],
+      [amount('10', '$10.00 · риск', 'l', 5)],
+      [
+        button(LABELS.stakeCustomButton, `demo:sc:${String(PAIR_EURUSD.id)}:5:l`),
+        button(LABELS.backToListButton, 'demo:sig:5'),
+      ],
     ]);
-    expect(
-      plainTextOf(
-        launchText({
-          firstName: USER.first_name,
-          durationSec: 5,
-          symbol: 'EUR/USD OTC',
-          amount: decimalStringSchema.parse('2.5'),
-          trades: 5,
-        }),
-      ),
-    ).toBe(
-      '🎯 EUR/USD OTC · ⏱ 5 с\n💵 Ставка: $2.50\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.',
-    );
     expect(edited?.text).toContain('EUR/USD OTC · ⏱ 5 с');
   });
 
-  // #327 (manager's decision 1): the demo launch drawn by the mode, a real cycle at the real stake
+  it('marks the broker minimum when no demo stake is saved (D-null)', async () => {
+    expect((await shownRows(null))[0]?.[0]).toEqual(amount('1', '$1.00 ✅'));
+  });
+
+  it('labels $10 «· риск» in a row of its own (D-risky)', async () => {
+    expect((await shownRows(null))[1]).toEqual([amount('10', '$10.00 · риск')]);
+  });
+
+  it('marks a saved preset once, without a second button (D-saved-preset)', async () => {
+    const rows = await shownRows('5.00000000');
+    expect(rows).toEqual([
+      [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00 ✅')],
+      [amount('10', '$10.00 · риск')],
+      [CUSTOM, BACK_LIST],
+    ]);
+  });
+
+  it('gives a saved custom amount within bounds its own ✅ button, in order (D-saved-custom)', async () => {
+    expect(await shownRows('7')).toEqual([
+      [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00')],
+      [amount('7', '$7.00 ✅')],
+      [amount('10', '$10.00 · риск')],
+      [CUSTOM, BACK_LIST],
+    ]);
+  });
+
+  it('puts a saved risky amount among the risky ones (D-risky-saved)', async () => {
+    expect(await shownRows('15')).toEqual([
+      [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00')],
+      [amount('10', '$10.00 · риск'), amount('15', '$15.00 ✅ · риск')],
+      [CUSTOM, BACK_LIST],
+    ]);
+  });
+
+  it('draws no button and no ✅ for a saved amount above the balance (D-saved-out)', async () => {
+    const rows = await shownRows('20000');
+    expect(rows).toEqual([
+      [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00')],
+      [amount('10', '$10.00 · риск')],
+      [CUSTOM, BACK_LIST],
+    ]);
+  });
+
+  it('says the balance is below the minimum and offers only the way back (D-empty)', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(
+          accessView({
+            broker: brokerBalance({
+              demo: {
+                available: decimalStringSchema.parse('0.5'),
+                held: decimalStringSchema.parse('0'),
+                total: decimalStringSchema.parse('0.5'),
+              },
+            }),
+          }),
+        ),
+    });
+    await press(LAUNCH);
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(plainTextOf(edited?.text as string)).toMatch(
+      /\n\nНа демо-счёте недостаточно средств даже для минимальной ставки\.$/,
+    );
+    expect(rowsOf(edited)).toEqual([[BACK_LIST]]);
+  });
+
+  it('says the access read failed, with a retry of the screen and the way back, and warns (D-access)', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(LAUNCH);
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(edited)).toEqual([[button(LABELS.demoRetryButton, LAUNCH)], [BACK_LIST]]);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'trading access not read for the amount screen',
+    ]);
+  });
+
+  // the manager's answer to the implementer's clarify (2026-10-15): the refusal of a screen sent
+  // as a new message is edited in place by its retry
+  it('retries a failed read under a trade in place, with `a` (D-access-n)', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
+      [button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'a'))],
+      [BACK_ANALYSIS],
+    ]);
+  });
+
+  it.each([
+    ['a blocked user', accessView({ status: UserStatus.Blocked }), TEXTS.blocked],
+    [
+      'no account',
+      accessView({ broker: null, brokerUnavailable: BrokerBalanceUnavailableReason.NoAccount }),
+      TEXTS.accountNone,
+    ],
+    [
+      'an ambiguous account',
+      accessView({
+        broker: null,
+        brokerUnavailable: BrokerBalanceUnavailableReason.AmbiguousAccount,
+      }),
+      TEXTS.statusAmbiguous,
+    ],
+    [
+      'no balance snapshot',
+      accessView({
+        broker: null,
+        brokerUnavailable: BrokerBalanceUnavailableReason.BrokerUnavailable,
+      }),
+      TEXTS.stakeBalanceMissing,
+    ],
+  ])(
+    'refuses %s as the picker does, then the way back (D-refusals)',
+    async (_label, access, text) => {
+      const { press, calls } = setup({ readTradingAccess: () => Promise.resolve(access) });
+      await press(LAUNCH);
+      const edited = payloadOf(calls, 'editMessageText');
+      expect(edited?.text).toBe(text.value);
+      expect(rowsOf(edited).at(-1)).toEqual([BACK_LIST]);
+      expect(
+        rowsOf(edited)
+          .flat()
+          .some((key) => key.callback_data?.startsWith('demo:sa:')),
+      ).toBe(false);
+    },
+  );
+
+  it('edits the analysis in place into the screen, its way back the analysis (`a`)', async () => {
+    const { press, calls } = setup();
+    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'a'));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
+      [amount('1', '$1.00 ✅', 'a'), amount('2', '$2.00', 'a'), amount('5', '$5.00', 'a')],
+      [amount('10', '$10.00 · риск', 'a')],
+      [
+        button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 15, 'a')),
+        BACK_ANALYSIS,
+      ],
+    ]);
+  });
+
+  it('sends the screen as a new message under a trade or a session, which stays (D-n)', async () => {
+    const { press, calls } = setup();
+    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toContain('Выбери сумму сделки 👇');
+    // its own presses edit it: the back token `a`
+    expect(rowsOf(sent)[0]?.[0]).toEqual(amount('1', '$1.00 ✅', 'a'));
+    expect(rowsOf(sent).at(-1)?.at(-1)).toEqual(BACK_ANALYSIS);
+  });
+
+  // door «analysis row opens the amount screen» (#476)
+  it('is what the analysis session row opens in demo; in real the row starts at once', async () => {
+    const demo = setup();
+    await demo.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+    expect(
+      rowsOf(demo.calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload)[0],
+    ).toEqual([button('🚀 Сессия из 5 сделок', `demo:l:${String(PAIR_EURUSD.id)}:15:a`)]);
+    const real = setup({
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await real.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+    expect(
+      rowsOf(real.calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload)[0],
+    ).toEqual([
+      button(
+        '🚀 Сессия из 5 сделок · REAL',
+        sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+      ),
+    ]);
+  });
+
+  // T-back: the typed amount's prompt has «↩️ Назад» to this screen, which ends the step
+  it('ends the typed amount step left open, and only that step (T-back)', async () => {
+    const cycle = setup({
+      dialog: { step: 'cycleStake', assetId: PAIR_EURUSD.id, durationSec: 15, back: 'l' },
+    });
+    await cycle.press(LAUNCH);
+    expect(cycle.loginDialog.get(USER.id)).toBeUndefined();
+    const login = setup({ dialog: { step: 'email' } });
+    await login.press(LAUNCH);
+    expect(login.loginDialog.get(USER.id)).toEqual({ step: 'email' });
+  });
+
+  // #327 (manager's decision 1): the launch drawn by the mode, a real cycle at the real stake
   it('shows a user in real mode the real cycle, its stake and the real picker', async () => {
     const { press, calls } = setup({
       readTradingAccess: () =>
@@ -710,54 +893,6 @@ describe('the launch screen', () => {
     expect(plainTextOf(edited?.text as string)).toBe(
       `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
     );
-    expect(
-      rowsOf(edited)
-        .flat()
-        .map((b) => b.text),
-    ).not.toContain('📊 Анализ пары');
-  });
-
-  it('keeps the demo launch when access cannot say the mode', async () => {
-    const { press, calls } = setup({
-      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    });
-    await press(LAUNCH);
-    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(LAUNCH_ROWS);
-  });
-
-  it('starts a 15 s session of the pair from «🚀 Запустить цикл»', () => {
-    const data = LAUNCH_ROWS[0]?.[0]?.callback_data ?? '';
-    expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
-      mode: TradeMode.Demo,
-      assetId: PAIR_EURUSD.id,
-      durationSec: 15,
-      launch: true,
-    });
-  });
-
-  it('draws the stake line without an amount and warns when access is not read', async () => {
-    const { press, calls, logger } = setup({
-      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    });
-    await press(LAUNCH);
-
-    const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(
-      launchText({
-        firstName: USER.first_name,
-        durationSec: 15,
-        symbol: PAIR_EURUSD.symbol,
-        amount: null,
-        trades: 5,
-      }).value,
-    );
-    expect(edited?.text).toContain(
-      TEXTS.launchStakeMinimum({ firstName: USER.first_name, stake: null }).value,
-    );
-    expect(rowsOf(edited)).toEqual(LAUNCH_ROWS);
-    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
-      'trading access not read for the stake label',
-    ]);
   });
 
   it('refuses a pair that closed after the list was drawn', async () => {
@@ -832,7 +967,7 @@ describe('the launch screen', () => {
   });
 
   it.each([15, 5] as const)(
-    'launches a pair paying exactly 80 percent at %i s',
+    'offers the amounts on a pair paying exactly 80 percent at %i s',
     async (durationSec) => {
       const { press, calls } = setup({
         readPairs: () =>
@@ -840,38 +975,42 @@ describe('the launch screen', () => {
       });
       await press(demoLaunchCallbackData(PAIR_EURUSD.id, durationSec));
 
-      expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-        [
-          button(
-            LABELS.launchCycleButton,
-            sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec, true),
-          ),
-        ],
-        [
-          button(
-            LABELS.stakeChangeButton,
-            launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec),
-          ),
-        ],
-        [button(LABELS.backToListButton, demoSignalsCallbackData(durationSec))],
+      expect(rowsOf(payloadOf(calls, 'editMessageText'))[0]).toEqual([
+        amount('1', '$1.00 ✅', 'l', durationSec),
+        amount('2', '$2.00', 'l', durationSec),
+        amount('5', '$5.00', 'l', durationSec),
       ]);
     },
   );
 
-  it('only stops the spinner on an id the backend would refuse', async () => {
-    const { press, calls, readPairs } = setup();
-    await press('demo:l:0:15');
+  it.each(['demo:l:0:15', 'demo:l:0:15:a', 'demo:l:0:15:n'])(
+    'only stops the spinner on an id the backend would refuse: %s',
+    async (data) => {
+      const { press, calls, readPairs } = setup();
+      await press(data);
 
-    expect(methods(calls)).toEqual(['answerCallbackQuery']);
-    expect(readPairs).not.toHaveBeenCalled();
-  });
+      expect(methods(calls)).toEqual(['answerCallbackQuery']);
+      expect(readPairs).not.toHaveBeenCalled();
+    },
+  );
 
   it('keeps its data inside the Bot API 64 bytes', () => {
     const MAX_ID = 2_147_483_647;
     expect(Buffer.byteLength(demoLaunchCallbackData(MAX_ID, 15))).toBe(20);
+    expect(Buffer.byteLength(demoLaunchCallbackData(MAX_ID, 15, 'n'))).toBe(22);
+    expect(
+      Buffer.byteLength(cycleStakeCallbackData(MAX_ID, 15, '999999999999.99999999', 'a')),
+    ).toBe(45);
+    expect(Buffer.byteLength(cycleCustomCallbackData(MAX_ID, 15, 'a'))).toBe(23);
     expect(Buffer.byteLength(launchStakeCallbackData(TradeMode.Real, MAX_ID, 15))).toBe(23);
     expect(Buffer.byteLength(demoSignalsCallbackData(15))).toBe(11);
     expect(Buffer.byteLength(DEMO_SIGNALS_CALLBACK_DATA)).toBe(8);
+  });
+
+  it('draws the `l` origin without a token, as the list did before #476', () => {
+    expect(demoLaunchCallbackData(101, 15)).toBe('demo:l:101:15');
+    expect(demoLaunchCallbackData(101, 15, 'l')).toBe('demo:l:101:15');
+    expect(demoLaunchCallbackData(101, 15, 'a')).toBe('demo:l:101:15:a');
   });
 });
 
@@ -1194,10 +1333,8 @@ describe('the summary and «📊 Анализ»', () => {
 describe('the analysis', () => {
   const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
-  const SESSION = button(
-    '🚀 Сессия из 5 сделок',
-    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
-  );
+  // in demo the session row opens the amount screen in place (#476)
+  const SESSION = button('🚀 Сессия из 5 сделок', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
   const MORE = button(
     LABELS.analysisMoreButton,
     analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo),
@@ -1429,7 +1566,7 @@ describe('the analysis', () => {
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
     const session = button(
       sessionStartButtonLabel(5, TradeMode.Demo),
-      sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec),
+      demoLaunchCallbackData(PAIR_EURUSD.id, durationSec, 'a'),
     );
     const rows = rowsOf(edits(calls).at(-1)?.payload);
     expect(rows.some((row) => row.length === 1 && row[0]?.text === session.text)).toBe(shown);
@@ -1696,10 +1833,8 @@ describe('the analysis', () => {
 describe('«➕ Ещё» under the analysis', () => {
   const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo);
   const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
-  const SESSION = button(
-    '🚀 Сессия из 5 сделок',
-    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
-  );
+  // in demo the session row opens the amount screen in place (#476)
+  const SESSION = button('🚀 Сессия из 5 сделок', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
   const STAKE_MENU = button(
     LABELS.stakeMenuButton,
     stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
@@ -1977,7 +2112,7 @@ describe('«➕ Ещё» under the analysis', () => {
       const { press, calls } = setup();
       await press(datum(''));
       expect(datas(calls).some((d) => d.startsWith('demo:stake:'))).toBe(true);
-      expect(datas(calls).some((d) => d.startsWith('demo:sess:'))).toBe(true);
+      expect(datas(calls).some((d) => d === `demo:l:${String(PAIR_EURUSD.id)}:5:a`)).toBe(true);
     });
   });
 
@@ -2228,7 +2363,7 @@ describe('a press under the session card (a photo)', () => {
   const sendsOf = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'sendMessage');
   // the card's buttons that edit the pressed message: «🔁 Ещё сессия» replies (K7 in
-  // trading-session.test.ts) and «🏠 В меню» replies too
+  // trading-session.test.ts; in demo its amount screen, `:n`, #476) and «🏠 В меню» replies too
   const editingButtons = (durationSec: number) =>
     sessionCardKeyboard(
       sessionView({ settings: { ...SESSION_VIEW.settings!, durationSec } }),
@@ -2238,7 +2373,10 @@ describe('a press under the session card (a photo)', () => {
       .map((key) => ('callback_data' in key ? key.callback_data : undefined))
       .filter(
         (data): data is string =>
-          data !== undefined && data.startsWith('demo:') && !data.startsWith('demo:sess:'),
+          data !== undefined &&
+          data.startsWith('demo:') &&
+          !data.startsWith('demo:sess:') &&
+          !(data.startsWith('demo:l:') && data.endsWith(':n')),
       );
   const pressOnPhoto = async (data: string, options: Parameters<typeof setup>[0] = {}) => {
     const scene = setup(options);

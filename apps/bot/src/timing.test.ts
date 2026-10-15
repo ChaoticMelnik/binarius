@@ -55,6 +55,8 @@ import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
+  cycleCustomCallbackData,
+  cycleStakeCallbackData,
   demoLaunchCallbackData,
   demoSignalsCallbackData,
   analysisMoreCallbackData,
@@ -903,11 +905,22 @@ const DEMO_LAUNCH = demoScreenBranches(
         readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
         expected: { backend: 2, telegram: 2 },
       },
+      {
+        label: 'a user in real mode gets the launch screen',
+        readTradingAccess: () => Promise.resolve({ ...ACCESS_VIEW, tradingMode: TradeMode.Real }),
+        expected: { backend: 2, telegram: 2 },
+      },
     ],
     2,
   ),
   2,
 );
+// #476: a door under a trade or a session sends the screen at once, shorter than the edit
+DEMO_LAUNCH.branches.push({
+  label: 'a door under a trade or a session sends the screen as a new message',
+  update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
+  expected: { backend: 2, telegram: 2 },
+});
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary, the signal, the result in
 // place of «⏳». Its edits are two, so the shared screen branches do not describe it.
 const EDIT_TRANSPORT = new HttpError(
@@ -2641,6 +2654,96 @@ const STAKE_TEXT_BRANCHES: readonly Branch[] = [
   STAKE_TEXT_WORST_CASE,
 ];
 
+// the amount screen's presses (#476, cycle-stake.ts)
+const cyclePressUpdate = (chatType?: string) =>
+  callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'l'), chatType);
+const CYCLE_STAKE_PRESET_WORST_CASE: Branch = {
+  label: 'the cycle starts, the status is sent, the screen cannot be deleted and is stripped',
+  update: cyclePressUpdate(),
+  apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+  expected: { backend: 3, telegram: 4 },
+};
+const CYCLE_STAKE_PRESET_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: cyclePressUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the data is forged',
+    update: callbackUpdate('demo:sa:0:5:5:l'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the amount is saved, the cycle starts and the screen is deleted',
+    update: cyclePressUpdate(),
+    expected: { backend: 3, telegram: 3 },
+  },
+  {
+    label: 'the save is refused',
+    update: cyclePressUpdate(),
+    setStake: stakeRefused,
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the save outcome is unknown',
+    update: cyclePressUpdate(),
+    setStake: unreachable,
+    expected: { backend: 2, telegram: 2 },
+  },
+  // one attempt: the retry would not fit SHUTDOWN_BUDGET_MS with the delete
+  {
+    label: 'the start outcome is unknown and is not asked again',
+    update: cyclePressUpdate(),
+    startSession: unreachable,
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'answering the query is refused and the status still goes',
+    update: cyclePressUpdate(),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 3, telegram: 3 },
+  },
+  CYCLE_STAKE_PRESET_WORST_CASE,
+];
+const CYCLE_STAKE_CUSTOM = pickerBranches(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'), 0, {
+  forged: 'demo:sc:0:5:a',
+});
+const ON_CYCLE_STEP: LoginDialogState = {
+  step: 'cycleStake',
+  assetId: PAIR_EURUSD.id,
+  durationSec: 5,
+  back: 'l',
+};
+const cycleText = (label: string, text: string, expected: Calls, patch: Partial<Branch> = {}) => ({
+  label,
+  update: textUpdate(text),
+  dialog: ON_CYCLE_STEP,
+  expected,
+  ...patch,
+});
+const CYCLE_STAKE_TEXT_WORST_CASE: Branch = cycleText(
+  'the typed amount is saved, the start outcome is unknown and the retry learns the session',
+  '5',
+  { backend: 4, telegram: 1 },
+  {
+    startSession: (() => {
+      let first = true;
+      return () => {
+        if (!first) return Promise.resolve({ active: SESSION_VIEW });
+        first = false;
+        return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+      };
+    })(),
+  },
+);
+const CYCLE_STAKE_TEXT_BRANCHES: readonly Branch[] = [
+  cycleText('the text is not an amount', 'abc', { backend: 0, telegram: 1 }),
+  cycleText('the save fails', '5', { backend: 2, telegram: 1 }, { setStake: unreachable }),
+  cycleText('the typed amount is saved and the cycle starts', '5', { backend: 3, telegram: 1 }),
+  CYCLE_STAKE_TEXT_WORST_CASE,
+];
+
 const LEVEL_CURRENT_WORST_CASE: Branch = {
   label: 'the selected level is pressed',
   update: callbackUpdate(LEVEL_CURRENT_CALLBACK_DATA),
@@ -2809,6 +2912,33 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       DEMO_SIGNALS.branches,
       DEMO_SIGNALS.worst,
       HANDLER_CALLS.demoSignals,
+    );
+  });
+
+  it('the amount screen (#476): cycleStakePreset', async () => {
+    await checkHandler(
+      'cycleStakePreset',
+      CYCLE_STAKE_PRESET_BRANCHES,
+      CYCLE_STAKE_PRESET_WORST_CASE,
+      HANDLER_CALLS.cycleStakePreset,
+    );
+  });
+
+  it('the amount screen (#476): cycleStakeCustom', async () => {
+    await checkHandler(
+      'cycleStakeCustom',
+      CYCLE_STAKE_CUSTOM.branches,
+      CYCLE_STAKE_CUSTOM.worst,
+      HANDLER_CALLS.cycleStakeCustom,
+    );
+  });
+
+  it('the amount screen (#476): cycleStakeText', async () => {
+    await checkHandler(
+      'cycleStakeText',
+      CYCLE_STAKE_TEXT_BRANCHES,
+      CYCLE_STAKE_TEXT_WORST_CASE,
+      HANDLER_CALLS.cycleStakeText,
     );
   });
 

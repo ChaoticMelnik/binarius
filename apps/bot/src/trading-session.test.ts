@@ -21,13 +21,16 @@ import {
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
+  cycleStakeCallbackData,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  demoLaunchCallbackData,
   sessionStartCallbackData,
   stakeMenuCallbackData,
 } from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {
+  ACCESS_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CASHIER_URL,
@@ -100,9 +103,14 @@ function setup(
     stopSessions?: BackendClient['stopSessions'];
     // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
     cashierUrl?: string | null;
+    readTradingAccess?: BackendClient['readTradingAccess'];
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
+  // the amount screen behind a demo «🔁 Ещё сессия» (#476)
+  const readTradingAccess = vi.fn<BackendClient['readTradingAccess']>(
+    options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
+  );
   const startSession = vi.fn<BackendClient['startSession']>(
     options.startSession ?? (() => Promise.resolve({ started: SESSION_VIEW })),
   );
@@ -129,6 +137,7 @@ function setup(
       stopSession,
       claimSessionSummary,
       stopSessions,
+      readTradingAccess,
     }),
     logger,
     botInfo: BOT_INFO,
@@ -178,11 +187,9 @@ const statusOf = (view: TradingSessionView) => sessionStatusText(PAIR_EURUSD.sym
 const LIVE_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
 ];
-// SESSION_VIEW's own pair and duration
-const AGAIN = button(
-  LABELS.sessionAgainButton,
-  sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
-);
+// SESSION_VIEW's own pair and duration; a demo session's opens the amount screen as a new message
+// (#476)
+const AGAIN = button(LABELS.sessionAgainButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'));
 // #350: the end of the path under a stopped session, after its refresh and «🔁 Ещё сессия»
 // the list of the session's duration; the duration screen for one the demo no longer offers (#382)
 const toSignals = (durationSec: 5 | 15) => [
@@ -772,12 +779,7 @@ describe('«🔁 Ещё сессия»', () => {
       rows(sessionView({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 5 } })),
     ).toEqual([
       [button(LABELS.sessionRefreshButton, REFRESH)],
-      [
-        button(
-          LABELS.sessionAgainButton,
-          sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
-        ),
-      ],
+      [button(LABELS.sessionAgainButton, `demo:l:${String(PAIR_EURUSD.id)}:5:n`)],
       newAnalysis(5),
       toSignals(5),
       DEPOSIT,
@@ -832,20 +834,18 @@ describe('«🔁 Ещё сессия»', () => {
     ).toEqual([refresh, TO_DURATIONS, DEPOSIT, INVITE, MENU]);
   });
 
-  it('starts a new session of the same pair and duration through the session button', async () => {
-    const { press, startSession } = setup();
+  // #476: the door «again opens the amount screen»; the session starts from an amount
+  it('opens the amount screen of the same pair and duration as a new message, starting nothing', async () => {
+    const { press, startSession, calls } = setup();
     await press(AGAIN.callback_data ?? '');
-    expect(startSession.mock.calls).toEqual([
-      [
-        {
-          telegramUserId: String(USER.id),
-          mode: TradeMode.Demo,
-          assetId: PAIR_EURUSD.id,
-          durationSec: 15,
-          trades: 5,
-        },
-      ],
-    ]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toContain('Выбери сумму сделки 👇');
+    // the screen's own presses edit it: it carries the analysis's way back
+    expect(rowsOf(sent).flat()).toContainEqual(
+      button('$5.00', cycleStakeCallbackData(PAIR_EURUSD.id, 15, '5', 'a')),
+    );
+    expect(startSession).not.toHaveBeenCalled();
   });
 
   // #327: a stopped real session's again button is marked REAL and starts a real one
@@ -956,7 +956,7 @@ describe('the summary card (#318)', () => {
   });
 
   // the card is a photo: an edit of it is refused (demo.test.ts → a press under the session card)
-  it('K7 «🔁 Ещё сессия» under the card starts a session by a reply, never an edit', async () => {
+  it('K7 «🔁 Ещё сессия» under the card opens the amount screen by a reply, never an edit', async () => {
     const scene = setup();
     scene.apiErrors.set('editMessageText', {
       ok: false,
@@ -968,8 +968,8 @@ describe('the summary card (#318)', () => {
       .find((key) => key.text === LABELS.sessionAgainButton);
     await scene.press((again as Button | undefined)?.callback_data ?? '');
     expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(payloadOf(scene.calls, 'sendMessage')?.text).toBe(statusOf(SESSION_VIEW));
-    expect(scene.startSession).toHaveBeenCalledTimes(1);
+    expect(payloadOf(scene.calls, 'sendMessage')?.text).toContain('Выбери сумму сделки 👇');
+    expect(scene.startSession).not.toHaveBeenCalled();
     expect(scene.logger.error).not.toHaveBeenCalled();
   });
 
