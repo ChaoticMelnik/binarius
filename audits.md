@@ -3133,8 +3133,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **Implementer Step 5: инструмент, который правит и откатывает файлы вокруг дочернего процесса, тестируется и через реальный процесс (сбой spawn, битый вывод, сигнал)** — **внедрено в #DOCS: `.claude/skills/implementer/SKILL.md` → Step 5, «An instrument is not exempt»**
-2. **«Лимиты до спавна»: jq по `<synthetic>`-сообщениям вместо grep по тексту отказа** — **внедрено в #DOCS: `.claude/CLAUDE.md` → Экономия токенов → «Лимиты до спавна»**
-3. **tech-lead Step 7: спавн-промпт называет `TEST_DATABASE_URL`/`REDIS_URL` для worktree** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own worktree**
+1. **Implementer Step 5: инструмент, который правит и откатывает файлы вокруг дочернего процесса, тестируется и через реальный процесс (сбой spawn, битый вывод, сигнал)** — **внедрено в #517: `.claude/skills/implementer/SKILL.md` → Step 5, «An instrument is not exempt»**
+2. **«Лимиты до спавна»: jq по `<synthetic>`-сообщениям вместо grep по тексту отказа** — **внедрено в #517: `.claude/CLAUDE.md` → Экономия токенов → «Лимиты до спавна»**
+3. **tech-lead Step 7: спавн-промпт называет `TEST_DATABASE_URL`/`REDIS_URL` для worktree** — **внедрено в #517: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own worktree**
 4. **Повторный замер через 5–10 задач тем же скриптом (комментарий владельца в #511): доля ходов на тесты у implementer ≤ 8 %, в главной сессии ≈ 0** — **открыто (2026-10-15, владелец)**
 5. **Remaining Minor круга 2** — **вынесено в #516**
