@@ -3171,10 +3171,9 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **Лимит 3 круга у задачи, разделённой на PR, — по каждому PR (решение владельца 2026-10-15)** — **внедрено в #522: `.claude/CLAUDE.md` → GitHub — статусы задач; `.claude/skills/tech-lead/SKILL.md` → Phase 4**
+1. **Лимит 3 круга у задачи, разделённой на PR, — по каждому PR (решение владельца 2026-10-15)** — **вынесено в #523**
 2. **Задание длиннее ~15 мин (fetch, бэктест) запускает tech-lead своей фоновой задачей; фаза возвращает команду и путь лога** — **внедрено в #522: `.claude/skills/tech-lead/SKILL.md` → Step 7**
-3. **Architect validation checklist: каждая проверка «пройдено / не пройдено» называет результат на нулевой выборке (отказ или FAIL), и тест доводит этот случай до кода выхода** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+3. **Architect validation checklist: каждая проверка «пройдено / не пройдено» называет результат на нулевой выборке (отказ или FAIL), и тест доводит этот случай через точку входа команды до кода выхода** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
 4. **Architect validation checklist: каждое смещение во времени называет точку отсчёта, одну для всех решений плана** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
-5. **Задача из нескольких PR: непоследние части — `Refs #<N>`, Done и Phase 5 — после последней части (Codex Major на этом docs-PR)** — **внедрено в #522: `.claude/CLAUDE.md` → GitHub — статусы задач, Git-процесс; architect Step 4a; implementer Step 7 (шаблон PR); reviewer Step 6b; tech-lead Mode 1 (Implementer step — check), Phase 4, «A PR left In Review by a manager session» шаг 3**
-6. **Глобальный `~/.claude/CLAUDE.md` (Skill Orchestration → Full sequence, лимит кругов): разделённая задача — круги по каждому PR, непоследняя часть — `Refs`, без Done и аудита, они после последней части (Codex, minor, проектная секция главнее)** — **открыто (2026-10-15, владелец)**
-7. **Remaining Minor** — **вынесено в #518 (#512), #521 (#520)**
+5. **Задача из нескольких PR: непоследние части — `Refs #<N>`, Done и Phase 5 — после последней части, сценарий следующей части у implementer'а, памятка о размере, правка глобального `~/.claude/CLAUDE.md`** — **вынесено в #523** (решение владельца 2026-10-15: Codex на docs-PR #522 трижды подряд находил Major, итерации исправлений исчерпаны)
+6. **Remaining Minor** — **вынесено в #518 (#512), #521 (#520)**
