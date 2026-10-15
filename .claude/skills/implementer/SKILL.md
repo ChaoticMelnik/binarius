@@ -143,7 +143,7 @@ gh pr create --repo ChaoticMelnik/binarius --title "#N: description" --body "$(c
 - [what changed]
 
 ## Closes
-Closes #N   (a non-final part of a split: `Refs #N`, part K of M — `.claude/CLAUDE.md` → Git-процесс)
+Closes #N
 
 ## Test plan
 - [ ] [step to verify the change works]
