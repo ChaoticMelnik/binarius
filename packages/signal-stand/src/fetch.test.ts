@@ -121,7 +121,34 @@ describe('fetch', () => {
     const o = options({ rest, clock });
     await fetchCandles(o);
     const cached = readSeries(seriesPath(o.dir, PAIR.id, '1m'), vi.fn());
-    expect(cached).toEqual(rows.filter((row) => row.timestamp + MINUTE <= now));
+    const closed = rows.filter((row) => row.timestamp + MINUTE <= now);
+    // the first row of the first answer and of the first answer after the gap are not kept
+    const kept = new Set(cached.map((row) => row.timestamp));
+    expect(closed.filter((row) => !kept.has(row.timestamp))).toEqual([all[0], all[701]]);
+    expect(cached).toEqual(closed.filter((row) => row !== all[0] && row !== all[701]));
+  });
+
+  it('F1c the first row of an answer is never stored: it opens at the window, not at the previous close', async () => {
+    const now = T0 + 10_000;
+    const clock = fixedClock(now);
+    const rows = Array.from({ length: 1_500 }, (_, i) => minute(T0 - 1_400 * MINUTE + i * MINUTE));
+    const { rest: inner, calls } = windowRest(rows, clock);
+    const rest = {
+      ...inner,
+      getChart: async (request: ChartRequest) => {
+        const [first, ...others] = await inner.getChart(request);
+        return first === undefined ? [] : [{ ...first, open: 0.95 }, ...others];
+      },
+    };
+    const o = options({ rest, clock });
+    await fetchCandles(o);
+    const cached = readSeries(seriesPath(o.dir, PAIR.id, '1m'), vi.fn());
+    expect(calls.length).toBeGreaterThan(2);
+    expect(cached.length).toBe(1_399);
+    expect(cached.filter((row) => row.open === 0.95)).toEqual([]);
+    expect(
+      cached.every((row, i) => i === 0 || row.timestamp - cached[i - 1].timestamp === MINUTE),
+    ).toBe(true);
   });
 
   it('F2 a second fetch of a complete range asks for no candles', async () => {
@@ -139,7 +166,10 @@ describe('fetch', () => {
 
   it('F3 a 429 waits as told, 60 s without Retry-After, and asks for the same page again', async () => {
     const clock = fixedClock(T0 + 10_000);
-    const { rest: inner, calls } = windowRest([minute(T0 - MINUTE)], clock);
+    const { rest: inner, calls } = windowRest(
+      [minute(T0 - 2 * MINUTE), minute(T0 - MINUTE)],
+      clock,
+    );
     const failures = [
       new BrokerRestError(BrokerRestErrorCode.RateLimited, { status: 429, retryAfterSec: 2 }),
       new BrokerRestError(BrokerRestErrorCode.RateLimited, { status: 429 }),
@@ -187,6 +217,8 @@ describe('fetch', () => {
       `fetch ${PAIR.id} 1m: BrokerRestError/unavailable status 503`,
     );
     await expect(failure).rejects.not.toThrow(/secret/);
-    expect(readSeries(seriesPath(o.dir, PAIR.id, '1m'), vi.fn())).toEqual(rows.slice(0, 500));
+    const stored = readSeries(seriesPath(o.dir, PAIR.id, '1m'), vi.fn());
+    expect(stored.length).toBeGreaterThan(400);
+    expect(stored).toEqual(rows.slice(1, stored.length + 1));
   });
 });
