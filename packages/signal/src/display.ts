@@ -1,5 +1,6 @@
 import {
   DISPLAY_INDICATOR_PARAMS,
+  MACD_REQUIRED_CANDLES,
   MacdCross,
   type Candle,
   type SignalIndicators,
@@ -7,10 +8,6 @@ import {
 } from '@binarius/shared';
 import { candleProblem, prepareCandles } from './candles';
 import { macd, sma } from './indicators';
-
-// two signal-line points: the cross compares the last two closed candles
-export const MACD_REQUIRED_CANDLES =
-  DISPLAY_INDICATOR_PARAMS.macdSlow + DISPLAY_INDICATOR_PARAMS.macdSignal;
 
 const short = (closedCandles: number, required: number) =>
   ({ ok: false, closedCandles, required }) as const;

@@ -250,6 +250,11 @@ export const DISPLAY_INDICATOR_PARAMS = {
   maLong: 200,
 } as const;
 
+// two signal-line points: the cross compares the last two closed candles. The feed's MACD needs
+// this many and the card's «данных мало» prints it when the field is absent (#482).
+export const MACD_REQUIRED_CANDLES =
+  DISPLAY_INDICATOR_PARAMS.macdSlow + DISPLAY_INDICATOR_PARAMS.macdSignal;
+
 export const MacdCross = { Up: 'up', Down: 'down', None: 'none' } as const;
 export type MacdCross = (typeof MacdCross)[keyof typeof MacdCross];
 
