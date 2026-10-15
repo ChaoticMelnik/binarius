@@ -39,7 +39,8 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 - `apps/bot/src/analysis.ts` — the analysis screen as a pure function (#126): `analysisScreen`,
   `analysisUnavailableScreen`, `analysisSubject`, `NO_SIGNAL_REASON_TEXT`, `TREND_WORDS`,
   `MOMENTUM_WORDS`, `VOLATILITY_WORDS` (maps to catalog keys, [bot-texts.md](bot-texts.md)),
-  `formatPrice`, `formatRsi`, `formatAtrPct`.
+  `formatRsi`, `formatAtrPct`; prices print through `formatPrice` of
+  `packages/shared/src/bot-text-format.ts` (moved there by #464 for the session's trade messages).
 - `apps/bot/src/screen.ts` — `editRefusal`, the classification of a refused edit, shared with
   `/settings`.
 - `apps/bot/src/backend-client.ts` — `readPairs()`: a `GET trading/pairs` under the bearer with

@@ -1,4 +1,4 @@
-# The session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122, #321, #327, #418)
+# The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on every `decided` answer, a signal or none (#360); a finished single trade's message
@@ -13,8 +13,11 @@ Pressing one starts a session of that mode — demo, or real for a user in real 
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
-orchestrator (#287): the bot only starts, reads and stops the session. When the session is over,
-one picture of its trades follows the final status ([The summary card](#the-summary-card-318)), and
+orchestrator (#287): the bot only starts, reads and stops the session. Every settled trade then
+comes as its own new message without sound, and the finished session's summary with sound — both
+sent by the backend ([Trade messages and the summary](#trade-messages-and-the-summary-464)). When
+the session is over, one picture of its trades follows the summary
+([The summary card](#the-summary-card-318)), and
 «📤 Поделиться» under it sends that picture into a chat the user picks
 ([Sharing the card](#sharing-the-card-321)).
 The command `/stop` (#122) stops every active session of the user at once ([/stop](#stop-122)).
@@ -53,9 +56,20 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 - `apps/bot/src/session-card.ts` — `sessionCardModel`, `sessionCardSvg` and `renderSessionCard`
   (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js` and the fonts in
   `apps/bot/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them).
-- `apps/bot/src/texts.ts` — `sessionStatusText`, `pluralTrades`, `sessionStartButtonLabel` and the
-  stop-reason map; the texts are the `session` group of the catalog and the two buttons
-  `sessionRefreshButton`, `sessionStopButton` ([bot-texts.md](bot-texts.md)).
+- `apps/bot/src/texts.ts` — `sessionStatusText`, `sessionStartButtonLabel` and `sessionTexts`, the
+  shared session words over the bot's catalog; the texts are the `session` group of the catalog and
+  the two buttons `sessionRefreshButton`, `sessionStopButton` ([bot-texts.md](bot-texts.md)).
+- `packages/shared/src/session-texts.ts` (#464) — `createSessionTexts({ html, plain })`: the
+  plural, the score, the result, the asset label, the stop-reason map (`SESSION_STOP_LINES`), the
+  stopped session's closing lines (`sessionClosingLines`), and the trade message and summary
+  builders. The bot's status message and the backend's notices print through it, each with its own
+  catalog object, so the summary's lines are the status message's own
+  (`apps/bot/src/session-summary-parity.test.ts` holds them equal).
+- `packages/shared/src/session-steps.ts` (#464) — `sessionTradeSteps(results, strategy)`: each
+  settled trade's cycle and step.
+- `apps/backend/src/trading/session-notices.ts`, `session-notice-messages.ts`, `session-view.ts`
+  and `packages/db/src/session-notice-ops.ts` (#464) — the sender of the trade messages and the
+  summary ([Trade messages and the summary](#trade-messages-and-the-summary-464)).
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop`,
   `.sessionShare`, `.sessionShared` (#321) and
   the four `SESSION_TRACK_*` constants ([Timing](#timing)).
@@ -349,9 +363,12 @@ One entry per session id, in process memory, like the intent tracker
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
   entry, retried until the deadline. Gone → stop. Anything else thrown → `error` `trading session
   tracking failed`, stop.
-- **The card** (#318): an entry calls it as it ends on a done view whose final edit landed — on the
-  poll that sees it, or at the deadline — so once. A failed edit means no card yet; a card that
-  failed is not tried again: the entry has ended ([The summary card](#the-summary-card-318)).
+- **The card** (#318): an entry calls it as it ends on a done view whose final edit landed and
+  whose `noticesDone` is set (the backend's summary message went out, #464) — on the poll that sees
+  it, or at the deadline — so once. A done view without `noticesDone` is polled on with no edit
+  (the render key leaves the flag out), and at the deadline it gets its final edit and no card. A
+  failed edit means no card yet; a card that failed is not tried again: the entry has ended
+  ([The summary card](#the-summary-card-318)).
 - `SESSION_TRACKER_MAX_ENTRIES` (10 000): the oldest entry goes first. `stop()` clears every timer,
   refuses new entries and waits for every attempt in flight; `runBot` drains it as its
   `session tracker` step.
@@ -412,19 +429,120 @@ id or the symbol.
 - `trading session card shared` (#321, `info`): a chosen result, `sessionId` = its `result_id`.
   Neither the query nor the file id is logged.
 
+## Trade messages and the summary (#464)
+
+Every settled trade of a session comes as a new message, **without sound**
+(`disable_notification: true`) and without buttons, in the trades' order; once the session is
+finished, one summary message comes **with sound**. The status message with «🔄 Обновить» and
+«⏹ Остановить сессию» stays as it was. The backend sends both, not the bot: a restart of either,
+and any number of «🔄 Обновить» presses, sends nothing twice and skips nothing but what the
+endings below lose.
+
+```text
+⚡ Цикл 3 Шаг 1
+🟢 Ставка: $11.50 → +$22.08          (in a code block: Telegram shows it with «copy»)
+📊 Цена: 0.49803 → 0.49820
+```
+
+- **The figures** (the owner's sample, manager's decision 3b): a win 🟢 `stake → +payout` (stake
+  plus profit), a loss 🔴 `stake → -loss` (the broker trade's profit, `-$5.00` for a full loss), a
+  tie ⚪ `stake → +stake, ставка вернулась`. The stake is the intent's amount, printed by
+  `formatStake` (every fraction digit, at least two); the figure after «→» is one SQL `numeric`
+  column of the claim (`case` on the profit's sign, Rule 2) printed by `formatSignedStake`; the
+  class is the same SQL `case` the view's counters use, so `0.001` is a win. The lines need not add
+  up to the summary's «💰 Результат»: a win's line is its payout, the result is the profits' sum.
+- **The prices** are `broker_trades.open_price` → `close_price`, `formatPrice` with the pair's
+  `digits` from the backend's pairs catalog; with no catalog or the pair gone, as the double prints
+  (`String()`).
+- **Cycle and step** follow the stake sizer's series (`readHistory` in
+  `apps/trading-worker/src/stake/size.ts`; `steps-parity.test.ts` holds them equal for every
+  history of up to six trades): under the fixed strategy every trade is step 1 of the next cycle;
+  under martingale the step is the losses in a row plus one, a win ends the series, a tie leaves it
+  as it is, and a cycle is a series. Settings v1 carry no strategy (Rule 23), so the sender passes
+  `fixed`; #450 passes the session's.
+- **«🔄 Адаптивная ставка включена»** is the first line of a trade whose stake is above the
+  session's base stake (`decimalLessThan`, bigint). Under the fixed strategy the stake is the base
+  stake, so the line does not appear before #450. No text says «Мартингейл».
+- **The summary** is the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then the
+  status message's own closing lines (`sessionClosingLines`): «🏁 Сессия завершена: …» for a
+  completed session, otherwise the stop line and «📊 Итог: …», then «💰 Результат» (the SQL sum,
+  #337), the balance of the session's mode and its age line when it predates the last trade. Its
+  balance is read as the route reads it (`readFinishedSessionView`): at most one broker GET per
+  session, `mayRefresh: false`. Under it «🏠 В меню».
+- **When.** The trades as they settle, within `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing; the
+  summary once the session is finished — stopped and no intent of it outside the terminal statuses
+  (`isTradingSessionFinished`) — and every settled trade was claimed first. A trade on manual
+  review holds the summary: when an operator settles it, it comes as the next trade, then the
+  summary («без результата, пока не закроется»). A finished session with no settled trade gets the
+  mark and no message.
+- **Who.** The session's owner by join (`trading_sessions → broker_accounts →
+  users.telegram_user_id`); no id comes from outside. A user with `telegram_blocked_at` set gets
+  nothing, and the cursor moves on. The notification level does not apply: trade results are
+  outside it (Rule 19).
+
+### The state
+
+`trading_sessions.notified_trades` is the cursor: how many of the session's settled trades (a
+settled intent with its broker trade), in creation order, were claimed for sending. A session's
+trades are strictly sequential (one non-terminal intent per account, Rule 7), so settlement order
+is creation order and a count is the whole state. `final_notice_sent_at` is the summary's mark.
+Every send is claimed by a CAS UPDATE before the Telegram call (`claimSessionTradeNotice`,
+`claimSessionFinalNotice` in `packages/db/src/session-notice-ops.ts`): at most once, the mailing
+engine's rule. The migration's backfill (0049) set every existing session's cursor at its settled
+trades and marked every stopped session, so nothing settled before the deploy is sent.
+
+### Every way a send ends
+
+| Ending | Cursor / mark | Then |
+|---|---|---|
+| sent | stays claimed | the session's next trade in the same tick |
+| the user blocked the bot (read flag) | claimed, no call | the next trade |
+| 403 | stays claimed; the user is marked unreachable | later trades claimed without a call |
+| 429 | put back (`releaseSessionTradeNotice`; the summary's by `releaseSessionFinalNotice`) | the whole sender pauses for `retry_after`; the same send first after it |
+| another 4xx | put back, an attempt counted in memory | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped` |
+| 5xx, a timeout, the transport | stays claimed | `warn` … `outcome unknown`; never sent again |
+| the process dies between the claim and the send | stays claimed | lost, at most one per session per crash |
+| the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; the session waits for the next tick |
+| `stop()` mid-tick | the send in flight ends or times out | nothing is claimed after it |
+
+The summary's 429 or refusal takes its mark back only while the card (#318) has not been claimed
+on it; the card waits for the mark, so in practice always.
+
+### Rate and timing
+
+`SESSION_NOTICE_SEND_PER_SECOND` = 9, its own pacer; with the mailings' 20 it stays under
+Telegram's 30 a second for one bot (`TIMING_CHAIN_HOLDS`). `SESSION_NOTICE_SCAN` = 200 pending
+sessions a tick, oldest first (`trading_sessions_notice_pending_idx`). `stop()` waits for the send
+in flight: the pace's gap, a summary's balance refresh and its send, under phase 1's budget.
+
+### Logs (backend)
+
+With `sessionId` (and `claimed` for a trade), the error's name and code and the Telegram method and
+code; no Telegram id, no text.
+
+- `session trade notice refused`, `… dropped`, `… outcome unknown`, `… refused: the user is
+  unreachable` (`warn`); `session summary refused`, `… dropped`, `… outcome unknown`, `… refused:
+  the user is unreachable` (`warn`)
+- `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
+- `session trade notice not built`, `session summary not built`, `session notices failed for a
+  session`, `session notice tick failed` (`error`)
+
 ## The summary card (#318)
 
-One PNG per finished session, demo and real alike, sent to the status message's chat under its
-final status. Sharing it is «📤 Поделиться» ([Sharing the card](#sharing-the-card-321)) or
+One PNG per finished session, demo and real alike, sent to the status message's chat under the
+backend's summary message (#464), without sound (`disable_notification: true`): the summary
+carries the session's one sound. Sharing it is «📤 Поделиться» ([Sharing the card](#sharing-the-card-321)) or
 Telegram's own forwarding.
 
-- **When.** The tracker's entry ends on a done view (stopped, the last trade settled or rejected)
-  and the final status is on screen. A last trade on `manual_review` is not done, so no card yet:
+- **When.** The tracker's entry ends on a done view (stopped, the last trade settled or rejected),
+  the final status is on screen and the summary message went out (`noticesDone`, #464; the claim
+  below refuses the card before it). A last trade on `manual_review` is not done, so no card yet:
   an operator settling it later gives one on the tracker's next poll while its entry lives (until
   `SESSION_TRACK_DEADLINE_MS`), otherwise on the user's «🔄 Обновить». A session with no settled
   trade gets none.
 - **At most once.** `POST /trading/sessions/:id/summary` ([trading-session.md](trading-session.md#routes))
-  sets `trading_sessions.summary_sent_at` by one CAS UPDATE and answers the card's rows; every
+  sets `trading_sessions.summary_sent_at` by one CAS UPDATE — only once `final_notice_sent_at` is
+  set (#464) — and answers the card's rows; every
   other answer is 409 `summary_unavailable`, and the bot then sends nothing. Two entries of one
   session (a refresh while it is tracked, a start's 409) race the claim and one wins.
 - **The numbers.** Each trade's result is its `broker_trades.profit`, the total the same SQL sum
@@ -560,6 +678,23 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     409, so no new card is sent.
 25. **Two «📤 Поделиться» buttons** (#321): the URL button on `/invite` (`inviteShareButton`) and the
     one under the card (`sessionShareButton`); different screens, separate keys.
+26. **At most once for the trade messages and the summary** (#464, manager's decision 2a): an
+    unknown Telegram outcome or a crash between the claim and the send loses that one message; no
+    duplicate is possible. Falsifiable: `session trade notice outcome unknown` above 0.1 % of
+    sends.
+27. **The notices' rate** (#464): at most 9 a second (540 a minute) for every session together;
+    above it the messages lag behind the trades, never drop. The bot's own replies and edits are
+    outside that budget, as before.
+28. **Latency** (#464): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
+    after its settle.
+29. **The trade lines do not add up to «💰 Результат»** for wins and ties (#464): the owner's
+    sample prints the payout and the returned stake.
+30. **A stopped session stuck on manual review** stays in the sender's scan until settled or
+    rejected (#464): one cheap row each.
+31. **No card** when the backend has not sent the summary by the tracker's deadline (#464, about
+    70 min after the start); «🔄 Обновить» later gives it once the mark is set.
+32. **Sessions running at the deploy** (#464) get their later trades and their summary; the trades
+    settled before it are not sent. Sessions that ended before it get no summary.
 
 ## Running it locally
 
@@ -578,7 +713,9 @@ its own, which no runtime check of this issue used.
 
 - **#287** — the orchestrator that opens the session's trades ([trading-session.md](trading-session.md)).
 - **#283** — the start, read and stop routes.
-- **#29** — a notification for each trade of the session; this message is only edited.
+- **#29** — notifications; the session's trade messages and summary are #464's.
+- **#450** — the martingale strategy: it passes the session's strategy to `sessionTradeSteps` (the
+  sender passes `fixed` today), and the adaptive line then appears on the raised steps.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
 - **#321** — «📤 Поделиться» under the summary card ([Sharing the card](#sharing-the-card-321)); a
