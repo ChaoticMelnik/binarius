@@ -1,8 +1,12 @@
-import { DISPLAY_INDICATOR_PARAMS, type SignalIndicators } from '@binarius/shared';
+import {
+  DISPLAY_INDICATOR_PARAMS,
+  MACD_REQUIRED_CANDLES,
+  type SignalIndicators,
+} from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
-import { displayIndicators, MACD_REQUIRED_CANDLES } from './display';
+import { displayIndicators } from './display';
 import { closedNow, INTERVAL_MS, mildRise, seriesFrom } from './testing';
 
 const show = (closes: readonly number[]): SignalIndicators | undefined => {
