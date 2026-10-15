@@ -1,8 +1,17 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   MutationsError,
@@ -204,6 +213,23 @@ describe('runMutations', () => {
     expect(calls).toEqual([]);
   });
 
+  it('T8b: an uncommitted change outside the edited files, or an untracked file -> refusal (exit 2)', async () => {
+    writeList([mutation('M1', [{ file: 'src/a.ts', old: 'a = 1', new: 'a = 0' }])]);
+    const { runner, calls } = fakeRunner({ M1: redOnly('a works') });
+    const gitignore = readFileSync(path.join(root, '.gitignore'), 'utf8');
+    writeFileSync(path.join(root, '.gitignore'), `${gitignore}extra/\n`);
+    const tracked = await run(runner).catch((e: unknown) => e);
+    expect((tracked as MutationsError).exitCode).toBe(2);
+    expect(readFileSync(path.join(root, '.gitignore'), 'utf8')).toBe(`${gitignore}extra/\n`);
+    writeFileSync(path.join(root, '.gitignore'), gitignore);
+    writeFileSync(path.join(root, 'src/new.ts'), 'export {};\n');
+    const untracked = await run(runner).catch((e: unknown) => e);
+    expect((untracked as MutationsError).exitCode).toBe(2);
+    expect((untracked as MutationsError).message).toContain('src/new.ts');
+    expect(calls).toEqual([]);
+    expect(head()).toBe(SOURCE);
+  });
+
   it('T9: the runner throws -> the file is back at HEAD', async () => {
     writeList([mutation('M1', [{ file: 'src/a.ts', old: 'a = 1', new: 'a = 0' }])]);
     const error = await run(
@@ -251,6 +277,130 @@ describe('runMutations', () => {
     expect(outcome.rows.map((r) => r.id)).toEqual(['M2']);
     expect(readFileSync(outcome.tablePath, 'utf8').split('\n')[0]).toContain(' only=M2 ');
   });
+});
+
+describe('classify through runMutations', () => {
+  it('T18: a tests entry that matched no test file -> not-run naming it', async () => {
+    writeList([mutation('M1', [{ file: 'src/a.ts', old: 'a = 1', new: 'a = 0' }])]);
+    const empty = await run(
+      fakeRunner({ M1: { exit: 1, report: { testResults: [] }, stderrTail: '' } }).runner,
+    );
+    expect(empty.rows[0]?.kind).toBe('not-run');
+    expect(empty.rows[0]?.detail).toBe('no test file matched src/a.test.ts');
+    writeList([
+      {
+        ...mutation('M1', [{ file: 'src/a.ts', old: 'a = 1', new: 'a = 0' }]),
+        tests: ['src/a.test.ts', 'src/b.test.ts'],
+      },
+    ]);
+    const partial = await run(fakeRunner({ M1: redOnly('a works') }).runner);
+    expect(partial.rows[0]?.kind).toBe('not-run');
+    expect(partial.rows[0]?.detail).toBe('no test file matched src/b.test.ts');
+    expect(partial.exitCode).toBe(1);
+  });
+
+  it('T19: vitest exited non-zero with every test passed -> not-run, not green', async () => {
+    writeList([mutation('M1', [{ file: 'src/a.ts', old: 'a = 1', new: 'a = 0' }])]);
+    const outcome = await run(
+      fakeRunner({
+        M1: {
+          exit: 1,
+          report: report({ status: 'passed', passed: ['a works'] }),
+          stderrTail: 'Unhandled Rejection',
+        },
+      }).runner,
+    );
+    expect(outcome.rows[0]?.kind).toBe('not-run');
+    expect(outcome.rows[0]?.detail).toBe('exit 1 without a failed test, Unhandled Rejection');
+    expect(outcome.exitCode).toBe(1);
+  });
+});
+
+// The CLI with the real default runner and a real child process: PATH holds only a git wrapper
+// and, where a case needs one, a fake pnpm, so no real vitest runs.
+describe('the CLI', () => {
+  const script = fileURLToPath(new URL('./mutations.ts', import.meta.url));
+  // a non-literal import, as in tooling/vitest-projects.test.ts: tooling's rootDir is tooling/
+  const testing = async () =>
+    (await import(
+      pathToFileURL(fileURLToPath(new URL('../packages/shared/src/testing.ts', import.meta.url)))
+        .href
+    )) as { until: (what: string, condition: () => boolean) => Promise<void> };
+  const which = (name: string) =>
+    execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
+  let bin: string;
+
+  beforeEach(() => {
+    bin = mkdtempSync(path.join(tmpdir(), 'mutations-bin-'));
+    writeExecutable('git', `#!/bin/sh\nexec ${which('git')} "$@"\n`);
+    writeList([mutation('M1', [{ file: 'src/a.ts', old: 'a = 1', new: 'a = 0' }])]);
+  });
+
+  afterEach(() => {
+    rmSync(bin, { recursive: true, force: true });
+  });
+
+  function writeExecutable(name: string, body: string): void {
+    writeFileSync(path.join(bin, name), body);
+    chmodSync(path.join(bin, name), 0o755);
+  }
+
+  function cli(onStart?: (child: ReturnType<typeof spawn>) => void) {
+    return new Promise<{ code: number | null; stderr: string; stdout: string }>(
+      (resolve, reject) => {
+        const child = spawn(process.execPath, [script, listPath, '--out', out], {
+          cwd: root,
+          env: { PATH: bin },
+        });
+        let stderr = '';
+        let stdout = '';
+        child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+        child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+        child.on('error', reject);
+        child.on('close', (code) => resolve({ code, stderr, stdout }));
+        onStart?.(child);
+      },
+    );
+  }
+
+  it('T15: pnpm not found -> exit 3 naming ENOENT, the file back at HEAD', async () => {
+    const result = await cli();
+    expect(result.code).toBe(3);
+    expect(result.stderr).toContain('ENOENT');
+    expect(head()).toBe(SOURCE);
+    expect(git('status', '--porcelain')).toBe('');
+  }, 20_000);
+
+  it('T16: a truncated report -> no-report row, exit 1, the file back at HEAD', async () => {
+    writeExecutable(
+      'pnpm',
+      '#!/bin/sh\nfor a in "$@"; do case "$a" in --outputFile=*) printf \'{"testResults":[\' > "${a#--outputFile=}";; esac; done\nexit 1\n',
+    );
+    const result = await cli();
+    expect(result.code).toBe(1);
+    expect(readFileSync(path.join(out, 'table.md'), 'utf8')).toContain(
+      '| M1 | a works | no-report: exit 1, report is not JSON |',
+    );
+    expect(head()).toBe(SOURCE);
+    expect(git('status', '--porcelain')).toBe('');
+  }, 20_000);
+
+  it('T17: SIGTERM while the runner works -> exit 130, the file back at HEAD', async () => {
+    const marker = path.join(bin, 'started');
+    writeExecutable('pnpm', `#!/bin/sh\n: > ${marker}\nexec ${which('sleep')} 10\n`);
+    const { until } = await testing();
+    let child: ReturnType<typeof spawn> | undefined;
+    const done = cli((started) => (child = started));
+    try {
+      await until('the fake pnpm to start', () => existsSync(marker));
+    } finally {
+      child?.kill('SIGTERM');
+    }
+    const result = await done;
+    expect(result.code).toBe(130);
+    expect(head()).toBe(SOURCE);
+    expect(git('status', '--porcelain')).toBe('');
+  }, 20_000);
 });
 
 describe('parseMutationList', () => {
