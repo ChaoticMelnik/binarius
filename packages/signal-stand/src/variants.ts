@@ -25,6 +25,8 @@ export interface DecisionContext {
   nowMs: number;
   v1(): SignalDecisionV1;
   v2(point?: V2Point): SignalDecision;
+  // v2 at the default point on the 1m series, at the same nowMs
+  v2OneMinute(): SignalDecision;
 }
 
 export interface Variant {
@@ -81,14 +83,14 @@ const VOLATILITY_REFUSALS: ReadonlySet<string> = new Set([
 export const VARIANTS: readonly Variant[] = [
   {
     name: 'v1',
-    intervals: ['5s', '15s'],
+    intervals: ['5s', '15s', '1m'],
     grid: [{}],
     headlinePause: false,
     decide: (ctx) => decisionOf(ctx.v1()),
   },
   {
     name: 'v2',
-    intervals: ['5s', '15s'],
+    intervals: ['5s', '15s', '1m'],
     grid: V2_GRID,
     headlinePause: true,
     decide: (ctx, point) => decisionOf(ctx.v2(asV2Point(point))),
@@ -109,6 +111,21 @@ export const VARIANTS: readonly Variant[] = [
       if (rsi >= 50 + band) return { action: TradeAction.Down };
       if (rsi <= 50 - band) return { action: TradeAction.Up };
       return { refusal: 'revert_rsi_inside_band' };
+    },
+  },
+  {
+    // #380's first variant: v2's action only when the 1m trend agrees (trend only)
+    name: 'v2+1m',
+    intervals: ['5s', '15s'],
+    grid: [{}],
+    headlinePause: true,
+    decide(ctx) {
+      const decision = ctx.v2();
+      if (decision.kind === SignalKind.NoSignal) return { refusal: decision.reason };
+      const minute = ctx.v2OneMinute();
+      if (!('features' in minute)) return { refusal: '1m_no_data' };
+      if (minute.features.trend !== decision.action) return { refusal: '1m_trend_disagrees' };
+      return { action: decision.action };
     },
   },
 ];

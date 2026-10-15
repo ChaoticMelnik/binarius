@@ -15,7 +15,7 @@ function scripted(script: readonly (TradeAction | undefined)[], seen: number[] =
   let i = 0;
   return {
     name: 'scripted',
-    intervals: ['5s'],
+    intervals: ['5s', '1m'],
     grid: [{}],
     headlinePause: true,
     decide({ nowMs }) {
@@ -147,6 +147,17 @@ describe('simulate', () => {
       expect(trade.entryAt).toBe(FIRST + openDelayMs);
       expect(trade.exitAt).toBe(FIRST + openDelayMs + 5_000);
     }
+  });
+
+  it('V8 the 1m interval decides on minute boundaries and trades 60 s', () => {
+    const seen: number[] = [];
+    const result = simulate(
+      market(),
+      config(scripted([undefined, Up], seen), { interval: '1m', until: T0 + 600_000 }),
+    );
+    const first = Math.ceil((T0 + 1) / 60_000) * 60_000 + DECISION_SLACK_MS;
+    expect(seen.slice(0, 2)).toEqual([first, first + 60_000]);
+    expect(result.trades[0].exitAt - result.trades[0].entryAt).toBe(60_000);
   });
 
   it('S8 a run is deterministic', () => {
