@@ -263,8 +263,10 @@ A finished one (#337):
 ```
 
 - **The result** is `trades.profit` of the view: the backend's SQL sum of the settled trades'
-  profit, printed by `formatSignedUsd` (`+$2.50`, `-$0.50`; a zero, truncated ones included, is
-  `$0.00` with no sign). The bot adds no money (Rule 2). The live score line carries it after
+  profit, printed by `formatSignedUsd` with every fraction digit it has, at least two (`+$2.50`,
+  `-$0.50`, `-$1.7515`: the live broker pays `S × p / 100` unrounded, so a sum can carry more digits
+  than cents, and cutting them would show a loss smaller than it is, #450); a zero is `$0.00` with
+  no sign. The bot adds no money (Rule 2). The live score line carries it after
   «·»; a stopped session gets it as its own line «💰 Результат: …».
 - **The balance** is `balance.available` of the view in the session's mode, through `formatUsd`:
   «🧪 Демобаланс» for demo, «💵 Реальный баланс» for real (`sessionBalanceDemo`/
@@ -298,6 +300,10 @@ A finished one (#337):
 | `rejected_twice` | ❌ Сессия остановлена: две сделки подряд не открылись. |
 | `timeout` | ⏱ Сессия остановлена: истёк час на сессию. |
 | `stake_stop` | ⚠️ Сессия остановлена: ставку не удалось подобрать — проверь демобаланс в /account. |
+| `max_steps_exceeded` (#450) | 🛑 Сессия остановлена: серия проигрышей дошла до лимита повышений ставки. |
+| `max_stake_exceeded` (#450) | 🛑 Сессия остановлена: следующая ставка вышла бы за лимит размера ставки. |
+| `max_session_loss_exceeded` (#450) | 🛑 Сессия остановлена: следующая сделка могла бы превысить лимит убытка сессии. |
+| `session_duration_exceeded` (#450) | ⏱ Сессия остановлена: истёк час на сессию. (`sessionStopSessionDuration`, `timeout`'s words: the sizer's hour on the worker's clock) |
 | `account_unavailable` | ⚠️ Сессия остановлена: новую сделку открыть нельзя — проверь токены и аккаунт в /account. |
 | `pair_unavailable` | ⚠️ Сессия остановлена: пара закрылась или не принимает эту длительность. |
 | `balance_unavailable` | ⚠️ Сессия остановлена: баланс Binodex не получен. |
@@ -489,11 +495,13 @@ endings below lose.
   `apps/trading-worker/src/stake/size.ts`; `steps-parity.test.ts` holds them equal for every
   history of up to six trades): under the fixed strategy every trade is step 1 of the next cycle;
   under martingale the step is the losses in a row plus one, a win ends the series, a tie leaves it
-  as it is, and a cycle is a series. Settings v1 carry no strategy (Rule 23), so the sender passes
-  `fixed`; #450 passes the session's.
+  as it is, and a cycle is a series. The sender passes the session's own strategy,
+  `sessionStakeParams(settings).strategy` (#450): settings v1 and settings that cannot be read count
+  as `fixed`.
 - **«🔄 Адаптивная ставка включена»** is the first line of a trade whose stake is above the
-  session's base stake (`decimalLessThan`, bigint). Under the fixed strategy the stake is the base
-  stake, so the line does not appear before #450. No text says «Мартингейл».
+  session's base stake (`decimalLessThan`, bigint): under martingale, every step after a loss.
+  Under the fixed strategy the stake is the base stake, so the line does not appear. No text says
+  «Мартингейл».
 - **The summary** is the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then the
   status message's own closing lines (`sessionClosingLines`): «🏁 Сессия завершена: …» for a
   completed session, otherwise the stop line and «📊 Итог: …», then «💰 Результат» (the SQL sum,
@@ -585,9 +593,10 @@ Telegram's own forwarding.
 - **The numbers.** Each trade's result is its `broker_trades.profit`, the total the same SQL sum
   the status prints (`sessionProfitSumSql`, #337); the bot formats them (`formatSignedUsd`) and
   adds nothing. Win, loss and tie go by the exact decimal's sign, as the view counts them, so
-  `0.001` is a win that prints `+$0.00`. The prices are `broker_trades.open_price`/`close_price`:
-  the line runs through each trade's entry (a quarter into its column) and exit (three quarters),
-  scaled between the lowest and the highest price, in the middle when all are equal. It is not the
+  `0.001` is a win that prints `+$0.001` (every digit, #450). The prices are
+  `broker_trades.open_price`/`close_price`: the line runs through each trade's entry (a quarter
+  into its column) and exit (three quarters), scaled between the lowest and the highest price, in
+  the middle when all are equal. It is not the
   market path between them. No balance: the card is made to be forwarded, the balance stays in the
   status.
 - **The layout.** 1200 × 675, dark. The pair (or «актив #N»), «СЕССИЯ ЗАВЕРШЕНА», «ИТОГ» and the
@@ -764,8 +773,9 @@ signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5
 - **#287** — the orchestrator that opens the session's trades ([trading-session.md](trading-session.md)).
 - **#283** — the start, read and stop routes.
 - **#29** — notifications; the session's trade messages and summary are #464's.
-- **#450** — the martingale strategy: it passes the session's strategy to `sessionTradeSteps` (the
-  sender passes `fixed` today), and the adaptive line then appears on the raised steps.
+- **#450** — the martingale strategy by default ([stake.md](stake.md#defaults)): the session's
+  strategy goes to `sessionTradeSteps`, the adaptive line appears on the raised steps, and the four
+  limits stop the session with their own lines.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade;
   since **#509** on a signal only, and every door's press or start checks the pair's signal.

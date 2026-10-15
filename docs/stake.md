@@ -1,16 +1,19 @@
-# Stake sizing v1 (issue #19)
+# Stake sizing v1 (issue #19, default Martingale #450)
 
 `apps/trading-worker/src/stake/` decides the amount of the next trade in a session, or stops the
 session with a reason. It is a pure function: it reads no clock, no environment, no network and no
 database, and writes no log. The same parameters and input always give the same decision. Its
 caller is the session orchestrator (#287, `trading-session/orchestrator.ts`,
-[trading-session.md](trading-session.md)), which builds `{ strategy: 'fixed', ...settings.stake }`
-from `trading_sessions.settings` v1 and feeds it the session's history (#130).
+[trading-session.md](trading-session.md)), which builds the parameters with
+`sessionStakeParams(settings)` from the session's `trading_sessions.settings` and feeds it the
+session's history (#130).
 
-Two strategies exist. `fixed` sends the same stake every time and is the default. `martingale` is
-a bounded Martingale: after each loss the next stake recovers the loss of the streak plus the
-profit of the base stake at the current payout. Martingale stays off until its limits are approved
-and the open items below are checked.
+Two strategies exist. `fixed` sends the same stake every time. `martingale` is a bounded
+Martingale: after each loss the next stake recovers the loss of the streak plus the profit of the
+base stake at the current payout. Since #450 new sessions run on `martingale` by default, with the
+limits of [Defaults](#defaults); `SESSION_STAKE_STRATEGY=fixed` switches new sessions back. The
+sizer's own default without parameters (`DEFAULT_STAKE_PARAMS`) stays `fixed`: only its tests use
+it.
 
 ```bash
 pnpm test --project unit apps/trading-worker/src/stake   # needs no database or Redis
@@ -104,18 +107,22 @@ and `consecutiveLosses + 1` for `martingale`.
 |---|---|---|
 | `unresolved_trade` | a trade without a result | a live intent never gets here: the attempt reschedules until it is terminal (reconciliation, #89, gives an `unknown` one its result). What reaches the sizer — `manual_review`, a `settled` intent without its profit — stops the session as `stake_stop`; no new stake is issued, which guards against counting a trade twice |
 | `invalid_amount`, `invalid_trade`, `invalid_payout` | the data contract (a database row or the pairs catalog) | stops the session and logs a contract problem; the same data gives the same answer |
-| `session_duration_exceeded`, `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded` | a martingale limit | ends the session with the reason |
+| `session_duration_exceeded`, `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded` | a martingale limit | ends the session with the `stop_reason` of the same name (#450) |
 | `below_min_trade_amount` | the account's broker minimum (`GET /broker/user`) | ends the session; the broker would answer 400 `Amount is below the minimum` |
 | `insufficient_balance` | the mode's balance in the snapshot | ends the session; the broker would answer 400 `Insufficient balance` |
 
-Any `stop` ends the session as `stake_stop`, with the code in the log line (#287). `StopReason` is closed, so a code outside this table cannot be
-returned.
+A martingale limit's stop ends the session with the `stop_reason` of the same name; every other
+`stop` ends it as `stake_stop` (#287). The code is in the log line either way. The orchestrator
+maps the codes through `STAKE_STOP_REASONS` (`satisfies Record<StopReason, …>`), and `StopReason`
+is closed, so a code outside this table cannot be returned and a new one fails the typecheck until
+it is mapped.
 
 ## Formula
 
 With `s = stakeScale`, `floor_s` and `ceil_s` rounding to `s` fractional digits, and
-`expectedProfit(x) = floor_s(x × payout / 100)` (the profit the broker credits by the fixture's
-rule, `floor(amount × payout / 100)` in cents, docs/mock-broker.md):
+`expectedProfit(x) = floor_s(x × payout / 100)` (the worst case: the fixture credits
+`floor(amount × payout / 100)` in cents, docs/mock-broker.md; the live broker credits
+`amount × payout / 100` unrounded, which is never less, [Live probe](#live-probe-2026-10-15)):
 
 ```
 target = ceil_s(streakLoss + expectedProfit(baseStake))
@@ -165,9 +172,10 @@ realizedSessionLoss, settledTrades, sessionElapsedMs, baseStake }`, with the amo
 ## Parameters
 
 `StakeParams` is a union: `{ strategy: 'fixed', baseStake, stakeScale }` or
-`{ strategy: 'martingale', baseStake, stakeScale, limits }`. The martingale limits have no defaults;
-the type requires all four, and `assertStakeParams` checks the same for an object that did not come
-from a literal.
+`{ strategy: 'martingale', baseStake, stakeScale, limits }`. The sizer has no default limits: the
+type requires all four, and `assertStakeParams` checks the same for an object that did not come
+from a literal. A session's limits are written into its settings at the start
+([Defaults](#defaults)).
 
 | Name | Default | Rule |
 |---|---|---|
@@ -182,23 +190,84 @@ from a literal.
 The defaults are checked when `config.ts` is imported, so a default edited out of its rules fails
 at import.
 
-## Open items
+## Defaults
 
-These are checked before Martingale is switched on:
+Decided for #450 (owner 2026-10-10, item 3; the night's manager chose 12×). The strategy of new
+sessions is `SESSION_STAKE_STRATEGY` (`martingale` or `fixed`; unset is `martingale`; anything
+else, an empty value included, stops the backend and the `session-start` CLI at start). The start
+route and the CLI write it into the session's settings v2 with `buildSessionSettings`, and for
+`martingale` the limits of the session's base stake B, from `martingaleLimitsFor(B)`
+(`packages/shared/src/trading-session.ts`, the one place of the multipliers):
 
-1. A stake with two fractional digits (`"1.55"`) was not sent to the live broker. A `1.5` demo
-   stake was accepted on 2026-10-03; the "at most 2 decimals" rule is the fixture's. Falsifiable:
-   `POST /v1/broker/user/trades` with `amount "1.55"` opens a trade of 1.55.
-2. How the live broker rounds `potential_profit` and `profit` is not recorded
-   (docs/broker-rest.md -> Open items). The formula assumes the worst case, a floor to `stakeScale`;
-   a broker that rounds up or to nearest only over-recovers. A broker that truncates to a coarser
-   scale (whole units) would under-recover. Falsifiable: the live `potential_profit` for stake `S`
-   at payout `p` is not below `floor2(S × p / 100)`.
-3. A tie (`profit = 0`) was not observed live. Repeating the stake is the owner's decision, not an
-   observation.
-4. The form of live `payout` values (fractional or not) was not recorded. Up to 4 fractional digits
-   are accepted; more is `invalid_payout`. Falsifiable: no live pair has a payout with more than 4
-   fractional digits.
+| Limit | Default | Constant |
+|---|---|---|
+| `maxSteps` | 4: at most three raises in a row | `MARTINGALE_MAX_STEPS` |
+| `maxStake` | 12 × B | `MARTINGALE_MAX_STAKE_MULTIPLIER = 12n` |
+| `maxSessionLoss` | 20 × B | `MARTINGALE_MAX_SESSION_LOSS_MULTIPLIER = 20n` |
+| `maxSessionDurationMs` | 3 600 000, the session's hour | `SESSION_MAX_DURATION_MS` |
+
+The multiplication is `bigint` at scale 8 (`multiplyDecimal`), so a limit is canonical and on the
+grid of B (`1.55` → `18.6`, `31`). A B whose limit leaves `numeric(20,8)` fails the settings
+schema: the start route answers `balance_unavailable`, the CLI `invalid_settings`.
+
+A series of losses only, stakes as multiples of B at `stakeScale 2`, by the sizer itself:
+
+| payout | stakes of steps 1-4 | loss of 4 losses | what stops step 4 at 12×/20× |
+|---|---|---|---|
+| 96 % | 1 · 2.05 · 4.18 · 8.54 | 15.77 B | nothing; step 5 is `max_steps_exceeded` |
+| 90 % | 1 · 2.12 · 4.47 · 9.44 | 17.03 B | nothing |
+| 87 % | 1 · 2.15 · 4.63 · 9.95 | 17.73 B | nothing |
+| 85 % | 1 · 2.18 · 4.75 · 10.33 | 18.26 B | nothing |
+| 80 % | 1 · 2.25 · 5.07 · 11.40 | 19.72 B | nothing |
+| 79 % (a payout that fell inside the session, #509) | 1 · 2.27 · 5.14 · 11.65 | 20.06 B | `max_session_loss_exceeded` |
+| 77 % | 1 · 2.30 · 5.29 · 12.16 | — | `max_stake_exceeded` |
+| 70 % | 1 · 2.43 · 5.90 · 14.33 | — | `max_stake_exceeded` |
+
+**A deviation from the owner's figure.** The owner asked for one stake at most «~10×» B. At 10×
+the fourth stake passes only at a payout of 87 % or more, so at the usual 80-86 % a series would
+have two raises, not three. 12× keeps three raises at every payout from the start's 80 % floor,
+and the session's loss stays within 20 × B. Back to 10×: `MARTINGALE_MAX_STAKE_MULTIPLIER = 10n`
+and its pin in `trading-session.test.ts`; then at 80-86 % step 4 stops as `max_stake_exceeded`.
+
+Rules of a session that the defaults do not change (#450 clarify):
+
+- A tie leaves the series as it is: the next stake is the same step (`orchestrator.db.test.ts` G2,
+  `steps-parity.test.ts`).
+- The session ends at its N-th settled trade, in the middle of a series too (G9); its result shows
+  the series' loss.
+- Only the base stake is checked against the balance at the start. A series that outgrows the
+  balance stops as `stake_stop` (`insufficient_balance`, G8).
+- The strategy and the limits are frozen in the session's row at the start: switching
+  `SESSION_STAKE_STRATEGY` changes new sessions only, and a v1 row of a session started before
+  #450 trades on as `fixed`.
+
+## Live probe (2026-10-15)
+
+The four open items of #19 were closed by the owner on the pilot's demo account before Martingale
+became the default (#450 comments of 2026-10-15). Sources: the broker's public catalog
+`GET /v1/broker/pairs/binary` (144 pairs) and a read-only query of the pilot's `broker_trades`
+(581 demo trades, 580 closed: 277 wins, 293 losses, 10 with `profit = 0`; stakes 1-100), then a demo
+session with a stake of 1.55 at a payout of 87 % (session `44abf84b-…`).
+
+| Item | Result | Evidence |
+|---|---|---|
+| 1. A stake with two fractional digits | closed: accepted | the broker took `amount "1.55"` and opened a trade of 1.55 (`raw.amount` 1.55); a loss took exactly 1.55 |
+| 2. How `potential_profit` and `profit` are rounded | closed: `profit` is not rounded | a win of 1.55 at 87 % paid `profit` 1.3485 = 1.55 × 87 / 100 exactly (`raw.profit` 1.3485), more digits than `stakeScale`; `potential_profit` of the open trade was 1.35, a display value rounded to 2 digits (round-half-up or ceil, one sample cannot tell) that can be above the real payout by a fraction of a cent. All 277 earlier wins had `profit = amount × payout / 100` exactly, with integer stakes and payouts never needing a rounding |
+| 3. A tie | closed: observed, the stake comes back | 10 trades of 5, 15 and 60 s at payouts 77-96 had `close_price = open_price` and `profit = 0`; no `profit = 0` at different prices and no non-zero profit at equal ones. The next stake after a tie is the owner's decision (above), not an observation |
+| 4. The form of `payout` | closed: whole percent | every `payout` and `max_payout` of the catalog is an integer, 50-96, and so is `raw.payout` of all 581 trades; the "at most 4 fractional digits" rule holds with room |
+
+What follows for the formula:
+
+- `floor_s` is the conservative case. The real `profit` is at least `floor2(S × p / 100)`, so a
+  series is recovered with a small margin and never short; the falsifiable claim of item 2
+  ("`potential_profit` is not below `floor2(S × p / 100)`") holds.
+- `potential_profit` is not the payout: nothing here reads it as the amount credited.
+- The session's and the series' P&L can have more digits than `stakeScale` (up to 4 with a stake
+  of 2 digits and a whole payout). The sizer counts them exactly (`size.test.ts` S23), and the bot
+  prints a session's result with every digit (`formatSignedUsd`: `-$1.7515`, not the smaller
+  `-$1.75`).
+- The next martingale stake is still rounded up to `stakeScale`: the broker took 2 digits, more
+  were not tried.
 
 The payout is read from the catalog when the decision is made; the broker may open the trade at a
 different `trade.payout`. The streak loss is counted from the actual `profit`, so a drifting payout
@@ -207,7 +276,8 @@ trades only, and an unresolved trade stops the sizer, so the pre-check never und
 
 ## What it is not
 
-- It does not wire itself into a session, read the database or the env, or log.
+- It does not wire itself into a session, read the database or the env, or log. The strategy of a
+  session is chosen by `SESSION_STAKE_STRATEGY` at its start, not here.
 - It makes no backtest, no tuning and no profitability claim. A Martingale raises the stake after
   every loss; its limits bound the damage, they do not remove it.
 - It contains no user-facing text. The Russian wording of a stop reason is the bot's
@@ -215,10 +285,10 @@ trades only, and an unresolved trade stops the sizer, so the pre-check never und
 
 ## Boundaries
 
-- #130: `trading_sessions.settings` v1 and the history read `readSessionHistory`
+- #130: `trading_sessions.settings` and the history read `readSessionHistory`
   ([trading-session.md](trading-session.md)). #287: the orchestrator that feeds them to the sizer
-  (shipped).
+  (shipped). #450: settings v2 with the strategy and the limits, Martingale by default.
 - #89: the result of an unresolved trade.
-- `packages/shared` and `packages/db` are not changed. The bigint arithmetic moves to shared with a
-  second consumer.
+- The module's bigint arithmetic stays here; the limits' multiplication is shared's
+  `multiplyDecimal` (`packages/shared/src/stake.ts`), which the start route and the CLI need.
 - The invariant is Architecture Rules -> "Размер ставки v1" in `.claude/skills/architect/SKILL.md`.
