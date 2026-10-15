@@ -3040,8 +3040,66 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **Manager Phase 0: compare the shared test DB's `drizzle.__drizzle_migrations` (count and hash) with `packages/db/drizzle/*.sql`; a mismatch → an owner step in the report** — **открыто (2026-10-14, владелец)**
-2. **Implementer → «Доказательства мутаций»: mutations only on committed work, each reverted by restoring that one file; never `git checkout --` over uncommitted changes** — **открыто (2026-10-14, владелец)**
+1. **Manager Phase 0: compare the shared test DB's `drizzle.__drizzle_migrations` (count and hash) with `packages/db/drizzle/*.sql`; a mismatch → an owner step in the report** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 4**
+2. **Implementer → «Доказательства мутаций»: mutations only on committed work, each reverted by restoring that one file; never `git checkout --` over uncommitted changes** — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5 (Quiet runs)**
 3. **Manager Phase 0: probe the Codex limit with a short `task` call, not only `status` — the limit was found at the first final pass** — **открыто (2026-10-14, владелец)**
-4. **Manager: an Opus limit that stops the main context leaves the night without a final report; write the expected owner step «если отчёт не завершён — `/manager продолжить` после сброса лимита» in the report header at the start** — **открыто (2026-10-14, владелец)**
+4. **Manager: an Opus limit that stops the main context leaves the night without a final report; write the expected owner step «если отчёт не завершён — `/manager продолжить` после сброса лимита» in the report header at the start** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 8**
 5. **Remaining Minor** — **вынесено в #477 (#470), #478 (#471), #479 (#472); splits #473, #474**
+
+---
+
+## #326, #327, #418, #419, #11, #111, #112, #117 — ночь manager 2026-10-14 и дневной мерж 2026-10-15
+
+Ночная сессия `/manager` 2026-10-14 20:56 – 15.10 03:29 MSK (дедлайн 04:57, отсечка новых задач 03:27). Восемь задач, десять PR, все — круг 1 без Blocker/Major. Codex: лимит до 15.10 01:04 → пропуск у #488, #489, #490, #491; после сброса — прогоны у #492, #493, #494, #495 (#486 — до лимита). Мерж 15.10 04:40–05:45 после «мержить без перепроверки Codex» владельца: строка пропуска владельца у #488–#491, ребейз каждого PR на свежий `main` перед вопросом, отдельный вопрос перед каждым мержем. Отчёт ночи: https://claude.ai/artifact/6VWr6FEfpYSqiS4mv5C3Q2.
+
+| Issue | PR | Review rounds | Added lines (без snapshot) | Migration | Codex (final pass) | Merge | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------|-------------|
+| #326 сумма реальной ставки | #486 | 1 | 2 299 | 0046_real_stake | `task-mv8h21tl-dtyqvx` | rebase, база стека | → #496 |
+| #327 реальные сессии | #488 | 1 | 1 297 | — | skipped by owner 15.10 (night limit) | rebase после ребейза на main (range-diff `=`) | → #497 |
+| #418 удалять экран запуска | #489 | 1 | 410 | — | skipped by owner 15.10 (night limit) | rebase (range-diff `=`) | → #498 |
+| #419 пары в два столбца | #490 | 1 | 100 | — | skipped by owner 15.10 (night limit) | rebase (контекст docs) | — (LGTM) |
+| #11 widget-сессия депозита | #491 | 1 | 1 927 | — | skipped by owner 15.10 (night limit) | rebase после implementer-ребейза (конфликт Rule 33), мутации сняты заново | → #499 |
+| #111 страница кассы | #492 | 1 | 1 819 | — | `task-mv8o0e48-dpa9kz` | **squash** (2 несобирающихся коммита) | → #500; m1 закрыт в #493 |
+| #112 события кассы | #493 | 1 | 1 841 | — | `task-mv8psnh3-tf1paw` | **squash** (красный коммит), implementer-ребейз (2 конфликта), мутации сняты заново | → #501 |
+| #117 покупка за Stars | #495 + #494 | 1 + 1 | 1 170 + 2 547 (факт 3 717 > 3 000 → деление по коммитам) | 0046 → **0047**_stars_purchase | `task-mv8sh7sn-ig8rnf`, `task-mv8sl2n6-yqjndt` | #495 rebase (перенумерация миграции, проход ревьюера), #494 **squash** (адаптация к #326/#327, Rule 37 → 39, проход ревьюера) | → #503 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Colima была остановлена — `up -d redis` не доходил до сокета; запущена менеджером. Общая тестовая БД — 46 из 46 миграций, хэши совпали (предложение 1 прошлой записи выполнено вручную). |
+| Manager | правила посреди ночи | Владелец влил `eeadc07`, `03bbd00` (21:44, 21:54): Plan Update на Opus, тихие прогоны, свежий implementer на круг исправлений, агенты ревью по diff. Менеджер подтянул `main` в 22:05 и применял правила с #327. |
+| Manager | время | Время событий в отчёте и в комментариях взятия #326/#327/#418 ставилось по оценке, а не по часам — уехало на 5–47 мин; отчёт исправлен в 23:25, комментарии на GitHub остались с неверным временем. |
+| Manager | стек #419 | База `feat/327-real-sessions` выбрана по заголовку hunk `signalsScreen`, а не по изменению; архитектор показал, что она была не обязательна. Цена — мерж после #488. |
+| Manager | clarify | 15 решений, все — рекомендуемые варианты; у решений, опирающихся на факт кода, проверка названа в комментарии «Решение менеджера». Три помечены «проверить утром»: #11 обход DEMO_ONLY для `deposit-probe` в docs, #111 `trustProxy` во всём `web`, #117 живая проверка реальными Stars. |
+| Architect | все | Первичный план #326 — Fable; все Plan Update (круг 0, деление #117) — Opus по правилу 2026-10-14. Дважды (#11, #117) архитектор ошибочно сообщил о работе на Fable — транскрипт: 100 % `claude-opus-5-5`. Индекс CodeGraph устарел (stale worktree `rosy-singing-fiddle`, нулевые callers) — использовался как карта. |
+| Architect | #117 оценка | ~2 760 против факта 3 717 (тесты 2 027 против ~1 300); запасная линия плана снимала 100–150 строк. Implementer вернул «дефект плана», архитектор разделил стек по границе коммитов без переписывания истории. |
+| Implementer | коммиты | #492: застейдженный `git mv` попал не в тот коммит — 2 коммита не собираются; #493: первый коммит проходит typecheck, но падает тест таймингов. Force-push ночью запрещён → squash при мерже. #494 после ребейза — коммиты 1–4 без typecheck → squash. |
+| Implementer | code search | CodeGraph в нескольких фазах не использован первым (индекс устарел и не содержит веток стека) — названо в PR. |
+| Reviewer | все | Круг 1 у всех; 3b по содержанию diff (деньги, auth, маршруты); major'ы Codex (#491 удалённый ключ текста, #492 m2/m3, #493 m1, #494 m3) отклонены или понижены с обоснованием в ревью. |
+| Tech Lead (day) | Merge | Стеки сверху вниз, зависимые переводились на `main` до мержа базы, база — без `--delete-branch`, ветка базы удалялась после ребейза зависимых. Конфликтные ребейзы (#491, #493, #494) — implementer только на ребейз, `range-diff` сверен, мутации сняты заново; изменения сверх разрешения конфликтов (#495 миграция 0047, #494 адаптация + Rule 39) — проход ревьюера (оба чистые). Миграции 0046, 0047 накатаны на общую тестовую БД (48). Ночные worktree и БД удалены. |
+
+### Review iterations: #486 — 1, #488 — 1, #489 — 1, #490 — 1, #491 — 1, #492 — 1, #493 — 1, #494 — 1, #495 — 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Remaining Minor всех PR (тексты, docs сильнее кода, тесты без проверки, бюджеты pre-checkout не применяются, сверка Stars обрывает тик) | Minor → #496–#501, #503 | unverified-claim, other | — | Implementer / Architect plan |
+| Несобирающиеся и красные коммиты (#492, #493, #494 после ребейза) | Process | unverified-claim | «Каждый коммит собирается» проверялся только typecheck'ом; ночью нельзя переписать историю | Implementer Step 5 |
+| Размер #117: 3 717 против оценки 2 760 | Process | other | Оценка тестов занижена для задач с леджером/платежами | Architect Step 4a |
+| Время в отчёте и комментариях по оценке | Process | unverified-claim | Нет правила брать время из часов | Manager (Claim, Report) |
+| Правила процесса сменились посреди ночи | Process | preflight | `.claude/` сверялся только в Phase 0 | Manager Phase 0 / Claim |
+| Colima остановлена | Process | preflight | Phase 0 шаг 4 не проверял демон Docker | Manager Phase 0 |
+| `.claude/CLAUDE.md` инвариант 2 «пять писателей леджера» после #117 | Minor | single-source | Факт в двух местах (Rule 2 и памятка CLAUDE.md) | Implementer #117 (ночью CLAUDE.md не правится) |
+
+### Process improvement proposals
+
+1. **Manager Phase 0 шаг 4: Docker-демон остановлен → `colima start`, затем `up -d redis`; сверка `drizzle.__drizzle_migrations` общей тестовой БД с `packages/db/drizzle/*.sql` (количество и хэши)** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Phase 0, шаг 4**
+2. **Manager Claim: перед каждым захватом `git diff --stat HEAD origin/main -- .claude/`, при расхождении — pull и применение правил со следующего спавна; всё время — из `TZ=Europe/Moscow date +%H:%M`** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task selection → Claim**
+3. **Implementer Step 5: каждый коммит — typecheck и тесты затронутых пакетов на его дереве, не только typecheck** — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5**
+4. **Ночью разрешить `--force-with-lease` на своей ветке до открытия PR (чтобы чинить историю коммитов)** — **открыто (2026-10-15, владелец)**
+5. **Architect Step 4a: для задач с леджером/платежами оценка тестов ×1,5 (у #117 тесты 2 027 против ~1 300)** — **открыто (2026-10-15, владелец)**
+6. **Переиндексировать CodeGraph и убрать stale worktree `rosy-singing-fiddle`; manager Phase 0 — проверка свежести индекса** — **открыто (2026-10-15, владелец)**
+7. **`.claude/CLAUDE.md` инвариант 2: «шесть писателей леджера»** — **внедрено в #<PR>: `.claude/CLAUDE.md` → Планирование задач → Доменные инварианты, п. 2**
+8. **Remaining Minor** — **вынесено в #496 (#486), #497 (#488), #498 (#489), #499 (#491), #500 (#492), #501 (#493), #503 (#495, #494)**

@@ -69,7 +69,7 @@ The manager does not switch the main checkout's branch. Phases work in `.claude/
    No `state.json` → write it the same way, without the `mv`.
 2. **Tech-lead Phase 0** as written (fetch, status, Codex/GitHub/runtime checks, previous audit). Codex not ready or out of budget does not stop the night: it is recorded, and substitution 2 applies.
 3. **`.claude/` is `main`'s**: `git fetch --prune origin && git diff origin/main --stat -- .claude/` prints nothing (the harness loads skills from the checkout). Non-empty → stop with the diff, `ended`. Skipped only in a trial run declared in the launch prompt.
-4. **Test infrastructure** for `pnpm check` (README → Test database): the native Postgres answers (`pg_isready -h 127.0.0.1 -p 5434`), and Redis runs (`docker compose -f "$ROOT/compose.yaml" ps --services --status running` lists `redis`). Redis missing → `docker compose -f "$ROOT/compose.yaml" up -d redis` — the manager's only compose command of the night; it never runs `down`, `stop` or `kill`. Postgres not answering → stop with `ended` and the owner step «запустить Postgres 18 на 5434».
+4. **Test infrastructure** for `pnpm check` (README → Test database): the native Postgres answers (`pg_isready -h 127.0.0.1 -p 5434`), and Redis runs (`docker compose -f "$ROOT/compose.yaml" ps --services --status running` lists `redis`). Redis missing → `docker compose -f "$ROOT/compose.yaml" up -d redis` — the manager's only compose command of the night; it never runs `down`, `stop` or `kill`. Postgres not answering → stop with `ended` and the owner step «запустить Postgres 18 на 5434». The Docker daemon itself may be down (2026-10-14: Colima was stopped, so `up -d redis` could not reach the socket): `docker info` failing → `colima start` first, then `up -d redis`; the report names it under «Шаги владельца» (Colima stays running). The shared test DB is checked against `main`: the count and the hash list of `drizzle.__drizzle_migrations` (`select hash … order by id`) equal `shasum -a 256` of `packages/db/drizzle/*.sql` in order; a mismatch is an owner step in the report, and every phase of the night runs on its own database.
 5. **Snapshot** into the report's «Исходное состояние»:
    ```bash
    git rev-parse origin/main && git log --oneline -5 origin/main
@@ -87,7 +87,7 @@ The manager does not switch the main checkout's branch. Phases work in `.claude/
 
    They are the fallback guarantee: a stray `docker compose up` from the main checkout, the only place with a `.env`, still gets `DEMO_ONLY=true`. The working guarantee is the no-stand rule and its detection.
 7. **Clock and alarm.** `main_sha_start` into `state.json`, then the alarm: `Bash` with `run_in_background: true`, command `sleep <deadline − now>; echo DEADLINE`. The completion notice carries no stdout: any completion of this task is a wake-up, and the decision is always the clock (§ Budget).
-8. **Report.** `Skill(artifact-design)`, copy `.claude/skills/manager/report-template.html` to `$M/report-<date>.html`, fill «Исходное состояние» and the header, publish with `Artifact` (`file_path` = that file, `icon: "report"`, `pin: true`, `description` = one sentence on the night) and store the URL in `state.json`.
+8. **Report.** `Skill(artifact-design)`, copy `.claude/skills/manager/report-template.html` to `$M/report-<date>.html`, fill «Исходное состояние» and the header (with the line «Если статус остался «идёт» после дедлайна — `/manager продолжить` после сброса лимита»: an Opus limit can stop the main context before the final report), publish with `Artifact` (`file_path` = that file, `icon: "report"`, `pin: true`, `description` = one sentence on the night) and store the URL in `state.json`.
 
 ## Task selection
 
@@ -123,7 +123,7 @@ The manager does not switch the main checkout's branch. Phases work in `.claude/
 
 **Time**: no new task under § Budget's limit.
 
-**Claim**: re-run the check block (it fetches first) right before writing anything; any new signal → skip. Then `→ In Progress` (`/github`), then the comment «Взята менеджером, сессия <YYYY-MM-DD> <HH:MM MSK>; отчёт: <report URL>». If a write times out, re-read status and comments before repeating it.
+**Claim**: re-run the check block (it fetches first) right before writing anything; any new signal → skip. Then `→ In Progress` (`/github`), then the comment «Взята менеджером, сессия <YYYY-MM-DD> <HH:MM MSK>; отчёт: <report URL>». If a write times out, re-read status and comments before repeating it. Before each claim, `git diff --stat HEAD origin/main -- .claude/` in the main checkout: non-empty → `git pull --rebase origin main` (the checkout is clean on `main`), read the changed rules, and apply them from the next spawn on, with a line in the report (2026-10-14: the owner merged process changes at 21:44 and 21:54 mid-night). Every time written into a comment, `state.json` or the report comes from `TZ=Europe/Moscow date +%H:%M` in the same command, never from an estimate (2026-10-14: three claim comments carried times 5–47 min ahead of the clock).
 
 ## Task cycle
 
