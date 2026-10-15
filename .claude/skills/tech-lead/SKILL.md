@@ -313,7 +313,7 @@ Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (
    The reviewer does not post LGTM for such a PR; the audit records it as "merged at the round limit, findings in #<new>".
 
 **If the reviewer reports the PR is clean:**
-It posted the ready-to-merge comment or returned the classifier's refusal (Merge relay), and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5.
+It posted the ready-to-merge comment or returned the classifier's refusal (Merge relay), and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5. A non-final part of a split (`Refs #<N>`, `.claude/CLAUDE.md` → Git-процесс) is the exception: the issue goes back to In Progress, the next part is rebased onto `main` and gets its PR, and Done and Phase 5 wait for the final part's merge.
 
 **Tech-lead's own 6-pre run** (Phase 4 iteration 3 after a round-3 Blocker fix; a PR left In Review by a manager session). Not a review round.
 1. `gh pr checks <N>` at the current head: wait while running. Red → report it to the owner; no run, no merge question.

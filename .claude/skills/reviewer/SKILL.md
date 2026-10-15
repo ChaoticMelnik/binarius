@@ -143,7 +143,7 @@ Spawned, and the permission classifier refuses this comment: do not retry. Retur
 - **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the round, the PR number, the head SHA approved, the id of the 6-pre Codex job (or its skip line), the posted ready-to-merge comment URL (or the classifier's refusal with the body), `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
 - **Invoked directly by the owner:** ask via `AskUserQuestion` immediately before this specific merge — a yes on an earlier PR never carries over. On an explicit yes: `gh pr merge <N>` with the chosen allowed method — never `--admin` or any other bypass flag. If it fails (conflicts, red checks, branch protection): report the failure and stop.
 
-Either way: before moving to Done, confirm the merge actually happened — `gh pr view <N> --json state,mergedAt`, proceed only once `state` is `"MERGED"`. Then move the issue to **Done** via `/github` skill.
+Either way: before moving to Done, confirm the merge actually happened — `gh pr view <N> --json state,mergedAt`, proceed only once `state` is `"MERGED"`. Then move the issue to **Done** via `/github` skill — unless the PR is a non-final part of a split (`Refs #<N>`): the issue then goes back to In Progress (`.claude/CLAUDE.md` → Git-процесс).
 
 ---
 
