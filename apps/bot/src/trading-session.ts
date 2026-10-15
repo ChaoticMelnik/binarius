@@ -4,6 +4,7 @@ import {
   errorLogFields,
   pairLabel,
   TradeMode,
+  TradingModeErrorCode,
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -11,6 +12,8 @@ import {
   type CreateTradingSessionRequest,
   type PairLabel,
   type PairsCatalogResponse,
+  type SetTradingModeResponse,
+  type TelegramHtml,
   type TradingSessionView,
 } from '@binarius/shared';
 import {
@@ -34,6 +37,7 @@ import {
   backToAnalysisKeyboard,
   depositRows,
   inviteButton,
+  MODE_CALLBACK_DATA,
   menuKeyboard,
   supportKeyboard,
   withBuy,
@@ -137,6 +141,7 @@ export interface TradingSessionDeps {
     | 'stopSession'
     | 'claimSessionSummary'
     | 'stopSessions'
+    | 'setTradingMode'
   >;
   logger: Logger;
   sessionTracker: Pick<SessionTracker, 'track'>;
@@ -373,7 +378,8 @@ export function createTradingSessionComposer<C extends Context>({
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
   });
 
-  // /stop (#122): every active session of the user, one message whatever the count. No
+  // /stop (#122): every active session of the user, one message whatever the count, and the user
+  // back in demo (#473): a line before that message when the mode changed or the switch failed. No
   // confirmation and no retry, as the stop button: an unknown outcome shows in the session's own
   // status message, and a second /stop is harmless («Активных сессий нет.»). Every answer carries
   // «🏠 В меню» or the session's keyboard (Rule 31).
@@ -381,10 +387,26 @@ export function createTradingSessionComposer<C extends Context>({
     const from = ctx.from;
     if (from === undefined) return;
     const telegramUserId = String(from.id);
-    const [stopped, catalog] = await Promise.all([
-      settle(backend.stopSessions(telegramUserId)),
+    // the switch after the stop, never beside it: a switch out of real stops the sessions itself
+    // (#327), and a stop that came second would answer «Активных сессий нет.» about them
+    const [[stopped, reset], catalog] = await Promise.all([
+      settle(backend.stopSessions(telegramUserId)).then(
+        async (result) =>
+          [result, await settle(backend.setTradingMode(telegramUserId, TradeMode.Demo))] as const,
+      ),
       settle(backend.readPairs()),
     ]);
+    await replyModeReset(ctx, reset);
+    await replyStopped(ctx, telegramUserId, stopped, catalog);
+  });
+
+  // the message of #122, unchanged by #473
+  async function replyStopped(
+    ctx: Context,
+    telegramUserId: string,
+    stopped: Settled<Awaited<ReturnType<BackendClient['stopSessions']>>>,
+    catalog: Settled<PairsCatalogResponse>,
+  ): Promise<void> {
     if (!stopped.ok) {
       logger.warn(
         { ...errorLogFields(stopped.error), ...backendErrorFields(stopped.error) },
@@ -410,7 +432,45 @@ export function createTradingSessionComposer<C extends Context>({
       reply_markup: sessionKeyboard(view, cashierUrl),
     });
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
-  });
+  }
+
+  // The mode line of /stop (#473); its `stoppedSessions` is not read, the stop before it answered
+  // for the sessions. No users row has no mode to reset. A 4xx is a refusal before the write; any
+  // other failure, a throw that is not the client's included, may have committed: unlike the mode
+  // screen's outcomeUnknown, /stop has no screen to fall back to, so «не переключён» is said only
+  // when proven.
+  async function replyModeReset(ctx: Context, reset: Settled<SetTradingModeResponse>) {
+    let text: TelegramHtml;
+    let keyboard: InlineKeyboard;
+    if (reset.ok) {
+      if (!reset.value.changed) return;
+      text = TEXTS.modeStopReset;
+      keyboard = menuKeyboard();
+    } else {
+      const { error } = reset;
+      if (isHttpError(error, TradingModeErrorCode.UserNotFound)) return;
+      const fields = { ...errorLogFields(error), ...backendErrorFields(error) };
+      if (
+        error instanceof BackendError &&
+        error.code === BackendErrorCode.HttpStatus &&
+        (error.status ?? 0) < 500
+      ) {
+        logger.warn(fields, 'trading mode not reset');
+        text = TEXTS.modeNotReset;
+        keyboard = menuKeyboard();
+      } else {
+        logger.warn(fields, 'trading mode outcome unknown');
+        text = TEXTS.modeOutcomeUnknown;
+        keyboard = withMenu(new InlineKeyboard().text(LABELS.modeScreenButton, MODE_CALLBACK_DATA));
+      }
+    }
+    await replyHtml(ctx, text, { reply_markup: keyboard }).catch((error: unknown) => {
+      logger.warn(
+        { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage') },
+        'trading mode line not sent',
+      );
+    });
+  }
 
   async function start(request: CreateTradingSessionRequest): Promise<StartOutcome> {
     try {

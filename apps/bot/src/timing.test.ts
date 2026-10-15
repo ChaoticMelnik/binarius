@@ -1648,13 +1648,16 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
   SESSION_STOP_WORST_CASE,
 ];
 
-// /stop (#122): one message whatever the count, so every path is stopSessions ∥ readPairs and
-// one sendMessage
+const modeHttpError = (status: number, reason: string) =>
+  new BackendError(BackendErrorCode.HttpStatus, { status, reason });
+
+// /stop (#122): one message whatever the count; stopSessions, then setTradingMode to demo (#473),
+// beside readPairs, and the mode line before the message when the mode changed or the switch failed
 const stopUpdate = (chatType?: string) => textUpdate('/stop', chatType);
 const STOP_WORST_CASE: Branch = {
   label: 'one session is stopped and its status is sent',
   update: stopUpdate(),
-  expected: { backend: 2, telegram: 1 },
+  expected: { backend: 3, telegram: 2 },
 };
 const STOP_BRANCHES: readonly Branch[] = [
   {
@@ -1672,32 +1675,55 @@ const STOP_BRANCHES: readonly Branch[] = [
     label: 'no session was active',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([]),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
   {
     label: 'two sessions are stopped',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([STOPPED_SESSION, STOPPED_SESSION]),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
   {
     label: 'the stop fails',
     update: stopUpdate(),
     stopSessions: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
   {
     label: 'the catalog fails',
     update: stopUpdate(),
     readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'the user is in demo already',
+    update: stopUpdate(),
+    setTradingMode: () =>
+      Promise.resolve({ tradingMode: TradeMode.Demo, changed: false, stoppedSessions: 0 }),
+    expected: { backend: 3, telegram: 1 },
+  },
+  {
+    label: 'the switch finds no users row',
+    update: stopUpdate(),
+    setTradingMode: () => Promise.reject(modeHttpError(404, 'user_not_found')),
+    expected: { backend: 3, telegram: 1 },
+  },
+  {
+    label: 'the switch is refused',
+    update: stopUpdate(),
+    setTradingMode: () => Promise.reject(modeHttpError(400, 'invalid_request')),
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'the switch outcome is unknown',
+    update: stopUpdate(),
+    setTradingMode: () => Promise.reject(modeHttpError(500, 'internal')),
+    expected: { backend: 3, telegram: 2 },
   },
 ];
 
 // The mode screen (#474, trading-mode.ts): the open sends a new message, the confirm and the
 // switches edit in place; an unknown switch outcome reads access again.
-const modeHttpError = (status: number, reason: string) =>
-  new BackendError(BackendErrorCode.HttpStatus, { status, reason });
 const MODE_OPEN_WORST_CASE: Branch = {
   label: 'the screen is sent',
   update: callbackUpdate('mode'),

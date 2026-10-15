@@ -187,9 +187,9 @@ export const HANDLER_CALLS = {
   level: { backend: 1, telegram: 3 },
   // the selected level pressed: answerCallbackQuery only
   levelCurrent: { backend: 0, telegram: 1 },
-  // /stop (#122): stopSessions ∥ readPairs — counted as sequential, as in confirm — then
-  // sendMessage
-  stop: { backend: 2, telegram: 1 },
+  // /stop (#122): stopSessions → setTradingMode to demo (#473) ∥ readPairs — counted as
+  // sequential — then the mode line, then the #122 message
+  stop: { backend: 3, telegram: 2 },
   // the mode screen (#474, trading-mode.ts) from the card: answerCallbackQuery ∥
   // readTradingAccess — counted as sequential — then sendMessage
   modeOpen: { backend: 1, telegram: 2 },

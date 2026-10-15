@@ -1,10 +1,12 @@
-import { HttpError, InputFile } from 'grammy';
+import { GrammyError, HttpError, InputFile } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
+import { until } from '@binarius/shared/testing';
 import {
   pairLabel,
   TradeIntentStatus,
   TradeMode,
+  TradingModeErrorCode,
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -64,7 +66,8 @@ import {
   sessionStopCallbackData,
   START_REFUSALS,
 } from './trading-session';
-import { INVITE_CALLBACK_DATA } from './keyboards';
+import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
+import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
 import { INLINE_QUERY_LIMIT, shareQuery } from './session-share';
 
 const START = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
@@ -103,6 +106,7 @@ function setup(
     stopSession?: BackendClient['stopSession'];
     claimSessionSummary?: BackendClient['claimSessionSummary'];
     stopSessions?: BackendClient['stopSessions'];
+    setTradingMode?: BackendClient['setTradingMode'];
     // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
     cashierUrl?: string | null;
     readTradingAccess?: BackendClient['readTradingAccess'];
@@ -133,6 +137,11 @@ function setup(
   const stopSessions = vi.fn<BackendClient['stopSessions']>(
     options.stopSessions ?? (() => Promise.resolve([STOPPED])),
   );
+  // a demo user by default: /stop changes no mode (#473)
+  const setTradingMode = vi.fn<BackendClient['setTradingMode']>(
+    options.setTradingMode ??
+      (() => Promise.resolve({ tradingMode: TradeMode.Demo, changed: false, stoppedSessions: 0 })),
+  );
   const logger = fakeLogger();
   const sessionTracker = stubSessionTracker();
   const bot = createBot({
@@ -144,6 +153,7 @@ function setup(
       stopSession,
       claimSessionSummary,
       stopSessions,
+      setTradingMode,
       readTradingAccess,
       evaluateSignal,
     }),
@@ -173,6 +183,7 @@ function setup(
     stopSession,
     claimSessionSummary,
     stopSessions,
+    setTradingMode,
     evaluateSignal,
     ...api,
   };
@@ -803,6 +814,160 @@ describe('/stop (#122)', () => {
       await send(text);
       expect(onlyMessage(calls)?.text).toBe(statusOf(STOPPED));
       expect(stopSessions).toHaveBeenCalledTimes(1);
+    }
+  });
+});
+
+describe('/stop resets the mode (#473)', () => {
+  const RESET = { tradingMode: TradeMode.Demo, changed: true, stoppedSessions: 0 };
+  const MODE_ROWS = [[button(LABELS.modeScreenButton, MODE_CALLBACK_DATA)], MENU];
+  const sends = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload);
+  const sentText = (calls: readonly ApiCall[], text: string) =>
+    sends(calls).find((payload) => payload.text === text);
+
+  it('ST1 the switch is asked only once the stop has answered', async () => {
+    let answerStop: (sessions: TradingSessionView[]) => void = () => undefined;
+    const { send, stopSessions, setTradingMode } = setup({
+      stopSessions: () =>
+        new Promise((resolve) => {
+          answerStop = resolve;
+        }),
+      setTradingMode: () => Promise.resolve(RESET),
+    });
+    const handled = send('/stop');
+    // a switch beside the stop would be asked in the same turn as it
+    await until('the stop', () => stopSessions.mock.calls.length === 1);
+    expect(setTradingMode).not.toHaveBeenCalled();
+    answerStop([STOPPED]);
+    await handled;
+    expect(setTradingMode.mock.calls).toEqual([[String(USER.id), TradeMode.Demo]]);
+  });
+
+  it('ST2 a switch out of real: the mode line with the menu first, then the stopped status', async () => {
+    const { send, calls, sessionTracker } = setup({
+      setTradingMode: () => Promise.resolve({ ...RESET, stoppedSessions: 1 }),
+    });
+    await send('/stop');
+    const [line, status] = sends(calls);
+    expect(methods(calls)).toEqual(['sendMessage', 'sendMessage']);
+    expect(line?.text).toBe(TEXTS.modeStopReset.value);
+    expect(line?.text).toBe('🎮 Режим: DEMO — следующие сделки пойдут на демо.');
+    expect(rowsOf(line)).toEqual([MENU]);
+    // the switch's own count is not read: the stop before it answered for the session
+    expect(status?.text).toBe(statusOf(STOPPED));
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+  });
+
+  it('ST3 a user already in demo gets the message of #122 only', async () => {
+    const { send, calls, logger, setTradingMode } = setup({
+      setTradingMode: () =>
+        Promise.resolve({ tradingMode: TradeMode.Demo, changed: false, stoppedSessions: 0 }),
+    });
+    await send('/stop');
+    expect(sends(calls).map((payload) => payload.text)).toEqual([statusOf(STOPPED)]);
+    expect(setTradingMode).toHaveBeenCalledTimes(1);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('ST4 no users row: nothing to reset, nothing said, no warning', async () => {
+    const { send, calls, logger } = setup({
+      setTradingMode: () => Promise.reject(httpError(404, TradingModeErrorCode.UserNotFound)),
+    });
+    await send('/stop');
+    expect(sends(calls).map((payload) => payload.text)).toEqual([statusOf(STOPPED)]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('ST5 a 4xx refusal: «не переключён» with the menu and a warning, the status after it', async () => {
+    const { send, calls, logger, sessionTracker } = setup({
+      setTradingMode: () => Promise.reject(httpError(400)),
+    });
+    await send('/stop');
+    const line = sentText(calls, TEXTS.modeNotReset.value);
+    expect(line?.text).toBe('⚠️ Режим не переключён — открой /menu.');
+    expect(rowsOf(line)).toEqual([MENU]);
+    expect(sentText(calls, TEXTS.modeOutcomeUnknown.value)).toBeUndefined();
+    expect(warnings(logger)).toEqual(['trading mode not reset']);
+    expect(sentText(calls, statusOf(STOPPED))).toBeDefined();
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+  });
+
+  it('ST6 a 5xx, no answer, a body off the contract or any throw: the outcome is unknown', async () => {
+    for (const error of [
+      httpError(500),
+      httpError(503),
+      new BackendError(BackendErrorCode.Unreachable, { status: 200 }),
+      new BackendError(BackendErrorCode.ContractViolation),
+      new Error('not the client'),
+    ]) {
+      const { send, calls, logger } = setup({ setTradingMode: () => Promise.reject(error) });
+      await send('/stop');
+      const line = sentText(calls, TEXTS.modeOutcomeUnknown.value);
+      expect(rowsOf(line)).toEqual(MODE_ROWS);
+      expect(sentText(calls, TEXTS.modeNotReset.value)).toBeUndefined();
+      expect(warnings(logger)).toEqual(['trading mode outcome unknown']);
+      expect(sentText(calls, statusOf(STOPPED))).toBeDefined();
+    }
+  });
+
+  it('ST7 a failed stop: the switch is asked all the same, its line and unavailable', async () => {
+    const { send, calls, logger, setTradingMode } = setup({
+      stopSessions: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      setTradingMode: () => Promise.resolve(RESET),
+    });
+    await send('/stop');
+    expect(setTradingMode).toHaveBeenCalledTimes(1);
+    expect(sends(calls).map((payload) => payload.text)).toEqual([
+      TEXTS.modeStopReset.value,
+      TEXTS.unavailable.value,
+    ]);
+    expect(warnings(logger)).toEqual(['trading sessions not stopped']);
+  });
+
+  it('ST8 Telegram refuses the mode line: a warning with its method and code, the status still sent', async () => {
+    const { send, calls, logger, sessionTracker, answers } = setup({
+      setTradingMode: () => Promise.resolve(RESET),
+    });
+    const sendAnswer = messageAnswer(TEXT_CARD_MESSAGE_ID);
+    answers.set('sendMessage', (payload, signal) => {
+      if (payload.text === TEXTS.modeStopReset.value) {
+        throw new GrammyError(
+          'refused',
+          { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+          'sendMessage',
+          payload,
+        );
+      }
+      return sendAnswer(payload, signal);
+    });
+    await send('/stop');
+    expect(sends(calls).map((payload) => payload.text)).toEqual([
+      TEXTS.modeStopReset.value,
+      statusOf(STOPPED),
+    ]);
+    expect(warnings(logger)).toEqual(['trading mode line not sent']);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      method: 'sendMessage',
+      telegramErrorCode: 403,
+    });
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+  });
+
+  it('ST9 no keyboard of /stop carries a switch: the screen is a read, the switches stay on it', async () => {
+    const outcomes: BackendClient['setTradingMode'][] = [
+      () => Promise.resolve(RESET),
+      () => Promise.reject(httpError(400)),
+      () => Promise.reject(httpError(500)),
+    ];
+    for (const setTradingMode of outcomes) {
+      const { send, calls } = setup({ setTradingMode });
+      await send('/stop');
+      const data = sends(calls).flatMap((payload) =>
+        rowsOf(payload).flatMap((row) => row.map((key) => key.callback_data)),
+      );
+      expect(data).not.toContain(MODE_REAL_CALLBACK_DATA);
+      expect(data).not.toContain(MODE_DEMO_CALLBACK_DATA);
     }
   });
 });

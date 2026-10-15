@@ -99,6 +99,7 @@ interface Scenario {
   readIntent?: BackendClient['readIntent'];
   setStake?: BackendClient['setStake'];
   setTradingMode?: BackendClient['setTradingMode'];
+  stopSessions?: BackendClient['stopSessions'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -129,7 +130,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
-    stopSessions: () => Promise.reject(new Error('not used by these scenes')),
+    stopSessions:
+      scenario.stopSessions ?? (() => Promise.reject(new Error('not used by these scenes'))),
     setStake: scenario.setStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
     setTradingMode:
       scenario.setTradingMode ?? (() => Promise.reject(new Error('not used by these scenes'))),
@@ -1568,5 +1570,74 @@ describe('what the bot writes about the trading mode (#474)', () => {
       err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
     });
     noUserNoAmount(lines);
+  });
+});
+
+describe('what the bot writes about /stop back to demo (#473)', () => {
+  const noUser = (lines: readonly string[]) => {
+    const fields = lines
+      .map((line) => JSON.stringify({ ...parsed(line), time: undefined, pid: undefined }))
+      .join('');
+    expect(fields).not.toContain(String(USER.id));
+  };
+  const stop = {
+    update: textUpdate('/stop'),
+    level: 'trace' as const,
+    stopSessions: () => Promise.resolve([]),
+  };
+
+  it('names a refused switch by error, code, status and reason, without the user', async () => {
+    const { lines } = await linesFrom({
+      ...stop,
+      setTradingMode: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 400, reason: 'validation' }),
+        ),
+    });
+    expect(lineWith(lines, 'trading mode not reset')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 400,
+      backendReason: 'validation',
+    });
+    noUser(lines);
+  });
+
+  it('names a switch of unknown outcome by error, code and status, without the user', async () => {
+    const { lines } = await linesFrom({
+      ...stop,
+      setTradingMode: () =>
+        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 502 })),
+    });
+    expect(lineWith(lines, 'trading mode outcome unknown')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 502,
+    });
+    noUser(lines);
+  });
+
+  it('names a mode line Telegram refused by method and code, and nothing of the text', async () => {
+    const { lines } = await linesFrom({
+      ...stop,
+      setTradingMode: () =>
+        Promise.resolve({ tradingMode: TradeMode.Demo, changed: true, stoppedSessions: 0 }),
+      apiErrors: [
+        [
+          'sendMessage',
+          { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+        ],
+      ],
+    });
+    const line = lineWith(lines, 'trading mode line not sent');
+    expect(line).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'sendMessage',
+      telegramErrorCode: 403,
+    });
+    expect(JSON.stringify(line)).not.toContain('DEMO');
+    expect(JSON.stringify(line)).not.toContain('blocked');
+    noUser(lines);
   });
 });
