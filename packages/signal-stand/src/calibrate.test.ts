@@ -439,4 +439,11 @@ describe('calibrate', () => {
     expect(reported.out.find((l) => l.includes('v2 5 s:'))).toMatch(/reported, not gated$/);
     expect(reported.code).toBe(0);
   });
+  it('E8 a duration with no stand interval counts unsupported_duration and joins no era', () => {
+    const session = liveSession(2);
+    const odd = { ...session.trades[0], duration_sec: 30 };
+    const { counter, out } = run({ ...session, trades: [...session.trades, odd] });
+    expect(counter('unsupported_duration')).toBe(1);
+    expect(out.some((l) => l.includes('v2 30 s:'))).toBe(false);
+  });
 });
