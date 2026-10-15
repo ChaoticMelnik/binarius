@@ -51,8 +51,8 @@ Progress and refusals go to stderr as plain lines. A broker error is printed as 
 status and `retryAfterSec`, never with its URL or body (Rule 8). The chart and pairs endpoints take
 no token, and the stand reads none.
 
-`calibrate` reads the owner's files and writes only `$STAND_DIR/calibration.json`. Run with the
-explicit flags above, it writes nothing next to them.
+`calibrate` reads the owner's files and writes only `$STAND_DIR/calibration.json`, and only on
+PASS. Run with the explicit flags above, it writes nothing next to them.
 
 ## The budget
 
@@ -265,8 +265,9 @@ decision checked by `signalDecisionSchema`/`signalDecisionV1Schema`. A line fail
 `malformed_session_file`. These files are a second source of prices:
 - For each file, the rows are compared with the cache rows of the same asset and timestamps. An
   equal file counts `price_series_match`. Any OHLC difference counts `price_series_revised`,
-  printed with the first differing timestamp. Rows the cache lacks are `not_in_cache`, not
-  revisions. A file's first row is not compared: it is its answer's first row, whose `open` is
+  printed with the first differing timestamp. Rows the cache lacks are `price_rows_not_in_cache`,
+  not revisions, and a file with no row compared counts only `price_files_not_compared`, never
+  `price_series_match`. A file's first row is not compared: it is its answer's first row, whose `open` is
   the window's first tick (The cache → the first-row rule).
 - A price comes from the cache first. When the cache lacks the row, it comes from the session
   files (`priced_from_session_file`). With neither, the trade is `unpriced`.
@@ -287,11 +288,21 @@ line is `unmatched`. For each matched trade, the stand checks:
   trade's (`replayed` / `replay_mismatch`).
 - The line's closed candles equal the cache's interval rows at the same timestamps
   (`series_match` / `series_revised`). The forming row is skipped because it was not final when
-  logged, and so is the first row, the first row of the feed's answer.
+  logged, and so is the first row, the first row of the feed's answer. Rows the cache lacks are
+  `series_rows_not_in_cache`, and a line with no row compared counts only
+  `series_lines_not_compared`.
 - The delays `open_timestamp − created_at` and `open_timestamp − nowMs`.
 
+**The refusal.** Before any gate, every asset of a non-ambiguous trade needs its `pairs.json`
+entry and a non-empty cached `1s` series and series of each interval its trades use. Otherwise
+`calibrate` names every missing one (`<id>: not in pairs.json`, `<id>: no 5s series`) with
+"fetch it first", exits 1 and writes nothing. A trade whose duration has no `TRADE_INTERVALS`
+entry counts `unsupported_duration`; it stays in gate 2 and the delay choice, and in no era.
+
 **The pass rule.** Exit 0 needs all three gates:
-1. `series_revised` = 0 and `price_series_revised` = 0. A revised history invalidates the stand.
+1. `series_revised` = 0 and `price_series_revised` = 0, with at least one session file and one
+   journal line compared (a `*_match` or `*_revised` count above 0). Nothing compared is
+   "FAIL no revision evidence". A revised history invalidates the stand.
 2. The outcome match is at least `CALIBRATE_MIN_OUTCOME_MATCH_PCT` (85 %) of the priced trades.
    The match is the sign of `close − open`, priced at the trade's own timestamps shifted by `k`,
    in the trade's direction, against the sign of `profit`. `k` is in `{−1000, 0, +1000}`, and the
@@ -299,11 +310,12 @@ line is `unmatched`. For each matched trade, the stand checks:
 3. For each era × duration with at least `CALIBRATE_MIN_ERA_TRADES` (30) live trades, the live
    win rate lies inside the Wilson interval of the stand's own rate. The stand's rate comes from
    v1, or v2 at 15/5 with the pause, simulated inside each session's window: from its first
-   `created_at` to its last `close_timestamp`. Smaller rows are reported, not gated.
+   `created_at` to its last `close_timestamp`, at the headline delay. A gated row whose stand
+   has no win or loss is "FAIL no stand evidence": an empty sample's interval would hold any
+   rate. Smaller rows are reported, not gated.
 
 The totals print in this order: revisions, outcome match, per-era comparison, the delay choice,
-the delay distributions, the price error in ticks per `k` (`× 10^digits`, needs `pairs.json`),
-and the counters.
+the delay distributions, the price error in ticks per `k` (`× 10^digits`), and the counters.
 
 **The headline delay.** For every priced, non-ambiguous trade and each `openDelay` in the grid,
 the stand prices `entry = created_at + openDelay` and `exit = entry + duration`. It then compares
@@ -311,7 +323,9 @@ the simulated outcome with the sign of `profit`. `created_at` stands in for the 
 the intent is created right after the decision, and the gap between them is not in the export.
 The delay with the highest match share wins, and a tie goes to the smaller delay. A trade
 unpriced at one delay leaves only that delay's denominator. `calibrate` writes the choice to
-`$STAND_DIR/calibration.json`, which `run` reads. The choice gates nothing.
+`$STAND_DIR/calibration.json` on PASS, which `run` reads. Gate 3 compares the stand at this
+delay; gates 1 and 2 do not depend on it. A FAIL saves nothing, so an earlier PASS's file stays,
+with its own date in `run`'s delay origin.
 
 ## Pairs
 
