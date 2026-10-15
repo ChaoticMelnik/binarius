@@ -95,7 +95,7 @@ export async function main(argv: readonly string[], env: EnvSource, io: MainIo):
     const clock = io.clock ?? systemClock;
     if (command === 'fetch') {
       const intervals = (values.intervals ?? FETCH_INTERVALS.join(',')).split(',');
-      const unknown = intervals.find((interval) => FETCH_STEP_MS[interval] === undefined);
+      const unknown = intervals.find((interval) => !Object.hasOwn(FETCH_STEP_MS, interval));
       if (unknown !== undefined)
         throw new UsageError(`--intervals: ${unknown} is not a stand interval`);
       const assets = list(values.assets, STAND_ASSET_IDS);

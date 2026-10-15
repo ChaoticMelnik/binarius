@@ -1,7 +1,7 @@
+import { breakEvenPct } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import {
   addTrade,
-  breakEvenPct,
   emptyTally,
   selectPoint,
   verdictOf,

@@ -83,18 +83,18 @@ export function simulate(market: Market, config: SimConfig): SimResult {
   let decidedAt = nextAsk(config.from);
   while (decidedAt + config.openDelayMs + durationSec * 1000 <= config.until) {
     result.decisions++;
-    const verdict = config.variant.decide(
+    const decision = config.variant.decide(
       decisionContext(market, config.interval, decidedAt),
       config.point,
     );
     const next = nextAsk(decidedAt + 1);
-    if ('refusal' in verdict) {
-      refuse(verdict.refusal);
+    if ('refusal' in decision) {
+      refuse(decision.refusal);
       lastSignal = undefined;
       decidedAt = next;
       continue;
     }
-    const { action } = verdict;
+    const { action } = decision;
     if (config.pause && lastSignal === action && pausedDirection(priced) === action) {
       refuse(PAUSE_REFUSAL);
       decidedAt = next;

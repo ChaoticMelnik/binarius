@@ -221,4 +221,15 @@ describe('fetch', () => {
     expect(stored.length).toBeGreaterThan(400);
     expect(stored).toEqual(rows.slice(1, stored.length + 1));
   });
+
+  it('F10 an inherited key of the step table is not an interval: refused before any GET', async () => {
+    const clock = fixedClock(T0);
+    const { rest, calls } = windowRest([], clock);
+    for (const interval of ['constructor', 'toString', '__proto__']) {
+      await expect(fetchCandles(options({ rest, clock, intervals: [interval] }))).rejects.toThrow(
+        `fetch: interval ${interval} is not one of the stand's`,
+      );
+    }
+    expect(calls).toHaveLength(0);
+  });
 });

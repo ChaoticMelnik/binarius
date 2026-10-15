@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { MIN_CYCLE_PAYOUT_PCT } from '@binarius/shared';
 import {
   firstTimestamp,
   lastTimestamp,
@@ -15,7 +16,6 @@ import {
   PRICE_INTERVAL,
   PRICE_STEP_MS,
   TRADE_INTERVALS,
-  type TradeInterval,
 } from './config';
 import { priceIndex } from './price';
 import { buildReport, type AssetCell, type Cell, type RunData, type SeriesInfo } from './report';
@@ -30,6 +30,24 @@ export function splitTrades(trades: readonly SimTrade[], split: number, payout: 
   for (const trade of trades)
     addTrade(trade.decidedAt < split ? inSample : outOfSample, trade, payout);
   return { inSample, outOfSample };
+}
+
+const DAY_MS = 86_400_000;
+
+export interface SeriesRange {
+  label: string;
+  first: number;
+  last: number;
+}
+
+// `fetch --days` bounds only a series' first fetch, so pooled pairs can cover different ranges
+export function rangeWarning(ranges: readonly SeriesRange[]): string | undefined {
+  const days = (range: SeriesRange) => (range.last - range.first) / DAY_MS;
+  const longest = Math.max(...ranges.map(days));
+  const short = ranges.filter((range) => longest - days(range) > 1);
+  if (short.length === 0) return undefined;
+  const listed = short.map((range) => `${range.label} ${days(range).toFixed(1)} d`).join(', ');
+  return `run: pooled ${PRICE_INTERVAL} ranges differ by more than a day: ${listed}, against ${longest.toFixed(1)} d`;
 }
 
 export interface RunOptions {
@@ -58,13 +76,25 @@ export function runBacktest(options: RunOptions): number {
     return pair;
   });
 
-  const priceFiles = options.assets.map((id) => seriesPath(dir, id, PRICE_INTERVAL));
-  const firsts = priceFiles.map(firstTimestamp).filter((ms) => ms !== undefined);
-  const lasts = priceFiles.map(lastTimestamp).filter((ms) => ms !== undefined);
+  const ranges = options.assets.map((id) => {
+    const file = seriesPath(dir, id, PRICE_INTERVAL);
+    return { first: firstTimestamp(file), last: lastTimestamp(file) };
+  });
+  const firsts = ranges.map(({ first }) => first).filter((ms) => ms !== undefined);
+  const lasts = ranges.map(({ last }) => last).filter((ms) => ms !== undefined);
   if (firsts.length === 0) throw new StandError(`run: no ${PRICE_INTERVAL} series in ${dir}`);
   const since = Math.min(...firsts);
   const until = Math.max(...lasts) + PRICE_STEP_MS;
   const split = splitAt(since, until, IN_SAMPLE_SHARE);
+  const warning = rangeWarning(
+    pairs.flatMap((pair, i) => {
+      const { first, last } = ranges[i];
+      return pair.payout < MIN_CYCLE_PAYOUT_PCT || first === undefined || last === undefined
+        ? []
+        : [{ label: `${pair.symbol} (${pair.id})`, first, last }];
+    }),
+  );
+  if (warning !== undefined) io.err(warning);
 
   const cells = new Map<string, Cell>();
   const series: SeriesInfo[] = [];
@@ -89,7 +119,7 @@ export function runBacktest(options: RunOptions): number {
       ),
     };
     for (const variant of VARIANTS) {
-      for (const interval of variant.intervals as readonly TradeInterval[]) {
+      for (const interval of variant.intervals) {
         for (const point of variant.grid) {
           for (const pause of [false, true]) {
             for (const openDelayMs of OPEN_DELAY_GRID_MS) {

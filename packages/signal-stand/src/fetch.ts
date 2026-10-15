@@ -108,7 +108,7 @@ async function fetchSeries(options: FetchOptions, assetId: number, interval: str
 
 export async function fetchCandles(options: FetchOptions): Promise<void> {
   for (const interval of options.intervals) {
-    if (FETCH_STEP_MS[interval] === undefined) {
+    if (!Object.hasOwn(FETCH_STEP_MS, interval)) {
       throw new StandError(`fetch: interval ${interval} is not one of the stand's`);
     }
   }

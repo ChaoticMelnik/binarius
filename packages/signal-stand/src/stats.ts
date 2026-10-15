@@ -1,7 +1,4 @@
-import { breakEvenPct } from '@binarius/shared';
 import type { SimTrade } from './simulate';
-
-export { breakEvenPct };
 
 const Z95 = 1.959964;
 

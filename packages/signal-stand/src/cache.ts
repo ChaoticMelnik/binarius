@@ -111,11 +111,30 @@ export function firstTimestamp(file: string): number | undefined {
 }
 
 // cuts a partial last line, so the next append starts on a line of its own
+// reads back from the end only as far as the last newline, so an append never rereads the file
 function repairTail(file: string, warn: Warn): void {
   if (!existsSync(file)) return;
-  const text = readFileSync(file, 'utf8');
-  if (text === '' || text.endsWith('\n')) return;
-  truncateSync(file, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)));
+  const fd = openSync(file, 'r');
+  let size: number;
+  let keep = 0;
+  try {
+    size = fstatSync(fd).size;
+    const buffer = Buffer.alloc(TAIL_BYTES);
+    for (let end = size; end > 0;) {
+      const start = Math.max(0, end - TAIL_BYTES);
+      readSync(fd, buffer, 0, end - start, start);
+      const newline = buffer.subarray(0, end - start).lastIndexOf(0x0a);
+      if (newline !== -1) {
+        keep = start + newline + 1;
+        break;
+      }
+      end = start;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  if (keep === size) return;
+  truncateSync(file, keep);
   warn(`${file}: a partial last line was cut before appending`);
 }
 
@@ -143,7 +162,13 @@ export const pairsPath = (dir: string): string => path.join(dir, 'pairs.json');
 export function readPairs(dir: string): PairSnapshot[] {
   const file = pairsPath(dir);
   if (!existsSync(file)) return [];
-  const parsed = pairsFileSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    throw new StandError(`${file}: not a pairs snapshot`);
+  }
+  const parsed = pairsFileSchema.safeParse(value);
   if (!parsed.success) throw new StandError(`${file}: not a pairs snapshot`);
   return parsed.data;
 }
