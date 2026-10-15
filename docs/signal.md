@@ -132,11 +132,17 @@ MA200 is `{ ok: false, closedCandles: 149, required: 200 }`, MA50 and MACD have 
 
 | Indicator | Needs closed candles | Value |
 |---|---|---|
-| `macd` | 35 (`macdSlow + macdSignal`: two signal-line points) | `{ macd, signal, histogram, cross }`; `cross` is `up` when the histogram goes from below 0 to above 0 between the last two closed candles, `down` the other way, otherwise `none` (a zero on either point is `none`) |
+| `macd` | 35 (`MACD_REQUIRED_CANDLES` = `macdSlow + macdSignal`: two signal-line points) | `{ macd, signal, histogram, cross }`; `cross` is `up` when the histogram goes from below 0 to above 0 between the last two closed candles, `down` the other way, otherwise `none` (a zero on either point is `none`) |
 | `ma50`, `ma200` | 50, 200 | `{ value, lastClose }`: the SMA and the last closed candle's close, the same candle as `features.lastClose` |
 
 `display.test.ts` D1–D9 pin the counts, the cross and the refusals against closed forms and an
 EMA written in the test, not against `indicators.ts`.
+
+The consumer is the bot's analysis card ([bot-demo.md → The analysis](bot-demo.md#the-analysis)):
+a word and the number per indicator, «данных мало (N из M)» for `ok: false`, and the same for all
+three, at 0 of `MACD_REQUIRED_CANDLES` (shared, beside `DISPLAY_INDICATOR_PARAMS`) and of the two
+periods, when the answer has no `indicators` key. The bot does not depend on `packages/signal`, so
+the count it prints for a missing field comes from shared, the one source both read.
 
 Each indicator runs over the whole closed series the caller supplies, with no trailing window.
 EMA and Wilder values depend on the series length, so a decision can be reproduced only from the

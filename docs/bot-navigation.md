@@ -35,7 +35,7 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 
 | `NoNextStepReason` | Where | Why |
 |---|---|---|
-| `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`, an edit, or a new message when the summary is gone) | the result replaces it with its keyboard within the signal's budget; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the summary above it and /menu remain |
+| `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`: an edit of the pressed message, or a new message at once under a photo — the analysis card, the session's summary card, #482) | a text result replaces it with its keyboard within the signal's budget, and after a signal's card (#482) it is deleted; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, when the card's photo fails in transport and «⏳»'s edit is refused, or when its delete is refused, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the screen above it and /menu remain |
 
 The backend's push has one exception of its own, by its method's type rather than a reason:
 

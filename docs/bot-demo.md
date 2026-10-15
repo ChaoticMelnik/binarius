@@ -99,13 +99,17 @@ demo:a:<assetId>          (a pair, «↩️ Длительность»)  → the
 demo:d:<assetId>:<sec>    (a duration)       → readDemoTrade, then the summary with «📊 Анализ»
 demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить анализ»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade ∥ POST /trading/access (the mode)
-  bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 15 с…», no keyboard
+  bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 15 с…», no keyboard (under a photo —
+         the analysis card, the session's summary card — sendMessage at once, #482)
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
-  bot  → editMessageText: the analysis screen with its keyboard: the session first on every
-         decided answer, «➕ Ещё» on a signal (#360)
+  bot  → on a signal: sendPhoto, the card (#482) — the bull or the bear, the caption with its
+         block, in demo the amounts under it — then deleteMessage of «⏳»
+  bot  → otherwise: editMessageText of «⏳» into the analysis screen with its keyboard: the
+         session first on every decided answer (#360)
 demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's token, #379)
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
+         (in demo under the card's amounts, which stay, #482)
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
 <mode>:sess:<assetId>:<sec>[:l]              (the session button: in real the analysis's row, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия», the row under a finished trade, #327; in demo the buttons sent before #476) → the session, bot-session.md
 stk:o:<d|r>:p:<assetId>:<sec>                 («💵 Изменить ставку» of the real launch screen, and of demo launch screens sent before #476) → the picker, bot-demo-trade.md
@@ -377,9 +381,22 @@ not a fresh catalog.
   «↩️ Типы». On `fetch_failed` and when the signal call threw: the last two rows only.
   «⏳ Анализирую…» has no keyboard, so «📊 Анализ» cannot be pressed twice while the signal is
   asked for.
-- **Analysis expanded by «➕ Ещё» (#360).** The session row (not below the cycle floor), then «🚀 Открыть сделку: ⬆️ Вверх ·
-  $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and the way back — the same
-  message, only its keyboard edited. «🔄 Повторить анализ» draws the collapsed form again.
+- **The card's amounts (#482, demo).** Under a signal's card in demo the amounts of the amount
+  screen take the session row's place: the same rows (`appendCycleAmounts`, ✅ on the amount in
+  effect, the risky ones two a row), `demo:sa:<assetId>:<sec>:<amount>:a`, then «✏️ Своя сумма»
+  in a row of its own — only when the access read gives demo mode, `stakeAccess` gives a broker
+  snapshot (not for a blocked user), the amounts are not empty, and the session row's conditions
+  hold (the cycle floor, `sessionFits`). The caption's last line is then «Выбери сумму сделки 👇»
+  (`analysisChooseAmount`). Otherwise — no snapshot, a balance below the minimum, a failed read —
+  the session row as before, whose press opens the amount screen and says why there. An amount's
+  press is #476's: the save, the start, the card deleted after the status (`deleteMessage` takes a
+  photo as it takes a text); «✏️ Своя сумма» and «💵 Сумма» edit the pressed message, refused as a
+  caption, and their screen goes as a new message.
+- **Analysis expanded by «➕ Ещё» (#360).** The session row (not below the cycle floor) — in demo
+  the card's amounts in its place, by the same conditions read at this press (#482) — then «🚀
+  Открыть сделку: ⬆️ Вверх · $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and
+  the way back — the same message, only its keyboard edited. «🔄 Повторить анализ» draws the
+  collapsed form again.
 - **Real mode (#121, [trading-mode.md](trading-mode.md)).** The analysis reads access for the
   user's mode beside the catalog: in real mode the session row is «🚀 Сессия из 5 сделок · REAL»
   with `real:sess:<assetId>:<sec>` (#327; in demo `demo:l:<assetId>:<sec>:a`, the amount screen,
@@ -409,41 +426,60 @@ plain strings; every label but a pair's starts with an emoji.
 
 Every fragment is a `TEXTS` entry and the screens are assembled by `demoPairsScreen`,
 `demoDurationsScreen`, `demoSummary` and `analysisScreen`; the symbol is a hole of
-`telegramHtml`, escaped once. The pairs screen, the durations screen, the summary and the
+`telegramHtml`, escaped once — inside the card's `<pre>` too, with every label and value. The pairs screen, the durations screen, the summary and the
 analysis of a signal each say once what the payout is: the size of a win on a right forecast, not
 its probability. The durations screen, the summary and the analysis of a signal also name the
 break-even share at that payout (#379): «Безубыточность: {breakEven}% верных прогнозов.» —
 `100 / (100 + payout)`, one decimal, a dash where the payout gives none (`formatBreakEven`). No
 profit, accuracy or probability is promised (`texts.test.ts` holds the absence of «вероятност» and
 «точност» in every analysis entry); the only numbers are the broker's payout, the break-even share
-computed from it, the page count and the signal's own features.
+computed from it, the page count and the signal's own features and display indicators.
 
 ## The analysis
 
 `demo:an` keeps the order «check, then the screen». `readDemoTrade` runs on the catalog read at
 this press; any refusal is the table in [The check](#the-check), with no «⏳» and no signal asked
-for. On `ok` the summary becomes «⏳ Анализирую {symbol} · {duration}…», then
+for. On `ok` «⏳ Анализирую {symbol} · {duration}…» stands (`showWaiting`), then
 `evaluateSignal(assetId, intervalForDuration(sec))` asks the backend's `POST /trading/signal`
-([signal.md](signal.md#post-tradingsignal-258)), then the screen replaces «⏳». The interval is
+([signal.md](signal.md#post-tradingsignal-258)), then a text screen replaces «⏳», or a signal's
+card goes as a photo and «⏳» is deleted (#482). The interval is
 the longest table candle not above the duration; on `DEMO_DURATIONS_SEC` it is the duration
 itself: a 5 s trade is analysed on `5s` candles and a 15 s trade on `15s`, never on `1m` (#313;
 `analysis.test.ts` A1 breaks when the two tables part, and `signal.test.ts` S3 when either falls
 back to `1m`).
 
-Where «⏳» went decides where the result goes (`editOrReply`'s outcome):
+Where «⏳» stands decides where the result goes (#482). A pressed message with a photo (the
+analysis card, the session's summary card #318) cannot become text, so its «⏳» goes as a new
+message at once; trying the edit first would make the card's path five Telegram calls, past the
+shutdown budget ([Timing](#timing)):
 
 | «⏳» | Then |
 |---|---|
-| edited, or «message is not modified» | the signal, then the result through `editOrReply` (its own four outcomes) |
-| the summary gone → «⏳» sent anew | the signal, then the result as a new message with its keyboard |
-| failed in transport | nothing more, and no signal asked for: a second message after an unknown delivery is worse than none |
+| the pressed message edited, or «message is not modified» | the signal; a text result through `editOrReply`; a card as a photo, then «⏳» deleted |
+| under a photo: sent as a new message | the signal; a text result edited into «⏳» by its id (gone → sent anew, a transport failure → nothing more, `editByIdOrReply`); a card as a photo, then «⏳» deleted |
+| the pressed message gone or not editable | no «⏳» anew (`warn` `the demo screen was not edited, the analysis goes as a new message`); the signal, then the result — text or card — as a new message |
+| failed in transport (the edit, or the new «⏳») | nothing more, and no signal asked for: a second message after an unknown delivery is worse than none |
 | any other refusal | `bot.catch`, nothing more |
+
+The card's photo and «⏳» after it (`sendCard`; the budget leaves one call after the photo):
+
+| Outcome | Then |
+|---|---|
+| sent | the `file_id` of its largest size remembered for the direction (none in the answer: `warn` `no_file_id`); «⏳» deleted: «message to delete not found» → `info`, anything else, a transport failure too → `warn` `the analysis «⏳» was not deleted`, nothing more |
+| refused by Telegram (`GrammyError`, a stale `file_id` among them) | the direction's `file_id` forgotten (`warn` `the analysis card photo was refused, sending its text`); the same caption and keyboard as text in place of «⏳» (any refusal → `warn`, nothing more), or as a new message where «⏳» is gone; the next press uploads the file |
+| failed in transport | the outcome unknown (`error` `the analysis card failed in transport`): «⏳» says «⚠️ Не удалось получить свечи…» with «🔄 Повторить анализ» and the way back (its refusal → nothing more); without «⏳» nothing more. A repeat after a card that did arrive gives a second card (accepted) |
+
+The pictures are `apps/bot/src/assets/setup-bull.png` and `setup-bear.png` (1280×640,
+`SETUP_CARD_PHOTO_PATHS`; `assets.test.ts` holds each a PNG within the Bot API's photo limits):
+replacing a file changes the card without a code change. The first card of each direction goes
+as the file, every later one by the `file_id` Telegram answered with, kept in the composer's memory:
+a restart, or a second bot process, uploads each picture once again.
 
 The screen (`analysisScreen`) is built from this press's pair and the answer only:
 
 | Answer | Headline | Body | Buttons above the repeat (#360) |
 |---|---|---|---|
-| `decided`, `signal` | «📈 Сигнал: ⬆️ Вверх» / «📉 Сигнал: ⬇️ Вниз» | the feature lines, the payout with the break-even share, on a pair below the cycle floor «🚫 Цикл на этой паре не запускается: выплата ниже 80%.» (`analysisCycleUnavailable`, #379), «⚠️ Сигнал — не прогноз результата и не гарантия…» | the session (not below the cycle floor), «➕ Ещё» by the decision's action |
+| `decided`, `signal` — the card (#482), a photo of the bull or the bear | «🟢 Сильный сигнал на рост» / «🔴 Сильный сигнал на падение» | the block (below), the payout with the break-even share, on a pair below the cycle floor «🚫 Цикл на этой паре не запускается: выплата ниже 80%.» (`analysisCycleUnavailable`, #379), «⚠️ Сигнал — не прогноз результата и не гарантия…», in demo over the amounts «Выбери сумму сделки 👇» | in demo the amounts, else the session (not below the cycle floor); «➕ Ещё» by the decision's action |
 | `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала разовую сделку бот не предлагает. Автосессия дождётся сигнала сама…», below the cycle floor the note as the last line | the session (not below the cycle floor) |
 | `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…», below the cycle floor the note as the last line; no feature line, the decision carries none | the session (not below the cycle floor) |
 | `fetch_failed` `rate_limited` with `retryAfterSec` | «⚠️ Брокер ограничил запросы. Попробуй через N с.» | — | none |
@@ -454,7 +490,41 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 each of its trades itself, so «сигнала нет» now is no reason to withhold it. Where the candles were
 not read, its first trade would wait on the same failure, so no session row is drawn.
 
-The feature lines, every number from the answer:
+The card's block (#482) is a `<pre>`, so Telegram draws it monospaced with a copy button: eight
+rows of a label (`cardRowPair` … `cardRowDirection`) padded to the longest label after the
+overrides — by `String#length`, UTF-16 units, as the caption limit counts them — one space, the
+value. Every number is the answer's:
+
+```
+Пара          EUR/USD OTC
+RSI           нейтрально 62.3
+MACD          выше сигнальной 0.000023
+MA50          цена выше 1.08531
+MA200         цена ниже 1.08612
+Тренд EMA     вверх
+Волатильность в норме 0.041%
+Направление   ⬆️ ВВЕРХ 🟢
+```
+
+- RSI: «перекуплен» at `features.rsi ≥ 50 + params.rsiExtremeBand`, «перепродан» at `≤ 50 −
+  rsiExtremeBand`, «нейтрально» between — the bounds of the decision's own `rsi_overbought` /
+  `rsi_oversold` (65 / 35 by default); then the RSI to a tenth.
+- MACD (12, 26, 9): «пересечение вверх» / «пересечение вниз» when `indicators.macd.cross` says the
+  cross happened on the last closed candle; otherwise «выше сигнальной» / «ниже сигнальной» /
+  «на сигнальной» by the histogram's sign; then the histogram at the pair's digits plus one.
+- MA50, MA200: «цена выше» / «цена ниже» / «цена на MA» by the last close against the average,
+  then the average at the pair's digits.
+- An indicator with `ok: false`: «данных мало ({closedCandles} из {required})» in place of the
+  word and the number. With no `indicators` field (the unbroken tail failed the candle checks,
+  [signal.md](signal.md)) all three say «данных мало (0 из 35 / 50 / 200)»: the row is never
+  dropped and never prints a default.
+- The trend word of the decision; «в норме» and the ATR% (a signal is decided with the volatility
+  in bounds); «⬆️ ВВЕРХ 🟢» / «⬇️ ВНИЗ 🔴» by the action.
+
+The direction is the decision's (Signal v2 on its 60 candles); MACD and MA are shown, not decided
+on, until #483, so «рост» beside «MA200: цена ниже» is possible.
+
+The feature lines of a rule refusal, every number from the answer:
 
 - «📐 Тренд по EMA: вверх — EMA{params.emaFast} {features.emaFast} выше EMA{params.emaSlow}
   {features.emaSlow}» — «выше»/«ниже»/«равна» by the order of the two EMAs; the trend words
@@ -470,7 +540,8 @@ The feature lines, every number from the answer:
 
 Prices are printed with the pair's `digits`, RSI to a tenth, ATR% to a thousandth (a live 1m ATR%
 sits in the hundredths and thousandths), ATR in quote steps to a tenth (`formatAtrTicks`). The periods come from `params`, never from the bot: a
-backend tuned to other periods prints those (`analysis.test.ts` A2 runs on non-default ones).
+backend tuned to other periods prints those (the fixture's are not the defaults). `analysis.test.ts`
+A2 holds the card to the answer's numbers and the pair's payout, and nothing else.
 
 «➕ Ещё» is drawn only on a signal, which is reached only after `readDemoTrade` was `ok` on this
 press: the pair open by its schedule and the duration inside its range on a fresh catalog. Its
@@ -484,8 +555,9 @@ session row, whose press meets the route's 409 `payout_too_low` and `sessionPayo
 every session button drawn before #379 does.
 
 **«➕ Ещё» (#360).** The press answers the query beside `POST /trading/access` and edits only the
-keyboard of the same message (`editMessageReplyMarkup`, no text): the session row stays first
-where the datum's token is `s`,
+keyboard of the same message (`editMessageReplyMarkup`, no text — a photo's markup can be edited):
+the session row stays first where the datum's token is `s` — in demo the card's amounts in its
+place where this press's access read allows them (#482) —
 then «🚀 Открыть сделку: ⬆️ Вверх · $5.00» and «💵 Сумма» (`stk:o:d:a:<assetId>:<sec>`, the picker
 of the expansion's mode, `r` in real mode, #326) in one row, then the repeat and the way back. The
 label names the amount the press would trade, the saved stake of the user's mode or the broker's
@@ -535,12 +607,14 @@ no backend call and up to three Bot API calls: 24 s; `.demoSignals` (`demo:sig:<
 `.demoLaunch` are two backend calls (the signals or access read beside the catalog) and up to three
 Bot API calls: 34 s (#320). Each of `.demoGroups`, `.demoPage`, `.demoAsset` and
 `.demoDuration` is one backend call and up to three Bot API calls (the edit refused as gone,
-then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is two backend calls
-(the catalog beside the answer, then the signal; the access read for the stake label moved to
-«➕ Ещё», #360) and up to four Bot API calls — the answer, then «⏳» refused as gone and sent
-anew, the result sent; or the answer, «⏳» edited, the result's edit refused as gone and sent anew:
-2 × 5 000 + 4 × 8 000 = 42 s; since #121 the access read for the mode beside the catalog makes
-it 3 × 5 000 + 4 × 8 000 = 47 s. `.analysisMore` (#360) is one backend call (access beside the
+then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
+(the catalog and the access read beside the answer, then the signal) and up to four Bot API calls:
+3 × 5 000 + 4 × 8 000 = 47 s. Its four-call paths (#482): the answer, «⏳» edited or sent under a
+photo, the card's photo, «⏳» deleted; the answer, «⏳», the photo refused, «⏳» edited into the
+text card; the answer, «⏳» sent under a photo, the text result's edit refused as gone, the result
+sent anew; the answer, the summary gone, the photo refused, the text card sent. A gone summary
+gets no «⏳» anew: with it the card's path would be 3 × 5 000 + 5 × 8 000 = 55 s, past the
+shutdown budget. `.analysisMore` (#360) is one backend call (access beside the
 answer) and two Bot API calls (the answer, the keyboard's edit; a refused edit sends nothing
 more): 21 s. The longest declared path is `demoAnalysis`'s and, since #418, `sessionStart`'s 47 s,
 so `HANDLER_BUDGET_MS` is 47 s

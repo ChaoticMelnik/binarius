@@ -789,8 +789,8 @@ text, the unpin, the pin — [bot-menu.md](bot-menu.md)); the demo button is one
 Bot API calls, and each demo screen after it one backend call and up to three Bot API calls (the
 query answered, the edit refused, the screen sent anew — [bot-demo.md](bot-demo.md)), except
 «📊 Анализ», three backend calls (the catalog, the signal, the access read for the stake label —
-#297) and up to four Bot API calls (the query answered, «⏳» and the result, one of the two edits
-refused and sent anew); the
+#297) and up to four Bot API calls (the query answered, «⏳», then the signal's card as a photo and
+«⏳» deleted, or a text result's edit refused and sent anew — #482, [bot-demo.md](bot-demo.md#timing)); the
 stake button is four backend calls (the catalog and the access read together but counted one after
 the other, the intent and its one retry) and two Bot API calls, and «🔄 Обновить статус» two backend
 calls and up to three Bot API calls ([bot-demo-trade.md](bot-demo-trade.md)); the resend button is one
@@ -809,8 +809,8 @@ four Bot API calls (the same card), 42 s. The longest is «📊 Анализ», 
 since #418 (the launch screen deleted, or stripped, after the status) and an amount of the amount
 screen since #476 (the start in one attempt, the screen deleted after it), 3 × 5 000 + 4 × 8 000 =
 **47 s**, inside the **50 s** shutdown budget, inside the **55 s** `stop_grace_period` of the
-compose service. The usual path is far shorter — the answer, the «⏳» edit and the result's edit
-beside three short reads — and the 47 s needs three backend calls and four Bot API calls each to
+compose service. The usual path is far shorter — the answer, the «⏳» edit, then the card and the
+delete of «⏳» or the result's edit, beside three short reads — and the 47 s needs three backend calls and four Bot API calls each to
 hit its timeout. `timing.test.ts` runs
 every terminal branch of each handler through the real handlers and asserts that each makes the
 calls it is declared to make and that the worst of them is what `HANDLER_CALLS` says — so a

@@ -153,7 +153,8 @@ block, and a dynamic `import()` is not caught; the check on every call holds eit
 
 - html: 4096 (`TELEGRAM_MESSAGE_LIMIT`); 1024 (`TELEGRAM_CAPTION_LIMIT`) for the parts of a
   caption — `welcome` (the video's), the account card's `card*` and `featureLines`, the status
-  card's `status*`.
+  card's `status*`. The analysis card (#482) is a caption too: its keys keep the message limit
+  each, and the card as a whole is bounded by `analysisCard` below.
 - The command descriptions 256, `profileDescription` 512, `profileShortDescription` 120: the Bot
   API's limits.
 - Every other plain entry: `BOT_LABEL_LIMIT` (64) and one line. This is the project's limit, not
@@ -440,8 +441,11 @@ cannot bound: each message the bot builds from several keys (the account and sta
 `/help`, `/account`, the analysis screens, the trade and session status, the demo screens,
 `/settings` with the stake line and the stake picker, the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; the session's trade message and summary, which the
-backend sends through the shared builders of `packages/shared/src/session-texts.ts`, #464), and
-each html key with variables in no such message. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
+backend sends through the shared builders of `packages/shared/src/session-texts.ts`, #464; the
+analysis card, `analysisCard`, a caption of 1024, #482), and
+each html key with variables in no such message. The card's block is measured as the bot pads it:
+each of its eight rows is the longest of the eight labels, a space and the value, and each
+direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
 widest — the key's width in `BOT_TEXT_VAR_WIDTHS`, else the variable's in
 `BOT_TEXT_VAR_DEFAULT_WIDTHS` — and labels read from the texts in effect, so a longer override of a
 label widens the line it goes into, and a variable an override adds widens the message by its own
@@ -453,6 +457,7 @@ stake 25 (`formatStake` over an unsigned `numeric(20,8)`: either saved stake, th
 and either balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
 backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are stated
 assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a symbol ≤ 64, a session's counters
-≤ 999, the analysis numbers, a bot's username ≤ 32 (Telegram's rule). A value past one of them lengthens a message by a few characters,
+≤ 999, the analysis numbers (the closed candles an indicator holds and needs, `required`, ≤ 5
+digits as `candles`), a bot's username ≤ 32 (Telegram's rule). A value past one of them lengthens a message by a few characters,
 and Telegram refuses the message only if that crosses its limit. A plain label is measured as
 written, markup and entities included: it is escaped and shown literally.

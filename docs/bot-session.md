@@ -588,10 +588,12 @@ Telegram's own forwarding.
   «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню» alone without `settings`
   (`sessionCardKeyboard`). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321).
-  «📊 Новый анализ» and «📡 К сигналам» edit the pressed message; under the card Telegram refuses
-  that with «there is no text in the message to edit», `editRefusal` (`screen.ts`) reads it as
-  gone, and the screen comes as a new message under the card (the analysis: «⏳», then its
-  result), with one `warn` `the demo screen was not edited, sending it anew` per press.
+  «📡 К сигналам» edits the pressed message; under the card Telegram refuses that with «there is
+  no text in the message to edit», `editRefusal` (`screen.ts`) reads it as gone, and the screen
+  comes as a new message under the card, with one `warn` `the demo screen was not edited, sending
+  it anew` per press. «📊 Новый анализ» tries no edit (#482): the press carries the photo, so
+  «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the
+  card goes as a photo and «⏳» is deleted ([bot-demo.md → The analysis](bot-demo.md#the-analysis)).
 - **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about
   30 ms per card on the bot's event loop. It loads only `apps/bot/fonts/Inter-*.ttf`
   (`loadSystemFonts: false`): the alpine image has no fonts, and without a font resvg drops the
@@ -671,12 +673,13 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     Falsifiable: the owner's container command above does not print `ok`.
 13. **Render cost** (#318): about 30 ms per finished session on the bot's event loop. Falsifiable:
     a render over 200 ms on the pilot.
-14. **Warn noise under the card** (#318): every press of «📊 Новый анализ» or «📡 К сигналам» under
-    a card logs one `warn` `the demo screen was not edited, sending it anew`; a separate outcome
-    for "no text" would be a third answer in every caller of `editRefusal`. Falsifiable: that
-    line's rate after #318 is roughly the rate of those two presses.
-15. **A leftover «⏳»** (#318): «⏳ Анализирую…» stays as a message without a keyboard above the
-    analysis result sent under the card, as on any gone edit since #126.
+14. **Warn noise under the card** (#318): every press of «📡 К сигналам» under a card logs one
+    `warn` `the demo screen was not edited, sending it anew` («📊 Новый анализ» no longer edits
+    there, #482); a separate outcome for "no text" would be a third answer in every caller of
+    `editRefusal`. Falsifiable: that line's rate after #482 is roughly the rate of that press.
+15. **A leftover «⏳»** (#318) — closed by #482: under the card «⏳» is sent at once and the
+    result is edited into it, or deleted after a signal's card; it stays only when that edit or
+    delete is refused or fails in transport.
 16. **Telegram's wording is taken from public reports** (#318): «there is no text in the message
     to edit» has not been observed live here. Falsifiable by the owner's check in the PR: a press
     under the card that logs `update handler failed` means the description differs.
