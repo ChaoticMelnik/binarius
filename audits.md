@@ -3171,8 +3171,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **Лимит 3 круга у задачи, разделённой на PR, — по каждому PR (решение владельца 2026-10-15)** — **внедрено в #<PR>: `.claude/CLAUDE.md` → GitHub — статусы задач; `.claude/skills/tech-lead/SKILL.md` → Phase 4**
-2. **Задание длиннее ~15 мин (fetch, бэктест) запускает tech-lead своей фоновой задачей; фаза возвращает команду и путь лога** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Step 7**
-3. **Architect validation checklist: каждая проверка «пройдено / не пройдено» называет результат на нулевой выборке (отказ или FAIL), и тест доводит этот случай до кода выхода** — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
-4. **Architect validation checklist: каждое смещение во времени называет точку отсчёта, одну для всех решений плана** — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+1. **Лимит 3 круга у задачи, разделённой на PR, — по каждому PR (решение владельца 2026-10-15)** — **внедрено в #522: `.claude/CLAUDE.md` → GitHub — статусы задач; `.claude/skills/tech-lead/SKILL.md` → Phase 4**
+2. **Задание длиннее ~15 мин (fetch, бэктест) запускает tech-lead своей фоновой задачей; фаза возвращает команду и путь лога** — **внедрено в #522: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+3. **Architect validation checklist: каждая проверка «пройдено / не пройдено» называет результат на нулевой выборке (отказ или FAIL), и тест доводит этот случай до кода выхода** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+4. **Architect validation checklist: каждое смещение во времени называет точку отсчёта, одну для всех решений плана** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
 5. **Remaining Minor** — **вынесено в #518 (#512), #521 (#520)**
