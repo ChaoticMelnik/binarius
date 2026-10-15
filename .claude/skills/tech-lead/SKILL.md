@@ -58,7 +58,7 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 - [ ] Branch name matches convention: `feat/<N>-*` / `fix/<N>-*`
 - [ ] Commits reference the issue: `#<N>: description`
-- [ ] PR body has: what changed, `Closes #<N>` (`Refs #<N>` for a Phase 5 audit docs PR), a test plan
+- [ ] PR body has: what changed, `Closes #<N>` (`Refs #<N>` for a Phase 5 audit docs PR or a non-final part of a split, `.claude/CLAUDE.md` → Git-процесс), a test plan
 - [ ] Issue moved to In Review only after the PR was created
 - [ ] PR contains only relevant files (no `git add .` artifacts)
 - [ ] No new type/build errors in the diff
@@ -313,7 +313,7 @@ Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (
    The reviewer does not post LGTM for such a PR; the audit records it as "merged at the round limit, findings in #<new>".
 
 **If the reviewer reports the PR is clean:**
-It posted the ready-to-merge comment or returned the classifier's refusal (Merge relay), and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5. A non-final part of a split (`Refs #<N>`, `.claude/CLAUDE.md` → Git-процесс) is the exception: the issue goes back to In Progress, the next part is rebased onto `main` and gets its PR, and Done and Phase 5 wait for the final part's merge.
+It posted the ready-to-merge comment or returned the classifier's refusal (Merge relay), and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5. A non-final part of a split (`Refs #<N>`, `.claude/CLAUDE.md` → Git-процесс) is the exception: no Done and no Phase 5; the next part's implementer rebases it onto `main`, moves the issue to In Progress and opens its PR, and Done and Phase 5 wait for the final part's merge.
 
 **Tech-lead's own 6-pre run** (Phase 4 iteration 3 after a round-3 Blocker fix; a PR left In Review by a manager session). Not a review round.
 1. `gh pr checks <N>` at the current head: wait while running. Red → report it to the owner; no run, no merge question.
@@ -336,7 +336,7 @@ It posted the ready-to-merge comment or returned the classifier's refusal (Merge
      - run now → tech-lead's own 6-pre run;
      - «мержить без него» → tech-lead posts the owner's skip line as a PR comment, with `<сбой>` and the job taken from the night's line.
    - **No skip line, and step 1 moved the head** → tech-lead's own 6-pre run, with no question.
-3. **The merge relay**; after each merge, run Phase 5. After any rebase onto a moved `main` — stacked or not, textually clean or not — the merge question waits for green `gh pr checks` at the new head: a clean rebase still broke CI twice on 2026-10-10 (#446: `tsc` after #448 made `webPublicUrl` required; #447: the longest-answer gate lacked rows for methods merged meanwhile). Commits a rebase adds beyond conflict resolution — a new assumption, a changed test oracle (#234 `0580dee` and #141 `7b138a9`: rows for methods merged meanwhile) — get a reviewer pass before the merge question: a short reviewer spawn (`model: "opus"`) on that commit range only; disclosure in the PR alone is not enough. Its Blocker/Major are handled as a round's (Phase 4); on a PR whose 3 rounds are used, the pass is a check, not a round, and a Blocker/Major goes to the Phase 4 iteration 3 branches. The merge question names the pass and its verdict.
+3. **The merge relay**; after each merge, run Phase 5 (after a non-final part of a split, Phase 5 waits for the final part — Phase 4). After any rebase onto a moved `main` — stacked or not, textually clean or not — the merge question waits for green `gh pr checks` at the new head: a clean rebase still broke CI twice on 2026-10-10 (#446: `tsc` after #448 made `webPublicUrl` required; #447: the longest-answer gate lacked rows for methods merged meanwhile). Commits a rebase adds beyond conflict resolution — a new assumption, a changed test oracle (#234 `0580dee` and #141 `7b138a9`: rows for methods merged meanwhile) — get a reviewer pass before the merge question: a short reviewer spawn (`model: "opus"`) on that commit range only; disclosure in the PR alone is not enough. Its Blocker/Major are handled as a round's (Phase 4); on a PR whose 3 rounds are used, the pass is a check, not a round, and a Blocker/Major goes to the Phase 4 iteration 3 branches. The merge question names the pass and its verdict.
 
 A PR with open Blocker/Major («Открытые находки на конец цикла задачи (3-й круг) или сессии менеджера»): the owner decides — a Plan Update round (the round count continues from the night's) or close the PR. A PR whose last round was 3 gets no further round: Phase 4 iteration 3 branches instead.
 
