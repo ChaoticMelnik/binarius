@@ -104,12 +104,14 @@ import {
   USER_VIEW,
   captureApi,
   callbackUpdate,
+  photoCallbackUpdate,
   chosenInlineResultUpdate,
   inlineQueryUpdate,
   failFromSecondCall,
   chatMemberUpdate,
   fakeLogger,
   messageAnswer,
+  photoAnswer,
   textUpdate,
   accessView,
   accountView,
@@ -438,7 +440,8 @@ async function observe(branch: Branch): Promise<Calls> {
       : { welcomeVideoFileId: branch.welcomeVideoFileId }),
   });
   const api = captureApi(bot);
-  api.answers.set('sendPhoto', messageAnswer(CARD_MESSAGE_ID));
+  // the analysis card reads the file_id of the photo it sent (#482)
+  api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, ['card-file-id']));
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   for (const [method, failure] of branch.apiErrors ?? []) api.apiErrors.set(method, failure);
   for (const [method, answer] of branch.answers ?? []) api.answers.set(method, answer);
@@ -921,17 +924,25 @@ DEMO_LAUNCH.branches.push({
   update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
   expected: { backend: 2, telegram: 2 },
 });
-// «📊 Анализ» (#126): the check, «⏳» edited in place of the summary, the signal, the result in
-// place of «⏳». Its edits are two, so the shared screen branches do not describe it.
+// «📊 Анализ» (#126): the check, «⏳» edited in place of the summary — or sent at once under a
+// photo (#482) — the signal, then a text result in place of «⏳» or the card as a photo with «⏳»
+// deleted after it. Its edits are two, so the shared screen branches do not describe it.
 const EDIT_TRANSPORT = new HttpError(
   "Network request for 'editMessageText' failed!",
   new Error('The operation was aborted due to timeout'),
 );
+// a delete of a screen refused as forbidden: the analysis's «⏳» (#482) and the launch screen (#418)
+const DELETE_FORBIDDEN: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: "Bad Request: message can't be deleted",
+};
 const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+const analysisOnPhoto = () => photoCallbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+const noSignal = () => Promise.resolve(SIGNAL_NO_SIGNAL);
 const DEMO_ANALYSIS_WORST_CASE: Branch = {
-  label: '«⏳» is refused as gone and sent anew, then the result is sent',
-  update: analysisUpdate(),
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  label: 'under a photo «⏳» is sent, then the card, then «⏳» is deleted',
+  update: analysisOnPhoto(),
   expected: { backend: 3, telegram: 4 },
 };
 const DEMO_ANALYSIS = {
@@ -955,21 +966,69 @@ const DEMO_ANALYSIS = {
       }),
     ),
     {
-      label: '«⏳» and the result are edited',
+      label: '«⏳» is edited, then the card is sent and «⏳» deleted',
       update: analysisUpdate(),
+      expected: { backend: 3, telegram: 4 },
+    },
+    DEMO_ANALYSIS_WORST_CASE,
+    {
+      label: 'the delete of «⏳» is refused, and nothing more is done',
+      update: analysisUpdate(),
+      apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'the photo is refused, and «⏳» is edited into the text card',
+      update: analysisUpdate(),
+      apiErrors: [['sendPhoto', PHOTO_REFUSED]],
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'the photo fails in transport, and «⏳» says the analysis is unavailable',
+      update: analysisUpdate(),
+      apiErrors: [['sendPhoto', photoTimedOut()]],
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: '«⏳» is refused as gone and not sent anew, then the card is sent',
+      update: analysisUpdate(),
+      apiErrors: [['editMessageText', EDIT_REFUSED]],
+      expected: { backend: 3, telegram: 3 },
+    },
+    {
+      label: '«⏳» is refused as gone, the photo too, and the text card is sent',
+      update: analysisUpdate(),
+      apiErrors: [
+        ['editMessageText', EDIT_REFUSED],
+        ['sendPhoto', PHOTO_REFUSED],
+      ],
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: '«⏳» and a text result are edited',
+      update: analysisUpdate(),
+      evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'answering the query is refused and the analysis still goes',
       update: analysisUpdate(),
       apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+      evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 3 },
     },
-    DEMO_ANALYSIS_WORST_CASE,
+    {
+      label: '«⏳» is refused as gone, and the text result is sent',
+      update: analysisUpdate(),
+      apiErrors: [['editMessageText', EDIT_REFUSED]],
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 3 },
+    },
     {
       label: '«⏳» and the result are refused as not modified',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+      evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 3 },
     },
     // rethrown into bot.catch
@@ -994,13 +1053,40 @@ const DEMO_ANALYSIS = {
       label: 'the result edit is refused as gone and the result is sent anew',
       update: analysisUpdate(),
       failSecondEdit: EDIT_REFUSED,
+      evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 4 },
     },
     {
       label: 'the result edit fails in transport',
       update: analysisUpdate(),
       failSecondEdit: EDIT_TRANSPORT,
+      evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 3 },
+    },
+    {
+      label: 'under a photo «⏳» fails in transport and nothing more is done',
+      update: analysisOnPhoto(),
+      apiErrors: [['sendMessage', textCardTimedOut()]],
+      expected: { backend: 2, telegram: 2 },
+    },
+    {
+      label: 'under a photo «⏳» is sent, then the text result in its place',
+      update: analysisOnPhoto(),
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 3 },
+    },
+    {
+      label: 'under a photo the new «⏳» is gone, and the text result is sent anew',
+      update: analysisOnPhoto(),
+      apiErrors: [['editMessageText', EDIT_REFUSED]],
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'under a photo the photo is refused, and «⏳» is edited into the text card',
+      update: analysisOnPhoto(),
+      apiErrors: [['sendPhoto', PHOTO_REFUSED]],
+      expected: { backend: 3, telegram: 4 },
     },
     {
       label: 'the signal call fails',
@@ -1012,12 +1098,6 @@ const DEMO_ANALYSIS = {
       label: 'the broker rate-limits the candles',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-      expected: { backend: 3, telegram: 3 },
-    },
-    {
-      label: 'the decision is a rule refusal',
-      update: analysisUpdate(),
-      evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
       expected: { backend: 3, telegram: 3 },
     },
     {
@@ -1270,11 +1350,6 @@ const sessionStartUpdate = (chatType?: string) =>
 // the launch screen's «🚀 Запустить цикл» (#418): deleted after the status
 const launchStartUpdate = () =>
   callbackUpdate(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5, true));
-const DELETE_FORBIDDEN: ApiError = {
-  ok: false,
-  error_code: 400,
-  description: "Bad Request: message can't be deleted",
-};
 const sessionHttpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });
 const SESSION_START_WORST_CASE: Branch = {

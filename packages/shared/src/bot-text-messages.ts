@@ -194,6 +194,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   amount: (m) =>
     Math.max(w.stake, m.length('stakeMinimumLabel') + ' ('.length + w.stake + ')'.length),
   count: () => w.count,
+  // a display indicator's closed candles (signal.ts), as `closedCandles`
+  required: () => w.candles,
   symbol: () => w.symbol,
   group: (m) => m.longest(...groups),
   page: () => w.page,
@@ -270,6 +272,7 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
       ),
   },
   analysisCandles: { count: () => w.candles },
+  indicatorShortData: { count: () => w.candles },
   analysisAtrTicks: { count: () => w.atrTicks },
   intentStake: { amount: () => w.stake },
   // asset · duration · stake (texts.ts → sessionStatusText)
@@ -337,19 +340,86 @@ const balances = (amount: number): BotTextSegment[] => [
   k('statusReserved'),
 ];
 
-// a signal is decided with the volatility in bounds
-const features = (signal: boolean): BotTextSegment[] => [
+// a rule refusal's features (the signal's card has a block of its own)
+const features: BotTextSegment[] = [
   k('analysisTrend'),
   '\n',
   k('analysisMomentum'),
   '\n',
-  signal
-    ? k('analysisVolatility', { value: (m) => volatility(m, m.length('volatilityNormal')) })
-    : k('analysisVolatility'),
+  k('analysisVolatility'),
   '\n',
   k('analysisCandles'),
   '\n',
   k('analysisLastPrice'),
+];
+
+// The card's block (analysis.ts → cardBlock): every label padded to the longest of the eight, one
+// space, the value; inside <pre>, whose tags parsing drops
+const cardLabels = oneOf(
+  ...(
+    [
+      'cardRowPair',
+      'cardRowRsi',
+      'cardRowMacd',
+      'cardRowMa50',
+      'cardRowMa200',
+      'cardRowTrend',
+      'cardRowVolatility',
+      'cardRowDirection',
+    ] as const
+  ).map((key) => [k(key)]),
+);
+const x = (width: number) => 'x'.repeat(width);
+// an indicator with its word and number, or «данных мало» in place of both
+const indicatorRow = (...words: BotPlainKey[]): BotTextSegment[] => [
+  cardLabels,
+  ' ',
+  oneOf([anyOf(...words), ' ', x(w.price)], [k('indicatorShortData')]),
+];
+const card = (title: BotHtmlKey, direction: BotPlainKey): BotTextSegment[] => [
+  k('analysisHeader'),
+  '\n',
+  k(title),
+  '\n\n',
+  cardLabels,
+  ' ',
+  x(w.symbol),
+  '\n',
+  cardLabels,
+  ' ',
+  anyOf('rsiOverbought', 'rsiOversold', 'rsiNeutral'),
+  ' ',
+  x(w.rsi),
+  '\n',
+  ...indicatorRow('macdCrossUp', 'macdCrossDown', 'macdAbove', 'macdBelow', 'macdEqual'),
+  '\n',
+  ...indicatorRow('maPriceAbove', 'maPriceBelow', 'maPriceEqual'),
+  '\n',
+  ...indicatorRow('maPriceAbove', 'maPriceBelow', 'maPriceEqual'),
+  '\n',
+  cardLabels,
+  ' ',
+  anyOf('trendUp', 'trendDown', 'trendFlat'),
+  '\n',
+  cardLabels,
+  ' ',
+  k('volatilityNormal'),
+  ' ',
+  x(w.atrPct + '%'.length),
+  '\n',
+  cardLabels,
+  ' ',
+  k(direction),
+  '\n',
+  k('demoPayout'),
+  // a pair paying below the cycle floor gets no session row, the note says why (on every
+  // decided answer, #379; in both modes, #327)
+  oneOf([], ['\n', k('analysisCycleUnavailable')]),
+  '\n\n',
+  // real mode (#121): its own disclaimer
+  anyOf('analysisDisclaimer', 'analysisDisclaimerReal'),
+  // in demo, over the amounts only (demo.ts)
+  oneOf([], ['\n\n', k('analysisChooseAmount')]),
 ];
 
 // helpText: a line per command of the menu, in its order
@@ -485,23 +555,15 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     body: [k('analysisHeader'), '\n', anyOf('analysisRateLimited', 'analysisUnavailable')],
   },
   {
-    id: 'analysisSignal',
-    title: 'Анализ: сигнал',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    id: 'analysisCard',
+    title: 'Анализ: карточка сигнала',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    // the title and the direction row follow the same signal, so each direction is measured whole
     body: [
-      k('analysisHeader'),
-      '\n',
-      anyOf('analysisSignalUp', 'analysisSignalDown'),
-      '\n\n',
-      ...features(true),
-      '\n',
-      k('demoPayout'),
-      // a pair paying below the cycle floor gets no session row, the note says why (on every
-      // decided answer, #379; in both modes, #327)
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
-      '\n\n',
-      // real mode (#121): its own disclaimer
-      anyOf('analysisDisclaimer', 'analysisDisclaimerReal'),
+      oneOf(
+        card('analysisCardUp', 'cardDirectionUp'),
+        card('analysisCardDown', 'cardDirectionDown'),
+      ),
     ],
   },
   {
@@ -526,7 +588,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n',
       k('analysisNoSignal', { reason: (m) => m.longest(...ruleReasons) }),
       '\n\n',
-      ...features(false),
+      ...features,
       '\n\n',
       k('analysisNoSignalHint'),
       oneOf([], ['\n', k('analysisCycleUnavailable')]),

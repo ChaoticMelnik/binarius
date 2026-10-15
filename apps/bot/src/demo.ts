@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
 import {
   BrokerRestErrorCode,
   checkStake,
@@ -40,6 +40,7 @@ import {
   analysisUnavailableScreen,
   type AnalysisScreen,
 } from './analysis';
+import { SETUP_CARD_PHOTO_PATHS } from './assets';
 import { backendErrorFields, type BackendClient } from './backend-client';
 import {
   checkDemoCycle,
@@ -62,14 +63,15 @@ import {
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { editRefusal } from './screen';
+import { deleteRefusal, editRefusal } from './screen';
 import {
+  editMessageTextByIdHtml,
   editMessageTextHtml,
   editMessageTextHtmlWithoutNextStep,
   NO_NEXT_STEP_REASONS,
   replyHtml,
   replyHtmlWithoutNextStep,
-  type NoNextStepReason,
+  replyWithPhotoHtml,
 } from './send';
 import { stakeAccess } from './stake-access';
 import {
@@ -618,6 +620,53 @@ export function cycleStakeAmounts({
 const CALM_PER_ROW = 3;
 const RISKY_PER_ROW = 2;
 
+// The amounts of a demo cycle and the one in effect (the saved demo stake, or the broker's minimum
+// without one), drawn by the amount screen and under the analysis card (#482).
+export interface CycleAmounts {
+  amounts: DecimalString[];
+  current: DecimalString;
+}
+
+export const cycleAmountsOf = (
+  access: Pick<TradingAccessResponse, 'demoStake'>,
+  broker: BrokerBalanceView,
+): CycleAmounts => ({
+  amounts: cycleStakeAmounts({
+    minTradeAmount: broker.minTradeAmount,
+    available: broker.demo.available,
+    saved: access.demoStake,
+  }),
+  current: decimalStringSchema.parse(normalizeDecimal(access.demoStake ?? broker.minTradeAmount)),
+});
+
+// The amount rows, ✅ on the one in effect, then «✏️ Своя сумма» with no row closed after it: the
+// amount screen puts its way back beside it, the card closes the row itself. No amount, no button.
+export function appendCycleAmounts(
+  keyboard: InlineKeyboard,
+  { assetId, durationSec, back }: CycleStakeStep,
+  { amounts, current }: CycleAmounts,
+): InlineKeyboard {
+  const appendRows = (group: DecimalString[], perRow: number) => {
+    group.forEach((amount, index) => {
+      if (index > 0 && index % perRow === 0) keyboard.row();
+      keyboard.text(
+        cycleStakeLabel(amount, amount === current),
+        cycleStakeCallbackData(assetId, durationSec, amount, back),
+      );
+    });
+    if (group.length > 0) keyboard.row();
+  };
+  appendRows(
+    amounts.filter((amount) => !stakeIsRisky(amount)),
+    CALM_PER_ROW,
+  );
+  appendRows(amounts.filter(stakeIsRisky), RISKY_PER_ROW);
+  if (amounts.length > 0) {
+    keyboard.text(LABELS.stakeCustomButton, cycleCustomCallbackData(assetId, durationSec, back));
+  }
+  return keyboard;
+}
+
 // the amount screen's way back: to the signal list, or to the pair's analysis
 export function appendCycleBack(
   keyboard: InlineKeyboard,
@@ -647,46 +696,19 @@ export function cycleStakeScreen({
   broker: BrokerBalanceView;
   saved?: { amount: DecimalString | null; mode: TradeMode };
 }): DemoScreen {
-  const { assetId, durationSec, back } = step;
-  const current = decimalStringSchema.parse(
-    normalizeDecimal(access.demoStake ?? broker.minTradeAmount),
-  );
-  const amounts = cycleStakeAmounts({
-    minTradeAmount: broker.minTradeAmount,
-    available: broker.demo.available,
-    saved: access.demoStake,
-  });
-  const keyboard = new InlineKeyboard();
-  const appendRows = (group: DecimalString[], perRow: number) => {
-    group.forEach((amount, index) => {
-      if (index > 0 && index % perRow === 0) keyboard.row();
-      keyboard.text(
-        cycleStakeLabel(amount, amount === current),
-        cycleStakeCallbackData(assetId, durationSec, amount, back),
-      );
-    });
-    if (group.length > 0) keyboard.row();
-  };
-  appendRows(
-    amounts.filter((amount) => !stakeIsRisky(amount)),
-    CALM_PER_ROW,
-  );
-  appendRows(amounts.filter(stakeIsRisky), RISKY_PER_ROW);
-  if (amounts.length > 0) {
-    keyboard.text(LABELS.stakeCustomButton, cycleCustomCallbackData(assetId, durationSec, back));
-  }
+  const shown = cycleAmountsOf(access, broker);
   return {
     text: cycleStakeText({
       firstName,
-      durationSec,
+      durationSec: step.durationSec,
       symbol,
-      stake: current,
+      stake: shown.current,
       access,
       broker,
-      empty: amounts.length === 0,
+      empty: shown.amounts.length === 0,
       ...(saved === undefined ? {} : { saved }),
     }),
-    keyboard: appendCycleBack(keyboard, step),
+    keyboard: appendCycleBack(appendCycleAmounts(new InlineKeyboard(), step, shown), step),
   };
 }
 
@@ -784,6 +806,9 @@ export function createDemoComposer<C extends Context>({
   connectKeyboard,
 }: DemoComposerDeps): Composer<C> {
   const composer = new Composer<C>();
+  // The file_id Telegram answered the first card of each direction with (#482): memory only, so a
+  // restart, or a second bot process, uploads each picture once again.
+  const photoIds = new Map<TradeAction, string>();
 
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
@@ -898,8 +923,9 @@ export function createDemoComposer<C extends Context>({
   });
 
   // The analysis (#126): the check on the catalog read at this press, never on the one the
-  // summary was drawn from; then «⏳» in place of the summary, the signal, and the screen in place
-  // of «⏳». The signal is asked for only once «⏳» was delivered: after an edit of unknown outcome
+  // summary was drawn from; then «⏳» (showWaiting), the signal, and the screen: a text in place
+  // of «⏳», or a signal's card (#482) as a photo under it, «⏳» deleted after it. The signal is
+  // asked for only once «⏳» was delivered or is known gone: after a send of unknown outcome
   // nothing more is sent, and a decision nobody sees would cost a broker call.
   composer.callbackQuery(DEMO_ANALYSIS_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
@@ -920,17 +946,16 @@ export function createDemoComposer<C extends Context>({
       await editOrReply(ctx, screen.text, screen.keyboard);
       return;
     }
-    const waiting = await editOrReply(
+    const waiting = await showWaiting(
       ctx,
       TEXTS.analyzing({ subject: analysisSubject(read.pair, durationSec) }),
-      NO_NEXT_STEP_REASONS.InProgress,
     );
     if (waiting === 'unknown') return;
-    const screen = await evaluate(read.pair, durationSec, stake.mode);
-    const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair, stake.mode);
-    // «⏳» went as a new message: the result follows it rather than editing the summary again
-    if (waiting === 'sent') await replyHtml(ctx, screen.text, { reply_markup: keyboard });
-    else await editOrReply(ctx, screen.text, keyboard);
+    const amounts = cardAmountsOf(stake.access, pairPayoutAccepted(read.pair), durationSec);
+    const screen = await evaluate(read.pair, durationSec, stake.mode, amounts !== null);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair, stake.mode, amounts);
+    if (screen.photo === null) await showResult(ctx, waiting, screen.text, keyboard);
+    else await sendCard(ctx, waiting, screen.photo, screen.text, keyboard, read.pair, durationSec);
   });
 
   // «➕ Ещё» (#360): only the keyboard of the pressed analysis changes. The amount is read at this
@@ -942,7 +967,7 @@ export function createDemoComposer<C extends Context>({
       await answerOnly(ctx);
       return;
     }
-    const { amount, mode } = await answerAnd(ctx, stakeAmount(ctx.from.id));
+    const { access, amount, mode } = await answerAnd(ctx, stakeAmount(ctx.from.id));
     // the analysis was drawn in another mode than the user's now (or access was not read for a
     // real one): no button to trade under a text that names the other mode; the repeat redraws it
     await editKeyboard(
@@ -955,6 +980,7 @@ export function createDemoComposer<C extends Context>({
             amount,
             data.payoutAccepted,
             mode,
+            cardAmountsOf(access, data.payoutAccepted, data.durationSec),
           )
         : appendAnalysisTail(new InlineKeyboard(), data.assetId, data.durationSec),
     );
@@ -966,6 +992,7 @@ export function createDemoComposer<C extends Context>({
     pair: PairView,
     durationSec: DemoDurationSec,
     mode: TradeMode,
+    chooseAmount: boolean,
   ): Promise<AnalysisScreen> {
     let response;
     try {
@@ -983,7 +1010,246 @@ export function createDemoComposer<C extends Context>({
     ) {
       logger.warn({ signalCode: response.code }, 'signal not evaluated');
     }
-    return analysisScreen({ pair, durationSec, response, mode });
+    return analysisScreen({ pair, durationSec, response, mode, chooseAmount });
+  }
+
+  // «⏳» before the signal is asked for. Under a photo (the analysis card, the session's summary
+  // card #318) a caption cannot become this text, so «⏳» goes as a new message at once: an edit
+  // tried first would make the longest path five Telegram calls, past SHUTDOWN_BUDGET_MS
+  // (timing.ts). Elsewhere it is the pressed message edited; one gone is not replaced by a new
+  // «⏳» — the result goes as a new message without one (null). A transport failure leaves «⏳»
+  // unknown and sends nothing more; any other refusal goes to bot.catch.
+  async function showWaiting(ctx: Context, text: TelegramHtml): Promise<Waiting | 'unknown'> {
+    const pressed = ctx.callbackQuery?.message;
+    if (pressed !== undefined && 'photo' in pressed && pressed.photo !== undefined) {
+      try {
+        const sent = await replyHtmlWithoutNextStep(ctx, text, NO_NEXT_STEP_REASONS.InProgress);
+        return { pressed: false, chatId: sent.chat.id, messageId: sent.message_id };
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'sendMessage'),
+            updateId: ctx.update.update_id,
+          },
+          'the analysis «⏳» failed in transport, sending nothing more',
+        );
+        return 'unknown';
+      }
+    }
+    try {
+      await editMessageTextHtmlWithoutNextStep(ctx, text, NO_NEXT_STEP_REASONS.InProgress);
+    } catch (error) {
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      if (refusal === 'gone') {
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error) },
+          'the demo screen was not edited, the analysis goes as a new message',
+        );
+        return null;
+      } else if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'editMessageText'),
+            updateId: ctx.update.update_id,
+          },
+          'the demo screen edit failed in transport, sending nothing more',
+        );
+        return 'unknown';
+      } else if (refusal !== 'shown') {
+        throw error;
+      }
+      logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
+    }
+    const chatId = ctx.chat?.id;
+    const messageId = pressed?.message_id;
+    return chatId === undefined || messageId === undefined
+      ? null
+      : { pressed: true, chatId, messageId };
+  }
+
+  // A text result: in place of «⏳» — the pressed message as every demo screen is edited, a new
+  // «⏳» by its id with the same classification — or as a new message where «⏳» is gone.
+  async function showResult(
+    ctx: Context,
+    waiting: Waiting,
+    text: TelegramHtml,
+    keyboard: InlineKeyboard,
+  ): Promise<void> {
+    if (waiting === null) await replyHtml(ctx, text, { reply_markup: keyboard });
+    else if (waiting.pressed) await editOrReply(ctx, text, keyboard);
+    else await editByIdOrReply(ctx, waiting, text, keyboard);
+  }
+
+  async function editByIdOrReply(
+    ctx: Context,
+    { chatId, messageId }: Exclude<Waiting, null>,
+    text: TelegramHtml,
+    keyboard: InlineKeyboard,
+  ): Promise<void> {
+    try {
+      await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
+    } catch (error) {
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      if (refusal === 'shown') {
+        logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
+      } else if (refusal === 'gone') {
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error) },
+          'the demo screen was not edited, sending it anew',
+        );
+        await replyHtml(ctx, text, { reply_markup: keyboard });
+      } else if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'editMessageText'),
+            updateId: ctx.update.update_id,
+          },
+          'the demo screen edit failed in transport, sending nothing more',
+        );
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // A signal's card (#482): the picture of its direction, by the file_id remembered for it or as
+  // the file, under «⏳», which is deleted once the card is there. A photo Telegram refuses — a
+  // stale file_id among them — forgets the id, and the same caption and keyboard go as text in
+  // place of «⏳» (or new, where «⏳» is gone); the next press uploads the file. A transport failure
+  // leaves the card unknown: «⏳» says the analysis is unavailable, with its repeat. Neither edit
+  // is followed by anything: the budget has no call left (timing.ts).
+  async function sendCard(
+    ctx: Context,
+    waiting: Waiting,
+    action: TradeAction,
+    text: TelegramHtml,
+    keyboard: InlineKeyboard,
+    pair: PairView,
+    durationSec: DemoDurationSec,
+  ): Promise<void> {
+    const known = photoIds.get(action);
+    let sent;
+    try {
+      sent = await replyWithPhotoHtml(
+        ctx,
+        known ?? new InputFile(SETUP_CARD_PHOTO_PATHS[action]),
+        text,
+        { reply_markup: keyboard },
+      );
+    } catch (error) {
+      if (error instanceof GrammyError) {
+        photoIds.delete(action);
+        logger.warn(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error),
+            byFileId: known !== undefined,
+          },
+          'the analysis card photo was refused, sending its text',
+        );
+        if (waiting === null) await replyHtml(ctx, text, { reply_markup: keyboard });
+        else await editWaiting(ctx, waiting, text, keyboard);
+      } else if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'sendPhoto'),
+            updateId: ctx.update.update_id,
+          },
+          'the analysis card failed in transport',
+        );
+        if (waiting !== null) {
+          await editWaiting(
+            ctx,
+            waiting,
+            analysisUnavailableScreen(pair, durationSec).text,
+            appendAnalysisTail(new InlineKeyboard(), pair.id, durationSec),
+          );
+        }
+      } else {
+        throw error;
+      }
+      return;
+    }
+    if (known === undefined) {
+      // the largest size is last; any size names the same photo to Telegram
+      const fileId = sent.photo.at(-1)?.file_id;
+      if (fileId === undefined) {
+        logger.warn({ reason: 'no_file_id' }, 'the analysis card picture is not remembered');
+      } else {
+        photoIds.set(action, fileId);
+      }
+    }
+    if (waiting !== null) await deleteWaiting(ctx, waiting);
+  }
+
+  // «⏳» edited after the card could not go: any refusal or failure is logged, nothing more
+  async function editWaiting(
+    ctx: Context,
+    { chatId, messageId }: Exclude<Waiting, null>,
+    text: TelegramHtml,
+    keyboard: InlineKeyboard,
+  ): Promise<void> {
+    try {
+      await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
+    } catch (error) {
+      if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'editMessageText'),
+          updateId: ctx.update.update_id,
+        },
+        'the analysis «⏳» was not edited after the card',
+      );
+    }
+  }
+
+  // Telegram allows deleting a bot's own message under 48 h old in a private chat, so a refusal is
+  // unexpected: a gone one is logged as info, anything else (a transport failure too) as a
+  // warning, and nothing more — the card is already there.
+  async function deleteWaiting(
+    ctx: Context,
+    { chatId, messageId }: Exclude<Waiting, null>,
+  ): Promise<void> {
+    try {
+      await ctx.api.deleteMessage(chatId, messageId);
+    } catch (error) {
+      if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
+      if (error instanceof GrammyError && deleteRefusal(error) === 'gone') {
+        logger.info({ ...telegramErrorFields(error) }, 'the analysis «⏳» was already gone');
+        return;
+      }
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'deleteMessage'),
+          updateId: ctx.update.update_id,
+        },
+        'the analysis «⏳» was not deleted',
+      );
+    }
+  }
+
+  // The amounts under a signal's card and in its «➕ Ещё» (#482): in demo, with a broker snapshot
+  // to draw them from (stakeAccess: a blocked user gets none), on a pair and a duration a cycle
+  // may start on — the session row's conditions. Otherwise null, and the session row stays: its
+  // press opens the amount screen, which says why.
+  function cardAmountsOf(
+    access: TradingAccessResponse | null,
+    payoutAccepted: boolean,
+    durationSec: DemoDurationSec,
+  ): CycleAmounts | null {
+    if (access === null || access.tradingMode !== TradeMode.Demo) return null;
+    if (!payoutAccepted || !sessionFits(durationSec)) return null;
+    const checked = stakeAccess(access, (keyboard) => keyboard, connectKeyboard);
+    if (!('broker' in checked)) return null;
+    const shown = cycleAmountsOf(access, checked.broker);
+    return shown.amounts.length > 0 ? shown : null;
   }
 
   // The two reads together; a failed one is the screen's retry with the pressed data and the way
@@ -1039,34 +1305,42 @@ export function createDemoComposer<C extends Context>({
   // (#360) and the analysis (its session row). A failed read drops the
   // amount and reads as demo: the signal or the pair decides the screen, and the press reads
   // access again anyway.
-  async function stakeAmount(
-    telegramUserId: number,
-  ): Promise<{ amount: DecimalString | null; mode: TradeMode }> {
+  async function stakeAmount(telegramUserId: number): Promise<{
+    access: TradingAccessResponse | null;
+    amount: DecimalString | null;
+    mode: TradeMode;
+  }> {
     try {
       const access = await backend.readTradingAccess(String(telegramUserId));
-      return { amount: effectiveStake(access), mode: access.tradingMode };
+      return { access, amount: effectiveStake(access), mode: access.tradingMode };
     } catch (error) {
       logger.warn(
         { ...errorLogFields(error), ...backendErrorFields(error) },
         'trading access not read for the stake label',
       );
-      return { amount: null, mode: TradeMode.Demo };
+      return { access: null, amount: null, mode: TradeMode.Demo };
     }
   }
 
   // The session row first on every `decided` answer (#360) of a pair paying at least the cycle
-  // floor (#379, the screen says why otherwise), in the user's mode (#327), «➕ Ещё» on a signal,
-  // then «🔄 Повторить анализ» and the way back
+  // floor (#379, the screen says why otherwise), in the user's mode (#327) — under a signal's card
+  // in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then «🔄 Повторить
+  // анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     screen: AnalysisScreen,
     pair: PairView,
     mode: TradeMode,
+    amounts: CycleAmounts | null,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     const payoutAccepted = pairPayoutAccepted(pair);
-    if (screen.session) appendSessionRow(keyboard, assetId, durationSec, payoutAccepted, mode);
+    if (screen.photo !== null && amounts !== null) {
+      appendCycleAmounts(keyboard, { assetId, durationSec, back: 'a' }, amounts).row();
+    } else if (screen.session) {
+      appendSessionRow(keyboard, assetId, durationSec, payoutAccepted, mode);
+    }
     if (screen.stake !== null) {
       keyboard
         .text(
@@ -1080,7 +1354,8 @@ export function createDemoComposer<C extends Context>({
 
   // What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it, with «💵 Сумма»
   // opening the picker of the same mode (#326). In real mode (#121) the stake button and the
-  // session row (#327) are marked REAL.
+  // session row (#327) are marked REAL; in demo the amounts stay above it where the card drew them
+  // (#482), read at this press.
   function expandedKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
@@ -1088,6 +1363,7 @@ export function createDemoComposer<C extends Context>({
     amount: DecimalString | null,
     payoutAccepted: boolean,
     mode: TradeMode,
+    amounts: CycleAmounts | null,
   ): InlineKeyboard {
     const stakeData = stakeCallbackData(
       assetId,
@@ -1097,12 +1373,14 @@ export function createDemoComposer<C extends Context>({
       stakeFingerprint(amount, mode),
     );
     const label = stakeButtonLabel(action, amount, mode);
-    const keyboard = appendSessionRow(
-      new InlineKeyboard(),
-      assetId,
-      durationSec,
-      payoutAccepted,
-      mode,
+    const keyboard = (
+      amounts === null
+        ? appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted, mode)
+        : appendCycleAmounts(
+            new InlineKeyboard(),
+            { assetId, durationSec, back: 'a' },
+            amounts,
+          ).row()
     )
       .text(label, stakeData)
       .text(LABELS.stakeMenuButton, stakeMenuCallbackData(mode, assetId, durationSec))
@@ -1166,30 +1444,23 @@ export function createDemoComposer<C extends Context>({
   // twice — is done; a message that is gone or cannot be edited gets the screen anew; any other
   // refusal goes to bot.catch with nothing sent, the keyboard on screen being the retry. A
   // transport failure leaves the edit unknown and sends nothing more; anything else is a bug.
-  // The outcome tells the analysis where its result goes. With a reason in place of a keyboard
-  // the edit removes the one on screen (send.ts).
   async function editOrReply(
     ctx: Context,
     text: TelegramHtml,
-    next: InlineKeyboard | NoNextStepReason,
-  ): Promise<EditOutcome> {
+    keyboard: InlineKeyboard,
+  ): Promise<void> {
     try {
-      if (typeof next === 'string') await editMessageTextHtmlWithoutNextStep(ctx, text, next);
-      else await editMessageTextHtml(ctx, text, { reply_markup: next });
-      return 'edited';
+      await editMessageTextHtml(ctx, text, { reply_markup: keyboard });
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'shown') {
         logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
-        return 'shown';
       } else if (refusal === 'gone') {
         logger.warn(
           { ...errorLogFields(error), ...telegramErrorFields(error) },
           'the demo screen was not edited, sending it anew',
         );
-        if (typeof next === 'string') await replyHtmlWithoutNextStep(ctx, text, next);
-        else await replyHtml(ctx, text, { reply_markup: next });
-        return 'sent';
+        await replyHtml(ctx, text, { reply_markup: keyboard });
       } else if (error instanceof HttpError) {
         logger.error(
           {
@@ -1199,7 +1470,6 @@ export function createDemoComposer<C extends Context>({
           },
           'the demo screen edit failed in transport, sending nothing more',
         );
-        return 'unknown';
       } else {
         throw error;
       }
@@ -1420,7 +1690,9 @@ export function createDemoComposer<C extends Context>({
   return composer;
 }
 
-type EditOutcome = 'edited' | 'shown' | 'sent' | 'unknown';
+// Where the analysis's «⏳» is: the pressed message, or a new one under a photo; null when the
+// pressed message was gone and no «⏳» stands
+type Waiting = { pressed: boolean; chatId: number; messageId: number } | null;
 
 export interface DemoScreen {
   text: TelegramHtml;

@@ -127,8 +127,8 @@ describe('the assembled messages', () => {
   });
 
   // #327: sessions in both modes
-  it('measures the cycle floor note under the real disclaimer of a signal', () => {
-    const analysis = message('analysisSignal');
+  it('measures the cycle floor note under the real disclaimer of a signal card', () => {
+    const analysis = message('analysisCard');
     const texts = { analysisDisclaimer: 'я', analysisDisclaimerReal: 'я'.repeat(300) };
     const note = BOT_TEXT_CATALOG.analysisCycleUnavailable.source;
     expect(

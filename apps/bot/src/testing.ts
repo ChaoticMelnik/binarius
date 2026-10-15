@@ -15,6 +15,7 @@ import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
   BrokerRestErrorCode,
+  MacdCross,
   MomentumDirection,
   NoSignalReason,
   NotificationLevel,
@@ -40,6 +41,7 @@ import {
   type ScanInterval,
   type SignalDecision,
   type SignalFeatures,
+  type SignalIndicators,
   type SignalParams,
   type TradeIntentView,
   type TradingAccessResponse,
@@ -330,6 +332,17 @@ export const SIGNAL_DECISION: SignalDecision = {
   features: SIGNAL_FEATURES,
 };
 export const SIGNAL_DECIDED = signalDecided(SIGNAL_DECISION);
+// The display indicators of the analysis card (#482): MACD above its signal line with no cross on
+// the last candle, the last close above MA50 and below MA200
+export const SIGNAL_INDICATORS: SignalIndicators = {
+  macd: { ok: true, macd: 0.000123, signal: 0.0001, histogram: 0.000023, cross: MacdCross.None },
+  ma50: { ok: true, value: 1.085312, lastClose: SIGNAL_FEATURES.lastClose },
+  ma200: { ok: true, value: 1.086121, lastClose: SIGNAL_FEATURES.lastClose },
+};
+export const SIGNAL_CARD: TradingSignalResponse = tradingSignalResponseSchema.parse({
+  ...SIGNAL_DECIDED,
+  indicators: SIGNAL_INDICATORS,
+});
 export const SIGNAL_NO_SIGNAL = signalDecided({
   kind: SignalKind.NoSignal,
   version: SIGNAL_ALGORITHM_VERSION,
@@ -562,6 +575,19 @@ export const callbackUpdate = (data: string, chatType = 'private'): Update =>
       },
     },
   }) as unknown as Update;
+
+// A press under a photo (#482): the analysis card, or the session's summary card (#318) — a
+// message with a caption, which an edit cannot turn into text
+export const photoCallbackUpdate = (data: string): Update => {
+  const update = callbackUpdate(data) as unknown as {
+    callback_query: { message: Record<string, unknown> };
+  };
+  update.callback_query.message.photo = [
+    { file_id: 'pressed-photo', file_unique_id: 'pressed', width: 100, height: 50 },
+  ];
+  update.callback_query.message.caption = 'card';
+  return update as unknown as Update;
+};
 
 // An inline query (#321): no chat, only the type of the chat it is typed in, when the client says
 export const inlineQueryUpdate = (

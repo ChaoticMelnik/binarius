@@ -111,8 +111,8 @@ const LEVEL_LABELS = labelsOf({
   [NotificationLevel.Off]: 'levelOff',
 } as const satisfies Record<NotificationLevel, BotStaticPlainKey>);
 
-// A trade's direction in words: the analysis screen's headline and its stake button (#126), and
-// #127's status texts.
+// A trade's direction in words: the analysis's stake button (#126) and #127's status texts; the
+// card names it with its own words (#482).
 export const ACTION_LABELS = labelsOf({
   [TradeAction.Up]: 'actionUp',
   [TradeAction.Down]: 'actionDown',
@@ -698,6 +698,10 @@ ${TEXTS.demoNext}`;
 
 // the analysis screen's ATR in quote steps (#379)
 export const atrTicksText = (count: string): string => plain.analysisAtrTicks({ count });
+
+// an indicator of the analysis card without enough closed candles (#482)
+export const indicatorShortText = (count: number, required: number): string =>
+  plain.indicatorShortData({ count: String(count), required: String(required) });
 
 // The signals screen's arrow (#320): a data mark like the pair's payout, so it stays out of the
 // catalog, and the word labels would not fit a row of pairs, two buttons wide since #419.

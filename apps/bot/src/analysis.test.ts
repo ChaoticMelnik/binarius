@@ -6,6 +6,7 @@ import {
   CandleProblem,
   DATA_REFUSAL_REASONS,
   intervalForDuration,
+  MacdCross,
   MomentumDirection,
   NoSignalReason,
   plainTextOf,
@@ -14,6 +15,7 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
   SignalKind,
+  TELEGRAM_CAPTION_LIMIT,
   TELEGRAM_MESSAGE_LIMIT,
   TradeAction,
   TradeMode,
@@ -21,13 +23,16 @@ import {
   type DataRefusalReason,
   type SignalDataRefusal,
   type SignalDecision,
+  type SignalIndicators,
   type TradingSignalResponse,
   formatPrice,
+  tradingSignalResponseSchema,
 } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
 import {
   analysisScreen,
   analysisUnavailableScreen,
+  cardBlock,
   formatAtrPct,
   formatAtrTicks,
   formatRsi,
@@ -36,10 +41,12 @@ import {
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import {
   PAIR_EURUSD,
+  SIGNAL_CARD,
   SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
   SIGNAL_FEATURES,
   SIGNAL_FETCH_FAILED,
+  SIGNAL_INDICATORS,
   SIGNAL_NO_SIGNAL,
   SIGNAL_PARAMS,
   signalDecided,
@@ -79,12 +86,42 @@ const screenOf = (
   response: TradingSignalResponse,
   pair = PAIR_EURUSD,
   mode: TradeMode = TradeMode.Demo,
-) => analysisScreen({ mode, pair, durationSec: 5, response });
+  chooseAmount = false,
+) => analysisScreen({ mode, pair, durationSec: 5, response, chooseAmount });
 const linesOf = (
   response: TradingSignalResponse,
   pair = PAIR_EURUSD,
   mode: TradeMode = TradeMode.Demo,
-) => plainTextOf(screenOf(response, pair, mode).text).split('\n');
+  chooseAmount = false,
+) => plainTextOf(screenOf(response, pair, mode, chooseAmount).text).split('\n');
+const SIGNAL_DECISION_DOWN = {
+  ...head,
+  kind: SignalKind.Signal,
+  action: TradeAction.Down,
+  features: SIGNAL_FEATURES,
+} as const;
+// SIGNAL_CARD with some indicators and features replaced
+const cardWith = (
+  indicators: Partial<SignalIndicators>,
+  features: Partial<typeof SIGNAL_FEATURES> = {},
+): string[] =>
+  linesOf(
+    tradingSignalResponseSchema.parse({
+      ...SIGNAL_CARD,
+      decision: {
+        ...head,
+        kind: SignalKind.Signal,
+        action: TradeAction.Up,
+        features: { ...SIGNAL_FEATURES, ...features },
+      },
+      indicators: { ...SIGNAL_INDICATORS, ...indicators },
+    }),
+  );
+// the value of the block's row with this label
+const rowOf = (lines: string[], label: string): string | undefined => {
+  const line = lines.find((candidate) => candidate.startsWith(`${label} `));
+  return line?.slice('Волатильность '.length);
+};
 const FEATURE_PREFIXES = ['📐 Тренд по EMA:', '⚡ Импульс по RSI:', '🌊 Волатильность по ATR:'];
 const hasFeatureLines = (lines: string[]) =>
   FEATURE_PREFIXES.every((prefix) => lines.some((line) => line.startsWith(prefix)));
@@ -99,45 +136,183 @@ describe('the analysis screen', () => {
     }
   });
 
-  // A2: the fixture's periods (EMA7/25, RSI10, ATR12) are not the decider's defaults
-  it('prints every number of a signal from the answer and the pair, and no other number', () => {
-    const text = plainTextOf(screenOf(SIGNAL_DECIDED).text);
+  // A2 (#482): the card prints the answer's features and indicators and the pair's payout only
+  it("prints every number of a signal's card from the answer and the pair, and no other number", () => {
+    const text = plainTextOf(screenOf(SIGNAL_CARD).text);
     const numbers = (text.match(/\d+(?:\.\d+)?/g) ?? []).sort();
+    const { macd, ma50, ma200 } = SIGNAL_INDICATORS;
+    if (!macd.ok || !ma50.ok || !ma200.ok) throw new Error('the fixture has every indicator');
     const expected = [
       // the header's duration label, «⏱ 5 с»
       '5',
-      String(SIGNAL_PARAMS.emaFast),
-      formatPrice(SIGNAL_FEATURES.emaFast, PAIR_EURUSD.digits),
-      String(SIGNAL_PARAMS.emaSlow),
-      formatPrice(SIGNAL_FEATURES.emaSlow, PAIR_EURUSD.digits),
-      String(SIGNAL_PARAMS.rsiPeriod),
+      // the row labels MA50 and MA200
+      '50',
+      '200',
       formatRsi(SIGNAL_FEATURES.rsi),
-      String(SIGNAL_PARAMS.atrPeriod),
+      formatPrice(macd.histogram, PAIR_EURUSD.digits + 1),
+      formatPrice(ma50.value, PAIR_EURUSD.digits),
+      formatPrice(ma200.value, PAIR_EURUSD.digits),
       formatAtrPct(SIGNAL_FEATURES.atrPct),
-      formatAtrTicks(SIGNAL_FEATURES.atrTicks),
-      String(SIGNAL_FEATURES.closedCandles),
-      formatPrice(SIGNAL_FEATURES.lastClose, PAIR_EURUSD.digits),
       String(PAIR_EURUSD.payout),
       formatBreakEven(PAIR_EURUSD.payout),
     ].sort();
     expect(numbers).toEqual(expected);
   });
 
-  it('lays out a signal: the header, the headline, the features, the payout, the disclaimer', () => {
-    expect(plainTextOf(screenOf(SIGNAL_DECIDED).text)).toBe(
+  // AC 1 (#482)
+  it('lays out a signal as a card: the header, the title, the block, the payout, the disclaimer', () => {
+    expect(plainTextOf(screenOf(SIGNAL_CARD).text)).toBe(
       `📊 Анализ: EUR/USD OTC · ⏱ 5 с
-📈 Сигнал: ⬆️ Вверх
+🟢 Сильный сигнал на рост
 
-📐 Тренд по EMA: вверх — EMA7 1.08542 выше EMA25 1.08511
-⚡ Импульс по RSI: вверх — RSI10 62.3
-🌊 Волатильность по ATR: в норме — ATR12 0.041% · 44.7 шага котировки
-🕯 Закрытых свечей: 59
-💲 Последняя цена: 1.08560
+Пара          EUR/USD OTC
+RSI           нейтрально 62.3
+MACD          выше сигнальной 0.000023
+MA50          цена выше 1.08531
+MA200         цена ниже 1.08612
+Тренд EMA     вверх
+Волатильность в норме 0.041%
+Направление   ⬆️ ВВЕРХ 🟢
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
 
 ⚠️ Сигнал — не прогноз результата и не гарантия. Это демо: деньги не нужны.`,
     );
-    expect(plainTextOf(screenOf(signalOf(TradeAction.Down)).text)).toContain('📉 Сигнал: ⬇️ Вниз');
+    expect(screenOf(SIGNAL_CARD).text.value).toContain(
+      '<pre>Пара          EUR/USD OTC\nRSI           нейтрально 62.3\n',
+    );
+    expect(screenOf(SIGNAL_CARD).text.value).toContain('⬆️ ВВЕРХ 🟢</pre>\n💰');
+    expect(screenOf(SIGNAL_CARD).photo).toBe(TradeAction.Up);
+    const down = screenOf(
+      tradingSignalResponseSchema.parse({ ...SIGNAL_CARD, decision: SIGNAL_DECISION_DOWN }),
+    );
+    expect(down.photo).toBe(TradeAction.Down);
+    const downLines = plainTextOf(down.text).split('\n');
+    expect(downLines[1]).toBe('🔴 Сильный сигнал на падение');
+    expect(downLines).toContain('Направление   ⬇️ ВНИЗ 🔴');
+  });
+
+  it('lines the values up in one column, after the longest label', () => {
+    const block = linesOf(SIGNAL_CARD).slice(3, 11);
+    expect(block).toHaveLength(8);
+    const column = 'Волатильность '.length;
+    for (const line of block) {
+      expect(line.slice(0, column).trimEnd().length, line).toBeLessThan(column);
+      expect(line[column - 1], line).toBe(' ');
+      expect(line[column], line).not.toBe(' ');
+    }
+    // the width is String#length: a label with a pair of surrogates is two wide
+    expect(
+      cardBlock([
+        ['🟢🟢', 'a'],
+        ['abc', 'b'],
+      ]).split('\n'),
+    ).toEqual(['🟢🟢 a', 'abc  b']);
+  });
+
+  // #482: the RSI's word by the decision's rsiExtremeBand (15 in the fixture), never rsiBand (5)
+  it.each([
+    [62.34, 'нейтрально 62.3'],
+    [60, 'нейтрально 60.0'],
+    [65, 'перекуплен 65.0'],
+    [64.99, 'нейтрально 65.0'],
+    [35, 'перепродан 35.0'],
+    [35.01, 'нейтрально 35.0'],
+  ])('says RSI %f is «%s»', (rsi, value) => {
+    expect(rowOf(cardWith({}, { rsi }), 'RSI')).toBe(value);
+  });
+
+  // #482: a cross on the last candle first, the side by the histogram's sign otherwise
+  it.each([
+    [MacdCross.Up, 0.00002, 'пересечение вверх 0.000020'],
+    [MacdCross.Down, -0.00002, 'пересечение вниз -0.000020'],
+    [MacdCross.None, 0.00002, 'выше сигнальной 0.000020'],
+    [MacdCross.None, -0.00002, 'ниже сигнальной -0.000020'],
+    [MacdCross.None, 0, 'на сигнальной 0.000000'],
+  ])('says MACD with cross %s and histogram %f is «%s»', (cross, histogram, value) => {
+    const macd = { ok: true as const, macd: 0.0001, signal: 0.0001 - histogram, histogram, cross };
+    expect(rowOf(cardWith({ macd }), 'MACD')).toBe(value);
+  });
+
+  it.each([
+    [1.0856, 'цена выше 1.08500'],
+    [1.0844, 'цена ниже 1.08500'],
+    [1.085, 'цена на MA 1.08500'],
+  ])('says a last close of %f against MA 1.085 is «%s»', (lastClose, value) => {
+    const ma = { ok: true as const, value: 1.085, lastClose };
+    const card = cardWith({ ma50: ma, ma200: ma });
+    expect(rowOf(card, 'MA50')).toBe(value);
+    expect(rowOf(card, 'MA200')).toBe(value);
+  });
+
+  // AC 3: an indicator short of candles says so, with no number of its own
+  it('says «данных мало» for an indicator short of candles, and prints no value for it', () => {
+    const card = cardWith({
+      ma200: { ok: false, closedCandles: 149, required: 200 },
+      macd: { ok: false, closedCandles: 20, required: 35 },
+    });
+    expect(rowOf(card, 'MA200')).toBe('данных мало (149 из 200)');
+    expect(rowOf(card, 'MACD')).toBe('данных мало (20 из 35)');
+    expect(rowOf(card, 'MA50')).toBe('цена выше 1.08531');
+  });
+
+  it('says «данных мало» on all three indicators when the answer has none', () => {
+    const lines = linesOf(SIGNAL_DECIDED);
+    expect(rowOf(lines, 'MACD')).toBe('данных мало (0 из 35)');
+    expect(rowOf(lines, 'MA50')).toBe('данных мало (0 из 50)');
+    expect(rowOf(lines, 'MA200')).toBe('данных мало (0 из 200)');
+    expect(lines.slice(3, 11)).toHaveLength(8);
+  });
+
+  // AC 2, 3: the answer exactly as the feed gives it on 118 rows with the forming one (part 1's
+  // feed.test.ts F13): MA200 short, MA50 and MACD with their numbers
+  it('prints the indicators of an answer shaped as the feed gives it on 117 closed candles', () => {
+    const response = tradingSignalResponseSchema.parse({
+      ...SIGNAL_DECIDED,
+      indicators: {
+        macd: {
+          ok: true,
+          macd: 0.0000412,
+          signal: 0.0000376,
+          histogram: 0.0000036,
+          cross: 'none',
+        },
+        ma50: { ok: true, value: 1.0854417, lastClose: 1.085604 },
+        ma200: { ok: false, closedCandles: 117, required: 200 },
+      },
+    });
+    const lines = linesOf(response);
+    expect(rowOf(lines, 'MACD')).toBe('выше сигнальной 0.000004');
+    expect(rowOf(lines, 'MA50')).toBe('цена выше 1.08544');
+    expect(rowOf(lines, 'MA200')).toBe('данных мало (117 из 200)');
+  });
+
+  it('ends a demo card over the amounts with «Выбери сумму сделки 👇», and only then', () => {
+    const lines = linesOf(SIGNAL_CARD, PAIR_EURUSD, TradeMode.Demo, true);
+    expect(lines.slice(-3)).toEqual([
+      plainTextOf(TEXTS.analysisDisclaimer),
+      '',
+      'Выбери сумму сделки 👇',
+    ]);
+    expect(linesOf(SIGNAL_CARD)).not.toContain('Выбери сумму сделки 👇');
+    expect(linesOf(SIGNAL_CARD).at(-1)).toBe(plainTextOf(TEXTS.analysisDisclaimer));
+    // a refusal has no card and no amounts
+    expect(linesOf(SIGNAL_NO_SIGNAL, PAIR_EURUSD, TradeMode.Demo, true)).not.toContain(
+      'Выбери сумму сделки 👇',
+    );
+  });
+
+  // AC 4: no signal and a broker failure stay text, with no picture
+  it('draws no picture on any screen but a signal', () => {
+    for (const response of [
+      SIGNAL_NO_SIGNAL,
+      SIGNAL_DATA_REFUSAL,
+      SIGNAL_FETCH_FAILED,
+      ...RULE_REFUSAL_REASONS.map((reason) => ruleRefusalOf(reason)),
+      ...DATA_REFUSAL_REASONS.map(dataRefusalOf),
+    ]) {
+      expect(screenOf(response).photo).toBeNull();
+    }
+    expect(analysisUnavailableScreen(PAIR_EURUSD, 5).photo).toBeNull();
   });
 
   // A3
@@ -165,7 +340,7 @@ describe('the analysis screen', () => {
     );
     expect(volatilityOf(ruleRefusalOf(NoSignalReason.RsiOverbought))).toMatch(/: в норме — /);
     expect(volatilityOf(SIGNAL_NO_SIGNAL)).toMatch(/: в норме — /);
-    expect(volatilityOf(SIGNAL_DECIDED)).toMatch(/: в норме — /);
+    expect(rowOf(linesOf(SIGNAL_DECIDED), 'Волатильность')).toBe('в норме 0.041%');
   });
 
   // #379: the three v2 refusals in words of their own
@@ -355,8 +530,16 @@ describe('the analysis screen', () => {
       SIGNAL_FETCH_FAILED,
     ];
     for (const response of responses) {
-      const { text } = analysisScreen({ mode: TradeMode.Demo, pair, durationSec: 15, response });
-      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      const { text, photo } = analysisScreen({
+        mode: TradeMode.Demo,
+        pair,
+        durationSec: 15,
+        response,
+        chooseAmount: true,
+      });
+      // a signal is a caption (#482)
+      const limit = photo === null ? TELEGRAM_MESSAGE_LIMIT : TELEGRAM_CAPTION_LIMIT;
+      expect(telegramTextProblems(text, limit)).toEqual([]);
       expect(plainTextOf(text)).toContain(pair.symbol);
       expect(text.value).not.toContain('&amp;amp;');
     }
@@ -373,18 +556,36 @@ describe('the text source', () => {
 
   const screenWith = (key: BotTextKey, response: TradingSignalResponse) => {
     setBotTextSource(stubTextSource(key));
-    return analysisScreen({ mode: TradeMode.Demo, pair: PAIR_EURUSD, durationSec: 5, response })
-      .text.value;
+    return analysisScreen({
+      mode: TradeMode.Demo,
+      pair: PAIR_EURUSD,
+      durationSec: 5,
+      response,
+      chooseAmount: true,
+    }).text.value;
   };
+  const disagree = ruleRefusalOf(NoSignalReason.TrendMomentumDisagree);
 
   it.each<[string, BotTextKey, TradingSignalResponse]>([
-    ['the headline', 'analysisSignalUp', SIGNAL_DECIDED],
+    ['the card title', 'analysisCardUp', SIGNAL_CARD],
+    ['a row label', 'cardRowMa200', SIGNAL_CARD],
+    ['the RSI word', 'rsiNeutral', SIGNAL_CARD],
+    ['the MACD word', 'macdAbove', SIGNAL_CARD],
+    ['the MA word', 'maPriceBelow', SIGNAL_CARD],
+    ['the direction', 'cardDirectionUp', SIGNAL_CARD],
+    ['the amounts line', 'analysisChooseAmount', SIGNAL_CARD],
     ['the reason', 'noSignalRsiNeutral', SIGNAL_NO_SIGNAL],
-    ['the trend word', 'trendUp', SIGNAL_DECIDED],
-    ['the momentum word', 'momentumUp', SIGNAL_DECIDED],
-    ['the volatility word', 'volatilityNormal', SIGNAL_DECIDED],
-    ['the EMA relation', 'emaAbove', SIGNAL_DECIDED],
+    ['the trend word', 'trendUp', SIGNAL_CARD],
+    ['the momentum word', 'momentumUp', disagree],
+    ['the volatility word', 'volatilityNormal', SIGNAL_CARD],
+    ['the EMA relation', 'emaAbove', disagree],
   ])('shows %s from the source in place', (_name, key, response) => {
     expect(screenWith(key, response)).toContain(stubText(key));
+  });
+
+  it('shows the short-data word from the source in place, with its numbers', () => {
+    expect(screenWith('indicatorShortData', SIGNAL_DECIDED)).toContain(
+      'MA200         ЗАГЛУШКА indicatorShortData 0 200',
+    );
   });
 });
