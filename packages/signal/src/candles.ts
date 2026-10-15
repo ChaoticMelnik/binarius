@@ -23,7 +23,7 @@ const invalid = (index: number, problem: CandleProblem): PreparedCandles => ({
   refusal: { reason: NoSignalReason.InvalidCandle, detail: { index, problem } },
 });
 
-function candleProblem(candle: Candle): CandleProblem | undefined {
+export function candleProblem(candle: Candle): CandleProblem | undefined {
   const { timestamp, open, high, low, close } = candle;
   if (![timestamp, open, high, low, close].every(Number.isFinite)) return CandleProblem.NonFinite;
   if (!(open > 0 && high > 0 && low > 0 && close > 0)) return CandleProblem.NonPositive;

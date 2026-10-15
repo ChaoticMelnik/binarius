@@ -313,7 +313,7 @@ export const tradingSignalResponseSchema = z.discriminatedUnion('outcome', [
     outcome: z.literal(SignalFeedOutcome.Decided),
     params: signalParamsSchema,
     decision: signalDecisionSchema,
-    // absent when the whole response did not pass the candle checks (docs/signal.md)
+    // absent when the unbroken tail of the response did not pass the candle checks (docs/signal.md)
     indicators: signalIndicatorsSchema.optional(),
   }),
   z.strictObject({
