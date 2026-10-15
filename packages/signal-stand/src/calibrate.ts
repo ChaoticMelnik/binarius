@@ -3,13 +3,14 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   intervalForDuration,
   SignalKind,
+  toCandle,
   tradeActionSchema,
   type Candle,
   type TradeAction,
 } from '@binarius/shared';
 import { replaySignalJournalEntry, type StoredSignalJournalEntry } from '@binarius/signal';
 import { z } from 'zod';
-import { readPairs, readSeries, seriesPath, StandError } from './cache';
+import { firstTimestamp, readPairs, readSeries, seriesPath, StandError } from './cache';
 import {
   ATTEMPT_WINDOW_MS,
   CALIBRATE_MIN_ERA_TRADES,
@@ -29,7 +30,6 @@ import { compareRows, mergedRows, readSessionFiles } from './session-candles';
 import { simulate, type Market } from './simulate';
 import { addTrade, emptyTally, intervalOf, winRatePct, type Tally } from './stats';
 import { V2_PRODUCTION_POINT, VARIANTS } from './variants';
-import { lowerBound } from './window';
 
 // the plan's export query (docs/signal-stand.md -> Calibration); money is compared by sign only
 const liveTradeSchema = z.object({
@@ -46,16 +46,16 @@ const liveTradeSchema = z.object({
 });
 export type LiveTrade = z.infer<typeof liveTradeSchema>;
 
-export type Era = 'v1' | 'ambiguous' | 'v2';
-export const eraOf = (createdAtMs: number): Era =>
+type Era = 'v1' | 'ambiguous' | 'v2';
+const eraOf = (createdAtMs: number): Era =>
   createdAtMs < V2_MERGED_AT ? 'v1' : createdAtMs < V2_FIRST_CLEAN_AT ? 'ambiguous' : 'v2';
 
-export function liveOutcome(profit: string): Outcome {
+function liveOutcome(profit: string): Outcome {
   if (/^-?0+(\.0+)?$/.test(profit)) return 'tie';
   return profit.startsWith('-') ? 'loss' : 'win';
 }
 
-export interface CalibrateOptions {
+interface CalibrateOptions {
   dir: string;
   journal: string;
   trades: string;
@@ -64,11 +64,11 @@ export interface CalibrateOptions {
   now?: () => number;
 }
 
-export interface Share {
+interface Share {
   matched: number;
   priced: number;
 }
-export const share = (s: Share): number => (s.priced === 0 ? 0 : (100 * s.matched) / s.priced);
+const share = (s: Share): number => (s.priced === 0 ? 0 : (100 * s.matched) / s.priced);
 export const outcomeGatePasses = (s: Share): boolean => share(s) >= CALIBRATE_MIN_OUTCOME_MATCH_PCT;
 
 // does the stand's pricing of this entry and exit give the live outcome; undefined = no price
@@ -80,7 +80,7 @@ function matches(trade: LiveTrade, price: PriceAt, entryAt: number, exitAt: numb
 }
 
 // gate 2: at the trade's own open and close, both shifted by k
-export const matchAtShift = (trade: LiveTrade, price: PriceAt, k: number) =>
+const matchAtShift = (trade: LiveTrade, price: PriceAt, k: number) =>
   matches(trade, price, trade.open_timestamp_ms + k, trade.close_timestamp_ms + k);
 
 // the headline delay: entry at created_at + delay, the stand's stand-in for the decision moment
@@ -99,14 +99,16 @@ function count(shares: ReadonlyMap<number, Share>, key: number, matched: boolean
   if (matched) s.matched++;
 }
 
-// gate 3 for one era x duration: gated from CALIBRATE_MIN_ERA_TRADES live trades
-export function eraCheck(live: Tally, stand: Tally): { gated: boolean; inside: boolean } {
+// Gate 3 for one era x duration, gated from CALIBRATE_MIN_ERA_TRADES live trades. A stand with no
+// decided trade is no evidence: its interval would be [0, 100] and hold any live rate.
+type EraStatus = 'inside' | 'outside' | 'no_stand_evidence';
+export function eraCheck(live: Tally, stand: Tally): { gated: boolean; status: EraStatus } {
+  const gated = live.trades >= CALIBRATE_MIN_ERA_TRADES;
+  if (stand.wins + stand.losses === 0) return { gated, status: 'no_stand_evidence' };
   const ci = intervalOf(stand);
   const rate = winRatePct(live);
-  return {
-    gated: live.trades >= CALIBRATE_MIN_ERA_TRADES,
-    inside: rate !== undefined && rate >= ci.low && rate <= ci.high,
-  };
+  const inside = rate !== undefined && rate >= ci.low && rate <= ci.high;
+  return { gated, status: inside ? 'inside' : 'outside' };
 }
 const shareText = (s: Share) => `${s.matched}/${s.priced} = ${share(s).toFixed(1)} %`;
 
@@ -121,12 +123,7 @@ function quantiles(values: readonly number[]): string {
 export function bestOf<T>(grid: readonly T[], shares: ReadonlyMap<T, Share>): T {
   let best = grid[0];
   for (const value of grid) {
-    if (
-      share(shares.get(value) ?? { matched: 0, priced: 0 }) >
-      share(shares.get(best) ?? { matched: 0, priced: 0 })
-    ) {
-      best = value;
-    }
+    if (share(shares.get(value)!) > share(shares.get(best)!)) best = value;
   }
   return best;
 }
@@ -150,36 +147,56 @@ function readJournal(file: string, counters: Record<string, number>) {
   return byKey;
 }
 
-// the latest line of the same pair and interval at most ATTEMPT_WINDOW_MS before the intent
+// the latest line of the same pair and interval at most ATTEMPT_WINDOW_MS before the intent;
+// the list is sorted by nowMs (readJournal)
 function matchLine(
   lines: readonly StoredSignalJournalEntry[] | undefined,
   createdAtMs: number,
 ): StoredSignalJournalEntry | undefined {
-  let found: StoredSignalJournalEntry | undefined;
-  for (const entry of lines ?? []) {
-    if (entry.nowMs > createdAtMs) break;
-    if (createdAtMs - entry.nowMs <= ATTEMPT_WINDOW_MS) found = entry;
+  if (lines === undefined) return undefined;
+  let lo = 0;
+  let hi = lines.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (lines[mid].nowMs <= createdAtMs) lo = mid + 1;
+    else hi = mid;
   }
-  return found;
+  const found = lines[lo - 1] as StoredSignalJournalEntry | undefined;
+  return found !== undefined && createdAtMs - found.nowMs <= ATTEMPT_WINDOW_MS ? found : undefined;
 }
 
-// The closed rows of the line against the cache. The forming row was not final when logged, and
-// the first row of the feed's answer opens at its window (as compareRows' first row).
-function seriesRevised(entry: StoredSignalJournalEntry, cache: readonly Candle[]) {
-  let revised = false;
-  let notInCache = 0;
-  for (const [timestamp, open, high, low, close] of entry.series.slice(1)) {
-    if (timestamp + entry.intervalMs > entry.nowMs) continue;
-    const found = cache[lowerBound(cache, timestamp)] as Candle | undefined;
-    if (found?.timestamp !== timestamp) {
-      notInCache++;
-      continue;
-    }
-    if (found.open !== open || found.high !== high || found.low !== low || found.close !== close) {
-      revised = true;
+// the closed rows of the line; the forming row was not final when logged
+const closedRows = (entry: StoredSignalJournalEntry): Candle[] =>
+  entry.series
+    .filter(([timestamp]) => timestamp + entry.intervalMs <= entry.nowMs)
+    .map(([timestamp, open, high, low, close]) => toCandle([timestamp, open, high, low, close]));
+
+const supportedInterval = (durationSec: number): TradeInterval | undefined => {
+  const interval = intervalForDuration(durationSec) as TradeInterval;
+  return TRADE_INTERVALS[interval]?.durationSec === durationSec ? interval : undefined;
+};
+
+// Before any gate: every traded asset needs its pairs.json entry and cached series, or the
+// comparisons below would count nothing and pass on no evidence.
+function refuseMissing(dir: string, trades: readonly LiveTrade[]): void {
+  const pairs = new Set(readPairs(dir).map((pair) => pair.id));
+  const needed = new Map<number, Set<string>>();
+  for (const trade of trades) {
+    if (eraOf(trade.created_at_ms) === 'ambiguous') continue;
+    const intervals = needed.get(trade.asset_id) ?? new Set([PRICE_INTERVAL]);
+    const interval = supportedInterval(trade.duration_sec);
+    if (interval !== undefined) intervals.add(interval);
+    needed.set(trade.asset_id, intervals);
+  }
+  const missing: string[] = [];
+  for (const [assetId, intervals] of [...needed].sort(([a], [b]) => a - b)) {
+    if (!pairs.has(assetId)) missing.push(`${assetId}: not in pairs.json`);
+    for (const interval of intervals) {
+      if (firstTimestamp(seriesPath(dir, assetId, interval)) === undefined)
+        missing.push(`${assetId}: no ${interval} series`);
     }
   }
-  return { revised, notInCache };
+  if (missing.length > 0) throw new StandError(`calibrate: ${missing.join('; ')} - fetch it first`);
 }
 
 interface EraRow {
@@ -211,6 +228,7 @@ export function runCalibrate(options: CalibrateOptions): number {
     malformed_line: 0,
     version_mismatch: 0,
     ambiguous: 0,
+    unsupported_duration: 0,
     unpriced: 0,
     priced_from_session_file: 0,
     unsupported_version: 0,
@@ -219,11 +237,14 @@ export function runCalibrate(options: CalibrateOptions): number {
     replay_mismatch: 0,
     series_match: 0,
     series_revised: 0,
+    series_lines_not_compared: 0,
     series_rows_not_in_cache: 0,
     price_series_match: 0,
     price_series_revised: 0,
+    price_files_not_compared: 0,
     price_rows_not_in_cache: 0,
   };
+  refuseMissing(options.dir, trades);
   const firstRevisions: string[] = [];
   const journal = readJournal(options.journal, counters);
   const sessions = readSessionFiles(options.sessionCandles);
@@ -250,7 +271,9 @@ export function runCalibrate(options: CalibrateOptions): number {
     for (const file of files) {
       const comparison = compareRows(file.candles, cachePrices);
       counters.price_rows_not_in_cache += comparison.notInCache;
-      if (comparison.revised > 0) {
+      if (comparison.compared === 0) {
+        counters.price_files_not_compared++;
+      } else if (comparison.revised > 0) {
         counters.price_series_revised++;
         firstRevisions.push(
           `${file.name}: ${comparison.revised} rows, first ${new Date(comparison.firstRevisedAt ?? 0).toISOString()}`,
@@ -265,8 +288,8 @@ export function runCalibrate(options: CalibrateOptions): number {
     const intervalSeries = Object.fromEntries(
       Object.keys(TRADE_INTERVALS).map((interval) => [interval, load(interval)]),
     ) as Market['series'];
-    const digits = digitsOf.get(assetId);
-    const market: Market = { assetId, digits: digits ?? 0, series: intervalSeries, price };
+    const digits = digitsOf.get(assetId)!;
+    const market: Market = { assetId, digits, series: intervalSeries, price };
 
     const own = trades.filter((trade) => trade.asset_id === assetId);
     for (const trade of own) {
@@ -289,7 +312,7 @@ export function runCalibrate(options: CalibrateOptions): number {
       for (const k of PRICE_SHIFT_GRID_MS) {
         count(outcomeShares, k, matchAtShift(trade, price, k));
         const entry = price(trade.open_timestamp_ms + k);
-        if (entry !== undefined && digits !== undefined) {
+        if (entry !== undefined) {
           ticks.get(k)!.push(Math.round(Math.abs(trade.open_price - entry) * 10 ** digits));
         }
       }
@@ -309,12 +332,17 @@ export function runCalibrate(options: CalibrateOptions): number {
           isDeepStrictEqual(replay, line.decision) && sameAction ? 'replayed' : 'replay_mismatch'
         ]++;
         const cacheSeries = intervalSeries[interval as TradeInterval] ?? [];
-        const check = seriesRevised(line, cacheSeries);
+        const check = compareRows(closedRows(line), cacheSeries);
         counters.series_rows_not_in_cache += check.notInCache;
-        counters[check.revised ? 'series_revised' : 'series_match']++;
+        if (check.compared === 0) counters.series_lines_not_compared++;
+        else counters[check.revised > 0 ? 'series_revised' : 'series_match']++;
         openMinusDecision.push(trade.open_timestamp_ms - line.nowMs);
       }
 
+      if (supportedInterval(trade.duration_sec) === undefined) {
+        counters.unsupported_duration++;
+        continue;
+      }
       const key = `${era}|${trade.duration_sec}`;
       const row = eras.get(key) ?? { live: emptyTally(), stand: new Map() };
       addTrade(row.live, { outcome: liveOutcome(trade.profit) }, 0);
@@ -325,15 +353,15 @@ export function runCalibrate(options: CalibrateOptions): number {
     const windows = new Map<string, LiveTrade[]>();
     for (const trade of own) {
       const era = eraOf(trade.created_at_ms);
-      if (era === 'ambiguous') continue;
+      if (era === 'ambiguous' || supportedInterval(trade.duration_sec) === undefined) continue;
       const key = `${era}|${trade.duration_sec}|${trade.trading_session_id}`;
-      windows.set(key, [...(windows.get(key) ?? []), trade]);
+      const list = windows.get(key);
+      if (list === undefined) windows.set(key, [trade]);
+      else list.push(trade);
     }
     for (const [key, list] of windows) {
       const [era, duration] = key.split('|');
-      const interval = intervalForDuration(Number(duration)) as TradeInterval;
-      if (TRADE_INTERVALS[interval]?.durationSec !== Number(duration) || digits === undefined)
-        continue;
+      const interval = supportedInterval(Number(duration))!;
       const variant = VARIANTS.find((v) => v.name === era)!;
       const point = era === 'v2' ? V2_PRODUCTION_POINT : {};
       const row = eras.get(`${era}|${duration}`)!;
@@ -357,13 +385,18 @@ export function runCalibrate(options: CalibrateOptions): number {
   const bestK = bestOf(PRICE_SHIFT_GRID_MS, outcomeShares);
   const headlineDelayMs = bestOf(OPEN_DELAY_GRID_MS, delayShares);
   const outcome = outcomeShares.get(bestK)!;
-  const revisionsOk = counters.series_revised === 0 && counters.price_series_revised === 0;
+  // gate 1 needs something compared on both sources: 0 revisions among 0 rows is no evidence
+  const revisionEvidence =
+    counters.series_match + counters.series_revised > 0 &&
+    counters.price_series_match + counters.price_series_revised > 0;
+  const revisionsOk =
+    revisionEvidence && counters.series_revised === 0 && counters.price_series_revised === 0;
   const outcomeOk = outcomeGatePasses(outcome);
   let erasOk = true;
 
   const out = io.out;
   out(
-    `revisions: series_revised ${counters.series_revised} (series_match ${counters.series_match}), price_series_revised ${counters.price_series_revised} (price_series_match ${counters.price_series_match}) -> ${revisionsOk ? 'ok' : 'FAIL'}`,
+    `revisions: series_revised ${counters.series_revised} (series_match ${counters.series_match}), price_series_revised ${counters.price_series_revised} (price_series_match ${counters.price_series_match}) -> ${revisionsOk ? 'ok' : revisionEvidence ? 'FAIL' : 'FAIL no revision evidence'}`,
   );
   for (const line of firstRevisions) out(`  revised: ${line}`);
   out(
@@ -378,10 +411,17 @@ export function runCalibrate(options: CalibrateOptions): number {
     const stand = row.stand.get(headlineDelayMs) ?? emptyTally();
     const ci = intervalOf(stand);
     const liveRate = winRatePct(row.live);
-    const { gated, inside } = eraCheck(row.live, stand);
-    if (gated && !inside) erasOk = false;
+    const { gated, status } = eraCheck(row.live, stand);
+    if (gated && status !== 'inside') erasOk = false;
+    const verdict = !gated
+      ? 'reported, not gated'
+      : status === 'inside'
+        ? 'ok'
+        : status === 'outside'
+          ? 'FAIL'
+          : 'FAIL no stand evidence';
     out(
-      `  ${era} ${duration} s: live ${row.live.trades} trades ${row.live.wins}W/${row.live.losses}L/${row.live.ties}T ${liveRate?.toFixed(1) ?? '-'} %; stand ${stand.trades} trades ${stand.wins}W/${stand.losses}L/${stand.ties}T ${winRatePct(stand)?.toFixed(1) ?? '-'} % [${ci.low.toFixed(1)}, ${ci.high.toFixed(1)}] -> ${gated ? (inside ? 'ok' : 'FAIL') : 'reported, not gated'}`,
+      `  ${era} ${duration} s: live ${row.live.trades} trades ${row.live.wins}W/${row.live.losses}L/${row.live.ties}T ${liveRate?.toFixed(1) ?? '-'} %; stand ${stand.trades} trades ${stand.wins}W/${stand.losses}L/${stand.ties}T ${winRatePct(stand)?.toFixed(1) ?? '-'} % [${ci.low.toFixed(1)}, ${ci.high.toFixed(1)}] -> ${verdict}`,
     );
   }
   out(`headline openDelay (entry at created_at + delay): ${headlineDelayMs} ms`);
@@ -397,21 +437,24 @@ export function runCalibrate(options: CalibrateOptions): number {
       .join(', ')}`,
   );
 
-  mkdirSync(options.dir, { recursive: true });
-  writeFileSync(
-    calibrationPath(options.dir),
-    JSON.stringify(
-      {
-        headlineDelayMs,
-        calibratedAt: (options.now ?? Date.now)(),
-        bestK,
-        outcomeMatchPct: share(outcome),
-      },
-      null,
-      2,
-    ) + '\n',
-  );
   const pass = revisionsOk && outcomeOk && erasOk;
+  // a FAIL saves nothing: run would otherwise report the delay as calibrate's
+  if (pass) {
+    mkdirSync(options.dir, { recursive: true });
+    writeFileSync(
+      calibrationPath(options.dir),
+      JSON.stringify(
+        {
+          headlineDelayMs,
+          calibratedAt: (options.now ?? Date.now)(),
+          bestK,
+          outcomeMatchPct: share(outcome),
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+  }
   out(`calibrate: ${pass ? 'PASS' : 'FAIL'}`);
   return pass ? 0 : 1;
 }

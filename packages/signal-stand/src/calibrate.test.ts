@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { SignalKind, TradeAction } from '@binarius/shared';
+import { SignalKind, TradeAction, type Candle } from '@binarius/shared';
 import { DEFAULT_SIGNAL_PARAMS, toJournalCandle } from '@binarius/signal';
 import { describe, expect, it, vi } from 'vitest';
 import { appendRows, readSeries, seriesPath } from './cache';
@@ -37,7 +37,7 @@ const profitOf = (action: TradeAction, entry: number, exit: number) =>
   ({ win: '0.90000000', loss: '-1.00000000', tie: '0.00000000' })[outcomeOf(action, entry, exit)];
 
 // live trades on the moments v2 signalled, each with the journal line the feed would have logged
-function liveSession(count: number) {
+function liveSession(count: number, onlyWins = false) {
   const trades: LiveTrade[] = [];
   const lines: string[] = [];
   for (let nowMs = T0 + 600_500; trades.length < count; nowMs += STEP) {
@@ -63,9 +63,11 @@ function liveSession(count: number) {
       decision: { ...decision, features: { ...decision.features } },
     };
     if (series.at(-1)![0] + STEP <= nowMs) continue;
-    lines.push(JSON.stringify({ level: 30, time: nowMs, signal, msg: 'signal decision' }));
     const open = nowMs + 900;
     const close = open + 5_000;
+    const profit = profitOf(decision.action, price(open)!, price(close)!);
+    if (onlyWins && profit !== '0.90000000') continue;
+    lines.push(JSON.stringify({ level: 30, time: nowMs, signal, msg: 'signal decision' }));
     trades.push({
       trading_session_id: 's1',
       asset_id: PAIR.id,
@@ -76,11 +78,28 @@ function liveSession(count: number) {
       open_price: price(open)!,
       close_timestamp_ms: close,
       close_price: price(close)!,
-      profit: profitOf(decision.action, price(open)!, price(close)!),
+      profit,
     });
     nowMs += 10_000;
   }
   return { trades, lines };
+}
+
+const sessionRows = (candles: readonly Candle[]) =>
+  candles.map((c) => [c.timestamp, c.open, c.high, c.low, c.close]);
+
+// the owner's session export of the whole path
+function sessionDirOf(candles: readonly Candle[] = seconds): string {
+  const dir = tempDir();
+  writeJson(path.join(dir, 'all_1s.json'), {
+    session: 'all',
+    asset_id: PAIR.id,
+    interval: '1s',
+    start_time: 0,
+    limit: candles.length,
+    rows: sessionRows(candles),
+  });
+  return dir;
 }
 
 function run(setup: { trades: unknown; lines: string[]; dir?: string; sessionDir?: string }) {
@@ -92,7 +111,7 @@ function run(setup: { trades: unknown; lines: string[]; dir?: string; sessionDir
     dir,
     journal: path.join(live, 'journal.jsonl'),
     trades: writeJson(path.join(live, 'trades.json'), setup.trades),
-    sessionCandles: setup.sessionDir ?? path.join(live, 'none'),
+    sessionCandles: setup.sessionDir ?? sessionDirOf(),
     io: { out: (l) => out.push(l), err: vi.fn() },
     now: () => T0,
   });
@@ -118,10 +137,11 @@ describe('calibrate', () => {
     expect(counter('replayed')).toBe(6);
     expect(counter('unmatched')).toBe(0);
     expect(out.at(-1)).toBe('calibrate: PASS');
+    // created_at and open_timestamp share a second, so delay 0 prices the live entry
     const saved = JSON.parse(readFileSync(calibrationPath(dir), 'utf8')) as {
       headlineDelayMs: number;
     };
-    expect([0, 1_000, 3_000]).toContain(saved.headlineDelayMs);
+    expect(saved.headlineDelayMs).toBe(0);
   });
 
   it('C2 a revised closed candle fails the run, and revisions are the first line', () => {
@@ -150,9 +170,13 @@ describe('calibrate', () => {
 
   it('C4 an era is gated from 30 live trades: outside the interval fails it, 29 trades only report', () => {
     const stand = tally(50, 50);
-    expect(eraCheck(tally(30, 0), stand)).toEqual({ gated: true, inside: false });
-    expect(eraCheck(tally(15, 15), stand)).toEqual({ gated: true, inside: true });
-    expect(eraCheck(tally(29, 0), stand)).toEqual({ gated: false, inside: false });
+    expect(eraCheck(tally(30, 0), stand)).toEqual({ gated: true, status: 'outside' });
+    expect(eraCheck(tally(15, 15), stand)).toEqual({ gated: true, status: 'inside' });
+    expect(eraCheck(tally(29, 0), stand)).toEqual({ gated: false, status: 'outside' });
+    expect(eraCheck(tally(15, 15), { ...emptyTally(), trades: 2, ties: 2 })).toEqual({
+      gated: true,
+      status: 'no_stand_evidence',
+    });
   });
 
   it('C5 a trade of the evening of 10-09 is ambiguous and in no comparison', () => {
@@ -320,5 +344,99 @@ describe('calibrate', () => {
     const { counter } = run({ ...session, dir, sessionDir });
     expect(counter('priced_from_session_file')).toBe(1);
     expect(counter('unpriced')).toBe(0);
+  });
+  it('E1 an empty stand dir is refused before any gate, naming the traded asset, and saves nothing', () => {
+    const dir = tempDir();
+    expect(() => run({ ...liveSession(2), dir })).toThrow(
+      `calibrate: ${PAIR.id}: not in pairs.json; ${PAIR.id}: no 1s series; ${PAIR.id}: no 5s series - fetch it first`,
+    );
+    expect(existsSync(calibrationPath(dir))).toBe(false);
+  });
+
+  it('E2 one traded asset or one series missing from the cache is refused by name', () => {
+    const session = liveSession(2);
+    const other = { ...session.trades[0], asset_id: 999 };
+    expect(() => run({ ...session, trades: [...session.trades, other] })).toThrow(
+      'calibrate: 999: not in pairs.json; 999: no 1s series; 999: no 5s series - fetch it first',
+    );
+    const dir = cacheWith(seconds);
+    rmSync(seriesPath(dir, PAIR.id, '5s'));
+    expect(() => run({ ...session, dir })).toThrow(
+      `calibrate: ${PAIR.id}: no 5s series - fetch it first`,
+    );
+    expect(existsSync(calibrationPath(dir))).toBe(false);
+  });
+
+  it('E3 a gated era whose stand has no trade fails: no stand evidence', () => {
+    const session = liveSession(6);
+    const dir = cacheWith(seconds);
+    // the 15s cache ends long before the 15 s trades, so the stand decides nothing there
+    writeFileSync(seriesPath(dir, PAIR.id, '15s'), '');
+    appendRows(seriesPath(dir, PAIR.id, '15s'), aggregate(seconds.slice(0, 600), 15_000), quiet);
+    const later = Array.from({ length: 30 }, (_, i): LiveTrade => {
+      const created = T0 + 3_600_000 + i * 60_000;
+      const open = created + 400;
+      const close = open + 15_000;
+      return {
+        trading_session_id: 's15',
+        asset_id: PAIR.id,
+        action: TradeAction.Up,
+        duration_sec: 15,
+        created_at_ms: created,
+        open_timestamp_ms: open,
+        open_price: price(open)!,
+        close_timestamp_ms: close,
+        close_price: price(close)!,
+        profit: profitOf(TradeAction.Up, price(open)!, price(close)!),
+      };
+    });
+    const { code, out } = run({ ...session, trades: [...session.trades, ...later], dir });
+    expect(out[0]).toMatch(/-> ok$/);
+    expect(out[1]).toMatch(/-> ok$/);
+    expect(out.find((l) => l.includes('v2 15 s:'))).toMatch(
+      /live 30 trades .* stand 0 trades .* -> FAIL no stand evidence$/,
+    );
+    expect(code).toBe(1);
+  });
+
+  it('E4 session files and journal lines the cache cannot compare are no revision evidence', () => {
+    const session = liveSession(6);
+    const dir = cacheWith(seconds.slice(0, 200));
+    const sessionDir = sessionDirOf(seconds.slice(600));
+    const { code, out, counter } = run({ ...session, dir, sessionDir });
+    expect(counter('price_files_not_compared')).toBe(1);
+    expect(counter('price_series_match')).toBe(0);
+    expect(counter('series_lines_not_compared')).toBe(6);
+    expect(counter('series_match')).toBe(0);
+    expect(out[0]).toMatch(/-> FAIL no revision evidence$/);
+    expect(out[1]).toMatch(/6\/6 = 100.0 %.* -> ok$/);
+    expect(code).toBe(1);
+  });
+
+  it('E5 E7 an outcome match of 84 % fails the run and saves nothing; a pass saves', () => {
+    const session = liveSession(25);
+    const flipped = session.trades.map((t, i) =>
+      i < 4 ? { ...t, profit: t.profit.startsWith('-') ? '0.90000000' : '-1.00000000' } : t,
+    );
+    const failed = run({ ...session, trades: flipped });
+    expect(failed.out[0]).toMatch(/-> ok$/);
+    expect(failed.out[1]).toMatch(/: 21\/25 = 84.0 % .* -> FAIL$/);
+    expect(failed.code).toBe(1);
+    expect(existsSync(calibrationPath(failed.dir))).toBe(false);
+    const passed = run(session);
+    expect(passed.code).toBe(0);
+    expect(existsSync(calibrationPath(passed.dir))).toBe(true);
+  });
+
+  it('E6 a 30-trade era with the live rate outside the stand interval fails; 29 trades pass', () => {
+    const session = liveSession(30, true);
+    const gated = run(session);
+    expect(gated.out.find((l) => l.includes('v2 5 s:'))).toMatch(
+      /live 30 trades 30W\/0L\/0T 100.0 %; stand \d+ trades .* -> FAIL$/,
+    );
+    expect(gated.code).toBe(1);
+    const reported = run({ ...session, trades: session.trades.slice(0, 29) });
+    expect(reported.out.find((l) => l.includes('v2 5 s:'))).toMatch(/reported, not gated$/);
+    expect(reported.code).toBe(0);
   });
 });
