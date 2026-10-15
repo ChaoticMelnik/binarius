@@ -11,8 +11,8 @@ pairs by page, the durations of a pair, the summary of the choice with «📊 А
 analysis. Every screen reads the broker's pairs again through
 `GET /trading/pairs` ([pairs-catalog.md](pairs-catalog.md)) and draws nothing from an earlier
 read. «📊 Анализ» shows the analysis of the pair's candles by Signal module v1 (#126,
-[The analysis](#the-analysis)). Its first row is the session of five trades on every `decided`
-answer (#360, [bot-session.md](bot-session.md#the-button)); on a signal, «➕ Ещё» draws the single
+[The analysis](#the-analysis)). Its first row is the session of five trades on a signal (#360;
+since #509 never on «сигнала нет», [bot-session.md](bot-session.md#the-button)); on a signal, «➕ Ещё» draws the single
 trade's stake button in place, whose press is #127 ([bot-demo-trade.md](bot-demo-trade.md)).
 
 ```bash
@@ -86,7 +86,10 @@ demo:sig:<sec>            (a duration, «🔄 Обновить», «↩️ К с
   bot  → editMessageText: «Сигналы сейчас · ⏱ <sec> с», the pairs with a signal two a row, «🔄 Обновить» «↩️ Длительность» in one row, «🧭 Выбрать пару вручную»
 demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoCycle(<sec>) ∥ POST /trading/access
-  bot  → editMessageText (sendMessage for :n): the amount screen in demo, the launch screen in real
+         ∥ POST /trading/signal { assetId, interval: intervalForDuration(sec) } (#509)
+  bot  → editMessageText (sendMessage for :n): the amount screen in demo, the launch screen in
+         real; «сигнала нет» → the refusal with «🔀 Выбрать другую пару», the signal unread →
+         «🔄 Повторить»
 demo:sa:<assetId>:<sec>:<amount>:<l|a>  (an amount of the amount screen, #476)
   bot  → answerCallbackQuery ∥ POST /trading/stake (demo, <amount>) ∥ GET /trading/pairs
   bot  → on a save: POST /trading/sessions, one attempt → the session's status; the amount screen deleted
@@ -104,8 +107,8 @@ demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить ан
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
   bot  → on a signal: sendPhoto, the card (#482) — the bull or the bear, the caption with its
          block, in demo the amounts under it — then deleteMessage of «⏳»
-  bot  → otherwise: editMessageText of «⏳» into the analysis screen with its keyboard: the
-         session first on every decided answer (#360)
+  bot  → otherwise: editMessageText of «⏳» into the analysis screen with its keyboard: no
+         session row on «сигнала нет» (#509)
 demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's token, #379)
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
@@ -195,9 +198,10 @@ number is odd (#419); then «🔄 Обновить» (`demo:sig:<sec>`) and «�
 one row, and «🧭 Выбрать пару вручную» (`demo:g`) in its own.
 
 The list is a snapshot of the duration's candle that closed last: «Сигнал держится одну свечу
-(⏱ 15 с); перед каждой сделкой бот проверяет его заново». A press never reads the signal again — the session's
-orchestrator asks for it before every trade (#287), so a stale pick costs a «сигнала нет» wait, not a
-trade against the signal. The button's arrow is the scanner's at `asOf`; the amount screen shows no
+(⏱ 15 с); перед каждой сделкой бот проверяет его заново». The press reads the pair's signal once
+more (#509, [The amount screen](#the-amount-screen-476)): a pick whose signal is gone gets the
+refusal, not a session; the session's orchestrator still asks for the signal before every trade
+(#287). The button's arrow is the scanner's at `asOf`; the amount screen shows no
 direction, since the session decides it per trade.
 
 | Outcome | What the bot shows |
@@ -224,6 +228,22 @@ message, so the trade's or the session's message stays). The way back is «↩�
 (`demo:sig:<sec>`) from the list and «↩️ Назад к анализу» (`demo:an:<assetId>:<sec>`) otherwise;
 a screen drawn by `:n` carries `a` in its own buttons, since its presses edit it. Old `demo:sess:…`
 buttons in messages sent before #476 still start a session at once.
+
+**The pair's signal at the press (#509).** Beside the catalog and access the press reads the pair's
+signal (`POST /trading/signal`, `intervalForDuration(sec)`; the backend's cached feed, so a press
+right after the analysis asks the broker nothing) in either mode, since three of the doors —
+«🔁 Ещё сессия», the row under a finished trade, an old message — were drawn without it. After the
+check's refusal (the table below, `payout_too_low` included), in order:
+
+| The signal | What the press shows |
+|---|---|
+| a throw, or `fetch_failed` (`rate_limited` included) | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + «🔄 Повторить» (the pressed data: `demo:l:` is a read) and «🏠 В меню»; `warn` `launch signal not evaluated` (not for `rate_limited`) (L-sig2, L-sig3) |
+| «сигнала нет» | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig:<sec>`) and «🏠 В меню» (L-sig1) |
+| a signal | the amount screen in demo, the launch screen in real, as above (L-sig4) |
+
+`:n` answers with a new message, as for every screen of this node (L-sig6). The start route checks
+the signal again (`no_signal`, [trading-session.md](trading-session.md#post-tradingsessions) step
+4c), so a signal gone between this press and an amount's press refuses there.
 
 Text: «🎯 {symbol} · ⏱ {sec} с», «🤖 Бот проведёт 5 сделок подряд…», then «Выбери сумму сделки 👇»
 (`cycleStakeChoose`). Keyboard:
@@ -372,7 +392,7 @@ not a fresh catalog.
   row; each carries the duration. The screen is deleted after the start, once the session's status
   is sent (#418).
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
-- **Analysis (#360).** On every `decided` answer — a signal or «сигнала нет» — «🚀 Сессия из 5
+- **Analysis (#360).** On a signal — since #509 not on «сигнала нет» — «🚀 Сессия из 5
   сделок» alone in the first row where `sessionFitsDeadline(5, sec)` holds, at every duration of
   the set (#284, [bot-session.md](bot-session.md#the-button)), and the pair pays at least the cycle
   floor (`pairPayoutAccepted`, #379; the expansion carries the fact in `demo:more`'s token; below
@@ -480,15 +500,16 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 | Answer | Headline | Body | Buttons above the repeat (#360) |
 |---|---|---|---|
 | `decided`, `signal` — the card (#482), a photo of the bull or the bear | «🟢 Сильный сигнал на рост» / «🔴 Сильный сигнал на падение» | the block (below), the payout with the break-even share, on a pair below the cycle floor «🚫 Цикл на этой паре не запускается: выплата ниже 80%.» (`analysisCycleUnavailable`, #379), «⚠️ Сигнал — не прогноз результата и не гарантия…», in demo over the amounts «Выбери сумму сделки 👇» | in demo the amounts, else the session (not below the cycle floor); «➕ Ещё» by the decision's action |
-| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала разовую сделку бот не предлагает. Автосессия дождётся сигнала сама…», below the cycle floor the note as the last line | the session (not below the cycle floor) |
-| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…», below the cycle floor the note as the last line; no feature line, the decision carries none | the session (not below the cycle floor) |
+| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала бот не предлагает ни сделку, ни сессию. Повтори анализ позже или выбери другую пару.» (#509), below the cycle floor the note as the last line | none (#509) |
+| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…», below the cycle floor the note as the last line; no feature line, the decision carries none | none (#509) |
 | `fetch_failed` `rate_limited` with `retryAfterSec` | «⚠️ Брокер ограничил запросы. Попробуй через N с.» | — | none |
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | «⚠️ Не удалось получить свечи у брокера…»; `warn` `signal not evaluated` with `signalCode` (not for `rate_limited`) | — | none |
 | `evaluateSignal` threw (unreachable, a timeout, a non-2xx, a broken body) | the same; `warn` `signal not evaluated` with the error | — | none |
 
-`AnalysisScreen.session` is true on every `decided` answer: the session asks for the signal before
-each of its trades itself, so «сигнала нет» now is no reason to withhold it. Where the candles were
-not read, its first trade would wait on the same failure, so no session row is drawn.
+`AnalysisScreen.session` is true on a signal only (#509, owner: no session on a pair without a
+signal now). Until #509 it was true on every `decided` answer, and the session waited for a signal
+itself; the no-signal limit ([trading-session.md](trading-session.md#the-no-signal-limit-509)) now
+stops such a wait after 2 min. Where the candles were not read, no session row is drawn either.
 
 The card's block (#482) is a `<pre>`, so Telegram draws it monospaced with a copy button: eight
 rows of a label (`cardRowPair` … `cardRowDirection`) padded to the longest label after the

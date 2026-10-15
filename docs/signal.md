@@ -8,9 +8,11 @@ no log. The same candles, `intervalMs`, `nowMs`, `digits` and parameters always 
 decision. The
 signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) fetches the candles,
 calls the decider and writes one journal line per decision. Its callers are the backend's
-`POST /trading/signal` (#258, [below](#post-tradingsignal-258)) and the backend's background
-scanner behind `GET /trading/signals` (#343, [The scanner](#the-scanner-343)), both through one
-cache. The worker never calls the feed itself: the session orchestrator (#287,
+`POST /trading/signal` (#258, [below](#post-tradingsignal-258)), the backend's background
+scanner behind `GET /trading/signals` (#343, [The scanner](#the-scanner-343)) and, since #509, the
+session start `POST /trading/sessions` (step 4c, [trading-session.md](trading-session.md#post-tradingsessions):
+no session on a pair whose current candle says `no_signal`), all through one cache: a start right
+after the analysis of the same pair in the same candle asks the broker nothing. The worker never calls the feed itself: the session orchestrator (#287,
 [trading-session.md](trading-session.md)) asks `POST /trading/signal`.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
