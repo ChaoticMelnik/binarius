@@ -3175,4 +3175,6 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 2. **Задание длиннее ~15 мин (fetch, бэктест) запускает tech-lead своей фоновой задачей; фаза возвращает команду и путь лога** — **внедрено в #522: `.claude/skills/tech-lead/SKILL.md` → Step 7**
 3. **Architect validation checklist: каждая проверка «пройдено / не пройдено» называет результат на нулевой выборке (отказ или FAIL), и тест доводит этот случай до кода выхода** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
 4. **Architect validation checklist: каждое смещение во времени называет точку отсчёта, одну для всех решений плана** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+5. **Задача из нескольких PR: непоследние части — `Refs #<N>`, Done и Phase 5 — после последней части (Codex Major на этом docs-PR)** — **внедрено в #522: `.claude/CLAUDE.md` → Git-процесс; architect Step 4a; implementer Step 6 (шаблон PR); reviewer Step 6b; tech-lead Phase 4**
+6. **Глобальный `~/.claude/CLAUDE.md`: оговорка о кругах по каждому PR у разделённой задачи (Codex, minor, проектная секция главнее)** — **открыто (2026-10-15, владелец)**
 5. **Remaining Minor** — **вынесено в #518 (#512), #521 (#520)**
