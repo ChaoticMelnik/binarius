@@ -203,7 +203,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     let message: ClientPushMessage;
     try {
       const assetId = view.settings?.assetId ?? view.lastIntent?.assetId ?? 0;
-      message = sessionSummaryMessage(view, pairOf(catalog.read(), assetId).symbol);
+      message = sessionSummaryMessage(view, pairOf(catalog.read(), assetId).label);
     } catch (error) {
       // a bug, before the claim: the session stays pending, and its card waits for the summary
       logger.error({ ...fields, ...errorLogFields(error) }, 'session summary not built');

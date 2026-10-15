@@ -2,6 +2,8 @@ import { Composer, InlineKeyboard, type Api, type Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import {
   errorLogFields,
+  pairLabel,
+  type PairLabel,
   type PairsCatalogResponse,
   type TradingSessionView,
 } from '@binarius/shared';
@@ -105,8 +107,10 @@ const isNotFound = (error: unknown): boolean =>
 const assetIdOf = (view: TradingSessionView): number | undefined =>
   view.settings?.assetId ?? view.lastIntent?.assetId;
 
-const symbolOf = (catalog: Settled<PairsCatalogResponse>, assetId: number): string | null =>
-  catalog.ok ? (catalog.value.pairs.find((pair) => pair.id === assetId)?.symbol ?? null) : null;
+const symbolOf = (catalog: Settled<PairsCatalogResponse>, assetId: number): PairLabel | null => {
+  const pair = catalog.ok ? catalog.value.pairs.find((listed) => listed.id === assetId) : undefined;
+  return pair === undefined ? null : pairLabel(pair);
+};
 
 // Mounted on the bot itself, not under the private-chat filter: inline updates carry no chat.
 // Inline mode makes `@bot …` available to anyone in any chat, so every query is answered, and

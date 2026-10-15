@@ -26,6 +26,23 @@ export const pairViewSchema = z.object({
 });
 export type PairView = z.infer<typeof pairViewSchema>;
 
+// The pair's label on every screen and in the backend's summary (#428): the broker's symbol, then
+// " OTC" by isOtc. The live catalog keeps OTC out of the symbol and lists 22 symbols twice, a
+// regular pair and an OTC one, so the symbol alone cannot tell them apart. The symbol is an
+// unbounded wire string: it is cut before the suffix, so the suffix always survives.
+export const PAIR_SYMBOL_LIMIT = 64;
+export const PAIR_OTC_SUFFIX = ' OTC';
+export const PAIR_LABEL_MAX_LENGTH = PAIR_SYMBOL_LIMIT + PAIR_OTC_SUFFIX.length;
+declare const pairLabelBrand: unique symbol;
+export type PairLabel = string & { readonly [pairLabelBrand]: true };
+
+export const pairLabel = (pair: { symbol: string; isOtc?: boolean }): PairLabel => {
+  const base = pair.symbol.slice(0, PAIR_SYMBOL_LIMIT);
+  return (
+    pair.isOtc === true && !pair.symbol.endsWith(PAIR_OTC_SUFFIX) ? base + PAIR_OTC_SUFFIX : base
+  ) as PairLabel;
+};
+
 // The broker's five types and a bucket for any other, in the order the bot lists them. The
 // scanner shares its pairs among these groups and the signals screen fills its places by them
 // (#460). The broker's own string never enters callback data: a group is one of these.

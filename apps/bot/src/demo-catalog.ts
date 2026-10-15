@@ -3,6 +3,7 @@ import {
   isPairOpen,
   intervalForDuration,
   pairAcceptsDuration,
+  pairLabel,
   pairPayoutAccepted,
   pairTypeGroupOf,
   SIGNAL_SCAN_INTERVALS,
@@ -50,8 +51,9 @@ export const pairsOf = (catalog: PairsCatalogResponse, group: PairTypeGroup): Pa
     (pair) => pairTypeGroupOf(pair.type) === group && durationOptions(pair).length > 0,
   );
 
-// sorted by symbol in code-unit order, ties by id, so a page holds the same pairs on every read
-// of the same catalog
+// Sorted by label in code-unit order, ties by id, so a page holds the same pairs on every read of
+// the same catalog. A regular pair's label is a prefix of its OTC twin's (#428), so the regular
+// one comes right before it.
 export const openPairsOf = (
   catalog: PairsCatalogResponse,
   group: PairTypeGroup,
@@ -59,7 +61,9 @@ export const openPairsOf = (
 ): PairView[] =>
   pairsOf(catalog, group)
     .filter((pair) => isOpen(pair, nowMs))
-    .sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : a.id - b.id));
+    .map((pair) => ({ pair, label: pairLabel(pair) }))
+    .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : a.pair.id - b.pair.id))
+    .map(({ pair }) => pair);
 
 export interface DemoPage {
   pairs: PairView[];

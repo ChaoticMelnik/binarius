@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  pairLabel,
   BOT_TEXT_CATALOG,
   BotTextGroup,
   BotTextKind,
   defaultBotTextSource,
   escapeTelegramHtml,
-  INTENT_SYMBOL_LIMIT,
   type BotTextKey,
   type BotTextVarName,
   BrokerAccountStatus,
@@ -92,6 +92,9 @@ import {
   type AccountCardInput,
   type StatusCardInput,
 } from './texts';
+
+// a label of a regular pair: the symbol as given, cut to the limit
+const lbl = (symbol: string) => pairLabel({ symbol });
 
 const d = (value: string) => decimalStringSchema.parse(value);
 
@@ -805,9 +808,9 @@ describe('the demo screens', () => {
     expect(plainTextOf(text).split('Безубыточность: 50.0% верных прогнозов.')).toHaveLength(2);
   });
 
-  it('shows the symbol as the broker spells it, escaped once in the markup', () => {
+  it("shows the pair's label, escaped once in the markup", () => {
     for (const text of [screens.durations, screens.summary]) {
-      expect(plainTextOf(text)).toContain(SYMBOL);
+      expect(plainTextOf(text)).toContain(`${SYMBOL} OTC`);
       expect(text.value).not.toContain('&amp;amp;');
     }
   });
@@ -841,7 +844,7 @@ describe('the demo screens', () => {
     ]);
     expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual(['⏱ 5 с', '⏱ 15 с']);
     expect(groupButtonLabel('currency', 46)).toBe('💱 Валюты · 46');
-    expect(pairButtonLabel('EUR/USD OTC', 85)).toBe('EUR/USD OTC 85%');
+    expect(pairButtonLabel(pairLabel(PAIR_EURUSD), 85)).toBe('EUR/USD OTC 85%');
   });
 
   // these buttons are not in LABELS, so the LABELS-wide checks above do not see them
@@ -855,7 +858,7 @@ describe('the demo screens', () => {
   });
 
   it('keeps a pair button plain: a data label with no emoji', () => {
-    const label = pairButtonLabel(PAIR_EURUSD.symbol, PAIR_EURUSD.payout);
+    const label = pairButtonLabel(pairLabel(PAIR_EURUSD), PAIR_EURUSD.payout);
     expect(label).not.toMatch(MARKUP_OR_ENTITY);
     expect(label).not.toMatch(/\p{Extended_Pictographic}/u);
   });
@@ -938,7 +941,7 @@ describe('the demo trade status', () => {
         amount: '999999999999.99999999' as DecimalString,
       };
       for (const tail of [{}, { deadline: true }, { sessionOffer: true }]) {
-        const text = intentStatusText(HOSTILE_SYMBOL, widest, tail);
+        const text = intentStatusText(lbl(HOSTILE_SYMBOL), widest, tail);
         expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
       }
     },
@@ -949,7 +952,9 @@ describe('the demo trade status', () => {
     'says «открыта» for %s only when it is accepted',
     (status) => {
       for (const lastError of [null, ...Object.values(TradeIntentFailureReason)]) {
-        const plain = plainTextOf(intentStatusText('EUR/USD', intentView({ status, lastError })));
+        const plain = plainTextOf(
+          intentStatusText(lbl('EUR/USD'), intentView({ status, lastError })),
+        );
         // «не открыта» is a refusal, not a claim
         expect(/(?<!не )открыта/.test(plain)).toBe(status === TradeIntentStatus.Accepted);
       }
@@ -957,7 +962,7 @@ describe('the demo trade status', () => {
   );
 
   it('prints the trade line from the view and the symbol escaped once', () => {
-    const text = intentStatusText('EUR/<USD>', intentView());
+    const text = intentStatusText(lbl('EUR/<USD>'), intentView());
     expect(plainTextOf(text)).toBe(
       [
         '🎮 Демо-сделка',
@@ -971,32 +976,31 @@ describe('the demo trade status', () => {
 
   // #313: an intent created before the deploy keeps its duration, labelled by the fallback
   it('labels a duration outside the demo set by the fallback', () => {
-    expect(plainTextOf(intentStatusText('EUR/USD', intentView({ durationSec: 60 })))).toContain(
-      ' · ⏱ 60 с · ',
-    );
+    expect(
+      plainTextOf(intentStatusText(lbl('EUR/USD'), intentView({ durationSec: 60 }))),
+    ).toContain(' · ⏱ 60 с · ');
   });
 
-  it('caps the symbol and stands the asset id in for a missing one', () => {
-    const long = 'S'.repeat(INTENT_SYMBOL_LIMIT + 10);
-    expect(plainTextOf(intentStatusText(long, intentView()))).toContain(
-      `📈 ${'S'.repeat(INTENT_SYMBOL_LIMIT)} · `,
-    );
+  // the label's cap is pairLabel's (#428, catalog.test.ts)
+  it('stands the asset id in for a missing symbol', () => {
     expect(plainTextOf(intentStatusText(null, intentView({ assetId: 91 })))).toContain(
       '📈 актив #91 · ',
     );
   });
 
   it('prints a duration outside the demo table in seconds', () => {
-    expect(plainTextOf(intentStatusText('X', intentView({ durationSec: 45 })))).toContain(
+    expect(plainTextOf(intentStatusText(lbl('X'), intentView({ durationSec: 45 })))).toContain(
       ' · ⏱ 45 с · ',
     );
   });
 
   it('appends the deadline hint only when asked', () => {
     const hint = plainTextOf(TEXTS.intentDeadline);
-    expect(plainTextOf(intentStatusText('X', intentView()))).not.toContain(hint);
+    expect(plainTextOf(intentStatusText(lbl('X'), intentView()))).not.toContain(hint);
     expect(
-      plainTextOf(intentStatusText('X', intentView(), { deadline: true })).endsWith(`\n\n${hint}`),
+      plainTextOf(intentStatusText(lbl('X'), intentView(), { deadline: true })).endsWith(
+        `\n\n${hint}`,
+      ),
     ).toBe(true);
     expect(hint).toContain(`«${LABELS.refreshIntentButton}»`);
   });
@@ -1006,7 +1010,7 @@ describe('the demo trade status', () => {
     const offer =
       '🤖 Дальше бот может торговать сам: сессия из 5 сделок на этой паре, сигнал он проверяет перед каждой сделкой.';
     const view = intentView({ status: TradeIntentStatus.Accepted });
-    expect(plainTextOf(intentStatusText('X', view, { sessionOffer: true }))).toBe(
+    expect(plainTextOf(intentStatusText(lbl('X'), view, { sessionOffer: true }))).toBe(
       [
         '🎮 Демо-сделка',
         '📈 X · ⬆️ Вверх · ⏱ 15 с · ставка $1.00',
@@ -1016,8 +1020,8 @@ describe('the demo trade status', () => {
         offer,
       ].join('\n'),
     );
-    expect(plainTextOf(intentStatusText('X', view))).not.toContain('🤖');
-    const withDeadline = plainTextOf(intentStatusText('X', view, { deadline: true }));
+    expect(plainTextOf(intentStatusText(lbl('X'), view))).not.toContain('🤖');
+    const withDeadline = plainTextOf(intentStatusText(lbl('X'), view, { deadline: true }));
     expect(withDeadline).not.toContain('🤖');
     expect(withDeadline.endsWith(plainTextOf(TEXTS.intentDeadline))).toBe(true);
   });
@@ -1025,7 +1029,7 @@ describe('the demo trade status', () => {
   it('tells a trade the executor never took apart from a broker refusal', () => {
     const notConfigured = plainTextOf(
       intentStatusText(
-        'X',
+        lbl('X'),
         intentView({
           status: TradeIntentStatus.Rejected,
           lastError: TradeIntentFailureReason.ExecutorNotConfigured,
@@ -1035,7 +1039,7 @@ describe('the demo trade status', () => {
     expect(notConfigured).toContain('исполнение сделок ещё не подключено');
     const byBroker = plainTextOf(
       intentStatusText(
-        'X',
+        lbl('X'),
         intentView({
           status: TradeIntentStatus.Rejected,
           lastError: TradeIntentFailureReason.BrokerRejected,
@@ -1045,7 +1049,7 @@ describe('the demo trade status', () => {
     expect(byBroker).toContain('Брокер отклонил сделку');
     const paused = plainTextOf(
       intentStatusText(
-        'X',
+        lbl('X'),
         intentView({
           status: TradeIntentStatus.Rejected,
           lastError: TradeIntentFailureReason.TradingPaused,
@@ -1057,7 +1061,7 @@ describe('the demo trade status', () => {
     );
     const demoOnly = plainTextOf(
       intentStatusText(
-        'X',
+        lbl('X'),
         intentView({
           status: TradeIntentStatus.Rejected,
           lastError: TradeIntentFailureReason.DemoOnly,
@@ -1070,7 +1074,7 @@ describe('the demo trade status', () => {
   });
 
   it.each(LIVE)('keeps %s a live status, with no claim that the token came back', (status) => {
-    expect(plainTextOf(intentStatusText('X', intentView({ status })))).not.toContain(
+    expect(plainTextOf(intentStatusText(lbl('X'), intentView({ status })))).not.toContain(
       'Токен возвращён',
     );
   });
@@ -1097,7 +1101,7 @@ describe('the demo session status', () => {
       trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.5') }),
       lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
     });
-    expect(plainOf('EUR/USD OTC', view)).toBe(
+    expect(plainOf(pairLabel(PAIR_EURUSD), view)).toBe(
       [
         '🎮 Демо-сессия',
         '📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00',
@@ -1112,14 +1116,18 @@ describe('the demo session status', () => {
   // #327: the header by the session's mode, the settings unavailable included
   it('heads a real session «💼 Реальная сессия» and a demo one «🎮 Демо-сессия»', () => {
     const real = sessionView({ mode: TradeMode.Real });
-    expect(plainOf('X', real).split('\n')[0]).toBe('💼 Реальная сессия');
-    expect(plainOf('X', { ...real, settings: null }).split('\n')[0]).toBe('💼 Реальная сессия');
-    expect(plainOf('X', SESSION_VIEW).split('\n')[0]).toBe('🎮 Демо-сессия');
-    expect(plainOf('X', { ...SESSION_VIEW, settings: null }).split('\n')[0]).toBe('🎮 Демо-сессия');
+    expect(plainOf(lbl('X'), real).split('\n')[0]).toBe('💼 Реальная сессия');
+    expect(plainOf(lbl('X'), { ...real, settings: null }).split('\n')[0]).toBe(
+      '💼 Реальная сессия',
+    );
+    expect(plainOf(lbl('X'), SESSION_VIEW).split('\n')[0]).toBe('🎮 Демо-сессия');
+    expect(plainOf(lbl('X'), { ...SESSION_VIEW, settings: null }).split('\n')[0]).toBe(
+      '🎮 Демо-сессия',
+    );
   });
 
   it('waits for a signal while no trade is open, with no score before the first settle', () => {
-    expect(plainOf('X', SESSION_VIEW)).toBe(
+    expect(plainOf(lbl('X'), SESSION_VIEW)).toBe(
       [
         '🎮 Демо-сессия',
         '📈 X · ⏱ 15 с · ставка $1.00',
@@ -1132,7 +1140,7 @@ describe('the demo session status', () => {
       trades: settled({ settled: 1, won: 1 }),
       lastIntent: intentView({ status: TradeIntentStatus.Settled }),
     });
-    expect(plainOf('X', afterSettle)).toContain('🔎 Ждём сигнал для следующей сделки…');
+    expect(plainOf(lbl('X'), afterSettle)).toContain('🔎 Ждём сигнал для следующей сделки…');
   });
 
   it('names a tie only when a trade tied', () => {
@@ -1140,11 +1148,11 @@ describe('the demo session status', () => {
       stopped(TradingSessionStopReason.Completed, {
         trades: settled({ settled: 5, won: 3, lost: 2 - tied, tied }),
       });
-    expect(plainOf('X', completed(0))).toContain(
+    expect(plainOf(lbl('X'), completed(0))).toContain(
       '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
     );
-    expect(plainOf('X', completed(0))).not.toContain('в ноль');
-    expect(plainOf('X', completed(1))).toContain(
+    expect(plainOf(lbl('X'), completed(0))).not.toContain('в ноль');
+    expect(plainOf(lbl('X'), completed(1))).toContain(
       '🏁 Сессия завершена: 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
     );
   });
@@ -1154,7 +1162,7 @@ describe('the demo session status', () => {
       trades: settled({ settled: 2, won: 2, profit: d('1.7') }),
       lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
     });
-    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+    expect(plainOf(lbl('X'), view).split('\n').slice(3)).toEqual([
       '⏹ Сессия остановлена по твоей команде.',
       '📊 Итог: 2 сделки — 2 в плюс, 0 в минус',
       '💰 Результат: +$1.70',
@@ -1164,7 +1172,7 @@ describe('the demo session status', () => {
     const closed = stopped(TradingSessionStopReason.UserStopped, {
       lastIntent: intentView({ status: TradeIntentStatus.Settled }),
     });
-    expect(plainOf('X', closed).split('\n').slice(3)).toEqual([
+    expect(plainOf(lbl('X'), closed).split('\n').slice(3)).toEqual([
       '⏹ Сессия остановлена по твоей команде.',
     ]);
   });
@@ -1181,7 +1189,7 @@ describe('the demo session status', () => {
     });
 
   it('T2 a completed demo session shows its result and the demo balance, with no age', () => {
-    expect(plainOf('X', finished()).split('\n').slice(3)).toEqual([
+    expect(plainOf(lbl('X'), finished()).split('\n').slice(3)).toEqual([
       '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
       '💰 Результат: +$2.50',
       nbsp('🧪 Демобаланс: $10 002.50'),
@@ -1190,7 +1198,7 @@ describe('the demo session status', () => {
 
   it('T3 a balance read before the last trade carries its age', () => {
     const view = finished({ balance: { available: d('10002.5'), ageSec: 75, current: false } });
-    expect(plainOf('X', view).split('\n').slice(-2)).toEqual([
+    expect(plainOf(lbl('X'), view).split('\n').slice(-2)).toEqual([
       nbsp('🧪 Демобаланс: $10 002.50'),
       '🕒 Баланс Binodex обновлён 1 мин назад.',
     ]);
@@ -1198,14 +1206,14 @@ describe('the demo session status', () => {
 
   it('T4 an account without a snapshot shows the result only', () => {
     expect(
-      plainOf('X', finished({ balance: null }))
+      plainOf(lbl('X'), finished({ balance: null }))
         .split('\n')
         .slice(3),
     ).toEqual(['🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус', '💰 Результат: +$2.50']);
   });
 
   it('T5 a real session shows the real balance', () => {
-    const text = plainOf('X', finished({ mode: TradeMode.Real }));
+    const text = plainOf(lbl('X'), finished({ mode: TradeMode.Real }));
     expect(text).toContain(nbsp('💵 Реальный баланс: $10 002.50'));
     expect(text).not.toContain('Демобаланс');
   });
@@ -1216,7 +1224,7 @@ describe('the demo session status', () => {
       lastIntent: intentView({ status: TradeIntentStatus.Rejected }),
       balance: { available: d('10000'), ageSec: 75, current: false },
     });
-    const text = plainOf('X', view);
+    const text = plainOf(lbl('X'), view);
     expect(text).not.toContain('Результат');
     expect(text).not.toContain('Демобаланс');
     expect(text).not.toContain('🕒');
@@ -1228,7 +1236,7 @@ describe('the demo session status', () => {
       lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
       balance: { available: d('9999.85'), ageSec: 30, current: false },
     });
-    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+    expect(plainOf(lbl('X'), view).split('\n').slice(3)).toEqual([
       '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
       '📊 Итог: 2 сделки — 1 в плюс, 1 в минус',
       '💰 Результат: -$0.15',
@@ -1239,7 +1247,7 @@ describe('the demo session status', () => {
 
   // the owner's wording for both sources of manual_review: a trade or the account (#284 clarify)
   it('asks for support on manual review', () => {
-    expect(plainOf('X', stopped(TradingSessionStopReason.ManualReview))).toContain(
+    expect(plainOf(lbl('X'), stopped(TradingSessionStopReason.ManualReview))).toContain(
       '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
     );
   });
@@ -1252,7 +1260,7 @@ describe('the demo session status', () => {
       const view = stopped(TradingSessionStopReason.ManualReview, {
         lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
       });
-      expect(plainOf('X', view, { deadline }).split('\n').slice(3)).toEqual([
+      expect(plainOf(lbl('X'), view, { deadline }).split('\n').slice(3)).toEqual([
         '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
       ]);
     },
@@ -1262,7 +1270,7 @@ describe('the demo session status', () => {
     const view = stopped(TradingSessionStopReason.UserStopped, {
       lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
     });
-    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+    expect(plainOf(lbl('X'), view).split('\n').slice(3)).toEqual([
       '⏹ Сессия остановлена по твоей команде.',
       '🛠 Сделка на ручной проверке — напиши в поддержку: /support',
     ]);
@@ -1274,7 +1282,7 @@ describe('the demo session status', () => {
       const view = stopped(TradingSessionStopReason.Timeout, {
         lastIntent: intentView({ status }),
       });
-      expect(plainOf('X', view)).toContain('⏳ Открытая сделка доиграет до конца.');
+      expect(plainOf(lbl('X'), view)).toContain('⏳ Открытая сделка доиграет до конца.');
     },
   );
 
@@ -1284,19 +1292,19 @@ describe('the demo session status', () => {
     (stopReason) => {
       for (const status of [TradeIntentStatus.Accepted, TradeIntentStatus.ManualReview]) {
         const view = stopped(stopReason, { lastIntent: intentView({ status }) });
-        expect(plainOf('X', view, { deadline: true })).toBe(plainOf('X', view));
+        expect(plainOf(lbl('X'), view, { deadline: true })).toBe(plainOf(lbl('X'), view));
       }
     },
   );
 
   it('reads the switch refusal of the single trade for a session the kill switch stopped', () => {
-    expect(plainOf('X', stopped(TradingSessionStopReason.KillSwitch))).toContain(
+    expect(plainOf(lbl('X'), stopped(TradingSessionStopReason.KillSwitch))).toContain(
       plainTextOf(TEXTS.tradingPaused),
     );
   });
 
   it('says the settings are unreadable instead of throwing on a hand-written row', () => {
-    expect(plainOf('X', sessionView({ settings: null }))).toBe(
+    expect(plainOf(lbl('X'), sessionView({ settings: null }))).toBe(
       [
         '🎮 Демо-сессия',
         '',
@@ -1311,8 +1319,8 @@ describe('the demo session status', () => {
     );
     const hint = plainTextOf(TEXTS.sessionDeadline);
     expect(hint).toContain(`«${LABELS.sessionRefreshButton}»`);
-    expect(plainOf('X', SESSION_VIEW)).not.toContain(hint);
-    expect(plainOf('X', SESSION_VIEW, { deadline: true }).endsWith(`\n${hint}`)).toBe(true);
+    expect(plainOf(lbl('X'), SESSION_VIEW)).not.toContain(hint);
+    expect(plainOf(lbl('X'), SESSION_VIEW, { deadline: true }).endsWith(`\n${hint}`)).toBe(true);
   });
 
   it.each(Object.values(TradingSessionStopReason))(
@@ -1338,7 +1346,7 @@ describe('the demo session status', () => {
         lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
       });
       for (const deadline of [false, true]) {
-        const text = sessionStatusText(`<&>"`.repeat(20), widest, { deadline });
+        const text = sessionStatusText(lbl(`<&>"`.repeat(20)), widest, { deadline });
         expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
       }
     },
@@ -1361,7 +1369,7 @@ describe('the demo session status', () => {
       }),
     });
     expect(
-      telegramTextProblems(sessionStatusText('S'.repeat(100), view, { deadline: true })),
+      telegramTextProblems(sessionStatusText(lbl('S'.repeat(100)), view, { deadline: true })),
     ).toEqual([]);
   });
 
@@ -1404,7 +1412,9 @@ describe('the shared card caption (#321)', () => {
 
   it('names the pair, the score without the $ sum, and the link with the payload share', () => {
     expect(
-      plainTextOf(sessionShareCaption('EUR/USD OTC', PAIR_EURUSD.id, trades, 'binarius_bot')),
+      plainTextOf(
+        sessionShareCaption(pairLabel(PAIR_EURUSD), PAIR_EURUSD.id, trades, 'binarius_bot'),
+      ),
     ).toBe(
       [
         '🏁 EUR/USD OTC: 5 сделок — 3 в плюс, 2 в минус',
@@ -1551,14 +1561,14 @@ describe('the text source', () => {
 
   it('shows a live status line from the source in place', () => {
     setBotTextSource(stubTextSource('intentAccepted'));
-    const text = intentStatusText('X', intentView({ status: TradeIntentStatus.Accepted }));
+    const text = intentStatusText(lbl('X'), intentView({ status: TradeIntentStatus.Accepted }));
     expect(text.value).toContain(stubText('intentAccepted'));
   });
 
   it('shows a rejection line from the source in place', () => {
     setBotTextSource(stubTextSource('intentRejectedByBroker'));
     const text = intentStatusText(
-      'X',
+      lbl('X'),
       intentView({
         status: TradeIntentStatus.Rejected,
         lastError: TradeIntentFailureReason.BrokerRejected,
@@ -1570,7 +1580,7 @@ describe('the text source', () => {
   it('shows a session stop line from the source in place', () => {
     setBotTextSource(stubTextSource('sessionStopTimeout'));
     const text = sessionStatusText(
-      'X',
+      lbl('X'),
       sessionView({
         status: TradingSessionStatus.Stopped,
         stopReason: TradingSessionStopReason.Timeout,

@@ -184,12 +184,26 @@ export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingA
 // accepts no demo duration (#313: 5 and 15 s) and is never listed.
 export const PAIR_EURUSD: PairView = {
   id: 101,
-  symbol: 'EUR/USD OTC',
+  symbol: 'EUR/USD',
   isOtc: true,
   type: 'currency',
   digits: 5,
   payout: 85,
   maxPayout: 92,
+  minTimeframe: 5,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+};
+// PAIR_EURUSD's regular twin (#428): the live catalog lists a symbol twice, OTC by is_otc only,
+// and omits the field on a regular pair. A higher id than the OTC pair's, so an order by symbol
+// and id alone would list the OTC one first. Only in the catalogs of the tests that name it.
+export const PAIR_EURUSD_REGULAR: PairView = {
+  id: 707,
+  symbol: 'EUR/USD',
+  type: 'currency',
+  digits: 5,
+  payout: 54,
+  maxPayout: 60,
   minTimeframe: 5,
   maxTimeframe: 3600,
   scheduledUntil: 0,
@@ -208,7 +222,7 @@ export const PAIR_CLOSED: PairView = {
 };
 export const PAIR_SHORT: PairView = {
   id: 202,
-  symbol: 'BTC/USD OTC',
+  symbol: 'BTC/USD',
   isOtc: true,
   type: 'cryptocurrency',
   digits: 2,
@@ -245,7 +259,7 @@ export const PAIR_MINUTE_ONLY: PairView = {
 // accepts 15 s and not 5 s: a signal on the 5 s list has no button for it (#382)
 export const PAIR_15S_ONLY: PairView = {
   id: 606,
-  symbol: 'NZD/USD OTC',
+  symbol: 'NZD/USD',
   isOtc: true,
   type: 'currency',
   digits: 5,

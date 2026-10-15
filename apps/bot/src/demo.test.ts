@@ -2,6 +2,7 @@ import { BotError, GrammyError, HttpError, InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   BrokerBalanceUnavailableReason,
   BrokerRestErrorCode,
   createTradeIntentRequestSchema,
@@ -59,6 +60,7 @@ import {
   PAIR_15S_ONLY,
   PAIR_CLOSED,
   PAIR_EURUSD,
+  PAIR_EURUSD_REGULAR,
   PAIR_MINUTE_ONLY,
   PAIR_OTHER_TYPE,
   PAIR_SHORT,
@@ -232,6 +234,7 @@ const MANY = Array.from({ length: 25 }, (_, index): PairView => ({
   ...PAIR_EURUSD,
   id: 1000 + index,
   symbol: `P${String(index).padStart(2, '0')}`,
+  isOtc: false,
 })).reverse();
 
 describe('the duration screen (#382)', () => {
@@ -328,6 +331,7 @@ describe('the signals screen', () => {
       ...PAIR_EURUSD,
       id,
       symbol: `S${id}`,
+      isOtc: false,
       type,
       payout,
       ...patch,
@@ -477,8 +481,12 @@ describe('the signals screen', () => {
   });
 
   it('labels a pair by its symbol, the arrow of the direction and the payout', () => {
-    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Up, 85)).toBe('EUR/USD OTC ⬆️ 85%');
-    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Down, 85)).toBe('EUR/USD OTC ⬇️ 85%');
+    expect(signalButtonLabel(pairLabel(PAIR_EURUSD), TradeAction.Up, 85)).toBe(
+      'EUR/USD OTC ⬆️ 85%',
+    );
+    expect(signalButtonLabel(pairLabel(PAIR_EURUSD), TradeAction.Down, 85)).toBe(
+      'EUR/USD OTC ⬇️ 85%',
+    );
   });
 
   // a pair with a signal on one interval only appears on that duration's list; a pair that
@@ -662,7 +670,7 @@ describe('the amount screen (#476)', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edited = payloadOf(calls, 'editMessageText');
     expect(plainTextOf(edited?.text as string)).toBe(
-      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
+      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
     );
     expect(rowsOf(edited)).toEqual(DEFAULT_ROWS);
     const labels = rowsOf(edited)
@@ -980,7 +988,7 @@ describe('the amount screen (#476)', () => {
       [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
     ]);
     expect(plainTextOf(edited?.text as string)).toBe(
-      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
+      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
     );
   });
 
@@ -989,7 +997,7 @@ describe('the amount screen (#476)', () => {
     await press(demoLaunchCallbackData(PAIR_CLOSED.id, 15));
 
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
-      TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }).value,
+      TEXTS.demoPairClosed({ symbol: pairLabel(PAIR_CLOSED) }).value,
     );
   });
 
@@ -998,7 +1006,7 @@ describe('the amount screen (#476)', () => {
     await press(demoLaunchCallbackData(PAIR_MINUTE_ONLY.id, 15));
 
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
-      TEXTS.demoDurationUnsupported({ symbol: PAIR_MINUTE_ONLY.symbol }).value,
+      TEXTS.demoDurationUnsupported({ symbol: pairLabel(PAIR_MINUTE_ONLY) }).value,
     );
   });
 
@@ -1271,6 +1279,16 @@ describe('the types and their pages', () => {
     ]);
   });
 
+  // #428: the live catalog lists a symbol twice, a regular pair and an OTC one
+  it('labels the OTC twin by its flag and lists the regular pair right before it', async () => {
+    const { press, calls } = setup({ readPairs: catalogOf(PAIR_EURUSD, PAIR_EURUSD_REGULAR) });
+    await press(demoPageCallbackData('currency', 0));
+    expect(rowsOf(payloadOf(calls, 'editMessageText'))[0]).toEqual([
+      button('EUR/USD 54%', demoAssetCallbackData(PAIR_EURUSD_REGULAR.id)),
+      button('EUR/USD OTC 85%', demoAssetCallbackData(PAIR_EURUSD.id)),
+    ]);
+  });
+
   it('offers «◀️» and «▶️» only where a page exists', async () => {
     const { press, calls } = setup({ readPairs: catalogOf(...MANY) });
     await press(demoPageCallbackData('currency', 1));
@@ -1312,7 +1330,7 @@ describe('a pair and its durations', () => {
   });
 
   it('leaves out the durations outside the pair range, and leads back to its page', async () => {
-    const narrow = { ...PAIR_EURUSD, symbol: 'ZAR/USD OTC', minTimeframe: 10, maxTimeframe: 900 };
+    const narrow = { ...PAIR_EURUSD, symbol: 'ZAR/USD', minTimeframe: 10, maxTimeframe: 900 };
     const { press, calls } = setup({ readPairs: catalogOf(...MANY, narrow) });
     await press(demoAssetCallbackData(narrow.id));
 
@@ -1331,7 +1349,7 @@ describe('a pair and its durations', () => {
     await press(demoAssetCallbackData(PAIR_SHORT.id));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(TEXTS.demoNoDuration({ symbol: PAIR_SHORT.symbol }).value);
+    expect(edited?.text).toBe(TEXTS.demoNoDuration({ symbol: pairLabel(PAIR_SHORT) }).value);
     expect(rowsOf(edited)).toEqual([
       [button(LABELS.demoBackPairsButton, demoPageCallbackData('cryptocurrency', 0)), BACK_GROUPS],
     ]);
@@ -1342,7 +1360,7 @@ describe('a pair and its durations', () => {
     await press(demoAssetCallbackData(PAIR_CLOSED.id));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }).value);
+    expect(edited?.text).toBe(TEXTS.demoPairClosed({ symbol: pairLabel(PAIR_CLOSED) }).value);
     expect(rowsOf(edited)).toEqual([[BACK_EURUSD_PAGE, BACK_GROUPS]]);
   });
 
@@ -1381,7 +1399,7 @@ describe('the summary and «📊 Анализ»', () => {
     const edits = calls.filter((call) => call.method === 'editMessageText');
     expect(edits.map((call) => call.payload.text)).toEqual([
       demoSummary(PAIR_EURUSD, 15).value,
-      TEXTS.demoPairClosed({ symbol: PAIR_EURUSD.symbol }).value,
+      TEXTS.demoPairClosed({ symbol: pairLabel(PAIR_EURUSD) }).value,
     ]);
     expect(evaluateSignal).not.toHaveBeenCalled();
     expect(readPairs).toHaveBeenCalledTimes(2);
@@ -1404,7 +1422,9 @@ describe('the summary and «📊 Анализ»', () => {
     await press(demoDurationCallbackData(PAIR_EURUSD.id, 15));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(TEXTS.demoDurationUnsupported({ symbol: PAIR_EURUSD.symbol }).value);
+    expect(edited?.text).toBe(
+      TEXTS.demoDurationUnsupported({ symbol: pairLabel(PAIR_EURUSD) }).value,
+    );
     expect(rowsOf(edited)).toEqual([[BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
   });
 
@@ -1628,7 +1648,7 @@ describe('the analysis', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
-      TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }).value,
+      TEXTS.demoPairClosed({ symbol: pairLabel(PAIR_CLOSED) }).value,
     );
     expect(evaluateSignal).not.toHaveBeenCalled();
   });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   BrokerBalanceUnavailableReason,
   decimalStringSchema,
   NotificationLevel,
@@ -7,6 +8,7 @@ import {
   TradeMode,
   UserStatus,
   type DecimalString,
+  type PairLabel,
   CONNECT_CALLBACK_DATA,
   defaultBotTextSource,
   supportUrl,
@@ -344,9 +346,9 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   const savedCycle = (
     amount: DecimalString | null,
     {
-      symbol = PAIR_EURUSD.symbol,
+      symbol = pairLabel(PAIR_EURUSD),
       durationSec = 15,
-    }: { symbol?: string | null; durationSec?: 5 | 15 } = {},
+    }: { symbol?: PairLabel | null; durationSec?: 5 | 15 } = {},
   ) =>
     cycleStakeScreen({
       step: { assetId: PAIR_EURUSD.id, durationSec, back: 'l' },
@@ -385,7 +387,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(lastPayload(calls)?.text).toBe(savedCycle(d('5')).text.value);
     expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
-      `✅ Демо-ставка сохранена: $5.00\n\n🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
+      `✅ Демо-ставка сохранена: $5.00\n\n🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
     );
     expect(rowsOf(lastPayload(calls))).toEqual([
       [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00 ✅')],
@@ -401,7 +403,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const at5: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 };
     const { press, calls } = setup({ readTradingAccess: savedAccess(d('5')) });
     await press(stakePresetCallbackData('5', TradeMode.Demo, at5));
-    expect(lastPayload(calls)?.text).toContain(`${PAIR_EURUSD.symbol} · ⏱ 5 с`);
+    expect(lastPayload(calls)?.text).toContain('EUR/USD OTC · ⏱ 5 с');
     expect(rowsOf(lastPayload(calls))[0]).toEqual([
       amount('1', '$1.00', 5),
       amount('2', '$2.00', 5),
@@ -443,7 +445,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       assetId: PAIR_EURUSD.id,
       durationSec: 15,
       firstName: USER.first_name,
-      symbol: PAIR_EURUSD.symbol,
+      symbol: pairLabel(PAIR_EURUSD),
       // the real stake in force (none saved: the minimum); the saved demo stake only in its line
       amount: d('1'),
       saved: { amount: d('5'), mode: TradeMode.Demo },
@@ -486,7 +488,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       });
       await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
       expect(plainTextOf(lastPayload(calls)?.text as string)).toContain(
-        `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с $1.00`,
+        `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с $1.00`,
       );
     } finally {
       setBotTextSource(defaultBotTextSource);
@@ -548,7 +550,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       });
       await press(stakePresetCallbackData('5', TradeMode.Demo, { ...PAIR, durationSec }));
       expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
-        `✅ Демо-ставка сохранена: $5.00\n\n🚫 ${PAIR_EURUSD.symbol}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
+        `✅ Демо-ставка сохранена: $5.00\n\n🚫 ${pairLabel(PAIR_EURUSD)}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
       );
       expect(rowsOf(lastPayload(calls))).toEqual([
         [button(LABELS.backToListButton, `demo:sig:${String(durationSec)}`)],
@@ -1011,7 +1013,7 @@ describe('the real stake picker', () => {
       assetId: PAIR_EURUSD.id,
       durationSec: 15,
       firstName: USER.first_name,
-      symbol: PAIR_EURUSD.symbol,
+      symbol: pairLabel(PAIR_EURUSD),
       amount: d('5'),
       saved: { amount: d('5'), mode: R },
       mode: R,

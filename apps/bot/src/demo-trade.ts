@@ -3,6 +3,7 @@ import {
   BrokerBalanceUnavailableReason,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
+  pairLabel,
   pairPayoutAccepted,
   TradeIntentErrorCode,
   TradeMode,
@@ -282,7 +283,7 @@ export function createDemoTradeComposer<C extends Context>({
       : withMenu(intentKeyboard(view, payoutAccepted));
     await refreshInPlace(
       ctx,
-      intentStatusText(pair?.symbol ?? null, view, {
+      intentStatusText(pair === undefined ? null : pairLabel(pair), view, {
         sessionOffer: sessionOfferOf(view, payoutAccepted) !== undefined,
       }),
       keyboard,
@@ -403,12 +404,12 @@ export function createDemoTradeComposer<C extends Context>({
         await replyHtml(ctx, TEXTS.demoPairMissing, { reply_markup: backToGroups });
         return;
       case 'pair_closed':
-        await replyHtml(ctx, TEXTS.demoPairClosed({ symbol: read.pair.symbol }), {
+        await replyHtml(ctx, TEXTS.demoPairClosed({ symbol: pairLabel(read.pair) }), {
           reply_markup: backToGroups,
         });
         return;
       case 'duration_unsupported':
-        await replyHtml(ctx, TEXTS.demoDurationUnsupported({ symbol: read.pair.symbol }), {
+        await replyHtml(ctx, TEXTS.demoDurationUnsupported({ symbol: pairLabel(read.pair) }), {
           reply_markup: backToDurations,
         });
         return;
@@ -420,9 +421,10 @@ export function createDemoTradeComposer<C extends Context>({
   // this message untracked: track() of a tracked id is a no-op.
   async function sendStatus(ctx: Context, pair: PairView, intent: TradeIntentView): Promise<void> {
     const payoutAccepted = pairPayoutAccepted(pair);
+    const label = pairLabel(pair);
     const sent = await replyHtml(
       ctx,
-      intentStatusText(pair.symbol, intent, {
+      intentStatusText(label, intent, {
         sessionOffer: sessionOfferOf(intent, payoutAccepted) !== undefined,
       }),
       {
@@ -433,7 +435,7 @@ export function createDemoTradeComposer<C extends Context>({
     intentTracker.track({
       intentId: intent.id,
       telegramUserId: intent.telegramUserId,
-      symbol: pair.symbol,
+      label,
       payoutAccepted,
       view: intent,
       edit: (text, view, end) =>

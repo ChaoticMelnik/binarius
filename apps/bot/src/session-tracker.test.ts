@@ -1,6 +1,7 @@
 import { GrammyError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -34,7 +35,7 @@ import {
 const FIRST = SESSION_TRACK_FIRST_POLL_MS;
 const POLL = SESSION_TRACK_POLL_MS;
 const DEADLINE = SESSION_TRACK_DEADLINE_MS;
-const SYMBOL = PAIR_EURUSD.symbol;
+const LABEL = pairLabel(PAIR_EURUSD);
 
 const GONE = () =>
   new GrammyError(
@@ -77,7 +78,7 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
   const request = (patch: Partial<SessionTrackRequest> = {}): SessionTrackRequest => ({
     sessionId: SESSION_ID,
     telegramUserId: String(USER.id),
-    symbol: SYMBOL,
+    label: LABEL,
     view: SESSION_VIEW,
     edit: target().edit,
     card: vi.fn<SessionTrackRequest['card']>(() => Promise.resolve()),
@@ -87,7 +88,7 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
 }
 
 const shown = (view: TradingSessionView, deadline = false) =>
-  sessionStatusText(SYMBOL, view, { deadline }).value;
+  sessionStatusText(LABEL, view, { deadline }).value;
 const texts = (edits: readonly TelegramHtml[]) => edits.map((text) => text.value);
 
 const live = (status: TradeIntentStatus) => intentView({ status });

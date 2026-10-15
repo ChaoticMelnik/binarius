@@ -1,6 +1,7 @@
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
@@ -26,7 +27,7 @@ import {
 const FIRST = INTENT_TRACK_FIRST_POLL_MS;
 const POLL = INTENT_TRACK_POLL_MS;
 const DEADLINE = INTENT_TRACK_DEADLINE_MS;
-const SYMBOL = PAIR_EURUSD.symbol;
+const LABEL = pairLabel(PAIR_EURUSD);
 
 const editRefused = (description: string): GrammyError =>
   new GrammyError(
@@ -89,7 +90,7 @@ function setup({
   const request = (patch: Partial<IntentTrackRequest> = {}): IntentTrackRequest => ({
     intentId: INTENT_ID,
     telegramUserId: String(USER.id),
-    symbol: SYMBOL,
+    label: LABEL,
     payoutAccepted: true,
     view: intentView(),
     edit,
@@ -101,7 +102,7 @@ function setup({
 // the tail under the status: the hint at the deadline of a live status, the session offer under a
 // stop status (#360), never both
 const shown = (view: TradeIntentView, tail?: 'deadline' | 'offer') =>
-  intentStatusText(SYMBOL, view, {
+  intentStatusText(LABEL, view, {
     deadline: tail === 'deadline',
     sessionOffer: tail === 'offer',
   }).value;

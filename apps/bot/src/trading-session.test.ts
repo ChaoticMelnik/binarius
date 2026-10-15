@@ -2,6 +2,7 @@ import { HttpError, InputFile } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   TradeIntentStatus,
   TradeMode,
   TradingSessionErrorCode,
@@ -190,7 +191,8 @@ const httpError = (status: number, reason?: string) =>
     status,
     ...(reason === undefined ? {} : { reason }),
   });
-const statusOf = (view: TradingSessionView) => sessionStatusText(PAIR_EURUSD.symbol, view).value;
+const statusOf = (view: TradingSessionView) =>
+  sessionStatusText(pairLabel(PAIR_EURUSD), view).value;
 
 const LIVE_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
@@ -267,13 +269,14 @@ describe('the session button', () => {
     ]);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(SESSION_VIEW));
+    expect(sent?.text).toContain('EUR/USD OTC · ⏱');
     expect(sent?.parse_mode).toBe('HTML');
     expect(rowsOf(sent)).toEqual(LIVE_ROWS);
     expect(sessionTracker.track).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
       sessionId: SESSION_ID,
       telegramUserId: String(USER.id),
-      symbol: PAIR_EURUSD.symbol,
+      label: 'EUR/USD OTC',
       view: SESSION_VIEW,
     });
   });
@@ -731,7 +734,7 @@ describe('/stop (#122)', () => {
     expect(entry).toMatchObject({
       sessionId: open.id,
       telegramUserId: String(USER.id),
-      symbol: PAIR_EURUSD.symbol,
+      label: pairLabel(PAIR_EURUSD),
       view: open,
     });
     await entry.edit(telegramHtml`edited`, open);
@@ -953,7 +956,7 @@ describe('the summary card (#318)', () => {
     expect(photo?.parse_mode).toBe('HTML');
     expect(photo?.caption).toBe(
       TEXTS.sessionCardCaption({
-        symbol: PAIR_EURUSD.symbol,
+        symbol: pairLabel(PAIR_EURUSD),
         profit: SUMMARY.result,
         botUsername: BOT_INFO.username,
       }).value,

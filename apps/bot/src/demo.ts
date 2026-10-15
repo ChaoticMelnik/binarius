@@ -10,6 +10,7 @@ import {
   DEFAULT_SESSION_TRADES,
   errorLogFields,
   normalizeDecimal,
+  pairLabel,
   sessionFitsDeadline,
   intervalForDuration,
   MIN_CYCLE_PAYOUT_PCT,
@@ -27,6 +28,7 @@ import {
   tradeModeSchema,
   type BrokerBalanceView,
   type DecimalString,
+  type PairLabel,
   type PairsCatalogResponse,
   type PairTypeGroup,
   type PairView,
@@ -550,7 +552,7 @@ export function signalsScreen(
   shown.forEach(({ pair, action }, index) => {
     if (index > 0 && index % 2 === 0) keyboard.row();
     keyboard.text(
-      signalButtonLabel(pair.symbol, action, pair.payout),
+      signalButtonLabel(pairLabel(pair), action, pair.payout),
       demoLaunchCallbackData(pair.id, durationSec),
     );
   });
@@ -585,7 +587,7 @@ export function launchScreen({
   assetId: number;
   durationSec: DemoDurationSec;
   firstName: string;
-  symbol: string | null;
+  symbol: PairLabel | null;
   amount: DecimalString | null;
   saved?: { amount: DecimalString | null; mode: TradeMode };
   mode?: TradeMode;
@@ -707,7 +709,7 @@ export function cycleStakeScreen({
 }: {
   step: CycleStakeStep;
   firstName: string;
-  symbol: string | null;
+  symbol: PairLabel | null;
   access: Pick<TradingAccessResponse, 'tokens' | 'broker' | 'demoStake' | 'realStake'>;
   broker: BrokerBalanceView;
   saved?: { amount: DecimalString | null; mode: TradeMode };
@@ -743,7 +745,7 @@ export function demoCycleScreen({
 }: {
   step: CycleStakeStep;
   firstName: string;
-  symbol: string | null;
+  symbol: PairLabel | null;
   access: TradingAccessResponse | null;
   connectKeyboard: () => InlineKeyboard;
   saved?: { amount: DecimalString | null; mode: TradeMode };
@@ -789,7 +791,7 @@ ${screen.text}`,
 export function payoutTooLowScreen(pair: PairView, durationSec: DemoDurationSec): DemoScreen {
   return {
     text: TEXTS.demoPayoutTooLow({
-      symbol: pair.symbol,
+      symbol: pairLabel(pair),
       payout: String(pair.payout),
       payoutFloor: String(MIN_CYCLE_PAYOUT_PCT),
       breakEven: formatBreakEven(pair.payout),
@@ -887,14 +889,14 @@ export function createDemoComposer<C extends Context>({
                 assetId,
                 durationSec,
                 firstName,
-                symbol: read.pair.symbol,
+                symbol: pairLabel(read.pair),
                 amount: effectiveStake(access),
                 mode: TradeMode.Real,
               })
             : demoCycleScreen({
                 step,
                 firstName,
-                symbol: read.pair.symbol,
+                symbol: pairLabel(read.pair),
                 access,
                 connectKeyboard,
               });
@@ -1603,7 +1605,7 @@ export function createDemoComposer<C extends Context>({
         return pairClosedScreen(read.catalog, read.pair);
       case 'duration_unsupported':
         return {
-          text: TEXTS.demoDurationUnsupported({ symbol: read.pair.symbol }),
+          text: TEXTS.demoDurationUnsupported({ symbol: pairLabel(read.pair) }),
           keyboard: new InlineKeyboard()
             .text(LABELS.demoBackDurationsButton, demoAssetCallbackData(assetId))
             .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA),
@@ -1668,7 +1670,7 @@ export function createDemoComposer<C extends Context>({
     const keyboard = new InlineKeyboard();
     pairs.forEach((pair, index) => {
       if (index > 0 && index % 2 === 0) keyboard.row();
-      keyboard.text(pairButtonLabel(pair.symbol, pair.payout), demoAssetCallbackData(pair.id));
+      keyboard.text(pairButtonLabel(pairLabel(pair), pair.payout), demoAssetCallbackData(pair.id));
     });
     keyboard.row();
     if (page > 0) keyboard.text(LABELS.demoPrevButton, demoPageCallbackData(group, page - 1));
@@ -1692,7 +1694,7 @@ export function createDemoComposer<C extends Context>({
     const options = durationOptions(pair);
     if (options.length === 0) {
       return {
-        text: TEXTS.demoNoDuration({ symbol: pair.symbol }),
+        text: TEXTS.demoNoDuration({ symbol: pairLabel(pair) }),
         keyboard: backToPairs(catalog, pair),
       };
     }
@@ -1713,7 +1715,7 @@ export function createDemoComposer<C extends Context>({
 
   function pairClosedScreen(catalog: PairsCatalogResponse, pair: PairView): DemoScreen {
     return {
-      text: TEXTS.demoPairClosed({ symbol: pair.symbol }),
+      text: TEXTS.demoPairClosed({ symbol: pairLabel(pair) }),
       keyboard: backToPairs(catalog, pair),
     };
   }

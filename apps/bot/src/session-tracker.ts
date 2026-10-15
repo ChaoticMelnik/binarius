@@ -2,6 +2,7 @@ import { GrammyError, HttpError } from 'grammy';
 import {
   errorLogFields,
   isTradingSessionFinished,
+  type PairLabel,
   type TelegramHtml,
   type TradingSessionView,
 } from '@binarius/shared';
@@ -35,8 +36,8 @@ export const sessionTrackingDone = isTradingSessionFinished;
 export interface SessionTrackRequest {
   sessionId: string;
   telegramUserId: string;
-  // the pair's symbol as the catalog spelled it at the press, or null
-  symbol: string | null;
+  // the pair's label as the catalog gave it at the press, or null
+  label: PairLabel | null;
   // what the message shows now
   view: TradingSessionView;
   // edits the status message; the keyboard follows the view (no stop button once it stopped),
@@ -226,7 +227,7 @@ export function createSessionTracker({
     entry.view = view;
     const key = renderKey(view);
     if (key !== entry.rendered) {
-      const goOn = await editTo(entry, sessionStatusText(entry.symbol, view), key);
+      const goOn = await editTo(entry, sessionStatusText(entry.label, view), key);
       if (!goOn) return;
     }
     // The card goes once, then the entry ends, whatever the card did: a claim the backend
@@ -255,7 +256,7 @@ export function createSessionTracker({
     const key = done ? renderKey(entry.view) : 'deadline';
     await editTo(
       entry,
-      sessionStatusText(entry.symbol, entry.view, done ? {} : { deadline: true }),
+      sessionStatusText(entry.label, entry.view, done ? {} : { deadline: true }),
       key,
     );
     if (done && entry.rendered === key && entry.view.noticesDone) await entry.card(entry.view);

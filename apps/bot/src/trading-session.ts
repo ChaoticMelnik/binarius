@@ -2,12 +2,14 @@ import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Conte
 import {
   DEFAULT_SESSION_TRADES,
   errorLogFields,
+  pairLabel,
   TradeMode,
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
   type BotStaticHtmlKey,
   type CreateTradingSessionRequest,
+  type PairLabel,
   type PairsCatalogResponse,
   type TradingSessionView,
 } from '@binarius/shared';
@@ -235,14 +237,18 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
     (error: unknown) => ({ ok: false, error }),
   );
 
-// the symbol only, so any catalog will do, a stale one included; null names the asset by its id
+// the pair's label only, so any catalog will do, a stale one included; null names the asset by
+// its id
 const symbolOf = (
   catalog: Settled<PairsCatalogResponse>,
   view: Pick<TradingSessionView, 'settings'>,
-): string | null =>
-  catalog.ok && view.settings !== null
-    ? (catalog.value.pairs.find((pair) => pair.id === view.settings?.assetId)?.symbol ?? null)
-    : null;
+): PairLabel | null => {
+  const pair =
+    catalog.ok && view.settings !== null
+      ? catalog.value.pairs.find((listed) => listed.id === view.settings?.assetId)
+      : undefined;
+  return pair === undefined ? null : pairLabel(pair);
+};
 
 // What a session start needs (#476): the session button's data, the catalog read beside it (the
 // status's symbol), whether an unknown outcome is asked once more, and whether the pressed message
@@ -483,7 +489,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function showInPlace(
     ctx: Context,
     telegramUserId: string,
-    symbol: string | null,
+    symbol: PairLabel | null,
     view: TradingSessionView,
   ): Promise<void> {
     const text = sessionStatusText(symbol, view);
@@ -564,7 +570,7 @@ export function createTradingSessionComposer<C extends Context>({
   function track(
     ctx: Context,
     telegramUserId: string,
-    symbol: string | null,
+    symbol: PairLabel | null,
     view: TradingSessionView,
     chatId: number,
     messageId: number,
@@ -573,7 +579,7 @@ export function createTradingSessionComposer<C extends Context>({
     sessionTracker.track({
       sessionId: view.id,
       telegramUserId,
-      symbol,
+      label: symbol,
       view,
       edit: (text, current, end) =>
         editMessageTextByIdHtml(ctx.api, chatId, messageId, text, {
@@ -590,7 +596,7 @@ export function createTradingSessionComposer<C extends Context>({
     ctx: Context,
     chatId: number,
     telegramUserId: string,
-    symbol: string | null,
+    symbol: PairLabel | null,
     botUsername: string,
     view: TradingSessionView,
   ): Promise<void> {

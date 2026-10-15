@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  pairLabel,
   CONNECT_CALLBACK_DATA,
   decimalStringSchema,
   plainTextOf,
@@ -123,7 +124,7 @@ const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
   (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
 const warnings = (logger: ReturnType<typeof fakeLogger>) =>
   logger.warn.mock.calls.map((call) => call[1] as string);
-const STATUS = sessionStatusText(PAIR_EURUSD.symbol, SESSION_VIEW).value;
+const STATUS = sessionStatusText(pairLabel(PAIR_EURUSD), SESSION_VIEW).value;
 
 describe('an amount of the amount screen', () => {
   it('saves the amount as the demo stake, then starts the cycle (C-save)', async () => {

@@ -7,8 +7,8 @@ import {
   confirmButtonLabel,
   createBotTexts,
   createSessionTexts,
-  INTENT_SYMBOL_LIMIT,
   joinHtmlLines,
+  pairLabel,
   DEFAULT_SESSION_TRADES,
   defaultBotTextSource,
   formatStake,
@@ -42,6 +42,7 @@ import {
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
+  type PairLabel,
   type PairTypeGroup,
   type PairView,
   type StarPaymentView,
@@ -406,18 +407,15 @@ const statusLineOfIntent = ({ status, lastError }: IntentStatusView): TelegramHt
       : textOf(REJECTED_LINES[lastError])
     : textOf(INTENT_STATUS_LINES[status]);
 
-// The demo trade's one message (#127). `symbol` is the pair's as the catalog spells it, or null
-// when the catalog could not say (the refresh button): the asset's id stands in for it. The
-// callers never ask for the deadline hint and the session offer (#360) together.
+// The demo trade's one message (#127). `symbol` is the pair's label (pairLabel), or null when
+// the catalog could not say (the refresh button): the asset's id stands in for it. The callers
+// never ask for the deadline hint and the session offer (#360) together.
 export function intentStatusText(
-  symbol: string | null,
+  symbol: PairLabel | null,
   view: IntentStatusView,
   { deadline = false, sessionOffer = false }: { deadline?: boolean; sessionOffer?: boolean } = {},
 ): TelegramHtml {
-  const asset =
-    symbol === null
-      ? plain.intentAssetFallback({ assetId: String(view.assetId) })
-      : symbol.slice(0, INTENT_SYMBOL_LIMIT);
+  const asset = symbol ?? plain.intentAssetFallback({ assetId: String(view.assetId) });
   const trade = [
     asset,
     ACTION_LABELS[view.action],
@@ -495,7 +493,7 @@ export const sessionCardFooter = (count: number, score: SessionScore): string =>
 // The caption of the card shared through «📤 Поделиться» (#321, session-share.ts): the score
 // without the $ sum, which the image itself shows, and the bot's link.
 export const sessionShareCaption = (
-  symbol: string | null,
+  symbol: PairLabel | null,
   assetId: number,
   trades: TradingSessionView['trades'],
   botUsername: string,
@@ -511,7 +509,7 @@ export const sessionShareCaption = (
 // a live session's trade number, score and the last trade's status, or a stopped session's
 // reason and result. `symbol` is null when the catalog could not say.
 export function sessionStatusText(
-  symbol: string | null,
+  symbol: PairLabel | null,
   view: SessionStatusView,
   { deadline = false }: { deadline?: boolean } = {},
 ): TelegramHtml {
@@ -659,11 +657,11 @@ export const stakeButtonLabel = (
       ...(mode === TradeMode.Real ? [MODE_LABELS[TradeMode.Real]] : []),
     ].join(' · '),
   });
-// a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
-// (it already carries «OTC»), the payout printed as it arrives; no separators, so it fits a
-// half-width button (#419)
-export const pairButtonLabel = (symbol: string, payout: number): string =>
-  `${symbol} ${String(payout)}%`;
+// a data label, like the confirm button's address: no emoji, the pair's label (pairLabel: the
+// broker's symbol, " OTC" by isOtc, #428), the payout printed as it arrives; no separators, so it
+// fits a half-width button (#419)
+export const pairButtonLabel = (label: PairLabel, payout: number): string =>
+  `${label} ${String(payout)}%`;
 
 // One screen of a type's pairs: the header naming the type, the page line.
 export const demoPairsScreen = (
@@ -684,13 +682,13 @@ export const payoutText = (pair: PairView): TelegramHtml =>
   TEXTS.demoPayout({ payout: String(pair.payout), breakEven: formatBreakEven(pair.payout) });
 
 export const demoDurationsScreen = (pair: PairView): TelegramHtml =>
-  telegramHtml`${TEXTS.demoAsset({ symbol: pair.symbol })}
+  telegramHtml`${TEXTS.demoAsset({ symbol: pairLabel(pair) })}
 ${payoutText(pair)}
 
 ${TEXTS.demoChooseDuration}`;
 
 export const demoSummary = (pair: PairView, durationSec: DemoDurationSec): TelegramHtml =>
-  telegramHtml`${TEXTS.demoAsset({ symbol: pair.symbol })}
+  telegramHtml`${TEXTS.demoAsset({ symbol: pairLabel(pair) })}
 ${TEXTS.demoDurationLine({ label: DEMO_DURATION_LABELS[durationSec] })}
 ${payoutText(pair)}
 
@@ -709,9 +707,10 @@ const SIGNAL_ARROWS = {
   [TradeAction.Up]: '⬆️',
   [TradeAction.Down]: '⬇️',
 } as const satisfies Record<TradeAction, string>;
-// a pair with a signal: the symbol, the scanner's direction at the last closed candle, the payout
-export const signalButtonLabel = (symbol: string, action: TradeAction, payout: number): string =>
-  `${symbol} ${SIGNAL_ARROWS[action]} ${String(payout)}%`;
+// a pair with a signal: the pair's label, the scanner's direction at the last closed candle, the
+// payout
+export const signalButtonLabel = (label: PairLabel, action: TradeAction, payout: number): string =>
+  `${label} ${SIGNAL_ARROWS[action]} ${String(payout)}%`;
 
 // The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
@@ -729,7 +728,7 @@ export function launchText({
 }: {
   firstName: string;
   durationSec: DemoDurationSec;
-  symbol: string | null;
+  symbol: PairLabel | null;
   amount: DecimalString | null;
   trades: number;
   saved?: { amount: DecimalString | null; mode: TradeMode };
@@ -776,7 +775,7 @@ export function cycleStakeText({
 }: {
   firstName: string;
   durationSec: DemoDurationSec;
-  symbol: string | null;
+  symbol: PairLabel | null;
   stake: DecimalString;
   access: AccessForTexts;
   broker: BrokerBalanceView;
