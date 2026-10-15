@@ -377,6 +377,8 @@ out of pooling.
     trades.
   - `open_timestamp − created_at` has a median of 397 ms and a p95 of 927 ms.
   - The journal's `nowMs` falls about 0.5 s after the candle boundary (the backend feed's moment).
+    That is the scanner's moment, not the session's `D`: sessions ask at the boundary + 2 s
+    (`DECISION_SLACK_MS`).
 - **2026-10-15, journal shape.** Every line is a pino line with `signal`, and every entry is `v2`
   with `digits`.
 
