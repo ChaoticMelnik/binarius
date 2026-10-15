@@ -103,19 +103,41 @@ the broker is a refusal, never a wrong direction.
 | `ema(values, p)` | `prev + 2 / (p + 1) × (value - prev)` | SMA of the first `p` values | `values[p - 1 + j]` |
 | `rsi(closes, p)` | `100 - 100 / (1 + avgGain / avgLoss)`, Wilder smoothing `(prev × (p - 1) + current) / p` | mean of the first `p` gains and losses | `closes[p + j]` |
 | `atr(candles, p)` | Wilder-smoothed true range, `max(high - low, abs(high - prevClose), abs(low - prevClose))` | mean of the first `p` true ranges | `candles[p + j]` |
+| `sma(values, p)` (#482) | mean of the last `p` values | none | `values[p - 1 + j]` |
+| `macd(closes, f, s, g)` (#482) | line `ema(f) − ema(s)` over the closes both cover, signal `ema(line, g)`, histogram `line − signal` | the two `ema` seeds | `closes[s + g − 2 + j]` (all three) |
 
 If gains and losses are both zero, RSI is 50. A zero loss alone gives 100 and a zero gain alone
 gives 0, both straight from the formula. A series shorter than its seed throws a `RangeError`.
 This is a programmer error, because the count check runs first.
 
-The tests pin three worked references: `ema([1, 2, 3, 4, 5], 3) = [2, 3, 4]`;
+The tests pin five worked references: `ema([1, 2, 3, 4, 5], 3) = [2, 3, 4]`;
 `rsi([1, 3, 2, 4, 3], 2) = [200/3, 600/7, 600/11]`; `atr` over true ranges `[2, 4, 6]` with
-period 2 `= [3, 4.5]`.
+period 2 `= [3, 4.5]`; `sma([1, 2, 4, 8, 16], 3) = [7/3, 14/3, 28/3]`;
+`macd([1, 2, 4, 8, 16, 32], 2, 3, 2)` = line `[11/9, 239/108, 2791/648]`, signal
+`[37/36, 589/324, 845/243]` (`indicators.test.ts` I9, I10). `macd` with `f ≥ s` throws.
+
+### Display indicators (#482)
+
+`displayIndicators(candles, intervalMs, nowMs, params)` (`display.ts`) computes what the analysis
+card shows beside the decision; the decision never reads it (MACD and MA join it only after the
+#483 backtest). The periods are `DISPLAY_INDICATOR_PARAMS` (shared): MACD 12, 26, 9, MA50, MA200.
+It runs over the whole response: the same `prepareCandles`, with a floor of one closed candle. A
+response that does not pass (`invalid_candle`, `candle_gap`, `stale`, no closed candle) gives no
+indicators, and the route's answer has no `indicators` key; a gap in the early rows can do this
+while the decision on the last 60 rows is a signal (`feed.test.ts` F14). Otherwise each indicator
+is either a value or `{ ok: false, closedCandles, required }` on its own count:
+
+| Indicator | Needs closed candles | Value |
+|---|---|---|
+| `macd` | 35 (`macdSlow + macdSignal`: two signal-line points) | `{ macd, signal, histogram, cross }`; `cross` is `up` when the histogram goes from below 0 to above 0 between the last two closed candles, `down` the other way, otherwise `none` (a zero on either point is `none`) |
+| `ma50`, `ma200` | 50, 200 | `{ value, lastClose }`: the SMA and the last closed candle's close, the same candle as `features.lastClose` |
+
+`display.test.ts` D1–D8 pin the counts, the cross and the refusals.
 
 Each indicator runs over the whole closed series the caller supplies, with no trailing window.
 EMA and Wilder values depend on the series length, so a decision can be reproduced only from the
-exact series. For decisions to be comparable, the feed fetches `SIGNAL_CHART_LIMIT` (60) candles
-and records the series.
+exact series. For decisions to be comparable, the decision reads the last `SIGNAL_CHART_LIMIT`
+(60) rows of the response and the journal records them.
 
 ## Decision
 
@@ -232,12 +254,21 @@ interval outside the table is a `RangeError` before any fetch.
 `evaluate` reads the clock once (`nowMs`, `Date.now` unless `now` is passed) and checks it with
 `assertSignalClock`, and `digits` with `assertDigits` (0 to `MAX_PAIR_DIGITS`), before any broker
 call (`feed.test.ts` F11). It then requests
-`chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT)`:
+`chartWindow(nowMs, intervalMs, SIGNAL_FETCH_LIMIT)`:
 `startTime = floor(nowMs / intervalMs) × intervalMs − (limit − 1) × intervalMs`. That is `limit`
 candle starts ending on the current interval boundary. The last of them is the forming candle,
 which the decider drops. The decision uses the same `nowMs` the window was built from.
 
-`SIGNAL_CHART_LIMIT` is 60 (owner's choice). The window has to leave `minClosedCandles` closed
+`SIGNAL_FETCH_LIMIT` is 300 (#482): MA200 needs 200 closed candles. The decision reads only the
+last `SIGNAL_CHART_LIMIT` rows of the response (`candles.slice(-SIGNAL_CHART_LIMIT)`), the same
+rows a fetch of 60 with the same right edge returns, so the decision, the journal series and the
+#381 stand do not change (`feed.test.ts` F12); the display indicators read all of them. A shorter
+response (a new pair) gives the decision all of its last ≤ 60 rows. `assertFetchLimit` checks
+`SIGNAL_FETCH_LIMIT ≥ SIGNAL_CHART_LIMIT` and `SIGNAL_FETCH_LIMIT − 1 − maxStaleIntervals ≥ 200`
+(300 − 1 − 2 = 297) at import and in `createSignalFeed` (`feed-config.test.ts` K4). The number of
+chart GETs does not change, for the scanner either; each answer is about 5 times longer.
+
+`SIGNAL_CHART_LIMIT` is 60 (owner's choice). The decision window has to leave `minClosedCandles` closed
 candles even after the forming candle and `maxStaleIntervals` late candles are taken out:
 `SIGNAL_CHART_LIMIT − 1 − maxStaleIntervals ≥ minClosedCandles`, which is 60 − 1 − 2 = 57 ≥ 50
 for the defaults. `assertFeedLimit` checks this when `feed-config.ts` is imported (for
@@ -280,10 +311,10 @@ key `signal`:
 |---|---|
 | `assetId`, `interval`, `intervalMs`, `nowMs` | the request and the clock reading the decision used |
 | `digits` (v2) | the pair's quote precision the caller passed |
-| `fetch` | `{ startTime, limit, rows, durationMs }` |
+| `fetch` | `{ startTime, limit, rows, durationMs }`: the actual request (`limit` 300) and the rows it returned |
 | `version` | `SIGNAL_ALGORITHM_VERSION` |
 | `params` | `decider.params`, the frozen parameters |
-| `series` | the candles as received, as tuples `[timestamp, open, high, low, close]` (`volume` is never written) |
+| `series` | the last `SIGNAL_CHART_LIMIT` rows of the response, the ones the decision read, as tuples `[timestamp, open, high, low, close]` (`volume` is never written) |
 | `decision` | the decision as `decide` returned it |
 
 No key of the entry is a redacted key or an error key of `logOptions`, so the line holds the entry
@@ -391,7 +422,7 @@ accepts a duration stays the caller's check: an analysis of a closed pair is all
 
 | Evaluation | Status | Body (`tradingSignalResponseSchema`) |
 |---|---|---|
-| `decided` | 200 | `{ outcome: 'decided', params, decision }`: the decider's parameters, so the screen names `EMA9`/`EMA21` from them, and the decision |
+| `decided` | 200 | `{ outcome: 'decided', params, decision, indicators? }`: the decider's parameters, so the screen names `EMA9`/`EMA21` from them, the decision, and the [display indicators](#display-indicators-482), absent when the response did not pass the candle checks (`signal-routes.test.ts` R3b, R6) |
 | `fetch_failed` | 200 | `{ outcome: 'fetch_failed', code, retryAfterSec? }`; `status` and the request facts stay in the feed's `warn` line |
 | a body that fails the schema | 400 | `{ error: 'validation', issues }` |
 | no catalog snapshot, or not `fresh` | 503 | `{ error: 'catalog_unavailable' }` (`TradingSignalErrorCode.CatalogUnavailable`, the pairs route's string); the feed is not called (`signal-routes.test.ts` R7) |
