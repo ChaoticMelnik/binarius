@@ -126,7 +126,7 @@ Do not proceed to Step 6 until answered.
 - [ ] Every budget/timeout constant names the operation it bounds; the chain between them is checked at import and by a test, in every process that has one
 - [ ] CI-executed tooling was checked against the runner image's version, not the local one
 - [ ] Every documented invariant is worded no wider than the place that enforces it (cite it)
-- [ ] Every pass/fail gate the plan defines says what it returns on zero evidence (empty input, 0 compared rows, an empty sample, a missing cache): a refusal or FAIL, never PASS — and a test drives that case end to end (#381 PR #520 M1: `calibrate` passed on an empty stand, `wilson(0, 0)` = [0, 100])
+- [ ] Every pass/fail gate the plan defines says what it returns on zero evidence (empty input, 0 compared rows, an empty sample, a missing cache): a refusal or FAIL, never PASS — and a test drives that case through the command's entry point to its exit code (or the caller-visible result), not only the gate function (#381 PR #520 M1: `calibrate` passed on an empty stand, `wilson(0, 0)` = [0, 100])
 - [ ] Every time offset the plan defines names its reference point (a candle boundary, the decision moment, a record's timestamp), and every decision that uses it names the same one (#381 PR #512 M1: one decision measured `openDelay` from the decision moment, two others from the boundary, and the fallback counted the 2 s slack twice)
 ```
 
