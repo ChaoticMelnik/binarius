@@ -6,6 +6,9 @@ import {
   BrokerAccountStatus,
   confirmButtonLabel,
   createBotTexts,
+  createSessionTexts,
+  INTENT_SYMBOL_LIMIT,
+  joinHtmlLines,
   DEFAULT_SESSION_TRADES,
   defaultBotTextSource,
   formatStake,
@@ -32,6 +35,7 @@ import {
   type BotTextKey,
   type BotTextKeyOfGroup,
   type BotTextSource,
+  type SessionScore,
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
@@ -59,6 +63,13 @@ const { html, plain } = createBotTexts({ sourceOf: (key) => active.sourceOf(key)
 
 // A message part by its key, for the maps that name a text rather than hold it (the refusals).
 export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
+
+// The session's words shared with the backend's session notices (#464, session-texts.ts in
+// packages/shared), printed with this bot's catalog.
+export const sessionTexts = createSessionTexts({ html, plain });
+export const { pluralTrades, sessionAssetLabel } = sessionTexts;
+const { tradesCount, scoreOf, resultOf, sessionClosingLines } = sessionTexts;
+const joinLines = joinHtmlLines;
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
 // toBe on them holds.
@@ -106,14 +117,24 @@ export const ACTION_LABELS = labelsOf({
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole is escaped
 // unless it is TelegramHtml already, and every assembled text is checked again
 // (telegramHtmlTemplate); a variable's value is escaped like any string (bot-text-vars.ts). The
-// catalog's html keys but four, and the reminders: cardGreeting branches to cardGreetingNoName,
+// catalog's html keys but these, and the reminders: cardGreeting branches to cardGreetingNoName,
 // featureLines is a fragment of cardBody and helpAbout, and only the backend sends
-// oauthLoginFailed and depositCredited (its pushes) and the `mailing` group (its mailing engine).
+// oauthLoginFailed and depositCredited (its pushes), the session notices (#464) and the `mailing`
+// group (its mailing engine).
+// the session notices' keys (#464): the backend sends them, through session-texts.ts
+const BACKEND_SESSION_KEYS = [
+  'sessionTradeWon',
+  'sessionTradeLost',
+  'sessionTradeTied',
+  'sessionAdaptiveStake',
+  'sessionSummarySymbol',
+] as const;
 const NOT_IN_TEXTS = [
   'cardGreetingNoName',
   'featureLines',
   'oauthLoginFailed',
   'depositCredited',
+  ...BACKEND_SESSION_KEYS,
   ...botTextKeysOf(BotTextGroup.Mailing),
 ] as const;
 type TextKey = Exclude<
@@ -122,6 +143,7 @@ type TextKey = Exclude<
   | 'featureLines'
   | 'oauthLoginFailed'
   | 'depositCredited'
+  | (typeof BACKEND_SESSION_KEYS)[number]
   | BotTextKeyOfGroup<typeof BotTextGroup.Mailing>
 >;
 
@@ -362,9 +384,6 @@ const REJECTED_LINES = {
   [TradeIntentFailureReason.BrokerUnavailable]: 'intentRejected',
 } as const satisfies Record<TradeIntentFailureReason, BotStaticHtmlKey>;
 
-// The broker's symbol is an unbounded wire string: at most this many characters are printed.
-export const INTENT_SYMBOL_LIMIT = 64;
-
 // What the status message shows of an intent: its trade and its status; nothing else of the view.
 export type IntentStatusView = Pick<
   TradeIntentView,
@@ -424,34 +443,6 @@ ${TEXTS.intentTrade({ line: trade })}
 ${statusLineOfIntent(view)}${tail}`;
 }
 
-// A session's stop reasons but completed, by key (#284). kill_switch reads the single
-// trade's own refusal of the closed switch.
-const SESSION_STOP_LINES = {
-  [TradingSessionStopReason.ManualReview]: 'sessionStopManualReview',
-  [TradingSessionStopReason.RejectedTwice]: 'sessionStopRejectedTwice',
-  [TradingSessionStopReason.Timeout]: 'sessionStopTimeout',
-  [TradingSessionStopReason.StakeStop]: 'sessionStopStakeStop',
-  [TradingSessionStopReason.AccountUnavailable]: 'sessionStopAccountUnavailable',
-  [TradingSessionStopReason.PairUnavailable]: 'sessionStopPairUnavailable',
-  [TradingSessionStopReason.BalanceUnavailable]: 'sessionStopBalanceUnavailable',
-  [TradingSessionStopReason.InvalidSettings]: 'sessionStopInvalidSettings',
-  [TradingSessionStopReason.UserStopped]: 'sessionStopUserStopped',
-  [TradingSessionStopReason.KillSwitch]: 'tradingPaused',
-} as const satisfies Record<
-  Exclude<TradingSessionStopReason, typeof TradingSessionStopReason.Completed>,
-  BotStaticHtmlKey
->;
-
-// «сделка», «сделки» or «сделок» after the number
-export function pluralTrades(count: number): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return plain.sessionTradeOne;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return plain.sessionTradeFew;
-  return plain.sessionTradeMany;
-}
-const tradesCount = (count: number): string => `${String(count)} ${pluralTrades(count)}`;
-
 // A session door's label in real mode carries the mode's label (#327), as the stake button does
 // (#121), so a real session never starts from a button that looks like a demo one
 const withModeLabel = (label: string, mode: TradeMode): string =>
@@ -480,49 +471,6 @@ type SessionStatusView = Pick<
   TradingSessionView,
   'mode' | 'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent' | 'balance'
 >;
-
-const SESSION_BALANCE_LINES = {
-  [TradeMode.Demo]: 'sessionBalanceDemo',
-  [TradeMode.Real]: 'sessionBalanceReal',
-} as const satisfies Record<TradeMode, keyof typeof TEXTS>;
-
-// A stopped session's result and the balance after it (#337): nothing before the first closed
-// trade. The balance is the snapshot's in the session's mode, with its age when the backend could
-// not read it after the last trade.
-const outcomeLines = ({ mode, trades, balance }: SessionStatusView): TelegramHtml[] => {
-  if (trades.settled === 0) return [];
-  const lines = [TEXTS.sessionResult({ profit: trades.profit })];
-  if (balance !== null) {
-    lines.push(TEXTS[SESSION_BALANCE_LINES[mode]]({ amount: formatUsd(balance.available) }));
-    if (!balance.current) lines.push(TEXTS.statusStale({ age: balance.ageSec }));
-  }
-  return lines;
-};
-
-// a hole holding an array is joined without a separator, so the newlines are written here
-const joinLines = ([first, ...rest]: readonly TelegramHtml[]): TelegramHtml =>
-  rest.reduce(
-    (joined, line) => telegramHtml`${joined}
-${line}`,
-    first ?? telegramHtml``,
-  );
-
-// «3 в плюс, 1 в минус», with «в ноль» only when a trade tied
-type SessionScore = Pick<TradingSessionView['trades'], 'won' | 'lost' | 'tied'>;
-const scoreOf = ({ won, lost, tied }: SessionScore): string =>
-  [
-    plain.sessionWon({ count: String(won) }),
-    plain.sessionLost({ count: String(lost) }),
-    ...(tied > 0 ? [plain.sessionTied({ count: String(tied) })] : []),
-  ].join(', ');
-const resultOf = (trades: TradingSessionView['trades']): string =>
-  `${tradesCount(trades.settled)} — ${scoreOf(trades)}`;
-
-// the session's pair as the catalog spells it, or the asset's id when the catalog could not say
-export const sessionAssetLabel = (symbol: string | null, assetId: number): string =>
-  symbol === null
-    ? plain.intentAssetFallback({ assetId: String(assetId) })
-    : symbol.slice(0, INTENT_SYMBOL_LIMIT);
 
 // The summary card's words (#318, session-card.ts), read when the card is drawn so an override
 // reaches the next card. The footer is an assembled message (bot-text-messages.ts →
@@ -586,21 +534,20 @@ ${TEXTS.sessionSettingsUnavailable}`;
     body.push(
       sessionIntentLive(lastIntent) ? statusLineOfIntent(lastIntent) : TEXTS.sessionWaitingSignal,
     );
-  } else if (view.stopReason === TradingSessionStopReason.Completed) {
-    body.push(TEXTS.sessionCompleted({ result: resultOf(trades) }), ...outcomeLines(view));
   } else {
-    if (view.stopReason !== null) body.push(textOf(SESSION_STOP_LINES[view.stopReason]));
-    if (trades.settled > 0) body.push(TEXTS.sessionTotal({ result: resultOf(trades) }));
-    body.push(...outcomeLines(view));
-    // manual_review's stop line already says it and points at /support: one text for both of its
-    // sources (owner, #284 clarify), so the trade's own review line is not repeated under it
-    const reviewRepeated =
-      view.stopReason === TradingSessionStopReason.ManualReview &&
-      lastIntent?.status === TradeIntentStatus.ManualReview;
-    if (sessionIntentLive(lastIntent) && !reviewRepeated) {
-      body.push(statusLineOfIntent(lastIntent));
+    // the lines the backend's summary repeats (#464), then what only this message follows
+    body.push(...sessionClosingLines(view));
+    if (view.stopReason !== TradingSessionStopReason.Completed) {
+      // manual_review's stop line already says it and points at /support: one text for both of
+      // its sources (owner, #284 clarify), so the trade's own review line is not repeated under it
+      const reviewRepeated =
+        view.stopReason === TradingSessionStopReason.ManualReview &&
+        lastIntent?.status === TradeIntentStatus.ManualReview;
+      if (sessionIntentLive(lastIntent) && !reviewRepeated) {
+        body.push(statusLineOfIntent(lastIntent));
+      }
+      if (intentPlaysOut(lastIntent)) body.push(TEXTS.sessionOpenTradePlaysOut);
     }
-    if (intentPlaysOut(lastIntent)) body.push(TEXTS.sessionOpenTradePlaysOut);
   }
   // stopped with no reason is what the CHECKs refuse; the view's schema still allows it
   if (body.length === 0) body.push(TEXTS.sessionStatusUnavailable);

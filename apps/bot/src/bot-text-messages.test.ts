@@ -13,6 +13,8 @@ import {
   resolveBotTextOverrides,
   INT4_MAX,
   LinkBonusSkipReason,
+  MAX_PAIR_DIGITS,
+  SessionTradeResult,
   NotificationLevel,
   MomentumDirection,
   NoSignalReason,
@@ -65,6 +67,7 @@ import {
   intentStatusText,
   sessionCardFooter,
   sessionStatusText,
+  sessionTexts as notices,
   setBotTextSource,
   settingsText,
   stakePickerText,
@@ -85,6 +88,7 @@ const COUNT = '9223372036854775807';
 const USD = '-999999999999.99999999' as DecimalString;
 // a stake, the broker's minimum and the demo balance are unsigned money() values (#297)
 const STAKE = '999999999999.99999999' as DecimalString;
+const d = (value: string) => value as DecimalString;
 const lengthOf = (text: TelegramHtml) => plainTextOf(text).length;
 const NAME = x(W.firstName);
 
@@ -334,6 +338,57 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionCompleted: () =>
     sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
+  // a session's trade, sent by the backend through the same builder (#464): each class, with and
+  // without the adaptive line, the prices with the most digits a pair has and as String() prints
+  // the widest double
+  sessionTrade: () =>
+    Object.values(SessionTradeResult).flatMap((result) =>
+      [d('1'), STAKE].flatMap((baseStake) =>
+        [
+          { digits: MAX_PAIR_DIGITS, price: -999_999_999.123 },
+          { digits: null, price: -1.2345678901234567e-308 },
+        ].map(({ digits, price }) =>
+          notices.sessionTradeText({
+            amount: STAKE,
+            outcome: d('-9999999999999.99999999'),
+            result,
+            openPrice: price,
+            closePrice: price,
+            digits,
+            cycle: N,
+            step: N,
+            baseStake,
+          }),
+        ),
+      ),
+    ),
+  // the finished session's summary, sent by the backend through the same builder (#464)
+  sessionSummary: () =>
+    [x(W.symbol + 10), null].flatMap((symbol) =>
+      [TradingSessionStopReason.Completed, ...STOP_REASONS].flatMap((stopReason) =>
+        Object.values(TradeMode).flatMap((mode) =>
+          SESSION_BALANCES.flatMap((balance) =>
+            // each plural of the count
+            [N, 992, 991].map((settled) =>
+              notices.sessionSummaryText(symbol, INT4_MAX, {
+                mode,
+                stopReason,
+                trades: {
+                  planned: N,
+                  settled,
+                  rejected: 0,
+                  won: N,
+                  lost: N,
+                  tied: N,
+                  profit: USD,
+                },
+                balance,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
   // the card's footer (#318): plain text on the image, at each plural and every count tied
   sessionCardFooter: () =>
     [N, 992, 991].map(

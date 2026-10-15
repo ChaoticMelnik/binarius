@@ -5,6 +5,7 @@ import {
   BotTextKind,
   defaultBotTextSource,
   escapeTelegramHtml,
+  INTENT_SYMBOL_LIMIT,
   type BotTextKey,
   type BotTextVarName,
   BrokerAccountStatus,
@@ -71,7 +72,6 @@ import {
   groupButtonLabel,
   pairButtonLabel,
   helpText,
-  INTENT_SYMBOL_LIMIT,
   intentStatusText,
   LABELS,
   levelLabel,
@@ -132,6 +132,10 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   assetId: text,
   digits: text,
   step: text,
+  cycle: text,
+  outcome: d('22.08'),
+  openPrice: text,
+  closePrice: text,
   score: text,
   profit: d('-1.5'),
   result: text,
@@ -1421,7 +1425,7 @@ describe('the shared card caption (#321)', () => {
 // TEXTS and LABELS are views of the catalog that keep the names they had before it (#240): a
 // key added to them is a text or a label the bot never had under that name.
 describe('the facades over the catalog', () => {
-  it('gives TEXTS every html key of the catalog but the four it reaches through other entries or never sends, and the reminders', () => {
+  it('gives TEXTS every html key of the catalog but those it reaches through other entries or never sends, and the reminders', () => {
     const htmlKeys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
       (key) => BOT_TEXT_CATALOG[key].kind === BotTextKind.Html,
     );
@@ -1429,9 +1433,18 @@ describe('the facades over the catalog', () => {
       htmlKeys
         .filter(
           (key) =>
-            !['cardGreetingNoName', 'featureLines', 'oauthLoginFailed', 'depositCredited'].includes(
-              key,
-            ),
+            ![
+              'cardGreetingNoName',
+              'featureLines',
+              'oauthLoginFailed',
+              'depositCredited',
+              // the backend's session notices (#464)
+              'sessionTradeWon',
+              'sessionTradeLost',
+              'sessionTradeTied',
+              'sessionAdaptiveStake',
+              'sessionSummarySymbol',
+            ].includes(key),
         )
         .filter((key) => BOT_TEXT_CATALOG[key].group !== BotTextGroup.Mailing)
         .sort(),
