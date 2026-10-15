@@ -93,12 +93,14 @@ const texts = (edits: readonly TelegramHtml[]) => edits.map((text) => text.value
 const live = (status: TradeIntentStatus) => intentView({ status });
 const money = (value: string) => value as DecimalString;
 const trading = sessionView({ lastIntent: live(TradeIntentStatus.Accepted) });
+// the backend has sent its summary message (#464) unless a case says otherwise
 const stoppedWith = (lastIntent: TradingSessionView['lastIntent']) =>
   sessionView({
     status: TradingSessionStatus.Stopped,
     stopReason: TradingSessionStopReason.UserStopped,
     endedAt: '2026-10-07T10:05:00.000Z',
     lastIntent,
+    noticesDone: true,
   });
 const settledOne = {
   trades: { ...SESSION_VIEW.trades, settled: 1, won: 1 },
@@ -534,6 +536,39 @@ describe('the session tracker', () => {
       expect(logger.error.mock.calls.map((call) => call[1])).toEqual([
         'trading session tracking failed',
       ]);
+    });
+
+    // #464: the card comes after the backend's summary message, never before it
+    const unsent = sessionView({ ...stoppedClosed, noticesDone: false });
+
+    it('C8 a done session whose summary message is not sent yet keeps polling, with no card and no edit', async () => {
+      const { tracker, request, readSession, target } = setup({
+        script: [unsent, unsent, stoppedClosed],
+      });
+      const { edits, edit } = target();
+      const card = cardSpy();
+      tracker.track(request({ view: unsent, edit, card }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL);
+      expect(readSession).toHaveBeenCalledTimes(2);
+      expect(card).not.toHaveBeenCalled();
+      expect(tracker.size()).toBe(1);
+      expect(edits).toEqual([]);
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(card).toHaveBeenCalledTimes(1);
+      expect(card).toHaveBeenCalledWith(stoppedClosed);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('C9 at the deadline, a done session without its summary message gets its final edit and no card', async () => {
+      const { tracker, request, target } = setup({ script: [unsent] });
+      const { edits, edit } = target();
+      const card = cardSpy();
+      tracker.track(request({ edit, card }));
+      await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
+      // the poll's edit, then the deadline's own last one of the same final status
+      expect(new Set(texts(edits))).toEqual(new Set([shown(unsent)]));
+      expect(card).not.toHaveBeenCalled();
+      expect(tracker.size()).toBe(0);
     });
 
     it('C7 stop() waits for the card in flight', async () => {

@@ -621,8 +621,19 @@ describe('claimSessionSummary (#318)', () => {
         .from(tradingSessions)
         .where(eq(tradingSessions.id, session.id))
     )[0]?.at;
-  const stop = (session: { id: string }) =>
-    stopTradingSession(tmp.db, { id: session.id, reason: TradingSessionStopReason.Completed });
+  // the session's summary message is out, which the card waits for (#464); S14 leaves it unset
+  const markNoticed = (session: { id: string }) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ finalNoticeSentAt: sql`now()` })
+      .where(eq(tradingSessions.id, session.id));
+  const stop = async (session: { id: string }, { noticed = true } = {}) => {
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.Completed,
+    });
+    if (noticed) await markNoticed(session);
+  };
   // a stopped session of `profits`, each step settled at its own prices
   const finished = async (profits: string[], mode: TradeMode = TradeMode.Demo) => {
     // a real session's intents need a user in real mode (#121)
@@ -768,6 +779,17 @@ describe('claimSessionSummary (#318)', () => {
       trades: [{ profit: '0.85000000', openPrice: 1, closePrice: 2 }],
     });
     expect(view.trades.profit).toBe('0.85000000');
+  });
+
+  it('S14 a finished session is not claimed before its summary message, and is after it (#464)', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+    await stop(session, { noticed: false });
+    expect(await claim(session, seed)).toBeUndefined();
+    expect(await sentAt(session)).toBeNull();
+    await markNoticed(session);
+    expect(await claim(session, seed)).toMatchObject({ result: '0.85000000' });
   });
 
   it('S12 two claims at once: exactly one wins', async () => {

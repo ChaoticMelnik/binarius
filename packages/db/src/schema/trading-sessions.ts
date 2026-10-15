@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   check,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -49,6 +50,13 @@ export const tradingSessions = pgTable(
     // the summary card's at-most-once mark (#318): set by claimSessionSummary's one CAS, never
     // cleared; NULL on every session that has not sent its card
     summarySentAt: timestamp('summary_sent_at', { withTimezone: true }),
+    // The session notices' cursor (#464, docs/bot-session.md → Trade messages): how many of the
+    // session's settled trades, in creation order, the backend's sender has claimed for sending.
+    // Raised one by one by claimSessionTradeNotice's CAS, lowered only by its release.
+    notifiedTrades: integer('notified_trades').notNull().default(0),
+    // the summary message's at-most-once mark (#464): set by claimSessionFinalNotice's one CAS,
+    // never cleared; the card of #318 waits for it
+    finalNoticeSentAt: timestamp('final_notice_sent_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -72,6 +80,7 @@ export const tradingSessions = pgTable(
       sql`(${t.status} = ${literal(TradingSessionStatus.Stopped)}) = (${t.endedAt} is not null)`,
     ),
     check('trading_sessions_settings_object_check', sql`jsonb_typeof(${t.settings}) = 'object'`),
+    check('trading_sessions_notified_trades_check', sql`${t.notifiedTrades} >= 0`),
     uniqueIndex('trading_sessions_active_account_idx')
       .on(t.brokerAccountId)
       .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),
@@ -79,5 +88,9 @@ export const tradingSessions = pgTable(
     index('trading_sessions_runnable_idx')
       .on(t.lastDecisionAt.asc().nullsFirst(), t.createdAt)
       .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),
+    // the notice sender's scan (#464): the sessions without their summary, oldest first
+    index('trading_sessions_notice_pending_idx')
+      .on(t.createdAt)
+      .where(sql`${t.finalNoticeSentAt} is null`),
   ],
 );

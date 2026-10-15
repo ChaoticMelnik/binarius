@@ -1110,6 +1110,11 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
       id: session.id,
       reason: TradingSessionStopReason.Completed,
     });
+    // the summary message is out: the card waits for it (#464)
+    await tmp.db
+      .update(tradingSessions)
+      .set({ finalNoticeSentAt: sql`now()` })
+      .where(eq(tradingSessions.id, session.id));
     return { ...seed, sessionId: session.id };
   };
 

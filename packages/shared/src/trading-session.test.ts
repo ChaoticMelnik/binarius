@@ -182,6 +182,7 @@ const view = {
   trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   lastIntent: null,
   balance: null,
+  noticesDone: false,
 };
 
 describe('tradingSessionViewSchema', () => {
@@ -233,6 +234,18 @@ describe('tradingSessionViewSchema', () => {
       safeParseTradingSessionResponse({ session: { ...view, balance: { ...balance, extra: 1 } } })
         .success,
     ).toBe(false);
+  });
+
+  it('requires the summary mark as a boolean (#464)', () => {
+    const withoutMark: Partial<typeof view> = { ...view };
+    delete withoutMark.noticesDone;
+    expect(safeParseTradingSessionResponse({ session: withoutMark }).success).toBe(false);
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, noticesDone: 'yes' } }).success,
+    ).toBe(false);
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, noticesDone: true } }).success,
+    ).toBe(true);
   });
 });
 

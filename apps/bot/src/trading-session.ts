@@ -549,7 +549,9 @@ export function createTradingSessionComposer<C extends Context>({
           profit: summary.result,
           botUsername,
         }),
-        { reply_markup: keyboard },
+        // without sound: the backend's summary message just before it carries the session's
+        // one sound (#464)
+        { reply_markup: keyboard, disable_notification: true },
       );
       // «📤 Поделиться» (#321): catches its own failures, so the warning below is the send's only
       await attachShareButton(ctx.api, logger, view.id, sent, keyboard);

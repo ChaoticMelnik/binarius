@@ -43,7 +43,8 @@ export interface SessionTrackRequest {
   // or only the menu once the session is gone (#350)
   edit: (text: TelegramHtml, view: TradingSessionView, end?: 'not_found') => Promise<unknown>;
   // sends the summary card under the final status (#318): called once, as the entry ends on a
-  // done view whose final edit landed; it handles its own failures
+  // done view whose final edit landed and whose summary message the backend sent (#464); it
+  // handles its own failures
   card: (view: TradingSessionView) => Promise<void>;
 }
 
@@ -230,7 +231,9 @@ export function createSessionTracker({
     }
     // The card goes once, then the entry ends, whatever the card did: a claim the backend
     // committed answers 409 the second time, so a retry could only lose it (docs/bot-session.md).
-    if (sessionTrackingDone(view) && entry.rendered === key) {
+    // It waits for the backend's summary message (#464), so it never comes before it: a done
+    // session without it is polled on, with no edit while nothing it prints changes.
+    if (sessionTrackingDone(view) && entry.rendered === key && view.noticesDone) {
       await entry.card(view);
       finish(entry);
       return;
@@ -240,7 +243,8 @@ export function createSessionTracker({
 
   // Re-arm, or past the deadline one last edit, not retried, and stop: the hint for a session
   // still followed, the final status for a done one whose edit never landed, and its card once
-  // that edit lands.
+  // that edit lands and the summary message went out (no card otherwise: it would come before
+  // the summary or without it).
   async function next(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     if (now() - entry.startedAt < deadlineMs) {
@@ -254,7 +258,7 @@ export function createSessionTracker({
       sessionStatusText(entry.symbol, entry.view, done ? {} : { deadline: true }),
       key,
     );
-    if (done && entry.rendered === key) await entry.card(entry.view);
+    if (done && entry.rendered === key && entry.view.noticesDone) await entry.card(entry.view);
     finish(entry);
   }
 

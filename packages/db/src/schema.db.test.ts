@@ -2942,6 +2942,25 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
+  // the session notices' cursor (#464): NOT NULL refuses NULL before the CHECK sees it
+  it('rejects a negative notified_trades and accepts zero', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const stopped = { status: 'stopped', stopReason: 'completed', endedAt: new Date() };
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values(session(seed.accountId, stopped))
+        .returning();
+      expect(row!.notifiedTrades).toBe(0);
+      expect(row!.finalNoticeSentAt).toBeNull();
+      await rejectsWith(
+        tx.insert(tradingSessions).values({ ...session(seed.accountId), notifiedTrades: -1 }),
+        '23514',
+        'trading_sessions_notified_trades_check',
+      );
+    });
+  });
+
   it('rejects a second active session of the account and accepts any number of stopped ones', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
