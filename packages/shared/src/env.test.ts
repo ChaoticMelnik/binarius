@@ -6,6 +6,7 @@ import {
   parseBooleanEnv,
   parseBoundedIntegerEnv,
   parseDemoOnlyEnv,
+  parseDepositWidgetOriginsEnv,
   parseEnumEnv,
   parseIntegerEnv,
   parseInternalTokenEnv,
@@ -277,5 +278,44 @@ describe('parseNoWhitespaceEnv', () => {
 
   it('returns a clean value unchanged', () => {
     expect(parseNoWhitespaceEnv('123:abc-DEF_ghi', 'SOME_TOKEN')).toBe('123:abc-DEF_ghi');
+  });
+});
+
+describe('parseDepositWidgetOriginsEnv (#11, #111)', () => {
+  const origins = (value: string | undefined) =>
+    parseDepositWidgetOriginsEnv({ DEPOSIT_WIDGET_ORIGINS: value }, 'https://binodex.app');
+
+  it('defaults to the origin it is given', () => {
+    expect(origins(undefined)).toEqual(['https://binodex.app']);
+  });
+
+  it('reads a comma-separated list of origins in order, normalised', () => {
+    expect(origins('https://binodex.app,https://Pay.Binodex.app:8443')).toEqual([
+      'https://binodex.app',
+      'https://pay.binodex.app:8443',
+    ]);
+  });
+
+  it.each([
+    ['', /must not be empty/],
+    ['https://binodex.app,', /empty item/],
+    [',https://binodex.app', /empty item/],
+    ['http://localhost:3000', /https origins/],
+    ['https://binodex.app/embed', /origin without a path/],
+    ['https://binodex.app, https://pay.binodex.app', /whitespace/],
+    ['https://binodex.app,https://binodex.app', /twice/],
+    ['https://binodex.app,https://BINODEX.app:443', /twice/],
+  ])('refuses %j, naming the variable and not the value', (value, message) => {
+    let thrown: unknown;
+    try {
+      origins(value);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const text = (thrown as Error).message;
+    expect(text).toMatch(message);
+    expect(text).toContain('DEPOSIT_WIDGET_ORIGINS');
+    expect(text).not.toContain('binodex');
   });
 });

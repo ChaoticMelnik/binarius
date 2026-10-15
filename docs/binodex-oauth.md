@@ -431,8 +431,8 @@ check (before the broker), the per-key windows, the broker, and for `login` the 
 
 ### Limits
 
-In-process windows (`rate-window.ts`), like the callback's: reset by a restart and per backend
-process, which is what is deployed.
+In-process windows (`packages/shared/src/rate-window.ts`), like the callback's: reset by a restart
+and per backend process, which is what is deployed.
 
 - **Ceilings:** 60 `send-code` and 300 `login` requests a minute for the whole route → 429
   `too_many_requests`. Every `send-code` is a real letter, so it is held far lower.

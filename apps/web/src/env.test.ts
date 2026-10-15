@@ -18,7 +18,19 @@ describe('parseEnv', () => {
       publicOrigin: 'http://127.0.0.1:3001',
       brokerAuthorizeUrl: 'https://binodex.app/oauth/authorize',
       secureCookies: false,
+      depositWidgetOrigins: ['https://binodex.app'],
     });
+  });
+
+  // the parser's cases live in packages/shared (parseDepositWidgetOriginsEnv); this is the wiring
+  it('reads DEPOSIT_WIDGET_ORIGINS through the parser the backend uses (#111)', () => {
+    expect(
+      parseEnv({ ...valid, DEPOSIT_WIDGET_ORIGINS: 'https://pay.binodex.app,https://binodex.app' })
+        .depositWidgetOrigins,
+    ).toEqual(['https://pay.binodex.app', 'https://binodex.app']);
+    expect(() => parseEnv({ ...valid, DEPOSIT_WIDGET_ORIGINS: 'http://localhost:3000' })).toThrow(
+      'Env DEPOSIT_WIDGET_ORIGINS must list https origins',
+    );
   });
 
   it('accepts explicit optional variables', () => {

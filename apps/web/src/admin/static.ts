@@ -43,4 +43,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .tg-label { display: inline-block; padding: 0.25rem 0.75rem; border: 1px solid #8884; border-radius: 0.5rem; }
 blockquote { margin: 0.25rem 0; padding-left: 0.75rem; border-left: 3px solid #8888; }
 blockquote.expandable { max-height: 4.5em; overflow: hidden; }
+#widget:not([hidden]) { display: block; width: 100%; border: 0; }
 `;

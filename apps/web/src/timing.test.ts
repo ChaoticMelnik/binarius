@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ADMIN_LOGIN_BUDGET_MS, BOT_PROFILE_PUBLISH_BUDGET_MS } from '@binarius/shared';
+import {
+  ADMIN_LOGIN_BUDGET_MS,
+  BOT_PROFILE_PUBLISH_BUDGET_MS,
+  DEPOSIT_WIDGET_SESSION_BUDGET_MS,
+} from '@binarius/shared';
 import { OAUTH_CALLBACK_BUDGET_MS, OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
 import {
   composeDurationMs,
@@ -11,6 +15,7 @@ import {
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
+  DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS,
   OAUTH_CALLBACK_REQUEST_TIMEOUT_MS,
   SHUTDOWN_BUDGET_MS,
 } from './timing';
@@ -31,6 +36,11 @@ describe('web timing', () => {
     expect(OAUTH_CALLBACK_BUDGET_MS).toBeLessThan(OAUTH_CALLBACK_REQUEST_TIMEOUT_MS);
     expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
     expect(OAUTH_CALLBACK_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+    // the cashier's forward (#111)
+    expect(DEPOSIT_WIDGET_SESSION_BUDGET_MS).toBeLessThan(
+      DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS,
+    );
+    expect(DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
     expect(SHUTDOWN_BUDGET_MS).toBeLessThan(COMPOSE_STOP_GRACE_PERIOD_MS);
   });
 
@@ -73,5 +83,12 @@ describe('web timing', () => {
     expect(composeServiceEnvValue(composeYaml, 'web', 'BROKER_OAUTH_AUTHORIZE_URL')).toBe(
       '*broker-authorize-url',
     );
+  });
+
+  // the cashier page's frame-src and the backend's widget allowlist are one list (#111): one .env
+  // line forwarded to both, with no default here (the parser's default is the authorize origin)
+  it("gives the web the backend's DEPOSIT_WIDGET_ORIGINS, forwarded only when set", () => {
+    expect(composeServiceEnvValue(composeYaml, 'web', 'DEPOSIT_WIDGET_ORIGINS')).toBe('');
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'DEPOSIT_WIDGET_ORIGINS')).toBe('');
   });
 });

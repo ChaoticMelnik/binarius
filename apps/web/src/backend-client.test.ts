@@ -49,6 +49,7 @@ import {
   safeParseChangePasswordResponse,
   safeParseLogoutResponse,
   safeParseOAuthCallbackResponse,
+  safeParseDepositWidgetSessionResponse,
   safeParseRevokeSessionResponse,
   safeParseStaffSessionsResponse,
   TOKEN_LEDGER_NOTE_MAX,
@@ -212,6 +213,68 @@ describe('oauthCallback', () => {
       oauthCallbackTimeoutMs: 50,
     });
     const error = await rejectionOf(client.oauthCallback(CALLBACK));
+    expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
+  });
+});
+
+describe('depositWidgetSession (#111)', () => {
+  const REQUEST = { initData: INIT_DATA, clientIp: '203.0.113.7' };
+  const ANSWER = {
+    session: 'widget-session-value',
+    expiresInSec: 600,
+    widgetUrl: 'https://binodex.app/embed/pay?client_id=c',
+    widgetOrigin: 'https://binodex.app',
+  };
+
+  it('posts the body unchanged to the public route, without the admin bearer', async () => {
+    const { baseUrl, captured } = await serve((response) => {
+      json(response, 200, ANSWER);
+    });
+    const answer = await createBackendClient({ baseUrl, token: TOKEN }).depositWidgetSession(
+      REQUEST,
+    );
+
+    expect(answer).toEqual(ANSWER);
+    expect(captured.url).toBe('/deposit/widget-session');
+    expect(captured.headers?.authorization).toBeUndefined();
+    expect(captured.body).toBe(JSON.stringify(REQUEST));
+  });
+
+  it('carries the backend error code and status of a refusal', async () => {
+    const { baseUrl } = await serve((response) => {
+      json(response, 409, { error: 'no_active_account' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).depositWidgetSession(REQUEST),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 409,
+      reason: 'no_active_account',
+    });
+  });
+
+  it('refuses a 2xx body outside the contract', async () => {
+    const { baseUrl } = await serve((response) => {
+      json(response, 200, { ...ANSWER, widgetUrl: 'http://binodex.app/embed/pay' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).depositWidgetSession(REQUEST),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  // its own timeout, sized against DEPOSIT_WIDGET_SESSION_BUDGET_MS (timing.ts)
+  it('gives up on a backend that never answers after its own timeout', async () => {
+    const { baseUrl } = await serve(() => {});
+    const client = createBackendClient({
+      baseUrl,
+      token: TOKEN,
+      timeoutMs: 60_000,
+      oauthCallbackTimeoutMs: 60_000,
+      depositWidgetSessionTimeoutMs: 50,
+    });
+    const error = await rejectionOf(client.depositWidgetSession(REQUEST));
     expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
   });
 });
@@ -1269,6 +1332,16 @@ describe('body size', () => {
             status: longest(BrokerAccountStatus),
             createdAt: AT,
           },
+        },
+      },
+      // the session and both URLs are the broker's, bounded by nothing but their https shape
+      depositWidgetSession: {
+        parse: safeParseDepositWidgetSessionResponse,
+        sample: {
+          session: ofBytes(ASSUMED_LONGEST_FREE_STRING),
+          expiresInSec: INT4_MAX,
+          widgetUrl: `https://${ofBytes(ASSUMED_LONGEST_FREE_STRING - 'https://'.length)}`,
+          widgetOrigin: `https://${ofBytes(ASSUMED_LONGEST_FREE_STRING - 'https://'.length)}`,
         },
       },
     };

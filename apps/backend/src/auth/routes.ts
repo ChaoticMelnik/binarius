@@ -1,5 +1,8 @@
 import type { FastifyBaseLogger, FastifyPluginAsync, FastifyReply } from 'fastify';
 import {
+  createKeyedWindow,
+  createWindow,
+  type RateWindow,
   BrokerAccountStatus,
   errorIdentity,
   errorLogFields,
@@ -30,7 +33,6 @@ import { telegramErrorFields } from '../telegram-logging';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import { internalBearerAuth } from './internal';
 import { LinkPushKind, type ClientPush, type LinkPushOutcome } from './client-push';
-import { createKeyedWindow, createWindow, type RateWindow } from './rate-window';
 import type { InitDataVerifier } from './telegram-init-data';
 
 // The ceiling on everything the public callback accepts, taken before the body is parsed and

@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  createWindow,
   POSTBACK_PATH_PREFIX,
   PostbackResponseOutcome,
   PostbackSource,
@@ -8,7 +9,6 @@ import {
 } from '@binarius/shared';
 import { recordPostback, type Db } from '@binarius/db';
 import { secretDigest, secretMatches } from '../auth/internal';
-import { createWindow } from '../auth/rate-window';
 
 // The ceiling on deliveries past the secret. The broker's are a few a day at pilot volume; this
 // only ever catches a leaked secret.

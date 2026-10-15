@@ -1,6 +1,8 @@
 import { isIP } from 'node:net';
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  createKeyedWindow,
+  createWindow,
   DEPOSIT_BODY_LIMIT_BYTES,
   DEPOSIT_WIDGET_SESSION_PATH,
   DepositErrorCode,
@@ -9,7 +11,6 @@ import {
   safeParseDepositWidgetSessionRequest,
 } from '@binarius/shared';
 import { resolveBalanceAccount, type Db } from '@binarius/db';
-import { createKeyedWindow, createWindow } from '../auth/rate-window';
 import type { InitDataVerifier } from '../auth/telegram-init-data';
 import {
   depositErrorFor,

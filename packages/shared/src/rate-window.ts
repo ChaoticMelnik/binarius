@@ -12,7 +12,7 @@ export interface RateWindow {
 }
 
 // One fixed window per process, rolled forward lazily. A distributed limit would need Redis and
-// is follow-up work; this one bounds a single backend, which is what the deployment runs.
+// is follow-up work; this one bounds a single process, which is what the deployment runs.
 export function createWindow(limit: number): RateWindow {
   let startedAt = Date.now();
   let count = 0;

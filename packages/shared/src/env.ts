@@ -179,3 +179,28 @@ export function parseBoundedIntegerEnv(
   if (value < min || value > max) throw new Error(`Env ${name} must be between ${min} and ${max}`);
   return value;
 }
+
+// The origins the broker's cashier widget may be served from (#11, #111). The backend refuses a
+// widget served from anywhere else, and apps/web names the same list in the cashier page's CSP
+// frame-src and re-checks the backend's answer against it, so both processes read the one
+// variable through this parser. Absent: `defaultOrigin`, the broker platform's origin the
+// fallback widget URL is built on. Present: a comma-separated list of https origins, each spelled
+// as WEB_PUBLIC_URL is. Messages name the variable, never the value.
+export function parseDepositWidgetOriginsEnv(source: EnvSource, defaultOrigin: string): string[] {
+  const name = 'DEPOSIT_WIDGET_ORIGINS';
+  if (source[name] === undefined) return [defaultOrigin];
+  const origins = readEnv(source, name)
+    .split(',')
+    .map((item) => {
+      if (item === '') throw new Error(`Env ${name} must not list an empty item`);
+      const origin = parseOriginEnv(item, name);
+      if (new URL(origin).protocol !== 'https:') {
+        throw new Error(`Env ${name} must list https origins`);
+      }
+      return origin;
+    });
+  if (new Set(origins).size !== origins.length) {
+    throw new Error(`Env ${name} must not list an origin twice`);
+  }
+  return origins;
+}

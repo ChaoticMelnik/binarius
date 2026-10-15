@@ -98,8 +98,10 @@ Accepted:
 | Telegram → `apps/backend` | the button press | a CAS that joins `staff` on the Telegram account the update came from — the id in the button authorises nothing |
 | Telegram → `apps/backend` | `/start`, the login link button (#448) | the staff member is the one whose `telegram_user_id` is the update's sender; nothing in the button names anyone. Only the sender's own account can be asked about, and every refusal is one text |
 
-`ip` and `userAgent` are what the web process saw, and the backend records them as given. Behind
-a reverse proxy that is the proxy's address until `trustProxy` is configured (#4).
+`ip` and `userAgent` are what the web process saw, and the backend records them as given. `ip` is
+the client's address as Caddy forwarded it: `web` trusts `X-Forwarded-For` from loopback and private
+peers only (`trustProxy: 'loopback, uniquelocal'`, #111, docs/deposit.md → The page). A request
+that did not come through such a proxy records its peer's own address.
 
 `apps/web` holds no database connection. That is not tidiness: everything it may read is decided
 by a staff session the backend checks inside the transaction that records the read, so a direct

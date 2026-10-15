@@ -136,7 +136,8 @@ services:
       # Here rather than in the broker anchor: the worker never receives it.
       POSTBACK_URL_SECRET:
       # The cashier widget's origins (#11, docs/deposit.md). Forwarded only when set; unset, the
-      # backend allows the origin of BROKER_OAUTH_AUTHORIZE_URL alone.
+      # backend allows the origin of BROKER_OAUTH_AUTHORIZE_URL alone. `web` below reads the same
+      # line (#111): the two lists must be one, tied by both processes' timing.test.ts.
       DEPOSIT_WIDGET_ORIGINS:
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
@@ -307,7 +308,7 @@ services:
     # nested `:?` even when ADMIN_PUBLIC_URL is unset, which would refuse every run. The CI
     # compose job checks the refusal; the message must not contain " #" (a YAML comment) or "}".
     init: ${ADMIN_PUBLIC_URL+ADMIN_PUBLIC_URL was renamed to WEB_PUBLIC_URL in issue 114, rename it in .env - }true
-    # Not the shared anchor: env.ts reads exactly these six names, and DATABASE_URL and
+    # Not the shared anchor: env.ts reads exactly these seven names, and DATABASE_URL and
     # REDIS_URL have no business in a process that never opens either connection — everything
     # it may read is decided by a staff session the backend checks (docs/staff-login.md).
     environment:
@@ -323,6 +324,9 @@ services:
       # the redirect default above is this value plus a path.
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
       BROKER_OAUTH_AUTHORIZE_URL: *broker-authorize-url
+      # the cashier page's frame-src and its check of the backend's widget origin (#111): the
+      # backend's value, forwarded only when set; unset, both default to the authorize origin
+      DEPOSIT_WIDGET_ORIGINS:
     ports:
       - "127.0.0.1:${WEB_PORT:-3001}:3000"
     develop:

@@ -213,31 +213,14 @@ describe('parseEnv', () => {
   });
 });
 
+// the parser's cases live in packages/shared (parseDepositWidgetOriginsEnv); this is the wiring
 describe('DEPOSIT_WIDGET_ORIGINS (#11)', () => {
-  const origins = (value: string | undefined) =>
-    parseEnv({ ...valid, DEPOSIT_WIDGET_ORIGINS: value }).depositWidgetOrigins;
-
-  it('defaults to the origin of the broker authorize URL', () => {
-    expect(origins(undefined)).toEqual(['https://binodex.app']);
-  });
-
-  it('reads a comma-separated list of origins', () => {
-    expect(origins('https://binodex.app,https://pay.binodex.app:8443')).toEqual([
-      'https://binodex.app',
-      'https://pay.binodex.app:8443',
-    ]);
-  });
-
-  it.each([
-    ['', /must not be empty/],
-    ['https://binodex.app,', /empty item/],
-    [',https://binodex.app', /empty item/],
-    ['http://localhost:3000', /https origins/],
-    ['https://binodex.app/embed', /origin without a path/],
-    ['https://binodex.app, https://pay.binodex.app', /whitespace/],
-    ['https://binodex.app,https://binodex.app', /twice/],
-  ])('refuses %j', (value, message) => {
-    expect(() => origins(value)).toThrow(message);
+  it('defaults to the origin of the broker authorize URL and reads the list', () => {
+    expect(parseEnv(valid).depositWidgetOrigins).toEqual(['https://binodex.app']);
+    expect(
+      parseEnv({ ...valid, DEPOSIT_WIDGET_ORIGINS: 'https://pay.binodex.app' })
+        .depositWidgetOrigins,
+    ).toEqual(['https://pay.binodex.app']);
   });
 });
 

@@ -114,6 +114,7 @@ beforeAll(async () => {
     publicOrigin: ORIGIN,
     brokerAuthorizeUrl: 'https://binodex.app/oauth/authorize',
     secureCookies: false,
+    depositWidgetOrigins: ['https://binodex.app'],
     logLevel: 'silent',
   });
 });
