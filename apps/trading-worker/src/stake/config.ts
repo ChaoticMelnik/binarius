@@ -23,7 +23,8 @@ export type StakeParams =
   | (CommonParams & { strategy: typeof StakeStrategy.Fixed })
   | (CommonParams & { strategy: typeof StakeStrategy.Martingale; limits: MartingaleLimits });
 
-// Martingale stays off until its limits are approved (#19): no default limits exist.
+// The sizer's parameters with none given, for the sizer's own tests: sessions take theirs from
+// their settings (sessionStakeParams, #450), martingale by default with martingaleLimitsFor.
 export const DEFAULT_STAKE_PARAMS: Readonly<StakeParams> = Object.freeze({
   strategy: StakeStrategy.Fixed,
   baseStake: decimalStringSchema.parse('1.00'),

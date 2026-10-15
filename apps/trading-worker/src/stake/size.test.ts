@@ -178,6 +178,26 @@ describe('stake sizer: the martingale step', () => {
     const decision = createStakeSizer(martingale()).next(input({ history: [win('1.00', '0.85')] }));
     expect(decision.kind === 'stake' && decision.features.realizedSessionLoss).toBe('0');
   });
+
+  // #450, the live probe of 2026-10-15: the broker pays S × p / 100 unrounded, 1.3485 on 1.55 at 87 %
+  it('S23 a live profit with more decimals than stakeScale is counted exactly', () => {
+    const sizer = createStakeSizer(martingale({}, '1.55'));
+    const won = sizer.next(input({ payout: 87, history: [loss('1.55'), win('3.35', '2.9145')] }));
+    expect(stakeOf(won)).toBe('1.55');
+    expect(won.kind === 'stake' && won.features).toMatchObject({
+      step: 1,
+      streakLoss: '0',
+      realizedSessionLoss: '0',
+    });
+    const lost = sizer.next(
+      input({ payout: 87, history: [win('1.55', '1.3485'), loss('1.55'), loss('3.35')] }),
+    );
+    expect(lost.kind === 'stake' && lost.features).toMatchObject({
+      step: 3,
+      streakLoss: '4.9',
+      realizedSessionLoss: '3.5515',
+    });
+  });
 });
 
 describe('stake sizer: data stops', () => {

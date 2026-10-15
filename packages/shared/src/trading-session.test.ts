@@ -7,6 +7,9 @@ import {
   MAX_SESSION_TRADES,
   TRADING_SESSION_SETTINGS_VERSION,
   TradingSessionErrorCode,
+  buildSessionSettings,
+  martingaleLimitsFor,
+  sessionStakeParams,
   TradingSessionStatus,
   TradingSessionStopReason,
   safeParseCreateTradingSessionRequest,
@@ -25,7 +28,7 @@ import {
 } from './trading-session';
 
 const settings = {
-  version: TRADING_SESSION_SETTINGS_VERSION,
+  version: 1,
   assetId: 101,
   durationSec: 60,
   trades: DEFAULT_SESSION_TRADES,
@@ -57,7 +60,7 @@ describe('tradingSessionSettingsSchema', () => {
   });
 
   it('refuses an unknown version, an extra key, a missing key and the empty default', () => {
-    expect(refused({ ...settings, version: 2 })).toBe(true);
+    expect(refused({ ...settings, version: 3 })).toBe(true);
     expect(refused({ ...settings, strategy: 'martingale' })).toBe(true);
     expect(refused({ ...settings, stake: { ...settings.stake, limits: {} } })).toBe(true);
     expect(refused({ ...settings, trades: undefined })).toBe(true);
@@ -72,6 +75,143 @@ describe('tradingSessionSettingsSchema', () => {
     expect(refused({ ...settings, stake: { baseStake: '0', stakeScale: 0 } })).toBe(true);
     expect(refused({ ...settings, stake: { baseStake: '1', stakeScale: 9 } })).toBe(true);
     expect(refused({ ...settings, stake: { baseStake: '1', stakeScale: -1 } })).toBe(true);
+  });
+});
+
+// #450: v2 carries the strategy, martingale with its limits; only v2 is written
+describe('tradingSessionSettingsSchema v2', () => {
+  const limits = {
+    maxSteps: 4,
+    maxStake: '12',
+    maxSessionLoss: '20',
+    maxSessionDurationMs: 3_600_000,
+  };
+  const fixed = {
+    ...settings,
+    version: 2,
+    stake: { strategy: 'fixed', baseStake: '1', stakeScale: 2 },
+  };
+  const martingale = { ...fixed, stake: { ...fixed.stake, strategy: 'martingale', limits } };
+
+  it('writes version 2', () => {
+    expect(TRADING_SESSION_SETTINGS_VERSION).toBe(2);
+  });
+
+  it('accepts fixed and martingale', () => {
+    expect(safeParseTradingSessionSettings(fixed).success).toBe(true);
+    expect(safeParseTradingSessionSettings(martingale).success).toBe(true);
+  });
+
+  it('refuses martingale without limits, fixed with them and a v2 stake without a strategy', () => {
+    expect(refused({ ...martingale, stake: { ...fixed.stake, strategy: 'martingale' } })).toBe(
+      true,
+    );
+    expect(refused({ ...fixed, stake: { ...fixed.stake, limits } })).toBe(true);
+    expect(refused({ ...fixed, stake: settings.stake })).toBe(true);
+    expect(refused({ ...fixed, stake: { ...fixed.stake, strategy: 'other' } })).toBe(true);
+  });
+
+  it('refuses limits outside their domain', () => {
+    const withLimits = (patch: object) => ({
+      ...martingale,
+      stake: { ...martingale.stake, limits: { ...limits, ...patch } },
+    });
+    expect(refused(withLimits({ maxSteps: 1 }))).toBe(true);
+    expect(refused(withLimits({ maxStake: '0' }))).toBe(true);
+    expect(refused(withLimits({ maxSessionLoss: '-20' }))).toBe(true);
+    expect(refused(withLimits({ maxSessionLoss: '1234567890123' }))).toBe(true);
+    expect(refused(withLimits({ maxSessionDurationMs: 0 }))).toBe(true);
+    expect(refused(withLimits({ extra: 1 }))).toBe(true);
+  });
+
+  it('reads v1 as the fixed strategy and v2 as stored', () => {
+    const v1 = safeParseTradingSessionSettings(settings);
+    expect(v1.success && sessionStakeParams(v1.data)).toEqual({
+      strategy: 'fixed',
+      baseStake: '1',
+      stakeScale: 0,
+    });
+    const v2 = safeParseTradingSessionSettings(martingale);
+    expect(v2.success && sessionStakeParams(v2.data)).toEqual(martingale.stake);
+  });
+});
+
+describe('martingaleLimitsFor (#450, docs/stake.md -> Defaults)', () => {
+  const d = (value: string) => decimalStringSchema.parse(value);
+
+  it('pins 4 steps, 12×B, 20×B and the session hour', () => {
+    expect(martingaleLimitsFor(d('1.00'))).toEqual({
+      maxSteps: 4,
+      maxStake: '12',
+      maxSessionLoss: '20',
+      maxSessionDurationMs: 3_600_000,
+    });
+    expect(martingaleLimitsFor(d('1.55'))).toMatchObject({
+      maxStake: '18.6',
+      maxSessionLoss: '31',
+    });
+  });
+
+  it('keeps a stake of 8 fraction digits on its grid', () => {
+    expect(martingaleLimitsFor(d('0.00500000'))).toMatchObject({
+      maxStake: '0.06',
+      maxSessionLoss: '0.1',
+    });
+    expect(martingaleLimitsFor(d('0.00000001'))).toMatchObject({
+      maxStake: '0.00000012',
+      maxSessionLoss: '0.0000002',
+    });
+  });
+});
+
+describe('buildSessionSettings (#450)', () => {
+  const input = {
+    assetId: 101,
+    durationSec: 60,
+    trades: 5,
+    stake: { baseStake: decimalStringSchema.parse('1.55'), stakeScale: 2 },
+  };
+
+  it('writes v2 martingale with the limits of the base stake', () => {
+    const built = buildSessionSettings({ ...input, strategy: 'martingale' });
+    expect(built.success && built.data).toEqual({
+      version: 2,
+      assetId: 101,
+      durationSec: 60,
+      trades: 5,
+      stake: {
+        strategy: 'martingale',
+        baseStake: '1.55',
+        stakeScale: 2,
+        limits: {
+          maxSteps: 4,
+          maxStake: '18.6',
+          maxSessionLoss: '31',
+          maxSessionDurationMs: 3_600_000,
+        },
+      },
+    });
+  });
+
+  it('writes v2 fixed without limits', () => {
+    const built = buildSessionSettings({ ...input, strategy: 'fixed' });
+    expect(built.success && built.data.stake).toEqual({
+      strategy: 'fixed',
+      baseStake: '1.55',
+      stakeScale: 2,
+    });
+  });
+
+  it('refuses a zero stake and a stake whose limits leave numeric(20,8)', () => {
+    for (const strategy of ['fixed', 'martingale'] as const) {
+      const zero = { ...input.stake, baseStake: decimalStringSchema.parse('0') };
+      expect(buildSessionSettings({ ...input, stake: zero, strategy }).success).toBe(false);
+    }
+    const huge = { ...input.stake, baseStake: decimalStringSchema.parse('100000000000') };
+    expect(buildSessionSettings({ ...input, stake: huge, strategy: 'fixed' }).success).toBe(true);
+    expect(buildSessionSettings({ ...input, stake: huge, strategy: 'martingale' }).success).toBe(
+      false,
+    );
   });
 });
 

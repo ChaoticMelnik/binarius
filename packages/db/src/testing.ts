@@ -279,7 +279,7 @@ export async function seedUnknownIntent(
 
 // settings v1 of the mock broker's EUR/USD (id 101, min_timeframe 60) at its min_trade_amount
 export const sessionSettings = (
-  patch: Partial<TradingSessionSettings> = {},
+  patch: Partial<Extract<TradingSessionSettings, { version: 1 }>> = {},
 ): TradingSessionSettings => ({
   version: 1,
   assetId: 101,

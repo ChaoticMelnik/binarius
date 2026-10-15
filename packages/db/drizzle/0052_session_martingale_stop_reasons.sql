@@ -1,0 +1,2 @@
+ALTER TABLE "trading_sessions" DROP CONSTRAINT "trading_sessions_stop_reason_check";--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_stop_reason_check" CHECK ("trading_sessions"."stop_reason" in ('completed', 'manual_review', 'rejected_twice', 'timeout', 'stake_stop', 'max_steps_exceeded', 'max_stake_exceeded', 'max_session_loss_exceeded', 'session_duration_exceeded', 'account_unavailable', 'pair_unavailable', 'balance_unavailable', 'invalid_settings', 'user_stopped', 'kill_switch', 'no_signal_timeout'));

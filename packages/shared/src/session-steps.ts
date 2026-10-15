@@ -3,9 +3,10 @@
 export const SessionTradeResult = { Won: 'won', Lost: 'lost', Tied: 'tied' } as const;
 export type SessionTradeResult = (typeof SessionTradeResult)[keyof typeof SessionTradeResult];
 
-// The stake strategies' wire names, as the worker's sizer spells them (apps/trading-worker
-// src/stake/codes.ts); settings v1 carry none, so every session is fixed until #450.
-export type SessionStakeStrategy = 'fixed' | 'martingale';
+// The stake strategies' wire names (#450): settings v2 carry one, the worker's sizer takes it
+// (apps/trading-worker/src/stake/codes.ts re-exports it) and settings v1 read as fixed
+export const SessionStakeStrategy = { Fixed: 'fixed', Martingale: 'martingale' } as const;
+export type SessionStakeStrategy = (typeof SessionStakeStrategy)[keyof typeof SessionStakeStrategy];
 
 export interface SessionTradeStep {
   cycle: number;
@@ -25,7 +26,7 @@ export function sessionTradeSteps(
   let consecutiveLosses = 0;
   let cycle = 0;
   for (const result of results) {
-    const step = strategy === 'martingale' ? consecutiveLosses + 1 : 1;
+    const step = strategy === SessionStakeStrategy.Martingale ? consecutiveLosses + 1 : 1;
     if (step === 1) cycle += 1;
     steps.push({ cycle, step });
     if (result === SessionTradeResult.Won) consecutiveLosses = 0;

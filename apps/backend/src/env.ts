@@ -6,6 +6,7 @@ import {
   assertOriginSpelling,
   parseBoundedIntegerEnv,
   parseDemoOnlyEnv,
+  parseSessionStakeStrategyEnv,
   parseDepositWidgetOriginsEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -15,6 +16,7 @@ import {
   parseUrlEnv,
   readEnv,
   type EnvSource,
+  type SessionStakeStrategy,
 } from '@binarius/shared';
 import { OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
 import {
@@ -79,6 +81,8 @@ export interface Env {
   // the demo-only fuse (#396): read once at start, refuses real intents and real sessions, and the
   // cashier's widget session (#11)
   demoOnly: boolean;
+  // the stake strategy frozen into every new session's settings (#450); martingale by default
+  sessionStakeStrategy: SessionStakeStrategy;
   // the origins the cashier widget may be served from (#11); default: the broker platform's origin
   depositWidgetOrigins: string[];
   // the postback route's path secret (#141); absent = the route is not registered
@@ -140,6 +144,7 @@ export function parseEnv(source: EnvSource): Env {
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
     webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
     demoOnly: parseDemoOnlyEnv(source),
+    sessionStakeStrategy: parseSessionStakeStrategyEnv(source),
     depositWidgetOrigins: parseDepositWidgetOriginsEnv(
       source,
       new URL(readEnv(source, 'BROKER_OAUTH_AUTHORIZE_URL')).origin,

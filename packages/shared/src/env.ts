@@ -1,3 +1,5 @@
+import { SessionStakeStrategy } from './session-steps';
+
 export type EnvSource = Record<string, string | undefined>;
 
 export interface UrlEnvRules {
@@ -151,6 +153,16 @@ export function parseBooleanEnv(raw: string, name: string): boolean {
 // the worker cannot read the same .env differently.
 export function parseDemoOnlyEnv(source: EnvSource): boolean {
   return parseBooleanEnv(readEnv(source, 'DEMO_ONLY', 'false'), 'DEMO_ONLY');
+}
+
+// The stake strategy of new sessions (#450): one value for the start route and the session-start
+// CLI, frozen into each session's settings; martingale unless set, anything else fails the start
+export function parseSessionStakeStrategyEnv(source: EnvSource): SessionStakeStrategy {
+  return parseEnumEnv(
+    readEnv(source, 'SESSION_STAKE_STRATEGY', SessionStakeStrategy.Martingale),
+    'SESSION_STAKE_STRATEGY',
+    Object.values(SessionStakeStrategy),
+  );
 }
 
 // These values are pasted from .env straight into a URL, a header or a payload, where a stray

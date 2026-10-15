@@ -3,8 +3,8 @@ import { MAX_PAIR_DIGITS } from './broker';
 // How the bot texts print the backend's numbers (#24), for the bot and the variables of
 // bot-text-vars.ts (#358). Text in, text out: an amount is a decimal string and a count an
 // integer string, and going through Number would lose digits a numeric(20,8) or a bigint holds
-// (Rule 2). The fraction is cut to two digits, not rounded, so the card never shows more than the
-// broker reported.
+// (Rule 2). A balance's fraction is cut to two digits, not rounded, so the card never shows more
+// than the broker reported; a signed result keeps every digit (formatSignedUsd).
 
 const GROUP_SEPARATOR = ' ';
 
@@ -22,11 +22,17 @@ export function formatUsd(amount: string): string {
   return `${negative && !zero ? '-' : ''}$${groupDigits(whole)}.${cents}`;
 }
 
-// A session's result (#337): '1.5' → '+$1.50', '-1.5' → '-$1.50'; a zero, truncated ones
-// included, keeps no sign, as in formatUsd
+// A session's result (#337) and a trade's profit on the summary card: every fraction digit it has,
+// at least two, so a loss of 1.7515 is not shown as the smaller -$1.75 (#450: the live broker's
+// profit is S × p / 100 unrounded). '1.5' → '+$1.50', '-1.7515' → '-$1.7515'; a zero keeps no
+// sign, as in formatUsd
 export function formatSignedUsd(amount: string): string {
-  const formatted = formatUsd(amount);
-  return formatted.startsWith('$') && formatted !== '$0.00' ? `+${formatted}` : formatted;
+  const negative = amount.startsWith('-');
+  const [whole = '0', fraction = ''] = (negative ? amount.slice(1) : amount).split('.');
+  const digits = fraction.replace(/0+$/, '').padEnd(2, '0');
+  const zero = /^0*$/.test(whole) && /^0*$/.test(digits);
+  const sign = zero ? '' : negative ? '-' : '+';
+  return `${sign}$${groupDigits(whole)}.${digits}`;
 }
 
 // A stake (#297): every fraction digit it has, at least two, so a stake of 0.005 is not shown

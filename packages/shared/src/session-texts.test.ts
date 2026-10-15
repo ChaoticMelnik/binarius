@@ -128,6 +128,28 @@ describe('sessionSummaryText (#464)', () => {
     },
   );
 
+  // #450: the four martingale limits, each its own text with no promise of a result
+  it.each([
+    [
+      TradingSessionStopReason.MaxStepsExceeded,
+      '🛑 Сессия остановлена: серия проигрышей дошла до лимита повышений ставки.',
+    ],
+    [
+      TradingSessionStopReason.MaxStakeExceeded,
+      '🛑 Сессия остановлена: следующая ставка вышла бы за лимит размера ставки.',
+    ],
+    [
+      TradingSessionStopReason.MaxSessionLossExceeded,
+      '🛑 Сессия остановлена: следующая сделка могла бы превысить лимит убытка сессии.',
+    ],
+    [
+      TradingSessionStopReason.SessionDurationExceeded,
+      '⏱ Сессия остановлена: истёк час на сессию.',
+    ],
+  ])('the stop reason %s prints its text', (stopReason, line) => {
+    expect(lines(view({ stopReason }))[1]).toBe(line);
+  });
+
   // #509: the line carries the limit in minutes, from the constant the worker stops by
   it('the stop reason no_signal_timeout prints the limit in minutes', () => {
     expect(lines(view({ stopReason: TradingSessionStopReason.NoSignalTimeout }))[1]).toBe(

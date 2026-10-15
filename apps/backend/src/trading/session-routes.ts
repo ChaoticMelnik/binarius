@@ -8,6 +8,7 @@ import {
   TradeMode,
   TradingSessionErrorCode,
   TradingSessionStopReason,
+  buildSessionSettings,
   errorLogFields,
   intervalForDuration,
   isPairOpen,
@@ -21,7 +22,7 @@ import {
   SignalKind,
   checkStake,
   stakeSettingsFrom,
-  tradingSessionSettingsSchema,
+  type SessionStakeStrategy,
   type TradingSessionErrorCode as ErrorCode,
 } from '@binarius/shared';
 import {
@@ -57,6 +58,8 @@ export interface TradingSessionRoutesDeps {
   internalApiToken: string;
   // the process runs DEMO_ONLY (#396): createTradingSession refuses a real session
   demoOnly: boolean;
+  // SESSION_STAKE_STRATEGY (#450): frozen into the new session's settings, never read again
+  stakeStrategy: SessionStakeStrategy;
   now?: () => number;
 }
 
@@ -113,7 +116,7 @@ const refuse = (reply: FastifyReply, code: Exclude<ErrorCode, 'active_session_ex
 // way may have written the account's snapshot.
 export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> = async (
   app,
-  { db, catalog, balance, signals, internalApiToken, demoOnly, now = Date.now },
+  { db, catalog, balance, signals, internalApiToken, demoOnly, stakeStrategy, now = Date.now },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -243,14 +246,15 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     });
     if (stakeRefusal !== null) return refuse(reply, stakeRefusal);
 
-    // a stored min_trade_amount of 0 is valid and gives baseStake '0', which settings v1 refuse:
-    // the snapshot offers no stake to trade with, the same answer as no snapshot
-    const stakeSettings = tradingSessionSettingsSchema.safeParse({
-      version: 1,
+    // a stored min_trade_amount of 0 is valid and gives baseStake '0', which the settings refuse:
+    // the snapshot offers no stake to trade with, the same answer as no snapshot; so does a stake
+    // whose martingale limits would leave numeric(20,8) (#450)
+    const stakeSettings = buildSessionSettings({
       assetId,
       durationSec,
       trades,
       stake: stakeSettingsFrom(savedStake, snapshot.minTradeAmount),
+      strategy: stakeStrategy,
     });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');

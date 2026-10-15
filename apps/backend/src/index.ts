@@ -203,6 +203,7 @@ const app = buildApp({
     signals: signalFeed,
     internalApiToken: env.internalApiToken,
     demoOnly: env.demoOnly,
+    stakeStrategy: env.sessionStakeStrategy,
   },
   signal: {
     feed: signalFeed,

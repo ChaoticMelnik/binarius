@@ -13,6 +13,7 @@ import {
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
+  SessionStakeStrategy,
   decimalStringSchema,
   safeParseSessionSummaryRefusal,
   safeParseSessionSummaryResponse,
@@ -22,6 +23,7 @@ import {
   type BinaryPair,
   type BrokerUser,
   type PairsCatalogView,
+  type SessionStakeStrategy as StakeStrategy,
   type TradingSessionView,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
@@ -149,6 +151,8 @@ function appWith(
     // what the refresh answers once the stub ran
     outcome?: BalanceRefreshOutcome;
     demoOnly?: boolean;
+    // SESSION_STAKE_STRATEGY of the process (#450); its default by default
+    stakeStrategy?: StakeStrategy;
     // the pair's signal at the start (#509); a signal by default
     signal?: SignalEvaluation | (() => Promise<SignalEvaluation>);
   } = {},
@@ -189,6 +193,7 @@ function appWith(
       signals: signals.feed,
       internalApiToken: PAIRS_TEST_TOKEN,
       demoOnly: options.demoOnly ?? false,
+      stakeStrategy: options.stakeStrategy ?? SessionStakeStrategy.Martingale,
       now: () => NOW,
     },
     signal: unusedSignalDeps(),
@@ -278,12 +283,23 @@ describe('POST /trading/sessions', () => {
       status: TradingSessionStatus.Active,
       stopReason: null,
       endedAt: null,
+      // #450: the process's default strategy, martingale, with the limits of the base stake
       settings: {
-        version: 1,
+        version: 2,
         assetId: ASSET,
         durationSec: 60,
         trades: 5,
-        stake: { baseStake: '1', stakeScale: 0 },
+        stake: {
+          strategy: 'martingale',
+          baseStake: '1',
+          stakeScale: 0,
+          limits: {
+            maxSteps: 4,
+            maxStake: '12',
+            maxSessionLoss: '20',
+            maxSessionDurationMs: 3_600_000,
+          },
+        },
       },
       trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
       lastIntent: null,
@@ -540,7 +556,7 @@ describe('POST /trading/sessions', () => {
     expect(response.statusCode).toBe(201);
     const session = sessionOf(response);
     expect(session.mode).toBe(TradeMode.Real);
-    expect(session.settings?.stake).toEqual({ baseStake: '2.5', stakeScale: 2 });
+    expect(session.settings?.stake).toMatchObject({ baseStake: '2.5', stakeScale: 2 });
     const [row] = await tmp.db
       .select()
       .from(tradingSessions)
@@ -756,7 +772,63 @@ describe('POST /trading/sessions', () => {
     );
     const response = await start(appWith(), bodyFor(seed));
     expect(response.statusCode).toBe(201);
-    expect(sessionOf(response).settings?.stake).toEqual({ baseStake: '2.5', stakeScale: 2 });
+    expect(sessionOf(response).settings?.stake).toMatchObject({ baseStake: '2.5', stakeScale: 2 });
+  });
+
+  // #450: SESSION_STAKE_STRATEGY of the process, frozen into the row with the saved stake's limits
+  it('R40 writes the martingale limits of the saved stake', async () => {
+    const seed = await seedReady();
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Demo,
+      decimalStringSchema.parse('1.55'),
+    );
+    const response = await start(
+      appWith({ stakeStrategy: SessionStakeStrategy.Martingale }),
+      bodyFor(seed),
+    );
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.settings).toMatchObject({
+      version: 2,
+      stake: {
+        strategy: 'martingale',
+        baseStake: '1.55',
+        stakeScale: 2,
+        limits: {
+          maxSteps: 4,
+          maxStake: '18.6',
+          maxSessionLoss: '31',
+          maxSessionDurationMs: 3_600_000,
+        },
+      },
+    });
+    const [row] = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    expect(row?.settings).toEqual(session.settings);
+  });
+
+  it('R41 writes v2 fixed under SESSION_STAKE_STRATEGY=fixed, and a later process leaves the row as it is', async () => {
+    const seed = await seedReady();
+    const response = await start(
+      appWith({ stakeStrategy: SessionStakeStrategy.Fixed }),
+      bodyFor(seed),
+    );
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.settings?.stake).toEqual({ strategy: 'fixed', baseStake: '1', stakeScale: 0 });
+
+    await app?.close();
+    const again = await read(
+      appWith({ stakeStrategy: SessionStakeStrategy.Martingale }),
+      session.id,
+      seed.telegramUserId,
+    );
+    expect(again.statusCode).toBe(200);
+    expect(sessionOf(again).settings).toEqual(session.settings);
   });
 
   it.each([

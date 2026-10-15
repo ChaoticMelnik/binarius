@@ -50,13 +50,15 @@ describe('BOT_TEXT_VARS', () => {
   it('V3 prints the session result with its sign (#337)', () => {
     expect(BOT_TEXT_VARS.profit.format(money('-0.15000000'), texts)).toBe('-$0.15');
     expect(BOT_TEXT_VARS.profit.format(money('2.5'), texts)).toBe('+$2.50');
+    expect(BOT_TEXT_VARS.profit.format(money('-1.75150000'), texts)).toBe('-$1.7515');
     expect(BOT_TEXT_VARS.profit.format(money('0.00000000'), texts)).toBe('$0.00');
   });
 
   // the defaults of BOT_TEXT_VAR_DEFAULT_WIDTHS rest on these (docs/bot-texts.md → Assumptions)
   it('V2 takes the widths of the formatters at the edge of their domains', () => {
     expect(formatUsd('-999999999999.99999999')).toHaveLength(W.usd);
-    expect(formatSignedUsd('999999999999.99999999')).toHaveLength(W.usd);
+    expect(formatSignedUsd('-999999999999.99999999')).toHaveLength(W.signedUsd);
+    expect(formatSignedUsd('999999999999.99999999')).toHaveLength(W.signedUsd);
     expect(formatStake('999999999999.99999999')).toHaveLength(W.stake);
     expect(formatUsd('0')).toHaveLength(W.zeroUsd);
     expect(formatCount(COUNT)).toHaveLength(W.count);

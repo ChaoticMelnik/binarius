@@ -50,6 +50,11 @@ function fromUnits(value: bigint): DecimalString {
   return decimalStringSchema.parse(normalizeDecimal(`${integer}.${fraction}`));
 }
 
+// amount × k in bigint (Rule 2), canonical: a multiple of an amount on a grid stays on it. The
+// martingale limits of a session (martingaleLimitsFor, #450)
+export const multiplyDecimal = (amount: DecimalString, k: bigint): DecimalString =>
+  fromUnits(units(amount) * k);
+
 // max(STAKE_MIN_SCALE, fraction digits of the canonical minTradeAmount)
 export const stakeScale = (minTradeAmount: DecimalString): number =>
   Math.max(STAKE_MIN_SCALE, decimalScale(minTradeAmount));

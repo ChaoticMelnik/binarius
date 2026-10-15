@@ -61,6 +61,7 @@ const plan = (patch: Partial<Parameters<typeof planSessionStart>[0]> = {}) =>
     durationSec: 60,
     trades: 5,
     minTradeAmount: '1.00000000' as DecimalString,
+    strategy: 'fixed',
     ...patch,
   });
 
@@ -78,11 +79,50 @@ describe('planSessionStart (#287)', () => {
     ['0.50000000', { baseStake: '0.5', stakeScale: 1 }],
     ['1.25000000', { baseStake: '1.25', stakeScale: 2 }],
     ['0.00000001', { baseStake: '0.00000001', stakeScale: 8 }],
-  ])('C5 builds settings v1 from a minimum of %s', (minTradeAmount, stake) => {
+  ])('C5 builds settings v2 fixed from a minimum of %s', (minTradeAmount, stake) => {
     expect(plan({ minTradeAmount: minTradeAmount as DecimalString })).toEqual({
       ok: true,
-      settings: { version: 1, assetId: 101, durationSec: 60, trades: 5, stake },
+      settings: {
+        version: 2,
+        assetId: 101,
+        durationSec: 60,
+        trades: 5,
+        stake: { strategy: 'fixed', ...stake },
+      },
     });
+  });
+
+  // #450: the CLI's SESSION_STAKE_STRATEGY, with the default limits of the minimum
+  it('C8 builds settings v2 martingale with the limits of its base stake', () => {
+    expect(plan({ minTradeAmount: '1.25000000' as DecimalString, strategy: 'martingale' })).toEqual(
+      {
+        ok: true,
+        settings: {
+          version: 2,
+          assetId: 101,
+          durationSec: 60,
+          trades: 5,
+          stake: {
+            strategy: 'martingale',
+            baseStake: '1.25',
+            stakeScale: 2,
+            limits: {
+              maxSteps: 4,
+              maxStake: '15',
+              maxSessionLoss: '25',
+              maxSessionDurationMs: 3_600_000,
+            },
+          },
+        },
+      },
+    );
+  });
+
+  it('C9 refuses a martingale minimum whose limits leave numeric(20,8) as invalid_settings', () => {
+    expect(
+      plan({ minTradeAmount: '100000000000' as DecimalString, strategy: 'martingale' }),
+    ).toEqual({ ok: false, reason: 'invalid_settings' });
+    expect(plan({ minTradeAmount: '100000000000' as DecimalString })).toMatchObject({ ok: true });
   });
 
   it.each(['0.00000000', '0', '00.000'])(

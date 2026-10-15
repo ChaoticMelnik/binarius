@@ -785,7 +785,7 @@ export const tradingSessionsHref = (query: AdminTradingSessionsQuery): string =>
   return params.size > 0 ? `/admin/trading-sessions?${params}` : '/admin/trading-sessions';
 };
 
-// settings are null when the row does not parse as v1: each of its cells then prints "—"
+// settings are null when the row parses as neither version: each of its cells then prints "—"
 const tradingSessionRow = (session: AdminTradingSessionView): SafeHtml => {
   const { settings } = session;
   return html`<tr>
