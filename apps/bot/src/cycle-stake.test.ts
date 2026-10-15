@@ -28,6 +28,7 @@ import {
   TEXT_CARD_MESSAGE_ID,
   USER,
   callbackUpdate,
+  photoCallbackUpdate,
   captureApi,
   fakeBackend,
   fakeLogger,
@@ -103,6 +104,7 @@ function setup(
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   return {
     press: (data: string) => bot.handleUpdate(callbackUpdate(data)),
+    bot,
     type: (text: string) => bot.handleUpdate(textUpdate(text)),
     setStake,
     startSession,
@@ -145,6 +147,19 @@ describe('an amount of the amount screen', () => {
     const { press, calls } = setup();
     await press(PRESS);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+  });
+
+  // #482: the analysis card draws these amounts under its photo; deleteMessage takes either kind
+  it('deletes the analysis card its amount was pressed under, once the status is sent', async () => {
+    const { bot, calls, startSession } = setup();
+    const update = photoCallbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '2', 'a'));
+    await bot.handleUpdate(update);
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    expect(payloadOf(calls, 'deleteMessage')).toEqual({
+      chat_id: USER.id,
+      message_id: (update.callback_query?.message as { message_id: number }).message_id,
+    });
   });
 
   it('keeps the analysis way back in the data of a screen drawn from the analysis', async () => {

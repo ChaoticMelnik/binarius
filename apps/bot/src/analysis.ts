@@ -1,6 +1,9 @@
 import {
   BrokerRestErrorCode,
+  DISPLAY_INDICATOR_PARAMS,
   formatPrice,
+  MACD_REQUIRED_CANDLES,
+  MacdCross,
   MIN_CYCLE_PAYOUT_PCT,
   MomentumDirection,
   NoSignalReason,
@@ -15,18 +18,28 @@ import {
   type BotStaticHtmlKey,
   type PairView,
   type SignalFeatures,
+  type SignalIndicators,
   type SignalParams,
   type TelegramHtml,
   type TradingSignalResponse,
 } from '@binarius/shared';
 import type { DemoDurationSec } from './demo-catalog';
-import { atrTicksText, DEMO_DURATION_LABELS, labelsOf, payoutText, TEXTS, textOf } from './texts';
+import {
+  atrTicksText,
+  DEMO_DURATION_LABELS,
+  indicatorShortText,
+  labelsOf,
+  payoutText,
+  TEXTS,
+  textOf,
+} from './texts';
 
 // The analysis screen (#126, docs/bot-demo.md): pure, from the pair read at the press and the
-// backend's answer. Every number on it is the answer's — a feature, or a period from `params` —
-// or the pair's payout and the break-even share computed from it; nothing is the bot's own.
-// Which buttons go under it is demo.ts's. The words are catalog keys (bot-texts.ts), read when a
-// screen is built.
+// backend's answer. Every number on it is the answer's — a feature, a display indicator, or a
+// period from `params` — or the pair's payout and the break-even share computed from it; nothing
+// is the bot's own. A signal is a card (#482): the picture of its direction, sent by demo.ts, under
+// a caption with a monospaced block. Which buttons go under it is demo.ts's. The words are catalog
+// keys (bot-texts.ts), read when a screen is built.
 
 // `satisfies Record<NoSignalReason, …>`: a reason added to shared's constant fails tsc here.
 export const NO_SIGNAL_REASON_TEXT = labelsOf({
@@ -77,10 +90,61 @@ const EMA_RELATION_WORDS = labelsOf({
   equal: 'emaEqual',
 } as const);
 
-const SIGNAL_HEADLINES = {
-  [TradeAction.Up]: 'analysisSignalUp',
-  [TradeAction.Down]: 'analysisSignalDown',
+const CARD_TITLES = {
+  [TradeAction.Up]: 'analysisCardUp',
+  [TradeAction.Down]: 'analysisCardDown',
 } as const satisfies Record<TradeAction, BotStaticHtmlKey>;
+
+const CARD_DIRECTIONS = labelsOf({
+  [TradeAction.Up]: 'cardDirectionUp',
+  [TradeAction.Down]: 'cardDirectionDown',
+} as const satisfies Record<TradeAction, BotPlainKey>);
+
+const CARD_ROWS = labelsOf({
+  pair: 'cardRowPair',
+  rsi: 'cardRowRsi',
+  macd: 'cardRowMacd',
+  ma50: 'cardRowMa50',
+  ma200: 'cardRowMa200',
+  trend: 'cardRowTrend',
+  volatility: 'cardRowVolatility',
+  direction: 'cardRowDirection',
+} as const);
+
+const RSI_WORDS = labelsOf({
+  overbought: 'rsiOverbought',
+  oversold: 'rsiOversold',
+  neutral: 'rsiNeutral',
+} as const);
+
+const MACD_WORDS = labelsOf({
+  crossUp: 'macdCrossUp',
+  crossDown: 'macdCrossDown',
+  above: 'macdAbove',
+  below: 'macdBelow',
+  equal: 'macdEqual',
+} as const);
+
+// a cross on the last closed candle is told first; without one, the histogram's sign tells the side
+const MACD_CROSS_WORDS = {
+  [MacdCross.Up]: 'crossUp',
+  [MacdCross.Down]: 'crossDown',
+  [MacdCross.None]: null,
+} as const satisfies Record<MacdCross, keyof typeof MACD_WORDS | null>;
+
+const MA_WORDS = labelsOf({
+  above: 'maPriceAbove',
+  below: 'maPriceBelow',
+  equal: 'maPriceEqual',
+} as const);
+
+// The field is absent when the unbroken tail of the candles did not pass their checks
+// (docs/signal.md): each indicator then had none, and its row says so rather than going missing.
+const NO_INDICATORS: SignalIndicators = {
+  macd: { ok: false, closedCandles: 0, required: MACD_REQUIRED_CANDLES },
+  ma50: { ok: false, closedCandles: 0, required: DISPLAY_INDICATOR_PARAMS.maShort },
+  ma200: { ok: false, closedCandles: 0, required: DISPLAY_INDICATOR_PARAMS.maLong },
+};
 
 export const formatRsi = (value: number): string => value.toFixed(1);
 // a live 1m ATR% sits in the hundredths and thousandths: two decimals would print 0.00
@@ -97,6 +161,8 @@ export interface AnalysisScreen {
   stake: TradeAction | null;
   // the session row (#360): on every `decided` answer, never when the candles were not read
   session: boolean;
+  // the card's picture (#482), by the direction of a signal; null on every other screen
+  photo: TradeAction | null;
 }
 
 export interface AnalysisScreenInput {
@@ -105,6 +171,8 @@ export interface AnalysisScreenInput {
   response: TradingSignalResponse;
   // the user's mode as the analysis's access read gave it (#121): the disclaimer follows it
   mode: TradeMode;
+  // the amounts are drawn under the card (demo.ts, #482): its last line points at them
+  chooseAmount: boolean;
 }
 
 export function analysisScreen({
@@ -112,6 +180,7 @@ export function analysisScreen({
   durationSec,
   response,
   mode,
+  chooseAmount,
 }: AnalysisScreenInput): AnalysisScreen {
   const real = mode === TradeMode.Real;
   // Every `decided` answer of a pair below the cycle floor gets no session row (demo.ts, #379), in
@@ -132,22 +201,31 @@ ${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}
 ${body}`,
       stake: null,
       session: false,
+      photo: null,
     };
   }
   const { decision, params } = response;
   if (decision.kind === SignalKind.Signal) {
-    const features = featureLines(decision.features, params, pair, VOLATILITY_WORDS.normal);
-    const payout = withCycleNote(payoutText(pair));
+    const { action, features } = decision;
+    const block = cardBlock(
+      cardRows(action, features, params, response.indicators ?? NO_INDICATORS, pair),
+    );
+    const choose = chooseAmount
+      ? telegramHtml`
+
+${TEXTS.analysisChooseAmount}`
+      : [];
     return {
       text: telegramHtml`${header}
-${textOf(SIGNAL_HEADLINES[decision.action])}
+${textOf(CARD_TITLES[action])}
 
-${features}
-${payout}
+<pre>${block}</pre>
+${withCycleNote(payoutText(pair))}
 
-${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}`,
-      stake: decision.action,
+${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}${choose}`,
+      stake: action,
       session: true,
+      photo: action,
     };
   }
   const headline = TEXTS.analysisNoSignal({ reason: NO_SIGNAL_REASON_TEXT[decision.reason] });
@@ -159,6 +237,7 @@ ${headline}
 ${withCycleNote(TEXTS.analysisDataHint)}`,
       stake: null,
       session: true,
+      photo: null,
     };
   }
   const volatility = VOLATILITY_WORDS[REFUSAL_VOLATILITY[decision.reason] ?? 'normal'];
@@ -171,6 +250,7 @@ ${featureLines(decision.features, params, pair, volatility)}
 ${withCycleNote(TEXTS.analysisNoSignalHint)}`,
     stake: null,
     session: true,
+    photo: null,
   };
 }
 
@@ -183,7 +263,55 @@ export const analysisUnavailableScreen = (
 ${TEXTS.analysisUnavailable}`,
   stake: null,
   session: false,
+  photo: null,
 });
+
+// The card's block (#482): eight rows, a label and a value, the RSI's word by the bounds of the
+// decision's own rsiExtremeBand (the refusals rsi_overbought / rsi_oversold use the same)
+function cardRows(
+  action: TradeAction,
+  features: SignalFeatures,
+  params: SignalParams,
+  indicators: SignalIndicators,
+  pair: PairView,
+): [string, string][] {
+  const rsiWord =
+    features.rsi >= 50 + params.rsiExtremeBand
+      ? RSI_WORDS.overbought
+      : features.rsi <= 50 - params.rsiExtremeBand
+        ? RSI_WORDS.oversold
+        : RSI_WORDS.neutral;
+  const { macd, ma50, ma200 } = indicators;
+  const macdValue = macd.ok
+    ? `${MACD_WORDS[MACD_CROSS_WORDS[macd.cross] ?? sideOf(macd.histogram, 0)]} ${formatPrice(macd.histogram, pair.digits + 1)}`
+    : indicatorShortText(macd.closedCandles, macd.required);
+  return [
+    [CARD_ROWS.pair, pair.symbol],
+    [CARD_ROWS.rsi, `${rsiWord} ${formatRsi(features.rsi)}`],
+    [CARD_ROWS.macd, macdValue],
+    [CARD_ROWS.ma50, maValue(ma50, pair)],
+    [CARD_ROWS.ma200, maValue(ma200, pair)],
+    [CARD_ROWS.trend, TREND_WORDS[features.trend]],
+    [CARD_ROWS.volatility, `${VOLATILITY_WORDS.normal} ${formatAtrPct(features.atrPct)}%`],
+    [CARD_ROWS.direction, CARD_DIRECTIONS[action]],
+  ];
+}
+
+const sideOf = (value: number, reference: number) =>
+  value > reference ? 'above' : value < reference ? 'below' : 'equal';
+
+function maValue(ma: SignalIndicators['ma50'], pair: PairView): string {
+  if (!ma.ok) return indicatorShortText(ma.closedCandles, ma.required);
+  return `${MA_WORDS[sideOf(ma.lastClose, ma.value)]} ${formatPrice(ma.value, pair.digits)}`;
+}
+
+// Every label padded to the longest one, then a space and the value. The width is String#length,
+// UTF-16 code units, as the caption limit counts them (bot-text-messages.ts measures the same).
+// Inside <pre> the columns line up, and Telegram gives the block its copy button.
+export function cardBlock(rows: readonly (readonly [string, string])[]): string {
+  const width = Math.max(...rows.map(([label]) => label.length));
+  return rows.map(([label, value]) => `${label.padEnd(width)} ${value}`).join('\n');
+}
 
 function featureLines(
   f: SignalFeatures,

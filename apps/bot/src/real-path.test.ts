@@ -58,6 +58,7 @@ import {
   fakeLogger,
   intentView,
   messageAnswer,
+  photoAnswer,
   SESSION_ID,
   sessionView,
   signalsResponse,
@@ -232,7 +233,8 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
-  api.answers.set('sendPhoto', messageAnswer(CARD_MESSAGE_ID));
+  // the analysis card reads the file_id of the photo it sent (#482)
+  api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, ['card-file-id']));
   await bot.handleUpdate(scene.update);
   return api.calls.flatMap(wordsOf);
 }

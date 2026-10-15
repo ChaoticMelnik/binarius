@@ -91,10 +91,13 @@ export const HANDLER_CALLS = {
   // #382 (no duration): answerCallbackQuery, then editMessageReplyMarkup
   legacyDuration: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads counted
-  // as sequential, as in confirm; the access read gives the mode the session row depends on
-  // (#121) — the «⏳» edit refused as gone → sendMessage, evaluateSignal, the result by
-  // sendMessage; or «⏳» edited, the signal, the result's edit refused as gone → sendMessage.
-  // Both are 3 / 4, 47 s: the longest handler, with sessionStart (#418), under SHUTDOWN_BUDGET_MS.
+  // as sequential, as in confirm; the access read gives the mode the session row and the card's
+  // amounts depend on (#121, #482) — then «⏳», evaluateSignal and the result. The longest paths
+  // (#482): «⏳» edited (or sent at once under a photo), the card's sendPhoto, «⏳»'s deleteMessage;
+  // «⏳» edited, the photo refused, «⏳» edited into the text card; «⏳» sent under a photo, the
+  // text result's edit refused as gone → sendMessage. A gone «⏳» is not sent anew, which would
+  // make the card's path 3 / 5 = 55 s. All are 3 / 4, 47 s: the longest handler, with sessionStart
+  // (#418), under SHUTDOWN_BUDGET_MS.
   demoAnalysis: { backend: 3, telegram: 4 },
   // «➕ Ещё» (#360): answerCallbackQuery ∥ readTradingAccess — counted as sequential, as in
   // confirm — then editMessageReplyMarkup; a refused edit sends nothing more

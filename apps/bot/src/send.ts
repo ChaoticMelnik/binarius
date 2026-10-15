@@ -14,7 +14,8 @@ import { STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
 
 export const NO_NEXT_STEP_REASONS = {
   // a screen in place while the bot waits for an answer; the next screen replaces it with a
-  // keyboard, and none on it keeps the same button from being pressed twice («⏳ Анализирую…»)
+  // keyboard, or goes as a photo and deletes it (the analysis card, #482), and none on it keeps
+  // the same button from being pressed twice («⏳ Анализирую…»)
   InProgress: 'in_progress',
 } as const;
 export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];

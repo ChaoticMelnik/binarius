@@ -187,12 +187,61 @@ const allFeatures = Object.values(TrendDirection).flatMap((trend) =>
     [-999_999_999.5, 1, -999_999_999.75].map((emaSlow) => featuresOf(trend, momentum, emaSlow)),
   ),
 );
-// in both modes: the disclaimer and the hint follow the user's mode (#121)
+// in both modes: the disclaimer and the hint follow the user's mode (#121); with the amounts'
+// line and without it (#482)
 const screens = (responses: TradingSignalResponse[]) =>
   responses.flatMap((response) =>
     DEMO_DURATIONS_SEC.flatMap((durationSec) =>
-      Object.values(TradeMode).map(
-        (mode) => analysisScreen({ mode, pair: widePair, durationSec, response }).text,
+      Object.values(TradeMode).flatMap((mode) =>
+        [false, true].map(
+          (chooseAmount) =>
+            analysisScreen({ mode, pair: widePair, durationSec, response, chooseAmount }).text,
+        ),
+      ),
+    ),
+  );
+// The card's indicators (#482): each word at the widest number, and «данных мало» at the widest
+// counts; with no field, all three short at 0
+const WIDE = -999_999_999.5;
+const SHORT = { ok: false, closedCandles: 99_999, required: 99_999 } as const;
+const macdOf = (cross: string, histogram: number) => ({
+  ok: true,
+  macd: 0,
+  signal: 0,
+  histogram,
+  cross,
+});
+const MACDS = [
+  macdOf('up', WIDE),
+  macdOf('down', WIDE),
+  macdOf('none', WIDE),
+  macdOf('none', -WIDE),
+  macdOf('none', 0),
+  SHORT,
+];
+const MAS = [
+  { ok: true, value: WIDE, lastClose: WIDE },
+  { ok: true, value: WIDE, lastClose: 1 },
+  { ok: true, value: WIDE, lastClose: -999_999_999.75 },
+  SHORT,
+];
+const INDICATORS = [
+  undefined,
+  ...MACDS.flatMap((macd) => MAS.map((ma) => ({ macd, ma50: ma, ma200: ma }))),
+];
+const cardFeatures = Object.values(TrendDirection).flatMap((trend) =>
+  [100, 0, 50].map((rsi) => ({ ...featuresOf(trend, MomentumDirection.Up), rsi })),
+);
+const cards = () =>
+  screens(
+    Object.values(TradeAction).flatMap((action) =>
+      cardFeatures.flatMap((features) =>
+        INDICATORS.map((indicators) =>
+          tradingSignalResponseSchema.parse({
+            ...decided({ kind: SignalKind.Signal, action, features }),
+            ...(indicators === undefined ? {} : { indicators }),
+          }),
+        ),
       ),
     ),
   );
@@ -309,12 +358,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       (durationSec) => analysisUnavailableScreen(widePair, durationSec).text,
     ),
   ],
-  analysisSignal: () =>
-    screens(
-      Object.values(TradeAction).flatMap((action) =>
-        allFeatures.map((features) => decided({ kind: SignalKind.Signal, action, features })),
-      ),
-    ),
+  analysisCard: cards,
   analysisNoData: () =>
     screens(
       DATA_REFUSAL_REASONS.map((reason) =>
@@ -559,7 +603,7 @@ describe('the assembled messages, against the real assembly', () => {
     expect([...read].sort()).toEqual([...botTextMessageKeys(message)].sort());
   });
 
-  it.each(['intentStatus', 'analysisSignal', 'analysisNoSignal'])(
+  it.each(['intentStatus', 'analysisNoSignal'])(
     'M5 estimates %s exactly with markup and entities in the labels',
     (id) => {
       const texts = { actionUp: '<b></b>'.repeat(9), actionDown: '&amp;'.repeat(12) };
@@ -569,6 +613,30 @@ describe('the assembled messages, against the real assembly', () => {
       expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
     },
   );
+
+  // #482: the block's columns follow the longest label after the overrides, by String#length
+  it.each([
+    [
+      'M4',
+      'a long label and a long word',
+      { cardRowTrend: '🟢'.repeat(20), macdCrossUp: 'я'.repeat(64), rsiOverbought: 'я'.repeat(40) },
+    ],
+    [
+      'M5',
+      'markup and entities in the labels',
+      {
+        cardRowPair: '<b></b>'.repeat(3),
+        cardRowDirection: '&amp;'.repeat(4),
+        cardDirectionUp: '<i>x</i>'.repeat(5),
+        maPriceEqual: '&lt;'.repeat(9),
+      },
+    ],
+  ])('%s estimates analysisCard exactly with %s', (_id, _case, texts) => {
+    const message = ASSEMBLED.find((m) => m.id === 'analysisCard')!;
+    setBotTextSource(recording(texts).source);
+    const real = Math.max(...REAL.analysisCard!().map(lengthOf));
+    expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
+  });
 
   // two overrides, each valid on its own, must not break /account for an unknown address
   it('V11 renders an overridden account line with an overridden unknown address', () => {
@@ -586,7 +654,7 @@ describe('the assembled messages, against the real assembly', () => {
     );
   });
 
-  it.each(['intentStatus', 'analysisSignal', 'analysisNoSignal'])(
+  it.each(['intentStatus', 'analysisNoSignal'])(
     'M4 estimates %s exactly with a long label overridden',
     (id) => {
       const texts = { actionUp: 'я'.repeat(64), demoDuration15: 'я'.repeat(64) };

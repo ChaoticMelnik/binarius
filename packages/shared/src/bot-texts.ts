@@ -766,12 +766,21 @@ export const BOT_TEXT_CATALOG = {
     `📊 <b>Анализ: {subject}</b>`,
     { vars: ['subject'] },
   ),
-  analysisSignalUp: html(g.Analysis, 'Анализ: сигнал вверх.', `📈 <b>Сигнал: {actionUp}</b>`, {
-    fragments: { actionUp: 'actionUp' },
-  }),
-  analysisSignalDown: html(g.Analysis, 'Анализ: сигнал вниз.', `📉 <b>Сигнал: {actionDown}</b>`, {
-    fragments: { actionDown: 'actionDown' },
-  }),
+  analysisCardUp: html(
+    g.Analysis,
+    'Анализ: заголовок карточки при сигнале вверх, под картинкой быка.',
+    `🟢 <b>Сильный сигнал на рост</b>`,
+  ),
+  analysisCardDown: html(
+    g.Analysis,
+    'Анализ: заголовок карточки при сигнале вниз, под картинкой медведя.',
+    `🔴 <b>Сильный сигнал на падение</b>`,
+  ),
+  analysisChooseAmount: html(
+    g.Analysis,
+    'Анализ: последняя строка карточки в демо, когда под ней кнопки сумм сделки.',
+    `Выбери сумму сделки 👇`,
+  ),
   analysisNoSignal: html(
     g.Analysis,
     'Анализ: сигнала нет, с причиной.',
@@ -840,12 +849,12 @@ export const BOT_TEXT_CATALOG = {
   ),
   actionUp: plain(
     g.Analysis,
-    'Направление «вверх»: в сигнале, на кнопке сделки и в строке сделки.',
+    'Направление «вверх»: на кнопке сделки и в строке сделки.',
     '⬆️ Вверх',
   ),
   actionDown: plain(
     g.Analysis,
-    'Направление «вниз»: в сигнале, на кнопке сделки и в строке сделки.',
+    'Направление «вниз»: на кнопке сделки и в строке сделки.',
     '⬇️ Вниз',
   ),
   stakeButton: plain(
@@ -959,6 +968,93 @@ export const BOT_TEXT_CATALOG = {
   emaAbove: plain(g.Analysis, 'Анализ: быстрая EMA выше медленной, в строке тренда.', 'выше'),
   emaBelow: plain(g.Analysis, 'Анализ: быстрая EMA ниже медленной, в строке тренда.', 'ниже'),
   emaEqual: plain(g.Analysis, 'Анализ: быстрая EMA равна медленной, в строке тренда.', 'равна'),
+  cardRowPair: plain(g.Analysis, 'Карточка анализа: подпись строки пары в блоке.', 'Пара'),
+  cardRowRsi: plain(g.Analysis, 'Карточка анализа: подпись строки RSI в блоке.', 'RSI'),
+  cardRowMacd: plain(g.Analysis, 'Карточка анализа: подпись строки MACD в блоке.', 'MACD'),
+  cardRowMa50: plain(g.Analysis, 'Карточка анализа: подпись строки MA50 в блоке.', 'MA50'),
+  cardRowMa200: plain(g.Analysis, 'Карточка анализа: подпись строки MA200 в блоке.', 'MA200'),
+  cardRowTrend: plain(g.Analysis, 'Карточка анализа: подпись строки тренда в блоке.', 'Тренд EMA'),
+  cardRowVolatility: plain(
+    g.Analysis,
+    'Карточка анализа: подпись строки волатильности в блоке.',
+    'Волатильность',
+  ),
+  cardRowDirection: plain(
+    g.Analysis,
+    'Карточка анализа: подпись строки направления в блоке.',
+    'Направление',
+  ),
+  rsiOverbought: plain(
+    g.Analysis,
+    'Карточка анализа: RSI не ниже верхней границы Signal, в строке RSI.',
+    'перекуплен',
+  ),
+  rsiOversold: plain(
+    g.Analysis,
+    'Карточка анализа: RSI не выше нижней границы Signal, в строке RSI.',
+    'перепродан',
+  ),
+  rsiNeutral: plain(
+    g.Analysis,
+    'Карточка анализа: RSI между границами Signal, в строке RSI.',
+    'нейтрально',
+  ),
+  macdCrossUp: plain(
+    g.Analysis,
+    'Карточка анализа: MACD пересёк сигнальную линию вверх на последней свече, в строке MACD.',
+    'пересечение вверх',
+  ),
+  macdCrossDown: plain(
+    g.Analysis,
+    'Карточка анализа: MACD пересёк сигнальную линию вниз на последней свече, в строке MACD.',
+    'пересечение вниз',
+  ),
+  macdAbove: plain(
+    g.Analysis,
+    'Карточка анализа: MACD выше сигнальной линии без пересечения, в строке MACD.',
+    'выше сигнальной',
+  ),
+  macdBelow: plain(
+    g.Analysis,
+    'Карточка анализа: MACD ниже сигнальной линии без пересечения, в строке MACD.',
+    'ниже сигнальной',
+  ),
+  macdEqual: plain(
+    g.Analysis,
+    'Карточка анализа: MACD равен сигнальной линии, в строке MACD.',
+    'на сигнальной',
+  ),
+  maPriceAbove: plain(
+    g.Analysis,
+    'Карточка анализа: последняя цена выше скользящей средней, в строке MA.',
+    'цена выше',
+  ),
+  maPriceBelow: plain(
+    g.Analysis,
+    'Карточка анализа: последняя цена ниже скользящей средней, в строке MA.',
+    'цена ниже',
+  ),
+  maPriceEqual: plain(
+    g.Analysis,
+    'Карточка анализа: последняя цена равна скользящей средней, в строке MA.',
+    'цена на MA',
+  ),
+  cardDirectionUp: plain(
+    g.Analysis,
+    'Карточка анализа: направление сигнала вверх, последняя строка блока.',
+    '⬆️ ВВЕРХ 🟢',
+  ),
+  cardDirectionDown: plain(
+    g.Analysis,
+    'Карточка анализа: направление сигнала вниз, последняя строка блока.',
+    '⬇️ ВНИЗ 🔴',
+  ),
+  indicatorShortData: plain(
+    g.Analysis,
+    'Карточка анализа: индикатору не хватило закрытых свечей, вместо значения в его строке.',
+    'данных мало ({count} из {required})',
+    { vars: ['count', 'required'] },
+  ),
 
   // ---- Демо-сделка --------------------------------------------------------------------------
   intentHeader: html(g.Trade, 'Сделка: заголовок сообщения статуса.', `🎮 <b>Демо-сделка</b>`),
