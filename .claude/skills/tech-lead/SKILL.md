@@ -77,9 +77,10 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 ### Whole-feature pass — check
 
-The reviewer's final Codex pass (Step 6-pre, `Whole-feature pass` marker) covered exactly the approved diff. A skip line instead of a run (in the review, the ready-to-merge comment, the docs PR body, or tech-lead's PR comment from its own 6-pre run or the morning step; texts in reviewer Step 6-pre item 4), by kind:
+The reviewer's final Codex pass (Step 6-pre, `Whole-feature pass` marker) covered exactly the approved diff. A skip line instead of a run (in the review, the ready-to-merge comment, the docs PR body, or tech-lead's PR comment from its own 6-pre run; texts in reviewer Step 6-pre item 4), by kind:
 - **Usage limit:** `node "$COMPANION" status <id> --json | jq -r '.job.status, .job.summary'` prints `failed` and a summary matching `hit your usage limit`. If `status` answers "No job found" (the job was started from a review worktree that is gone, and jobs are keyed by working directory): `jq -r --arg id <id> '.jobs[]? | select(.id == $id) | .status, .summary' ~/.claude/plugins/data/codex-openai-codex/state/*/state.json`.
-- **The owner's skip** (by day, the morning's «мержить без него», or after the failures of tech-lead's own 6-pre run): recorded as an owner-approved deviation, not a Major; its source is the `AskUserQuestion` answer in this session.
+- **The owner's skip** (by day, or after the failures of tech-lead's own 6-pre run): recorded as an owner-approved deviation, not a Major; its source is the `AskUserQuestion` answer in this session.
+- **A PR of a `/manager` session:** the manager line is the rule (`.claude/CLAUDE.md` → Режим manager → «Codex ночью не запускается»), not a deviation; no run to re-hash.
 
 Anything else is a Major audit finding. Otherwise find the newest completed job with the marker and re-hash:
 
@@ -315,7 +316,7 @@ Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (
 **If the reviewer reports the PR is clean:**
 It posted the ready-to-merge comment or returned the classifier's refusal (Merge relay), and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5.
 
-**Tech-lead's own 6-pre run** (Phase 4 iteration 3 after a round-3 Blocker fix; a PR left In Review by a manager session). Not a review round.
+**Tech-lead's own 6-pre run** (Phase 4 iteration 3 after a round-3 Blocker fix). Not a review round.
 1. `gh pr checks <N>` at the current head: wait while running. Red → report it to the owner; no run, no merge question.
 2. The reviewer's Step 6-pre command, from the main context, at the current head.
 3. Outcome:
@@ -324,18 +325,13 @@ It posted the ready-to-merge comment or returned the classifier's refusal (Merge
    - Usage limit → tech-lead posts the usage-limit skip line (reviewer Step 6-pre item 4) as a PR comment, and the merge question names it.
    - Any other failure → 2 attempts, then `AskUserQuestion` «Codex: запустить позже / мержить без него». On the second answer, tech-lead posts the owner's skip line as a PR comment.
 
-**A PR left In Review by a manager session.** Start from the night's report: the reviewer's verdict, the Codex job id or skip line and the checks are recorded there, and the Phase 3 audit comment is already posted. In this order:
+**A PR left In Review by a manager session.** Start from the night's report: the reviewer's verdict and the checks are recorded there, and the Phase 3 audit comment is already posted. In this order:
 1. **A stacked PR** (its base is another open PR, «Merge after #<base>»). Deleting the base branch on the base's merge (`--delete-branch`) makes GitHub **close** every PR that targets it, not retarget it (#437 and #439 on 2026-10-10; reopening them needed the owner's permission to re-push the base branch). In this order:
    - before the base's merge, retarget every dependent: `gh pr list --base <base branch> --json number --jq '.[].number'`, then `gh pr edit <dep> --base main` for each;
    - merge the base with `--rebase` and **without** `--delete-branch` — the one exception to the standing merge method; the merge question says so;
    - on each dependent, an implementer "rebase only" spawn (`model: "opus"`, implementer → Fixing Review Findings → Step 5) does: `git rebase --onto origin/main <old base head>`; before the push, the per-commit check of implementer Step 5 on every rewritten commit (its own worktree: typecheck and the touched packages' tests) — a commit that fails is reworked before the push; when the rework would need more than the rebase, the branch is pushed as is and the spawn reports it, the PR is squash-merged so no red commit reaches `main`, and the merge question says so (#494 on 2026-10-15: commits 1–4 lost their typecheck in the rebase); then `git push --force-with-lease` and the mutation table re-taken at the new head in one call of `tooling/mutations.ts`. Tech-lead then checks `git range-diff` against the approved head, and `gh pr view <dep> --json closingIssuesReferences` must name its issue — a PR opened on another PR's branch can lose its `Closes` link when retargeted (#441: #115 stayed open after the merge);
    - delete the base branch (`git push origin --delete <base branch>`) only when `gh pr list --base <base branch>` is empty.
-2. **Codex, decided once at the current head.** A run is due when the PR has a night skip line, or step 1 moved the head; otherwise go to step 3.
-   - **The usage limit is still active at preflight** → no run, no question. If the PR's skip line is not already a usage-limit line at this head, tech-lead posts the usage-limit skip line (preflight's job) as a PR comment.
-   - **A night skip line** → `AskUserQuestion` «Codex пропущен ночью — запустить сейчас / мержить без него» (run now recommended):
-     - run now → tech-lead's own 6-pre run;
-     - «мержить без него» → tech-lead posts the owner's skip line as a PR comment, with `<сбой>` and the job taken from the night's line.
-   - **No skip line, and step 1 moved the head** → tech-lead's own 6-pre run, with no question.
+2. **No Codex** (`.claude/CLAUDE.md` → Режим manager → «Codex ночью не запускается»): no run and no question, even when step 1 moved the head; the merge question names the night's manager line (reviewer Step 6-pre item 4).
 3. **The merge relay**; after each merge, run Phase 5. After any rebase onto a moved `main` — stacked or not, textually clean or not — the merge question waits for green `gh pr checks` at the new head: a clean rebase still broke CI twice on 2026-10-10 (#446: `tsc` after #448 made `webPublicUrl` required; #447: the longest-answer gate lacked rows for methods merged meanwhile). Commits a rebase adds beyond conflict resolution — a new assumption, a changed test oracle (#234 `0580dee` and #141 `7b138a9`: rows for methods merged meanwhile) — get a reviewer pass before the merge question: a short reviewer spawn (`model: "opus"`) on that commit range only; disclosure in the PR alone is not enough. Its Blocker/Major are handled as a round's (Phase 4); on a PR whose 3 rounds are used, the pass is a check, not a round, and a Blocker/Major goes to the Phase 4 iteration 3 branches. The merge question names the pass and its verdict.
 
 A PR with open Blocker/Major («Открытые находки на конец цикла задачи (3-й круг) или сессии менеджера»): the owner decides — a Plan Update round (the round count continues from the night's) or close the PR. A PR whose last round was 3 gets no further round: Phase 4 iteration 3 branches instead.
@@ -408,7 +404,7 @@ Run once the merge is confirmed and the issue is Done.
 - Never push to `main` or merge a PR without whatever confirmation this repo's CLAUDE.md currently requires.
 - Never move an issue to Done without explicit confirmation that the PR was merged (`state == "MERGED"`).
 - Never edit files in another agent's/developer's active domain without flagging the conflict.
-- Never execute Architect, Implementer or Reviewer steps inline — always as an `Agent` spawn with the policy `model` whose first action invokes the role's Skill, even for trivial one-line issues — except the reviewer's Step 6-pre command, which tech-lead runs itself as tech-lead's own 6-pre run (Phase 4 iteration 3 after a round-3 Blocker fix; a PR left In Review by a manager session, once at its current head) and in the Phase 5 docs PR.
+- Never execute Architect, Implementer or Reviewer steps inline — always as an `Agent` spawn with the policy `model` whose first action invokes the role's Skill, even for trivial one-line issues — except the reviewer's Step 6-pre command, which tech-lead runs itself as tech-lead's own 6-pre run (Phase 4 iteration 3 after a round-3 Blocker fix) and in the Phase 5 docs PR.
 - Never write text output between pipeline phases where this repo's CLAUDE.md has waived stop points — an inter-phase recap forces the user to say "continue" unnecessarily.
 - Never waive a missing Codex final pass silently: a usage-limit skip is recorded with its skip line where the run would have been, any other missing pass is a process deviation.
 - Any question to the owner goes through `AskUserQuestion`, never plain text — including the questions a spawned phase returns.
