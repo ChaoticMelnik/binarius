@@ -363,27 +363,71 @@ describe('createSignalFeed', () => {
   });
 
   // #482: the broker is asked SIGNAL_FETCH_LIMIT rows; the decision and its journal series are the
-  // last SIGNAL_CHART_LIMIT of them, as a fetch of that many would have returned
-  it('F12 a 300-row response decides on its last 60 rows; indicators read all of them', async () => {
-    const rows = mildRise(SIGNAL_FETCH_LIMIT - 45);
-    expect(rows).toHaveLength(SIGNAL_FETCH_LIMIT);
-    const nowMs = closedNow(rows);
-    const tail = rows.slice(-SIGNAL_CHART_LIMIT);
-    const feed = (candles: readonly Candle[]) =>
-      createSignalFeed({ rest: stubRest(candles), logger: sink(), now: () => nowMs });
+  // rows a fetch of SIGNAL_CHART_LIMIT with the same right edge returns, cut by time. nowMs = T is
+  // inside the candle starting at B, so that fetch starts at B - 59 * I.
+  describe('F12 the decision window of a 300-row response', () => {
+    const W0 = B - 59 * I;
+    const starts = (from: number, to: number) =>
+      Array.from({ length: (to - from) / I + 1 }, (_, k) => from + k * I);
+    // aligned rows up to and including `last`, 300 starts back from B
+    const answer = (last: number, missing: readonly number[] = []) =>
+      mildRise(SIGNAL_FETCH_LIMIT - 45, { start: B - 299 * I }).filter(
+        ({ timestamp }) => timestamp <= last && !missing.includes(timestamp),
+      );
+    const run = async (candles: readonly Candle[]) =>
+      decided(
+        await createSignalFeed({ rest: stubRest(candles), logger: sink(), now: () => T }).evaluate({
+          assetId: 101,
+          interval: '1m',
+          digits: 5,
+        }),
+      );
+    const seriesStarts = (entry: SignalJournalEntry) =>
+      entry.series.map(([timestamp]) => timestamp);
 
-    const result = await feed(rows).evaluate({ assetId: 101, interval: '1m', digits: 5 });
-    const entry = decided(result);
-    const onTail = decided(await feed(tail).evaluate({ assetId: 101, interval: '1m', digits: 5 }));
-
-    expect(entry.decision).toStrictEqual(onTail.decision);
-    expect(entry.series).toStrictEqual(onTail.series);
-    expect(entry.series).toHaveLength(SIGNAL_CHART_LIMIT);
-    expect(entry.fetch).toMatchObject({ limit: SIGNAL_FETCH_LIMIT, rows: SIGNAL_FETCH_LIMIT });
-    expect(result).toMatchObject({
-      indicators: { ma200: { ok: true, lastClose: rows.at(-1)?.close } },
+    it('a: no forming candle leaves 59 rows from B - 59 I', async () => {
+      const entry = await run(answer(B - I));
+      expect(entry.fetch.rows).toBe(299);
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - I));
+      expect(entry.series).toHaveLength(59);
     });
-    expect(onTail).not.toHaveProperty('indicators.ma200.value');
+
+    it.each([
+      [1, 58],
+      [2, 57],
+    ])('b: %i late closed candles leave %i rows, none before B - 59 I', async (late, rows) => {
+      const entry = await run(answer(B - (1 + late) * I));
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - (1 + late) * I));
+      expect(entry.series).toHaveLength(rows);
+    });
+
+    it('c: a gap just before the window is not candle_gap; the decision is the one of case a', async () => {
+      const entry = await run(answer(B - I, [B - 60 * I]));
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - I));
+      expect(entry.decision).not.toMatchObject({ reason: 'candle_gap' });
+      expect(entry.decision).toStrictEqual((await run(answer(B - I))).decision);
+    });
+
+    it('d: a gap inside the window is candle_gap at the index a 60-row fetch gives', async () => {
+      const entry = await run(answer(B, [B - 30 * I]));
+      expect(entry.series).toHaveLength(59);
+      expect(entry.decision).toMatchObject({
+        reason: 'candle_gap',
+        detail: { index: 29, expectedTimestamp: B - 30 * I, actualTimestamp: B - 29 * I },
+      });
+    });
+
+    it('the full answer decides on B - 59 I .. B and gives MA200', async () => {
+      const result = await createSignalFeed({
+        rest: stubRest(answer(B)),
+        logger: sink(),
+        now: () => T,
+      }).evaluate({ assetId: 101, interval: '1m', digits: 5 });
+      const entry = decided(result);
+      expect(entry.fetch).toMatchObject({ limit: SIGNAL_FETCH_LIMIT, rows: SIGNAL_FETCH_LIMIT });
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B));
+      expect(result).toMatchObject({ indicators: { ma200: { ok: true } } });
+    });
   });
 
   it('F13 118 rows with a forming one: MA200 is short 117 of 200, MA50 and MACD have values', async () => {
@@ -402,7 +446,7 @@ describe('createSignalFeed', () => {
     });
   });
 
-  it('F14 a gap in the early rows gives no indicators and leaves the decision on the last 60', async () => {
+  it('F14 a gap in the early rows leaves the indicators to the rows after it', async () => {
     const rows = mildRise(SIGNAL_FETCH_LIMIT - 45 + 1).filter((_, i) => i !== 10);
     const nowMs = closedNow(rows);
 
@@ -412,7 +456,9 @@ describe('createSignalFeed', () => {
       now: () => nowMs,
     }).evaluate({ assetId: 101, interval: '1m', digits: 5 });
 
-    expect(result).not.toHaveProperty('indicators');
+    expect(result).toMatchObject({
+      indicators: { macd: { ok: true }, ma50: { ok: true }, ma200: { ok: true } },
+    });
     expect(decided(result).decision).toMatchObject({ kind: 'signal' });
   });
 });

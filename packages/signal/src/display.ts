@@ -5,7 +5,7 @@ import {
   type SignalIndicators,
   type SignalParams,
 } from '@binarius/shared';
-import { prepareCandles } from './candles';
+import { candleProblem, prepareCandles } from './candles';
 import { macd, sma } from './indicators';
 
 // two signal-line points: the cross compares the last two closed candles
@@ -30,15 +30,31 @@ function movingAverage(closes: readonly number[], period: number): SignalIndicat
   };
 }
 
-// The whole response passes the decider's own candle checks with a floor of one closed candle; a
-// response that does not pass gives no indicators. Each indicator then refuses on its own count.
+// the rows after the response's last break: a step other than intervalMs or a candle that fails
+// the per-candle checks; one early gap must not cost all three indicators
+function unbrokenTail(candles: readonly Candle[], intervalMs: number): readonly Candle[] {
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candleProblem(candles[i]) !== undefined) return candles.slice(i + 1);
+    if (i > 0 && candles[i].timestamp - candles[i - 1].timestamp !== intervalMs) {
+      return candles.slice(i);
+    }
+  }
+  return candles;
+}
+
+// The unbroken tail passes the decider's own candle checks with a floor of one closed candle (the
+// forming candle, the future, staleness); a tail that does not pass gives no indicators. Each
+// indicator then refuses on the tail's count.
 export function displayIndicators(
   candles: readonly Candle[],
   intervalMs: number,
   nowMs: number,
   params: SignalParams,
 ): SignalIndicators | undefined {
-  const prepared = prepareCandles(candles, intervalMs, nowMs, { ...params, minClosedCandles: 1 });
+  const prepared = prepareCandles(unbrokenTail(candles, intervalMs), intervalMs, nowMs, {
+    ...params,
+    minClosedCandles: 1,
+  });
   if (!prepared.ok) return undefined;
   const closes = prepared.closed.map((candle) => candle.close);
   const { macdFast, macdSlow, macdSignal, maShort, maLong } = DISPLAY_INDICATOR_PARAMS;

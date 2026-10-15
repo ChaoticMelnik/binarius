@@ -1,7 +1,13 @@
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker } from '@binarius/mock-broker';
 import { NoSignalReason } from '@binarius/shared';
-import { chartWindow, createSignalDecider, SIGNAL_CHART_LIMIT } from '@binarius/signal';
+import {
+  chartWindow,
+  createSignalDecider,
+  decisionRows,
+  SIGNAL_CHART_LIMIT,
+  SIGNAL_FETCH_LIMIT,
+} from '@binarius/signal';
 import { describe, expect, it } from 'vitest';
 import { aggregate, secondsPath, T0 } from './testing';
 import { seriesAt } from './window';
@@ -65,5 +71,17 @@ describe('seriesAt', () => {
       digits: 5,
     });
     expect(decision).toMatchObject({ reason: NoSignalReason.InsufficientCandles });
+  });
+
+  // #482: the feed's decision rows, cut from the 300-row answer, are the rows the stand replays
+  it.each([
+    ['inside a candle', T0 + 580 * STEP + 2_000],
+    ['on a boundary', T0 + 580 * STEP],
+    ['one step before the boundary', T0 + 581 * STEP - 1],
+    ['with the gap just before the window', T0 + 619 * STEP + 2_000],
+  ])('W4 decisionRows of the fetch answer equals seriesAt %s', (_, nowMs) => {
+    const fives = aggregate(secondsPath(T0, 3_200), STEP).filter((__, i) => i !== 560);
+    const answer = seriesAt(fives, STEP, nowMs, SIGNAL_FETCH_LIMIT);
+    expect(decisionRows(answer, nowMs, STEP)).toStrictEqual(seriesAt(fives, STEP, nowMs));
   });
 });

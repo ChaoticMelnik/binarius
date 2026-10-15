@@ -4,18 +4,14 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
   type BrokerRestErrorCode,
+  type Candle,
   type SignalIndicators,
   type SignalInterval,
 } from '@binarius/shared';
 import { assertSignalClock } from './candles';
 import { assertDigits, createSignalDecider, type SignalDecider } from './decide';
 import { displayIndicators } from './display';
-import {
-  assertFeedLimit,
-  assertFetchLimit,
-  SIGNAL_CHART_LIMIT,
-  SIGNAL_FETCH_LIMIT,
-} from './feed-config';
+import { assertFeedLimit, SIGNAL_CHART_LIMIT, SIGNAL_FETCH_LIMIT } from './feed-config';
 import { toJournalCandle, type SignalJournalEntry } from './journal';
 
 export interface SignalFeedRequest {
@@ -38,7 +34,7 @@ export type SignalEvaluation =
   | {
       outcome: typeof SignalFeedOutcome.Decided;
       entry: SignalJournalEntry;
-      // absent when the whole response did not pass the candle checks
+      // absent when the unbroken tail of the response did not pass the candle checks
       indicators?: SignalIndicators;
     }
   | {
@@ -81,11 +77,24 @@ export function chartWindow(
   return { startTime: boundary - (limit - 1) * intervalMs, limit };
 }
 
+// The rows a fetch of SIGNAL_CHART_LIMIT with the same right edge returns: cut by time, as the
+// #381 stand's seriesAt cuts its cache, not by count: a missing forming or late closed candle
+// would otherwise pull in older rows. Rows outside the window, a future one included, do not
+// reach the decision, as they would not reach it from that fetch's answer either.
+export function decisionRows(
+  candles: readonly Candle[],
+  nowMs: number,
+  intervalMs: number,
+): Candle[] {
+  const { startTime } = chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT);
+  const boundary = Math.floor(nowMs / intervalMs) * intervalMs;
+  return candles.filter(({ timestamp }) => startTime <= timestamp && timestamp <= boundary);
+}
+
 export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
   const { rest, logger, now = Date.now } = deps;
   const decider = deps.decider ?? createSignalDecider();
   assertFeedLimit(SIGNAL_CHART_LIMIT, decider.params);
-  assertFetchLimit(SIGNAL_FETCH_LIMIT, decider.params);
 
   return {
     decider,
@@ -125,9 +134,8 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
       }
       const durationMs = Math.round(performance.now() - started);
 
-      // the same rows a limit of SIGNAL_CHART_LIMIT with the same right edge returns: the decision,
-      // its journal series and the #381 stand do not change with the longer fetch
-      const decisionCandles = candles.slice(-SIGNAL_CHART_LIMIT);
+      // the decision, its journal series and the #381 stand do not change with the longer fetch
+      const decisionCandles = decisionRows(candles, nowMs, intervalMs);
       const decision = decider.decide({ candles: decisionCandles, intervalMs, nowMs, digits });
       const entry: SignalJournalEntry = {
         assetId,
