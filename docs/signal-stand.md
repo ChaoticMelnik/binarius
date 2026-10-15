@@ -74,6 +74,10 @@ $STAND_DIR/
 - **Appending.** A page is appended after it was parsed. The forming candle is never stored,
   because its close is not final and a stored row is never fetched again. Only rows with
   `timestamp + step <= now` at the answer are kept.
+- **The first row of an answer is never stored.** Its `open` is the first tick inside the
+  requested window, not the previous close. Each request therefore starts one step before the
+  first wanted row, and drops its first row (`fetch.test.ts` F1c). After a gap longer than a
+  page, the first row past the gap is the dropped one: one row is lost there (F1b).
 - **Reading.** Every line is checked against the wire's shape (`candleWireSchema`). A broken last
   line is the trace of a crash mid-append. It is dropped with one stderr line, and the next
   append cuts it first. A broken line anywhere else is an error naming the file and the line
@@ -245,6 +249,10 @@ out of pooling.
   4 971 rows across 5 000 steps, with nine 60-90 s holes. A gap longer than the window answers
   `[]`. The pager therefore starts the next window after the page's last row, or after the whole
   window when the page was empty. It does not stop on a short page.
+- **2026-10-15, first rows.** A first cache of 11 pairs was compared with the owner's 102 session
+  files. All 68 differing rows differed only in `open`. 52 were the first row of a session file,
+  and the other 16 fell exactly on the cache's own page starts. The cache was fetched again with
+  the first-row rule above.
 - **2026-10-15, the owner's trades export** (#381, the plan's export query). For all 495 trades:
   - `open_price` equals the close of the `1s` row at `floor(open_timestamp)` in 232 trades, and
     at `floor(open_timestamp) + 1 s` in 148.
@@ -273,7 +281,9 @@ out of pooling.
 8. **One process per `$STAND_DIR`.** There is no lock file.
 9. **Non-overlapping trades under-use the data.** No per-candle hit rate is reported, because it
    would count correlated, overlapping trades as independent.
-10. **The mock broker pages differently.** It caps a page by rows, not by the time window. The
+10. **One row may be lost after a long gap** (the first-row rule above). That row then shows up
+    as a `candle_gap` or an unpriced trade, never as a guessed value.
+11. **The mock broker pages differently.** It caps a page by rows, not by the time window. The
     pager's next-window rule is right under both: `fetch.test.ts` F1 runs on the mock, and F1b
     runs on a time-window fake with a long gap.
 

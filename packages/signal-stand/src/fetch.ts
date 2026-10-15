@@ -73,27 +73,33 @@ async function fetchSeries(options: FetchOptions, assetId: number, interval: str
   let rows = 0;
   // ask only while the window can hold a closed candle
   while (startTime + stepMs <= until) {
+    // The first row of every answer opens at the window's first tick, not at the previous close
+    // (observed 2026-10-15: every difference between the broker's answers was the `open` of an
+    // answer's first row). Each request starts one step early, and its first row is not kept.
+    const requestStart = startTime - stepMs;
     const page = await paced(options, what, () =>
-      options.rest.getChart({ assetId, interval, startTime, limit }),
+      options.rest.getChart({ assetId, interval, startTime: requestStart, limit }),
     );
     pages++;
     // the forming candle is not stored: its close is not final, and a stored row is never redone
     const closedBefore = options.clock.now();
-    const fresh = page.filter(
-      (candle) =>
-        (last === undefined || candle.timestamp > last) &&
-        candle.timestamp + stepMs <= closedBefore,
-    );
+    const fresh = page
+      .slice(1)
+      .filter(
+        (candle) =>
+          (last === undefined || candle.timestamp > last) &&
+          candle.timestamp + stepMs <= closedBefore,
+      );
     appendRows(file, fresh, options.warn);
     rows += fresh.length;
     last = fresh.at(-1)?.timestamp ?? last;
-    // The broker answers the time window [startTime, startTime + limit x step): a gap shortens the
-    // page, and a gap longer than the window answers [] (observed 2026-10-15). The next window
-    // starts after the page's last row, or after the whole window when it was empty.
+    // The broker answers the time window [start, start + limit x step): a gap shortens the page,
+    // and a gap longer than the window answers [] (observed 2026-10-15). The next window starts
+    // after the page's last row, or after the whole window when it was empty.
     const pageLast = page.at(-1)?.timestamp;
     startTime =
       pageLast === undefined
-        ? startTime + limit * stepMs
+        ? requestStart + limit * stepMs + stepMs
         : Math.max(pageLast + stepMs, startTime + stepMs);
   }
   const lastIso = last === undefined ? 'none' : new Date(last).toISOString();
