@@ -262,3 +262,147 @@ describe('the Stars reconciler', () => {
     expect(reads).toEqual([]);
   });
 });
+
+// --- Refunds (#118) ----------------------------------------------------------------------------
+
+// Telegram's refund of `charge`: an outgoing transaction with the charge's own id, to the payer
+const refundTx = (
+  charge: StarTransaction,
+  seed: SeededAccount,
+  patch: { receiver?: number; date?: number; transactionType?: string } = {},
+): StarTransaction => ({
+  id: charge.id,
+  amount: charge.amount,
+  date: patch.date ?? NOW_S - 60,
+  receiver: {
+    type: 'user',
+    transaction_type: (patch.transactionType ?? 'invoice_payment') as 'invoice_payment',
+    user: { id: patch.receiver ?? Number(seed.telegramUserId), is_bot: false, first_name: 'Ada' },
+  },
+});
+
+const refundAudits = async (paymentId: string) =>
+  (await tmp.db.select().from(auditLog).where(eq(auditLog.entityId, paymentId))).filter(
+    (row) => row.action === 'stars_refunded',
+  );
+
+describe('the Stars reconciler: refunds', () => {
+  it('S20 records the refund of a paid charge once, with the transaction type, and pushes nothing', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed);
+    await reconciler([bought]).subject.tick();
+    const { subject, captured, logs } = reconciler([refundTx(bought, seed), bought]);
+    await subject.tick();
+    await subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(payment).toMatchObject({ status: StarPaymentStatus.Refunded });
+    expect((await ledgerOf(seed.userId)).map((row) => [row.kind, row.balanceDelta])).toEqual(
+      expect.arrayContaining([
+        ['purchase', 50n],
+        ['refund', -50n],
+      ]),
+    );
+    const audits = await refundAudits(payment!.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.payload).toMatchObject({
+      via: 'reconciler',
+      telegramAnswer: 'transaction',
+      transactionType: 'invoice_payment',
+      tokensTaken: '50',
+    });
+    expect(callsTo(captured.calls, 'sendMessage')).toEqual([]);
+    expect(logs().filter((line) => line.msg === 'stars refund recorded')).toHaveLength(1);
+  });
+
+  it('S21 records the refund of a held charge with no token taken', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed, { amount: 99 });
+    await reconciler([bought]).subject.tick();
+    await reconciler([refundTx(bought, seed)]).subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(payment).toMatchObject({ status: StarPaymentStatus.Refunded });
+    expect(await ledgerOf(seed.userId)).toEqual([]);
+    expect((await refundAudits(payment!.id))[0]!.payload).toMatchObject({
+      fromStatus: 'held',
+      tokensTaken: '0',
+    });
+  });
+
+  it('S22 leaves a charge refunded already alone', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed);
+    await reconciler([bought]).subject.tick();
+    await reconciler([refundTx(bought, seed)]).subject.tick();
+    const { subject, logs } = reconciler([refundTx(bought, seed)]);
+    await subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(await refundAudits(payment!.id)).toHaveLength(1);
+    expect(logs().filter((line) => line.level === 50)).toEqual([]);
+  });
+
+  it('S23 skips an outgoing transaction for a charge we never recorded, logged once', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const never = purchase(seed);
+    const { subject, logs } = reconciler([refundTx(never, seed)]);
+    await subject.tick();
+    await subject.tick();
+    const lines = logs().filter(
+      (line) => line.msg === 'stars outgoing transaction for a charge we never recorded',
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ telegramPaymentChargeId: never.id, totalAmount: 100 });
+    expect(JSON.stringify(lines[0])).not.toContain(seed.telegramUserId);
+    expect(await paymentsOf(seed.userId)).toEqual([]);
+  });
+
+  it('S24 records nothing for a refund to someone who is not the payer, and says so once', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed);
+    await reconciler([bought]).subject.tick();
+    const { subject, logs } = reconciler([refundTx(bought, seed, { receiver: 31_337 })]);
+    await subject.tick();
+    await subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(payment).toMatchObject({ status: StarPaymentStatus.Paid });
+    expect(await ledgerOf(seed.userId)).toHaveLength(1);
+    expect(
+      logs().filter((line) => line.msg === 'stars refund to a user who is not the payer'),
+    ).toEqual([expect.objectContaining({ telegramPaymentChargeId: bought.id, level: 50 })]);
+  });
+
+  it('S25 credits and then refunds a charge whose purchase and refund are on one page', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed);
+    // Telegram lists the newest first: the refund, then the purchase
+    await reconciler([refundTx(bought, seed), bought]).subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(payment).toMatchObject({ status: StarPaymentStatus.Refunded });
+    expect((await ledgerOf(seed.userId)).map((row) => row.kind).sort()).toEqual([
+      'purchase',
+      'refund',
+    ]);
+  });
+
+  it('S26 ignores a refund dated outside the window', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed);
+    await reconciler([bought]).subject.tick();
+    await reconciler([refundTx(bought, seed, { date: NOW_S - 172_801 })]).subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(payment).toMatchObject({ status: StarPaymentStatus.Paid });
+  });
+
+  it('records a refund whose receiver carries another transaction type (clarify В1)', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 0n });
+    const bought = purchase(seed);
+    await reconciler([bought]).subject.tick();
+    await reconciler([
+      refundTx(bought, seed, { transactionType: 'paid_media_payment' }),
+    ]).subject.tick();
+    const [payment] = await paymentsOf(seed.userId);
+    expect(payment).toMatchObject({ status: StarPaymentStatus.Refunded });
+    expect((await refundAudits(payment!.id))[0]!.payload).toMatchObject({
+      transactionType: 'paid_media_payment',
+    });
+  });
+});

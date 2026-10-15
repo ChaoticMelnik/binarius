@@ -14,7 +14,7 @@ import { starPayments } from './star-payments';
 // A refund asked for from /paysupport (#118, docs/stars.md → /paysupport): a notice for the staff,
 // one per payment. Its resolution is the payment's own status — `stars refund` refunds and records
 // it there — so nothing updates or deletes a request; no trigger enforces that, no writer does it.
-// The requester is the payer: requestStarRefund inserts by INSERT … SELECT on
+// The requester is the payer: /paysupport's request inserts by INSERT … SELECT on
 // payer_telegram_user_id, so another Telegram id inserts nothing.
 export const starRefundRequests = pgTable(
   'star_refund_requests',

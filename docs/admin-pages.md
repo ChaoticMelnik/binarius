@@ -298,7 +298,7 @@ as `manual:<id>`; a row with none (an
 
 | Parameter | Matches |
 |---|---|
-| `kind` | one `TokenLedgerKind` (`purchase`, `bonus`, `reserve`, `release`, `settle`, `adjustment`) |
+| `kind` | one `TokenLedgerKind` (`purchase`, `bonus`, `reserve`, `release`, `settle`, `adjustment`, `refund` — a Stars refund, #118) |
 | `user` | the user's id (a uuid) |
 
 A `user` with no rows, or with no row at all, gives an empty page, not an error. The cursor
