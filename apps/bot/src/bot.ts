@@ -53,6 +53,7 @@ import {
 import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
 import { createSessionShareComposer } from './session-share';
+import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
 import {
@@ -489,6 +490,11 @@ export function createBot({
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
   bot.use(createSessionShareComposer({ backend, logger }));
+
+  // /buy, «⭐ Купить токены» and the payment (#117, docs/stars.md), ahead of the text handler below,
+  // which swallows commands; the pre-checkout query on the bot, for the same reason as the share
+  privateChats.use(createStarsComposer({ backend, logger, connectKeyboard: welcomeKeyboard }));
+  bot.use(createPreCheckoutComposer({ backend, logger }));
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });

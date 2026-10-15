@@ -143,7 +143,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `active_session_exists` with `null` | that session ended between the backend's check and its read | «⏳ Предыдущая сессия только что завершилась. Нажми кнопку ещё раз.» |
 | 404 `broker_account_not_found`, 409 `account_revoked` | refusal before the side effect | `accountNone` / `accountRevoked` + the connect button |
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
-| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.» |
+| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) above the way back |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
 | 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396): a real door pressed by a user left in real mode; the bot does not know the flag | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |

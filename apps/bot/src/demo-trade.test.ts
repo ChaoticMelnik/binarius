@@ -19,6 +19,7 @@ import {
   MENU_CALLBACK_DATA,
   supportUrl,
   DEMO_CALLBACK_DATA,
+  BUY_CALLBACK_DATA,
 } from '@binarius/shared';
 import { telegramHtml } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -141,6 +142,8 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
+// for want of tokens, the purchase above the way back (#117)
+const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
 // the end of the path (#350): the analysis of the same pair and duration, the signals, the menu
 const END_ROWS = [
   [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
@@ -345,7 +348,7 @@ describe('the stake button', () => {
     [TradeIntentErrorCode.AccountRevoked, 409, TEXTS.accountRevoked, CONNECT_ROWS],
     [TradeIntentErrorCode.AccountNotConfirmed, 409, TEXTS.stakeAccountNotConfirmed, BACK_ROWS],
     [TradeIntentErrorCode.AccountHalted, 409, TEXTS.stakeAccountHalted, BACK_ROWS],
-    [TradeIntentErrorCode.InsufficientTokens, 409, TEXTS.stakeInsufficientTokens, BACK_ROWS],
+    [TradeIntentErrorCode.InsufficientTokens, 409, TEXTS.stakeInsufficientTokens, BUY_ROWS],
     [TradeIntentErrorCode.ActiveIntentExists, 409, TEXTS.stakeActiveIntent, BACK_ROWS],
     [TradeIntentErrorCode.ClientRequestIdConflict, 409, TEXTS.stakeButtonUsed, BACK_ROWS],
     [TradeIntentErrorCode.TradingPaused, 409, TEXTS.tradingPaused, BACK_ROWS],

@@ -633,6 +633,19 @@ export const LABELS: Omit<Pick<BotPlainTexts, LabelKey>, keyof LabelOverrides> &
 // what «📤 Поделиться» puts beside the link in the chat the user picks (#115); plain, as a label
 export const inviteShareText = (): string => plain.inviteShareText;
 
+// The Stars purchase (#117, docs/stars.md): Telegram parses none of these, so they are plain like
+// the labels — the package and pay buttons, the invoice's title and description, and the
+// pre-checkout's error_message.
+export const buyPackageLabel = ({ tokens, stars }: { tokens: bigint; stars: number }): string =>
+  plain.buyPackageButton({ purchasedTokens: tokens.toString(), stars: String(stars) });
+export const starsPayLabel = (stars: number): string =>
+  plain.starsPayButton({ stars: String(stars) });
+export const starsInvoiceTitle = (): string => plain.starsInvoiceTitle;
+export const starsInvoiceDescription = (tokens: string): string =>
+  plain.starsInvoiceDescription({ purchasedTokens: tokens });
+export const starsPreCheckoutError = (failed: boolean): string =>
+  failed ? plain.starsPreCheckoutFailed : plain.starsPreCheckoutRefused;
+
 // The demo's asset types (#125); ₿ is not Extended_Pictographic, so the crypto group takes 💠.
 export const DEMO_GROUP_LABELS = labelsOf({
   currency: 'demoGroupCurrency',

@@ -10,6 +10,7 @@ import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   MAILING_MIN_OFFSET_HOURS,
+  STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
 import {
   BALANCE_WATCH_WINDOW_MS,
@@ -102,6 +103,21 @@ export const TELEGRAM_BOT_SENDS_PER_SECOND = 30;
 // A send Telegram refused (not 403 or 429) is tried again this much later, up to the attempts.
 export const MAILING_RETRY_MS = 300_000;
 export const MAILING_MAX_ATTEMPTS = 3;
+
+// --- The Stars reconciler (#117) --------------------------------------------------------------
+// docs/stars.md → Reconciliation. Long polling confirms an update's offset even when its handler
+// failed, so a successful_payment the backend never heard of is lost to the bot; the reconciler
+// reads the bot's Star transactions and credits what is missing. Each getStarTransactions call
+// (grammY's ApiClientOptions.timeoutSeconds), one attempt: the next tick reads the same pages.
+export const STARS_TELEGRAM_API_TIMEOUT_MS = 3_000;
+export const STARS_RECONCILE_TICK_MS = 300_000;
+// Bot API: 1-100 transactions a call
+export const STARS_RECONCILE_PAGE_SIZE = 100;
+// A tick reads at most this many pages, whatever their order (accepted risk 2 of the plan: past
+// it the tick logs an error and a cursor becomes a follow-up).
+export const STARS_RECONCILE_MAX_PAGES = 50;
+// Only transactions this recent are credited: older ones are a staff member's to look at.
+export const STARS_RECONCILE_WINDOW_S = 172_800;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -335,7 +351,16 @@ export const TIMING_CHAIN_HOLDS =
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < MAILING_SEND_TICK_MS &&
   (MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND <= MAILING_SEND_TICK_MS &&
   MAILING_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
-  MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_HOURS * 3_600_000;
+  MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_HOURS * 3_600_000 &&
+  // the pre-checkout route reads only, inside phase 1 (the bot's chain holds it under Telegram's
+  // 10 s, apps/bot/src/timing.ts)
+  STARS_PRECHECKOUT_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the reconciler's stop waits for the call in flight, then a credit and its push; a full tick
+  // ends before the next one starts; the window spans many ticks
+  STARS_TELEGRAM_API_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  STARS_RECONCILE_MAX_PAGES * STARS_TELEGRAM_API_TIMEOUT_MS < STARS_RECONCILE_TICK_MS &&
+  STARS_RECONCILE_TICK_MS < STARS_RECONCILE_WINDOW_S * 1000 &&
+  STARS_RECONCILE_PAGE_SIZE <= 100;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

@@ -26,6 +26,14 @@ import {
   TRADING_SESSIONS_STOP_PATH,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
+  starsInvoiceResponseSchema,
+  starsPaidResponseSchema,
+  starsPreCheckoutResponseSchema,
+  type StarsInvoiceResponse,
+  type StarsPaidRequest,
+  type StarsPaidResponse,
+  type StarsPreCheckoutRequest,
+  type StarsPreCheckoutResponse,
   userReferralResponseSchema,
   type ChatMemberResponse,
   type ConfirmLoginResponse,
@@ -54,7 +62,7 @@ import {
   type UserStartRequest,
   type UserStartView,
 } from '@binarius/shared';
-import { BACKEND_REQUEST_TIMEOUT_MS } from './timing';
+import { BACKEND_REQUEST_TIMEOUT_MS, STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS } from './timing';
 
 // bounds one internal-API response body (Architecture Rule 26)
 export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
@@ -145,6 +153,14 @@ export interface BackendClient {
   ): Promise<SetStakeResult>;
   // every text override, as stored: the refresher resolves them (#299)
   readBotTexts(): Promise<BotTextOverride[]>;
+  // The Stars purchase (#117, docs/stars.md). The invoice's payload for a package: a read, every
+  // refusal a 4xx before anything is written.
+  createStarsInvoice(telegramUserId: string, packageCode: string): Promise<StarsInvoiceResponse>;
+  // Telegram's pre-checkout query: yes or a refusal reason; bounded by its own, shorter timeout,
+  // since Telegram waits 10 s for the answer (timing.ts)
+  checkStarsPreCheckout(request: StarsPreCheckoutRequest): Promise<StarsPreCheckoutResponse>;
+  // successful_payment: the credit's outcome, the same for a repeated delivery
+  reportStarsPaid(request: StarsPaidRequest): Promise<StarsPaidResponse>;
 }
 
 export type SetStakeResult =
@@ -176,8 +192,9 @@ export function createBackendClient({
     path: string,
     body?: unknown,
     maxBytes = MAX_BACKEND_BODY_BYTES,
+    callTimeoutMs = timeoutMs,
   ): Promise<{ ok: boolean; status: number; payload: unknown }> => {
-    const signal = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.timeout(callTimeoutMs);
     let response: Response;
     try {
       response = await fetch(new URL(path, root), {
@@ -235,8 +252,9 @@ export function createBackendClient({
     path: string,
     body?: unknown,
     maxBytes?: number,
+    callTimeoutMs?: number,
   ): Promise<unknown> => {
-    const { ok, status, payload } = await send(method, path, body, maxBytes);
+    const { ok, status, payload } = await send(method, path, body, maxBytes, callTimeoutMs);
     if (!ok) throw httpStatusError(status, payload);
     return payload;
   };
@@ -410,6 +428,31 @@ export function createBackendClient({
       }
       if (status === 409 && safeParseSessionSummaryRefusal(payload).success) return null;
       throw httpStatusError(status, payload);
+    },
+    async createStarsInvoice(telegramUserId, packageCode) {
+      const parsed = starsInvoiceResponseSchema.safeParse(
+        await post('payments/stars/invoice', { telegramUserId, packageCode }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async checkStarsPreCheckout(preCheckout) {
+      const parsed = starsPreCheckoutResponseSchema.safeParse(
+        await request(
+          'POST',
+          'payments/stars/pre-checkout',
+          preCheckout,
+          undefined,
+          Math.min(timeoutMs, STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS),
+        ),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async reportStarsPaid(paid) {
+      const parsed = starsPaidResponseSchema.safeParse(await post('payments/stars/paid', paid));
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
     },
     async stopSessions(telegramUserId) {
       const parsed = safeParseTradingSessionsStoppedResponse(

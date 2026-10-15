@@ -1,6 +1,6 @@
-import type { Api, Context, InlineKeyboard } from 'grammy';
+import { InlineKeyboard, type Api, type Context } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
-import type { TelegramHtml } from '@binarius/shared';
+import { STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
 
 // The bot's one send seam for user texts (the backend's is auth/client-push.ts): the only place
 // that sets parse_mode HTML and unwraps TelegramHtml, so a raw string cannot reach the user as
@@ -106,6 +106,30 @@ export const sendPhotoByIdHtml = (
   caption: TelegramHtml,
   extra: WithNextStep<PhotoByIdExtra>,
 ) => api.sendPhoto(chatId, photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });
+
+// A Telegram Stars invoice (#117, docs/stars.md): currency XTR, no provider token, one price.
+// Telegram parses none of its texts. The keyboard is required like every message's, and the Bot
+// API wants the pay button first: `pay` is that button's label and leads the keyboard; `then` is
+// what follows it. No start_parameter: a forwarded copy keeps its Pay button, which is why the
+// credit checks the payer (docs/stars.md → Payer).
+export const replyWithInvoiceStars = (
+  ctx: Context,
+  invoice: { title: string; description: string; payload: string; label: string; stars: number },
+  { pay, then }: { pay: string; then: InlineKeyboard },
+) =>
+  ctx.replyWithInvoice(
+    invoice.title,
+    invoice.description,
+    invoice.payload,
+    STARS_CURRENCY,
+    [{ label: invoice.label, amount: invoice.stars }],
+    {
+      reply_markup: new InlineKeyboard([
+        [InlineKeyboard.pay(pay)],
+        ...then.inline_keyboard.filter((row) => row.length > 0),
+      ]),
+    },
+  );
 
 // The inline answers (#321, session-share.ts): the shared summary card, posted «via @bot» into a
 // chat the user picked. No keyboard by type, an exception to the rule above

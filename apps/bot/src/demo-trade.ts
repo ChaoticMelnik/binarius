@@ -40,6 +40,7 @@ import {
   menuKeyboard,
   retryKeyboard,
   supportKeyboard,
+  withBuy,
   withMenu,
 } from './keyboards';
 import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
@@ -102,6 +103,8 @@ interface Refusal {
   connect?: true;
   // the text of a real press, where it differs (#326)
   real?: BotStaticHtmlKey;
+  // «⭐ Купить токены» above the way back: a refusal for want of tokens (#117)
+  buy?: true;
   // «💵 Сумма» of the press's mode under the text: a refusal of the amount itself (#297)
   stakeMenu?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
@@ -120,7 +123,7 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.AccountRevoked]: { text: 'accountRevoked', connect: true },
   [TradeIntentErrorCode.AccountNotConfirmed]: { text: 'stakeAccountNotConfirmed' },
   [TradeIntentErrorCode.AccountHalted]: { text: 'stakeAccountHalted' },
-  [TradeIntentErrorCode.InsufficientTokens]: { text: 'stakeInsufficientTokens' },
+  [TradeIntentErrorCode.InsufficientTokens]: { text: 'stakeInsufficientTokens', buy: true },
   [TradeIntentErrorCode.ActiveIntentExists]: { text: 'stakeActiveIntent' },
   // the same button pressed with other parameters: the amount changed between two presses, which
   // the fingerprint normally refuses first
@@ -355,7 +358,9 @@ export function createDemoTradeComposer<C extends Context>({
                 LABELS.stakeMenuButton,
                 stakeMenuCallbackData(mode, stake.assetId, stake.durationSec),
               )
-            : backToAnalysisKeyboard(stake.assetId, stake.durationSec);
+            : refusal.buy === true
+              ? withBuy(backToAnalysisKeyboard(stake.assetId, stake.durationSec))
+              : backToAnalysisKeyboard(stake.assetId, stake.durationSec);
     await replyHtml(ctx, text, { reply_markup });
   }
 

@@ -25,6 +25,7 @@ import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 import { botTextsRoutes } from './bot-texts/routes';
 import { postbackRoutes, type PostbackRoutesDeps } from './postbacks/routes';
 import { depositRoutes, type DepositRoutesDeps } from './deposit/routes';
+import { paymentsRoutes } from './payments/routes';
 
 type DependencyCheck = () => Promise<unknown>;
 
@@ -256,6 +257,8 @@ export function buildApp({
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);
   void app.register(botTextsRoutes, users);
+  // the Stars purchase (#117): the same internal API, the same database and token
+  void app.register(paymentsRoutes, users);
   void app.register(adminRoutes, admin);
   void app.register(depositRoutes, deposit);
   if (postbacks !== undefined) void app.register(postbackRoutes, postbacks);

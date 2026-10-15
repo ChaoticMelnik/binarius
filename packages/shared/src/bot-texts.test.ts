@@ -206,6 +206,7 @@ describe('the bot texts catalog', () => {
     expect(botTextKeysOf(BotTextGroup.Commands).sort()).toEqual(
       [
         'accountCommand',
+        'buyCommand',
         'helpCommand',
         'inviteCommand',
         'menuCommand',

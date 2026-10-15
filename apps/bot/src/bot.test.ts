@@ -24,6 +24,7 @@ import {
   MENU_CALLBACK_DATA,
   RETRY_COMMANDS,
   supportUrl,
+  BUY_CALLBACK_DATA,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
@@ -152,6 +153,9 @@ function setup(
     stopSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
     setStake: vi.fn(() => Promise.reject(new Error('not used here'))),
     readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
+    createStarsInvoice: vi.fn(() => Promise.reject(new Error('not used here'))),
+    checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('not used here'))),
+    reportStarsPaid: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -407,15 +411,17 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // the demo, then the invite in a row of its own (#115)
+  // the demo, then the invite in a row of its own (#115), then the purchase (#117)
   const CARD_ROWS = [
     [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
+    [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
   ];
-  // in real mode the entry reads «🚀 Торговать» (#121)
+  // in real mode the entry reads «🚀 Торговать» (#121); the purchase in both modes (#117)
   const REAL_CARD_ROWS = [
     [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
+    [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
   ];
   // the line's default holds none of its variables
   const NO_SNAPSHOT = () =>
@@ -709,6 +715,7 @@ describe('«🏠 В меню» (#350)', () => {
     expect(inlineButtons(sentPayload(calls, 'sendPhoto'))).toEqual([
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
+      { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
     ]);
   });
 
@@ -1544,6 +1551,9 @@ describe('the account card', () => {
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setStake: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
+          createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
+          checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
+          reportStarsPaid: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1594,6 +1604,9 @@ describe('the account card', () => {
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setStake: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
+          createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
+          checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
+          reportStarsPaid: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2726,6 +2739,9 @@ describe('the Bot API timeout', () => {
         stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
         setStake: vi.fn(() => Promise.reject(new Error('unused'))),
         readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
+        createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
+        checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
+        reportStarsPaid: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

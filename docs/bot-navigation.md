@@ -46,13 +46,15 @@ chat with the bot:
 
 - `packages/shared/src/bot-navigation.ts`: `DEMO_CALLBACK_DATA` (`demo`), `CONNECT_CALLBACK_DATA`
   (`connect`), `MENU_CALLBACK_DATA` (`menu`), `commandRetryCallbackData` (`cmd:account`,
-  `cmd:settings`, `cmd:invite` since #115) and its pattern, and `supportUrl()`. The bot and the backend's push build their
+  `cmd:settings`, `cmd:invite` since #115) and its pattern, `BUY_CALLBACK_DATA` (`buy`) and
+  `buyPackageCallbackData` (`buy:<code>`, #117), and `supportUrl()`. The bot and the backend's push build their
   buttons from it, so a pushed button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
   `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
   path's duration, `demo:sig:<sec>`, since #382; its `beforeMenu` rows go right above the menu);
   since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` and `inviteKeyboard`
-  ([referrals.md](referrals.md)).
+  ([referrals.md](referrals.md)); since #117 `buyButton`, `withBuy` and `buyPackagesKeyboard`
+  ([stars.md](stars.md)).
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Новый анализ»,
   `toSignalsButton` «📡 К сигналам»; reused: `demoRetryButton` «🔄 Повторить»,
   `stakeBackAnalysisButton` «↩️ Назад к анализу», `supportButton`, `demoButton`.
@@ -86,7 +88,7 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить (unchanged) |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить (unchanged) |
-| status card | 🎮 Демо-торговля · 👥 Пригласить друга (#115) |
+| status card | 🎮 Демо-торговля · 👥 Пригласить друга (#115) · ⭐ Купить токены (#117) |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
@@ -100,6 +102,14 @@ no repeat.
 | `/help` | 🏠 В меню |
 | `/invite`, «👥 Пригласить друга» (#115) | 📤 Поделиться (a URL) · 🏠 В меню |
 | `inviteNeedsStart` (`/invite` before the first `/start`) | 🏠 В меню |
+| `/buy`, «⭐ Купить токены» (#117, [stars.md](stars.md)) | a package per row (`buy:<code>`) · 🏠 В меню |
+| `buyNeedsAccount` | 🔗 Подключить |
+| `buyPackageGone` | the packages · 🏠 В меню |
+| `unavailable` after `/buy` or a package (reads) | 🔄 Повторить (`buy`, `buy:<code>`) · 🏠 В меню |
+| the Stars invoice (`replyWithInvoiceStars`, `send.ts`) | ⭐ Оплатить N (Telegram's pay button, first by the Bot API's rule) · 🏠 В меню |
+| `starsCredited`, `starsPending`; the reconciler's push `starsCredited` | 🏠 В меню |
+| `starsHeld` | the support URL · 🏠 В меню |
+| the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены · ↩️ Назад к анализу · 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
 | demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged); the launch screen is deleted once the session's status is sent (#418) |

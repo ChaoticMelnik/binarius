@@ -11,6 +11,7 @@ import {
   editMessageTextHtml,
   replyHtml,
   replyHtmlWithoutNextStep,
+  replyWithInvoiceStars,
   replyWithPhotoHtml,
   replyWithVideoHtml,
   sendPhotoByIdHtml,
@@ -92,3 +93,10 @@ export const viaInlineResultKeyboard = answerInlineQueryPhotoHtml(
 );
 // @ts-expect-error the empty answer takes nothing to send (TS2554)
 export const viaInlineEmptyResults = answerInlineQueryEmpty(ctx, []);
+
+// #117: the invoice carries its next step after the pay button, like every message
+const invoice = { title: 't', description: 'd', payload: 'p', label: 'l', stars: 1 };
+// @ts-expect-error an invoice without the keyboard does not compile (TS2554)
+export const viaInvoiceNoKeyboard = replyWithInvoiceStars(ctx, invoice);
+// @ts-expect-error nor without what follows the pay button (TS2741)
+export const viaInvoiceNoNextStep = replyWithInvoiceStars(ctx, invoice, { pay: 'pay' });

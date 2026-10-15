@@ -12,6 +12,8 @@ export const ALLOWED_UPDATES = [
   'message',
   'callback_query',
   'my_chat_member',
+  // Telegram's question before it charges a Stars payment (#117); successful_payment is a message
+  'pre_checkout_query',
   // the card shared through «📤 Поделиться» (#321): the query, and the chosen result's log line
   'inline_query',
   'chosen_inline_result',

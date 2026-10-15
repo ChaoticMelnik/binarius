@@ -290,7 +290,8 @@ from them. A note is printed as text, a missing (null) one as «—».
 **Основание** is the one reference a row may carry (`token_ledger_reference_check`): an intent is a
 link to its card; a deposit is printed as its id (the deposits list has no filter by id); a broker
 account as its id (it has no page; the broker accounts list shows the same id in its first
-column); a manual reference as `manual:<id>`; a row with none (an
+column); a Stars payment (#117, [stars.md](stars.md)) as its `star_payments` id; a manual reference
+as `manual:<id>`; a row with none (an
 `adjustment` without one) shows «—».
 
 **Filters are exact matches**, each optional, both combined:

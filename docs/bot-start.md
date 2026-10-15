@@ -392,7 +392,8 @@ a send is refused with 403 (the link push after the callback, a mailing)
 ```
 
 The bot asks Telegram for `my_chat_member` (`ALLOWED_UPDATES` in `lifecycle.ts`, beside `message`,
-`callback_query` and, since #321, `inline_query` and `chosen_inline_result`), handles it in
+`callback_query`, since #321 `inline_query` and `chosen_inline_result`, and since #117
+`pre_checkout_query`, [stars.md](stars.md)), handles it in
 private chats only, forwards `kicked` and `member` as Telegram spells them and ignores any other
 status; it decides nothing and sends nothing — a blocked chat could not receive it anyway. A
 repeated `kicked` keeps the first time and runs the cancel again, so a job created between two
@@ -661,10 +662,10 @@ is missing from the answer; `timing.test.ts` holds the declared calls.
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list eight commands, in this
+Telegram's «Меню» button and the hints shown when the user types `/` list nine commands, in this
 order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/stop` —
 «Остановить сессию» ([bot-session.md](bot-session.md#stop-122)), `/account` —
-«Аккаунт Binodex» ([bot-account.md](bot-account.md)),
+«Аккаунт Binodex» ([bot-account.md](bot-account.md)), `/buy` — «Купить токены» ([stars.md](stars.md), #117),
 `/settings` — «Настройки уведомлений», `/invite` — «Пригласить друга» ([referrals.md](referrals.md)),
 `/help` — «Помощь» ([/help](#help-184)) and `/support` —
 «Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in

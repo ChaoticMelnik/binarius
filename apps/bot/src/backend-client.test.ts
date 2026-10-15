@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BOT_TEXT_CATALOG,
   botTextOverridesResponseSchema,
@@ -10,6 +10,11 @@ import {
   MAX_SESSION_TRADES,
   MomentumDirection,
   NotificationLevel,
+  StarsCreditOutcome,
+  StarsPreCheckoutRefusal,
+  starsInvoiceResponseSchema,
+  starsPaidResponseSchema,
+  starsPreCheckoutResponseSchema,
   OAuthErrorCode,
   PairsCatalogErrorCode,
   REFERRAL_CODE_LENGTH,
@@ -57,6 +62,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
+import { BACKEND_REQUEST_TIMEOUT_MS, STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS } from './timing';
 import {
   BackendError,
   BackendErrorCode,
@@ -84,6 +90,8 @@ import {
   SIGNAL_FETCH_FAILED,
   SESSION_ID,
   SESSION_VIEW,
+  STARS_INVOICE,
+  STARS_PAYLOAD,
   closeServer,
   listen,
   accountView,
@@ -329,6 +337,105 @@ describe('readReferral (#115)', () => {
       status: 404,
       reason: UserErrorCode.UserNotFound,
     });
+  });
+});
+
+describe('the Stars purchase (#117)', () => {
+  const preCheckout = {
+    telegramUserId: '4242',
+    invoicePayload: STARS_PAYLOAD,
+    currency: 'XTR',
+    totalAmount: 250,
+  };
+  const paid = {
+    ...preCheckout,
+    telegramPaymentChargeId: 'charge-1',
+    providerPaymentChargeId: '',
+    paidAt: 1_790_000_000,
+  };
+
+  it('posts the invoice request and returns the payload and the package', async () => {
+    const { baseUrl, capture } = await serve((_request, response) => {
+      json(response, 200, STARS_INVOICE);
+    });
+    const client = createBackendClient({ baseUrl, token: TOKEN });
+    expect(await client.createStarsInvoice('4242', 'p150')).toEqual(STARS_INVOICE);
+    expect(capture.url).toBe('/payments/stars/invoice');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', packageCode: 'p150' });
+  });
+
+  it('reports a payload that is not an invoice payload as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, response) => {
+      json(response, 200, { ...STARS_INVOICE, payload: 'stars:p150:not-a-uuid' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).createStarsInvoice('4242', 'p150'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries a refusal code as the reason of a 409', async () => {
+    const { baseUrl } = await serve((_request, response) => {
+      json(response, 409, { error: 'no_active_account' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).createStarsInvoice('4242', 'p150'),
+    );
+    expect(error).toMatchObject({ status: 409, reason: 'no_active_account' });
+  });
+
+  it('posts the pre-checkout query and returns the answer', async () => {
+    const { baseUrl, capture } = await serve((_request, response) => {
+      json(response, 200, { ok: false, reason: 'amount' });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).checkStarsPreCheckout(preCheckout),
+    ).toEqual({ ok: false, reason: 'amount' });
+    expect(capture.url).toBe('/payments/stars/pre-checkout');
+    expect(JSON.parse(capture.body ?? '')).toEqual(preCheckout);
+  });
+
+  // Telegram waits 10 s for the answer: the call is cut at its own timeout, not the client's 5 s
+  it('bounds the pre-checkout call by its own, shorter timeout', async () => {
+    const { baseUrl } = await serve((_request, response) => {
+      json(response, 200, { ok: true });
+    });
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      await createBackendClient({ baseUrl, token: TOKEN }).checkStarsPreCheckout(preCheckout);
+      expect(timeout).toHaveBeenCalledWith(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS);
+      timeout.mockClear();
+      await createBackendClient({ baseUrl, token: TOKEN })
+        .createStarsInvoice('4242', 'p150')
+        .catch(() => undefined);
+      expect(timeout).toHaveBeenCalledWith(BACKEND_REQUEST_TIMEOUT_MS);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it('posts the payment and returns the outcome', async () => {
+    const { baseUrl, capture } = await serve((_request, response) => {
+      json(response, 200, { outcome: 'credited', tokens: '150', balance: '162' });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).reportStarsPaid(paid)).toEqual({
+      outcome: 'credited',
+      tokens: '150',
+      balance: '162',
+    });
+    expect(capture.url).toBe('/payments/stars/paid');
+    expect(JSON.parse(capture.body ?? '')).toEqual(paid);
+  });
+
+  it('reports a credit outcome without its numbers as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, response) => {
+      json(response, 200, { outcome: 'credited' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).reportStarsPaid(paid),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
 
@@ -1728,6 +1835,22 @@ describe('body size', () => {
           error: longest(Object.values(StakeRefusal)),
           limits: { minTradeAmount: DECIMAL, available: DECIMAL, scale: NONNEGATIVE_INT },
         },
+      },
+      // the Stars purchase (#117): the payload is bounded by the Bot API's 128 bytes
+      createStarsInvoice: {
+        parse: (input) => starsInvoiceResponseSchema.safeParse(input),
+        sample: {
+          payload: `stars:${'p'.repeat(16)}:${UUID}`,
+          package: { code: 'p'.repeat(16), tokens: TOKENS, stars: INT4_MAX },
+        },
+      },
+      checkStarsPreCheckout: {
+        parse: (input) => starsPreCheckoutResponseSchema.safeParse(input),
+        sample: { ok: false, reason: longest(Object.values(StarsPreCheckoutRefusal)) },
+      },
+      reportStarsPaid: {
+        parse: (input) => starsPaidResponseSchema.safeParse(input),
+        sample: { outcome: StarsCreditOutcome.AlreadyCredited, tokens: TOKENS, balance: TOKENS },
       },
       // Reds when the catalog grows to about 500 keys: then the ceiling is revisited, not the
       // assumption.

@@ -203,7 +203,7 @@ built when it is published. The tests of the source swap hold one place each (`b
 
 Data and identifiers, not texts (decision on the issue's plan, approved by the owner):
 
-- the command names `/start`, `/menu`, `/stop`, `/account`, `/settings`, `/invite`, `/help`, `/support` —
+- the command names `/start`, `/menu`, `/stop`, `/account`, `/buy`, `/settings`, `/invite`, `/help`, `/support` —
   the bot routes by them; only their descriptions are entries. The names and their order are
   `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
@@ -241,6 +241,8 @@ compile.
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
 | `referralLink` | the user's personal link, `referralLinkOf` (#115) | as is | — |
+| `purchasedTokens`, `stars` | a Stars package's tokens and price (#117, [stars.md](stars.md)) | `formatCount` | — |
+| `tokenBalance` | `users.token_balance` after a Stars credit (#117) | `formatCount` | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description

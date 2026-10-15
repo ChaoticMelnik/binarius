@@ -3,10 +3,11 @@
 A user with an active Binodex account gets the **status card** (#24) as the bot's home: on
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
-status or age line when the broker balance is missing or old, a hint, and two buttons, each in
+status or age line when the broker balance is missing or old, a hint, and three buttons, each in
 its own row: «🎮 Демо-торговля» (#320; «🚀 Торговать» in real mode, #121,
-[trading-mode.md](trading-mode.md)) and «👥 Пригласить друга» (#115,
-[referrals.md](referrals.md)). It is pinned in place of whatever was pinned before.
+[trading-mode.md](trading-mode.md)), «👥 Пригласить друга» (#115,
+[referrals.md](referrals.md)) and «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)). It is
+pinned in place of whatever was pinned before.
 
 ## Components
 
@@ -24,7 +25,7 @@ its own row: «🎮 Демо-торговля» (#320; «🚀 Торговать
   catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard` with
   `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` button by mode, then the `invite`
-  button, #115),
+  button, #115, then the `buy` button, #117),
   `pinCard`.
 - `packages/shared/src/bot-commands.ts` — `/menu` «Главное меню», right after `/start`.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.start`, `.menu`, `.demo`, and the conjunct
