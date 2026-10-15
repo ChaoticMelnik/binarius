@@ -412,7 +412,10 @@ describe('tick', () => {
   beforeEach(async () => {
     own = await createTempDatabase(baseUrl);
   });
-  afterEach(() => own.drop());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    return own.drop();
+  });
 
   const withIntent = async (patch: Parameters<typeof linked>[1] = {}) => {
     const account = await linked(own.db, patch);
@@ -625,20 +628,17 @@ describe('tick', () => {
       fetches += 1;
       return new Promise<Response>(() => undefined);
     });
-    try {
-      const balance = reconciler(
-        own.db,
-        { stalledRetryMs: 0 },
-        createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 50 }),
-      );
-      await balance.tick();
-      expect(fetches).toBe(1);
-      await balance.tick();
-      expect(fetches).toBe(2);
-      await balance.stop();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    // unstubbed in afterEach: a tick that hangs (the bug) times out the test before a finally
+    const balance = reconciler(
+      own.db,
+      { stalledRetryMs: 0 },
+      createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 50 }),
+    );
+    await balance.tick();
+    expect(fetches).toBe(1);
+    await balance.tick();
+    expect(fetches).toBe(2);
+    await balance.stop();
   });
 
   it('logs an unexpected throw by name and code only, and goes on with the next account', async () => {
