@@ -237,7 +237,7 @@ compile.
 | `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
-| `stake` | on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464) | `formatStake` | `stakeMinimumLabel` |
+| `stake` | on the mode screen and its confirm the real stake, the saved one or the broker's minimum, never `null`, whatever the user's mode (#474); on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464) | `formatStake` | `stakeMinimumLabel` |
 | `outcome` | a session trade's figure after «→», by SQL (#464): the payout of a win, the loss of a loss, the stake of a tie | `formatSignedStake` | — |
 | `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
@@ -440,7 +440,8 @@ queue — the last call wins — and «Опубликовать заново» m
 A key's limit is checked with its variables' samples. `BOT_TEXT_MESSAGES` describes what that
 cannot bound: each message the bot builds from several keys (the account and status cards,
 `/help`, `/account`, the analysis screens, the trade and session status, the demo screens,
-`/settings` with the stake line and the stake picker, the summary card's footer — plain text drawn
+`/settings` with the stake line and the stake picker, the mode screen, its confirm and a switch's
+result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; the session's trade message and summary, which the
 backend sends through the shared builders of `packages/shared/src/session-texts.ts`, #464; the
 analysis card, `analysisCard`, a caption of 1024, #482), and

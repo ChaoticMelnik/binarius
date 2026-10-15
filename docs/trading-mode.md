@@ -1,8 +1,8 @@
 # Trading mode
 
 A user trades either demo or real, one mode at a time (#121). The mode is a persisted user
-state, `users.trading_mode`, switched only by `POST /trading/mode`: the bot's mode screen is #474,
-`/stop` returning the user to demo is #473. In real mode the bot's single trade goes to the
+state, `users.trading_mode`, switched only by `POST /trading/mode`, which the bot calls from its
+mode screen (#474); `/stop` returning the user to demo is #473. In real mode the bot's single trade goes to the
 broker with real money at the user's real stake (#326: the saved real stake, the broker's minimum
 without one), and a session runs in the user's mode (#327): a real session trades real money at
 the real stake.
@@ -19,7 +19,8 @@ the real stake.
 - `packages/shared/src/trading-mode.ts` — the route's contract; `decimalLessThan` in
   `stake.ts`.
 - `apps/backend/src/trading/trading-mode.ts` — `POST /trading/mode`.
-- `apps/bot/src/keyboards.ts` → `statusCardKeyboard(mode)`; `analysis.ts`, `demo.ts`, `demo-trade.ts`, `stake-picker.ts`, `trading-session.ts` — the paths that follow the
+- `apps/bot/src/trading-mode.ts` — the mode screen (#474); `keyboards.ts` →
+  `statusCardKeyboard(mode)` and `MODE_CALLBACK_DATA`; `analysis.ts`, `demo.ts`, `demo-trade.ts`, `stake-picker.ts`, `trading-session.ts` — the paths that follow the
   mode.
 
 ## The column and its writer
@@ -87,8 +88,8 @@ the kill-switch are not read: a blocked user's trades and a closed switch are re
 `stoppedSessions` (#327, required in `setTradingModeResponseSchema`) counts the user's active
 sessions the switch stopped: `setTradingMode` calls `stopUserSessions` in its transaction after the
 `users` UPDATE returned a row (lock order `users` → `trading_sessions`, Rule 5), so the new mode
-and the stopped sessions commit together; `0` when the user was in that mode already. No bot reads
-it yet: the mode screen (#474) prints «⏹ Активная сессия остановлена.» on `stoppedSessions >= 1`.
+and the stopped sessions commit together; `0` when the user was in that mode already. The bot's
+mode screen prints «⏹ Активная сессия остановлена.» on `stoppedSessions >= 1` (below).
 Tests: `trading-mode.db.test.ts` T1–T10, `user-ops.db.test.ts` U-mode 6–8.
 
 ## The bot
@@ -98,13 +99,82 @@ The mode comes from `POST /trading/access` only (`tradingMode`, required: a back
 
 **The card.** The header prints `MODE_LABELS[tradingMode]`, the hint is `statusHint` in demo and
 `statusHintReal` in real: «⚠️ Реальный режим: сделки идут на реальные деньги на сумму $X.», X the
-real stake in force (#326). The entry is «🎮 Демо-торговля» in demo and «🚀 Торговать» in real, both
-`demo`; then «👥 Пригласить друга».
+real stake in force (#326). The first row is the entry and the mode button: «🎮 Демо-торговля» and
+«💼 Реальный режим» in demo, «🚀 Торговать» and «🎮 Вернуться в демо» in real (#474). The entry is
+`demo` in both; the mode button is `mode` in both and only opens the mode screen, it never switches
+by itself. Then «👥 Пригласить друга».
 
-**The mode screen — #474.** Until it lands, real mode is switched only through `POST /trading/mode`
-(internal bearer); the bot has no way in or out of real. The screen (enable with a confirm, the
-cancel in place, back to demo, the card's mode button) is #474; `/stop` returning the user to demo
-is #473, after it.
+**The mode screen** (#474, `trading-mode.ts`). `mode` sends it as a new message (the card, a
+photo or text by the fallback, is never edited); `mode:x` (`MODE_SCREEN_CALLBACK_DATA`, «↩️ Отмена»
+and «⚙️ Режим») redraws it in place from a fresh access read under the screen's own messages;
+`mode:r`, `mode:r:ok` and `mode:d` edit in place too (shown → done, gone → sent anew, transport →
+an `error` line and nothing more, anything else → `bot.catch`). The screen:
+
+```
+⚙️ Режим торговли
+Сейчас: DEMO|REAL
+💵 Реальный баланс: $X                 — with a snapshot; «нет свежих данных» when it is not fresh
+💼 Сумма реальной сделки: $Y           — with a snapshot; Y = realStake ?? minTradeAmount
+(a blank line)
+⚠️ В реальном режиме сделки и сессии идут на реальные деньги.
+⏹ Смена режима останавливает активную сессию.
+⏸ Торговля сейчас приостановлена — …   — only while the switch is closed
+```
+
+then «💼 Включить реальный режим» (`mode:r`) in demo or «🎮 Вернуться в демо» (`mode:d`) in real,
+and «🏠 В меню». Y is the real stake whatever the mode now, never the demo one; the line has no
+button (the owner's decision 2 on #326): the stake is changed in `/settings` → «💼 Реал» or under the
+analysis. The session line is static (#474 clarify 3): it is shown with no session running too, the
+screen reads no sessions. The paused line does not take the enable step away: the route does not
+read the kill-switch.
+
+The access read's refusals, as the stake picker words them: a failed read → «⚠️ Сервис временно
+недоступен…» with «⚙️ Режим» and «🏠 В меню» (warn `trading access not read for the mode screen`);
+`blocked` → `blocked` with the support button; a user in demo with no snapshot → `accountNone`
+with the connect button, `statusAmbiguous` or `stakeBalanceMissing`, each with «🏠 В меню» and no
+enable step (the route would refuse). A user in real always gets the screen, without the balance
+and stake lines when there is no snapshot, so the way back to demo stays open.
+
+**The confirm** (`mode:r`) reads access again:
+
+| The read | The bot |
+| --- | --- |
+| failed, `blocked`, demo with no snapshot | the refusals above |
+| the user is in real already | the screen |
+| `real.available < minTradeAmount` (`decimalLessThan`, the snapshot of any age, as the route compares) | `modeBelowMinimum` with «⚙️ Режим» and «🏠 В меню», no confirm button; the route checks again |
+| otherwise | «Включить реальный режим? Сделки пойдут на реальные деньги на сумму <b>$Y</b>.», the out-of-bounds line when `checkStake(Y, { minTradeAmount, available: real.available })` refuses, the session line; «✅ Подтверждаю» (`mode:r:ok`) and «↩️ Отмена» (`mode:x`) in one row |
+
+The out-of-bounds line («⚠️ Сумма $Y сейчас не подходит к реальному счёту (доступно $A, минимум
+$M) — сделки будут отклоняться, пока не изменишь её в /settings → «💼 Реал».») stands for any
+refusal of `checkStake` (precision, the minimum, the balance: #474 clarify answer to the
+implementer) and forbids nothing: the switch stays open (#474 clarify 2). `checkStake` is the
+routes' own function (Rule 29), in bigint. «↩️ Отмена» edits the confirm into the screen, so its
+«✅ Подтверждаю» is gone; it is the step back, so the confirm has no «🏠 В меню» of its own.
+
+**Accepted: a confirm left uncancelled stays live** (decision 23 of #121): a second screen opened
+in parallel, a confirm abandoned, or an edit lost in transport (the cancel's own included) keeps a
+«✅ Подтверждаю» that enables real when pressed, with no expiry. The press goes to the route, which
+checks the balance again; the amount in the text may be out of date, but the press creates no
+trade, and the result names the mode, not the amount.
+
+**The switch** (`mode:r:ok`, `mode:d`) calls `setTradingMode`; back to demo needs no confirm
+(#474 clarify 4: the safe direction for money). Every answer has its source and its step:
+
+| Answer | Source | The bot | Log |
+| --- | --- | --- | --- |
+| 200 | the write went through, or the user was in that mode already (`changed: false`) | `modeEnabled` / `modeDisabled` by the mode the server answered, not by the button; «⏹ Активная сессия остановлена.» under it when `stoppedSessions >= 1`; «🏠 В меню» | — |
+| 409 `real_balance_below_minimum` | refused before the write | `modeBelowMinimum`, «⚙️ Режим» + menu | — |
+| 409 `balance_unavailable` | refused before the write | `stakeBalanceMissing`, the same buttons | — |
+| 409 `demo_only` | the process refused before any read (Rule 33) | `tradingDemoOnly`, the same buttons | — |
+| 404 `user_not_found` | refused before the write; the access read had just found the row | `unavailable`, the same buttons | warn `trading mode not changed` |
+| 400, another 4xx, a code outside the contract | the bot's contract error, before the write | `unavailable`, the same buttons | error `trading mode not changed` |
+| 5xx, a timeout, a dropped connection, a 2xx outside the schema (without `stoppedSessions` too) | **unknown**: the UPDATE may have committed | access read again: the screen with the mode found (no session line: its outcome is unknown); that read failing → `modeOutcomeUnknown` «⚠️ Не удалось узнать, переключился ли режим — открой экран режима ещё раз.», «⚙️ Режим» + menu | warn `trading mode outcome unknown` |
+
+`SWITCH_REFUSALS` `satisfies Record<TradingModeErrorCode, …>`: a code added to the contract fails
+`tsc`. An unknown outcome is never inferred from a repeated write: the bot reads the state again.
+`mode:r:ok` and `mode:d` are writes (`WRITE_CALLBACK_PREFIXES`): no «🔄 Повторить» carries them,
+and no message after a failure carries a switch; «⚙️ Режим» (`mode:x`) and `mode:r` are reads.
+Tests: `trading-mode.test.ts` (MS, MC, MX, MW, MR), `backend-client.test.ts` → `setTradingMode`.
 
 **The class rule** (Plan 5): the screens of the real path that read no mode (the signals, the
 manual choice, the summary) have neutral default texts; the screens that read the mode (the card,
@@ -129,7 +199,7 @@ amount in demo (as before #121, so an older demo button still trades): a button 
 and pressed in the other is refused with «⚠️ Режим или сумма сделки изменились — открой анализ
 заново.» and nothing is created. The press sends `mode: tradingMode` and the key
 `<mode>:<telegramUserId>:<nonce>`. `real_mode_off` (the mode went demo between the read and the
-POST) → «⚠️ Реальный режим выключен — открой анализ заново.». The status
+POST) → «⚠️ Реальный режим выключен — включи его в меню и открой анализ заново.». The status
 message's header is «💼 Реальная сделка» for a real view, and a finished real trade offers a real
 session («🚀 Сессия из 5 сделок · REAL», #327).
 
@@ -153,23 +223,32 @@ demo from it is #473 (part 2 of #121, split off by the size rule).
 
 ## Timing
 
-`HANDLER_CALLS`: `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418
+`HANDLER_CALLS`: `modeOpen` 1 / 2, `modeConfirm` 1 / 3, `modeInPlace` 1 / 3, `modeSet` 2 / 3
+(the access read on an unknown outcome: 2 × 5 s + 3 × 8 s = 34 s), `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418
 and `cycleStakePreset` since #476, under the 50 s shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
 every terminal branch.
 
 ## Logs
 
-`trading access not read for the launch screen` (warn): `errorLogFields` and `backendErrorFields`, never the Telegram id or an amount (`logging.test.ts`).
+`trading access not read for the mode screen` (warn), `trading mode not changed` (warn for
+`user_not_found`, error otherwise), `trading mode outcome unknown` (warn), `trading access not read
+for the launch screen` (warn): `errorLogFields` and `backendErrorFields`, never the Telegram id or
+an amount (`logging.test.ts`).
 
 ## Running it locally
 
 Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 [trading-access.md](trading-access.md) plus the worker and the bot:
 
-1. Switch the user to real with the `access` helper of trading-access.md (the internal bearer):
+1. Switch the user to real through the mode screen: `/menu` → «💼 Реальный режим» (DEMO, the real
+   balance, «💼 Сумма реальной сделки», the session line) → «💼 Включить реальный режим» (the
+   confirm names the real stake) → «↩️ Отмена» (the confirm becomes the screen again) → «💼
+   Включить реальный режим» → «✅ Подтверждаю» → «✅ Режим: REAL». Without the bot, the `access`
+   helper of trading-access.md (the internal bearer) does the same:
    `access /trading/mode '{"telegramUserId":"<id>","mode":"real"}'` → 200
    `{"tradingMode":"real","changed":true,"stoppedSessions":0}`.
-2. `/menu` shows REAL, the real hint and «🚀 Торговать»; «Сигналы сейчас» has no «запустит цикл».
+2. `/menu` shows REAL, the real hint, «🚀 Торговать» and «🎮 Вернуться в демо»; «Сигналы сейчас»
+   has no «запустит цикл».
 3. A pair opens the launch screen with «🚀 Запустить цикл · REAL» and the real stake; the press
    starts a real session («💼 Реальная сессия», the worker's `trading session intent created`
    lines with `mode: real`, the mock broker's trades `is_demo: false`). The analysis ends with «Реальный режим: сделка идёт на реальные деньги»; «➕ Ещё» shows
@@ -178,18 +257,21 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
    real picker («💼 Сумма реальной сделки», «Реальный баланс»); after `$5` is saved the hint reads
    «на сумму $5.00», «➕ Ещё» shows «… · $5.00 · REAL» and the press trades `$5`
    (`trade_intents.amount`).
-4. Switch back with `"mode":"demo"` → `"stoppedSessions":1` while the real session runs, the
-   session `user_stopped`: the card is DEMO, and the old REAL buttons (stake and session) answer
+4. Switch back with «🎮 Вернуться в демо» on the mode screen while the real session runs → «✅
+   Режим: DEMO.» and «⏹ Активная сессия остановлена.» (with the helper: `"mode":"demo"` →
+   `"stoppedSessions":1`), the session `user_stopped`: the card is DEMO, and the old REAL buttons (stake and session) answer
    «Режим или сумма сделки изменились». With `DEMO_ONLY=true`, `"mode":"real"` → 409 `demo_only`,
    and a session button pressed by a user left in real answers «Реальные сделки на этом сервере
-   отключены».
+   отключены»; on the mode screen «✅ Подтверждаю» answers «⚠️ Реальные сделки на этом сервере
+   отключены…» and the way back to demo stays open.
 
 ## Boundaries
 
-- **#474** — the mode screen in the bot; then **#473** — `/stop` returning the user to demo.
-- **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326));
-  the mode screen's stake line and confirm amount are #474's. **#327** (shipped) — real sessions;
-  the line «⏹ Активная сессия остановлена.» on the mode screen is #474's, `/stop` → demo #473's.
+- **#473** — `/stop` returning the user to demo, after #474 (it calls the bot's `setTradingMode`).
+- **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)).
+  **#327** (shipped) — real sessions.
+- **#450** — the Martingale of a session: whichever of #474 and #450 merges second adds «В сессии
+  ставка растёт после проигрыша.» to `modeWarning` (#474 clarify 1).
 - **#37** — the grant for real trades with Binodex. The real branch of `open_trade` was not
   observed live ([broker-rest.md](broker-rest.md) → Observed live: one demo trade); the mock
   broker holds both modes.

@@ -87,7 +87,7 @@ read (#115). `/start` and
 «🔄 Повторить» carries the pressed data again **only after a read**: a demo screen, the signals
 screen, the picker's way back to /settings, the trade's and the session's refresh. A press that
 writes — `demo:stake:`, `demo:sess:`, `real:sess:` (#327), `session:stop:`, `confirm:`, `resend`, `stk:s:`, `stk:z:`,
-`level:`, `ps:r:` (#118) — never gets it: its failure leads back to where it was pressed (the analysis, the
+`level:`, `ps:r:` (#118), the mode switches `mode:r:ok` and `mode:d` (#474) — never gets it: its failure leads back to where it was pressed (the analysis, the
 menu), so a lost answer never becomes a second trade or session. `testing.ts` → `captureApi` throws
 on any message whose «🔄 Повторить» carries one of those prefixes, in every scene of every bot test
 (`WRITE_CALLBACK_PREFIXES`, `testing.test.ts`). «➕ Ещё» (`demo:more:`, #360) is a read that sends
@@ -101,7 +101,7 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить (unchanged) |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить (unchanged) |
-| status card | 🎮 Демо-торговля · 👥 Пригласить друга (#115) · ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) |
+| status card | 🎮 Демо-торговля and 💼 Реальный режим in one row (in real: 🚀 Торговать and 🎮 Вернуться в демо, both opening the mode screen, #474) · 👥 Пригласить друга (#115) · ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
@@ -134,6 +134,11 @@ no repeat.
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
 | the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню; `no_signal` (#509) → 🔀 Выбрать другую пару (`demo:sig:<sec>`) · 🏠 В меню |
 | a cycle door's press (`demo:l`, #509): «сигнала нет» / the signal unread | 🔀 Выбрать другую пару · 🏠 В меню / 🔄 Повторить (the pressed data) · 🏠 В меню |
+| the mode screen (`mode`, `mode:x`; #474, [trading-mode.md](trading-mode.md#the-bot)) | 💼 Включить реальный режим (`mode:r`) in demo or 🎮 Вернуться в демо (`mode:d`) in real · 🏠 В меню |
+| its confirm (`mode:r`) | ✅ Подтверждаю (`mode:r:ok`) · ↩️ Отмена (`mode:x`, the step back, so no menu of its own) |
+| a switch's result (`modeEnabled`, `modeDisabled`) | 🏠 В меню |
+| every refusal or failure of the mode screen and its switches (`modeBelowMinimum`, `stakeBalanceMissing`, `tradingDemoOnly`, `unavailable`, `modeOutcomeUnknown`) | ⚙️ Режим (`mode:x`, a read) · 🏠 В меню — never a switch |
+| the mode screen's access refusals in demo (`accountNone`, `statusAmbiguous`, `stakeBalanceMissing`) | 🔗 Подключить · 🏠 В меню; 🏠 В меню |
 | the trade's refresh failed | 🔄 Повторить (`intent:<id>`) · 🏠 В меню; `intentStatusUnavailable` (404) → 🏠 В меню |
 | the session's refresh or stop failed | 🔄 Обновить (`session:<id>`) · 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
@@ -171,7 +176,8 @@ call: the keyboards ride on the messages already sent.
 - **#202** — reminders to a user who connected and never started the demo: sent through
   `client-push.ts` with the demo button ([mailing.md](mailing.md)).
 - **#474 / #326 / #327** — the mode screen, the real stake and real sessions: the seam types make
-  them comply ([trading-mode.md](trading-mode.md)).
+  them comply ([trading-mode.md](trading-mode.md)); the mode screen leaves a next step under every
+  message (the rows above, `trading-mode.test.ts` MR1).
 - **#321** — «📤 Поделиться» under the session's summary card (#318), on top of
   `sessionCardKeyboard`'s rows; the inline result it posts is the exception above
   ([bot-session.md](bot-session.md#sharing-the-card-321)).
