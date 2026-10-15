@@ -236,8 +236,8 @@ status line of an intent and a session's stake use it too; balances keep `format
 ## The status message
 
 `intentStatusText(symbol, view, { deadline?, sessionOffer? })` builds the message from four parts: a
-header, the trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the symbol capped at 64
-characters), a blank line, and the status line; then, after a blank line, the deadline hint or the
+header, the trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the pair's label —
+[`pairLabel`](pairs-catalog.md#the-pairs-label-428), the symbol capped at 64 characters, then « OTC»), a blank line, and the status line; then, after a blank line, the deadline hint or the
 session offer (#360) when the caller asks for one. The callers never ask for both. The status line is chosen by `view.status`, or by
 `view.lastError` when the status is `rejected`:
 

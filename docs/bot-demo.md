@@ -371,9 +371,10 @@ not a fresh catalog.
   broker type outside the five). A type with no pair that accepts a demo duration has no button; a
   type with such pairs but none open shows «· 0» and its press says «🔒 {type}: сейчас всё закрыто
   по расписанию».
-- **Pairs.** `DEMO_PAGE_SIZE` = 12 open pairs, two per row, sorted by symbol in code-unit order
-  (ties by id), each «EUR/USD OTC 85%» — the broker's symbol (it carries «OTC» itself) and its
-  payout as it arrives. Then one row: «◀️» when a page before exists, «↩️ Типы», «▶️» when a page
+- **Pairs.** `DEMO_PAGE_SIZE` = 12 open pairs, two per row, sorted by label in code-unit order
+  (ties by id), each «EUR/USD OTC 85%» — the pair's label (the broker's symbol with « OTC» when
+  `is_otc`, [pairs-catalog.md → The pair's label](pairs-catalog.md#the-pairs-label-428)) and its
+  payout as it arrives. A regular pair comes right before its OTC twin of the same symbol. Then one row: «◀️» when a page before exists, «↩️ Типы», «▶️» when a page
   after exists. A page beyond the end (the catalog shrank) is the last page. Closed pairs are not
   listed.
 - **Durations.** The admitted durations of `⏱ 5 с` and `⏱ 15 с`, in one row, then «↩️ Активы»

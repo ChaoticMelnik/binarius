@@ -208,7 +208,8 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
   the bot routes by them; only their descriptions are entries. The names and their order are
   `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
-- `pairButtonLabel` («symbol payout%»), `signalButtonLabel` («symbol ⬆️ payout%», #419) and
+- `pairButtonLabel` («label payout%»), `signalButtonLabel` («label ⬆️ payout%», #419; the label is
+  `pairLabel`'s, with `PAIR_OTC_SUFFIX` « OTC», #428) and
   `groupButtonLabel`'s ` · N`;
 - the ` ✅` after the selected level (`currentLevelLabel`);
 - the fallback duration `⏱ N с` (`durationLabelOf`), `formatAge`'s `с`/`мин`, `formatUsd`'s `$`
@@ -456,7 +457,8 @@ Widths from a schema are enforced there: an address entered by the user 254, a U
 stake 25 (`formatStake` over an unsigned `numeric(20,8)`: either saved stake, the broker's minimum
 and either balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
 backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are stated
-assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a symbol ≤ 64, a session's counters
+assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a pair label ≤ 68
+(`PAIR_LABEL_MAX_LENGTH`: the symbol ≤ 64 + « OTC»), a session's counters
 ≤ 999, the analysis numbers (the closed candles an indicator holds and needs, `required`, ≤ 5
 digits as `candles`), a bot's username ≤ 32 (Telegram's rule). A value past one of them lengthens a message by a few characters,
 and Telegram refuses the message only if that crosses its limit. A plain label is measured as

@@ -288,7 +288,8 @@ A finished one (#337):
   stopped one gets its plain final status.
 - **`settings: null`** (a hand-written row): the header and «⚠️ Настройки сессии не прочитаны —
   напиши в поддержку: /support».
-- The symbol is capped at 64 characters; without a catalog «актив #<id>» stands in. The stake is
+- The pair's label ([`pairLabel`](pairs-catalog.md#the-pairs-label-428), #428): the symbol capped
+  at 64 characters, « OTC» by `isOtc`; without a catalog «актив #<id>» stands in. The stake is
   `settings.stake.baseStake` through `formatUsd`, never a number.
 
 | Stop reason | Line |
