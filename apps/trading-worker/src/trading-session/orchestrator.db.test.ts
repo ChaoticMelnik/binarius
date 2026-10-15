@@ -11,6 +11,7 @@ import {
   isClosedTrade,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_TIMEOUT_MS,
+  SIGNAL_CHART_INTERVAL_MS,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -1270,7 +1271,8 @@ describe('the no-signal limit (#509)', () => {
     await expectActive(seed.session.id);
 
     await changedAgo(seed.session.id, LIMIT + 5_000);
-    advance(CONFIG.retryMs);
+    // past the no_signal hold: up to a 1m candle plus the slack
+    advance(SIGNAL_CHART_INTERVAL_MS['1m'] + CONFIG.candleSlackMs + 1_000);
     await orchestrator.tick();
     await expectStopped(seed.session.id, 'no_signal');
     await orchestrator.stop();
