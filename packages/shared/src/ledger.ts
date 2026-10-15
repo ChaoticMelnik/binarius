@@ -9,6 +9,8 @@ export const TokenLedgerKind = {
   Release: 'release',
   Settle: 'settle',
   Adjustment: 'adjustment',
+  // a Stars payment refunded by a staff member (#118): what is left of its tokens, taken back
+  Refund: 'refund',
 } as const;
 export type TokenLedgerKind = (typeof TokenLedgerKind)[keyof typeof TokenLedgerKind];
 export const tokenLedgerKindSchema = z.enum(TokenLedgerKind);

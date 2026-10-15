@@ -72,6 +72,9 @@ export const AuditAction = {
   // a Stars payment credited, or recorded and held for a staff member (#117)
   StarsPurchased: 'stars_purchased',
   StarsPaymentHeld: 'stars_payment_held',
+  // a Stars payment refunded, and a refund asked for from /paysupport (#118)
+  StarsRefunded: 'stars_refunded',
+  StarsRefundRequested: 'stars_refund_requested',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);

@@ -9,6 +9,8 @@ import {
   starsPaidRequestSchema,
   starsPaidResponseSchema,
   starsPreCheckoutRequestSchema,
+  STAR_REFUND_REASON_MAX,
+  starRefundReasonSchema,
 } from './stars';
 
 const USER_ID = '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10';
@@ -122,5 +124,16 @@ describe('the route schemas', () => {
     ).toBe(true);
     expect(starsPaidResponseSchema.safeParse({ outcome: 'credited' }).success).toBe(false);
     expect(starsPaidResponseSchema.safeParse({ outcome: 'held' }).success).toBe(true);
+  });
+});
+
+// #118: refunds
+describe('the refund contracts', () => {
+  it('takes a reason of 1-200 code points without control characters, trimmed', () => {
+    expect(starRefundReasonSchema.parse('  просьба  ')).toBe('просьба');
+    expect(starRefundReasonSchema.safeParse('я'.repeat(STAR_REFUND_REASON_MAX)).success).toBe(true);
+    for (const bad of ['', '   ', 'я'.repeat(STAR_REFUND_REASON_MAX + 1), 'a\nb', 'a\tb']) {
+      expect(starRefundReasonSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 });
