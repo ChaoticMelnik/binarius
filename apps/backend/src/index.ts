@@ -200,6 +200,7 @@ const app = buildApp({
     db,
     catalog: pairsCatalog,
     balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
+    signals: signalFeed,
     internalApiToken: env.internalApiToken,
     demoOnly: env.demoOnly,
   },

@@ -64,6 +64,8 @@ import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import type { TradingSessionRoutesDeps } from './session-routes';
 import {
   PAIRS_TEST_TOKEN,
+  fakeSignalFeed,
+  sessionSignalEvaluation,
   unusedAccessTokenDeps,
   unusedBalanceDeps,
   unusedPairsDeps,
@@ -71,6 +73,7 @@ import {
   unusedSignalsDeps,
 } from './testing';
 import { unusedDepositDeps } from '../deposit/testing';
+import type { SignalEvaluation } from '@binarius/signal';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -124,6 +127,7 @@ let app: FastifyInstance | undefined;
 let lines: string[] = [];
 let refreshCalls: { accountId: string; options: Parameters<Refresh>[1] }[] = [];
 let catalogReads = 0;
+let signalCalls: Parameters<TradingSessionRoutesDeps['signals']['evaluate']>[0][] = [];
 
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
@@ -134,6 +138,7 @@ afterEach(async () => {
   lines = [];
   refreshCalls = [];
   catalogReads = 0;
+  signalCalls = [];
 });
 afterAll(() => tmp.drop());
 
@@ -144,9 +149,13 @@ function appWith(
     // what the refresh answers once the stub ran
     outcome?: BalanceRefreshOutcome;
     demoOnly?: boolean;
+    // the pair's signal at the start (#509); a signal by default
+    signal?: SignalEvaluation | (() => Promise<SignalEvaluation>);
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
+  const signals = fakeSignalFeed(options.signal ?? sessionSignalEvaluation('signal'));
+  signalCalls = signals.calls;
   const refresh: Refresh = (accountId, refreshOptions) => {
     refreshCalls.push({ accountId, options: refreshOptions });
     if (options.refresh === undefined) throw new Error('unexpected balance refresh');
@@ -177,6 +186,7 @@ function appWith(
         },
       },
       balance: { refresh },
+      signals: signals.feed,
       internalApiToken: PAIRS_TEST_TOKEN,
       demoOnly: options.demoOnly ?? false,
       now: () => NOW,
@@ -433,6 +443,69 @@ describe('POST /trading/sessions', () => {
     );
     await expectRefusal(response, 409, 'payout_too_low', before);
     expect(refreshCalls).toEqual([]);
+    // R33 (#509): the floor answers before the signal is asked
+    expect(signalCalls).toEqual([]);
+  });
+
+  // #509: no session on a pair without a signal now, whatever door the request came from
+  it('R28 a pair with no signal is 409 no_signal and writes no session', async () => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const response = await start(
+      appWith({ signal: sessionSignalEvaluation('no_signal') }),
+      bodyFor(seed),
+    );
+    await expectRefusal(response, 409, 'no_signal', before);
+  });
+
+  it.each(['rate_limited', 'unavailable'] as const)(
+    'R29 a signal fetch_failed %s is 503 signal_unavailable and writes no session',
+    async (code) => {
+      const seed = await seedReady();
+      const before = await sessionCount();
+      const response = await start(
+        appWith({ signal: { outcome: 'fetch_failed', code } as unknown as SignalEvaluation }),
+        bodyFor(seed),
+      );
+      await expectRefusal(response, 503, 'signal_unavailable', before);
+    },
+  );
+
+  it('R29 a signal feed that throws is 503 signal_unavailable, not a 500', async () => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const response = await start(
+      appWith({ signal: () => Promise.reject(new TypeError('boom')) }),
+      bodyFor(seed),
+    );
+    await expectRefusal(response, 503, 'signal_unavailable', before);
+  });
+
+  it("R30/R31 a signal starts; the feed is asked for the duration's candle and the pair's digits", async () => {
+    const seed = await seedReady();
+    const response = await start(appWith(), bodyFor(seed, { durationSec: 300 }));
+    expect(response.statusCode).toBe(201);
+    expect(signalCalls).toEqual([{ assetId: ASSET, interval: '5m', digits: pair.digits }]);
+  });
+
+  it('R32 a signal without a balance snapshot is 409 balance_unavailable', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const before = await sessionCount();
+    const response = await start(appWith({ refresh: () => Promise.resolve() }), bodyFor(seed));
+    await expectRefusal(response, 409, 'balance_unavailable', before);
+  });
+
+  it('R32b no signal and no balance snapshot answers no_signal first', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const before = await sessionCount();
+    const response = await start(
+      appWith({
+        refresh: () => Promise.resolve(),
+        signal: sessionSignalEvaluation('no_signal'),
+      }),
+      bodyFor(seed),
+    );
+    await expectRefusal(response, 409, 'no_signal', before);
   });
 
   it('R20 a pair paying exactly 80 % starts', async () => {

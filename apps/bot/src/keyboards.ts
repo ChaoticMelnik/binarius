@@ -4,17 +4,14 @@ import {
   BUY_CALLBACK_DATA,
   buyPackageCallbackData,
   DEMO_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
+  demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
   STAR_PACKAGES,
   supportUrl,
   TradeMode,
 } from '@binarius/shared';
-import {
-  DEMO_SIGNALS_CALLBACK_DATA,
-  demoAnalysisCallbackData,
-  demoSignalsCallbackData,
-  durationOf,
-} from './demo';
+import { demoAnalysisCallbackData, durationOf } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
 import { buyPackageLabel, inviteShareText, LABELS } from './texts';
 
@@ -136,21 +133,24 @@ export const backToAnalysisKeyboard = (assetId: number, durationSec: DemoDuratio
 // analysis of the same pair and duration while the demo still offers it, the signals of that
 // duration (the duration screen when the demo no longer offers it, #382), the menu;
 // each in its own row, under the rows a caller already put in `keyboard` (or none). `beforeMenu`
-// rows go right above the menu (the session result's invite, #115).
+// rows go right above the menu (the session result's invite, #115). `otherPair`, a session that
+// stopped for want of a signal (#509): no analysis of that pair, «🔀 Выбрать другую пару» in
+// place of «📡 К сигналам» on the same data.
 export function appendEndOfPath(
   keyboard: InlineKeyboard,
   assetId: number,
   durationSec: number,
   beforeMenu: readonly InlineKeyboardButton[][] = [],
+  { otherPair = false }: { otherPair?: boolean } = {},
 ): InlineKeyboard {
   const demoDuration = durationOf(String(durationSec));
   const rows = [
-    ...(demoDuration === undefined
+    ...(demoDuration === undefined || otherPair
       ? []
       : [[button(LABELS.newAnalysisButton, demoAnalysisCallbackData(assetId, demoDuration))]]),
     [
       button(
-        LABELS.toSignalsButton,
+        otherPair ? LABELS.otherPairButton : LABELS.toSignalsButton,
         demoDuration === undefined
           ? DEMO_SIGNALS_CALLBACK_DATA
           : demoSignalsCallbackData(demoDuration),

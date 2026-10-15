@@ -1,8 +1,11 @@
 import { InlineKeyboard } from 'grammy';
 import {
   createSessionTexts,
+  DEMO_SIGNALS_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   sessionTradeSteps,
+  signalsCallbackDataFor,
+  TradingSessionStopReason,
   type PairsCatalogView,
   type SessionStakeStrategy,
   type TelegramHtml,
@@ -52,17 +55,29 @@ export function sessionTradeMessage(
   });
 }
 
-// The finished session's summary, with sound and the menu as its next step. A summary is sent
-// only with a settled trade, so the last intent names the asset when the settings could not be
-// read.
+// The finished session's summary, with sound and the menu as its next step; a session the
+// no-signal limit stopped gets «🔀 Выбрать другую пару» above it, the signals of its duration
+// (#509). A summary is sent with a settled trade or for that stop, whose attempt had read the
+// settings, so the last intent names the asset when the settings could not be read.
 export function sessionSummaryMessage(
   view: TradingSessionView,
   symbol: string | null,
 ): ClientPushMessage {
   const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
   if (assetId === undefined) throw new Error('a summarized session names no asset');
+  const keyboard = new InlineKeyboard();
+  if (view.stopReason === TradingSessionStopReason.NoSignalTimeout) {
+    keyboard
+      .text(
+        CLIENT_LABELS.otherPairButton,
+        view.settings === null
+          ? DEMO_SIGNALS_CALLBACK_DATA
+          : signalsCallbackDataFor(view.settings.durationSec),
+      )
+      .row();
+  }
   return {
     text: notices.sessionSummaryText(symbol, assetId, view),
-    reply_markup: new InlineKeyboard().text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
+    reply_markup: keyboard.text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
   };
 }

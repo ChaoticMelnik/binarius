@@ -14,7 +14,7 @@ import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 import { STARS_PAYSUPPORT_LIST_LIMIT } from './stars';
 import { INT4_MAX } from './trading';
-import { DEFAULT_SESSION_TRADES } from './trading-session';
+import { DEFAULT_SESSION_TRADES, SESSION_NO_SIGNAL_TIMEOUT_MS } from './trading-session';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
 // messages). A key's own limit is checked with its variables' samples; these descriptions bound
@@ -58,6 +58,7 @@ export const BOT_TEXT_WIDTHS = {
   // formatBreakEven: 0.0-100.0, or a dash
   breakEven: 5,
   payoutFloor: String(MIN_CYCLE_PAYOUT_PCT).length,
+  noSignalMinutes: String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000).length,
   // «999 из 999»
   page: 10,
   // formatPaymentDate: 'dd.mm.yyyy hh:mm'
@@ -202,6 +203,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   payout: () => w.payout,
   breakEven: () => w.breakEven,
   payoutFloor: () => w.payoutFloor,
+  noSignalMinutes: () => w.noSignalMinutes,
   label: (m) => m.longest(...durations),
   subject,
   reason: (m) => m.longest(...ruleReasons, ...dataReasons),
@@ -461,6 +463,7 @@ const sessionStopLines = [
   'sessionStopBalanceUnavailable',
   'sessionStopInvalidSettings',
   'sessionStopUserStopped',
+  'sessionStopNoSignalTimeout',
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
 const sessionHead = [anyOf('sessionHeader', 'sessionHeaderReal'), '\n', k('sessionSettings')];

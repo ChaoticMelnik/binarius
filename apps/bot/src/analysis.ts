@@ -159,7 +159,7 @@ export interface AnalysisScreen {
   text: TelegramHtml;
   // the direction of the stake button behind «➕ Ещё», set on a signal only
   stake: TradeAction | null;
-  // the session row (#360): on every `decided` answer, never when the candles were not read
+  // the session row (#360): on a signal only (#509), so no session is offered on a pair without one
   session: boolean;
   // the card's picture (#482), by the direction of a signal; null on every other screen
   photo: TradeAction | null;
@@ -236,7 +236,7 @@ ${headline}
 
 ${withCycleNote(TEXTS.analysisDataHint)}`,
       stake: null,
-      session: true,
+      session: false,
       photo: null,
     };
   }
@@ -249,7 +249,7 @@ ${featureLines(decision.features, params, pair, volatility)}
 
 ${withCycleNote(TEXTS.analysisNoSignalHint)}`,
     stake: null,
-    session: true,
+    session: false,
     photo: null,
   };
 }

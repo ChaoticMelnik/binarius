@@ -45,6 +45,11 @@ export function fakeSignalFeed(answer: SignalEvaluation | (() => Promise<SignalE
   return { feed, calls };
 }
 
+// A decided evaluation of `kind` for the session start's signal step (#509), which reads the
+// decision's kind alone; the journal fields are left out.
+export const sessionSignalEvaluation = (kind: 'signal' | 'no_signal'): SignalEvaluation =>
+  ({ outcome: 'decided', entry: { decision: { kind } } }) as unknown as SignalEvaluation;
+
 // for suites that never call POST /trading/signal
 export const unusedSignalDeps = (): SignalRoutesDeps => ({
   feed: {
@@ -73,6 +78,11 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
   db: {} as TradingSessionRoutesDeps['db'],
   catalog: fakeCatalog(undefined),
   balance: unusedBalanceDeps(),
+  signals: {
+    evaluate: () => {
+      throw new Error('the session start signal is not wired in this test');
+    },
+  },
   internalApiToken: PAIRS_TEST_TOKEN,
   demoOnly: false,
 });

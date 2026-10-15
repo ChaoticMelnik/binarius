@@ -17,6 +17,7 @@ import {
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
   SignalFeedOutcome,
+  SignalKind,
   stakeIsRisky,
   stakePresets,
   telegramHtml,
@@ -33,6 +34,10 @@ import {
   type TradingAccessResponse,
   type TradingSignalsResponse,
   DEMO_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
+  demoSignalsCallbackData,
+  MENU_CALLBACK_DATA,
+  signalsCallbackDataFor,
 } from '@binarius/shared';
 import {
   analysisScreen,
@@ -103,11 +108,22 @@ import {
 // device all lead to the same screen, and every screen reads the catalog anew.
 
 // Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
-// `demo:l:2147483647:15:n` 22 and `demo:sig:15` 11. `demo:sig` is the main path's duration screen
-// (#382): every old «🔄 Обновить», «↩️ К списку» and «📡 К сигналам» lands there.
-export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
-export const demoSignalsCallbackData = (durationSec: DemoDurationSec): string =>
-  `${DEMO_SIGNALS_CALLBACK_DATA}:${durationSec}`;
+// `demo:l:2147483647:15:n` 22 and `demo:sig:15` 11 (DEMO_SIGNALS_CALLBACK_DATA, bot-navigation.ts).
+
+// A session refused or stopped for want of a signal on its pair (#509): the signals of the same
+// duration, then the menu (keyboards.ts → withMenu's row).
+export const otherPairKeyboard = (durationSec: number): InlineKeyboard =>
+  new InlineKeyboard()
+    .text(LABELS.otherPairButton, signalsCallbackDataFor(durationSec))
+    .row()
+    .text(LABELS.menuButton, MENU_CALLBACK_DATA);
+// the same read pressed again (`demo:l:` is a read: it opens a screen, never a session), the menu
+const retryWithMenu = (data: string): InlineKeyboard =>
+  new InlineKeyboard()
+    .text(LABELS.demoRetryButton, data)
+    .row()
+    .text(LABELS.menuButton, MENU_CALLBACK_DATA);
+
 // Where the amount screen of a demo cycle (#476) was opened: `l` the signal list (no token in the
 // data, as before #476), `a` the analysis, `n` the offer under a finished trade or «🔁 Ещё сессия».
 // `l` and `a` edit the pressed message; `n` sends the screen as a new message, so the trade's or
@@ -837,8 +853,9 @@ export function createDemoComposer<C extends Context>({
 
   // A pair of the list, and since #476 every demo door of a cycle: the amount screen in demo, the
   // launch screen in real (#327). The pair is checked against the catalog read at this press, never
-  // the one the list was drawn from; the signal is not read again, the cycle asks for it before
-  // each trade. The press ends a typed amount's step left open: its prompt's «↩️ Назад» is one.
+  // the one the list was drawn from, and so is its signal (#509): a door drawn without one — «🔁 Ещё
+  // сессия», the offer under a single trade, an old message — opens no session on a pair that has
+  // no signal now. The press ends a typed amount's step left open: its prompt's «↩️ Назад» is one.
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -848,25 +865,39 @@ export function createDemoComposer<C extends Context>({
     }
     const origin: CycleOrigin = ctx.match[3] === 'a' ? 'a' : ctx.match[3] === 'n' ? 'n' : 'l';
     if (dialog.get(ctx.from.id)?.step === 'cycleStake') dialog.delete(ctx.from.id);
-    const [read, access] = await answerAnd(
+    const [read, access, signal] = await answerAnd(
       ctx,
-      Promise.all([readDemoCycle(backend, assetId, durationSec, now), readAccess(ctx.from.id)]),
+      Promise.all([
+        readDemoCycle(backend, assetId, durationSec, now),
+        readAccess(ctx.from.id),
+        readLaunchSignal(assetId, durationSec),
+      ]),
     );
     const firstName = ctx.from.first_name;
     const step = { assetId, durationSec, back: cycleBackOf(origin) };
     const screen = !read.ok
       ? // a pair below the cycle floor gets the floor's refusal in either mode (#327)
         launchFailure(ctx, read, assetId, durationSec)
-      : access?.tradingMode === TradeMode.Real
-        ? launchScreen({
-            assetId,
-            durationSec,
-            firstName,
-            symbol: read.pair.symbol,
-            amount: effectiveStake(access),
-            mode: TradeMode.Real,
-          })
-        : demoCycleScreen({ step, firstName, symbol: read.pair.symbol, access, connectKeyboard });
+      : signal === 'unavailable'
+        ? { text: TEXTS.sessionSignalUnavailable, keyboard: retryWithMenu(ctx.callbackQuery.data) }
+        : signal === 'no_signal'
+          ? { text: TEXTS.sessionNoSignal, keyboard: otherPairKeyboard(durationSec) }
+          : access?.tradingMode === TradeMode.Real
+            ? launchScreen({
+                assetId,
+                durationSec,
+                firstName,
+                symbol: read.pair.symbol,
+                amount: effectiveStake(access),
+                mode: TradeMode.Real,
+              })
+            : demoCycleScreen({
+                step,
+                firstName,
+                symbol: read.pair.symbol,
+                access,
+                connectKeyboard,
+              });
     if (origin === 'n') await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
     else await editOrReply(ctx, screen.text, screen.keyboard);
   });
@@ -1288,6 +1319,31 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
+  // The pair's signal at a cycle door's press (#509), as the start route reads it: the same cached
+  // feed, so a press right after the analysis asks the broker nothing. A thrown call and every
+  // fetch_failed are `unavailable`: the door never opens on a signal it could not read.
+  async function readLaunchSignal(
+    assetId: number,
+    durationSec: DemoDurationSec,
+  ): Promise<'signal' | 'no_signal' | 'unavailable'> {
+    try {
+      const response = await backend.evaluateSignal(assetId, intervalForDuration(durationSec));
+      if (response.outcome === SignalFeedOutcome.FetchFailed) {
+        if (response.code !== BrokerRestErrorCode.RateLimited) {
+          logger.warn({ signalCode: response.code }, 'launch signal not evaluated');
+        }
+        return 'unavailable';
+      }
+      return response.decision.kind === SignalKind.Signal ? 'signal' : 'no_signal';
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error) },
+        'launch signal not evaluated',
+      );
+      return 'unavailable';
+    }
+  }
+
   // the amount screen's access read (#476): null when it failed, which that screen says
   async function readAccess(telegramUserId: number): Promise<TradingAccessResponse | null> {
     try {
@@ -1322,10 +1378,10 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The session row first on every `decided` answer (#360) of a pair paying at least the cycle
-  // floor (#379, the screen says why otherwise), in the user's mode (#327) — under a signal's card
-  // in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then «🔄 Повторить
-  // анализ» and the way back
+  // The session row first on a signal (#360; never on «сигнала нет», #509) of a pair paying at
+  // least the cycle floor (#379, the screen says why otherwise), in the user's mode (#327) — under
+  // a signal's card in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then
+  // «🔄 Повторить анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,

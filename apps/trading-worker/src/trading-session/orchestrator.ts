@@ -21,9 +21,7 @@ import {
   errorLogFields,
   intervalForDuration,
   isPairOpen,
-  MIN_CYCLE_PAYOUT_PCT,
   pairAcceptsDuration,
-  pairPayoutAccepted,
   safeParseTradingSessionSettings,
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
@@ -241,6 +239,7 @@ export function createSessionOrchestrator({
 
     const history = await readSessionHistory(db, session.id, {
       maxDurationMs: config.maxDurationMs,
+      noSignalTimeoutMs: config.noSignalTimeoutMs,
     });
     if (history === undefined) {
       logger.warn(ids, 'trading session vanished');
@@ -295,19 +294,22 @@ export function createSessionOrchestrator({
         fields: { assetId: settings.assetId, listed: pair !== undefined },
       };
     }
+    // The three waits for a signal end at the no-signal limit (#509, owner): a closed pair, a
+    // no_signal, the pause after two losses. A failure to read the pairs or the signal is not a
+    // wait for a signal, so it neither stops the session nor moves the count.
+    const noSignalStop = (waited: 'pair_closed' | 'no_signal' | 'paused'): Ending => ({
+      kind: 'stop',
+      reason: TradingSessionStopReason.NoSignalTimeout,
+      fields: { waited },
+    });
     const nowMs = now();
     if (!isPairOpen(pair, nowMs)) {
+      if (history.waitExpired) return noSignalStop('pair_closed');
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
       return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
     }
-    // no cycle trades a pair paying less than the floor; the session waits for it (owner, #379)
-    if (!pairPayoutAccepted(pair)) {
-      logger.info(
-        { ...ids, assetId: pair.id, payout: pair.payout, floor: MIN_CYCLE_PAYOUT_PCT },
-        'trading session waits for the payout',
-      );
-      return { kind: 'hold', ms: config.retryMs };
-    }
+    // the payout floor is the start's alone (#509, owner): a pair whose payout fell below it after
+    // the start keeps trading on its signals
 
     const interval = intervalForDuration(settings.durationSec);
     const answer = await signals.evaluate({ assetId: settings.assetId, interval }, { signal });
@@ -336,6 +338,7 @@ export function createSessionOrchestrator({
       return Math.ceil(decidedAt / intervalMs) * intervalMs + config.candleSlackMs - decidedAt;
     };
     if (response.decision.kind === SignalKind.NoSignal) {
+      if (history.waitExpired) return noSignalStop('no_signal');
       logger.info(
         { ...ids, reason: response.decision.reason },
         'trading session waits for the next candle',
@@ -344,6 +347,7 @@ export function createSessionOrchestrator({
     }
     const action: TradeAction = response.decision.action;
     if (pausedDirection(history.intents) === action && session.lastSignalAction === action) {
+      if (history.waitExpired) return noSignalStop('paused');
       logger.info({ ...ids, action }, 'trading session waits for the signal to change');
       return { kind: 'hold', ms: untilNextCandle(), signalAction: action };
     }

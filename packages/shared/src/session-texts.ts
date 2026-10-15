@@ -5,7 +5,11 @@ import { SessionTradeResult } from './session-steps';
 import { decimalLessThan } from './stake';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
 import { TradeMode } from './trading';
-import { TradingSessionStopReason, type TradingSessionView } from './trading-session';
+import {
+  SESSION_NO_SIGNAL_TIMEOUT_MS,
+  TradingSessionStopReason,
+  type TradingSessionView,
+} from './trading-session';
 
 // The session's words that both the bot's status message and the backend's session notices print
 // (#464, docs/bot-session.md): one source, so the summary the backend sends cannot drift from the
@@ -16,7 +20,7 @@ import { TradingSessionStopReason, type TradingSessionView } from './trading-ses
 export const INTENT_SYMBOL_LIMIT = 64;
 
 // A session's stop reasons but completed, by key (#284). kill_switch reads the single
-// trade's own refusal of the closed switch.
+// trade's own refusal of the closed switch; no_signal_timeout's line carries the limit (#509).
 export const SESSION_STOP_LINES = {
   [TradingSessionStopReason.ManualReview]: 'sessionStopManualReview',
   [TradingSessionStopReason.RejectedTwice]: 'sessionStopRejectedTwice',
@@ -29,7 +33,10 @@ export const SESSION_STOP_LINES = {
   [TradingSessionStopReason.UserStopped]: 'sessionStopUserStopped',
   [TradingSessionStopReason.KillSwitch]: 'tradingPaused',
 } as const satisfies Record<
-  Exclude<TradingSessionStopReason, typeof TradingSessionStopReason.Completed>,
+  Exclude<
+    TradingSessionStopReason,
+    typeof TradingSessionStopReason.Completed | typeof TradingSessionStopReason.NoSignalTimeout
+  >,
   BotStaticHtmlKey
 >;
 
@@ -126,7 +133,15 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
       return [html.sessionCompleted({ result: resultOf(view.trades) }), ...outcomeLines(view)];
     }
     const lines: TelegramHtml[] = [];
-    if (view.stopReason !== null) lines.push(html[SESSION_STOP_LINES[view.stopReason]]);
+    if (view.stopReason === TradingSessionStopReason.NoSignalTimeout) {
+      lines.push(
+        html.sessionStopNoSignalTimeout({
+          noSignalMinutes: String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000),
+        }),
+      );
+    } else if (view.stopReason !== null) {
+      lines.push(html[SESSION_STOP_LINES[view.stopReason]]);
+    }
     if (view.trades.settled > 0) lines.push(html.sessionTotal({ result: resultOf(view.trades) }));
     lines.push(...outcomeLines(view));
     return lines;

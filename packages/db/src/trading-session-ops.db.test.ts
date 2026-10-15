@@ -6,6 +6,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  SESSION_NO_SIGNAL_TIMEOUT_MS,
   decimalStringSchema,
   type DecimalString,
   type TradeIntentErrorCode,
@@ -66,6 +67,7 @@ if (baseUrl === undefined || baseUrl === '') {
 }
 
 const HOUR_MS = 3_600_000;
+const LIMITS = { maxDurationMs: HOUR_MS, noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS };
 
 let tmp: TempDatabase;
 beforeAll(async () => {
@@ -805,10 +807,11 @@ describe('readSessionHistory', () => {
       tmp.db,
       intentInput(seed, { step: 2, action: TradeAction.Down }),
     );
-    const history = await readSessionHistory(tmp.db, seed.session.id, { maxDurationMs: HOUR_MS });
+    const history = await readSessionHistory(tmp.db, seed.session.id, LIMITS);
     expect(history).toEqual({
       telegramUserId: seed.telegramUserId,
       expired: false,
+      waitExpired: false,
       intents: [
         {
           id: first.id,
@@ -829,9 +832,7 @@ describe('readSessionHistory', () => {
       ],
     });
     expect(
-      await readSessionHistory(tmp.db, '00000000-0000-4000-8000-000000000000', {
-        maxDurationMs: HOUR_MS,
-      }),
+      await readSessionHistory(tmp.db, '00000000-0000-4000-8000-000000000000', LIMITS),
     ).toBeUndefined();
   });
   it('H2 flags a session past the deadline (#287 review M1)', async () => {
@@ -840,12 +841,77 @@ describe('readSessionHistory', () => {
       startedAt: new Date(Date.now() - 2 * HOUR_MS),
     });
     const fresh = await seedSessionAccount();
-    expect(
-      (await readSessionHistory(tmp.db, expired.id, { maxDurationMs: HOUR_MS }))!.expired,
-    ).toBe(true);
-    expect(
-      (await readSessionHistory(tmp.db, fresh.session.id, { maxDurationMs: HOUR_MS }))!.expired,
-    ).toBe(false);
+    expect((await readSessionHistory(tmp.db, expired.id, LIMITS))!.expired).toBe(true);
+    expect((await readSessionHistory(tmp.db, fresh.session.id, LIMITS))!.expired).toBe(false);
+  });
+});
+
+// #509: the no-signal count, from the later of started_at and the session's last intent change
+describe('readSessionHistory: waitExpired (#509)', () => {
+  const ago = (ms: number) => sql`now() - (${ms}::int * interval '1 millisecond')`;
+  const startedAgo = (id: string, ms: number) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ startedAt: ago(ms) })
+      .where(eq(tradingSessions.id, id));
+  const changedAgo = (id: string, ms: number) =>
+    tmp.db.execute(sql`update trade_intents set updated_at = ${ago(ms)} where id = ${id}`);
+  const waitExpired = async (id: string) =>
+    (await readSessionHistory(tmp.db, id, LIMITS))!.waitExpired;
+  const LIMIT = SESSION_NO_SIGNAL_TIMEOUT_MS;
+
+  it('NS1 a session without an intent counts from started_at: past the limit it expired', async () => {
+    const seed = await seedSessionAccount();
+    await startedAgo(seed.session.id, LIMIT + 60_000);
+    expect(await waitExpired(seed.session.id)).toBe(true);
+  });
+
+  it("NS2 the session's intent changed 30 s ago: not expired though started 5 min ago", async () => {
+    const seed = await seedSessionAccount();
+    const { intent } = await createSessionIntent(tmp.db, intentInput(seed));
+    await settle(intent, '0.82');
+    await startedAgo(seed.session.id, 300_000);
+    await changedAgo(intent.id, 30_000);
+    expect(await waitExpired(seed.session.id)).toBe(false);
+    await changedAgo(intent.id, LIMIT + 5_000);
+    expect(await waitExpired(seed.session.id)).toBe(true);
+  });
+
+  it("NS3 another session's intent on the same account does not count", async () => {
+    const seed = await seedSessionAccount();
+    const { intent } = await createSessionIntent(tmp.db, intentInput(seed));
+    await settle(intent, '0.82');
+    await stopTradingSession(tmp.db, { id: seed.session.id, reason: 'completed' });
+    const later = await createSessionRow({
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      settings: sessionSettings(),
+    });
+    await startedAgo(later.id, LIMIT + 5_000);
+    expect(await waitExpired(later.id)).toBe(true);
+  });
+
+  it('NS4 a bot trade on the account (no session) does not count', async () => {
+    const seed = await seedSessionAccount();
+    await startedAgo(seed.session.id, LIMIT + 5_000);
+    await createTradeIntent(tmp.db, {
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: 'demo',
+      assetId: 101,
+      amount: decimalStringSchema.parse('1'),
+      action: 'up',
+      durationSec: 60,
+      clientRequestId: `bot-${seed.session.id}`,
+    });
+    expect(await waitExpired(seed.session.id)).toBe(true);
+  });
+
+  it('NS5 the boundary: started 10 s inside the limit is not expired', async () => {
+    const seed = await seedSessionAccount();
+    await startedAgo(seed.session.id, LIMIT - 10_000);
+    expect(await waitExpired(seed.session.id)).toBe(false);
   });
 });
 

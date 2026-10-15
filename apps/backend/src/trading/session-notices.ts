@@ -3,6 +3,7 @@ import { GrammyError } from 'grammy';
 import {
   errorLogFields,
   safeParseTradingSessionSettings,
+  TradingSessionStopReason,
   type TelegramHtml,
   type TradingSessionSettings,
 } from '@binarius/shared';
@@ -193,8 +194,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     const telegramUserId = String(session.telegramUserId);
     const view = await readFinishedSessionView({ db, balance }, session.sessionId, telegramUserId);
     if (view === undefined) return 'skip';
-    // no settled trade: no result to report (#337, #318), the mark alone
-    if (view.trades.settled === 0) {
+    // no settled trade: no result to report (#337, #318), the mark alone — but a session the
+    // no-signal limit stopped tells why with the way to another pair, trades or not (#509)
+    if (view.trades.settled === 0 && view.stopReason !== TradingSessionStopReason.NoSignalTimeout) {
       await claimSessionFinalNotice(db, { sessionId: session.sessionId });
       return 'next';
     }

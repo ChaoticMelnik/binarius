@@ -297,6 +297,8 @@ export const TIMING_CHAIN_HOLDS =
   TRADING_ACCESS_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the session start route (#283) waits on the same GET when the account has no snapshot
   TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_SESSION_START_BUDGET_MS &&
+  // and on the pair's signal beside it (#509): the two run in parallel, so each fits on its own
+  SIGNAL_FETCH_BUDGET_MS < TRADING_SESSION_START_BUDGET_MS &&
   TRADING_SESSION_START_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // a finished session's view refreshes the balance with the same GET (#337)
   TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_SESSION_VIEW_BUDGET_MS &&

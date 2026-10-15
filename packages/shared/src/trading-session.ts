@@ -65,6 +65,9 @@ export const TradingSessionStopReason = {
   UserStopped: 'user_stopped',
   // the global trading switch is closed (#144, stopPausedSessions)
   KillSwitch: 'kill_switch',
+  // SESSION_NO_SIGNAL_TIMEOUT_MS since the later of started_at and the session's last intent
+  // change, on the database clock, while the session waited for a signal (#509)
+  NoSignalTimeout: 'no_signal_timeout',
 } as const;
 export type TradingSessionStopReason =
   (typeof TradingSessionStopReason)[keyof typeof TradingSessionStopReason];
@@ -107,6 +110,10 @@ export const SESSION_MAX_DURATION_MS = 3_600_000;
 // CATCHUP_STALLED_RETRY_MS (30 s); 120 keeps room (stated: shared cannot import the worker)
 export const SESSION_SETTLE_SLACK_SEC = 120;
 
+// A session that waits this long for a signal stops with no_signal_timeout (#509, owner): counted
+// from the later of started_at and its last intent's change, on the database clock
+export const SESSION_NO_SIGNAL_TIMEOUT_MS = 120_000;
+
 export const sessionFitsDeadline = (trades: number, durationSec: number): boolean =>
   trades * (durationSec + SESSION_SETTLE_SLACK_SEC) * 1000 <= SESSION_MAX_DURATION_MS;
 
@@ -147,6 +154,10 @@ export const TradingSessionErrorCode = {
   PayoutTooLow: 'payout_too_low',
   // the string of PairsCatalogErrorCode.Unavailable: the same cache answers both routes
   CatalogUnavailable: 'catalog_unavailable',
+  // the pair's signal on the current candle is no_signal (#509): no session starts on it
+  NoSignal: 'no_signal',
+  // the signal could not be read (broker failure, rate limit): the start refuses, never opens
+  SignalUnavailable: 'signal_unavailable',
   NotFound: 'not_found',
   SessionNotActive: 'session_not_active',
   // the session's stake against the account's snapshot (#297, checkStake)

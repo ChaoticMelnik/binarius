@@ -523,7 +523,7 @@ line is in it with its level.
 
 | msg | level | When |
 |---|---|---|
-| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`) |
+| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` (`no_signal_timeout`: `pair_closed`, `no_signal` or `paused`, #509) |
 | `trading session stopped for manual review` | error | the halt sweep, or `account_halted` from the attempt (`code`) |
 | `trading session completed` | info | settled trades reached `settings.trades` (`settled`) |
 | `trading session vanished` | warn | a race: the row was gone between the scan and the history |
@@ -533,7 +533,6 @@ line is in it with its level.
 | `trading session signal unavailable` | warn | the signal call failed (`reason`, `status`) |
 | `trading session signal fetch failed` | warn | the backend answered `fetch_failed` (`code`, `retryAfterSec`) |
 | `trading session waits for the next candle` | info | `no_signal` (`reason`) |
-| `trading session waits for the payout` | info | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (`assetId`, `payout`, `floor`; #379) |
 | `trading session waits for the signal to change` | info | the pause after two losses in `action` (#379) |
 | `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |

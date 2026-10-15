@@ -5,6 +5,7 @@ import {
   TradeMode,
   TradingSessionErrorCode,
   TradingSessionStatus,
+  TradingSessionStopReason,
   type BotStaticHtmlKey,
   type CreateTradingSessionRequest,
   type PairsCatalogResponse,
@@ -20,6 +21,7 @@ import {
 import {
   demoLaunchCallbackData,
   durationOf,
+  otherPairKeyboard,
   SESSION_START_PATTERN,
   sessionStartCallbackData,
   sessionStartDataOf,
@@ -67,10 +69,10 @@ export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${UUID}$`);
 // A live session gets both buttons; a stopped one the refresh, since its last trade can still
 // settle and move the counters, and «🔁 Ещё сессия» on its own pair, duration and mode (#320,
 // #327): in real the session button's data, so the start handler checks it as any other; in demo
-// the amount screen (#476). A duration the
-// demo no longer offers has no such button.
+// the amount screen (#476). A duration the demo no longer offers has no such button, and neither
+// has a session that stopped for want of a signal (#509).
 export const sessionKeyboard = (
-  view: Pick<TradingSessionView, 'id' | 'mode' | 'status' | 'settings'>,
+  view: Pick<TradingSessionView, 'id' | 'mode' | 'status' | 'settings' | 'stopReason'>,
   cashierUrl: string | undefined,
 ): InlineKeyboard => {
   const keyboard = new InlineKeyboard().text(
@@ -86,15 +88,16 @@ export const sessionKeyboard = (
 // A stopped session's next steps under `keyboard`'s rows: the again button while the demo offers
 // its duration, then the end of the path with «💳 Пополнить» (#27) and «👥 Пригласить друга»
 // (#115) right above the menu; the deposit, the invite and the menu alone when its settings could
-// not be read.
+// not be read. A no_signal_timeout stop (#509) offers another pair instead of the same one again.
 function appendSessionEnd(
   keyboard: InlineKeyboard,
-  { mode, settings }: Pick<TradingSessionView, 'mode' | 'settings'>,
+  { mode, settings, stopReason }: Pick<TradingSessionView, 'mode' | 'settings' | 'stopReason'>,
   cashierUrl: string | undefined,
 ): InlineKeyboard {
   if (settings === null) return withInvite(keyboard, cashierUrl);
+  const otherPair = stopReason === TradingSessionStopReason.NoSignalTimeout;
   const durationSec = durationOf(String(settings.durationSec));
-  if (durationSec !== undefined) {
+  if (durationSec !== undefined && !otherPair) {
     // a demo session's again opens the amount screen (#476) as a new message, so this one stays
     keyboard
       .row()
@@ -105,10 +108,13 @@ function appendSessionEnd(
           : sessionStartCallbackData(mode, settings.assetId, durationSec),
       );
   }
-  return appendEndOfPath(keyboard, settings.assetId, settings.durationSec, [
-    ...depositRows(cashierUrl),
-    [inviteButton()],
-  ]);
+  return appendEndOfPath(
+    keyboard,
+    settings.assetId,
+    settings.durationSec,
+    [...depositRows(cashierUrl), [inviteButton()]],
+    { otherPair },
+  );
 }
 
 // Under the summary card (#318): the stopped status's next steps without «🔄 Обновить», which
@@ -116,7 +122,7 @@ function appendSessionEnd(
 // анализ» and «📡 К сигналам» edit too: a photo's edit is refused as gone and their screen is
 // answered anew (screen.ts).
 export const sessionCardKeyboard = (
-  view: Pick<TradingSessionView, 'mode' | 'settings'>,
+  view: Pick<TradingSessionView, 'mode' | 'settings' | 'stopReason'>,
   cashierUrl: string | undefined,
 ): InlineKeyboard => appendSessionEnd(new InlineKeyboard(), view, cashierUrl);
 
@@ -147,6 +153,8 @@ interface Refusal {
   buy?: true;
   // «💵 Сумма» under the text: a refusal of the saved stake itself (#297)
   stakeMenu?: true;
+  // «🔀 Выбрать другую пару» and the menu: the pair has no signal now (#509)
+  otherPair?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
 }
@@ -177,6 +185,10 @@ export const START_REFUSALS = {
   // an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell below the floor (#379)
   [TradingSessionErrorCode.PayoutTooLow]: { text: 'sessionPayoutTooLow' },
   [TradingSessionErrorCode.CatalogUnavailable]: { text: 'demoCatalogUnavailable' },
+  // an old «🔁 Ещё сессия», the offer under a single trade or a real launch screen on a pair with
+  // no signal now (#509); both answered before any row is written
+  [TradingSessionErrorCode.NoSignal]: { text: 'sessionNoSignal', otherPair: true },
+  [TradingSessionErrorCode.SignalUnavailable]: { text: 'sessionSignalUnavailable' },
   // the client returns it as { active }, so it never arrives here
   [TradingSessionErrorCode.ActiveSessionExists]: { text: 'unavailable', log: true },
   // answers of the read and stop routes, not of the start
@@ -202,12 +214,16 @@ const isHttpError = (error: unknown, reason: string): boolean =>
   error.reason === reason;
 
 // A 5xx, no answer, or a body that is not the contract's: the session may have been committed and
-// the answer lost. Any 4xx, and the 503 catalog_unavailable, the start route answers before
-// createTradingSession.
+// the answer lost. Any 4xx, and the 503s catalog_unavailable and signal_unavailable (#509), the
+// start route answers before createTradingSession.
+const KNOWN_503: ReadonlySet<string> = new Set([
+  TradingSessionErrorCode.CatalogUnavailable,
+  TradingSessionErrorCode.SignalUnavailable,
+]);
 export const sessionOutcomeUnknown = (error: unknown): boolean =>
   error instanceof BackendError &&
   (error.code !== BackendErrorCode.HttpStatus || (error.status ?? 0) >= 500) &&
-  !(error.status === 503 && error.reason === TradingSessionErrorCode.CatalogUnavailable);
+  !(error.status === 503 && error.reason !== undefined && KNOWN_503.has(error.reason));
 
 type StartOutcome =
   { ok: true; result: StartSessionResult } | { ok: false; unknown: boolean; error: unknown };
@@ -430,7 +446,9 @@ export function createTradingSessionComposer<C extends Context>({
               )
             : refusal.buy === true
               ? withBuy(backToAnalysisKeyboard(assetId, durationSec), cashierUrl)
-              : backToAnalysisKeyboard(assetId, durationSec);
+              : refusal.otherPair === true
+                ? otherPairKeyboard(durationSec)
+                : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
     await replyHtml(ctx, textOf(text), { reply_markup });

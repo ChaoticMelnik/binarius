@@ -338,6 +338,10 @@ export interface SessionHistory {
   telegramUserId: string;
   // started_at + maxDurationMs passed, on the database clock at this read
   expired: boolean;
+  // noSignalTimeoutMs passed since the later of started_at and the newest updated_at of the
+  // session's own intents, on the database clock at this read (#509): a session without an intent
+  // counts from its start, and a bot trade on the account (NULL session) moves nothing
+  waitExpired: boolean;
   intents: SessionHistoryIntent[];
 }
 
@@ -346,12 +350,18 @@ export interface SessionHistory {
 export async function readSessionHistory(
   db: Db,
   sessionId: string,
-  { maxDurationMs }: { maxDurationMs: number },
+  { maxDurationMs, noSignalTimeoutMs }: { maxDurationMs: number; noSignalTimeoutMs: number },
 ): Promise<SessionHistory | undefined> {
   const [owner] = await db
     .select({
       telegramUserId: users.telegramUserId,
       expired: sql<boolean>`${pastDeadline(maxDurationMs)}`,
+      // greatest() skips a NULL: no intent leaves started_at
+      waitExpired: sql<boolean>`greatest(
+        ${tradingSessions.startedAt},
+        (select max(${tradeIntents.updatedAt}) from ${tradeIntents}
+          where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
+      ) < ${millisecondsAgo(noSignalTimeoutMs)}`,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -371,7 +381,12 @@ export async function readSessionHistory(
     .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
     .where(eq(tradeIntents.tradingSessionId, sessionId))
     .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
-  return { telegramUserId: owner.telegramUserId.toString(), expired: owner.expired, intents };
+  return {
+    telegramUserId: owner.telegramUserId.toString(),
+    expired: owner.expired,
+    waitExpired: owner.waitExpired,
+    intents,
+  };
 }
 
 // CAS on status = active: a second stop finds nothing and the first reason stays

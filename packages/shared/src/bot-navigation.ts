@@ -3,6 +3,22 @@
 // sends is one the bot handles when it is pressed (precedent: link-confirmation.ts). Callback data
 // is 1-64 bytes.
 
+import { SIGNAL_CHART_INTERVAL_MS, SIGNAL_SCAN_INTERVALS } from './signal';
+
+// «Сигналы сейчас» (#320): `demo:sig` is the duration screen (#382), every old «🔄 Обновить»,
+// «↩️ К списку» and «📡 К сигналам» lands there; `demo:sig:<sec>` the list of one duration. Here
+// since #509, when the backend's session summary started to carry «🔀 Выбрать другую пару».
+export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
+export const demoSignalsCallbackData = (durationSec: number): string =>
+  `${DEMO_SIGNALS_CALLBACK_DATA}:${String(durationSec)}`;
+// the list of a duration the scanner lists, the duration screen for any other
+export const signalsCallbackDataFor = (durationSec: number): string =>
+  SIGNAL_SCAN_INTERVALS.some(
+    (interval) => SIGNAL_CHART_INTERVAL_MS[interval] === durationSec * 1000,
+  )
+    ? demoSignalsCallbackData(durationSec)
+    : DEMO_SIGNALS_CALLBACK_DATA;
+
 // The status card's button (#24), and since #350 the account card's: the signals screen (#320).
 // Kept as `demo`, so a button on an old card leads there too.
 export const DEMO_CALLBACK_DATA = 'demo';

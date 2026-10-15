@@ -11,6 +11,7 @@ import {
   TradingSessionStopReason,
   type TradingAccessResponse,
   type TradingSessionView,
+  demoSignalsCallbackData,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
 import { createBot } from './bot';
@@ -21,7 +22,6 @@ import {
   demoDurationCallbackData,
   demoLaunchCallbackData,
   demoPageCallbackData,
-  demoSignalsCallbackData,
   sessionStartCallbackData,
   stakeCallbackData,
   stakeFingerprint,
@@ -111,6 +111,18 @@ const SCENES: Scene[] = [
   press('the signals, empty', demoSignalsCallbackData(15), { signals: signalsResponse(NOW) }),
   press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
   press('the launch below the cycle floor', demoLaunchCallbackData(BELOW_FLOOR.id, 15)),
+  // #509: the launch on a pair without a signal now, and a signal that could not be read
+  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 15), {
+    evaluateSignal: SIGNAL_NO_SIGNAL,
+  }),
+  press('the launch, fetch_failed', demoLaunchCallbackData(PAIR_EURUSD.id, 15), {
+    evaluateSignal: SIGNAL_FETCH_FAILED,
+  }),
+  press(
+    'a real session refused for no signal',
+    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+    { startSession: sessionRefusal(TradingSessionErrorCode.NoSignal) },
+  ),
   press(
     'a save from the launch',
     stakePresetCallbackData('5', TradeMode.Demo, {
@@ -264,6 +276,9 @@ describe('the real path (#121)', () => {
     ['a stopped real session', 'проверь баланс в /account'],
     ['a demo session button of an earlier render', 'Режим или сумма сделки изменились'],
     ['the launch', '🚀 Запустить цикл · REAL'],
+    ['the launch, no signal', 'По паре сейчас нет сигнала'],
+    ['the launch, fetch_failed', 'Не удалось проверить сигнал пары'],
+    ['a real session refused for no signal', '🔀 Выбрать другую пару'],
     ['the analysis, a signal', '🚀 Сессия из 5 сделок · REAL'],
     ['«➕ Ещё»', '🚀 Сессия из 5 сделок · REAL'],
     ['the refresh of a settled real trade', '🚀 Сессия из 5 сделок · REAL'],

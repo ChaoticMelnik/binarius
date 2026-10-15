@@ -10,6 +10,7 @@ import {
   AccountHaltReason,
   isClosedTrade,
   SESSION_MAX_DURATION_MS,
+  SESSION_NO_SIGNAL_TIMEOUT_MS,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -118,6 +119,7 @@ const CONFIG: SessionOrchestratorConfig = {
   retryMs: 60_000,
   candleSlackMs: 5_000,
   maxDurationMs: SESSION_MAX_DURATION_MS,
+  noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
 };
 
 // the orchestrator's clock: the hold-backs and the sizer read it, the sweeps read the database's
@@ -641,6 +643,7 @@ describe('the attempt and the sequence (#287)', () => {
         'the later deadline on the database clock',
         async () =>
           (await readSessionHistory(tmp.db, later.session.id, {
+            noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
             maxDurationMs: SESSION_MAX_DURATION_MS,
           }))!.expired,
       );
@@ -1119,33 +1122,18 @@ describe('the pause after two losses (#379)', () => {
     await orchestrator.stop();
   });
 
-  it('P6 a pair paying below the floor holds the session for retryMs and asks no signal', async () => {
+  // #509 (owner): the floor is the start's alone; a payout that fell after it keeps trading
+  it('P6 a pair whose payout fell below the floor after the start trades on its signal', async () => {
     const seed = await seedSession();
     const signals = signalsOf();
-    let catalog = fresh([eurUsd({ payout: 79 })]);
     const orchestrator = orchestratorOf({
       signals,
-      pairs: { read: () => Promise.resolve(catalog) },
+      pairs: pairsOf(fresh([eurUsd({ payout: 79 })])),
     });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(0);
-    const row = await sessionRow(seed.session.id);
-    expect(row).toMatchObject({ status: TradingSessionStatus.Active, lastSignalAction: null });
-    expect(row.lastDecisionAt).not.toBeNull();
-    expect(
-      linesOf(seed.session.id).filter(
-        (line) => line.msg === 'trading session waits for the payout',
-      ),
-    ).toEqual([expect.objectContaining({ level: 30, assetId: 101, payout: 79, floor: 80 })]);
-    advance(CONFIG.retryMs - 1_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(0);
-
-    catalog = fresh([eurUsd({ payout: 80 })]);
-    advance(1_000);
     await orchestrator.tick();
     expect(signals.calls).toHaveLength(1);
     expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
     await orchestrator.stop();
   });
 
@@ -1203,6 +1191,159 @@ describe('the pause after two losses (#379)', () => {
     ],
   ])('P7 %s', (_, intents, expected) => {
     expect(pausedDirection(intents)).toBe(expected);
+  });
+});
+
+// #509 (owner): two minutes waiting for a signal stop the session, on the database clock, from the
+// later of started_at and the session's last intent change; the tests move those rows relative to
+// the production limit
+describe('the no-signal limit (#509)', () => {
+  const LIMIT = SESSION_NO_SIGNAL_TIMEOUT_MS;
+  const ago = (ms: number) => sql`now() - (${ms}::int * interval '1 millisecond')`;
+  const startedAgo = (id: string, ms: number) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ startedAt: ago(ms) })
+      .where(eq(tradingSessions.id, id));
+  const changedAgo = (sessionId: string, ms: number) =>
+    tmp.db.execute(
+      sql`update trade_intents set updated_at = ${ago(ms)} where trading_session_id = ${sessionId}`,
+    );
+  const noSignal: SignalOutcome = { ok: true, response: noSignalAnswer() };
+  const stopLines = (sessionId: string) =>
+    linesOf(sessionId).filter((line) => line.msg === 'trading session stopped');
+  const tokensOf = async (userId: string) => {
+    const [row] = await tmp.db
+      .select({ balance: users.tokenBalance, reserved: users.tokenReserved })
+      .from(users)
+      .where(eq(users.id, userId));
+    const { rows } = await tmp.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from token_ledger where user_id = ${userId}`,
+    );
+    return { ...row, ledger: rows[0]!.n };
+  };
+  const expectStopped = async (sessionId: string, waited: string) => {
+    expect(await sessionRow(sessionId)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.NoSignalTimeout,
+    });
+    expect(stopLines(sessionId)).toEqual([
+      expect.objectContaining({ level: 40, reason: 'no_signal_timeout', waited }),
+    ]);
+  };
+  const expectActive = async (sessionId: string) =>
+    expect((await sessionRow(sessionId)).status).toBe(TradingSessionStatus.Active);
+
+  it('W1 no_signal past the limit since the start stops it, nothing reserved or written', async () => {
+    const seed = await seedSession();
+    await startedAgo(seed.session.id, LIMIT + 5_000);
+    const before = await tokensOf(seed.userId);
+    const signals = signalsOf(noSignal);
+    const orchestrator = orchestratorOf({ signals });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    await expectStopped(seed.session.id, 'no_signal');
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect(await tokensOf(seed.userId)).toEqual(before);
+    await orchestrator.stop();
+  });
+
+  it('W2 no_signal 10 s inside the limit holds it', async () => {
+    const seed = await seedSession();
+    await startedAgo(seed.session.id, LIMIT - 10_000);
+    const orchestrator = orchestratorOf({ signals: signalsOf(noSignal) });
+    await orchestrator.tick();
+    await expectActive(seed.session.id);
+    expect(stopLines(seed.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
+  it("W3 counts from the session's last intent change, not the start", async () => {
+    const seed = await seedSession();
+    let answer: SignalOutcome = { ok: true, response: signalAnswer(TradeAction.Up) };
+    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
+    await tradeOnce(orchestrator, seed);
+    await startedAgo(seed.session.id, 300_000);
+    await changedAgo(seed.session.id, 30_000);
+    answer = noSignal;
+    await orchestrator.tick();
+    await expectActive(seed.session.id);
+
+    await changedAgo(seed.session.id, LIMIT + 5_000);
+    advance(CONFIG.retryMs);
+    await orchestrator.tick();
+    await expectStopped(seed.session.id, 'no_signal');
+    await orchestrator.stop();
+  });
+
+  it('W4 the pause after two losses past the limit stops it', async () => {
+    const seed = await seedSession();
+    const answer: SignalOutcome = { ok: true, response: signalAnswer(TradeAction.Down) };
+    const signals = signalsOf(answer);
+    const orchestrator = orchestratorOf({ signals });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await startedAgo(seed.session.id, 300_000);
+    await changedAgo(seed.session.id, LIMIT + 5_000);
+    await orchestrator.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(2);
+    await expectStopped(seed.session.id, 'paused');
+    await orchestrator.stop();
+  });
+
+  it('W5 a pair closed by its schedule past the limit stops it, no signal asked', async () => {
+    const seed = await seedSession();
+    await startedAgo(seed.session.id, LIMIT + 5_000);
+    const signals = signalsOf();
+    const orchestrator = orchestratorOf({
+      signals,
+      pairs: pairsOf(fresh([eurUsd({ scheduledUntil: clock + 30_000 })])),
+    });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(0);
+    await expectStopped(seed.session.id, 'pair_closed');
+    await orchestrator.stop();
+  });
+
+  it.each<[string, SignalOutcome]>([
+    ['unavailable', { ok: false, reason: BackendUnavailable.BackendUnreachable }],
+    ['fetch_failed', { ok: true, response: fetchFailedAnswer() }],
+  ])('W6 a signal %s past the limit holds it; the next no_signal stops it', async (_, failed) => {
+    const seed = await seedSession();
+    await startedAgo(seed.session.id, LIMIT + 5_000);
+    let answer = failed;
+    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
+    await orchestrator.tick();
+    await expectActive(seed.session.id);
+    answer = noSignal;
+    advance(CONFIG.retryMs);
+    await orchestrator.tick();
+    await expectStopped(seed.session.id, 'no_signal');
+    await orchestrator.stop();
+  });
+
+  it('W7 a signal past the limit trades', async () => {
+    const seed = await seedSession();
+    await startedAgo(seed.session.id, LIMIT + 30_000);
+    const orchestrator = orchestratorOf();
+    await orchestrator.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    await expectActive(seed.session.id);
+    await orchestrator.stop();
+  });
+
+  it('W8 a new orchestrator (a worker restart) stops from the rows alone', async () => {
+    const seed = await seedSession();
+    await startedAgo(seed.session.id, LIMIT - 10_000);
+    const first = orchestratorOf({ signals: signalsOf(noSignal) });
+    await first.tick();
+    await first.stop();
+    await expectActive(seed.session.id);
+    await startedAgo(seed.session.id, LIMIT + 5_000);
+    const second = orchestratorOf({ signals: signalsOf(noSignal) });
+    await second.tick();
+    await expectStopped(seed.session.id, 'no_signal');
+    await second.stop();
   });
 });
 

@@ -185,6 +185,7 @@ describe('the bot texts catalog', () => {
         'menuButton',
         'newAnalysisButton',
         'oauthButton',
+        'otherPairButton',
         'refreshIntentButton',
         'repeatAnalysisButton',
         'resendButton',
