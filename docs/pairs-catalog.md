@@ -25,7 +25,7 @@ pnpm test --project unit packages/broker-rest packages/shared/src/catalog.test.t
 ## The module
 
 ```ts
-const catalog = createPairsCatalog({ client, ttlMs, logger, now });
+const catalog = createPairsCatalog({ client, ttlMs, logger, now, abandoned });
 catalog.read();     // PairsCatalogView | undefined
 catalog.refresh();  // Promise<boolean>
 catalog.start();
@@ -48,8 +48,14 @@ catalog.stop();
   the TTL, so the verdict is its own: neither the route nor the bot compares ages.
 - A failed `refresh()` leaves the snapshot as it was and writes one `warn` line (see Logging).
   The next attempt is the next tick; there is no backoff, on 429 included.
-- `start()` arms `setInterval(refresh, ttlMs)`. A second `start()` does nothing, and neither does
-  a `start()` after `stop()`.
+- `start()` arms `setInterval(tick, ttlMs)`. A tick first checks staleness, synchronously, then
+  calls `refresh()`: a refresh that never settles cannot hide a stale catalog (#481, see Logging).
+  A second `start()` does nothing, and neither does a `start()` after `stop()`.
+- The REST client's deadline holds even when `fetch` ignores its abort (docs/broker-rest.md →
+  Timeouts), so one hung request no longer holds the single flight past `BROKER_REST_TIMEOUT_MS`
+  plus one timer tick: the next tick sends a new request.
+- `abandoned` is optional and defaults to `abandonedFetches()` (`packages/shared/src/fetch-deadline.ts`),
+  the process's count of calls still pending past their own deadline. It is only logged.
 - `stop()` clears the timer and aborts the request in flight. That request resolves `false`
   without a log line, and every later `refresh()` resolves `false` without a request.
 
@@ -62,7 +68,7 @@ In `packages/broker-rest/src/pairs-catalog.ts`:
 | `MIN_BROKER_PAIRS_TTL_MS` | 30 000 | lowest accepted `BROKER_PAIRS_TTL_MS` |
 | `DEFAULT_BROKER_PAIRS_TTL_MS` | 30 000 | the timer's period when the env does not set one |
 | `MAX_BROKER_PAIRS_TTL_MS` | 60 000 | highest accepted `BROKER_PAIRS_TTL_MS`; plus one request, the oldest age `read()` still calls fresh |
-| `BROKER_PAIRS_MAX_STALE_MS` | 300 000 | how long the last snapshot is still served while every refresh fails |
+| `BROKER_PAIRS_MAX_STALE_MS` | 300 000 | how long the last snapshot is still served while every refresh fails; also the repeat interval of `pairs catalog is stale` (see Logging) |
 
 `PAIRS_CATALOG_CHAIN_HOLDS` throws at import unless
 `BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS ≤ DEFAULT ≤ MAX < BROKER_PAIRS_MAX_STALE_MS` and
@@ -118,6 +124,26 @@ One line per failed refresh, at `warn`:
 when the error has them. The line holds neither the base URL nor any of the response body beyond
 `detail`.
 `pairs-catalog.test.ts` reads these lines back through a pino logger built with `logOptions`.
+
+A catalog that stopped refreshing is an `error` (#481), written by the tick when the catalog is
+stale: `read()` is `undefined` (no snapshot, including after a failed warm-up, or one older than
+`BROKER_PAIRS_MAX_STALE_MS`) or not `fresh`:
+
+```json
+{ "ageMs": 60000, "failedRefreshes": 1, "abandoned": 0, "msg": "pairs catalog is stale" }
+```
+
+- Once at the first stale tick of a streak, then again at the first stale tick at least
+  `BROKER_PAIRS_MAX_STALE_MS` after the previous line, measured from that line's `now()`.
+- `ageMs` is the snapshot's age from its `fetchedAt` on the catalog's `now()`, `null` with no
+  snapshot at all. `failedRefreshes` counts the requests that failed since the last success; one
+  cut by `stop()` is not counted. `abandoned` is the process-wide count above: greater than 0 means
+  `fetch` ignored its own abort somewhere in the process.
+- The first success after a reported streak writes `info` `{ ageMs, failedRefreshes }`
+  `pairs catalog fresh again`, where `ageMs` is the replaced snapshot's age just before the
+  replacement, and ends the streak: the next stale tick reports at once.
+- No ops alert and no restart: a restart after a repeated `pairs catalog is stale` is the owner's
+  step.
 
 ## Boundaries
 

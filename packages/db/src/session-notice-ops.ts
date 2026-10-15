@@ -26,7 +26,7 @@ import { users } from './schema/users';
 const SETTLED = literal(TradeIntentStatus.Settled);
 
 // A settled trade of the session: a settled intent with its broker trade (settleIntent writes
-// both). The same count the view's `settled` and the backfill (0049) take.
+// both). The same count the view's `settled` and the backfill (0050) take.
 const settledCountSql = sql<number>`(
   select count(*)::int from ${tradeIntents}
     join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}

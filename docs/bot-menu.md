@@ -3,10 +3,12 @@
 A user with an active Binodex account gets the **status card** (#24) as the bot's home: on
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
-status or age line when the broker balance is missing or old, a hint, and three buttons, each in
+status or age line when the broker balance is missing or old, a hint, and four buttons, each in
 its own row: «🎮 Демо-торговля» (#320; «🚀 Торговать» in real mode, #121,
 [trading-mode.md](trading-mode.md)), «👥 Пригласить друга» (#115,
-[referrals.md](referrals.md)) and «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)). It is
+[referrals.md](referrals.md)), «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)) and
+«💳 Пополнить» (#27, both modes, the cashier Mini App, [deposit.md](deposit.md); only when
+`WEB_PUBLIC_URL` is https, otherwise the card has the first three). It is
 pinned in place of whatever was pinned before.
 
 ## Components

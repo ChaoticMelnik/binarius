@@ -55,14 +55,19 @@ chat with the bot:
 - `packages/shared/src/bot-navigation.ts`: `DEMO_CALLBACK_DATA` (`demo`), `CONNECT_CALLBACK_DATA`
   (`connect`), `MENU_CALLBACK_DATA` (`menu`), `commandRetryCallbackData` (`cmd:account`,
   `cmd:settings`, `cmd:invite` since #115) and its pattern, `BUY_CALLBACK_DATA` (`buy`) and
-  `buyPackageCallbackData` (`buy:<code>`, #117), and `supportUrl()`. The bot and the backend's push build their
+  `buyPackageCallbackData` (`buy:<code>`, #117), `PAYSUPPORT_LIST_CALLBACK` (`ps:l`) and
+  `paysupportRefundCallbackData` (`ps:r:<payment id>`, #118), `supportUrl()`, and since #27
+  `CASHIER_PAGE_PATH` (`/cashier`, the page `web` serves) and `cashierUrlOf(origin)` (the page's
+  URL on an https origin, none otherwise). The bot and the backend's push build their
   buttons from it, so a pushed button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
   `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
   path's duration, `demo:sig:<sec>`, since #382; its `beforeMenu` rows go right above the menu);
   since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` and `inviteKeyboard`
   ([referrals.md](referrals.md)); since #117 `buyButton`, `withBuy` and `buyPackagesKeyboard`
-  ([stars.md](stars.md)).
+  ([stars.md](stars.md)); since #27 `depositButton` and `depositRows` («💳 Пополнить», a `web_app`
+  button with no callback data; no row without a URL; the only builders, `keyboards.test.ts`,
+  [deposit.md](deposit.md)).
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Новый анализ»,
   `toSignalsButton` «📡 К сигналам»; reused: `demoRetryButton` «🔄 Повторить»,
   `stakeBackAnalysisButton` «↩️ Назад к анализу», `supportButton`, `demoButton`.
@@ -82,7 +87,7 @@ read (#115). `/start` and
 «🔄 Повторить» carries the pressed data again **only after a read**: a demo screen, the signals
 screen, the picker's way back to /settings, the trade's and the session's refresh. A press that
 writes — `demo:stake:`, `demo:sess:`, `real:sess:` (#327), `session:stop:`, `confirm:`, `resend`, `stk:s:`, `stk:z:`,
-`level:` — never gets it: its failure leads back to where it was pressed (the analysis, the
+`level:`, `ps:r:` (#118) — never gets it: its failure leads back to where it was pressed (the analysis, the
 menu), so a lost answer never becomes a second trade or session. `testing.ts` → `captureApi` throws
 on any message whose «🔄 Повторить» carries one of those prefixes, in every scene of every bot test
 (`WRITE_CALLBACK_PREFIXES`, `testing.test.ts`). «➕ Ещё» (`demo:more:`, #360) is a read that sends
@@ -96,7 +101,7 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить (unchanged) |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить (unchanged) |
-| status card | 🎮 Демо-торговля · 👥 Пригласить друга (#115) · ⭐ Купить токены (#117) |
+| status card | 🎮 Демо-торговля · 👥 Пригласить друга (#115) · ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
@@ -117,10 +122,14 @@ no repeat.
 | the Stars invoice (`replyWithInvoiceStars`, `send.ts`) | ⭐ Оплатить N (Telegram's pay button, first by the Bot API's rule) · 🏠 В меню |
 | `starsCredited`, `starsPending`; the reconciler's push `starsCredited` | 🏠 В меню |
 | `starsHeld` | the support URL · 🏠 В меню |
-| the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены · ↩️ Назад к анализу · 🏠 В меню |
+| `/paysupport`, «↩️ К списку оплат» (`ps:l`, #118, [stars.md](stars.md#paysupport)) | ↩️ Нужен возврат: <date> per open payment (`ps:r:<id>`) · the support URL · 🏠 В меню |
+| `paysupportEmpty` | the support URL · 🏠 В меню |
+| `unavailable` after `/paysupport` (a read) | 🔄 Повторить (`ps:l`) · 🏠 В меню |
+| every answer to «Нужен возврат» (a write), `unavailable` included | ↩️ К списку оплат (`ps:l`) · 🏠 В меню |
+| the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены · 💳 Пополнить (#27, https only) · ↩️ Назад к анализу · 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
-| demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged); the launch screen is deleted once the session's status is sent (#418) |
+| demo screens, the signals and launch screens (#320), the amount screen (#476), the picker | their own keyboards (unchanged); the launch screen and the amount screen are deleted once the session's status is sent (#418) |
 | the analysis (#360) | 🚀 Сессия из 5 сделок on every `decided` answer · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ Длительность ↩️ Типы; «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
 | the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню |
@@ -129,10 +138,10 @@ no repeat.
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 сделок (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
 | session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
-| session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 🔄 Обновить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
+| session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 🔄 Обновить · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
 | `/stop` (#122), one session stopped | the session's status keyboard (the two rows above) |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
-| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
+| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never

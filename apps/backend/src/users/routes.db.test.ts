@@ -18,7 +18,7 @@ import {
   users,
 } from '@binarius/db';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -48,6 +48,7 @@ const testApp = (logs?: { write(line: string): void }) =>
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     // trace, so a level below production's info cannot hide a line from the log test

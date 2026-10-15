@@ -26,6 +26,7 @@ import {
   DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
+  demoLaunchCallbackData,
   effectiveStake,
   sessionStartCallbackData,
   STAKE_CALLBACK_PATTERN,
@@ -77,11 +78,14 @@ export function intentKeyboard(
       : new InlineKeyboard();
   const offer = sessionOfferOf(view, payoutAccepted);
   if (offer !== undefined) {
+    // a demo trade's offer opens the amount screen (#476) as a new message, so the trade's stays
     keyboard
       .row()
       .text(
         sessionStartButtonLabel(DEFAULT_SESSION_TRADES, view.mode),
-        sessionStartCallbackData(view.mode, view.assetId, offer),
+        view.mode === TradeMode.Demo
+          ? demoLaunchCallbackData(view.assetId, offer, 'n')
+          : sessionStartCallbackData(view.mode, view.assetId, offer),
       );
   }
   return TRACKER_STOP_STATUSES.has(view.status)
@@ -96,6 +100,8 @@ export interface DemoTradeDeps {
   intentTracker: Pick<IntentTracker, 'track'>;
   // the welcome's connect button, for a press with no account to trade on
   connectKeyboard: () => InlineKeyboard;
+  // «💳 Пополнить»'s page (#27): cashierUrlOf's; none, no button
+  cashierUrl?: string;
 }
 
 interface Refusal {
@@ -175,6 +181,7 @@ export function createDemoTradeComposer<C extends Context>({
   now,
   intentTracker,
   connectKeyboard,
+  cashierUrl,
 }: DemoTradeDeps): Composer<C> {
   const composer = new Composer<C>();
 
@@ -359,7 +366,7 @@ export function createDemoTradeComposer<C extends Context>({
                 stakeMenuCallbackData(mode, stake.assetId, stake.durationSec),
               )
             : refusal.buy === true
-              ? withBuy(backToAnalysisKeyboard(stake.assetId, stake.durationSec))
+              ? withBuy(backToAnalysisKeyboard(stake.assetId, stake.durationSec), cashierUrl)
               : backToAnalysisKeyboard(stake.assetId, stake.durationSec);
     await replyHtml(ctx, text, { reply_markup });
   }

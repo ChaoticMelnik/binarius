@@ -13,11 +13,13 @@ import {
   defaultBotTextSource,
   formatStake,
   formatUsd,
+  stakeIsRisky,
   isPendingLink,
   MODE_LABELS,
   LinkBonusSkipReason,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
+  StarPaymentStatus,
   telegramHtml,
   TradeAction,
   TRADE_INTENT_TRANSITIONS,
@@ -36,11 +38,13 @@ import {
   type BotTextKeyOfGroup,
   type BotTextSource,
   type SessionScore,
+  type BrokerBalanceView,
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
   type PairTypeGroup,
   type PairView,
+  type StarPaymentView,
   type TelegramHtml,
   type TradeIntentView,
   type TradingAccessResponse,
@@ -580,6 +584,35 @@ export const LABELS: Omit<Pick<BotPlainTexts, LabelKey>, keyof LabelOverrides> &
 // what «📤 Поделиться» puts beside the link in the chat the user picks (#115); plain, as a label
 export const inviteShareText = (): string => plain.inviteShareText;
 
+// /paysupport (#118, docs/stars.md → /paysupport): the header, then a line per payment in the order
+// given (newest first), by its state — a request already made reads as such until the refund.
+export function paysupportText(payments: readonly StarPaymentView[]): TelegramHtml {
+  const lines = payments.map(paysupportLine);
+  // a hole holding an array is joined without a separator, so the newlines are written here
+  const joined = lines.slice(1).reduce(
+    (all, line) => telegramHtml`${all}
+${line}`,
+    lines[0] ?? telegramHtml``,
+  );
+  return telegramHtml`${TEXTS.paysupportScreen}
+
+${joined}`;
+}
+
+function paysupportLine({ paidAt, totalAmount, status, requested }: StarPaymentView): TelegramHtml {
+  const context = { paymentDate: paidAt, stars: String(totalAmount) };
+  if (status === StarPaymentStatus.Refunded) return TEXTS.paysupportLineRefunded(context);
+  if (requested) return TEXTS.paysupportLineRequested(context);
+  return status === StarPaymentStatus.Held
+    ? TEXTS.paysupportLineHeld(context)
+    : TEXTS.paysupportLinePaid(context);
+}
+
+// plain, as every button label
+export const paysupportRefundLabel = (paidAt: number): string =>
+  plain.paysupportRefundButton({ paymentDate: paidAt });
+export const paysupportListLabel = (): string => plain.paysupportListButton;
+
 // The Stars purchase (#117, docs/stars.md): Telegram parses none of these, so they are plain like
 // the labels — the package and pay buttons, the invoice's title and description, and the
 // pre-checkout's error_message.
@@ -721,6 +754,68 @@ export function launchText({
 
 ${joinLines(lines)}`;
 }
+
+// The amount screen of a demo cycle (#476, demo.ts → cycleStakeScreen): the pair, the cycle, then
+// the call to choose an amount, or the picker's line when the demo balance is below the broker's
+// minimum. `stake` is the amount in effect; after a picker save the saved line leads, as on the
+// launch screen.
+export function cycleStakeText({
+  firstName,
+  durationSec,
+  symbol,
+  stake,
+  access,
+  broker,
+  empty,
+  saved,
+  trades = DEFAULT_SESSION_TRADES,
+}: {
+  firstName: string;
+  durationSec: DemoDurationSec;
+  symbol: string | null;
+  stake: DecimalString;
+  access: AccessForTexts;
+  broker: BrokerBalanceView;
+  empty: boolean;
+  saved?: { amount: DecimalString | null; mode: TradeMode };
+  // a parameter so the length test reaches the widest plural, as launchText's
+  trades?: number;
+}): TelegramHtml {
+  const context = { firstName, stake };
+  const lines = [
+    ...(symbol === null
+      ? []
+      : [
+          TEXTS.launchHeader({
+            ...context,
+            subject: `${symbol} · ${DEMO_DURATION_LABELS[durationSec]}`,
+          }),
+        ]),
+    TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
+  ];
+  const choose = empty
+    ? TEXTS.stakePickerNoPresets({
+        ...userContextOf(firstName, TradeMode.Demo, access),
+        minStake: broker.minTradeAmount,
+        demoAvailable: broker.demo.available,
+        realAvailable: broker.real.available,
+      })
+    : TEXTS.cycleStakeChoose({ firstName });
+  const body = telegramHtml`${joinLines(lines)}
+
+${choose}`;
+  if (saved === undefined) return body;
+  return telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
+
+${body}`;
+}
+
+// An amount's button on that screen: ✅ on the amount in effect, «· риск» from
+// STAKE_RISK_THRESHOLD (#476)
+export const cycleStakeLabel = (amount: DecimalString, current: boolean): string => {
+  const shown = current ? `${formatStake(amount)} ✅` : formatStake(amount);
+  return stakeIsRisky(amount) ? plain.stakeRiskButton({ amount: shown }) : shown;
+};
 
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button

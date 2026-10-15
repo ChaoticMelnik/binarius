@@ -658,9 +658,14 @@ export const BOT_TEXT_CATALOG = {
     `📡 Для {label} сигналов сейчас нет — обнови через несколько секунд, выбери другую длительность или пару вручную.`,
     { vars: ['label'] },
   ),
-  launchHeader: html(g.Demo, 'Экран ставки: пара и длительность цикла.', `🎯 <b>{subject}</b>`, {
-    vars: ['subject', 'firstName', 'stake'],
-  }),
+  launchHeader: html(
+    g.Demo,
+    'Экран ставки и экран суммы демо-цикла (#476): пара и длительность цикла.',
+    `🎯 <b>{subject}</b>`,
+    {
+      vars: ['subject', 'firstName', 'stake'],
+    },
+  ),
   launchStake: html(g.Demo, 'Экран ставки: сумма каждой сделки цикла.', `💵 Ставка: {stake}`, {
     vars: ['stake', 'firstName'],
   }),
@@ -672,7 +677,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   launchCycle: html(
     g.Demo,
-    'Экран ставки: что сделает цикл, с числом сделок.',
+    'Экран ставки и экран суммы демо-цикла (#476): что сделает цикл, с числом сделок.',
     `🤖 Бот проведёт {trades} подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.`,
     { vars: ['trades', 'firstName', 'stake'] },
   ),
@@ -1619,11 +1624,19 @@ export const BOT_TEXT_CATALOG = {
   ),
   launchCycleButton: plain(
     g.Buttons,
-    'Экран ставки: запуск цикла сделок; в реальном режиме бот дописывает « · REAL».',
+    'Экран ставки (реальный режим; в демо — экран суммы, #476): запуск цикла сделок, бот дописывает « · REAL».',
     '🚀 Запустить цикл',
   ),
-  stakeChangeButton: plain(g.Buttons, 'Экран ставки: открыть выбор суммы.', '💵 Изменить ставку'),
-  backToListButton: plain(g.Buttons, 'Экран ставки: назад к сигналам.', '↩️ К списку'),
+  stakeChangeButton: plain(
+    g.Buttons,
+    'Экран ставки (реальный режим; в демо — экран суммы, #476): открыть выбор суммы.',
+    '💵 Изменить ставку',
+  ),
+  backToListButton: plain(
+    g.Buttons,
+    'Экран ставки и экран суммы цикла: назад к сигналам.',
+    '↩️ К списку',
+  ),
   stakeBackLaunchButton: plain(g.Buttons, 'Экран суммы: назад к экрану ставки.', '↩️ К запуску'),
   sessionAgainButton: plain(
     g.Buttons,
@@ -1723,6 +1736,11 @@ export const BOT_TEXT_CATALOG = {
     'Карточка статуса и отказ «не хватает токенов»: экран покупки токенов.',
     '⭐ Купить токены',
   ),
+  depositButton: plain(
+    g.Buttons,
+    'Карточка статуса, отказ «не хватает токенов», конец сессии: касса пополнения (Mini App).',
+    '💳 Пополнить',
+  ),
   sessionShareButton: plain(
     g.Buttons,
     'Кнопка под картинкой-итогом сессии: выбор чата, куда отправить картинку.',
@@ -1768,6 +1786,12 @@ export const BOT_TEXT_CATALOG = {
   supportCommand: plain(g.Commands, 'Описание /support в меню команд и в /help.', 'Поддержка', {
     limit: COMMAND_LIMIT,
   }),
+  paysupportCommand: plain(
+    g.Commands,
+    'Описание /paysupport в меню команд и в /help.',
+    'Вопросы по оплате Stars и возврат',
+    { limit: COMMAND_LIMIT },
+  ),
 
   // ---- Профиль бота -------------------------------------------------------------------------
   profileDescription: plain(
@@ -1788,6 +1812,84 @@ export const BOT_TEXT_CATALOG = {
     'Строка на странице профиля бота и в превью ссылки на него.',
     '🚀 Автосессии на Binodex прямо в Telegram: бот сам торгует демо по сигналу, ты смотришь результат',
     { limit: SHORT_DESCRIPTION_LIMIT },
+  ),
+  cycleStakeChoose: html(
+    g.Demo,
+    'Экран суммы демо-цикла (#476): под строкой цикла, над кнопками сумм.',
+    `Выбери сумму сделки 👇`,
+    { vars: ['firstName'] },
+  ),
+  stakeRiskButton: plain(
+    g.Demo,
+    'Экран суммы демо-цикла (#476): кнопка суммы от $10 — сумма (с ✅, если она в силе) и пометка риска.',
+    `{amount} · риск`,
+    { vars: ['amount'] },
+  ),
+  paysupportScreen: html(
+    g.Stars,
+    '/paysupport: заголовок над последними оплатами Stars.',
+    `⭐ <b>Оплаты Telegram Stars</b>
+Последние оплаты. Нужен возврат — нажми кнопку под оплатой: заявку рассмотрит сотрудник поддержки и вернёт Stars. Токены, которые уже потрачены, не возвращаются.`,
+  ),
+  paysupportLinePaid: html(
+    g.Stars,
+    '/paysupport: строка оплаты, по которой начислены токены.',
+    `✅ {paymentDate} — {stars} ⭐, оплачено`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportLineHeld: html(
+    g.Stars,
+    '/paysupport: строка оплаты, которую проверяет поддержка (токены не начислены).',
+    `⏳ {paymentDate} — {stars} ⭐, на проверке`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportLineRequested: html(
+    g.Stars,
+    '/paysupport: строка оплаты, по которой уже есть заявка на возврат.',
+    `📨 {paymentDate} — {stars} ⭐, заявка на возврат принята`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportLineRefunded: html(
+    g.Stars,
+    '/paysupport: строка возвращённой оплаты.',
+    `↩️ {paymentDate} — {stars} ⭐, возвращено`,
+    { vars: ['paymentDate', 'stars'] },
+  ),
+  paysupportEmpty: html(
+    g.Stars,
+    '/paysupport без оплат Stars: под текстом кнопка поддержки.',
+    `Оплат Telegram Stars нет. Вопрос по оплате — напиши в поддержку.`,
+  ),
+  paysupportRequested: html(
+    g.Stars,
+    'После «Нужен возврат»: заявка принята.',
+    `📨 Заявка на возврат принята. Сотрудник поддержки проверит оплату и вернёт Stars — Telegram пришлёт уведомление о возврате.`,
+  ),
+  paysupportAlreadyRequested: html(
+    g.Stars,
+    'После «Нужен возврат»: по этой оплате заявка уже есть.',
+    `Заявка на возврат этой оплаты уже есть — сотрудник поддержки её рассмотрит.`,
+  ),
+  paysupportAlreadyRefunded: html(
+    g.Stars,
+    'После «Нужен возврат»: оплата уже возвращена.',
+    `Эта оплата уже возвращена.`,
+  ),
+  paysupportNotFound: html(
+    g.Stars,
+    'После «Нужен возврат»: оплата не найдена.',
+    `Оплата не найдена. Открой список заново.`,
+  ),
+  paysupportRefundButton: plain(
+    g.Stars,
+    '/paysupport: кнопка заявки на возврат под оплатой.',
+    '↩️ Нужен возврат: {paymentDate}',
+    { vars: ['paymentDate'] },
+  ),
+  paysupportListButton: plain(
+    g.Stars,
+    'После заявки на возврат: назад к списку оплат.',
+    '↩️ К списку оплат',
   ),
 };
 

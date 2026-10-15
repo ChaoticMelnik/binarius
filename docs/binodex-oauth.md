@@ -15,7 +15,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
 | Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10) and by the email login (#162) |
-| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort, a 2xx body read up to `MAX_OAUTH_BODY_BYTES` (64 KiB) as it arrives; the error body is released unread; `BROKER_ENDPOINTS` is the one table of paths and statuses |
+| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort and a deadline that holds even when `fetch` ignores that abort (`withinDeadline`, #481: an abandoned call is `unavailable` and logged `broker oauth request abandoned`), a 2xx body read up to `MAX_OAUTH_BODY_BYTES` (64 KiB) as it arrives; the error body is released unread; `BROKER_ENDPOINTS` is the one table of paths and statuses |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 | Push      | `apps/backend/src/auth/client-push.ts`    | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it; the mailings send through it too (#202) |
@@ -830,7 +830,8 @@ from every line this application or `SafeLogController` writes.
 
 Backend only, never the worker (the worker neither exchanges grants nor decrypts tokens);
 `TELEGRAM_BOT_TOKEN` is the one the `bot` service reads as well, and `BROKER_OAUTH_AUTHORIZE_URL`
-and `WEB_PUBLIC_URL` are read by `web` (`WEB_PUBLIC_URL` by `backend` as well, #448):
+and `WEB_PUBLIC_URL` are read by `web` (`WEB_PUBLIC_URL` by `backend` as well, #448, and by
+`bot`, #27):
 
 | Variable                                   | Meaning                                                                                                    |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |

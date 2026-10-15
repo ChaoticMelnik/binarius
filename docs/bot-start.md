@@ -662,13 +662,14 @@ is missing from the answer; `timing.test.ts` holds the declared calls.
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list nine commands, in this
+Telegram's «Меню» button and the hints shown when the user types `/` list ten commands, in this
 order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/stop` —
 «Остановить сессию» ([bot-session.md](bot-session.md#stop-122)), `/account` —
 «Аккаунт Binodex» ([bot-account.md](bot-account.md)), `/buy` — «Купить токены» ([stars.md](stars.md), #117),
 `/settings` — «Настройки уведомлений», `/invite` — «Пригласить друга» ([referrals.md](referrals.md)),
-`/help` — «Помощь» ([/help](#help-184)) and `/support` —
-«Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in
+`/help` — «Помощь» ([/help](#help-184)), `/support` —
+«Поддержка» ([Notification level and /support](#notification-level-and-support-120)) and `/paysupport` —
+«Вопросы по оплате Stars и возврат» ([stars.md](stars.md#paysupport), #118). The list is `BOT_COMMANDS` in
 `packages/shared/src/bot-commands.ts`, the only place it is written (#301): each command's name and
 the key of its description, the catalog's `commands` group, which the CLI can override
 ([bot-texts.md](bot-texts.md) → Publishing). The bot reads it through `botCommands()` in
@@ -748,8 +749,9 @@ The bot's name and avatar are not registered: they stay with @BotFather (`setMyN
 | `BACKEND_URL`           | yes         | `http:`/`https:`, `http://backend:3000` under compose                 |
 | `LOG_LEVEL`             | no (`info`) | pino level                                                            |
 | `WELCOME_VIDEO_FILE_ID` | no          | `file_id` of the welcome video, no whitespace; absent means text only |
+| `WEB_PUBLIC_URL`        | yes         | `web`'s origin, the same value and parser as `web`'s (compose gives the same default); «💳 Пополнить» opens `<origin>/cashier`, https only, otherwise no button and one startup warning (#27, [deposit.md](deposit.md)) |
 
-Under compose the `bot` service is given only these five names, not the shared environment
+Under compose the `bot` service is given only these six names, not the shared environment
 anchor the other services take: the Postgres password and the Redis URL have no business in a
 process that opens neither, and `WELCOME_VIDEO_FILE_ID` is passed only when it is set.
 Nothing in this repository guards that today. `env.test.ts` used to scan `compose.yaml` line by
@@ -804,7 +806,8 @@ the edit refused, the message sent anew), the selected level one Bot API call, `
 old duration button are declared in the same table (bot-demo-trade.md, bot-session.md,
 bot-demo.md); and a text on the code step two backend calls (the login and the recheck) and up to
 four Bot API calls (the same card), 42 s. The longest is «📊 Анализ», with «🚀 Запустить цикл»
-since #418 (the launch screen deleted, or stripped, after the status), 3 × 5 000 + 4 × 8 000 =
+since #418 (the launch screen deleted, or stripped, after the status) and an amount of the amount
+screen since #476 (the start in one attempt, the screen deleted after it), 3 × 5 000 + 4 × 8 000 =
 **47 s**, inside the **50 s** shutdown budget, inside the **55 s** `stop_grace_period` of the
 compose service. The usual path is far shorter — the answer, the «⏳» edit and the result's edit
 beside three short reads — and the 47 s needs three backend calls and four Bot API calls each to

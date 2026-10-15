@@ -77,8 +77,9 @@ export const HANDLER_CALLS = {
   // a duration's list (#320, #382): answerCallbackQuery ∥ readSignals ∥ readPairs — the reads
   // counted as sequential, as in confirm — then editMessageText refused as gone → sendMessage
   demoSignals: { backend: 2, telegram: 3 },
-  // a pair of the list (#320): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — counted the
-  // same way — then editMessageText refused as gone → sendMessage
+  // a pair of the list (#320) and every demo door of a cycle (#476): answerCallbackQuery ∥
+  // readPairs ∥ readTradingAccess — counted the same way — then editMessageText refused as gone →
+  // sendMessage; a door under a trade or a session sends at once, shorter
   demoLaunch: { backend: 2, telegram: 3 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration):
   // answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
@@ -120,13 +121,25 @@ export const HANDLER_CALLS = {
   // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
-  // «🚀 Сессия из 5 сделок» (#284; the analysis, the row under a finished trade #360, «🔁 Ещё
-  // сессия» #320 and the launch screen's «🚀 Запустить цикл» all land here): answerCallbackQuery ∥
+  // «🚀 Сессия из 5 сделок» (#284; in real the analysis, the row under a finished trade #360, «🔁 Ещё
+  // сессия» #320 and the launch screen's «🚀 Запустить цикл» land here, and demo buttons sent
+  // before #476): answerCallbackQuery ∥
   // readPairs — counted as sequential, as in confirm — then startSession and its one retry on an
   // unknown outcome, then sendMessage; after it, the launch screen's deleteMessage refused as
   // forbidden and editMessageReplyMarkup (#418), so the status is never withheld by them. 47 s,
   // equal to demoAnalysis.
   sessionStart: { backend: 3, telegram: 4 },
+  // an amount of the amount screen (#476, cycle-stake.ts): answerCallbackQuery ∥ setStake ∥
+  // readPairs — counted as sequential, as in confirm — then startSession in one attempt (its retry
+  // would make it 4 / 4 = 52 s, past SHUTDOWN_BUDGET_MS), sendMessage, then the screen's
+  // deleteMessage refused as forbidden and editMessageReplyMarkup (#418). 47 s, equal to
+  // sessionStart.
+  cycleStakePreset: { backend: 3, telegram: 4 },
+  // its «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
+  cycleStakeCustom: { backend: 0, telegram: 3 },
+  // a text on that step: setStake ∥ readPairs — counted as sequential — then startSession and its
+  // one retry on an unknown outcome, then sendMessage; nothing is deleted
+  cycleStakeText: { backend: 4, telegram: 1 },
   // the session's «🔄 Обновить»: answerCallbackQuery ∥ readSession ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   sessionRefresh: { backend: 2, telegram: 3 },
@@ -185,6 +198,14 @@ export const HANDLER_CALLS = {
   preCheckout: { backend: 1, telegram: 1 },
   // successful_payment: reportStarsPaid, then sendMessage
   paid: { backend: 1, telegram: 1 },
+  // /paysupport (#118): listStarsPayments, then sendMessage — the list, the empty screen or the
+  // failure
+  paysupport: { backend: 1, telegram: 1 },
+  // its list again (`ps:l`): answerCallbackQuery, then /paysupport's path
+  paysupportList: { backend: 1, telegram: 2 },
+  // «Нужен возврат» (`ps:r:<id>`): answerCallbackQuery ∥ requestStarsRefund — counted as
+  // sequential, as in confirm — then sendMessage
+  paysupportRequest: { backend: 1, telegram: 2 },
   // /support: sendMessage; no backend call
   support: { backend: 0, telegram: 1 },
   // /help: sendMessage; no backend call

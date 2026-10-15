@@ -358,10 +358,10 @@ describe('listPendingSessionNotices', () => {
   });
 });
 
-// The backfill (0049) as the deploy runs it: the cursor at every session's settled trades, the
+// The backfill (0050) as the deploy runs it: the cursor at every session's settled trades, the
 // mark on every stopped one. Its SQL is read from the migration file and run over sessions put
 // back to the state before it.
-describe('migration 0049 (the backfill)', () => {
+describe('migration 0050 (the backfill)', () => {
   it('starts the notices from the deploy: nothing settled before it is sent', async () => {
     const running = await seedSession();
     await settled(running, '4.6');
@@ -380,7 +380,7 @@ describe('migration 0049 (the backfill)', () => {
       path.dirname(fileURLToPath(import.meta.url)),
       '..',
       'drizzle',
-      '0049_session_notices_backfill.sql',
+      '0050_session_notices_backfill.sql',
     );
     for (const statement of (await readFile(file, 'utf8')).split('--> statement-breakpoint')) {
       await tmp.pool.query(statement);

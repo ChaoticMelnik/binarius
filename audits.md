@@ -3138,3 +3138,42 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 3. **tech-lead Step 7: спавн-промпт называет `TEST_DATABASE_URL`/`REDIS_URL` для worktree** — **внедрено в #517: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own worktree**
 4. **Повторный замер через 5–10 задач тем же скриптом (комментарий владельца в #511): доля ходов на тесты у implementer ≤ 8 %, в главной сессии ≈ 0** — **открыто (2026-10-15, владелец)**
 5. **Remaining Minor круга 2** — **вынесено в #516**
+
+---
+
+## #381 — [SPIKE] Стенд проверки Signal на истории свечей брокера (2026-10-15)
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Предварительный шаг (#381 до деплоя) | Экспорт сделок с прод-БД заблокирован классификатором auto mode; владелец выполнил `! ~/binarius-stand/export_trades.sh`. Свечи и итоги — комментарий в #381 до деплоя `3eee0b9`. |
+| Tech Lead | Phase 0 | Codex готов, лимита нет; `.claude/CLAUDE.md` = `origin/main`. План 09.10 на `4a95ad0` устарел (#379 v2 в `main`) → Plan Update круга 0. |
+| Architect | Plan Update r0 | Opus. 4 новых развилки, все ответы рекомендуемые: 14 дней × 28 пар, файлы сессий — второй источник цен, эры v1/v2, суммарное правило прохода. Найдено: глубина истории брокера 30 дней, а не 7. Дефект плана от implementer'а (выбор `openDelay`) закрыт отдельным Plan Update без вопроса владельцу. |
+| Implementer | часть 1 | Факт 4 070 строк → деление по запасной линии: #512 (fetch, run) и стек `feat/381-signal-stand-calibrate`. Агент умер на API 403 до отчёта; работа на GitHub была цела; фоновый fetch остановился на 14 из 28 пар (`unavailable`) и был перезапущен tech-lead'ом. |
+| Reviewer | #512 круг 1 / 2 | Круг 1: Major M1 + 7 Minor → Todo. Круг 2: чисто, 6 Minor; Codex — пропуск по лимиту до 15.10 14:12 (job `task-mv9dfevc-i13tqj`). |
+| Tech Lead | #512 мерж | После круга исправлений размер 3 190 строк — владелец оставил одним PR. Вопрос, «да», `mergeable` перепроверен → MERGED 10:05:05Z; Minor → #518. |
+| Implementer | часть 2 | `rebase --onto origin/main 5252f82`, проверка каждого коммита, мутации через `tooling/mutations.ts`; `calibrate` на реальных данных PASS, полный `run` по 28 парам (32 мин). PR #520, `Closes #381`. |
+| Reviewer | #520 круг 1 / 2 | Круг 1: Major M1 + 6 Minor → Todo. Владелец: круги считаются по каждому PR при делении. Круг 2: чисто, 5 Minor; Codex прошёл (job `task-mv9fxscs-rdbttf`, 1 Minor). |
+| Tech Lead | #520 мерж | Вопрос, «да» → MERGED 11:22:46Z; #381 → Done; Minor → #521. Модели: все фазы — `claude-opus-5-5`, 3d — `claude-sonnet-5-5`; `<synthetic>` — implementer части 1 (API 403). |
+
+### Review iterations: #512 — 2, #520 — 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #512 M1: запасной `openDelay` 3000 считал 2 с запаса дважды (вход на границе + 5 с) | Major | single-source | Решение 6 плана считало задержку от момента решения D, решения 7 и 9 — от границы свечи | Architect plan |
+| #520 M1: `calibrate` проходит без данных (пустой `STAND_DIR`, неполный fetch; `wilson(0, 0)` = [0, 100]) | Major | unverified-claim | Проверки определены через счётчики без правила для нулевой выборки | Architect plan |
+| Minor #512 (m6, n1–n6) и #520 (n1–n5) | Minor → #518, #521 | other | — | Implementer |
+| Фоновый fetch умер вместе с implementer'ом | Process | other | Долгое задание запускала фаза, а не tech-lead | tech-lead Step 7 |
+| Как считать лимит кругов у задачи, разделённой на PR, — правило молчало | Process | other | Step 4a вводит деление, Phase 4 считает круги «на задачу» | tech-lead Phase 4 |
+
+### Process improvement proposals
+
+1. **Лимит 3 круга у задачи, разделённой на PR, — по каждому PR (решение владельца 2026-10-15)** — **вынесено в #523**
+2. **Задание длиннее ~15 мин (fetch, бэктест) запускает tech-lead своей фоновой задачей; фаза возвращает команду и путь лога** — **внедрено в #522: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+3. **Architect validation checklist: каждая проверка «пройдено / не пройдено» называет результат на нулевой выборке (отказ или FAIL), и тест доводит этот случай через точку входа команды до кода выхода** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+4. **Architect validation checklist: каждое смещение во времени называет точку отсчёта, одну для всех решений плана** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+5. **Задача из нескольких PR: непоследние части — `Refs #<N>`, Done и Phase 5 — после последней части, сценарий следующей части у implementer'а, памятка о размере, правка глобального `~/.claude/CLAUDE.md`** — **вынесено в #523** (решение владельца 2026-10-15: Codex на docs-PR #522 трижды подряд находил Major, итерации исправлений исчерпаны)
+6. **Remaining Minor** — **вынесено в #518 (#512), #521 (#520)**

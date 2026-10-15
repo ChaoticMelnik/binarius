@@ -56,12 +56,13 @@ const data = (): SignalDecision => ({
   detail: { closedCandles: 3, required: 50 },
 });
 
-const ctx = (v2: SignalDecision): DecisionContext => ({
+const ctx = (v2: SignalDecision, minute: SignalDecision = data()): DecisionContext => ({
   nowMs: T0,
   v1: () => {
     throw new Error('not read');
   },
   v2: () => v2,
+  v2OneMinute: () => minute,
 });
 
 function market(): Market {
@@ -73,6 +74,7 @@ function market(): Market {
     series: {
       '5s': aggregate(seconds, 5_000),
       '15s': aggregate(seconds, 15_000),
+      '1m': aggregate(seconds, 60_000),
     },
   };
 }
@@ -138,10 +140,45 @@ describe('variants', () => {
     });
   });
 
+  it('V6 v2+1m trades only when the 1m trend agrees; no 1m data is no trade', () => {
+    const confirm = variant('v2+1m');
+    const up = signal(TradeAction.Up);
+    expect(confirm.decide(ctx(up, signal(TradeAction.Up)), {})).toEqual({ action: 'up' });
+    expect(
+      confirm.decide(ctx(up, rule(NoSignalReason.RsiNeutral, { trend: TrendDirection.Up })), {}),
+    ).toEqual({
+      action: 'up',
+    });
+    expect(
+      confirm.decide(ctx(up, signal(TradeAction.Down, { trend: TrendDirection.Down })), {}),
+    ).toEqual({
+      refusal: '1m_trend_disagrees',
+    });
+    expect(
+      confirm.decide(ctx(up, rule(NoSignalReason.TrendFlat, { trend: TrendDirection.Flat })), {}),
+    ).toEqual({
+      refusal: '1m_trend_disagrees',
+    });
+    expect(confirm.decide(ctx(up, data()), {})).toEqual({ refusal: '1m_no_data' });
+    expect(confirm.decide(ctx(rule(NoSignalReason.TrendFlat), signal(TradeAction.Up)), {})).toEqual(
+      {
+        refusal: NoSignalReason.TrendFlat,
+      },
+    );
+  });
+
+  it('V7 the 1m decision 59 s into a minute reads the last closed minute', () => {
+    const m = market();
+    const boundary = T0 + 3 * 3600_000;
+    const minute = decisionContext(m, '5s', boundary + 59_000).v2OneMinute();
+    expect(minute).toHaveProperty('features.lastCandleTimestamp', boundary - 60_000);
+  });
+
   it('V9 the grids: 9 / 3 / 1 points, every v2 point a valid parameter set', () => {
     expect(V2_GRID).toHaveLength(9);
     expect(REVERT_GRID).toHaveLength(3);
     expect(variant('v1').grid).toHaveLength(1);
+    expect(variant('v2+1m').grid).toHaveLength(1);
     expect(V2_GRID).toContainEqual(V2_PRODUCTION_POINT);
     for (const point of V2_GRID) {
       expect(() => assertSignalParams({ ...DEFAULT_SIGNAL_PARAMS, ...point })).not.toThrow();

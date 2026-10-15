@@ -7,6 +7,7 @@ import {
   failChallengeDelivery,
   findStaffByTelegram,
   issueLoginLink,
+  listActiveStaffTelegramIds,
   markChallengeCodeSent,
   recordStaffBotRefusal,
   StaffLoginChallengeStatus,
@@ -59,6 +60,9 @@ export interface AdminTelegram {
 }
 
 export interface AdminBot extends AdminTelegram {
+  /** Plain text to every active staff member in turn (#118: a refund request from /paysupport).
+   *  A failed send is a warn per recipient and not repeated; it never throws for one. */
+  notifyStaff(text: string): Promise<void>;
   start(): void;
   stop(): Promise<void>;
   readonly bot: GrammyBot;
@@ -339,6 +343,20 @@ export function createAdminBot({
       polling = false;
       await bot.stop();
       await settled;
+    },
+
+    async notifyStaff(text) {
+      for (const telegramUserId of await listActiveStaffTelegramIds(db)) {
+        try {
+          // a string chat_id, as sendLoginPrompt's
+          await bot.api.sendMessage(String(telegramUserId), text);
+        } catch (error) {
+          logger.warn(
+            { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage') },
+            'the staff notice could not be delivered',
+          );
+        }
+      }
     },
 
     async sendLoginPrompt({ challengeId, telegramUserId, login, ip, userAgent }) {

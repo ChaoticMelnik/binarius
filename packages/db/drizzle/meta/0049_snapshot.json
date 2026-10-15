@@ -1,6 +1,6 @@
 {
-  "id": "9ea070fa-0580-4fb9-bf86-6ea8802c76d6",
-  "prevId": "349b49f2-bb93-472a-b64a-a9bb2b4f0f5c",
+  "id": "0be147b7-7872-4f4c-95bb-ffd221e2b534",
+  "prevId": "4c8f669c-c2b1-4c76-a2f0-dc5519374339",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -125,9 +125,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -299,9 +299,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "broker_accounts_user_id_idx": {
           "name": "broker_accounts_user_id_idx",
@@ -314,43 +314,43 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "broker_accounts_user_id_users_id_fk": {
           "name": "broker_accounts_user_id_users_id_fk",
           "tableFrom": "broker_accounts",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "broker_accounts_id_user_id_key": {
           "name": "broker_accounts_id_user_id_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "user_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "broker_accounts_id_broker_user_id_key": {
           "name": "broker_accounts_id_broker_user_id_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "broker_user_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -436,9 +436,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "auth_sessions_user_id_idx": {
           "name": "auth_sessions_user_id_idx",
@@ -451,9 +451,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "auth_sessions_expires_at_idx": {
           "name": "auth_sessions_expires_at_idx",
@@ -466,24 +466,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "auth_sessions_user_id_users_id_fk": {
           "name": "auth_sessions_user_id_users_id_fk",
           "tableFrom": "auth_sessions",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -553,9 +553,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "oauth_states_expires_at_idx": {
           "name": "oauth_states_expires_at_idx",
@@ -568,9 +568,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -688,10 +688,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"token_ledger\".\"kind\" = 'reserve'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "token_ledger_terminal_intent_idx": {
           "name": "token_ledger_terminal_intent_idx",
@@ -704,10 +704,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"token_ledger\".\"kind\" in ('release', 'settle')",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "token_ledger_deposit_event_idx": {
           "name": "token_ledger_deposit_event_idx",
@@ -726,10 +726,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"token_ledger\".\"deposit_event_id\" is not null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "token_ledger_star_payment_idx": {
           "name": "token_ledger_star_payment_idx",
@@ -748,10 +748,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"token_ledger\".\"star_payment_id\" is not null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "token_ledger_link_bonus_user_idx": {
           "name": "token_ledger_link_bonus_user_idx",
@@ -764,10 +764,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"token_ledger\".\"kind\" = 'bonus' and \"token_ledger\".\"broker_account_id\" is not null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "token_ledger_user_created_idx": {
           "name": "token_ledger_user_created_idx",
@@ -786,9 +786,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "token_ledger_intent_id_idx": {
           "name": "token_ledger_intent_id_idx",
@@ -801,84 +801,84 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "token_ledger_user_id_users_id_fk": {
           "name": "token_ledger_user_id_users_id_fk",
           "tableFrom": "token_ledger",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "token_ledger_intent_owner_fk": {
           "name": "token_ledger_intent_owner_fk",
           "tableFrom": "token_ledger",
+          "tableTo": "trade_intents",
           "columnsFrom": [
             "intent_id",
             "user_id"
           ],
-          "tableTo": "trade_intents",
           "columnsTo": [
             "id",
             "user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "token_ledger_deposit_owner_fk": {
           "name": "token_ledger_deposit_owner_fk",
           "tableFrom": "token_ledger",
+          "tableTo": "deposit_events",
           "columnsFrom": [
             "deposit_event_id",
             "user_id"
           ],
-          "tableTo": "deposit_events",
           "columnsTo": [
             "id",
             "user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "token_ledger_account_owner_fk": {
           "name": "token_ledger_account_owner_fk",
           "tableFrom": "token_ledger",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id",
             "user_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id",
             "user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "token_ledger_star_payment_owner_fk": {
           "name": "token_ledger_star_payment_owner_fk",
           "tableFrom": "token_ledger",
+          "tableTo": "star_payments",
           "columnsFrom": [
             "star_payment_id",
             "user_id"
           ],
-          "tableTo": "star_payments",
           "columnsTo": [
             "id",
             "user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -887,7 +887,7 @@
       "checkConstraints": {
         "token_ledger_kind_check": {
           "name": "token_ledger_kind_check",
-          "value": "\"token_ledger\".\"kind\" in ('purchase', 'bonus', 'reserve', 'release', 'settle', 'adjustment')"
+          "value": "\"token_ledger\".\"kind\" in ('purchase', 'bonus', 'reserve', 'release', 'settle', 'adjustment', 'refund')"
         },
         "token_ledger_ref_type_check": {
           "name": "token_ledger_ref_type_check",
@@ -903,11 +903,11 @@
         },
         "token_ledger_reference_check": {
           "name": "token_ledger_reference_check",
-          "value": "case\n            when \"token_ledger\".\"kind\" in ('reserve', 'release', 'settle')\n              then \"token_ledger\".\"intent_id\" is not null and \"token_ledger\".\"deposit_event_id\" is null\n                and \"token_ledger\".\"broker_account_id\" is null and \"token_ledger\".\"ref_id\" is null\n                and \"token_ledger\".\"star_payment_id\" is null\n            when \"token_ledger\".\"kind\" = 'purchase'\n              then \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"broker_account_id\" is null and \"token_ledger\".\"ref_id\" is null\n                and (\"token_ledger\".\"deposit_event_id\" is not null) <> (\"token_ledger\".\"star_payment_id\" is not null)\n            when \"token_ledger\".\"kind\" = 'bonus'\n              then \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"ref_id\" is null and \"token_ledger\".\"star_payment_id\" is null\n                and not (\"token_ledger\".\"deposit_event_id\" is not null and \"token_ledger\".\"broker_account_id\" is not null)\n            else \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"deposit_event_id\" is null and \"token_ledger\".\"broker_account_id\" is null\n              and \"token_ledger\".\"star_payment_id\" is null\n          end"
+          "value": "case\n            when \"token_ledger\".\"kind\" in ('reserve', 'release', 'settle')\n              then \"token_ledger\".\"intent_id\" is not null and \"token_ledger\".\"deposit_event_id\" is null\n                and \"token_ledger\".\"broker_account_id\" is null and \"token_ledger\".\"ref_id\" is null\n                and \"token_ledger\".\"star_payment_id\" is null\n            when \"token_ledger\".\"kind\" = 'purchase'\n              then \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"broker_account_id\" is null and \"token_ledger\".\"ref_id\" is null\n                and (\"token_ledger\".\"deposit_event_id\" is not null) <> (\"token_ledger\".\"star_payment_id\" is not null)\n            when \"token_ledger\".\"kind\" = 'bonus'\n              then \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"ref_id\" is null and \"token_ledger\".\"star_payment_id\" is null\n                and not (\"token_ledger\".\"deposit_event_id\" is not null and \"token_ledger\".\"broker_account_id\" is not null)\n            when \"token_ledger\".\"kind\" = 'refund'\n              then \"token_ledger\".\"star_payment_id\" is not null and \"token_ledger\".\"intent_id\" is null\n                and \"token_ledger\".\"deposit_event_id\" is null and \"token_ledger\".\"broker_account_id\" is null\n                and \"token_ledger\".\"ref_id\" is null\n            else \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"deposit_event_id\" is null and \"token_ledger\".\"broker_account_id\" is null\n              and \"token_ledger\".\"star_payment_id\" is null\n          end"
         },
         "token_ledger_delta_shape_check": {
           "name": "token_ledger_delta_shape_check",
-          "value": "case \"token_ledger\".\"kind\"\n            when 'reserve' then \"token_ledger\".\"reserved_delta\" > 0 and \"token_ledger\".\"balance_delta\" = 0\n            when 'release' then \"token_ledger\".\"reserved_delta\" < 0 and \"token_ledger\".\"balance_delta\" = 0\n            when 'settle' then \"token_ledger\".\"reserved_delta\" < 0\n            when 'purchase' then \"token_ledger\".\"balance_delta\" > 0 and \"token_ledger\".\"reserved_delta\" = 0\n            when 'bonus' then \"token_ledger\".\"balance_delta\" > 0 and \"token_ledger\".\"reserved_delta\" = 0\n            else true\n          end"
+          "value": "case \"token_ledger\".\"kind\"\n            when 'reserve' then \"token_ledger\".\"reserved_delta\" > 0 and \"token_ledger\".\"balance_delta\" = 0\n            when 'release' then \"token_ledger\".\"reserved_delta\" < 0 and \"token_ledger\".\"balance_delta\" = 0\n            when 'settle' then \"token_ledger\".\"reserved_delta\" < 0\n            when 'purchase' then \"token_ledger\".\"balance_delta\" > 0 and \"token_ledger\".\"reserved_delta\" = 0\n            when 'bonus' then \"token_ledger\".\"balance_delta\" > 0 and \"token_ledger\".\"reserved_delta\" = 0\n            when 'refund' then \"token_ledger\".\"balance_delta\" < 0 and \"token_ledger\".\"reserved_delta\" = 0\n            else true\n          end"
         },
         "token_ledger_adjustment_note_check": {
           "name": "token_ledger_adjustment_note_check",
@@ -1036,9 +1036,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "trading_sessions_active_account_idx": {
           "name": "trading_sessions_active_account_idx",
@@ -1051,10 +1051,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"trading_sessions\".\"status\" = 'active'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "trading_sessions_runnable_idx": {
           "name": "trading_sessions_runnable_idx",
@@ -1073,10 +1073,10 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"trading_sessions\".\"status\" = 'active'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "trading_sessions_notice_pending_idx": {
           "name": "trading_sessions_notice_pending_idx",
@@ -1089,37 +1089,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"trading_sessions\".\"final_notice_sent_at\" is null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "trading_sessions_broker_account_id_broker_accounts_id_fk": {
           "name": "trading_sessions_broker_account_id_broker_accounts_id_fk",
           "tableFrom": "trading_sessions",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "trading_sessions_id_account_mode_key": {
           "name": "trading_sessions_id_account_mode_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "broker_account_id",
             "mode"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1302,9 +1302,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "trade_intents_active_account_idx": {
           "name": "trade_intents_active_account_idx",
@@ -1317,10 +1317,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"trade_intents\".\"status\" not in ('settled', 'rejected')",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "trade_intents_account_status_idx": {
           "name": "trade_intents_account_status_idx",
@@ -1339,9 +1339,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "trade_intents_status_updated_idx": {
           "name": "trade_intents_status_updated_idx",
@@ -1360,9 +1360,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "trade_intents_user_id_idx": {
           "name": "trade_intents_user_id_idx",
@@ -1375,9 +1375,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "trade_intents_session_id_idx": {
           "name": "trade_intents_session_id_idx",
@@ -1390,102 +1390,102 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "trade_intents_broker_account_id_broker_accounts_id_fk": {
           "name": "trade_intents_broker_account_id_broker_accounts_id_fk",
           "tableFrom": "trade_intents",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "trade_intents_user_id_users_id_fk": {
           "name": "trade_intents_user_id_users_id_fk",
           "tableFrom": "trade_intents",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "trade_intents_trading_session_id_trading_sessions_id_fk": {
           "name": "trade_intents_trading_session_id_trading_sessions_id_fk",
           "tableFrom": "trade_intents",
+          "tableTo": "trading_sessions",
           "columnsFrom": [
             "trading_session_id"
           ],
-          "tableTo": "trading_sessions",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "trade_intents_account_owner_fk": {
           "name": "trade_intents_account_owner_fk",
           "tableFrom": "trade_intents",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id",
             "user_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id",
             "user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "trade_intents_session_account_fk": {
           "name": "trade_intents_session_account_fk",
           "tableFrom": "trade_intents",
+          "tableTo": "trading_sessions",
           "columnsFrom": [
             "trading_session_id",
             "broker_account_id",
             "mode"
           ],
-          "tableTo": "trading_sessions",
           "columnsTo": [
             "id",
             "broker_account_id",
             "mode"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "trade_intents_id_account_mode_key": {
           "name": "trade_intents_id_account_mode_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "broker_account_id",
             "mode"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "trade_intents_id_user_key": {
           "name": "trade_intents_id_user_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "user_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1616,36 +1616,36 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"outbox_events\".\"status\" = 'pending'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "outbox_events_intent_id_trade_intents_id_fk": {
           "name": "outbox_events_intent_id_trade_intents_id_fk",
           "tableFrom": "outbox_events",
+          "tableTo": "trade_intents",
           "columnsFrom": [
             "intent_id"
           ],
-          "tableTo": "trade_intents",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "outbox_events_topic_intent_key": {
           "name": "outbox_events_topic_intent_key",
+          "nullsNotDistinct": false,
           "columns": [
             "topic",
             "intent_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1821,72 +1821,72 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "broker_trades_broker_account_id_broker_accounts_id_fk": {
           "name": "broker_trades_broker_account_id_broker_accounts_id_fk",
           "tableFrom": "broker_trades",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "broker_trades_intent_id_trade_intents_id_fk": {
           "name": "broker_trades_intent_id_trade_intents_id_fk",
           "tableFrom": "broker_trades",
+          "tableTo": "trade_intents",
           "columnsFrom": [
             "intent_id"
           ],
-          "tableTo": "trade_intents",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "broker_trades_intent_account_fk": {
           "name": "broker_trades_intent_account_fk",
           "tableFrom": "broker_trades",
+          "tableTo": "trade_intents",
           "columnsFrom": [
             "intent_id",
             "broker_account_id",
             "mode"
           ],
-          "tableTo": "trade_intents",
           "columnsTo": [
             "id",
             "broker_account_id",
             "mode"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "broker_trades_account_trade_key": {
           "name": "broker_trades_account_trade_key",
+          "nullsNotDistinct": false,
           "columns": [
             "broker_account_id",
             "broker_trade_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "broker_trades_intent_id_key": {
           "name": "broker_trades_intent_id_key",
+          "nullsNotDistinct": false,
           "columns": [
             "intent_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -2066,15 +2066,15 @@
         "broker_balance_snapshots_account_fk": {
           "name": "broker_balance_snapshots_account_fk",
           "tableFrom": "broker_balance_snapshots",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2216,9 +2216,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "deposit_events_user_id_idx": {
           "name": "deposit_events_user_id_idx",
@@ -2231,9 +2231,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "deposit_events_broker_account_id_idx": {
           "name": "deposit_events_broker_account_id_idx",
@@ -2246,9 +2246,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "deposit_events_broker_user_id_idx": {
           "name": "deposit_events_broker_user_id_idx",
@@ -2261,78 +2261,78 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "deposit_events_user_id_users_id_fk": {
           "name": "deposit_events_user_id_users_id_fk",
           "tableFrom": "deposit_events",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "deposit_events_broker_account_id_broker_accounts_id_fk": {
           "name": "deposit_events_broker_account_id_broker_accounts_id_fk",
           "tableFrom": "deposit_events",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "deposit_events_account_owner_fk": {
           "name": "deposit_events_account_owner_fk",
           "tableFrom": "deposit_events",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id",
             "user_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id",
             "user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "deposit_events_account_trader_fk": {
           "name": "deposit_events_account_trader_fk",
           "tableFrom": "deposit_events",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id",
             "broker_user_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id",
             "broker_user_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "deposit_events_id_user_key": {
           "name": "deposit_events_id_user_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "user_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -2409,6 +2409,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "payer_telegram_user_id": {
+          "name": "payer_telegram_user_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -2447,35 +2453,35 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "star_payments_user_id_users_id_fk": {
           "name": "star_payments_user_id_users_id_fk",
           "tableFrom": "star_payments",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "star_payments_id_user_key": {
           "name": "star_payments_id_user_key",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "user_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -2487,6 +2493,10 @@
         "star_payments_total_amount_check": {
           "name": "star_payments_total_amount_check",
           "value": "\"star_payments\".\"total_amount\" > 0"
+        },
+        "star_payments_payer_check": {
+          "name": "star_payments_payer_check",
+          "value": "\"star_payments\".\"payer_telegram_user_id\" > 0"
         },
         "star_payments_tokens_check": {
           "name": "star_payments_tokens_check",
@@ -2503,6 +2513,80 @@
         "star_payments_refund_pair_check": {
           "name": "star_payments_refund_pair_check",
           "value": "(\"star_payments\".\"status\" = 'refunded') = (\"star_payments\".\"refunded_at\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.star_refund_requests": {
+      "name": "star_refund_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "star_payment_id": {
+          "name": "star_payment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_by_telegram_user_id": {
+          "name": "requested_by_telegram_user_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_at": {
+          "name": "requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "star_refund_requests_payment_key": {
+          "name": "star_refund_requests_payment_key",
+          "columns": [
+            {
+              "expression": "star_payment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "star_refund_requests_payment_fk": {
+          "name": "star_refund_requests_payment_fk",
+          "tableFrom": "star_refund_requests",
+          "tableTo": "star_payments",
+          "columnsFrom": [
+            "star_payment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "star_refund_requests_requested_by_check": {
+          "name": "star_refund_requests_requested_by_check",
+          "value": "\"star_refund_requests\".\"requested_by_telegram_user_id\" > 0"
         }
       },
       "isRLSEnabled": false
@@ -2586,10 +2670,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"postback_deliveries\".\"outcome\" <> 'rejected'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "postback_deliveries_deposit_event_id_idx": {
           "name": "postback_deliveries_deposit_event_id_idx",
@@ -2602,9 +2686,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "postback_deliveries_created_at_idx": {
           "name": "postback_deliveries_created_at_idx",
@@ -2617,24 +2701,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "postback_deliveries_deposit_event_id_deposit_events_id_fk": {
           "name": "postback_deliveries_deposit_event_id_deposit_events_id_fk",
           "tableFrom": "postback_deliveries",
+          "tableTo": "deposit_events",
           "columnsFrom": [
             "deposit_event_id"
           ],
-          "tableTo": "deposit_events",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2747,9 +2831,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -2866,10 +2950,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"notification_jobs\".\"dedupe_key\" is not null",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "notification_jobs_status_scheduled_idx": {
           "name": "notification_jobs_status_scheduled_idx",
@@ -2888,9 +2972,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "notification_jobs_user_id_idx": {
           "name": "notification_jobs_user_id_idx",
@@ -2903,24 +2987,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "notification_jobs_user_id_users_id_fk": {
           "name": "notification_jobs_user_id_users_id_fk",
           "tableFrom": "notification_jobs",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3043,9 +3127,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "audit_log_created_at_idx": {
           "name": "audit_log_created_at_idx",
@@ -3058,9 +3142,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -3074,7 +3158,7 @@
         },
         "audit_log_action_check": {
           "name": "audit_log_action_check",
-          "value": "\"audit_log\".\"action\" in ('staff_created', 'staff_disabled', 'staff_password_reset', 'staff_login_failed', 'staff_login_locked', 'staff_login_password_ok', 'staff_login_telegram_failed', 'staff_login_telegram_confirmed', 'staff_login_denied', 'staff_login_code_failed', 'staff_login_completed', 'staff_sessions_viewed', 'staff_session_revoked', 'staff_logout', 'trading_stopped', 'trading_resumed', 'bot_text_saved', 'bot_text_reset', 'overview_viewed', 'users_viewed', 'user_viewed', 'intents_viewed', 'intent_viewed', 'trading_sessions_viewed', 'tokens_viewed', 'audit_log_viewed', 'staff_password_changed', 'staff_password_change_failed', 'bot_texts_viewed', 'bot_text_viewed', 'bot_text_previewed', 'bot_profile_published', 'deposits_viewed', 'broker_accounts_viewed', 'token_adjusted', 'staff_login_link_issued', 'staff_login_link_refused', 'staff_login_link_completed', 'trading_mode_changed', 'stars_purchased', 'stars_payment_held')"
+          "value": "\"audit_log\".\"action\" in ('staff_created', 'staff_disabled', 'staff_password_reset', 'staff_login_failed', 'staff_login_locked', 'staff_login_password_ok', 'staff_login_telegram_failed', 'staff_login_telegram_confirmed', 'staff_login_denied', 'staff_login_code_failed', 'staff_login_completed', 'staff_sessions_viewed', 'staff_session_revoked', 'staff_logout', 'trading_stopped', 'trading_resumed', 'bot_text_saved', 'bot_text_reset', 'overview_viewed', 'users_viewed', 'user_viewed', 'intents_viewed', 'intent_viewed', 'trading_sessions_viewed', 'tokens_viewed', 'audit_log_viewed', 'staff_password_changed', 'staff_password_change_failed', 'bot_texts_viewed', 'bot_text_viewed', 'bot_text_previewed', 'bot_profile_published', 'deposits_viewed', 'broker_accounts_viewed', 'token_adjusted', 'staff_login_link_issued', 'staff_login_link_refused', 'staff_login_link_completed', 'trading_mode_changed', 'stars_purchased', 'stars_payment_held', 'stars_refunded', 'stars_refund_requested')"
         }
       },
       "isRLSEnabled": false
@@ -3221,15 +3305,15 @@
           "columns": [
             {
               "expression": "lower(\"login\")",
-              "isExpression": true,
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "staff_telegram_user_id_idx": {
           "name": "staff_telegram_user_id_idx",
@@ -3242,9 +3326,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -3368,9 +3452,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "staff_login_challenges_expires_at_idx": {
           "name": "staff_login_challenges_expires_at_idx",
@@ -3383,9 +3467,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "staff_login_challenges_open_idx": {
           "name": "staff_login_challenges_open_idx",
@@ -3398,25 +3482,25 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"staff_login_challenges\".\"status\" in ('pending', 'confirmed')",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "staff_login_challenges_staff_id_staff_id_fk": {
           "name": "staff_login_challenges_staff_id_staff_id_fk",
           "tableFrom": "staff_login_challenges",
+          "tableTo": "staff",
           "columnsFrom": [
             "staff_id"
           ],
-          "tableTo": "staff",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3520,9 +3604,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "staff_login_links_live_idx": {
           "name": "staff_login_links_live_idx",
@@ -3535,10 +3619,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"staff_login_links\".\"status\" = 'issued'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "staff_login_links_staff_created_idx": {
           "name": "staff_login_links_staff_created_idx",
@@ -3557,24 +3641,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "staff_login_links_staff_id_staff_id_fk": {
           "name": "staff_login_links_staff_id_staff_id_fk",
           "tableFrom": "staff_login_links",
+          "tableTo": "staff",
           "columnsFrom": [
             "staff_id"
           ],
-          "tableTo": "staff",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3680,9 +3764,9 @@
             }
           ],
           "isUnique": true,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "staff_sessions_staff_id_idx": {
           "name": "staff_sessions_staff_id_idx",
@@ -3695,9 +3779,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "staff_sessions_expires_at_idx": {
           "name": "staff_sessions_expires_at_idx",
@@ -3710,37 +3794,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "staff_sessions_staff_id_staff_id_fk": {
           "name": "staff_sessions_staff_id_staff_id_fk",
           "tableFrom": "staff_sessions",
+          "tableTo": "staff",
           "columnsFrom": [
             "staff_id"
           ],
-          "tableTo": "staff",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "staff_sessions_revoked_by_staff_id_staff_id_fk": {
           "name": "staff_sessions_revoked_by_staff_id_staff_id_fk",
           "tableFrom": "staff_sessions",
+          "tableTo": "staff",
           "columnsFrom": [
             "revoked_by_staff_id"
           ],
-          "tableTo": "staff",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3808,15 +3892,15 @@
         "bot_text_overrides_updated_by_staff_id_staff_id_fk": {
           "name": "bot_text_overrides_updated_by_staff_id_staff_id_fk",
           "tableFrom": "bot_text_overrides",
+          "tableTo": "staff",
           "columnsFrom": [
             "updated_by_staff_id"
           ],
-          "tableTo": "staff",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3872,15 +3956,15 @@
         "broker_session_leases_account_fk": {
           "name": "broker_session_leases_account_fk",
           "tableFrom": "broker_session_leases",
+          "tableTo": "broker_accounts",
           "columnsFrom": [
             "broker_account_id"
           ],
-          "tableTo": "broker_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3923,25 +4007,25 @@
         "referral_codes_user_fk": {
           "name": "referral_codes_user_fk",
           "tableFrom": "referral_codes",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "referral_codes_code_key": {
           "name": "referral_codes_code_key",
+          "nullsNotDistinct": false,
           "columns": [
             "code"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -3996,47 +4080,47 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "referrals_invitee_fk": {
           "name": "referrals_invitee_fk",
           "tableFrom": "referrals",
+          "tableTo": "users",
           "columnsFrom": [
             "invitee_user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "referrals_inviter_fk": {
           "name": "referrals_inviter_fk",
           "tableFrom": "referrals",
+          "tableTo": "users",
           "columnsFrom": [
             "inviter_user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "referrals_invitee_key": {
           "name": "referrals_invitee_key",
+          "nullsNotDistinct": false,
           "columns": [
             "invitee_user_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -4051,21 +4135,21 @@
   },
   "enums": {},
   "schemas": {},
-  "views": {},
   "sequences": {
     "public.bot_text_override_version_seq": {
       "name": "bot_text_override_version_seq",
+      "schema": "public",
       "increment": "1",
+      "startWith": "1",
       "minValue": "1",
       "maxValue": "9007199254740991",
-      "startWith": "1",
       "cache": "1",
-      "cycle": false,
-      "schema": "public"
+      "cycle": false
     }
   },
   "roles": {},
   "policies": {},
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

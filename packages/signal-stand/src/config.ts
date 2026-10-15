@@ -16,6 +16,7 @@ export const PRICE_STEP_MS = 1_000;
 export const TRADE_INTERVALS = {
   '5s': { intervalMs: 5_000, durationSec: 5 },
   '15s': { intervalMs: 15_000, durationSec: 15 },
+  '1m': { intervalMs: 60_000, durationSec: 60 },
 } as const;
 export type TradeInterval = keyof typeof TRADE_INTERVALS;
 export const FETCH_INTERVALS = [PRICE_INTERVAL, '5s', '15s', '1m'] as const;
@@ -29,13 +30,23 @@ export const OPEN_DELAY_GRID_MS = [0, 1_000, 3_000] as const;
 export const FALLBACK_HEADLINE_DELAY_MS = 0;
 
 // Copied from apps/trading-worker/src/trading-session/config.ts, which a package cannot import:
-// TRADING_SESSION_CANDLE_SLACK_MS, TRADING_SESSION_TICK_MS.
+// TRADING_SESSION_CANDLE_SLACK_MS, TRADING_SESSION_TICK_MS, TRADING_SESSION_ATTEMPT_TIMEOUT_MS.
 export const DECISION_SLACK_MS = 2_000;
 export const SETTLE_TICK_MS = 5_000;
+export const ATTEMPT_WINDOW_MS = 10_000;
 
 export const IN_SAMPLE_SHARE = 5 / 7;
 export const MIN_IN_SAMPLE_TRADES = 100;
 export const POOLED_BREAK_EVEN_PAYOUT = 80;
+
+// #379's merge (2026-10-09 16:13 UTC); the deploy time is not known, so the evening of 10-09 is
+// neither era
+export const V2_MERGED_AT = Date.UTC(2026, 9, 9, 16, 13);
+export const V2_FIRST_CLEAN_AT = Date.UTC(2026, 9, 10);
+// set from one sample: 443/494 on 2026-10-15
+export const CALIBRATE_MIN_OUTCOME_MATCH_PCT = 85;
+export const CALIBRATE_MIN_ERA_TRADES = 30;
+export const PRICE_SHIFT_GRID_MS = [-1_000, 0, 1_000] as const;
 
 // the 28 pairs of 2026-10-15: the 27 the live sessions traded and the plan's ten (symbols, types
 // and payouts: docs/signal-stand.md -> Pairs; the stand reads them only from pairs.json)

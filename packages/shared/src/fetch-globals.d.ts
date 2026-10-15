@@ -32,3 +32,18 @@ declare class Response {
   readonly body: ReadableStream<Uint8Array> | null;
   readonly status: number;
 }
+
+// the subset fetch-deadline.ts uses, for the same reason
+declare class AbortSignal {
+  static any(signals: AbortSignal[]): AbortSignal;
+  static abort(reason?: unknown): AbortSignal;
+  readonly aborted: boolean;
+  readonly reason: unknown;
+  addEventListener(type: 'abort', listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(type: 'abort', listener: () => void): void;
+}
+
+declare class AbortController {
+  readonly signal: AbortSignal;
+  abort(reason?: unknown): void;
+}

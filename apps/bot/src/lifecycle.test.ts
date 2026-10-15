@@ -156,6 +156,7 @@ describe('runBot', () => {
         { command: 'invite', description: 'Пригласить друга' },
         { command: 'help', description: 'Помощь' },
         { command: 'support', description: 'Поддержка' },
+        { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
       ],
       { scope: { type: 'all_private_chats' } },
     );
@@ -760,6 +761,8 @@ function scene(options: SceneOptions = {}) {
     createStarsInvoice: () => Promise.reject(new Error('not used by these scenes')),
     checkStarsPreCheckout: () => Promise.reject(new Error('not used by these scenes')),
     reportStarsPaid: () => Promise.reject(new Error('not used by these scenes')),
+    listStarsPayments: () => Promise.reject(new Error('not used by these scenes')),
+    requestStarsRefund: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     intentTracker: stubTracker(),
@@ -930,6 +933,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
         { command: 'invite', description: 'Пригласить друга' },
         { command: 'help', description: 'Помощь' },
         { command: 'support', description: 'Поддержка' },
+        { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
       ],
       scope: { type: 'all_private_chats' },
     });

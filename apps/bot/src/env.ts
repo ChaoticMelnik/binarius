@@ -2,6 +2,7 @@ import {
   parseInternalTokenEnv,
   parseLogLevelEnv,
   parseNoWhitespaceEnv,
+  parseOriginEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -19,6 +20,8 @@ export interface Env {
   backendUrl: string;
   logLevel: LogLevel;
   welcomeVideoFileId?: string;
+  // apps/web's origin, the cashier's (#27): the same variable and rule as web's and backend's
+  webPublicUrl: string;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -41,5 +44,6 @@ export function parseEnv(source: EnvSource): Env {
       source.WELCOME_VIDEO_FILE_ID === undefined
         ? undefined
         : parseNoWhitespaceEnv(readEnv(source, 'WELCOME_VIDEO_FILE_ID'), 'WELCOME_VIDEO_FILE_ID'),
+    webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
   };
 }

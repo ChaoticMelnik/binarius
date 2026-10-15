@@ -2,6 +2,8 @@ import type { Candle } from '@binarius/shared';
 
 // Every series is aligned to the end of its input:
 //   ema(values, p)[j]  belongs to values[p - 1 + j]
+//   sma(values, p)[j]  belongs to values[p - 1 + j]
+//   macd(closes, f, s, g).*[j] belongs to closes[s + g - 2 + j]
 //   rsi(closes, p)[j]  belongs to closes[p + j]
 //   atr(candles, p)[j] belongs to candles[p + j]
 // A series shorter than the seed is a programmer error: the decider checks the count first.
@@ -33,6 +35,46 @@ export function ema(values: readonly number[], period: number): number[] {
     out.push(previous + k * (values[i] - previous));
   }
   return out;
+}
+
+export function sma(values: readonly number[], period: number): number[] {
+  assertSeed('sma', period, values.length, period);
+  const out: number[] = [];
+  for (let i = period - 1; i < values.length; i++) {
+    out.push(mean(values.slice(i - period + 1, i + 1)));
+  }
+  return out;
+}
+
+export interface MacdSeries {
+  macd: number[];
+  signal: number[];
+  histogram: number[];
+}
+
+// MACD line = ema(fast) - ema(slow) over the closes both cover; the signal line is the ema of that
+// line; all three are aligned to the signal line
+export function macd(
+  closes: readonly number[],
+  fast: number,
+  slow: number,
+  signal: number,
+): MacdSeries {
+  if (!(fast < slow)) {
+    throw new RangeError(`macd: fast period must be below slow, got ${fast} and ${slow}`);
+  }
+  assertSeed('macd', slow, closes.length, slow + signal - 1);
+  assertSeed('macd', signal, closes.length, slow + signal - 1);
+  const fastLine = ema(closes, fast);
+  const slowLine = ema(closes, slow);
+  const line = slowLine.map((value, j) => fastLine[j + slow - fast] - value);
+  const signalLine = ema(line, signal);
+  const tail = line.slice(signal - 1);
+  return {
+    macd: tail,
+    signal: signalLine,
+    histogram: tail.map((value, j) => value - signalLine[j]),
+  };
 }
 
 function rsiFrom(avgGain: number, avgLoss: number): number {

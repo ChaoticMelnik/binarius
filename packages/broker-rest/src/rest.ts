@@ -1,6 +1,10 @@
 import {
   BrokerRestErrorCode,
+  DeadlineError,
+  errorLogFields,
   readBody,
+  withinDeadline,
+  type FetchDeadlineLogger,
   safeParseBinaryPairs,
   safeParseBrokerError,
   safeParseBrokerUser,
@@ -31,7 +35,7 @@ import {
 // One REST call's deadline when the caller passes none. Every process that waits on a call in a
 // shutdown phase orders it below that phase: apps/trading-worker/src/intents/config.ts; the pairs
 // catalog orders it below its TTL (pairs-catalog.ts) and is aborted, not awaited, at the
-// backend's shutdown.
+// backend's shutdown. It holds even when fetch ignores its abort signal (withinDeadline, #481).
 export const BROKER_REST_TIMEOUT_MS = 5_000;
 
 // free text from the broker is logged, never persisted, and only this much of it
@@ -128,6 +132,8 @@ export interface BrokerRestClient {
 export interface BrokerRestClientOptions {
   baseUrl: string;
   timeoutMs?: number;
+  // where an abandoned or late-settled call is logged; without one only the thrown error tells
+  logger?: FetchDeadlineLogger;
 }
 
 type SafeParse<T> = (input: unknown) => { success: true; data: T } | { success: false };
@@ -186,7 +192,46 @@ export function createBrokerRestClient(options: BrokerRestClientOptions): Broker
       : new BrokerRestError(BrokerRestErrorCode.Unavailable, { status });
   }
 
+  // the codes a cut that settles in time gives: our deadline is the broker's unavailability
+  const abandonedError = (error: DeadlineError): BrokerRestError =>
+    new BrokerRestError(
+      error.code === 'aborted' ? BrokerRestErrorCode.Aborted : BrokerRestErrorCode.Unavailable,
+    );
+
+  // The whole call - headers, an error body, the body, the parse - runs inside one deadline.
   async function send<W>(call: Call<W>): Promise<W> {
+    const { logger } = options;
+    try {
+      return await withinDeadline(timeoutMs, call.signal, (combined) => attempt(call, combined), {
+        onAbandoned: (deadlineError) =>
+          logger?.error(
+            {
+              endpoint: call.endpoint,
+              timeoutMs,
+              ...errorLogFields(abandonedError(deadlineError)),
+            },
+            'broker request abandoned',
+          ),
+        onSettledLate: (late) =>
+          logger?.warn(
+            late.ok
+              ? { endpoint: call.endpoint, lateMs: late.lateMs, outcome: 'ok' }
+              : {
+                  endpoint: call.endpoint,
+                  lateMs: late.lateMs,
+                  outcome: 'error',
+                  ...errorLogFields(late.error),
+                },
+            'broker request settled late',
+          ),
+      });
+    } catch (error) {
+      if (error instanceof DeadlineError) throw abandonedError(error);
+      throw error;
+    }
+  }
+
+  async function attempt<W>(call: Call<W>, combined: AbortSignal): Promise<W> {
     const { method, path, bearer } = BROKER_REST_ENDPOINTS[call.endpoint];
     const url = new URL(path, options.baseUrl);
     for (const [key, value] of Object.entries(call.query ?? {})) {
@@ -197,9 +242,6 @@ export function createBrokerRestClient(options: BrokerRestClientOptions): Broker
       headers.authorization = `Bearer ${call.auth.accessToken}`;
     }
     if (call.body !== undefined) headers['content-type'] = 'application/json';
-    const timeout = AbortSignal.timeout(timeoutMs);
-    // bounds the headers and the body read alike
-    const combined = call.signal === undefined ? timeout : AbortSignal.any([call.signal, timeout]);
 
     let response: Response;
     try {

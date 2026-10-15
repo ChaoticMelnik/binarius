@@ -33,9 +33,16 @@ import {
   BUY_CALLBACK_DATA,
   buyPackageCallbackData,
   StarsErrorCode,
+  PAYSUPPORT_LIST_CALLBACK,
+  paysupportRefundCallbackData,
+  StarsRefundErrorCode,
   StarsPreCheckoutRefusal,
 } from '@binarius/shared';
-import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
+import {
+  composeDurationMs,
+  composeServiceEnvValue,
+  composeServiceValue,
+} from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
   LEVEL_CURRENT_CALLBACK_DATA,
@@ -48,6 +55,8 @@ import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
+  cycleCustomCallbackData,
+  cycleStakeCallbackData,
   demoLaunchCallbackData,
   demoSignalsCallbackData,
   analysisMoreCallbackData,
@@ -177,6 +186,8 @@ interface Branch {
   createStarsInvoice?: BackendClient['createStarsInvoice'];
   checkStarsPreCheckout?: BackendClient['checkStarsPreCheckout'];
   reportStarsPaid?: BackendClient['reportStarsPaid'];
+  listStarsPayments?: BackendClient['listStarsPayments'];
+  requestStarsRefund?: BackendClient['requestStarsRefund'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -397,6 +408,19 @@ async function observe(branch: Branch): Promise<Calls> {
         branch.reportStarsPaid ??
         (() => Promise.resolve({ outcome: 'credited' as const, tokens: '150', balance: '162' }))
       )(request);
+    },
+    listStarsPayments: (telegramUserId) => {
+      backend += 1;
+      return (branch.listStarsPayments ?? (() => Promise.resolve([PAYSUPPORT_PAYMENT])))(
+        telegramUserId,
+      );
+    },
+    requestStarsRefund: (telegramUserId, paymentId) => {
+      backend += 1;
+      return (branch.requestStarsRefund ?? (() => Promise.resolve('requested' as const)))(
+        telegramUserId,
+        paymentId,
+      );
     },
   };
   const loginDialog = createLoginDialog();
@@ -881,11 +905,22 @@ const DEMO_LAUNCH = demoScreenBranches(
         readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
         expected: { backend: 2, telegram: 2 },
       },
+      {
+        label: 'a user in real mode gets the launch screen',
+        readTradingAccess: () => Promise.resolve({ ...ACCESS_VIEW, tradingMode: TradeMode.Real }),
+        expected: { backend: 2, telegram: 2 },
+      },
     ],
     2,
   ),
   2,
 );
+// #476: a door under a trade or a session sends the screen at once, shorter than the edit
+DEMO_LAUNCH.branches.push({
+  label: 'a door under a trade or a session sends the screen as a new message',
+  update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
+  expected: { backend: 2, telegram: 2 },
+});
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary, the signal, the result in
 // place of «⏳». Its edits are two, so the shared screen branches do not describe it.
 const EDIT_TRANSPORT = new HttpError(
@@ -2164,6 +2199,102 @@ const PAID_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// /paysupport (#118): the list, the empty screen or the failure, each one message
+const PAYSUPPORT_PAYMENT = {
+  id: '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10',
+  paidAt: 1_790_000_000,
+  packageCode: 'p50',
+  totalAmount: 100,
+  status: 'paid' as const,
+  requested: false,
+};
+const PAYSUPPORT_WORST_CASE: Branch = {
+  label: 'the payments are listed',
+  update: textUpdate('/paysupport'),
+  expected: { backend: 1, telegram: 1 },
+};
+const PAYSUPPORT_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate('/paysupport')),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/paysupport', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  PAYSUPPORT_WORST_CASE,
+  {
+    label: 'there is no payment',
+    update: textUpdate('/paysupport'),
+    listStarsPayments: () => Promise.resolve([]),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: textUpdate('/paysupport'),
+    listStarsPayments: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+const PAYSUPPORT_LIST_BRANCHES: readonly Branch[] = [
+  ...PAYSUPPORT_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
+    ...branch,
+    label: `the list button: ${branch.label}`,
+    update: callbackUpdate(PAYSUPPORT_LIST_CALLBACK),
+    expected: { backend: branch.expected.backend, telegram: branch.expected.telegram + 1 },
+  })),
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(PAYSUPPORT_LIST_CALLBACK, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+];
+const PAYSUPPORT_LIST_WORST_CASE = PAYSUPPORT_LIST_BRANCHES[0]!;
+
+const refundUpdate = (chatType?: string) =>
+  callbackUpdate(paysupportRefundCallbackData(PAYSUPPORT_PAYMENT.id), chatType);
+const PAYSUPPORT_REQUEST_WORST_CASE: Branch = {
+  label: 'the request is recorded',
+  update: refundUpdate(),
+  expected: { backend: 1, telegram: 2 },
+};
+const PAYSUPPORT_REQUEST_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: refundUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  PAYSUPPORT_REQUEST_WORST_CASE,
+  {
+    label: 'the request was made before',
+    update: refundUpdate(),
+    requestStarsRefund: () => Promise.resolve('already_requested' as const),
+    expected: { backend: 1, telegram: 2 },
+  },
+  ...[
+    [409, StarsRefundErrorCode.AlreadyRefunded],
+    [404, StarsRefundErrorCode.PaymentNotFound],
+  ].map(([status, reason]) => ({
+    label: `the backend refuses with ${String(reason)}`,
+    update: refundUpdate(),
+    requestStarsRefund: refusedWith(status as number, reason as string),
+    expected: { backend: 1, telegram: 2 },
+  })),
+  {
+    label: 'the backend is unreachable',
+    update: refundUpdate(),
+    requestStarsRefund: unreachable,
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the id is not a uuid',
+    update: callbackUpdate(`ps:r:${'-'.repeat(36)}`),
+    expected: { backend: 0, telegram: 2 },
+  },
+];
+
 // «🏠 В меню» (#350): /menu's branches after the answer, the card never pinned.
 const menuButton = (label: string, expected: Calls, patch: Partial<Branch> = {}): Branch => ({
   label,
@@ -2523,6 +2654,96 @@ const STAKE_TEXT_BRANCHES: readonly Branch[] = [
   STAKE_TEXT_WORST_CASE,
 ];
 
+// the amount screen's presses (#476, cycle-stake.ts)
+const cyclePressUpdate = (chatType?: string) =>
+  callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'l'), chatType);
+const CYCLE_STAKE_PRESET_WORST_CASE: Branch = {
+  label: 'the cycle starts, the status is sent, the screen cannot be deleted and is stripped',
+  update: cyclePressUpdate(),
+  apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+  expected: { backend: 3, telegram: 4 },
+};
+const CYCLE_STAKE_PRESET_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: cyclePressUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the data is forged',
+    update: callbackUpdate('demo:sa:0:5:5:l'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the amount is saved, the cycle starts and the screen is deleted',
+    update: cyclePressUpdate(),
+    expected: { backend: 3, telegram: 3 },
+  },
+  {
+    label: 'the save is refused',
+    update: cyclePressUpdate(),
+    setStake: stakeRefused,
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the save outcome is unknown',
+    update: cyclePressUpdate(),
+    setStake: unreachable,
+    expected: { backend: 2, telegram: 2 },
+  },
+  // one attempt: the retry would not fit SHUTDOWN_BUDGET_MS with the delete
+  {
+    label: 'the start outcome is unknown and is not asked again',
+    update: cyclePressUpdate(),
+    startSession: unreachable,
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'answering the query is refused and the status still goes',
+    update: cyclePressUpdate(),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 3, telegram: 3 },
+  },
+  CYCLE_STAKE_PRESET_WORST_CASE,
+];
+const CYCLE_STAKE_CUSTOM = pickerBranches(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'), 0, {
+  forged: 'demo:sc:0:5:a',
+});
+const ON_CYCLE_STEP: LoginDialogState = {
+  step: 'cycleStake',
+  assetId: PAIR_EURUSD.id,
+  durationSec: 5,
+  back: 'l',
+};
+const cycleText = (label: string, text: string, expected: Calls, patch: Partial<Branch> = {}) => ({
+  label,
+  update: textUpdate(text),
+  dialog: ON_CYCLE_STEP,
+  expected,
+  ...patch,
+});
+const CYCLE_STAKE_TEXT_WORST_CASE: Branch = cycleText(
+  'the typed amount is saved, the start outcome is unknown and the retry learns the session',
+  '5',
+  { backend: 4, telegram: 1 },
+  {
+    startSession: (() => {
+      let first = true;
+      return () => {
+        if (!first) return Promise.resolve({ active: SESSION_VIEW });
+        first = false;
+        return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+      };
+    })(),
+  },
+);
+const CYCLE_STAKE_TEXT_BRANCHES: readonly Branch[] = [
+  cycleText('the text is not an amount', 'abc', { backend: 0, telegram: 1 }),
+  cycleText('the save fails', '5', { backend: 2, telegram: 1 }, { setStake: unreachable }),
+  cycleText('the typed amount is saved and the cycle starts', '5', { backend: 3, telegram: 1 }),
+  CYCLE_STAKE_TEXT_WORST_CASE,
+];
+
 const LEVEL_CURRENT_WORST_CASE: Branch = {
   label: 'the selected level is pressed',
   update: callbackUpdate(LEVEL_CURRENT_CALLBACK_DATA),
@@ -2691,6 +2912,33 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       DEMO_SIGNALS.branches,
       DEMO_SIGNALS.worst,
       HANDLER_CALLS.demoSignals,
+    );
+  });
+
+  it('the amount screen (#476): cycleStakePreset', async () => {
+    await checkHandler(
+      'cycleStakePreset',
+      CYCLE_STAKE_PRESET_BRANCHES,
+      CYCLE_STAKE_PRESET_WORST_CASE,
+      HANDLER_CALLS.cycleStakePreset,
+    );
+  });
+
+  it('the amount screen (#476): cycleStakeCustom', async () => {
+    await checkHandler(
+      'cycleStakeCustom',
+      CYCLE_STAKE_CUSTOM.branches,
+      CYCLE_STAKE_CUSTOM.worst,
+      HANDLER_CALLS.cycleStakeCustom,
+    );
+  });
+
+  it('the amount screen (#476): cycleStakeText', async () => {
+    await checkHandler(
+      'cycleStakeText',
+      CYCLE_STAKE_TEXT_BRANCHES,
+      CYCLE_STAKE_TEXT_WORST_CASE,
+      HANDLER_CALLS.cycleStakeText,
     );
   });
 
@@ -2891,6 +3139,33 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     await checkHandler('paid', PAID_BRANCHES, PAID_WORST_CASE, HANDLER_CALLS.paid);
   });
 
+  it('/paysupport (#118)', async () => {
+    await checkHandler(
+      'paysupport',
+      PAYSUPPORT_BRANCHES,
+      PAYSUPPORT_WORST_CASE,
+      HANDLER_CALLS.paysupport,
+    );
+  });
+
+  it('the /paysupport list button (#118)', async () => {
+    await checkHandler(
+      'paysupportList',
+      PAYSUPPORT_LIST_BRANCHES,
+      PAYSUPPORT_LIST_WORST_CASE,
+      HANDLER_CALLS.paysupportList,
+    );
+  });
+
+  it('a refund request of /paysupport (#118)', async () => {
+    await checkHandler(
+      'paysupportRequest',
+      PAYSUPPORT_REQUEST_BRANCHES,
+      PAYSUPPORT_REQUEST_WORST_CASE,
+      HANDLER_CALLS.paysupportRequest,
+    );
+  });
+
   it('the confirm button', async () => {
     await checkHandler('confirm', CONFIRM_BRANCHES, CONFIRM_WORST_CASE, HANDLER_CALLS.confirm);
   });
@@ -2997,6 +3272,13 @@ describe('the bounds this project does not own', () => {
     expect(composeDurationMs(composeServiceValue(composeYaml, 'bot', 'stop_grace_period'))).toBe(
       COMPOSE_STOP_GRACE_PERIOD_MS,
     );
+  });
+
+  // the cashier button's origin (#27): the page web serves, so one value for both
+  it('gives the bot the same WEB_PUBLIC_URL as web', () => {
+    const bot = composeServiceEnvValue(composeYaml, 'bot', 'WEB_PUBLIC_URL');
+    expect(bot).toMatch(/^\$\{WEB_PUBLIC_URL:-[^}]+\}$/);
+    expect(bot).toBe(composeServiceEnvValue(composeYaml, 'web', 'WEB_PUBLIC_URL'));
   });
 
   it('matches the sleep grammY takes after a failed getUpdates', () => {

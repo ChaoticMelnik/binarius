@@ -7,7 +7,16 @@ import {
   parseStarsInvoicePayload,
   STARS_CURRENCY,
 } from '@binarius/shared';
-import { creditStarPayment, listKnownStarCharges, StarsCreditSource, type Db } from '@binarius/db';
+import {
+  creditStarPayment,
+  listKnownStarCharges,
+  listStarChargesToRefund,
+  recordStarRefund,
+  StarsCreditSource,
+  StarsRefundEvidence,
+  StarsRefundSource,
+  type Db,
+} from '@binarius/db';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 import { telegramErrorFields } from '../telegram-logging';
@@ -25,6 +34,9 @@ import { logCredit } from './routes';
 // offset even when its handler failed, so Telegram never sends it again. Every tick reads the bot's
 // Star transactions from offset 0 and credits each of ours that star_payments does not hold,
 // through the same creditStarPayment the bot's route calls, so a race with the bot credits once.
+// It records refunds the same way (#118, docs/stars.md → Refunds): an outgoing transaction to a user
+// whose id is a charge star_payments holds as paid or held goes through recordStarRefund, the CLI's
+// writer, so a refund the CLI made but could not record — or one made by hand — is recorded once.
 
 export interface StarReconcilerConfig {
   tickMs: number;
@@ -79,6 +91,30 @@ function invoicePaymentOf(transaction: StarTransaction): InvoicePayment | undefi
   };
 }
 
+// An outgoing transaction to a user: a refund when its id is one of our charges (Telegram: «Coincides
+// with the identifier of the original transaction for refund transactions»). Not narrowed by the
+// receiver's transaction_type, which has not been seen on a live refund (clarify В1 of #118): the
+// match on a charge id we hold is the filter, and the type goes into the audit row.
+interface OutgoingToUser {
+  id: string;
+  amount: number;
+  date: number;
+  receiverTelegramUserId: number;
+  transactionType: string;
+}
+
+function outgoingToUserOf(transaction: StarTransaction): OutgoingToUser | undefined {
+  const receiver = transaction.receiver;
+  if (receiver?.type !== 'user') return undefined;
+  return {
+    id: transaction.id,
+    amount: transaction.amount,
+    date: transaction.date,
+    receiverTelegramUserId: receiver.user.id,
+    transactionType: receiver.transaction_type,
+  };
+}
+
 // What a credit made here tells the user (answer 3 of the clarify round): the bot's own answer to
 // successful_payment never came, so nothing else says the tokens arrived.
 export const starsCreditedPush = (tokens: bigint, balance: bigint): ClientPushMessage => ({
@@ -99,7 +135,7 @@ export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
   // a charge that cannot be matched is said once per process, not on every tick
   const reported = new Set<string>();
 
-  function reportOnce(payment: InvoicePayment, message: string): void {
+  function reportOnce(payment: { id: string; amount: number }, message: string): void {
     if (reported.has(payment.id)) return;
     reported.add(payment.id);
     logger.error({ telegramPaymentChargeId: payment.id, totalAmount: payment.amount }, message);
@@ -146,9 +182,61 @@ export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
     if (credit.outcome === 'credited') await pushCredit(payer, credit.tokens, credit.balance);
   }
 
+  // the page's refunds, after its credits: a charge credited a moment ago is refundable now
+  async function recordRefunds(transactions: StarTransaction[], oldest: number): Promise<number> {
+    const outgoing = transactions
+      .map(outgoingToUserOf)
+      .filter((refund): refund is OutgoingToUser => refund !== undefined)
+      .filter((refund) => refund.date >= oldest);
+    if (outgoing.length === 0) return 0;
+    const ids = outgoing.map((refund) => refund.id);
+    const [refundable, known] = await Promise.all([
+      listStarChargesToRefund(db, ids),
+      listKnownStarCharges(db, ids),
+    ]);
+    let recorded = 0;
+    for (const refund of outgoing) {
+      if (stopped) return recorded;
+      if (!known.has(refund.id)) {
+        reportOnce(refund, 'stars outgoing transaction for a charge we never recorded');
+        continue;
+      }
+      // refunded already: by the CLI, or by an earlier tick
+      if (!refundable.has(refund.id)) continue;
+      const record = await db.transaction((tx) =>
+        recordStarRefund(tx, {
+          telegramPaymentChargeId: refund.id,
+          source: StarsRefundSource.Reconciler,
+          telegramAnswer: StarsRefundEvidence.Transaction,
+          receiverTelegramUserId: BigInt(refund.receiverTelegramUserId),
+          transactionType: refund.transactionType,
+        }),
+      );
+      switch (record.outcome) {
+        case 'refunded':
+          // no push: Telegram tells the user about the refund itself
+          logger.info(
+            { starPaymentId: record.paymentId, tokensTaken: record.taken.toString() },
+            'stars refund recorded',
+          );
+          recorded += 1;
+          break;
+        case 'receiver_mismatch':
+          reportOnce(refund, 'stars refund to a user who is not the payer');
+          break;
+        case 'not_found':
+          reportOnce(refund, 'stars outgoing transaction for a charge we never recorded');
+          break;
+        case 'already_recorded':
+          break;
+      }
+    }
+    return recorded;
+  }
+
   async function runTick(): Promise<void> {
     const oldest = Math.floor(now() / 1000) - config.windowS;
-    let credited = 0;
+    let settled = 0;
     for (let page = 0; page < config.maxPages; page += 1) {
       if (stopped) return;
       const transactions = await readTransactions(page * config.pageSize, config.pageSize);
@@ -164,10 +252,11 @@ export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
         if (stopped) return;
         if (known.has(payment.id)) continue;
         await settle(payment);
-        credited += 1;
+        settled += 1;
       }
+      settled += await recordRefunds(transactions, oldest);
       if (transactions.length < config.pageSize) {
-        if (credited > 0) logger.info({ settled: credited }, 'stars reconcile tick');
+        if (settled > 0) logger.info({ settled }, 'stars reconcile tick');
         return;
       }
     }

@@ -67,6 +67,9 @@ export const stubTextSource = (...keys: BotTextKey[]): BotTextSource<BotTextKey>
   sourceOf: (key) => (keys.includes(key) ? stubText(key) : defaultBotTextSource.sourceOf(key)),
 });
 
+// «💳 Пополнить»'s page in the tests (#27): an https origin's cashierUrlOf
+export const CASHIER_URL = 'https://web.example/cashier';
+
 export const BOT_INFO: UserFromGetMe = {
   id: 1,
   is_bot: true,
@@ -431,6 +434,8 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     createStarsInvoice: unused,
     checkStarsPreCheckout: unused,
     reportStarsPaid: unused,
+    listStarsPayments: unused,
+    requestStarsRefund: unused,
     ...patch,
   };
 };
@@ -657,12 +662,16 @@ export const WRITE_CALLBACK_PREFIXES = [
   'demo:stake:',
   'demo:sess:',
   'real:sess:',
+  // an amount of the amount screen (#476): saves the stake, then starts a session
+  'demo:sa:',
   'session:stop:',
   'confirm:',
   'resend',
   'stk:s:',
   'stk:z:',
   'level:',
+  // a refund request from /paysupport (#118)
+  'ps:r:',
 ] as const;
 
 // Every message a scene sends goes through here, so no scene can send a repeat of a write

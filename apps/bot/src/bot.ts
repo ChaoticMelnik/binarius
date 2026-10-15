@@ -53,8 +53,10 @@ import {
 import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
 import { createSessionShareComposer } from './session-share';
+import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingSessionComposer } from './trading-session';
+import { createCycleStakeComposer } from './cycle-stake';
 import type { IntentTracker } from './intent-tracker';
 import {
   createLoginDialog,
@@ -109,6 +111,8 @@ export interface CreateBotOptions {
   backend: BackendClient;
   logger: Logger;
   welcomeVideoFileId?: string;
+  // «💳 Пополнить»'s page (#27): cashierUrlOf(WEB_PUBLIC_URL); none (not https), no button
+  cashierUrl?: string;
   // the two seams the tests need: a bot that must not call getMe, and a client pointed at a
   // local server so the configured timeout can be observed rather than assumed
   botInfo?: UserFromGetMe;
@@ -129,6 +133,7 @@ export function createBot({
   backend,
   logger,
   welcomeVideoFileId,
+  cashierUrl,
   botInfo,
   apiRoot,
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
@@ -283,7 +288,7 @@ export function createBot({
       demoStake: access.demoStake,
       realStake: access.realStake,
     });
-    const reply_markup = statusCardKeyboard(access.tradingMode);
+    const reply_markup = statusCardKeyboard(access.tradingMode, cashierUrl);
     const sent = await sendWithTextFallback(
       ctx,
       {
@@ -454,7 +459,15 @@ export function createBot({
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
-  privateChats.use(createDemoComposer({ backend, logger, now }));
+  privateChats.use(
+    createDemoComposer({
+      backend,
+      logger,
+      now,
+      dialog: loginDialog,
+      connectKeyboard: welcomeKeyboard,
+    }),
+  );
 
   // the stake button under the analysis and the refresh button under the status (#127)
   privateChats.use(
@@ -464,6 +477,7 @@ export function createBot({
       now,
       intentTracker,
       connectKeyboard: welcomeKeyboard,
+      cashierUrl,
     }),
   );
 
@@ -478,14 +492,23 @@ export function createBot({
   privateChats.use(stakePicker.composer);
 
   // the session button under the analysis and the buttons under the session's status (#284)
-  privateChats.use(
-    createTradingSessionComposer({
-      backend,
-      logger,
-      sessionTracker,
-      connectKeyboard: welcomeKeyboard,
-    }),
-  );
+  const tradingSession = createTradingSessionComposer({
+    backend,
+    logger,
+    sessionTracker,
+    connectKeyboard: welcomeKeyboard,
+    cashierUrl,
+  });
+  // the amounts of a demo cycle's amount screen (#476), which start through the session's path;
+  // its typed amount arrives through the text handler below
+  const cycleStake = createCycleStakeComposer({
+    backend,
+    logger,
+    dialog: loginDialog,
+    startSession: tradingSession.startSession,
+  });
+  privateChats.use(cycleStake.composer);
+  privateChats.use(tradingSession.composer);
 
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
@@ -495,6 +518,8 @@ export function createBot({
   // which swallows commands; the pre-checkout query on the bot, for the same reason as the share
   privateChats.use(createStarsComposer({ backend, logger, connectKeyboard: welcomeKeyboard }));
   bot.use(createPreCheckoutComposer({ backend, logger }));
+  // /paysupport and its refund request (#118, docs/stars.md → /paysupport), for the same reason
+  privateChats.use(createPaysupportComposer({ backend, logger }));
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });
@@ -599,6 +624,11 @@ export function createBot({
     // as invalid
     if (state.step === 'stake') {
       await stakePicker.onStakeText(ctx, state, text);
+      return;
+    }
+    // the typed amount of a demo cycle (#476): saved, then the cycle starts
+    if (state.step === 'cycleStake') {
+      await cycleStake.onText(ctx, state, text);
       return;
     }
 

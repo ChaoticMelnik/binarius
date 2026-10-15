@@ -1,4 +1,9 @@
-import { errorLogFields, type BinaryPair, type PairsCatalogView } from '@binarius/shared';
+import {
+  abandonedFetches,
+  errorLogFields,
+  type BinaryPair,
+  type PairsCatalogView,
+} from '@binarius/shared';
 import { BROKER_REST_TIMEOUT_MS, BrokerRestError, type BrokerRestClient } from './rest';
 
 // The catalog's numbers form one chain:
@@ -40,6 +45,8 @@ export interface PairsCatalog {
 
 export interface PairsCatalogLogger {
   warn(fields: object, message: string): void;
+  error(fields: object, message: string): void;
+  info(fields: object, message: string): void;
 }
 
 export interface PairsCatalogDeps {
@@ -47,6 +54,8 @@ export interface PairsCatalogDeps {
   ttlMs: number;
   logger: PairsCatalogLogger;
   now?: () => number;
+  // calls of the process still pending past their deadline; abandonedFetches() by default
+  abandoned?: () => number;
 }
 
 export function createPairsCatalog(deps: PairsCatalogDeps): PairsCatalog {
@@ -56,6 +65,50 @@ export function createPairsCatalog(deps: PairsCatalogDeps): PairsCatalog {
   let controller: AbortController | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
+  // request failures since the last success; a request cut by stop() is not one
+  let failedRefreshes = 0;
+  // now() of the last 'pairs catalog is stale' line; undefined while no streak is reported
+  let lastStaleLineAt: number | undefined;
+  const abandoned = deps.abandoned ?? abandonedFetches;
+
+  // ageMs everywhere is measured from the snapshot's fetchedAt on this catalog's now()
+  const ageOf = (taken: PairsSnapshot, at: number): number => Math.max(0, at - taken.fetchedAt);
+
+  function read(): PairsCatalogView | undefined {
+    if (snapshot === undefined) return undefined;
+    const ageMs = ageOf(snapshot, now());
+    if (ageMs > BROKER_PAIRS_MAX_STALE_MS) return undefined;
+    return {
+      pairs: snapshot.pairs,
+      fetchedAt: snapshot.fetchedAt,
+      ageMs,
+      fresh: ageMs <= deps.ttlMs + BROKER_REST_TIMEOUT_MS,
+    };
+  }
+
+  // #481: a catalog that stopped refreshing is an error in the log, not only `fresh: false` in a
+  // response. Once per streak, then again every BROKER_PAIRS_MAX_STALE_MS from the last line.
+  // No snapshot at all (a failed warm-up) is stale, with ageMs null.
+  function reportIfStale(): void {
+    if (read()?.fresh === true) return;
+    const at = now();
+    if (lastStaleLineAt !== undefined && at - lastStaleLineAt < BROKER_PAIRS_MAX_STALE_MS) return;
+    lastStaleLineAt = at;
+    deps.logger.error(
+      {
+        ageMs: snapshot === undefined ? null : ageOf(snapshot, at),
+        failedRefreshes,
+        abandoned: abandoned(),
+      },
+      'pairs catalog is stale',
+    );
+  }
+
+  // checked before the refresh, so a refresh that never settles cannot hide the streak
+  function tick(): void {
+    reportIfStale();
+    void refresh();
+  }
 
   async function fetchOnce(): Promise<boolean> {
     const abort = new AbortController();
@@ -63,12 +116,22 @@ export function createPairsCatalog(deps: PairsCatalogDeps): PairsCatalog {
     try {
       const pairs = await deps.client.listPairs({ signal: abort.signal });
       if (stopped) return false;
+      const at = now();
+      if (lastStaleLineAt !== undefined) {
+        deps.logger.info(
+          { ageMs: snapshot === undefined ? null : ageOf(snapshot, at), failedRefreshes },
+          'pairs catalog fresh again',
+        );
+        lastStaleLineAt = undefined;
+      }
+      failedRefreshes = 0;
       // taken after the answer: the age measures the data, not the attempt
-      snapshot = { pairs, fetchedAt: now() };
+      snapshot = { pairs, fetchedAt: at };
       return true;
     } catch (error) {
       // only stop() aborts this signal, and our own shutdown is not a broker failure
       if (abort.signal.aborted) return false;
+      failedRefreshes += 1;
       const fields =
         error instanceof BrokerRestError
           ? {
@@ -96,21 +159,11 @@ export function createPairsCatalog(deps: PairsCatalogDeps): PairsCatalog {
   }
 
   return {
-    read() {
-      if (snapshot === undefined) return undefined;
-      const ageMs = Math.max(0, now() - snapshot.fetchedAt);
-      if (ageMs > BROKER_PAIRS_MAX_STALE_MS) return undefined;
-      return {
-        pairs: snapshot.pairs,
-        fetchedAt: snapshot.fetchedAt,
-        ageMs,
-        fresh: ageMs <= deps.ttlMs + BROKER_REST_TIMEOUT_MS,
-      };
-    },
+    read,
     refresh,
     start() {
       if (stopped || timer !== undefined) return;
-      timer = setInterval(() => void refresh(), deps.ttlMs);
+      timer = setInterval(tick, deps.ttlMs);
     },
     stop() {
       stopped = true;

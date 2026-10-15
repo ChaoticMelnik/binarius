@@ -1,5 +1,10 @@
 import pino from 'pino';
-import { BOT_TEXTS_REFRESH_MS, createBotTextRefresher, logOptions } from '@binarius/shared';
+import {
+  BOT_TEXTS_REFRESH_MS,
+  cashierUrlOf,
+  createBotTextRefresher,
+  logOptions,
+} from '@binarius/shared';
 import { backendErrorFields, createBackendClient } from './backend-client';
 import { createBot } from './bot';
 import { parseEnv } from './env';
@@ -20,6 +25,10 @@ import {
 const env = parseEnv(process.env);
 
 const logger = pino(logOptions(env.logLevel));
+
+// Telegram opens a Mini App over https only: local dev runs without «💳 Пополнить» (#27)
+const cashierUrl = cashierUrlOf(env.webPublicUrl);
+if (cashierUrl === undefined) logger.warn('cashier button off: WEB_PUBLIC_URL is not https');
 
 const backend = createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken });
 
@@ -55,6 +64,7 @@ const bot = createBot({
   backend,
   logger,
   welcomeVideoFileId: env.welcomeVideoFileId,
+  cashierUrl,
   intentTracker,
   sessionTracker,
 });

@@ -25,7 +25,7 @@ import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 import { botTextsRoutes } from './bot-texts/routes';
 import { postbackRoutes, type PostbackRoutesDeps } from './postbacks/routes';
 import { depositRoutes, type DepositRoutesDeps } from './deposit/routes';
-import { paymentsRoutes } from './payments/routes';
+import { paymentsRoutes, type PaymentsRoutesDeps } from './payments/routes';
 
 type DependencyCheck = () => Promise<unknown>;
 
@@ -42,6 +42,8 @@ export interface AppDeps {
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
   admin: AdminRoutesDeps;
+  // the Stars purchase and /paysupport (#117, #118)
+  payments: PaymentsRoutesDeps;
   // the cashier's widget session (#11)
   deposit: DepositRoutesDeps;
   // the broker's postbacks (#141): present only while POSTBACK_URL_SECRET is set, so the route
@@ -196,6 +198,7 @@ export function buildApp({
   auth,
   users,
   admin,
+  payments,
   deposit,
   postbacks,
   logDestination,
@@ -257,8 +260,8 @@ export function buildApp({
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);
   void app.register(botTextsRoutes, users);
-  // the Stars purchase (#117): the same internal API, the same database and token
-  void app.register(paymentsRoutes, users);
+  // the Stars purchase (#117) and /paysupport (#118): the same internal API
+  void app.register(paymentsRoutes, payments);
   void app.register(adminRoutes, admin);
   void app.register(depositRoutes, deposit);
   if (postbacks !== undefined) void app.register(postbackRoutes, postbacks);

@@ -1,6 +1,6 @@
 // Test-only fixtures for the stand's suites, imported by no runtime module.
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Candle } from '@binarius/shared';
@@ -77,4 +77,9 @@ export function cacheWith(
     appendRows(seriesPath(dir, pair.id, interval), aggregate(seconds, stepMs), quiet);
   }
   return dir;
+}
+
+export function writeJson(file: string, value: unknown): string {
+  writeFileSync(file, JSON.stringify(value));
+  return file;
 }

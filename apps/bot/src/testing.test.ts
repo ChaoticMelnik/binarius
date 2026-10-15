@@ -1,6 +1,11 @@
 import { Bot, GrammyError, HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
+import { confirmCallbackData, NotificationLevel, TradeAction, TradeMode } from '@binarius/shared';
+import { levelCallbackData, RESEND_CALLBACK_DATA } from './bot';
+import { cycleStakeCallbackData, sessionStartCallbackData, stakeCallbackData } from './demo';
+import { stakePresetCallbackData, stakeResetCallbackData } from './stake-picker';
+import { sessionStopCallbackData } from './trading-session';
 import {
   BOT_INFO,
   USER,
@@ -97,5 +102,25 @@ describe('refuseWriteRetried', () => {
     expect(() =>
       refuseWriteRetried('sendMessage', keyboard(LABELS.sessionAgainButton, 'demo:sess:101:15')),
     ).not.toThrow();
+  });
+});
+
+// #476: a write's data drawn by its own builder carries a listed prefix, so a «🔄 Повторить» with
+// it fails the scene; a builder added without its prefix is caught here
+describe('WRITE_CALLBACK_PREFIXES', () => {
+  const SETTINGS = { kind: 'settings' } as const;
+  it.each([
+    ['the stake button', stakeCallbackData(101, 15, TradeAction.Up, '0123456789ab', 'abcdef')],
+    ['a demo session', sessionStartCallbackData(TradeMode.Demo, 101, 15)],
+    ['a real session', sessionStartCallbackData(TradeMode.Real, 101, 15, true)],
+    ['an amount of the amount screen', cycleStakeCallbackData(101, 15, '5', 'l')],
+    ['the session stop', sessionStopCallbackData('9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d')],
+    ['the login confirm', confirmCallbackData('3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01')],
+    ['the code resend', RESEND_CALLBACK_DATA],
+    ['a stake preset', stakePresetCallbackData('5', TradeMode.Demo, SETTINGS)],
+    ['the stake reset', stakeResetCallbackData(TradeMode.Demo, SETTINGS)],
+    ['a notification level', levelCallbackData(NotificationLevel.All)],
+  ])('lists the prefix of %s', (_label, data) => {
+    expect(WRITE_CALLBACK_PREFIXES.some((prefix) => data.startsWith(prefix))).toBe(true);
   });
 });

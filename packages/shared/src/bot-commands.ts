@@ -16,6 +16,7 @@ export const BOT_COMMANDS = [
   { command: 'invite', key: 'inviteCommand' },
   { command: 'help', key: 'helpCommand' },
   { command: 'support', key: 'supportCommand' },
+  { command: 'paysupport', key: 'paysupportCommand' },
 ] as const satisfies readonly { command: string; key: BotCommandKey }[];
 
 // Private chats only: the bot ignores every other chat type (bot.chatType('private') in

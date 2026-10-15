@@ -1,8 +1,8 @@
 # Broker REST client (issue #98)
 
 `packages/broker-rest/src/rest.ts` (`@binarius/broker-rest`) is the client for the Binodex Broker
-REST API: five calls, one error class, and no state. It has no logger, no counters and no
-retries. The caller passes the access token on every authorized call and decides what to retry
+REST API: five calls, one error class, and no state. It has no counters and no retries, and logs
+only a call abandoned past its deadline, to an optional `logger` (see Timeouts). The caller passes the access token on every authorized call and decides what to retry
 and what to log. It moved out of `apps/trading-worker` in #138 so the backend and the worker
 share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md). The
 signal feed (`packages/signal`, docs/signal.md → Feed and journal) calls `getChart` on a client its
@@ -22,7 +22,8 @@ const client = createBrokerRestClient({ baseUrl: 'https://api.binodex.app' });
 const user = await client.getUser({ accessToken }, { signal });
 ```
 
-`timeoutMs` is optional and defaults to `BROKER_REST_TIMEOUT_MS` (see Timeouts). `options` on every
+`timeoutMs` is optional and defaults to `BROKER_REST_TIMEOUT_MS` (see Timeouts); so is `logger`
+(`{ error, warn }`, the backend and the worker pass their app logger). `options` on every
 call is `{ signal?: AbortSignal }`.
 
 | Method | HTTP | Bearer | Sends | Returns |
@@ -97,7 +98,8 @@ characters (accepted risk).
 ## Secrets and logging
 
 The error carries no `cause`, URL, header or request body, and no response body beyond `detail`.
-The client writes no log line. A caller logs a failure like this:
+The client writes no log line for a failure; the two lines of an abandoned call are under
+Timeouts. A caller logs a failure like this:
 
 ```ts
 logger.warn(
@@ -126,6 +128,23 @@ checked where that process's chain lives:
   its own still finishes inside the drain. `config.test.ts` asserts it.
 - the pairs catalog: `BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS` in
   `packages/broker-rest/src/pairs-catalog.ts` (docs/pairs-catalog.md).
+
+**The deadline does not rely on `fetch` honouring its abort (#481).** On the pilot a `listPairs`
+stayed pending for minutes with no error, and no probe reproduced a `fetch` that outlives its
+`AbortSignal.timeout`. So the whole call (headers, the error body, the body, the parse) runs inside
+`withinDeadline` (`packages/shared/src/fetch-deadline.ts`), whose own timer replaces
+`AbortSignal.timeout` and aborts the call's signal at `BROKER_REST_TIMEOUT_MS`:
+
+- A call that settles before the cut, or within one timer tick after it, passes its own outcome
+  through, so every code above is unchanged (`unavailable` for our timeout, `aborted` for the
+  caller's signal, a status whose error body the abort cut).
+- A call still pending after that tick is **abandoned**: the caller gets `unavailable` (our timer)
+  or `aborted` (the caller's signal) at once, and the client's `logger`, when given, writes
+  `error` `{ endpoint, timeoutMs, err }` `broker request abandoned`. If it settles later, the
+  result is dropped and `warn` `{ endpoint, lateMs, outcome: 'ok' | 'error', err? }`
+  `broker request settled late` is written; `lateMs` counts from the abandonment.
+- `abandonedFetches()` counts the process's calls still abandoned. Same timeout, no new constant,
+  so no chain below changes.
 
 Each `*_CHAIN_HOLDS` throws at import when its link breaks. The backend waits on no REST call
 during shutdown: its one caller, the pairs catalog, is aborted by `stop()` in phase 1.

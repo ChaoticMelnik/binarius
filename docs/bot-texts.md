@@ -203,7 +203,7 @@ built when it is published. The tests of the source swap hold one place each (`b
 
 Data and identifiers, not texts (decision on the issue's plan, approved by the owner):
 
-- the command names `/start`, `/menu`, `/stop`, `/account`, `/buy`, `/settings`, `/invite`, `/help`, `/support` —
+- the command names `/start`, `/menu`, `/stop`, `/account`, `/buy`, `/settings`, `/invite`, `/help`, `/support`, `/paysupport` —
   the bot routes by them; only their descriptions are entries. The names and their order are
   `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
@@ -235,7 +235,7 @@ compile.
 | `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
-| `stake` | on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464) | `formatStake` | `stakeMinimumLabel` |
+| `stake` | on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464) | `formatStake` | `stakeMinimumLabel` |
 | `outcome` | a session trade's figure after «→», by SQL (#464): the payout of a win, the loss of a loss, the stake of a tie | `formatSignedStake` | — |
 | `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
@@ -244,6 +244,7 @@ compile.
 | `referralLink` | the user's personal link, `referralLinkOf` (#115) | as is | — |
 | `purchasedTokens`, `stars` | a Stars package's tokens and price (#117, [stars.md](stars.md)) | `formatCount` | — |
 | `tokenBalance` | `users.token_balance` after a Stars credit (#117) | `formatCount` | — |
+| `paymentDate` | a Stars payment's `paid_at`, Unix seconds (#118, /paysupport) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, `cycle`, `step`, `openPrice`,
 `closePrice`, …) are a line's value the

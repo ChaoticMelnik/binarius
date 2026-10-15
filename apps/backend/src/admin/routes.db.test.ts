@@ -88,7 +88,7 @@ import {
 } from '@binarius/db/testing';
 import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
-import { fakeBotProfileApi, stubTelegram, unusedAdminDeps } from './testing';
+import { fakeBotProfileApi, stubTelegram, unusedAdminDeps, unusedPaymentsDeps } from './testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -163,6 +163,7 @@ const build = (
       initDataVerifier: {} as never,
     },
     users: { db: tmp.db, internalApiToken: 'internal' },
+    payments: unusedPaymentsDeps(),
     admin: {
       ...unusedAdminDeps(),
       db: tmp.db,
@@ -3079,6 +3080,7 @@ describe('the bot texts pages (#300)', () => {
     { command: 'invite', description: 'Пригласить друга' },
     { command: 'help', description: 'Помощь' },
     { command: 'support', description: 'Поддержка' },
+    { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
   ];
   const withProfileApi = async (options: Parameters<typeof fakeBotProfileApi>[0] = {}) => {
     const fake = fakeBotProfileApi(options);

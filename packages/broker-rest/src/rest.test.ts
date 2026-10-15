@@ -1,8 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import pino from 'pino';
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import {
+  abandonedFetches,
   BrokerRestErrorCode,
   errorLogFields,
   isClosedTrade,
@@ -470,6 +471,127 @@ describe('transport', () => {
       const error = await caught(cut.listPairs());
       expect(error).toMatchObject({ code: BrokerRestErrorCode.Unavailable, status: 200 });
     });
+  });
+});
+
+// #481: a fetch that never settles and ignores its signal - what held the pilot's catalog
+describe('a fetch that ignores its abort signal', () => {
+  const TIMEOUT_MS = 50;
+  const logger = () => ({ error: vi.fn(), warn: vi.fn() });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const neverSettles = () => vi.stubGlobal('fetch', () => new Promise<Response>(() => undefined));
+
+  it('rejects a GET as unavailable at its own deadline and logs it abandoned once', async () => {
+    neverSettles();
+    const log = logger();
+    const stuck = createBrokerRestClient({
+      baseUrl: broker.url,
+      timeoutMs: TIMEOUT_MS,
+      logger: log,
+    });
+    const before = abandonedFetches();
+    const started = Date.now();
+    const error = await caught(stuck.listPairs());
+    expect(error.code).toBe(BrokerRestErrorCode.Unavailable);
+    expect(error).not.toHaveProperty('status');
+    expect(Date.now() - started).toBeLessThan(TIMEOUT_MS + 1_000);
+    expect(abandonedFetches()).toBe(before + 1);
+    expect(log.error).toHaveBeenCalledExactlyOnceWith(
+      {
+        endpoint: 'pairs',
+        timeoutMs: TIMEOUT_MS,
+        err: { name: 'BrokerRestError', code: BrokerRestErrorCode.Unavailable },
+      },
+      'broker request abandoned',
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a POST as unavailable at its own deadline', async () => {
+    neverSettles();
+    const stuck = createBrokerRestClient({ baseUrl: broker.url, timeoutMs: TIMEOUT_MS });
+    expect((await caught(stuck.openTrade(auth, openRequest))).code).toBe(
+      BrokerRestErrorCode.Unavailable,
+    );
+  });
+
+  it('rejects as aborted when the caller signal fires first', async () => {
+    neverSettles();
+    const log = logger();
+    const stuck = createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 60_000, logger: log });
+    const controller = new AbortController();
+    const pending = caught(stuck.getUser(auth, { signal: controller.signal }));
+    setTimeout(() => controller.abort(), 10);
+    expect((await pending).code).toBe(BrokerRestErrorCode.Aborted);
+    expect(log.error).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        err: { name: 'BrokerRestError', code: BrokerRestErrorCode.Aborted },
+      }),
+      'broker request abandoned',
+    );
+  });
+
+  it('bounds a body whose read never ends and ignores cancel', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull: () => new Promise<void>(() => undefined),
+            cancel: () => new Promise<void>(() => undefined),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    );
+    const log = logger();
+    const stuck = createBrokerRestClient({
+      baseUrl: broker.url,
+      timeoutMs: TIMEOUT_MS,
+      logger: log,
+    });
+    const before = abandonedFetches();
+    expect((await caught(stuck.listPairs())).code).toBe(BrokerRestErrorCode.Unavailable);
+    expect(abandonedFetches()).toBe(before + 1);
+    expect(log.error).toHaveBeenCalledOnce();
+  });
+
+  it('logs an abandoned request that settles late, and counts it no longer', async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => (answer = resolve)));
+    const log = logger();
+    const stuck = createBrokerRestClient({
+      baseUrl: broker.url,
+      timeoutMs: TIMEOUT_MS,
+      logger: log,
+    });
+    const before = abandonedFetches();
+    expect((await caught(stuck.listPairs())).code).toBe(BrokerRestErrorCode.Unavailable);
+    expect(abandonedFetches()).toBe(before + 1);
+    answer(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
+    await until('the late answer to be logged', () => log.warn.mock.calls.length === 1);
+    expect(log.warn).toHaveBeenCalledWith(
+      { endpoint: 'pairs', lateMs: expect.any(Number) as number, outcome: 'ok' },
+      'broker request settled late',
+    );
+    expect(abandonedFetches()).toBe(before);
+  });
+
+  it('logs nothing for a request that honours its abort', async () => {
+    const log = logger();
+    const quick = createBrokerRestClient({
+      baseUrl: broker.url,
+      timeoutMs: TIMEOUT_MS,
+      logger: log,
+    });
+    broker.rest.failNext('pairs', { hang: true });
+    const before = abandonedFetches();
+    expect((await caught(quick.listPairs())).code).toBe(BrokerRestErrorCode.Unavailable);
+    expect(abandonedFetches()).toBe(before);
+    expect(log.error).not.toHaveBeenCalled();
   });
 });
 

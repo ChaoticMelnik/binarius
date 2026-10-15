@@ -24,6 +24,7 @@ import {
   referralCodes,
   referrals,
   starPayments,
+  starRefundRequests,
   staff,
   staffLoginChallenges,
   staffLoginLinks,
@@ -3349,6 +3350,7 @@ const starPayment = (userId: string, patch: Record<string, unknown> = {}) => ({
   currency: 'XTR',
   totalAmount: 100,
   tokens: 50n,
+  payerTelegramUserId: 4242n,
   status: 'paid' as const,
   paidAt: sql`now()`,
   ...patch,
@@ -3533,6 +3535,217 @@ describe('token_ledger: the Stars purchase (#117)', () => {
         ...(kind === 'adjustment' ? { note: 'n' } : {}),
       };
       for (const extra of extras) {
+        if (extra === 'deposit') values.depositEventId = await seedDeposit(tx, seed);
+        if (extra === 'account') values.brokerAccountId = seed.accountId;
+        if (extra === 'intent') {
+          values.intentId = (
+            await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning()
+          )[0]!.id;
+        }
+        if (extra === 'ref') Object.assign(values, { refType: 'manual', refId: randomUUID() });
+      }
+      await rejectsWith(
+        tx.insert(tokenLedger).values(values as typeof tokenLedger.$inferInsert),
+        '23514',
+        'token_ledger_reference_check',
+      );
+    });
+  });
+});
+
+// --- the Stars refund (#118) -------------------------------------------------------------------
+
+describe('star_payments: the payer (#118)', () => {
+  it.each([
+    ['a payer of 0', 0n],
+    ['a negative payer', -1n],
+  ])('rejects %s', async (_label, payer) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(starPayments).values(starPayment(seed.userId, { payerTelegramUserId: payer })),
+        '23514',
+        'star_payments_payer_check',
+      );
+    });
+  });
+
+  it('accepts a payer of 1 and rejects a NULL one by the column itself', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await expect(
+        tx.insert(starPayments).values(starPayment(seed.userId, { payerTelegramUserId: 1n })),
+      ).resolves.toBeDefined();
+      const error = await tx
+        .insert(starPayments)
+        .values(starPayment(seed.userId, { payerTelegramUserId: null }))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'payer_telegram_user_id' });
+    });
+  });
+});
+
+describe('star_refund_requests (#118)', () => {
+  it('accepts one request per payment and refuses a second', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      const request = { starPaymentId: payment, requestedByTelegramUserId: 4242n };
+      await expect(tx.insert(starRefundRequests).values(request)).resolves.toBeDefined();
+      await rejectsWith(
+        tx.insert(starRefundRequests).values(request),
+        '23505',
+        'star_refund_requests_payment_key',
+      );
+    });
+  });
+
+  it('refuses a request for no payment', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx
+          .insert(starRefundRequests)
+          .values({ starPaymentId: randomUUID(), requestedByTelegramUserId: 1n }),
+        '23503',
+        'star_refund_requests_payment_fk',
+      );
+    });
+  });
+
+  it.each([
+    ['a requester of 0', 0n],
+    ['a negative requester', -1n],
+  ])('refuses %s', async (_label, requester) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await rejectsWith(
+        tx
+          .insert(starRefundRequests)
+          .values({ starPaymentId: payment, requestedByTelegramUserId: requester }),
+        '23514',
+        'star_refund_requests_requested_by_check',
+      );
+    });
+  });
+
+  it('keeps a payment with a request from being deleted', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await tx
+        .insert(starRefundRequests)
+        .values({ starPaymentId: payment, requestedByTelegramUserId: 4242n });
+      await rejectsWith(
+        tx.delete(starPayments).where(eq(starPayments.id, payment)),
+        '23001',
+        'star_refund_requests_payment_fk',
+      );
+    });
+  });
+});
+
+describe('token_ledger: the Stars refund (#118)', () => {
+  const refundRow = (userId: string, starPaymentId: string, patch: Record<string, unknown> = {}) =>
+    ({
+      userId,
+      kind: 'refund',
+      balanceDelta: -1n,
+      reservedDelta: 0n,
+      starPaymentId,
+      ...patch,
+    }) as typeof tokenLedger.$inferInsert;
+
+  it('accepts a refund of −1 naming its Stars payment, beside the purchase of the same payment', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await tx
+        .insert(tokenLedger)
+        .values({
+          userId: seed.userId,
+          kind: 'purchase',
+          balanceDelta: 50n,
+          starPaymentId: payment,
+        });
+      await expect(
+        tx.insert(tokenLedger).values(refundRow(seed.userId, payment)),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  it('refunds one Stars payment only once', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await tx.insert(tokenLedger).values(refundRow(seed.userId, payment));
+      await rejectsWith(
+        tx.insert(tokenLedger).values(refundRow(seed.userId, payment)),
+        '23505',
+        'token_ledger_star_payment_idx',
+      );
+    });
+  });
+
+  it('rejects a refund of another user’s Stars payment', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await rejectsWith(
+        tx.insert(tokenLedger).values(refundRow(other.userId, payment)),
+        '23503',
+        'token_ledger_star_payment_owner_fk',
+      );
+    });
+  });
+
+  // a refund only takes tokens back, and never touches the reserve
+  it.each([
+    ['a refund that adds tokens', { balanceDelta: 5n }],
+    ['a refund that moves the reserve', { reservedDelta: 1n }],
+    ['a refund that frees the reserve', { balanceDelta: 0n, reservedDelta: -1n }],
+  ])('rejects %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await rejectsWith(
+        tx.insert(tokenLedger).values(refundRow(seed.userId, payment, patch)),
+        '23514',
+        'token_ledger_delta_shape_check',
+      );
+    });
+  });
+
+  // 0 and 0 is refused by the CHECK every row passes first
+  it('rejects a refund that moves nothing', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      await rejectsWith(
+        tx.insert(tokenLedger).values(refundRow(seed.userId, payment, { balanceDelta: 0n })),
+        '23514',
+        'token_ledger_delta_check',
+      );
+    });
+  });
+
+  it.each([
+    ['a refund naming no Stars payment', ['none']],
+    ['a refund naming a deposit beside its Stars payment', ['deposit']],
+    ['a refund naming a broker account', ['account']],
+    ['a refund naming an intent', ['intent']],
+    ['a refund with a manual reference', ['ref']],
+  ] as const)('rejects %s', async (_label, extras) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const payment = await seedStarPayment(tx, seed.userId);
+      const values: Record<string, unknown> = { ...refundRow(seed.userId, payment) };
+      for (const extra of extras) {
+        if (extra === 'none') values.starPaymentId = null;
         if (extra === 'deposit') values.depositEventId = await seedDeposit(tx, seed);
         if (extra === 'account') values.brokerAccountId = seed.accountId;
         if (extra === 'intent') {

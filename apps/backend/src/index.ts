@@ -81,15 +81,23 @@ const cipher = createTokenCipher({
   keyId: env.tokenEncryptionKeyId,
   key: env.tokenEncryptionKey,
 });
+// The fetch clients log to the app's logger, which does not exist yet: nothing calls them before
+// it does.
+const fetchLogger = {
+  error: (object: object, message: string) => app.log.error(object, message),
+  warn: (object: object, message: string) => app.log.warn(object, message),
+};
+
 const broker = createBrokerOAuthClient({
   baseUrl: env.brokerApiBaseUrl,
   clientId: env.brokerClientId,
   clientSecret: env.brokerClientSecret,
+  logger: fetchLogger,
 });
 
 // One REST client for the process: the pairs catalog and the balance reconciler. It adds
 // /v1/broker/... to the same base the OAuth client uses.
-const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl });
+const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl, logger: fetchLogger });
 
 // The route reads it from the first request on; it is warmed before listen() and refreshed by its
 // own timer every BROKER_PAIRS_TTL_MS (docs/pairs-catalog.md).
@@ -97,7 +105,11 @@ const pairsCatalog = createPairsCatalog({
   client: brokerRest,
   ttlMs: env.brokerPairsTtlMs,
   // the app's logger does not exist yet, and this one is first used by the warm-up below
-  logger: { warn: (object, message) => app.log.warn(object, message) },
+  logger: {
+    warn: (object, message) => app.log.warn(object, message),
+    error: (object, message) => app.log.error(object, message),
+    info: (object, message) => app.log.info(object, message),
+  },
 });
 
 // POST /trading/signal (docs/signal.md -> POST /trading/signal): one public chart GET per
@@ -218,6 +230,11 @@ const app = buildApp({
   users: {
     db,
     internalApiToken: env.internalApiToken,
+  },
+  payments: {
+    db,
+    internalApiToken: env.internalApiToken,
+    notifyStaff: (text) => adminBot.notifyStaff(text),
   },
   admin: {
     db,

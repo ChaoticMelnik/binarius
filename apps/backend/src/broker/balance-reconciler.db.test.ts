@@ -60,10 +60,14 @@ const WARN = 40;
 const ERROR = 50;
 const INFO = 30;
 
-function reconciler(db: Db = tmp.db, config: Partial<BalanceReconcilerConfig> = {}) {
+function reconciler(
+  db: Db = tmp.db,
+  config: Partial<BalanceReconcilerConfig> = {},
+  client = createBrokerRestClient({ baseUrl: broker.url }),
+) {
   return createBalanceReconciler({
     db,
-    client: createBrokerRestClient({ baseUrl: broker.url }),
+    client,
     accessToken: async (accountId, options) => {
       tokenCalls.push({ accountId, options });
       const answer = tokenAnswers.get(accountId) ?? { ok: false, reason: 'account_not_found' };
@@ -408,7 +412,10 @@ describe('tick', () => {
   beforeEach(async () => {
     own = await createTempDatabase(baseUrl);
   });
-  afterEach(() => own.drop());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    return own.drop();
+  });
 
   const withIntent = async (patch: Parameters<typeof linked>[1] = {}) => {
     const account = await linked(own.db, patch);
@@ -610,6 +617,27 @@ describe('tick', () => {
 
     await balance.tick();
     expect(tokenCalls.map((call) => call.accountId)).toEqual([account.accountId]);
+    await balance.stop();
+  });
+
+  // #481: a getUser whose fetch never settles and ignores its signal ends at the REST deadline
+  it('ends a tick whose broker fetch never settles, and the next tick asks again', async () => {
+    await withIntent();
+    let fetches = 0;
+    vi.stubGlobal('fetch', () => {
+      fetches += 1;
+      return new Promise<Response>(() => undefined);
+    });
+    // unstubbed in afterEach: a tick that hangs (the bug) times out the test before a finally
+    const balance = reconciler(
+      own.db,
+      { stalledRetryMs: 0 },
+      createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 50 }),
+    );
+    await balance.tick();
+    expect(fetches).toBe(1);
+    await balance.tick();
+    expect(fetches).toBe(2);
     await balance.stop();
   });
 

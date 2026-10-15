@@ -53,6 +53,31 @@ export const ADMIN_TEXTS = {
       'Если это не вы — нажмите «Это не я», и мы запишем попытку.',
     ].join('\n'),
 
+  // A refund asked for from the client bot's /paysupport (#118, docs/stars.md → /paysupport). The
+  // command is the one a staff member runs on the server; the reason is theirs to write.
+  refundRequested: ({
+    chargeId,
+    packageCode,
+    stars,
+    status,
+    payerTelegramUserId,
+  }: {
+    chargeId: string;
+    packageCode: string;
+    stars: number;
+    status: string;
+    payerTelegramUserId: string;
+  }): string =>
+    [
+      'Запрос возврата Stars из /paysupport.',
+      `Оплата: ${chargeId}`,
+      `Пакет: ${packageCode}, ${String(stars)} ⭐, статус ${status}`,
+      `Плательщик: ${payerTelegramUserId}`,
+      '',
+      'Команда на сервере:',
+      `pnpm --filter @binarius/backend stars refund ${chargeId} --reason "…"`,
+    ].join('\n'),
+
   confirmButton: 'Подтвердить вход',
   denyButton: 'Это не я',
 

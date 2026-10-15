@@ -160,6 +160,7 @@ describe('the bot texts catalog', () => {
         'analysisMoreButton',
         'backToListButton',
         'buyButton',
+        'depositButton',
         'demoManualButton',
         'demoSignalsRefreshButton',
         'launchCycleButton',
@@ -214,6 +215,7 @@ describe('the bot texts catalog', () => {
         'startCommand',
         'stopCommand',
         'supportCommand',
+        'paysupportCommand',
       ].sort(),
     );
   });

@@ -1,7 +1,17 @@
-import { SIGNAL_CHART_INTERVAL_MS, SIGNAL_INTERVALS, type SignalParams } from '@binarius/shared';
+import {
+  DISPLAY_INDICATOR_PARAMS,
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_INTERVALS,
+  type SignalParams,
+} from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
-import { assertFeedLimit, SIGNAL_CHART_LIMIT } from './feed-config';
+import {
+  assertFeedLimit,
+  assertFetchLimit,
+  SIGNAL_CHART_LIMIT,
+  SIGNAL_FETCH_LIMIT,
+} from './feed-config';
 
 const withParams = (patch: Partial<SignalParams>): SignalParams => ({
   ...DEFAULT_SIGNAL_PARAMS,
@@ -51,5 +61,19 @@ describe('signal feed config', () => {
     expect(() => assertFeedLimit(SIGNAL_CHART_LIMIT - 0.5, DEFAULT_SIGNAL_PARAMS)).toThrow(
       RangeError,
     );
+  });
+
+  it('K4 the fetch limit leaves MA200 its closed candles in the worst accepted case', () => {
+    const { maxStaleIntervals } = DEFAULT_SIGNAL_PARAMS;
+    const atBoundary = 1 + maxStaleIntervals + DISPLAY_INDICATOR_PARAMS.maLong;
+    expect(SIGNAL_FETCH_LIMIT).toBeGreaterThanOrEqual(atBoundary);
+    expect(SIGNAL_FETCH_LIMIT).toBeGreaterThanOrEqual(SIGNAL_CHART_LIMIT);
+    expect(() => assertFetchLimit(SIGNAL_FETCH_LIMIT, DEFAULT_SIGNAL_PARAMS)).not.toThrow();
+    expect(() => assertFetchLimit(atBoundary, DEFAULT_SIGNAL_PARAMS)).not.toThrow();
+    expect(() => assertFetchLimit(atBoundary - 1, DEFAULT_SIGNAL_PARAMS)).toThrow(RangeError);
+    expect(() => assertFetchLimit(atBoundary + 0.5, DEFAULT_SIGNAL_PARAMS)).toThrow(RangeError);
+    expect(() =>
+      assertFetchLimit(atBoundary, withParams({ maxStaleIntervals: maxStaleIntervals + 1 })),
+    ).toThrow(RangeError);
   });
 });

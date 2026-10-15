@@ -9,6 +9,11 @@ import {
   starsPaidRequestSchema,
   starsPaidResponseSchema,
   starsPreCheckoutRequestSchema,
+  STAR_REFUND_REASON_MAX,
+  starRefundReasonSchema,
+  starsPaymentsResponseSchema,
+  starsRefundRequestSchema,
+  starsRefundResponseSchema,
 } from './stars';
 
 const USER_ID = '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10';
@@ -122,5 +127,50 @@ describe('the route schemas', () => {
     ).toBe(true);
     expect(starsPaidResponseSchema.safeParse({ outcome: 'credited' }).success).toBe(false);
     expect(starsPaidResponseSchema.safeParse({ outcome: 'held' }).success).toBe(true);
+  });
+});
+
+// #118: refunds and /paysupport
+describe('the refund contracts', () => {
+  it('takes a reason of 1-200 code points without control characters, trimmed', () => {
+    expect(starRefundReasonSchema.parse('  просьба  ')).toBe('просьба');
+    expect(starRefundReasonSchema.safeParse('я'.repeat(STAR_REFUND_REASON_MAX)).success).toBe(true);
+    for (const bad of ['', '   ', 'я'.repeat(STAR_REFUND_REASON_MAX + 1), 'a\nb', 'a\tb']) {
+      expect(starRefundReasonSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  const view = {
+    id: USER_ID,
+    paidAt: 1_790_000_000,
+    packageCode: 'p50',
+    totalAmount: 100,
+    status: 'paid',
+    requested: false,
+  };
+
+  it('lists at most five payments, each with a known status', () => {
+    expect(starsPaymentsResponseSchema.safeParse({ payments: Array(5).fill(view) }).success).toBe(
+      true,
+    );
+    expect(starsPaymentsResponseSchema.safeParse({ payments: Array(6).fill(view) }).success).toBe(
+      false,
+    );
+    expect(
+      starsPaymentsResponseSchema.safeParse({ payments: [{ ...view, status: 'pending' }] }).success,
+    ).toBe(false);
+  });
+
+  it('asks for a refund by a payment uuid and answers one of two outcomes', () => {
+    expect(
+      starsRefundRequestSchema.safeParse({ telegramUserId: '42', paymentId: USER_ID }).success,
+    ).toBe(true);
+    expect(
+      starsRefundRequestSchema.safeParse({ telegramUserId: '42', paymentId: 'not-a-uuid' }).success,
+    ).toBe(false);
+    expect(starsRefundResponseSchema.safeParse({ outcome: 'already_requested' }).success).toBe(
+      true,
+    );
+    expect(starsRefundResponseSchema.safeParse({ outcome: 'refunded' }).success).toBe(false);
   });
 });

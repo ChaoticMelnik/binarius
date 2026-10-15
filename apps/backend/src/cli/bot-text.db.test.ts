@@ -336,6 +336,7 @@ const DEFAULT_MENU = [
   { command: 'invite', description: 'Пригласить друга' },
   { command: 'help', description: 'Помощь' },
   { command: 'support', description: 'Поддержка' },
+  { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
 ];
 const SCOPE = { scope: { type: 'all_private_chats' } };
 const TOKEN = '123456:AA-cli-publish-token';

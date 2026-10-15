@@ -1,6 +1,6 @@
 import pino from 'pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { logOptions, toBinaryPair, type BinaryPair } from '@binarius/shared';
+import { BrokerRestErrorCode, logOptions, toBinaryPair, type BinaryPair } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import {
@@ -13,7 +13,12 @@ import {
   type PairsCatalog,
   type PairsCatalogDeps,
 } from './pairs-catalog';
-import { BROKER_REST_TIMEOUT_MS, createBrokerRestClient, type BrokerRestClient } from './rest';
+import {
+  BROKER_REST_TIMEOUT_MS,
+  BrokerRestError,
+  createBrokerRestClient,
+  type BrokerRestClient,
+} from './rest';
 
 const START_CLOCK = 1_790_000_000_000;
 
@@ -297,6 +302,161 @@ describe('the timer', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+// #481: a catalog that stopped refreshing is an error in the log
+describe('the stale streak', () => {
+  const TTL = DEFAULT_BROKER_PAIRS_TTL_MS;
+  const PAIRS: BinaryPair[] = [];
+  const seam = () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() });
+  type Mode = 'ok' | 'fail' | 'hang';
+
+  // a listPairs that ignores its signal when it hangs, as the pilot's did
+  function scripted(modes: Mode[]): Pick<BrokerRestClient, 'listPairs'> {
+    let call = 0;
+    return {
+      listPairs: () => {
+        const mode = modes[Math.min(call, modes.length - 1)];
+        call += 1;
+        if (mode === 'ok') return Promise.resolve(PAIRS);
+        if (mode === 'fail') {
+          return Promise.reject(new BrokerRestError(BrokerRestErrorCode.Unavailable));
+        }
+        return new Promise<BinaryPair[]>(() => undefined);
+      },
+    };
+  }
+
+  // one interval tick, with the catalog's clock moved by the same period
+  async function tick(catalog: PairsCatalog): Promise<void> {
+    clock += TTL;
+    vi.advanceTimersByTime(TTL);
+    await Promise.race([catalog.refresh(), Promise.resolve()]);
+    await Promise.resolve();
+  }
+
+  const staleLines = (log: ReturnType<typeof seam>) =>
+    log.error.mock.calls.filter(([, message]) => message === 'pairs catalog is stale');
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  });
+
+  it('reports a refresh that never settles once, and again BROKER_PAIRS_MAX_STALE_MS after the line', async () => {
+    const log = seam();
+    const catalog = catalogOf({
+      client: scripted(['ok', 'hang']),
+      logger: log,
+      abandoned: () => 7,
+    });
+    expect(await catalog.refresh()).toBe(true);
+    catalog.start();
+    await tick(catalog); // 30 s: still fresh
+    expect(staleLines(log)).toHaveLength(0);
+    await tick(catalog); // 60 s: past ttl + the REST timeout
+    expect(staleLines(log)).toEqual([
+      [{ ageMs: 2 * TTL, failedRefreshes: 0, abandoned: 7 }, 'pairs catalog is stale'],
+    ]);
+    const firstLineAt = clock;
+    while (clock + TTL < firstLineAt + BROKER_PAIRS_MAX_STALE_MS) await tick(catalog);
+    expect(staleLines(log)).toHaveLength(1);
+    await tick(catalog);
+    expect(clock - firstLineAt).toBe(BROKER_PAIRS_MAX_STALE_MS);
+    expect(staleLines(log)).toHaveLength(2);
+    expect(staleLines(log)[1]?.[0]).toEqual({
+      ageMs: 2 * TTL + BROKER_PAIRS_MAX_STALE_MS,
+      failedRefreshes: 0,
+      abandoned: 7,
+    });
+  });
+
+  it('counts failed refreshes and logs the recovery once, with the replaced snapshot age', async () => {
+    const log = seam();
+    const catalog = catalogOf({
+      client: scripted(['ok', 'fail', 'fail', 'fail', 'ok']),
+      logger: log,
+      abandoned: () => 0,
+    });
+    await catalog.refresh();
+    catalog.start();
+    await tick(catalog);
+    await tick(catalog);
+    expect(staleLines(log)).toEqual([
+      [{ ageMs: 2 * TTL, failedRefreshes: 1, abandoned: 0 }, 'pairs catalog is stale'],
+    ]);
+    await tick(catalog);
+    expect(log.info).not.toHaveBeenCalled();
+    await tick(catalog);
+    expect(log.info).toHaveBeenCalledExactlyOnceWith(
+      { ageMs: 4 * TTL, failedRefreshes: 3 },
+      'pairs catalog fresh again',
+    );
+    await tick(catalog);
+    expect(log.info).toHaveBeenCalledOnce();
+    expect(staleLines(log)).toHaveLength(1);
+  });
+
+  it('starts a new streak at once after a recovery', async () => {
+    const log = seam();
+    const catalog = catalogOf({
+      client: scripted(['ok', 'fail', 'ok', 'fail']),
+      logger: log,
+      abandoned: () => 0,
+    });
+    await catalog.refresh();
+    catalog.start();
+    await tick(catalog);
+    await tick(catalog); // stale, then the refresh succeeds
+    expect(staleLines(log)).toHaveLength(1);
+    expect(log.info).toHaveBeenCalledOnce();
+    await tick(catalog);
+    await tick(catalog); // stale again, well inside BROKER_PAIRS_MAX_STALE_MS of the first line
+    expect(staleLines(log)).toHaveLength(2);
+  });
+
+  it('calls a failed warm-up stale, with ageMs null', async () => {
+    const log = seam();
+    const catalog = catalogOf({ client: scripted(['fail']), logger: log, abandoned: () => 0 });
+    expect(await catalog.refresh()).toBe(false);
+    catalog.start();
+    await tick(catalog);
+    expect(staleLines(log)).toEqual([
+      [{ ageMs: null, failedRefreshes: 1, abandoned: 0 }, 'pairs catalog is stale'],
+    ]);
+  });
+
+  it('reports nothing while the catalog refreshes on time', async () => {
+    const log = seam();
+    const catalog = catalogOf({ client: scripted(['ok']), logger: log });
+    await catalog.refresh();
+    catalog.start();
+    for (let i = 0; i < 20; i += 1) await tick(catalog);
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+  });
+});
+
+// The issue's acceptance test (#481): a fetch that never settles and ignores its signal no
+// longer holds the single flight, so the next tick sends a new request.
+describe('a broker fetch that never settles', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('does not block the next tick past the REST deadline', async () => {
+    let fetches = 0;
+    vi.stubGlobal('fetch', () => {
+      fetches += 1;
+      return new Promise<Response>(() => undefined);
+    });
+    const stuck = createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 20 });
+    const catalog = catalogOf({ client: stuck, ttlMs: 50, now: Date.now, logger: seamLogger() });
+    catalog.start();
+    await until('a second request', () => fetches >= 2);
+    expect(fetches).toBeGreaterThanOrEqual(2);
+  });
+});
+
+const seamLogger = () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() });
 
 describe('constants', () => {
   it('order the REST timeout, the TTL range and the stale ceiling', () => {

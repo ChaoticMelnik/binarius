@@ -14,6 +14,11 @@ import {
   StarsPreCheckoutRefusal,
   starsInvoiceResponseSchema,
   starsPaidResponseSchema,
+  starsPaymentsResponseSchema,
+  starsRefundResponseSchema,
+  STARS_PAYSUPPORT_LIST_LIMIT,
+  StarPaymentStatus,
+  StarsRefundRequestOutcome,
   starsPreCheckoutResponseSchema,
   OAuthErrorCode,
   PairsCatalogErrorCode,
@@ -1852,6 +1857,25 @@ describe('body size', () => {
       reportStarsPaid: {
         parse: (input) => starsPaidResponseSchema.safeParse(input),
         sample: { outcome: StarsCreditOutcome.AlreadyCredited, tokens: TOKENS, balance: TOKENS },
+      },
+      // /paysupport (#118): at most STARS_PAYSUPPORT_LIST_LIMIT payments
+      listStarsPayments: {
+        parse: (input) => starsPaymentsResponseSchema.safeParse(input),
+        sample: {
+          payments: Array.from({ length: STARS_PAYSUPPORT_LIST_LIMIT }, () => ({
+            id: UUID,
+            paidAt: NONNEGATIVE_INT,
+            packageCode: 'p'.repeat(16),
+            totalAmount: INT4_MAX,
+            status: longest(Object.values(StarPaymentStatus)),
+            requested: false,
+          })),
+        },
+      },
+      // the 404 / 409 refusals are shorter than nothing; the answer is one outcome
+      requestStarsRefund: {
+        parse: (input) => starsRefundResponseSchema.safeParse(input),
+        sample: { outcome: longest(Object.values(StarsRefundRequestOutcome)) },
       },
       // Reds when the catalog grows to about 500 keys: then the ceiling is revisited, not the
       // assumption.

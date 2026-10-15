@@ -60,6 +60,7 @@ import {
 } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import {
+  cycleStakeLabel,
   ACTION_LABELS,
   accountCard,
   accountStatus,
@@ -105,6 +106,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   purchasedTokens: '150',
   tokenBalance: '162',
   stars: '250',
+  paymentDate: 1_790_000_000,
   demoBalance: { amount: d('10000'), fresh: true },
   realBalance: null,
   mode: TradeMode.Demo,
@@ -486,7 +488,7 @@ describe('texts', () => {
     it('reads the command descriptions from the source in place (#301)', () => {
       setBotTextSource(stubTextSource('supportCommand'));
       try {
-        expect(botCommands().at(-1)).toEqual({
+        expect(botCommands().find((entry) => entry.command === 'support')).toEqual({
           command: 'support',
           description: stubText('supportCommand'),
         });
@@ -1457,6 +1459,7 @@ describe('the facades over the catalog', () => {
         'analysisMoreButton',
         'backToListButton',
         'buyButton',
+        'depositButton',
         'demoManualButton',
         'demoSignalsRefreshButton',
         'launchCycleButton',
@@ -1506,6 +1509,7 @@ describe('the facades over the catalog', () => {
         'toSignalsButton',
         'tradeButton',
         'supportCommand',
+        'paysupportCommand',
       ].sort(),
     );
   });
@@ -1599,5 +1603,20 @@ describe('the text source', () => {
       description: stubText('profileDescription'),
       shortDescription: stubText('profileShortDescription'),
     });
+  });
+});
+
+// #476: the amount screen's labels; the composition lives in cycleStakeLabel only
+describe('cycleStakeLabel', () => {
+  const d = (value: string) => decimalStringSchema.parse(value);
+
+  it.each([
+    ['9.99', false, '$9.99'],
+    ['9.99', true, '$9.99 ✅'],
+    ['10', false, '$10.00 · риск'],
+    ['10', true, '$10.00 ✅ · риск'],
+    ['15', true, '$15.00 ✅ · риск'],
+  ])('labels %s (in effect: %s) as %s', (amount, current, label) => {
+    expect(cycleStakeLabel(d(amount), current)).toBe(label);
   });
 });

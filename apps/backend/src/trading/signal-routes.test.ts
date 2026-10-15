@@ -19,7 +19,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
@@ -121,6 +121,7 @@ function appWith(
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
     logDestination: { write: (line: string) => void lines.push(line) },
   });
   return app;
@@ -191,6 +192,27 @@ describe('POST /trading/signal', () => {
     expect(calls).toStrictEqual([{ assetId: 101, interval: '1m', digits: 5 }]);
   });
 
+  // #482: the card's indicators ride next to the decision; a response without them stays valid
+  it('R3b answers the indicators of a decision as the feed gave them', async () => {
+    const indicators = {
+      macd: { ok: true, macd: 0.0012, signal: 0.0009, histogram: 0.0003, cross: 'up' },
+      ma50: { ok: true, value: 1.1, lastClose: 1.15 },
+      ma200: { ok: false, closedCandles: 117, required: 200 },
+    } as const;
+    const { feed } = fakeSignalFeed({ ...decidedEvaluation, indicators } as SignalEvaluation);
+    const response = await post(appWith(feed), { assetId: 101, interval: '1m' });
+    expect(response.statusCode).toBe(200);
+    const body: unknown = response.json();
+    expect(body).toMatchObject({ outcome: 'decided', indicators });
+    expect(safeParseTradingSignalResponse(body).success).toBe(true);
+    expect(
+      safeParseTradingSignalResponse({
+        ...(body as object),
+        indicators: { ...indicators, ma200: { ok: false, closedCandles: 117 } },
+      }).success,
+    ).toBe(false);
+  });
+
   it.each([
     {
       evaluation: { code: 'rate_limited', status: 429, retryAfterSec: 7 },
@@ -241,8 +263,13 @@ describe('POST /trading/signal', () => {
     const second = await post(target, { assetId: 101, interval: '1m' });
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
-    const body = first.json<{ outcome: string; decision: unknown }>();
+    const body = first.json<{ outcome: string; decision: unknown; indicators?: unknown }>();
     expect(body.outcome).toBe('decided');
+    expect(body.indicators).toMatchObject({
+      macd: { ok: true },
+      ma50: { ok: true },
+      ma200: { ok: true },
+    });
     expect(second.json()).toStrictEqual(body);
     expect(broker.rest.journal.filter((entry) => entry.endpoint === 'chart')).toHaveLength(1);
 

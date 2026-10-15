@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AuditAction,
@@ -17,13 +17,22 @@ import {
   type SeededUser,
   type TempDatabase,
 } from './testing';
-import { auditLog, starPayments, tokenLedger, users } from './schema/index';
+import { auditLog, starPayments, starRefundRequests, tokenLedger, users } from './schema/index';
 import {
   creditStarPayment,
   listKnownStarCharges,
+  listOpenStarRefundRequests,
+  listStarChargesToRefund,
+  listStarPaymentsForPayer,
+  readStarPaymentByCharge,
   readStarsBuyer,
+  recordStarRefund,
+  requestStarRefund,
   StarsCreditSource,
+  StarsRefundEvidence,
+  StarsRefundSource,
   type StarPaymentInput,
+  type StarRefundInput,
 } from './star-payment-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -269,5 +278,449 @@ describe('readStarsBuyer', () => {
     expect(await readStarsBuyer(tmp.db, telegramUserId)).toMatchObject({
       hasActiveBrokerAccount: true,
     });
+  });
+});
+
+// --- Refunds (#118) ----------------------------------------------------------------------------
+
+const refundOf = (charge: string, patch: Partial<StarRefundInput> = {}): StarRefundInput => ({
+  telegramPaymentChargeId: charge,
+  source: StarsRefundSource.Cli,
+  telegramAnswer: StarsRefundEvidence.Refunded,
+  reason: 'просьба пользователя',
+  ...patch,
+});
+
+const refund = (input: StarRefundInput) => tmp.db.transaction((tx) => recordStarRefund(tx, input));
+
+async function paymentRow(charge: string) {
+  const [row] = await tmp.db
+    .select()
+    .from(starPayments)
+    .where(eq(starPayments.telegramPaymentChargeId, charge));
+  return row!;
+}
+
+const refundRows = async (userId: string) =>
+  (await ledgerOf(userId)).filter((row) => row.kind === TokenLedgerKind.Refund);
+
+// the reserve is moved the way a live intent holds it: only the cache, as the reserve writer does
+const holdReserve = (userId: string, reserved: bigint) =>
+  tmp.db.update(users).set({ tokenReserved: reserved }).where(eq(users.id, userId));
+
+describe('creditStarPayment: the payer (#118)', () => {
+  it('records the payer, also when it is not the payload’s user (a held forwarded invoice)', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const own = paymentOf(user);
+    const forwarded = paymentOf(user, { payerTelegramUserId: 31337n });
+    await credit(own);
+    await credit(forwarded);
+    expect((await paymentRow(own.telegramPaymentChargeId)).payerTelegramUserId).toBe(
+      BigInt(user.telegramUserId),
+    );
+    expect(await paymentRow(forwarded.telegramPaymentChargeId)).toMatchObject({
+      status: StarPaymentStatus.Held,
+      payerTelegramUserId: 31337n,
+    });
+  });
+});
+
+describe('recordStarRefund', () => {
+  it('R1 takes the tokens back from a full balance: refunded, one refund row, one audit row', async () => {
+    const user = await seedUser(tmp.db, { balance: 7n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    const result = await refund(refundOf(payment.telegramPaymentChargeId));
+    expect(result).toMatchObject({
+      outcome: 'refunded',
+      fromStatus: StarPaymentStatus.Paid,
+      taken: 50n,
+      notRecovered: 0n,
+      balance: 7n,
+    });
+    if (result.outcome !== 'refunded') throw new Error(result.outcome);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(row.status).toBe(StarPaymentStatus.Refunded);
+    expect(row.refundedAt).toBeInstanceOf(Date);
+    expect(await refundRows(user.userId)).toEqual([
+      expect.objectContaining({ balanceDelta: -50n, reservedDelta: 0n, starPaymentId: row.id }),
+    ]);
+    expect(await balanceOf(user.userId)).toBe(7n);
+    const audits = (await auditOf(row.id)).filter((a) => a.action === AuditAction.StarsRefunded);
+    expect(audits).toEqual([
+      expect.objectContaining({
+        actorType: 'system',
+        actorId: null,
+        payload: {
+          userId: user.userId,
+          payerTelegramUserId: user.telegramUserId,
+          fromStatus: StarPaymentStatus.Paid,
+          packageCode: 'p50',
+          totalAmount: 100,
+          tokensTaken: '50',
+          tokensNotRecovered: '0',
+          via: StarsRefundSource.Cli,
+          telegramAnswer: StarsRefundEvidence.Refunded,
+          reason: 'просьба пользователя',
+        },
+      }),
+    ]);
+  });
+
+  it('R2 takes only what is available above a live reserve, and leaves the reserve', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    // 20 of the 50 held by a live intent
+    await holdReserve(user.userId, 20n);
+    const result = await refund(refundOf(payment.telegramPaymentChargeId));
+    expect(result).toMatchObject({
+      outcome: 'refunded',
+      taken: 30n,
+      notRecovered: 20n,
+      balance: 20n,
+    });
+    const [after] = await tmp.db
+      .select({ balance: users.tokenBalance, reserved: users.tokenReserved })
+      .from(users)
+      .where(eq(users.id, user.userId));
+    expect(after).toEqual({ balance: 20n, reserved: 20n });
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(
+      (await auditOf(row.id)).find((a) => a.action === AuditAction.StarsRefunded)?.payload,
+    ).toMatchObject({ tokensTaken: '30', tokensNotRecovered: '20' });
+  });
+
+  it('R3 refunds with nothing available: no ledger row, refunded, 0 taken in the audit row', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    await holdReserve(user.userId, 50n);
+    const result = await refund(refundOf(payment.telegramPaymentChargeId));
+    expect(result).toMatchObject({
+      outcome: 'refunded',
+      taken: 0n,
+      notRecovered: 50n,
+      balance: 50n,
+    });
+    expect(await refundRows(user.userId)).toEqual([]);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(row.status).toBe(StarPaymentStatus.Refunded);
+    expect(
+      (await auditOf(row.id)).find((a) => a.action === AuditAction.StarsRefunded)?.payload,
+    ).toMatchObject({ tokensTaken: '0', tokensNotRecovered: '50' });
+  });
+
+  it.each([
+    ['with tokens taken', 0n],
+    ['with nothing taken', 50n],
+  ])(
+    'R4 records a second refund of the same charge as already recorded (%s)',
+    async (_l, reserve) => {
+      const user = await seedUser(tmp.db, { balance: 0n });
+      const payment = paymentOf(user);
+      await credit(payment);
+      await holdReserve(user.userId, reserve);
+      const first = await refund(refundOf(payment.telegramPaymentChargeId));
+      expect(first.outcome).toBe('refunded');
+      const balance = await balanceOf(user.userId);
+      const row = await paymentRow(payment.telegramPaymentChargeId);
+      const second = await refund(
+        refundOf(payment.telegramPaymentChargeId, {
+          source: StarsRefundSource.Reconciler,
+          telegramAnswer: StarsRefundEvidence.Transaction,
+        }),
+      );
+      expect(second).toEqual({
+        outcome: 'already_recorded',
+        paymentId: row.id,
+        refundedAt: row.refundedAt,
+      });
+      expect(await refundRows(user.userId)).toHaveLength(reserve === 0n ? 1 : 0);
+      expect(await balanceOf(user.userId)).toBe(balance);
+      expect(
+        (await auditOf(row.id)).filter((a) => a.action === AuditAction.StarsRefunded),
+      ).toHaveLength(1);
+    },
+  );
+
+  it('R5 refunds a held payment: no token taken, nothing not recovered', async () => {
+    const user = await seedUser(tmp.db, { balance: 3n });
+    const payment = paymentOf(user, { totalAmount: 99 });
+    expect((await credit(payment)).outcome).toBe('held');
+    const result = await refund(refundOf(payment.telegramPaymentChargeId));
+    expect(result).toMatchObject({
+      outcome: 'refunded',
+      fromStatus: StarPaymentStatus.Held,
+      taken: 0n,
+      notRecovered: 0n,
+      balance: 3n,
+    });
+    expect(await ledgerOf(user.userId)).toEqual([]);
+    expect((await paymentRow(payment.telegramPaymentChargeId)).status).toBe(
+      StarPaymentStatus.Refunded,
+    );
+  });
+
+  // R6: the reconciler's record queues behind the CLI's users lock, then meets the refunded row
+  it('R6 records once when the CLI and the reconciler record the same refund at once', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let markHeld!: () => void;
+    const held = new Promise<void>((resolve) => (markHeld = resolve));
+    const first = tmp.db.transaction(async (tx) => {
+      const result = await recordStarRefund(tx, refundOf(payment.telegramPaymentChargeId));
+      markHeld();
+      await gate;
+      return result;
+    });
+    let second: Promise<unknown> | undefined;
+    try {
+      await Promise.race([held, first]);
+      second = refund(
+        refundOf(payment.telegramPaymentChargeId, {
+          source: StarsRefundSource.Reconciler,
+          telegramAnswer: StarsRefundEvidence.Transaction,
+          receiverTelegramUserId: BigInt(user.telegramUserId),
+        }),
+      );
+      await until('the second record to queue behind the held users row', async () => {
+        return (await lockWaiters(tmp.db)) === 1;
+      });
+    } finally {
+      release();
+    }
+    expect(await first).toMatchObject({ outcome: 'refunded', taken: 50n });
+    expect(await second).toMatchObject({ outcome: 'already_recorded' });
+    expect(await refundRows(user.userId)).toHaveLength(1);
+    expect(await balanceOf(user.userId)).toBe(0n);
+  });
+
+  it('R7 writes nothing for a receiver who is not the payer', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(
+      await refund(
+        refundOf(payment.telegramPaymentChargeId, {
+          source: StarsRefundSource.Reconciler,
+          receiverTelegramUserId: BigInt(user.telegramUserId) + 1n,
+        }),
+      ),
+    ).toEqual({ outcome: 'receiver_mismatch', paymentId: row.id });
+    expect((await paymentRow(payment.telegramPaymentChargeId)).status).toBe(StarPaymentStatus.Paid);
+    expect(await refundRows(user.userId)).toEqual([]);
+    expect(await balanceOf(user.userId)).toBe(50n);
+  });
+
+  it('R8 answers not_found for an unknown charge', async () => {
+    expect(await refund(refundOf('charge-never-seen'))).toEqual({ outcome: 'not_found' });
+  });
+
+  // R9: users first (Rule 5). The payment row stays free while the writer waits on users.
+  it('R9 waits on a held users row before it locks the payment row', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let markHeld!: () => void;
+    const held = new Promise<void>((resolve) => (markHeld = resolve));
+    const holder = tmp.db.transaction(async (tx) => {
+      await tx.execute(sql`select 1 from users where id = ${user.userId} for no key update`);
+      markHeld();
+      await gate;
+    });
+    let record: Promise<unknown> | undefined;
+    try {
+      await held;
+      record = refund(refundOf(payment.telegramPaymentChargeId));
+      await until('the record to queue behind the held users row', async () => {
+        return (await lockWaiters(tmp.db)) === 1;
+      });
+      // the payment row is not locked by the waiting writer: a NOWAIT lock on it succeeds
+      await tmp.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select 1 from star_payments where telegram_payment_charge_id = ${payment.telegramPaymentChargeId} for no key update nowait`,
+        );
+      });
+    } finally {
+      release();
+    }
+    await holder;
+    expect(await record).toMatchObject({ outcome: 'refunded' });
+  });
+});
+
+describe('the refund reads (#118)', () => {
+  it('readStarPaymentByCharge reads a row, undefined for an unknown charge', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    expect(await readStarPaymentByCharge(tmp.db, payment.telegramPaymentChargeId)).toMatchObject({
+      userId: user.userId,
+      payerTelegramUserId: BigInt(user.telegramUserId),
+      status: StarPaymentStatus.Paid,
+      tokens: 50n,
+      refundedAt: null,
+    });
+    expect(await readStarPaymentByCharge(tmp.db, 'charge-never')).toBeUndefined();
+  });
+
+  it('listStarChargesToRefund names paid and held charges, not refunded or unknown ones', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const paid = paymentOf(user);
+    const held = paymentOf(user, { totalAmount: 1 });
+    const refunded = paymentOf(user);
+    for (const payment of [paid, held, refunded]) await credit(payment);
+    await refund(refundOf(refunded.telegramPaymentChargeId));
+    expect(
+      await listStarChargesToRefund(tmp.db, [
+        paid.telegramPaymentChargeId,
+        held.telegramPaymentChargeId,
+        refunded.telegramPaymentChargeId,
+        'charge-never',
+      ]),
+    ).toEqual(new Set([paid.telegramPaymentChargeId, held.telegramPaymentChargeId]));
+    expect(await listStarChargesToRefund(tmp.db, [])).toEqual(new Set());
+  });
+});
+
+describe('listStarPaymentsForPayer and requestStarRefund (#118)', () => {
+  it('lists the payer’s five newest payments with their request flag', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payer = BigInt(user.telegramUserId);
+    const payments = [];
+    for (let day = 1; day <= 6; day += 1) {
+      const payment = paymentOf(user, { paidAt: new Date(`2026-10-0${day}T00:00:00.000Z`) });
+      await credit(payment);
+      payments.push(await paymentRow(payment.telegramPaymentChargeId));
+    }
+    await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: payments[5]!.id });
+    const listed = await listStarPaymentsForPayer(tmp.db, payer);
+    expect(listed.map((p) => p.id)).toEqual(
+      payments
+        .slice(1)
+        .reverse()
+        .map((p) => p.id),
+    );
+    expect(listed[0]).toEqual({
+      id: payments[5]!.id,
+      paidAt: Date.parse('2026-10-06T00:00:00.000Z') / 1000,
+      packageCode: 'p50',
+      totalAmount: 100,
+      status: StarPaymentStatus.Paid,
+      requested: true,
+    });
+    expect(listed.slice(1).every((p) => !p.requested)).toBe(true);
+    // another Telegram id sees none of them
+    expect(await listStarPaymentsForPayer(tmp.db, payer + 1n)).toEqual([]);
+  });
+
+  it('lists a forwarded invoice’s payment for its payer, not for the users row', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user, { payerTelegramUserId: 424_242n });
+    await credit(payment);
+    expect(await listStarPaymentsForPayer(tmp.db, 424_242n)).toEqual([
+      expect.objectContaining({ status: StarPaymentStatus.Held }),
+    ]);
+    expect(await listStarPaymentsForPayer(tmp.db, BigInt(user.telegramUserId))).toEqual([]);
+  });
+
+  it('records a request once, with its audit row, and tells a repeat apart', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payer = BigInt(user.telegramUserId);
+    const payment = paymentOf(user);
+    await credit(payment);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    const first = await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: row.id });
+    expect(first).toMatchObject({ outcome: 'requested', payment: { id: row.id } });
+    expect(await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: row.id })).toEqual({
+      outcome: 'already_requested',
+    });
+    const requests = await tmp.db
+      .select()
+      .from(starRefundRequests)
+      .where(eq(starRefundRequests.starPaymentId, row.id));
+    expect(requests).toEqual([expect.objectContaining({ requestedByTelegramUserId: payer })]);
+    expect(
+      (await auditOf(row.id)).filter((a) => a.action === AuditAction.StarsRefundRequested),
+    ).toEqual([
+      expect.objectContaining({
+        actorType: 'user',
+        actorId: user.telegramUserId,
+        payload: {
+          userId: user.userId,
+          status: StarPaymentStatus.Paid,
+          requestId: requests[0]!.id,
+        },
+      }),
+    ]);
+  });
+
+  it('answers not_found for another payer’s payment and for no payment, writing nothing', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    const stranger = BigInt(user.telegramUserId) + 7n;
+    expect(
+      await requestStarRefund(tmp.db, { telegramUserId: stranger, paymentId: row.id }),
+    ).toEqual({ outcome: 'not_found' });
+    expect(
+      await requestStarRefund(tmp.db, {
+        telegramUserId: stranger,
+        paymentId: '00000000-0000-4000-8000-00000000beef',
+      }),
+    ).toEqual({ outcome: 'not_found' });
+    expect(
+      await tmp.db
+        .select()
+        .from(starRefundRequests)
+        .where(eq(starRefundRequests.starPaymentId, row.id)),
+    ).toEqual([]);
+  });
+
+  it('answers already_refunded for a refunded payment, writing nothing', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    await refund(refundOf(payment.telegramPaymentChargeId));
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(
+      await requestStarRefund(tmp.db, {
+        telegramUserId: BigInt(user.telegramUserId),
+        paymentId: row.id,
+      }),
+    ).toEqual({ outcome: 'already_refunded' });
+    expect(
+      await tmp.db
+        .select()
+        .from(starRefundRequests)
+        .where(eq(starRefundRequests.starPaymentId, row.id)),
+    ).toEqual([]);
+  });
+
+  it('listOpenStarRefundRequests lists open requests oldest first and hides refunded ones', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payer = BigInt(user.telegramUserId);
+    const rows = [];
+    for (let i = 0; i < 3; i += 1) {
+      const payment = paymentOf(user);
+      await credit(payment);
+      const row = await paymentRow(payment.telegramPaymentChargeId);
+      await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: row.id });
+      rows.push(row);
+    }
+    await refund(refundOf(rows[1]!.telegramPaymentChargeId));
+    const open = (await listOpenStarRefundRequests(tmp.db)).filter(
+      (request) => request.payment.userId === user.userId,
+    );
+    expect(open.map((request) => request.payment.id)).toEqual([rows[0]!.id, rows[2]!.id]);
+    expect(open[0]!.requestedAt).toBeInstanceOf(Date);
   });
 });

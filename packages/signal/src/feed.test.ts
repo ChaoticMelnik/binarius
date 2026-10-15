@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
 import { chartWindow, createSignalFeed, type SignalEvaluation } from './feed';
-import { SIGNAL_CHART_LIMIT } from './feed-config';
+import { SIGNAL_CHART_LIMIT, SIGNAL_FETCH_LIMIT } from './feed-config';
 import { replaySignalJournalEntry, type SignalJournalEntry } from './journal';
 import { closedNow, INTERVAL_MS, mildRise, seriesFrom, tickSeries, trending } from './testing';
 
@@ -67,10 +67,10 @@ describe('createSignalFeed', () => {
 
     const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 }));
 
-    const { startTime } = chartWindow(T, I, SIGNAL_CHART_LIMIT);
-    expect(entry.fetch).toMatchObject({ startTime, limit: SIGNAL_CHART_LIMIT });
+    const { startTime } = chartWindow(T, I, SIGNAL_FETCH_LIMIT);
+    expect(entry.fetch).toMatchObject({ startTime, limit: SIGNAL_FETCH_LIMIT });
     // the fixture includes the forming candle, as the live chart does
-    expect(entry.fetch.rows).toBe(SIGNAL_CHART_LIMIT);
+    expect(entry.fetch.rows).toBe(SIGNAL_FETCH_LIMIT);
     expect(entry.series).toHaveLength(SIGNAL_CHART_LIMIT);
     expect(entry.series.at(-1)?.[0]).toBe(B);
     expect(entry.series[0]?.[0]).toBe(B - (SIGNAL_CHART_LIMIT - 1) * I);
@@ -85,7 +85,7 @@ describe('createSignalFeed', () => {
       query: {
         asset_id: '101',
         interval: '1m',
-        limit: String(SIGNAL_CHART_LIMIT),
+        limit: String(SIGNAL_FETCH_LIMIT),
         start_time: String(startTime),
       },
     });
@@ -105,7 +105,7 @@ describe('createSignalFeed', () => {
   });
 
   // #313: the demo's 5 and 15 s trades are analysed on their own candles; the window still
-  // counts candles, so it spans SIGNAL_CHART_LIMIT steps of the short interval
+  // counts candles, so it spans SIGNAL_FETCH_LIMIT steps of the short interval
   it.each(['5s', '15s'] as const)(
     'F2b on the mock broker a %s evaluation asks %s candles and is decided',
     async (interval) => {
@@ -120,7 +120,7 @@ describe('createSignalFeed', () => {
 
       const entry = decided(await feed.evaluate({ assetId: 202, interval, digits: 2 }));
 
-      const { startTime } = chartWindow(now, step, SIGNAL_CHART_LIMIT);
+      const { startTime } = chartWindow(now, step, SIGNAL_FETCH_LIMIT);
       expect(broker.rest.journal[0]?.query).toMatchObject({
         asset_id: '202',
         interval,
@@ -164,7 +164,7 @@ describe('createSignalFeed', () => {
         interval: '1m',
         intervalMs: I,
         nowMs: T,
-        ...chartWindow(T, I, SIGNAL_CHART_LIMIT),
+        ...chartWindow(T, I, SIGNAL_FETCH_LIMIT),
       };
       expect(result).toStrictEqual({
         outcome: 'fetch_failed',
@@ -360,5 +360,105 @@ describe('createSignalFeed', () => {
       RangeError,
     );
     expect(getChart).not.toHaveBeenCalled();
+  });
+
+  // #482: the broker is asked SIGNAL_FETCH_LIMIT rows; the decision and its journal series are the
+  // rows a fetch of SIGNAL_CHART_LIMIT with the same right edge returns, cut by time. nowMs = T is
+  // inside the candle starting at B, so that fetch starts at B - 59 * I.
+  describe('F12 the decision window of a 300-row response', () => {
+    const W0 = B - 59 * I;
+    const starts = (from: number, to: number) =>
+      Array.from({ length: (to - from) / I + 1 }, (_, k) => from + k * I);
+    // aligned rows up to and including `last`, 300 starts back from B
+    const answer = (last: number, missing: readonly number[] = []) =>
+      mildRise(SIGNAL_FETCH_LIMIT - 45, { start: B - 299 * I }).filter(
+        ({ timestamp }) => timestamp <= last && !missing.includes(timestamp),
+      );
+    const run = async (candles: readonly Candle[]) =>
+      decided(
+        await createSignalFeed({ rest: stubRest(candles), logger: sink(), now: () => T }).evaluate({
+          assetId: 101,
+          interval: '1m',
+          digits: 5,
+        }),
+      );
+    const seriesStarts = (entry: SignalJournalEntry) =>
+      entry.series.map(([timestamp]) => timestamp);
+
+    it('a: no forming candle leaves 59 rows from B - 59 I', async () => {
+      const entry = await run(answer(B - I));
+      expect(entry.fetch.rows).toBe(299);
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - I));
+      expect(entry.series).toHaveLength(59);
+    });
+
+    it.each([
+      [1, 58],
+      [2, 57],
+    ])('b: %i late closed candles leave %i rows, none before B - 59 I', async (late, rows) => {
+      const entry = await run(answer(B - (1 + late) * I));
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - (1 + late) * I));
+      expect(entry.series).toHaveLength(rows);
+    });
+
+    it('c: a gap just before the window is not candle_gap; the decision is the one of case a', async () => {
+      const entry = await run(answer(B - I, [B - 60 * I]));
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - I));
+      expect(entry.decision).not.toMatchObject({ reason: 'candle_gap' });
+      expect(entry.decision).toStrictEqual((await run(answer(B - I))).decision);
+    });
+
+    it('d: a gap inside the window is candle_gap at the index a 60-row fetch gives', async () => {
+      const entry = await run(answer(B, [B - 30 * I]));
+      expect(entry.series).toHaveLength(59);
+      expect(entry.decision).toMatchObject({
+        reason: 'candle_gap',
+        detail: { index: 29, expectedTimestamp: B - 30 * I, actualTimestamp: B - 29 * I },
+      });
+    });
+
+    it('the full answer decides on B - 59 I .. B and gives MA200', async () => {
+      const result = await createSignalFeed({
+        rest: stubRest(answer(B)),
+        logger: sink(),
+        now: () => T,
+      }).evaluate({ assetId: 101, interval: '1m', digits: 5 });
+      const entry = decided(result);
+      expect(entry.fetch).toMatchObject({ limit: SIGNAL_FETCH_LIMIT, rows: SIGNAL_FETCH_LIMIT });
+      expect(seriesStarts(entry)).toStrictEqual(starts(W0, B));
+      expect(result).toMatchObject({ indicators: { ma200: { ok: true } } });
+    });
+  });
+
+  it('F13 118 rows with a forming one: MA200 is short 117 of 200, MA50 and MACD have values', async () => {
+    const rows = mildRise(118 - 45);
+    const nowMs = closedNow(rows.slice(0, -1));
+    const feed = createSignalFeed({ rest: stubRest(rows), logger: sink(), now: () => nowMs });
+
+    const result = await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 });
+
+    expect(result).toMatchObject({
+      indicators: {
+        macd: { ok: true },
+        ma50: { ok: true },
+        ma200: { ok: false, closedCandles: 117, required: 200 },
+      },
+    });
+  });
+
+  it('F14 a gap in the early rows leaves the indicators to the rows after it', async () => {
+    const rows = mildRise(SIGNAL_FETCH_LIMIT - 45 + 1).filter((_, i) => i !== 10);
+    const nowMs = closedNow(rows);
+
+    const result = await createSignalFeed({
+      rest: stubRest(rows),
+      logger: sink(),
+      now: () => nowMs,
+    }).evaluate({ assetId: 101, interval: '1m', digits: 5 });
+
+    expect(result).toMatchObject({
+      indicators: { macd: { ok: true }, ma50: { ok: true }, ma200: { ok: true } },
+    });
+    expect(decided(result).decision).toMatchObject({ kind: 'signal' });
   });
 });

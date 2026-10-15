@@ -21,15 +21,19 @@ import {
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
+  cycleStakeCallbackData,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  demoLaunchCallbackData,
   sessionStartCallbackData,
   stakeMenuCallbackData,
 } from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {
+  ACCESS_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
+  CASHIER_URL,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   SESSION_ID,
@@ -72,6 +76,7 @@ const STOP = sessionStopCallbackData(SESSION_ID);
 interface Button {
   text: string;
   callback_data?: string;
+  web_app?: { url: string };
 }
 
 const STOPPED = sessionView({
@@ -96,9 +101,16 @@ function setup(
     stopSession?: BackendClient['stopSession'];
     claimSessionSummary?: BackendClient['claimSessionSummary'];
     stopSessions?: BackendClient['stopSessions'];
+    // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
+    cashierUrl?: string | null;
+    readTradingAccess?: BackendClient['readTradingAccess'];
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
+  // the amount screen behind a demo «🔁 Ещё сессия» (#476)
+  const readTradingAccess = vi.fn<BackendClient['readTradingAccess']>(
+    options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
+  );
   const startSession = vi.fn<BackendClient['startSession']>(
     options.startSession ?? (() => Promise.resolve({ started: SESSION_VIEW })),
   );
@@ -125,11 +137,13 @@ function setup(
       stopSession,
       claimSessionSummary,
       stopSessions,
+      readTradingAccess,
     }),
     logger,
     botInfo: BOT_INFO,
     intentTracker: stubTracker(),
     sessionTracker,
+    ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -173,11 +187,9 @@ const statusOf = (view: TradingSessionView) => sessionStatusText(PAIR_EURUSD.sym
 const LIVE_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
 ];
-// SESSION_VIEW's own pair and duration
-const AGAIN = button(
-  LABELS.sessionAgainButton,
-  sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
-);
+// SESSION_VIEW's own pair and duration; a demo session's opens the amount screen as a new message
+// (#476)
+const AGAIN = button(LABELS.sessionAgainButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'));
 // #350: the end of the path under a stopped session, after its refresh and «🔁 Ещё сессия»
 // the list of the session's duration; the duration screen for one the demo no longer offers (#382)
 const toSignals = (durationSec: 5 | 15) => [
@@ -190,11 +202,14 @@ const newAnalysis = (durationSec: 5 | 15) => [
 ];
 // «👥 Пригласить друга» right above the menu at every end of a session (#115)
 const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
+// «💳 Пополнить» (#27): the cashier Mini App, right above the invite at the end of a session
+const DEPOSIT: Button[] = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
 const STOPPED_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH)],
   [AGAIN],
   newAnalysis(15),
   toSignals(15),
+  DEPOSIT,
   INVITE,
   MENU,
 ];
@@ -206,8 +221,9 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
-// for want of tokens, the purchase above the way back (#117)
-const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
+// for want of tokens, the purchase, then the deposit (#27), above the way back (#117)
+const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
+const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], DEPOSIT, ...BACK_ROWS];
 // a failed read of the session, after the refresh or the stop: its refresh, never the stop again
 const SESSION_REFRESH_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], MENU_ROW];
 const STAKE_MENU_ROWS = [
@@ -329,6 +345,17 @@ describe('the session button', () => {
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track).not.toHaveBeenCalled();
     expect(warnings(logger)).toEqual(refusal.log === true ? ['trading session not started'] : []);
+  });
+
+  // #27: «💳 Пополнить» under the purchase in both modes; none on an origin that is not https
+  it('puts the deposit under the purchase of a real refusal for want of tokens, and none without a cashier', async () => {
+    const refuse = () => Promise.reject(httpError(409, TradingSessionErrorCode.InsufficientTokens));
+    const real = setup({ startSession: refuse });
+    await real.press(sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5));
+    expect(rowsOf(payloadOf(real.calls, 'sendMessage'))).toEqual(BUY_ROWS);
+    const bare = setup({ startSession: refuse, cashierUrl: null });
+    await bare.press(START);
+    expect(rowsOf(payloadOf(bare.calls, 'sendMessage'))).toEqual(BUY_ONLY_ROWS);
   });
 
   // #297: the saved stake refused against the snapshot; the picker opens from the same analysis
@@ -746,20 +773,16 @@ describe('/stop (#122)', () => {
 
 describe('«🔁 Ещё сессия»', () => {
   it('is on a stopped session only, with its pair and duration', () => {
-    const rows = (view: TradingSessionView) => sessionKeyboard(view).inline_keyboard;
+    const rows = (view: TradingSessionView) => sessionKeyboard(view, CASHIER_URL).inline_keyboard;
     expect(rows(STOPPED)).toEqual(STOPPED_ROWS);
     expect(
       rows(sessionView({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 5 } })),
     ).toEqual([
       [button(LABELS.sessionRefreshButton, REFRESH)],
-      [
-        button(
-          LABELS.sessionAgainButton,
-          sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
-        ),
-      ],
+      [button(LABELS.sessionAgainButton, `demo:l:${String(PAIR_EURUSD.id)}:5:n`)],
       newAnalysis(5),
       toSignals(5),
+      DEPOSIT,
       INVITE,
       MENU,
     ]);
@@ -768,35 +791,61 @@ describe('«🔁 Ещё сессия»', () => {
     expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
   });
 
+  // #27: «💳 Пополнить» at the end of a real session too, and nowhere without a cashier
+  it('ends a stopped session of either mode with the deposit, the invite and the menu', () => {
+    const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
+    for (const view of [STOPPED, realStopped]) {
+      expect(sessionKeyboard(view, CASHIER_URL).inline_keyboard.slice(-3), view.mode).toEqual([
+        DEPOSIT,
+        INVITE,
+        MENU,
+      ]);
+      expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard.slice(-3), view.mode).toEqual([
+        DEPOSIT,
+        INVITE,
+        MENU,
+      ]);
+    }
+    const withoutDeposit = STOPPED_ROWS.filter((row) => row !== DEPOSIT);
+    expect(sessionKeyboard(STOPPED, undefined).inline_keyboard).toEqual(withoutDeposit);
+    expect(sessionKeyboard({ ...STOPPED, settings: null }, undefined).inline_keyboard).toEqual([
+      [button(LABELS.sessionRefreshButton, REFRESH)],
+      INVITE,
+      MENU,
+    ]);
+    expect(sessionKeyboard(SESSION_VIEW, CASHIER_URL).inline_keyboard).toEqual(LIVE_ROWS);
+  });
+
   it('is not drawn without settings or on a duration the demo no longer offers', () => {
     const refresh = [button(LABELS.sessionRefreshButton, REFRESH)];
-    // without settings only the invite and the menu follow: no pair to analyse
-    expect(sessionKeyboard({ ...STOPPED, settings: null }).inline_keyboard).toEqual([
+    // without settings only the deposit, the invite and the menu follow: no pair to analyse
+    expect(sessionKeyboard({ ...STOPPED, settings: null }, CASHIER_URL).inline_keyboard).toEqual([
       refresh,
+      DEPOSIT,
       INVITE,
       MENU,
     ]);
     // an old duration: no «🔁 Ещё сессия» and no «📊 Новый анализ», the signals and the menu stay
     expect(
-      sessionKeyboard({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } })
-        .inline_keyboard,
-    ).toEqual([refresh, TO_DURATIONS, INVITE, MENU]);
+      sessionKeyboard(
+        { ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } },
+        CASHIER_URL,
+      ).inline_keyboard,
+    ).toEqual([refresh, TO_DURATIONS, DEPOSIT, INVITE, MENU]);
   });
 
-  it('starts a new session of the same pair and duration through the session button', async () => {
-    const { press, startSession } = setup();
+  // #476: the door «again opens the amount screen»; the session starts from an amount
+  it('opens the amount screen of the same pair and duration as a new message, starting nothing', async () => {
+    const { press, startSession, calls } = setup();
     await press(AGAIN.callback_data ?? '');
-    expect(startSession.mock.calls).toEqual([
-      [
-        {
-          telegramUserId: String(USER.id),
-          mode: TradeMode.Demo,
-          assetId: PAIR_EURUSD.id,
-          durationSec: 15,
-          trades: 5,
-        },
-      ],
-    ]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toContain('Выбери сумму сделки 👇');
+    // the screen's own presses edit it: it carries the analysis's way back
+    expect(rowsOf(sent).flat()).toContainEqual(
+      button('$5.00', cycleStakeCallbackData(PAIR_EURUSD.id, 15, '5', 'a')),
+    );
+    expect(startSession).not.toHaveBeenCalled();
   });
 
   // #327: a stopped real session's again button is marked REAL and starts a real one
@@ -806,8 +855,8 @@ describe('«🔁 Ещё сессия»', () => {
       '🔁 Ещё сессия · REAL',
       sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
     );
-    expect(sessionKeyboard(realStopped).inline_keyboard[1]).toEqual([realAgain]);
-    expect(sessionCardKeyboard(realStopped).inline_keyboard[0]).toEqual([realAgain]);
+    expect(sessionKeyboard(realStopped, CASHIER_URL).inline_keyboard[1]).toEqual([realAgain]);
+    expect(sessionCardKeyboard(realStopped, CASHIER_URL).inline_keyboard[0]).toEqual([realAgain]);
     const { press, startSession } = setup();
     await press(realAgain.callback_data ?? '');
     expect(startSession.mock.calls[0]?.[0]).toMatchObject({ mode: TradeMode.Real });
@@ -820,7 +869,7 @@ describe('the summary card (#318)', () => {
     trades: { ...STOPPED.trades, settled: 2, won: 1, lost: 1, profit: SUMMARY.result },
     lastIntent: intentView({ status: TradeIntentStatus.Settled }),
   });
-  const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), INVITE, MENU];
+  const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), DEPOSIT, INVITE, MENU];
   // the tracker's entry of a refresh on a done session: its card is what the tracker calls
   const entryOf = async (setupResult: ReturnType<typeof setup>) => {
     await setupResult.press(REFRESH);
@@ -828,13 +877,14 @@ describe('the summary card (#318)', () => {
   };
 
   it('K1 is the stopped status keyboard without «🔄 Обновить»; the invite and the menu alone without settings', () => {
-    const rows = (view: TradingSessionView) => sessionCardKeyboard(view).inline_keyboard;
+    const rows = (view: TradingSessionView) =>
+      sessionCardKeyboard(view, CASHIER_URL).inline_keyboard;
     expect(rows(DONE)).toEqual(CARD_ROWS);
     // S4: no empty first row
-    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([INVITE, MENU]);
+    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([DEPOSIT, INVITE, MENU]);
     expect(
       rows(sessionView({ ...DONE, settings: { ...DONE.settings!, durationSec: 60 } })),
-    ).toEqual([TO_DURATIONS, INVITE, MENU]);
+    ).toEqual([TO_DURATIONS, DEPOSIT, INVITE, MENU]);
   });
 
   it('K2 claims, then sends one PNG to the status chat with its caption and keyboard', async () => {
@@ -906,20 +956,20 @@ describe('the summary card (#318)', () => {
   });
 
   // the card is a photo: an edit of it is refused (demo.test.ts → a press under the session card)
-  it('K7 «🔁 Ещё сессия» under the card starts a session by a reply, never an edit', async () => {
+  it('K7 «🔁 Ещё сессия» under the card opens the amount screen by a reply, never an edit', async () => {
     const scene = setup();
     scene.apiErrors.set('editMessageText', {
       ok: false,
       error_code: 400,
       description: 'Bad Request: there is no text in the message to edit',
     });
-    const again = sessionCardKeyboard(DONE)
+    const again = sessionCardKeyboard(DONE, CASHIER_URL)
       .inline_keyboard.flat()
       .find((key) => key.text === LABELS.sessionAgainButton);
     await scene.press((again as Button | undefined)?.callback_data ?? '');
     expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(payloadOf(scene.calls, 'sendMessage')?.text).toBe(statusOf(SESSION_VIEW));
-    expect(scene.startSession).toHaveBeenCalledTimes(1);
+    expect(payloadOf(scene.calls, 'sendMessage')?.text).toContain('Выбери сумму сделки 👇');
+    expect(scene.startSession).not.toHaveBeenCalled();
     expect(scene.logger.error).not.toHaveBeenCalled();
   });
 
@@ -1010,9 +1060,10 @@ describe('the summary card (#318)', () => {
         botUsername: BOT_INFO.username,
       }).value,
     );
-    expect(rowsOf(photo)).toEqual([INVITE, MENU]);
+    expect(rowsOf(photo)).toEqual([DEPOSIT, INVITE, MENU]);
     expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
       SHARE_ROW,
+      DEPOSIT,
       INVITE,
       MENU,
     ]);
