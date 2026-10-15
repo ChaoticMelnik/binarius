@@ -20,6 +20,7 @@ import {
 import { starPayments, tokenLedger } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
+import { unusedDepositDeps } from '../deposit/testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -48,6 +49,7 @@ beforeAll(async () => {
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',

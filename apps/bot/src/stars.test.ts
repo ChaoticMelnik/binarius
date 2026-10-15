@@ -127,6 +127,7 @@ describe('/buy and «⭐ Купить токены»', () => {
           pendingBrokerAccounts: [],
           notificationLevel: 'all' as const,
           demoStake: null,
+          realStake: null,
         }),
       ),
     });
