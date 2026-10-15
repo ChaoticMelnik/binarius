@@ -433,6 +433,8 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     createStarsInvoice: unused,
     checkStarsPreCheckout: unused,
     reportStarsPaid: unused,
+    listStarsPayments: unused,
+    requestStarsRefund: unused,
     ...patch,
   };
 };
@@ -665,6 +667,8 @@ export const WRITE_CALLBACK_PREFIXES = [
   'stk:s:',
   'stk:z:',
   'level:',
+  // a refund request from /paysupport (#118)
+  'ps:r:',
 ] as const;
 
 // Every message a scene sends goes through here, so no scene can send a repeat of a write

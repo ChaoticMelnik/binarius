@@ -26,6 +26,13 @@ export const BUY_CALLBACK_DATA = 'buy';
 export const buyPackageCallbackData = (code: string): string => `${BUY_CALLBACK_DATA}:${code}`;
 export const BUY_PACKAGE_PATTERN = /^buy:([a-z0-9]{1,16})$/;
 
+// /paysupport (#118, docs/stars.md → /paysupport): `ps:l` is its list, a read; `ps:r:<payment id>`
+// asks for a refund, a write that a «🔄 Повторить» must never carry. The id carries no authority:
+// the backend matches it to the presser's Telegram id. `ps:r:` and a uuid is 41 bytes.
+export const PAYSUPPORT_LIST_CALLBACK = 'ps:l';
+export const paysupportRefundCallbackData = (paymentId: string): string => `ps:r:${paymentId}`;
+export const PAYSUPPORT_REFUND_PATTERN = /^ps:r:([0-9a-f-]{36})$/;
+
 // Where /support leads (#120). A temporary personal account: #220 replaces it, and this is the one
 // line to change.
 export const SUPPORT_TELEGRAM_USERNAME = 'dimmelya';

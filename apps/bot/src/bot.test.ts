@@ -159,6 +159,8 @@ function setup(
     createStarsInvoice: vi.fn(() => Promise.reject(new Error('not used here'))),
     checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('not used here'))),
     reportStarsPaid: vi.fn(() => Promise.reject(new Error('not used here'))),
+    listStarsPayments: vi.fn(() => Promise.reject(new Error('not used here'))),
+    requestStarsRefund: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -1576,6 +1578,8 @@ describe('the account card', () => {
           createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
           checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
           reportStarsPaid: vi.fn(() => Promise.reject(new Error('unused'))),
+          listStarsPayments: vi.fn(() => Promise.reject(new Error('unused'))),
+          requestStarsRefund: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1629,6 +1633,8 @@ describe('the account card', () => {
           createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
           checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
           reportStarsPaid: vi.fn(() => Promise.reject(new Error('unused'))),
+          listStarsPayments: vi.fn(() => Promise.reject(new Error('unused'))),
+          requestStarsRefund: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2764,6 +2770,8 @@ describe('the Bot API timeout', () => {
         createStarsInvoice: vi.fn(() => Promise.reject(new Error('unused'))),
         checkStarsPreCheckout: vi.fn(() => Promise.reject(new Error('unused'))),
         reportStarsPaid: vi.fn(() => Promise.reject(new Error('unused'))),
+        listStarsPayments: vi.fn(() => Promise.reject(new Error('unused'))),
+        requestStarsRefund: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

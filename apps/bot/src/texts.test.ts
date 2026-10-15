@@ -105,6 +105,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   purchasedTokens: '150',
   tokenBalance: '162',
   stars: '250',
+  paymentDate: 1_790_000_000,
   demoBalance: { amount: d('10000'), fresh: true },
   realBalance: null,
   mode: TradeMode.Demo,
@@ -482,7 +483,7 @@ describe('texts', () => {
     it('reads the command descriptions from the source in place (#301)', () => {
       setBotTextSource(stubTextSource('supportCommand'));
       try {
-        expect(botCommands().at(-1)).toEqual({
+        expect(botCommands().find((entry) => entry.command === 'support')).toEqual({
           command: 'support',
           description: stubText('supportCommand'),
         });
@@ -1494,6 +1495,7 @@ describe('the facades over the catalog', () => {
         'toSignalsButton',
         'tradeButton',
         'supportCommand',
+        'paysupportCommand',
       ].sort(),
     );
   });

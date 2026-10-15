@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { accessTokenPath, safeParseAccessTokenResponse } from '@binarius/shared';
 import { buildApp } from '../app';
-import { unusedAdminDeps } from '../admin/testing';
+import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import type { UsersRoutesDeps } from '../users/routes';
@@ -51,6 +51,7 @@ function appWith(answer: AccessTokenResult): FastifyInstance {
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
   });
   return app;
 }

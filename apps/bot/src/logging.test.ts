@@ -131,6 +131,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     createStarsInvoice: () => Promise.reject(new Error('not used by these scenes')),
     checkStarsPreCheckout: () => Promise.reject(new Error('not used by these scenes')),
     reportStarsPaid: () => Promise.reject(new Error('not used by these scenes')),
+    listStarsPayments: () => Promise.reject(new Error('not used by these scenes')),
+    requestStarsRefund: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);

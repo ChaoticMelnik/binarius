@@ -12,6 +12,8 @@ import {
 } from './bot-texts';
 import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
+import { STARS_PAYSUPPORT_LIST_LIMIT } from './stars';
+import { INT4_MAX } from './trading';
 import { DEFAULT_SESSION_TRADES } from './trading-session';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
@@ -58,6 +60,12 @@ export const BOT_TEXT_WIDTHS = {
   payoutFloor: String(MIN_CYCLE_PAYOUT_PCT).length,
   // «999 из 999»
   page: 10,
+  // formatPaymentDate: 'dd.mm.yyyy hh:mm'
+  paymentDate: 16,
+  // a Stars amount: int4, formatCount over INT4_MAX (star_payments.total_amount)
+  starAmount: String(INT4_MAX).length + Math.floor((String(INT4_MAX).length - 1) / 3),
+  // /paysupport's list (#118)
+  paysupportLines: STARS_PAYSUPPORT_LIST_LIMIT,
   retryAfterSec: 5,
   assetId: 10,
   // formatPrice: |x| < 1e9 with up to 10 digits after the point, and a sign
@@ -165,6 +173,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   purchasedTokens: () => w.count,
   tokenBalance: () => w.count,
   stars: () => w.count,
+  paymentDate: () => w.paymentDate,
   demoBalance: balance,
   realBalance: balance,
   mode: () => w.mode,
@@ -253,6 +262,11 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionTied: { count: () => w.sessionCount },
   sessionBalanceDemo: { amount: () => w.usd },
   sessionBalanceReal: { amount: () => w.usd },
+  // /paysupport's lines print a payment's total_amount, an int4 (#118)
+  paysupportLinePaid: { stars: () => w.starAmount },
+  paysupportLineHeld: { stars: () => w.starAmount },
+  paysupportLineRequested: { stars: () => w.starAmount },
+  paysupportLineRefunded: { stars: () => w.starAmount },
   // the card's column: a trade's number in its session, at most MAX_SESSION_TRADES
   sessionCardTrade: { count: () => w.sessionCount },
   // shown only with an amount; launchStakeMinimum stands in without one
@@ -417,6 +431,27 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       {
         repeat: w.accountLines,
         of: [anyOf('accountLineActive', 'accountLinePending', 'accountLineRevoked')],
+        separator: '\n',
+      },
+    ],
+  },
+  {
+    id: 'paysupport',
+    title: '/paysupport',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      k('paysupportScreen'),
+      '\n\n',
+      {
+        repeat: w.paysupportLines,
+        of: [
+          anyOf(
+            'paysupportLinePaid',
+            'paysupportLineHeld',
+            'paysupportLineRequested',
+            'paysupportLineRefunded',
+          ),
+        ],
         separator: '\n',
       },
     ],

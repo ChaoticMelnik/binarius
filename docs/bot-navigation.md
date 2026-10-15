@@ -47,9 +47,10 @@ chat with the bot:
 - `packages/shared/src/bot-navigation.ts`: `DEMO_CALLBACK_DATA` (`demo`), `CONNECT_CALLBACK_DATA`
   (`connect`), `MENU_CALLBACK_DATA` (`menu`), `commandRetryCallbackData` (`cmd:account`,
   `cmd:settings`, `cmd:invite` since #115) and its pattern, `BUY_CALLBACK_DATA` (`buy`) and
-  `buyPackageCallbackData` (`buy:<code>`, #117), `supportUrl()`, and since #27 `CASHIER_PAGE_PATH`
-  (`/cashier`, the page `web` serves) and `cashierUrlOf(origin)` (the page's URL on an https
-  origin, none otherwise). The bot and the backend's push build their
+  `buyPackageCallbackData` (`buy:<code>`, #117), `PAYSUPPORT_LIST_CALLBACK` (`ps:l`) and
+  `paysupportRefundCallbackData` (`ps:r:<payment id>`, #118), `supportUrl()`, and since #27
+  `CASHIER_PAGE_PATH` (`/cashier`, the page `web` serves) and `cashierUrlOf(origin)` (the page's
+  URL on an https origin, none otherwise). The bot and the backend's push build their
   buttons from it, so a pushed button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
   `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
@@ -78,7 +79,7 @@ read (#115). `/start` and
 «🔄 Повторить» carries the pressed data again **only after a read**: a demo screen, the signals
 screen, the picker's way back to /settings, the trade's and the session's refresh. A press that
 writes — `demo:stake:`, `demo:sess:`, `real:sess:` (#327), `session:stop:`, `confirm:`, `resend`, `stk:s:`, `stk:z:`,
-`level:` — never gets it: its failure leads back to where it was pressed (the analysis, the
+`level:`, `ps:r:` (#118) — never gets it: its failure leads back to where it was pressed (the analysis, the
 menu), so a lost answer never becomes a second trade or session. `testing.ts` → `captureApi` throws
 on any message whose «🔄 Повторить» carries one of those prefixes, in every scene of every bot test
 (`WRITE_CALLBACK_PREFIXES`, `testing.test.ts`). «➕ Ещё» (`demo:more:`, #360) is a read that sends
@@ -113,6 +114,10 @@ no repeat.
 | the Stars invoice (`replyWithInvoiceStars`, `send.ts`) | ⭐ Оплатить N (Telegram's pay button, first by the Bot API's rule) · 🏠 В меню |
 | `starsCredited`, `starsPending`; the reconciler's push `starsCredited` | 🏠 В меню |
 | `starsHeld` | the support URL · 🏠 В меню |
+| `/paysupport`, «↩️ К списку оплат» (`ps:l`, #118, [stars.md](stars.md#paysupport)) | ↩️ Нужен возврат: <date> per open payment (`ps:r:<id>`) · the support URL · 🏠 В меню |
+| `paysupportEmpty` | the support URL · 🏠 В меню |
+| `unavailable` after `/paysupport` (a read) | 🔄 Повторить (`ps:l`) · 🏠 В меню |
+| every answer to «Нужен возврат» (a write), `unavailable` included | ↩️ К списку оплат (`ps:l`) · 🏠 В меню |
 | the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены · 💳 Пополнить (#27, https only) · ↩️ Назад к анализу · 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |

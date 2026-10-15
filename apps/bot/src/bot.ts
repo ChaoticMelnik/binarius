@@ -53,6 +53,7 @@ import {
 import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
 import { createSessionShareComposer } from './session-share';
+import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
@@ -500,6 +501,8 @@ export function createBot({
   // which swallows commands; the pre-checkout query on the bot, for the same reason as the share
   privateChats.use(createStarsComposer({ backend, logger, connectKeyboard: welcomeKeyboard }));
   bot.use(createPreCheckoutComposer({ backend, logger }));
+  // /paysupport and its refund request (#118, docs/stars.md → /paysupport), for the same reason
+  privateChats.use(createPaysupportComposer({ backend, logger }));
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });

@@ -6,6 +6,7 @@ import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { BotProfileMethod } from '@binarius/shared';
 import type { BotProfileApi } from '../bot-texts/publish';
+import type { PaymentsRoutesDeps } from '../payments/routes';
 import type { AdminRoutesDeps } from './routes';
 
 export const ADMIN_BOT_INFO: UserFromGetMe = {
@@ -219,3 +220,11 @@ export function fakeBotProfileApi(
   };
   return { api, calls };
 }
+
+// For a suite that never reaches /payments/stars/*: the database is never read, and a notice
+// would be a failure of the suite.
+export const unusedPaymentsDeps = (): PaymentsRoutesDeps => ({
+  db: {} as never,
+  internalApiToken: 'payments-token-for-tests',
+  notifyStaff: () => Promise.reject(new Error('unused')),
+});

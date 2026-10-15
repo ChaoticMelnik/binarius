@@ -230,6 +230,11 @@ const app = buildApp({
     db,
     internalApiToken: env.internalApiToken,
   },
+  payments: {
+    db,
+    internalApiToken: env.internalApiToken,
+    notifyStaff: (text) => adminBot.notifyStaff(text),
+  },
   admin: {
     db,
     adminWebToken: env.adminWebToken,

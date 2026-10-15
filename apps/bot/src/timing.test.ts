@@ -33,6 +33,9 @@ import {
   BUY_CALLBACK_DATA,
   buyPackageCallbackData,
   StarsErrorCode,
+  PAYSUPPORT_LIST_CALLBACK,
+  paysupportRefundCallbackData,
+  StarsRefundErrorCode,
   StarsPreCheckoutRefusal,
 } from '@binarius/shared';
 import {
@@ -181,6 +184,8 @@ interface Branch {
   createStarsInvoice?: BackendClient['createStarsInvoice'];
   checkStarsPreCheckout?: BackendClient['checkStarsPreCheckout'];
   reportStarsPaid?: BackendClient['reportStarsPaid'];
+  listStarsPayments?: BackendClient['listStarsPayments'];
+  requestStarsRefund?: BackendClient['requestStarsRefund'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -401,6 +406,19 @@ async function observe(branch: Branch): Promise<Calls> {
         branch.reportStarsPaid ??
         (() => Promise.resolve({ outcome: 'credited' as const, tokens: '150', balance: '162' }))
       )(request);
+    },
+    listStarsPayments: (telegramUserId) => {
+      backend += 1;
+      return (branch.listStarsPayments ?? (() => Promise.resolve([PAYSUPPORT_PAYMENT])))(
+        telegramUserId,
+      );
+    },
+    requestStarsRefund: (telegramUserId, paymentId) => {
+      backend += 1;
+      return (branch.requestStarsRefund ?? (() => Promise.resolve('requested' as const)))(
+        telegramUserId,
+        paymentId,
+      );
     },
   };
   const loginDialog = createLoginDialog();
@@ -2168,6 +2186,102 @@ const PAID_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// /paysupport (#118): the list, the empty screen or the failure, each one message
+const PAYSUPPORT_PAYMENT = {
+  id: '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10',
+  paidAt: 1_790_000_000,
+  packageCode: 'p50',
+  totalAmount: 100,
+  status: 'paid' as const,
+  requested: false,
+};
+const PAYSUPPORT_WORST_CASE: Branch = {
+  label: 'the payments are listed',
+  update: textUpdate('/paysupport'),
+  expected: { backend: 1, telegram: 1 },
+};
+const PAYSUPPORT_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate('/paysupport')),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/paysupport', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  PAYSUPPORT_WORST_CASE,
+  {
+    label: 'there is no payment',
+    update: textUpdate('/paysupport'),
+    listStarsPayments: () => Promise.resolve([]),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: textUpdate('/paysupport'),
+    listStarsPayments: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+const PAYSUPPORT_LIST_BRANCHES: readonly Branch[] = [
+  ...PAYSUPPORT_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
+    ...branch,
+    label: `the list button: ${branch.label}`,
+    update: callbackUpdate(PAYSUPPORT_LIST_CALLBACK),
+    expected: { backend: branch.expected.backend, telegram: branch.expected.telegram + 1 },
+  })),
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(PAYSUPPORT_LIST_CALLBACK, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+];
+const PAYSUPPORT_LIST_WORST_CASE = PAYSUPPORT_LIST_BRANCHES[0]!;
+
+const refundUpdate = (chatType?: string) =>
+  callbackUpdate(paysupportRefundCallbackData(PAYSUPPORT_PAYMENT.id), chatType);
+const PAYSUPPORT_REQUEST_WORST_CASE: Branch = {
+  label: 'the request is recorded',
+  update: refundUpdate(),
+  expected: { backend: 1, telegram: 2 },
+};
+const PAYSUPPORT_REQUEST_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: refundUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  PAYSUPPORT_REQUEST_WORST_CASE,
+  {
+    label: 'the request was made before',
+    update: refundUpdate(),
+    requestStarsRefund: () => Promise.resolve('already_requested' as const),
+    expected: { backend: 1, telegram: 2 },
+  },
+  ...[
+    [409, StarsRefundErrorCode.AlreadyRefunded],
+    [404, StarsRefundErrorCode.PaymentNotFound],
+  ].map(([status, reason]) => ({
+    label: `the backend refuses with ${String(reason)}`,
+    update: refundUpdate(),
+    requestStarsRefund: refusedWith(status as number, reason as string),
+    expected: { backend: 1, telegram: 2 },
+  })),
+  {
+    label: 'the backend is unreachable',
+    update: refundUpdate(),
+    requestStarsRefund: unreachable,
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the id is not a uuid',
+    update: callbackUpdate(`ps:r:${'-'.repeat(36)}`),
+    expected: { backend: 0, telegram: 2 },
+  },
+];
+
 // «🏠 В меню» (#350): /menu's branches after the answer, the card never pinned.
 const menuButton = (label: string, expected: Calls, patch: Partial<Branch> = {}): Branch => ({
   label,
@@ -2893,6 +3007,33 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('successful_payment (#117)', async () => {
     await checkHandler('paid', PAID_BRANCHES, PAID_WORST_CASE, HANDLER_CALLS.paid);
+  });
+
+  it('/paysupport (#118)', async () => {
+    await checkHandler(
+      'paysupport',
+      PAYSUPPORT_BRANCHES,
+      PAYSUPPORT_WORST_CASE,
+      HANDLER_CALLS.paysupport,
+    );
+  });
+
+  it('the /paysupport list button (#118)', async () => {
+    await checkHandler(
+      'paysupportList',
+      PAYSUPPORT_LIST_BRANCHES,
+      PAYSUPPORT_LIST_WORST_CASE,
+      HANDLER_CALLS.paysupportList,
+    );
+  });
+
+  it('a refund request of /paysupport (#118)', async () => {
+    await checkHandler(
+      'paysupportRequest',
+      PAYSUPPORT_REQUEST_BRANCHES,
+      PAYSUPPORT_REQUEST_WORST_CASE,
+      HANDLER_CALLS.paysupportRequest,
+    );
   });
 
   it('the confirm button', async () => {

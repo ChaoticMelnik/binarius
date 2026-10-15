@@ -57,6 +57,7 @@ import {
 import {
   accountCard,
   accountStatus,
+  paysupportText,
   demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
@@ -273,6 +274,24 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   statusCard: statusCards,
   help: () => [helpText(botCommands())],
   account: accountLists,
+  // each state at its widest, five lines of it (#118)
+  paysupport: () =>
+    [
+      { status: 'paid' as const, requested: false },
+      { status: 'held' as const, requested: false },
+      { status: 'paid' as const, requested: true },
+      { status: 'refunded' as const, requested: true },
+    ].map((state) =>
+      paysupportText(
+        Array.from({ length: W.paysupportLines }, () => ({
+          id: '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10',
+          paidAt: 1_790_000_000,
+          packageCode: 'p50',
+          totalAmount: INT4_MAX,
+          ...state,
+        })),
+      ),
+    ),
   analysisFailed: () => [
     ...screens([
       tradingSignalResponseSchema.parse({

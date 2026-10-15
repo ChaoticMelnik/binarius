@@ -162,7 +162,7 @@ export const starsPaidResponseSchema = z.discriminatedUnion('outcome', [
 ]);
 export type StarsPaidResponse = z.infer<typeof starsPaidResponseSchema>;
 
-// --- Refunds (#118, docs/stars.md → Refunds) -----------------------------------------------------
+// --- Refunds and /paysupport (#118, docs/stars.md → Refunds) ------------------------------------
 
 // The staff member's reason for `stars refund`, kept in the audit row: the kill switch's rule, code
 // points without control characters.
@@ -174,3 +174,51 @@ export const starRefundReasonSchema = z
   .regex(REFUND_REASON_SHAPE, {
     error: `expected 1-${STAR_REFUND_REASON_MAX} characters without control characters`,
   });
+
+// The payments /paysupport lists: the payer's newest.
+export const STARS_PAYSUPPORT_LIST_LIMIT = 5;
+
+export const StarsRefundErrorCode = {
+  // no payment by that id, or another payer's: the two are not told apart (Rule 13)
+  PaymentNotFound: 'payment_not_found',
+  AlreadyRefunded: 'already_refunded',
+} as const;
+export type StarsRefundErrorCode = (typeof StarsRefundErrorCode)[keyof typeof StarsRefundErrorCode];
+
+export const starsPaymentsRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
+export type StarsPaymentsRequest = z.infer<typeof starsPaymentsRequestSchema>;
+
+export const starPaymentViewSchema = z.object({
+  id: z.uuid(),
+  // Unix seconds, Telegram's clock (star_payments.paid_at)
+  paidAt: z.int().positive(),
+  packageCode: packageCodeSchema,
+  totalAmount: starAmountSchema,
+  status: z.enum(StarPaymentStatus),
+  // a refund was asked for from /paysupport
+  requested: z.boolean(),
+});
+export type StarPaymentView = z.infer<typeof starPaymentViewSchema>;
+
+export const starsPaymentsResponseSchema = z.object({
+  payments: z.array(starPaymentViewSchema).max(STARS_PAYSUPPORT_LIST_LIMIT),
+});
+export type StarsPaymentsResponse = z.infer<typeof starsPaymentsResponseSchema>;
+
+export const starsRefundRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  paymentId: z.uuid(),
+});
+export type StarsRefundRequest = z.infer<typeof starsRefundRequestSchema>;
+
+export const StarsRefundRequestOutcome = {
+  Requested: 'requested',
+  AlreadyRequested: 'already_requested',
+} as const;
+export type StarsRefundRequestOutcome =
+  (typeof StarsRefundRequestOutcome)[keyof typeof StarsRefundRequestOutcome];
+
+export const starsRefundResponseSchema = z.object({
+  outcome: z.enum(StarsRefundRequestOutcome),
+});
+export type StarsRefundResponse = z.infer<typeof starsRefundResponseSchema>;

@@ -185,6 +185,14 @@ export const HANDLER_CALLS = {
   preCheckout: { backend: 1, telegram: 1 },
   // successful_payment: reportStarsPaid, then sendMessage
   paid: { backend: 1, telegram: 1 },
+  // /paysupport (#118): listStarsPayments, then sendMessage — the list, the empty screen or the
+  // failure
+  paysupport: { backend: 1, telegram: 1 },
+  // its list again (`ps:l`): answerCallbackQuery, then /paysupport's path
+  paysupportList: { backend: 1, telegram: 2 },
+  // «Нужен возврат» (`ps:r:<id>`): answerCallbackQuery ∥ requestStarsRefund — counted as
+  // sequential, as in confirm — then sendMessage
+  paysupportRequest: { backend: 1, telegram: 2 },
   // /support: sendMessage; no backend call
   support: { backend: 0, telegram: 1 },
   // /help: sendMessage; no backend call

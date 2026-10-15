@@ -23,9 +23,11 @@ import {
   listKnownStarCharges,
   listOpenStarRefundRequests,
   listStarChargesToRefund,
+  listStarPaymentsForPayer,
   readStarPaymentByCharge,
   readStarsBuyer,
   recordStarRefund,
+  requestStarRefund,
   StarsCreditSource,
   StarsRefundEvidence,
   StarsRefundSource,
@@ -588,8 +590,122 @@ describe('the refund reads (#118)', () => {
   });
 });
 
-describe('listOpenStarRefundRequests (#118)', () => {
-  it('lists open requests oldest first and hides refunded ones', async () => {
+describe('listStarPaymentsForPayer and requestStarRefund (#118)', () => {
+  it('lists the payer’s five newest payments with their request flag', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payer = BigInt(user.telegramUserId);
+    const payments = [];
+    for (let day = 1; day <= 6; day += 1) {
+      const payment = paymentOf(user, { paidAt: new Date(`2026-10-0${day}T00:00:00.000Z`) });
+      await credit(payment);
+      payments.push(await paymentRow(payment.telegramPaymentChargeId));
+    }
+    await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: payments[5]!.id });
+    const listed = await listStarPaymentsForPayer(tmp.db, payer);
+    expect(listed.map((p) => p.id)).toEqual(
+      payments
+        .slice(1)
+        .reverse()
+        .map((p) => p.id),
+    );
+    expect(listed[0]).toEqual({
+      id: payments[5]!.id,
+      paidAt: Date.parse('2026-10-06T00:00:00.000Z') / 1000,
+      packageCode: 'p50',
+      totalAmount: 100,
+      status: StarPaymentStatus.Paid,
+      requested: true,
+    });
+    expect(listed.slice(1).every((p) => !p.requested)).toBe(true);
+    // another Telegram id sees none of them
+    expect(await listStarPaymentsForPayer(tmp.db, payer + 1n)).toEqual([]);
+  });
+
+  it('lists a forwarded invoice’s payment for its payer, not for the users row', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user, { payerTelegramUserId: 424_242n });
+    await credit(payment);
+    expect(await listStarPaymentsForPayer(tmp.db, 424_242n)).toEqual([
+      expect.objectContaining({ status: StarPaymentStatus.Held }),
+    ]);
+    expect(await listStarPaymentsForPayer(tmp.db, BigInt(user.telegramUserId))).toEqual([]);
+  });
+
+  it('records a request once, with its audit row, and tells a repeat apart', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payer = BigInt(user.telegramUserId);
+    const payment = paymentOf(user);
+    await credit(payment);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    const first = await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: row.id });
+    expect(first).toMatchObject({ outcome: 'requested', payment: { id: row.id } });
+    expect(await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: row.id })).toEqual({
+      outcome: 'already_requested',
+    });
+    const requests = await tmp.db
+      .select()
+      .from(starRefundRequests)
+      .where(eq(starRefundRequests.starPaymentId, row.id));
+    expect(requests).toEqual([expect.objectContaining({ requestedByTelegramUserId: payer })]);
+    expect(
+      (await auditOf(row.id)).filter((a) => a.action === AuditAction.StarsRefundRequested),
+    ).toEqual([
+      expect.objectContaining({
+        actorType: 'user',
+        actorId: user.telegramUserId,
+        payload: {
+          userId: user.userId,
+          status: StarPaymentStatus.Paid,
+          requestId: requests[0]!.id,
+        },
+      }),
+    ]);
+  });
+
+  it('answers not_found for another payer’s payment and for no payment, writing nothing', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    const stranger = BigInt(user.telegramUserId) + 7n;
+    expect(
+      await requestStarRefund(tmp.db, { telegramUserId: stranger, paymentId: row.id }),
+    ).toEqual({ outcome: 'not_found' });
+    expect(
+      await requestStarRefund(tmp.db, {
+        telegramUserId: stranger,
+        paymentId: '00000000-0000-4000-8000-00000000beef',
+      }),
+    ).toEqual({ outcome: 'not_found' });
+    expect(
+      await tmp.db
+        .select()
+        .from(starRefundRequests)
+        .where(eq(starRefundRequests.starPaymentId, row.id)),
+    ).toEqual([]);
+  });
+
+  it('answers already_refunded for a refunded payment, writing nothing', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    await refund(refundOf(payment.telegramPaymentChargeId));
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(
+      await requestStarRefund(tmp.db, {
+        telegramUserId: BigInt(user.telegramUserId),
+        paymentId: row.id,
+      }),
+    ).toEqual({ outcome: 'already_refunded' });
+    expect(
+      await tmp.db
+        .select()
+        .from(starRefundRequests)
+        .where(eq(starRefundRequests.starPaymentId, row.id)),
+    ).toEqual([]);
+  });
+
+  it('listOpenStarRefundRequests lists open requests oldest first and hides refunded ones', async () => {
     const user = await seedUser(tmp.db, { balance: 0n });
     const payer = BigInt(user.telegramUserId);
     const rows = [];
@@ -597,9 +713,7 @@ describe('listOpenStarRefundRequests (#118)', () => {
       const payment = paymentOf(user);
       await credit(payment);
       const row = await paymentRow(payment.telegramPaymentChargeId);
-      await tmp.db
-        .insert(starRefundRequests)
-        .values({ starPaymentId: row.id, requestedByTelegramUserId: payer });
+      await requestStarRefund(tmp.db, { telegramUserId: payer, paymentId: row.id });
       rows.push(row);
     }
     await refund(refundOf(rows[1]!.telegramPaymentChargeId));

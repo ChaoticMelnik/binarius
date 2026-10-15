@@ -662,13 +662,14 @@ is missing from the answer; `timing.test.ts` holds the declared calls.
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list nine commands, in this
+Telegram's «Меню» button and the hints shown when the user types `/` list ten commands, in this
 order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/stop` —
 «Остановить сессию» ([bot-session.md](bot-session.md#stop-122)), `/account` —
 «Аккаунт Binodex» ([bot-account.md](bot-account.md)), `/buy` — «Купить токены» ([stars.md](stars.md), #117),
 `/settings` — «Настройки уведомлений», `/invite` — «Пригласить друга» ([referrals.md](referrals.md)),
-`/help` — «Помощь» ([/help](#help-184)) and `/support` —
-«Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in
+`/help` — «Помощь» ([/help](#help-184)), `/support` —
+«Поддержка» ([Notification level and /support](#notification-level-and-support-120)) and `/paysupport` —
+«Вопросы по оплате Stars и возврат» ([stars.md](stars.md#paysupport), #118). The list is `BOT_COMMANDS` in
 `packages/shared/src/bot-commands.ts`, the only place it is written (#301): each command's name and
 the key of its description, the catalog's `commands` group, which the CLI can override
 ([bot-texts.md](bot-texts.md) → Publishing). The bot reads it through `botCommands()` in

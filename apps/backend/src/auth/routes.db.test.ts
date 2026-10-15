@@ -37,6 +37,7 @@ import {
   captureApi,
   inlineButtons,
   unusedAdminDeps,
+  unusedPaymentsDeps,
   type CapturedApi,
 } from '../admin/testing';
 import { createClientPush } from './client-push';
@@ -128,6 +129,7 @@ const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
     signal: unusedSignalDeps(),
     signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
+    payments: unusedPaymentsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     // trace, so a level below production's info cannot hide a line from the log tests
