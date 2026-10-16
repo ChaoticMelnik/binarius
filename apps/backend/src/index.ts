@@ -8,6 +8,7 @@ import {
   closeAll,
   createBotTextRefresher,
   errorLogFields,
+  SERVICE_ACCOUNTS_MIN,
   SIGNAL_SCAN_INTERVALS,
 } from '@binarius/shared';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
@@ -27,6 +28,7 @@ import { createInitDataVerifier } from './auth/telegram-init-data';
 import { ensureFreshAccessToken } from './auth/token-service';
 import { createBalanceReconciler } from './broker/balance-reconciler';
 import { createBrokerOAuthClient } from './broker/oauth-client';
+import { createServiceAccountKeeper } from './broker/service-accounts';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
@@ -34,6 +36,11 @@ import { createScanPacer } from './signal/pacer';
 import { createSignalScanner } from './signal/scanner';
 import {
   BOT_TEXTS_LOAD_BUDGET_MS,
+  SERVICE_ACCOUNTS_TICK_MS,
+  SERVICE_RENEWALS_PER_TICK,
+  SERVICE_STALLED_RETRY_MS,
+  SERVICE_TOKEN_RENEW_AHEAD_MS,
+  SERVICE_TOKEN_ROTATION_GAP_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   SIGNAL_CACHE_MAX_TTL_MS,
@@ -236,7 +243,9 @@ const app = buildApp({
   payments: {
     db,
     internalApiToken: env.internalApiToken,
-    notifyStaff: (text) => adminBot.notifyStaff(text),
+    notifyStaff: async (text) => {
+      await adminBot.notifyStaff(text);
+    },
   },
   admin: {
     db,
@@ -295,6 +304,23 @@ const balanceReconciler = createBalanceReconciler({
   config: {
     intervalMs: env.balanceReconcileIntervalMs,
     maxPerMinute: env.balancePollMaxPerMinute,
+  },
+});
+
+// docs/service-accounts.md: the one timer that exchanges a token, and only a service account's
+// (#391); it also tells the staff bot when fewer than SERVICE_ACCOUNTS_MIN of them work
+const serviceAccounts = createServiceAccountKeeper({
+  db,
+  accessToken,
+  notifyStaff: (text, signal) => adminBot.notifyStaff(text, signal),
+  logger: app.log,
+  config: {
+    tickMs: SERVICE_ACCOUNTS_TICK_MS,
+    renewAheadMs: SERVICE_TOKEN_RENEW_AHEAD_MS,
+    rotationGapMs: SERVICE_TOKEN_ROTATION_GAP_MS,
+    perTick: SERVICE_RENEWALS_PER_TICK,
+    stalledRetryMs: SERVICE_STALLED_RETRY_MS,
+    minWorking: SERVICE_ACCOUNTS_MIN,
   },
 });
 
@@ -360,6 +386,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => mailing.stop(),
       () => sessionNotices.stop(),
       () => starReconciler.stop(),
+      () => serviceAccounts.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -405,6 +432,7 @@ if (!shuttingDown) {
   mailing.start();
   sessionNotices.start();
   starReconciler.start();
+  serviceAccounts.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

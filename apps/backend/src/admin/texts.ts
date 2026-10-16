@@ -1,5 +1,14 @@
+import { ServiceAccountNotWorkingReason } from '@binarius/shared';
+
 // Everything the staff bot says. Russian, per the project's language convention; the code
 // around it is English.
+
+const SERVICE_ACCOUNT_REASON_LABELS = {
+  [ServiceAccountNotWorkingReason.UserBlocked]: 'пользователь заблокирован',
+  [ServiceAccountNotWorkingReason.Pending]: 'не подтверждён в боте',
+  [ServiceAccountNotWorkingReason.Revoked]: 'отозван',
+  [ServiceAccountNotWorkingReason.TokenExpired]: 'токен истёк',
+} as const satisfies Record<ServiceAccountNotWorkingReason, string>;
 
 export const ADMIN_TEXTS = {
   // /start for an active staff member: the button that sends a login link (#448)
@@ -87,6 +96,43 @@ export const ADMIN_TEXTS = {
       'Он действует 5 минут и используется один раз.',
       'Никому не сообщайте код: сотрудники Binarius его никогда не спрашивают.',
     ].join('\n'),
+
+  // The service-account alerts (#391, docs/service-accounts.md → The alert). Plain text, no
+  // token and no account id: the label is the broker email, or the broker's user id without one.
+  serviceAccountsBelow: ({
+    working,
+    marked,
+    min,
+    notWorking,
+  }: {
+    working: number;
+    marked: number;
+    min: number;
+    notWorking: {
+      label: string;
+      reason: ServiceAccountNotWorkingReason;
+      revokedReason: string | null;
+    }[];
+  }): string =>
+    [
+      `Служебных аккаунтов брокера в работе: ${String(working)} из минимум ${String(min)} (отмечено: ${String(marked)}).`,
+      ...(notWorking.length === 0
+        ? []
+        : [
+            'Не в работе:',
+            ...notWorking.map(
+              ({ label, reason, revokedReason }) =>
+                `— ${label}: ${SERVICE_ACCOUNT_REASON_LABELS[reason]}${
+                  reason === ServiceAccountNotWorkingReason.Revoked && revokedReason !== null
+                    ? ` (${revokedReason})`
+                    : ''
+                }`,
+            ),
+          ]),
+    ].join('\n'),
+
+  serviceAccountsRestored: ({ working, min }: { working: number; min: number }): string =>
+    `Служебные аккаунты брокера восстановлены: в работе ${String(working)} из минимум ${String(min)}.`,
 
   // Button answers: they go out through answerCallbackQuery, whose text the Bot API caps at 200
   // characters. texts.test.ts lists them by name, so a new one needs a line there too.

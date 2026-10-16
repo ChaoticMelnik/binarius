@@ -132,6 +132,20 @@ export const STARS_RECONCILE_MAX_PAGES = 50;
 // Only transactions this recent are credited: older ones are a staff member's to look at.
 export const STARS_RECONCILE_WINDOW_S = 172_800;
 
+// --- The service accounts (#391) ---------------------------------------------------------------
+// docs/service-accounts.md → The keeper. The keeper's period: renewals, then the count.
+export const SERVICE_ACCOUNTS_TICK_MS = 60_000;
+// How long before its expiry a service token is exchanged: the broker's token lives 7 days, and a
+// day ahead leaves a 429 a day of retries a minute apart.
+export const SERVICE_TOKEN_RENEW_AHEAD_MS = 86_400_000;
+// A timer exchanges one account at most once an hour, whatever lifetime the broker answers: the
+// guard against a shortened expires_in turning every tick into an exchange.
+export const SERVICE_TOKEN_ROTATION_GAP_MS = 3_600_000;
+// Exchanges a tick, one after another, each bounded by BROKER_HTTP_TIMEOUT_MS.
+export const SERVICE_RENEWALS_PER_TICK = 5;
+// The hold-back of an account after key_unavailable or a throw.
+export const SERVICE_STALLED_RETRY_MS = 300_000;
+
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
 // logins would be a way to spend the process's memory, so the concurrency is capped and the
@@ -382,7 +396,15 @@ export const TIMING_CHAIN_HOLDS =
   STARS_TELEGRAM_API_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   STARS_RECONCILE_MAX_PAGES * STARS_TELEGRAM_API_TIMEOUT_MS < STARS_RECONCILE_TICK_MS &&
   STARS_RECONCILE_TICK_MS < STARS_RECONCILE_WINDOW_S * 1000 &&
-  STARS_RECONCILE_PAGE_SIZE <= 100;
+  STARS_RECONCILE_PAGE_SIZE <= 100 &&
+  // the service-account keeper (#391): a tick's exchanges end before the next tick; a held
+  // account sits out at least one tick; the hold-back, the rotation gap and the renewal window
+  // nest; stop() waits for one exchange (above) or one staff-bot send in flight
+  SERVICE_RENEWALS_PER_TICK * BROKER_HTTP_TIMEOUT_MS < SERVICE_ACCOUNTS_TICK_MS &&
+  SERVICE_ACCOUNTS_TICK_MS < SERVICE_STALLED_RETRY_MS &&
+  SERVICE_STALLED_RETRY_MS < SERVICE_TOKEN_ROTATION_GAP_MS &&
+  SERVICE_TOKEN_ROTATION_GAP_MS < SERVICE_TOKEN_RENEW_AHEAD_MS &&
+  ADMIN_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }
