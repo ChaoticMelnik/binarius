@@ -1377,6 +1377,23 @@ describe('recordSessionMessage (#567)', () => {
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', messageId: 77 });
   });
 
+  it('posts the message it replaces when one is named', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { session: SESSION_VIEW });
+    });
+    await createBackendClient({ baseUrl, token: TOKEN }).recordSessionMessage(
+      SESSION_ID,
+      '4242',
+      77,
+      76,
+    );
+    expect(JSON.parse(capture.body ?? '')).toEqual({
+      telegramUserId: '4242',
+      messageId: 77,
+      replacesMessageId: 76,
+    });
+  });
+
   it('carries a 404 not_found as readSession does', async () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 404, { error: 'not_found' });
