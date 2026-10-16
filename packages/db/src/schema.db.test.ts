@@ -3119,6 +3119,43 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
+  // the waiting message (#536): a positive message_id, a slot from 0, an id only on a slot
+  it.each([
+    [0, 0, 'trading_sessions_waiting_message_id_check'],
+    [-1, 0, 'trading_sessions_waiting_message_id_check'],
+    [null, -1, 'trading_sessions_waiting_after_message_check'],
+    [5, null, 'trading_sessions_waiting_pair_check'],
+  ])('rejects waiting_message_id %s with waiting_after_message %s (%s)', async (id, slot, name) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradingSessions).values({
+          ...session(seed.accountId),
+          waitingMessageId: id,
+          waitingAfterMessage: slot,
+        }),
+        '23514',
+        name,
+      );
+    });
+  });
+
+  it.each([
+    [null, null],
+    [null, 0],
+    [1, 0],
+    [2147483647, 2147483647],
+  ])('accepts waiting_message_id %s with waiting_after_message %s', async (id, slot) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values({ ...session(seed.accountId), waitingMessageId: id, waitingAfterMessage: slot })
+        .returning();
+      expect([row!.waitingMessageId, row!.waitingAfterMessage]).toEqual([id, slot]);
+    });
+  });
+
   it('rejects a second active session of the account and accepts any number of stopped ones', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);

@@ -16,10 +16,14 @@ import { tradingSessions, users } from './schema/index';
 import {
   claimSessionFinalNotice,
   claimSessionTradeNotice,
+  claimSessionWaiting,
+  clearSessionWaitingMessage,
   listPendingSessionNotices,
+  recordSessionWaitingMessage,
   releaseSessionFinalNotice,
   recordSessionCycleMessage,
   releaseSessionTradeNotice,
+  releaseSessionWaiting,
 } from './session-notice-ops';
 import {
   createTempDatabase,
@@ -420,6 +424,181 @@ describe('listPendingSessionNotices', () => {
     const all = await listPendingSessionNotices(tmp.db, { limit: 10_000 });
     const firstTwo = await listPendingSessionNotices(tmp.db, { limit: 2 });
     expect(firstTwo).toEqual(all.slice(0, 2));
+  });
+});
+
+describe('the waiting message (#536)', () => {
+  const waitingClaim = (session: { id: string }) =>
+    claimSessionWaiting(tmp.db, { sessionId: session.id });
+  const waitingRecord = (session: { id: string }, slot: number, messageId: number) =>
+    recordSessionWaitingMessage(tmp.db, { sessionId: session.id, slot, messageId });
+  const waitingClear = (session: { id: string }, messageId: number) =>
+    clearSessionWaitingMessage(tmp.db, { sessionId: session.id, messageId });
+  const statusMessage = (session: { id: string }, messageId: number) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: messageId })
+      .where(eq(tradingSessions.id, session.id));
+  // the session's first trade, claimed and sent in a new cycle message
+  async function cycleMessage(
+    target: Awaited<ReturnType<typeof seedSession>>,
+    claimed: number,
+    messageId: number,
+  ) {
+    await settled(target, '-5');
+    await claim(target.session, claimed);
+    await recordSessionCycleMessage(tmp.db, {
+      sessionId: target.session.id,
+      claimed,
+      messageId,
+      from: claimed,
+    });
+  }
+  const waitingOf = async (session: { id: string }) => {
+    const row = await rowOf(session);
+    return [row.waitingMessageId, row.waitingAfterMessage];
+  };
+
+  it('N13 claims a slot once, only on an active session under its status or cycle message', async () => {
+    const target = await seedSession();
+    // no message of the session yet: the waiting message would stand above it
+    expect(await waitingClaim(target.session)).toBeUndefined();
+    await statusMessage(target.session, 7);
+    expect(await waitingClaim(target.session)).toEqual({ slot: 0 });
+    expect(await waitingClaim(target.session)).toBeUndefined();
+    expect(await waitingOf(target.session)).toEqual([null, 0]);
+    // a new cycle message leaves the slot behind
+    await cycleMessage(target, 0, 41);
+    expect(await waitingClaim(target.session)).toEqual({ slot: 41 });
+    expect(await waitingClaim(target.session)).toBeUndefined();
+
+    // a live waiting message on an earlier slot holds the claim until it is cleared
+    await waitingRecord(target.session, 41, 50);
+    await cycleMessage(target, 1, 42);
+    expect(await waitingClaim(target.session)).toBeUndefined();
+    await waitingClear(target.session, 50);
+    expect(await waitingClaim(target.session)).toEqual({ slot: 42 });
+
+    const cycleOnly = await seedSession();
+    await cycleMessage(cycleOnly, 0, 41);
+    expect(await waitingClaim(cycleOnly.session)).toEqual({ slot: 41 });
+
+    const stopped = await seedSession();
+    await statusMessage(stopped.session, 7);
+    await stop(stopped.session, TradingSessionStopReason.UserStopped);
+    expect(await waitingClaim(stopped.session)).toBeUndefined();
+  });
+
+  it('N13 two claims of the same slot at once: exactly one wins', async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    const results = await Promise.all([waitingClaim(target.session), waitingClaim(target.session)]);
+    expect(results.filter((result) => result !== undefined)).toEqual([{ slot: 0 }]);
+  });
+
+  it('N14 the id is recorded only on its own claimed slot without an id, on an active session', async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    // nothing claimed
+    expect(await waitingRecord(target.session, 0, 50)).toBe(false);
+    await waitingClaim(target.session);
+    expect(await waitingRecord(target.session, 41, 50)).toBe(false);
+    expect(await waitingRecord(target.session, 0, 50)).toBe(true);
+    expect(await waitingRecord(target.session, 0, 51)).toBe(false);
+    expect(await waitingOf(target.session)).toEqual([50, 0]);
+
+    const stopped = await seedSession();
+    await statusMessage(stopped.session, 7);
+    await waitingClaim(stopped.session);
+    await stop(stopped.session, TradingSessionStopReason.UserStopped);
+    expect(await waitingRecord(stopped.session, 0, 50)).toBe(false);
+    expect(await waitingOf(stopped.session)).toEqual([null, 0]);
+  });
+
+  it('N15 a release frees the claimed slot only while no id was recorded', async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    await waitingClaim(target.session);
+    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 41 })).toBe(
+      false,
+    );
+    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 0 })).toBe(
+      true,
+    );
+    expect(await waitingOf(target.session)).toEqual([null, null]);
+    expect(await waitingClaim(target.session)).toEqual({ slot: 0 });
+    await waitingRecord(target.session, 0, 50);
+    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 0 })).toBe(
+      false,
+    );
+    expect(await waitingOf(target.session)).toEqual([50, 0]);
+  });
+
+  it('N16 a clear drops only its own id and keeps the slot', async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    await waitingClaim(target.session);
+    await waitingRecord(target.session, 0, 50);
+    expect(await waitingClear(target.session, 51)).toBe(false);
+    expect(await waitingOf(target.session)).toEqual([50, 0]);
+    expect(await waitingClear(target.session, 50)).toBe(true);
+    expect(await waitingOf(target.session)).toEqual([null, 0]);
+    // the same slot is not claimed again
+    expect(await waitingClaim(target.session)).toBeUndefined();
+  });
+
+  it('N17 the summary is refused while a waiting message is live, granted once it is cleared', async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    await waitingClaim(target.session);
+    await waitingRecord(target.session, 0, 50);
+    await stop(target.session, TradingSessionStopReason.UserStopped);
+    expect(await finalClaim(target.session)).toBe(false);
+    await waitingClear(target.session, 50);
+    expect(await finalClaim(target.session)).toBe(true);
+    // no claim after the summary
+    expect(await waitingClaim(target.session)).toBeUndefined();
+  });
+
+  it('N18 lists a session with a waiting message due or stale, never one of a blocked user', async () => {
+    const due = await seedSession();
+    await statusMessage(due.session, 7);
+    const live = await seedSession();
+    await statusMessage(live.session, 7);
+    await waitingClaim(live.session);
+    await waitingRecord(live.session, 0, 50);
+    const stopped = await seedSession();
+    await statusMessage(stopped.session, 7);
+    await waitingClaim(stopped.session);
+    await waitingRecord(stopped.session, 0, 50);
+    await rejected(stopped);
+    await stop(stopped.session, TradingSessionStopReason.UserStopped);
+    const blocked = await seedSession();
+    await statusMessage(blocked.session, 7);
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, blocked.seed.userId));
+
+    expect(await pendingOf(due.session)).toMatchObject({
+      status: 'active',
+      waitingMessageId: null,
+      waitingDue: true,
+      finished: false,
+    });
+    expect(await pendingOf(live.session)).toBeUndefined();
+    expect(await pendingOf(stopped.session)).toMatchObject({
+      status: 'stopped',
+      waitingMessageId: 50,
+      waitingDue: false,
+    });
+    expect(await pendingOf(blocked.session)).toBeUndefined();
+
+    // a new cycle message makes the live one stale
+    await cycleMessage(live, 0, 41);
+    expect(await pendingOf(live.session)).toMatchObject({ waitingMessageId: 50, waitingDue: false });
+    await waitingClear(live.session, 50);
+    expect(await pendingOf(live.session)).toMatchObject({ waitingMessageId: null, waitingDue: true });
   });
 });
 
