@@ -1,6 +1,6 @@
 # The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567)
 
-The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
+The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never on «сигнала нет»); a finished single trade's message
 draws the same button under its result (#360,
 [bot-demo-trade.md](bot-demo-trade.md#the-status-message)); the launch screen of the signals list
@@ -14,7 +14,8 @@ amount saves the demo stake and then starts the session through the same path, a
 deleted the same way. Old demo buttons sent before #476 carry the session button's data and still
 start at once.
 Pressing a session button, or an amount, starts a session of that mode — demo, or real for a user in
-real mode ([trading-mode.md](trading-mode.md)) — of `DEFAULT_SESSION_TRADES` trades through
+real mode ([trading-mode.md](trading-mode.md)) — of `DEFAULT_SESSION_CYCLES` cycles (#552: a
+martingale cycle ends with a win, so a session is five wins; under fixed five trades) through
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
@@ -37,7 +38,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   is byte for byte the one before), `:l` (`SESSION_START_LAUNCH_TOKEN`) appended on the launch
   screen's (#418)
   (`sessionStartCallbackData`, `SESSION_START_PATTERN`, `sessionStartDataOf`), the predicate
-  `sessionFits(durationSec)` = `sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec)`, the
+  `sessionFits(durationSec)` = `sessionFitsDeadline(DEFAULT_SESSION_CYCLES, durationSec,
+  martingale)` (#552: the bot does not know the backend's strategy and counts martingale's worst
+  case, the default and the longer one), the
   button's row in the analysis keyboard (in demo `demo:l:<assetId>:<sec>:a`, #476), and
   `launchScreen`'s «🚀 Запустить цикл · REAL» (#320, #327).
 - `apps/bot/src/trading-session.ts` — `createTradingSessionComposer({ backend, logger,
@@ -99,7 +102,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-<mode>:sess:<assetId>:<sec>[:l]    (in real «🚀 Сессия из 5 сделок · REAL» under the analysis or a finished trade, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия · REAL», #327; demo buttons sent before #476; the longest, real:sess:2147483647:15:l, 25 bytes)
+<mode>:sess:<assetId>:<sec>[:l]    (in real «🚀 Сессия из 5 циклов · REAL» under the analysis or a finished trade, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия · REAL», #327; demo buttons sent before #476; the longest, real:sess:2147483647:15:l, 25 bytes)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
   bot → sendMessage: the status, with «🔄 Обновить» (session:<id>) and «⏹ Остановить сессию»
@@ -141,10 +144,10 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   and the session waited for a signal itself; the owner wants no session on a pair without one) —
   as the first row, above «➕ Ещё»; not on «сигнала нет», `fetch_failed` or a failed signal call,
   and not on a pair paying below the cycle floor (`pairPayoutAccepted`, #379; the screen
-  says why, and «➕ Ещё» carries the verdict in its datum). It is drawn only where `sessionFits(durationSec)` holds: 5 × (5 + 120) s and 5 × (15 + 120) s fit the worker's hour, so
+  says why, and «➕ Ещё» carries the verdict in its datum). It is drawn only where `sessionFits(durationSec)` holds: 5 × 4 × (5 + 120) s and 5 × 4 × (15 + 120) s fit the worker's hour (#552: five cycles of up to four trades), so
   after #313 every duration of the set has the button; the guard stays, in the keyboard and in
-  `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_TRADES` with
-  `pluralTrades`, and the request sends the same number, so the label, the check and the request
+  `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_CYCLES` with
+  `cyclesCount` («5 циклов», #552), and the request sends the same number as `cycles`, so the label, the check and the request
   cannot disagree. In real mode every door's label ends with « · REAL» (`sessionStartButtonLabel`,
   `launchCycleButtonLabel`, `sessionAgainButtonLabel`; `MODE_LABELS`, as the real stake button):
   a real session never starts from a button that looks like a demo one (#327).
@@ -168,7 +171,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   whose way back is that pair's analysis, not the launch screen: one handler serves every door
   (accepted).
 - **A third door (#360).** A single trade's status message, once the trade is `accepted`, `settled`
-  or `rejected`, draws «🚀 Сессия из 5 сделок» with `real:sess:<assetId>:<sec>` of a real trade
+  or `rejected`, draws «🚀 Сессия из 5 циклов» with `real:sess:<assetId>:<sec>` of a real trade
   (#327) or `demo:l:<assetId>:<sec>:n` of a demo one (the amount screen, #476), above
   the end of the path, by the tracker's edits and by «🔄 Обновить статус» (`sessionOfferOf`,
   [bot-demo-trade.md](bot-demo-trade.md#the-status-message)), and only when the pair paid at least
@@ -266,7 +269,7 @@ included (#327):
 ```text
 🎮 Демо-сессия
 📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
-🔢 Сделка 3 из 5
+🔁 Цикл 2 из 5
 📊 Счёт: 1 в плюс, 1 в минус · -$0.50    (from the first settled trade; «в ноль» only when tied > 0)
 
 ✅ Сделка открыта у брокера.             (the last trade's line from the demo trade's texts)
@@ -278,7 +281,7 @@ A finished one (#337):
 🎮 Демо-сессия
 📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
 
-🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус
+🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус
 💰 Результат: +$2.50
 🧪 Демобаланс: $10 002.50
 🕒 Баланс Binodex обновлён 1 мин назад.  (only when the balance predates the last trade)
@@ -297,10 +300,15 @@ A finished one (#337):
   snapshot (`balance: null`): the result alone.
 - Both lines appear only once a trade settled (`settled > 0`), under every stop reason.
 
-- **Live** (`status` is not `stopped`): the trade number is `min(settled + 1, planned)`; the last
+- **Live** (`status` is not `stopped`): «🔁 Цикл N из M» (`sessionCycle`, #552), N =
+  `min(cycles.closed + 1, cycles.planned)` of the view: a loss and a tie keep the number, a win
+  moves it (under fixed every trade does); a v1/v2 session of before #552 counts its trades
+  there. The last
   line is the last trade's status line when it is live, otherwise «🔎 Ждём сигнал для следующей
   сделки…».
-- **Completed**: «🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус», then the result, the
+- **Completed**: «🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус» (#552: the
+  closed cycles, then the trades and the score by trade, as «📊 Итог», «📤 Поделиться» and the
+  card's footer), then the result, the
   balance and its age line (above).
 - **Stopped for another reason**: the reason's line, then «📊 Итог: …» when a trade settled, the
   result, the balance and its age line, then the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
@@ -414,7 +422,7 @@ One entry per session id, in process memory, like the intent tracker
   `isTradingSessionFinished`, the predicate the backend refreshes the balance by (#337). A stopped session
   with an open trade is followed until that trade settles, so its counts are final. A last trade
   in `manual_review` still has edges, so that entry runs to the deadline.
-- **The render key** is `status|stopReason|planned|settled|won|lost|tied|profit|
+- **The render key** is `status|stopReason|cycles.planned|cycles.closed|settled|won|lost|tied|profit|
   balance.available|balance.current|lastIntent.id|lastIntent.status|lastIntent.lastError`; the
   message is edited only when it changes. `balance.ageSec` is left out: it moves on every poll and
   would edit a `manual_review` session's message every 10 s to the deadline.
@@ -635,8 +643,8 @@ cycle, so every trade is a new message of one block, as before #551.
 - **The length.** Before an edit the sender measures the text as Telegram counts it after parsing
   the entities (`plainTextOf`, as `telegramTextProblems`); a text past 4096
   (`TELEGRAM_MESSAGE_LIMIT`) opens a new message of the same cycle from the trade that did not fit,
-  and the full one stays as it is. The defaults never get there — a session has at most 20 trades
-  of about 100 characters each — so only an override can; the assembled-messages registry
+  and the full one stays as it is. The defaults never get there — a cycle has at most `maxSteps`
+  (4) trades plus its ties, of about 100 characters each — so only an override can; the assembled-messages registry
   (`sessionTrade`, [bot-texts.md](bot-texts.md)) keeps one block with its adaptive line within the
   limit, so the unit the sender never splits always fits.
 - **The summary** is the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then the
@@ -777,7 +785,9 @@ Telegram's own forwarding.
   market path between them. No balance: the card is made to be forwarded, the balance stays in the
   status.
 - **The layout.** 1200 × 675, dark. The pair (or «актив #N»), «СЕССИЯ ЗАВЕРШЕНА», «ИТОГ» and the
-  signed total; a column per trade, «Сделка N» and its result; blue entry markers, exits green,
+  signed total; a column per trade, «Сделка N» and its result (at most
+  `MAX_SESSION_SUMMARY_TRADES`, 720, the summary's bound since #552: a five-cycle martingale
+  session without ties has at most 20 trades, and only many ties make the columns crowd); blue entry markers, exits green,
   red or grey; the legend; the footer «5 сделок · 3 в плюс, 2 в минус», «в ноль» only when a trade
   tied. Every word is the catalog's (`sessionCard*`), XML-escaped, and shrinks to fit its slot.
 - **The caption** is `sessionCardCaption`: «🏁 {symbol}: итог сессии {profit}» and «🤖 @{botUsername}»,
@@ -1017,9 +1027,9 @@ card is drawn and rendered by `session-card.test.ts` on the host's resvg build. 
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
 The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, 15 s, «📊 Анализ»,
-«🚀 Сессия из 5 сделок» first, with or without a signal, then an amount of the amount screen
+«🚀 Сессия из 5 циклов» first, with or without a signal, then an amount of the amount screen
 (#476; or a pair of «Сигналы сейчас» and an amount), the status moving, «⏹ Остановить сессию»; on a
-signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5 сделок» under the trade's result
+signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5 циклов» under the trade's result
 (#360) — need a bot token of its own, which no runtime check of this issue used.
 
 ## Boundaries

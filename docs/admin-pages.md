@@ -265,11 +265,12 @@ session, not the bot's owner-scoped read.
 `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the other lists: one `SELECT` joined to
 `broker_accounts` and `users`. Columns: the session id with «Заявки →» (the intents list filtered by
 this session), the owner's Telegram id (a link to the user card), the broker id, mode, status, stop
-reason, then asset, duration, trades and base stake from `settings`, then started, ended and last
-decision. Codes are printed as codes, an empty value as «—».
+reason, then asset, duration, length («Длина»: «5 циклов» for settings v3, «5 сделок» for v1/v2,
+#552) and base stake from `settings`, then started, ended and last decision. Codes are printed as codes, an empty value as «—».
 
-`settings` is parsed against v1 (`tradingSessionSettingsSchema`) at read, as the orchestrator and the
-bot's view do: a row that does not parse — the column default `{}`, an extra key, another version —
+`settings` is parsed against every version (`tradingSessionSettingsSchema`) at read, as the
+orchestrator and the bot's view do: a row that does not parse — the column default `{}`, an extra
+key, an unknown version —
 is shown as «—» in all four settings columns. The raw `jsonb` never reaches the answer; the stake
 scale is the sizer's parameter and is not shown.
 

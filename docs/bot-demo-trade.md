@@ -53,7 +53,7 @@ demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
   bot → sendMessage: the status, with «🔄 Обновить статус» (intent:<id>)
   tracker: after 1 s, then every 3 s → GET /trading/intents/<id>?telegramUserId=<id>
            → editMessageText of that message when the status changes; on accepted, settled or
-             rejected the session offer and «🚀 Сессия из 5 сделок» (<mode>:sess:<assetId>:<sec>, #360, #327)
+             rejected the session offer and «🚀 Сессия из 5 циклов» (<mode>:sess:<assetId>:<sec>, #360, #327)
 intent:<id>                («🔄 Обновить статус»)
   bot → answerCallbackQuery ∥ GET /trading/intents/<id>?telegramUserId=<presser> ∥ GET /trading/pairs
   bot → editMessageText: the status in place
@@ -259,12 +259,12 @@ Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that 
 **The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить статус» while the
 status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
 (`TRACKER_STOP_STATUSES`), the session offer (#360) and the end of the path under it —
-«🚀 Сессия из 5 сделок», then «📊 Новый анализ» (the same pair and duration), «📡 К сигналам»,
+«🚀 Сессия из 5 циклов», then «📊 Новый анализ» (the same pair and duration), «📡 К сигналам»,
 «🏠 В меню» ([bot-navigation.md](bot-navigation.md)). An accepted trade gets all five rows.
 
 **The session offer (#360).** On `accepted`, `settled` and `rejected` alike, the message ends with
-«🤖 Дальше бот может торговать сам: сессия из 5 сделок на этой паре, сигнал он проверяет перед
-каждой сделкой.» and the keyboard carries «🚀 Сессия из 5 сделок» with `<mode>:sess:<assetId>:<sec>`
+«🤖 Дальше бот может торговать сам: сессия из 5 циклов на этой паре, сигнал он проверяет перед
+каждой сделкой.» and the keyboard carries «🚀 Сессия из 5 циклов» with `<mode>:sess:<assetId>:<sec>`
 of that trade (a real trade offers a real session, labelled « · REAL», #327) — the session button's own data, so its press is the start handler with its
 refusals and its `{ active }` answer: a press while a session runs shows the running one and starts
 none ([bot-session.md](bot-session.md#the-button)). One predicate decides the line and the row,
@@ -277,8 +277,8 @@ press after the change meets the route's 409 `payout_too_low`. A trade from befo
 «📊 Новый анализ». The tracker's edits and «🔄 Обновить статус» draw it; the message right after
 the press (`planned`) never does; the deadline edit of a live status carries the hint and no
 offer, and the deadline edit of a stop status whose edit never landed carries the offer; the 404
-edit carries neither. The number of trades is the catalog's `{trades}`, from
-`DEFAULT_SESSION_TRADES`. A rejection whose cause also refuses a session (`trading_paused`,
+edit carries neither. The number of cycles is the catalog's `{cycles}`, from
+`DEFAULT_SESSION_CYCLES` (#552). A rejection whose cause also refuses a session (`trading_paused`,
 `account_halted`) still shows the offer; the start's refusal explains it (owner, #320). The tracker's
 edit takes the view and, for an edit that is not a status, why (`IntentTrackRequest.edit(text,
 view, end?)`): the deadline on a live status adds «🏠 В меню» under the refresh, and an intent gone

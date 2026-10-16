@@ -198,7 +198,8 @@ at import.
 Decided for #450 (owner 2026-10-10, item 3; the night's manager chose 12×). The strategy of new
 sessions is `SESSION_STAKE_STRATEGY` (`martingale` or `fixed`; unset is `martingale`; anything
 else, an empty value included, stops the backend and the `session-start` CLI at start). The start
-route and the CLI write it into the session's settings v2 with `buildSessionSettings`, and for
+route and the CLI write it into the session's settings v3 (#552; v2 until then) with
+`buildSessionSettings`, and for
 `martingale` the limits of the session's base stake B, from `martingaleLimitsFor(B)`
 (`packages/shared/src/trading-session.ts`, the one place of the multipliers):
 
@@ -232,13 +233,19 @@ have two raises, not three. 12× keeps three raises at every payout from the sta
 and the session's loss stays within 20 × B. Back to 10×: `MARTINGALE_MAX_STAKE_MULTIPLIER = 10n`
 and its pin in `trading-session.test.ts`; then at 80-86 % step 4 stops as `max_stake_exceeded`.
 
-Rules of a session that the defaults do not change (#450 clarify):
+Rules of a session that the defaults do not change (#450 clarify; the length since #552):
 
 - A tie leaves the series as it is: the next stake is the same step (`orchestrator.db.test.ts` G2,
   `steps-parity.test.ts`); the trade's message shows it as the next step of the same cycle
   (#551).
-- The session ends at its N-th settled trade, in the middle of a series too (G9); its result shows
-  the series' loss.
+- The session ends at its N-th closed cycle (#552, owner 2026-10-16), never in the middle of a
+  series: under martingale a win closes the cycle, a loss or a tie does not (`orchestrator.db.test.ts`
+  G9′, G12); under fixed every settled trade is a cycle (G11). Only a technical reason cuts a
+  series short: the limits above, `timeout`, `kill_switch`, `manual_review`, `rejected_twice`,
+  `account_unavailable`, `pair_unavailable`, `balance_unavailable`, `stake_stop`,
+  `no_signal_timeout`, and `user_stopped` (at once, an open trade plays out). The start refuses a
+  session whose worst case, `MARTINGALE_MAX_STEPS` trades a cycle, cannot fit the hour
+  (`sessionFitsDeadline`). A v2 row of before #552 still ends at its N-th settled trade (G10).
 - Only the base stake is checked against the balance at the start. A series that outgrows the
   balance stops as `stake_stop` (`insufficient_balance`, G8).
 - The strategy and the limits are frozen in the session's row at the start: switching

@@ -281,6 +281,18 @@ longer name would push past the table's length CHECK stays as it was, and the lo
 default and name the reason (`bot-text list`, the admin section). The old name is then an
 unavailable variable: a form still open with it is refused on save.
 
+Since #552 a session's length is in cycles: `sessionStartButton`, `intentSessionOffer`,
+`launchCycle` and `launchCycleReal` take `{cycles}` («5 циклов») for `{trades}`, and the two launch
+screens «перед каждой сделкой проверит» for «перед каждой проверит» («каждой» has no noun after
+«циклов»). Migration `0056_session_cycles_texts` rewrites a saved override of these keys the same
+way, both replacements of a launch screen in one UPDATE, so a row gets both or neither; the length
+guard is on the rewritten text, and a row it would push past the CHECK stays as it was, as with
+0030. An override in its own words gets the placeholder only. `sessionCompleted` took `{cycles}`
+before `{result}`; an override without it stays valid (no variable is required) and prints no
+cycles. `sessionStep` («🔢 Сделка {step}») is gone for `sessionCycle` («🔁 Цикл {cycle} из
+{cyclesPlanned}»): a saved override of it is an unknown key, which `bot-text reset sessionStep`
+removes.
+
 ## Adding a text
 
 1. Add an entry to `BOT_TEXT_CATALOG` in the group of the screen that shows it, with a Russian

@@ -246,7 +246,7 @@ check's refusal (the table below, `payout_too_low` included), in order:
 the signal again (`no_signal`, [trading-session.md](trading-session.md#post-tradingsessions) step
 4c), so a signal gone between this press and an amount's press refuses there.
 
-Text: «🎯 {symbol} · ⏱ {sec} с», «🤖 Бот проведёт 5 сделок подряд…», then «Выбери сумму сделки 👇»
+Text: «🎯 {symbol} · ⏱ {sec} с», «🤖 Бот проведёт 5 циклов подряд…», then «Выбери сумму сделки 👇»
 (`cycleStakeChoose`). Keyboard:
 
 - the amounts (`cycleStakeAmounts`): the picker's presets (`stakePresets`: the broker's minimum
@@ -275,7 +275,7 @@ drawn (`payout_too_low`, #379) says «🚫 {symbol}: выплата {payout}% �
 **An amount** (`demo:sa:<assetId>:<sec>:<amount>:<l|a>`, `cycle-stake.ts`) is a write
 (`WRITE_CALLBACK_PREFIXES`). The press saves the amount as the demo stake (`POST /trading/stake`,
 beside the catalog read), and only on `{ saved }` starts the cycle (`POST /trading/sessions`, mode
-demo, `DEFAULT_SESSION_TRADES`), which reads the saved stake itself (Rule 29). The two requests are
+demo, `cycles: DEFAULT_SESSION_CYCLES`, #552), which reads the saved stake itself (Rule 29). The two requests are
 not atomic: a stake saved from another device in between is the cycle's, and a refused start leaves
 the amount saved. The amount in the data is the one saved, as the picker's preset: the backend
 bounds it. A refused save («💵 Сумма» opens the amount screen anew as a new message, then the way
@@ -301,7 +301,7 @@ unless one of them was `demo:l`.
 ### The launch screen in real mode (#327)
 
 In real mode `demo:l` draws the launch screen with the real stake in force (`effectiveStake`):
-three lines — «🎯 {symbol} · ⏱ {sec} с», «💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and
+three lines — «🎯 {symbol} · ⏱ {sec} с», «💵 Ставка: $X», «🤖 Бот проведёт 5 циклов подряд…» — and
 three rows: «🚀 Запустить цикл · REAL» (`real:sess:<assetId>:<sec>:l`, the session button's data
 with the launch token: the start, its refusals and the 409 are the same, and once the session's
 status is sent the start deletes this screen,
@@ -420,7 +420,7 @@ not a fresh catalog.
   the way back — the same message, only its keyboard edited. «🔄 Повторить анализ» draws the
   collapsed form again.
 - **Real mode (#121, [trading-mode.md](trading-mode.md)).** The analysis reads access for the
-  user's mode beside the catalog: in real mode the session row is «🚀 Сессия из 5 сделок · REAL»
+  user's mode beside the catalog: in real mode the session row is «🚀 Сессия из 5 циклов · REAL»
   with `real:sess:<assetId>:<sec>` (#327; in demo `demo:l:<assetId>:<sec>:a`, the amount screen,
   #476), the disclaimer is `analysisDisclaimerReal` («…Реальный
   режим: сделка идёт на реальные деньги.»), and the hint and the `analysisCycleUnavailable` line

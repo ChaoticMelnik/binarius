@@ -201,11 +201,11 @@ and pressed in the other is refused with «⚠️ Режим или сумма �
 `<mode>:<telegramUserId>:<nonce>`. `real_mode_off` (the mode went demo between the read and the
 POST) → «⚠️ Реальный режим выключен — включи его в меню и открой анализ заново.». The status
 message's header is «💼 Реальная сделка» for a real view, and a finished real trade offers a real
-session («🚀 Сессия из 5 сделок · REAL», #327).
+session («🚀 Сессия из 5 циклов · REAL», #327).
 
 **The launch screen** in real mode (#327) is the one demo drew before #476, drawn by the mode
 (demo now draws the amount screen, [bot-demo.md](bot-demo.md#the-amount-screen-476)): «💵 Ставка:
-$X» with the real stake in force, «🤖 Бот проведёт 5 сделок подряд… Реальный режим: сделки идут на реальные
+$X» with the real stake in force, «🤖 Бот проведёт 5 циклов подряд… Реальный режим: сделки идут на реальные
 деньги.» (`launchCycleReal`), «🚀 Запустить цикл · REAL» (`real:sess:…`), «💵 Изменить ставку» of
 the real picker (`stk:o:r:p:…`) and «↩️ К списку»; a pair below the cycle floor gets the floor's
 refusal as in demo. The single real trade stays on the manual path. A stake saved from a launch
