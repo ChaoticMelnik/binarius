@@ -56,7 +56,8 @@ chat with the bot:
   (`connect`), `MENU_CALLBACK_DATA` (`menu`), `commandRetryCallbackData` (`cmd:account`,
   `cmd:settings`, `cmd:invite` since #115) and its pattern, `BUY_CALLBACK_DATA` (`buy`) and
   `buyPackageCallbackData` (`buy:<code>`, #117), `PAYSUPPORT_LIST_CALLBACK` (`ps:l`) and
-  `paysupportRefundCallbackData` (`ps:r:<payment id>`, #118), `supportUrl()`, and since #27
+  `paysupportRefundCallbackData` (`ps:r:<payment id>`, #118), `demoAnalysisCallbackData`
+  (`demo:an:<assetId>:<sec>`, moved from `demo.ts` by #484 for the analysis reminder), `supportUrl()`, and since #27
   `CASHIER_PAGE_PATH` (`/cashier`, the page `web` serves) and `cashierUrlOf(origin)` (the page's
   URL on an https origin, none otherwise). The bot and the backend's push build their
   buttons from it, so a pushed button lands on the bot's handler.
@@ -151,6 +152,7 @@ no repeat.
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
 | the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
+| the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Новый анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration) — one button, as the chain's reminders |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
 a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals of the same

@@ -32,7 +32,8 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `cycleStakeCallbackData`, `cycleCustomCallbackData` and their patterns (#476),
   `launchStakeCallbackData`, `DEMO_GROUPS_CALLBACK_DATA`,
   `demoPageCallbackData`, `demoAssetCallbackData`, `demoDurationCallbackData`,
-  `demoAnalysisCallbackData`, `analysisMoreCallbackData` (#360), `stakeCallbackData`),
+  `analysisMoreCallbackData` (#360), `stakeCallbackData`; `demoAnalysisCallbackData` lives in
+  `packages/shared/src/bot-navigation.ts` since #484, the backend's reminder draws it too),
   `ANALYSIS_MORE_PATTERN` and `analysisMoreDataOf` (#360), `STAKE_CALLBACK_PATTERN`, `stakeDataOf`
   and `newStakeNonce` (#127), `durationsScreen` (#382), `signalsScreen` and `launchScreen` (#320,
   in real mode), `cycleStakeAmounts`, `cycleStakeScreen` and `demoCycleScreen` (#476; the last two
@@ -57,9 +58,11 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 - `apps/bot/src/backend-client.ts` — `readPairs()`: a `GET trading/pairs` under the bearer with
   no body, parsed by `safeParsePairsCatalogResponse`, the whole answer returned; `readSignals()`
   (#320): a `GET trading/signals` the same way, parsed by `safeParseTradingSignalsResponse`;
-  `evaluateSignal(assetId, interval)`: a `POST trading/signal` with `{ assetId, interval }`,
-  parsed by `safeParseTradingSignalResponse`, the whole answer returned (a `fetch_failed` is an
-  answer, not an error).
+  `evaluateSignal(assetId, interval, analysis?)`: a `POST trading/signal` with
+  `{ assetId, interval }` and, from the analysis card only, `analysis: { telegramUserId,
+  durationSec }` (#484, [The reminder](#the-reminder-484)), parsed by
+  `safeParseTradingSignalResponse`, the whole answer returned (a `fetch_failed` is an answer, not
+  an error).
 - `apps/bot/src/texts.ts` — the `demo*` entries of `TEXTS`, `demoPairsScreen`,
   `demoDurationsScreen`, `demoSummary`, `DEMO_GROUP_LABELS`, `DEMO_DURATION_LABELS`,
   `groupButtonLabel`, `pairButtonLabel`, and the `demo*Button` labels; the `analysis*`,
@@ -101,11 +104,12 @@ demo:g                    («🧭 Выбрать пару вручную», «�
 demo:t:<group>:<page>     (a type, «◀️», «▶️») → the type's open pairs, page <page>
 demo:a:<assetId>          (a pair, «↩️ Длительность»)  → the check of the pair, then its durations
 demo:d:<assetId>:<sec>    (a duration)       → readDemoTrade, then the summary with «📊 Анализ»
-demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить анализ»)
+demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить анализ», the reminder's «📊 Новый анализ»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade ∥ POST /trading/access (the mode)
   bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 15 с…», no keyboard (under a photo —
          the analysis card, the session's summary card — sendMessage at once, #482)
-  bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
+  bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec),
+                               analysis: { telegramUserId, durationSec: sec } } (#484)
   bot  → on a signal: sendPhoto, the card (#482) — the bull or the bear, the caption with its
          block, in demo the amounts under it — then deleteMessage of «⏳»
   bot  → otherwise: editMessageText of «⏳» into the analysis screen with its keyboard: no
@@ -689,6 +693,19 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
 `logging.test.ts` reads these lines back from the pino sink, except the two `callbackData` fields
 and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the handlers' logger.
 
+## The reminder (#484)
+
+The analysis card names its user and duration in the signal request (`analysis`), and the backend
+records the decision as the user's last analysis ([signal.md](signal.md) → POST /trading/signal):
+a signal with its pair and duration, «сигнала нет» as none. The cycle's doors (`demo:l`, #509) send
+no `analysis`: they are not an analysis. Ten minutes after an analysis with a signal that led to no
+trade, no session and no other analysis, the backend's mailing engine sends a demo user one
+reminder, `analysisUnusedReminder`, with «📊 Новый анализ» — `demo:an:<assetId>:<sec>` of the same
+pair and duration, so its press is this screen's handler, a fresh analysis: the signal of the old
+card is stale. The bot holds no state for it; the rules, the window (60 min) and the outcomes are
+[mailing.md](mailing.md) → The analysis reminder. The request still makes three backend calls
+(`HANDLER_CALLS.demoAnalysis`): the record rides on the signal request.
+
 ## Boundaries
 
 - **#258** — `POST /trading/signal`, its cache and the decider ([signal.md](signal.md)).
@@ -704,5 +721,8 @@ and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the ha
   ([bot-session.md](bot-session.md)); the worker half is shipped (#287,
   [trading-session.md](trading-session.md)).
 - **#24** — the status card and its button ([bot-menu.md](bot-menu.md)).
+- **#484** — the analysis reminder is the backend's mailing ([mailing.md](mailing.md)); the bot
+  only sends `analysis` with the card's signal request and handles the button as any `demo:an`.
+  The chain before the first demo session is #202, apart from it.
 - No `/demo` command, and no check of the user at entry: a blocked or revoked user is refused by
   the backend when the intent is created (#127).

@@ -428,12 +428,21 @@ docker compose logs --no-log-prefix --since 1h backend | grep -F '"msg":"signal 
 ## POST /trading/signal (#258)
 
 The backend computes the signal for the bot's analysis screen (#126). The route sits behind the
-internal bearer (`internalBearerAuth`, as `GET /trading/pairs`) and touches no database: one
-public chart GET through the cached feed, on the process's one REST client.
+internal bearer (`internalBearerAuth`, as `GET /trading/pairs`): one public chart GET through the
+cached feed, on the process's one REST client, and, only for a request with `analysis` (#484), one
+write of the user's `users.last_analysis_*` after the decision.
 
-Request: `{ assetId, interval }` (`tradingSignalRequestSchema`): `assetId` a positive int4, the
-same spelling as `POST /trading/intents`; `interval` a key of the table. There is no user id: the
-chart is public and a decision is per pair. After the shape, the route looks the pair up in the
+Request: `{ assetId, interval, analysis? }` (`tradingSignalRequestSchema`): `assetId` a positive
+int4, the same spelling as `POST /trading/intents`; `interval` a key of the table. The decision
+is per pair: the chart is public. `analysis: { telegramUserId, durationSec }` is sent only by the
+bot's analysis card (#484, [mailing.md](mailing.md) → The analysis reminder): with a `decided`
+evaluation the route calls `setLastAnalysis` — a signal records the pair and `durationSec`, no
+signal records none — and answers as without the field; `fetch_failed` and the refusals below
+record nothing. The record is best-effort: its failure is a `warn` `last analysis not recorded`
+(name and code) and the decision is answered; an unknown `telegramUserId` writes nothing and is
+no error (`signal-routes.test.ts` R10–R17). The cycle's doors and the session start read the feed
+without it. Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
+(R3). After the shape, the route looks the pair up in the
 backend's pairs cache (the one `GET /trading/pairs` serves) for its `digits` (#379), before any
 chart GET; neither refusal below is journalled, no decision was made. Whether the pair is open or
 accepts a duration stays the caller's check: an analysis of a closed pair is allowed.
