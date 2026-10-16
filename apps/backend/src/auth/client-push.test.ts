@@ -162,16 +162,32 @@ describe('the mailing push', () => {
 });
 
 describe('the session notices (#464)', () => {
-  it('sends a trade as Telegram HTML without sound and without a keyboard', async () => {
+  it('sends a trade as Telegram HTML without sound and without a keyboard, answering its message_id', async () => {
     const push = createClientPush({ token: TOKEN });
-    const { calls } = captureApi(push);
-    await push.sendSessionTrade(TELEGRAM_USER_ID, telegramHtml`<pre>a &amp; b</pre>`);
+    const { calls, answers } = captureApi(push);
+    answers.set('sendMessage', () => ({ message_id: 4242 }));
+    expect(await push.sendSessionTrade(TELEGRAM_USER_ID, telegramHtml`<pre>a &amp; b</pre>`)).toBe(
+      4242,
+    );
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(sentPayload(calls, 'sendMessage')).toEqual({
       chat_id: '9007199254740993',
       text: '<pre>a &amp; b</pre>',
       parse_mode: 'HTML',
       disable_notification: true,
+    });
+  });
+
+  it('edits the cycle message (#551) as Telegram HTML without a keyboard', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    await push.editSessionTrade(TELEGRAM_USER_ID, 4242, telegramHtml`<pre>a &amp; b</pre>`);
+    expect(calls.map((call) => call.method)).toEqual(['editMessageText']);
+    expect(sentPayload(calls, 'editMessageText')).toEqual({
+      chat_id: '9007199254740993',
+      message_id: 4242,
+      text: '<pre>a &amp; b</pre>',
+      parse_mode: 'HTML',
     });
   });
 
