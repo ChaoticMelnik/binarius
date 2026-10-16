@@ -388,6 +388,10 @@ export const TIMING_CHAIN_HOLDS =
     TRADING_ACCESS_REFRESH_BUDGET_MS +
     CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <
     SHUTDOWN_PHASE1_BUDGET_MS &&
+  // a trade's step of a cycle (#551) may make two calls: the edit of the cycle message, and when
+  // Telegram answers it is gone, the new message - each after its own pace
+  2 * (1000 / SESSION_NOTICE_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS) <
+    SHUTDOWN_PHASE1_BUDGET_MS &&
   // the pre-checkout route reads only, inside phase 1 (the bot's chain holds it under Telegram's
   // 10 s, apps/bot/src/timing.ts)
   STARS_PRECHECKOUT_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
