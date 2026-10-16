@@ -69,11 +69,11 @@ export function depositErrorFor(failure: DepositWidgetSessionFailure): DepositEr
       switch (failure.reason) {
         case AccessTokenRefusal.UserBlocked:
           return DepositErrorCode.UserBlocked;
-        // the row changed between the resolution and the lock: the user logs in again
+        // the row changed between the resolution and the lock: the user logs in again;
+        // not_service is unreachable: the cashier never passes serviceOnly (#391)
         case AccessTokenRefusal.AccountRevoked:
         case AccessTokenRefusal.AccountPending:
         case AccessTokenRefusal.AccountNotFound:
-        // unreachable: the cashier never passes serviceOnly (#391)
         case AccessTokenRefusal.NotService:
           return DepositErrorCode.TokenUnavailable;
         // passing: the broker's rate limit on the exchange, a key rollout, or an exchange this
