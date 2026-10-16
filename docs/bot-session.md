@@ -1,4 +1,4 @@
-# The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476)
+# The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on a signal (#360; since #509 never on «сигнала нет»); a finished single trade's message
@@ -19,8 +19,8 @@ real mode ([trading-mode.md](trading-mode.md)) — of `DEFAULT_SESSION_TRADES` t
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
 orchestrator (#287): the bot only starts, reads and stops the session. Every settled trade then
-comes as its own new message without sound, and the finished session's summary with sound — both
-sent by the backend ([Trade messages and the summary](#trade-messages-and-the-summary-464)). When
+shows in a message without sound — a martingale cycle in one message, each step added to it by an
+edit (#551) — and the finished session's summary comes with sound — both sent by the backend ([Trade messages and the summary](#trade-messages-and-the-summary-464)). When
 the session is over, one picture of its trades follows the summary
 ([The summary card](#the-summary-card-318)), and
 «📤 Поделиться» under it sends that picture into a chat the user picks
@@ -69,12 +69,14 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   the two buttons `sessionRefreshButton`, `sessionStopButton` ([bot-texts.md](bot-texts.md)).
 - `packages/shared/src/session-texts.ts` (#464) — `createSessionTexts({ html, plain })`: the
   plural, the score, the result, the asset label, the stop-reason map (`SESSION_STOP_LINES`), the
-  stopped session's closing lines (`sessionClosingLines`), and the trade message and summary
-  builders. The bot's status message and the backend's notices print through it, each with its own
+  stopped session's closing lines (`sessionClosingLines`), and the cycle message
+  (`sessionCycleText`, #551) and summary builders. The bot's status message and the backend's notices print through it, each with its own
   catalog object, so the summary's lines are the status message's own
   (`apps/bot/src/session-summary-parity.test.ts` holds them equal).
 - `packages/shared/src/session-steps.ts` (#464) — `sessionTradeSteps(results, strategy)`: each
   settled trade's cycle and step.
+- `packages/shared/src/telegram-refusals.ts` (#551) — `editRefusal`, `deleteRefusal`: what a
+  refused edit or delete means, for the bot's screens and the backend's cycle message alike.
 - `apps/backend/src/trading/session-notices.ts`, `session-notice-messages.ts`, `session-view.ts`
   and `packages/db/src/session-notice-ops.ts` (#464) — the sender of the trade messages and the
   summary ([Trade messages and the summary](#trade-messages-and-the-summary-464)).
@@ -82,7 +84,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `.sessionShare`, `.sessionShared` (#321) and
   the four `SESSION_TRACK_*` constants ([Timing](#timing)).
 - `packages/shared/src/bot-text-format.ts` — `formatSignedUsd`, the session's result with its sign
-  (#337), next to `formatUsd`; the catalog's `profit` variable prints through it.
+  (#337), next to `formatUsd`; the catalog's `profit` and `outcome` (#539) variables print through
+  it.
 
 ## Sequence
 
@@ -205,7 +208,7 @@ row under a finished trade and «🔁 Ещё сессия» keep their messages 
 their session buttons in real carry the plain datum, their demo doors open the amount screen in
 place of the analysis or as a new message.
 
-| `deleteMessage` | Class (`deleteRefusal`, `screen.ts`) | Then | Log |
+| `deleteMessage` | Class (`deleteRefusal`, `telegram-refusals.ts`) | Then | Log |
 | --- | --- | --- | --- |
 | `true` | deleted | — | — |
 | 400 «message to delete not found» (the user or an earlier press deleted it) | `gone` | nothing | `info` `the launch screen was already gone` |
@@ -479,40 +482,65 @@ id or the symbol.
 
 ## Trade messages and the summary (#464)
 
-Every settled trade of a session comes as a new message, **without sound**
+Every settled trade of a session shows in a message **without sound**
 (`disable_notification: true`) and without buttons, in the trades' order; once the session is
 finished, one summary message comes **with sound**. The status message with «🔄 Обновить» and
 «⏹ Остановить сессию» stays as it was. The backend sends both, not the bot: a restart of either,
 and any number of «🔄 Обновить» presses, sends nothing twice and skips nothing but what the
 endings below lose.
 
+**One cycle, one message** (#551, the owner's decision 2026-10-16, after the reference bot). A
+cycle's first trade sends a new message with its block; each later trade of the same cycle edits
+that message (`editMessageText`), which then lists every step of the cycle, the newest at the
+bottom. The next cycle is a new message. Under the fixed strategy every trade is step 1 of its own
+cycle, so every trade is a new message of one block, as before #551.
+
 ```text
-⚡ Цикл 3 Шаг 1
-🟢 Ставка: $11.50 → +$22.08          (in a code block: Telegram shows it with «copy»)
-📊 Цена: 0.49803 → 0.49820
+⚡ Цикл 2 Шаг 1
+🔴 Ставка: $5.00 → -$5.00           (each block's two lines in a code block: Telegram shows it with «copy»)
+📊 Цена: 0.49810 → 0.49790
+
+🔄 Адаптивная ставка включена
+
+⚡ Цикл 2 Шаг 2
+⚪ Ставка: $11.50 → $0.00, ставка вернулась
+📊 Цена: 0.49790 → 0.49790
+
+⚡ Цикл 2 Шаг 3
+🟢 Ставка: $11.50 → +$10.58
+📊 Цена: 0.49790 → 0.49815
 ```
 
-- **The figures** (the owner's sample, manager's decision 3b): a win 🟢 `stake → +payout` (stake
-  plus profit), a loss 🔴 `stake → -loss` (the broker trade's profit, `-$5.00` for a full loss), a
-  tie ⚪ `stake → +stake, ставка вернулась`. The stake is the intent's amount, printed by
-  `formatStake` (every fraction digit, at least two); the figure after «→» is one SQL `numeric`
-  column of the claim (`case` on the profit's sign, Rule 2) printed by `formatSignedStake`; the
-  class is the same SQL `case` the view's counters use, so `0.001` is a win. The lines need not add
-  up to the summary's «💰 Результат»: a win's line is its payout, the result is the profits' sum.
+- **The figures** (#539): after «→» every outcome prints the broker trade's profit
+  (`broker_trades.profit`, one `numeric` column of the claim, Rule 2) by `formatSignedUsd`: a win
+  🟢 `+profit`, a loss 🔴 `-loss` (`-$5.00` for a full loss), a tie ⚪ `$0.00, ставка вернулась`
+  (a zero has no sign). The stake is the intent's amount, printed by `formatStake` (every fraction
+  digit, at least two). The class is the same SQL `case` on the profit's sign the view's counters
+  use, so a profit of `0.001` is a win and prints `+$0.001`. The trades' lines add up to the
+  summary's «💰 Результат», the SQL sum of the same profits.
 - **The prices** are `broker_trades.open_price` → `close_price`, `formatPrice` with the pair's
   `digits` from the backend's pairs catalog; with no catalog or the pair gone, as the double prints
   (`String()`).
-- **Cycle and step** follow the stake sizer's series (`readHistory` in
-  `apps/trading-worker/src/stake/size.ts`; `steps-parity.test.ts` holds them equal for every
-  history of up to six trades): under the fixed strategy every trade is step 1 of the next cycle;
-  under martingale the step is the losses in a row plus one, a win ends the series, a tie leaves it
-  as it is, and a cycle is a series. The sender passes the session's own strategy,
-  `sessionStakeParams(settings).strategy` (#450): settings v1 and settings that cannot be read count
-  as `fixed`.
-- **«🔄 Адаптивная ставка включена»** is the first line of a trade whose stake is above the
-  session's base stake (`decimalLessThan`, bigint): under martingale, every step after a loss.
-  Under the fixed strategy the stake is the base stake, so the line does not appear. No text says
+- **Cycle and step** (`sessionTradeSteps`). A cycle is the stake sizer's series (`readHistory` in
+  `apps/trading-worker/src/stake/size.ts`): only a win closes it. Under martingale the step is the
+  trade's number within its cycle (#551): a loss and a tie both move to the next step. The sizer's
+  own step counts the losses in a row plus one and bounds its raises (`maxSteps`,
+  [stake.md](stake.md)), so the message's step is the sizer's plus the ties since the last win
+  (`steps-parity.test.ts`, every history of up to six trades); with ties a message can show a step
+  above `maxSteps`. Under the fixed strategy every trade is step 1 of the next cycle. The sender
+  passes the session's own strategy, `sessionStakeParams(settings).strategy` (#450): settings v1
+  and settings that cannot be read count as `fixed`.
+- **«🔄 Адаптивная ставка включена»** stands once per cycle, alone, between the blocks of step 1
+  and step 2, whatever the stake of step 2 (after a tie it is the base stake). It is not repeated
+  above steps 3, 4…; under the fixed strategy there is no step 2, so no line. No text says
   «Мартингейл».
+- **The length.** Before an edit the sender measures the text as Telegram counts it after parsing
+  the entities (`plainTextOf`, as `telegramTextProblems`); a text past 4096
+  (`TELEGRAM_MESSAGE_LIMIT`) opens a new message of the same cycle from the trade that did not fit,
+  and the full one stays as it is. The defaults never get there — a session has at most 20 trades
+  of about 100 characters each — so only an override can; the assembled-messages registry
+  (`sessionTrade`, [bot-texts.md](bot-texts.md)) keeps one block with its adaptive line within the
+  limit, so the unit the sender never splits always fits.
 - **The summary** is the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then the
   status message's own closing lines (`sessionClosingLines`): «🏁 Сессия завершена: …» for a
   completed session, otherwise the stop line and «📊 Итог: …», then «💰 Результат» (the SQL sum,
@@ -542,43 +570,79 @@ endings below lose.
 settled intent with its broker trade), in creation order, were claimed for sending. A session's
 trades are strictly sequential (one non-terminal intent per account, Rule 7), so settlement order
 is creation order and a count is the whole state. `final_notice_sent_at` is the summary's mark.
-Every send is claimed by a CAS UPDATE before the Telegram call (`claimSessionTradeNotice`,
+Every trade is claimed by a CAS UPDATE before the Telegram call (`claimSessionTradeNotice`,
 `claimSessionFinalNotice` in `packages/db/src/session-notice-ops.ts`): at most once, the mailing
 engine's rule. The migration's backfill (0050) set every existing session's cursor at its settled
 trades and marked every stopped session, so nothing settled before the deploy is sent.
 
+**The cycle message** (#551, migration 0054): `cycle_message_id` is Telegram's `message_id` of
+the message the next step of the same cycle edits, `cycle_message_from` the index (from 0, in the
+cursor's order) of the first settled trade it shows; both or neither (CHECK), the id above 0, the
+index from 0. The claim returns them with every settled trade up to the claimed one, so the
+sender knows the claimed trade's cycle and the blocks to show. One writer:
+`recordSessionCycleMessage`, a CAS that holds only while the cursor stands right after the claimed
+trade and no summary was sent, called only after Telegram answered a new message with its id. An
+edit never changes them. For the claimed trade the sender:
+
+1. with no cycle message, or one that shows another cycle: sends a new message with the cycle's
+   trades so far — its own block alone, unless the session was met mid-cycle (a deploy, a new
+   message whose outcome was unknown) — and records it from the cycle's first trade;
+2. otherwise: renders the trades from `cycle_message_from` to the claimed one; past the length
+   limit it sends a new message from the claimed trade and records it from there; else it edits the
+   cycle message.
+
+Since the state is written only after a send went through, and the claim before every call, a
+step's block is never sent twice by a retry; the next step's edit shows every block of its
+message again, so a block lost in the middle of a cycle comes back with the next step.
+
 ### Every way a send ends
 
-| Ending | Cursor / mark | Then |
+| Ending | Cursor / cycle message | Then |
 |---|---|---|
-| sent | stays claimed | the session's next trade in the same tick |
-| the user blocked the bot (read flag) | claimed, no call | the next trade |
-| 403 | stays claimed; the user is marked unreachable | later trades claimed without a call |
-| 429 | put back (`releaseSessionTradeNotice`; the summary's by `releaseSessionFinalNotice`) | the whole sender pauses for `retry_after`; the same send first after it |
-| another 4xx | put back, an attempt counted in memory | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped` |
-| 5xx, a timeout, the transport | stays claimed | `warn` … `outcome unknown`; never sent again |
-| the process dies between the claim and the send | stays claimed | lost, at most one per session per crash |
+| a new message sent | stays claimed; the cycle message = its id and `from`, one CAS | the session's next trade in the same tick |
+| an edit sent | stays claimed; unchanged | the next trade |
+| an edit answered «message is not modified» | as sent | the next trade |
+| an edit answered «message to edit not found», «message can't be edited» or «there is no text in the message to edit» (`editRefusal` → gone: the user deleted it, or it is too old to edit) | stays claimed; after one more pace a new message with the gone message's blocks (`from` to the claimed trade), recorded | the next trade; `warn` … `edited anew` |
+| the user blocked the bot (read flag) | claimed, no call; unchanged | the next trade |
+| 403 (send or edit) | stays claimed; the user is marked unreachable | later trades claimed without a call |
+| 429 (send or edit) | put back (`releaseSessionTradeNotice`; the summary's by `releaseSessionFinalNotice`); unchanged | the whole sender pauses for `retry_after`; the same trade first after it |
+| another 4xx (send or edit) | put back, an attempt counted in memory; unchanged | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped`; the next step's edit still shows the block |
+| 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
+| 5xx, a timeout, the transport — an edit | stays claimed; unchanged | `warn` … `edit outcome unknown`; the next step's edit shows the block; a cycle's last step is lost |
+| a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
+| the block does not fit (4096) | a new message from this trade; recorded from it | `info` … `split` |
+| the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
+| the record refused (the cursor moved: another sender) | the other sender's record stands | at most repeated blocks, never a lost step |
 | the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; the session waits for the next tick |
-| `stop()` mid-tick | the send in flight ends or times out | nothing is claimed after it |
+| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it |
 
-The summary's 429 or refusal takes its mark back only while the card (#318) has not been claimed
-on it; the card waits for the mark, so in practice always.
+No ending leaves a session at the head of the queue without moving: the claim moves the cursor,
+and the order is the sessions' `created_at`. The summary's 429 or refusal takes its mark back only
+while the card (#318) has not been claimed on it; the card waits for the mark, so in practice
+always.
 
 ### Rate and timing
 
 `SESSION_NOTICE_SEND_PER_SECOND` = 9, its own pacer; with the mailings' 20 it stays under
-Telegram's 30 a second for one bot (`TIMING_CHAIN_HOLDS`). `SESSION_NOTICE_SCAN` = 200 pending
-sessions a tick, oldest first (`trading_sessions_notice_pending_idx`). `stop()` waits for the send
-in flight: the pace's gap, a summary's balance refresh and its send, under phase 1's budget.
+Telegram's 30 a second for one bot (`TIMING_CHAIN_HOLDS`). An edit takes a token of the same
+pacer as a send: Telegram counts it as a call. `SESSION_NOTICE_SCAN` = 200 pending sessions a
+tick, oldest first (`trading_sessions_notice_pending_idx`). `stop()` waits for the call in flight:
+the pace's gap, a summary's balance refresh and its send; or a step's edit, and when Telegram
+answers the cycle message is gone, a second pace and the new message (#551, `2 × (1000 / 9 +
+CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)`) — each under phase 1's budget.
 
 ### Logs (backend)
 
 With `sessionId` (and `claimed` for a trade), the error's name and code and the Telegram method and
-code; no Telegram id, no text.
+code; no Telegram id, no message id, no text. The trade's lines are the same for a send and an
+edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
 
-- `session trade notice refused`, `… dropped`, `… outcome unknown`, `… refused: the user is
-  unreachable` (`warn`); `session summary refused`, `… dropped`, `… outcome unknown`, `… refused:
-  the user is unreachable` (`warn`)
+- `session trade notice refused`, `… dropped`, `… outcome unknown`, `… edit outcome unknown`
+  (#551), `… refused: the user is unreachable` (`warn`); `session summary refused`, `… dropped`,
+  `… outcome unknown`, `… refused: the user is unreachable` (`warn`)
+- `session trade notice edited anew: the cycle message is gone`, `session trade notice not
+  recorded: no message id` (`warn`, #551); `session trade notice split: the cycle message is full`
+  (`info`, with `from`, #551)
 - `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
 - `session trade notice not built`, `session summary not built`, `session notices failed for a
   session`, `session notice tick failed` (`error`)
@@ -624,7 +688,7 @@ Telegram's own forwarding.
   first three (#509). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321).
   «📡 К сигналам» edits the pressed message; under the card Telegram refuses that with «there is
-  no text in the message to edit», `editRefusal` (`screen.ts`) reads it as gone, and the screen
+  no text in the message to edit», `editRefusal` (`telegram-refusals.ts`) reads it as gone, and the screen
   comes as a new message under the card, with one `warn` `the demo screen was not edited, sending
   it anew` per press. «📊 Новый анализ» tries no edit (#482): the press carries the photo, so
   «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the
@@ -740,17 +804,19 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     409, so no new card is sent.
 25. **Two «📤 Поделиться» buttons** (#321): the URL button on `/invite` (`inviteShareButton`) and the
     one under the card (`sessionShareButton`); different screens, separate keys.
-26. **At most once for the trade messages and the summary** (#464, manager's decision 2a): an
-    unknown Telegram outcome or a crash between the claim and the send loses that one message; no
-    duplicate is possible. Falsifiable: `session trade notice outcome unknown` above 0.1 % of
-    sends.
+26. **At most once for each trade's call and the summary** (#464, manager's decision 2a; #551): an
+    unknown Telegram outcome or a crash between the claim and the call is never retried for that
+    trade. In the middle of a cycle the next step's edit shows the lost block again; a cycle's last
+    step, and a block that went into a new message after a split whose outcome was unknown, stay
+    lost (the next step splits again and starts with its own block). A retry never doubles a
+    message; a new message whose outcome was unknown can repeat blocks (risk 35). Falsifiable:
+    `session trade notice outcome unknown` and `… edit outcome unknown` above 0.1 % of calls.
 27. **The notices' rate** (#464): at most 9 a second (540 a minute) for every session together;
     above it the messages lag behind the trades, never drop. The bot's own replies and edits are
     outside that budget, as before.
 28. **Latency** (#464): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
     after its settle.
-29. **The trade lines do not add up to «💰 Результат»** for wins and ties (#464): the owner's
-    sample prints the payout and the returned stake.
+29. Closed by #539: the trade lines print the profit and add up to «💰 Результат».
 30. **A stopped session stuck on manual review** stays in the sender's scan until settled or
     rejected (#464): one cheap row each.
 31. **No card** when the backend has not sent the summary by the tracker's deadline (#464, about
@@ -765,6 +831,19 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 34. **A signal gone right after the start** (#509): the start saw a signal, the orchestrator's
     first attempt a few seconds later sees «сигнала нет»; the session waits up to the no-signal
     limit and stops with no trade. That is the limit, by the owner's decision.
+35. **Repeated blocks** (#551): a new message whose outcome was unknown (the next step sends the
+    cycle anew), and a second sender in a deploy's window (its record refused, its message sent),
+    can show a cycle's blocks twice, within one cycle; no step is lost by it. Falsifiable: two
+    messages of one cycle with common blocks more often than `session trade notice outcome
+    unknown`.
+36. **Sessions mid-cycle at the deploy of #551** have no cycle message: their next step sends a new
+    message with the cycle so far, repeating the blocks sent one per message before the deploy,
+    once. No backfill.
+37. **A step above `maxSteps`** (#551, the owner's answer 2026-10-16): with ties a message shows,
+    say, «Шаг 5» under a limit of 4; the limit bounds the raises, and its stop text «лимит повышений
+    ставки» says so ([stake.md](stake.md)).
+38. **Edits share the notices' rate** (#551): an edit is one call of the 9 a second; long series of
+    edits make the messages lag behind the trades, never drop (risk 27).
 
 ## Running it locally
 

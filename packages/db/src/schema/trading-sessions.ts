@@ -57,7 +57,7 @@ export const tradingSessions = pgTable(
     // the summary message's at-most-once mark (#464): set by claimSessionFinalNotice's one CAS,
     // never cleared; the card of #318 waits for it
     finalNoticeSentAt: timestamp('final_notice_sent_at', { withTimezone: true }),
-    // The session's live cycle message (#551, docs/bot-session.md → The cycle message): Telegram's
+    // The session's live cycle message (#551, docs/bot-session.md → The state): Telegram's
     // message_id of the message the next step of the same cycle edits, and the index (from 0, in
     // the cursor's order) of the first settled trade it shows. Both NULL until a new message of
     // the session was sent; written only by recordSessionCycleMessage after a send went through,

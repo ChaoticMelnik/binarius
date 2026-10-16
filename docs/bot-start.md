@@ -37,8 +37,8 @@ routes, the confirmation and the starter pack are described in
   screens behind the demo button, their check on a fresh catalog and the analysis screen,
   [bot-demo.md](bot-demo.md)), `demo-trade.ts` and `intent-tracker.ts` (the stake press, the
   refresh button and the tracker that follows a demo trade's status, [bot-demo-trade.md](bot-demo-trade.md)) and
-  `screen.ts` (how a refused edit of a screen is classified, shared by `/settings`, the demo and
-  the demo trade).
+  `packages/shared/src/telegram-refusals.ts` (how a refused edit of a screen is classified, shared
+  by `/settings`, the demo, the demo trade and the backend's session cycle message, #551).
 - `packages/shared/src/bot-texts.ts` — the catalog of every client bot text, the bot's and the
   backend push's alike ([bot-texts.md](bot-texts.md)); `bot-text-template.ts` beside it renders
   and validates them.
@@ -494,7 +494,7 @@ failure is the unavailable text as a new message with the menu, the keyboard unt
 pressing again is the retry.
 
 Unlike a refused send, a refused edit may mean the message already shows the result, so the
-refusal is classified (`editRefusal` in `screen.ts`), by `error_code` 400 and the lead phrase of
+refusal is classified (`editRefusal` in `telegram-refusals.ts`), by `error_code` 400 and the lead phrase of
 Telegram's `description` as the Bot API server words it (telegram-bot-api `Client.cpp`); the
 description is compared, never logged.
 

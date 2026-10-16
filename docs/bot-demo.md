@@ -51,8 +51,9 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `MOMENTUM_WORDS`, `VOLATILITY_WORDS` (maps to catalog keys, [bot-texts.md](bot-texts.md)),
   `formatRsi`, `formatAtrPct`; prices print through `formatPrice` of
   `packages/shared/src/bot-text-format.ts` (moved there by #464 for the session's trade messages).
-- `apps/bot/src/screen.ts` — `editRefusal`, the classification of a refused edit, shared with
-  `/settings`.
+- `packages/shared/src/telegram-refusals.ts` (moved from `apps/bot/src/screen.ts` by #551) —
+  `editRefusal`, the classification of a refused edit, shared with `/settings` and the backend's
+  session cycle message.
 - `apps/bot/src/backend-client.ts` — `readPairs()`: a `GET trading/pairs` under the bearer with
   no body, parsed by `safeParsePairsCatalogResponse`, the whole answer returned; `readSignals()`
   (#320): a `GET trading/signals` the same way, parsed by `safeParseTradingSignalsResponse`;
@@ -607,7 +608,7 @@ failed expansion changes nothing on screen.
 ## Edits
 
 `editOrReply` edits the message the pressed button is under, and classifies every refusal
-(`screen.ts`):
+(`telegram-refusals.ts`):
 
 - «message is not modified» (the same screen pressed twice) — done; `info`
   `the demo screen already shows this`.
