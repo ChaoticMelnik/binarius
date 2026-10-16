@@ -3177,3 +3177,37 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 4. **Architect validation checklist: каждое смещение во времени называет точку отсчёта, одну для всех решений плана** — **внедрено в #522: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
 5. **Задача из нескольких PR: непоследние части — `Refs #<N>`, Done и Phase 5 — после последней части, сценарий следующей части у implementer'а, памятка о размере, правка глобального `~/.claude/CLAUDE.md`** — **вынесено в #523** (решение владельца 2026-10-15: Codex на docs-PR #522 трижды подряд находил Major, итерации исправлений исчерпаны)
 6. **Remaining Minor** — **вынесено в #518 (#512), #521 (#520)**
+
+---
+
+## #391 — Служебные аккаунты брокера: добавление из админки, автообновление токена, минимум 3 с алертом (2026-10-16)
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Codex готов, лимита нет; `.claude/CLAUDE.md` = `origin/main`; лимит Fable 10.10 в окне 7 дней, владелец сообщил о сбросе. Владелец добавил #391 в волну #392/#404/#405 (#404 зависит от него). План 09.10 на `6f1e1b7` устарел на 221 коммит → Plan Update круга 0. |
+| Architect | Plan Update r0 | Opus. Одна новая развилка (real-режим теперь в `main`): владелец — служебный аккаунт торгует в обоих режимах. Сверка: миграция 0053, переиспользование `notifyStaff`, четвёртое исчерпывающее место `not_service` (`depositErrorFor`, найдено grep'ом — codegraph дал 0 callers), Rule 26, два web-теста навигации. Контракт #404 сохранён. |
+| Implementer | clarify + реализация | Вопрос: проверка процедуры docs на стенде против запрета tech-lead'а запускать сервисы → владелец: стенд после PR, до ревью. PR #554, 2 908 строк без snapshot, своя БД `binarius_impl_391`, проверка каждого коммита, `pnpm check` зелёный, 51/51 мутаций. Процедура пройдена на локальном стенде; доставка алерта в реальный чат не проверена (id сотрудника — заглушка). |
+| Reviewer | круг 1 | Чисто, 5 Minor; Codex `task-mvaroz4b-eyitru` на `774c58c` (2 Minor). Владелец: m1–m4 исправить до мержа. |
+| Architect / Implementer | Plan Update r1 / исправления | Классы: allowlist return с `i` (единственный), V1 без шпиона `decrypt` + новый V6, шесть мест про сроки в docs. 2 938 строк, 55/55 мутаций. |
+| Reviewer | круг 2 | Чисто, 3 новых Minor (m6–m8); Codex `task-mvatt1te-bv78s8` на `4b07ad1` (major → Minor m6: текст docs сильнее кода, код по плану). |
+| Tech Lead | мерж | Вопрос, «да», `mergeable` перепроверен → MERGED 10:42:10Z `--rebase --delete-branch`; Done; m5–m8 → #556; миграция 0053 на общую тестовую базу после guard'а (implementer #392 гонял vitest). Модели: все фазы `claude-opus-5-5`, 3d — `claude-sonnet-5-5`. |
+
+### Review iterations: 2 (без Blocker/Major; круг 2 — исправление Minor по решению владельца)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m2: флаг `i` на allowlist return-пути | Minor | other | regex собран из `UUID_PATTERN.source.slice` с общим флагом | Implementer |
+| m3: V1 слабее текста docs | Minor | unverified-claim | docs цитировали тест, который не пинит заявленное | Implementer |
+| m4/m6: сроки и алерт в docs сильнее кода | Minor | unverified-claim | текст docs не сверен с поведением keeper'а | Architect (план) / Implementer |
+| Запрет сервисов в спавне против проверки плана на стенде | Minor | other | шаблон спавна tech-lead'а для параллельного прогона | Tech Lead |
+| Остановка backend: «intake did not stop within the budget» (до #391) | — | other | вне задачи | — |
+
+### Process improvement proposals
+
+1. Спавн при параллельной работе не запрещает сервисы целиком; если план проверяет процедуру на стенде, промпт называет где и когда — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+2. Остановка backend укладывается в бюджет — **вынесено в #557**
+3. Оставшиеся Minor — **вынесено в #556**
