@@ -56,13 +56,37 @@ describe('POST /users/referral contract', () => {
   });
 
   it('accepts an active user with a code and a blocked one without', () => {
+    const stats = { connected: 0, tokensEarned: '0' };
     const ok = (user: unknown) => userReferralResponseSchema.safeParse({ user }).success;
-    expect(ok({ status: UserStatus.Active, code: 'AbC123xY', invited: 0 })).toBe(true);
-    expect(ok({ status: UserStatus.Blocked, code: null, invited: 3 })).toBe(true);
-    expect(ok({ status: UserStatus.Active, code: 'short', invited: 0 })).toBe(false);
-    expect(ok({ status: UserStatus.Active, code: null, invited: 0 })).toBe(false);
-    expect(ok({ status: UserStatus.Blocked, code: 'AbC123xY', invited: 0 })).toBe(false);
-    expect(ok({ status: UserStatus.Active, code: 'AbC123xY', invited: -1 })).toBe(false);
-    expect(ok({ status: UserStatus.Active, code: 'AbC123xY', invited: 1.5 })).toBe(false);
+    expect(ok({ status: UserStatus.Active, code: 'AbC123xY', invited: 0, ...stats })).toBe(true);
+    expect(ok({ status: UserStatus.Blocked, code: null, invited: 3, ...stats })).toBe(true);
+    expect(ok({ status: UserStatus.Active, code: 'short', invited: 0, ...stats })).toBe(false);
+    expect(ok({ status: UserStatus.Active, code: null, invited: 0, ...stats })).toBe(false);
+    expect(ok({ status: UserStatus.Blocked, code: 'AbC123xY', invited: 0, ...stats })).toBe(false);
+    expect(ok({ status: UserStatus.Active, code: 'AbC123xY', invited: -1, ...stats })).toBe(false);
+    expect(ok({ status: UserStatus.Active, code: 'AbC123xY', invited: 1.5, ...stats })).toBe(false);
   });
+
+  // #116: the two fields of the reward, in both variants
+  it.each([UserStatus.Active, UserStatus.Blocked])(
+    'bounds connected and tokensEarned (%s)',
+    (status) => {
+      const base = {
+        status,
+        code: status === UserStatus.Active ? 'AbC123xY' : null,
+        invited: 2,
+        connected: 1,
+        tokensEarned: '50',
+      };
+      const ok = (patch: object) =>
+        userReferralResponseSchema.safeParse({ user: { ...base, ...patch } }).success;
+      expect(ok({})).toBe(true);
+      expect(ok({ connected: -1 })).toBe(false);
+      expect(ok({ connected: 0.5 })).toBe(false);
+      expect(ok({ tokensEarned: 50 })).toBe(false);
+      expect(ok({ tokensEarned: '-50' })).toBe(false);
+      expect(ok({ connected: undefined })).toBe(false);
+      expect(ok({ tokensEarned: undefined })).toBe(false);
+    },
+  );
 });

@@ -1,9 +1,15 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { REFERRAL_CODE_PATTERN, UserStatus } from '@binarius/shared';
+import { BrokerAccountStatus, REFERRAL_CODE_PATTERN, UserStatus } from '@binarius/shared';
 import { readUserReferral, randomReferralCode, REFERRAL_CODE_ATTEMPTS } from './referral-ops';
-import { referralCodes, referrals } from './schema/index';
-import { createTempDatabase, seedUser, type TempDatabase } from './testing';
+import { referralCodes, referrals, tokenLedger } from './schema/index';
+import {
+  bonusRuleRef,
+  createTempDatabase,
+  seedBrokerAccount,
+  seedUser,
+  type TempDatabase,
+} from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -36,7 +42,13 @@ describe('readUserReferral (#115)', () => {
     const user = await seedUser(tmp.db);
     const first = await read(user.telegramUserId);
     expect(first?.code).toMatch(REFERRAL_CODE_PATTERN);
-    expect(first).toEqual({ status: UserStatus.Active, code: first?.code, invited: 0 });
+    expect(first).toEqual({
+      status: UserStatus.Active,
+      code: first?.code,
+      invited: 0,
+      connected: 0,
+      tokensEarned: '0',
+    });
     const second = await read(user.telegramUserId);
     expect(second?.code).toBe(first?.code);
     expect(await codesOf(user.userId)).toEqual([{ code: first?.code }]);
@@ -54,6 +66,8 @@ describe('readUserReferral (#115)', () => {
       status: UserStatus.Blocked,
       code: null,
       invited: 0,
+      connected: 0,
+      tokensEarned: '0',
     });
     expect(await codesOf(user.userId)).toEqual([]);
   });
@@ -107,6 +121,83 @@ describe('readUserReferral (#115)', () => {
     const [a, b] = await Promise.all([read(user.telegramUserId), read(user.telegramUserId)]);
     expect(a?.code).toBe(b?.code);
     expect(await codesOf(user.userId)).toHaveLength(1);
+  });
+});
+
+// #116: what the rewards made of the invitations
+describe('readUserReferral: connected and tokensEarned', () => {
+  const invite = async (inviterUserId: string) => {
+    const invitee = await seedUser(tmp.db);
+    const [row] = await tmp.db
+      .insert(referrals)
+      .values({ inviteeUserId: invitee.userId, inviterUserId })
+      .returning({ id: referrals.id });
+    return { ...invitee, referralId: row!.id };
+  };
+  const account = (userId: string, status: BrokerAccountStatus, isPartnerClient: boolean) =>
+    seedBrokerAccount(tmp.db, userId, { status, isPartnerClient });
+  const reward = async (userId: string, referralId: string, tokens: bigint) =>
+    tmp.db.insert(tokenLedger).values({
+      userId,
+      kind: 'bonus',
+      balanceDelta: tokens,
+      referralId,
+      ...(await bonusRuleRef(tmp.db, 'referral_reward')),
+    });
+
+  it('R1 counts invitees with a confirmed partner account, each once', async () => {
+    const inviter = await seedUser(tmp.db);
+    const active = await invite(inviter.userId);
+    await account(active.userId, BrokerAccountStatus.Active, true);
+    await account(active.userId, BrokerAccountStatus.Active, true);
+    const revoked = await invite(inviter.userId);
+    await account(revoked.userId, BrokerAccountStatus.Revoked, true);
+    const pending = await invite(inviter.userId);
+    await account(pending.userId, BrokerAccountStatus.Pending, true);
+    const notPartner = await invite(inviter.userId);
+    await account(notPartner.userId, BrokerAccountStatus.Active, false);
+    await invite(inviter.userId);
+    const other = await seedUser(tmp.db);
+    const theirs = await invite(other.userId);
+    await account(theirs.userId, BrokerAccountStatus.Active, true);
+
+    expect(await read(inviter.telegramUserId)).toMatchObject({ invited: 5, connected: 2 });
+    expect(await read(other.telegramUserId)).toMatchObject({ invited: 1, connected: 1 });
+  });
+
+  it('R2 sums only this inviter’s rewards, not its starter pack or another inviter’s', async () => {
+    const inviter = await seedUser(tmp.db);
+    const first = await invite(inviter.userId);
+    const second = await invite(inviter.userId);
+    await reward(inviter.userId, first.referralId, 50n);
+    await reward(inviter.userId, second.referralId, 70n);
+    await tmp.db.insert(tokenLedger).values({
+      userId: inviter.userId,
+      kind: 'bonus',
+      balanceDelta: 100n,
+      brokerAccountId: await account(inviter.userId, BrokerAccountStatus.Active, true),
+      ...(await bonusRuleRef(tmp.db, 'link_bonus')),
+    });
+    const other = await seedUser(tmp.db);
+    const theirs = await invite(other.userId);
+    await reward(other.userId, theirs.referralId, 50n);
+
+    expect((await read(inviter.telegramUserId))?.tokensEarned).toBe('120');
+    expect((await read(other.telegramUserId))?.tokensEarned).toBe('50');
+  });
+
+  it('R3 a blocked inviter’s view carries both', async () => {
+    const inviter = await seedUser(tmp.db, { status: UserStatus.Blocked });
+    const invitee = await invite(inviter.userId);
+    await account(invitee.userId, BrokerAccountStatus.Active, true);
+    await reward(inviter.userId, invitee.referralId, 50n);
+    expect(await read(inviter.telegramUserId)).toEqual({
+      status: UserStatus.Blocked,
+      code: null,
+      invited: 1,
+      connected: 1,
+      tokensEarned: '50',
+    });
   });
 });
 

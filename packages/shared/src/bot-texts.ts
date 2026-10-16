@@ -582,12 +582,14 @@ export const BOT_TEXT_CATALOG = {
   // ---- /invite (#115, docs/referrals.md) ----------------------------------------------------
   inviteScreen: html(
     g.Invite,
-    '/invite, кнопка «Пригласить друга»: персональная ссылка и число приглашённых.',
+    '/invite, кнопка «Пригласить друга»: персональная ссылка, число приглашённых, сколько из них подключили партнёрский аккаунт Binodex и сколько токенов получено за приглашения.',
     `👥 <b>Пригласи друга</b>
 Твоя ссылка:
 {referralLink}
-Приглашено: {count}`,
-    { vars: ['referralLink', 'count'] },
+Приглашено: {count}
+Подключили аккаунт: {connected}
+Получено токенов: {earnedTokens}`,
+    { vars: ['referralLink', 'count', 'connected', 'earnedTokens'] },
   ),
   inviteNeedsStart: html(
     g.Invite,

@@ -1,8 +1,15 @@
 import { randomInt } from 'node:crypto';
-import { count, eq } from 'drizzle-orm';
-import { REFERRAL_CODE_LENGTH, UserStatus, type UserReferralView } from '@binarius/shared';
+import { count, eq, sql } from 'drizzle-orm';
+import {
+  BrokerAccountStatus,
+  REFERRAL_CODE_LENGTH,
+  UserStatus,
+  type UserReferralView,
+} from '@binarius/shared';
 import type { Db } from './client';
+import { brokerAccounts } from './schema/broker-accounts';
 import { referralCodes, referrals } from './schema/referrals';
+import { tokenLedger } from './schema/token-ledger';
 import { users } from './schema/users';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -16,7 +23,9 @@ export const randomReferralCode = (): string =>
 // The /invite screen's read (#115, docs/referrals.md → The route). It creates the user's code on
 // first use, so it is a write too, but an idempotent one: a repeat finds the code the first made.
 // Each step is one autocommit statement; no lock beyond the FK's KEY SHARE on the users row. A
-// blocked user gets no new code. No users row → undefined.
+// blocked user gets no new code. No users row → undefined. `connected` counts invitees whose
+// partner account was ever confirmed (a revoked one included); `tokensEarned` sums the rewards
+// paid (#116), so the two differ while the reward rule is off.
 export async function readUserReferral(
   db: Db,
   telegramUserId: bigint,
@@ -28,18 +37,34 @@ export async function readUserReferral(
     .where(eq(users.telegramUserId, telegramUserId));
   if (user === undefined) return undefined;
 
-  const countInvited = async (): Promise<number> => {
-    const [row] = await db
-      .select({ count: count() })
+  const stats = async () => {
+    const [invited] = await db
+      .select({
+        invited: count(),
+        connected: sql<number>`count(*) filter (where exists (
+          select 1 from ${brokerAccounts}
+          where ${brokerAccounts.userId} = ${referrals.inviteeUserId}
+            and ${brokerAccounts.isPartnerClient}
+            and ${brokerAccounts.status} <> ${BrokerAccountStatus.Pending}
+        ))`.mapWith(Number),
+      })
       .from(referrals)
       .where(eq(referrals.inviterUserId, user.id));
-    return row?.count ?? 0;
+    const [earned] = await db
+      .select({ tokens: sql<string>`coalesce(sum(${tokenLedger.balanceDelta}), 0)::text` })
+      .from(tokenLedger)
+      .where(sql`${tokenLedger.userId} = ${user.id} and ${tokenLedger.referralId} is not null`);
+    return {
+      invited: invited?.invited ?? 0,
+      connected: invited?.connected ?? 0,
+      tokensEarned: earned?.tokens ?? '0',
+    };
   };
   if (user.status === UserStatus.Blocked) {
-    return { status: user.status, code: null, invited: await countInvited() };
+    return { status: user.status, code: null, ...(await stats()) };
   }
   const code = await codeOf(db, user.id, generate);
-  return { status: user.status, code, invited: await countInvited() };
+  return { status: user.status, code, ...(await stats()) };
 }
 
 async function codeOf(db: Db, userId: string, generate: () => string): Promise<string> {

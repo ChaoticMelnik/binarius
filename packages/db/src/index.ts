@@ -17,6 +17,7 @@ export * from './balance-snapshot-ops';
 export * from './session-lease-ops';
 export * from './user-ops';
 export * from './referral-ops';
+export * from './referral-reward-ops';
 export * from './delivery-ops';
 export * from './mailing-scenarios';
 export * from './mailing-ops';

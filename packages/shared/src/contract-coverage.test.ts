@@ -498,11 +498,23 @@ describe('contract coverage (issue #6)', () => {
     >().toEqualTypeOf<TradingSessionView>();
   });
 
-  it('Referral screen (issue #115)', () => {
+  it('Referral screen (issues #115, #116)', () => {
     expectTypeOf<UserReferralResponse>().toEqualTypeOf<{
       user:
-        | { status: 'active'; code: string; invited: number }
-        | { status: 'blocked'; code: null; invited: number };
+        | {
+            status: 'active';
+            code: string;
+            invited: number;
+            connected: number;
+            tokensEarned: string;
+          }
+        | {
+            status: 'blocked';
+            code: null;
+            invited: number;
+            connected: number;
+            tokensEarned: string;
+          };
     }>();
   });
 

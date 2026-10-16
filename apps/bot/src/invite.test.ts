@@ -62,10 +62,17 @@ describe('/invite', () => {
     expect(api.calls.map((call) => call.method)).toEqual(['sendMessage']);
     const message = sentPayload(api.calls, 'sendMessage');
     expect(message?.text).toBe(
-      TEXTS.inviteScreen({ referralLink: LINK, count: String(REFERRAL_VIEW.invited) }).value,
+      TEXTS.inviteScreen({
+        referralLink: LINK,
+        count: String(REFERRAL_VIEW.invited),
+        connected: String(REFERRAL_VIEW.connected),
+        earnedTokens: REFERRAL_VIEW.tokensEarned,
+      }).value,
     );
     expect(message?.text).toContain(LINK);
     expect(message?.text).toContain('Приглашено: 2');
+    expect(message?.text).toContain('Подключили аккаунт: 1');
+    expect(message?.text).toContain('Получено токенов: 1\u00a0050');
     const [shareRow, menuRow, ...rest] = inlineRows(message) as { text: string; url?: string }[][];
     expect(rest).toEqual([]);
     expect(menuRow).toEqual(MENU_ROW);
@@ -84,7 +91,13 @@ describe('/invite', () => {
 
   it('I2 sends a blocked user to support', async () => {
     const { bot, api } = setup(() =>
-      Promise.resolve({ status: UserStatus.Blocked, code: null, invited: 3 }),
+      Promise.resolve({
+        status: UserStatus.Blocked,
+        code: null,
+        invited: 3,
+        connected: 1,
+        tokensEarned: '50',
+      }),
     );
     await bot.handleUpdate(textUpdate('/invite'));
     const message = sentPayload(api.calls, 'sendMessage');

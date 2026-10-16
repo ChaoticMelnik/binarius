@@ -47,7 +47,11 @@ export async function showInvite(
     return;
   }
   const referralLink = referralLinkOf(ctx.me.username, user.code);
-  await replyHtml(ctx, TEXTS.inviteScreen({ referralLink, count: String(user.invited) }), {
-    reply_markup: inviteKeyboard(referralLink),
+  const screen = TEXTS.inviteScreen({
+    referralLink,
+    count: String(user.invited),
+    connected: String(user.connected),
+    earnedTokens: user.tokensEarned,
   });
+  await replyHtml(ctx, screen, { reply_markup: inviteKeyboard(referralLink) });
 }

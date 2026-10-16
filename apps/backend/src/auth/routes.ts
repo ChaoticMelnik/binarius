@@ -9,6 +9,7 @@ import {
   LinkBonusSkipReason,
   OAUTH_CALLBACK_BODY_LIMIT_BYTES,
   OAuthErrorCode,
+  ReferralRewardSkipReason,
   safeParseConfirmLoginRequest,
   safeParseEmailLoginRequest,
   safeParseEmailSendCodeRequest,
@@ -25,6 +26,7 @@ import {
   type BrokerAccountRow,
   type Db,
   type LinkBonusGrant,
+  type ReferralRewardResult,
   type TokenCipher,
 } from '@binarius/db';
 import {
@@ -136,6 +138,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
         });
       }
       warnIfNoActiveRule(request.log, confirmed.account, confirmed.grant);
+      logReferralReward(request.log, confirmed.referral);
       return reply.send({
         account: toBrokerAccountView(confirmed.account),
         grant: toLinkBonusGrantView(confirmed.grant),
@@ -241,8 +244,11 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
                 : OAuthErrorCode.BrokerAccountTaken,
           });
         }
-        if (linked.grant === null) throw new Error('an activating link returned no grant');
+        if (linked.grant === null || linked.referral === null) {
+          throw new Error('an activating link returned no grant');
+        }
         warnIfNoActiveRule(request.log, linked.account, linked.grant);
+        logReferralReward(request.log, linked.referral);
         return reply.send({
           account: toBrokerAccountView(linked.account),
           grant: toLinkBonusGrantView(linked.grant),
@@ -406,4 +412,30 @@ function warnIfNoActiveRule(
 ): void {
   if (grant.granted || grant.reason !== LinkBonusSkipReason.NoActiveRule) return;
   log.warn({ userId: account.userId, brokerAccountId: account.id }, 'link_bonus_no_active_rule');
+}
+
+// The inviter's reward (#116, docs/referrals.md → The reward), written after the commit. The
+// invitee's answer does not change; these lines are the owner's record. No line for a skip that
+// is the normal case (no referral, a non-partner account, a reward already paid).
+function logReferralReward(log: FastifyBaseLogger, referral: ReferralRewardResult): void {
+  if (referral.rewarded) {
+    log.info(
+      {
+        referralId: referral.referralId,
+        inviterUserId: referral.inviterUserId,
+        tokens: referral.tokens.toString(),
+        ruleVersion: referral.version,
+      },
+      'referral rewarded',
+    );
+    return;
+  }
+  if (referral.reason === ReferralRewardSkipReason.NoActiveRule) {
+    log.warn({ referralId: referral.referralId }, 'referral_reward_no_active_rule');
+  } else if (referral.reason === ReferralRewardSkipReason.InviterBlocked) {
+    log.info(
+      { referralId: referral.referralId, reason: referral.reason },
+      'referral reward skipped',
+    );
+  }
 }

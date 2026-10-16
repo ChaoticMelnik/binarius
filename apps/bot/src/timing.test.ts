@@ -2701,7 +2701,14 @@ const INVITE_BRANCHES: readonly Branch[] = [
   {
     label: 'the user is blocked',
     update: textUpdate('/invite'),
-    readReferral: () => Promise.resolve({ status: UserStatus.Blocked, code: null, invited: 0 }),
+    readReferral: () =>
+      Promise.resolve({
+        status: UserStatus.Blocked,
+        code: null,
+        invited: 0,
+        connected: 0,
+        tokensEarned: '0',
+      }),
     expected: { backend: 1, telegram: 1 },
   },
   {

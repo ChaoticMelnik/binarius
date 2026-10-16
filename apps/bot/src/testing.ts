@@ -144,6 +144,8 @@ export const REFERRAL_VIEW: UserReferralView = {
   status: UserStatus.Active,
   code: 'AbC123xY',
   invited: 2,
+  connected: 1,
+  tokensEarned: '1050',
 };
 export const accountView = (patch: Partial<UserAccountView> = {}): UserAccountView => ({
   ...ACCOUNT_VIEW,
