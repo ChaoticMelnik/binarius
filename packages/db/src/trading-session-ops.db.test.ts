@@ -1126,6 +1126,55 @@ describe('recordSessionStatusMessage (#567)', () => {
       }),
     ).toBe(false);
     expect((await sessionOf(seed.session.id))!.statusMessageId).toBeNull();
+
+    const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
+    expect(
+      await recordSessionStatusMessage(tmp.db, {
+        id: seed.session.id,
+        telegramUserId: other.telegramUserId,
+        messageId: 42,
+        replacesMessageId: 41,
+      }),
+    ).toBe(false);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(41);
+  });
+
+  it('X1 a record replacing the recorded message writes, and the list carries the new one', async () => {
+    const seed = await seedSessionAccount();
+    const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
+    expect(
+      await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42, replacesMessageId: 41 }),
+    ).toBe(true);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(42);
+    const row = (await listTrackedSessions(tmp.db, { limit: 2_000 })).find(
+      (listed) => listed.id === seed.session.id,
+    );
+    expect(row?.messageId).toBe(42);
+  });
+
+  it('X2 a record replacing another message than the recorded one writes nothing', async () => {
+    const seed = await seedSessionAccount();
+    const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
+    expect(
+      await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42, replacesMessageId: 40 }),
+    ).toBe(false);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(41);
+  });
+
+  it('X3 an empty slot is free to a record that replaces a message', async () => {
+    const seed = await seedSessionAccount();
+    expect(
+      await recordSessionStatusMessage(tmp.db, {
+        id: seed.session.id,
+        telegramUserId: seed.telegramUserId,
+        messageId: 42,
+        replacesMessageId: 40,
+      }),
+    ).toBe(true);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(42);
   });
 
   it('M3 a missing session writes nothing', async () => {
