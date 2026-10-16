@@ -97,10 +97,14 @@ export interface ClientPush {
   sendLink(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
   sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
   sendDepositCredited(telegramUserId: bigint, balance: BotTextBalance): Promise<void>;
-  // A settled trade of a session (#464, docs/bot-session.md → Trade messages): without sound and
-  // without a keyboard, the one exception of this seam (docs/bot-navigation.md → Exceptions,
+  // A session's cycle message (#464, #551, docs/bot-session.md → Trade messages): without sound
+  // and without a keyboard, the one exception of this seam (docs/bot-navigation.md → Exceptions,
   // `session_trade`). It takes the text alone, so no other message can drop its keyboard here.
-  sendSessionTrade(telegramUserId: bigint, text: TelegramHtml): Promise<void>;
+  // Resolves to the sent message's message_id, which the next step of the cycle edits.
+  sendSessionTrade(telegramUserId: bigint, text: TelegramHtml): Promise<number>;
+  // The next step of a cycle (#551): the cycle message edited to `text`, still without a
+  // keyboard. An edit makes no sound.
+  editSessionTrade(telegramUserId: bigint, messageId: number, text: TelegramHtml): Promise<void>;
   // the finished session's summary (#464): with sound and its next step
   sendSessionSummary(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
 }
@@ -133,9 +137,19 @@ export function createClientPush({
     await api.sendMessage(String(telegramUserId), text.value, { parse_mode: 'HTML', reply_markup });
   };
   const sendSessionTrade = async (telegramUserId: bigint, text: TelegramHtml) => {
-    await api.sendMessage(String(telegramUserId), text.value, {
+    const sent = await api.sendMessage(String(telegramUserId), text.value, {
       parse_mode: 'HTML',
       disable_notification: true,
+    });
+    return sent.message_id;
+  };
+  const editSessionTrade = async (
+    telegramUserId: bigint,
+    messageId: number,
+    text: TelegramHtml,
+  ) => {
+    await api.editMessageText(String(telegramUserId), messageId, text.value, {
+      parse_mode: 'HTML',
     });
   };
   return {
@@ -145,6 +159,7 @@ export function createClientPush({
     sendDepositCredited: (telegramUserId, balance) =>
       send(telegramUserId, depositCreditedMessage(balance)),
     sendSessionTrade,
+    editSessionTrade,
     sendSessionSummary: send,
   };
 }
