@@ -160,6 +160,8 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         case AccessTokenRefusal.AccountNotFound:
           return { outcome: 'account_not_found', marked: false };
         case AccessTokenRefusal.RefreshNeeded:
+        // unreachable: this caller never asks for a service-only token (#391)
+        case AccessTokenRefusal.NotService:
           return { outcome: 'refresh_needed', marked: false };
         case AccessTokenRefusal.UserBlocked:
           return { outcome: 'user_blocked', marked: false };

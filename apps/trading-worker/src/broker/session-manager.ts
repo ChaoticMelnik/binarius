@@ -306,11 +306,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         return config.retryMs;
       // not_configured: worker.ts builds the manager only with the backend source;
       // refresh_rate_limited is unreachable with mayRefresh: false, temporary if it ever comes
-      // (#275)
+      // (#275); not_service is unreachable: the worker's body has no serviceOnly (#391)
       case AccessTokenUnavailable.BackendStatus:
       case AccessTokenUnavailable.ContractViolation:
       case AccessTokenUnavailable.NotConfigured:
       case AccessTokenRefusal.RefreshRateLimited:
+      case AccessTokenRefusal.NotService:
         logger.warn({ accountId, reason, status }, 'broker session token unavailable');
         return config.retryMs;
       case AccessTokenRefusal.AccountNotFound:

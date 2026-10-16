@@ -1006,3 +1006,109 @@ describe('ensureFreshAccessToken with a refused token (#281)', () => {
     expect(await rowOf(account.id)).toMatchObject({ status: 'active', authRevokedReason: null });
   });
 });
+
+describe('ensureFreshAccessToken for the service-account keeper (#391)', () => {
+  const HOUR = 3_600_000;
+  const RENEW_AHEAD_MS = 24 * HOUR;
+  const mark = (id: string) =>
+    tmp.db
+      .update(brokerAccounts)
+      .set({ serviceSince: sql`now()` })
+      .where(eq(brokerAccounts.id, id));
+  const expiresIn = (id: string, hours: number) =>
+    tmp.db
+      .update(brokerAccounts)
+      .set({ accessTokenExpiresAt: sql`now() + make_interval(hours => ${hours})` })
+      .where(eq(brokerAccounts.id, id));
+  const accessOf = (row: BrokerAccountRow) =>
+    cipher.decrypt(row.accessTokenEnc, { accountId: row.id, field: TokenField.Access });
+
+  it('V1 refuses an unmarked row with not_service, without the broker and without a write', async () => {
+    const account = await expiredAccount();
+    const before = await rowOf(account.id);
+    const requests = stub.tokenRequests;
+    expect(
+      await ensureFreshAccessToken(deps(), account.id, { mayRefresh: true, serviceOnly: true }),
+    ).toEqual({ ok: false, reason: 'not_service' });
+    expect(stub.tokenRequests).toBe(requests);
+    expect(await rowOf(account.id)).toEqual(before);
+  });
+
+  it('V2 exchanges the expired token of a marked row', async () => {
+    const account = await expiredAccount();
+    await mark(account.id);
+    const requests = stub.tokenRequests;
+    const result = await ensureFreshAccessToken(deps(), account.id, {
+      mayRefresh: true,
+      serviceOnly: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(stub.tokenRequests).toBe(requests + 1);
+    const after = await rowOf(account.id);
+    expect(after.tokenRotatedAt).not.toBeNull();
+    expect(after.accessTokenEnc).not.toEqual(account.accessTokenEnc);
+    expect(after.serviceSince).not.toBeNull();
+  });
+
+  it('V3 exchanges a token inside renewAheadMs and returns one outside it untouched', async () => {
+    const inside = await linkedAccount();
+    await mark(inside.id);
+    await expiresIn(inside.id, 23);
+    const outside = await linkedAccount();
+    await mark(outside.id);
+    await expiresIn(outside.id, 25);
+    const options = { mayRefresh: true, serviceOnly: true, renewAheadMs: RENEW_AHEAD_MS } as const;
+
+    let requests = stub.tokenRequests;
+    const renewed = await ensureFreshAccessToken(deps(), inside.id, options);
+    expect(renewed.ok).toBe(true);
+    expect(stub.tokenRequests).toBe(requests + 1);
+    expect((await rowOf(inside.id)).accessTokenEnc).not.toEqual(inside.accessTokenEnc);
+
+    requests = stub.tokenRequests;
+    const kept = await ensureFreshAccessToken(deps(), outside.id, options);
+    expect(kept).toEqual({ ok: true, accessToken: accessOf(outside) });
+    expect(stub.tokenRequests).toBe(requests);
+    expect((await rowOf(outside.id)).accessTokenEnc).toEqual(outside.accessTokenEnc);
+  });
+
+  it('V4 keeps the status checks first: revoked and blocked rows answer as before, nothing decrypted', async () => {
+    const decrypt = vi.fn(cipher.decrypt);
+    const spied = { ...cipher, decrypt };
+    const revokedRow = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: 'revoked', authRevokedReason: 'refresh_invalid_grant' })
+      .where(eq(brokerAccounts.id, revokedRow.id));
+    expect(
+      await ensureFreshAccessToken(deps({ cipher: spied }), revokedRow.id, {
+        mayRefresh: true,
+        serviceOnly: true,
+      }),
+    ).toEqual({ ok: false, reason: 'account_revoked', revokedReason: 'refresh_invalid_grant' });
+
+    const blockedRow = await expiredAccount();
+    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, blockedRow.userId));
+    expect(
+      await ensureFreshAccessToken(deps({ cipher: spied }), blockedRow.id, {
+        mayRefresh: true,
+        serviceOnly: true,
+      }),
+    ).toEqual({ ok: false, reason: 'user_blocked' });
+    expect(decrypt).not.toHaveBeenCalled();
+  });
+
+  it('V5 ignores both options with mayRefresh: false', async () => {
+    const account = await linkedAccount();
+    await expiresIn(account.id, 23);
+    const requests = stub.tokenRequests;
+    expect(
+      await ensureFreshAccessToken(deps(), account.id, {
+        mayRefresh: false,
+        serviceOnly: true,
+        renewAheadMs: RENEW_AHEAD_MS,
+      }),
+    ).toEqual({ ok: true, accessToken: accessOf(account) });
+    expect(stub.tokenRequests).toBe(requests);
+  });
+});

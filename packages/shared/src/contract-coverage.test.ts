@@ -188,6 +188,7 @@ describe('contract coverage (issue #6)', () => {
       | 'key_unavailable'
       | 'refresh_needed'
       | 'refresh_rate_limited'
+      | 'not_service'
     >();
     expectTypeOf<AccountHaltReason>().toEqualTypeOf<
       'reconciliation_ambiguous' | 'reconciliation_not_found' | 'trade_mismatch'

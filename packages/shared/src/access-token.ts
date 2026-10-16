@@ -26,6 +26,9 @@ export const AccessTokenRefusal = {
   // the token needs an exchange and the caller passed mayRefresh: false
   RefreshNeeded: 'refresh_needed',
   RefreshRateLimited: 'refresh_rate_limited',
+  // only for a backend caller that passed serviceOnly (the service-account keeper, #391): the row
+  // is not a service account. The route's body has no serviceOnly, so it never answers this.
+  NotService: 'not_service',
 } as const;
 export type AccessTokenRefusal = (typeof AccessTokenRefusal)[keyof typeof AccessTokenRefusal];
 export const accessTokenRefusalSchema = z.enum(AccessTokenRefusal);

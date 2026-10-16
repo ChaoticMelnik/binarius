@@ -50,6 +50,8 @@ export type AccessTokenResult =
   // the broker's rate limit refused the exchange before acting: the pair is intact, nothing
   // written (#275)
   | { ok: false; reason: 'refresh_rate_limited' }
+  // serviceOnly and the row is not a service account (#391): nothing decrypted or written
+  | { ok: false; reason: 'not_service' }
   | { ok: false; reason: 'account_revoked'; revokedReason: AuthRevokedReason | null };
 
 export interface TokenServiceDeps {
@@ -77,6 +79,13 @@ export interface AccessTokenOptions {
   // token; another token means someone already rotated the pair, and the stored one is returned
   // (#281)
   refusedToken?: string | undefined;
+  // Both read only when mayRefresh is not false (#391, docs/service-accounts.md).
+  // serviceOnly: the row must be a service account (service_since set), checked under the row
+  // lock; any other row is refused with not_service before anything is decrypted. This is what
+  // keeps a timer's exchange to the service accounts alone (Rule 12's exception).
+  serviceOnly?: true;
+  // how long before its expiry a token is exchanged, in place of ACCESS_SKEW_MS
+  renewAheadMs?: number;
 }
 
 // Returns a usable access token for the account, refreshing it when needed.
@@ -123,6 +132,13 @@ async function refreshUnderLock(
   if (account.status !== BrokerAccountStatus.Active) {
     return { ok: false, reason: 'account_revoked', revokedReason: account.authRevokedReason };
   }
+  if (
+    options.mayRefresh !== false &&
+    options.serviceOnly === true &&
+    account.serviceSince === null
+  ) {
+    return { ok: false, reason: 'not_service' };
+  }
 
   // Another key id means another process owns this row — during a key rollout both run at
   // once. Declining to serve it is the only safe answer: revoking here would let a process
@@ -158,7 +174,9 @@ async function refreshUnderLock(
     return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
   }
 
-  if (account.accessTokenExpiresAt.getTime() > Date.now() + ACCESS_SKEW_MS) {
+  const renewAheadMs =
+    options.mayRefresh === false ? ACCESS_SKEW_MS : (options.renewAheadMs ?? ACCESS_SKEW_MS);
+  if (account.accessTokenExpiresAt.getTime() > Date.now() + renewAheadMs) {
     // decrypted only on the branch that returns it: a refresh must not depend on the access
     // ciphertext, which it is about to replace anyway
     let accessToken: string;
