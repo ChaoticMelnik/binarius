@@ -5,6 +5,7 @@ import {
   MENU_CALLBACK_DATA,
   pairLabel,
   plainTextOf,
+  sessionStopCallbackData,
   SessionStakeStrategy,
   sessionStakeParams,
   sessionTradeSteps,
@@ -129,3 +130,13 @@ export function sessionSummaryMessage(
     reply_markup: keyboard.text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
   };
 }
+
+// The waiting message (#536, docs/bot-session.md → The waiting message): the wait for the next
+// signal, with the one button that stops the session; `:w` tells the bot to delete it on a press.
+export const sessionWaitingMessage = (sessionId: string): ClientPushMessage => ({
+  text: CLIENT_TEXTS.sessionWaitingSignal,
+  reply_markup: new InlineKeyboard().text(
+    CLIENT_LABELS.sessionStopButton,
+    sessionStopCallbackData(sessionId, { waiting: true }),
+  ),
+});

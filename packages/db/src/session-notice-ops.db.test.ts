@@ -584,6 +584,7 @@ describe('the waiting message (#536)', () => {
       status: 'active',
       waitingMessageId: null,
       waitingDue: true,
+      waitingStale: false,
       finished: false,
     });
     expect(await pendingOf(live.session)).toBeUndefined();
@@ -591,14 +592,23 @@ describe('the waiting message (#536)', () => {
       status: 'stopped',
       waitingMessageId: 50,
       waitingDue: false,
+      waitingStale: true,
     });
     expect(await pendingOf(blocked.session)).toBeUndefined();
 
     // a new cycle message makes the live one stale
     await cycleMessage(live, 0, 41);
-    expect(await pendingOf(live.session)).toMatchObject({ waitingMessageId: 50, waitingDue: false });
+    expect(await pendingOf(live.session)).toMatchObject({
+      waitingMessageId: 50,
+      waitingDue: false,
+      waitingStale: true,
+    });
     await waitingClear(live.session, 50);
-    expect(await pendingOf(live.session)).toMatchObject({ waitingMessageId: null, waitingDue: true });
+    expect(await pendingOf(live.session)).toMatchObject({
+      waitingMessageId: null,
+      waitingDue: true,
+      waitingStale: false,
+    });
   });
 });
 

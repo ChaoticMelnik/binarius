@@ -84,6 +84,7 @@ export interface PendingSessionNotice {
   // the live waiting message's id, NULL when there is none
   waitingMessageId: number | null;
   waitingDue: boolean;
+  waitingStale: boolean;
 }
 
 // The sessions with something to send: no summary yet, and a settled trade past the cursor, a
@@ -106,6 +107,7 @@ export async function listPendingSessionNotices(
       status: tradingSessions.status,
       waitingMessageId: tradingSessions.waitingMessageId,
       waitingDue: waitingDueSql,
+      waitingStale: waitingStaleSql,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -381,9 +383,7 @@ export async function clearSessionWaitingMessage(
   const rows = await db
     .update(tradingSessions)
     .set({ waitingMessageId: null })
-    .where(
-      and(eq(tradingSessions.id, sessionId), eq(tradingSessions.waitingMessageId, messageId)),
-    )
+    .where(and(eq(tradingSessions.id, sessionId), eq(tradingSessions.waitingMessageId, messageId)))
     .returning({ id: tradingSessions.id });
   return rows.length > 0;
 }
