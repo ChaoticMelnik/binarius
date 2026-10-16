@@ -940,6 +940,53 @@ describe('a martingale cycle is one message (#551)', () => {
     expect(editsTo(captured.calls, target)).toHaveLength(0);
   });
 
+  it("D22 stop() during a finished session's last step: the step ends, the summary waits for the next start - no balance read, no mark", async () => {
+    const target = await seedSession(MARTINGALE);
+    // a balance older than the last settle: a summary's view would ask the broker (D9)
+    await snapshot(target);
+    await settled(target, '-5');
+    const first = sender();
+    await first.notices.tick();
+    await settled(target, '-5');
+    await stop(target);
+    // the worst path of a step: the edit finds the message gone, the new message goes
+    first.captured.apiErrors.set(
+      'editMessageText',
+      refusal('Bad Request: message to edit not found'),
+    );
+    const answer = first.captured.answers.get('sendMessage')!;
+    let stopping: Promise<void> | undefined;
+    first.captured.answers.set('sendMessage', (payload) => {
+      stopping ??= first.notices.stop();
+      return answer(payload);
+    });
+    await first.notices.tick();
+    await stopping;
+
+    expect(first.refreshCalls).toEqual([]);
+    const sends = sendsTo(first.captured.calls, target);
+    expect(sends).toHaveLength(2);
+    for (const send of sends) expect(send.payload.disable_notification).toBe(true);
+    const row = await rowOf(target);
+    expect(row.finalNoticeSentAt).toBeNull();
+    expect(row.notifiedTrades).toBe(2);
+    expect(await cycleStateOf(target)).toEqual({
+      messageId: answered.get(sends[1]!.payload),
+      from: 0,
+    });
+    expect(messagesOf(first.logs(), WARN)).toEqual([
+      'session trade notice edited anew: the cycle message is gone',
+    ]);
+
+    const next = sender();
+    await next.notices.tick();
+    const summaries = sendsTo(next.captured.calls, target);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.payload.disable_notification).toBeUndefined();
+    expect(next.refreshCalls).toHaveLength(1);
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+  });
+
   it('D4-edit 429: the step is put back, the sender pauses, then edits once', async () => {
     const clock = { now: 1_000_000 };
     const target = await seedSession(MARTINGALE);

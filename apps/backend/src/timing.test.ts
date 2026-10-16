@@ -344,6 +344,8 @@ describe('broker balance timing', () => {
     ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
+  // the step's worst path ends with the next trade's pace; a summary does not start after stop()
+  // (D22 in session-notices.db.test.ts), so the summary's link above is not added to this one
   it('ends a session notice cycle step inside phase 1: the edit, then the new message when it is gone (#551)', () => {
     expect(
       2 * (1000 / SESSION_NOTICE_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS),

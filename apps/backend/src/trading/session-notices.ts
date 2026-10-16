@@ -77,8 +77,8 @@ export interface SessionNoticeSenderDeps {
 export interface SessionNoticeSender {
   tick(): Promise<void>;
   start(): void;
-  // Ends the loop and waits for the tick in flight: no claim after it, the send in flight
-  // completes or times out (timing.ts).
+  // Ends the loop and waits for the tick in flight: no claim and no summary's balance read starts
+  // after it; the call in flight completes or times out (timing.ts).
   stop(): Promise<void>;
 }
 
@@ -267,6 +267,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   }
 
   async function sendSummary(session: PendingSessionNotice): Promise<Step> {
+    // a summary does not start after stop(): its view reads the balance (up to
+    // TRADING_ACCESS_REFRESH_BUDGET_MS), which would add to the step in flight (timing.ts)
+    if (stopped) return 'skip';
     const fields = { sessionId: session.sessionId };
     const telegramUserId = String(session.telegramUserId);
     const view = await readFinishedSessionView({ db, balance }, session.sessionId, telegramUserId);
