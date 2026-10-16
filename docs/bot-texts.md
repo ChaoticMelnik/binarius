@@ -294,7 +294,9 @@ guard is on the rewritten text, and a row it would push past the CHECK stays as 
 before `{result}`; an override without it stays valid (no variable is required) and prints no
 cycles. `sessionStep` («🔢 Сделка {step}») is gone for `sessionCycle` («🔁 Цикл {cycle} из
 {cyclesPlanned}»): a saved override of it is an unknown key, which `bot-text reset sessionStep`
-removes.
+removes. #536 removes `sessionCycle`, `sessionScore`, `sessionSettings`, `sessionDeadline`,
+`sessionRefreshButton` and the variable `cyclesPlanned`: a saved override of them is an unknown
+key (`bot-text reset <key>`).
 
 ## Adding a text
 
@@ -454,7 +456,8 @@ queue — the last call wins — and «Опубликовать заново» m
 
 A key's limit is checked with its variables' samples. `BOT_TEXT_MESSAGES` describes what that
 cannot bound: each message the bot builds from several keys (the account and status cards,
-`/help`, `/account`, the analysis screens, the trade and session status, the demo screens,
+`/help`, `/account`, the analysis screens, the trade status, the session message and the reply to
+its stop (#536), the demo screens,
 `/settings` with the stake line and the stake picker, the mode screen, its confirm and a switch's
 result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; a block of the session's cycle message with its

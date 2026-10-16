@@ -292,7 +292,7 @@ trades only, and an unresolved trade stops the sizer, so the pre-check never und
 - It makes no backtest, no tuning and no profitability claim. A Martingale raises the stake after
   every loss; its limits bound the damage, they do not remove it.
 - It contains no user-facing text. The Russian wording of a stop reason is the bot's
-  (`sessionStatusText` in `apps/bot/src/texts.ts`, [bot-session.md](bot-session.md#the-status-message)).
+  (`sessionEndLine` of `packages/shared/src/session-texts.ts`, [bot-session.md](bot-session.md#the-session-message)).
 
 ## Boundaries
 
