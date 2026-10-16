@@ -409,6 +409,9 @@ const telegramMessageIdSchema = z.int().min(1).max(INT4_MAX);
 export const recordSessionStatusMessageRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
   messageId: telegramMessageIdSchema,
+  // the message this one was sent in place of, because Telegram refused the pressed one's edit as
+  // gone: the record replaces it when it is the one recorded
+  replacesMessageId: telegramMessageIdSchema.optional(),
 });
 export type RecordSessionStatusMessageRequest = z.infer<
   typeof recordSessionStatusMessageRequestSchema
@@ -416,8 +419,16 @@ export type RecordSessionStatusMessageRequest = z.infer<
 
 // POST /trading/sessions/:id/status-message/lost (#567): Telegram refused an edit of the recorded
 // message for good (gone or 403), so the bot has the backend forget it, by the same id: a message
-// recorded after it stays. The body is the record's; false when nothing was forgotten.
+// recorded after it stays. The body names the lost message; false when nothing was forgotten.
 export const SESSION_STATUS_MESSAGE_LOST_SUFFIX = `${SESSION_STATUS_MESSAGE_SUFFIX}/lost`;
+
+export const forgetSessionStatusMessageRequestSchema = z.strictObject({
+  telegramUserId: telegramUserIdSchema,
+  messageId: telegramMessageIdSchema,
+});
+export type ForgetSessionStatusMessageRequest = z.infer<
+  typeof forgetSessionStatusMessageRequestSchema
+>;
 
 export const forgetSessionStatusMessageResponseSchema = z.strictObject({ forgotten: z.boolean() });
 export type ForgetSessionStatusMessageResponse = z.infer<
@@ -455,5 +466,7 @@ export const safeParseTrackedSessionsQuery = (input: unknown) =>
   trackedSessionsQuerySchema.safeParse(input);
 export const safeParseTrackedSessionsResponse = (input: unknown) =>
   trackedSessionsResponseSchema.safeParse(input);
+export const safeParseForgetSessionStatusMessageRequest = (input: unknown) =>
+  forgetSessionStatusMessageRequestSchema.safeParse(input);
 export const safeParseForgetSessionStatusMessageResponse = (input: unknown) =>
   forgetSessionStatusMessageResponseSchema.safeParse(input);

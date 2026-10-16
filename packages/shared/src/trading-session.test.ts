@@ -4,6 +4,7 @@ import { decimalStringSchema } from './money';
 import { INT4_MAX, TradeIntentStatus, type TradeIntentView } from './trading';
 import {
   TRACKED_SESSIONS_MAX,
+  safeParseForgetSessionStatusMessageRequest,
   safeParseRecordSessionStatusMessageRequest,
   safeParseTrackedSessionsQuery,
   safeParseTrackedSessionsResponse,
@@ -485,6 +486,38 @@ describe('the recovery contract (#567)', () => {
     expect(
       safeParseRecordSessionStatusMessageRequest({ telegramUserId: owner, messageId: 1, x: 1 })
         .success,
+    ).toBe(false);
+  });
+  it('accepts replacesMessageId from 1 to INT4_MAX and refuses one past the bound', () => {
+    for (const replacesMessageId of [1, INT4_MAX]) {
+      expect(
+        safeParseRecordSessionStatusMessageRequest({
+          telegramUserId: owner,
+          messageId: 2,
+          replacesMessageId,
+        }).success,
+      ).toBe(true);
+    }
+    for (const replacesMessageId of [0, INT4_MAX + 1]) {
+      expect(
+        safeParseRecordSessionStatusMessageRequest({
+          telegramUserId: owner,
+          messageId: 2,
+          replacesMessageId,
+        }).success,
+      ).toBe(false);
+    }
+  });
+  it('the lost body names the message and refuses replacesMessageId', () => {
+    expect(
+      safeParseForgetSessionStatusMessageRequest({ telegramUserId: owner, messageId: 1 }).success,
+    ).toBe(true);
+    expect(
+      safeParseForgetSessionStatusMessageRequest({
+        telegramUserId: owner,
+        messageId: 1,
+        replacesMessageId: 2,
+      }).success,
     ).toBe(false);
   });
 
