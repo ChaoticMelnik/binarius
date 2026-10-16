@@ -137,7 +137,7 @@ function summary(input: SpikeReportInput, totals: Totals): string[] {
   return [
     '## Summary (for #404)',
     '',
-    `- subscription cap: ${silent.length === 0 ? `none observed up to ${capacity.subscribed} ids` : `chunks without ticks: ${silent.join(', ')} of ${capacity.chunks.length}`}`,
+    `- subscription cap: ${capacity.cut !== undefined ? `not measured (phase A cut: ${capacity.cut})` : silent.length === 0 ? `none observed up to ${capacity.subscribed} ids` : `chunks without ticks: ${silent.join(', ')} of ${capacity.chunks.length}`}`,
     `- open / close exact: ${share(
       sum(totals.candles, (c) => c.openEq),
       compared,
@@ -187,7 +187,7 @@ export function renderReport(input: SpikeReportInput): string {
     '',
     '## Phase A: subscription capacity',
     '',
-    `- subscribed ${capacity.subscribed}, with ticks ${capacity.withTicks}; open ${capacity.open.withTicks} of ${capacity.open.subscribed}, closed ${capacity.closed.withTicks} of ${capacity.closed.subscribed}`,
+    `- subscribed ${capacity.subscribed}, with ticks ${capacity.withTicks}; open ${capacity.open.withTicks} of ${capacity.open.subscribed}, closed ${capacity.closed.withTicks} of ${capacity.closed.subscribed}${capacity.cut === undefined ? '' : `; window cut: ${capacity.cut}`}`,
     `- first tick after the subscribe: ${capacity.firstTickDelayMs === undefined ? '-' : `median ${capacity.firstTickDelayMs.median} ms, max ${capacity.firstTickDelayMs.max} ms`}`,
     '',
     '| chunk (send order) | ids | with ticks |',
@@ -250,7 +250,7 @@ export function renderReport(input: SpikeReportInput): string {
   for (const hole of input.holes) {
     const affected = SPIKE_INTERVALS.map(({ name, ms }) => {
       const first = Math.floor(hole.span.fromMs / ms);
-      const last = Math.ceil(hole.span.toMs / ms) - 1;
+      const last = Math.floor(hole.span.toMs / ms);
       return `${name} ${Math.max(0, last - first + 1)}`;
     }).join(', ');
     lines.push(

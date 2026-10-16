@@ -42,7 +42,7 @@ const ATR_PERIOD = 14;
 
 // [start, end) against a hole [fromMs, toMs]: the markHole rule of the builder
 const overlapsHole = (start: number, end: number, holes: readonly Span[]) =>
-  holes.some((hole) => start < hole.toMs && end > hole.fromMs);
+  holes.some((hole) => start <= hole.toMs && end > hole.fromMs);
 
 export const cutToRange = (series: readonly Candle[], range: SeriesRange): Candle[] =>
   series.filter(({ timestamp }) => range.firstMs <= timestamp && timestamp <= range.lastMs);
