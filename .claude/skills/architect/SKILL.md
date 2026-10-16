@@ -128,6 +128,7 @@ Do not proceed to Step 6 until answered.
 - [ ] Every documented invariant is worded no wider than the place that enforces it (cite it)
 - [ ] Every pass/fail gate the plan defines says what it returns on zero evidence (empty input, 0 compared rows, an empty sample, a missing cache): a refusal or FAIL, never PASS — and a test drives that case through the command's entry point to its exit code (or the caller-visible result), not only the gate function (#381 PR #520 M1: `calibrate` passed on an empty stand, `wilson(0, 0)` = [0, 100])
 - [ ] Every time offset the plan defines names its reference point (a candle boundary, the decision moment, a record's timestamp), and every decision that uses it names the same one (#381 PR #512 M1: one decision measured `openDelay` from the decision moment, two others from the boundary, and the fallback counted the 2 s slack twice)
+- [ ] Every test double and fixture the plan names differs from the code's own normalisation on the axis under test: a fake `sleep` honours the abort signal the real one would, a catalog fixture is not already in the order the code re-sorts it, a state stream repeats a transition the code may see twice (#392 PR #553: a fake sleep that ignored `stop` hid an unpaced fetch after SIGINT; ascending ids hid coverage measured on a re-sorted split; no two-drop flap hid a hole stretched to the end of the run)
 ```
 
 Task classes with a mandatory plan section — each row traces to a real review finding (`audits.md`). A plan whose task falls into a class must contain that section:
