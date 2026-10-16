@@ -1,5 +1,7 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
 import {
+  deleteRefusal,
+  editRefusal,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
   pairLabel,
@@ -45,7 +47,6 @@ import {
   withMenu,
 } from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
-import { deleteRefusal, editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml, sendPhotoByIdHtml } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
 import { attachShareButton } from './session-share';
@@ -126,7 +127,7 @@ function appendSessionEnd(
 // Under the summary card (#318): the stopped status's next steps without «🔄 Обновить», which
 // edits the text of the message it is under, and a photo has a caption instead. «📊 Новый
 // анализ» and «📡 К сигналам» edit too: a photo's edit is refused as gone and their screen is
-// answered anew (screen.ts).
+// answered anew (telegram-refusals.ts in @binarius/shared).
 export const sessionCardKeyboard = (
   view: Pick<TradingSessionView, 'mode' | 'settings' | 'stopReason'>,
   cashierUrl: string | undefined,

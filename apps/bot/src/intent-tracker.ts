@@ -1,5 +1,6 @@
 import { GrammyError, HttpError } from 'grammy';
 import {
+  editRefusal,
   errorLogFields,
   TRADE_INTENT_TRANSITIONS,
   TradeIntentStatus,
@@ -17,7 +18,6 @@ import {
 import { telegramErrorFields, type Logger } from './logging';
 import { durationOf, sessionFits } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
-import { editRefusal } from './screen';
 import { intentStatusText, TEXTS } from './texts';
 
 // The demo trade's status message follows its intent (#127, docs/bot-demo-trade.md): after the

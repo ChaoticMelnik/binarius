@@ -1,5 +1,6 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
+  editRefusal,
   BrokerBalanceUnavailableReason,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
@@ -53,7 +54,6 @@ import {
   type IntentTracker,
 } from './intent-tracker';
 import { telegramErrorFields, type Logger } from './logging';
-import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
 import { intentStatusText, LABELS, sessionStartButtonLabel, TEXTS, textOf } from './texts';
 

@@ -1,5 +1,6 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
+  editRefusal,
   errorLogFields,
   parseStakeInput,
   StakeErrorCode,
@@ -25,7 +26,6 @@ import {
 } from './demo';
 import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml } from './send';
 import { refusalText } from './stake-picker';
 import { LABELS, TEXTS } from './texts';

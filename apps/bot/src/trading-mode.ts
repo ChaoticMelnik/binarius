@@ -1,5 +1,6 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
+  editRefusal,
   BrokerBalanceUnavailableReason,
   checkStake,
   decimalLessThan,
@@ -20,7 +21,6 @@ import {
 } from './backend-client';
 import { MODE_CALLBACK_DATA, menuKeyboard, supportKeyboard, withMenu } from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
-import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml } from './send';
 import {
   LABELS,
