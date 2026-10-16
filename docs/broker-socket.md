@@ -533,11 +533,15 @@ Two parts:
   close (the first candle ever opens at its first tick). High and low include the open. Every
   price is rounded at the pair's `digits`, so the broker's float artifacts
   (`0.6946199999999999`) never reach a comparison. A tick of a bucket older than the current one
-  is `late` and dropped. A tick with a non-finite or non-positive price, or a non-finite
-  timestamp, is `invalid` and dropped. A bucket without a tick makes no candle. `markHole` drops
-  the candles that overlap a hole. `aggregateEndLabelled` turns the broker's `1s` rows, which
-  are labelled by their end (the row labelled `t + 1000` is the first second of the candle at
-  `t`), into complete `5s`/`15s` candles. "No tick, no candle" is a hypothesis the report tests
+  is `late` and dropped. An older tick inside the current bucket moves its high or low only:
+  the close stays with the newest tick. A tick with a non-finite or non-positive price, or a
+  non-finite timestamp, is `invalid` and dropped. A bucket without a tick makes no candle.
+  `markHole(fromMs, toMs)` takes a finite hole with `fromMs ≤ toMs` and drops every candle whose
+  span overlaps the closed interval `[fromMs, toMs]`, including one that starts exactly at
+  `toMs`. No candle is built afterwards for a bucket the hole reaches: such a tick is counted as
+  `holed`, and the next candle opens at its price. `aggregateEndLabelled` turns the broker's `1s`
+  rows, which are labelled by their end (the row labelled `t + 1000` is the first second of the
+  candle at `t`), into complete `5s`/`15s` candles. "No tick, no candle" is a hypothesis the report tests
   (the `REST only` column). If the broker makes flat candles for empty buckets, #404 changes the
   rule.
 - **The CLI** `candle-spike` in `apps/trading-worker/src/cli/` (`candle-spike.ts` for env, wiring
@@ -569,28 +573,33 @@ had no candidate.
 1. **Setup.** The CLI reads the REST catalog and checks `SPIKE_ASSET_IDS` before any socket opens
    (a failure names the index, never the id). Then it starts the socket. Within 15 s it must be
    `ready` with a `user.data` of the account's own user and a `common.assets_list`. A
-   `user.data` of another user is `setup failed`.
+   `user.data` of another user is `setup failed`, and so is a `SIGINT` here (`setup failed:
+   interrupted`).
 2. **Phase A: capacity** (60 s). The CLI subscribes the ids through the client, which sends them
    in 40-id chunks. It counts which ids got a tick, split open and closed, and the coverage per
-   chunk in send order. A per-socket cap shows as whole chunks without ticks. Whether one
-   `price.subscribe` of 41 ids is refused by the broker or by our client is #555.
+   chunk in send order. A per-socket cap shows as whole chunks without ticks. A `SIGINT` or a
+   drop during the window prints the cap as `not measured (phase A cut: …)`, and phase A's state
+   changes are listed in phase C. Whether one `price.subscribe` of 41 ids is refused by the
+   broker or by our client is #555.
 3. **Phase B: accuracy** (`SPIKE_MINUTES`). Every tick of a chosen pair goes into two builders
    (`5s`, `15s`). The CLI records the receipt delay `now − tick time`, which mixes network
    latency and clock skew and can be negative. It also records ticks per second, every state
    change of the socket, and CPU and RSS once a minute. A drop (from `ready` to any other state)
    is a hole from the last tick before it to the first tick after the socket is `ready` again.
-   Holes are recorded, not applied to the builders. `SIGINT` ends phase B early, and the fetch
+   A drop before that first tick continues the same hole, so a flap is one hole. Holes are
+   recorded, not applied to the builders. `SIGINT` ends phase B within a second, and the fetch
    and the comparison still run on the candles so far. A terminal state (`token_expired`,
    `auth_failed`, `disconnected_by_server`) ends phase B the same way.
 4. **The fetch.** The CLI fetches three series per pair from the public chart, one GET per
-   500 ms: `5s`, `15s` and `1s`. The range of an interval runs from the first candle starting at
-   or after the pair's first tick to the last candle ended by its last tick. The broker's first
+   500 ms: `5s`, `15s` and `1s`. The range of an interval runs from the candle after the candle
+   of the pair's first tick to the last candle ended by its last tick. The broker's first
    chart row opens at the first tick inside the requested window, not at the previous close
    ([signal-stand.md → The cache](signal-stand.md#the-cache)). So every request starts one step
    before the first wanted row, and the answer's first row is dropped. A `429` is retried once
    after `Retry-After` (60 s without one). After that, or on any other error, the series is
    `rest_unavailable` with its code, and the other series are compared as usual. These GETs come
-   from the pilot's IP, inside the 600/min window.
+   from the pilot's IP, inside the 600/min window. The fetch keeps its pace and its `429` wait
+   after a `SIGINT`; a second `SIGINT` ends the run without a report.
 5. **The comparison**, per pair and interval, at the pair's `digits`:
    - **Candles:** equal open and close, the high/low difference in quote steps (0/1/2/≥3), the
      `REST only` and `ticks only` rows, and the ATR(14) difference, mean and max.
@@ -609,8 +618,9 @@ had no candidate.
    - **The `1s` aggregation** against the native `5s`/`15s`: the share of candles equal on all
      four prices. The chart probe of 2026-10-09 saw 29/29, the stand 961/1000, so the report
      measures the share and does not assume it is exact.
-   - Candles that overlap a hole, and moments whose 60-candle decision window overlaps one, are
-     counted in their own column and left out of every share (the display too).
+   - Candles that overlap a hole, and moments whose 60-candle decision window overlaps one,
+     including a candle or window that starts exactly at the hole's end, are counted in their
+     own column and left out of every share (the display too).
 
 **The report** starts with a header (start, minutes, `complete` / `interrupted` / `ended by
 <state>`, the pairs table with the group and ticks per second, the catalog sizes). It then has
