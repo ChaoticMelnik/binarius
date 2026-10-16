@@ -86,6 +86,20 @@ describe('createCandleBuilder', () => {
     expect(b.watermark).toBe(T0 + I + 5);
   });
 
+  it('T5b an older tick inside the current bucket moves high/low, not close', () => {
+    const b = builder();
+    feed(b, [
+      [5, 1.2],
+      [300, 1.3],
+      [200, 1.0],
+      [5_005, 1.25],
+    ]);
+    expect(b.candles()).toEqual([
+      candle(0, 1.2, 1.3, 1.0, 1.3),
+      candle(5_000, 1.3, 1.3, 1.25, 1.25),
+    ]);
+  });
+
   it('T6 a bad price or timestamp is invalid: dropped and counted', () => {
     const b = builder();
     feed(b, [
@@ -113,13 +127,38 @@ describe('createCandleBuilder', () => {
   it('T8 markHole drops the overlapping candles only', () => {
     const b = builder();
     for (let i = 0; i < 6; i++) b.push({ timestamp: T0 + i * I + 5, price: 1 + i / 100 });
-    // [T0 + 2I, T0 + 4I]: the candle at T0 + I ends at the hole's start, the one at T0 + 4I starts
-    // at its end; the candles at 2I and 3I overlap it
+    // [T0 + 2I, T0 + 4I]: the candle at T0 + I ends at the hole's start and stays; the one at
+    // T0 + 4I starts at its end, so its open may be a price the hole hid
     b.markHole(T0 + 2 * I, T0 + 4 * I);
-    expect(b.candles().map((c) => (c.timestamp - T0) / I)).toEqual([0, 1, 4, 5]);
+    expect(b.candles().map((c) => (c.timestamp - T0) / I)).toEqual([0, 1, 5]);
 
     b.push({ timestamp: T0 + 6 * I + 5, price: 1.5 });
     expect(b.candles().at(-1)?.open).toBe(1.05);
+  });
+
+  it('T8b no candle for a bucket a hole removed or reached; the next opens at the newest price', () => {
+    const removed = builder();
+    feed(removed, [
+      [5_000, 1.1],
+      [5_005, 1.2],
+    ]);
+    removed.markHole(5_100, 8_000);
+    feed(removed, [
+      [9_000, 1.3],
+      [10_100, 1.4],
+    ]);
+    expect(removed.candles()).toEqual([candle(10_000, 1.3, 1.4, 1.3, 1.4)]);
+    expect(removed.holed).toBe(1);
+
+    const reached = builder();
+    feed(reached, [[5_000, 1.1]]);
+    reached.markHole(5_100, 12_000);
+    feed(reached, [
+      [12_500, 1.3],
+      [15_100, 1.4],
+    ]);
+    expect(reached.candles()).toEqual([candle(15_000, 1.3, 1.4, 1.3, 1.4)]);
+    expect(reached.holed).toBe(1);
   });
 
   it('T10 60 buckets of ticks pass the decider checks', () => {
@@ -147,6 +186,13 @@ describe('createCandleBuilder', () => {
     expect(() => builder({ digits: 11 })).toThrow(RangeError);
     expect(() => builder({ digits: 1.5 })).toThrow(RangeError);
     expect(() => builder({ capacity: 0 })).toThrow(RangeError);
+    for (const [fromMs, toMs] of [
+      [Number.NaN, 1],
+      [0, Number.POSITIVE_INFINITY],
+      [10, 5],
+    ]) {
+      expect(() => builder().markHole(fromMs!, toMs!)).toThrow(RangeError);
+    }
   });
 });
 
