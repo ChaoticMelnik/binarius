@@ -35,7 +35,7 @@ one that credits. What was credited before keeps its version and its amount.
 | Kind | Params | Who credits |
 |---|---|---|
 | `link_bonus` | `{ "tokens": "<1..1000>" }` | `grantLinkBonus`, the starter pack |
-| `referral_reward` | `{ "tokens": "<1..1000>" }` | #116, the inviter's reward |
+| `referral_reward` | `{ "tokens": "<1..1000>" }` | `grantReferralReward`, the inviter's reward ([referrals.md → The reward](referrals.md#the-reward), #116) |
 | `deposit_bonus` | `{ "tokensPerUsd": "<decimal > 0>", "minAmountUsd": "<decimal ≥ 0>", "maxTokens": "<decimal > 0>" }` | #386; the formula over these is #386's |
 
 Tokens are decimal strings, never JSON numbers: the amount reaches `bigint` without a float
@@ -48,11 +48,13 @@ adjustment's cap, not a CHECK. Every object is strict: an unknown key is refused
   `token_ledger_bonus_rule_fk (bonus_rule_id, bonus_rule_kind) → bonus_rules (id, kind)`.
 - `token_ledger_bonus_rule_check`: a `bonus` names a rule **of the kind its reference
   requires** — a starter pack (a `broker_account_id`) a `link_bonus` rule, a deposit-linked bonus
-  a `deposit_bonus` rule — and a bonus that names no reference (a promo) is refused. Every other
-  kind names no rule. #116 adds the `referral_id → referral_reward` branch.
+  a `deposit_bonus` rule, an inviter's reward (a `referral_id`, #116) a `referral_reward` rule —
+  and a bonus that names no reference (a promo) is refused. Every other kind names no rule.
 - Each reference keeps its own dedupe key: the starter pack one per user
   (`token_ledger_link_bonus_user_idx`), a deposit one bonus per deposit
-  (`token_ledger_deposit_event_idx`). A rule change does not widen them, so a later version never
+  (`token_ledger_deposit_event_idx`), an inviter's reward one per referral
+  (`token_ledger_referral_idx`). `applyBonus` takes the reference as `{ brokerAccountId }` or
+  `{ referralId }`; the reference picks the rule kind it accepts and the `ON CONFLICT` arbiter. A rule change does not widen them, so a later version never
   credits the same event again.
 - **What a rule change does:** the next credit uses the new version. **What it does not do:**
   write any ledger row, or touch a credit already made — those keep the version they name.

@@ -245,6 +245,8 @@ compile.
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
 | `referralLink` | the user's personal link, `referralLinkOf` (#115) | as is | — |
+| `connected` | invitees with a confirmed partner account, `/invite` (#116) | as is | — |
+| `earnedTokens` | the tokens the user's invitations paid, `/invite` (#116) | `formatCount` | — |
 | `purchasedTokens`, `stars` | a Stars package's tokens and price (#117, [stars.md](stars.md)) | `formatCount` | — |
 | `tokenBalance` | `users.token_balance` after a Stars credit (#117) | `formatCount` | — |
 | `paymentDate` | a Stars payment's `paid_at`, Unix seconds (#118, /paysupport) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
