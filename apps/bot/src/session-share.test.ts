@@ -23,6 +23,7 @@ import {
   inlineQueryUpdate,
   intentView,
   sessionView,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   type ApiCall,
@@ -69,6 +70,7 @@ function setup(
     botInfo: BOT_INFO,
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
   });
   const api = captureApi(bot);
   const ask = (query: string, chatType?: string) =>

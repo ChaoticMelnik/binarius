@@ -64,6 +64,7 @@ import {
   SESSION_ID,
   sessionView,
   signalsResponse,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -229,6 +230,7 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       recordStart: () => Promise.resolve(userView({ hasActiveBrokerAccount: true })),

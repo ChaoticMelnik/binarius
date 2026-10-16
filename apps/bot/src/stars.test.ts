@@ -28,6 +28,7 @@ import {
   sentPayload,
   STARS_INVOICE,
   STARS_PAYLOAD,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   successfulPaymentUpdate,
@@ -69,6 +70,7 @@ function setup(patch: Partial<BackendClient> = {}) {
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend,
     logger,

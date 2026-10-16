@@ -47,20 +47,22 @@ const GONE = () =>
 
 type Answer = TradingSessionView | Error | (() => Promise<TradingSessionView>);
 
-// readSession answers the script in order and repeats its last entry
+// readSession and recordSessionMessage answer the one script in order and repeat its last entry
 function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }) {
   const logger = fakeLogger();
   let index = 0;
-  const readSession = vi.fn<BackendClient['readSession']>(() => {
-    const answer = script[Math.min(index, script.length - 1)];
+  const answer = (): Promise<TradingSessionView> => {
+    const next = script[Math.min(index, script.length - 1)];
     index += 1;
-    if (typeof answer === 'function') return answer();
-    return answer instanceof Error
-      ? Promise.reject(answer)
-      : Promise.resolve(answer as TradingSessionView);
-  });
+    if (typeof next === 'function') return next();
+    return next instanceof Error
+      ? Promise.reject(next)
+      : Promise.resolve(next as TradingSessionView);
+  };
+  const readSession = vi.fn<BackendClient['readSession']>(answer);
+  const recordSessionMessage = vi.fn<BackendClient['recordSessionMessage']>(answer);
   const tracker = createSessionTracker({
-    backend: { readSession },
+    backend: { readSession, recordSessionMessage },
     logger,
     firstPollMs: FIRST,
     pollMs: POLL,
@@ -69,7 +71,7 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
   });
   const target = () => {
     const edits: TelegramHtml[] = [];
-    const edit = vi.fn<SessionTrackRequest['edit']>((text) => {
+    const edit = vi.fn<SessionTrackRequest['edit']>((...[text]) => {
       edits.push(text);
       return Promise.resolve(true);
     });
@@ -78,14 +80,18 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
   const request = (patch: Partial<SessionTrackRequest> = {}): SessionTrackRequest => ({
     sessionId: SESSION_ID,
     telegramUserId: String(USER.id),
+    messageId: MESSAGE_ID,
     label: LABEL,
     view: SESSION_VIEW,
+    record: false,
     edit: target().edit,
     card: vi.fn<SessionTrackRequest['card']>(() => Promise.resolve()),
     ...patch,
   });
-  return { tracker, readSession, logger, request, target };
+  return { tracker, readSession, recordSessionMessage, logger, request, target };
 }
+
+const MESSAGE_ID = 77;
 
 const shown = (view: TradingSessionView, deadline = false) =>
   sessionStatusText(LABEL, view, { deadline }).value;
@@ -266,7 +272,7 @@ describe('the session tracker', () => {
       script: [trading, stoppedOpen, stoppedClosed],
     });
     const old = target();
-    const heldEdit = vi.fn<SessionTrackRequest['edit']>((text) => {
+    const heldEdit = vi.fn<SessionTrackRequest['edit']>((...[text]) => {
       old.edits.push(text);
       return new Promise((resolve) => {
         finishEdit = () => resolve(true);
@@ -566,8 +572,8 @@ describe('the session tracker', () => {
       const card = cardSpy();
       tracker.track(request({ edit, card }));
       await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
-      // the poll's edit, then the deadline's own last one of the same final status
-      expect(new Set(texts(edits))).toEqual(new Set([shown(unsent)]));
+      // the poll's edit only: the deadline does not draw the same final status again
+      expect(texts(edits)).toEqual([shown(unsent)]);
       expect(card).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
     });
@@ -593,6 +599,152 @@ describe('the session tracker', () => {
       release();
       await stopping;
       expect(stopped).toBe(true);
+    });
+  });
+
+  describe('the status message recorded and recovered (#567)', () => {
+    const FAILURE = () => new BackendError(BackendErrorCode.HttpStatus, { status: 500 });
+    const NOT_FOUND = () =>
+      new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: SESSION_NOT_FOUND });
+
+    it('P1 the first poll records the message and reads its view; the next one only reads', async () => {
+      const { tracker, readSession, recordSessionMessage, request, target } = setup({
+        script: [trading, stoppedClosed],
+      });
+      const { edits, edit } = target();
+      tracker.track(request({ record: true, edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(recordSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
+      expect(readSession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(recordSessionMessage).toHaveBeenCalledTimes(1);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(texts(edits)).toEqual([shown(trading), shown(stoppedClosed)]);
+    });
+
+    it('P2 a failed record is asked again on the next poll, logged once', async () => {
+      const { tracker, readSession, recordSessionMessage, request, logger } = setup({
+        script: [FAILURE(), FAILURE(), trading],
+      });
+      tracker.track(request({ record: true }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL * 3);
+      expect(recordSessionMessage).toHaveBeenCalledTimes(3);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+        'trading session status not read',
+      ]);
+    });
+
+    it('P3 an entry with no view yet draws the status its first poll reads', async () => {
+      const { tracker, request, target } = setup({ script: [SESSION_VIEW] });
+      const { edits, edit } = target();
+      tracker.track(request({ view: null, edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(edits)).toEqual([shown(SESSION_VIEW)]);
+      expect(tracker.size()).toBe(1);
+    });
+
+    it("P4 the deadline counts from the request's startedAt", async () => {
+      const { tracker, readSession, request } = setup({ script: [SESSION_VIEW] });
+      tracker.track(request({ view: null, startedAt: Date.now() - DEADLINE + FIRST + POLL }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(tracker.size()).toBe(1);
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(tracker.size()).toBe(0);
+      expect(readSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('P5 has() answers for a tracked session only', async () => {
+      const { tracker, request } = setup({ script: [stoppedClosed] });
+      expect(tracker.has(SESSION_ID)).toBe(false);
+      tracker.track(request());
+      expect(tracker.has(SESSION_ID)).toBe(true);
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(tracker.has(SESSION_ID)).toBe(false);
+    });
+
+    it('P6 a 404 on the record says the status is unavailable and stops', async () => {
+      const { tracker, readSession, recordSessionMessage, request, target } = setup({
+        script: [NOT_FOUND()],
+      });
+      const { edits, edit } = target();
+      tracker.track(request({ record: true, edit }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+      expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
+      expect(recordSessionMessage).toHaveBeenCalledTimes(1);
+      expect(readSession).not.toHaveBeenCalled();
+      expect(tracker.size()).toBe(0);
+    });
+
+    // a recovered session past the deadline: the first poll draws the final text, at most once
+    const past = () => Date.now() - DEADLINE - 1;
+    const reviewed = sessionView({
+      ...stoppedWith(live(TradeIntentStatus.ManualReview)),
+      stopReason: TradingSessionStopReason.ManualReview,
+    });
+    const unsent = sessionView({ ...stoppedClosed, noticesDone: false });
+
+    it('P7a past the deadline, an active session is drawn once, with the hint, and ends', async () => {
+      const { tracker, readSession, request, target } = setup({ script: [SESSION_VIEW] });
+      const { edits, edit } = target();
+      tracker.track(request({ view: null, startedAt: past(), edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(edits)).toEqual([shown(SESSION_VIEW, true)]);
+      expect(edits[0]?.value).toContain(TEXTS.sessionDeadline.value);
+      expect(tracker.size()).toBe(0);
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(readSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('P7b past the deadline, a stopped session on review is drawn once, with no hint', async () => {
+      const { tracker, request, target } = setup({ script: [reviewed] });
+      const { edits, edit } = target();
+      tracker.track(request({ view: null, startedAt: past(), edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(edits)).toEqual([shown(reviewed)]);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('P7c past the deadline, a done session without its summary message is drawn once, no card', async () => {
+      const { tracker, request, target } = setup({ script: [unsent] });
+      const { edits, edit } = target();
+      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+      tracker.track(request({ view: null, startedAt: past(), edit, card }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(edits)).toEqual([shown(unsent)]);
+      expect(card).not.toHaveBeenCalled();
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('P7d past the deadline, a done session with its summary message gets one edit and its card', async () => {
+      const { tracker, request, target } = setup({ script: [stoppedClosed] });
+      const { edits, edit } = target();
+      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+      tracker.track(request({ view: null, startedAt: past(), edit, card }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(edits)).toEqual([shown(stoppedClosed)]);
+      expect(card.mock.calls).toEqual([[stoppedClosed]]);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('P7e past the deadline, a failed first read ends the entry with no edit and no error', async () => {
+      const { tracker, request, target, logger } = setup({ script: [FAILURE()] });
+      const { edits, edit } = target();
+      tracker.track(request({ view: null, startedAt: past(), edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(edits).toEqual([]);
+      expect(tracker.size()).toBe(0);
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('P7f a 404 for an entry with no view draws the unavailable text with no view', async () => {
+      const { tracker, request, target } = setup({ script: [NOT_FOUND()] });
+      const { edits, edit } = target();
+      tracker.track(request({ view: null, startedAt: past(), edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
+      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found']]);
+      expect(tracker.size()).toBe(0);
     });
   });
 });

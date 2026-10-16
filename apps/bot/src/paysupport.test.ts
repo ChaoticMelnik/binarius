@@ -17,6 +17,7 @@ import {
   fakeLogger,
   inlineRows,
   sentPayload,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -58,6 +59,7 @@ function setup(patch: Partial<BackendClient> = {}) {
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend,
     logger,

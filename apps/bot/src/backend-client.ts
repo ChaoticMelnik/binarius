@@ -21,10 +21,13 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
+  safeParseTrackedSessionsResponse,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   TRADING_SIGNALS_PATH,
   TRADING_SESSIONS_STOP_PATH,
+  TRADING_SESSIONS_TRACKED_PATH,
+  TRACKED_SESSIONS_MAX,
   TRADING_MODE_PATH,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
@@ -52,11 +55,13 @@ import {
   type NotificationLevel,
   type NotificationLevelResponse,
   type PairsCatalogResponse,
+  SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
   type SessionSummary,
   type SignalInterval,
   type TelegramChatMemberStatus,
   type TradeIntentView,
+  type TrackedSession,
   type TradeMode,
   type SetTradingModeResponse,
   type TradingAccessResponse,
@@ -76,6 +81,9 @@ export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
 // GET /bot-texts - every override of the catalog; sized for every catalog key at Telegram's
 // message limit in 4-byte characters (#234)
 export const MAX_BOT_TEXTS_BODY_BYTES = 8 * 1024 * 1024;
+// GET /trading/sessions/tracked (#567) - TRACKED_SESSIONS_MAX rows of ~180 bytes at their longest
+// (backend-client.test.ts → the samples table), a quarter of it at most
+export const MAX_TRACKED_SESSIONS_BODY_BYTES = 2 * 1024 * 1024;
 
 export const BackendErrorCode = {
   // the request never produced a response: network failure, timeout, or an aborted socket
@@ -83,7 +91,7 @@ export const BackendErrorCode = {
   // a response arrived with a status outside 2xx
   HttpStatus: 'http_status',
   // a 2xx body that is not what the contract says it is, or is longer than its ceiling
-  // (MAX_BACKEND_BODY_BYTES, MAX_BOT_TEXTS_BODY_BYTES)
+  // (MAX_BACKEND_BODY_BYTES, MAX_BOT_TEXTS_BODY_BYTES, MAX_TRACKED_SESSIONS_BODY_BYTES)
   ContractViolation: 'contract_violation',
 } as const;
 export type BackendErrorCode = (typeof BackendErrorCode)[keyof typeof BackendErrorCode];
@@ -151,6 +159,15 @@ export interface BackendClient {
   claimSessionSummary(id: string, telegramUserId: string): Promise<SessionSummary | null>;
   // every active session of the user, stopped (#122); empty when there was none
   stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
+  // the first poll of a status message (#567): records its id, the first one recorded wins, and
+  // answers the view readSession does; scoped by the owner like readSession
+  recordSessionMessage(
+    id: string,
+    telegramUserId: string,
+    messageId: number,
+  ): Promise<TradingSessionView>;
+  // the sessions to track again after a restart (#567), oldest first, at most TRACKED_SESSIONS_MAX
+  listTrackedSessions(): Promise<TrackedSession[]>;
   // the saved stake of the mode, or a bounds refusal with the limits it was checked against (#297,
   // #326); any other failure throws as from every method
   setStake(
@@ -491,6 +508,25 @@ export function createBackendClient({
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
+    },
+    async recordSessionMessage(id, telegramUserId, messageId) {
+      return sessionOf(
+        await post(`trading/sessions/${encodeURIComponent(id)}${SESSION_STATUS_MESSAGE_SUFFIX}`, {
+          telegramUserId,
+          messageId,
+        }),
+      );
+    },
+    async listTrackedSessions() {
+      const query = new URLSearchParams({ limit: String(TRACKED_SESSIONS_MAX) });
+      const parsed = safeParseTrackedSessionsResponse(
+        await get(
+          `${TRADING_SESSIONS_TRACKED_PATH.slice(1)}?${query.toString()}`,
+          MAX_TRACKED_SESSIONS_BODY_BYTES,
+        ),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.sessions;
     },
     async stopSessions(telegramUserId) {
       const parsed = safeParseTradingSessionsStoppedResponse(

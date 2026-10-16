@@ -9,6 +9,7 @@ import { vi, type Mock } from 'vitest';
 import type { BackendClient } from './backend-client';
 import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
+import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
 import { LABELS } from './texts';
 import {
@@ -456,6 +457,8 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     stopSession: unused,
     claimSessionSummary: unused,
     stopSessions: unused,
+    recordSessionMessage: unused,
+    listTrackedSessions: unused,
     setStake: unused,
     setTradingMode: unused,
     readBotTexts: unused,
@@ -473,6 +476,10 @@ export const stubTracker = (): { track: Mock<IntentTracker['track']> } => ({ tra
 // the same for the sessions' tracker (#284)
 export const stubSessionTracker = (): { track: Mock<SessionTracker['track']> } => ({
   track: vi.fn(),
+});
+// the session recovery's wiring point (#567): the resume createBot attaches, kept for a test
+export const stubSessionResumer = (): { attach: Mock<SessionResumer['attach']> } => ({
+  attach: vi.fn(),
 });
 
 export const EMAIL = 'ada@example.test';

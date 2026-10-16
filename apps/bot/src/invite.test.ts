@@ -18,6 +18,7 @@ import {
   inlineRows,
   REFERRAL_VIEW,
   sentPayload,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -35,6 +36,7 @@ function setup(readReferral: BackendClient['readReferral']) {
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend,
     logger,

@@ -62,6 +62,7 @@ import {
   stubTextSource,
   messageAnswer,
   pairsResponse,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   type ApiCall,
@@ -112,6 +113,7 @@ function setup(
     now: () => NOW,
     intentTracker,
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
   });
   const api = captureApi(bot);

@@ -14,6 +14,7 @@ import {
   formatSignedUsd,
   plainTextOf,
   telegramHtml,
+  type PairLabel,
   type SessionSummary,
   type TradingSessionView,
   CONNECT_CALLBACK_DATA,
@@ -52,6 +53,7 @@ import {
   messageAnswer,
   photoAnswer,
   sessionView,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -144,6 +146,7 @@ function setup(
   );
   const logger = fakeLogger();
   const sessionTracker = stubSessionTracker();
+  const sessionResumer = stubSessionResumer();
   const bot = createBot({
     token: '123456:AA-bot-token',
     backend: fakeBackend({
@@ -161,6 +164,7 @@ function setup(
     botInfo: BOT_INFO,
     intentTracker: stubTracker(),
     sessionTracker,
+    sessionResumer,
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
   });
   const api = captureApi(bot);
@@ -172,11 +176,13 @@ function setup(
   // the launch screen's scenes (#418) read the pressed message's id from the update they built
   const pressUpdate = (update: Update) => bot.handleUpdate(update);
   return {
+    bot,
     press,
     pressUpdate,
     send,
     logger,
     sessionTracker,
+    sessionResumer,
     readPairs,
     startSession,
     readSession,
@@ -307,7 +313,7 @@ describe('the session button', () => {
     expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
 
     // #350: a session gone from the backend gets the menu only
-    await entry.edit(telegramHtml`gone`, SESSION_VIEW, 'not_found');
+    await entry.edit(telegramHtml`gone`, null, 'not_found');
     expect(
       rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
     ).toEqual([MENU]);
@@ -1461,5 +1467,72 @@ describe('the launch screen after the start (#418)', () => {
       });
       expect(methods(calls), data).toEqual(['answerCallbackQuery', 'sendMessage']);
     }
+  });
+});
+
+describe('the resume of a tracked session after a restart (#567)', () => {
+  const DONE = sessionView({
+    ...STOPPED,
+    trades: { ...STOPPED.trades, settled: 1, won: 1, profit: SUMMARY.result },
+    lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+  });
+  const RESUMED_MESSAGE_ID = 4321;
+  const tracked = {
+    id: SESSION_ID,
+    telegramUserId: String(USER.id),
+    messageId: RESUMED_MESSAGE_ID,
+    assetId: PAIR_EURUSD.id,
+    startedAt: '2026-10-07T10:00:00.000Z',
+  };
+  const resumed = (scene: ReturnType<typeof setup>, label: PairLabel | null) => {
+    const resume = scene.sessionResumer.attach.mock.calls[0]?.[0];
+    if (resume === undefined) throw new Error('createBot attached no resume');
+    resume(scene.bot.api, 'resumed_bot', tracked, label);
+    expect(scene.sessionTracker.track).toHaveBeenCalledTimes(1);
+    return scene.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
+  };
+
+  it("RS1 tracks the session on the list's message: no view, not recorded again, the deadline from its start", async () => {
+    const scene = setup();
+    const entry = resumed(scene, pairLabel(PAIR_EURUSD));
+    expect(entry).toMatchObject({
+      sessionId: SESSION_ID,
+      telegramUserId: String(USER.id),
+      messageId: RESUMED_MESSAGE_ID,
+      label: pairLabel(PAIR_EURUSD),
+      view: null,
+      record: false,
+      startedAt: Date.parse(tracked.startedAt),
+    });
+    await entry.edit(telegramHtml`edited`, STOPPED);
+    const edit = payloadOf(scene.calls, 'editMessageText');
+    expect(edit).toMatchObject({
+      chat_id: USER.id,
+      message_id: RESUMED_MESSAGE_ID,
+      text: 'edited',
+    });
+    expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
+  });
+
+  it("RS2 the card goes to the owner's chat with the resume's bot username", async () => {
+    const scene = setup();
+    await resumed(scene, pairLabel(PAIR_EURUSD)).card(DONE);
+    const photo = payloadOf(scene.calls, 'sendPhoto');
+    expect(photo?.chat_id).toBe(USER.id);
+    expect(photo?.caption).toContain('@resumed_bot');
+  });
+
+  it('RS3 the label is what the resume was handed; null names the asset by its id', async () => {
+    const scene = setup();
+    const entry = resumed(scene, null);
+    expect(entry.label).toBeNull();
+    await entry.card(DONE);
+    expect(payloadOf(scene.calls, 'sendPhoto')?.caption).toBe(
+      TEXTS.sessionCardCaption({
+        symbol: sessionAssetLabel(null, PAIR_EURUSD.id),
+        profit: SUMMARY.result,
+        botUsername: 'resumed_bot',
+      }).value,
+    );
   });
 });

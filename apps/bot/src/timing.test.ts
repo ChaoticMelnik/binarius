@@ -121,6 +121,7 @@ import {
   type ApiAnswer,
   SESSION_VIEW,
   sessionView,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
 } from './testing';
@@ -133,6 +134,8 @@ import {
   INTENT_TRACK_DRAIN_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  SESSION_RESUME_DRAIN_MS,
+  SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_DRAIN_MS,
   SESSION_TRACK_FIRST_POLL_MS,
@@ -383,6 +386,15 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.stopSessions ?? (() => Promise.resolve([STOPPED_SESSION])))(telegramUserId);
     },
+    // the session tracker's first poll and the recovery's list (#567): no handler makes either
+    recordSessionMessage: () => {
+      backend += 1;
+      return Promise.reject(new Error('no handler records a status message'));
+    },
+    listTrackedSessions: () => {
+      backend += 1;
+      return Promise.reject(new Error('no handler lists the tracked sessions'));
+    },
     setStake: (telegramUserId, mode, amount) => {
       backend += 1;
       return (branch.setStake ?? ((_id, _mode, saved) => Promise.resolve({ saved })))(
@@ -438,6 +450,7 @@ async function observe(branch: Branch): Promise<Calls> {
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),
@@ -3538,6 +3551,12 @@ describe("the demo session tracker's bounds", () => {
       2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS,
     );
     expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+
+  it("drains a recovery pass's list and catalog inside the shutdown budget (#567)", () => {
+    expect(SESSION_RESUME_DRAIN_MS).toBe(2 * BACKEND_REQUEST_TIMEOUT_MS);
+    expect(SESSION_RESUME_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+    expect(SESSION_RESUME_INTERVAL_MS).toBe(600_000);
   });
 });
 
