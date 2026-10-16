@@ -387,8 +387,8 @@ export function createTradingSessionComposer<C extends Context>({
       return;
     }
     if (catalog === undefined) {
-      // the waiting message is gone with the stop: a slow or refused delete never withholds the
-      // reply, and the session message is tracked already (its first poll recorded it, #567)
+      // the waiting message goes with the stop: a refused delete never withholds the reply, and
+      // the session message is tracked already (its first poll recorded it, #567)
       await removePressedMessage(ctx, 'the pressed message');
       await replyHtml(ctx, sessionStopReplyText(view), {
         reply_markup: sessionCardKeyboard(view, cashierUrl),
