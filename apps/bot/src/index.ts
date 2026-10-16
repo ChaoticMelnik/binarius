@@ -18,6 +18,7 @@ import {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_FIRST_POLL_MS,
@@ -48,6 +49,7 @@ const sessionTracker = createSessionTracker({
   firstPollMs: SESSION_TRACK_FIRST_POLL_MS,
   pollMs: SESSION_TRACK_POLL_MS,
   deadlineMs: SESSION_TRACK_DEADLINE_MS,
+  resumeGapMs: SESSION_RESUME_GAP_MS,
 });
 
 // tracks the sessions again after a restart (#567); createBot hands it the session composer's resume

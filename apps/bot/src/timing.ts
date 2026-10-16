@@ -6,6 +6,7 @@ import {
   TRADING_SESSION_START_BUDGET_MS,
   TRADING_SESSION_VIEW_BUDGET_MS,
   TRADING_SIGNAL_BUDGET_MS,
+  TRACKED_SESSIONS_MAX,
 } from '@binarius/shared';
 
 // Every bound the bot runs under, and what each one bounds. The chain is checked at import, so
@@ -280,10 +281,17 @@ export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEG
 // The recovery of session tracking after a restart (#567, session-resume.ts): a pass at the
 // start and one every 10 minutes, each one list request and one catalog read per bot process.
 // What its stop() can be waiting for is a pass's list and catalog, counted one after the other;
-// the entries it hands the tracker are memory. The interval is no link of the chain: getting it
-// wrong only changes how often the list is read.
+// the entries it hands the tracker are memory. The interval is a link of the chain through the
+// pace below.
 export const SESSION_RESUME_INTERVAL_MS = 600_000;
 export const SESSION_RESUME_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS;
+// The pace of the recovered entries' first polls (session-tracker.ts → resumeGapMs): each is one
+// readSession, at most one editMessageText and, for a session whose card is due, its sendPhoto
+// and editMessageReplyMarkup. 4 a second lays a full list (TRACKED_SESSIONS_MAX) out within one
+// interval of the bot's start, the task's 10 minutes; it comes on top of the backend's 20 + 9 a
+// second on the same token (docs/bot-session.md → Accepted risks, 47).
+export const SESSION_RESUME_PER_SECOND = 4;
+export const SESSION_RESUME_GAP_MS = 1000 / SESSION_RESUME_PER_SECOND;
 
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
@@ -308,6 +316,12 @@ export const TIMING_CHAIN_HOLDS =
   SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  // the first polls of a full recovery list start within one interval of the bot's start (#567)
+  STARTUP_BUDGET_MS +
+    SESSION_RESUME_DRAIN_MS +
+    SESSION_TRACK_FIRST_POLL_MS +
+    TRACKED_SESSIONS_MAX * SESSION_RESUME_GAP_MS <
+    SESSION_RESUME_INTERVAL_MS &&
   // the pre-checkout: the route inside the call, the call and the answer inside Telegram's 10 s
   STARS_PRECHECKOUT_BUDGET_MS <= STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS &&
   STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS <= BACKEND_REQUEST_TIMEOUT_MS &&

@@ -27,6 +27,7 @@ import {
 } from './testing';
 import { sessionStatusText, TEXTS } from './texts';
 import {
+  SESSION_RESUME_GAP_MS,
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_FIRST_POLL_MS,
   SESSION_TRACK_POLL_MS,
@@ -35,6 +36,7 @@ import {
 const FIRST = SESSION_TRACK_FIRST_POLL_MS;
 const POLL = SESSION_TRACK_POLL_MS;
 const DEADLINE = SESSION_TRACK_DEADLINE_MS;
+const GAP = SESSION_RESUME_GAP_MS;
 const LABEL = pairLabel(PAIR_EURUSD);
 
 const GONE = () =>
@@ -84,6 +86,7 @@ function setup({
     firstPollMs: FIRST,
     pollMs: POLL,
     deadlineMs: DEADLINE,
+    resumeGapMs: GAP,
     ...(maxEntries === undefined ? {} : { maxEntries }),
   });
   const target = () => {
@@ -641,12 +644,26 @@ describe('the session tracker', () => {
       const { edits, edit } = target();
       tracker.track(request({ record: true, edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(recordSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
+      expect(recordSessionMessage.mock.calls).toEqual([
+        [SESSION_ID, String(USER.id), MESSAGE_ID, undefined],
+      ]);
       expect(readSession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL);
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
       expect(readSession).toHaveBeenCalledTimes(1);
       expect(texts(edits)).toEqual([shown(trading), shown(stoppedClosed)]);
+    });
+
+    it('P8 a record names the message it replaces; the next poll only reads', async () => {
+      const { tracker, readSession, recordSessionMessage, request } = setup({ script: [trading] });
+      tracker.track(request({ record: true, replacesMessageId: 76 }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(recordSessionMessage.mock.calls).toEqual([
+        [SESSION_ID, String(USER.id), MESSAGE_ID, 76],
+      ]);
+      expect(readSession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(readSession).toHaveBeenCalledTimes(1);
     });
 
     it('P2 a failed record is asked again on the next poll, logged once', async () => {
@@ -861,6 +878,142 @@ describe('the session tracker', () => {
       expect(forgetSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
       expect(card).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
+    });
+  });
+
+  // A pass hands the tracker up to TRACKED_SESSIONS_MAX recovered entries at once (#567 review
+  // round 2, Major 1): their first polls go in slots GAP apart, so a restart is no burst
+  describe('the recovered entries paced (#567)', () => {
+    const idOf = (i: number) => `00000000-0000-4000-8000-00000000010${i}`;
+    const recovered = (i: number) => ({ sessionId: idOf(i), view: null, record: false }) as const;
+    const readsOf = (readSession: { mock: { calls: unknown[][] } }, id: string) =>
+      readSession.mock.calls.filter((call) => call[0] === id).length;
+
+    it('W1 five recovered entries tracked at once edit one a slot, never two in one GAP', async () => {
+      const { tracker, readSession, request, target } = setup({ script: [trading] });
+      const { edits, edit } = target();
+      for (let i = 0; i < 5; i += 1) tracker.track(request({ ...recovered(i), edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(edits).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(GAP - 1);
+      expect(edits).toHaveLength(1);
+      for (let slot = 2; slot <= 5; slot += 1) {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(edits).toHaveLength(slot);
+        await vi.advanceTimersByTimeAsync(GAP - 1);
+        expect(edits).toHaveLength(slot);
+      }
+      expect(readSession).toHaveBeenCalledTimes(5);
+    });
+
+    it('W2 a pressed entry tracked after recovered ones polls at FIRST, not after the slots', async () => {
+      const { tracker, recordSessionMessage, request } = setup({ script: [trading] });
+      for (let i = 0; i < 3; i += 1) tracker.track(request(recovered(i)));
+      tracker.track(request({ sessionId: idOf(9), record: true }));
+      await vi.advanceTimersByTimeAsync(FIRST - 1);
+      expect(recordSessionMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(recordSessionMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('W3 the slots carry over between calls, and an idle pacer adds no wait', async () => {
+      const { tracker, readSession, request } = setup({ script: [trading] });
+      tracker.track(request(recovered(0)));
+      tracker.track(request(recovered(1)));
+      tracker.track(request(recovered(2)));
+      await vi.advanceTimersByTimeAsync(FIRST + 2 * GAP - 1);
+      expect(readsOf(readSession, idOf(2))).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(readsOf(readSession, idOf(2))).toBe(1);
+      await vi.advanceTimersByTimeAsync(POLL);
+      tracker.track(request(recovered(3)));
+      await vi.advanceTimersByTimeAsync(FIRST - 1);
+      expect(readsOf(readSession, idOf(3))).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(readsOf(readSession, idOf(3))).toBe(1);
+    });
+
+    it('W4 a press on a recovered entry waiting for its slot polls at FIRST, and the slot polls nothing', async () => {
+      const { tracker, readSession, recordSessionMessage, request } = setup({ script: [trading] });
+      for (let i = 0; i < 3; i += 1) tracker.track(request(recovered(i)));
+      tracker.track(request({ sessionId: idOf(2), record: true }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(recordSessionMessage).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(3 * GAP);
+      expect(readSession).toHaveBeenCalledTimes(2);
+      expect(readsOf(readSession, idOf(2))).toBe(0);
+    });
+
+    it('W5 stop() clears the pending slots', async () => {
+      const { tracker, readSession, request } = setup({ script: [trading] });
+      for (let i = 0; i < 3; i += 1) tracker.track(request(recovered(i)));
+      await tracker.stop();
+      await vi.advanceTimersByTimeAsync(FIRST + 3 * GAP);
+      expect(readSession).not.toHaveBeenCalled();
+    });
+  });
+
+  // What this process drew on a message is remembered (#567 review round 2, Major 1): a recovered
+  // entry of it edits only when what it prints changed, so a stuck session costs a pass one read
+  describe('what was drawn remembered (#567)', () => {
+    const past = () => Date.now() - DEADLINE - 1;
+    const reviewed = sessionView({
+      ...stoppedWith(live(TradeIntentStatus.ManualReview)),
+      stopReason: TradingSessionStopReason.ManualReview,
+    });
+    const moved = sessionView({ ...reviewed, ...settledOne });
+    const recovered = { view: null, record: false } as const;
+
+    it('Y1 a stuck session recovered again on its message reads once more and does not edit', async () => {
+      const { tracker, readSession, request, target } = setup({ script: [reviewed] });
+      const first = target();
+      tracker.track(request({ ...recovered, startedAt: past(), edit: first.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(first.edits).toHaveLength(1);
+      expect(tracker.size()).toBe(0);
+      const second = target();
+      tracker.track(request({ ...recovered, startedAt: past(), edit: second.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(readSession).toHaveBeenCalledTimes(2);
+      expect(second.edits).toEqual([]);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('Y2 the same, when what it prints changed, edits once', async () => {
+      const { tracker, request, target } = setup({ script: [reviewed, moved] });
+      tracker.track(request({ ...recovered, startedAt: past(), edit: target().edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      const second = target();
+      tracker.track(request({ ...recovered, startedAt: past(), edit: second.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(second.edits)).toEqual([shown(moved)]);
+    });
+
+    it("Y3 a recovered entry on another message does not use the first message's memory", async () => {
+      const { tracker, request, target } = setup({ script: [reviewed] });
+      tracker.track(request({ ...recovered, startedAt: past(), edit: target().edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      const second = target();
+      tracker.track(
+        request({ ...recovered, messageId: MESSAGE_ID + 1, startedAt: past(), edit: second.edit }),
+      );
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(second.edits)).toEqual([shown(reviewed)]);
+    });
+
+    it('Y4 a lost message leaves no memory: the next entry of it edits again', async () => {
+      const { tracker, forgetSessionMessage, request, target } = setup({
+        script: [trading, SESSION_VIEW],
+      });
+      tracker.track(request({ view: SESSION_VIEW, edit: () => Promise.reject(FORBIDDEN()) }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(forgetSessionMessage).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(0);
+      const second = target();
+      tracker.track(request({ ...recovered, edit: second.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(second.edits)).toEqual([shown(SESSION_VIEW)]);
     });
   });
 });
