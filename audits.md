@@ -3269,6 +3269,12 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 |---------|----------|-------|------------|-----------------|
 | m1: the worst path of `stop()` added the summary's 3 s balance refresh to the step's edit + gone + send (~9.3 of 10 s) | Minor | unverified-claim | the timing link modelled the step path and the summary path as alternatives without checking where `sendSummary` tests `stopped` | Architect (timing link) |
 | m6: docs promise "never a lost step" with two senders; edits do not keep that | Minor | instance-vs-class | the guarantee was carried over from new messages to edits without checking the edit path | Architect / Implementer (docs) |
+| m2: the docs' "another 4xx" row says the next edit still shows the block, which is false for a cycle's last step and a split continuation | Minor | instance-vs-class | the recovery claim was written for the middle of a cycle and not checked at its two ends | Implementer (docs) |
+| m3: the header comment of `session-notices.ts` says "send nothing twice", while accepted risks 2-3 repeat a block | Minor | other | a comment carried over from #464 was not re-read against the plan's accepted risks | Implementer |
+| m4: duplicate guard, a split literal built twice, an over-long comment line | Minor | other | cleanups left after the builder API moved into the backend | Implementer |
+| m5: the retry key `${sessionId}:${claimed}` is built in two places | Minor | single-source | `failed()` rebuilds a key its caller already has | Implementer |
+| m7: the "cycle message is gone" warning logs no `errorLogFields(error)` | Minor | instance-vs-class | a new failure line did not follow the file's logging pattern (Rule 8) | Implementer |
+| m8: the header of `session-notice-ops.ts` still says "each trade as its own message" | Minor | other | a header written for #464 was not updated by the change it describes | Implementer |
 | Prettier's reflow of unrelated tests in `schema.db.test.ts` (fix-up commit `abaf9e4`) | process | other | the implementer rule says to format only changed files, but a changed existing file gets reflowed as a whole | Implementer |
 
 ### Process improvement proposals
