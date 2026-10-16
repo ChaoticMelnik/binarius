@@ -204,6 +204,43 @@ describe('the session notices (#464)', () => {
   });
 });
 
+describe('the waiting message (#536)', () => {
+  it('sends it as Telegram HTML without sound, with its keyboard, answering its message_id', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendMessage', () => ({ message_id: 4243 }));
+    const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.sessionStopButton, 'session:x');
+    expect(
+      await push.sendSessionWaiting(TELEGRAM_USER_ID, {
+        text: telegramHtml`<b>ждём</b>`,
+        reply_markup,
+      }),
+    ).toBe(4243);
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    const payload = sentPayload(calls, 'sendMessage');
+    expect(payload).toMatchObject({
+      chat_id: '9007199254740993',
+      text: '<b>ждём</b>',
+      parse_mode: 'HTML',
+      disable_notification: true,
+    });
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.sessionStopButton, callback_data: 'session:x' },
+    ]);
+  });
+
+  it('deletes it by its id', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    await push.deleteSessionWaiting(TELEGRAM_USER_ID, 4243);
+    expect(calls.map((call) => call.method)).toEqual(['deleteMessage']);
+    expect(sentPayload(calls, 'deleteMessage')).toEqual({
+      chat_id: '9007199254740993',
+      message_id: 4243,
+    });
+  });
+});
+
 describe('the deposit push', () => {
   const money = (value: string) => value as DecimalString;
   const sent = async (balance: Parameters<ClientPush['sendDepositCredited']>[1]) => {

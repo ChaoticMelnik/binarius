@@ -107,6 +107,10 @@ export interface ClientPush {
   editSessionTrade(telegramUserId: bigint, messageId: number, text: TelegramHtml): Promise<void>;
   // the finished session's summary (#464): with sound and its next step
   sendSessionSummary(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
+  // The waiting message under the session's messages (#536, docs/bot-session.md → The waiting
+  // message): without sound, with its «⏹». Resolves to its message_id, which its delete takes.
+  sendSessionWaiting(telegramUserId: bigint, message: ClientPushMessage): Promise<number>;
+  deleteSessionWaiting(telegramUserId: bigint, messageId: number): Promise<void>;
 }
 
 export interface CreateClientPushOptions {
@@ -152,6 +156,20 @@ export function createClientPush({
       parse_mode: 'HTML',
     });
   };
+  const sendSessionWaiting = async (
+    telegramUserId: bigint,
+    { text, reply_markup }: ClientPushMessage,
+  ) => {
+    const sent = await api.sendMessage(String(telegramUserId), text.value, {
+      parse_mode: 'HTML',
+      disable_notification: true,
+      reply_markup,
+    });
+    return sent.message_id;
+  };
+  const deleteSessionWaiting = async (telegramUserId: bigint, messageId: number) => {
+    await api.deleteMessage(String(telegramUserId), messageId);
+  };
   return {
     api,
     sendLink: (telegramUserId, outcome) => send(telegramUserId, linkPushMessage(outcome)),
@@ -161,5 +179,7 @@ export function createClientPush({
     sendSessionTrade,
     editSessionTrade,
     sendSessionSummary: send,
+    sendSessionWaiting,
+    deleteSessionWaiting,
   };
 }

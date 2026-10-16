@@ -17,11 +17,12 @@ import {
 } from '@binarius/shared';
 import type { ClaimedSessionTrade } from '@binarius/db';
 import { inlineButtons } from '../admin/testing';
-import { CLIENT_LABELS, setBotTextSource } from '../auth/texts';
+import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
 import {
   pairOf,
   sessionCycleMessage,
   sessionSummaryMessage,
+  sessionWaitingMessage,
   type SessionCycleNotice,
 } from './session-notice-messages';
 
@@ -269,6 +270,17 @@ describe('sessionSummaryMessage (#464)', () => {
       shared.sessionSummaryText(null, 77, view).value,
     );
     expect(() => sessionSummaryMessage({ ...view, settings: null }, null)).toThrow();
+  });
+});
+
+describe('sessionWaitingMessage (#536)', () => {
+  it('is the wait for a signal under the stop button marked as pressed under it', () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const message = sessionWaitingMessage(id);
+    expect(message.text.value).toBe(CLIENT_TEXTS.sessionWaitingSignal.value);
+    expect(inlineButtons({ reply_markup: message.reply_markup })).toEqual([
+      { text: CLIENT_LABELS.sessionStopButton, callback_data: `session:stop:${id}:w` },
+    ]);
   });
 });
 
