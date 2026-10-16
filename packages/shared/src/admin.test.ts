@@ -27,6 +27,10 @@ import {
   adminBrokerAccountsResponseSchema,
   adminBrokerAccountsSearchParams,
   adminBrokerAccountViewSchema,
+  adminServiceAccountsResponseSchema,
+  adminServiceAccountViewSchema,
+  adminServiceMarkRequestSchema,
+  adminServiceMarkResponseSchema,
   safeParseAdminBrokerAccountsQuery,
   adminConfirmRequestSchema,
   adminConfirmResponseSchema,
@@ -363,6 +367,7 @@ describe('admin read responses', () => {
     tokenRotatedAt: AT,
     createdAt: AT,
     updatedAt: AT,
+    serviceSince: null,
   };
   const detail = {
     id: listItem.id,
@@ -861,6 +866,7 @@ describe('broker accounts contracts (#342)', () => {
     tokenRotatedAt: AT,
     createdAt: AT,
     updatedAt: AT,
+    serviceSince: null,
     userId: U1,
     telegramUserId: '4242',
   };
@@ -886,7 +892,7 @@ describe('broker accounts contracts (#342)', () => {
       'userId',
       'telegramUserId',
     ]);
-    expect(Object.keys(adminBrokerAccountListItemSchema.shape)).toHaveLength(14);
+    expect(Object.keys(adminBrokerAccountListItemSchema.shape)).toHaveLength(15);
   });
 
   const withoutOwner = Object.fromEntries(Object.entries(halted).filter(([k]) => k !== 'userId'));
@@ -976,6 +982,78 @@ describe('broker accounts contracts (#342)', () => {
     it('writes nothing for an empty query', () => {
       expect(adminBrokerAccountsSearchParams({}).size).toBe(0);
     });
+  });
+});
+
+describe('service accounts contracts (#391)', () => {
+  const view = {
+    id: '00000000-0000-4000-8000-000000000020',
+    brokerUserId: 'broker-7',
+    email: 'ada@example.com',
+    isPartnerClient: false,
+    status: 'revoked',
+    authRevokedReason: 'refresh_outcome_unknown',
+    tradingHalted: false,
+    haltedReason: null,
+    accessTokenExpiresAt: AT,
+    tokenRotatedAt: null,
+    createdAt: AT,
+    updatedAt: AT,
+    serviceSince: AT,
+  };
+  const row = {
+    ...view,
+    userId: '00000000-0000-4000-8000-000000000010',
+    telegramUserId: '4242',
+    working: false,
+    notWorkingReason: 'revoked',
+  };
+  const page = { me: ME, min: 3, working: 0, accounts: [row] };
+  const mark = { me: ME, outcome: 'marked', account: view };
+
+  it('accepts a page, a working row without a reason and an unmarked view', () => {
+    expect(adminServiceAccountsResponseSchema.safeParse(page).success).toBe(true);
+    expect(
+      adminServiceAccountViewSchema.safeParse({ ...row, working: true, notWorkingReason: null })
+        .success,
+    ).toBe(true);
+    expect(
+      adminServiceMarkResponseSchema.safeParse({
+        ...mark,
+        outcome: 'unmarked',
+        account: { ...view, serviceSince: null },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('SC2: refuses an extra key at every level of the four shapes', () => {
+    expect(adminServiceAccountViewSchema.safeParse({ ...row, extra: 1 }).success).toBe(false);
+    expect(adminServiceAccountsResponseSchema.safeParse({ ...page, extra: 1 }).success).toBe(false);
+    expect(
+      adminServiceAccountsResponseSchema.safeParse({ ...page, accounts: [{ ...row, x: 1 }] })
+        .success,
+    ).toBe(false);
+    expect(
+      adminServiceAccountsResponseSchema.safeParse({ ...page, me: { ...ME, extra: 1 } }).success,
+    ).toBe(false);
+    expect(adminServiceMarkRequestSchema.safeParse({ service: true, x: 1 }).success).toBe(false);
+    expect(adminServiceMarkResponseSchema.safeParse({ ...mark, extra: 1 }).success).toBe(false);
+    expect(
+      adminServiceMarkResponseSchema.safeParse({ ...mark, account: { ...view, extra: 1 } }).success,
+    ).toBe(false);
+  });
+
+  it.each([['yes'], [1], [null], [undefined]])('refuses service = %j', (service) => {
+    expect(adminServiceMarkRequestSchema.safeParse({ service }).success).toBe(false);
+  });
+
+  it('refuses an unknown reason and a not_found outcome', () => {
+    expect(
+      adminServiceAccountViewSchema.safeParse({ ...row, notWorkingReason: 'other' }).success,
+    ).toBe(false);
+    expect(
+      adminServiceMarkResponseSchema.safeParse({ ...mark, outcome: 'not_found' }).success,
+    ).toBe(false);
   });
 });
 

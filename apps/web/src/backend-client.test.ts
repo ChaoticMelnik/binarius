@@ -1055,6 +1055,7 @@ describe('body size', () => {
       tokenRotatedAt: AT,
       createdAt: AT,
       updatedAt: AT,
+      serviceSince: AT,
     };
     const intent = {
       id: UUID,

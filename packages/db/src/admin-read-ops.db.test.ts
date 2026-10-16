@@ -251,6 +251,7 @@ describe('readUserForAdmin', () => {
       'tokenRotatedAt',
       'createdAt',
       'updatedAt',
+      'serviceSince',
     ]);
     expect(view.email).toBeNull();
     expect(view.authRevokedReason).toBe(AuthRevokedReason.RefreshExpired);

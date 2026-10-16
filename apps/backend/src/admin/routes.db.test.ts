@@ -1848,6 +1848,7 @@ describe('the read pages (#107)', () => {
       'tokenRotatedAt',
       'createdAt',
       'updatedAt',
+      'serviceSince',
     ]);
     expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
     const body = adminUserResponseSchema.parse(raw);

@@ -2600,6 +2600,26 @@ const SNAPSHOT_REQUIRED = [
   ['restObservedAt', 'rest_observed_at'],
 ] as const;
 
+describe('broker_accounts.service_since (#391)', () => {
+  it('S1: is NULL by default and stores a timestamp', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [before] = await tx
+        .select({ serviceSince: brokerAccounts.serviceSince })
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, seed.accountId));
+      expect(before?.serviceSince).toBeNull();
+      const at = new Date('2026-10-16T08:00:00.123Z');
+      const [after] = await tx
+        .update(brokerAccounts)
+        .set({ serviceSince: at })
+        .where(eq(brokerAccounts.id, seed.accountId))
+        .returning({ serviceSince: brokerAccounts.serviceSince });
+      expect(after?.serviceSince).toEqual(at);
+    });
+  });
+});
+
 describe('broker_balance_snapshots', () => {
   it.each(SNAPSHOT_AMOUNTS)('accepts a zero %s', async (field) => {
     await rolledBack(async (tx) => {
