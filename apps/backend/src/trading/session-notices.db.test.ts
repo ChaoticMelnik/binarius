@@ -1213,6 +1213,17 @@ describe('the waiting message (#536)', () => {
     expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'waiting']);
   });
 
+  it('W2 a trade settled before the first waiting message: the trade first, the waiting message under it', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    await settled(target, '4.6');
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'waiting']);
+    const [trade] = sendsTo(captured.calls, target);
+    expect((await waitingOf(target)).slot).toBe(answered.get(trade!.payload));
+  });
+
   it('W3 a new cycle message: the waiting message deleted before it and sent again after it', async () => {
     const { target, run, id } = await waiting();
     await settled(target, '4.6');
