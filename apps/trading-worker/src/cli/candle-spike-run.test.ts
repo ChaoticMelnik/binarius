@@ -18,10 +18,8 @@ import { exitCodeOf } from './candle-spike';
 import { renderReport } from './candle-spike-report';
 import {
   choosePairs,
-  RAW_PROBE_IDS,
   runSpike,
   type IntervalResult,
-  type RawSocket,
   type SpikeDeps,
   type SpikeOptions,
   type SpikeReportInput,
@@ -118,7 +116,6 @@ interface Options {
   drop?: { fromMs: number; toMs: number };
   getChart?: (request: ChartRequest, h: Harness) => Promise<Candle[]>;
   skipRow?: (request: ChartRequest, label: number) => boolean;
-  rawAuth?: 'success' | 'error' | 'silent';
   options?: Partial<SpikeOptions>;
   onSleep?: (h: Harness) => void;
 }
@@ -130,8 +127,6 @@ interface Harness {
   sleeps: number[];
   lines: string[];
   chartCalls: ChartRequest[];
-  rawEmits: { event: string; payload: unknown }[];
-  rawDisconnected: boolean;
   stop: AbortController;
   run(): Promise<SpikeRun>;
 }
@@ -146,8 +141,6 @@ function harness(o: Options = {}): Harness {
     sleeps: [],
     lines: [],
     chartCalls: [],
-    rawEmits: [],
-    rawDisconnected: false,
     stop: new AbortController(),
   } as unknown as Harness;
 
@@ -190,37 +183,6 @@ function harness(o: Options = {}): Harness {
   };
   h.client = client;
 
-  const raw = {
-    handlers: new Map<string, (...args: unknown[]) => void>(),
-    any: undefined as ((event: string, ...args: unknown[]) => void) | undefined,
-    connected: false,
-  };
-  let rawOpen = false;
-  const rawSocket: RawSocket = {
-    on: (event, listener) => raw.handlers.set(event, listener),
-    onAny: (listener) => {
-      raw.any = listener;
-    },
-    emit(event, payload) {
-      h.rawEmits.push({ event, payload });
-      if (event === 'user.auth') {
-        if (o.rawAuth === 'error') raw.handlers.get('user.auth.error')?.({ message: 'no' });
-        if ((o.rawAuth ?? 'success') === 'success') raw.handlers.get('user.auth.success')?.();
-      }
-      if (event === 'price.subscribe') {
-        const ids = (payload as { assets: number[] }).assets;
-        raw.any?.('price.subscribed', ids);
-        for (const id of ids.slice(0, 3)) {
-          raw.any?.('price.update', [id, priceAt(id, h.clock), h.clock]);
-        }
-      }
-    },
-    disconnect() {
-      h.rawDisconnected = true;
-      raw.handlers.get('disconnect')?.('io client disconnect');
-    },
-  };
-
   const ticking = o.ticking ?? (() => true);
   const advance = (to: number) => {
     for (const t of tickTimes(h.clock, to)) {
@@ -245,10 +207,6 @@ function harness(o: Options = {}): Harness {
 
   const deps: SpikeDeps = {
     openClient: () => client,
-    openRawSocket: () => {
-      rawOpen = true;
-      return rawSocket;
-    },
     rest: {
       listPairs: () => Promise.resolve(catalog),
       getChart(request) {
@@ -263,10 +221,6 @@ function harness(o: Options = {}): Harness {
     now: () => h.clock,
     sleep(ms) {
       h.sleeps.push(ms);
-      if (rawOpen && !raw.connected) {
-        raw.connected = true;
-        raw.handlers.get('connect')?.();
-      }
       advance(h.clock + ms);
       o.onSleep?.(h);
       return Promise.resolve();
@@ -277,7 +231,6 @@ function harness(o: Options = {}): Harness {
     timing: {
       readyTimeoutMs: 1_000,
       capacityWindowMs: 2_000,
-      rawProbeWindowMs: 1_000,
       restPaceMs: 10,
       progressEveryMs: 300_000,
       sampleEveryMs: 60_000,
@@ -332,7 +285,7 @@ describe('runSpike setup', () => {
 });
 
 describe('runSpike phase A', () => {
-  it('R2 coverage per 40-id chunk, and one raw message of 41 ids', async () => {
+  it('R2 coverage per 40-id chunk', async () => {
     const catalog = Array.from({ length: 90 }, (_, i) => pair(1_000 + i));
     const h = harness({ catalog, ticking: (id) => id < 1_040, options: { minutes: 1 } });
     const report = await ran(h);
@@ -343,24 +296,6 @@ describe('runSpike phase A', () => {
       { size: 10, withTicks: 0 },
     ]);
     expect([report.capacity.subscribed, report.capacity.withTicks]).toEqual([90, 40]);
-    const subscribes = h.rawEmits.filter((emit) => emit.event === 'price.subscribe');
-    expect(subscribes).toHaveLength(1);
-    expect((subscribes[0]!.payload as { assets: number[] }).assets).toHaveLength(RAW_PROBE_IDS);
-    expect(report.raw).toEqual({
-      outcome: 'ran',
-      echoIds: 41,
-      events: ['price.subscribed', 'price.update'],
-      idsWithTicks: 3,
-      disconnectedByServer: false,
-    });
-    expect(h.rawDisconnected).toBe(true);
-  });
-
-  it('the raw probe refused at user.auth: a row, and the run goes on', async () => {
-    const catalog = Array.from({ length: 45 }, (_, i) => pair(1_000 + i));
-    const report = await ran(harness({ catalog, rawAuth: 'error', options: { minutes: 1 } }));
-    expect(report.raw.outcome).toBe('auth_failed');
-    expect(report.compared).toBeGreaterThan(0);
   });
 });
 
@@ -409,7 +344,7 @@ describe('runSpike phase B and the comparison', () => {
   });
 
   it('R4 a drop mid-run is one hole; the candles around it are counted apart', async () => {
-    const fromMs = T0 + 2_000 + 1_000 + 60_000;
+    const fromMs = T0 + 2_000 + 60_000;
     const h = harness({ options: { minutes: 3 }, drop: { fromMs, toMs: fromMs + 20_000 } });
     const report = await ran(h);
 
@@ -462,7 +397,7 @@ describe('runSpike phase B and the comparison', () => {
   });
 
   it('R6 SIGINT in phase B: the fetch and the comparison run on the candles so far', async () => {
-    const stopAt = T0 + 2_000 + 1_000 + 90_000;
+    const stopAt = T0 + 2_000 + 90_000;
     const h = harness({
       options: { minutes: 3 },
       onSleep: (harnessed) => {

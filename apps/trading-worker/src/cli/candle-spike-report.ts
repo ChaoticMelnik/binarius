@@ -138,7 +138,6 @@ function summary(input: SpikeReportInput, totals: Totals): string[] {
     '## Summary (for #404)',
     '',
     `- subscription cap: ${silent.length === 0 ? `none observed up to ${capacity.subscribed} ids` : `chunks without ticks: ${silent.join(', ')} of ${capacity.chunks.length}`}`,
-    `- 41 ids in one message: ${rawLine(input)}`,
     `- open / close exact: ${share(
       sum(totals.candles, (c) => c.openEq),
       compared,
@@ -161,15 +160,6 @@ function summary(input: SpikeReportInput, totals: Totals): string[] {
     `- receipt delay p95: ${input.delay === undefined ? '-' : `${input.delay.p95} ms`}`,
     `- cpu: ${fixed(input.process.cpuPct)} %, max RSS ${fixed(input.process.maxRssMb)} MB`,
   ];
-}
-
-function rawLine(input: SpikeReportInput): string {
-  const { raw } = input;
-  if (raw.outcome !== 'ran')
-    return `${raw.outcome}${raw.detail === undefined ? '' : ` (${raw.detail})`}`;
-  const echo = raw.echoIds === undefined ? 'none' : `${raw.echoIds} ids`;
-  const events = raw.events.length === 0 ? 'none' : raw.events.join(', ');
-  return `echo ${echo}; events ${events}; ids with ticks ${raw.idsWithTicks}; ${raw.disconnectedByServer ? 'disconnected' : 'stayed'}`;
 }
 
 export function renderReport(input: SpikeReportInput): string {
@@ -199,7 +189,6 @@ export function renderReport(input: SpikeReportInput): string {
     '',
     `- subscribed ${capacity.subscribed}, with ticks ${capacity.withTicks}; open ${capacity.open.withTicks} of ${capacity.open.subscribed}, closed ${capacity.closed.withTicks} of ${capacity.closed.subscribed}`,
     `- first tick after the subscribe: ${capacity.firstTickDelayMs === undefined ? '-' : `median ${capacity.firstTickDelayMs.median} ms, max ${capacity.firstTickDelayMs.max} ms`}`,
-    `- 41 ids in one message: ${rawLine(input)}`,
     '',
     '| chunk (send order) | ids | with ticks |',
     '|---|---|---|',
