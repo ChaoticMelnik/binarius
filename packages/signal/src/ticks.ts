@@ -22,12 +22,15 @@ export interface CandleBuilder {
   push(tick: Tick): void;
   // ascending, a copy
   candles(): Candle[];
-  // the timestamp of the newest accepted tick
+  // the timestamp of the newest tick that was neither late nor invalid
   readonly watermark: number | undefined;
-  // drops every candle whose span [timestamp, timestamp + intervalMs) overlaps [fromMs, toMs]
+  // drops every candle whose span [timestamp, timestamp + intervalMs) overlaps [fromMs, toMs], and
+  // builds none for a bucket it reaches; finite, fromMs <= toMs
   markHole(fromMs: number, toMs: number): void;
   // ticks of a bucket older than the current one, dropped
   readonly late: number;
+  // ticks of a bucket a marked hole reaches: no candle
+  readonly holed: number;
   // ticks with a non-finite or non-positive price or a non-finite timestamp, dropped
   readonly invalid: number;
 }
@@ -50,7 +53,10 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
   // survives markHole: the next candle still opens at the last close the broker's series had
   let lastClose: number | undefined;
   let watermark: number | undefined;
+  // the first bucket no marked hole reaches
+  let holeUntil = Number.NEGATIVE_INFINITY;
   let late = 0;
+  let holed = 0;
   let invalid = 0;
 
   return {
@@ -65,11 +71,15 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
         return;
       }
       const value = round(price);
+      // an older tick inside the current bucket: close stays with the newest one
+      const newest = watermark === undefined || timestamp >= watermark;
       const current = stored.at(-1);
-      if (current !== undefined && current.timestamp === bucket) {
+      if (bucket < holeUntil) {
+        holed += 1;
+      } else if (current !== undefined && current.timestamp === bucket) {
         current.high = Math.max(current.high, value);
         current.low = Math.min(current.low, value);
-        current.close = value;
+        if (newest) current.close = value;
       } else {
         const open = lastClose ?? value;
         stored.push({
@@ -82,21 +92,30 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
         if (stored.length > capacity) stored.splice(0, stored.length - capacity);
       }
       currentBucket = bucket;
-      lastClose = value;
-      watermark = watermark === undefined ? timestamp : Math.max(watermark, timestamp);
+      if (newest) {
+        lastClose = value;
+        watermark = timestamp;
+      }
     },
     candles: () => stored.map((candle) => ({ ...candle })),
     get watermark() {
       return watermark;
     },
     markHole(fromMs, toMs) {
+      if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs) {
+        throw new RangeError('candle builder: a hole must be finite with fromMs <= toMs');
+      }
       const kept = stored.filter(
-        (candle) => !(candle.timestamp < toMs && candle.timestamp + intervalMs > fromMs),
+        (candle) => !(candle.timestamp <= toMs && candle.timestamp + intervalMs > fromMs),
       );
       stored.splice(0, stored.length, ...kept);
+      holeUntil = Math.max(holeUntil, Math.floor(toMs / intervalMs) * intervalMs + intervalMs);
     },
     get late() {
       return late;
+    },
+    get holed() {
+      return holed;
     },
     get invalid() {
       return invalid;
