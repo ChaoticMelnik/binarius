@@ -395,6 +395,11 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return Promise.reject(new Error('no handler lists the tracked sessions'));
     },
+    // the session tracker's report of a lost message (#567): no handler makes it
+    forgetSessionMessage: () => {
+      backend += 1;
+      return Promise.reject(new Error('no handler forgets a status message'));
+    },
     setStake: (telegramUserId, mode, amount) => {
       backend += 1;
       return (branch.setStake ?? ((_id, _mode, saved) => Promise.resolve({ saved })))(

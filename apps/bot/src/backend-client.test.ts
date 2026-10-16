@@ -38,6 +38,7 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
+  safeParseForgetSessionStatusMessageResponse,
   safeParseTrackedSessionsResponse,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
@@ -1397,6 +1398,38 @@ describe('recordSessionMessage (#567)', () => {
   });
 });
 
+describe('forgetSessionMessage (#567)', () => {
+  const forget = (baseUrl: string) =>
+    createBackendClient({ baseUrl, token: TOKEN }).forgetSessionMessage(SESSION_ID, '4242', 77);
+
+  it('posts the owner and the message id to the lost path and returns forgotten', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { forgotten: true });
+    });
+    expect(await forget(baseUrl)).toBe(true);
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/status-message/lost`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', messageId: 77 });
+  });
+
+  it('returns false when nothing was forgotten', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { forgotten: false });
+    });
+    expect(await forget(baseUrl)).toBe(false);
+  });
+
+  it('reports a broken body as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { forgotten: 'yes' });
+    });
+    expect(await rejectionOf(forget(baseUrl))).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+    });
+  });
+});
+
 describe('listTrackedSessions (#567)', () => {
   const row = {
     id: SESSION_ID,
@@ -1958,6 +1991,10 @@ describe('body size', () => {
           })),
         },
         limit: MAX_TRACKED_SESSIONS_BODY_BYTES / 4,
+      },
+      forgetSessionMessage: {
+        parse: safeParseForgetSessionStatusMessageResponse,
+        sample: { forgotten: false },
       },
       stopSessions: {
         parse: safeParseTradingSessionsStoppedResponse,

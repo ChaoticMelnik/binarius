@@ -854,6 +854,7 @@ function scene(options: SceneOptions = {}) {
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
     recordSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
     listTrackedSessions: () => Promise.reject(new Error('not used by these scenes')),
+    forgetSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
     setStake: () => Promise.reject(new Error('not used by these scenes')),
     setTradingMode: () => Promise.reject(new Error('not used by these scenes')),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),

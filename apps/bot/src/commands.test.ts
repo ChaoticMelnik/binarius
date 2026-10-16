@@ -42,6 +42,7 @@ describe('the command menu', () => {
       stopSessions: () => Promise.reject(new Error('not used here')),
       recordSessionMessage: () => Promise.reject(new Error('not used here')),
       listTrackedSessions: () => Promise.reject(new Error('not used here')),
+      forgetSessionMessage: () => Promise.reject(new Error('not used here')),
       setStake: () => Promise.reject(new Error('not used here')),
       setTradingMode: () => Promise.reject(new Error('not used here')),
       readBotTexts: () => Promise.reject(new Error('not used here')),

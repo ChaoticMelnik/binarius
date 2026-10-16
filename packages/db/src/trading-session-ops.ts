@@ -699,6 +699,15 @@ export async function readTradingSessionView(
   );
 }
 
+// The session row belongs to the Telegram user (Rule 13): the owner check of every CAS on
+// trading_sessions by a bot-supplied id, so a foreign id writes nothing, like a missing one.
+const sessionOwnedBy = (telegramUserId: string) => sql`exists (
+  select 1 from ${brokerAccounts}
+    join ${users} on ${users.id} = ${brokerAccounts.userId}
+   where ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+     and ${users.telegramUserId} = ${BigInt(telegramUserId)}
+)`;
+
 // The finished session's summary card, claimed at most once (#318, docs/bot-session.md → The
 // summary card). One CAS UPDATE sets summary_sent_at only when every condition holds: the
 // owner's session (Rule 13, a foreign id reads as a missing one), stopped, not sent before, no
@@ -725,12 +734,7 @@ export async function claimSessionSummary(
           eq(tradingSessions.status, TradingSessionStatus.Stopped),
           isNull(tradingSessions.summarySentAt),
           isNotNull(tradingSessions.finalNoticeSentAt),
-          sql`exists (
-            select 1 from ${brokerAccounts}
-              join ${users} on ${users.id} = ${brokerAccounts.userId}
-             where ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
-               and ${users.telegramUserId} = ${BigInt(telegramUserId)}
-          )`,
+          sessionOwnedBy(telegramUserId),
           sql`not exists (
             select 1 from ${tradeIntents}
              where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
@@ -804,8 +808,9 @@ export async function readActiveTradingSessionView(
 }
 
 // Records the bot's status message of the session (#567, docs/bot-session.md → Recovery after a
-// restart): one CAS UPDATE, only while none is recorded (the first one wins) and only on the
-// owner's session (Rule 13: a foreign id writes nothing, like a missing one). True when it wrote.
+// restart): one CAS UPDATE, only while none is recorded (the first one wins while it lives: a lost
+// one is forgotten, and the next record writes) and only on the owner's session (Rule 13: a
+// foreign id writes nothing, like a missing one). True when it wrote.
 export async function recordSessionStatusMessage(
   db: Db,
   { id, telegramUserId, messageId }: { id: string; telegramUserId: string; messageId: number },
@@ -817,12 +822,29 @@ export async function recordSessionStatusMessage(
       and(
         eq(tradingSessions.id, id),
         isNull(tradingSessions.statusMessageId),
-        sql`exists (
-          select 1 from ${brokerAccounts}
-            join ${users} on ${users.id} = ${brokerAccounts.userId}
-           where ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
-             and ${users.telegramUserId} = ${BigInt(telegramUserId)}
-        )`,
+        sessionOwnedBy(telegramUserId),
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+// Forgets the session's status message (#567): the bot reports it lost when Telegram refused its
+// edit for good (gone or 403). One CAS UPDATE on the same id and the owner's session, so a message
+// recorded after the lost one stays and a foreign id writes nothing (Rule 13). The row then leaves
+// the recovery list. True when it wrote.
+export async function forgetSessionStatusMessage(
+  db: Db,
+  { id, telegramUserId, messageId }: { id: string; telegramUserId: string; messageId: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ statusMessageId: null })
+    .where(
+      and(
+        eq(tradingSessions.id, id),
+        eq(tradingSessions.statusMessageId, messageId),
+        sessionOwnedBy(telegramUserId),
       ),
     )
     .returning({ id: tradingSessions.id });
@@ -849,7 +871,8 @@ end`;
 
 // The sessions the bot tracks again after a restart (#567): a status message recorded, no summary
 // card sent, and not finished with no settled trade and its summary message sent - such a session
-// never gets a card, so there is nothing left to follow. Oldest first, at most `limit`. Not scoped
+// never gets a card, so there is nothing left to follow. A row leaves the list when its card is
+// claimed, when it finishes so, or when its message is lost (forgetSessionStatusMessage). Oldest first, at most `limit`. Not scoped
 // by a user: the bot's internal recovery list (Rule 13), each row naming its owner's chat.
 export async function listTrackedSessions(
   db: Db,

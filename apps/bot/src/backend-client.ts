@@ -18,6 +18,7 @@ import {
   safeParseSessionSummaryResponse,
   safeParseTradeIntentView,
   safeParseTradingAccessResponse,
+  safeParseForgetSessionStatusMessageResponse,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
@@ -55,6 +56,7 @@ import {
   type NotificationLevel,
   type NotificationLevelResponse,
   type PairsCatalogResponse,
+  SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
   type SessionSummary,
@@ -168,6 +170,10 @@ export interface BackendClient {
   ): Promise<TradingSessionView>;
   // the sessions to track again after a restart (#567), oldest first, at most TRACKED_SESSIONS_MAX
   listTrackedSessions(): Promise<TrackedSession[]>;
+  // the recorded status message is lost (#567): Telegram refused its edit for good; the backend
+  // forgets it by the same id, so the session leaves the recovery list. False when nothing was
+  // forgotten: another message is recorded, none is, or the id is not the user's
+  forgetSessionMessage(id: string, telegramUserId: string, messageId: number): Promise<boolean>;
   // the saved stake of the mode, or a bounds refusal with the limits it was checked against (#297,
   // #326); any other failure throws as from every method
   setStake(
@@ -516,6 +522,16 @@ export function createBackendClient({
           messageId,
         }),
       );
+    },
+    async forgetSessionMessage(id, telegramUserId, messageId) {
+      const parsed = safeParseForgetSessionStatusMessageResponse(
+        await post(
+          `trading/sessions/${encodeURIComponent(id)}${SESSION_STATUS_MESSAGE_LOST_SUFFIX}`,
+          { telegramUserId, messageId },
+        ),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.forgotten;
     },
     async listTrackedSessions() {
       const query = new URLSearchParams({ limit: String(TRACKED_SESSIONS_MAX) });

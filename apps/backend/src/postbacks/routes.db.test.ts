@@ -359,6 +359,7 @@ describe('the proxy guard', () => {
       // the bot's session recovery (#567)
       '/trading/sessions/tracked',
       '/trading/sessions/:id/status-message',
+      '/trading/sessions/:id/status-message/lost',
       // public by initData, but reached from web on the internal network only (#11)
       '/deposit/widget-session',
       '/deposit/credited',

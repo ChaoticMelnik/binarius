@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import {
+  SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
   SessionSummaryErrorCode,
@@ -34,6 +35,7 @@ import {
   checkTradingSessionStart,
   claimSessionSummary,
   createTradingSession,
+  forgetSessionStatusMessage,
   listTrackedSessions,
   readActiveTradingSessionView,
   readBalanceSnapshot,
@@ -336,6 +338,27 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     const session = await viewForReply(id.data, telegramUserId);
     if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     return reply.send({ session });
+  });
+
+  // The bot's report of a lost status message (#567): Telegram refused its edit for good, so the
+  // row forgets it and leaves the recovery list. The owner and the message id are in the CAS, so
+  // another user's id, a missing session and another message all answer forgotten: false and
+  // write nothing (Rule 13).
+  const lostMessagePath = `${TRADING_SESSIONS_PATH}/:id${SESSION_STATUS_MESSAGE_LOST_SUFFIX}`;
+  app.post(lostMessagePath, async (request, reply) => {
+    const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
+    const body = safeParseRecordSessionStatusMessageRequest(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'validation', issues: body.error.issues });
+    }
+    const { telegramUserId, messageId } = body.data;
+    const forgotten = await forgetSessionStatusMessage(db, {
+      id: id.data,
+      telegramUserId,
+      messageId,
+    });
+    return reply.send({ forgotten });
   });
 
   // Owner scope is the read; the CAS is by id. A session's account and the account's user never
