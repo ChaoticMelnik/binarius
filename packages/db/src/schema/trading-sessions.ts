@@ -66,8 +66,9 @@ export const tradingSessions = pgTable(
     cycleMessageFrom: integer('cycle_message_from'),
     // The bot's status message of the session (#567, docs/bot-session.md → Recovery after a
     // restart): Telegram's message_id of the first status message the bot tracked it on, so the
-    // bot can track it again after a restart. Written once, only by recordSessionStatusMessage's
-    // CAS (`is null`, the owner in the predicate), never cleared; read by listTrackedSessions.
+    // bot can track it again after a restart. Written by recordSessionStatusMessage's CAS (`is
+    // null`, the owner in the predicate), cleared only by forgetSessionStatusMessage's (the same
+    // id, the owner) once the bot reports it lost; read by listTrackedSessions.
     statusMessageId: integer('status_message_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

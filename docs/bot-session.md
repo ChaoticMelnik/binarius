@@ -425,8 +425,10 @@ One entry per session id, in process memory, like the intent tracker
   when the text is not on screen yet (the poll's edit failed, or a read failed after the last good
   one). An entry that never read a view ends with no edit (#567).
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
-  entry, retried until the deadline. Gone → stop. Anything else thrown → `error` `trading session
-  tracking failed`, stop.
+  entry, retried until the deadline. An edit refused as gone or with any 403 → the message is
+  lost: reported (`POST …/status-message/lost`, [A lost message](#recovery-after-a-restart-567)),
+  stop. Any other edit refusal or a transport failure: `warn` once per entry, retried on the next
+  poll. Anything else thrown → `error` `trading session tracking failed`, stop.
 - **The card** (#318): an entry calls it as it ends on a done view whose final edit landed and
   whose `noticesDone` is set (the backend's summary message went out, #464) — on the poll that sees
   it, or at the deadline — so once. A done view without `noticesDone` is polled on with no edit
@@ -443,9 +445,9 @@ One entry per session id, in process memory, like the intent tracker
 - **The record.** Every entry made by a press (the start, «🔄 Обновить», «⏹», `/stop`) carries its
   message's id; its first poll is `POST /trading/sessions/:id/status-message` in place of the GET,
   one backend call as before, and its answer is the same view. The backend keeps
-  `trading_sessions.status_message_id`: **the first id wins**, a later message of the same session
-  is followed in memory only. A failed record (5xx, transport) is asked again on the next poll;
-  404 ends the entry as a read's would.
+  `trading_sessions.status_message_id`: **the first id wins** while it lives (until it is lost,
+  below), a later message of the same session is followed in memory only. A failed record (5xx,
+  transport) is asked again on the next poll; 404 ends the entry as a read's would.
 - **The list.** `GET /trading/sessions/tracked` returns the sessions with a recorded message and no
   card, except the finished ones with no settled trade whose summary was sent (no card ever comes
   for them), oldest first, at most `TRACKED_SESSIONS_MAX` (2 000) —
@@ -460,8 +462,19 @@ One entry per session id, in process memory, like the intent tracker
   sessions not resumed`, and the next pass reads it again. One pass at a time; `stop()` ends the
   timer and waits for the pass in flight, whose entries are memory.
 - **A session past the deadline** (a stuck one, or a done one still waiting for its summary): the
-  first poll draws its final text and the entry ends, so each pass costs it one GET and at most
-  one edit; its card comes on the first pass after it is due.
+  first poll draws its final text and the entry ends, so each pass costs it one GET and one edit,
+  plus one retry when that edit failed (429, 5xx, transport); its card comes on the first pass
+  after it is due.
+- **A lost message.** An edit refused as gone (`editRefusal`: the message deleted, too old to edit,
+  or no text) or with any 403 (the bot blocked, the account deleted — the backend's own rule,
+  `isTelegramForbidden`, Rule 19) can never land on that message, so it never gets its card. The
+  tracker reports it with `POST /trading/sessions/:id/status-message/lost`
+  ([trading-session.md](trading-session.md#post-tradingsessionsidstatus-messagelost-567)), which
+  clears `status_message_id` only while it is still that id, and the entry ends; the session
+  leaves the list, and the next message the bot records for it is recorded again. The 404 edit
+  («⚠️ Статус сессии недоступен.») reports nothing. A failed report is `warn` `trading session
+  message not forgotten` and is not retried: the next pass tracks the session again, its edit is
+  refused again, and the report goes again.
 - **Not recovered:** a session with no recorded message — started before #567 and never refreshed,
   a restart within the 3 s before the first poll, the CLI's — and a list longer than the ceiling,
   whose newest rows wait.
@@ -517,6 +530,7 @@ id or the symbol.
 - `trading mode line not sent` (`/stop`, #473): Telegram refused the mode line (`method`,
   `telegramErrorCode`)
 - `trading session message not edited`
+- `trading session message not forgotten` (#567): the report of a lost status message failed
 - `the launch screen was not deleted` (#418): the delete refused other than gone or forbidden, or
   failed in transport (`method: deleteMessage`, `telegramErrorCode` or `transportError`, `updateId`)
 - `the launch screen keyboard was not removed` (#418): the strip after a forbidden delete failed
@@ -917,28 +931,39 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 39. **The first recorded message wins** (#567): a session's second status message (a press of the
     session button again, «🔄 Обновить», `/stop`) is followed in memory; after a restart edits and
     the card go to the first one. Both show the one session. Falsifiable: after a restart only the
-    upper of two messages of a session is edited.
+    upper of two messages of a session is edited. A lost first message frees the slot: the next
+    new message the bot records is the one after a restart, not one it already followed in memory,
+    whose record came before the loss.
 40. **Stuck sessions** (#567) — on manual review, or with a stalled worker, longer than
-    `SESSION_TRACK_DEADLINE_MS` from `started_at`: each recovery pass costs each one GET and at
-    most one `editMessageText` — the first poll draws the final text at once (the hint under a
-    session not stopped, the final status under a stopped one) and the entry ends; an unchanged
-    text is «not modified» (shown), a moved age line a silent edit. The card comes on the first pass
+    `SESSION_TRACK_DEADLINE_MS` from `started_at`: each recovery pass costs each one GET and one
+    `editMessageText`, plus one retry when it failed — the first poll draws the final text at
+    once (the hint under a session not stopped, the final status under a stopped one) and the
+    entry ends; an unchanged text is «not modified» (shown), a moved age line a silent edit. The card comes on the first pass
     after the operator settles the trade and the summary is sent. Falsifiable: more than 100 rows
-    of the list with `startedAt` older than a day, or more than one `editMessageText` per session
+    of the list with `startedAt` older than a day, or more than two `editMessageText` per session
     per pass.
 41. **Sessions started before #567** have no recorded message: after a restart they are not
     recovered until a press of «🔄 Обновить» records one. Likewise a restart in the 3 s before a
     new status's first poll. Falsifiable: a card missing for a session started before the deploy
     and finished after a restart of the bot.
 42. **The list's ceiling** (#567): with more than `TRACKED_SESSIONS_MAX` (2 000) open sessions the
-    newest wait for the oldest to close; the oldest first are the stuck ones, so with risk 40 it
-    bounds their number. Falsifiable: the list answering exactly 2 000 rows.
+    newest wait for the oldest to close. A row leaves when its card is claimed, when its session
+    finishes with no settled trade and its summary sent, or when its message is lost; only the
+    stuck ones (risk 40) stay long, and the operator closes them. Falsifiable: the list answering
+    exactly 2 000 rows.
 43. **Up to 10 minutes** (#567) for an entry the tracker dropped later — evicted at
     `SESSION_TRACKER_MAX_ENTRIES` or ended at the deadline before the summary — to be tracked
     again; a restart itself waits for no interval, the first pass runs at the start.
 44. **The backend before the bot at a deploy** (#567): a bot whose backend does not know
     `POST …/status-message` gets 404 on the first poll and shows «⚠️ Статус сессии недоступен.»
     for the starts in that window.
+45. **A 403 is a loss** (#567): after the user unblocks the bot, the card of a session whose edit
+    got a 403 never comes, as the backend drops the summary that fell on the block (Rule 19); a
+    pressed entry no longer edits its status after a 403 either. Falsifiable: a card arriving
+    without the #464 summary before it.
+46. **An edit refused for good in words outside `editRefusal`** is retried on every pass: one GET
+    and two edits. Falsifiable: `trading session message not edited` for one session on adjacent
+    passes with a code that is neither 429 nor 5xx.
 
 ## Running it locally
 
