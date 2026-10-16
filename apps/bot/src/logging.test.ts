@@ -135,6 +135,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
       scenario.stopSessions ?? (() => Promise.reject(new Error('not used by these scenes'))),
     recordSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
     listTrackedSessions: () => Promise.reject(new Error('not used by these scenes')),
+    forgetSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
     setStake: scenario.setStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
     setTradingMode:
       scenario.setTradingMode ?? (() => Promise.reject(new Error('not used by these scenes'))),

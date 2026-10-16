@@ -459,6 +459,8 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     stopSessions: unused,
     recordSessionMessage: unused,
     listTrackedSessions: unused,
+    // a lost message forgotten: the tracker reports one on every gone or 403 edit (#567)
+    forgetSessionMessage: () => Promise.resolve(true),
     setStake: unused,
     setTradingMode: unused,
     readBotTexts: unused,

@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
   SessionSummaryErrorCode,
@@ -1632,5 +1633,32 @@ describe('the recovery routes (#567)', () => {
     expect(rows).toEqual(
       [seeded[1]!, seeded[0]!].map((row) => ({ ...row, messageId: 9, assetId: ASSET })),
     );
+  });
+
+  it('T9 POST lost forgets the recorded message once, by its id and owner only', async () => {
+    const seed = await seedSession();
+    const other = await seedUser(tmp.db);
+    const target = appWith();
+    const lost = (id: string, body: object, headers: Record<string, string> = auth) =>
+      target.inject({
+        method: 'POST',
+        url: `${TRADING_SESSIONS_PATH}/${id}${SESSION_STATUS_MESSAGE_LOST_SUFFIX}`,
+        headers,
+        payload: body,
+      });
+    const body = { telegramUserId: seed.telegramUserId, messageId: 41 };
+    await record(target, seed.sessionId, body);
+    const foreign = await lost(seed.sessionId, { ...body, telegramUserId: other.telegramUserId });
+    expect([foreign.statusCode, foreign.json()]).toEqual([200, { forgotten: false }]);
+    expect(await recordedOf(seed.sessionId)).toBe(41);
+    expect((await lost('nope', body)).statusCode).toBe(404);
+    expect((await lost(seed.sessionId, { ...body, messageId: 0 })).statusCode).toBe(400);
+    expect((await lost(seed.sessionId, body, {})).statusCode).toBe(401);
+    expect(await recordedOf(seed.sessionId)).toBe(41);
+    const first = await lost(seed.sessionId, body);
+    expect([first.statusCode, first.json()]).toEqual([200, { forgotten: true }]);
+    expect(await recordedOf(seed.sessionId)).toBeNull();
+    const again = await lost(seed.sessionId, body);
+    expect([again.statusCode, again.json()]).toEqual([200, { forgotten: false }]);
   });
 });

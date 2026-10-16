@@ -44,6 +44,7 @@ import {
   TradingSessionDbErrorCode,
   createSessionIntent,
   createTradingSession,
+  forgetSessionStatusMessage,
   listRunnableSessions,
   listTrackedSessions,
   markSessionDecision,
@@ -1216,5 +1217,49 @@ describe('listTrackedSessions (#567)', () => {
     const rows = await listTrackedSessions(tmp.db, { limit: 2 });
     expect(rows.map((row) => row.id)).toEqual([first.session.id, second.session.id]);
     expect(rows.map((row) => row.assetId)).toEqual([null, 101]);
+  });
+
+  // the review's case (#567 round 1): a finished session with a settled trade whose message is gone
+  // or whose owner blocked the bot never gets its card, so only the lost message takes it out
+  it('F1 forgetting the recorded message takes a finished session with a settled trade out; the next record writes', async () => {
+    const done = await tracked();
+    const { intent } = await createSessionIntent(tmp.db, intentInput(done));
+    await settle(intent, '0.82');
+    await stop(done.session.id);
+    await mark(done.session.id, { finalNoticeSentAt: new Date() });
+    expect((await listed()).has(done.session.id)).toBe(true);
+    const input = { id: done.session.id, telegramUserId: done.telegramUserId };
+    expect(await forgetSessionStatusMessage(tmp.db, { ...input, messageId: 7 })).toBe(true);
+    expect((await sessionOf(done.session.id))!.statusMessageId).toBeNull();
+    expect((await listed()).has(done.session.id)).toBe(false);
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 8 })).toBe(true);
+    expect((await sessionOf(done.session.id))!.statusMessageId).toBe(8);
+  });
+
+  it('F2 another message id forgets nothing', async () => {
+    const seed = await tracked();
+    expect(
+      await forgetSessionStatusMessage(tmp.db, {
+        id: seed.session.id,
+        telegramUserId: seed.telegramUserId,
+        messageId: 8,
+      }),
+    ).toBe(false);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(7);
+    expect((await listed()).has(seed.session.id)).toBe(true);
+  });
+
+  it("F3 another user's telegramUserId forgets nothing", async () => {
+    const seed = await tracked();
+    const other = await seedUserWithAccount(tmp.db);
+    expect(
+      await forgetSessionStatusMessage(tmp.db, {
+        id: seed.session.id,
+        telegramUserId: other.telegramUserId,
+        messageId: 7,
+      }),
+    ).toBe(false);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(7);
+    expect((await listed()).has(seed.session.id)).toBe(true);
   });
 });

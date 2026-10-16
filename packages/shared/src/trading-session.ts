@@ -414,6 +414,16 @@ export type RecordSessionStatusMessageRequest = z.infer<
   typeof recordSessionStatusMessageRequestSchema
 >;
 
+// POST /trading/sessions/:id/status-message/lost (#567): Telegram refused an edit of the recorded
+// message for good (gone or 403), so the bot has the backend forget it, by the same id: a message
+// recorded after it stays. The body is the record's; false when nothing was forgotten.
+export const SESSION_STATUS_MESSAGE_LOST_SUFFIX = `${SESSION_STATUS_MESSAGE_SUFFIX}/lost`;
+
+export const forgetSessionStatusMessageResponseSchema = z.strictObject({ forgotten: z.boolean() });
+export type ForgetSessionStatusMessageResponse = z.infer<
+  typeof forgetSessionStatusMessageResponseSchema
+>;
+
 // GET /trading/sessions/tracked (#567): the sessions the bot tracks again after a restart, oldest
 // first, at most TRACKED_SESSIONS_MAX; a uuid never equals 'tracked', so /:id keeps its routes
 export const TRADING_SESSIONS_TRACKED_PATH = `${TRADING_SESSIONS_PATH}/tracked`;
@@ -445,3 +455,5 @@ export const safeParseTrackedSessionsQuery = (input: unknown) =>
   trackedSessionsQuerySchema.safeParse(input);
 export const safeParseTrackedSessionsResponse = (input: unknown) =>
   trackedSessionsResponseSchema.safeParse(input);
+export const safeParseForgetSessionStatusMessageResponse = (input: unknown) =>
+  forgetSessionStatusMessageResponseSchema.safeParse(input);
