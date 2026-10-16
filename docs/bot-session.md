@@ -436,6 +436,15 @@ One entry per session id, in process memory, like the intent tracker
   screen already, and no card. A
   failed edit means no card yet; a card that failed is not tried again: the entry has ended
   ([The summary card](#the-summary-card-318)).
+- **Recovered entries are paced, and what was drawn is remembered** (#567). An entry tracked with
+  no view (a recovered one) takes the next slot for its first poll instead of `firstPollMs`: slots
+  are `resumeGapMs` apart (`SESSION_RESUME_GAP_MS`, 250 ms), none sooner than `firstPollMs` from
+  the `track()`, and they carry over from one call to the next, so two passes in a row are paced
+  together. A slot is an ordinary timer: `stop()` clears it like any other. An entry with a view
+  (a press) polls after `firstPollMs` as before. When an entry ends, the tracker remembers what it
+  last drew on its message (its render key), bounded by `SESSION_TRACKER_MAX_ENTRIES`, the oldest
+  going first; an entry that ends on a lost message leaves no memory. A recovered entry of the
+  same message starts from that key, so its first poll edits only when what it prints changed.
 - `SESSION_TRACKER_MAX_ENTRIES` (10 000): the oldest entry goes first. `stop()` clears every timer,
   refuses new entries and waits for every attempt in flight; `runBot` drains it as its
   `session tracker` step.
@@ -446,8 +455,12 @@ One entry per session id, in process memory, like the intent tracker
   message's id; its first poll is `POST /trading/sessions/:id/status-message` in place of the GET,
   one backend call as before, and its answer is the same view. The backend keeps
   `trading_sessions.status_message_id`: **the first id wins** while it lives (until it is lost,
-  below), a later message of the same session is followed in memory only. A failed record (5xx,
-  transport) is asked again on the next poll; 404 ends the entry as a read's would.
+  below), a later message of the same session is followed in memory only. The exception is a
+  replacement: when «🔄 Обновить» or «⏹» gets its edit refused as gone and sends the status anew,
+  that record carries `replacesMessageId` (the pressed message), and the CAS writes when the column
+  is empty or equal to it, so a message sent in place of the recorded one becomes the recorded one.
+  A failed record (5xx, transport) is asked again on the next poll, with the same body; 404 ends
+  the entry as a read's would.
 - **The list.** `GET /trading/sessions/tracked` returns the sessions with a recorded message and no
   card, except the finished ones with no settled trade whose summary was sent (no card ever comes
   for them), oldest first, at most `TRACKED_SESSIONS_MAX` (2 000) —
@@ -456,22 +469,25 @@ One entry per session id, in process memory, like the intent tracker
   `SESSION_RESUME_INTERVAL_MS` (10 min), the list beside the pairs catalog — the pass's only two
   calls. Each listed session `tracker.has()` does not hold is tracked on its message in the
   owner's private chat (its chat id is the user's id): no view yet (the first poll draws what it
-  reads), its first poll a GET, its deadline counted from the session's `startedAt`. Edits and
+  reads), its first poll a GET in the next slot, 4 a second ([The tracker](#the-tracker)), its
+  deadline counted from the session's `startedAt`. Edits and
   the card are a pressed entry's ([The summary card](#the-summary-card-318)). A catalog that cannot
   be read gives no label (the asset by its id); a list that cannot be read is `warn` `trading
   sessions not resumed`, and the next pass reads it again. One pass at a time; `stop()` ends the
   timer and waits for the pass in flight, whose entries are memory.
 - **A session past the deadline** (a stuck one, or a done one still waiting for its summary): the
-  first poll draws its final text and the entry ends, so each pass costs it one GET and one edit,
-  plus one retry when that edit failed (429, 5xx, transport); its card comes on the first pass
-  after it is due.
+  first poll draws its final text and the entry ends, so each pass costs it one GET, and an edit
+  only when what it prints changed since this process last drew it, plus one retry when that edit
+  failed (429, 5xx, transport); the first pass after a start edits it once, as nothing is
+  remembered. Its card comes on the first pass after it is due.
 - **A lost message.** An edit refused as gone (`editRefusal`: the message deleted, too old to edit,
   or no text) or with any 403 (the bot blocked, the account deleted — the backend's own rule,
   `isTelegramForbidden`, Rule 19) can never land on that message, so it never gets its card. The
   tracker reports it with `POST /trading/sessions/:id/status-message/lost`
   ([trading-session.md](trading-session.md#post-tradingsessionsidstatus-messagelost-567)), which
   clears `status_message_id` only while it is still that id, and the entry ends; the session
-  leaves the list, and the next message the bot records for it is recorded again. The 404 edit
+  leaves the list, and the next message the bot records for it is recorded again. A loss leaves
+  no memory of what was drawn, so the next pass finds it again by an edit. The 404 edit
   («⚠️ Статус сессии недоступен.») reports nothing. A failed report is `warn` `trading session
   message not forgotten` and is not retried: the next pass tracks the session again, its edit is
   refused again, and the report goes again.
@@ -505,15 +521,21 @@ One entry per session id, in process memory, like the intent tracker
   `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 3 × 8 s = 34 s: an attempt's read and edit, then the card's
   claim and `sendPhoto` (#318) and the `editMessageReplyMarkup` that adds «📤 Поделиться» (#321).
 - `SESSION_RESUME_INTERVAL_MS` = 10 min (#567): one list and one catalog read per bot process per
-  pass; not a link of the chain, getting it wrong only changes how often the list is read.
+  pass, and a link of the chain through the pace below.
+- `SESSION_RESUME_PER_SECOND` = 4, `SESSION_RESUME_GAP_MS` = 1000 / 4 = 250 ms (#567): the slots
+  of the recovered entries' first polls ([The tracker](#the-tracker)). The chain checks
+  `STARTUP_BUDGET_MS + SESSION_RESUME_DRAIN_MS + SESSION_TRACK_FIRST_POLL_MS + TRACKED_SESSIONS_MAX
+  × SESSION_RESUME_GAP_MS < SESSION_RESUME_INTERVAL_MS`: 29 s + 10 s + 3 s + 500 s = 542 s < 600 s,
+  so the first polls of a full list start within 10 minutes of the bot's start, and a pass's slots
+  are spent before the next pass begins. Below 4 a second a full list does not fit.
   `SESSION_RESUME_DRAIN_MS` = 2 × 5 s = 10 s: what the recovery's `stop()` waits for, the list and
   the catalog counted one after the other. The recovery's calls are background work, as the
   tracker's, and in no `HANDLER_CALLS` budget; the first poll stays one backend call.
 - The chain at import adds `TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   link #283 left to the bot), `TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   read and the stop wait on one balance GET for a finished session, #337), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
-  SESSION_TRACK_DEADLINE_MS` (imported, so checked), drain < `SHUTDOWN_BUDGET_MS` and
-  `SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS` (#567).
+  SESSION_TRACK_DEADLINE_MS` (imported, so checked), drain < `SHUTDOWN_BUDGET_MS`,
+  `SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS` and the recovery's pace above (#567).
 
 ## Logs
 
@@ -707,7 +729,9 @@ the pace's gap, a summary's balance refresh and its send; or a step's edit, and 
 answers the cycle message is gone, a second pace and the new message, then the next trade's pace
 (#551, `2 × (1000 / 9 + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)`). A summary does not start after
 `stop()` (the check comes before its balance read), so the two paths never add up; each is under
-phase 1's budget.
+phase 1's budget. The bot's recovery after a restart adds up to 4 first polls a second on the same
+token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 edits, 12 calls when each entry's card is due
+([risk 47](#accepted-risks)).
 
 ### Logs (backend)
 
@@ -930,18 +954,20 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     edits make the messages lag behind the trades, never drop (risk 27).
 39. **The first recorded message wins** (#567): a session's second status message (a press of the
     session button again, «🔄 Обновить», `/stop`) is followed in memory; after a restart edits and
-    the card go to the first one. Both show the one session. Falsifiable: after a restart only the
-    upper of two messages of a session is edited. A lost first message frees the slot: the next
-    new message the bot records is the one after a restart, not one it already followed in memory,
-    whose record came before the loss.
+    the card go to the first one. Both show the one session. The exception is a message sent in
+    place of the recorded one whose edit Telegram refused as gone: it becomes the recorded one.
+    Falsifiable: after a restart only the upper of two messages of a session is edited. A lost
+    first message frees the slot: the next new message the bot records is the one after a restart,
+    not one it already followed in memory, whose record came before the loss.
 40. **Stuck sessions** (#567) — on manual review, or with a stalled worker, longer than
-    `SESSION_TRACK_DEADLINE_MS` from `started_at`: each recovery pass costs each one GET and one
-    `editMessageText`, plus one retry when it failed — the first poll draws the final text at
-    once (the hint under a session not stopped, the final status under a stopped one) and the
-    entry ends; an unchanged text is «not modified» (shown), a moved age line a silent edit. The card comes on the first pass
-    after the operator settles the trade and the summary is sent. Falsifiable: more than 100 rows
-    of the list with `startedAt` older than a day, or more than two `editMessageText` per session
-    per pass.
+    `SESSION_TRACK_DEADLINE_MS` from `started_at`: each recovery pass costs each one GET; an edit
+    only when what it prints changed since this process's last edit of it, plus one retry when
+    that edit did not land. The first pass after a restart edits each one once (the hint under a
+    session not stopped, the final status under a stopped one); an unchanged text is «not
+    modified» (shown). The card comes on the first pass after the operator settles the trade and
+    the summary is sent. Falsifiable: more than 100 rows of the list with `startedAt` older than
+    a day, or an `editMessageText` of a stuck session nothing of whose printed text changed since
+    this process's last landed edit of it.
 41. **Sessions started before #567** have no recorded message: after a restart they are not
     recovered until a press of «🔄 Обновить» records one. Likewise a restart in the 3 s before a
     new status's first poll. Falsifiable: a card missing for a session started before the deploy
@@ -953,7 +979,9 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     exactly 2 000 rows.
 43. **Up to 10 minutes** (#567) for an entry the tracker dropped later — evicted at
     `SESSION_TRACKER_MAX_ENTRIES` or ended at the deadline before the summary — to be tracked
-    again; a restart itself waits for no interval, the first pass runs at the start.
+    again, plus its slot. A restart itself waits for no interval: the first pass runs at the
+    start, its first polls in slots, the last of a full list about 8.5 minutes after the pass and
+    at most 542 s after the start (the chain's link).
 44. **The backend before the bot at a deploy** (#567): a bot whose backend does not know
     `POST …/status-message` gets 404 on the first poll and shows «⚠️ Статус сессии недоступен.»
     for the starts in that window.
@@ -964,6 +992,22 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 46. **An edit refused for good in words outside `editRefusal`** is retried on every pass: one GET
     and two edits. Falsifiable: `trading session message not edited` for one session on adjacent
     passes with a code that is neither 429 nor 5xx.
+47. **The recovery's pace on the bot's token** (#567): up to 4 first polls a second — up to 4
+    edits, up to 12 calls when each entry's card is due — for up to about 8.5 minutes after the
+    start and up to about 500 s of each periodic pass with a full list. It comes on top of the
+    backend's pacers, 20 + 9 a second (about 30 a second for Telegram: stated, not measured), and
+    of the bot's unpaced replies to users, which came on top of those shares before. A restart
+    during a mailing at its full pace can exceed about 30 a second. The cover: on a 429 the
+    mailings and the session's messages wait for `retry_after`, and a tracker edit is retried on
+    its entry's next poll. Below 4 a second a full list does not fit the task's 10 minutes;
+    cutting the backend's shares (#202, #464) is out of scope. Falsifiable: a 429 in the bot's
+    logs (`trading session message not edited`, `error_code` 429) or the backend's (a session
+    message waiting for `retry_after`) within 10 minutes of the bot's start with no mailing
+    running.
+48. **The pace's clock** (#567): slots are counted on the tracker's clock (`Date.now`, as the
+    deadline). A clock stepping back delays the remaining slots by the step. Falsifiable: a
+    recovered entry's first poll later than `firstPollMs + its position × SESSION_RESUME_GAP_MS`
+    with a sound clock.
 
 ## Running it locally
 
