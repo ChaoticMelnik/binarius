@@ -3244,5 +3244,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. Тест-двойники и фикстуры плана отличаются от нормализации кода по проверяемой оси (abort у фейкового sleep, неотсортированный каталог, повтор перехода) — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
+1. Тест-двойники и фикстуры плана отличаются от нормализации кода по проверяемой оси (abort у фейкового sleep, неотсортированный каталог, повтор перехода) — **внедрено в #560: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
 2. Оставшиеся Minor — **вынесено в #559**; фаза A и сырая проба 41 id — **вынесено в #555**
