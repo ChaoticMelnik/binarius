@@ -61,7 +61,7 @@ Never assume file contents — Read first. For anything structural — signature
 
 Follow the plan's steps in order. When the plan says to create issues (follow-ups, splits), use `/github` → "Create an issue" and then "Add issue to Project #2" — `gh issue create` alone leaves the issue off the board. Stack conventions (`.claude/CLAUDE.md` → Конвенции кода / `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference): TypeScript everywhere, pnpm workspaces, Drizzle for schema/migrations (use the `drizzle-orm-patterns` skill when touching `packages/db`), Vitest for unit/integration tests (use the `vitest-testing` skill), русские пользовательские строки / английский код. Comments: only when WHY is non-obvious — never describe WHAT the code does.
 
-`prettier --write` only on files you create, never the whole repo: the tree is not prettier-clean, and a repo-wide pass in #107 reflowed untouched code in `apps/backend` and `apps/web`, which took a separate revert commit. A file that already existed is formatted by hand; `prettier --write` formats the whole file, and one run on `schema.db.test.ts` in #551 reflowed unrelated tests and took fix-up commit `abaf9e4`. Before `git add` of such a file, read `git diff -- <file>`; a hunk you did not write is undone with Edit before the commit (`git checkout -p` is interactive and not available to an agent).
+`prettier --write` only on files you create, never the whole repo: the tree is not prettier-clean, and a repo-wide pass in #107 reflowed untouched code in `apps/backend` and `apps/web`, which took a separate revert commit. A file that already existed is formatted by hand; `prettier --write` formats the whole file, and one run on `schema.db.test.ts` in #551 reflowed unrelated tests and took fix-up commit `abaf9e4`. Before `git add` of such a file, read `git diff -- <file>`; a reflow the formatter made in lines you did not write is undone with Edit before the commit (`git checkout -p` is interactive and not available to an agent). A hunk that was already there before your change is someone else's work: leave it, do not stage it, and report it.
 
 ### Step 5: Test runs — targeted while working, the full check once at the head
 
@@ -185,7 +185,7 @@ As in the initial workflow's Step 5: targeted runs of the touched files while fi
 
 ### Step 5: Commit, push, update PR
 
-Same stop-point rule as the initial-implementation workflow:
+Same stop-point rule as the initial-implementation workflow, and the same formatting rule (Step 4: prettier only on new files, `git diff -- <file>` of every existing file before `git add`):
 
 ```bash
 git status
