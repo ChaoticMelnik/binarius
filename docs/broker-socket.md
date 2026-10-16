@@ -535,14 +535,17 @@ Two parts:
   (`0.6946199999999999`) never reach a comparison. A tick of a bucket older than the current one
   is `late` and dropped. An older tick inside the current bucket moves its high or low only:
   the close stays with the newest tick. A tick with a non-finite or non-positive price, or a
-  non-finite timestamp, is `invalid` and dropped. A bucket without a tick makes no candle.
-  `markHole(fromMs, toMs)` takes a finite hole with `fromMs ≤ toMs` and drops every candle whose
-  span overlaps the closed interval `[fromMs, toMs]`, including one that starts exactly at
-  `toMs`. No candle is built afterwards for a bucket the hole reaches: such a tick is counted as
-  `holed`, and the next candle opens at its price. `aggregateEndLabelled` turns the broker's `1s`
-  rows, which are labelled by their end (the row labelled `t + 1000` is the first second of the
-  candle at `t`), into complete `5s`/`15s` candles. "No tick, no candle" is a hypothesis the report tests
-  (the `REST only` column). If the broker makes flat candles for empty buckets, #404 changes the
+  non-finite timestamp, is `invalid` and dropped. `push` also takes the tick's receipt time on
+  the local clock: a tick more than `TICK_MAX_SKEW_MS` (60 s) from it, either way, is `skewed`
+  and dropped (`tickProblem`, the rule the CLI applies too). A bucket without a tick makes no
+  candle. `markHole(fromMs, toMs)` takes a finite hole with `fromMs ≤ toMs` and drops every
+  candle whose span overlaps the closed interval `[fromMs, toMs]`, including one that starts
+  exactly at `toMs`. No candle is built afterwards for a bucket the hole reaches (overlaps, before
+  or after the current one; other buckets build as usual): such a tick is counted as `holed`,
+  and the next candle opens at its price. `aggregateEndLabelled` turns the broker's `1s` rows,
+  which are labelled by their end (the row labelled `t + 1000` is the first second of the candle
+  at `t`), into complete `5s`/`15s` candles. "No tick, no candle" is a hypothesis the report
+  tests (the `REST only` column). If the broker makes flat candles for empty buckets, #404 changes the
   rule.
 - **The CLI** `candle-spike` in `apps/trading-worker/src/cli/` (`candle-spike.ts` for env, wiring
   and the exit code; `candle-spike-run.ts` for the phases and the fetch; `candle-spike-compare.ts`
@@ -560,7 +563,7 @@ Two parts:
 | `SPIKE_MINUTES` | 30 | phase B, 1..80 (80 keeps the `1s` fetch, `minutes × 60 + 6` rows, under the broker's 5000-row cap) |
 | `SPIKE_PAIRS` | 10 | how many pairs to choose, 1..40 |
 | `SPIKE_ASSET_IDS` | — | 1..40 comma-separated ids that replace the choice. Each must be in the REST catalog with `digits` the decider accepts; openness and the payout floor are not applied |
-| `SPIKE_SUBSCRIBE_ALL` | 1 | `1`: phase A subscribes every pair of `common.assets_list`; `0`: the chosen pairs only |
+| `SPIKE_SUBSCRIBE_ALL` | 1 | `1`: phase B also subscribes every pair of `common.assets_list`, after the chosen ones; `0`: the chosen pairs only |
 
 **The pair choice** follows the scanner's rule since #460, without its rotation. The candidates
 are open pairs (`isPairOpen`) that accept 5 s and pay at least the cycle floor
@@ -575,18 +578,16 @@ had no candidate.
    `ready` with a `user.data` of the account's own user and a `common.assets_list`. A
    `user.data` of another user is `setup failed`, and so is a `SIGINT` here (`setup failed:
    interrupted`).
-2. **Phase A: capacity** (60 s). The CLI subscribes the ids through the client, which sends them
-   in 40-id chunks. It counts which ids got a tick, split open and closed, and the coverage per
-   chunk in send order. A per-socket cap shows as whole chunks without ticks. A `SIGINT` or a
-   drop during the window prints the cap as `not measured (phase A cut: …)`, and phase A's state
-   changes are listed in phase C. Whether one `price.subscribe` of 41 ids is refused by the
-   broker or by our client is #555.
-3. **Phase B: accuracy** (`SPIKE_MINUTES`). Every tick of a chosen pair goes into two builders
-   (`5s`, `15s`). The CLI records the receipt delay `now − tick time`, which mixes network
-   latency and clock skew and can be negative. It also records ticks per second, every state
-   change of the socket, and CPU and RSS once a minute. A drop (from `ready` to any other state)
-   is a hole from the last tick before it to the first tick after the socket is `ready` again.
-   A drop before that first tick continues the same hole, so a flap is one hole. Holes are
+2. **Phase A** (the subscription cap per socket, one message of 41 ids) is #555.
+3. **Phase B: accuracy** (`SPIKE_MINUTES`). The CLI subscribes, the chosen pairs first. A tick
+   `tickProblem` refuses is counted and read no further. Every other tick of a chosen pair goes
+   into two builders (`5s`, `15s`). The CLI records the receipt delay `now − tick time`, which
+   mixes network latency and clock skew and can be negative. It also records ticks per second,
+   every state change of the socket, and CPU and RSS once a minute. A drop (from `ready` to any
+   other state) is a hole from the last tick before it to the first tick after the socket is
+   `ready` again that is later than that last one. A drop before that closing tick continues the
+   same hole, so a flap is one hole. A drop before phase B's first tick is no hole, and a hole
+   open at the end of phase B ends there, never before its start. Holes are
    recorded, not applied to the builders. `SIGINT` ends phase B within a second, and the fetch
    and the comparison still run on the candles so far. A terminal state (`token_expired`,
    `auth_failed`, `disconnected_by_server`) ends phase B the same way.
@@ -624,9 +625,8 @@ had no candidate.
 
 **The report** starts with a header (start, minutes, `complete` / `interrupted` / `ended by
 <state>`, the pairs table with the group and ticks per second, the catalog sizes). It then has
-a phase A table, phase B tables per interval (candles, decisions,
-display, `1s` aggregation), the load (receipt delay median/p95/min, ticks, late and invalid,
-CPU share, max RSS), and phase C (state changes, holes and the candles they cover). Last comes a
+phase B tables per interval (candles, decisions, display, `1s` aggregation), the load (receipt
+delay median/p95/min, ticks, late, invalid and skewed, CPU share, max RSS), and phase C (state changes, holes and the candles they cover). Last comes a
 summary for #404's architect. A share with nothing compared prints `0 of 0`. The run is one
 sample of market conditions, and #404 may ask for another one (other `SPIKE_ASSET_IDS`, another
 hour). Exit 0 only when phase B ran its whole window and at least one candle was compared.
