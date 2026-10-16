@@ -208,14 +208,15 @@ describe('the keeper renews the due service tokens', () => {
       id === a ? { ok: false, reason: 'key_unavailable' } : { ok: true, accessToken: TOKEN },
     );
     const { instance } = keeper({ accessToken: token });
-    const start = Date.now();
     await instance.tick();
     expect(token.calls.map((call) => call.accountId)).toEqual([a, b]);
+    // read after the attempt that held it back, so the clock below is past its retry time
+    const released = Date.now() + CONFIG.stalledRetryMs + 1;
 
     await instance.tick();
     expect(token.calls.map((call) => call.accountId)).toEqual([a, b, b]);
 
-    vi.spyOn(Date, 'now').mockReturnValue(start + CONFIG.stalledRetryMs + 1);
+    vi.spyOn(Date, 'now').mockReturnValue(released);
     await instance.tick();
     expect(token.calls.map((call) => call.accountId)).toEqual([a, b, b, a, b]);
   });
