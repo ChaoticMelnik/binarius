@@ -1,7 +1,12 @@
 import { and, asc, eq, isNotNull, notInArray, sql, type SQL } from 'drizzle-orm';
 import { BrokerAccountStatus, ServiceAccountNotWorkingReason, UserStatus } from '@binarius/shared';
 import type { Db } from './client';
-import { adminBrokerAccountColumns, type AdminBrokerAccountRow } from './admin-read-ops';
+import type { AdminServiceAccountView } from '@binarius/shared';
+import {
+  adminBrokerAccountColumns,
+  toAdminBrokerAccountListItem,
+  type AdminBrokerAccountRow,
+} from './admin-read-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { users } from './schema/users';
 import { millisecondsAgo, millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
@@ -137,4 +142,25 @@ export async function setServiceMark(
     .from(brokerAccounts)
     .where(eq(brokerAccounts.id, accountId));
   return existing === undefined ? 'not_found' : 'unchanged';
+}
+
+// The admin's projection of a state: the list item's allowlist plus the two facts of the count.
+export function toAdminServiceAccountView(state: ServiceAccountState): AdminServiceAccountView {
+  return {
+    ...toAdminBrokerAccountListItem(state),
+    working: state.working,
+    notWorkingReason: state.notWorkingReason,
+  };
+}
+
+// One account through the admin's column allowlist: the answer of a mark or an unmark.
+export async function readBrokerAccountForAdmin(
+  exec: DbExecutor,
+  accountId: string,
+): Promise<AdminBrokerAccountRow | undefined> {
+  const [row] = await exec
+    .select(adminBrokerAccountColumns)
+    .from(brokerAccounts)
+    .where(eq(brokerAccounts.id, accountId));
+  return row;
 }

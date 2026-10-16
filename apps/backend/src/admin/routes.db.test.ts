@@ -25,6 +25,10 @@ import {
   AccountHaltReason,
   adminBrokerAccountListItemSchema,
   adminBrokerAccountsResponseSchema,
+  adminServiceAccountsResponseSchema,
+  adminServiceAccountViewSchema,
+  adminServiceMarkResponseSchema,
+  AuthRevokedReason,
   adminDepositsResponseSchema,
   adminDepositViewSchema,
   AuditAction,
@@ -3725,6 +3729,207 @@ describe('the token adjustment (#246)', () => {
 
     expect(adminTokensResponseSchema.parse(page.json()).entries).toEqual([applied.entry]);
     expect(applied.entry).toMatchObject({ note: NOTE, refId: null, refType: null });
+  });
+});
+
+describe('the service accounts (#391)', () => {
+  const PATH = '/admin/broker-accounts/:id/service';
+  const urlOf = (accountId: string) => `/admin/broker-accounts/${accountId}/service`;
+  const VIEW_KEYS = Object.keys(adminServiceAccountViewSchema.shape);
+
+  beforeEach(async () => {
+    await tmp.db.update(brokerAccounts).set({ serviceSince: null });
+  });
+
+  const markAt = (id: string, at: string) =>
+    tmp.db
+      .update(brokerAccounts)
+      .set({ serviceSince: new Date(at) })
+      .where(eq(brokerAccounts.id, id));
+  const serviceSinceOf = async (id: string) => {
+    const [row] = await tmp.db
+      .select({ serviceSince: brokerAccounts.serviceSince, updatedAt: brokerAccounts.updatedAt })
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, id));
+    return row;
+  };
+
+  it('A1 lists every marked account, working or not, in mark order, with the count and the minimum', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId, telegramUserId } = await seedUser(tmp.db);
+    const working = await seedBrokerAccount(tmp.db, userId);
+    const revoked = await seedBrokerAccount(tmp.db, userId, {
+      status: BrokerAccountStatus.Revoked,
+    });
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ authRevokedReason: AuthRevokedReason.RefreshOutcomeUnknown })
+      .where(eq(brokerAccounts.id, revoked));
+    await seedBrokerAccount(tmp.db, userId);
+    await markAt(revoked, '2026-10-01T00:00:00.000Z');
+    await markAt(working, '2026-10-02T00:00:00.000Z');
+
+    const response = await readOnce(seeded.staffId, '/admin/service-accounts', token);
+
+    expect(response.statusCode).toBe(200);
+    const body = adminServiceAccountsResponseSchema.parse(response.json());
+    expect(body.min).toBe(3);
+    expect(body.working).toBe(1);
+    expect(body.accounts.map((a) => [a.id, a.working, a.notWorkingReason, a.serviceSince])).toEqual(
+      [
+        [revoked, false, 'revoked', '2026-10-01T00:00:00.000Z'],
+        [working, true, null, '2026-10-02T00:00:00.000Z'],
+      ],
+    );
+    expect(body.accounts[0]).toMatchObject({ userId, telegramUserId });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.ServiceAccountsViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/service-accounts' },
+    });
+  });
+
+  it('A2 answers exactly the view keys, nothing secret', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+    const id = await seedBrokerAccount(tmp.db, userId);
+    await markAt(id, '2026-10-01T00:00:00.000Z');
+
+    const response = await readOnce(seeded.staffId, '/admin/service-accounts', token);
+
+    const raw = response.json<{ accounts: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'min', 'working', 'accounts']);
+    expect(raw.accounts).toHaveLength(1);
+    for (const account of raw.accounts) expect(Object.keys(account)).toEqual(VIEW_KEYS);
+    expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
+  });
+
+  it('A3 marks an account: the answer, the row and one broker_account_service_set row', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+    const id = await seedBrokerAccount(tmp.db, userId);
+
+    const response = await postAsStaff(urlOf(id), token, { service: true });
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<Record<string, unknown>>();
+    expect(Object.keys(raw)).toEqual(['me', 'outcome', 'account']);
+    const answer = adminServiceMarkResponseSchema.parse(raw);
+    expect(answer.outcome).toBe('marked');
+    const row = await serviceSinceOf(id);
+    expect(answer.account.id).toBe(id);
+    expect(answer.account.serviceSince).toBe(row?.serviceSince?.toISOString());
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.BrokerAccountServiceSet,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.BrokerAccount,
+      entityId: id,
+      payload: { path: PATH, result: 'marked', accountId: id },
+    });
+  });
+
+  it('A4 unmarks once, then answers unchanged and leaves the row as it was', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+    const id = await seedBrokerAccount(tmp.db, userId);
+    await markAt(id, '2026-10-01T00:00:00.000Z');
+
+    const first = await postAsStaff(urlOf(id), token, { service: false });
+    expect(first.statusCode).toBe(200);
+    expect(adminServiceMarkResponseSchema.parse(first.json())).toMatchObject({
+      outcome: 'unmarked',
+      account: { id, serviceSince: null },
+    });
+    expect(await lastEntry(seeded.staffId)).toMatchObject({
+      action: AuditAction.BrokerAccountServiceCleared,
+      payload: { path: PATH, result: 'unmarked', accountId: id },
+    });
+    const after = await serviceSinceOf(id);
+
+    const again = await postAsStaff(urlOf(id), token, { service: false });
+    expect(again.statusCode).toBe(200);
+    expect(adminServiceMarkResponseSchema.parse(again.json()).outcome).toBe('unchanged');
+    expect(await lastEntry(seeded.staffId)).toMatchObject({
+      action: AuditAction.BrokerAccountServiceCleared,
+      payload: { path: PATH, result: 'unchanged', accountId: id },
+    });
+    expect(await serviceSinceOf(id)).toEqual(after);
+  });
+
+  it('A5 answers 404 for an id that is not a uuid (not recorded) and for an unknown uuid (recorded)', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const bad = await postAsStaff(urlOf('not-a-uuid'), token, { service: true });
+    expect([bad.statusCode, bad.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.BrokerAccountServiceSet,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: PATH, result: 'not_found' },
+    });
+
+    const unknown = randomUUID();
+    const missing = await postAsStaff(urlOf(unknown), token, { service: true });
+    expect([missing.statusCode, missing.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: PATH,
+      result: 'not_found',
+      accountId: unknown,
+    });
+  });
+
+  it.each([
+    ['a string', { service: 'yes' }],
+    ['no key', {}],
+    ['an extra key', { service: true, x: 1 }],
+  ])('A6 refuses %s with 400 before the session, writing nothing', async (_label, payload) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+    const id = await seedBrokerAccount(tmp.db, userId);
+    const before = await auditCount();
+
+    const response = await postAsStaff(urlOf(id), token, payload);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+    expect((await serviceSinceOf(id))?.serviceSince).toBeNull();
+  });
+
+  it('A7 refuses both routes without a live session and writes nothing', async () => {
+    const { userId } = await seedUser(tmp.db);
+    const id = await seedBrokerAccount(tmp.db, userId);
+    const before = await auditCount();
+    for (const token of [undefined, 'a'.repeat(43)]) {
+      const mark = await postAsStaff(urlOf(id), token, { service: true });
+      expect([mark.statusCode, mark.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+      const list = await app.inject({
+        method: 'GET',
+        url: '/admin/service-accounts',
+        headers: token === undefined ? BEARER : { ...BEARER, 'x-staff-session': token },
+      });
+      expect(list.statusCode).toBe(401);
+    }
+    const wrongBearer = await app.inject({
+      method: 'GET',
+      url: '/admin/service-accounts',
+      headers: { authorization: 'Bearer wrong' },
+    });
+    expect(wrongBearer.statusCode).toBe(401);
+    expect(await auditCount()).toBe(before);
+    expect((await serviceSinceOf(id))?.serviceSince).toBeNull();
   });
 });
 

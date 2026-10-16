@@ -3,6 +3,9 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  AdminServiceMarkOutcome,
+  SERVICE_ACCOUNTS_MIN,
+  ServiceAccountNotWorkingReason,
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
   ADMIN_BOT_PROFILE_IDENTITY_MAX,
@@ -35,6 +38,8 @@ import {
   safeParseAdminBotTextSaveResponse,
   safeParseAdminBotTextsResponse,
   safeParseAdminBrokerAccountsResponse,
+  safeParseAdminServiceAccountsResponse,
+  safeParseAdminServiceMarkResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminDepositsResponse,
   safeParseAdminIntentResponse,
@@ -74,6 +79,8 @@ import {
   SAMPLE_BOT_TEXTS,
   SAMPLE_BROKER_ACCOUNT_ITEM,
   SAMPLE_BROKER_ACCOUNTS,
+  SAMPLE_SERVICE_ACCOUNTS,
+  SAMPLE_SERVICE_MARKED,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSITS,
   SAMPLE_INTENT,
@@ -706,6 +713,72 @@ describe('the broker accounts call (#342)', () => {
   });
 });
 
+describe('the service accounts calls (#391)', () => {
+  const SESSION = 's'.repeat(43);
+  const ACCOUNT = '00000000-0000-4000-8000-0000000000d1';
+  const prefixed = async (status: number, body: unknown) => {
+    const served = await serve((response) => {
+      json(response, status, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('C1 asks for the page with the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(200, SAMPLE_SERVICE_ACCOUNTS);
+    expect(await client.serviceAccounts(SESSION)).toEqual(SAMPLE_SERVICE_ACCOUNTS);
+    expect([captured.method, captured.url]).toEqual(['GET', '/api/admin/service-accounts']);
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([
+    ['the page', { ...SAMPLE_SERVICE_ACCOUNTS, extra: 1 }],
+    [
+      'a row',
+      {
+        ...SAMPLE_SERVICE_ACCOUNTS,
+        accounts: [{ ...SAMPLE_SERVICE_ACCOUNTS.accounts[0], refreshTokenHash: 'x' }],
+      },
+    ],
+  ])('C1 refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(200, body);
+    expect(await rejectionOf(client.serviceAccounts(SESSION))).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+    });
+  });
+
+  it('C2 posts { service } to the account path, the id encoded', async () => {
+    const { client, captured } = await prefixed(200, SAMPLE_SERVICE_MARKED);
+    expect(await client.setServiceMark(SESSION, ACCOUNT, { service: true })).toEqual(
+      SAMPLE_SERVICE_MARKED,
+    );
+    expect([captured.method, captured.url]).toEqual([
+      'POST',
+      `/api/admin/broker-accounts/${ACCOUNT}/service`,
+    ]);
+    expect(JSON.parse(captured.body ?? '')).toEqual({ service: true });
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+
+    const odd = await prefixed(200, SAMPLE_SERVICE_MARKED);
+    await odd.client.setServiceMark(SESSION, 'a/b?c', { service: false });
+    expect(odd.captured.url).toBe('/api/admin/broker-accounts/a%2Fb%3Fc/service');
+  });
+
+  it('C2 carries a 404 as its status and code', async () => {
+    const { client } = await prefixed(404, { error: 'not_found' });
+    const error = await rejectionOf(client.setServiceMark(SESSION, ACCOUNT, { service: true }));
+    expect(error).toBeInstanceOf(BackendError);
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
+  });
+});
+
 describe('the password change call (#79)', () => {
   const SESSION = 's'.repeat(43);
   const REQUEST = {
@@ -1013,6 +1086,9 @@ describe('body size', () => {
     // brokerAccounts of the user card (packages/shared/src/admin.ts) is unbounded; false once a
     // user holds more than 10 links
     const ASSUMED_USER_BROKER_ACCOUNTS = 10;
+    // accounts of adminServiceAccountsResponseSchema (#391) is every marked account, unbounded by
+    // the schema; false once more than 50 accounts are marked (the pilot needs 3)
+    const ASSUMED_SERVICE_ACCOUNTS = 50;
     // problems of a refused preview, save or reset: the schema takes up to BOT_TEXT_OVERRIDES_MAX;
     // false once one change refuses more than 50 overrides
     const ASSUMED_LONGEST_PROBLEMS = 50;
@@ -1312,6 +1388,25 @@ describe('body size', () => {
           }),
           nextCursor: UUID,
         },
+      },
+      serviceAccounts: {
+        parse: safeParseAdminServiceAccountsResponse,
+        sample: {
+          me: ME,
+          min: SERVICE_ACCOUNTS_MIN,
+          working: ASSUMED_SERVICE_ACCOUNTS,
+          accounts: times(ASSUMED_SERVICE_ACCOUNTS, {
+            ...brokerAccount,
+            userId: UUID,
+            telegramUserId: INT8,
+            working: false,
+            notWorkingReason: longest(ServiceAccountNotWorkingReason),
+          }),
+        },
+      },
+      setServiceMark: {
+        parse: safeParseAdminServiceMarkResponse,
+        sample: { me: ME, outcome: longest(AdminServiceMarkOutcome), account: brokerAccount },
       },
       audit: {
         parse: safeParseAdminAuditResponse,

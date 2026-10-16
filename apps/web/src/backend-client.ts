@@ -26,6 +26,8 @@ import {
   safeParseAdminOverviewResponse,
   safeParseAdminAuditResponse,
   safeParseAdminBrokerAccountsResponse,
+  safeParseAdminServiceAccountsResponse,
+  safeParseAdminServiceMarkResponse,
   safeParseAdminDepositsResponse,
   safeParseAdminTokenAdjustmentResponse,
   safeParseAdminTokensResponse,
@@ -57,6 +59,9 @@ import {
   type AdminChangePasswordRequest,
   type AdminBrokerAccountsQuery,
   type AdminBrokerAccountsResponse,
+  type AdminServiceAccountsResponse,
+  type AdminServiceMarkRequest,
+  type AdminServiceMarkResponse,
   type AdminDepositsQuery,
   type AdminDepositsResponse,
   type AdminTokenAdjustmentRequest,
@@ -163,6 +168,14 @@ export interface BackendClient {
     token: string,
     query: AdminBrokerAccountsQuery,
   ): Promise<AdminBrokerAccountsResponse>;
+  /** the service accounts page (#391): every marked account and the working count */
+  serviceAccounts(token: string): Promise<AdminServiceAccountsResponse>;
+  /** mark or unmark a service account (#391); an unknown id is a 404 */
+  setServiceMark(
+    token: string,
+    accountId: string,
+    request: AdminServiceMarkRequest,
+  ): Promise<AdminServiceMarkResponse>;
   audit(token: string, query: AdminAuditQuery): Promise<AdminAuditResponse>;
   changePassword(
     token: string,
@@ -385,6 +398,21 @@ export function createBackendClient({
       const params = adminBrokerAccountsSearchParams(query);
       const path = params.size > 0 ? `admin/broker-accounts?${params}` : 'admin/broker-accounts';
       return parsed(safeParseAdminBrokerAccountsResponse, await call('GET', path, { session }));
+    },
+    async serviceAccounts(session) {
+      return parsed(
+        safeParseAdminServiceAccountsResponse,
+        await call('GET', 'admin/service-accounts', { session }),
+      );
+    },
+    async setServiceMark(session, accountId, request) {
+      return parsed(
+        safeParseAdminServiceMarkResponse,
+        await call('POST', `admin/broker-accounts/${encodeURIComponent(accountId)}/service`, {
+          body: request,
+          session,
+        }),
+      );
     },
     async audit(session, query) {
       const params = adminAuditSearchParams(query);
