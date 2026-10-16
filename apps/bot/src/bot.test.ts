@@ -75,6 +75,7 @@ import {
   accountView,
   brokerBalance,
   userView,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   stubText,
@@ -154,6 +155,8 @@ function setup(
     stopSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     claimSessionSummary: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
+    recordSessionMessage: vi.fn(() => Promise.reject(new Error('not used here'))),
+    listTrackedSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
     setStake: vi.fn(() => Promise.reject(new Error('not used here'))),
     setTradingMode: vi.fn(() => Promise.reject(new Error('not used here'))),
     readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
@@ -169,6 +172,7 @@ function setup(
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend,
     logger,
@@ -1562,6 +1566,7 @@ describe('the account card', () => {
       const bot = createBot({
         intentTracker: stubTracker(),
         sessionTracker: stubSessionTracker(),
+        sessionResumer: stubSessionResumer(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1583,6 +1588,8 @@ describe('the account card', () => {
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+          recordSessionMessage: vi.fn(() => Promise.reject(new Error('unused'))),
+          listTrackedSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setStake: vi.fn(() => Promise.reject(new Error('unused'))),
           setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1618,6 +1625,7 @@ describe('the account card', () => {
       const bot = createBot({
         intentTracker: stubTracker(),
         sessionTracker: stubSessionTracker(),
+        sessionResumer: stubSessionResumer(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
@@ -1639,6 +1647,8 @@ describe('the account card', () => {
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+          recordSessionMessage: vi.fn(() => Promise.reject(new Error('unused'))),
+          listTrackedSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setStake: vi.fn(() => Promise.reject(new Error('unused'))),
           setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -2758,6 +2768,7 @@ describe('the Bot API timeout', () => {
     const bot = createBot({
       intentTracker: stubTracker(),
       sessionTracker: stubSessionTracker(),
+      sessionResumer: stubSessionResumer(),
       token: '123456:AA-bot-token',
       // no handler runs in this test: the call under test is bot.api.sendMessage itself
       backend: {
@@ -2780,6 +2791,8 @@ describe('the Bot API timeout', () => {
         stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
         claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
         stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+        recordSessionMessage: vi.fn(() => Promise.reject(new Error('unused'))),
+        listTrackedSessions: vi.fn(() => Promise.reject(new Error('unused'))),
         setStake: vi.fn(() => Promise.reject(new Error('unused'))),
         setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
         readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),

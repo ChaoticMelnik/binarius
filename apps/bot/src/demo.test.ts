@@ -92,6 +92,7 @@ import {
   signalsResponse,
   signalDecided,
   type ApiCall,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
 } from './testing';
@@ -142,6 +143,7 @@ function setup(
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       readPairs,

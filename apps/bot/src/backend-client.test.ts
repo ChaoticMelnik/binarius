@@ -38,6 +38,7 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
+  safeParseTrackedSessionsResponse,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   safeParseUserAccountResponse,
@@ -48,6 +49,7 @@ import {
   SignalKind,
   STAKE_PATH,
   TELEGRAM_MESSAGE_LIMIT,
+  TRACKED_SESSIONS_MAX,
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeTransport,
@@ -75,6 +77,7 @@ import {
   createBackendClient,
   MAX_BACKEND_BODY_BYTES,
   MAX_BOT_TEXTS_BODY_BYTES,
+  MAX_TRACKED_SESSIONS_BODY_BYTES,
   type BackendClient,
 } from './backend-client';
 import {
@@ -1358,6 +1361,73 @@ describe('claimSessionSummary (#318)', () => {
   });
 });
 
+describe('recordSessionMessage (#567)', () => {
+  const record = (baseUrl: string) =>
+    createBackendClient({ baseUrl, token: TOKEN }).recordSessionMessage(SESSION_ID, '4242', 77);
+
+  it('posts the owner and the message id to the status-message path and returns the view', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { session: SESSION_VIEW });
+    });
+    expect(await record(baseUrl)).toEqual(SESSION_VIEW);
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/status-message`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', messageId: 77 });
+  });
+
+  it('carries a 404 not_found as readSession does', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: 'not_found' });
+    });
+    expect(await rejectionOf(record(baseUrl))).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
+  });
+
+  it('reports a broken body as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { session: { ...SESSION_VIEW, trades: null } });
+    });
+    expect(await rejectionOf(record(baseUrl))).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+    });
+  });
+});
+
+describe('listTrackedSessions (#567)', () => {
+  const row = {
+    id: SESSION_ID,
+    telegramUserId: '4242',
+    messageId: 77,
+    assetId: 101,
+    startedAt: SESSION_VIEW.startedAt,
+  };
+  const list = (baseUrl: string) =>
+    createBackendClient({ baseUrl, token: TOKEN }).listTrackedSessions();
+
+  it('sends a GET with the ceiling as the limit and returns the rows', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { sessions: [row, { ...row, assetId: null }] });
+    });
+    expect(await list(baseUrl)).toEqual([row, { ...row, assetId: null }]);
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe(`/trading/sessions/tracked?limit=${TRACKED_SESSIONS_MAX}`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('reports a broken body as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { sessions: [{ ...row, messageId: 0 }] });
+    });
+    expect(await rejectionOf(list(baseUrl))).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+    });
+  });
+});
+
 describe('stopSessions (#122)', () => {
   const stopped = {
     ...SESSION_VIEW,
@@ -1871,6 +1941,24 @@ describe('body size', () => {
       },
       readSession: { parse: safeParseTradingSessionResponse, sample: { session: SESSION } },
       stopSession: { parse: safeParseTradingSessionResponse, sample: { session: SESSION } },
+      recordSessionMessage: {
+        parse: safeParseTradingSessionResponse,
+        sample: { session: SESSION },
+      },
+      // TRACKED_SESSIONS_MAX rows at their longest, under its own ceiling
+      listTrackedSessions: {
+        parse: safeParseTrackedSessionsResponse,
+        sample: {
+          sessions: Array.from({ length: TRACKED_SESSIONS_MAX }, () => ({
+            id: UUID,
+            telegramUserId: TELEGRAM_ID,
+            messageId: INT4_MAX,
+            assetId: INT4_MAX,
+            startedAt: DATETIME,
+          })),
+        },
+        limit: MAX_TRACKED_SESSIONS_BODY_BYTES / 4,
+      },
       stopSessions: {
         parse: safeParseTradingSessionsStoppedResponse,
         sample: { sessions: Array.from({ length: ASSUMED_USER_BROKER_ACCOUNTS }, () => SESSION) },

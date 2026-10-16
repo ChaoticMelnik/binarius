@@ -67,6 +67,7 @@ import {
   type LoginStep,
 } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
+import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
 import { createStakePicker, SETTINGS_CALLBACK_DATA, stakeOpenCallbackData } from './stake-picker';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
@@ -127,6 +128,8 @@ export interface CreateBotOptions {
   intentTracker: Pick<IntentTracker, 'track'>;
   // follows each session's status message (#284); required for the same reason
   sessionTracker: Pick<SessionTracker, 'track'>;
+  // tracks the sessions again after a restart (#567): handed the session composer's resume
+  sessionResumer: Pick<SessionResumer, 'attach'>;
 }
 
 export function createBot({
@@ -142,6 +145,7 @@ export function createBot({
   now = Date.now,
   intentTracker,
   sessionTracker,
+  sessionResumer,
 }: CreateBotOptions): Bot {
   const bot = new Bot(token, {
     ...(botInfo === undefined ? {} : { botInfo }),
@@ -500,6 +504,7 @@ export function createBot({
     connectKeyboard: welcomeKeyboard,
     cashierUrl,
   });
+  sessionResumer.attach(tradingSession.resume);
   // the amounts of a demo cycle's amount screen (#476), which start through the session's path;
   // its typed amount arrives through the text handler below
   const cycleStake = createCycleStakeComposer({

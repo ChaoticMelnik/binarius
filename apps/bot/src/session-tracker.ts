@@ -3,6 +3,7 @@ import {
   editRefusal,
   errorLogFields,
   isTradingSessionFinished,
+  TradingSessionStatus,
   type PairLabel,
   type TelegramHtml,
   type TradingSessionView,
@@ -18,8 +19,8 @@ import { sessionStatusText, TEXTS } from './texts';
 
 // The session's status message follows its session (#284, docs/bot-session.md): the bot
 // polls GET /trading/sessions/:id and edits the message as the session moves. In-process memory,
-// like the intent tracker: a restart leaves each message at its last state, and its «🔄 Обновить»
-// is the recovery — a refresh of a live session tracks it again on that message.
+// like the intent tracker; the first poll of a message records its id with the backend (#567), so
+// after a restart the bot's resumer (session-resume.ts) tracks the session again on it.
 
 // The answer GET /trading/sessions/:id gives for an id that is missing or not this user's.
 export const SESSION_NOT_FOUND = 'not_found';
@@ -33,16 +34,28 @@ const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 // balance for the same predicate (#337), so the two cannot drift.
 export const sessionTrackingDone = isTradingSessionFinished;
 
+// what an edit draws for: the view it shows, or none once the session is gone (#350)
+export type SessionEditArgs =
+  [view: TradingSessionView, end?: undefined] | [view: null, end: 'not_found'];
+
 export interface SessionTrackRequest {
   sessionId: string;
   telegramUserId: string;
+  // the status message the edits go to (#567: its first poll records it with the backend)
+  messageId: number;
   // the pair's label as the catalog gave it at the press, or null
   label: PairLabel | null;
-  // what the message shows now
-  view: TradingSessionView;
+  // what the message shows now, or null when nothing of it was read yet (a recovered session)
+  view: TradingSessionView | null;
+  // when the entry's deadline starts, epoch ms: the session's started_at for a recovered one;
+  // now() by default
+  startedAt?: number;
+  // the first poll records messageId with the backend (#567) and reads the view from that answer;
+  // false when the backend has it already (a recovered session)
+  record: boolean;
   // edits the status message; the keyboard follows the view (no stop button once it stopped),
   // or only the menu once the session is gone (#350)
-  edit: (text: TelegramHtml, view: TradingSessionView, end?: 'not_found') => Promise<unknown>;
+  edit: (text: TelegramHtml, ...rest: SessionEditArgs) => Promise<unknown>;
   // sends the summary card under the final status (#318): called once, as the entry ends on a
   // done view whose final edit landed and whose summary message the backend sent (#464); it
   // handles its own failures
@@ -57,10 +70,12 @@ export interface SessionTracker {
   // clears every timer, refuses new entries, and waits for the attempts in flight
   stop(): Promise<void>;
   size(): number;
+  // the session has an entry
+  has(sessionId: string): boolean;
 }
 
 export interface SessionTrackerOptions {
-  backend: Pick<BackendClient, 'readSession'>;
+  backend: Pick<BackendClient, 'readSession' | 'recordSessionMessage'>;
   logger: Logger;
   firstPollMs: number;
   pollMs: number;
@@ -71,7 +86,8 @@ export interface SessionTrackerOptions {
 
 interface Entry extends SessionTrackRequest {
   startedAt: number;
-  // what is on screen, as renderKey spells it
+  // what is on screen, as finalOf's key spells it; '' while nothing was read, so the first good
+  // read draws
   rendered: string;
   timer: ReturnType<typeof setTimeout> | undefined;
   readFailures: number;
@@ -105,6 +121,22 @@ const renderKey = ({
   ]
     .map(String)
     .join('|');
+
+// What the message ends on: the view's status, with the deadline hint once past the deadline
+// under a session not stopped. The hint follows sessionStatusText's own rule (none under a
+// stopped session), so a stopped session's key past the deadline is its plain key and a text
+// already on screen is not drawn again.
+const finalOf = (
+  label: PairLabel | null,
+  view: TradingSessionView,
+  past: boolean,
+): { key: string; text: TelegramHtml } => {
+  const hinted = past && view.status !== TradingSessionStatus.Stopped;
+  return {
+    key: renderKey(view) + (hinted ? '|deadline' : ''),
+    text: sessionStatusText(label, view, { deadline: hinted }),
+  };
+};
 
 export function createSessionTracker({
   backend,
@@ -159,10 +191,10 @@ export function createSessionTracker({
     entry: Entry,
     text: TelegramHtml,
     key: string,
-    end?: 'not_found',
+    ...args: SessionEditArgs
   ): Promise<boolean> {
     try {
-      await entry.edit(text, entry.view, end);
+      await entry.edit(text, ...args);
       entry.rendered = key;
       return true;
     } catch (error) {
@@ -194,7 +226,9 @@ export function createSessionTracker({
   async function attempt(entry: Entry): Promise<void> {
     let view: TradingSessionView;
     try {
-      view = await backend.readSession(entry.sessionId, entry.telegramUserId);
+      view = entry.record
+        ? await backend.recordSessionMessage(entry.sessionId, entry.telegramUserId, entry.messageId)
+        : await backend.readSession(entry.sessionId, entry.telegramUserId);
     } catch (error) {
       if (!(error instanceof BackendError)) {
         failed(entry, error);
@@ -212,7 +246,7 @@ export function createSessionTracker({
       if (notFound) {
         // polling cannot fix a missing or foreign id; a replaced entry leaves the old message be
         if (current(entry)) {
-          await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND, 'not_found');
+          await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND, null, 'not_found');
         }
         finish(entry);
         return;
@@ -223,11 +257,13 @@ export function createSessionTracker({
     // A replaced, evicted or finished entry renders nothing, during stop() too; a current entry's
     // attempt that stop() drains still renders what it read, as in the intent tracker. An edit
     // already sent when the session moved can still land: the one edit the contract allows.
+    // an answer means the backend has the id: a later poll only reads; a failed one asks again
+    entry.record = false;
     if (!current(entry)) return;
     entry.view = view;
-    const key = renderKey(view);
+    const { key, text } = finalOf(entry.label, view, now() - entry.startedAt >= deadlineMs);
     if (key !== entry.rendered) {
-      const goOn = await editTo(entry, sessionStatusText(entry.label, view), key);
+      const goOn = await editTo(entry, text, key, view);
       if (!goOn) return;
     }
     // The card goes once, then the entry ends, whatever the card did: a claim the backend
@@ -242,24 +278,28 @@ export function createSessionTracker({
     await next(entry);
   }
 
-  // Re-arm, or past the deadline one last edit, not retried, and stop: the hint for a session
-  // still followed, the final status for a done one whose edit never landed, and its card once
-  // that edit lands and the summary message went out (no card otherwise: it would come before
-  // the summary or without it).
+  // Re-arm, or past the deadline stop, with one last edit, not retried, only when the final text
+  // is not on screen yet (the poll's own edit failed, or a read failed after the last good one):
+  // the hint for a session not stopped, the final status otherwise; then the card of a done
+  // session once that text is shown and the summary message went out (no card otherwise: it
+  // would come before the summary or without it). An entry that never read a view ends with no
+  // edit: it has nothing to draw.
   async function next(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     if (now() - entry.startedAt < deadlineMs) {
       arm(entry, pollMs);
       return;
     }
-    const done = sessionTrackingDone(entry.view);
-    const key = done ? renderKey(entry.view) : 'deadline';
-    await editTo(
-      entry,
-      sessionStatusText(entry.label, entry.view, done ? {} : { deadline: true }),
-      key,
-    );
-    if (done && entry.rendered === key && entry.view.noticesDone) await entry.card(entry.view);
+    const view = entry.view;
+    if (view === null) {
+      finish(entry);
+      return;
+    }
+    const { key, text } = finalOf(entry.label, view, true);
+    if (entry.rendered !== key) await editTo(entry, text, key, view);
+    if (sessionTrackingDone(view) && entry.rendered === key && view.noticesDone) {
+      await entry.card(view);
+    }
     finish(entry);
   }
 
@@ -274,8 +314,8 @@ export function createSessionTracker({
       }
       const entry: Entry = {
         ...request,
-        startedAt: previous?.startedAt ?? now(),
-        rendered: renderKey(request.view),
+        startedAt: previous?.startedAt ?? request.startedAt ?? now(),
+        rendered: request.view === null ? '' : renderKey(request.view),
         timer: undefined,
         readFailures: 0,
         editFailures: 0,
@@ -290,5 +330,6 @@ export function createSessionTracker({
       entries.clear();
     },
     size: () => entries.size,
+    has: (sessionId) => entries.has(sessionId),
   };
 }

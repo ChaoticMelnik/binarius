@@ -1,4 +1,12 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
+import {
+  Composer,
+  GrammyError,
+  HttpError,
+  InlineKeyboard,
+  InputFile,
+  type Api,
+  type Context,
+} from 'grammy';
 import {
   deleteRefusal,
   editRefusal,
@@ -16,6 +24,7 @@ import {
   type PairsCatalogResponse,
   type SetTradingModeResponse,
   type TelegramHtml,
+  type TrackedSession,
   type TradingSessionView,
 } from '@binarius/shared';
 import {
@@ -263,6 +272,16 @@ export type SessionStartData = Pick<
   NonNullable<ReturnType<typeof sessionStartDataOf>>,
   'mode' | 'assetId' | 'durationSec'
 >;
+// Tracks a session again on its recorded status message after a restart (#567,
+// session-resume.ts): the same entry a press makes, with no view read yet, the deadline from the
+// session's start, and the message already recorded. The label is the catalog's, or null.
+export type ResumeSession = (
+  api: Api,
+  botUsername: string,
+  session: TrackedSession,
+  label: PairLabel | null,
+) => void;
+
 export type StartSession = (
   ctx: Context,
   data: SessionStartData,
@@ -276,7 +295,11 @@ export function createTradingSessionComposer<C extends Context>({
   sessionTracker,
   connectKeyboard,
   cashierUrl,
-}: TradingSessionDeps): { composer: Composer<C>; startSession: StartSession } {
+}: TradingSessionDeps): {
+  composer: Composer<C>;
+  startSession: StartSession;
+  resume: ResumeSession;
+} {
   const composer = new Composer<C>();
 
   composer.callbackQuery(SESSION_START_PATTERN, async (ctx) => {
@@ -545,8 +568,9 @@ export function createTradingSessionComposer<C extends Context>({
   }
 
   // The view in place of the message the button is under, then tracking on whichever message
-  // shows it: after a restart the button is how tracking resumes, and a done session's entry
-  // sends its summary card once and ends (#318).
+  // shows it: its first poll records the message (#567), so a session started before the
+  // recovery existed is recovered from then on; a done session's entry sends its summary card
+  // once and ends (#318).
   async function showInPlace(
     ctx: Context,
     telegramUserId: string,
@@ -636,17 +660,55 @@ export function createTradingSessionComposer<C extends Context>({
     chatId: number,
     messageId: number,
   ): void {
-    const botUsername = ctx.me.username;
-    sessionTracker.track({
-      sessionId: view.id,
+    const target = { sessionId: view.id, telegramUserId, symbol, chatId, messageId };
+    follow(ctx.api, ctx.me.username, target, { view, record: true });
+  }
+
+  // a private chat's id is its user's id (Telegram ids fit in 52 bits, so Number keeps them)
+  const resume: ResumeSession = (api, botUsername, session, label) => {
+    const target = {
+      sessionId: session.id,
+      telegramUserId: session.telegramUserId,
+      symbol: label,
+      chatId: Number(session.telegramUserId),
+      messageId: session.messageId,
+    };
+    follow(api, botUsername, target, {
+      view: null,
+      record: false,
+      startedAt: Date.parse(session.startedAt),
+    });
+  };
+
+  function follow(
+    api: Api,
+    botUsername: string,
+    {
+      sessionId,
       telegramUserId,
+      symbol,
+      chatId,
+      messageId,
+    }: {
+      sessionId: string;
+      telegramUserId: string;
+      symbol: PairLabel | null;
+      chatId: number;
+      messageId: number;
+    },
+    entry: { view: TradingSessionView | null; record: boolean; startedAt?: number },
+  ): void {
+    sessionTracker.track({
+      sessionId,
+      telegramUserId,
+      messageId,
       label: symbol,
-      view,
-      edit: (text, current, end) =>
-        editMessageTextByIdHtml(ctx.api, chatId, messageId, text, {
+      ...entry,
+      edit: (text, ...[current, end]) =>
+        editMessageTextByIdHtml(api, chatId, messageId, text, {
           reply_markup: end === 'not_found' ? menuKeyboard() : sessionKeyboard(current, cashierUrl),
         }),
-      card: (current) => sendCard(ctx, chatId, telegramUserId, symbol, botUsername, current),
+      card: (current) => sendCard(api, chatId, telegramUserId, symbol, botUsername, current),
     });
   }
 
@@ -654,7 +716,7 @@ export function createTradingSessionComposer<C extends Context>({
   // drawn here, sent under the final status. A refused claim sends nothing and says nothing; any
   // other failure is logged and not retried — a committed claim would answer 409 the second time.
   async function sendCard(
-    ctx: Context,
+    api: Api,
     chatId: number,
     telegramUserId: string,
     symbol: PairLabel | null,
@@ -671,7 +733,7 @@ export function createTradingSessionComposer<C extends Context>({
       const png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
       const keyboard = sessionCardKeyboard(view, cashierUrl);
       const sent = await sendPhotoByIdHtml(
-        ctx.api,
+        api,
         chatId,
         new InputFile(png, 'session.png'),
         TEXTS.sessionCardCaption({
@@ -684,7 +746,7 @@ export function createTradingSessionComposer<C extends Context>({
         { reply_markup: keyboard, disable_notification: true },
       );
       // «📤 Поделиться» (#321): catches its own failures, so the warning below is the send's only
-      await attachShareButton(ctx.api, logger, view.id, sent, keyboard);
+      await attachShareButton(api, logger, view.id, sent, keyboard);
     } catch (error) {
       logger.warn(
         {
@@ -710,5 +772,5 @@ export function createTradingSessionComposer<C extends Context>({
     });
   }
 
-  return { composer, startSession };
+  return { composer, startSession, resume };
 }

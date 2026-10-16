@@ -10,6 +10,7 @@ import { createBot } from './bot';
 import { parseEnv } from './env';
 import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
+import { createSessionResumer } from './session-resume';
 import { createSessionTracker } from './session-tracker';
 import { setBotTextSource } from './texts';
 import {
@@ -17,6 +18,7 @@ import {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_FIRST_POLL_MS,
   SESSION_TRACK_POLL_MS,
@@ -48,6 +50,14 @@ const sessionTracker = createSessionTracker({
   deadlineMs: SESSION_TRACK_DEADLINE_MS,
 });
 
+// tracks the sessions again after a restart (#567); createBot hands it the session composer's resume
+const sessionResumer = createSessionResumer({
+  backend,
+  tracker: sessionTracker,
+  logger,
+  intervalMs: SESSION_RESUME_INTERVAL_MS,
+});
+
 // the texts with their overrides, from the first load on (docs/bot-texts.md → Loading)
 const botTexts = createBotTextRefresher({
   load: () => backend.readBotTexts(),
@@ -67,12 +77,18 @@ const bot = createBot({
   cashierUrl,
   intentTracker,
   sessionTracker,
+  sessionResumer,
 });
 
 runBot({
   bot,
   tracker: intentTracker,
   sessionTracker,
+  // bot.api and the username are known once bot.init() ran, before onStart
+  sessionResumer: {
+    start: () => sessionResumer.start(bot.api, bot.botInfo.username),
+    stop: () => sessionResumer.stop(),
+  },
   botTexts,
   logger,
   exit: (code) => process.exit(code),

@@ -276,6 +276,14 @@ export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
 // that puts «📤 Поделиться» on it (#321).
 export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS;
 
+// The recovery of session tracking after a restart (#567, session-resume.ts): a pass at the
+// start and one every 10 minutes, each one list request and one catalog read per bot process.
+// What its stop() can be waiting for is a pass's list and catalog, counted one after the other;
+// the entries it hands the tracker are memory. The interval is no link of the chain: getting it
+// wrong only changes how often the list is read.
+export const SESSION_RESUME_INTERVAL_MS = 600_000;
+export const SESSION_RESUME_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS;
+
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
 // /trading/signal (#126), POST /trading/sessions (#283) and a session's view and stop (#337):
@@ -298,6 +306,7 @@ export const TIMING_CHAIN_HOLDS =
   SESSION_TRACK_POLL_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   // the pre-checkout: the route inside the call, the call and the answer inside Telegram's 10 s
   STARS_PRECHECKOUT_BUDGET_MS <= STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS &&
   STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS <= BACKEND_REQUEST_TIMEOUT_MS &&

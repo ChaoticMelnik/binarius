@@ -33,6 +33,9 @@ export interface RunBotOptions {
   tracker: Pick<IntentTracker, 'stop'>;
   // the sessions' status tracker (#284), drained the same way
   sessionTracker: Pick<SessionTracker, 'stop'>;
+  // the recovery of session tracking (#567): started once the profile is published, its pass in
+  // flight drained
+  sessionResumer: { start(): void; stop(): Promise<void> };
   // the text overrides' refresher (#299): its load in flight waited for, and its first load
   // awaited before the menu and the profile are published (#301)
   botTexts: { stop(): Promise<void>; loaded(): Promise<void> };
@@ -51,6 +54,7 @@ export function runBot({
   bot,
   tracker,
   sessionTracker,
+  sessionResumer,
   botTexts,
   logger,
   exit,
@@ -107,6 +111,8 @@ export function runBot({
       await botTexts.loaded();
       if (stopping) return;
       await registerProfile();
+      // its first pass runs beside polling, not before it
+      if (!stopping) sessionResumer.start();
       logger.info('bot started');
     },
   });
@@ -147,6 +153,7 @@ export function runBot({
       step('polling loop', () => started),
       step('intent tracker', () => tracker.stop()),
       step('session tracker', () => sessionTracker.stop()),
+      step('session resume', () => sessionResumer.stop()),
       step('bot texts', () => botTexts.stop()),
     ];
 

@@ -61,6 +61,7 @@ import {
   textUpdate,
   type ApiAnswer,
   type ApiCall,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
 } from './testing';
@@ -132,6 +133,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
     stopSessions:
       scenario.stopSessions ?? (() => Promise.reject(new Error('not used by these scenes'))),
+    recordSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
+    listTrackedSessions: () => Promise.reject(new Error('not used by these scenes')),
     setStake: scenario.setStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
     setTradingMode:
       scenario.setTradingMode ?? (() => Promise.reject(new Error('not used by these scenes'))),
@@ -147,6 +150,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: TOKEN,
     backend,
     logger,
@@ -1301,6 +1305,7 @@ describe('what the bot writes when a drain step fails', () => {
       bot,
       tracker: { stop: () => Promise.resolve() },
       sessionTracker: { stop: () => Promise.resolve() },
+      sessionResumer: { start: () => {}, stop: () => Promise.resolve() },
       botTexts: { stop: () => Promise.resolve(), loaded: () => Promise.resolve() },
       logger,
       exit: vi.fn(),
@@ -1358,6 +1363,7 @@ describe('what the bot writes when a part of the profile is not registered', () 
         bot,
         tracker: { stop: () => Promise.resolve() },
         sessionTracker: { stop: () => Promise.resolve() },
+        sessionResumer: { start: () => {}, stop: () => Promise.resolve() },
         botTexts: { stop: () => Promise.resolve(), loaded: () => Promise.resolve() },
         logger,
         exit: vi.fn(),

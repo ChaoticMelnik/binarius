@@ -52,6 +52,7 @@ import {
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   pairsResponse,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -114,6 +115,7 @@ function setup(
     loginDialog,
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

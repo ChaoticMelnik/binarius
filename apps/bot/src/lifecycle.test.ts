@@ -19,6 +19,7 @@ import {
   sentPayload,
   startUpdate,
   type FakeLogger,
+  stubSessionResumer,
   stubSessionTracker,
   stubTracker,
 } from './testing';
@@ -70,6 +71,7 @@ const signals = () => new EventEmitter();
 
 // a tracker with nothing in flight: its stop settles at once (#127)
 const idleTracker = () => ({ stop: vi.fn(() => Promise.resolve()) });
+const idleResumer = () => ({ ...idleTracker(), start: vi.fn() });
 // a refresher whose first load has settled already (#301)
 const idleTexts = () => ({ ...idleTracker(), loaded: () => Promise.resolve() });
 // A refresher whose first load is still pending: settle() ends it, and so does stop(). In
@@ -116,6 +118,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -177,6 +180,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: held.texts,
       bot: fake.bot,
       logger: fakeLogger(),
@@ -216,6 +220,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: held.texts,
       bot: fake.bot,
       logger: log,
@@ -249,6 +254,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -290,6 +296,7 @@ describe('runBot', () => {
       runBot({
         tracker: idleTracker(),
         sessionTracker: idleTracker(),
+        sessionResumer: idleResumer(),
         botTexts: idleTexts(),
         bot: fake.bot,
         logger: log,
@@ -316,6 +323,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -336,6 +344,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -371,6 +380,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -397,6 +407,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -423,6 +434,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -451,6 +463,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -485,6 +498,7 @@ describe('runBot', () => {
     runBot({
       tracker,
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -512,6 +526,7 @@ describe('runBot', () => {
     runBot({
       tracker,
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -536,6 +551,7 @@ describe('runBot', () => {
     runBot({
       tracker,
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -569,6 +585,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker,
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -587,6 +604,81 @@ describe('runBot', () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
+  // #567
+  it('starts the session recovery once the profile is published, and not after a signal during the load', async () => {
+    const fake = fakeBot();
+    const order: string[] = [];
+    fake.api.setMyShortDescription.mockImplementation(() => {
+      order.push('profile');
+      return Promise.resolve(true as const);
+    });
+    const sessionResumer = { ...idleResumer(), start: vi.fn(() => void order.push('resume')) };
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer,
+      botTexts: idleTexts(),
+      bot: fake.bot,
+      logger: fakeLogger(),
+      exit: vi.fn(),
+      signalSource: signals(),
+    });
+    expect(sessionResumer.start).not.toHaveBeenCalled();
+    await fake.options[0]?.onStart?.(BOT_INFO);
+    expect(order).toEqual(['profile', 'resume']);
+    fake.resolveStart();
+
+    const held = heldTexts();
+    const signalled = fakeBot();
+    const signalSource = signals();
+    const late = idleResumer();
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer: late,
+      botTexts: held.texts,
+      bot: signalled.bot,
+      logger: fakeLogger(),
+      exit: vi.fn(),
+      signalSource,
+    });
+    const onStart = signalled.options[0]?.onStart?.(BOT_INFO);
+    signalSource.emit('SIGTERM');
+    held.settle();
+    await onStart;
+    expect(late.start).not.toHaveBeenCalled();
+    signalled.resolveStop();
+    signalled.resolveStart();
+  });
+
+  it('stops the session recovery with the bot and names it when its stop fails', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    const sessionResumer = {
+      start: vi.fn(),
+      stop: vi.fn(() => Promise.reject(new Error('resume died'))),
+    };
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer,
+      botTexts: idleTexts(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      signalSource,
+    });
+    signalSource.emit('SIGTERM');
+    expect(sessionResumer.stop).toHaveBeenCalledTimes(1);
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual(['shutdown: session resume failed', STEP_LINE]);
+  });
+
   // #299
   it('S1 names the bot texts refresher when its stop fails', async () => {
     const fake = fakeBot();
@@ -596,6 +688,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: {
         stop: vi.fn(() => Promise.reject(new Error('refresher died'))),
         loaded: () => Promise.resolve(),
@@ -621,6 +714,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: { stop: vi.fn(() => Promise.reject(new Error('tracker died'))) },
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: failing.bot,
       logger: log,
@@ -641,6 +735,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: { stop: vi.fn(() => new Promise<void>(() => {})) },
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: stuck.bot,
       logger: stuckLog,
@@ -664,6 +759,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -756,6 +852,8 @@ function scene(options: SceneOptions = {}) {
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
+    recordSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
+    listTrackedSessions: () => Promise.reject(new Error('not used by these scenes')),
     setStake: () => Promise.reject(new Error('not used by these scenes')),
     setTradingMode: () => Promise.reject(new Error('not used by these scenes')),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
@@ -768,6 +866,7 @@ function scene(options: SceneOptions = {}) {
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
+    sessionResumer: stubSessionResumer(),
     token: TOKEN,
     backend,
     logger: log,
@@ -811,6 +910,7 @@ function scene(options: SceneOptions = {}) {
   runBot({
     tracker: idleTracker(),
     sessionTracker: idleTracker(),
+    sessionResumer: idleResumer(),
     botTexts: idleTexts(),
     bot,
     logger: log,
