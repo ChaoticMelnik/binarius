@@ -1024,11 +1024,31 @@ describe('ensureFreshAccessToken for the service-account keeper (#391)', () => {
     cipher.decrypt(row.accessTokenEnc, { accountId: row.id, field: TokenField.Access });
 
   it('V1 refuses an unmarked row with not_service, without the broker and without a write', async () => {
+    const decrypt = vi.fn(cipher.decrypt);
     const account = await expiredAccount();
     const before = await rowOf(account.id);
     const requests = stub.tokenRequests;
     expect(
-      await ensureFreshAccessToken(deps(), account.id, { mayRefresh: true, serviceOnly: true }),
+      await ensureFreshAccessToken(deps({ cipher: { ...cipher, decrypt } }), account.id, {
+        mayRefresh: true,
+        serviceOnly: true,
+      }),
+    ).toEqual({ ok: false, reason: 'not_service' });
+    expect(stub.tokenRequests).toBe(requests);
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(await rowOf(account.id)).toEqual(before);
+  });
+
+  it('V6 refuses an unmarked row before the refused-token branch: a valid token stays unexpired', async () => {
+    const account = await linkedAccount();
+    const before = await rowOf(account.id);
+    const requests = stub.tokenRequests;
+    expect(
+      await ensureFreshAccessToken(deps(), account.id, {
+        mayRefresh: true,
+        serviceOnly: true,
+        refusedToken: hashToken(accessOf(account)),
+      }),
     ).toEqual({ ok: false, reason: 'not_service' });
     expect(stub.tokenRequests).toBe(requests);
     expect(await rowOf(account.id)).toEqual(before);
