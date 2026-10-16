@@ -10,6 +10,7 @@ import { bonusRules } from './bonus-rules';
 import { brokerAccounts } from './broker-accounts';
 import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
+import { referrals } from './referrals';
 import { starPayments } from './star-payments';
 import { tradeIntents } from './trade-intents';
 import { users } from './users';
@@ -55,6 +56,8 @@ export const tokenLedger = pgTable(
     depositEventId: uuid('deposit_event_id'),
     brokerAccountId: uuid('broker_account_id'),
     starPaymentId: uuid('star_payment_id'),
+    // the referral an inviter's reward pays (#116); the row's user_id is that referral's inviter
+    referralId: uuid('referral_id'),
     // the rule version a bonus was credited under (#13); the kind is carried so the FK below can
     // pin it to the kind the row's reference requires
     bonusRuleId: uuid('bonus_rule_id'),
@@ -87,6 +90,12 @@ export const tokenLedger = pgTable(
       columns: [t.starPaymentId, t.userId],
       foreignColumns: [starPayments.id, starPayments.userId],
     }),
+    // the reward goes to that referral's inviter and nobody else
+    foreignKey({
+      name: 'token_ledger_referral_inviter_fk',
+      columns: [t.referralId, t.userId],
+      foreignColumns: [referrals.id, referrals.inviterUserId],
+    }).onDelete('restrict'),
     foreignKey({
       name: 'token_ledger_bonus_rule_fk',
       columns: [t.bonusRuleId, t.bonusRuleKind],
@@ -105,24 +114,25 @@ export const tokenLedger = pgTable(
             when ${t.kind} in (${sqlLiteralList(INTENT_LEDGER_KINDS)})
               then ${t.intentId} is not null and ${t.depositEventId} is null
                 and ${t.brokerAccountId} is null and ${t.refId} is null
-                and ${t.starPaymentId} is null
+                and ${t.starPaymentId} is null and ${t.referralId} is null
             when ${t.kind} = ${kind(TokenLedgerKind.Purchase)}
               then ${t.intentId} is null and ${t.brokerAccountId} is null and ${t.refId} is null
+                and ${t.referralId} is null
                 and (${t.depositEventId} is not null) <> (${t.starPaymentId} is not null)
             when ${t.kind} = ${kind(TokenLedgerKind.Bonus)}
               then ${t.intentId} is null and ${t.refId} is null and ${t.starPaymentId} is null
-                and not (${t.depositEventId} is not null and ${t.brokerAccountId} is not null)
+                and num_nonnulls(${t.depositEventId}, ${t.brokerAccountId}, ${t.referralId}) <= 1
             when ${t.kind} = ${kind(TokenLedgerKind.Refund)}
               then ${t.starPaymentId} is not null and ${t.intentId} is null
                 and ${t.depositEventId} is null and ${t.brokerAccountId} is null
-                and ${t.refId} is null
+                and ${t.refId} is null and ${t.referralId} is null
             else ${t.intentId} is null and ${t.depositEventId} is null and ${t.brokerAccountId} is null
-              and ${t.starPaymentId} is null
+              and ${t.starPaymentId} is null and ${t.referralId} is null
           end`,
     ),
     // A bonus names a rule of the kind its reference requires: a starter pack a link_bonus rule, a
-    // deposit-linked bonus a deposit_bonus rule; a bonus naming neither is refused (#116 adds the
-    // referral branch). Every other kind names no rule. The `is not null` on the kind is load-bearing:
+    // deposit-linked bonus a deposit_bonus rule, an inviter's reward a referral_reward rule (#116);
+    // a bonus naming none of them is refused. Every other kind names no rule. The `is not null` on the kind is load-bearing:
     // a NULL kind would make the comparison NULL, pass the CHECK, and MATCH SIMPLE would skip the FK.
     check(
       'token_ledger_bonus_rule_check',
@@ -134,6 +144,8 @@ export const tokenLedger = pgTable(
                     then ${t.bonusRuleKind} = ${literal(BonusRuleKind.LinkBonus)}
                   when ${t.depositEventId} is not null
                     then ${t.bonusRuleKind} = ${literal(BonusRuleKind.DepositBonus)}
+                  when ${t.referralId} is not null
+                    then ${t.bonusRuleKind} = ${literal(BonusRuleKind.ReferralReward)}
                   else false
                 end
             else ${t.bonusRuleId} is null and ${t.bonusRuleKind} is null
@@ -191,6 +203,11 @@ export const tokenLedger = pgTable(
     uniqueIndex('token_ledger_link_bonus_user_idx')
       .on(t.userId)
       .where(sql`${t.kind} = ${kind(TokenLedgerKind.Bonus)} and ${t.brokerAccountId} is not null`),
+    // One reward per referral (#116), so one per invitee (referrals_invitee_key) and, since a
+    // broker_user_id has one owner (broker_accounts_broker_user_id_idx), one per broker account.
+    uniqueIndex('token_ledger_referral_idx')
+      .on(t.referralId)
+      .where(sql`${t.referralId} is not null`),
     index('token_ledger_user_created_idx').on(t.userId, t.createdAt),
     index('token_ledger_intent_id_idx').on(t.intentId),
   ],

@@ -534,7 +534,7 @@ describe('enum and uniqueness constraints', () => {
     });
   });
 
-  // these seven cannot be violated by an insert — a composite unique on (id, …) is unreachable
+  // these cannot be violated by an insert — a composite unique on (id, …) is unreachable
   // while id is the PK — so they are covered by asserting the catalog, and registered in the
   // coverage set only once that assertion has passed
   it('keeps the composite FK targets in place', async () => {
@@ -543,6 +543,7 @@ describe('enum and uniqueness constraints', () => {
       'broker_accounts_id_broker_user_id_key',
       'broker_accounts_id_user_id_key',
       'deposit_events_id_user_key',
+      'referrals_id_inviter_key',
       'star_payments_id_user_key',
       'trade_intents_id_account_mode_key',
       'trade_intents_id_user_key',
@@ -4132,6 +4133,193 @@ describe('token_ledger: the rule a bonus names (#13)', () => {
           brokerAccountId: seed.accountId,
           bonusRuleId: await seededRule(tx, 'referral_reward'),
           bonusRuleKind: 'link_bonus',
+        }),
+        '23503',
+        'token_ledger_bonus_rule_fk',
+      );
+    });
+  });
+});
+
+describe('token_ledger: the inviter’s reward (#116)', () => {
+  const ruleOf = async (tx: Tx, code: string) => {
+    const [row] = await tx
+      .select({ id: bonusRules.id })
+      .from(bonusRules)
+      .where(sql`${bonusRules.code} = ${code} and ${bonusRules.version} = 1`);
+    return { bonusRuleId: row!.id, bonusRuleKind: code as 'referral_reward' };
+  };
+  // an inviter with an account, an invitee, and the referral between them
+  const seedReferral = async (tx: Tx) => {
+    const inviter = await seedAccount(tx);
+    const invitee = await seedAccount(tx);
+    const [row] = await tx
+      .insert(referrals)
+      .values({ inviteeUserId: invitee.userId, inviterUserId: inviter.userId })
+      .returning({ id: referrals.id });
+    return { inviter, invitee, referralId: row!.id };
+  };
+  const reward = async (tx: Tx, userId: string, referralId: string) =>
+    ({
+      userId,
+      kind: 'bonus',
+      balanceDelta: 50n,
+      referralId,
+      ...(await ruleOf(tx, 'referral_reward')),
+    }) as typeof tokenLedger.$inferInsert;
+
+  it('accepts the reward on the inviter’s ledger beside the inviter’s own starter pack', async () => {
+    await rolledBack(async (tx) => {
+      const { inviter, referralId } = await seedReferral(tx);
+      await tx.insert(tokenLedger).values(await reward(tx, inviter.userId, referralId));
+      await tx.insert(tokenLedger).values({
+        userId: inviter.userId,
+        kind: 'bonus',
+        balanceDelta: 100n,
+        brokerAccountId: inviter.accountId,
+        ...(await bonusRuleRef(tx, 'link_bonus')),
+      });
+    });
+  });
+
+  it('refuses a second reward of the same referral', async () => {
+    await rolledBack(async (tx) => {
+      const { inviter, referralId } = await seedReferral(tx);
+      await tx.insert(tokenLedger).values(await reward(tx, inviter.userId, referralId));
+      await rejectsWith(
+        tx.insert(tokenLedger).values(await reward(tx, inviter.userId, referralId)),
+        '23505',
+        'token_ledger_referral_idx',
+      );
+    });
+  });
+
+  it.each([
+    ['on the invitee’s ledger', 'invitee'],
+    ['on a stranger’s ledger', 'stranger'],
+    ['naming a referral that does not exist', 'missing'],
+  ] as const)('refuses a reward %s', async (_label, whose) => {
+    await rolledBack(async (tx) => {
+      const { invitee, referralId } = await seedReferral(tx);
+      const userId = whose === 'stranger' ? (await seedAccount(tx)).userId : invitee.userId;
+      const row =
+        whose === 'missing'
+          ? { ...(await reward(tx, invitee.userId, referralId)), referralId: randomUUID() }
+          : await reward(tx, userId, referralId);
+      await rejectsWith(
+        tx.insert(tokenLedger).values(row),
+        '23503',
+        'token_ledger_referral_inviter_fk',
+      );
+    });
+  });
+
+  it.each([
+    ['under a link_bonus rule', { rule: 'link_bonus' }],
+    ['under a deposit_bonus rule', { rule: 'deposit_bonus' }],
+    ['with a NULL rule kind', { bonusRuleKind: null }],
+    ['with a NULL rule id', { bonusRuleId: null }],
+  ] as const)('refuses a reward %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const { inviter, referralId } = await seedReferral(tx);
+      const row: Record<string, unknown> = await reward(tx, inviter.userId, referralId);
+      if ('rule' in patch) {
+        Object.assign(
+          row,
+          patch.rule === 'deposit_bonus'
+            ? await bonusRuleRef(tx, 'deposit_bonus')
+            : await bonusRuleRef(tx, 'link_bonus'),
+        );
+      } else {
+        Object.assign(row, patch);
+      }
+      await rejectsWith(
+        tx.insert(tokenLedger).values(row as typeof tokenLedger.$inferInsert),
+        '23514',
+        'token_ledger_bonus_rule_check',
+      );
+    });
+  });
+
+  // the other reference passes token_ledger_bonus_rule_check under its own rule, so the one that
+  // refuses the pair is the reference CHECK; each kind's branch gets its own row
+  it.each([
+    ['a bonus naming a referral and a broker account', 'account'],
+    ['a bonus naming a referral and a deposit', 'deposit'],
+    ['an adjustment naming a referral', 'adjustment'],
+    ['a deposit purchase naming a referral', 'purchase'],
+    ['a reserve naming a referral', 'reserve'],
+    ['a Stars refund naming a referral', 'refund'],
+  ] as const)('refuses %s', async (_label, shape) => {
+    await rolledBack(async (tx) => {
+      const { inviter, referralId } = await seedReferral(tx);
+      const values: Record<string, unknown> = {
+        userId: inviter.userId,
+        balanceDelta: 10n,
+        referralId,
+      };
+      if (shape === 'account') {
+        Object.assign(values, {
+          kind: 'bonus',
+          brokerAccountId: inviter.accountId,
+          ...(await bonusRuleRef(tx, 'link_bonus')),
+        });
+      }
+      if (shape === 'deposit') {
+        Object.assign(values, {
+          kind: 'bonus',
+          depositEventId: await seedDeposit(tx, inviter),
+          ...(await bonusRuleRef(tx, 'deposit_bonus')),
+        });
+      }
+      if (shape === 'adjustment') Object.assign(values, { kind: 'adjustment', note: 'n' });
+      if (shape === 'purchase') {
+        Object.assign(values, { kind: 'purchase', depositEventId: await seedDeposit(tx, inviter) });
+      }
+      if (shape === 'reserve') {
+        const [row] = await tx.insert(tradeIntents).values(intent(inviter, 'r1')).returning();
+        Object.assign(values, {
+          kind: 'reserve',
+          balanceDelta: 0n,
+          reservedDelta: 1n,
+          intentId: row!.id,
+        });
+      }
+      if (shape === 'refund') {
+        Object.assign(values, {
+          kind: 'refund',
+          balanceDelta: -1n,
+          starPaymentId: await seedStarPayment(tx, inviter.userId),
+        });
+      }
+      await rejectsWith(
+        tx.insert(tokenLedger).values(values as typeof tokenLedger.$inferInsert),
+        '23514',
+        'token_ledger_reference_check',
+      );
+    });
+  });
+
+  it('refuses a zero-delta reward', async () => {
+    await rolledBack(async (tx) => {
+      const { inviter, referralId } = await seedReferral(tx);
+      await rejectsWith(
+        tx
+          .insert(tokenLedger)
+          .values({ ...(await reward(tx, inviter.userId, referralId)), balanceDelta: 0n }),
+        '23514',
+        'token_ledger_delta_check',
+      );
+    });
+  });
+
+  it('refuses a link_bonus rule id labelled referral_reward', async () => {
+    await rolledBack(async (tx) => {
+      const { inviter, referralId } = await seedReferral(tx);
+      await rejectsWith(
+        tx.insert(tokenLedger).values({
+          ...(await reward(tx, inviter.userId, referralId)),
+          bonusRuleId: (await bonusRuleRef(tx, 'link_bonus')).bonusRuleId,
         }),
         '23503',
         'token_ledger_bonus_rule_fk',

@@ -21,7 +21,7 @@ import type { DbExecutor, Tx } from './trade-intent-ops';
 // The bonus rule engine (#13, docs/bonus-rules.md). A credit is bound to the version that was
 // active when it was written, and a rule change writes no ledger rows, so changing a rule never
 // re-credits what was already credited: the dedupe keys of each reference (the starter pack per
-// user, the deposit per kind) keep a later version from paying the same event again.
+// user, the deposit per kind, the inviter's reward per referral) keep a later version from paying the same event again.
 //
 // bonus_rules sits outside the users → … lock chain (Rule 5): applyBonus reads it without a lock
 // (the ledger insert's FK takes KEY SHARE on the rule row), and the CLI's writers lock only the
@@ -79,8 +79,32 @@ export async function resolveActiveRule(
   return { ...row, params } as ResolvedBonusRule;
 }
 
-// #386 adds { depositEventId }, #116 { referralId }; each reference has its own arbiter.
-export type BonusReference = { brokerAccountId: string };
+// #386 adds { depositEventId }. Each reference pins the rule kind it may be credited under
+// (token_ledger_bonus_rule_check) and has its own arbiter, a partial unique index whose predicate
+// the conflict clause repeats: a partial unique index is an arbiter only when the conflict clause
+// implies its predicate.
+export type BonusReference = { brokerAccountId: string } | { referralId: string };
+
+function referenceShape(reference: BonusReference) {
+  if ('referralId' in reference) {
+    return {
+      kind: BonusRuleKind.ReferralReward,
+      columns: { referralId: reference.referralId },
+      conflict: {
+        target: tokenLedger.referralId,
+        where: sql`${tokenLedger.referralId} is not null`,
+      },
+    };
+  }
+  return {
+    kind: BonusRuleKind.LinkBonus,
+    columns: { brokerAccountId: reference.brokerAccountId },
+    conflict: {
+      target: tokenLedger.userId,
+      where: sql`${tokenLedger.kind} = ${literal(TokenLedgerKind.Bonus)} and ${tokenLedger.brokerAccountId} is not null`,
+    },
+  };
+}
 
 export type BonusSkipReason =
   typeof LinkBonusSkipReason.NoActiveRule | typeof LinkBonusSkipReason.AlreadyGranted;
@@ -97,9 +121,10 @@ export async function applyBonus(
   tx: Tx,
   { code, userId, reference }: { code: string; userId: string; reference: BonusReference },
 ): Promise<BonusGrant> {
+  const shape = referenceShape(reference);
   const rule = await resolveActiveRule(tx, code);
   if (rule === undefined) return { granted: false, reason: LinkBonusSkipReason.NoActiveRule };
-  if (rule.kind !== BonusRuleKind.LinkBonus) throw new InvalidBonusRule(code);
+  if (rule.kind !== shape.kind) throw new InvalidBonusRule(code);
   const { tokens } = rule.params;
   const [row] = await tx
     .insert(tokenLedger)
@@ -107,16 +132,11 @@ export async function applyBonus(
       userId,
       kind: TokenLedgerKind.Bonus,
       balanceDelta: tokens,
-      brokerAccountId: reference.brokerAccountId,
+      ...shape.columns,
       bonusRuleId: rule.id,
       bonusRuleKind: rule.kind,
     })
-    // the predicate repeats token_ledger_link_bonus_user_idx's: a partial unique index is an
-    // arbiter only when the conflict clause implies its predicate
-    .onConflictDoNothing({
-      target: tokenLedger.userId,
-      where: sql`${tokenLedger.kind} = ${literal(TokenLedgerKind.Bonus)} and ${tokenLedger.brokerAccountId} is not null`,
-    })
+    .onConflictDoNothing(shape.conflict)
     .returning({ id: tokenLedger.id });
   if (row === undefined) return { granted: false, reason: LinkBonusSkipReason.AlreadyGranted };
 

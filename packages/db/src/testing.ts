@@ -368,6 +368,8 @@ export async function lockWaiters(db: Db): Promise<number> {
 
 // what migration 0059 seeds as link_bonus v1: the amount the hard-coded constant used to hold
 export const SEEDED_LINK_BONUS_TOKENS = 100n;
+// referral_reward v1, the same seed (#116)
+export const SEEDED_REFERRAL_REWARD_TOKENS = 50n;
 
 export interface BonusRuleRef {
   bonusRuleId: string;
@@ -375,12 +377,10 @@ export interface BonusRuleRef {
 }
 
 // The columns a fixture's bonus row needs (token_ledger_bonus_rule_check): a starter pack names
-// link_bonus v1 from the seed, a deposit bonus a deposit_bonus version, which no seed provides,
-// so the first call in a database inserts one (inactive: no grant path reads it).
-export async function bonusRuleRef(
-  db: DbExecutor,
-  kind: typeof BonusRuleKind.LinkBonus | typeof BonusRuleKind.DepositBonus,
-): Promise<BonusRuleRef> {
+// link_bonus v1 from the seed, an inviter's reward referral_reward v1 from the seed, a deposit
+// bonus a deposit_bonus version, which no seed provides, so the first call in a database inserts
+// one (inactive: no grant path reads it).
+export async function bonusRuleRef(db: DbExecutor, kind: BonusRuleKind): Promise<BonusRuleRef> {
   const [existing] = await db
     .select({ id: bonusRules.id })
     .from(bonusRules)
