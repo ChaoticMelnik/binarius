@@ -87,7 +87,8 @@ the code today moves the cache in the same transaction as its ledger row:
 
 - `createInTransaction` (reserve, `trade-intent-ops.ts`);
 - `releaseTokens` (release, through `rejectIntent` / `rejectExpiredIntent`);
-- `grantLinkBonus` (the starter pack, through `confirmBrokerAccount`, `link-bonus-ops.ts`);
+- `applyBonus` (a bonus under its rule version, `bonus-rule-ops.ts`, #13) — today the starter pack,
+  through `grantLinkBonus` and `confirmBrokerAccount` / the email login;
 - `consumeTokens` (settle, through `settleIntent`, `trade-intent-ops.ts`, #17);
 - `adjustTokens` (the admin's manual adjustment, `token-adjustment-ops.ts`, #246;
   [admin-pages.md](admin-pages.md) → Корректировка токенов).

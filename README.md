@@ -278,6 +278,22 @@ docker compose exec backend pnpm --filter @binarius/backend kill-switch off
 What each command prints, what a closed switch does to queued intents and sessions, and the
 deploy note are in [docs/kill-switch.md](docs/kill-switch.md).
 
+## Bonus rules
+
+The starter pack (and, after #116 and #386, the referral reward and the deposit bonus) is credited
+under a versioned rule. A version is never edited: a change is a new version, then `activate`; what
+was already credited is not recalculated. The same migrated database as above:
+
+```bash
+docker compose exec backend pnpm --filter @binarius/backend bonus-rule list
+docker compose exec backend pnpm --filter @binarius/backend bonus-rule new-version link_bonus --params '{"tokens": "150"}'
+docker compose exec backend pnpm --filter @binarius/backend bonus-rule activate link_bonus 2
+docker compose exec backend pnpm --filter @binarius/backend bonus-rule deactivate link_bonus
+```
+
+The model, the params of each kind and the deploy note are in
+[docs/bonus-rules.md](docs/bonus-rules.md).
+
 ## Demo-only stand
 
 A stand an agent drives (#397) runs with `DEMO_ONLY=true` in `.env`: `backend` and

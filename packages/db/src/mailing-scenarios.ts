@@ -34,7 +34,8 @@ export interface MailingScenario {
 
 // The moment the account was connected: the starter pack's ledger row, written in the
 // activation transaction (grantLinkBonus). The predicate is token_ledger_link_bonus_user_idx's,
-// so there is at most one row.
+// so there is at most one row; an account connected with no active link_bonus rule has none, and
+// so no chain (#13).
 const linkedAt = sql`(select ${tokenLedger.createdAt} from ${tokenLedger}
   where ${tokenLedger.userId} = ${users.id}
     and ${tokenLedger.kind} = ${literal(TokenLedgerKind.Bonus)}
