@@ -22,6 +22,13 @@ import { users } from './schema/users';
 // the Telegram call: at most once, never twice (the mailing engine's rule). Each operation locks
 // only its own trading_sessions row, by its UPDATE, and reads trade_intents and broker_trades
 // without a lock (Rule 5), as markSessionDecision and claimSessionSummary do.
+//
+// A martingale cycle is one message (#551): its first trade sends it, every later trade of the
+// same cycle edits it. Which message that is, and from which trade it shows, is the session's
+// cycle message (cycle_message_id, cycle_message_from): the claim returns it, and only
+// recordSessionCycleMessage writes it, after a new message went through. An edit never changes
+// it, so an edit whose outcome is unknown leaves it pointing at the message the next step edits
+// again with every block.
 
 const SETTLED = literal(TradeIntentStatus.Settled);
 
@@ -102,10 +109,18 @@ export interface SessionTradeNoticeRow {
   assetId: number;
 }
 
+// The message the session's cycle is shown in: Telegram's message_id, and the index of the first
+// settled trade it shows (in the cursor's order, from 0)
+export interface SessionCycleMessage {
+  messageId: number;
+  from: number;
+}
+
 export interface ClaimedSessionTrade {
-  trade: SessionTradeNoticeRow;
-  // the classes of the session's settled trades up to this one, in order (for its cycle and step)
-  results: SessionTradeResult[];
+  // the session's settled trades up to the claimed one, in order: the claimed one is the last;
+  // their classes give its cycle and step, and the trades of its cycle are its message's blocks
+  trades: SessionTradeNoticeRow[];
+  cycleMessage: SessionCycleMessage | null;
 }
 
 const resultSql = sql<SessionTradeResult>`case when ${brokerTrades.profit} > 0 then ${literal(SessionTradeResult.Won)} when ${brokerTrades.profit} < 0 then ${literal(SessionTradeResult.Lost)} else ${literal(SessionTradeResult.Tied)} end`;
@@ -130,7 +145,10 @@ export async function claimSessionTradeNotice(
           sql`${settledCountSql} > ${claimed}`,
         ),
       )
-      .returning({ id: tradingSessions.id });
+      .returning({
+        messageId: tradingSessions.cycleMessageId,
+        from: tradingSessions.cycleMessageFrom,
+      });
     if (won === undefined) return undefined;
 
     // broker_trades_settlement_check: a closed trade has its close price and profit
@@ -153,17 +171,49 @@ export async function claimSessionTradeNotice(
       )
       .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id))
       .limit(claimed + 1);
-    const last = rows[claimed];
-    if (last === undefined)
+    if (rows.length !== claimed + 1) {
       throw new Error(`session ${sessionId} lost its settled trade ${claimed}`);
-    if (last.closePrice === null) {
-      throw new Error(`settled intent of session ${sessionId} has an open broker trade`);
     }
-    return {
-      trade: { ...last, closePrice: last.closePrice },
-      results: rows.map((row) => row.result),
-    };
+    const trades = rows.map(({ closePrice, ...row }) => {
+      if (closePrice === null) {
+        throw new Error(`settled intent of session ${sessionId} has an open broker trade`);
+      }
+      return { ...row, closePrice };
+    });
+    // trading_sessions_cycle_message_pair_check: both or neither
+    const cycleMessage =
+      won.messageId === null || won.from === null
+        ? null
+        : { messageId: won.messageId, from: won.from };
+    return { trades, cycleMessage };
   });
+}
+
+// Records the new message the claimed trade was sent in as the session's cycle message (#551):
+// one CAS, only while the cursor still stands right after that trade (`claimed + 1`) and no
+// summary was sent, so a sender whose claim was overtaken never moves it. Called only after
+// Telegram answered the send with the message's id. False when refused.
+export async function recordSessionCycleMessage(
+  db: Db,
+  {
+    sessionId,
+    claimed,
+    messageId,
+    from,
+  }: { sessionId: string; claimed: number; messageId: number; from: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ cycleMessageId: messageId, cycleMessageFrom: from })
+    .where(
+      and(
+        eq(tradingSessions.id, sessionId),
+        eq(tradingSessions.notifiedTrades, claimed + 1),
+        isNull(tradingSessions.finalNoticeSentAt),
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
 }
 
 // Puts a claimed trade back (`claimed + 1` → `claimed`): only for a send Telegram certainly did

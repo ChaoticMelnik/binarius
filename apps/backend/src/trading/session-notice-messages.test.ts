@@ -22,16 +22,17 @@ const LABEL = pairLabel({ symbol: 'EUR/USD', isOtc: true });
 const shared = createSessionTexts(createBotTexts(defaultBotTextSource));
 const { Won: W, Lost: L, Tied: T } = SessionTradeResult;
 
+const row = (result: SessionTradeResult, amount = '5') => ({
+  amount: d(amount),
+  outcome: d('9.6'),
+  result,
+  openPrice: 1.08765,
+  closePrice: 1.08712,
+  assetId: 101,
+});
 const claimed = (results: SessionTradeResult[], amount = '5'): ClaimedSessionTrade => ({
-  trade: {
-    amount: d(amount),
-    outcome: d('9.6'),
-    result: results.at(-1)!,
-    openPrice: 1.08765,
-    closePrice: 1.08712,
-    assetId: 101,
-  },
-  results,
+  trades: results.map((result, index) => row(result, index === results.length - 1 ? amount : '5')),
+  cycleMessage: null,
 });
 const settings: TradingSessionSettings = {
   version: 1,
@@ -44,7 +45,7 @@ const settings: TradingSessionSettings = {
 describe('sessionTradeMessage (#464)', () => {
   it('numbers each trade of a fixed session as its own cycle at step 1', () => {
     expect(sessionTradeMessage(claimed([L, L, W, T]), settings, 5).value).toBe(
-      shared.sessionCycleText([{ ...claimed([T]).trade, digits: 5, cycle: 4, step: 1 }]).value,
+      shared.sessionCycleText([{ ...row(T), digits: 5, cycle: 4, step: 1 }]).value,
     );
     expect(
       sessionTradeMessage(claimed([W]), settings, 5).value.startsWith('⚡ Цикл 1 Шаг 1\n'),

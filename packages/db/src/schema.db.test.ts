@@ -2982,6 +2982,44 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
+  // the session's cycle message (#551): both or neither, a positive message_id, a trade index
+  // from 0
+  it.each([
+    [1, null, 'trading_sessions_cycle_message_pair_check'],
+    [null, 0, 'trading_sessions_cycle_message_pair_check'],
+    [0, 0, 'trading_sessions_cycle_message_id_check'],
+    [-1, 0, 'trading_sessions_cycle_message_id_check'],
+    [1, -1, 'trading_sessions_cycle_message_from_check'],
+  ])('rejects cycle_message_id %s with cycle_message_from %s (%s)', async (id, from, name) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradingSessions).values({
+          ...session(seed.accountId),
+          cycleMessageId: id,
+          cycleMessageFrom: from,
+        }),
+        '23514',
+        name,
+      );
+    });
+  });
+
+  it.each([
+    [null, null],
+    [1, 0],
+    [2147483647, 2147483647],
+  ])('accepts cycle_message_id %s with cycle_message_from %s', async (id, from) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values({ ...session(seed.accountId), cycleMessageId: id, cycleMessageFrom: from })
+        .returning();
+      expect([row!.cycleMessageId, row!.cycleMessageFrom]).toEqual([id, from]);
+    });
+  });
+
   it('rejects a second active session of the account and accepts any number of stopped ones', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -3483,14 +3521,12 @@ describe('token_ledger: the Stars purchase (#117)', () => {
       const seed = await seedAccount(tx);
       const payment = await seedStarPayment(tx, seed.userId);
       await expect(
-        tx
-          .insert(tokenLedger)
-          .values({
-            userId: seed.userId,
-            kind: 'purchase',
-            balanceDelta: 50n,
-            starPaymentId: payment,
-          }),
+        tx.insert(tokenLedger).values({
+          userId: seed.userId,
+          kind: 'purchase',
+          balanceDelta: 50n,
+          starPaymentId: payment,
+        }),
       ).resolves.toBeDefined();
     });
   });
@@ -3520,14 +3556,12 @@ describe('token_ledger: the Stars purchase (#117)', () => {
       const other = await seedAccount(tx);
       const payment = await seedStarPayment(tx, seed.userId);
       await rejectsWith(
-        tx
-          .insert(tokenLedger)
-          .values({
-            userId: other.userId,
-            kind: 'purchase',
-            balanceDelta: 50n,
-            starPaymentId: payment,
-          }),
+        tx.insert(tokenLedger).values({
+          userId: other.userId,
+          kind: 'purchase',
+          balanceDelta: 50n,
+          starPaymentId: payment,
+        }),
         '23503',
         'token_ledger_star_payment_owner_fk',
       );
@@ -3683,14 +3717,12 @@ describe('token_ledger: the Stars refund (#118)', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const payment = await seedStarPayment(tx, seed.userId);
-      await tx
-        .insert(tokenLedger)
-        .values({
-          userId: seed.userId,
-          kind: 'purchase',
-          balanceDelta: 50n,
-          starPaymentId: payment,
-        });
+      await tx.insert(tokenLedger).values({
+        userId: seed.userId,
+        kind: 'purchase',
+        balanceDelta: 50n,
+        starPaymentId: payment,
+      });
       await expect(
         tx.insert(tokenLedger).values(refundRow(seed.userId, payment)),
       ).resolves.toBeDefined();
