@@ -14,23 +14,24 @@ export interface SessionTradeStep {
 }
 
 // The cycle and step of each settled trade of a session, in their order (docs/bot-session.md →
-// Trade messages). The step is the sizer's own (readHistory in apps/trading-worker/src/stake/
-// size.ts, held equal by steps-parity.test.ts): 1 under fixed; under martingale the losses in a
-// row before the trade plus one, a win ending the series and a tie leaving it as it is. A cycle
-// is a series: every trade at step 1 after the first starts the next one.
+// Trade messages). Under martingale the step is the trade's number within its cycle (#551): a win
+// ends the cycle, a loss and a tie both move to the next step. A cycle is the sizer's series
+// (readHistory in apps/trading-worker/src/stake/size.ts): only a win closes it. The sizer's own
+// step counts the losses in a row plus one and bounds its raises (maxSteps), so the message's
+// step exceeds it by the ties of the series (steps-parity.test.ts). Under fixed every trade is
+// step 1 of the next cycle.
 export function sessionTradeSteps(
   results: readonly SessionTradeResult[],
   strategy: SessionStakeStrategy,
 ): SessionTradeStep[] {
   const steps: SessionTradeStep[] = [];
-  let consecutiveLosses = 0;
+  let tradesSinceWin = 0;
   let cycle = 0;
   for (const result of results) {
-    const step = strategy === SessionStakeStrategy.Martingale ? consecutiveLosses + 1 : 1;
+    const step = strategy === SessionStakeStrategy.Martingale ? tradesSinceWin + 1 : 1;
     if (step === 1) cycle += 1;
     steps.push({ cycle, step });
-    if (result === SessionTradeResult.Won) consecutiveLosses = 0;
-    else if (result === SessionTradeResult.Lost) consecutiveLosses += 1;
+    tradesSinceWin = result === SessionTradeResult.Won ? 0 : tradesSinceWin + 1;
   }
   return steps;
 }

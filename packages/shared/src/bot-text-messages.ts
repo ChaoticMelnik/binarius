@@ -76,9 +76,6 @@ export const BOT_TEXT_WIDTHS = {
   // String(double), a trade's price when the catalog could not give the pair's digits: 17
   // significant digits, a sign, a point and an exponent (-1.2345678901234567e-308)
   rawPrice: 24,
-  // formatSignedStake of a payout: the sum of two numeric(20,8) values has one integer digit more
-  // than either, so one more digit and a group separator than `stake`, and the sign
-  signedStake: 28,
   // formatRsi on 0-100
   rsi: 5,
   // formatAtrPct
@@ -221,7 +218,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   seconds: () => w.retryAfterSec,
   // a trade's number in its session: sessionFitsDeadline starts at most 60 trades
   cycle: () => w.sessionCount,
-  outcome: () => w.signedStake,
+  // a session trade's profit, a numeric(20,8) printed by formatSignedUsd (#539)
+  outcome: () => w.signedUsd,
   // formatPrice with the pair's digits, or String() without them (session-texts.ts → priceOf)
   openPrice: () => Math.max(w.price, w.rawPrice),
   closePrice: () => Math.max(w.price, w.rawPrice),
@@ -732,14 +730,27 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     ],
   },
   {
-    // a settled trade of a session, sent by the backend (#464, session-texts.ts →
-    // sessionTradeText): the adaptive line only above the base stake
+    // a block of a session's cycle message, sent and edited by the backend (#551, session-texts.ts
+    // → sessionCycleText): the adaptive line above step 2's block, then the block. A cycle's
+    // message is such units a blank line apart; the sender splits it by its real length before
+    // the limit, never inside a unit, so this unit is what must fit
     id: 'sessionTrade',
     title: 'Сообщение сделки сессии',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      oneOf([], [k('sessionAdaptiveStake'), '\n']),
-      anyOf('sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied'),
+      oneOf(
+        [anyOf('sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied')],
+        // the line stands only above step 2: one digit
+        [
+          k('sessionAdaptiveStake'),
+          '\n\n',
+          oneOf(
+            ...(['sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied'] as const).map((key) => [
+              k(key, { step: () => 1 }),
+            ]),
+          ),
+        ],
+      ),
     ],
   },
   {

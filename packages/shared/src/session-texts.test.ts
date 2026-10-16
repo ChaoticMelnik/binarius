@@ -18,14 +18,13 @@ const d = (value: string) => value as DecimalString;
 
 const trade = (patch: Partial<SessionTradeNotice> = {}): SessionTradeNotice => ({
   amount: d('11.50000000'),
-  outcome: d('22.08000000'),
+  outcome: d('10.58000000'),
   result: SessionTradeResult.Won,
   openPrice: 0.49803,
   closePrice: 0.4982,
   digits: 5,
   cycle: 3,
-  step: 2,
-  baseStake: d('11.5'),
+  step: 1,
   ...patch,
 });
 
@@ -54,45 +53,68 @@ describe('the session words', () => {
   });
 });
 
-describe('sessionTradeText (#464)', () => {
-  it('prints a win as the owner’s sample: the cycle and step, stake → payout, the prices', () => {
-    expect(session.sessionTradeText(trade()).value).toBe(
-      '⚡ Цикл 3 Шаг 2\n<pre>🟢 Ставка: $11.50 → +$22.08\n📊 Цена: 0.49803 → 0.49820</pre>',
+describe('sessionCycleText (#551)', () => {
+  const ADAPTIVE = '🔄 Адаптивная ставка включена';
+  const text = (trades: SessionTradeNotice[]) => session.sessionCycleText(trades).value;
+
+  it('a cycle of one trade is its block alone: the cycle and step, stake → profit, the prices', () => {
+    expect(text([trade()])).toBe(
+      '⚡ Цикл 3 Шаг 1\n<pre>🟢 Ставка: $11.50 → +$10.58\n📊 Цена: 0.49803 → 0.49820</pre>',
     );
   });
 
-  it('prints a loss red with its loss signed, a tie white with its stake returned', () => {
-    expect(
-      session.sessionTradeText(trade({ result: SessionTradeResult.Lost, outcome: d('-11.5') }))
-        .value,
-    ).toContain('🔴 Ставка: $11.50 → -$11.50\n');
-    expect(
-      session.sessionTradeText(trade({ result: SessionTradeResult.Tied, outcome: d('11.5') }))
-        .value,
-    ).toContain('⚪ Ставка: $11.50 → +$11.50, ставка вернулась\n');
+  it('prints a loss red with its loss signed, a tie white at $0.00 with its stake returned (#539)', () => {
+    expect(text([trade({ result: SessionTradeResult.Lost, outcome: d('-11.5') })])).toContain(
+      '🔴 Ставка: $11.50 → -$11.50\n',
+    );
+    expect(text([trade({ result: SessionTradeResult.Tied, outcome: d('0.00000000') })])).toContain(
+      '⚪ Ставка: $11.50 → $0.00, ставка вернулась\n',
+    );
   });
 
-  it('heads the trade with the adaptive line only when its stake is above the base stake', () => {
-    const line = '🔄 Адаптивная ставка включена\n';
-    expect(session.sessionTradeText(trade({ baseStake: d('5') })).value.startsWith(line)).toBe(
-      true,
-    );
-    // a fixed session trades at its base stake: equal is not above
-    expect(session.sessionTradeText(trade({ baseStake: d('11.5') })).value).not.toContain(line);
-    expect(session.sessionTradeText(trade({ baseStake: null })).value).not.toContain(line);
+  it('lists the steps a blank line apart, the adaptive line once, alone, above step 2', () => {
+    const blocks = text([
+      trade({ result: SessionTradeResult.Lost, outcome: d('-5'), amount: d('5'), step: 1 }),
+      trade({ result: SessionTradeResult.Tied, outcome: d('0'), amount: d('11.5'), step: 2 }),
+      trade({ result: SessionTradeResult.Lost, outcome: d('-11.5'), step: 3 }),
+      trade({ step: 4 }),
+    ]).split('\n\n');
+    expect(blocks.map((block) => block.split('\n')[0])).toEqual([
+      '⚡ Цикл 3 Шаг 1',
+      ADAPTIVE,
+      '⚡ Цикл 3 Шаг 2',
+      '⚡ Цикл 3 Шаг 3',
+      '⚡ Цикл 3 Шаг 4',
+    ]);
+    expect(blocks[1]).toBe(ADAPTIVE);
+  });
+
+  it('prints the adaptive line at step 2 whatever its stake, after a tie at the base stake too', () => {
+    const tied = text([
+      trade({ result: SessionTradeResult.Tied, outcome: d('0'), step: 1 }),
+      trade({ step: 2 }),
+    ]);
+    expect(tied).toContain(`</pre>\n\n${ADAPTIVE}\n\n⚡ Цикл 3 Шаг 2`);
+  });
+
+  it('a continuation that starts at step 2 starts with the adaptive line; one past it has none', () => {
+    expect(text([trade({ step: 2 })]).startsWith(`${ADAPTIVE}\n\n⚡ Цикл 3 Шаг 2\n`)).toBe(true);
+    expect(text([trade({ step: 3 }), trade({ step: 4 })])).not.toContain(ADAPTIVE);
+  });
+
+  it('a fixed session has no step 2, so no adaptive line', () => {
+    expect(text([trade({ step: 1, cycle: 4 })])).not.toContain(ADAPTIVE);
   });
 
   it('prints the prices with the pair’s digits, and as the broker sent them without a catalog', () => {
-    expect(session.sessionTradeText(trade({ digits: 2 })).value).toContain('0.50 → 0.50');
-    expect(session.sessionTradeText(trade({ digits: null })).value).toContain(
-      '📊 Цена: 0.49803 → 0.4982',
-    );
+    expect(text([trade({ digits: 2 })])).toContain('0.50 → 0.50');
+    expect(text([trade({ digits: null })])).toContain('📊 Цена: 0.49803 → 0.4982');
   });
 
   it('names no strategy to the user', () => {
     for (const result of Object.values(SessionTradeResult)) {
-      const text = session.sessionTradeText(trade({ result, baseStake: d('1') })).value;
-      expect(text.toLowerCase()).not.toMatch(/мартингейл|martingale/);
+      const printed = text([trade({ step: 1 }), trade({ result, step: 2 })]);
+      expect(printed.toLowerCase()).not.toMatch(/мартингейл|martingale/);
     }
   });
 });

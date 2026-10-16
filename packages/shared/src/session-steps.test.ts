@@ -25,17 +25,17 @@ describe('sessionTradeSteps', () => {
     ]);
   });
 
-  it('martingale: a tie at step 2 keeps the next trade at step 2 of the same cycle', () => {
+  it('martingale: a tie is the next step of the same cycle (#551)', () => {
     expect(pairs(sessionTradeSteps([L, T, L, W], 'martingale'))).toEqual([
       '1.1',
       '1.2',
-      '1.2',
       '1.3',
+      '1.4',
     ]);
   });
 
-  it('martingale: a tie at step 1 leaves the next trade at step 1 of a new cycle', () => {
-    expect(pairs(sessionTradeSteps([T, W, L], 'martingale'))).toEqual(['1.1', '2.1', '3.1']);
+  it('martingale: a tie at step 1 leaves the cycle open, only a win closes it (#551)', () => {
+    expect(pairs(sessionTradeSteps([T, W, L], 'martingale'))).toEqual(['1.1', '1.2', '2.1']);
   });
 
   it('no trades, no steps', () => {

@@ -407,27 +407,28 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionCompleted: () =>
     sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
-  // a session's trade, sent by the backend through the same builder (#464): each class, with and
-  // without the adaptive line, the prices with the most digits a pair has and as String() prints
-  // the widest double
+  // a unit of a session's cycle message, sent by the backend through the same builder (#551):
+  // one trade's block, at step 2 with the adaptive line above it and at another step without it,
+  // each class, the prices with the most digits a pair has and as String() prints the widest double
   sessionTrade: () =>
     Object.values(SessionTradeResult).flatMap((result) =>
-      [d('1'), STAKE].flatMap((baseStake) =>
+      [2, N].flatMap((step) =>
         [
           { digits: MAX_PAIR_DIGITS, price: -999_999_999.123 },
           { digits: null, price: -1.2345678901234567e-308 },
         ].map(({ digits, price }) =>
-          notices.sessionTradeText({
-            amount: STAKE,
-            outcome: d('-9999999999999.99999999'),
-            result,
-            openPrice: price,
-            closePrice: price,
-            digits,
-            cycle: N,
-            step: N,
-            baseStake,
-          }),
+          notices.sessionCycleText([
+            {
+              amount: STAKE,
+              outcome: d('-999999999999.99999999'),
+              result,
+              openPrice: price,
+              closePrice: price,
+              digits,
+              cycle: N,
+              step,
+            },
+          ]),
         ),
       ),
     ),

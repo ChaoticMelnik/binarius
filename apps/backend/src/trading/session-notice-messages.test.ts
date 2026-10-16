@@ -44,27 +44,17 @@ const settings: TradingSessionSettings = {
 describe('sessionTradeMessage (#464)', () => {
   it('numbers each trade of a fixed session as its own cycle at step 1', () => {
     expect(sessionTradeMessage(claimed([L, L, W, T]), settings, 5).value).toBe(
-      shared.sessionTradeText({
-        ...claimed([T]).trade,
-        digits: 5,
-        cycle: 4,
-        step: 1,
-        baseStake: d('5'),
-      }).value,
+      shared.sessionCycleText([{ ...claimed([T]).trade, digits: 5, cycle: 4, step: 1 }]).value,
     );
     expect(
       sessionTradeMessage(claimed([W]), settings, 5).value.startsWith('⚡ Цикл 1 Шаг 1\n'),
     ).toBe(true);
   });
 
-  it('never prints the adaptive line under the v1 settings: the stake is the base stake', () => {
+  it('never prints the adaptive line under the v1 settings: every trade is step 1', () => {
     for (const result of [W, L, T]) {
-      expect(sessionTradeMessage(claimed([result]), settings, 5).value).not.toContain('🔄');
+      expect(sessionTradeMessage(claimed([L, result]), settings, 5).value).not.toContain('🔄');
     }
-    // a stake above the base, as #450's steps will have
-    expect(sessionTradeMessage(claimed([W], '11.5'), settings, 5).value).toContain(
-      '🔄 Адаптивная ставка включена\n⚡',
-    );
   });
 
   // #450: the steps follow the session's own strategy, read from its settings
@@ -86,8 +76,13 @@ describe('sessionTradeMessage (#464)', () => {
         },
       },
     };
+    expect(
+      sessionTradeMessage(claimed([T, L], '5'), martingale, 5).value.startsWith(
+        '🔄 Адаптивная ставка включена\n\n⚡ Цикл 1 Шаг 2\n',
+      ),
+    ).toBe(true);
     const third = sessionTradeMessage(claimed([L, L, W], '24.5'), martingale, 5).value;
-    expect(third.startsWith('🔄 Адаптивная ставка включена\n⚡ Цикл 1 Шаг 3\n')).toBe(true);
+    expect(third.startsWith('⚡ Цикл 1 Шаг 3\n')).toBe(true);
     expect(
       sessionTradeMessage(claimed([L, L, W, W]), martingale, 5).value.startsWith(
         '⚡ Цикл 2 Шаг 1\n',

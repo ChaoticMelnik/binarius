@@ -89,10 +89,10 @@ export async function listPendingSessionNotices(
   return rows;
 }
 
-// A settled trade as its message needs it. `outcome` is the figure after «→» (the owner's
-// sample, #464): the whole payout of a win, the loss of a loss, the stake of a tie, by Postgres in
-// numeric (Rule 2); `result` the class by the sign of the profit, as the view's counters compare
-// it. The stake is the intent's amount, equal to the broker trade's (Rule 15).
+// A settled trade as its message needs it. `outcome` is the figure after «→»: the broker trade's
+// profit (#539), so the lines of a session add up to its result; `result` the class by the sign
+// of the profit, as the view's counters compare it. The stake is the intent's amount, equal to the
+// broker trade's (Rule 15).
 export interface SessionTradeNoticeRow {
   amount: DecimalString;
   outcome: DecimalString;
@@ -109,7 +109,6 @@ export interface ClaimedSessionTrade {
 }
 
 const resultSql = sql<SessionTradeResult>`case when ${brokerTrades.profit} > 0 then ${literal(SessionTradeResult.Won)} when ${brokerTrades.profit} < 0 then ${literal(SessionTradeResult.Lost)} else ${literal(SessionTradeResult.Tied)} end`;
-const outcomeSql = sql<DecimalString>`case when ${brokerTrades.profit} > 0 then ${tradeIntents.amount} + ${brokerTrades.profit} when ${brokerTrades.profit} < 0 then ${brokerTrades.profit} else ${tradeIntents.amount} end`;
 
 // Claims the session's (claimed + 1)-th settled trade: one CAS raises the cursor from `claimed`,
 // only while no summary was sent and that trade exists. Undefined when the CAS lost (another
@@ -138,7 +137,7 @@ export async function claimSessionTradeNotice(
     const rows = await tx
       .select({
         amount: tradeIntents.amount,
-        outcome: outcomeSql,
+        outcome: sql<DecimalString>`${brokerTrades.profit}`,
         result: resultSql,
         openPrice: brokerTrades.openPrice,
         closePrice: brokerTrades.closePrice,

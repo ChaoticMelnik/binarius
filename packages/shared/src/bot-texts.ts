@@ -1708,11 +1708,12 @@ export const BOT_TEXT_CATALOG = {
     { ...caption, vars: ['symbol', 'result', 'botUsername'] },
   ),
 
-  // Sent by the backend only (#464, docs/bot-session.md → Trade messages): a message per settled
-  // trade of a session, without sound and without buttons, and the summary once it is finished.
+  // Sent by the backend only (#464, #551, docs/bot-session.md → Trade messages): a message per
+  // cycle of a session, its steps added by editing it, without sound and without buttons, and the
+  // summary once it is finished.
   sessionTradeWon: html(
     g.Session,
-    'Сообщение сделки сессии, выигрыш: цикл и шаг, ставка → выплата, цена открытия → закрытия. Без звука и без кнопок.',
+    'Блок сделки в сообщении цикла сессии, выигрыш: цикл и шаг, ставка → прибыль, цена открытия → закрытия. Следующие шаги цикла дописываются в то же сообщение. Без звука и без кнопок.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>🟢 Ставка: {stake} → {outcome}
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1720,7 +1721,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionTradeLost: html(
     g.Session,
-    'Сообщение сделки сессии, проигрыш: ставка → потеря со знаком минус.',
+    'Блок сделки в сообщении цикла сессии, проигрыш: ставка → потеря со знаком минус.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>🔴 Ставка: {stake} → {outcome}
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1728,7 +1729,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionTradeTied: html(
     g.Session,
-    'Сообщение сделки сессии, ничья: ставка → та же ставка, она вернулась.',
+    'Блок сделки в сообщении цикла сессии, ничья: ставка → $0.00, ставка вернулась; следующая сделка — следующий шаг того же цикла.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>⚪ Ставка: {stake} → {outcome}, ставка вернулась
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1736,7 +1737,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionAdaptiveStake: html(
     g.Session,
-    'Первая строка сообщения сделки, когда ставка этой сделки выше базовой.',
+    'Строка сообщения цикла сессии над блоком шага 2: один раз на цикл.',
     `🔄 Адаптивная ставка включена`,
   ),
   sessionSummarySymbol: html(
