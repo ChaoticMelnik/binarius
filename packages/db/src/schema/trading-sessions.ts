@@ -57,6 +57,13 @@ export const tradingSessions = pgTable(
     // the summary message's at-most-once mark (#464): set by claimSessionFinalNotice's one CAS,
     // never cleared; the card of #318 waits for it
     finalNoticeSentAt: timestamp('final_notice_sent_at', { withTimezone: true }),
+    // The session's live cycle message (#551, docs/bot-session.md → The cycle message): Telegram's
+    // message_id of the message the next step of the same cycle edits, and the index (from 0, in
+    // the cursor's order) of the first settled trade it shows. Both NULL until a new message of
+    // the session was sent; written only by recordSessionCycleMessage after a send went through,
+    // never cleared: a later cycle's trade sends a new message and moves them.
+    cycleMessageId: integer('cycle_message_id'),
+    cycleMessageFrom: integer('cycle_message_from'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -81,6 +88,12 @@ export const tradingSessions = pgTable(
     ),
     check('trading_sessions_settings_object_check', sql`jsonb_typeof(${t.settings}) = 'object'`),
     check('trading_sessions_notified_trades_check', sql`${t.notifiedTrades} >= 0`),
+    check(
+      'trading_sessions_cycle_message_pair_check',
+      sql`(${t.cycleMessageId} is null) = (${t.cycleMessageFrom} is null)`,
+    ),
+    check('trading_sessions_cycle_message_id_check', sql`${t.cycleMessageId} > 0`),
+    check('trading_sessions_cycle_message_from_check', sql`${t.cycleMessageFrom} >= 0`),
     uniqueIndex('trading_sessions_active_account_idx')
       .on(t.brokerAccountId)
       .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),

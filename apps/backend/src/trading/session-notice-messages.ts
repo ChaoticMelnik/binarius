@@ -41,14 +41,20 @@ export function pairOf(
 // session's own strategy (#450; settings that cannot be read count as fixed), the adaptive line
 // above step 2 (#551).
 export function sessionTradeMessage(
-  { trade, results }: ClaimedSessionTrade,
+  { trades }: ClaimedSessionTrade,
   settings: TradingSessionSettings | null,
   digits: number | null,
 ): TelegramHtml {
   const strategy =
     settings === null ? SessionStakeStrategy.Fixed : sessionStakeParams(settings).strategy;
-  const position = sessionTradeSteps(results, strategy).at(-1);
-  if (position === undefined) throw new Error('a claimed trade has no position in its session');
+  const trade = trades.at(-1);
+  const position = sessionTradeSteps(
+    trades.map((row) => row.result),
+    strategy,
+  ).at(-1);
+  if (trade === undefined || position === undefined) {
+    throw new Error('a claimed trade has no position in its session');
+  }
   return notices.sessionCycleText([
     {
       amount: trade.amount,

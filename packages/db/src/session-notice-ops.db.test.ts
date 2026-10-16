@@ -18,6 +18,7 @@ import {
   claimSessionTradeNotice,
   listPendingSessionNotices,
   releaseSessionFinalNotice,
+  recordSessionCycleMessage,
   releaseSessionTradeNotice,
 } from './session-notice-ops';
 import {
@@ -170,15 +171,17 @@ describe('claimSessionTradeNotice', () => {
     const target = await seedSession();
     await settled(target, '4.6');
     expect(await claim(target.session, 0)).toEqual({
-      trade: {
-        amount: '5.00000000',
-        outcome: '4.60000000',
-        result: 'won',
-        openPrice: 1,
-        closePrice: 1.5,
-        assetId: 101,
-      },
-      results: ['won'],
+      trades: [
+        {
+          amount: '5.00000000',
+          outcome: '4.60000000',
+          result: 'won',
+          openPrice: 1,
+          closePrice: 1.5,
+          assetId: 101,
+        },
+      ],
+      cycleMessage: null,
     });
     expect((await rowOf(target.session)).notifiedTrades).toBe(1);
     expect(await claim(target.session, 0)).toBeUndefined();
@@ -203,8 +206,13 @@ describe('claimSessionTradeNotice', () => {
     await settled(target, '0');
     const claimed = [];
     for (let index = 0; index < 3; index += 1) claimed.push(await claim(target.session, index));
-    expect(claimed.map((row) => row?.trade.openPrice)).toEqual([1, 3, 4]);
-    expect(claimed.at(-1)?.results).toEqual(['won', 'lost', 'tied']);
+    expect(claimed.map((row) => row?.trades.at(-1)?.openPrice)).toEqual([1, 3, 4]);
+    // every settled trade up to the claimed one, in order: its cycle's blocks
+    expect(claimed.at(-1)?.trades.map((row) => [row.openPrice, row.result, row.outcome])).toEqual([
+      [1, 'won', '4.60000000'],
+      [3, 'lost', '-5.00000000'],
+      [4, 'tied', '0.00000000'],
+    ]);
     expect(await claim(target.session, 3)).toBeUndefined();
   });
 
@@ -219,7 +227,7 @@ describe('claimSessionTradeNotice', () => {
     async (profit, outcome, result) => {
       const target = await seedSession();
       await settled(target, profit);
-      expect((await claim(target.session, 0))?.trade).toMatchObject({ outcome, result });
+      expect((await claim(target.session, 0))?.trades.at(-1)).toMatchObject({ outcome, result });
     },
   );
 
@@ -234,11 +242,65 @@ describe('claimSessionTradeNotice', () => {
     expect(
       await releaseSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 0 }),
     ).toBe(false);
-    expect((await claim(target.session, 0))?.trade.openPrice).toBe(1);
+    expect((await claim(target.session, 0))?.trades.at(-1)?.openPrice).toBe(1);
     expect(
       await releaseSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 1 }),
     ).toBe(false);
     expect((await rowOf(target.session)).notifiedTrades).toBe(1);
+  });
+});
+
+describe('the cycle message (#551)', () => {
+  const record = (session: { id: string }, claimed: number, messageId: number, from: number) =>
+    recordSessionCycleMessage(tmp.db, { sessionId: session.id, claimed, messageId, from });
+  const stateOf = async (session: { id: string }) => {
+    const row = await rowOf(session);
+    return [row.cycleMessageId, row.cycleMessageFrom];
+  };
+
+  it('N10 is recorded only while the cursor stands right after the claimed trade and no summary was sent', async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await settled(target, '-5');
+    await claim(target.session, 0);
+    expect(await record(target.session, 0, 41, 0)).toBe(true);
+    expect(await stateOf(target.session)).toEqual([41, 0]);
+    // the cursor moved on: a sender whose claim was overtaken writes nothing
+    await claim(target.session, 1);
+    expect(await record(target.session, 0, 99, 0)).toBe(false);
+    expect(await stateOf(target.session)).toEqual([41, 0]);
+    // nor one behind the cursor's last claim
+    expect(await record(target.session, 2, 99, 0)).toBe(false);
+    expect(await record(target.session, 1, 42, 1)).toBe(true);
+    expect(await stateOf(target.session)).toEqual([42, 1]);
+    await stop(target.session);
+    await finalClaim(target.session);
+    expect(await record(target.session, 1, 99, 0)).toBe(false);
+    expect(await stateOf(target.session)).toEqual([42, 1]);
+  });
+
+  it('N11 a release and the next claim leave the cycle message as it is', async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await settled(target, '-5');
+    await claim(target.session, 0);
+    await record(target.session, 0, 41, 0);
+    await claim(target.session, 1);
+    expect(
+      await releaseSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 1 }),
+    ).toBe(true);
+    expect(await stateOf(target.session)).toEqual([41, 0]);
+    await claim(target.session, 1);
+    expect(await stateOf(target.session)).toEqual([41, 0]);
+  });
+
+  it('N12 the claim returns the recorded cycle message', async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await settled(target, '0');
+    expect((await claim(target.session, 0))?.cycleMessage).toBeNull();
+    await record(target.session, 0, 41, 0);
+    expect((await claim(target.session, 1))?.cycleMessage).toEqual({ messageId: 41, from: 0 });
   });
 });
 
@@ -292,7 +354,7 @@ describe('claimSessionFinalNotice', () => {
       finished: true,
     });
     expect(await finalClaim(target.session)).toBe(false);
-    expect((await claim(target.session, 1))?.trade).toMatchObject({
+    expect((await claim(target.session, 1))?.trades.at(-1)).toMatchObject({
       openPrice: 7,
       result: 'lost',
     });

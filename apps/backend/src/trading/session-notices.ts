@@ -147,7 +147,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       text = sessionTradeMessage(
         claim,
         settings,
-        pairOf(catalog.read(), claim.trade.assetId).digits,
+        pairOf(catalog.read(), claim.trades.at(-1)?.assetId ?? 0).digits,
       );
     } catch (error) {
       // a bug: the claimed trade is not sent again, the session waits for the next tick
