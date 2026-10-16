@@ -14,7 +14,8 @@ import type { ResumeSession } from './trading-session';
 // restart). At the bot's start and every intervalMs after it, one pass reads the backend's list of
 // sessions with a recorded status message and no card, beside the pairs catalog for their labels,
 // and tracks each session the tracker does not hold on its message. One pass at a time; the list
-// and the catalog are the pass's only calls, nothing per session.
+// and the catalog are the pass's only calls, nothing per session; the tracker paces the first
+// polls of what a pass hands it.
 
 export interface SessionResumer {
   // the session composer's resume, wired once by createBot
@@ -78,14 +79,13 @@ export function createSessionResumer({
 
   const run = (api: Api, botUsername: string, attached: ResumeSession): void => {
     if (stopping || inFlight !== undefined) return;
-    const current = pass(api, botUsername, attached)
+    inFlight = pass(api, botUsername, attached)
       .catch((error: unknown) => {
         logger.error(errorLogFields(error), 'trading sessions resume failed');
       })
       .finally(() => {
         inFlight = undefined;
       });
-    inFlight = current;
   };
 
   return {
