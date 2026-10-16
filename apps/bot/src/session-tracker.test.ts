@@ -1,4 +1,4 @@
-import { GrammyError } from 'grammy';
+import { GrammyError, HttpError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   pairLabel,
@@ -45,10 +45,26 @@ const GONE = () =>
     {},
   );
 
+const FORBIDDEN = () =>
+  new GrammyError(
+    `Call to 'editMessageText' failed!`,
+    { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+    'editMessageText',
+    {},
+  );
+
 type Answer = TradingSessionView | Error | (() => Promise<TradingSessionView>);
 
 // readSession and recordSessionMessage answer the one script in order and repeat its last entry
-function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }) {
+function setup({
+  script,
+  maxEntries,
+  forget = () => Promise.resolve(true),
+}: {
+  script: Answer[];
+  maxEntries?: number;
+  forget?: BackendClient['forgetSessionMessage'];
+}) {
   const logger = fakeLogger();
   let index = 0;
   const answer = (): Promise<TradingSessionView> => {
@@ -61,8 +77,9 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
   };
   const readSession = vi.fn<BackendClient['readSession']>(answer);
   const recordSessionMessage = vi.fn<BackendClient['recordSessionMessage']>(answer);
+  const forgetSessionMessage = vi.fn<BackendClient['forgetSessionMessage']>(forget);
   const tracker = createSessionTracker({
-    backend: { readSession, recordSessionMessage },
+    backend: { readSession, recordSessionMessage, forgetSessionMessage },
     logger,
     firstPollMs: FIRST,
     pollMs: POLL,
@@ -88,7 +105,15 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
     card: vi.fn<SessionTrackRequest['card']>(() => Promise.resolve()),
     ...patch,
   });
-  return { tracker, readSession, recordSessionMessage, logger, request, target };
+  return {
+    tracker,
+    readSession,
+    recordSessionMessage,
+    forgetSessionMessage,
+    logger,
+    request,
+    target,
+  };
 }
 
 const MESSAGE_ID = 77;
@@ -483,7 +508,7 @@ describe('the session tracker', () => {
     });
 
     it('C3 waits for the final edit to land: no card while it fails, one once it lands', async () => {
-      const { tracker, request } = setup({ script: [stoppedClosed] });
+      const { tracker, request, forgetSessionMessage } = setup({ script: [stoppedClosed] });
       let failures = 2;
       const edit = vi.fn<SessionTrackRequest['edit']>(() =>
         failures-- > 0 ? Promise.reject(TRANSIENT()) : Promise.resolve(true),
@@ -496,6 +521,7 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(card).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
+      expect(forgetSessionMessage).not.toHaveBeenCalled();
     });
 
     it('C4 a session not done sends no card, through the deadline', async () => {
@@ -515,7 +541,7 @@ describe('the session tracker', () => {
 
     // the poll past the deadline fails its edit too; the deadline's own last edit then lands
     it('C5 at the deadline, a done session whose last edit lands there gets its card', async () => {
-      const { tracker, request } = setup({ script: [stoppedClosed] });
+      const { tracker, request, forgetSessionMessage } = setup({ script: [stoppedClosed] });
       const started = Date.now();
       let late = 0;
       const edit = vi.fn<SessionTrackRequest['edit']>(() => {
@@ -531,6 +557,7 @@ describe('the session tracker', () => {
       expect(late).toBe(2);
       expect(card).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
+      expect(forgetSessionMessage).not.toHaveBeenCalled();
     });
 
     it('C6 a card that throws still ends the entry, logged as a tracking failure', async () => {
@@ -744,6 +771,95 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
       expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found']]);
+      expect(tracker.size()).toBe(0);
+    });
+  });
+
+  // Telegram refused the edit for good (#567 review round 1, Major 1): the backend forgets the
+  // message, so the session leaves the recovery list instead of being tracked on every pass
+  describe('a lost status message (#567)', () => {
+    const recovered = { view: null, record: false } as const;
+
+    it('K-lost1 a gone edit on the first poll reports the message lost once and ends', async () => {
+      const { tracker, readSession, forgetSessionMessage, request } = setup({
+        script: [stoppedClosed],
+      });
+      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+      tracker.track(request({ ...recovered, edit: () => Promise.reject(GONE()), card }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(forgetSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
+      expect(tracker.size()).toBe(0);
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(card).not.toHaveBeenCalled();
+    });
+
+    it('K-lost2 a 403 edit is lost the same way, not retried', async () => {
+      const { tracker, readSession, forgetSessionMessage, request } = setup({
+        script: [stoppedClosed],
+      });
+      const edit = vi.fn<SessionTrackRequest['edit']>(() => Promise.reject(FORBIDDEN()));
+      tracker.track(request({ ...recovered, edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(forgetSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
+      expect(tracker.size()).toBe(0);
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(edit).toHaveBeenCalledTimes(1);
+    });
+
+    it('K-lost3 a failed report is one warn, no tracking failure, and the entry ends', async () => {
+      const { tracker, forgetSessionMessage, request, logger } = setup({
+        script: [stoppedClosed],
+        forget: () =>
+          Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+      });
+      tracker.track(request({ ...recovered, edit: () => Promise.reject(GONE()) }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL * 3);
+      expect(forgetSessionMessage).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+        'trading session message not edited',
+        'trading session message not forgotten',
+      ]);
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('K-lost4 a gone edit of the unavailable text on a 404 reports nothing', async () => {
+      const { tracker, forgetSessionMessage, request } = setup({
+        script: [
+          new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: SESSION_NOT_FOUND }),
+        ],
+      });
+      tracker.track(request({ ...recovered, edit: () => Promise.reject(GONE()) }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+      expect(forgetSessionMessage).not.toHaveBeenCalled();
+      expect(tracker.size()).toBe(0);
+    });
+
+    // the poll past the deadline fails its edit as a transport error; the deadline's own last edit
+    // (next()) is the one refused with 403
+    it("K-lost5 a pressed entry's last edit at the deadline refused with 403 reports the loss once", async () => {
+      const { tracker, forgetSessionMessage, request } = setup({ script: [stoppedClosed] });
+      const started = Date.now();
+      let late = 0;
+      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+      const edit = vi.fn<SessionTrackRequest['edit']>(() => {
+        if (Date.now() - started < DEADLINE) {
+          return Promise.reject(new HttpError('network', new Error('reset')));
+        }
+        late += 1;
+        return Promise.reject(
+          late === 1 ? new HttpError('network', new Error('reset')) : FORBIDDEN(),
+        );
+      });
+      tracker.track(request({ record: true, edit, card }));
+      await vi.advanceTimersByTimeAsync(DEADLINE - POLL);
+      expect(forgetSessionMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(late).toBe(2);
+      expect(forgetSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
+      expect(card).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
     });
   });

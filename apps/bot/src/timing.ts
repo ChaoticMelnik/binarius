@@ -273,7 +273,8 @@ export const SESSION_TRACK_POLL_MS = 10_000;
 export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
 // What sessionTracker.stop() can be waiting for: an attempt's readSession and edit, then for a
 // finished session its summary card's claim and sendPhoto (#318) and the editMessageReplyMarkup
-// that puts «📤 Поделиться» on it (#321).
+// that puts «📤 Поделиться» on it (#321). A lost message (#567) is shorter: the read, the poll's
+// failed edit, the deadline's last edit refused for good and the report of it, 2B + 2T.
 export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS;
 
 // The recovery of session tracking after a restart (#567, session-resume.ts): a pass at the
