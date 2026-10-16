@@ -158,7 +158,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   async function deliver(job: ClaimedMailingJob): Promise<MailingOutcome | undefined> {
     let message: ClientPushMessage;
     try {
-      message = mailingMessage(job.kind);
+      message = mailingMessage(job.kind, job.payload);
     } catch (error) {
       logger.error(
         { jobId: job.id, kind: job.kind, ...errorLogFields(error) },

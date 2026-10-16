@@ -61,6 +61,7 @@ import {
   SESSION_SUMMARY_SUFFIX,
   type SessionSummary,
   type SignalInterval,
+  type TradingSignalAnalysis,
   type TelegramChatMemberStatus,
   type TradeIntentView,
   type TrackedSession,
@@ -141,7 +142,12 @@ export interface BackendClient {
   ): Promise<NotificationLevelResponse>;
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
   readPairs(): Promise<PairsCatalogResponse>;
-  evaluateSignal(assetId: number, interval: SignalInterval): Promise<TradingSignalResponse>;
+  // `analysis` only from the analysis card (#484): the backend records it for the reminder
+  evaluateSignal(
+    assetId: number,
+    interval: SignalInterval,
+    analysis?: TradingSignalAnalysis,
+  ): Promise<TradingSignalResponse>;
   // the scanner's pairs with a signal on the last closed 15s candle (#343); no symbol or payout:
   // the bot joins them with readPairs (#320)
   readSignals(): Promise<TradingSignalsResponse>;
@@ -388,9 +394,9 @@ export function createBackendClient({
       return parsed.data;
     },
     // a broker failure is a 200 `fetch_failed`, returned like a decision (#258)
-    async evaluateSignal(assetId, interval) {
+    async evaluateSignal(assetId, interval, analysis) {
       const parsed = safeParseTradingSignalResponse(
-        await post('trading/signal', { assetId, interval }),
+        await post('trading/signal', { assetId, interval, ...(analysis ? { analysis } : {}) }),
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;

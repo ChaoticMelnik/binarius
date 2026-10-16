@@ -153,6 +153,74 @@ describe('the first-session chain through the engine', () => {
   });
 });
 
+// #484
+describe('the analysis reminder through the engine', () => {
+  // a demo user whose analysis of `pair` was 11 minutes ago, as setLastAnalysis writes it
+  async function analysed(pair = { assetId: 202, durationSec: 5 }) {
+    const user = await seedUser(tmp.db);
+    await tmp.db
+      .update(users)
+      .set({
+        lastAnalysisAt: sql`now() - interval '11 minutes'`,
+        lastAnalysisAssetId: pair.assetId,
+        lastAnalysisDurationSec: pair.durationSec,
+      })
+      .where(eq(users.id, user.userId));
+    return user;
+  }
+
+  it('E1 sends one reminder, as Telegram HTML with the sound on and a new analysis of the pair', async () => {
+    const user = await analysed();
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const sends = sendsTo(captured.calls, user.telegramUserId);
+    expect(sends).toHaveLength(1);
+    const payload = sends[0]!.payload;
+    expect(payload.text).toBe(CLIENT_TEXTS.analysisUnusedReminder.value);
+    expect(payload.parse_mode).toBe('HTML');
+    expect(payload).not.toHaveProperty('disable_notification');
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.newAnalysisButton, callback_data: 'demo:an:202:5' },
+    ]);
+    const [job] = await jobsOf(user.userId);
+    expect(job).toMatchObject({
+      kind: NotificationKind.AnalysisUnused,
+      status: NotificationJobStatus.Sent,
+      lastError: null,
+    });
+    await mailing.stop();
+  });
+
+  it('E2 a payload that does not build is logged as not built and retried, nothing is sent', async () => {
+    const user = await analysed();
+    const [row] = await tmp.db
+      .insert(notificationJobs)
+      .values({
+        userId: user.userId,
+        kind: NotificationKind.AnalysisUnused,
+        dedupeKey: sql`(select 'analysis_unused:' || extract(epoch from ${users.lastAnalysisAt})::text
+          from ${users} where ${users.id} = ${user.userId})`,
+        payload: {},
+        scheduledAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: notificationJobs.id });
+    const { mailing, captured, logs } = engine();
+    await mailing.sendTick();
+
+    expect(sendsTo(captured.calls, user.telegramUserId)).toEqual([]);
+    expect(logs().filter((line) => line.msg === 'mailing not built')).toMatchObject([
+      { level: ERROR, jobId: row!.id, kind: NotificationKind.AnalysisUnused },
+    ]);
+    const [job] = await jobsOf(user.userId);
+    expect(job).toMatchObject({ status: NotificationJobStatus.Pending, attempts: 1 });
+    await mailing.stop();
+  });
+});
+
 describe('the sender’s failures', () => {
   it('M7 marks a user who blocked the bot on 403, fails the job and cancels the rest', async () => {
     const user = await dueUser();

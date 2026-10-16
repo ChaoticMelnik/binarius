@@ -9,7 +9,9 @@ import {
 import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
-  MAILING_MIN_OFFSET_HOURS,
+  ANALYSIS_UNUSED_AFTER_MS,
+  ANALYSIS_UNUSED_UNTIL_MS,
+  MAILING_MIN_OFFSET_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
 import {
@@ -87,8 +89,8 @@ export const ADMIN_HANDLER_BUDGET_MS =
 export const CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS = 3_000;
 
 // --- The mailing engine (#202) -----------------------------------------------------------------
-// docs/mailing.md. The planner's tick: shorter than the earliest step, so no step is planned a
-// whole step late.
+// docs/mailing.md. The planner's tick: shorter than the earliest offset of any scenario (the
+// analysis reminder's 10 minutes, #484), so no job is planned a whole offset late.
 export const MAILING_PLAN_TICK_MS = 60_000;
 // The sender's tick, and how many jobs one tick claims and sends, one after another.
 export const MAILING_SEND_TICK_MS = 5_000;
@@ -374,13 +376,15 @@ export const TIMING_CHAIN_HOLDS =
   // send are the bound. The send ends inside its tick; a tick's batch at the rate takes the tick
   // exactly (equality, no headroom: the claims and sends push a full batch past it, and the tick
   // that overlaps it is a no-op); the rate is under Telegram's; the planner runs within the
-  // earliest step
+  // earliest offset; a due analysis reminder (#484) is planned and sent before its window closes
   1000 / MAILING_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <
     SHUTDOWN_PHASE1_BUDGET_MS &&
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < MAILING_SEND_TICK_MS &&
   (MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND <= MAILING_SEND_TICK_MS &&
   MAILING_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
-  MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_HOURS * 3_600_000 &&
+  MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_MS &&
+  ANALYSIS_UNUSED_AFTER_MS + MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS <
+    ANALYSIS_UNUSED_UNTIL_MS &&
   // the session notices (#464): with the mailings under Telegram's rate for one bot; stop() waits
   // for the send in flight - the pace's gap, then a summary's balance refresh and its one send
   MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&

@@ -34,6 +34,7 @@ import {
   DEMO_CALLBACK_DATA,
   SUPPORT_TELEGRAM_USERNAME,
   supportUrl,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
 import {
@@ -53,7 +54,6 @@ import {
 import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
-  demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoPageCallbackData,

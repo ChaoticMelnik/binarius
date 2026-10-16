@@ -9,6 +9,7 @@ import {
   TradingSessionErrorCode,
   type DecimalString,
   demoSignalsCallbackData,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -16,7 +17,6 @@ import {
   CYCLE_STAKE_PATTERN,
   cycleCustomCallbackData,
   cycleStakeCallbackData,
-  demoAnalysisCallbackData,
   demoLaunchCallbackData,
   SESSION_START_PATTERN,
 } from './demo';

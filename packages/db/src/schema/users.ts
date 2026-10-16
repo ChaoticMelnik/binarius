@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { bigint, check, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { bigint, check, integer, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { NotificationLevel, START_PAYLOAD_PATTERN, TradeMode, UserStatus } from '@binarius/shared';
 import {
   createdAt,
@@ -52,6 +52,13 @@ export const users = pgTable(
     // reserve UPDATE), a session through the route only while it is `demo`
     // (checkTradingSessionStart; the CLI session-start does not read it).
     tradingMode: text('trading_mode').$type<TradeMode>().notNull().default(TradeMode.Demo),
+    // The user's last analysis (#484, docs/mailing.md → The analysis reminder): when the bot
+    // last showed the analysis card with a signal, of which pair and duration; all NULL after an
+    // analysis with no signal. Written only by setLastAnalysis, from POST /trading/signal; read by
+    // the analysis reminder's scenario.
+    lastAnalysisAt: timestamp('last_analysis_at', { withTimezone: true }),
+    lastAnalysisAssetId: integer('last_analysis_asset_id'),
+    lastAnalysisDurationSec: integer('last_analysis_duration_sec'),
     tokenBalance: tokenAmount('token_balance'),
     tokenReserved: tokenAmount('token_reserved'),
     createdAt: createdAt(),
@@ -75,6 +82,16 @@ export const users = pgTable(
     check(
       'users_acquisition_pair_check',
       sql`(${t.acquisitionSource} is null) = (${t.acquiredAt} is null)`,
+    ),
+    // one fact: all three or none. `is not null` is spelled out: `null > 0` is NULL, which a CHECK
+    // accepts, so a half-written row would pass a bare `> 0`
+    check(
+      'users_last_analysis_check',
+      sql`(${t.lastAnalysisAt} is null and ${t.lastAnalysisAssetId} is null
+        and ${t.lastAnalysisDurationSec} is null)
+        or (${t.lastAnalysisAt} is not null and ${t.lastAnalysisAssetId} is not null
+          and ${t.lastAnalysisDurationSec} is not null and ${t.lastAnalysisAssetId} > 0
+          and ${t.lastAnalysisDurationSec} > 0)`,
     ),
     nullablePositiveNumeric('users_demo_stake_check', t.demoStake),
     nullablePositiveNumeric('users_real_stake_check', t.realStake),

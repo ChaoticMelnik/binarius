@@ -829,6 +829,43 @@ describe.each([
   });
 });
 
+// #484: the last analysis is one fact, all three columns or none
+describe('users.last_analysis_* (#484)', () => {
+  const at = sql`now()`;
+  it.each([
+    ['a time alone', { lastAnalysisAt: at }],
+    ['a time and a duration', { lastAnalysisAt: at, lastAnalysisDurationSec: 15 }],
+    ['a pair and a duration alone', { lastAnalysisAssetId: 101, lastAnalysisDurationSec: 15 }],
+    ['pair 0', { lastAnalysisAt: at, lastAnalysisAssetId: 0, lastAnalysisDurationSec: 15 }],
+    ['duration 0', { lastAnalysisAt: at, lastAnalysisAssetId: 101, lastAnalysisDurationSec: 0 }],
+  ] as const)('rejects %s', async (_, values) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(users).values({ telegramUserId: 990_201n, ...values }),
+        '23514',
+        'users_last_analysis_check',
+      );
+    });
+  });
+
+  it.each([
+    ['none', {}],
+    ['all three', { lastAnalysisAt: at, lastAnalysisAssetId: 101, lastAnalysisDurationSec: 15 }],
+    [
+      'the int4 bounds',
+      { lastAnalysisAt: at, lastAnalysisAssetId: 2_147_483_647, lastAnalysisDurationSec: 3600 },
+    ],
+  ] as const)('accepts %s', async (_, values) => {
+    await rolledBack(async (tx) => {
+      const [row] = await tx
+        .insert(users)
+        .values({ telegramUserId: 990_202n, ...values })
+        .returning({ id: users.id });
+      expect(row).toBeDefined();
+    });
+  });
+});
+
 describe('users and token_ledger', () => {
   it('rejects a negative balance', async () => {
     await rolledBack(async (tx) => {

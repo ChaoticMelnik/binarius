@@ -1768,7 +1768,7 @@ export const BOT_TEXT_CATALOG = {
   ),
 
   // ---- Напоминания (#202, docs/mailing.md) -------------------------------------------------
-  // Sent by the backend's mailing engine only, each with the «demoButton» button.
+  // Sent by the backend's mailing engine only; the first-session chain with the «demoButton» button.
   firstSessionReminder1h: html(
     g.Mailing,
     'Напоминание через час после подключения аккаунта, если демо-сессия ещё не запускалась.',
@@ -1798,6 +1798,17 @@ export const BOT_TEXT_CATALOG = {
 💡 Это демо: деньги не нужны.
 👇 Нажми «{demoButton}» — дальше бот всё сделает сам.`,
     { fragments: { demoButton: 'demoButton' } },
+  ),
+  // with the «newAnalysisButton» button of the same pair and duration (#484)
+  analysisUnusedReminder: html(
+    g.Mailing,
+    'Напоминание через 10 минут после анализа с сигналом, если сделка и сессия не запущены и другой анализ не открыт; только в демо.',
+    `🧠 <b>Анализ готов, но ещё не использован</b>
+
+📊 Анализ пары готов, а сумма сделки так и не выбрана — без неё ничего не запустится.
+🔄 Сигнал за это время мог измениться, поэтому бот проверит пару заново.
+👇 Нажми «{newAnalysisButton}».`,
+    { fragments: { newAnalysisButton: 'newAnalysisButton' } },
   ),
 
   // ---- Кнопки -------------------------------------------------------------------------------
@@ -1878,7 +1889,7 @@ export const BOT_TEXT_CATALOG = {
   menuButton: plain(g.Buttons, 'Кнопка «в меню»: карточка статуса, как /menu.', '🏠 В меню'),
   newAnalysisButton: plain(
     g.Buttons,
-    'Конец сделки и сессии: анализ той же пары и длительности заново.',
+    'Конец сделки и сессии, напоминание об анализе: анализ той же пары и длительности заново.',
     '📊 Новый анализ',
   ),
   toSignalsButton: plain(

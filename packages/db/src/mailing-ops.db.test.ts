@@ -7,11 +7,14 @@ import {
   NotificationLevel,
   TokenLedgerKind,
   TradeMode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   UserStatus,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   createTempDatabase,
+  intentRequest,
   lockWaiters,
   seedBrokerAccount,
   seedTradingSession,
@@ -24,11 +27,13 @@ import {
   notificationJobs,
   notificationKinds,
   tokenLedger,
+  tradingSessions,
   users,
 } from './schema/index';
+import { createTradeIntent } from './trade-intent-ops';
 import { LINK_BONUS_RULE_CODE } from './link-bonus-ops';
 import { markTelegramBlocked, setNotificationLevel } from './delivery-ops';
-import { setTradingMode } from './user-ops';
+import { setLastAnalysis, setTradingMode } from './user-ops';
 import {
   claimMailingJob,
   MAILING_OUTCOME_UNKNOWN,
@@ -105,6 +110,65 @@ const jobRow = async (id: string) => {
 };
 
 const hours = (n: number) => n * 60;
+
+// The user's last analysis (#484) `minutes` ago on the database clock, as setLastAnalysis writes
+// it but backdated, so the reminder is due without waiting.
+async function backdateAnalysis(
+  userId: string,
+  minutes: number,
+  { assetId = 101, durationSec = 15 }: { assetId?: number; durationSec?: number } = {},
+): Promise<Date> {
+  const [row] = await tmp.db
+    .update(users)
+    .set({
+      lastAnalysisAt: sql`now() - make_interval(secs => ${minutes * 60})`,
+      lastAnalysisAssetId: assetId,
+      lastAnalysisDurationSec: durationSec,
+    })
+    .where(eq(users.id, userId))
+    .returning({ at: users.lastAnalysisAt });
+  return row!.at!;
+}
+
+interface Analysed {
+  userId: string;
+  telegramUserId: bigint;
+  accountId: string;
+  analysedAt: Date;
+}
+
+// a demo user with an active account, whose analysis with a signal was `minutes` ago
+async function analysed(
+  minutes: number,
+  pair: { assetId?: number; durationSec?: number } = {},
+): Promise<Analysed> {
+  const user = await seedUser(tmp.db);
+  const accountId = await seedBrokerAccount(tmp.db, user.userId);
+  return {
+    userId: user.userId,
+    telegramUserId: BigInt(user.telegramUserId),
+    accountId,
+    analysedAt: await backdateAnalysis(user.userId, minutes, pair),
+  };
+}
+
+// a due analysis job under the key of the user's current analysis, written past the planner
+async function insertAnalysisJob(userId: string): Promise<string> {
+  const [job] = await tmp.db
+    .insert(notificationJobs)
+    .values({
+      userId,
+      kind: NotificationKind.AnalysisUnused,
+      dedupeKey: sql`(select 'analysis_unused:' || extract(epoch from ${users.lastAnalysisAt})::text
+        from ${users} where ${users.id} = ${userId})`,
+      scheduledAt: sql`now() - interval '1 minute'`,
+    })
+    .returning({ id: notificationJobs.id });
+  return job!.id;
+}
+
+const analysisJobsOf = async (userId: string) =>
+  (await jobsOf(userId)).filter((job) => job.kind === NotificationKind.AnalysisUnused);
 
 describe('planMailingJobs', () => {
   beforeAll(() => plansFromMinutesAgo(hours(200)));
@@ -368,7 +432,11 @@ describe('claimMailingJob', () => {
     const user = await linked(hours(24) + 1);
     const [job] = await tmp.db
       .insert(notificationJobs)
-      .values({ userId: user.userId, kind: NotificationKind.FirstSession1h })
+      .values({
+        userId: user.userId,
+        kind: NotificationKind.FirstSession1h,
+        dedupeKey: `first_session:${STEP_1H.afterHours}h`,
+      })
       .returning({ id: notificationJobs.id });
     expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
     expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Canceled);
@@ -387,10 +455,9 @@ describe('claimMailingJob', () => {
 
   it('M5 holds a reduced user’s second mailing until the window has passed', async () => {
     const user = await dueJob({ userLevel: NotificationLevel.Reduced });
-    const [second] = await tmp.db
-      .insert(notificationJobs)
-      .values({ userId: user.userId, kind: NotificationKind.FirstSession72h })
-      .returning({ id: notificationJobs.id });
+    // the second mailing is the analysis reminder: the chain step has one key per user (#484)
+    await backdateAnalysis(user.userId, 11);
+    const second = { id: await insertAnalysisJob(user.userId) };
 
     expect((await claimMailingJob(tmp.db, { scan: SCAN })).job?.id).toBe(user.jobId);
     expect((await claimMailingJob(tmp.db, { scan: SCAN })).job).toBeUndefined();
@@ -427,6 +494,7 @@ describe('settleMailingJob', () => {
     await tmp.db.insert(notificationJobs).values({
       userId: user.userId,
       kind: NotificationKind.FirstSession72h,
+      dedupeKey: `first_session:${STEP_72H.afterHours}h`,
       scheduledAt: sql`now() - interval '1 minute'`,
     });
     const { job } = await claimMailingJob(tmp.db, { scan: SCAN });
@@ -500,5 +568,224 @@ describe('settleMailingJob', () => {
         .from(notificationJobs)
         .where(and(eq(notificationJobs.id, id), eq(notificationJobs.attempts, 0))),
     ).toHaveLength(1);
+  });
+});
+
+// #484: the analysis reminder
+describe('the analysis reminder: planning', () => {
+  beforeAll(() => plansFromMinutesAgo(hours(200)));
+
+  it('A1 plans one job ten minutes after the analysis, with the pair for the button, and nothing earlier', async () => {
+    const due = await analysed(11, { assetId: 202, durationSec: 5 });
+    const early = await analysed(9);
+    await planMailingJobs(tmp.db);
+
+    expect(await jobsOf(early.userId)).toEqual([]);
+    const jobs = await jobsOf(due.userId);
+    expect(jobs.map((job) => [job.kind, job.status, job.payload])).toEqual([
+      [
+        NotificationKind.AnalysisUnused,
+        NotificationJobStatus.Pending,
+        { assetId: 202, durationSec: 5 },
+      ],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.analysedAt.getTime() + 600_000);
+    expect(jobs[0]!.dedupeKey).toMatch(/^analysis_unused:\d+\.\d{6}$/);
+    expect(jobs[0]!.dedupeKey).toContain(
+      `:${String(Math.floor(due.analysedAt.getTime() / 1000))}.`,
+    );
+  });
+
+  it('A2 plans only the latest analysis: an earlier one’s key never appears', async () => {
+    const user = await analysed(15);
+    const first = await tmp.db
+      .select({
+        key: sql<string>`'analysis_unused:' || extract(epoch from ${users.lastAnalysisAt})::text`,
+      })
+      .from(users)
+      .where(eq(users.id, user.userId));
+    const second = await backdateAnalysis(user.userId, 11);
+    await planMailingJobs(tmp.db);
+    const jobs = await analysisJobsOf(user.userId);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(second.getTime() + 600_000);
+    expect(jobs[0]!.dedupeKey).not.toBe(first[0]!.key);
+  });
+
+  it('A3 plans nothing once a trade or a session followed the analysis', async () => {
+    const traded = await analysed(11);
+    await createTradeIntent(tmp.db, intentRequest(String(traded.telegramUserId)));
+    const cycled = await analysed(11);
+    await seedTradingSession(tmp.db, cycled.accountId);
+    await planMailingJobs(tmp.db);
+    expect(await jobsOf(traded.userId)).toEqual([]);
+    expect(await jobsOf(cycled.userId)).toEqual([]);
+  });
+
+  it('A3b plans nothing while a session started before the analysis runs, and plans after one that stopped', async () => {
+    const running = await analysed(11);
+    await seedTradingSession(tmp.db, running.accountId, {
+      startedAt: new Date(Date.now() - 2 * 3_600_000),
+    });
+    const stopped = await analysed(11);
+    const session = await seedTradingSession(tmp.db, stopped.accountId, {
+      startedAt: new Date(Date.now() - 2 * 3_600_000),
+    });
+    await tmp.db
+      .update(tradingSessions)
+      .set({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.Completed,
+        endedAt: new Date(Date.now() - 3_600_000),
+      })
+      .where(eq(tradingSessions.id, session.id));
+    await planMailingJobs(tmp.db);
+    expect(await jobsOf(running.userId)).toEqual([]);
+    expect((await jobsOf(stopped.userId)).map((job) => job.kind)).toEqual([
+      NotificationKind.AnalysisUnused,
+    ]);
+  });
+
+  it('A3c plans nothing for a user in real mode, blocked by the admin, or after an analysis with no signal', async () => {
+    const real = await analysed(11);
+    await setTradingMode(tmp.db, real.telegramUserId, TradeMode.Real);
+    const blocked = await analysed(11);
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, blocked.userId));
+    const noSignal = await analysed(11);
+    await setLastAnalysis(tmp.db, noSignal.telegramUserId, null);
+    await planMailingJobs(tmp.db);
+    for (const user of [real, blocked, noSignal]) expect(await jobsOf(user.userId)).toEqual([]);
+  });
+
+  it('A6 plans nothing for an analysis older than the window', async () => {
+    const old = await analysed(61);
+    await planMailingJobs(tmp.db);
+    expect(await jobsOf(old.userId)).toEqual([]);
+  });
+
+  it('A7 plans an analysis once however many planners run, and not again once sent', async () => {
+    const user = await analysed(11);
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    const again = await planMailingJobs(tmp.db);
+    expect(again[NotificationKind.AnalysisUnused]).toBe(0);
+    const [job] = await analysisJobsOf(user.userId);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Sent, sentAt: sql`now()` })
+      .where(eq(notificationJobs.id, job!.id));
+    await planMailingJobs(tmp.db);
+    expect(await analysisJobsOf(user.userId)).toHaveLength(1);
+  });
+
+  it('A8 gives each analysis its own reminder', async () => {
+    const user = await analysed(11);
+    await planMailingJobs(tmp.db);
+    await backdateAnalysis(user.userId, 10.5);
+    await planMailingJobs(tmp.db);
+    const jobs = await analysisJobsOf(user.userId);
+    expect(jobs).toHaveLength(2);
+    expect(new Set(jobs.map((job) => job.dedupeKey)).size).toBe(2);
+  });
+
+  it('CUT plans nothing for an analysis before the kind’s plans_from, and the job for one after', async () => {
+    await plansFromMinutesAgo(30, NotificationKind.AnalysisUnused);
+    try {
+      const before = await analysed(40);
+      const after = await analysed(20);
+      await planMailingJobs(tmp.db);
+      expect(await jobsOf(before.userId)).toEqual([]);
+      expect((await jobsOf(after.userId)).map((job) => job.kind)).toEqual([
+        NotificationKind.AnalysisUnused,
+      ]);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+});
+
+describe('the analysis reminder: the claim', () => {
+  beforeAll(() => plansFromMinutesAgo(hours(200)));
+  // A claim takes the earliest due job of the database, and planned() runs the planner over every
+  // user: the earlier cases' facts are cleared and whatever they still plan is drained first.
+  beforeEach(async () => {
+    await tmp.db
+      .update(users)
+      .set({ lastAnalysisAt: null, lastAnalysisAssetId: null, lastAnalysisDurationSec: null });
+    await planMailingJobs(tmp.db);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.status, NotificationJobStatus.Pending));
+  });
+
+  // a user whose reminder the planner wrote and the sender has not claimed yet
+  async function planned(): Promise<Analysed & { jobId: string }> {
+    const user = await analysed(11);
+    await planMailingJobs(tmp.db);
+    const [job] = await analysisJobsOf(user.userId);
+    if (job === undefined) throw new Error('nothing planned');
+    return { ...user, jobId: job.id };
+  }
+
+  it('A4 claims the job of an analysis nobody acted on, with its payload', async () => {
+    const user = await planned();
+    const { job } = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(job).toMatchObject({
+      id: user.jobId,
+      kind: NotificationKind.AnalysisUnused,
+      payload: { assetId: 101, durationSec: 15 },
+      telegramUserId: user.telegramUserId,
+    });
+  });
+
+  it.each([
+    [
+      'opened another analysis',
+      (user: Analysed) =>
+        setLastAnalysis(tmp.db, user.telegramUserId, { assetId: 101, durationSec: 15 }),
+    ],
+    [
+      'created a trade',
+      (user: Analysed) => createTradeIntent(tmp.db, intentRequest(String(user.telegramUserId))),
+    ],
+    ['started a session', (user: Analysed) => seedTradingSession(tmp.db, user.accountId)],
+    [
+      'switched to real',
+      (user: Analysed) => setTradingMode(tmp.db, user.telegramUserId, TradeMode.Real),
+    ],
+    [
+      'was blocked by the admin',
+      (user: Analysed) =>
+        tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, user.userId)),
+    ],
+  ] as const)(
+    'A4 cancels at the claim the job of a user who %s after it was planned',
+    async (_, act) => {
+      const user = await planned();
+      await act(user);
+      expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({
+        job: undefined,
+        canceled: 1,
+      });
+      expect((await jobRow(user.jobId)).status).toBe(NotificationJobStatus.Canceled);
+    },
+  );
+
+  it('A5 cancels the job once an analysis with no signal cleared the fact, and claims nothing after', async () => {
+    const user = await planned();
+    await setLastAnalysis(tmp.db, user.telegramUserId, null);
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(user.jobId)).status).toBe(NotificationJobStatus.Canceled);
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 0 });
+  });
+
+  it('A6 cancels at the claim a job whose window closed before it was sent', async () => {
+    const user = await analysed(61);
+    const jobId = await insertAnalysisJob(user.userId);
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(jobId)).status).toBe(NotificationJobStatus.Canceled);
   });
 });

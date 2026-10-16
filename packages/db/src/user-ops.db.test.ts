@@ -32,7 +32,14 @@ import {
   tradingSessions,
   users,
 } from './schema/index';
-import { readStakes, recordUserStart, setStake, setTradingMode, toUserStartView } from './user-ops';
+import {
+  readStakes,
+  recordUserStart,
+  setLastAnalysis,
+  setStake,
+  setTradingMode,
+  toUserStartView,
+} from './user-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -427,6 +434,70 @@ describe('toUserStartView', () => {
       .where(eq(brokerAccounts.userId, row.id));
     expect(account).toBeDefined();
     expect(JSON.stringify(toUserStartView(row, true, []))).not.toContain(account!.id);
+  });
+});
+
+describe('setLastAnalysis (#484)', () => {
+  const rowOf = async (telegramUserId: bigint) => {
+    const [row] = await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId));
+    if (row === undefined) throw new Error('no users row');
+    return row;
+  };
+  const dbNow = async () => {
+    const { rows } = await tmp.pool.query<{ now: Date }>('select clock_timestamp() as now');
+    return rows[0]!.now.getTime();
+  };
+
+  it('LA1 records the pair and duration at the database clock, and null clears all three', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    const before = await dbNow();
+    expect(await setLastAnalysis(tmp.db, telegramUserId, { assetId: 101, durationSec: 15 })).toBe(
+      true,
+    );
+    const after = await dbNow();
+    const row = await rowOf(telegramUserId);
+    expect(row).toMatchObject({ lastAnalysisAssetId: 101, lastAnalysisDurationSec: 15 });
+    expect(row.lastAnalysisAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(row.lastAnalysisAt!.getTime()).toBeLessThanOrEqual(after);
+
+    expect(await setLastAnalysis(tmp.db, telegramUserId, null)).toBe(true);
+    expect(await rowOf(telegramUserId)).toMatchObject({
+      lastAnalysisAt: null,
+      lastAnalysisAssetId: null,
+      lastAnalysisDurationSec: null,
+    });
+  });
+
+  it('LA2 answers false for an unknown user and writes nothing', async () => {
+    const telegramUserId = nextTelegramUserId();
+    expect(await setLastAnalysis(tmp.db, telegramUserId, { assetId: 101, durationSec: 15 })).toBe(
+      false,
+    );
+    const rows = await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId));
+    expect(rows).toEqual([]);
+  });
+
+  it('LA3 touches only the three columns and updated_at', async () => {
+    const telegramUserId = nextTelegramUserId();
+    const other = nextTelegramUserId();
+    await start(telegramUserId);
+    await start(other);
+    await setStake(tmp.db, telegramUserId, TradeMode.Demo, '2.5' as DecimalString);
+    const before = await rowOf(telegramUserId);
+    const otherBefore = await rowOf(other);
+    await setLastAnalysis(tmp.db, telegramUserId, { assetId: 202, durationSec: 5 });
+    const outside = (row: typeof before) => ({
+      ...row,
+      lastAnalysisAt: undefined,
+      lastAnalysisAssetId: undefined,
+      lastAnalysisDurationSec: undefined,
+      updatedAt: undefined,
+    });
+    const after = await rowOf(telegramUserId);
+    expect(after).toMatchObject({ lastAnalysisAssetId: 202, lastAnalysisDurationSec: 5 });
+    expect(outside(after)).toEqual(outside(before));
+    expect(await rowOf(other)).toEqual(otherBefore);
   });
 });
 

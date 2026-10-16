@@ -201,6 +201,30 @@ export async function setStake(
   return row === undefined ? undefined : { mode, stake: canonicalStake(row.stake) };
 }
 
+// The fact the analysis reminder counts from (#484): the analysis card with a signal of this pair
+// and duration, at the database clock; null records an analysis with no signal, which ends the
+// previous one's reminder. One autocommit UPDATE of the user's own row; false = no users row.
+export async function setLastAnalysis(
+  db: Db,
+  telegramUserId: bigint,
+  analysis: { assetId: number; durationSec: number } | null,
+): Promise<boolean> {
+  const rows = await db
+    .update(users)
+    .set(
+      analysis === null
+        ? { lastAnalysisAt: null, lastAnalysisAssetId: null, lastAnalysisDurationSec: null }
+        : {
+            lastAnalysisAt: sql`now()`,
+            lastAnalysisAssetId: analysis.assetId,
+            lastAnalysisDurationSec: analysis.durationSec,
+          },
+    )
+    .where(eq(users.telegramUserId, telegramUserId))
+    .returning({ id: users.id });
+  return rows.length > 0;
+}
+
 // canonical; null = the broker's minimum; undefined = no users row
 export async function readStakes(
   db: Db,

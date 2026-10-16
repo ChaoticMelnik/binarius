@@ -1,26 +1,33 @@
 import { sql, type SQL } from 'drizzle-orm';
 import {
+  ANALYSIS_UNUSED_AFTER_MS,
+  ANALYSIS_UNUSED_UNTIL_MS,
   BrokerAccountStatus,
   FIRST_SESSION_CHAIN,
   NotificationKind,
   TokenLedgerKind,
   TradeMode,
+  TradingSessionStatus,
   UserStatus,
 } from '@binarius/shared';
 import { literal } from './schema/columns';
 import { brokerAccounts } from './schema/broker-accounts';
 import { tokenLedger } from './schema/token-ledger';
+import { tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 
-// What the planner and the sender know about a kind (docs/mailing.md). Both SQL fragments read
-// the outer `users` row and lock nothing.
+// What the planner and the sender know about a kind (docs/mailing.md). Every SQL fragment reads
+// the outer `users` row and locks nothing.
 export interface MailingScenario {
   // the user's fact the kind counts from; NULL plans nothing
   factAt: SQL;
-  afterHours: number;
-  // one job per user per key (notification_jobs_dedupe_key_idx), so planning is idempotent
-  dedupeKey: string;
+  afterMs: number;
+  // one job per user per key (notification_jobs_dedupe_key_idx), so planning is idempotent; the
+  // claim cancels a job whose key the scenario would not plan now (a newer fact)
+  dedupeKey: SQL;
+  // the job's payload (jsonb), what the message is built from; '{}' when absent
+  payload?: SQL;
   // checked when planning and again when the sender claims: false at claim cancels the job
   stillApplies: SQL;
 }
@@ -56,8 +63,8 @@ const firstSessionStep = (kind: NotificationKind): MailingScenario => {
   const next = FIRST_SESSION_CHAIN[index + 1];
   return {
     factAt: linkedAt,
-    afterHours: step.afterHours,
-    dedupeKey: `first_session:${step.afterHours}h`,
+    afterMs: step.afterHours * 3_600_000,
+    dedupeKey: sql`${`first_session:${String(step.afterHours)}h`}`,
     stillApplies:
       next === undefined
         ? beforeFirstSession
@@ -65,9 +72,36 @@ const firstSessionStep = (kind: NotificationKind): MailingScenario => {
   };
 };
 
+const lastAnalysisAt = sql`${users.lastAnalysisAt}`;
+
+// The analysis reminder (#484, docs/mailing.md → The analysis reminder): the user, not blocked by
+// the admin and trading demo, has created no trade and started no session since the analysis, runs
+// no session now, and the reminder's window has not closed. Another analysis is a new fact and so a
+// new key: the job of the previous one is cancelled at the claim by the key, not here.
+const analysisUnused = sql`(${users.status} = ${literal(UserStatus.Active)}
+  and ${users.tradingMode} = ${literal(TradeMode.Demo)}
+  and now() < ${lastAnalysisAt} + make_interval(secs => ${ANALYSIS_UNUSED_UNTIL_MS / 1000})
+  and not exists (select 1 from ${tradeIntents}
+    where ${tradeIntents.userId} = ${users.id}
+      and ${tradeIntents.createdAt} > ${lastAnalysisAt})
+  and not exists (select 1 from ${tradingSessions}
+    join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+    where ${brokerAccounts.userId} = ${users.id}
+      and (${tradingSessions.startedAt} > ${lastAnalysisAt}
+        or ${tradingSessions.status} <> ${literal(TradingSessionStatus.Stopped)})))`;
+
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
   [NotificationKind.FirstSession1h]: firstSessionStep(NotificationKind.FirstSession1h),
   [NotificationKind.FirstSession24h]: firstSessionStep(NotificationKind.FirstSession24h),
   [NotificationKind.FirstSession72h]: firstSessionStep(NotificationKind.FirstSession72h),
+  [NotificationKind.AnalysisUnused]: {
+    factAt: lastAnalysisAt,
+    afterMs: ANALYSIS_UNUSED_AFTER_MS,
+    // the analysis' own moment, microseconds and UTC whatever the session's TimeZone
+    dedupeKey: sql`('analysis_unused:' || extract(epoch from ${users.lastAnalysisAt})::text)`,
+    payload: sql`jsonb_build_object('assetId', ${users.lastAnalysisAssetId},
+      'durationSec', ${users.lastAnalysisDurationSec})`,
+    stillApplies: analysisUnused,
+  },
 } as const satisfies Record<NotificationKind, MailingScenario>;

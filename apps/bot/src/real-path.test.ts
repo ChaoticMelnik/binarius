@@ -12,12 +12,12 @@ import {
   type TradingAccessResponse,
   type TradingSessionView,
   demoSignalsCallbackData,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
 import { createBot } from './bot';
 import {
   analysisMoreCallbackData,
-  demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoLaunchCallbackData,

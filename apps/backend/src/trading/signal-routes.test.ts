@@ -28,6 +28,7 @@ import {
   fakeCatalog,
   fakeSignalFeed,
   PAIRS_TEST_TOKEN,
+  recordingLastAnalysis,
   unusedAccessTokenDeps,
   unusedBalanceDeps,
   unusedPairsDeps,
@@ -94,6 +95,7 @@ function appWith(
   feed: SignalRoutesDeps['feed'],
   // null: the cache holds no snapshot
   catalog: PairsCatalogView | null = catalogOf(),
+  lastAnalysis: SignalRoutesDeps['lastAnalysis'] = recordingLastAnalysis().lastAnalysis,
 ): FastifyInstance {
   lines = [];
   app = buildApp({
@@ -116,6 +118,7 @@ function appWith(
       feed,
       catalog: fakeCatalog(catalog ?? undefined),
       internalApiToken: PAIRS_TEST_TOKEN,
+      lastAnalysis,
     },
     signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
@@ -318,5 +321,124 @@ describe('POST /trading/signal', () => {
       { assetId: 101, interval: '15s', digits: 5 },
       { assetId: 202, interval: '15s', digits: 2 },
     ]);
+  });
+});
+
+// #484: the analysis card's request records the user's last analysis for the reminder
+describe('POST /trading/signal with analysis', () => {
+  const signalEvaluation = {
+    ...decidedEvaluation,
+    entry: {
+      ...(decidedEvaluation.outcome === 'decided' ? decidedEvaluation.entry : {}),
+      decision: { kind: 'signal', version: SIGNAL_ALGORITHM_VERSION, action: 'up' },
+    },
+  } as unknown as SignalEvaluation;
+  const analysis = { telegramUserId: '7001', durationSec: 15 };
+  const body = { assetId: 101, interval: '15s', analysis };
+
+  it('R10 a signal records the pair and duration once, after the feed, and answers as without', async () => {
+    const order: string[] = [];
+    const { feed } = fakeSignalFeed(() => {
+      order.push('feed');
+      return Promise.resolve(signalEvaluation);
+    });
+    const { lastAnalysis, calls } = recordingLastAnalysis(() => {
+      order.push('set');
+      return Promise.resolve(true);
+    });
+    const target = appWith(feed, catalogOf(), lastAnalysis);
+    const response = await post(target, body);
+    expect(response.statusCode).toBe(200);
+    expect(calls).toStrictEqual([[7001n, { assetId: 101, durationSec: 15 }]]);
+    expect(order).toStrictEqual(['feed', 'set']);
+    const without = await post(target, { assetId: 101, interval: '15s' });
+    expect(response.json()).toStrictEqual(without.json());
+  });
+
+  it('R11 no signal records none', async () => {
+    const { feed } = fakeSignalFeed(decidedEvaluation);
+    const { lastAnalysis, calls } = recordingLastAnalysis();
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    expect(response.statusCode).toBe(200);
+    expect(calls).toStrictEqual([[7001n, null]]);
+  });
+
+  it('R12 fetch_failed records nothing', async () => {
+    const { feed } = fakeSignalFeed({
+      outcome: 'fetch_failed',
+      request: facts,
+      code: 'unavailable',
+      status: 503,
+    });
+    const { lastAnalysis, calls } = recordingLastAnalysis();
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    expect(response.statusCode).toBe(200);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('R13 a request without analysis records nothing', async () => {
+    const { feed } = fakeSignalFeed(signalEvaluation);
+    const { lastAnalysis, calls } = recordingLastAnalysis();
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis), {
+      assetId: 101,
+      interval: '15s',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('R14 an unknown user is a 200 with the decision and no error line', async () => {
+    const { feed } = fakeSignalFeed(signalEvaluation);
+    const { lastAnalysis, calls } = recordingLastAnalysis(() => Promise.resolve(false));
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ outcome: 'decided' });
+    expect(calls).toHaveLength(1);
+    expect(parsedLines().filter((line) => (line.level as number) >= 40)).toHaveLength(0);
+  });
+
+  it('R15 a failed record is logged by name and code, and the decision is answered', async () => {
+    const { feed } = fakeSignalFeed(signalEvaluation);
+    const failure = Object.assign(new Error('connection to 10.0.0.5 lost: secret detail'), {
+      code: '57P01',
+    });
+    const { lastAnalysis } = recordingLastAnalysis(() => Promise.reject(failure));
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ outcome: 'decided' });
+    const warned = parsedLines().filter((line) => line.msg === 'last analysis not recorded');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({ level: 40, err: { name: 'Error', code: '57P01' } });
+    expect(lines.join('\n')).not.toContain('secret detail');
+  });
+
+  it.each([
+    { telegramUserId: '0', durationSec: 15 },
+    { telegramUserId: 7001, durationSec: 15 },
+    { telegramUserId: '7001', durationSec: 0 },
+    { telegramUserId: '7001', durationSec: '15' },
+    { telegramUserId: '7001' },
+  ])('R16 refuses analysis %j with 400 before the feed', async (bad) => {
+    const { feed, calls } = fakeSignalFeed(signalEvaluation);
+    const record = recordingLastAnalysis();
+    const response = await post(appWith(feed, catalogOf(), record.lastAnalysis), {
+      assetId: 101,
+      interval: '15s',
+      analysis: bad,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(record.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['503 catalog_unavailable', null, 101],
+    ['409 pair_unknown', catalogOf(), 303],
+  ] as const)('R17 %s records nothing', async (_, catalog, assetId) => {
+    const { feed } = fakeSignalFeed(signalEvaluation);
+    const { lastAnalysis, calls } = recordingLastAnalysis();
+    const response = await post(appWith(feed, catalog, lastAnalysis), { ...body, assetId });
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(calls).toHaveLength(0);
   });
 });

@@ -16,6 +16,7 @@ import {
   type DecimalString,
   type TelegramHtml,
   type TradingAccessResponse,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -26,7 +27,6 @@ import {
 } from './backend-client';
 import {
   assetIdOf,
-  demoAnalysisCallbackData,
   demoCycleScreen,
   demoLaunchCallbackData,
   durationOf,

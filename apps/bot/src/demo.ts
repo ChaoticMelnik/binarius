@@ -43,6 +43,7 @@ import {
   demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
   signalsCallbackDataFor,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import {
   analysisScreen,
@@ -163,8 +164,6 @@ export const demoPageCallbackData = (group: PairTypeGroup, page: number): string
 export const demoAssetCallbackData = (assetId: number): string => `demo:a:${assetId}`;
 export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:d:${assetId}:${durationSec}`;
-export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
-  `demo:an:${assetId}:${durationSec}`;
 // «➕ Ещё» under the analysis on a signal (#360): the press draws the single trade's row in place
 // of the collapsed keyboard. The direction, the payout floor's verdict (`s` the session row was
 // drawn, `n` withheld, #379) and the mode the analysis text was drawn in (`d`/`r`, #121) are the
@@ -988,7 +987,13 @@ export function createDemoComposer<C extends Context>({
     );
     if (waiting === 'unknown') return;
     const amounts = cardAmountsOf(stake.access, pairPayoutAccepted(read.pair), durationSec);
-    const screen = await evaluate(read.pair, durationSec, stake.mode, amounts !== null);
+    const screen = await evaluate(
+      ctx.from.id,
+      read.pair,
+      durationSec,
+      stake.mode,
+      amounts !== null,
+    );
     const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair, stake.mode, amounts);
     if (screen.photo === null) await showResult(ctx, waiting, screen.text, keyboard);
     else await sendCard(ctx, waiting, screen.photo, screen.text, keyboard, read.pair, durationSec);
@@ -1023,8 +1028,10 @@ export function createDemoComposer<C extends Context>({
   });
 
   // A thrown call (unreachable, a non-2xx, a broken body) and every fetch_failed but
-  // rate_limited are logged: rate_limited is the broker's ordinary answer, told to the user.
+  // rate_limited are logged: rate_limited is the broker's ordinary answer, told to the user. The
+  // request names the user's analysis, which the backend records for the analysis reminder (#484).
   async function evaluate(
+    telegramUserId: number,
     pair: PairView,
     durationSec: DemoDurationSec,
     mode: TradeMode,
@@ -1032,7 +1039,10 @@ export function createDemoComposer<C extends Context>({
   ): Promise<AnalysisScreen> {
     let response;
     try {
-      response = await backend.evaluateSignal(pair.id, intervalForDuration(durationSec));
+      response = await backend.evaluateSignal(pair.id, intervalForDuration(durationSec), {
+        telegramUserId: String(telegramUserId),
+        durationSec,
+      });
     } catch (error) {
       logger.warn(
         { ...errorLogFields(error), ...backendErrorFields(error) },

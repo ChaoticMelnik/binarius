@@ -40,6 +40,7 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   demoSignalsCallbackData,
   TRACKED_SESSIONS_MAX,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import {
   composeDurationMs,
@@ -61,7 +62,6 @@ import {
   cycleStakeCallbackData,
   demoLaunchCallbackData,
   analysisMoreCallbackData,
-  demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoPageCallbackData,

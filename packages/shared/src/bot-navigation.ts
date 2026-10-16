@@ -19,6 +19,12 @@ export const signalsCallbackDataFor = (durationSec: number): string =>
     ? demoSignalsCallbackData(durationSec)
     : DEMO_SIGNALS_CALLBACK_DATA;
 
+// «📊 Анализ» of a pair and duration (#482): the bot's analysis card, and since #484 the backend's
+// analysis reminder, «📊 Новый анализ» of the same pair and duration. The bot's pattern takes the
+// durations it offers. The longest, `demo:an:2147483647:15`, is 21 bytes.
+export const demoAnalysisCallbackData = (assetId: number, durationSec: number): string =>
+  `demo:an:${String(assetId)}:${String(durationSec)}`;
+
 // The status card's button (#24), and since #350 the account card's: the signals screen (#320).
 // Kept as `demo`, so a button on an old card leads there too.
 export const DEMO_CALLBACK_DATA = 'demo';
