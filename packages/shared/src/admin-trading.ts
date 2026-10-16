@@ -60,7 +60,7 @@ export const adminUserIntentsSectionSchema = z.strictObject({
 });
 export type AdminUserIntentsSection = z.infer<typeof adminUserIntentsSectionSchema>;
 
-// `settings` is the parsed value (v1 or v2) or null: the raw jsonb never reaches the wire.
+// `settings` is the parsed value (any version the schema reads: v1, v2 or v3) or null: the raw jsonb never reaches the wire.
 export const adminTradingSessionViewSchema = z.strictObject({
   id: z.uuid(),
   brokerAccountId: z.uuid(),

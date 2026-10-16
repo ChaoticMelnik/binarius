@@ -308,8 +308,9 @@ A finished one (#337):
   сделки…».
 - **Completed**: «🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус» (#552: the
   closed cycles, then the trades and the score by trade, as «📊 Итог», «📤 Поделиться» and the
-  card's footer), then the result, the
-  balance and its age line (above).
+  card's footer; a v1/v2 session of before #552 counts its trades as cycles here too, «🏁 Сессия
+  завершена: 5 циклов, 5 сделок — …», text only, during the deploy window: PR #572, accepted risk
+  3), then the result, the balance and its age line (above).
 - **Stopped for another reason**: the reason's line, then «📊 Итог: …» when a trade settled, the
   result, the balance and its age line, then the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
   worker carries it to its end without a person (live and not `manual_review`). Under the

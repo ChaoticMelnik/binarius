@@ -3,7 +3,7 @@
 export const SessionTradeResult = { Won: 'won', Lost: 'lost', Tied: 'tied' } as const;
 export type SessionTradeResult = (typeof SessionTradeResult)[keyof typeof SessionTradeResult];
 
-// The stake strategies' wire names (#450): settings v2 carry one, the worker's sizer takes it
+// The stake strategies' wire names (#450): settings v2 and v3 carry one, the worker's sizer takes it
 // (apps/trading-worker/src/stake/codes.ts re-exports it) and settings v1 read as fixed
 export const SessionStakeStrategy = { Fixed: 'fixed', Martingale: 'martingale' } as const;
 export type SessionStakeStrategy = (typeof SessionStakeStrategy)[keyof typeof SessionStakeStrategy];

@@ -11,7 +11,7 @@ pairs by page, the durations of a pair, the summary of the choice with «📊 А
 analysis. Every screen reads the broker's pairs again through
 `GET /trading/pairs` ([pairs-catalog.md](pairs-catalog.md)) and draws nothing from an earlier
 read. «📊 Анализ» shows the analysis of the pair's candles by Signal module v1 (#126,
-[The analysis](#the-analysis)). Its first row is the session of five trades on a signal (#360;
+[The analysis](#the-analysis)). Its first row is the session of five cycles (`DEFAULT_SESSION_CYCLES`, #552) on a signal (#360;
 since #509 never on «сигнала нет», [bot-session.md](bot-session.md#the-button)); on a signal, «➕ Ещё» draws the single
 trade's stake button in place, whose press is #127 ([bot-demo-trade.md](bot-demo-trade.md)).
 
@@ -395,7 +395,8 @@ not a fresh catalog.
   is sent (#418).
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
 - **Analysis (#360).** On a signal — since #509 not on «сигнала нет» — «🚀 Сессия из 5
-  сделок» alone in the first row where `sessionFitsDeadline(5, sec)` holds, at every duration of
+  циклов» alone in the first row where `sessionFitsDeadline(DEFAULT_SESSION_CYCLES, sec, martingale)`
+  holds (`sessionFits`; #552: the worst case of four trades a cycle), at every duration of
   the set (#284, [bot-session.md](bot-session.md#the-button)), and the pair pays at least the cycle
   floor (`pairPayoutAccepted`, #379; the expansion carries the fact in `demo:more`'s token; below
   it the screen says why); on a signal, «➕ Ещё» alone in
@@ -699,7 +700,7 @@ and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the ha
 - **#127** — the stake button's press, the intent and its status (`intent:` buttons):
   [bot-demo-trade.md](bot-demo-trade.md). It runs `readDemoTrade` again at the press, with the
   saved stake of the user's mode or `broker.minTradeAmount` (#297, #326).
-- **#284** — the session of five trades in the bot (real sessions #327): the button, status and stop
+- **#284** — the session of five trades in the bot (five cycles since #552; real sessions #327): the button, status and stop
   ([bot-session.md](bot-session.md)); the worker half is shipped (#287,
   [trading-session.md](trading-session.md)).
 - **#24** — the status card and its button ([bot-menu.md](bot-menu.md)).
