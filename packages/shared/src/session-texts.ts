@@ -3,7 +3,6 @@ import type { PairLabel } from './catalog';
 import type { BotHtmlTexts, BotPlainTexts, BotStaticHtmlKey } from './bot-texts';
 import type { DecimalString } from './money';
 import { SessionTradeResult } from './session-steps';
-import { decimalLessThan } from './stake';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
 import { TradeMode } from './trading';
 import {
@@ -69,8 +68,9 @@ ${line}`,
   );
 
 // A settled trade of a session as its message prints it (#464). `outcome` is the figure after
-// «→», computed by SQL (Rule 2): the payout of a win, the loss of a loss, the stake of a tie. The
-// prices are the broker trade's; `digits` the pair's, null when the catalog could not say.
+// «→», the broker trade's profit (#539): positive for a win, negative for a loss, zero for a tie,
+// so the lines of a session add up to its result. The prices are the broker trade's; `digits` the
+// pair's, null when the catalog could not say.
 export interface SessionTradeNotice {
   amount: DecimalString;
   outcome: DecimalString;
@@ -80,8 +80,6 @@ export interface SessionTradeNotice {
   digits: number | null;
   cycle: number;
   step: number;
-  // the session's base stake; null when the settings could not be read
-  baseStake: DecimalString | null;
 }
 
 const priceOf = (value: number, digits: number | null): string =>
@@ -158,20 +156,26 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
       ...sessionClosingLines(view),
     ]);
 
-  // A trade's message (#464): the adaptive line first when the trade's stake is above the base
-  // stake, then the cycle and step and the trade in a code block.
-  const sessionTradeText = (trade: SessionTradeNotice): TelegramHtml => {
-    const body = html[SESSION_TRADE_LINES[trade.result]]({
-      cycle: String(trade.cycle),
-      step: String(trade.step),
-      stake: trade.amount,
-      outcome: trade.outcome,
-      openPrice: priceOf(trade.openPrice, trade.digits),
-      closePrice: priceOf(trade.closePrice, trade.digits),
-    });
-    return trade.baseStake !== null && decimalLessThan(trade.baseStake, trade.amount)
-      ? joinHtmlLines([html.sessionAdaptiveStake, body])
-      : body;
+  // A cycle's message (#551): the blocks of its trades in their order, a blank line apart, each
+  // the cycle and step and the trade in a code block; the adaptive line stands once, alone, above
+  // the block of step 2, wherever that block is printed. The sender splits a cycle into more
+  // messages by length only between blocks, never inside one.
+  const sessionCycleText = (trades: readonly SessionTradeNotice[]): TelegramHtml => {
+    const parts: TelegramHtml[] = [];
+    for (const trade of trades) {
+      if (trade.step === 2) parts.push(html.sessionAdaptiveStake);
+      parts.push(
+        html[SESSION_TRADE_LINES[trade.result]]({
+          cycle: String(trade.cycle),
+          step: String(trade.step),
+          stake: trade.amount,
+          outcome: trade.outcome,
+          openPrice: priceOf(trade.openPrice, trade.digits),
+          closePrice: priceOf(trade.closePrice, trade.digits),
+        }),
+      );
+    }
+    return joinHtmlLines(parts.flatMap((part, i) => (i === 0 ? [part] : [telegramHtml``, part])));
   };
 
   return {
@@ -182,7 +186,7 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     sessionAssetLabel,
     sessionClosingLines,
     sessionSummaryText,
-    sessionTradeText,
+    sessionCycleText,
   };
 }
 export type SessionTexts = ReturnType<typeof createSessionTexts>;

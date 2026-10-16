@@ -172,7 +172,7 @@ describe('claimSessionTradeNotice', () => {
     expect(await claim(target.session, 0)).toEqual({
       trade: {
         amount: '5.00000000',
-        outcome: '9.60000000',
+        outcome: '4.60000000',
         result: 'won',
         openPrice: 1,
         closePrice: 1.5,
@@ -209,16 +209,19 @@ describe('claimSessionTradeNotice', () => {
   });
 
   it.each([
-    ['4.6', '9.60000000', 'won'],
-    ['0.001', '5.00100000', 'won'],
+    ['4.6', '4.60000000', 'won'],
+    ['0.001', '0.00100000', 'won'],
     ['-5', '-5.00000000', 'lost'],
     ['-2.5', '-2.50000000', 'lost'],
-    ['0', '5.00000000', 'tied'],
-  ])('N4 a stake of 5 at profit %s prints %s, %s', async (profit, outcome, result) => {
-    const target = await seedSession();
-    await settled(target, profit);
-    expect((await claim(target.session, 0))?.trade).toMatchObject({ outcome, result });
-  });
+    ['0', '0.00000000', 'tied'],
+  ])(
+    'N4 a stake of 5 at profit %s prints its profit %s (#539), %s',
+    async (profit, outcome, result) => {
+      const target = await seedSession();
+      await settled(target, profit);
+      expect((await claim(target.session, 0))?.trade).toMatchObject({ outcome, result });
+    },
+  );
 
   it('N5 a release puts the trade back once; a stale one changes nothing', async () => {
     const target = await seedSession();

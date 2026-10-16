@@ -38,8 +38,8 @@ export function pairOf(
 }
 
 // A settled trade's message: its cycle and step over the session's trades up to it, by the
-// session's own strategy (#450; settings that cannot be read count as fixed), and the adaptive
-// line when its stake is above the session's base stake.
+// session's own strategy (#450; settings that cannot be read count as fixed), the adaptive line
+// above step 2 (#551).
 export function sessionTradeMessage(
   { trade, results }: ClaimedSessionTrade,
   settings: TradingSessionSettings | null,
@@ -49,17 +49,18 @@ export function sessionTradeMessage(
     settings === null ? SessionStakeStrategy.Fixed : sessionStakeParams(settings).strategy;
   const position = sessionTradeSteps(results, strategy).at(-1);
   if (position === undefined) throw new Error('a claimed trade has no position in its session');
-  return notices.sessionTradeText({
-    amount: trade.amount,
-    outcome: trade.outcome,
-    result: trade.result,
-    openPrice: trade.openPrice,
-    closePrice: trade.closePrice,
-    digits,
-    cycle: position.cycle,
-    step: position.step,
-    baseStake: settings?.stake.baseStake ?? null,
-  });
+  return notices.sessionCycleText([
+    {
+      amount: trade.amount,
+      outcome: trade.outcome,
+      result: trade.result,
+      openPrice: trade.openPrice,
+      closePrice: trade.closePrice,
+      digits,
+      cycle: position.cycle,
+      step: position.step,
+    },
+  ]);
 }
 
 // The finished session's summary, with sound and the menu as its next step; a session the

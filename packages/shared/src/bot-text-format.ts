@@ -22,7 +22,7 @@ export function formatUsd(amount: string): string {
   return `${negative && !zero ? '-' : ''}$${groupDigits(whole)}.${cents}`;
 }
 
-// A session's result (#337) and a trade's profit on the summary card: every fraction digit it has,
+// A session's result (#337), a trade's profit on the summary card and in its message (#539): every fraction digit it has,
 // at least two, so a loss of 1.7515 is not shown as the smaller -$1.75 (#450: the live broker's
 // profit is S × p / 100 unrounded). '1.5' → '+$1.50', '-1.7515' → '-$1.7515'; a zero keeps no
 // sign, as in formatUsd
@@ -44,13 +44,6 @@ export function formatStake(amount: string): string {
 }
 
 export const formatCount = (count: string): string => groupDigits(count);
-
-// A trade's figure after «→» in its message (#464): '9.6' → '+$9.60', '-5' → '-$5.00', every
-// fraction digit as formatStake. The value is a stake or a payout, never zero (the session's
-// messages print a tie as its returned stake).
-export function formatSignedStake(amount: string): string {
-  return amount.startsWith('-') ? `-${formatStake(amount.slice(1))}` : `+${formatStake(amount)}`;
-}
 
 // A price is not money: a broker's double, printed with the pair's digits. A value outside the sane
 // range is printed at the nearest bound rather than failing the message.

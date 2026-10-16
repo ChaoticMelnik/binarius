@@ -3,7 +3,6 @@ import {
   formatAge,
   formatCount,
   formatPrice,
-  formatSignedStake,
   formatSignedUsd,
   formatStake,
   formatUsd,
@@ -98,19 +97,6 @@ describe('formatAge', () => {
     [7200, '120 мин'],
   ])('prints %i seconds as %s', (seconds, printed) => {
     expect(formatAge(seconds)).toBe(printed);
-  });
-});
-
-describe('formatSignedStake (#464)', () => {
-  it.each([
-    ['9.6', '+$9.60'],
-    ['9.60000000', '+$9.60'],
-    ['-5', '-$5.00'],
-    ['-5.00000000', '-$5.00'],
-    ['0.005', '+$0.005'],
-    ['1000.5', '+$1 000.50'],
-  ])('prints %s as %s', (amount, printed) => {
-    expect(formatSignedStake(amount)).toBe(spaced(printed));
   });
 });
 
