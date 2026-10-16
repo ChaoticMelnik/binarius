@@ -39,6 +39,7 @@ import {
   StarsPreCheckoutRefusal,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoSignalsCallbackData,
+  TRACKED_SESSIONS_MAX,
 } from '@binarius/shared';
 import {
   composeDurationMs,
@@ -135,7 +136,9 @@ import {
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
   SESSION_RESUME_DRAIN_MS,
+  SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
+  SESSION_RESUME_PER_SECOND,
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_DRAIN_MS,
   SESSION_TRACK_FIRST_POLL_MS,
@@ -3562,6 +3565,18 @@ describe("the demo session tracker's bounds", () => {
     expect(SESSION_RESUME_DRAIN_MS).toBe(2 * BACKEND_REQUEST_TIMEOUT_MS);
     expect(SESSION_RESUME_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
     expect(SESSION_RESUME_INTERVAL_MS).toBe(600_000);
+  });
+
+  it("paces the recovery's first polls inside one interval of the start (#567)", () => {
+    expect(SESSION_RESUME_PER_SECOND).toBe(4);
+    expect(SESSION_RESUME_GAP_MS).toBe(250);
+    const lastFirstPoll =
+      STARTUP_BUDGET_MS +
+      SESSION_RESUME_DRAIN_MS +
+      SESSION_TRACK_FIRST_POLL_MS +
+      TRACKED_SESSIONS_MAX * SESSION_RESUME_GAP_MS;
+    expect(lastFirstPoll).toBe(542_000);
+    expect(lastFirstPoll).toBeLessThan(SESSION_RESUME_INTERVAL_MS);
   });
 });
 

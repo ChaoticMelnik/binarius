@@ -20,7 +20,8 @@ import { sessionStatusText, TEXTS } from './texts';
 // The session's status message follows its session (#284, docs/bot-session.md): the bot
 // polls GET /trading/sessions/:id and edits the message as the session moves. In-process memory,
 // like the intent tracker; the first poll of a message records its id with the backend (#567), so
-// after a restart the bot's resumer (session-resume.ts) tracks the session again on it.
+// after a restart the bot's resumer (session-resume.ts) tracks the session again on it, the
+// recovered entries' first polls paced in slots and a message drawn in this process remembered.
 
 // The answer GET /trading/sessions/:id gives for an id that is missing or not this user's.
 export const SESSION_NOT_FOUND = 'not_found';
@@ -53,6 +54,9 @@ export interface SessionTrackRequest {
   // the first poll records messageId with the backend (#567) and reads the view from that answer;
   // false when the backend has it already (a recovered session)
   record: boolean;
+  // the pressed message this one was sent in place of, because Telegram refused its edit as gone:
+  // the record replaces it when it is the one recorded (#567)
+  replacesMessageId?: number;
   // edits the status message; the keyboard follows the view (no stop button once it stopped),
   // or only the menu once the session is gone (#350)
   edit: (text: TelegramHtml, ...rest: SessionEditArgs) => Promise<unknown>;
@@ -65,7 +69,9 @@ export interface SessionTrackRequest {
 export interface SessionTracker {
   // An id already tracked moves to the new message: the next change is drawn there and the old
   // message is not edited again, but for an attempt already in flight, which keeps the target it
-  // started with. The deadline keeps counting from the first track. A no-op after stop().
+  // started with. The deadline keeps counting from the first track. An entry with a view polls
+  // first after firstPollMs; one with no view (a recovered session) takes the next slot of
+  // resumeGapMs, no sooner than firstPollMs. A no-op after stop().
   track(request: SessionTrackRequest): void;
   // clears every timer, refuses new entries, and waits for the attempts in flight
   stop(): Promise<void>;
@@ -80,14 +86,16 @@ export interface SessionTrackerOptions {
   firstPollMs: number;
   pollMs: number;
   deadlineMs: number;
+  // the gap between the first polls of two entries tracked with no view (recovered ones, #567)
+  resumeGapMs: number;
   maxEntries?: number;
   now?: () => number;
 }
 
 interface Entry extends SessionTrackRequest {
   startedAt: number;
-  // what is on screen, as finalOf's key spells it; '' while nothing was read, so the first good
-  // read draws
+  // what is on screen, as finalOf's key spells it; '' while nothing was read and nothing this
+  // process drew on the message is remembered, so the first good read draws
   rendered: string;
   timer: ReturnType<typeof setTimeout> | undefined;
   readFailures: number;
@@ -144,10 +152,14 @@ export function createSessionTracker({
   firstPollMs,
   pollMs,
   deadlineMs,
+  resumeGapMs,
   maxEntries = SESSION_TRACKER_MAX_ENTRIES,
   now = Date.now,
 }: SessionTrackerOptions): SessionTracker {
   const entries = new Map<string, Entry>();
+  // what an ended entry last drew on its message, so a recovered entry of it edits only on a change
+  const drawn = new Map<string, { messageId: number; rendered: string }>();
+  let nextResumeAt = Number.NEGATIVE_INFINITY;
   // every attempt under way, a replaced or evicted entry's included, so stop() waits for all
   const inFlight = new Set<Promise<void>>();
   let stopping = false;
@@ -157,9 +169,29 @@ export function createSessionTracker({
   // map only after the drain, so during it an attempt in flight still counts as current.
   const current = (entry: Entry): boolean => entries.get(entry.sessionId) === entry;
 
-  const finish = (entry: Entry): void => {
+  // A lost message leaves no memory (remember false): the next edit has to find the loss again.
+  const finish = (entry: Entry, remember = true): void => {
     clearTimeout(entry.timer);
-    if (entries.get(entry.sessionId) === entry) entries.delete(entry.sessionId);
+    if (entries.get(entry.sessionId) !== entry) return;
+    entries.delete(entry.sessionId);
+    if (!remember || entry.rendered === '') return;
+    drawn.delete(entry.sessionId);
+    drawn.set(entry.sessionId, { messageId: entry.messageId, rendered: entry.rendered });
+    if (drawn.size > maxEntries) {
+      const oldest = drawn.keys().next().value;
+      if (oldest !== undefined) drawn.delete(oldest);
+    }
+  };
+
+  // An entry with no view edits unconditionally on its first poll after a restart (the bot cannot
+  // know what is on screen), and a pass hands up to TRACKED_SESSIONS_MAX of them at once, so their
+  // first polls go in slots resumeGapMs apart, no sooner than firstPollMs. The slots are timers:
+  // stop() clears them like any other (docs/bot-session.md → Rate and timing).
+  const resumeSlot = (): number => {
+    const t = now();
+    const at = Math.max(t + firstPollMs, nextResumeAt);
+    nextResumeAt = at + resumeGapMs;
+    return at - t;
   };
 
   const failed = (entry: Entry, error: unknown): void => {
@@ -234,7 +266,7 @@ export function createSessionTracker({
         }
         entry.editFailures += 1;
         if (!lostForGood) return true;
-        finish(entry);
+        finish(entry, false);
         if (args[0] !== null) await lost(entry);
         return false;
       }
@@ -247,7 +279,12 @@ export function createSessionTracker({
     let view: TradingSessionView;
     try {
       view = entry.record
-        ? await backend.recordSessionMessage(entry.sessionId, entry.telegramUserId, entry.messageId)
+        ? await backend.recordSessionMessage(
+            entry.sessionId,
+            entry.telegramUserId,
+            entry.messageId,
+            entry.replacesMessageId,
+          )
         : await backend.readSession(entry.sessionId, entry.telegramUserId);
     } catch (error) {
       if (!(error instanceof BackendError)) {
@@ -332,16 +369,23 @@ export function createSessionTracker({
         const oldest = entries.values().next().value;
         if (oldest !== undefined) finish(oldest);
       }
+      const memo = drawn.get(request.sessionId);
+      drawn.delete(request.sessionId);
       const entry: Entry = {
         ...request,
         startedAt: previous?.startedAt ?? request.startedAt ?? now(),
-        rendered: request.view === null ? '' : renderKey(request.view),
+        rendered:
+          request.view !== null
+            ? renderKey(request.view)
+            : memo?.messageId === request.messageId
+              ? memo.rendered
+              : '',
         timer: undefined,
         readFailures: 0,
         editFailures: 0,
       };
       entries.set(request.sessionId, entry);
-      arm(entry, firstPollMs);
+      arm(entry, request.view === null ? resumeSlot() : firstPollMs);
     },
     async stop() {
       stopping = true;
