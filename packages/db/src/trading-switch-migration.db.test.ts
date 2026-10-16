@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb } from './client';
 import { runMigrations } from './migrate';
 import { outboxEvents, tradeIntents } from './schema/index';
-import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
+import { createTempDatabase, type TempDatabase } from './testing';
 
 // S6 (#144): migration 0019 moves rows that carry real_trading_disabled to trading_paused before
 // it adds the CHECKs without the old value. The database is migrated to 0018 from a copy of the
@@ -54,7 +54,15 @@ describe('migration 0019', () => {
       [900_019],
     );
     const userId = rows[0]!.id;
-    const seed = { userId, brokerAccountId: await seedBrokerAccount(tmp.db, userId) };
+    // the account too: broker_accounts.service_since (#391) came after 0018 as well
+    const { rows: accounts } = await tmp.pool.query<{ id: string }>(
+      `insert into broker_accounts (user_id, broker_user_id, access_token_enc, refresh_token_enc,
+         token_key_id, access_token_expires_at, status)
+       values ($1, 'broker-0019', '\\x00'::bytea, '\\x00'::bytea, 'k1', now() + interval '1 hour', 'active')
+       returning id`,
+      [userId],
+    );
+    const seed = { userId, brokerAccountId: accounts[0]!.id };
     const [intent] = await tmp.db
       .insert(tradeIntents)
       .values({

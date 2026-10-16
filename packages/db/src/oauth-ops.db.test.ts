@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
   AuthRevokedReason,
+  BrokerAccountStatus,
   PostbackSource,
   type OAuthTokens,
 } from '@binarius/shared';
@@ -826,6 +827,43 @@ describe('linkBrokerAccount with activate (the email login, issue #162)', () => 
       }),
     ).toEqual({ ok: false, reason: 'user_blocked' });
     expect(await ledgerOf(user.userId)).toEqual([]);
+  });
+});
+
+describe('the service mark across a re-login (#391, Q5)', () => {
+  it('O11: an email re-login of a marked revoked account keeps the mark and makes it active', async () => {
+    const telegramUserId = 700_391n;
+    const tokens = brokerTokens();
+    const first = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: true,
+    });
+    if (!first.ok) throw new Error('the first link failed');
+    const markedAt = new Date('2026-10-01T00:00:00.000Z');
+    await tmp.db
+      .update(brokerAccounts)
+      .set({
+        serviceSince: markedAt,
+        status: BrokerAccountStatus.Revoked,
+        authRevokedReason: AuthRevokedReason.RefreshInvalidGrant,
+      })
+      .where(eq(brokerAccounts.id, first.account.id));
+
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: { ...tokens, refreshToken: 'refresh-after-revocation' },
+      cipher,
+      activate: true,
+    });
+    expect(again).toMatchObject({
+      ok: true,
+      account: { id: first.account.id, status: BrokerAccountStatus.Active },
+    });
+    const row = await brokerAccountRow(tmp.db, first.account.id);
+    expect(row.serviceSince).toEqual(markedAt);
+    expect(row.authRevokedReason).toBeNull();
   });
 });
 

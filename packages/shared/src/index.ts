@@ -13,6 +13,7 @@ export * from './broker-budget';
 export * from './trading-access';
 export * from './trading-mode';
 export * from './access-token';
+export * from './service-accounts';
 export * from './admin';
 export * from './admin-trading';
 export * from './ledger';

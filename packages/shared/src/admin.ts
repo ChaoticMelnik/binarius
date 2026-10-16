@@ -16,6 +16,7 @@ import {
   tokenLedgerRefTypeSchema,
 } from './ledger';
 import { decimalStringSchema } from './money';
+import { serviceAccountNotWorkingReasonSchema } from './service-accounts';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
 import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './trading';
 import { tokenBalanceViewSchema } from './trading-access';
@@ -284,6 +285,8 @@ export const adminBrokerAccountViewSchema = z.strictObject({
   tokenRotatedAt: isoDateTime.nullable(),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
+  // null = not a service account (#391)
+  serviceSince: isoDateTime.nullable(),
 });
 export type AdminBrokerAccountView = z.infer<typeof adminBrokerAccountViewSchema>;
 
@@ -621,6 +624,44 @@ export const adminBrokerAccountsResponseSchema = z.strictObject({
 });
 export type AdminBrokerAccountsResponse = z.infer<typeof adminBrokerAccountsResponseSchema>;
 
+// --- Service accounts (#391, docs/service-accounts.md) -------------------------------------------
+
+// Every marked account, working or not: the list is not paged (a handful by design).
+export const adminServiceAccountViewSchema = z.strictObject({
+  ...adminBrokerAccountListItemSchema.shape,
+  working: z.boolean(),
+  notWorkingReason: serviceAccountNotWorkingReasonSchema.nullable(),
+});
+export type AdminServiceAccountView = z.infer<typeof adminServiceAccountViewSchema>;
+
+export const adminServiceAccountsResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  min: z.number().int().positive(),
+  working: z.number().int().nonnegative(),
+  accounts: z.array(adminServiceAccountViewSchema),
+});
+export type AdminServiceAccountsResponse = z.infer<typeof adminServiceAccountsResponseSchema>;
+
+export const adminServiceMarkRequestSchema = z.strictObject({ service: z.boolean() });
+export type AdminServiceMarkRequest = z.infer<typeof adminServiceMarkRequestSchema>;
+
+// A re-mark keeps the first date and an unmark of an unmarked account changes nothing: both are
+// `unchanged`. An unknown id is a 404, not an outcome.
+export const AdminServiceMarkOutcome = {
+  Marked: 'marked',
+  Unmarked: 'unmarked',
+  Unchanged: 'unchanged',
+} as const;
+export type AdminServiceMarkOutcome =
+  (typeof AdminServiceMarkOutcome)[keyof typeof AdminServiceMarkOutcome];
+
+export const adminServiceMarkResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  outcome: z.enum(AdminServiceMarkOutcome),
+  account: adminBrokerAccountViewSchema,
+});
+export type AdminServiceMarkResponse = z.infer<typeof adminServiceMarkResponseSchema>;
+
 // --- Token adjustment (#246) --------------------------------------------------------------------
 
 // A signed whole number of tokens, never 0, within TOKEN_ADJUSTMENT_MAX_TOKENS. zod 4 runs the
@@ -729,3 +770,9 @@ export const safeParseAdminTokenAdjustmentRequest = (input: unknown) =>
   adminTokenAdjustmentRequestSchema.safeParse(input);
 export const safeParseAdminTokenAdjustmentResponse = (input: unknown) =>
   adminTokenAdjustmentResponseSchema.safeParse(input);
+export const safeParseAdminServiceAccountsResponse = (input: unknown) =>
+  adminServiceAccountsResponseSchema.safeParse(input);
+export const safeParseAdminServiceMarkRequest = (input: unknown) =>
+  adminServiceMarkRequestSchema.safeParse(input);
+export const safeParseAdminServiceMarkResponse = (input: unknown) =>
+  adminServiceMarkResponseSchema.safeParse(input);

@@ -191,6 +191,7 @@ export const SAMPLE_BROKER_ACCOUNT: AdminBrokerAccountView = {
   tokenRotatedAt: null,
   createdAt: AT,
   updatedAt: AT,
+  serviceSince: null,
 };
 
 export const SAMPLE_USER: AdminUserResponse = {

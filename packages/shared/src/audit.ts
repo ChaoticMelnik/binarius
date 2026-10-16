@@ -75,6 +75,10 @@ export const AuditAction = {
   // a Stars payment refunded, and a refund asked for from /paysupport (#118)
   StarsRefunded: 'stars_refunded',
   StarsRefundRequested: 'stars_refund_requested',
+  // admin service accounts (#391)
+  ServiceAccountsViewed: 'service_accounts_viewed',
+  BrokerAccountServiceSet: 'broker_account_service_set',
+  BrokerAccountServiceCleared: 'broker_account_service_cleared',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);
@@ -92,6 +96,7 @@ export const AuditEntityType = {
   User: 'user',
   TradeIntent: 'trade_intent',
   StarPayment: 'star_payment',
+  BrokerAccount: 'broker_account',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 export const auditEntityTypeSchema = z.enum(AuditEntityType);

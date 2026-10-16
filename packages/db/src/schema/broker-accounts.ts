@@ -47,6 +47,9 @@ export const brokerAccounts = pgTable(
     // exactly while the halt is, so lifting one means writing both
     tradingHalted: boolean('trading_halted').notNull().default(false),
     haltedReason: text('halted_reason').$type<AccountHaltReason>(),
+    // NULL = not a service account (#391, docs/service-accounts.md); else the mark's date, which
+    // also orders the service accounts for #404. The one writer is setServiceMark.
+    serviceSince: timestamp('service_since', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

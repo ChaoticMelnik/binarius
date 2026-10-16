@@ -48,6 +48,7 @@ import type {
 import * as accessToken from './access-token';
 import * as account from './account';
 import * as admin from './admin';
+import * as serviceAccounts from './service-accounts';
 import * as adminTrading from './admin-trading';
 import * as adminBotTexts from './admin-bot-texts';
 import * as broker from './broker';
@@ -539,6 +540,7 @@ describe('contract coverage (issue #6)', () => {
       botTextOverrides,
       exhaustive,
       httpBody,
+      serviceAccounts,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {
