@@ -3767,6 +3767,10 @@ describe('the service accounts (#391)', () => {
       '/admin/../x',
       '/admin/users/not-a-uuid',
       '/admin/broker-accounts?status=active',
+      '/ADMIN/SERVICE-ACCOUNTS',
+      '/admin/Broker-Accounts',
+      `/ADMIN/USERS/${SAMPLE_USER_ID}`,
+      `/admin/users/${SAMPLE_USER_ID}/x`,
       undefined,
     ]) {
       const response = await post(

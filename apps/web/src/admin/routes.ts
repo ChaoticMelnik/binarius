@@ -176,25 +176,28 @@ const resetFormOf = (body: unknown) => {
 
 // Only the body's shape (a field sent twice arrives as an array), then the shared schema: the
 // limit and the note's bounds live there, so web holds no second copy of them.
-// The service mark's form (#391): `return` is only ever one of the pages that carry the form.
-const serviceMarkForm = z.object({
-  service: z.enum(['on', 'off']),
-  return: z.string().optional(),
-});
-const SERVICE_RETURN_PATH = new RegExp(
-  `^/admin/(?:service-accounts|broker-accounts|users/${UUID_PATTERN.source.slice(1, -1)})$`,
-  'i',
-);
-// anything else — another site, a path with `..`, a query — goes back to the service page
-const returnPathOf = (value: string | undefined): string =>
-  value !== undefined && SERVICE_RETURN_PATH.test(value) ? value : SERVICE_ACCOUNTS_PATH;
-
 const adjustForm = z.object({
   direction: z.enum(['credit', 'debit']),
   amount: z.string().regex(/^[1-9]\d{0,18}$/),
   note: z.string(),
   balance: z.string().regex(/^\d{1,19}$/),
 });
+
+// The service mark's form (#391): `return` is only ever one of the pages that carry the form.
+const serviceMarkBody = z.object({
+  service: z.enum(['on', 'off']),
+  return: z.string().optional(),
+});
+const SERVICE_RETURN_PAGES: readonly string[] = [SERVICE_ACCOUNTS_PATH, '/admin/broker-accounts'];
+const USER_CARD_PREFIX = '/admin/users/';
+// anything else — another site, a path with `..`, a query, another letter case — goes back to the
+// service page
+const returnPathOf = (value: string | undefined): string =>
+  value !== undefined &&
+  (SERVICE_RETURN_PAGES.includes(value) ||
+    (value.startsWith(USER_CARD_PREFIX) && UUID_PATTERN.test(value.slice(USER_CARD_PREFIX.length))))
+    ? value
+    : SERVICE_ACCOUNTS_PATH;
 
 /**
  * A query string before its schema: a key whose value is the empty string is no key — an
@@ -1096,7 +1099,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       const { id } = request.params as { id: string };
       // a shape it cannot be never reaches the backend; the page shows what is there
       if (!UUID_PATTERN.test(id)) return reply.redirect(SERVICE_ACCOUNTS_PATH, 303);
-      const form = serviceMarkForm.safeParse(request.body);
+      const form = serviceMarkBody.safeParse(request.body);
       if (!form.success) {
         return sendHtml(
           reply,
