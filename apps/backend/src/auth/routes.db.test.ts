@@ -10,8 +10,8 @@ import {
   NotificationKind,
 } from '@binarius/shared';
 import {
-  LINK_BONUS_TOKENS,
   NotificationJobStatus,
+  bonusRules,
   brokerAccounts,
   createDb,
   createOAuthState,
@@ -22,7 +22,12 @@ import {
   tokenLedger,
   users,
 } from '@binarius/db';
-import { createTempDatabase, seedUser, type TempDatabase } from '@binarius/db/testing';
+import {
+  SEEDED_LINK_BONUS_TOKENS,
+  createTempDatabase,
+  seedUser,
+  type TempDatabase,
+} from '@binarius/db/testing';
 import { buildApp } from '../app';
 import {
   BrokerOAuthError,
@@ -781,13 +786,13 @@ describe('POST /auth/binodex/confirm', () => {
     expect(confirmLoginResponseSchema.parse(body)).toEqual(body);
     expect(body).toMatchObject({
       account: { id: account.id, status: 'active', isPartnerClient: true },
-      grant: { granted: true, tokens: LINK_BONUS_TOKENS.toString() },
+      grant: { granted: true, tokens: SEEDED_LINK_BONUS_TOKENS.toString() },
     });
     const [user] = await tmp.db
       .select({ balance: users.tokenBalance })
       .from(users)
       .where(eq(users.telegramUserId, BigInt(telegram)));
-    expect(user?.balance).toBe(LINK_BONUS_TOKENS);
+    expect(user?.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
   });
 
   it('pays nothing for the same user’s second partner account', async () => {
@@ -1323,7 +1328,7 @@ describe('POST /auth/binodex/email/login', () => {
     expect(Object.keys(body).sort()).toEqual(['account', 'grant']);
     expect(emailLoginResponseSchema.parse(body)).toMatchObject({
       account: { status: 'active', isPartnerClient: true, email },
-      grant: { granted: true, tokens: LINK_BONUS_TOKENS.toString() },
+      grant: { granted: true, tokens: SEEDED_LINK_BONUS_TOKENS.toString() },
     });
     expect(stub.lastEmailLoginBodyKeys).toContain('partner_code');
 
@@ -1331,12 +1336,12 @@ describe('POST /auth/binodex/email/login', () => {
     expect(row).toMatchObject({ status: 'active', authRevokedReason: null });
     expect(row?.refreshTokenHash).toMatch(/^[0-9a-f]{64}$/);
     const user = await userIdOf(telegramUserId);
-    expect(user?.balance).toBe(LINK_BONUS_TOKENS);
+    expect(user?.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
     const ledger = await tmp.db
       .select({ delta: tokenLedger.balanceDelta })
       .from(tokenLedger)
       .where(eq(tokenLedger.userId, user!.id));
-    expect(ledger).toEqual([{ delta: LINK_BONUS_TOKENS }]);
+    expect(ledger).toEqual([{ delta: SEEDED_LINK_BONUS_TOKENS }]);
   });
 
   it('signs an existing broker user in to the same account', async () => {
@@ -1400,7 +1405,7 @@ describe('POST /auth/binodex/email/login', () => {
     const second = await loginByEmail(telegramUserId, address('second'));
     expect(second.statusCode).toBe(200);
     expect(second.json().grant).toEqual({ granted: false, reason: 'already_granted' });
-    expect((await userIdOf(telegramUserId))?.balance).toBe(LINK_BONUS_TOKENS);
+    expect((await userIdOf(telegramUserId))?.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
   });
 
   it('maps a wrong code to 400 invalid_code and writes nothing', async () => {
@@ -1567,5 +1572,127 @@ describe('the email login logs', () => {
     const all = lines.join('\n');
     expect(all).not.toContain('MARKER-ADDRESS');
     expect(all).not.toContain('MARKER-CODE');
+  });
+});
+
+// #13: the pack is the active link_bonus version's. These cases swap that version and put it back,
+// so they run last and each restores v1 as the only active one.
+describe('the starter pack rule', () => {
+  const confirm = (payload: unknown, instance: ReturnType<typeof testApp>) =>
+    postJson(instance, '/auth/binodex/confirm', payload, { authorization: `Bearer ${TOKEN}` });
+  // two statements: bonus_rules_active_code_idx is checked row by row, so one UPDATE cannot swap
+  const setActive = async (version: number | null) => {
+    await tmp.pool.query(`update bonus_rules set is_active = false where code = 'link_bonus'`);
+    if (version === null) return;
+    await tmp.pool.query(
+      `update bonus_rules set is_active = true where code = 'link_bonus' and version = $1`,
+      [version],
+    );
+  };
+  const pendingPartner = async () => {
+    const telegram = telegramId();
+    const { response } = await login(telegram, `broker-${telegram}-${++seq}`, true);
+    const { account } = response.json() as { account: { id: string } };
+    return { telegram, accountId: account.id };
+  };
+  const ledgerRows = async (telegram: string) => {
+    const user = await userIdOf(telegram);
+    return tmp.db
+      .select({ id: tokenLedger.id })
+      .from(tokenLedger)
+      .where(eq(tokenLedger.userId, user!.id));
+  };
+  const withLogs = async (run: (instance: ReturnType<typeof testApp>) => Promise<void>) => {
+    const lines: string[] = [];
+    const instance = await own({}, { write: (line: string) => void lines.push(line) });
+    try {
+      await run(instance);
+    } finally {
+      await instance.close();
+    }
+    return lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  };
+
+  it('links without a pack and warns when no link_bonus version is active (confirm)', async () => {
+    const { telegram, accountId } = await pendingPartner();
+    await setActive(null);
+    try {
+      let body: unknown;
+      const logs = await withLogs(async (instance) => {
+        const response = await confirm({ telegramUserId: telegram, accountId }, instance);
+        expect(response.statusCode).toBe(200);
+        body = response.json();
+      });
+      expect(body).toMatchObject({
+        account: { id: accountId, status: 'active' },
+        grant: { granted: false, reason: 'no_active_rule' },
+      });
+      const user = await userIdOf(telegram);
+      expect(user?.balance).toBe(0n);
+      expect(await ledgerRows(telegram)).toEqual([]);
+      const warns = logs.filter((line) => line.msg === 'link_bonus_no_active_rule');
+      expect(warns).toEqual([
+        expect.objectContaining({ level: 40, userId: user!.id, brokerAccountId: accountId }),
+      ]);
+    } finally {
+      await setActive(1);
+    }
+  });
+
+  it('links without a pack and warns when no link_bonus version is active (email)', async () => {
+    const telegramUserId = telegramId();
+    await setActive(null);
+    try {
+      let body: Record<string, unknown> = {};
+      const logs = await withLogs(async (instance) => {
+        const response = await loginByEmail(telegramUserId, address('norule'), instance);
+        expect(response.statusCode).toBe(200);
+        body = response.json();
+      });
+      expect(body.grant).toEqual({ granted: false, reason: 'no_active_rule' });
+      const user = await userIdOf(telegramUserId);
+      expect(user?.balance).toBe(0n);
+      const warns = logs.filter((line) => line.msg === 'link_bonus_no_active_rule');
+      expect(warns).toEqual([
+        expect.objectContaining({
+          level: 40,
+          userId: user!.id,
+          brokerAccountId: (body.account as { id: string }).id,
+        }),
+      ]);
+    } finally {
+      await setActive(1);
+    }
+  });
+
+  it('refuses the activation and logs the rule by name and code when its params do not parse', async () => {
+    const { telegram, accountId } = await pendingPartner();
+    // a JSON number, not a decimal string: refused by the params schema, never rounded
+    await tmp.db.insert(bonusRules).values({
+      code: 'link_bonus',
+      version: 2,
+      kind: 'link_bonus',
+      params: { tokens: 150 },
+    });
+    await setActive(2);
+    try {
+      const logs = await withLogs(async (instance) => {
+        const response = await confirm({ telegramUserId: telegram, accountId }, instance);
+        expect(response.statusCode).toBe(500);
+        expect(response.json()).toEqual({ error: 'internal' });
+      });
+      const [row] = await tmp.db
+        .select({ status: brokerAccounts.status })
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, accountId));
+      expect(row?.status).toBe('pending');
+      expect(await ledgerRows(telegram)).toEqual([]);
+      const errors = logs.filter((line) => line.msg === 'unhandled request error');
+      expect(errors).toEqual([
+        expect.objectContaining({ err: { name: 'InvalidBonusRule', code: 'link_bonus' } }),
+      ]);
+    } finally {
+      await setActive(1);
+    }
   });
 });

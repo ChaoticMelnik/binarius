@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { createDb, type Db } from './client';
 import { runMigrations } from './migrate';
 import {
+  BonusRuleKind,
   BrokerAccountStatus,
   TradeAction,
   type AccountHaltReason,
@@ -15,7 +16,7 @@ import {
   type TradingSessionSettings,
   TradingSwitchSource,
 } from '@binarius/shared';
-import { brokerAccounts, staff, tradingSessions, users } from './schema/index';
+import { bonusRules, brokerAccounts, staff, tradingSessions, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
 import { hashPassword, type ScryptParams } from './staff-password';
 import type { BrokerAccountRow } from './oauth-ops';
@@ -23,6 +24,7 @@ import {
   createTradeIntent,
   markIntentUnknown,
   takeIntent,
+  type DbExecutor,
   type TradeIntentRow,
 } from './trade-intent-ops';
 import { tradingSwitch } from './schema/trading-switch';
@@ -360,4 +362,41 @@ export async function lockWaiters(db: Db): Promise<number> {
     sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
   );
   return rows[0]?.n ?? 0;
+}
+
+// --- Bonus rules (#13) ------------------------------------------------------------------------
+
+// what migration 0059 seeds as link_bonus v1: the amount the hard-coded constant used to hold
+export const SEEDED_LINK_BONUS_TOKENS = 100n;
+
+export interface BonusRuleRef {
+  bonusRuleId: string;
+  bonusRuleKind: BonusRuleKind;
+}
+
+// The columns a fixture's bonus row needs (token_ledger_bonus_rule_check): a starter pack names
+// link_bonus v1 from the seed, a deposit bonus a deposit_bonus version, which no seed provides,
+// so the first call in a database inserts one (inactive: no grant path reads it).
+export async function bonusRuleRef(
+  db: DbExecutor,
+  kind: typeof BonusRuleKind.LinkBonus | typeof BonusRuleKind.DepositBonus,
+): Promise<BonusRuleRef> {
+  const [existing] = await db
+    .select({ id: bonusRules.id })
+    .from(bonusRules)
+    .where(and(eq(bonusRules.code, kind), eq(bonusRules.kind, kind)))
+    .orderBy(asc(bonusRules.version))
+    .limit(1);
+  if (existing !== undefined) return { bonusRuleId: existing.id, bonusRuleKind: kind };
+  const [row] = await db
+    .insert(bonusRules)
+    .values({
+      code: kind,
+      version: 1,
+      kind,
+      params: { tokensPerUsd: '1', minAmountUsd: '0', maxTokens: '100' },
+    })
+    .returning({ id: bonusRules.id });
+  if (row === undefined) throw new Error('bonusRuleRef: insert returned no row');
+  return { bonusRuleId: row.id, bonusRuleKind: kind };
 }

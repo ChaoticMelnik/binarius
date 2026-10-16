@@ -13,13 +13,13 @@ import {
   openTradeFor,
 } from '@binarius/shared/testing';
 import {
+  SEEDED_LINK_BONUS_TOKENS,
   createTempDatabase,
   intentRequest,
   seedBrokerAccount,
   seedUser,
   type TempDatabase,
 } from './testing';
-import { LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
 import { tokenLedger, users } from './schema/index';
 import { adjustTokens } from './token-adjustment-ops';
@@ -246,7 +246,7 @@ describe('readTokenBalance', () => {
     });
     expect(result).toMatchObject({ ok: true, grant: { granted: true } });
 
-    expect(await read(user)).toMatchObject({ balance: LINK_BONUS_TOKENS, reserved: 0n });
+    expect(await read(user)).toMatchObject({ balance: SEEDED_LINK_BONUS_TOKENS, reserved: 0n });
     await expectCacheEqualsLedger(user);
   });
 

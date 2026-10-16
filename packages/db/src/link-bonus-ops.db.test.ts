@@ -1,10 +1,16 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BrokerAccountStatus, UserStatus, linkBonusGrantViewSchema } from '@binarius/shared';
-import { createTempDatabase, seedBrokerAccount, seedUser, type TempDatabase } from './testing';
-import { LINK_BONUS_RULE_CODE, LINK_BONUS_TOKENS, toLinkBonusGrantView } from './link-bonus-ops';
+import {
+  SEEDED_LINK_BONUS_TOKENS,
+  createTempDatabase,
+  seedBrokerAccount,
+  seedUser,
+  type TempDatabase,
+} from './testing';
+import { LINK_BONUS_RULE_CODE, toLinkBonusGrantView } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
-import { brokerAccounts, tokenLedger, users } from './schema/index';
+import { bonusRules, brokerAccounts, tokenLedger, users } from './schema/index';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -14,8 +20,14 @@ if (baseUrl === undefined || baseUrl === '') {
 }
 
 let tmp: TempDatabase;
+let seededRuleId: string;
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
+  const [rule] = await tmp.db
+    .select({ id: bonusRules.id })
+    .from(bonusRules)
+    .where(and(eq(bonusRules.code, LINK_BONUS_RULE_CODE), eq(bonusRules.version, 1)));
+  seededRuleId = rule!.id;
 });
 afterAll(() => tmp.drop());
 
@@ -46,6 +58,8 @@ async function ledgerOf(userId: string) {
       reservedDelta: tokenLedger.reservedDelta,
       brokerAccountId: tokenLedger.brokerAccountId,
       note: tokenLedger.note,
+      bonusRuleId: tokenLedger.bonusRuleId,
+      bonusRuleKind: tokenLedger.bonusRuleKind,
     })
     .from(tokenLedger)
     .where(eq(tokenLedger.userId, userId));
@@ -58,22 +72,27 @@ async function ledgerOf(userId: string) {
 }
 
 describe('the starter pack', () => {
-  it('pays LINK_BONUS_TOKENS once, on the confirm that activates a partner account', async () => {
+  it('pays the link_bonus v1 tokens once, on the confirm that activates a partner account', async () => {
     const user = await userWithPending(true);
     const result = await confirm(user, user.accounts[0]!);
-    expect(result).toMatchObject({ ok: true, grant: { granted: true, tokens: LINK_BONUS_TOKENS } });
+    expect(result).toMatchObject({
+      ok: true,
+      grant: { granted: true, tokens: SEEDED_LINK_BONUS_TOKENS },
+    });
 
     const ledger = await ledgerOf(user.userId);
     expect(ledger.rows).toEqual([
       {
         kind: 'bonus',
-        balanceDelta: LINK_BONUS_TOKENS,
+        balanceDelta: SEEDED_LINK_BONUS_TOKENS,
         reservedDelta: 0n,
         brokerAccountId: user.accounts[0],
-        note: LINK_BONUS_RULE_CODE,
+        note: null,
+        bonusRuleId: seededRuleId,
+        bonusRuleKind: 'link_bonus',
       },
     ]);
-    expect(ledger.balance).toBe(LINK_BONUS_TOKENS);
+    expect(ledger.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
     expect(ledger.sum).toBe(ledger.balance);
   });
 
@@ -89,7 +108,7 @@ describe('the starter pack', () => {
 
     const ledger = await ledgerOf(user.userId);
     expect(ledger.rows).toHaveLength(1);
-    expect(ledger.balance).toBe(LINK_BONUS_TOKENS);
+    expect(ledger.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
     expect(ledger.sum).toBe(ledger.balance);
   });
 
@@ -109,7 +128,7 @@ describe('the starter pack', () => {
     expect(second).toMatchObject({ ok: true, grant: { granted: true } });
     const after = await ledgerOf(user.userId);
     expect(after.rows.map((row) => row.brokerAccountId)).toEqual([user.accounts[1]]);
-    expect(after.balance).toBe(LINK_BONUS_TOKENS);
+    expect(after.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
     expect(after.sum).toBe(after.balance);
   });
 
@@ -122,7 +141,7 @@ describe('the starter pack', () => {
 
     const ledger = await ledgerOf(user.userId);
     expect(ledger.rows).toHaveLength(1);
-    expect(ledger.balance).toBe(LINK_BONUS_TOKENS);
+    expect(ledger.balance).toBe(SEEDED_LINK_BONUS_TOKENS);
     expect(ledger.sum).toBe(ledger.balance);
   });
 
@@ -155,6 +174,10 @@ describe('toLinkBonusGrantView', () => {
     [
       { granted: false, reason: 'already_granted' } as const,
       { granted: false, reason: 'already_granted' },
+    ],
+    [
+      { granted: false, reason: 'no_active_rule' } as const,
+      { granted: false, reason: 'no_active_rule' },
     ],
   ])('puts %o on the wire as %o', (grant, wire) => {
     const view = toLinkBonusGrantView(grant);

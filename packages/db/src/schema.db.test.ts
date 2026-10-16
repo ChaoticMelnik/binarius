@@ -12,6 +12,7 @@ import {
 import { createDb, type Db } from './client';
 import {
   auditLog,
+  bonusRules,
   botTextOverrides,
   brokerAccounts,
   brokerBalanceSnapshots,
@@ -42,6 +43,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { STAFF_LOGIN_CORPUS } from '@binarius/shared/testing';
+import { bonusRuleRef } from './testing';
 // Integration tests: a migrated Postgres named by TEST_DATABASE_URL (README → Test database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
 // transaction after its first error, so every case expects exactly one error code.
@@ -263,7 +265,7 @@ describe('enum and uniqueness constraints', () => {
       'bonus_rules_validity_check',
       (tx: Tx) =>
         tx.execute(
-          sql`insert into bonus_rules (code, kind, valid_from, valid_to) values ('c', 'k', now(), now() - interval '1 day')`,
+          sql`insert into bonus_rules (code, version, kind, valid_from, valid_to) values ('c', 1, 'link_bonus', now(), now() - interval '1 day')`,
         ),
     ],
     [
@@ -480,7 +482,14 @@ describe('enum and uniqueness constraints', () => {
   });
 
   it.each([
-    ['bonus_rules_code_idx', sql`insert into bonus_rules (code, kind) values ('dup', 'k')`],
+    [
+      'bonus_rules_code_version_key',
+      sql`insert into bonus_rules (code, version, kind) values ('dup', 1, 'link_bonus')`,
+    ],
+    [
+      'bonus_rules_active_code_idx',
+      sql`insert into bonus_rules (code, version, kind, is_active) values ('dup', (select coalesce(max(version), 0) + 1 from bonus_rules where code = 'dup'), 'link_bonus', true)`,
+    ],
     [
       // the second trader id does not matter: one deposit per payment of a source
       'deposit_events_source_payment_idx',
@@ -530,6 +539,7 @@ describe('enum and uniqueness constraints', () => {
   // coverage set only once that assertion has passed
   it('keeps the composite FK targets in place', async () => {
     const expected = [
+      'bonus_rules_id_kind_key',
       'broker_accounts_id_broker_user_id_key',
       'broker_accounts_id_user_id_key',
       'deposit_events_id_user_key',
@@ -1011,7 +1021,13 @@ describe('users and token_ledger', () => {
       });
       const [bonus] = await tx
         .insert(tokenLedger)
-        .values({ userId: seed.userId, kind: 'bonus', balanceDelta: 100n, depositEventId: deposit })
+        .values({
+          userId: seed.userId,
+          kind: 'bonus',
+          balanceDelta: 100n,
+          depositEventId: deposit,
+          ...(await bonusRuleRef(tx, 'deposit_bonus')),
+        })
         .returning({ id: tokenLedger.id });
       expect(bonus!.id).toBeDefined();
     });
@@ -1024,7 +1040,14 @@ describe('users and token_ledger', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const deposit = await seedDeposit(tx, seed);
-      const row = { userId: seed.userId, kind, balanceDelta: delta, depositEventId: deposit };
+      const rule = kind === 'bonus' ? await bonusRuleRef(tx, 'deposit_bonus') : {};
+      const row = {
+        userId: seed.userId,
+        kind,
+        balanceDelta: delta,
+        depositEventId: deposit,
+        ...rule,
+      };
       await tx.insert(tokenLedger).values(row);
       await rejectsWith(
         tx.insert(tokenLedger).values(row),
@@ -1089,12 +1112,16 @@ describe('users and token_ledger', () => {
           : other === 'deposit'
             ? { depositEventId: await seedDeposit(tx, seed) }
             : {};
+      // a bonus names a valid rule, so token_ledger_bonus_rule_check (which runs first, by name)
+      // passes and the reference check is the one that refuses
+      const rule = values.kind === 'bonus' ? await bonusRuleRef(tx, 'link_bonus') : {};
       await rejectsWith(
         tx.insert(tokenLedger).values({
           userId: seed.userId,
           brokerAccountId: seed.accountId,
           ...reference,
           ...values,
+          ...rule,
         }),
         '23514',
         'token_ledger_reference_check',
@@ -1115,6 +1142,7 @@ describe('users and token_ledger', () => {
           kind: 'bonus',
           balanceDelta: 10n,
           brokerAccountId: accountOf(other),
+          ...(await bonusRuleRef(tx, 'link_bonus')),
         }),
         '23503',
         'token_ledger_account_owner_fk',
@@ -1136,10 +1164,14 @@ describe('users and token_ledger', () => {
           accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
         })
         .returning({ id: brokerAccounts.id });
-      const pack = { userId: seed.userId, kind: 'bonus' as const, balanceDelta: 10n };
+      const link = await bonusRuleRef(tx, 'link_bonus');
+      const pack = { userId: seed.userId, kind: 'bonus' as const, balanceDelta: 10n, ...link };
       await tx.insert(tokenLedger).values({ ...pack, brokerAccountId: seed.accountId });
-      await tx.insert(tokenLedger).values({ ...pack, depositEventId: await seedDeposit(tx, seed) });
-      await tx.insert(tokenLedger).values(pack);
+      await tx.insert(tokenLedger).values({
+        ...pack,
+        ...(await bonusRuleRef(tx, 'deposit_bonus')),
+        depositEventId: await seedDeposit(tx, seed),
+      });
       await rejectsWith(
         tx.insert(tokenLedger).values({ ...pack, brokerAccountId: second!.id }),
         '23505',
@@ -1225,7 +1257,13 @@ describe('token_ledger_adjustment_note_check (#246)', () => {
   it('leaves the note of every other kind optional', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
-      await tx.insert(tokenLedger).values({ userId: seed.userId, kind: 'bonus', balanceDelta: 1n });
+      await tx.insert(tokenLedger).values({
+        userId: seed.userId,
+        kind: 'bonus',
+        balanceDelta: 1n,
+        brokerAccountId: seed.accountId,
+        ...(await bonusRuleRef(tx, 'link_bonus')),
+      });
     });
   });
 });
@@ -3639,7 +3677,7 @@ describe('token_ledger: the Stars purchase (#117)', () => {
     ['a purchase with a Stars payment and an intent', 'purchase', ['intent']],
     ['a purchase with a Stars payment and a manual reference', 'purchase', ['ref']],
     ['a reserve naming a Stars payment', 'reserve', ['intent']],
-    ['a bonus naming a Stars payment', 'bonus', []],
+    ['a bonus naming a Stars payment', 'bonus', ['account']],
     ['an adjustment naming a Stars payment', 'adjustment', []],
   ] as const)('rejects %s', async (_label, kind, extras) => {
     await rolledBack(async (tx) => {
@@ -3651,6 +3689,7 @@ describe('token_ledger: the Stars purchase (#117)', () => {
         starPaymentId: payment,
         ...(kind === 'reserve' ? { reservedDelta: 1n } : { balanceDelta: 10n }),
         ...(kind === 'adjustment' ? { note: 'n' } : {}),
+        ...(kind === 'bonus' ? await bonusRuleRef(tx, 'link_bonus') : {}),
       };
       for (const extra of extras) {
         if (extra === 'deposit') values.depositEventId = await seedDeposit(tx, seed);
@@ -3877,6 +3916,225 @@ describe('token_ledger: the Stars refund (#118)', () => {
         tx.insert(tokenLedger).values(values as typeof tokenLedger.$inferInsert),
         '23514',
         'token_ledger_reference_check',
+      );
+    });
+  });
+});
+
+// --- bonus rules (#13) ---------------------------------------------------------------------------
+
+// the bonus_rules triggers raise like raise_append_only, with no `constraint` field either
+async function rejectsAsImmutable(
+  query: Promise<unknown>,
+  trigger: 'bonus_rules_immutable' | 'bonus_rules_no_delete' | 'bonus_rules_no_truncate',
+) {
+  const error = await query.then(
+    () => undefined,
+    (thrown: unknown) => thrown,
+  );
+  expect(error, `expected ${trigger} to refuse but nothing was thrown`).toBeDefined();
+  expect(caught(error)).toMatchObject({
+    code: 'P0001',
+    message: 'bonus_rules rows are immutable',
+  });
+  observed.add(trigger);
+}
+
+async function seedRule(tx: Tx, patch: Partial<typeof bonusRules.$inferInsert> = {}) {
+  const [row] = await tx
+    .insert(bonusRules)
+    .values({
+      code: `rule-${++seq}`,
+      version: 1,
+      kind: 'link_bonus',
+      params: { tokens: '5' },
+      ...patch,
+    })
+    .returning();
+  return row!;
+}
+
+describe('bonus_rules (#13)', () => {
+  it.each([
+    ['id', sql`id = gen_random_uuid()`],
+    ['code', sql`code = code || '-x'`],
+    ['version', sql`version = version + 1`],
+    ['kind', sql`kind = 'deposit_bonus'`],
+    ['priority', sql`priority = priority + 1`],
+    ['params', sql`params = '{"tokens": "6"}'::jsonb`],
+    ['created_at', sql`created_at = created_at - interval '1 second'`],
+  ])('refuses an UPDATE of %s', async (_column, assignment) => {
+    await rolledBack(async (tx) => {
+      const rule = await seedRule(tx);
+      await rejectsAsImmutable(
+        tx.execute(sql`update bonus_rules set ${assignment} where id = ${rule.id}`),
+        'bonus_rules_immutable',
+      );
+    });
+  });
+
+  it.each([
+    ['is_active', sql`is_active = not is_active`],
+    ['valid_from', sql`valid_from = now() - interval '1 day'`],
+    ['valid_to', sql`valid_to = now() + interval '1 day'`],
+    ['updated_at', sql`updated_at = now() + interval '1 second'`],
+    ['params to itself', sql`params = params`],
+  ])('allows an UPDATE of %s', async (_column, assignment) => {
+    await rolledBack(async (tx) => {
+      const rule = await seedRule(tx);
+      const result = await tx.execute(
+        sql`update bonus_rules set ${assignment} where id = ${rule.id}`,
+      );
+      expect(result.rowCount).toBe(1);
+    });
+  });
+
+  it('refuses DELETE and TRUNCATE', async () => {
+    await rolledBack(async (tx) => {
+      const rule = await seedRule(tx);
+      await rejectsAsImmutable(
+        tx.delete(bonusRules).where(eq(bonusRules.id, rule.id)),
+        'bonus_rules_no_delete',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await rejectsAsImmutable(
+        tx.execute(sql`truncate bonus_rules cascade`),
+        'bonus_rules_no_truncate',
+      );
+    });
+  });
+
+  it.each([
+    ['version 0', { version: 0 }, '23514', 'bonus_rules_version_check'],
+    ['an unknown kind', { kind: 'promo' as never }, '23514', 'bonus_rules_kind_check'],
+  ])('refuses %s', async (_label, patch, code, constraint) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(seedRule(tx, patch), code, constraint);
+    });
+  });
+
+  it('refuses a NULL version', async () => {
+    await rolledBack(async (tx) => {
+      const error = await tx
+        .execute(
+          sql`insert into bonus_rules (code, version, kind) values ('null-version', null, 'link_bonus')`,
+        )
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'version' });
+    });
+  });
+
+  it('defaults a new version to inactive', async () => {
+    await rolledBack(async (tx) => {
+      const rule = await seedRule(tx);
+      expect(rule.isActive).toBe(false);
+    });
+  });
+});
+
+describe('token_ledger: the rule a bonus names (#13)', () => {
+  const seededRule = async (tx: Tx, code: string) => {
+    const [row] = await tx
+      .select({ id: bonusRules.id })
+      .from(bonusRules)
+      .where(sql`${bonusRules.code} = ${code} and ${bonusRules.version} = 1`);
+    return row!.id;
+  };
+
+  it('accepts a starter pack under link_bonus and a deposit bonus under deposit_bonus', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await tx.insert(tokenLedger).values({
+        userId: seed.userId,
+        kind: 'bonus',
+        balanceDelta: 10n,
+        brokerAccountId: seed.accountId,
+        ...(await bonusRuleRef(tx, 'link_bonus')),
+      });
+      await tx.insert(tokenLedger).values({
+        userId: seed.userId,
+        kind: 'bonus',
+        balanceDelta: 10n,
+        depositEventId: await seedDeposit(tx, seed),
+        ...(await bonusRuleRef(tx, 'deposit_bonus')),
+      });
+    });
+  });
+
+  it.each([
+    ['a starter pack naming no rule', 'pack', {}],
+    ['a starter pack with a rule id and a NULL kind', 'pack', { kind: null }],
+    ['a starter pack under a referral_reward rule', 'pack', { code: 'referral_reward' }],
+    ['a starter pack under a deposit_bonus rule', 'pack', { code: 'deposit_bonus' }],
+    ['a deposit bonus under a link_bonus rule', 'deposit', { code: 'link_bonus' }],
+    ['a deposit bonus naming no rule', 'deposit', {}],
+    ['a bonus naming nothing (a promo)', 'none', { code: 'link_bonus' }],
+    ['an adjustment naming a rule', 'adjustment', { code: 'link_bonus' }],
+    ['a purchase naming a rule', 'purchase', { code: 'link_bonus' }],
+    ['a reserve naming a rule', 'reserve', { code: 'link_bonus' }],
+    ['an adjustment naming only a rule kind', 'adjustment', { kindOnly: true }],
+  ] as const)('refuses %s', async (_label, shape, rule) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const values: Record<string, unknown> = { userId: seed.userId, balanceDelta: 10n };
+      if (shape === 'pack') {
+        Object.assign(values, { kind: 'bonus', brokerAccountId: seed.accountId });
+      }
+      if (shape === 'deposit') {
+        Object.assign(values, { kind: 'bonus', depositEventId: await seedDeposit(tx, seed) });
+      }
+      if (shape === 'none') values.kind = 'bonus';
+      if (shape === 'adjustment') Object.assign(values, { kind: 'adjustment', note: 'n' });
+      if (shape === 'purchase') {
+        Object.assign(values, { kind: 'purchase', depositEventId: await seedDeposit(tx, seed) });
+      }
+      if (shape === 'reserve') {
+        const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
+        Object.assign(values, {
+          kind: 'reserve',
+          balanceDelta: 0n,
+          reservedDelta: 1n,
+          intentId: row!.id,
+        });
+      }
+      if ('code' in rule) {
+        const ref =
+          rule.code === 'deposit_bonus'
+            ? await bonusRuleRef(tx, 'deposit_bonus')
+            : { bonusRuleId: await seededRule(tx, rule.code), bonusRuleKind: rule.code };
+        Object.assign(values, ref);
+      }
+      if ('kind' in rule) {
+        Object.assign(values, { ...(await bonusRuleRef(tx, 'link_bonus')), bonusRuleKind: null });
+      }
+      if ('kindOnly' in rule) values.bonusRuleKind = 'link_bonus';
+      await rejectsWith(
+        tx.insert(tokenLedger).values(values as typeof tokenLedger.$inferInsert),
+        '23514',
+        'token_ledger_bonus_rule_check',
+      );
+    });
+  });
+
+  // the CHECK pins the kind the reference requires; the FK pins that the named rule is of it
+  it('refuses a starter pack naming a referral_reward rule labelled link_bonus', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tokenLedger).values({
+          userId: seed.userId,
+          kind: 'bonus',
+          balanceDelta: 10n,
+          brokerAccountId: seed.accountId,
+          bonusRuleId: await seededRule(tx, 'referral_reward'),
+          bonusRuleKind: 'link_bonus',
+        }),
+        '23503',
+        'token_ledger_bonus_rule_fk',
       );
     });
   });

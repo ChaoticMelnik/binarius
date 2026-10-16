@@ -21,7 +21,9 @@ import {
 import type { Db } from './client';
 import { depositEvents, tokenLedger } from './schema/index';
 import {
+  bonusRuleRef,
   createTempDatabase,
+  seedBrokerAccount,
   seedQueuedIntent,
   seedUser,
   seedUserWithAccount,
@@ -58,10 +60,10 @@ const list = (
     listLedgerForAdmin(tx, { filters: {}, limit: ADMIN_PAGE_SIZE, ...options }),
   );
 
-// Written directly, bypassing adjustTokens: these suites test the reads, and a bonus naming
-// nothing still has no writer (#13); neither needs a reference. created_at is explicit — two
-// inserts in one transaction would share now(). These rows do not move the users cache; the
-// databases are temporary.
+// Written directly, bypassing adjustTokens: these suites test the reads. A bonus is a deposit bonus
+// on a deposit of its own, since token_ledger_bonus_rule_check refuses one naming nothing (#13),
+// so a user may hold several. created_at is explicit — two inserts in one transaction would share
+// now(). These rows do not move the users cache; the databases are temporary.
 async function insertEntry(
   db: Db,
   row: {
@@ -72,9 +74,11 @@ async function insertEntry(
     secondsAgo: number;
   },
 ): Promise<string> {
+  const bonus = row.kind === TokenLedgerKind.Bonus ? await depositBonusOf(db, row.userId) : {};
   const [inserted] = await db
     .insert(tokenLedger)
     .values({
+      ...bonus,
       userId: row.userId,
       kind: row.kind,
       balanceDelta: row.balanceDelta ?? 1n,
@@ -86,6 +90,25 @@ async function insertEntry(
     .returning({ id: tokenLedger.id });
   if (inserted === undefined) throw new Error('insertEntry: insert returned no row');
   return inserted.id;
+}
+
+let depositSeq = 0;
+async function depositBonusOf(db: Db, userId: string) {
+  const brokerUserId = `ledger-trader-${++depositSeq}`;
+  const brokerAccountId = await seedBrokerAccount(db, userId, { brokerUserId });
+  const [deposit] = await db
+    .insert(depositEvents)
+    .values({
+      source: PostbackSource.Binodex,
+      userId,
+      brokerAccountId,
+      brokerUserId,
+      paymentId: `ledger-pay-${depositSeq}`,
+      amount: '10' as DecimalString,
+    })
+    .returning({ id: depositEvents.id });
+  if (deposit === undefined) throw new Error('depositBonusOf: insert returned no row');
+  return { depositEventId: deposit.id, ...(await bonusRuleRef(db, 'deposit_bonus')) };
 }
 
 describe('listLedgerForAdmin — pages', () => {

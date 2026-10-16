@@ -403,6 +403,7 @@ describe('texts', () => {
       ['granted', { granted: true, tokens: TOKENS }],
       ['not partner', { granted: false, reason: 'not_partner_client' }],
       ['already', { granted: false, reason: 'already_granted' }],
+      ['no active rule', { granted: false, reason: 'no_active_rule' }],
       ['unknown', null],
     ];
     const VARIANTS: readonly [string, AccountCardInput][] = GRANTS.flatMap(([label, grant]) => [
@@ -455,6 +456,13 @@ describe('texts', () => {
       const unknown = card(null);
       expect(unknown).not.toMatch(/🎁|ℹ️/u);
       expect(unknown.endsWith(plainTextOf(TEXTS.cardBody(context)))).toBe(true);
+    });
+
+    // #13: the owner turned the pack off, so the card is the one without a bonus line
+    it('says nothing about a pack when no link_bonus rule is active', () => {
+      const context = { firstName: 'Ada', email: null };
+      const card = accountCard({ ...context, grant: { granted: false, reason: 'no_active_rule' } });
+      expect(card.value).toBe(accountCard({ ...context, grant: null }).value);
     });
 
     // the Bot API guarantees a first name non-empty, not non-blank

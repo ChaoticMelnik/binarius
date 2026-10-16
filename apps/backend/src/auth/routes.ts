@@ -6,6 +6,7 @@ import {
   BrokerAccountStatus,
   errorIdentity,
   errorLogFields,
+  LinkBonusSkipReason,
   OAUTH_CALLBACK_BODY_LIMIT_BYTES,
   OAuthErrorCode,
   safeParseConfirmLoginRequest,
@@ -21,7 +22,9 @@ import {
   linkBrokerAccount,
   toBrokerAccountView,
   toLinkBonusGrantView,
+  type BrokerAccountRow,
   type Db,
+  type LinkBonusGrant,
   type TokenCipher,
 } from '@binarius/db';
 import {
@@ -132,6 +135,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
               : OAuthErrorCode.AccountNotPending,
         });
       }
+      warnIfNoActiveRule(request.log, confirmed.account, confirmed.grant);
       return reply.send({
         account: toBrokerAccountView(confirmed.account),
         grant: toLinkBonusGrantView(confirmed.grant),
@@ -238,6 +242,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
           });
         }
         if (linked.grant === null) throw new Error('an activating link returned no grant');
+        warnIfNoActiveRule(request.log, linked.account, linked.grant);
         return reply.send({
           account: toBrokerAccountView(linked.account),
           grant: toLinkBonusGrantView(linked.grant),
@@ -390,4 +395,15 @@ function brokerOutcome(
     default:
       return { status: 502, code: OAuthErrorCode.BrokerUnavailable };
   }
+}
+
+// The account is linked either way; the line is how the owner sees that packs stopped because no
+// link_bonus version is active (#13, docs/bonus-rules.md). Not an error: nothing failed.
+function warnIfNoActiveRule(
+  log: FastifyBaseLogger,
+  account: BrokerAccountRow,
+  grant: LinkBonusGrant,
+): void {
+  if (grant.granted || grant.reason !== LinkBonusSkipReason.NoActiveRule) return;
+  log.warn({ userId: account.userId, brokerAccountId: account.id }, 'link_bonus_no_active_rule');
 }

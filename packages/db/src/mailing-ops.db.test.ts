@@ -13,6 +13,7 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
+  bonusRuleRef,
   createTempDatabase,
   intentRequest,
   lockWaiters,
@@ -31,7 +32,6 @@ import {
   users,
 } from './schema/index';
 import { createTradeIntent } from './trade-intent-ops';
-import { LINK_BONUS_RULE_CODE } from './link-bonus-ops';
 import { markTelegramBlocked, setNotificationLevel } from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
 import {
@@ -84,7 +84,7 @@ async function linked(minutes: number): Promise<Linked> {
       kind: TokenLedgerKind.Bonus,
       balanceDelta: 100n,
       brokerAccountId: accountId,
-      note: LINK_BONUS_RULE_CODE,
+      ...(await bonusRuleRef(tmp.db, 'link_bonus')),
       createdAt: sql`now() - make_interval(mins => ${minutes})`,
     })
     .returning({ createdAt: tokenLedger.createdAt });

@@ -1,4 +1,5 @@
 import {
+  assertExhausted,
   botCommandsOf,
   botTextKeysOf,
   BotTextGroup,
@@ -288,9 +289,17 @@ function bonusOf(
 ): TelegramHtml | null {
   if (grant === null) return null;
   if (grant.granted) return TEXTS.cardBonusGranted({ ...context, bonusTokens: grant.tokens });
-  return grant.reason === LinkBonusSkipReason.NotPartnerClient
-    ? TEXTS.cardBonusNotPartner(context)
-    : TEXTS.cardBonusAlready(context);
+  switch (grant.reason) {
+    case LinkBonusSkipReason.NotPartnerClient:
+      return TEXTS.cardBonusNotPartner(context);
+    case LinkBonusSkipReason.AlreadyGranted:
+      return TEXTS.cardBonusAlready(context);
+    // the owner turned the starter pack off (#13): the card says nothing about a bonus
+    case LinkBonusSkipReason.NoActiveRule:
+      return null;
+    default:
+      return assertExhausted(grant.reason, 'link bonus skip reason');
+  }
 }
 
 // Only what the card prints reaches it: `status` is branched on before a card exists, and

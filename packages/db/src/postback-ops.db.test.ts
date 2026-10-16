@@ -15,6 +15,7 @@ import {
 } from './postback-ops';
 import { depositEvents, postbackDeliveries, tokenLedger } from './schema/index';
 import {
+  bonusRuleRef,
   createTempDatabase,
   lockWaiters,
   seedBrokerAccount,
@@ -137,6 +138,7 @@ describe('recordPostback — keys', () => {
       kind: TokenLedgerKind.Bonus,
       balanceDelta: 1n,
       depositEventId: row!.id,
+      ...(await bonusRuleRef(tmp.db, 'deposit_bonus')),
     };
     await tmp.db.insert(tokenLedger).values(bonus);
     const refused = await tmp.db

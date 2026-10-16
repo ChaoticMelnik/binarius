@@ -209,6 +209,8 @@ export type OAuthErrorCode = (typeof OAuthErrorCode)[keyof typeof OAuthErrorCode
 export const LinkBonusSkipReason = {
   NotPartnerClient: 'not_partner_client',
   AlreadyGranted: 'already_granted',
+  // the link_bonus code has no active version valid now (#13): the owner turned the pack off
+  NoActiveRule: 'no_active_rule',
 } as const;
 export type LinkBonusSkipReason = (typeof LinkBonusSkipReason)[keyof typeof LinkBonusSkipReason];
 
