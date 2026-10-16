@@ -3311,5 +3311,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Size: estimate ~1 300 → 2 578 lines (×2 again, as #551) | Minor | other | tests and docs of three rounds; first-round estimate ×1.3 | Architect |
 
 ### Process improvement proposals
-1. The "work queue" task-class row also covers recovery lists re-read until a flag is set, with #567 R1 as its example; a new row "Bulk start-up work" requires the first pass's call rate per external API against the rate budgets and a named spacing constant — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+1. The "work queue" task-class row also covers recovery lists re-read until a flag is set, with #567 R1 as its example; a new row "Bulk start-up work" requires the first pass's call rate per external API against the rate budgets and a named spacing constant — **внедрено в #571: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
 2. Remaining Minors — **вынесено в #570**
