@@ -342,6 +342,10 @@ describe('broker balance timing', () => {
         TRADING_ACCESS_REFRESH_BUDGET_MS +
         CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
     ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    // #551: a cycle's step edits, and sends anew when the edit finds the message gone
+    expect(
+      2 * (1000 / SESSION_NOTICE_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS),
+    ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it.each([

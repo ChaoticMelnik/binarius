@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { GrammyError } from 'grammy';
 import {
+  editRefusal,
   errorLogFields,
   safeParseTradingSessionSettings,
   TradingSessionStopReason,
@@ -11,6 +12,7 @@ import {
   claimSessionFinalNotice,
   claimSessionTradeNotice,
   listPendingSessionNotices,
+  recordSessionCycleMessage,
   releaseSessionFinalNotice,
   releaseSessionTradeNotice,
   type Db,
@@ -28,15 +30,23 @@ import {
   SESSION_NOTICE_TICK_MS,
 } from '../timing';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
-import { pairOf, sessionSummaryMessage, sessionTradeMessage } from './session-notice-messages';
+import {
+  pairOf,
+  sessionCycleMessage,
+  sessionSummaryMessage,
+  type SessionCycleNotice,
+} from './session-notice-messages';
 import { readFinishedSessionView } from './session-view';
 
 // docs/bot-session.md → Trade messages (#464). One loop in the backend process sends every
-// settled trade of every session to the session's owner as its own message, without sound and
-// in the trades' order, and once the session is finished one summary with sound. Each send is
-// claimed by a CAS before the Telegram call (session-notice-ops.ts): a send whose outcome is
-// unknown is never repeated, so a message can be lost but never doubled. The bot's restart, a
-// backend restart and «🔄 Обновить» send nothing twice: the cursor is in trading_sessions.
+// settled trade of every session to the session's owner, without sound and in the trades' order,
+// and once the session is finished one summary with sound. A martingale cycle is one message
+// (#551): its first trade sends it, every later trade of the cycle edits it to show its block
+// too. Each trade is claimed by a CAS before the Telegram call (session-notice-ops.ts): a call
+// whose outcome is unknown is never repeated for that trade, so a trade's block can be lost but
+// a message never doubled by a retry; the next step's edit shows every block of its cycle again.
+// The bot's restart, a backend restart and «🔄 Обновить» send nothing twice: the cursor and the
+// cycle message are in trading_sessions.
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -54,7 +64,7 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
 
 export interface SessionNoticeSenderDeps {
   db: Db;
-  push: Pick<ClientPush, 'sendSessionTrade' | 'sendSessionSummary'>;
+  push: Pick<ClientPush, 'sendSessionTrade' | 'editSessionTrade' | 'sendSessionSummary'>;
   catalog: Pick<PairsCatalog, 'read'>;
   balance: Pick<BalanceReconciler, 'refresh'>;
   logger: FastifyBaseLogger;
@@ -134,6 +144,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     claimed: number,
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, claimed };
+    const key = `${session.sessionId}:${claimed}`;
     if (!session.telegramBlocked) await pace();
     // after the pace, so a stop during its sleep claims nothing more
     if (stopped) return 'skip';
@@ -142,9 +153,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     if (claim === undefined) return 'skip';
     // nothing can be delivered (Rule 19): the trade counts as sent
     if (session.telegramBlocked) return 'next';
-    let text: TelegramHtml;
+    let notice: SessionCycleNotice;
     try {
-      text = sessionTradeMessage(
+      notice = sessionCycleMessage(
         claim,
         settings,
         pairOf(catalog.read(), claim.trades.at(-1)?.assetId ?? 0).digits,
@@ -154,38 +165,104 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       logger.error({ ...fields, ...errorLogFields(error) }, 'session trade notice not built');
       return 'skip';
     }
+
+    // A new message: the cycle message from now on, recorded only once Telegram answered with its
+    // id. An id that is not a positive integer is not recorded: the next step sends anew.
+    const sendNew = async (text: TelegramHtml, from: number): Promise<Step> => {
+      let messageId: number;
+      try {
+        messageId = await push.sendSessionTrade(session.telegramUserId, text);
+      } catch (error) {
+        return failed(session, claimed, error, 'sendMessage');
+      }
+      attempts.delete(key);
+      if (!Number.isInteger(messageId) || messageId <= 0) {
+        logger.warn(fields, 'session trade notice not recorded: no message id');
+        return 'next';
+      }
+      await recordSessionCycleMessage(db, {
+        sessionId: session.sessionId,
+        claimed,
+        messageId,
+        from,
+      });
+      return 'next';
+    };
+
+    if (notice.kind === 'send') {
+      if (notice.split) {
+        logger.info(
+          { ...fields, from: notice.from },
+          'session trade notice split: the cycle message is full',
+        );
+      }
+      return sendNew(notice.text, notice.from);
+    }
     try {
-      await push.sendSessionTrade(session.telegramUserId, text);
-      attempts.delete(`${session.sessionId}:${claimed}`);
+      await push.editSessionTrade(session.telegramUserId, notice.messageId, notice.text);
+      attempts.delete(key);
       return 'next';
     } catch (error) {
-      const failure = failureOf(error);
-      const logged = {
-        ...fields,
-        ...errorLogFields(error),
-        ...telegramErrorFields(error, 'sendMessage'),
-      };
-      switch (failure.kind) {
-        case 'forbidden':
-          logger.warn(logged, 'session trade notice refused: the user is unreachable');
-          await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
-          session.telegramBlocked = true;
-          return 'next';
-        case 'wait':
-          await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
-          return pauseFor(failure.ms);
-        case 'refused':
-          if (mayRetry(`${session.sessionId}:${claimed}`)) {
-            logger.warn(logged, 'session trade notice refused');
-            await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
-            return 'skip';
-          }
-          logger.warn(logged, 'session trade notice dropped');
-          return 'next';
-        case 'unknown':
-          logger.warn(logged, 'session trade notice outcome unknown');
-          return 'next';
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      // the same text again (an edit whose outcome was unknown went through): shown
+      if (refusal === 'shown') {
+        attempts.delete(key);
+        return 'next';
       }
+      if (refusal === 'gone') {
+        // deleted by the user or no longer editable: the same blocks in a new message, now
+        logger.warn(
+          { ...fields, ...telegramErrorFields(error, 'editMessageText') },
+          'session trade notice edited anew: the cycle message is gone',
+        );
+        await pace();
+        return sendNew(notice.text, notice.from);
+      }
+      return failed(session, claimed, error, 'editMessageText');
+    }
+  }
+
+  // How a trade's send or edit that failed ends: Telegram refused it for good to this user (403),
+  // asked to wait (429) or refused this call (another 4xx), each certainly not shown; or the
+  // outcome is unknown, and the trade stays claimed.
+  async function failed(
+    session: PendingSessionNotice,
+    claimed: number,
+    error: unknown,
+    method: 'sendMessage' | 'editMessageText',
+  ): Promise<Step> {
+    const failure = failureOf(error);
+    const logged = {
+      sessionId: session.sessionId,
+      claimed,
+      ...errorLogFields(error),
+      ...telegramErrorFields(error, method),
+    };
+    switch (failure.kind) {
+      case 'forbidden':
+        logger.warn(logged, 'session trade notice refused: the user is unreachable');
+        await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
+        session.telegramBlocked = true;
+        return 'next';
+      case 'wait':
+        await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
+        return pauseFor(failure.ms);
+      case 'refused':
+        if (mayRetry(`${session.sessionId}:${claimed}`)) {
+          logger.warn(logged, 'session trade notice refused');
+          await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
+          return 'skip';
+        }
+        logger.warn(logged, 'session trade notice dropped');
+        return 'next';
+      case 'unknown':
+        logger.warn(
+          logged,
+          method === 'editMessageText'
+            ? 'session trade notice edit outcome unknown'
+            : 'session trade notice outcome unknown',
+        );
+        return 'next';
     }
   }
 

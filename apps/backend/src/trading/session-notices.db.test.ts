@@ -2,17 +2,23 @@ import { eq, inArray, isNull, sql } from 'drizzle-orm';
 import { HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   TradeAction,
   TradeIntentStatus,
   TradingSessionStopReason,
+  botTextMessageOverflows,
   decimalStringSchema,
+  defaultBotTextSource,
   logOptions,
+  plainTextOf,
+  TELEGRAM_MESSAGE_LIMIT,
   type BinaryPair,
+  type BotTextKey,
   type BrokerUser,
   type DecimalString,
   type PairsCatalogView,
+  type TradingSessionSettings,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
@@ -43,7 +49,7 @@ import {
   type CapturedApi,
 } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import {
   createSessionNoticeSender,
@@ -111,13 +117,34 @@ interface Target {
   step: number;
 }
 
-async function seedSession(): Promise<Target> {
+// settings v2 under martingale (#450): its trades' messages are one per cycle (#551)
+const MARTINGALE: TradingSessionSettings = {
+  version: 2,
+  assetId: ASSET,
+  durationSec: 60,
+  trades: 20,
+  stake: {
+    strategy: 'martingale',
+    baseStake: '5' as DecimalString,
+    stakeScale: 0,
+    limits: {
+      maxSteps: 4,
+      maxStake: '60' as DecimalString,
+      maxSessionLoss: '100' as DecimalString,
+      maxSessionDurationMs: 3_600_000,
+    },
+  },
+};
+
+async function seedSession(settings?: TradingSessionSettings): Promise<Target> {
   const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
   const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
-    settings: sessionSettings({
-      assetId: ASSET,
-      stake: { baseStake: '5' as DecimalString, stakeScale: 0 },
-    }),
+    settings:
+      settings ??
+      sessionSettings({
+        assetId: ASSET,
+        stake: { baseStake: '5' as DecimalString, stakeScale: 0 },
+      }),
   });
   return { seed, session, step: 0 };
 }
@@ -188,6 +215,16 @@ function sender(
 ) {
   const push = createClientPush({ token: PUSH_TOKEN });
   const captured = captureApi(push);
+  // Telegram answers a sent message with its id, growing
+  captured.answers.set('sendMessage', (payload) => {
+    messageIds += 1;
+    answered.set(payload, messageIds);
+    return { message_id: messageIds };
+  });
+  captured.answers.set('editMessageText', (payload) => {
+    edited.add(payload);
+    return true;
+  });
   const lines: string[] = [];
   const refreshCalls: Parameters<SessionNoticeSenderDeps['balance']['refresh']>[] = [];
   const notices = createSessionNoticeSender({
@@ -209,12 +246,37 @@ function sender(
   return { notices, captured, push, logs, refreshCalls };
 }
 
+let messageIds = 0;
+// the id each answered send got, by its recorded payload
+const answered = new WeakMap<object, number>();
+// the edits Telegram applied (a refused one is recorded as a call too)
+const edited = new WeakSet<object>();
+
 const sendsTo = (calls: readonly ApiCall[], target: Target) =>
   callsTo(calls, 'sendMessage').filter(
     (call) => call.payload.chat_id === target.seed.telegramUserId,
   );
 const textsTo = (calls: readonly ApiCall[], target: Target) =>
   sendsTo(calls, target).map((call) => String(call.payload.text));
+const editsTo = (calls: readonly ApiCall[], target: Target) =>
+  callsTo(calls, 'editMessageText').filter(
+    (call) => call.payload.chat_id === target.seed.telegramUserId,
+  );
+// what the user sees: every message by its id, at its last text
+function chatOf(calls: readonly ApiCall[], target: Target): string[] {
+  const shown = new Map<number, string>();
+  for (const call of calls) {
+    if (call.payload.chat_id !== target.seed.telegramUserId) continue;
+    const id =
+      call.method === 'sendMessage'
+        ? answered.get(call.payload)
+        : edited.has(call.payload)
+          ? Number(call.payload.message_id)
+          : undefined;
+    if (id !== undefined) shown.set(id, String(call.payload.text));
+  }
+  return [...shown.values()];
+}
 const rowOf = async (target: Target) =>
   (
     await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, target.session.id))
@@ -236,6 +298,13 @@ function failFirst(captured: CapturedApi, times: number, failure: ApiError | Htt
   };
   captured.apiErrors = errors;
 }
+// a 400 with Telegram's own wording
+const refusal = (description: string): ApiError => ({ ok: false, error_code: 400, description });
+const cycleStateOf = async (target: Target) => {
+  const row = await rowOf(target);
+  return { messageId: row.cycleMessageId, from: row.cycleMessageFrom };
+};
+const INFO = 30;
 const WARN = 40;
 const messagesOf = (logs: Record<string, unknown>[], level: number) =>
   logs.filter((entry) => entry.level === level).map((entry) => entry.msg);
@@ -607,6 +676,330 @@ describe('every way a send ends (#464)', () => {
     expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(4);
+  });
+});
+
+const ADAPTIVE = '🔄 Адаптивная ставка включена';
+// the heads of a message: its blocks' «⚡ Цикл N Шаг M» and the adaptive line
+const heads = (text: string) =>
+  text.split('\n').filter((line) => line.startsWith('⚡') || line.startsWith('🔄'));
+const loss = (step: number, cycle = 1, at = step) =>
+  `⚡ Цикл ${cycle} Шаг ${step}\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: ${(at / 10).toFixed(5)} → ${(at / 10 + 0.0001).toFixed(5)}</pre>`;
+
+describe('a martingale cycle is one message (#551)', () => {
+  it('D13 L, L, W: one silent message, two edits listing every step, then a new cycle sends anew', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '4.6');
+    await notices.tick();
+
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    const edits = editsTo(captured.calls, target);
+    expect(edits).toHaveLength(2);
+    const id = answered.get(sendsTo(captured.calls, target)[0]!.payload);
+    for (const edit of edits) {
+      expect(edit.payload.message_id).toBe(id);
+      expect(edit.payload.parse_mode).toBe('HTML');
+      expect(edit.payload.reply_markup).toBeUndefined();
+    }
+    expect(String(edits[0]!.payload.text)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
+    expect(String(edits[1]!.payload.text)).toBe(
+      [
+        loss(1),
+        ADAPTIVE,
+        loss(2),
+        '⚡ Цикл 1 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$4.60\n📊 Цена: 0.30000 → 0.30010</pre>',
+      ].join('\n\n'),
+    );
+    expect(await cycleStateOf(target)).toEqual({ messageId: id, from: 0 });
+
+    await settled(target, '-5');
+    await notices.tick();
+    const sends = sendsTo(captured.calls, target);
+    expect(sends).toHaveLength(2);
+    expect(String(sends[1]!.payload.text)).toBe(loss(1, 2, 4));
+    expect(sends[1]!.payload.disable_notification).toBe(true);
+    expect(await cycleStateOf(target)).toEqual({
+      messageId: answered.get(sends[1]!.payload),
+      from: 3,
+    });
+  });
+
+  it('D14 a tie at step 1 is step 2 of the same cycle: an edit with the adaptive line at the same stake', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    await settled(target, '0');
+    await settled(target, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target).map(heads)).toEqual([
+      ['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2'],
+    ]);
+    expect(String(editsTo(captured.calls, target)[0]!.payload.text)).toContain(
+      '⚪ Ставка: $5.00 → $0.00, ставка вернулась',
+    );
+  });
+
+  it('D15 a restarted sender edits the saved cycle message: nothing new is sent', async () => {
+    const target = await seedSession(MARTINGALE);
+    await settled(target, '-5');
+    const first = sender();
+    await first.notices.tick();
+    await first.notices.stop();
+    await settled(target, '-5');
+    const second = sender();
+    await second.notices.tick();
+    expect(sendsTo(second.captured.calls, target)).toHaveLength(0);
+    const [edit] = editsTo(second.captured.calls, target);
+    expect(edit?.payload.message_id).toBe(
+      answered.get(sendsTo(first.captured.calls, target)[0]!.payload),
+    );
+    expect(heads(String(edit?.payload.text))).toEqual([
+      '⚡ Цикл 1 Шаг 1',
+      ADAPTIVE,
+      '⚡ Цикл 1 Шаг 2',
+    ]);
+  });
+
+  it.each([
+    'Bad Request: message to edit not found',
+    "Bad Request: message can't be edited",
+    'Bad Request: there is no text in the message to edit',
+  ])(
+    'D16 an edit refused «%s»: the gone message’s blocks go anew in the same tick, and the next step edits them',
+    async (description) => {
+      const target = await seedSession(MARTINGALE);
+      const { notices, captured, logs } = sender();
+      await settled(target, '-5');
+      await notices.tick();
+      await settled(target, '-5');
+      captured.apiErrors.set('editMessageText', refusal(description));
+      await notices.tick();
+      captured.apiErrors.delete('editMessageText');
+      const sends = sendsTo(captured.calls, target);
+      expect(sends).toHaveLength(2);
+      expect(String(sends[1]!.payload.text)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
+      const id = answered.get(sends[1]!.payload);
+      expect(await cycleStateOf(target)).toEqual({ messageId: id, from: 0 });
+      expect(messagesOf(logs(), WARN)).toEqual([
+        'session trade notice edited anew: the cycle message is gone',
+      ]);
+
+      await settled(target, '-5');
+      await notices.tick();
+      const edits = editsTo(captured.calls, target);
+      expect(edits.at(-1)?.payload.message_id).toBe(id);
+      expect(heads(String(edits.at(-1)?.payload.text))).toEqual([
+        '⚡ Цикл 1 Шаг 1',
+        ADAPTIVE,
+        '⚡ Цикл 1 Шаг 2',
+        '⚡ Цикл 1 Шаг 3',
+      ]);
+    },
+  );
+
+  it('D17 an edit answered «message is not modified» counts as shown: no second call', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender();
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    captured.apiErrors.set(
+      'editMessageText',
+      refusal(
+        'Bad Request: message is not modified: specified new message content and reply markup are exactly the same',
+      ),
+    );
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    expect(editsTo(captured.calls, target)).toHaveLength(1);
+    expect((await rowOf(target)).notifiedTrades).toBe(2);
+    expect(messagesOf(logs(), WARN)).toEqual([]);
+  });
+
+  it('D18 a first step whose send outcome is unknown records nothing: the next step sends the cycle anew', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender();
+    await settled(target, '-5');
+    failFirst(
+      captured,
+      1,
+      new HttpError("Network request for 'sendMessage' failed!", new Error('timed out')),
+    );
+    await notices.tick();
+    expect(await cycleStateOf(target)).toEqual({ messageId: null, from: null });
+    expect(messagesOf(logs(), WARN)).toEqual(['session trade notice outcome unknown']);
+    await settled(target, '-5');
+    await notices.tick();
+    const sends = sendsTo(captured.calls, target);
+    expect(sends).toHaveLength(2);
+    expect(editsTo(captured.calls, target)).toHaveLength(0);
+    expect(String(sends[1]!.payload.text)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
+    expect(await cycleStateOf(target)).toEqual({
+      messageId: answered.get(sends[1]!.payload),
+      from: 0,
+    });
+  });
+
+  it.each([
+    ['a 5xx', () => telegramError(502)],
+    [
+      'a transport failure',
+      () => new HttpError("Network request for 'editMessageText' failed!", new Error('timed out')),
+    ],
+  ])(
+    'D19 an edit whose outcome is %s stays claimed; the next edit shows its block',
+    async (_name, failure) => {
+      const target = await seedSession(MARTINGALE);
+      const { notices, captured, logs } = sender();
+      await settled(target, '-5');
+      await notices.tick();
+      await settled(target, '-5');
+      captured.apiErrors.set('editMessageText', failure());
+      await notices.tick();
+      captured.apiErrors.delete('editMessageText');
+      expect((await rowOf(target)).notifiedTrades).toBe(2);
+      expect(messagesOf(logs(), WARN)).toEqual(['session trade notice edit outcome unknown']);
+      expect(logs().find((entry) => entry.level === WARN)).toMatchObject({
+        method: 'editMessageText',
+      });
+      await settled(target, '-5');
+      await notices.tick();
+      expect(sendsTo(captured.calls, target)).toHaveLength(1);
+      expect(chatOf(captured.calls, target).map(heads)).toEqual([
+        ['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2', '⚡ Цикл 1 Шаг 3'],
+      ]);
+    },
+  );
+
+  describe('D20 the length limit, under an override the registry accepts', () => {
+    // a loss's block of about 440 characters: nine of them fit in 4096, ten do not; a session
+    // has at most MAX_SESSION_TRADES (20) trades, so a split takes such an override
+    const PAD = 'ж'.repeat(380);
+    const source = {
+      sourceOf: (key: BotTextKey) =>
+        key === 'sessionTradeLost'
+          ? `${PAD}\n${defaultBotTextSource.sourceOf(key)}`
+          : defaultBotTextSource.sourceOf(key),
+    };
+    afterEach(() => setBotTextSource(defaultBotTextSource));
+
+    it('splits a cycle only between blocks: no block lost, each message within the limit', async () => {
+      expect(botTextMessageOverflows(source)).toEqual([]);
+      setBotTextSource(source);
+      const target = await seedSession(MARTINGALE);
+      const { notices, captured, logs } = sender();
+      for (let step = 0; step < 12; step += 1) {
+        await settled(target, '-5');
+        await notices.tick();
+      }
+      const chat = chatOf(captured.calls, target);
+      expect(chat).toHaveLength(2);
+      for (const text of chat) {
+        expect(plainTextOf(text).length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+      }
+      const steps = (text: string) => heads(text).filter((line) => line.startsWith('⚡'));
+      expect(steps(chat[0]!)).toEqual(
+        Array.from({ length: 9 }, (_, i) => `⚡ Цикл 1 Шаг ${i + 1}`),
+      );
+      expect(steps(chat[1]!)).toEqual(['⚡ Цикл 1 Шаг 10', '⚡ Цикл 1 Шаг 11', '⚡ Цикл 1 Шаг 12']);
+      // the first message is not edited after the split
+      const first = answered.get(sendsTo(captured.calls, target)[0]!.payload);
+      const editsOfFirst = editsTo(captured.calls, target).filter(
+        (call) => call.payload.message_id === first,
+      );
+      expect(editsOfFirst).toHaveLength(8);
+      expect(await cycleStateOf(target)).toEqual({
+        messageId: answered.get(sendsTo(captured.calls, target)[1]!.payload),
+        from: 9,
+      });
+      expect(
+        logs().filter(
+          (entry) =>
+            entry.level === INFO &&
+            entry.msg === 'session trade notice split: the cycle message is full',
+        ),
+      ).toEqual([expect.objectContaining({ sessionId: target.session.id, claimed: 9, from: 9 })]);
+    });
+  });
+
+  it('D21 a send answered without a usable message_id: not recorded, the next step sends anew', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender();
+    captured.answers.set('sendMessage', () => ({ message_id: 0 }));
+    await settled(target, '-5');
+    await notices.tick();
+    expect(await cycleStateOf(target)).toEqual({ messageId: null, from: null });
+    expect(messagesOf(logs(), WARN)).toEqual(['session trade notice not recorded: no message id']);
+    await settled(target, '-5');
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(2);
+    expect(editsTo(captured.calls, target)).toHaveLength(0);
+  });
+
+  it('D4-edit 429: the step is put back, the sender pauses, then edits once', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender({}, clock);
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    captured.apiErrors.set('editMessageText', telegramError(429, 30));
+    await notices.tick();
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+    expect(messagesOf(logs(), WARN)).toContain('session notices paused: Telegram asked to wait');
+    captured.apiErrors.delete('editMessageText');
+    clock.now += 30_000;
+    await notices.tick();
+    expect((await rowOf(target)).notifiedTrades).toBe(2);
+    expect(editsTo(captured.calls, target)).toHaveLength(2);
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+  });
+
+  it('D4-edit another 4xx: retried, then dropped; the next step’s edit shows the dropped block', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender({ config: { maxAttempts: 3 } });
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    captured.apiErrors.set('editMessageText', refusal('Bad Request: something else'));
+    await notices.tick();
+    await notices.tick();
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+    await notices.tick();
+    expect((await rowOf(target)).notifiedTrades).toBe(2);
+    expect(messagesOf(logs(), WARN)).toEqual([
+      'session trade notice refused',
+      'session trade notice refused',
+      'session trade notice dropped',
+    ]);
+    captured.apiErrors.delete('editMessageText');
+    await settled(target, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target).map(heads)).toEqual([
+      ['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2', '⚡ Цикл 1 Шаг 3'],
+    ]);
+  });
+
+  it('D4-edit 403: the user is marked unreachable, the later steps are claimed without a call', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    await settled(target, '-5');
+    captured.apiErrors.set('editMessageText', telegramError(403));
+    await notices.tick();
+    expect(editsTo(captured.calls, target)).toHaveLength(1);
+    const [user] = await tmp.db
+      .select({ at: users.telegramBlockedAt })
+      .from(users)
+      .where(eq(users.id, target.seed.userId));
+    expect(user?.at).toBeInstanceOf(Date);
+    expect((await rowOf(target)).notifiedTrades).toBe(3);
   });
 });
 
