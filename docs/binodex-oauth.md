@@ -400,6 +400,14 @@ is created, and nothing here stores or credits one.
 
 Accounts confirmed before migration `0008` received nothing; there was no production data then.
 
+**The inviter's reward (#116).** Right after `grantLinkBonus`, both activations —
+`confirmBrokerAccount` and the email login's `linkBrokerAccount` (`activate: true`) — call
+`grantReferralReward`: when the account is a partner one and the user was invited, the inviter gets
+the active `referral_reward` version's tokens, once per referral, in the same transaction. It does
+not depend on the pack. The routes' answers are unchanged; the outcome is logged
+([referrals.md → The reward](referrals.md#the-reward)). The OAuth callback (`activate: false`)
+pays neither.
+
 ## Email login (issue #162)
 
 The bot asks for an address, the backend asks the broker to mail a code to it, the user types the

@@ -1,8 +1,9 @@
-# Personal invite links (issue #115)
+# Personal invite links (issues #115, #116)
 
 Every user can share a personal start link, `https://t.me/<bot>?start=ref_<code>`. A new user who
-opens it and presses Start is recorded as invited by the link's owner, once. The reward for an
-invitee is #116; this part only records who invited whom and shows the link.
+opens it and presses Start is recorded as invited by the link's owner, once (#115). When the
+invitee connects a partner Binodex account, the inviter gets the tokens of the `referral_reward`
+rule, 50 in v1, once per invitee (#116, [The reward](#the-reward)).
 
 ## Components
 
@@ -13,7 +14,10 @@ invitee is #116; this part only records who invited whom and shows the link.
 - `packages/db/src/schema/referrals.ts` — the tables `referral_codes` and `referrals`, migration
   `0043_referrals`.
 - `packages/db/src/user-ops.ts` → `recordUserStart` — records the invitation.
-- `packages/db/src/referral-ops.ts` → `readUserReferral` — the code and the count.
+- `packages/db/src/referral-ops.ts` → `readUserReferral` — the code and the counts.
+- `packages/db/src/referral-reward-ops.ts` → `grantReferralReward` — the reward (#116), called by
+  `confirmBrokerAccount` and `linkBrokerAccount` (`packages/db/src/oauth-ops.ts`); migration
+  `0060_referral_reward`.
 - `apps/backend/src/users/routes.ts` → `POST /users/referral`.
 - `apps/bot/src/invite.ts` — the screen; `apps/bot/src/keyboards.ts` — `inviteButton`,
   `statusCardKeyboard`, `withInvite`, `inviteKeyboard`; `apps/bot/src/bot.ts` — `/invite`, the
@@ -42,7 +46,8 @@ column is `NOT NULL`.
 | `created_at` | database clock |
 
 CHECK `referrals_not_self_check` (`invitee_user_id <> inviter_user_id`). Every FK is
-`on delete restrict`. The reward's columns are #116's, with its own migration.
+`on delete restrict`. Unique `referrals_id_inviter_key (id, inviter_user_id)` is the target of the
+reward's ledger FK (#116); a referral row is never updated.
 
 ## The code
 
@@ -95,11 +100,14 @@ lock order of Architecture Rule 5 is untouched.
 |---|---|
 | a bad body | 400 `validation` |
 | no `users` row | 404 `user_not_found` |
-| an active user | 200 `{ user: { status: 'active', code, invited } }` — the code created on the first call |
-| a blocked user | 200 `{ user: { status: 'blocked', code: null, invited } }` — no code created |
+| an active user | 200 `{ user: { status: 'active', code, invited, connected, tokensEarned } }` — the code created on the first call |
+| a blocked user | 200 `{ user: { status: 'blocked', code: null, invited, connected, tokensEarned } }` — no code created |
 
-`invited` is the number of `referrals` rows with this inviter, a blocked inviter's included. The
-answer has these three keys only. The route creates a code on the first call, but a repeat finds
+`invited` is the number of `referrals` rows with this inviter, a blocked inviter's included.
+`connected` (#116) is how many of those invitees have a partner account that is not `pending` — a
+confirmed one, a revoked one included, each invitee once. `tokensEarned` is the sum of the
+inviter's ledger rows that name a referral, a decimal string. While the reward rule is off the two
+differ: an invitee is counted as connected without a reward. The answer has these five keys only. The route creates a code on the first call, but a repeat finds
 the same code, so the bot treats it as a read.
 
 ## The screen
@@ -111,7 +119,7 @@ always a new message, since the cards are photos.
 
 | Read | Text | Keyboard |
 |---|---|---|
-| active | `inviteScreen`: the link and «Приглашено: N» | «📤 Поделиться», then «🏠 В меню» |
+| active | `inviteScreen`: the link, «Приглашено: N», «Подключили аккаунт: N» and «Получено токенов: T» | «📤 Поделиться», then «🏠 В меню» |
 | blocked | `blocked` | the support URL |
 | 404 `user_not_found` (no `/start` yet) | `inviteNeedsStart` | «🏠 В меню», whose press runs `/start`'s path and creates the row |
 | any other failure | `unavailable`, `warn` `/invite not read` | «🔄 Повторить» `cmd:invite` · «🏠 В меню» |
@@ -125,18 +133,88 @@ its chat picker. An overridden `inviteScreen` may drop `{referralLink}` (no vari
 Timing (`apps/bot/src/timing.ts`): `HANDLER_CALLS.invite` = 1 / 1, `.inviteButton` = 1 / 2,
 `.commandRetry` stays 1 / 2.
 
+## The reward
+
+**The target action** (owner, 2026-10-08) is the invitee's activation of a **partner** Binodex
+account: a confirm (`POST /auth/binodex/confirm`) or an email login. **The reward** is the active
+`referral_reward` version's tokens ([bonus-rules.md](bonus-rules.md)) to the inviter; the invitee
+gets nothing beyond the starter pack.
+
+**Where.** `grantReferralReward(tx, { inviteeUserId, account })` runs in the activation's
+transaction, after `grantLinkBonus`, in this order:
+
+1. a non-partner account → `not_partner_client`;
+2. the invitee's `referrals` row (no lock: it is never updated) — none → `no_referral`;
+3. a ledger row naming that referral → `already_rewarded`, **before** the rule is read, so a
+   deactivated or broken rule neither changes this answer nor rolls a re-login back;
+4. the inviter's `users` row `FOR NO KEY UPDATE`; blocked → `inviter_blocked`;
+5. `applyBonus('referral_reward', { referralId })` → `rewarded` with the tokens and the version,
+   or `no_active_rule`.
+
+**When it fires** (manager's decision 2026-10-17): on every activation of a partner account by the
+invitee while the rule has an active version and the inviter is not blocked, at most once per
+referral. A skipped one is paid at the invitee's next activation of a partner account, a repeat
+email login included. The starter pack does not gate it: with `link_bonus` off the invitee gets no
+pack and the inviter still gets the reward. An active version whose params do not parse throws
+`InvalidBonusRule` and rolls the activation back, as the pack does (Rule 40). The OAuth callback
+(`activate: false`) pays nothing until the confirm.
+
+**The ledger row.** `kind = bonus` on the inviter, `balance_delta` = the rule's tokens,
+`referral_id`, `bonus_rule_id`/`bonus_rule_kind` of the version read; no `broker_account_id`, so it
+takes no slot of the inviter's own starter pack. `users.token_balance` moves in the same
+transaction (Rule 2).
+
+| Constraint | What it holds |
+|---|---|
+| `token_ledger_referral_inviter_fk` `(referral_id, user_id) → referrals (id, inviter_user_id)` | the reward is on that referral's inviter and nobody else |
+| `token_ledger_referral_idx` unique `(referral_id) where referral_id is not null` | one reward per referral; the `ON CONFLICT` arbiter |
+| `token_ledger_reference_check` | a bonus names at most one of `broker_account_id`, `deposit_event_id`, `referral_id`; no other kind names a referral |
+| `token_ledger_bonus_rule_check` | a bonus naming a referral is under a `referral_reward` rule |
+
+**Anti-fraud** (owner, 2026-10-08: by broker account only). Both of the owner's criteria follow from
+constraints rather than reads:
+
+- *The same broker account on both sides* cannot exist: `broker_accounts_broker_user_id_idx` gives
+  a `broker_user_id` one owner, and no writer changes an account's `user_id` or `broker_user_id`.
+  The invitee logging in with the inviter's broker account gets `broker_account_taken` and no
+  activation, so no reward.
+- *At most one reward per `broker_user_id`*: one referral per invitee (`referrals_invitee_key`),
+  one reward per referral (`token_ledger_referral_idx`), one owner per `broker_user_id`.
+
+**Locks (Rule 5).** The activation's order is `users`(invitee) → `broker_accounts` →
+`deposit_events` → `users`(inviter) → `token_ledger`. The inviter's row is the one second `users`
+row any writer locks. It cannot close a cycle: a referral is recorded only by the `/start` that
+created the invitee's row ([Recording](#recording)), so the inviter's row is always older, the
+invitation graph is a forest, and every wait among these writers runs from a newer row to an older
+one. Step 3's read is serialized by the invitee's own row, which every writer of this referral's
+reward holds first.
+
+**The log**, after the commit (the routes' answers are unchanged): `info` `referral rewarded`
+`{ referralId, inviterUserId, tokens, ruleVersion }`; `warn` `referral_reward_no_active_rule`
+`{ referralId }`; `info` `referral reward skipped` `{ referralId, reason: 'inviter_blocked' }`;
+nothing for `not_partner_client`, `no_referral` or `already_rewarded`.
+
+**Deploy.** Backend before the bot: the bot's schema requires `connected` and `tokensEarned`, so a
+new bot against an old backend shows `unavailable` on `/invite` until the backend is up.
+
 ## Accepted risks
 
 1. A user who wrote to the bot once without a link and later follows a friend's link is not
    counted: only a user the link's `/start` creates is an invitee.
-2. A blocked inviter's existing code still records new invitees; whether that earns anything is
-   #116's decision.
+2. A blocked inviter's existing code still records new invitees; their activations pay nothing
+   while the inviter is blocked, and the reward is paid at the invitee's next partner activation
+   after the unblock.
 3. A code is never rotated or revoked: a leaked link keeps attributing to its owner.
 4. The share text and the screen are in Russian only, as the whole bot.
+5. Two Telegram accounts of one person with two different partner broker accounts earn the reward:
+   anti-fraud is by broker account only (owner, 2026-10-08).
+6. A missed reward (rule off, inviter blocked, a non-partner account) is paid only at a later
+   activation, which may be long after or never; the inviter sees it on `/invite`. No push tells
+   the inviter about a reward yet (#576).
 
 ## Boundaries
 
-- **#116** — the reward: 50 tokens to the inviter when the invitee connects a partner Binodex
-  account, and the screen's «подключили аккаунт» and «получено токенов» lines.
+- **#576** — the push to the inviter about a reward, through the mailing engine (after #574).
+- **#386** — deposit-based bonuses; rewards for an invitee's deposit are not in scope.
 - **#440** — the personal link in the summary card's caption and in #321's share.
 - Inline mode (`switch_inline_query`) and the admin card — not in scope.
