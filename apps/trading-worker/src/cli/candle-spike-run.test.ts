@@ -511,7 +511,7 @@ describe('choosePairs', () => {
       pair(4, { type: 'cryptocurrency', payout: 88 }),
       pair(5, { type: 'stock', payout: 80 }),
       pair(6, { payout: 95, scheduledUntil: T0 + 60_000 }),
-      pair(7, { payout: 79 }),
+      pair(7, { type: 'commodity', payout: 79 }),
       pair(8, { payout: 99, digits: 11 }),
     ];
     const choice = choosePairs(catalog, T0, 4);
