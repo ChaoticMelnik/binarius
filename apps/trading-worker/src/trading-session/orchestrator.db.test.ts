@@ -1976,7 +1976,7 @@ describe('martingale (#450)', () => {
   });
 
   // #552: a session of N cycles ends on its N-th win, never in the middle of a series
-  it("G9' losses never complete a martingale session: two cycles end on the second win", async () => {
+  it('G9′ losses never complete a martingale session: two cycles end on the second win', async () => {
     const seed = await seedSession({ settings: martingale(2) });
     const orchestrator = at(80);
     await losses(orchestrator, seed, 2);
