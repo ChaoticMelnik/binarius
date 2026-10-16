@@ -184,6 +184,16 @@ describe('the session tracker', () => {
     expect(readSession).toHaveBeenCalledTimes(4);
   });
 
+  // #552: the cycle line prints cycles.closed, so a change of it alone is an edit
+  it('K2 edits when only the closed cycles change', async () => {
+    const nextCycle = sessionView({ cycles: { planned: 5, closed: 1 } });
+    const { tracker, request, target } = setup({ script: [SESSION_VIEW, nextCycle] });
+    const { edits, edit } = target();
+    tracker.track(request({ edit }));
+    await vi.advanceTimersByTimeAsync(FIRST + POLL);
+    expect(texts(edits)).toEqual([shown(nextCycle)]);
+  });
+
   // #337: a session on manual review is followed to the deadline and shows its balance's age
   it('K1 edits when the balance changes and not when only its age moves', async () => {
     const onReview = (available: string, ageSec: number) =>
