@@ -4,6 +4,7 @@ import { multiplyDecimal, StakeRefusal, stakeScale } from './stake';
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import {
   createTradeIntentRequestSchema,
+  INT4_MAX,
   TRADE_INTENT_TRANSITIONS,
   telegramUserIdSchema,
   tradeAmountSchema,
@@ -396,3 +397,51 @@ export const safeParseSessionSummaryResponse = (input: unknown) =>
   sessionSummaryResponseSchema.safeParse(input);
 export const safeParseSessionSummaryRefusal = (input: unknown) =>
   sessionSummaryRefusalSchema.safeParse(input);
+
+// POST /trading/sessions/:id/status-message (#567, docs/bot-session.md → Recovery after a
+// restart): the bot's first poll of a status message records its id, the first one recorded
+// wins; the answer is the view GET /trading/sessions/:id gives. The id is the bound of
+// trading_sessions.status_message_id (integer, CHECK > 0), so an id past it is a 400, not a 500.
+export const SESSION_STATUS_MESSAGE_SUFFIX = '/status-message';
+
+const telegramMessageIdSchema = z.int().min(1).max(INT4_MAX);
+
+export const recordSessionStatusMessageRequestSchema = z.strictObject({
+  telegramUserId: telegramUserIdSchema,
+  messageId: telegramMessageIdSchema,
+});
+export type RecordSessionStatusMessageRequest = z.infer<
+  typeof recordSessionStatusMessageRequestSchema
+>;
+
+// GET /trading/sessions/tracked (#567): the sessions the bot tracks again after a restart, oldest
+// first, at most TRACKED_SESSIONS_MAX; a uuid never equals 'tracked', so /:id keeps its routes
+export const TRADING_SESSIONS_TRACKED_PATH = `${TRADING_SESSIONS_PATH}/tracked`;
+export const TRACKED_SESSIONS_MAX = 2_000;
+
+export const trackedSessionsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(TRACKED_SESSIONS_MAX).default(TRACKED_SESSIONS_MAX),
+});
+
+// telegramUserId is the owner's, the chat the message is in; assetId is null for settings that
+// do not read
+export const trackedSessionSchema = z.strictObject({
+  id: z.uuid(),
+  telegramUserId: telegramUserIdSchema,
+  messageId: telegramMessageIdSchema,
+  assetId: z.int().min(1).max(INT4_MAX).nullable(),
+  startedAt: z.iso.datetime({ offset: true }),
+});
+export type TrackedSession = z.infer<typeof trackedSessionSchema>;
+
+export const trackedSessionsResponseSchema = z.strictObject({
+  sessions: z.array(trackedSessionSchema).max(TRACKED_SESSIONS_MAX),
+});
+export type TrackedSessionsResponse = z.infer<typeof trackedSessionsResponseSchema>;
+
+export const safeParseRecordSessionStatusMessageRequest = (input: unknown) =>
+  recordSessionStatusMessageRequestSchema.safeParse(input);
+export const safeParseTrackedSessionsQuery = (input: unknown) =>
+  trackedSessionsQuerySchema.safeParse(input);
+export const safeParseTrackedSessionsResponse = (input: unknown) =>
+  trackedSessionsResponseSchema.safeParse(input);

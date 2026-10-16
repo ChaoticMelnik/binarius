@@ -64,6 +64,11 @@ export const tradingSessions = pgTable(
     // never cleared: a later cycle's trade sends a new message and moves them.
     cycleMessageId: integer('cycle_message_id'),
     cycleMessageFrom: integer('cycle_message_from'),
+    // The bot's status message of the session (#567, docs/bot-session.md → Recovery after a
+    // restart): Telegram's message_id of the first status message the bot tracked it on, so the
+    // bot can track it again after a restart. Written once, only by recordSessionStatusMessage's
+    // CAS (`is null`, the owner in the predicate), never cleared; read by listTrackedSessions.
+    statusMessageId: integer('status_message_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -94,6 +99,7 @@ export const tradingSessions = pgTable(
     ),
     check('trading_sessions_cycle_message_id_check', sql`${t.cycleMessageId} > 0`),
     check('trading_sessions_cycle_message_from_check', sql`${t.cycleMessageFrom} >= 0`),
+    check('trading_sessions_status_message_id_check', sql`${t.statusMessageId} > 0`),
     uniqueIndex('trading_sessions_active_account_idx')
       .on(t.brokerAccountId)
       .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),
@@ -105,5 +111,10 @@ export const tradingSessions = pgTable(
     index('trading_sessions_notice_pending_idx')
       .on(t.createdAt)
       .where(sql`${t.finalNoticeSentAt} is null`),
+    // the bot's recovery list (#567): the sessions with a status message and no card yet, oldest
+    // first
+    index('trading_sessions_tracked_idx')
+      .on(t.startedAt)
+      .where(sql`${t.statusMessageId} is not null and ${t.summarySentAt} is null`),
   ],
 );

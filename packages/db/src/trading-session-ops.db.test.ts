@@ -6,6 +6,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  TradingSessionStopReason,
   SESSION_NO_SIGNAL_TIMEOUT_MS,
   decimalStringSchema,
   type DecimalString,
@@ -44,8 +45,10 @@ import {
   createSessionIntent,
   createTradingSession,
   listRunnableSessions,
+  listTrackedSessions,
   markSessionDecision,
   readSessionHistory,
+  recordSessionStatusMessage,
   stopExpiredSessions,
   stopHaltedSessions,
   stopPausedSessions,
@@ -1099,5 +1102,119 @@ describe('createSessionIntent', () => {
     );
     expect(error).toBeInstanceOf(TradingSessionNotActiveError);
     expect((await sessionOf(stopped.session.id))!.lastSignalAction).toBe('up');
+  });
+});
+
+describe('recordSessionStatusMessage (#567)', () => {
+  it('M1 records the first id once; a second id is refused and the first stays', async () => {
+    const seed = await seedSessionAccount();
+    const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42 })).toBe(false);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(41);
+  });
+
+  it("M2 another user's telegramUserId writes nothing", async () => {
+    const seed = await seedSessionAccount();
+    const other = await seedUserWithAccount(tmp.db);
+    expect(
+      await recordSessionStatusMessage(tmp.db, {
+        id: seed.session.id,
+        telegramUserId: other.telegramUserId,
+        messageId: 41,
+      }),
+    ).toBe(false);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBeNull();
+  });
+
+  it('M3 a missing session writes nothing', async () => {
+    const seed = await seedSessionAccount();
+    expect(
+      await recordSessionStatusMessage(tmp.db, {
+        id: '00000000-0000-4000-8000-000000000000',
+        telegramUserId: seed.telegramUserId,
+        messageId: 41,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('listTrackedSessions (#567)', () => {
+  const tracked = async (
+    patch: { startedAt?: Date; messageId?: number | null; settings?: unknown } = {},
+  ) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      ...(patch.startedAt === undefined ? {} : { startedAt: patch.startedAt }),
+      ...(patch.settings === undefined ? {} : { settings: patch.settings }),
+    });
+    const messageId = patch.messageId === undefined ? 7 : patch.messageId;
+    if (messageId !== null) {
+      await recordSessionStatusMessage(tmp.db, {
+        id: session.id,
+        telegramUserId: seed.telegramUserId,
+        messageId,
+      });
+    }
+    return { ...seed, session };
+  };
+  const mark = (id: string, set: Partial<typeof tradingSessions.$inferInsert>) =>
+    tmp.db.update(tradingSessions).set(set).where(eq(tradingSessions.id, id));
+  const stop = (id: string) => stopTradingSession(tmp.db, { id, reason: TradingSessionStopReason.UserStopped });
+  const listed = async () =>
+    new Map((await listTrackedSessions(tmp.db, { limit: 2_000 })).map((row) => [row.id, row]));
+
+  it('L1 lists an active session, a stopped one with an open trade and a finished one with a settled trade and no card', async () => {
+    const active = await tracked();
+    const open = await tracked();
+    await createSessionIntent(tmp.db, intentInput(open));
+    await stop(open.session.id);
+    const done = await tracked();
+    const { intent } = await createSessionIntent(tmp.db, intentInput(done));
+    await settle(intent, '0.82');
+    await stop(done.session.id);
+    await mark(done.session.id, { finalNoticeSentAt: new Date() });
+
+    const rows = await listed();
+    for (const seed of [active, open, done]) {
+      expect(rows.get(seed.session.id)).toEqual({
+        id: seed.session.id,
+        telegramUserId: seed.telegramUserId,
+        messageId: 7,
+        assetId: 101,
+        startedAt: seed.session.startedAt,
+      });
+    }
+  });
+
+  it('L2 leaves out a session with no message, one with its card sent and a finished one with no settled trade and its summary sent', async () => {
+    const untracked = await tracked({ messageId: null });
+    const carded = await tracked();
+    await mark(carded.session.id, { summarySentAt: new Date() });
+    const empty = await tracked();
+    const { intent } = await createSessionIntent(tmp.db, intentInput(empty));
+    await reject(intent);
+    await stop(empty.session.id);
+    await mark(empty.session.id, { finalNoticeSentAt: new Date() });
+
+    const rows = await listed();
+    expect(rows.has(untracked.session.id)).toBe(false);
+    expect(rows.has(carded.session.id)).toBe(false);
+    expect(rows.has(empty.session.id)).toBe(false);
+  });
+
+  it('L3 a finished session with no settled trade whose summary is not sent yet is listed', async () => {
+    const empty = await tracked();
+    await stop(empty.session.id);
+    expect((await listed()).has(empty.session.id)).toBe(true);
+  });
+
+  it('L4 orders by started_at and honours the limit; unreadable settings give a null assetId', async () => {
+    const second = await tracked({ startedAt: new Date('2000-01-02T00:00:00Z') });
+    const first = await tracked({ startedAt: new Date('2000-01-01T00:00:00Z'), settings: {} });
+    await tracked({ startedAt: new Date('2000-01-03T00:00:00Z') });
+    const rows = await listTrackedSessions(tmp.db, { limit: 2 });
+    expect(rows.map((row) => row.id)).toEqual([first.session.id, second.session.id]);
+    expect(rows.map((row) => row.assetId)).toEqual([null, 101]);
   });
 });

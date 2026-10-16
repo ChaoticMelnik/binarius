@@ -3020,6 +3020,29 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
+  // the bot's status message of the session (#567): a positive message_id or none
+  it.each([0, -1])('rejects status_message_id %s', async (id) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradingSessions).values({ ...session(seed.accountId), statusMessageId: id }),
+        '23514',
+        'trading_sessions_status_message_id_check',
+      );
+    });
+  });
+
+  it.each([null, 1, 2147483647])('accepts status_message_id %s', async (id) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values({ ...session(seed.accountId), statusMessageId: id })
+        .returning();
+      expect(row!.statusMessageId).toBe(id);
+    });
+  });
+
   it('rejects a second active session of the account and accepts any number of stopped ones', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);

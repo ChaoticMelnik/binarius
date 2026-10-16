@@ -1,0 +1,3 @@
+ALTER TABLE "trading_sessions" ADD COLUMN "status_message_id" integer;--> statement-breakpoint
+CREATE INDEX "trading_sessions_tracked_idx" ON "trading_sessions" USING btree ("started_at") WHERE "trading_sessions"."status_message_id" is not null and "trading_sessions"."summary_sent_at" is null;--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_status_message_id_check" CHECK ("trading_sessions"."status_message_id" > 0);
