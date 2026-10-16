@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import {
+  SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
   SessionSummaryErrorCode,
   TRADING_SESSIONS_PATH,
   TRADING_SESSIONS_STOP_PATH,
+  TRADING_SESSIONS_TRACKED_PATH,
   TradeMode,
   TradingSessionErrorCode,
   TradingSessionStopReason,
@@ -16,7 +18,9 @@ import {
   pairPayoutAccepted,
   safeParseCreateTradingSessionRequest,
   safeParseReadTradingSessionQuery,
+  safeParseRecordSessionStatusMessageRequest,
   safeParseStopTradingSessionRequest,
+  safeParseTrackedSessionsQuery,
   sessionFitsDeadline,
   SignalFeedOutcome,
   SignalKind,
@@ -30,10 +34,12 @@ import {
   checkTradingSessionStart,
   claimSessionSummary,
   createTradingSession,
+  listTrackedSessions,
   readActiveTradingSessionView,
   readBalanceSnapshot,
   readStakes,
   readTradingSessionView,
+  recordSessionStatusMessage,
   stopTradingSession,
   stopUserSessions,
   touchBalanceRequested,
@@ -281,6 +287,26 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     return reply.code(201).send({ session });
   });
 
+  // The bot's recovery list (#567, docs/bot-session.md → Recovery after a restart): not scoped by
+  // a user (Rule 13), each row names its owner's chat. A static path, so find-my-way picks it
+  // before /:id whatever the registration order.
+  app.get(TRADING_SESSIONS_TRACKED_PATH, async (request, reply) => {
+    const query = safeParseTrackedSessionsQuery(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: 'validation', issues: query.error.issues });
+    }
+    const rows = await listTrackedSessions(db, { limit: query.data.limit });
+    return reply.send({
+      sessions: rows.map(({ id, telegramUserId, messageId, assetId, startedAt }) => ({
+        id,
+        telegramUserId,
+        messageId,
+        assetId,
+        startedAt: startedAt.toISOString(),
+      })),
+    });
+  });
+
   app.get(`${TRADING_SESSIONS_PATH}/:id`, async (request, reply) => {
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
     if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
@@ -290,6 +316,24 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     }
     // another user's id answers exactly as a missing one (Rule 13)
     const session = await viewForReply(id.data, query.data.telegramUserId);
+    if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
+    return reply.send({ session });
+  });
+
+  // The bot's first poll of a status message (#567): records its id, the first one recorded wins,
+  // and answers the view GET /trading/sessions/:id gives. The owner is in the CAS and in the read,
+  // so another user's id writes nothing and answers as a missing one (Rule 13).
+  const statusMessagePath = `${TRADING_SESSIONS_PATH}/:id${SESSION_STATUS_MESSAGE_SUFFIX}`;
+  app.post(statusMessagePath, async (request, reply) => {
+    const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
+    const body = safeParseRecordSessionStatusMessageRequest(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'validation', issues: body.error.issues });
+    }
+    const { telegramUserId, messageId } = body.data;
+    await recordSessionStatusMessage(db, { id: id.data, telegramUserId, messageId });
+    const session = await viewForReply(id.data, telegramUserId);
     if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     return reply.send({ session });
   });
