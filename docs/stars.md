@@ -298,5 +298,5 @@ request in `stars requests`.
 - **#123** — the buy row under the 80 % / 100 % nudges, when it merges.
 - **#27** (done) — «💳 Пополнить» right under the buy row of the status card and of the two
   `insufficient_tokens` refusals (`docs/deposit.md` → The chain).
-- **#13** — bonuses on purchases; its migration rewrites `token_ledger_reference_check` on top of
-  this one's text.
+- **#13** — the bonus rule engine; its migration adds `token_ledger_bonus_rule_check` beside
+  `token_ledger_reference_check` and leaves this one's text as it is.

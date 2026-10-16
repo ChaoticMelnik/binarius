@@ -14,7 +14,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | --------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
-| Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10) and by the email login (#162) |
+| Starter pack | `packages/db/src/link-bonus-ops.ts`    | `grantLinkBonus`, called by the confirmation (#10) and by the email login (#162); the amount is the active `link_bonus` rule's ([bonus-rules.md](bonus-rules.md), #13) |
 | Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort and a deadline that holds even when `fetch` ignores that abort (`withinDeadline`, #481: an abandoned call is `unavailable` and logged `broker oauth request abandoned`), a 2xx body read up to `MAX_OAUTH_BODY_BYTES` (64 KiB) as it arrives; the error body is released unread; `BROKER_ENDPOINTS` is the one table of paths and statuses |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
@@ -356,9 +356,9 @@ Since #314 no route issues a state, so a manual callback answers `invalid_state`
 
 ## The starter pack
 
-Confirming a partner account (#10) pays its user `LINK_BONUS_TOKENS`, once per user — 100
-autotrading tokens, defined once in `packages/db/src/link-bonus-ops.ts` and nowhere else; the bot prints the
-number the backend sends. The demo balance is not part of it: the broker sets it when the account
+Confirming a partner account (#10) pays its user the tokens of the active `link_bonus` rule
+version, once per user — 100 autotrading tokens in v1, which migration 0059 seeds
+([bonus-rules.md](bonus-rules.md), #13); the bot prints the number the backend sends. The demo balance is not part of it: the broker sets it when the account
 is created, and nothing here stores or credits one.
 
 - **Where.** `grantLinkBonus` runs inside the `confirmBrokerAccount` transaction, after the
@@ -368,7 +368,9 @@ is created, and nothing here stores or credits one.
   re-login that brings a `revoked` account back to `active` — that is not a first activation.
 - **Once per user.** The ledger row is a `bonus` that names the account it was earned by
   (`token_ledger.broker_account_id`, a composite FK on `(id, user_id)`, so it can only name one
-  of the user's own accounts), with `note = 'link_bonus'` for #13. The partial unique index
+  of the user's own accounts) and the rule version it was credited under (`bonus_rule_id`, #13;
+  packs credited before 0059 carry `note = 'link_bonus'` and were bound to v1 by the migration).
+  The partial unique index
   `token_ledger_link_bonus_user_idx` on `user_id`, over bonuses that name an account, holds one
   such row per user; the insert is `ON CONFLICT … DO NOTHING`, and a second account answers
   `already_granted` with the balance untouched. The key is the user, not the account: linking a
@@ -380,7 +382,13 @@ is created, and nothing here stores or credits one.
   still gets the pack.
 - **The answer.** `POST /auth/binodex/confirm` returns `{ account, grant }`, where `grant` is
   `{ granted: true, tokens: "100" }` (a decimal string) or `{ granted: false, reason }` with
-  `reason` one of `not_partner_client`, `already_granted`.
+  `reason` one of `not_partner_client`, `already_granted`, `no_active_rule`.
+- **No active rule (#13).** With no `link_bonus` version active and valid now
+  (`bonus-rule deactivate link_bonus`), the account is activated without a pack:
+  `no_active_rule`, no ledger row, the bot's card has no line about a bonus, and the backend logs
+  the warning `link_bonus_no_active_rule` with `userId` and `brokerAccountId`. An active version
+  whose params do not parse throws `InvalidBonusRule`: the activation rolls back (500, logged by
+  name and code), no default amount is paid.
 - **#162.** The email login calls the same `grantLinkBonus` inside `linkBrokerAccount`
   (`activate: true`), with the same preconditions: the users row held by `upsertUser`, the
   account made `active` by that transaction. It calls it on **every** email login, not only the

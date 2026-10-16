@@ -102,7 +102,7 @@ it received. What writes `users.updated_at`:
 - the token reserve on a new intent (`createInTransaction`), `releaseTokens` and `consumeTokens` —
   the settlement of a trade, which the worker runs, trading sessions included
   (`trade-intent-ops.ts`);
-- `grantLinkBonus` (`link-bonus-ops.ts`);
+- `grantLinkBonus` (`link-bonus-ops.ts`, through `applyBonus`, #13);
 - `adjustTokens` — a staff member's token adjustment (`token-adjustment-ops.ts`, #246);
 - `upsertUser` on an OAuth login, insert only (`oauth-ops.ts`).
 

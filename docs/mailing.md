@@ -56,7 +56,8 @@ promise no profit; they are overridable like every catalog text and are read whe
   and a `broker_account_id`, which `grantLinkBonus` writes in the transaction that makes the
   account active (the bot's confirm and the email login alike). One per user
   (`token_ledger_link_bonus_user_idx`). An account that is not a partner client earns no pack,
-  and so gets no chain.
+  and so gets no chain; nor does an account connected while no `link_bonus` rule version is
+  active (`no_active_rule`, [bonus-rules.md](bonus-rules.md), #13).
 - **The chain applies** while the user is not blocked by the admin, trades demo
   (`users.trading_mode = 'demo'`, #121: the chain leads into the demo; a step planned before a
   switch to real is canceled at the claim), has an active account, and has no `trading_sessions`
@@ -243,7 +244,8 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
   `mailing tick` lines' `unknown` count, the `mailing not delivered` warnings with a
   `transportError` or a 5xx `telegramErrorCode`, and
   `select count(*) from notification_jobs where status = 'sent' and last_error = 'outcome_unknown'`.
-- An account that is not a partner client gets no starter pack and therefore no chain.
+- An account that is not a partner client gets no starter pack and therefore no chain; the same
+  holds for one connected while no `link_bonus` rule version is active (#13).
 - The last step has no end: a user who is unreachable or `off` at 72 h and comes back later gets
   it then, if they still have no session.
 - The analysis reminder (#484): "after the analysis" compares `created_at`/`started_at` with
