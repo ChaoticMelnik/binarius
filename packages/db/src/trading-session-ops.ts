@@ -802,3 +802,83 @@ export async function readActiveTradingSessionView(
   const id = await activeSessionOf(db, brokerAccountId);
   return id === undefined ? undefined : readTradingSessionView(db, id, telegramUserId);
 }
+
+// Records the bot's status message of the session (#567, docs/bot-session.md → Recovery after a
+// restart): one CAS UPDATE, only while none is recorded (the first one wins) and only on the
+// owner's session (Rule 13: a foreign id writes nothing, like a missing one). True when it wrote.
+export async function recordSessionStatusMessage(
+  db: Db,
+  { id, telegramUserId, messageId }: { id: string; telegramUserId: string; messageId: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ statusMessageId: messageId })
+    .where(
+      and(
+        eq(tradingSessions.id, id),
+        isNull(tradingSessions.statusMessageId),
+        sql`exists (
+          select 1 from ${brokerAccounts}
+            join ${users} on ${users.id} = ${brokerAccounts.userId}
+           where ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+             and ${users.telegramUserId} = ${BigInt(telegramUserId)}
+        )`,
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+export interface TrackedSessionRow {
+  id: string;
+  telegramUserId: string;
+  messageId: number;
+  // null when settings carry no positive int4 assetId (a hand-written row)
+  assetId: number | null;
+  startedAt: Date;
+}
+
+// settings->>'assetId' as an int4, NULL for anything else: CASE keeps the cast behind the shape
+// checks, which a plain AND would not
+const settingsAssetIdSql = sql<number | null>`case
+  when jsonb_typeof(${tradingSessions.settings}->'assetId') = 'number'
+   and ${tradingSessions.settings}->>'assetId' ~ '^[1-9][0-9]{0,9}$'
+  then case when (${tradingSessions.settings}->>'assetId')::bigint <= 2147483647
+    then (${tradingSessions.settings}->>'assetId')::int end
+end`;
+
+// The sessions the bot tracks again after a restart (#567): a status message recorded, no summary
+// card sent, and not finished with no settled trade and its summary message sent - such a session
+// never gets a card, so there is nothing left to follow. Oldest first, at most `limit`. Not scoped
+// by a user: the bot's internal recovery list (Rule 13), each row naming its owner's chat.
+export async function listTrackedSessions(
+  db: Db,
+  { limit }: { limit: number },
+): Promise<TrackedSessionRow[]> {
+  const rows = await db
+    .select({
+      id: tradingSessions.id,
+      telegramUserId: users.telegramUserId,
+      messageId: sql<number>`${tradingSessions.statusMessageId}`,
+      assetId: settingsAssetIdSql,
+      startedAt: tradingSessions.startedAt,
+    })
+    .from(tradingSessions)
+    .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(
+      and(
+        isNotNull(tradingSessions.statusMessageId),
+        isNull(tradingSessions.summarySentAt),
+        sql`not (${tradingSessions.finalNoticeSentAt} is not null and not exists (
+          select 1 from ${tradeIntents}
+            join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+           where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+             and ${tradeIntents.status} = ${SETTLED}
+        ))`,
+      ),
+    )
+    .orderBy(asc(tradingSessions.startedAt), asc(tradingSessions.id))
+    .limit(limit);
+  return rows.map((row) => ({ ...row, telegramUserId: row.telegramUserId.toString() }));
+}

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { PairsCatalogErrorCode } from './catalog';
 import { decimalStringSchema } from './money';
-import { TradeIntentStatus, type TradeIntentView } from './trading';
+import { INT4_MAX, TradeIntentStatus, type TradeIntentView } from './trading';
 import {
+  TRACKED_SESSIONS_MAX,
+  safeParseRecordSessionStatusMessageRequest,
+  safeParseTrackedSessionsQuery,
+  safeParseTrackedSessionsResponse,
   DEFAULT_SESSION_TRADES,
   MAX_SESSION_TRADES,
   TRADING_SESSION_SETTINGS_VERSION,
@@ -462,5 +466,54 @@ describe('tradingSessionsStoppedResponseSchema (#122)', () => {
 
   it('sits under the sessions path', () => {
     expect(TRADING_SESSIONS_STOP_PATH).toBe(`${TRADING_SESSIONS_PATH}/stop`);
+  });
+});
+
+describe('the recovery contract (#567)', () => {
+  const owner = '123456789';
+  it.each([0, INT4_MAX + 1, 1.5])('refuses a status messageId of %s', (messageId) => {
+    expect(
+      safeParseRecordSessionStatusMessageRequest({ telegramUserId: owner, messageId }).success,
+    ).toBe(false);
+  });
+  it('accepts a status messageId from 1 to INT4_MAX and refuses an extra field', () => {
+    for (const messageId of [1, INT4_MAX]) {
+      expect(
+        safeParseRecordSessionStatusMessageRequest({ telegramUserId: owner, messageId }).success,
+      ).toBe(true);
+    }
+    expect(
+      safeParseRecordSessionStatusMessageRequest({ telegramUserId: owner, messageId: 1, x: 1 })
+        .success,
+    ).toBe(false);
+  });
+
+  it.each(['0', String(TRACKED_SESSIONS_MAX + 1), 'ten', ''])('refuses limit=%s', (limit) => {
+    expect(safeParseTrackedSessionsQuery({ limit }).success).toBe(false);
+  });
+  it('reads limit, and the ceiling when it is absent', () => {
+    expect(safeParseTrackedSessionsQuery({ limit: '3' }).data).toEqual({ limit: 3 });
+    expect(safeParseTrackedSessionsQuery({}).data).toEqual({ limit: TRACKED_SESSIONS_MAX });
+  });
+
+  const row = {
+    id: '00000000-0000-4000-8000-000000000001',
+    telegramUserId: owner,
+    messageId: 7,
+    assetId: null,
+    startedAt: '2026-10-16T10:00:00.000Z',
+  };
+  it('reads a tracked session list and refuses a row without a field', () => {
+    expect(
+      safeParseTrackedSessionsResponse({ sessions: [row, { ...row, assetId: 101 }] }).success,
+    ).toBe(true);
+    const short: Partial<typeof row> = { ...row };
+    delete short.assetId;
+    expect(safeParseTrackedSessionsResponse({ sessions: [short] }).success).toBe(false);
+    expect(
+      safeParseTrackedSessionsResponse({
+        sessions: Array.from({ length: TRACKED_SESSIONS_MAX + 1 }, () => row),
+      }).success,
+    ).toBe(false);
   });
 });

@@ -386,6 +386,13 @@
       "when": 1792156700791,
       "tag": "0054_session_cycle_message",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1792169030075,
+      "tag": "0055_session_status_message",
+      "breakpoints": true
     }
   ]
 }
