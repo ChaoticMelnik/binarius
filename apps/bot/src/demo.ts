@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
 import {
+  deleteRefusal,
+  editRefusal,
   BrokerRestErrorCode,
   checkStake,
   comparePairsByPayout,
@@ -70,7 +72,6 @@ import {
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { deleteRefusal, editRefusal } from './screen';
 import {
   editMessageTextByIdHtml,
   editMessageTextHtml,
@@ -1498,9 +1499,9 @@ export function createDemoComposer<C extends Context>({
     );
   }
 
-  // Every refusal of an edit is classified (screen.ts): already shown — the same screen pressed
-  // twice — is done; a message that is gone or cannot be edited gets the screen anew; any other
-  // refusal goes to bot.catch with nothing sent, the keyboard on screen being the retry. A
+  // Every refusal of an edit is classified (telegram-refusals.ts in @binarius/shared): already
+  // shown — the same screen pressed twice — is done; a message that is gone or cannot be edited
+  // gets the screen anew; any other refusal goes to bot.catch with nothing sent, the keyboard on screen being the retry. A
   // transport failure leaves the edit unknown and sends nothing more; anything else is a bug.
   async function editOrReply(
     ctx: Context,

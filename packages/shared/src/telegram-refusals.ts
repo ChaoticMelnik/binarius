@@ -1,8 +1,12 @@
-import type { GrammyError } from 'grammy';
-
-// One classification of a refused edit for every screen edited in place: the /settings levels
-// (bot.ts) and the demo (demo.ts); and of a refused delete, for the launch screen the session
-// start removes (#418, trading-session.ts).
+// One classification of a refused edit for every message edited in place: the bot's screens (the
+// /settings levels in bot.ts, the demo in demo.ts) and the backend's session cycle message (#551,
+// apps/backend/src/trading/session-notices.ts); and of a refused delete, for the launch screen the
+// session start removes (#418, apps/bot/src/trading-session.ts). The error is typed by its shape,
+// so this package needs no grammY: a GrammyError is one.
+export interface TelegramRefusal {
+  error_code: number;
+  description: string;
+}
 
 // What a refused editMessageText means, from Telegram's own wording (telegram-bot-api Client.cpp:
 // MESSAGE_NOT_MODIFIED → "message is not modified: …", check_message → "message to edit not
@@ -20,7 +24,7 @@ const EDIT_TARGET_GONE = [
   'there is no text in the message to edit',
 ] as const;
 
-export function editRefusal(error: GrammyError): 'shown' | 'gone' | undefined {
+export function editRefusal(error: TelegramRefusal): 'shown' | 'gone' | undefined {
   if (error.error_code !== 400) return undefined;
   if (error.description.includes(EDIT_ALREADY_SHOWN)) return 'shown';
   if (EDIT_TARGET_GONE.some((phrase) => error.description.includes(phrase))) return 'gone';
@@ -36,7 +40,7 @@ export function editRefusal(error: GrammyError): 'shown' | 'gone' | undefined {
 const DELETE_TARGET_GONE = 'message to delete not found';
 const DELETE_FORBIDDEN = "can't be deleted";
 
-export function deleteRefusal(error: GrammyError): 'gone' | 'forbidden' | undefined {
+export function deleteRefusal(error: TelegramRefusal): 'gone' | 'forbidden' | undefined {
   if (error.error_code !== 400) return undefined;
   if (error.description.includes(DELETE_TARGET_GONE)) return 'gone';
   if (error.description.includes(DELETE_FORBIDDEN)) return 'forbidden';

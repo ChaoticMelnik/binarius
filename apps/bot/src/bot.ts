@@ -1,6 +1,7 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
 import type { Message, User, UserFromGetMe } from 'grammy/types';
 import {
+  editRefusal,
   BrokerAccountStatus,
   BrokerBalanceUnavailableReason,
   CONFIRM_CALLBACK_PATTERN,
@@ -67,7 +68,6 @@ import {
 } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import type { SessionTracker } from './session-tracker';
-import { editRefusal } from './screen';
 import { createStakePicker, SETTINGS_CALLBACK_DATA, stakeOpenCallbackData } from './stake-picker';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
 import {

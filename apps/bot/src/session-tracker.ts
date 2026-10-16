@@ -1,5 +1,6 @@
 import { GrammyError, HttpError } from 'grammy';
 import {
+  editRefusal,
   errorLogFields,
   isTradingSessionFinished,
   type PairLabel,
@@ -13,7 +14,6 @@ import {
   type BackendClient,
 } from './backend-client';
 import { telegramErrorFields, type Logger } from './logging';
-import { editRefusal } from './screen';
 import { sessionStatusText, TEXTS } from './texts';
 
 // The session's status message follows its session (#284, docs/bot-session.md): the bot
