@@ -73,6 +73,8 @@ export function depositErrorFor(failure: DepositWidgetSessionFailure): DepositEr
         case AccessTokenRefusal.AccountRevoked:
         case AccessTokenRefusal.AccountPending:
         case AccessTokenRefusal.AccountNotFound:
+        // unreachable: the cashier never passes serviceOnly (#391)
+        case AccessTokenRefusal.NotService:
           return DepositErrorCode.TokenUnavailable;
         // passing: the broker's rate limit on the exchange, a key rollout, or an exchange this
         // caller did not make, which the next request does
