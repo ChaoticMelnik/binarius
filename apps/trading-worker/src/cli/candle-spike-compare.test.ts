@@ -168,6 +168,12 @@ describe('compareSeries', () => {
     const result = compareSeries(ticks, rest, context(5, { holes }));
     expect(result).toMatchObject({ compared: 4, closeEq: 4, inHole: 1 });
   });
+
+  it('K6b a candle starting exactly at the hole end overlaps it', () => {
+    const rest = series(5, wave);
+    const holes: Span[] = [{ fromMs: T0 + I + 1, toMs: T0 + 3 * I }];
+    expect(compareSeries(rest, rest, context(5, { holes })).inHole).toBe(3);
+  });
 });
 
 describe('compareAggregation', () => {

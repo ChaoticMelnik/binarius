@@ -18,6 +18,7 @@ import { exitCodeOf } from './candle-spike';
 import { renderReport } from './candle-spike-report';
 import {
   choosePairs,
+  rangeOf,
   runSpike,
   type IntervalResult,
   type SpikeDeps,
@@ -269,6 +270,11 @@ describe('runSpike setup', () => {
     expect(await h.run()).toEqual({ kind: 'setup_failed', what: 'not within 1000 ms: ready' });
   });
 
+  it('R1c SIGINT during setup: setup failed, interrupted', async () => {
+    const h = harness({ ready: false, onSleep: (harnessed) => harnessed.stop.abort() });
+    expect(await h.run()).toEqual({ kind: 'setup_failed', what: 'interrupted' });
+  });
+
   it('E2 SPIKE_ASSET_IDS: an unknown id or digits out of range fail by index before any socket', async () => {
     const unknown = harness({ options: { assetIds: [101, 999] } });
     expect(await unknown.run()).toEqual({ kind: 'setup_failed', what: 'unknown asset id 1' });
@@ -296,6 +302,21 @@ describe('runSpike phase A', () => {
       { size: 10, withTicks: 0 },
     ]);
     expect([report.capacity.subscribed, report.capacity.withTicks]).toEqual([90, 40]);
+  });
+
+  it('R10 a window cut by SIGINT or a drop measures no cap', async () => {
+    const interrupted = await ran(harness({ onSleep: (h) => h.stop.abort() }));
+    expect(renderReport(interrupted)).toContain(
+      'subscription cap: not measured (phase A cut: interrupted)',
+    );
+
+    const dropped = await ran(harness({ drop: { fromMs: T0 + 500, toMs: T0 + 1_500 } }));
+    expect(renderReport(dropped)).toContain('subscription cap: not measured (phase A cut: a drop)');
+    expect(dropped.stateChanges.map((change) => [change.from, change.to])).toEqual([
+      ['ready', 'reconnecting'],
+      ['reconnecting', 'ready'],
+    ]);
+    expect(dropped.holes).toEqual([]);
   });
 });
 
@@ -362,6 +383,35 @@ describe('runSpike phase B and the comparison', () => {
     expect(result.restOnly).toBe(0);
   });
 
+  it('R4b a second drop before any tick continues the hole: a flap is one hole', async () => {
+    const fromMs = T0 + 2_000 + 60_000;
+    let step = 0;
+    let downAt = 0;
+    const h = harness({
+      options: { minutes: 3 },
+      onSleep: ({ client, clock }) => {
+        if (step === 0 && clock >= fromMs) {
+          client.fire(BrokerSocketState.Reconnecting, 'transport close');
+          client.fire(BrokerSocketState.Ready);
+          client.fire(BrokerSocketState.Reconnecting, 'transport close');
+          step = 1;
+          downAt = clock;
+        } else if (step === 1 && clock >= downAt + 20_000) {
+          client.fire(BrokerSocketState.Ready);
+          step = 2;
+        }
+      },
+    });
+    const report = await ran(h);
+
+    expect(report.stateChanges).toHaveLength(4);
+    expect(report.holes).toHaveLength(1);
+    const width = report.holes[0]!.span.toMs - report.holes[0]!.span.fromMs;
+    expect(width).toBeGreaterThanOrEqual(20_000);
+    expect(width).toBeLessThanOrEqual(22_000);
+    expect(interval(report, 101, '5s').candles!.inHole).toBeLessThanOrEqual(6);
+  });
+
   it('R5 a 429 is retried once after Retry-After, then the series is rest_unavailable', async () => {
     const limited = (times: number) => {
       let left = times;
@@ -398,18 +448,35 @@ describe('runSpike phase B and the comparison', () => {
 
   it('R6 SIGINT in phase B: the fetch and the comparison run on the candles so far', async () => {
     const stopAt = T0 + 2_000 + 90_000;
+    let abortedAt: number | undefined;
+    let limited = true;
     const h = harness({
       options: { minutes: 3 },
       onSleep: (harnessed) => {
-        if (harnessed.clock >= stopAt) harnessed.stop.abort();
+        if (abortedAt === undefined && harnessed.clock >= stopAt) {
+          abortedAt = harnessed.sleeps.length;
+          harnessed.stop.abort();
+        }
+      },
+      getChart: (request, harnessed) => {
+        if (request.assetId === 102 && request.interval === '15s' && limited) {
+          limited = false;
+          return Promise.reject(
+            new BrokerRestError(BrokerRestErrorCode.RateLimited, { retryAfterSec: 7 }),
+          );
+        }
+        return Promise.resolve(chart(request, harnessed.clock, () => false));
       },
     });
     const report = await ran(h);
 
+    // the fetch after SIGINT keeps its pace before every GET but the first, and the 429 wait
+    expect(h.sleeps.slice(abortedAt)).toEqual([10, 10, 7_000, 10, 10, 10, 10, 10, 10, 10]);
+
     expect(report.interrupted).toBe(true);
     expect(report.windowCompleted).toBe(false);
     expect(report.phaseBMs).toBeLessThan(100_000);
-    expect(h.chartCalls.length).toBe(9);
+    expect(h.chartCalls.length).toBe(10);
     expect(report.compared).toBeGreaterThan(0);
     expect(renderReport(report)).toContain('interrupted');
     expect(
@@ -434,6 +501,14 @@ describe('runSpike phase B and the comparison', () => {
     expect(text).toContain('## Summary (for #404)');
     expect(text).toMatch(/MA200 не измерено/);
     expect(text).toContain('subscription cap: none observed up to 3 ids');
+  });
+});
+
+describe('rangeOf', () => {
+  it('R11 the range starts after the candle of the first tick, on a boundary too', () => {
+    const I = 5_000;
+    expect(rangeOf({ first: T0, last: T0 + 10 * I + 1 }, I)!.firstMs).toBe(T0 + I);
+    expect(rangeOf({ first: T0 + 1, last: T0 + 10 * I + 1 }, I)!.firstMs).toBe(T0 + I);
   });
 });
 

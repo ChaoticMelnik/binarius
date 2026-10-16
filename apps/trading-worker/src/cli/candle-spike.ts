@@ -116,18 +116,6 @@ export function parseSpikeEnv(source: NodeJS.ProcessEnv): SpikeEnv {
 export const exitCodeOf = (run: SpikeRun): number =>
   run.kind === 'ran' && run.windowCompleted && run.compared > 0 ? EXIT_OK : EXIT_FAILED;
 
-const abortableSleep = (stop: AbortSignal) => (ms: number) =>
-  new Promise<void>((resolve) => {
-    if (stop.aborted) return resolve();
-    const timer = setTimeout(done, ms);
-    function done() {
-      clearTimeout(timer);
-      stop.removeEventListener('abort', done);
-      resolve();
-    }
-    stop.addEventListener('abort', done, { once: true });
-  });
-
 export async function runCandleSpikeCli(
   source: NodeJS.ProcessEnv,
   out: (line: string) => void,
@@ -177,7 +165,7 @@ export async function runCandleSpikeCli(
       rest: createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl }),
       credentials: { brokerUserId: account.brokerUserId, accessToken: token.accessToken },
       now: Date.now,
-      sleep: abortableSleep(stop),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       say: err,
       sample: () => {
         const cpu = process.cpuUsage();

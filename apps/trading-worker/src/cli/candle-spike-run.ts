@@ -94,6 +94,7 @@ export interface SpikeDeps {
   rest: Pick<BrokerRestClient, 'listPairs' | 'getChart'>;
   credentials: BrokerCredentials;
   now(): number;
+  // always waits ms, after SIGINT too (the fetch keeps its pace); the loops read stop themselves
   sleep(ms: number): Promise<void>;
   say(line: string): void;
   sample(): ProcessSample;
@@ -183,6 +184,8 @@ export interface CapacityResult {
   closed: { subscribed: number; withTicks: number };
   chunks: ChunkCoverage[];
   firstTickDelayMs?: { median: number; max: number };
+  // the window was cut short: its coverage is no cap
+  cut?: 'interrupted' | 'a drop';
 }
 
 export interface StateChangeRecord {
@@ -194,7 +197,8 @@ export interface StateChangeRecord {
 }
 
 export interface HoleRecord {
-  // local clock: left ready -> ready again (or the end of phase B)
+  // local clock: the first drop -> the last return to ready before the first tick (or the end of
+  // phase B)
   leftAt: number;
   backAt?: number;
   // broker time: the last tick before it -> the first tick after it
@@ -299,6 +303,7 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   const holes: HoleRecord[] = [];
   let openHole: HoleRecord | undefined;
   let terminal: string | undefined;
+  let droppedInA = false;
 
   const firstTickAt = new Map<number, number>();
   const builders = new Map<number, Record<SpikeIntervalName, CandleBuilder>>();
@@ -316,7 +321,7 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   const client = deps.openClient('A');
   client.onState((change) => {
     if (phase === 'done') return;
-    if (phase === 'B') {
+    if (phase === 'A' || phase === 'B') {
       stateChanges.push({
         at: deps.now(),
         from: change.from,
@@ -324,7 +329,14 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
         ...(change.reason === undefined ? {} : { reason: change.reason }),
         ...(watermark === undefined ? {} : { watermark }),
       });
-      if (change.from === BrokerSocketState.Ready && change.to !== BrokerSocketState.Ready) {
+    }
+    const left = change.from === BrokerSocketState.Ready && change.to !== BrokerSocketState.Ready;
+    if (phase === 'A' && left) droppedInA = true;
+    if (phase === 'B') {
+      if (left && openHole !== undefined) {
+        // no tick since the last drop: the same gap in the tick series, one hole
+        delete openHole.backAt;
+      } else if (left) {
         const from = watermark ?? deps.now();
         openHole = { leftAt: deps.now(), span: { fromMs: from, toMs: Number.POSITIVE_INFINITY } };
         holes.push(openHole);
@@ -374,6 +386,7 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
 
   const deadline = deps.now() + timing.readyTimeoutMs;
   for (;;) {
+    if (deps.stop.aborted) return { kind: 'setup_failed', what: 'interrupted' };
     if (foreignUser) return { kind: 'setup_failed', what: 'user.data of another user' };
     const missing = [
       client.state === BrokerSocketState.Ready ? undefined : 'ready',
@@ -415,6 +428,8 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
     subscribeAt,
     nowMs: deps.now(),
   });
+  const cut = deps.stop.aborted ? 'interrupted' : droppedInA ? 'a drop' : undefined;
+  if (cut !== undefined) capacityResult.cut = cut;
 
   // phase B: accuracy
   phase = 'B';
@@ -550,12 +565,13 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   return { kind: 'ran', report, compared, windowCompleted };
 }
 
-// [the first candle start at or after the first tick, the last one that ended by the last tick]
+// [the first candle after the builder's first, whose open is its own first tick; the last one that
+// ended by the last tick]
 export function rangeOf(
   span: { first: number; last: number },
   intervalMs: number,
 ): SeriesRange | undefined {
-  const firstMs = Math.ceil(span.first / intervalMs) * intervalMs;
+  const firstMs = Math.floor(span.first / intervalMs) * intervalMs + intervalMs;
   const lastMs = Math.floor(span.last / intervalMs) * intervalMs - intervalMs;
   return lastMs < firstMs ? undefined : { firstMs, lastMs };
 }
