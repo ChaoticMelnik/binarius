@@ -61,7 +61,8 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - **group** — the screen or scenario the admin section lists it under: `start`, `card`,
   `account`, `menu`, `settings`, `support`, `help`, `demo`, `analysis`, `trade`, `session`,
   `deposit`, `mailing`, `buttons`, `commands`, `profile`. `mailing` holds the texts only the
-  backend's mailing engine sends (#202), so the bot's `TEXTS` leaves the group out. `deposit`
+  backend's mailing engine sends (#202: the first-session chain; #484: `analysisUnusedReminder`), so
+  the bot's `TEXTS` leaves the group out. `deposit`
   holds the backend's push after a deposit in the cashier (`depositCredited`, #112), left out of
   `TEXTS` by name. `buttons` is exactly
   the bot's `LABELS` buttons plus

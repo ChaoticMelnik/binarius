@@ -182,7 +182,8 @@ the launch, the analysis and its expansion, the trade's status) speak of it. `re
 walks every screen a real-mode user can reach on the catalog's defaults and fails on any demo
 wording, with a demo control case; a new screen on the path is added to its scenes. Staff
 overrides of the texts are not checked by it. The first-session reminders («🎮 Демо-торговля»)
-are planned and sent only to a user in demo ([mailing.md](mailing.md)); the «🎮 Демо-торговля»
+and the analysis reminder («📊 Новый анализ», #484) are planned and sent only to a user in demo
+([mailing.md](mailing.md)); the «🎮 Демо-торговля»
 button under `/account`, the account card and the re-login push stays for a real-mode user too
 (accepted: it leads to the neutral duration screen, and every screen with a real-money button
 after it says REAL).
