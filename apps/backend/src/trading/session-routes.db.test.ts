@@ -1661,4 +1661,37 @@ describe('the recovery routes (#567)', () => {
     const again = await lost(seed.sessionId, body);
     expect([again.statusCode, again.json()]).toEqual([200, { forgotten: false }]);
   });
+
+  it('T10 a record replacing the recorded message writes; the lost route refuses replacesMessageId', async () => {
+    const seed = await seedSession();
+    const target = appWith();
+    const body = { telegramUserId: seed.telegramUserId };
+    expect((await record(target, seed.sessionId, { ...body, messageId: 41 })).statusCode).toBe(200);
+    const zero = await record(target, seed.sessionId, {
+      ...body,
+      messageId: 42,
+      replacesMessageId: 0,
+    });
+    expect(zero.statusCode).toBe(400);
+    expect(await recordedOf(seed.sessionId)).toBe(41);
+    const replaced = await record(target, seed.sessionId, {
+      ...body,
+      messageId: 42,
+      replacesMessageId: 41,
+    });
+    expect(replaced.statusCode).toBe(200);
+    expect(sessionOf(replaced).id).toBe(seed.sessionId);
+    expect(await recordedOf(seed.sessionId)).toBe(42);
+    const lost = await target.inject({
+      method: 'POST',
+      url: `${TRADING_SESSIONS_PATH}/${seed.sessionId}${SESSION_STATUS_MESSAGE_LOST_SUFFIX}`,
+      headers: auth,
+      payload: { ...body, messageId: 42, replacesMessageId: 41 },
+    });
+    expect([lost.statusCode, (lost.json() as { error?: unknown }).error]).toEqual([
+      400,
+      'validation',
+    ]);
+    expect(await recordedOf(seed.sessionId)).toBe(42);
+  });
 });

@@ -18,6 +18,7 @@ import {
   pairAcceptsDuration,
   pairPayoutAccepted,
   safeParseCreateTradingSessionRequest,
+  safeParseForgetSessionStatusMessageRequest,
   safeParseReadTradingSessionQuery,
   safeParseRecordSessionStatusMessageRequest,
   safeParseStopTradingSessionRequest,
@@ -323,7 +324,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
   });
 
   // The bot's first poll of a status message (#567): records its id, the first one recorded wins,
-  // and answers the view GET /trading/sessions/:id gives. The owner is in the CAS and in the read,
+  // unless the body names it as the message this one replaces, and answers the view GET /trading/sessions/:id gives. The owner is in the CAS and in the read,
   // so another user's id writes nothing and answers as a missing one (Rule 13).
   const statusMessagePath = `${TRADING_SESSIONS_PATH}/:id${SESSION_STATUS_MESSAGE_SUFFIX}`;
   app.post(statusMessagePath, async (request, reply) => {
@@ -333,8 +334,13 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     if (!body.success) {
       return reply.code(400).send({ error: 'validation', issues: body.error.issues });
     }
-    const { telegramUserId, messageId } = body.data;
-    await recordSessionStatusMessage(db, { id: id.data, telegramUserId, messageId });
+    const { telegramUserId, messageId, replacesMessageId } = body.data;
+    await recordSessionStatusMessage(db, {
+      id: id.data,
+      telegramUserId,
+      messageId,
+      replacesMessageId,
+    });
     const session = await viewForReply(id.data, telegramUserId);
     if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     return reply.send({ session });
@@ -348,7 +354,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
   app.post(lostMessagePath, async (request, reply) => {
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
     if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
-    const body = safeParseRecordSessionStatusMessageRequest(request.body);
+    const body = safeParseForgetSessionStatusMessageRequest(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: 'validation', issues: body.error.issues });
     }
