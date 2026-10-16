@@ -3,7 +3,6 @@ import {
   editRefusal,
   errorLogFields,
   isTradingSessionFinished,
-  TradingSessionStatus,
   type PairLabel,
   type TelegramHtml,
   type TradingSessionView,
@@ -18,8 +17,9 @@ import {
 import type { Logger } from './logging';
 import { sessionStatusText, TEXTS } from './texts';
 
-// The session's status message follows its session (#284, docs/bot-session.md): the bot
-// polls GET /trading/sessions/:id and edits the message as the session moves. In-process memory,
+// The session's message follows its session (#284, docs/bot-session.md): the bot polls GET
+// /trading/sessions/:id and edits the message when its text changes - once, when the session
+// stops (#536) - then sends the summary card (#318). In-process memory,
 // like the intent tracker; the first poll of a message records its id with the backend (#567), so
 // after a restart the bot's resumer (session-resume.ts) tracks the session again on it, the
 // recovered entries' first polls paced in slots and a message drawn in this process remembered.
@@ -27,7 +27,8 @@ import { sessionStatusText, TEXTS } from './texts';
 // The answer GET /trading/sessions/:id gives for an id that is missing or not this user's.
 export const SESSION_NOT_FOUND = 'not_found';
 
-// the intent tracker's bound: the oldest entry goes first, its message keeping the refresh button
+// the intent tracker's bound: the oldest entry goes first; the recovery pass (#567) tracks its
+// session again from the backend's list
 const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 
 // Where following a session ends: stopped, and its last trade can no longer move the counters. A
@@ -58,8 +59,8 @@ export interface SessionTrackRequest {
   // the pressed message this one was sent in place of, because Telegram refused its edit as gone:
   // the record replaces it when it is the one recorded (#567)
   replacesMessageId?: number;
-  // edits the status message; the keyboard follows the view (no stop button once it stopped),
-  // or only the menu once the session is gone (#350)
+  // edits the session message, without a keyboard (#536), or under the menu alone once the
+  // session is gone (#350)
   edit: (text: TelegramHtml, ...rest: SessionEditArgs) => Promise<unknown>;
   // sends the summary card under the final status (#318): called once, as the entry ends on a
   // done view whose final edit landed and whose summary message the backend sent (#464); it
@@ -95,59 +96,28 @@ export interface SessionTrackerOptions {
 
 interface Entry extends SessionTrackRequest {
   startedAt: number;
-  // what is on screen, as finalOf's key spells it; '' while nothing was read and nothing this
-  // process drew on the message is remembered, so the first good read draws
+  // the text on screen (finalOf's key); '' while nothing was read and nothing this process drew
+  // on the message is remembered, so the first good read draws
   rendered: string;
   timer: ReturnType<typeof setTimeout> | undefined;
   readFailures: number;
   editFailures: number;
 }
 
-// Every field the message prints from the view; the edit happens only when one of them changes.
-// The balance's age is left out: it moves every poll, and a manual_review session would be edited
-// every poll to the deadline; the age line is as of the edit that drew it (#337).
-const renderKey = ({
-  status,
-  stopReason,
-  trades,
-  cycles,
-  lastIntent,
-  balance,
-}: TradingSessionView): string =>
-  [
-    status,
-    stopReason,
-    cycles.planned,
-    cycles.closed,
-    trades.settled,
-    trades.won,
-    trades.lost,
-    trades.tied,
-    trades.profit,
-    balance?.available,
-    balance?.current,
-    lastIntent?.id,
-    lastIntent?.status,
-    lastIntent?.lastError,
-  ]
-    .map(String)
-    .join('|');
-
-// What the message ends on: the view's status, with the deadline hint once past the deadline
-// under a session not stopped. The hint follows sessionStatusText's own rule (none under a
-// stopped session), so a stopped session's key past the deadline is its plain key and a text
-// already on screen is not drawn again.
+// What the message shows of the view, and its key: the printed text itself (#536), so the edit
+// happens only when the text changes - the session's stop, a pair's label or an override of the
+// catalog's texts (#570) - and never because of a counter the message does not print.
 const finalOf = (
   label: PairLabel | null,
   view: TradingSessionView,
-  past: boolean,
 ): { key: string; text: TelegramHtml } => {
-  const hinted = past && view.status !== TradingSessionStatus.Stopped;
-  return {
-    key: renderKey(view) + (hinted ? '|deadline' : ''),
-    text: sessionStatusText(label, view, { deadline: hinted }),
-  };
+  const text = sessionStatusText(label, view);
+  return { key: text.value, text };
 };
+
+// The card waits for the done view's text on screen and the backend's summary message (#464)
+const cardDue = (entry: Entry, view: TradingSessionView, key: string): boolean =>
+  sessionTrackingDone(view) && entry.rendered === key && view.noticesDone;
 
 export function createSessionTracker({
   backend,
@@ -321,7 +291,7 @@ export function createSessionTracker({
     entry.record = false;
     if (!current(entry)) return;
     entry.view = view;
-    const { key, text } = finalOf(entry.label, view, now() - entry.startedAt >= deadlineMs);
+    const { key, text } = finalOf(entry.label, view);
     if (key !== entry.rendered) {
       const goOn = await editTo(entry, text, key, view);
       if (!goOn) return;
@@ -329,8 +299,8 @@ export function createSessionTracker({
     // The card goes once, then the entry ends, whatever the card did: a claim the backend
     // committed answers 409 the second time, so a retry could only lose it (docs/bot-session.md).
     // It waits for the backend's summary message (#464), so it never comes before it: a done
-    // session without it is polled on, with no edit while nothing it prints changes.
-    if (sessionTrackingDone(view) && entry.rendered === key && view.noticesDone) {
+    // session without it is polled on, with no edit while its text stays the same.
+    if (cardDue(entry, view, key)) {
       await entry.card(view);
       finish(entry);
       return;
@@ -338,12 +308,11 @@ export function createSessionTracker({
     await next(entry);
   }
 
-  // Re-arm, or past the deadline stop, with one last edit, not retried, only when the final text
-  // is not on screen yet (the poll's own edit failed, or a read failed after the last good one):
-  // the hint for a session not stopped, the final status otherwise; then the card of a done
-  // session once that text is shown and the summary message went out (no card otherwise: it
-  // would come before the summary or without it). An entry that never read a view ends with no
-  // edit: it has nothing to draw.
+  // Re-arm, or past the deadline stop, with one last edit, not retried, only when the last view's
+  // text is not on screen yet (the poll's own edit failed, or a read failed after the last good
+  // one); then the card of a done session once that text is shown and the summary message went
+  // out (no card otherwise: it would come before the summary or without it). An entry that never
+  // read a view ends with no edit: it has nothing to draw.
   async function next(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     if (now() - entry.startedAt < deadlineMs) {
@@ -355,9 +324,9 @@ export function createSessionTracker({
       finish(entry);
       return;
     }
-    const { key, text } = finalOf(entry.label, view, true);
+    const { key, text } = finalOf(entry.label, view);
     if (entry.rendered !== key) await editTo(entry, text, key, view);
-    if (sessionTrackingDone(view) && entry.rendered === key && view.noticesDone) {
+    if (cardDue(entry, view, key)) {
       await entry.card(view);
     }
     finish(entry);
@@ -379,7 +348,7 @@ export function createSessionTracker({
         startedAt: previous?.startedAt ?? request.startedAt ?? now(),
         rendered:
           request.view !== null
-            ? renderKey(request.view)
+            ? finalOf(request.label, request.view).key
             : memo?.messageId === request.messageId
               ? memo.rendered
               : '',

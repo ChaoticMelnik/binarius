@@ -121,8 +121,7 @@ function setup({
 
 const MESSAGE_ID = 77;
 
-const shown = (view: TradingSessionView, deadline = false) =>
-  sessionStatusText(LABEL, view, { deadline }).value;
+const shown = (view: TradingSessionView) => sessionStatusText(LABEL, view).value;
 const texts = (edits: readonly TelegramHtml[]) => edits.map((text) => text.value);
 
 const live = (status: TradeIntentStatus) => intentView({ status });
@@ -164,9 +163,11 @@ describe('the session tracker', () => {
     expect(sessionTrackingDone(stoppedWith(live(TradeIntentStatus.ManualReview)))).toBe(false);
   });
 
-  it('edits only when what the message prints changes', async () => {
+  // #536: the message prints nothing of the trades, so it is edited once, when the session stops
+  it('no edit while the text is the same: one edit when the session stops', async () => {
+    const tradedOn = sessionView({ ...trading, ...settledOne });
     const { tracker, readSession, request, target } = setup({
-      script: [SESSION_VIEW, trading, trading, stoppedClosed],
+      script: [SESSION_VIEW, trading, tradedOn, stoppedClosed],
     });
     const { edits, edit } = target();
     tracker.track(request({ edit }));
@@ -176,26 +177,16 @@ describe('the session tracker', () => {
     expect(readSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
     expect(edits).toEqual([]);
     await vi.advanceTimersByTimeAsync(POLL * 2);
-    expect(texts(edits)).toEqual([shown(trading)]);
+    expect(edits).toEqual([]);
     await vi.advanceTimersByTimeAsync(POLL);
-    expect(texts(edits)).toEqual([shown(trading), shown(stoppedClosed)]);
+    expect(texts(edits)).toEqual([shown(stoppedClosed)]);
     expect(tracker.size()).toBe(0);
     await vi.advanceTimersByTimeAsync(DEADLINE);
     expect(readSession).toHaveBeenCalledTimes(4);
   });
 
-  // #552: the cycle line prints cycles.closed, so a change of it alone is an edit
-  it('K2 edits when only the closed cycles change', async () => {
-    const nextCycle = sessionView({ cycles: { planned: 5, closed: 1 } });
-    const { tracker, request, target } = setup({ script: [SESSION_VIEW, nextCycle] });
-    const { edits, edit } = target();
-    tracker.track(request({ edit }));
-    await vi.advanceTimersByTimeAsync(FIRST + POLL);
-    expect(texts(edits)).toEqual([shown(nextCycle)]);
-  });
-
-  // #337: a session on manual review is followed to the deadline and shows its balance's age
-  it('K1 edits when the balance changes and not when only its age moves', async () => {
+  // #536: the balance is the summary's (#464), not the session message's
+  it('K1 a session on manual review: no edit when its balance or its age moves', async () => {
     const onReview = (available: string, ageSec: number) =>
       sessionView({
         status: TradingSessionStatus.Stopped,
@@ -212,10 +203,9 @@ describe('the session tracker', () => {
     });
     const { edits, edit } = target();
     tracker.track(request({ view: onReview('10000', 5), edit }));
-    await vi.advanceTimersByTimeAsync(FIRST + POLL);
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(edits).toEqual([]);
-    await vi.advanceTimersByTimeAsync(POLL);
-    expect(texts(edits)).toEqual([shown(moved)]);
+    expect(shown(moved)).toBe(shown(older));
   });
 
   it('hands the edit the view it draws, so the keyboard can follow it', async () => {
@@ -246,23 +236,25 @@ describe('the session tracker', () => {
     await vi.advanceTimersByTimeAsync(POLL);
     expect(tracker.size()).toBe(1);
     await vi.advanceTimersByTimeAsync(POLL);
-    expect(texts(edits)).toEqual([shown(stoppedOpen), shown(stoppedClosed)]);
+    // the same end line: the settle changes nothing it prints
+    expect(texts(edits)).toEqual([shown(stoppedOpen)]);
     expect(tracker.size()).toBe(0);
     expect(readSession).toHaveBeenCalledTimes(3);
   });
 
   it('moves a tracked session to the new message and leaves the old one alone', async () => {
-    const { tracker, request, target } = setup({ script: [trading, stoppedClosed] });
+    const { tracker, request, target } = setup({ script: [stoppedOpen, stoppedClosed] });
     const old = target();
     const fresh = target();
     tracker.track(request({ edit: old.edit }));
     await vi.advanceTimersByTimeAsync(FIRST);
-    expect(texts(old.edits)).toEqual([shown(trading)]);
-    tracker.track(request({ edit: fresh.edit, view: trading }));
+    expect(texts(old.edits)).toEqual([shown(stoppedOpen)]);
+    // the new message was sent while the session ran
+    tracker.track(request({ edit: fresh.edit, view: SESSION_VIEW }));
     expect(tracker.size()).toBe(1);
     await vi.advanceTimersByTimeAsync(FIRST);
     expect(texts(fresh.edits)).toEqual([shown(stoppedClosed)]);
-    expect(texts(old.edits)).toEqual([shown(trading)]);
+    expect(texts(old.edits)).toEqual([shown(stoppedOpen)]);
   });
 
   it('keeps the first deadline when a session moves to a new message', async () => {
@@ -272,7 +264,8 @@ describe('the session tracker', () => {
     const fresh = target();
     tracker.track(request({ edit: fresh.edit, view: trading }));
     await vi.advanceTimersByTimeAsync(FIRST + POLL);
-    expect(texts(fresh.edits)).toEqual([shown(trading, true)]);
+    // past the first deadline: ended, nothing to draw over the same text
+    expect(fresh.edits).toEqual([]);
     expect(tracker.size()).toBe(0);
   });
 
@@ -292,12 +285,12 @@ describe('the session tracker', () => {
     tracker.track(request({ edit: old.edit }));
     await vi.advanceTimersByTimeAsync(FIRST);
     tracker.track(request({ edit: fresh.edit }));
-    release(trading);
+    release(stoppedOpen);
     await vi.advanceTimersByTimeAsync(0);
     expect(old.edits).toEqual([]);
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(old.edits).toEqual([]);
-    expect(texts(fresh.edits)).toEqual([shown(stoppedOpen), shown(stoppedClosed)]);
+    expect(texts(fresh.edits)).toEqual([shown(stoppedOpen)]);
     // the old entry's one read and the new entry's two: nothing polls for the old message
     await vi.advanceTimersByTimeAsync(POLL * 3);
     expect(readSession).toHaveBeenCalledTimes(3);
@@ -307,7 +300,7 @@ describe('the session tracker', () => {
   it('lets an edit already in flight land on the old message, and nothing after it', async () => {
     let finishEdit: () => void = () => {};
     const { tracker, readSession, request, target } = setup({
-      script: [trading, stoppedOpen, stoppedClosed],
+      script: [stoppedOpen, stoppedClosed],
     });
     const old = target();
     const heldEdit = vi.fn<SessionTrackRequest['edit']>((...[text]) => {
@@ -319,14 +312,14 @@ describe('the session tracker', () => {
     const fresh = target();
     tracker.track(request({ edit: heldEdit }));
     await vi.advanceTimersByTimeAsync(FIRST);
-    expect(texts(old.edits)).toEqual([shown(trading)]);
-    tracker.track(request({ edit: fresh.edit, view: trading }));
+    expect(texts(old.edits)).toEqual([shown(stoppedOpen)]);
+    tracker.track(request({ edit: fresh.edit, view: SESSION_VIEW }));
     finishEdit();
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
-    expect(texts(old.edits)).toEqual([shown(trading)]);
-    expect(texts(fresh.edits)).toEqual([shown(stoppedOpen), shown(stoppedClosed)]);
+    expect(texts(old.edits)).toEqual([shown(stoppedOpen)]);
+    expect(texts(fresh.edits)).toEqual([shown(stoppedClosed)]);
     await vi.advanceTimersByTimeAsync(POLL * 3);
-    expect(readSession).toHaveBeenCalledTimes(3);
+    expect(readSession).toHaveBeenCalledTimes(2);
   });
 
   // review m3: a replaced entry's 404 is not drawn on the old message either
@@ -378,16 +371,15 @@ describe('the session tracker', () => {
     await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
     expect(tracker.size()).toBe(0);
     expect(edits.at(-1)?.value).toBe(shown(reviewed));
-    expect(edits.at(-1)?.value).not.toContain(TEXTS.sessionDeadline.value);
   });
 
-  it('points at the refresh button past the deadline for a live session', async () => {
+  // #536: no hint and no button past the deadline: the text on screen is the live one already
+  it('ends a live session at the deadline with no edit', async () => {
     const { tracker, request, target } = setup({ script: [SESSION_VIEW] });
     const { edits, edit } = target();
     tracker.track(request({ edit }));
     await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
-    expect(texts(edits)).toEqual([shown(SESSION_VIEW, true)]);
-    expect(edits[0]?.value).toContain(TEXTS.sessionDeadline.value);
+    expect(edits).toEqual([]);
     expect(tracker.size()).toBe(0);
   });
 
@@ -423,7 +415,7 @@ describe('the session tracker', () => {
   });
 
   it('stops when the message is gone', async () => {
-    const { tracker, readSession, request } = setup({ script: [trading] });
+    const { tracker, readSession, request } = setup({ script: [stoppedOpen] });
     tracker.track(request({ edit: () => Promise.reject(GONE()) }));
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(tracker.size()).toBe(0);
@@ -456,9 +448,9 @@ describe('the session tracker', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(stopped).toBe(false);
-    release(trading);
+    release(stoppedOpen);
     await stopping;
-    expect(texts(edits)).toEqual([shown(trading)]);
+    expect(texts(edits)).toEqual([shown(stoppedOpen)]);
     tracker.track(request({ sessionId: '00000000-0000-4000-8000-000000000000' }));
     expect(tracker.size()).toBe(0);
     await vi.advanceTimersByTimeAsync(DEADLINE);
@@ -490,7 +482,7 @@ describe('the session tracker', () => {
 
     it('C1 sends the card once, after the final edit, with the final view', async () => {
       const order: string[] = [];
-      const { tracker, request } = setup({ script: [trading, stoppedClosed] });
+      const { tracker, request } = setup({ script: [trading, stoppedOpen, stoppedClosed] });
       const card = vi.fn<SessionTrackRequest['card']>(() => {
         order.push('card');
         return Promise.resolve();
@@ -505,7 +497,7 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(card).toHaveBeenCalledTimes(1);
       expect(card).toHaveBeenCalledWith(stoppedClosed);
-      expect(order).toEqual(['edit', 'edit', 'card']);
+      expect(order).toEqual(['edit', 'card']);
       expect(tracker.size()).toBe(0);
     });
 
@@ -661,7 +653,7 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(POLL);
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
       expect(readSession).toHaveBeenCalledTimes(1);
-      expect(texts(edits)).toEqual([shown(trading), shown(stoppedClosed)]);
+      expect(texts(edits)).toEqual([shown(stoppedClosed)]);
     });
 
     it('P8 a record names the message it replaces; the next poll only reads', async () => {
@@ -738,13 +730,12 @@ describe('the session tracker', () => {
     });
     const unsent = sessionView({ ...stoppedClosed, noticesDone: false });
 
-    it('P7a past the deadline, an active session is drawn once, with the hint, and ends', async () => {
+    it('P7a past the deadline, an active session is drawn once, with no hint (#536), and ends', async () => {
       const { tracker, readSession, request, target } = setup({ script: [SESSION_VIEW] });
       const { edits, edit } = target();
       tracker.track(request({ view: null, startedAt: past(), edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(texts(edits)).toEqual([shown(SESSION_VIEW, true)]);
-      expect(edits[0]?.value).toContain(TEXTS.sessionDeadline.value);
+      expect(texts(edits)).toEqual([shown(SESSION_VIEW)]);
       expect(tracker.size()).toBe(0);
       await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(readSession).toHaveBeenCalledTimes(1);
@@ -972,7 +963,8 @@ describe('the session tracker', () => {
       ...stoppedWith(live(TradeIntentStatus.ManualReview)),
       stopReason: TradingSessionStopReason.ManualReview,
     });
-    const moved = sessionView({ ...reviewed, ...settledOne });
+    // what it prints changed: another stop reason (an old text on screen, #536)
+    const moved = sessionView({ ...reviewed, stopReason: TradingSessionStopReason.UserStopped });
     const recovered = { view: null, record: false } as const;
 
     it('Y1 a stuck session recovered again on its message reads once more and does not edit', async () => {
@@ -1012,9 +1004,21 @@ describe('the session tracker', () => {
       expect(texts(second.edits)).toEqual([shown(reviewed)]);
     });
 
+    // #570 Minor 1: the key is the printed text, so a label the memory did not draw is drawn
+    it('Y5 a recovered entry with another label than the one drawn edits once', async () => {
+      const { tracker, request, target } = setup({ script: [reviewed] });
+      tracker.track(request({ ...recovered, startedAt: past(), edit: target().edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      const second = target();
+      tracker.track(request({ ...recovered, label: null, startedAt: past(), edit: second.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(second.edits)).toEqual([sessionStatusText(null, reviewed).value]);
+      expect(texts(second.edits)).not.toEqual([shown(reviewed)]);
+    });
+
     it('Y4 a lost message leaves no memory: the next entry of it edits again', async () => {
       const { tracker, forgetSessionMessage, request, target } = setup({
-        script: [trading, SESSION_VIEW],
+        script: [stoppedOpen, SESSION_VIEW],
       });
       tracker.track(request({ view: SESSION_VIEW, edit: () => Promise.reject(FORBIDDEN()) }));
       await vi.advanceTimersByTimeAsync(FIRST);

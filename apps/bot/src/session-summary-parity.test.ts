@@ -11,9 +11,10 @@ import {
 import { intentView, PAIR_EURUSD, sessionView } from './testing';
 import { sessionStatusText, sessionTexts } from './texts';
 
-// The summary the backend sends at a session's end (#464) repeats the status message's final
-// lines: both are built by session-texts.ts in packages/shared, and this holds the two equal
-// line by line, so neither side can grow a line of its own without a red test.
+// The summary the backend sends at a session's end (#464) opens, under its pair, on the line the
+// session message ends on (#536): both are built by session-texts.ts in packages/shared, and this
+// holds the two equal, so neither side can change that line alone without a red test. The result
+// and the balance are the summary's only (#536).
 
 const BALANCES: TradingSessionView['balance'][] = [
   null,
@@ -25,14 +26,14 @@ const TRADES: TradingSessionView['trades'][] = [
   { settled: 3, rejected: 1, won: 1, lost: 1, tied: 1, profit: '-1' as DecimalString },
 ];
 
-// what follows the status message's header and settings line, and the blank line under them
-const statusBody = (view: TradingSessionView): string[] =>
-  sessionStatusText(pairLabel(PAIR_EURUSD), view).value.split('\n').slice(3);
-const summaryBody = (view: TradingSessionView): string[] =>
+// the session message's last line: its end line, under the head and the blank line
+const statusEnd = (view: TradingSessionView): string | undefined =>
+  sessionStatusText(pairLabel(PAIR_EURUSD), view).value.split('\n').at(-1);
+// the summary's line under its pair
+const summaryFirst = (view: TradingSessionView): string | undefined =>
   sessionTexts
     .sessionSummaryText(pairLabel(PAIR_EURUSD), PAIR_EURUSD.id, view)
-    .value.split('\n')
-    .slice(1);
+    .value.split('\n')[1];
 
 describe('the summary and the status message of a finished session (#464)', () => {
   const cases = Object.values(TradingSessionStopReason).flatMap((stopReason) =>
@@ -54,9 +55,10 @@ describe('the summary and the status message of a finished session (#464)', () =
   );
 
   it.each(cases.map((view) => [view.stopReason, view.mode, view]))(
-    'print the same closing lines: %s, %s',
+    'end the session message on the summary’s first line: %s, %s',
     (_reason, _mode, view) => {
-      expect(summaryBody(view)).toEqual(statusBody(view));
+      expect(summaryFirst(view)).toBeDefined();
+      expect(summaryFirst(view)).toBe(statusEnd(view));
     },
   );
 });

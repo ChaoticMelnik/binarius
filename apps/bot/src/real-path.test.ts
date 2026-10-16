@@ -3,6 +3,7 @@ import {
   BUY_CALLBACK_DATA,
   buyPackageCallbackData,
   decimalStringSchema,
+  sessionStopCallbackData,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -30,7 +31,6 @@ import {
 import { intentCallbackData } from './demo-trade';
 import { MODE_CALLBACK_DATA } from './keyboards';
 import { MODE_SCREEN_CALLBACK_DATA } from './trading-mode';
-import { sessionRefreshCallbackData } from './trading-session';
 import {
   stakeCustomCallbackData,
   stakePresetCallbackData,
@@ -92,7 +92,7 @@ interface Scene {
   access?: TradingAccessResponse;
   // #327: what the session routes answer; the start refuses mode_not_allowed by default
   startSession?: () => Promise<{ started: TradingSessionView }>;
-  readSession?: () => Promise<TradingSessionView>;
+  stopSession?: () => Promise<TradingSessionView>;
 }
 
 const sessionRefusal = (reason: TradingSessionErrorCode) => () =>
@@ -185,8 +185,9 @@ const SCENES: Scene[] = [
     sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
     { startSession: sessionRefusal(TradingSessionErrorCode.InsufficientBalance) },
   ),
-  press('a stopped real session', sessionRefreshCallbackData(SESSION_ID), {
-    readSession: () =>
+  // the stop under the waiting message (#536): the reply's «🔁 Ещё сессия» in real
+  press('a stopped real session', sessionStopCallbackData(SESSION_ID, { waiting: true }), {
+    stopSession: () =>
       Promise.resolve(
         sessionView({
           ...REAL_SESSION,
@@ -245,7 +246,8 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
       readIntent: () =>
         Promise.resolve(intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled })),
       startSession: scene.startSession ?? sessionRefusal(TradingSessionErrorCode.ModeNotAllowed),
-      readSession: scene.readSession ?? (() => Promise.resolve(REAL_SESSION)),
+      readSession: () => Promise.resolve(REAL_SESSION),
+      stopSession: scene.stopSession ?? (() => Promise.resolve(REAL_SESSION)),
     }),
     logger: fakeLogger(),
     botInfo: BOT_INFO,

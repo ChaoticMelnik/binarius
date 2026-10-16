@@ -209,6 +209,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   breakEven: () => w.breakEven,
   payoutFloor: () => w.payoutFloor,
   noSignalMinutes: () => w.noSignalMinutes,
+  // a session's duration in seconds, an int4 (texts.ts → sessionStatusText), and « с»
+  duration: () => String(INT4_MAX).length + ' с'.length,
   label: (m) => m.longest(...durations),
   subject,
   reason: (m) => m.longest(...ruleReasons, ...dataReasons),
@@ -226,7 +228,6 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   cycle: () => w.sessionCount,
   // «5 циклов»: settings.cycles, at most MAX_SESSION_CYCLES
   cycles: (m) => String(MAX_SESSION_CYCLES).length + 1 + cycles(m),
-  cyclesPlanned: () => String(MAX_SESSION_CYCLES).length,
   // a session trade's profit, a numeric(20,8) printed by formatSignedUsd (#539)
   outcome: () => w.signedUsd,
   // formatPrice with the pair's digits, or String() without them (session-texts.ts → priceOf)
@@ -289,10 +290,10 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   indicatorShortData: { count: () => w.candles },
   analysisAtrTicks: { count: () => w.atrTicks },
   intentStake: { amount: () => w.stake },
-  // asset · duration · stake (texts.ts → sessionStatusText)
-  sessionSettings: { line: (m) => tradeLine(m, 0) },
-  // the live session's cycle, at most settings.cycles (#552)
-  sessionCycle: { cycle: () => String(MAX_SESSION_CYCLES).length },
+  // the pair, or the asset's id when the catalog could not say (sessionAssetLabel); the session's
+  // base stake, never the minimum's label
+  sessionPair: { symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')) },
+  sessionStake: { stake: () => w.stake },
   sessionWon: { count: () => w.sessionCount },
   sessionLost: { count: () => w.sessionCount },
   sessionTied: { count: () => w.sessionCount },
@@ -464,14 +465,6 @@ const intentStatusLines = [
   'intentRejected',
 ] as const satisfies readonly BotHtmlKey[];
 
-// a trade the session can still move: one with an edge out of its status
-const liveIntentLines = [
-  'intentQueued',
-  'intentSubmitting',
-  'intentAccepted',
-  'intentUnknown',
-  'intentManualReview',
-] as const satisfies readonly BotHtmlKey[];
 const sessionStopLines = [
   'sessionStopManualReview',
   'sessionStopRejectedTwice',
@@ -489,7 +482,17 @@ const sessionStopLines = [
   'sessionStopNoSignalTimeout',
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
-const sessionHead = [anyOf('sessionHeader', 'sessionHeaderReal'), '\n', k('sessionSettings')];
+// the session message's head (#536, texts.ts → sessionStatusText): the mode's header, the pair,
+// the stake, the expiry
+const sessionHead = [
+  anyOf('sessionHeader', 'sessionHeaderReal'),
+  '\n',
+  k('sessionPair'),
+  '\n',
+  k('sessionStake'),
+  '\n',
+  k('sessionExpiry'),
+];
 // a finished session's result and the balance after it, by mode, with the age when it predates
 // the last trade (#337, texts.ts → outcomeLines)
 const sessionOutcome = [
@@ -708,37 +711,28 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionRunning',
     title: 'Сессия идёт',
     limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [
-      ...sessionHead,
-      '\n',
-      k('sessionCycle'),
-      '\n',
-      k('sessionScore'),
-      '\n\n',
-      anyOf(...liveIntentLines, 'sessionWaitingSignal'),
-      '\n',
-      k('sessionDeadline'),
-    ],
+    body: [...sessionHead, '\n\n', k('sessionRunning')],
   },
   {
     id: 'sessionCompleted',
     title: 'Сессия завершена',
     limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [...sessionHead, '\n\n', k('sessionCompleted'), ...sessionOutcome],
+    body: [...sessionHead, '\n\n', k('sessionCompleted')],
   },
   {
     id: 'sessionStopped',
     title: 'Сессия остановлена',
     limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [...sessionHead, '\n\n', anyOf(...sessionStopLines, 'sessionStatusUnavailable')],
+  },
+  {
+    // the reply to «⏹» and to /stop of one session (#536, texts.ts → sessionStopReplyText): the
+    // session's end line, and the open trade's line when it plays out
+    id: 'sessionStopReply',
+    title: 'Ответ на остановку сессии',
+    limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      ...sessionHead,
-      '\n\n',
-      anyOf(...sessionStopLines, 'sessionStatusUnavailable'),
-      '\n',
-      k('sessionTotal'),
-      ...sessionOutcome,
-      '\n',
-      anyOf(...liveIntentLines),
+      anyOf('sessionCompleted', ...sessionStopLines, 'sessionStatusUnavailable'),
       '\n',
       k('sessionOpenTradePlaysOut'),
     ],

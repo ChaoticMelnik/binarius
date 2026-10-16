@@ -145,11 +145,13 @@ export const HANDLER_CALLS = {
   // a text on that step: setStake ∥ readPairs — counted as sequential — then startSession and its
   // one retry on an unknown outcome, then sendMessage; nothing is deleted
   cycleStakeText: { backend: 4, telegram: 1 },
-  // the session's «🔄 Обновить»: answerCallbackQuery ∥ readSession ∥ readPairs — counted the same
-  // way — then editMessageText refused as gone → sendMessage
-  sessionRefresh: { backend: 2, telegram: 3 },
-  // «⏹ Остановить сессию»: answerCallbackQuery ∥ stopSession ∥ readPairs, readSession after a
-  // 409 session_not_active, then editMessageText refused as gone → sendMessage
+  // an old status message's «🔄 Обновить» (#536): answerCallbackQuery, then
+  // editMessageReplyMarkup, as legacyDuration
+  sessionRefresh: { backend: 0, telegram: 2 },
+  // «⏹ Остановить сессию» under an old status message (no `:w`, the worse path): answerCallbackQuery
+  // ∥ stopSession ∥ readPairs, readSession after a 409 session_not_active, then editMessageText
+  // refused as gone → sendMessage. Under the waiting message (`:w`, #536) it is 2 / 3:
+  // answerCallbackQuery ∥ stopSession, readSession after a 409, then deleteMessage, sendMessage
   sessionStop: { backend: 3, telegram: 3 },
   // «📤 Поделиться»'s inline query (#321): readSession ∥ readPairs — counted as sequential, as in
   // confirm — then answerInlineQuery; a query of another shape is answered empty at once
@@ -188,9 +190,9 @@ export const HANDLER_CALLS = {
   level: { backend: 1, telegram: 3 },
   // the selected level pressed: answerCallbackQuery only
   levelCurrent: { backend: 0, telegram: 1 },
-  // /stop (#122): stopSessions → setTradingMode to demo (#473) ∥ readPairs — counted as
-  // sequential — then the mode line, then the #122 message
-  stop: { backend: 3, telegram: 2 },
+  // /stop (#122): stopSessions → setTradingMode to demo (#473), then the mode line, then the #122
+  // message (one session's is the reply to its stop, #536, no catalog read)
+  stop: { backend: 2, telegram: 2 },
   // the mode screen (#474, trading-mode.ts) from the card: answerCallbackQuery ∥
   // readTradingAccess — counted as sequential — then sendMessage
   modeOpen: { backend: 1, telegram: 2 },

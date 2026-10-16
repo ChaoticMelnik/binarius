@@ -28,7 +28,6 @@ import {
   TradeIntentStatus,
   TradeMode,
   TradingSessionStatus,
-  TradingSessionStopReason,
   type BotHtmlKey,
   type BotHtmlTexts,
   type BotPlainTexts,
@@ -74,7 +73,8 @@ export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
 // packages/shared), printed with this bot's catalog.
 export const sessionTexts = createSessionTexts({ html, plain });
 export const { pluralTrades, sessionAssetLabel } = sessionTexts;
-const { tradesCount, cyclesCount, scoreOf, resultOf, sessionClosingLines } = sessionTexts;
+const { tradesCount, cyclesCount, scoreOf, resultOf } = sessionTexts;
+export const { sessionEndLine } = sessionTexts;
 const joinLines = joinHtmlLines;
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
@@ -127,13 +127,15 @@ export const ACTION_LABELS = labelsOf({
 // featureLines is a fragment of cardBody and helpAbout, and only the backend sends
 // oauthLoginFailed and depositCredited (its pushes), the session notices (#464) and the `mailing`
 // group (its mailing engine).
-// the session notices' keys (#464): the backend sends them, through session-texts.ts
+// the session notices' keys (#464): the backend sends them, through session-texts.ts; and the
+// waiting message (#536), session-notice-messages.ts
 const BACKEND_SESSION_KEYS = [
   'sessionTradeWon',
   'sessionTradeLost',
   'sessionTradeTied',
   'sessionAdaptiveStake',
   'sessionSummarySymbol',
+  'sessionWaitingSignal',
 ] as const;
 const NOT_IN_TEXTS = [
   'cardGreetingNoName',
@@ -513,68 +515,48 @@ export const sessionShareCaption = (
     botUsername,
   });
 
-// The session's one message (#284, docs/bot-session.md): the header by mode (#327) and the
-// settings, then
-// a live session's cycle number, score and the last trade's status, or a stopped session's
-// reason and result. `symbol` is null when the catalog could not say.
-export function sessionStatusText(
-  symbol: PairLabel | null,
-  view: SessionStatusView,
-  { deadline = false }: { deadline?: boolean } = {},
-): TelegramHtml {
-  const { settings, trades, cycles, lastIntent } = view;
+// The reply to «⏹» under the waiting message and to /stop of one session (#536): the end line, and
+// the open trade's line while the worker still carries it to its end.
+export const sessionStopReplyText = (
+  view: Pick<SessionStatusView, 'stopReason' | 'trades' | 'cycles' | 'lastIntent'>,
+): TelegramHtml =>
+  joinLines([
+    sessionEndLine(view),
+    ...(intentPlaysOut(view.lastIntent) ? [TEXTS.sessionOpenTradePlaysOut] : []),
+  ]);
+
+// The session's message (#284, #536, docs/bot-session.md → The session message): the header by
+// mode (#327), the pair, the stake and the expiry, then «Торговая сессия запущена…» while it runs
+// and its end line once it stopped. Nothing of its trades: they are the backend's messages, and the
+// result and balance its summary's (#464). `symbol` is null when the catalog could not say.
+export function sessionStatusText(symbol: PairLabel | null, view: SessionStatusView): TelegramHtml {
+  const { settings } = view;
   const header = view.mode === TradeMode.Real ? TEXTS.sessionHeaderReal : TEXTS.sessionHeader;
   if (settings === null) {
     return telegramHtml`${header}
 
 ${TEXTS.sessionSettingsUnavailable}`;
   }
-  const line = [
-    sessionAssetLabel(symbol, settings.assetId),
-    durationLabelOf(settings.durationSec),
-    plain.intentStake({ amount: formatStake(settings.stake.baseStake) }),
-  ].join(' · ');
-  const head = [header, TEXTS.sessionSettings({ line })];
-  const body: TelegramHtml[] = [];
-  if (view.status !== TradingSessionStatus.Stopped) {
-    const cycle = Math.min(cycles.closed + 1, cycles.planned);
-    head.push(TEXTS.sessionCycle({ cycle: String(cycle), cyclesPlanned: String(cycles.planned) }));
-    if (trades.settled > 0) {
-      head.push(TEXTS.sessionScore({ score: scoreOf(trades), profit: trades.profit }));
-    }
-    body.push(
-      sessionIntentLive(lastIntent) ? statusLineOfIntent(lastIntent) : TEXTS.sessionWaitingSignal,
-    );
-  } else {
-    // the lines the backend's summary repeats (#464), then what only this message follows
-    body.push(...sessionClosingLines(view));
-    if (view.stopReason !== TradingSessionStopReason.Completed) {
-      // manual_review's stop line already says it and points at /support: one text for both of
-      // its sources (owner, #284 clarify), so the trade's own review line is not repeated under it
-      const reviewRepeated =
-        view.stopReason === TradingSessionStopReason.ManualReview &&
-        lastIntent?.status === TradeIntentStatus.ManualReview;
-      if (sessionIntentLive(lastIntent) && !reviewRepeated) {
-        body.push(statusLineOfIntent(lastIntent));
-      }
-      if (intentPlaysOut(lastIntent)) body.push(TEXTS.sessionOpenTradePlaysOut);
-    }
-  }
-  // stopped with no reason is what the CHECKs refuse; the view's schema still allows it
-  if (body.length === 0) body.push(TEXTS.sessionStatusUnavailable);
-  // «ещё идёт» is about a session that runs: a stopped one gets its plain final status
-  if (deadline && view.status !== TradingSessionStatus.Stopped) body.push(TEXTS.sessionDeadline);
-  return telegramHtml`${joinLines(head)}
+  const head = joinLines([
+    header,
+    TEXTS.sessionPair({ symbol: sessionAssetLabel(symbol, settings.assetId) }),
+    TEXTS.sessionStake({ stake: settings.stake.baseStake }),
+    TEXTS.sessionExpiry({ duration: `${String(settings.durationSec)} с` }),
+  ]);
+  const state =
+    view.status === TradingSessionStatus.Stopped ? sessionEndLine(view) : TEXTS.sessionRunning;
+  return telegramHtml`${head}
 
-${joinLines(body)}`;
+${state}`;
 }
 
 // Button labels and the command descriptions: Telegram does not parse them, so they are plain
 // strings and are never escaped — an entity here would be shown literally. The catalog's
 // `buttons` and `commands` groups; the confirm button branches on the address here.
+// The waiting message's «⏹» (#536) is the backend's: the bot draws no stop button.
 type LabelKey = Exclude<
   BotTextKeyOfGroup<typeof BotTextGroup.Buttons | typeof BotTextGroup.Commands>,
-  'confirmButtonNoEmail'
+  'confirmButtonNoEmail' | 'sessionStopButton'
 >;
 interface LabelOverrides {
   confirmButton: (email: string | null) => string;
@@ -583,7 +565,7 @@ export const LABELS: Omit<Pick<BotPlainTexts, LabelKey>, keyof LabelOverrides> &
   facadeOf(
     plain,
     botTextKeysOf(BotTextGroup.Buttons, BotTextGroup.Commands).filter(
-      (key): key is LabelKey => key !== 'confirmButtonNoEmail',
+      (key): key is LabelKey => key !== 'confirmButtonNoEmail' && key !== 'sessionStopButton',
     ),
     { confirmButton: (email: string | null): string => confirmButtonLabel(plain, email) },
   );

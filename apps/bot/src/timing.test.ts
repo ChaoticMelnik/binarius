@@ -41,6 +41,7 @@ import {
   demoSignalsCallbackData,
   TRACKED_SESSIONS_MAX,
   demoAnalysisCallbackData,
+  sessionStopCallbackData,
 } from '@binarius/shared';
 import {
   composeDurationMs,
@@ -69,7 +70,6 @@ import {
   stakeCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
-import { sessionRefreshCallbackData, sessionStopCallbackData } from './trading-session';
 import { shareQuery } from './session-share';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -1510,13 +1510,13 @@ const SESSION_START_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// an old status message's «🔄 Обновить» (#536): the keyboard stripped, nothing read
 const sessionRefreshUpdate = (chatType?: string) =>
-  callbackUpdate(sessionRefreshCallbackData(SESSION_VIEW.id), chatType);
+  callbackUpdate(`session:${SESSION_VIEW.id}`, chatType);
 const SESSION_REFRESH_WORST_CASE: Branch = {
-  label: 'the message is gone and the status is sent anew',
+  label: 'the old keyboard is stripped',
   update: sessionRefreshUpdate(),
-  apiErrors: [['editMessageText', EDIT_GONE]],
-  expected: { backend: 2, telegram: 3 },
+  expected: { backend: 0, telegram: 2 },
 };
 const SESSION_REFRESH_BRANCHES: readonly Branch[] = [
   {
@@ -1529,35 +1529,7 @@ const SESSION_REFRESH_BRANCHES: readonly Branch[] = [
     update: callbackUpdate('session:not-a-uuid'),
     expected: { backend: 0, telegram: 0 },
   },
-  {
-    label: 'the session is not found',
-    update: sessionRefreshUpdate(),
-    readSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
-    expected: { backend: 2, telegram: 2 },
-  },
-  {
-    label: 'the read fails',
-    update: sessionRefreshUpdate(),
-    readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 2 },
-  },
-  {
-    label: 'the status is edited in place',
-    update: sessionRefreshUpdate(),
-    expected: { backend: 2, telegram: 2 },
-  },
   SESSION_REFRESH_WORST_CASE,
-  {
-    label: 'the edit fails in transport',
-    update: sessionRefreshUpdate(),
-    apiErrors: [
-      [
-        'editMessageText',
-        new HttpError("Network request for 'editMessageText' failed!", new Error('aborted')),
-      ],
-    ],
-    expected: { backend: 2, telegram: 2 },
-  },
 ];
 
 // #321: «📤 Поделиться»'s inline query and its chosen result. No chat filter: a group's query is
@@ -1618,12 +1590,15 @@ const SESSION_SHARED_WORST_CASE: Branch = {
   expected: { backend: 0, telegram: 0 },
 };
 
+// an old status message's «⏹» (no `:w`), and the one under the waiting message (#536)
 const sessionStopUpdate = (chatType?: string) =>
   callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id), chatType);
+const waitingStopUpdate = () =>
+  callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id, { waiting: true }));
 const notActive = () =>
   Promise.reject(sessionHttpError(409, TradingSessionErrorCode.SessionNotActive));
 const SESSION_STOP_WORST_CASE: Branch = {
-  label: 'the session had ended, it is read, and the message is gone',
+  label: 'an old status: the session had ended, it is read, and the message is gone',
   update: sessionStopUpdate(),
   stopSession: notActive,
   readSession: () => Promise.resolve(STOPPED_SESSION),
@@ -1642,43 +1617,70 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
     expected: { backend: 0, telegram: 0 },
   },
   {
-    label: 'the session is stopped and edited in place',
+    label: 'an old status: the session is stopped and edited in place',
     update: sessionStopUpdate(),
     expected: { backend: 2, telegram: 2 },
   },
   {
-    label: 'the session is not found',
+    label: 'an old status: the session is not found',
     update: sessionStopUpdate(),
     stopSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
     expected: { backend: 2, telegram: 2 },
   },
   {
-    label: 'the session had ended and its final view is edited in place',
+    label: 'an old status: the session had ended and its final view is edited in place',
     update: sessionStopUpdate(),
     stopSession: notActive,
     readSession: () => Promise.resolve(STOPPED_SESSION),
     expected: { backend: 3, telegram: 2 },
   },
   {
-    label: 'the session had ended and the read fails',
+    label: 'an old status: the session had ended and the read fails',
     update: sessionStopUpdate(),
     stopSession: notActive,
     readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     expected: { backend: 3, telegram: 2 },
   },
   SESSION_STOP_WORST_CASE,
+  {
+    label: 'the waiting message: stopped, the pressed message deleted, the reply sent',
+    update: waitingStopUpdate(),
+    expected: { backend: 1, telegram: 3 },
+  },
+  {
+    label: 'the waiting message: the session had ended, it is read, the reply sent',
+    update: waitingStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(STOPPED_SESSION),
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the waiting message: the session had ended, and the delete is forbidden',
+    update: waitingStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(STOPPED_SESSION),
+    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the waiting message: the stop fails',
+    update: waitingStopUpdate(),
+    stopSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
 ];
 
 const modeHttpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });
 
 // /stop (#122): one message whatever the count; stopSessions, then setTradingMode to demo (#473),
-// beside readPairs, and the mode line before the message when the mode changed or the switch failed
+// and the mode line before the message when the mode changed or the switch failed; one session's
+// is the reply to its stop (#536), no catalog read
 const stopUpdate = (chatType?: string) => textUpdate('/stop', chatType);
 const STOP_WORST_CASE: Branch = {
-  label: 'one session is stopped and its status is sent',
+  label: 'one session is stopped and the reply is sent',
   update: stopUpdate(),
-  expected: { backend: 3, telegram: 2 },
+  expected: { backend: 2, telegram: 2 },
 };
 const STOP_BRANCHES: readonly Branch[] = [
   {
@@ -1696,50 +1698,44 @@ const STOP_BRANCHES: readonly Branch[] = [
     label: 'no session was active',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([]),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
   {
     label: 'two sessions are stopped',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([STOPPED_SESSION, STOPPED_SESSION]),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
   {
     label: 'the stop fails',
     update: stopUpdate(),
     stopSessions: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 3, telegram: 2 },
-  },
-  {
-    label: 'the catalog fails',
-    update: stopUpdate(),
-    readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
   {
     label: 'the user is in demo already',
     update: stopUpdate(),
     setTradingMode: () =>
       Promise.resolve({ tradingMode: TradeMode.Demo, changed: false, stoppedSessions: 0 }),
-    expected: { backend: 3, telegram: 1 },
+    expected: { backend: 2, telegram: 1 },
   },
   {
     label: 'the switch finds no users row',
     update: stopUpdate(),
     setTradingMode: () => Promise.reject(modeHttpError(404, 'user_not_found')),
-    expected: { backend: 3, telegram: 1 },
+    expected: { backend: 2, telegram: 1 },
   },
   {
     label: 'the switch is refused',
     update: stopUpdate(),
     setTradingMode: () => Promise.reject(modeHttpError(400, 'invalid_request')),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
   {
     label: 'the switch outcome is unknown',
     update: stopUpdate(),
     setTradingMode: () => Promise.reject(modeHttpError(500, 'internal')),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
 ];
 
@@ -3341,7 +3337,7 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
-  it("the session's refresh button", async () => {
+  it("an old status message's «🔄 Обновить» (#536)", async () => {
     await checkHandler(
       'sessionRefresh',
       SESSION_REFRESH_BRANCHES,

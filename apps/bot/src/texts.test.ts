@@ -82,7 +82,9 @@ import {
   sessionAgainButtonLabel,
   sessionStartButtonLabel,
   launchCycleButtonLabel,
+  sessionEndLine,
   sessionStatusText,
+  sessionStopReplyText,
   setBotTextSource,
   settingsText,
   stakeButtonLabel,
@@ -130,6 +132,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   payoutFloor: text,
   noSignalMinutes: text,
   label: text,
+  duration: text,
   subject: text,
   reason: text,
   value: text,
@@ -141,7 +144,6 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   step: text,
   cycle: text,
   cycles: text,
-  cyclesPlanned: text,
   outcome: d('22.08'),
   openPrice: text,
   closePrice: text,
@@ -1108,22 +1110,23 @@ describe('the demo session status', () => {
   const plainOf = (...args: Parameters<typeof sessionStatusText>) =>
     plainTextOf(sessionStatusText(...args));
 
-  it('T1 lays out a live session with its cycle number, score with the result and the last trade', () => {
+  it('T1 lays out a live session: the header, the pair, the stake, the expiry, then it runs (#536)', () => {
     const view = sessionView({
       trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.5') }),
       cycles: { planned: 5, closed: 1 },
       lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
     });
-    expect(plainOf(pairLabel(PAIR_EURUSD), view)).toBe(
-      [
-        '🎮 Демо-сессия',
-        '📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00',
-        '🔁 Цикл 2 из 5',
-        '📊 Счёт: 1 в плюс, 1 в минус · -$0.50',
-        '',
-        '✅ Сделка открыта у брокера.',
-      ].join('\n'),
-    );
+    const running = [
+      '🎮 Демо-сессия',
+      '🔹 Торговая пара: EUR/USD OTC',
+      '🔹 Сумма сделки: $1.00',
+      '🔹 Время экспирации: 15 с',
+      '',
+      'Торговая сессия запущена…',
+    ].join('\n');
+    expect(plainOf(pairLabel(PAIR_EURUSD), view)).toBe(running);
+    // nothing of its trades: the same text before the first trade
+    expect(plainOf(pairLabel(PAIR_EURUSD), SESSION_VIEW)).toBe(running);
   });
 
   // #327: the header by the session's mode, the settings unavailable included
@@ -1139,196 +1142,78 @@ describe('the demo session status', () => {
     );
   });
 
-  it('waits for a signal while no trade is open, with no score before the first settle', () => {
-    expect(plainOf(lbl('X'), SESSION_VIEW)).toBe(
-      [
-        '🎮 Демо-сессия',
-        '📈 X · ⏱ 15 с · ставка $1.00',
-        '🔁 Цикл 1 из 5',
-        '',
-        '🔎 Ждём сигнал для следующей сделки…',
-      ].join('\n'),
-    );
-    const afterSettle = sessionView({
-      trades: settled({ settled: 1, won: 1 }),
-      lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+  it('prints the base stake and the expiry of the settings', () => {
+    const view = sessionView({
+      settings: {
+        version: 3,
+        assetId: 1,
+        durationSec: 5,
+        cycles: 5,
+        stake: { strategy: 'fixed', baseStake: d('12.5'), stakeScale: 1 },
+      },
     });
-    expect(plainOf(lbl('X'), afterSettle)).toContain('🔎 Ждём сигнал для следующей сделки…');
+    expect(plainOf(lbl('X'), view).split('\n').slice(2, 4)).toEqual([
+      '🔹 Сумма сделки: $12.50',
+      '🔹 Время экспирации: 5 с',
+    ]);
   });
 
-  // #552: a loss keeps the cycle, a win moves to the next one; the number never passes the plan
-  it('numbers the cycle by the closed ones, at most the planned', () => {
-    const cycleLine = (closed: number) =>
-      plainOf(lbl('X'), sessionView({ cycles: { planned: 5, closed } })).split('\n')[2];
-    expect(cycleLine(0)).toBe('🔁 Цикл 1 из 5');
-    expect(cycleLine(1)).toBe('🔁 Цикл 2 из 5');
-    expect(cycleLine(4)).toBe('🔁 Цикл 5 из 5');
-    expect(cycleLine(5)).toBe('🔁 Цикл 5 из 5');
-  });
-
-  it('names a tie only when a trade tied', () => {
+  it('ends a completed session on its completed line alone, a tie named only when one tied', () => {
     const completed = (tied: number) =>
       stopped(TradingSessionStopReason.Completed, {
-        trades: settled({ settled: 5, won: 3, lost: 2 - tied, tied }),
+        trades: settled({ settled: 5, won: 3, lost: 2 - tied, tied, profit: d('2.5') }),
         cycles: { planned: 5, closed: 5 },
+        lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+        balance: { available: d('10002.5'), ageSec: 0, current: true },
       });
-    expect(plainOf(lbl('X'), completed(0))).toContain(
+    expect(plainOf(lbl('X'), completed(0)).split('\n').slice(4)).toEqual([
+      '',
       '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
-    );
-    expect(plainOf(lbl('X'), completed(0))).not.toContain('в ноль');
+    ]);
     expect(plainOf(lbl('X'), completed(1))).toContain(
       '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
     );
   });
 
-  it("shows a stopped session's reason, its result, and an open trade that plays out", () => {
-    const view = stopped(TradingSessionStopReason.UserStopped, {
-      trades: settled({ settled: 2, won: 2, profit: d('1.7') }),
-      lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
-    });
-    expect(plainOf(lbl('X'), view).split('\n').slice(3)).toEqual([
-      '⏹ Сессия остановлена по твоей команде.',
-      '📊 Итог: 2 сделки — 2 в плюс, 0 в минус',
-      '💰 Результат: +$1.70',
-      '✅ Сделка открыта у брокера.',
-      '⏳ Открытая сделка доиграет до конца.',
-    ]);
-    const closed = stopped(TradingSessionStopReason.UserStopped, {
-      lastIntent: intentView({ status: TradeIntentStatus.Settled }),
-    });
-    expect(plainOf(lbl('X'), closed).split('\n').slice(3)).toEqual([
-      '⏹ Сессия остановлена по твоей команде.',
-    ]);
-  });
-
-  // #337: the result and the balance after the session, in the /menu card's words by mode
-  // formatUsd groups the digits with a no-break space
-  const nbsp = (text: string) => text.replace(/(\d) (\d)/g, '$1\u00a0$2');
-  const finished = (patch: Partial<TradingSessionView> = {}) =>
-    stopped(TradingSessionStopReason.Completed, {
-      trades: settled({ settled: 5, won: 3, lost: 2, profit: d('2.5') }),
-      cycles: { planned: 5, closed: 5 },
-      lastIntent: intentView({ status: TradeIntentStatus.Settled }),
-      balance: { available: d('10002.5'), ageSec: 0, current: true },
-      ...patch,
-    });
-
-  it('T2 a completed demo session shows its result and the demo balance, with no age', () => {
-    expect(plainOf(lbl('X'), finished()).split('\n').slice(3)).toEqual([
-      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
-      '💰 Результат: +$2.50',
-      nbsp('🧪 Демобаланс: $10 002.50'),
-    ]);
-  });
-
-  it('T3 a balance read before the last trade carries its age', () => {
-    const view = finished({ balance: { available: d('10002.5'), ageSec: 75, current: false } });
-    expect(plainOf(lbl('X'), view).split('\n').slice(-2)).toEqual([
-      nbsp('🧪 Демобаланс: $10 002.50'),
-      '🕒 Баланс Binodex обновлён 1 мин назад.',
-    ]);
-  });
-
-  it('T4 an account without a snapshot shows the result only', () => {
-    expect(
-      plainOf(lbl('X'), finished({ balance: null }))
-        .split('\n')
-        .slice(3),
-    ).toEqual([
-      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
-      '💰 Результат: +$2.50',
-    ]);
-  });
-
-  it('T5 a real session shows the real balance', () => {
-    const text = plainOf(lbl('X'), finished({ mode: TradeMode.Real }));
-    expect(text).toContain(nbsp('💵 Реальный баланс: $10 002.50'));
-    expect(text).not.toContain('Демобаланс');
-  });
-
-  it('T6 a session stopped before its first closed trade shows neither line', () => {
-    const view = stopped(TradingSessionStopReason.RejectedTwice, {
-      trades: settled({ settled: 0, rejected: 2 }),
-      lastIntent: intentView({ status: TradeIntentStatus.Rejected }),
-      balance: { available: d('10000'), ageSec: 75, current: false },
-    });
-    const text = plainOf(lbl('X'), view);
-    expect(text).not.toContain('Результат');
-    expect(text).not.toContain('Демобаланс');
-    expect(text).not.toContain('🕒');
-  });
-
-  it('T7 manual review shows the result and the stored balance with its age, no trade line', () => {
-    const view = stopped(TradingSessionStopReason.ManualReview, {
-      trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.15') }),
-      lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
-      balance: { available: d('9999.85'), ageSec: 30, current: false },
-    });
-    expect(plainOf(lbl('X'), view).split('\n').slice(3)).toEqual([
-      '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
-      '📊 Итог: 2 сделки — 1 в плюс, 1 в минус',
-      '💰 Результат: -$0.15',
-      nbsp('🧪 Демобаланс: $9 999.85'),
-      '🕒 Баланс Binodex обновлён 30 с назад.',
-    ]);
-  });
-
-  // the owner's wording for both sources of manual_review: a trade or the account (#284 clarify)
-  it('asks for support on manual review', () => {
-    expect(plainOf(lbl('X'), stopped(TradingSessionStopReason.ManualReview))).toContain(
-      '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
-    );
-  });
-
-  // Review Major 1: stopped on manual review with the trade itself on review — the owner's one
-  // text, no second /support line, no «доиграет», and no «ещё идёт» at the deadline.
-  it.each([false, true])(
-    'shows a session stopped with its trade on manual review as the one stop line (deadline %s)',
-    (deadline) => {
-      const view = stopped(TradingSessionStopReason.ManualReview, {
-        lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
-      });
-      expect(plainOf(lbl('X'), view, { deadline }).split('\n').slice(3)).toEqual([
-        '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
-      ]);
-    },
-  );
-
-  it('names a trade on review under another stop reason, without saying it plays out', () => {
-    const view = stopped(TradingSessionStopReason.UserStopped, {
-      lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
-    });
-    expect(plainOf(lbl('X'), view).split('\n').slice(3)).toEqual([
-      '⏹ Сессия остановлена по твоей команде.',
-      '🛠 Сделка на ручной проверке — напиши в поддержку: /support',
-    ]);
-  });
-
-  it.each([TradeIntentStatus.Queued, TradeIntentStatus.Accepted, TradeIntentStatus.Unknown])(
-    'says a %s trade of a stopped session plays out',
-    (status) => {
-      const view = stopped(TradingSessionStopReason.Timeout, {
-        lastIntent: intentView({ status }),
-      });
-      expect(plainOf(lbl('X'), view)).toContain('⏳ Открытая сделка доиграет до конца.');
-    },
-  );
-
-  // every stopped path, completed included: the deadline hint says the session still runs
-  it.each(Object.values(TradingSessionStopReason))(
-    'adds no deadline hint to a session stopped by %s',
+  // the result and the balance are the backend's summary's (#464): the message ends on the line
+  it.each(Object.values(TradingSessionStopReason).filter((r) => r !== 'completed'))(
+    'ends a session stopped by %s on its stop line alone, an open trade or none',
     (stopReason) => {
-      for (const status of [TradeIntentStatus.Accepted, TradeIntentStatus.ManualReview]) {
-        const view = stopped(stopReason, { lastIntent: intentView({ status }) });
-        expect(plainOf(lbl('X'), view, { deadline: true })).toBe(plainOf(lbl('X'), view));
+      for (const status of [
+        TradeIntentStatus.Accepted,
+        TradeIntentStatus.ManualReview,
+        TradeIntentStatus.Settled,
+      ]) {
+        const view = stopped(stopReason, {
+          trades: settled({ settled: 2, won: 2, profit: d('1.7') }),
+          lastIntent: intentView({ status }),
+          balance: { available: d('10000'), ageSec: 75, current: false },
+        });
+        const lines = plainOf(lbl('X'), view).split('\n');
+        expect(lines.slice(4)).toEqual(['', plainTextOf(sessionEndLine(view))]);
+        expect(lines.at(-1)).not.toBe('');
       }
     },
   );
 
-  it('reads the switch refusal of the single trade for a session the kill switch stopped', () => {
+  it('ends on the owner’s manual review line and the kill switch’s refusal', () => {
+    expect(
+      plainOf(lbl('X'), stopped(TradingSessionStopReason.ManualReview)).split('\n').at(-1),
+    ).toBe('🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support');
+    expect(
+      plainOf(lbl('X'), stopped(TradingSessionStopReason.UserStopped)).split('\n').at(-1),
+    ).toBe('⏹ Сессия остановлена по твоей команде.');
     expect(plainOf(lbl('X'), stopped(TradingSessionStopReason.KillSwitch))).toContain(
       plainTextOf(TEXTS.tradingPaused),
     );
+  });
+
+  it('ends a stopped session without a reason on the status unavailable', () => {
+    expect(
+      plainOf(lbl('X'), sessionView({ status: TradingSessionStatus.Stopped }))
+        .split('\n')
+        .at(-1),
+    ).toBe(plainTextOf(TEXTS.sessionStatusUnavailable));
   });
 
   it('says the settings are unreadable instead of throwing on a hand-written row', () => {
@@ -1341,14 +1226,10 @@ describe('the demo session status', () => {
     );
   });
 
-  it('names the asset by its id without a symbol, and adds the deadline hint only when asked', () => {
+  it('names the asset by its id without a symbol', () => {
     expect(plainOf(null, SESSION_VIEW)).toContain(
-      `📈 актив #${String(SESSION_VIEW.settings?.assetId)} · `,
+      `🔹 Торговая пара: актив #${String(SESSION_VIEW.settings?.assetId)}`,
     );
-    const hint = plainTextOf(TEXTS.sessionDeadline);
-    expect(hint).toContain(`«${LABELS.sessionRefreshButton}»`);
-    expect(plainOf(lbl('X'), SESSION_VIEW)).not.toContain(hint);
-    expect(plainOf(lbl('X'), SESSION_VIEW, { deadline: true }).endsWith(`\n${hint}`)).toBe(true);
   });
 
   it.each(Object.values(TradingSessionStopReason))(
@@ -1373,34 +1254,75 @@ describe('the demo session status', () => {
         balance: { available: d('999999999999.99999999'), ageSec: 2_147_483_647, current: false },
         lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
       });
-      for (const deadline of [false, true]) {
-        const text = sessionStatusText(lbl(`<&>"`.repeat(20)), widest, { deadline });
-        expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
-      }
+      const text = sessionStatusText(lbl(`<&>"`.repeat(20)), widest);
+      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
     },
   );
 
-  it('renders a live session with the longest rejected line as valid Telegram HTML', () => {
-    const view = sessionView({
-      cycles: { planned: 20, closed: 19 },
-      trades: {
-        settled: 19,
-        rejected: 20,
-        won: 19,
-        lost: 0,
-        tied: 0,
-        profit: d('-999999999999.99999999'),
-      },
-      lastIntent: intentView({
-        status: TradeIntentStatus.Rejected,
-        lastError: TradeIntentFailureReason.ExecutorNotConfigured,
-      }),
+  it('renders a live session with the widest pair as valid Telegram HTML', () => {
+    expect(telegramTextProblems(sessionStatusText(lbl('S'.repeat(100)), SESSION_VIEW))).toEqual([]);
+  });
+});
+
+// The reply to «⏹» under the waiting message and to /stop of one session (#536)
+describe('the stop reply', () => {
+  const stoppedWith = (lastIntent: TradingSessionView['lastIntent']) =>
+    sessionView({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+      lastIntent,
     });
-    expect(
-      telegramTextProblems(sessionStatusText(lbl('S'.repeat(100)), view, { deadline: true })),
-    ).toEqual([]);
+  const plainOfReply = (view: TradingSessionView) => plainTextOf(sessionStopReplyText(view));
+  const settled = (patch: Partial<typeof SESSION_VIEW.trades>) => ({
+    ...SESSION_VIEW.trades,
+    ...patch,
   });
 
+  it('is the end line, and the open trade’s line while it plays out', () => {
+    expect(plainOfReply(stoppedWith(intentView({ status: TradeIntentStatus.Accepted })))).toBe(
+      ['⏹ Сессия остановлена по твоей команде.', '⏳ Открытая сделка доиграет до конца.'].join(
+        '\n',
+      ),
+    );
+    expect(plainOfReply(stoppedWith(null))).toBe('⏹ Сессия остановлена по твоей команде.');
+  });
+
+  it.each([TradeIntentStatus.Queued, TradeIntentStatus.Submitting, TradeIntentStatus.Unknown])(
+    'says a %s trade plays out',
+    (status) => {
+      expect(plainOfReply(stoppedWith(intentView({ status })))).toContain(
+        '⏳ Открытая сделка доиграет до конца.',
+      );
+    },
+  );
+
+  it.each([TradeIntentStatus.ManualReview, TradeIntentStatus.Settled, TradeIntentStatus.Rejected])(
+    'says nothing of a %s trade',
+    (status) => {
+      expect(plainOfReply(stoppedWith(intentView({ status })))).toBe(
+        '⏹ Сессия остановлена по твоей команде.',
+      );
+    },
+  );
+
+  it('names a completed session’s result, and the status unavailable without a reason', () => {
+    expect(
+      plainOfReply(
+        sessionView({
+          status: TradingSessionStatus.Stopped,
+          stopReason: TradingSessionStopReason.Completed,
+          trades: settled({ settled: 5, won: 3, lost: 2 }),
+          cycles: { planned: 5, closed: 5 },
+        }),
+      ),
+    ).toBe('🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус');
+    expect(plainOfReply(sessionView({ status: TradingSessionStatus.Stopped }))).toBe(
+      plainTextOf(TEXTS.sessionStatusUnavailable),
+    );
+  });
+});
+
+describe('the session words', () => {
   it.each([
     [1, 'сделка'],
     [2, 'сделки'],
@@ -1486,6 +1408,8 @@ describe('the facades over the catalog', () => {
               'sessionTradeTied',
               'sessionAdaptiveStake',
               'sessionSummarySymbol',
+              // the waiting message (#536)
+              'sessionWaitingSignal',
             ].includes(key),
         )
         .filter((key) => BOT_TEXT_CATALOG[key].group !== BotTextGroup.Mailing)
@@ -1538,9 +1462,7 @@ describe('the facades over the catalog', () => {
         'refreshIntentButton',
         'repeatAnalysisButton',
         'resendButton',
-        'sessionRefreshButton',
         'sessionShareButton',
-        'sessionStopButton',
         'settingsCommand',
         'settingsStakeDemoButton',
         'settingsStakeRealButton',

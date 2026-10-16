@@ -1,12 +1,17 @@
 import { Bot, GrammyError, HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
-import { confirmCallbackData, NotificationLevel, TradeAction, TradeMode } from '@binarius/shared';
+import {
+  confirmCallbackData,
+  NotificationLevel,
+  sessionStopCallbackData,
+  TradeAction,
+  TradeMode,
+} from '@binarius/shared';
 import { levelCallbackData, RESEND_CALLBACK_DATA } from './bot';
 import { cycleStakeCallbackData, sessionStartCallbackData, stakeCallbackData } from './demo';
 import { stakePresetCallbackData, stakeResetCallbackData } from './stake-picker';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
-import { sessionStopCallbackData } from './trading-session';
 import {
   BOT_INFO,
   USER,
@@ -116,6 +121,10 @@ describe('WRITE_CALLBACK_PREFIXES', () => {
     ['a real session', sessionStartCallbackData(TradeMode.Real, 101, 15, true)],
     ['an amount of the amount screen', cycleStakeCallbackData(101, 15, '5', 'l')],
     ['the session stop', sessionStopCallbackData('9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d')],
+    [
+      'the session stop under the waiting message',
+      sessionStopCallbackData('9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', { waiting: true }),
+    ],
     ['the login confirm', confirmCallbackData('3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01')],
     ['the code resend', RESEND_CALLBACK_DATA],
     ['the switch to real', MODE_REAL_CALLBACK_DATA],
