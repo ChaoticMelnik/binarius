@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { BrokerAccountStatus } from '@binarius/shared';
@@ -223,6 +224,28 @@ describe('an active version that cannot be applied', () => {
     expect(error).toBeInstanceOf(InvalidBonusRule);
     expect(error).toMatchObject({ name: 'InvalidBonusRule', code: 'link_bonus' });
     expect(await accountStatus(user.accountId)).toBe('pending');
+    expect(await ledgerOf(user.userId)).toEqual({ rows: [], balance: 0n });
+  });
+});
+
+// #116: the reference picks the kind, so an inviter's reward never pays under a pack's rule
+describe('a reference the rule kind does not take', () => {
+  it('throws InvalidBonusRule for a referral reference under the link_bonus rule', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const error = await tmp.db
+      .transaction((tx) =>
+        applyBonus(tx, {
+          code: LINK_BONUS_RULE_CODE,
+          userId: user.userId,
+          reference: { referralId: randomUUID() },
+        }),
+      )
+      .then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+    expect(error).toBeInstanceOf(InvalidBonusRule);
+    expect(error).toMatchObject({ code: LINK_BONUS_RULE_CODE });
     expect(await ledgerOf(user.userId)).toEqual({ rows: [], balance: 0n });
   });
 });

@@ -111,6 +111,7 @@ describe('adjustTokens', () => {
       depositEventId: null,
       brokerAccountId: null,
       starPaymentId: null,
+      referralId: null,
       refType: null,
       refId: null,
     });

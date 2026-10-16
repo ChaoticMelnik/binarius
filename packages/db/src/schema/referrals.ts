@@ -29,7 +29,8 @@ export const referralCodes = pgTable(
 );
 
 // Who invited whom: one row per invitee, ever, written only by recordUserStart (user-ops.ts) in
-// the transaction of the /start that created the invitee's users row. The reward is #116's.
+// the transaction of the /start that created the invitee's users row. The inviter's reward is a
+// ledger row naming the referral (referral-reward-ops.ts, #116).
 export const referrals = pgTable(
   'referrals',
   {
@@ -50,6 +51,8 @@ export const referrals = pgTable(
       foreignColumns: [users.id],
     }).onDelete('restrict'),
     unique('referrals_invitee_key').on(t.inviteeUserId),
+    // the target of token_ledger_referral_inviter_fk: a reward row names its referral and its inviter
+    unique('referrals_id_inviter_key').on(t.id, t.inviterUserId),
     check('referrals_not_self_check', sql`${t.inviteeUserId} <> ${t.inviterUserId}`),
     index('referrals_inviter_idx').on(t.inviterUserId),
   ],
