@@ -3521,12 +3521,14 @@ describe('token_ledger: the Stars purchase (#117)', () => {
       const seed = await seedAccount(tx);
       const payment = await seedStarPayment(tx, seed.userId);
       await expect(
-        tx.insert(tokenLedger).values({
-          userId: seed.userId,
-          kind: 'purchase',
-          balanceDelta: 50n,
-          starPaymentId: payment,
-        }),
+        tx
+          .insert(tokenLedger)
+          .values({
+            userId: seed.userId,
+            kind: 'purchase',
+            balanceDelta: 50n,
+            starPaymentId: payment,
+          }),
       ).resolves.toBeDefined();
     });
   });
@@ -3556,12 +3558,14 @@ describe('token_ledger: the Stars purchase (#117)', () => {
       const other = await seedAccount(tx);
       const payment = await seedStarPayment(tx, seed.userId);
       await rejectsWith(
-        tx.insert(tokenLedger).values({
-          userId: other.userId,
-          kind: 'purchase',
-          balanceDelta: 50n,
-          starPaymentId: payment,
-        }),
+        tx
+          .insert(tokenLedger)
+          .values({
+            userId: other.userId,
+            kind: 'purchase',
+            balanceDelta: 50n,
+            starPaymentId: payment,
+          }),
         '23503',
         'token_ledger_star_payment_owner_fk',
       );
@@ -3717,12 +3721,14 @@ describe('token_ledger: the Stars refund (#118)', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const payment = await seedStarPayment(tx, seed.userId);
-      await tx.insert(tokenLedger).values({
-        userId: seed.userId,
-        kind: 'purchase',
-        balanceDelta: 50n,
-        starPaymentId: payment,
-      });
+      await tx
+        .insert(tokenLedger)
+        .values({
+          userId: seed.userId,
+          kind: 'purchase',
+          balanceDelta: 50n,
+          starPaymentId: payment,
+        });
       await expect(
         tx.insert(tokenLedger).values(refundRow(seed.userId, payment)),
       ).resolves.toBeDefined();
