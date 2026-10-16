@@ -271,7 +271,9 @@ export function createSessionOrchestrator({
     }
     const settledIntents = history.intents.filter((i) => i.status === TradeIntentStatus.Settled);
     const settled = settledIntents.length;
-    // a settled intent whose profit does not read is no win: the sizer stops it as invalid_amount
+    // a settled intent without a readable profit is no win; the sizer stops the session on it:
+    // unresolved_trade when the profit is missing (toSessionTrade), invalid_amount when its text
+    // does not parse - both stake_stop
     const won = settledIntents.filter((i) => {
       const profit = i.profit === null ? undefined : parseAmount(i.profit);
       return profit !== undefined && profit > 0n;

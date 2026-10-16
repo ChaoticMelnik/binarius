@@ -4,7 +4,7 @@
 export const StakeKind = { Stake: 'stake', Stop: 'stop' } as const;
 export type StakeKind = (typeof StakeKind)[keyof typeof StakeKind];
 
-// one source with the sessions' settings v2 and the trade messages' steps (#450)
+// one source with the sessions' settings (v2, v3 since #552) and the trade messages' steps (#450)
 export { SessionStakeStrategy as StakeStrategy } from '@binarius/shared';
 
 export const SessionTradeKind = {

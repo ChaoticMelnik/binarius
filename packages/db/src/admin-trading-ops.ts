@@ -189,7 +189,7 @@ export async function listTradingSessionsForAdmin(
 const isoOrNull = (value: Date | null): string | null =>
   value === null ? null : value.toISOString();
 
-// Key by key; settings are the parsed value (v1 or v2) or null, never the raw jsonb.
+// Key by key; settings are the parsed value (v1, v2 or v3) or null, never the raw jsonb.
 export function toAdminTradingSessionView(row: AdminTradingSessionRow): AdminTradingSessionView {
   const parsed = safeParseTradingSessionSettings(row.settings);
   return {
