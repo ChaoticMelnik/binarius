@@ -1,4 +1,4 @@
-import { eq, isNotNull, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AuthRevokedReason,
@@ -32,12 +32,12 @@ beforeAll(async () => {
 });
 afterAll(() => tmp.drop());
 
-// every case starts with no service account in this file's database
+// every case starts with no service account in this file's database, and with every earlier
+// case's account far from due, so a case sees only the rows it made
 beforeEach(async () => {
   await tmp.db
     .update(brokerAccounts)
-    .set({ serviceSince: null })
-    .where(isNotNull(brokerAccounts.serviceSince));
+    .set({ serviceSince: null, accessTokenExpiresAt: sql`now() + interval '30 days'` });
 });
 afterEach(() => {
   vi.useRealTimers();

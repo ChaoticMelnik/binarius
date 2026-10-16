@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { eq, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
@@ -35,12 +35,12 @@ beforeAll(async () => {
 });
 afterAll(() => tmp.drop());
 
-// every case starts with no service account in this file's database
+// every case starts with no service account in this file's database, and with every earlier
+// case's account far from due, so a case sees only the rows it made
 beforeEach(async () => {
   await tmp.db
     .update(brokerAccounts)
-    .set({ serviceSince: null })
-    .where(isNotNull(brokerAccounts.serviceSince));
+    .set({ serviceSince: null, accessTokenExpiresAt: sql`now() + interval '30 days'` });
 });
 
 const HOUR = 3_600_000;
@@ -169,8 +169,16 @@ describe('listServiceRenewalCandidates', () => {
 
   it('O7: soonest expiry first, the limit cuts, exclude removes', async () => {
     const base = { rotatedAt: null, createdAt: at(`now() - interval '2 hours'`) };
-    const later = await account({ ...base, expiresAt: at(`now() + interval '3 hours'`) });
-    const sooner = await account({ ...base, expiresAt: at(`now() + interval '2 hours'`) });
+    // the larger id expires sooner, so the order by id alone is the reverse of the right one
+    const [low = '', high = ''] = [await account(base), await account(base)].sort();
+    const due = (id: string, hours: number) =>
+      tmp.db
+        .update(brokerAccounts)
+        .set({ accessTokenExpiresAt: sql`now() + make_interval(hours => ${hours})` })
+        .where(eq(brokerAccounts.id, id));
+    await due(high, 2);
+    await due(low, 3);
+    const [sooner, later] = [high, low];
     expect(await candidates()).toEqual([sooner, later]);
     expect(await candidates({ limit: 1 })).toEqual([sooner]);
     expect(await candidates({ exclude: [sooner] })).toEqual([later]);
