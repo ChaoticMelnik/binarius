@@ -32,19 +32,12 @@ export interface SessionResumerOptions {
   intervalMs: number;
 }
 
-type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
-const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
-  promise.then(
-    (value) => ({ ok: true as const, value }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-
 // the pair's label from any catalog, a stale one included; null names the asset by its id
 const labelOf = (
-  catalog: Settled<PairsCatalogResponse>,
+  catalog: PromiseSettledResult<PairsCatalogResponse>,
   assetId: number | null,
 ): PairLabel | null => {
-  if (!catalog.ok || assetId === null) return null;
+  if (catalog.status !== 'fulfilled' || assetId === null) return null;
   const pair = catalog.value.pairs.find((listed) => listed.id === assetId);
   return pair === undefined ? null : pairLabel(pair);
 };
@@ -61,13 +54,13 @@ export function createSessionResumer({
   let stopping = false;
 
   async function pass(api: Api, botUsername: string, attached: ResumeSession): Promise<void> {
-    const [listed, catalog] = await Promise.all([
-      settle(backend.listTrackedSessions()),
-      settle(backend.readPairs()),
+    const [listed, catalog] = await Promise.allSettled([
+      backend.listTrackedSessions(),
+      backend.readPairs(),
     ]);
-    if (!listed.ok) {
+    if (listed.status !== 'fulfilled') {
       logger.warn(
-        { ...errorLogFields(listed.error), ...backendErrorFields(listed.error) },
+        { ...errorLogFields(listed.reason), ...backendErrorFields(listed.reason) },
         'trading sessions not resumed',
       );
       return;

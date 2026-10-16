@@ -75,7 +75,7 @@ export interface SessionTracker {
 }
 
 export interface SessionTrackerOptions {
-  backend: Pick<BackendClient, 'readSession' | 'recordSessionMessage'>;
+  backend: Pick<BackendClient, 'readSession' | 'recordSessionMessage' | 'forgetSessionMessage'>;
   logger: Logger;
   firstPollMs: number;
   pollMs: number;
@@ -170,6 +170,20 @@ export function createSessionTracker({
     finish(entry);
   };
 
+  // A lost message is reported once per refusal, not retried: the row stays in the recovery list,
+  // so the next pass tracks it again and its edit is refused again (docs/bot-session.md → A lost
+  // message). The answer is not read: false is another message recorded, or none.
+  const lost = async (entry: Entry): Promise<void> => {
+    try {
+      await backend.forgetSessionMessage(entry.sessionId, entry.telegramUserId, entry.messageId);
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error), sessionId: entry.sessionId },
+        'trading session message not forgotten',
+      );
+    }
+  };
+
   const arm = (entry: Entry, delayMs: number): void => {
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
@@ -184,9 +198,11 @@ export function createSessionTracker({
     }, delayMs);
   };
 
-  // As in the intent tracker: shown or edited is rendered; gone stops the entry; any other
-  // Telegram refusal or a transport failure is retried on the next poll, logged once per entry;
-  // anything else is a bug and stops the entry.
+  // Shown or edited is rendered. Gone or any 403 means the message is lost for good (the backend
+  // counts any 403 as the user unreachable, Rule 19): the entry ends and, for an edit drawn from a
+  // view, the backend is told to forget the message, so the session leaves the recovery list; the
+  // 404 edit has no session to forget. Any other Telegram refusal or a transport failure is
+  // retried on the next poll, logged once per entry; anything else is a bug and stops the entry.
   async function editTo(
     entry: Entry,
     text: TelegramHtml,
@@ -204,7 +220,9 @@ export function createSessionTracker({
         return true;
       }
       if (error instanceof GrammyError || error instanceof HttpError) {
-        if (refusal === 'gone' || entry.editFailures === 0) {
+        const lostForGood =
+          refusal === 'gone' || (error instanceof GrammyError && error.error_code === 403);
+        if (lostForGood || entry.editFailures === 0) {
           logger.warn(
             {
               ...errorLogFields(error),
@@ -215,8 +233,10 @@ export function createSessionTracker({
           );
         }
         entry.editFailures += 1;
-        if (refusal === 'gone') finish(entry);
-        return refusal !== 'gone';
+        if (!lostForGood) return true;
+        finish(entry);
+        if (args[0] !== null) await lost(entry);
+        return false;
       }
       failed(entry, error);
       return false;
