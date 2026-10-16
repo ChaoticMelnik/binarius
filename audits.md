@@ -3280,3 +3280,36 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. In an existing file, format only the lines you wrote and read `git diff` before `git add` — **внедрено в #565: `.claude/skills/implementer/SKILL.md` → Step 4**
 2. Exclude `.claude/worktrees/` from the codegraph index; the architect got copies instead of main — **вынесено в #564**
+
+---
+
+## #567 — Сессия: восстановление трекинга статуса без «🔄 Обновить» (часть A разбиения #536) (2026-10-16)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Preflight clean: main = origin/main, Codex ready, no Codex usage limit, Fable reset reported by the owner 2026-10-16, #535 and #551 merged. |
+| Architect | first plan | Fable (`claude-fable-5-1`), spawned for #536. 7 clarify questions, all answered by the owner (recommended). Step 4a split #536 into A #567 → B #536 → C #568 (owner's order). Plan posted before In Progress; estimate ~1 300. |
+| Implementer | clarify | Opus. 2 questions: one to the owner (first status message wins), one plan defect (two edits per pass past the deadline) → Plan Update 6220242567 on Opus before any code. |
+| Implementer | round 1 | 4 commits, 1 713 lines plus the 0055 snapshot; own worktree and database `binarius_impl_567`; 24/24 mutations; `pnpm check` 0. |
+| Tech Lead | Phase 3 | Audit comment 6220736474 before the reviewer spawn. |
+| Reviewer | round 1 | 1 Major, 3 Minor → Todo. Plan Update (Opus), fresh implementer: 2 owner questions, 32/32 mutations. |
+| Reviewer | round 2 | 1 Major, 3 Minor → Todo. Iteration-2 stop: owner chose re-plan from scratch; architect re-plan (Opus), fresh implementer: 1 owner question, 1 settled by the standing answer; 46/46 mutations, m34/m35/m42 replaced and named. |
+| Reviewer | round 3 | No Blocker/Major, 6 Minor. Codex `task-mvbccg2n-3tk14j` at head `8b1228b`; tech-lead re-hashed (base, head, diff-sha256 match). Codex rated Minor 1 major, reviewer downgraded it; the merge question named both. |
+| Tech Lead | merge | Question → yes (Minors to Backlog) → `mergeable` re-checked → MERGED 19:19:31Z (rebase, branch deleted). #567 Done; 6 Minor → #570 (Backlog); 0055 migrated on the shared database; `binarius_impl_567` dropped; worktrees removed. Models: every spawn on its policy model. |
+
+### Review iterations: 3
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 M1: a deleted status message or a blocked bot never set `summary_sent_at`, so the row stayed in the resume list forever (re-tracked every 10 min; at 2 000 such rows newer sessions starve) | Major | instance-vs-class | the plan listed how a row leaves the list on success only; the "work queue" task-class row existed but the resume list was not recognised as one | Architect (task classes) |
+| Plan defect: a resumed entry past the deadline was edited twice per pass | Minor | unverified-claim | risk 2 claimed one write per pass without tracing `attempt()` then `next()` | Architect (caught at implementer clarify) |
+| R2 M1: every recovered entry armed on the same 3 s timer → up to 2 000 GET + `editMessageText` in a burst after a restart, over Telegram's ~30/s | Major | other | the plan bounded the list size and the drain budget but not the call rate of the first pass against the Rate and timing budgets | Architect (budgets) |
+| R2 m1: `showInPlace` gone branch sent M2 without replacing the recorded M1 | Minor | instance-vs-class | the round-1 fix covered the tracker's lost path, not the composer's | Architect (Plan Update, class scan) |
+| R3 m1–m6 (memo key without the label, a pending `replacesMessageId` lost on a double press, Rule 26 without the 2 MiB ceiling, stale signatures in docs, logs tested on mocks, long lines/duplicate) | Minor | other | left at the round limit | → #570 |
+| Size: estimate ~1 300 → 2 578 lines (×2 again, as #551) | Minor | other | tests and docs of three rounds; first-round estimate ×1.3 | Architect |
+
+### Process improvement proposals
+1. The "work queue" task-class row also covers recovery lists re-read until a flag is set, with #567 R1 as its example; a new row "Bulk start-up work" requires the first pass's call rate per external API against the rate budgets and a named spacing constant — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+2. Remaining Minors — **вынесено в #570**
