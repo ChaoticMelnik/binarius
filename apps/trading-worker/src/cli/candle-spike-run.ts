@@ -15,6 +15,7 @@ import {
   assertDigits,
   createCandleBuilder,
   createSignalDecider,
+  tickProblem,
   type CandleBuilder,
 } from '@binarius/signal';
 import { BrokerEventType, type BrokerEvent } from '../broker/events';
@@ -24,7 +25,6 @@ import {
   type BrokerCredentials,
   type BrokerSocketClient,
 } from '../broker/socket';
-import { chunkAssets } from '../broker/subscriptions';
 import {
   compareAggregation,
   compareDecisions,
@@ -36,13 +36,12 @@ import {
 } from './candle-spike-compare';
 
 // The wiring of the candle spike (#392, docs/broker-socket.md -> The candle spike): one socket of
-// the account, phase A (how many subscribed ids the broker serves), phase B (ticks of the chosen pairs into candle builders for
-// SPIKE_MINUTES, with the receipt delay, the state changes and the process load), then the same
-// window from the public chart and the comparison. Writes nothing to the database, sends no
-// trade command, prints no token, URL, payload or broker user id.
+// the account, phase B (ticks of the chosen pairs into candle builders for SPIKE_MINUTES, with
+// the receipt delay, the state changes and the process load), then the same window from the
+// public chart and the comparison. Writes nothing to the database, sends no trade command,
+// prints no token, URL, payload or broker user id.
 
 export const READY_TIMEOUT_MS = 15_000;
-export const CAPACITY_WINDOW_MS = 60_000;
 export const REST_PACE_MS = 500;
 export const PROGRESS_EVERY_MS = 300_000;
 export const SAMPLE_EVERY_MS = 60_000;
@@ -63,7 +62,6 @@ const SPIKE_DURATION_SEC = 5;
 
 export interface SpikeTiming {
   readyTimeoutMs: number;
-  capacityWindowMs: number;
   restPaceMs: number;
   progressEveryMs: number;
   sampleEveryMs: number;
@@ -71,7 +69,6 @@ export interface SpikeTiming {
 
 export const SPIKE_TIMING: SpikeTiming = {
   readyTimeoutMs: READY_TIMEOUT_MS,
-  capacityWindowMs: CAPACITY_WINDOW_MS,
   restPaceMs: REST_PACE_MS,
   progressEveryMs: PROGRESS_EVERY_MS,
   sampleEveryMs: SAMPLE_EVERY_MS,
@@ -172,22 +169,6 @@ export function choosePairs(
 // this drops that row, whatever its timestamp.
 export const dropFirstRow = (rows: readonly Candle[]): Candle[] => rows.slice(1);
 
-export interface ChunkCoverage {
-  size: number;
-  withTicks: number;
-}
-
-export interface CapacityResult {
-  subscribed: number;
-  withTicks: number;
-  open: { subscribed: number; withTicks: number };
-  closed: { subscribed: number; withTicks: number };
-  chunks: ChunkCoverage[];
-  firstTickDelayMs?: { median: number; max: number };
-  // the window was cut short: its coverage is no cap
-  cut?: 'interrupted' | 'a drop';
-}
-
 export interface StateChangeRecord {
   at: number;
   from: string;
@@ -201,7 +182,8 @@ export interface HoleRecord {
   // phase B)
   leftAt: number;
   backAt?: number;
-  // broker time: the last tick before it -> the first tick after it
+  // broker time: the last accepted tick before it -> the first accepted tick later than that;
+  // fromMs <= toMs, and toMs = max(the end of phase B, fromMs) when no such tick came
   span: Span;
 }
 
@@ -240,10 +222,9 @@ export interface SpikeReportInput {
   choice: PairChoice;
   operatorChoice: boolean;
   catalog: { rest: number; socket: number; socketOnly: number; restOnly: number };
-  capacity: CapacityResult;
   pairs: PairResult[];
   delay?: Distribution;
-  ticks: { total: number; late: number; invalid: number };
+  ticks: { total: number; late: number; invalid: number; skewed: number };
   process: { cpuPct?: number; maxRssMb?: number };
   stateChanges: StateChangeRecord[];
   holes: HoleRecord[];
@@ -293,7 +274,7 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   }
   const chosenIds = new Set(choice.chosen.map((pair) => pair.id));
 
-  type Phase = 'setup' | 'A' | 'B' | 'done';
+  type Phase = 'setup' | 'B' | 'done';
   let phase: Phase = 'setup';
   let socketPairs: BinaryPair[] | undefined;
   let ownUser = false;
@@ -303,13 +284,12 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   const holes: HoleRecord[] = [];
   let openHole: HoleRecord | undefined;
   let terminal: string | undefined;
-  let droppedInA = false;
 
-  const firstTickAt = new Map<number, number>();
   const builders = new Map<number, Record<SpikeIntervalName, CandleBuilder>>();
   const tickSpan = new Map<number, { first: number; last: number; count: number }>();
   const delays: number[] = [];
   let phaseBTicks = 0;
+  const rejected = { invalid: 0, skewed: 0 };
   const capacity = options.minutes * 12 + 4;
   for (const pair of choice.chosen) {
     builders.set(pair.id, {
@@ -321,7 +301,7 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   const client = deps.openClient('A');
   client.onState((change) => {
     if (phase === 'done') return;
-    if (phase === 'A' || phase === 'B') {
+    if (phase === 'B') {
       stateChanges.push({
         at: deps.now(),
         from: change.from,
@@ -331,14 +311,16 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
       });
     }
     const left = change.from === BrokerSocketState.Ready && change.to !== BrokerSocketState.Ready;
-    if (phase === 'A' && left) droppedInA = true;
     if (phase === 'B') {
       if (left && openHole !== undefined) {
         // no tick since the last drop: the same gap in the tick series, one hole
         delete openHole.backAt;
-      } else if (left) {
-        const from = watermark ?? deps.now();
-        openHole = { leftAt: deps.now(), span: { fromMs: from, toMs: Number.POSITIVE_INFINITY } };
+      } else if (left && watermark !== undefined) {
+        // before phase B's first accepted tick there is no gap in the builders' series
+        openHole = {
+          leftAt: deps.now(),
+          span: { fromMs: watermark, toMs: Number.POSITIVE_INFINITY },
+        };
         holes.push(openHole);
       }
       if (change.to === BrokerSocketState.Ready && openHole !== undefined) {
@@ -359,17 +341,22 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
       return;
     }
     if (event.type !== BrokerEventType.PriceUpdate) return;
+    if (phase !== 'B') return;
     const { assetId, price, timestamp } = event.update;
-    if (phase === 'A') {
-      if (!firstTickAt.has(assetId)) firstTickAt.set(assetId, deps.now());
+    const receivedAt = deps.now();
+    phaseBTicks += 1;
+    // the builder's own rule, before anything reads the tick's time
+    const problem = tickProblem({ price, timestamp }, receivedAt);
+    if (problem !== undefined) {
+      rejected[problem] += 1;
       return;
     }
-    if (phase !== 'B') return;
-    phaseBTicks += 1;
-    delays.push(deps.now() - timestamp);
+    delays.push(receivedAt - timestamp);
     const pairBuilders = builders.get(assetId);
     if (pairBuilders === undefined) return;
-    for (const { name } of SPIKE_INTERVALS) pairBuilders[name].push({ price, timestamp });
+    for (const { name } of SPIKE_INTERVALS) {
+      pairBuilders[name].push({ price, timestamp }, receivedAt);
+    }
     const span = tickSpan.get(assetId);
     if (span === undefined) tickSpan.set(assetId, { first: timestamp, last: timestamp, count: 1 });
     else {
@@ -377,7 +364,8 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
       span.count += 1;
     }
     watermark = watermark === undefined ? timestamp : Math.max(watermark, timestamp);
-    if (openHole?.backAt !== undefined && openHole.span.toMs === Number.POSITIVE_INFINITY) {
+    // a replayed older price after the recovery does not close it
+    if (openHole?.backAt !== undefined && timestamp > openHole.span.fromMs) {
       openHole.span.toMs = timestamp;
       openHole = undefined;
     }
@@ -416,23 +404,11 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
     say(`pair ${pair.id} ${pair.symbol} digits ${pair.digits} payout ${pair.payout} ${pair.group}`);
   }
 
-  // phase A: capacity
-  phase = 'A';
-  say('phase A: subscription capacity');
-  const subscribeAt = deps.now();
-  client.subscribe(
-    options.subscribeAll ? [...new Set([...socketIds, ...chosenIds])] : [...chosenIds],
-  );
-  await waitFor(deps, timing.capacityWindowMs);
-  const capacityResult = measureCapacity(client.subscriptions(), socketCatalog, firstTickAt, {
-    subscribeAt,
-    nowMs: deps.now(),
-  });
-  const cut = deps.stop.aborted ? 'interrupted' : droppedInA ? 'a drop' : undefined;
-  if (cut !== undefined) capacityResult.cut = cut;
-
-  // phase B: accuracy
   phase = 'B';
+  // the chosen pairs first: one chunk (MAX_SPIKE_PAIRS <= MAX_PRICE_SUBSCRIPTION_ASSETS)
+  client.subscribe(
+    options.subscribeAll ? [...new Set([...chosenIds, ...socketIds])] : [...chosenIds],
+  );
   const phaseBStart = deps.now();
   const phaseBEnd = phaseBStart + options.minutes * 60_000;
   say(`phase B: ${options.minutes} min on ${choice.chosen.length} pairs`);
@@ -457,7 +433,9 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
   const windowCompleted = phaseBStop >= phaseBEnd && terminal === undefined;
   for (const hole of holes) {
     // no tick after it: the hole runs to the end of phase B
-    if (hole.span.toMs === Number.POSITIVE_INFINITY) hole.span.toMs = phaseBStop;
+    if (hole.span.toMs === Number.POSITIVE_INFINITY) {
+      hole.span.toMs = Math.max(phaseBStop, hole.span.fromMs);
+    }
   }
   phase = 'done';
   client.stop();
@@ -547,13 +525,12 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
     choice,
     operatorChoice: options.assetIds !== undefined,
     catalog,
-    capacity: capacityResult,
     pairs,
     ...(delay === undefined ? {} : { delay }),
     ticks: {
       total: phaseBTicks,
       late: allBuilders.reduce((sum, builder) => sum + builder.late, 0),
-      invalid: allBuilders.reduce((sum, builder) => sum + builder.invalid, 0),
+      ...rejected,
     },
     process: {
       ...(wallMs > 0 ? { cpuPct: ((last.cpuMicros - first.cpuMicros) / 1000 / wallMs) * 100 } : {}),
@@ -574,43 +551,6 @@ export function rangeOf(
   const firstMs = Math.floor(span.first / intervalMs) * intervalMs + intervalMs;
   const lastMs = Math.floor(span.last / intervalMs) * intervalMs - intervalMs;
   return lastMs < firstMs ? undefined : { firstMs, lastMs };
-}
-
-async function waitFor(deps: SpikeDeps, ms: number) {
-  const until = deps.now() + ms;
-  while (deps.now() < until && !deps.stop.aborted) {
-    await deps.sleep(Math.min(WAIT_STEP_MS, until - deps.now()));
-  }
-}
-
-function measureCapacity(
-  subscribed: readonly number[],
-  catalog: readonly BinaryPair[],
-  firstTickAt: ReadonlyMap<number, number>,
-  clock: { subscribeAt: number; nowMs: number },
-): CapacityResult {
-  const open = new Set(
-    catalog.filter((pair) => isPairOpen(pair, clock.nowMs)).map((pair) => pair.id),
-  );
-  const ticked = (id: number) => firstTickAt.has(id);
-  const count = (ids: readonly number[]) => ({
-    subscribed: ids.length,
-    withTicks: ids.filter(ticked).length,
-  });
-  const delays = subscribed.filter(ticked).map((id) => firstTickAt.get(id)! - clock.subscribeAt);
-  const delay = distribution(delays);
-  return {
-    ...count(subscribed),
-    open: count(subscribed.filter((id) => open.has(id))),
-    closed: count(subscribed.filter((id) => !open.has(id))),
-    chunks: chunkAssets(subscribed).map((chunk) => ({
-      size: chunk.length,
-      withTicks: chunk.filter(ticked).length,
-    })),
-    ...(delay === undefined
-      ? {}
-      : { firstTickDelayMs: { median: delay.median, max: sorted(delays).at(-1)! } }),
-  };
 }
 
 type Fetched = { ok: true; rows: Candle[] } | { ok: false; code: string };

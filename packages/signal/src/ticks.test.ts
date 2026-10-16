@@ -1,7 +1,12 @@
 import { NoSignalReason, SignalKind, type Candle } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { createSignalDecider } from './decide';
-import { aggregateEndLabelled, createCandleBuilder, type CandleBuilder } from './ticks';
+import {
+  aggregateEndLabelled,
+  createCandleBuilder,
+  TICK_MAX_SKEW_MS,
+  type CandleBuilder,
+} from './ticks';
 
 const I = 5_000;
 const T0 = 1_760_000_000_000;
@@ -9,8 +14,9 @@ const T0 = 1_760_000_000_000;
 const builder = (fields: { intervalMs?: number; digits?: number; capacity?: number } = {}) =>
   createCandleBuilder({ intervalMs: I, digits: 5, capacity: 100, ...fields });
 
-const feed = (b: CandleBuilder, ticks: [number, number][]) => {
-  for (const [timestamp, price] of ticks) b.push({ timestamp, price });
+// received at its own time unless receivedAt is given
+const feed = (b: CandleBuilder, ticks: [number, number][], receivedAt?: number) => {
+  for (const [timestamp, price] of ticks) b.push({ timestamp, price }, receivedAt ?? timestamp);
 };
 
 const candle = (timestamp: number, open: number, high: number, low: number, close: number) => ({
@@ -102,14 +108,18 @@ describe('createCandleBuilder', () => {
 
   it('T6 a bad price or timestamp is invalid: dropped and counted', () => {
     const b = builder();
-    feed(b, [
-      [T0, Number.NaN],
-      [T0, 0],
-      [T0, -1],
-      [Number.NaN, 1.1],
-      [Number.POSITIVE_INFINITY, 1.1],
-      [T0, Number.POSITIVE_INFINITY],
-    ]);
+    feed(
+      b,
+      [
+        [T0, Number.NaN],
+        [T0, 0],
+        [T0, -1],
+        [Number.NaN, 1.1],
+        [Number.POSITIVE_INFINITY, 1.1],
+        [T0, Number.POSITIVE_INFINITY],
+      ],
+      T0,
+    );
     expect(b.invalid).toBe(6);
     expect(b.candles()).toEqual([]);
     expect(b.watermark).toBeUndefined();
@@ -117,7 +127,7 @@ describe('createCandleBuilder', () => {
 
   it('T7 capacity keeps the newest candles in order', () => {
     const b = builder({ capacity: 120 });
-    for (let i = 0; i < 130; i++) b.push({ timestamp: T0 + i * I + 5, price: 1 + i / 1000 });
+    for (let i = 0; i < 130; i++) feed(b, [[T0 + i * I + 5, 1 + i / 1000]]);
     const kept = b.candles();
     expect(kept).toHaveLength(120);
     expect(kept[0]?.timestamp).toBe(T0 + 10 * I);
@@ -126,13 +136,13 @@ describe('createCandleBuilder', () => {
 
   it('T8 markHole drops the overlapping candles only', () => {
     const b = builder();
-    for (let i = 0; i < 6; i++) b.push({ timestamp: T0 + i * I + 5, price: 1 + i / 100 });
+    for (let i = 0; i < 6; i++) feed(b, [[T0 + i * I + 5, 1 + i / 100]]);
     // [T0 + 2I, T0 + 4I]: the candle at T0 + I ends at the hole's start and stays; the one at
     // T0 + 4I starts at its end, so its open may be a price the hole hid
     b.markHole(T0 + 2 * I, T0 + 4 * I);
     expect(b.candles().map((c) => (c.timestamp - T0) / I)).toEqual([0, 1, 5]);
 
-    b.push({ timestamp: T0 + 6 * I + 5, price: 1.5 });
+    feed(b, [[T0 + 6 * I + 5, 1.5]]);
     expect(b.candles().at(-1)?.open).toBe(1.05);
   });
 
@@ -161,12 +171,45 @@ describe('createCandleBuilder', () => {
     expect(reached.holed).toBe(1);
   });
 
+  it('T8c a hole reaches only the buckets it overlaps, before and after the current one', () => {
+    const b = builder();
+    feed(b, [[1_000, 1.0]]);
+    b.markHole(10_000, 12_000);
+    b.markHole(30_000, 32_000);
+    feed(b, [
+      [2_000, 1.1],
+      [20_000, 1.2],
+      [31_000, 1.3],
+      [35_100, 1.4],
+    ]);
+    expect(b.candles().map((c) => [c.timestamp, c.open, c.close])).toEqual([
+      [0, 1.0, 1.1],
+      [20_000, 1.1, 1.2],
+      [35_000, 1.3, 1.4],
+    ]);
+    expect(b.holed).toBe(1);
+  });
+
+  it('T6b a tick more than TICK_MAX_SKEW_MS from its receipt is skewed: dropped, counted', () => {
+    const b = builder();
+    b.push({ timestamp: T0, price: 1.1 }, T0 + TICK_MAX_SKEW_MS);
+    b.push({ timestamp: T0 + 3_600_000, price: 9.9 }, T0 + 100);
+    b.push({ timestamp: T0 - 3_600_000, price: 9.9 }, T0 + 100);
+    b.push({ timestamp: T0 + I + 5, price: 1.2 }, T0 + I + 5);
+    expect([b.skewed, b.late]).toEqual([2, 0]);
+    expect(b.candles()).toEqual([
+      candle(T0, 1.1, 1.1, 1.1, 1.1),
+      candle(T0 + I, 1.1, 1.2, 1.1, 1.2),
+    ]);
+    expect(() => b.push({ timestamp: T0, price: 1 }, Number.NaN)).toThrow(RangeError);
+  });
+
   it('T10 60 buckets of ticks pass the decider checks', () => {
     const b = builder({ capacity: 200 });
     let price = 1.1;
     for (let i = 0; i < 60 * 5; i++) {
       price += ((i * 7919) % 13) - 6 > 0 ? 0.00007 : -0.00006;
-      b.push({ timestamp: T0 + i * 1_000 + 300, price });
+      feed(b, [[T0 + i * 1_000 + 300, price]]);
     }
     const candles: Candle[] = b.candles();
     expect(candles).toHaveLength(60);
