@@ -3308,7 +3308,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R2 M1: every recovered entry armed on the same 3 s timer → up to 2 000 GET + `editMessageText` in a burst after a restart, over Telegram's ~30/s | Major | other | the plan bounded the list size and the drain budget but not the call rate of the first pass against the Rate and timing budgets | Architect (budgets) |
 | R2 m1: `showInPlace` gone branch sent M2 without replacing the recorded M1 | Minor | instance-vs-class | the round-1 fix covered the tracker's lost path, not the composer's | Architect (Plan Update, class scan) |
 | R3 m1–m6 (memo key without the label, a pending `replacesMessageId` lost on a double press, Rule 26 without the 2 MiB ceiling, stale signatures in docs, logs tested on mocks, long lines/duplicate) | Minor | other | left at the round limit | → #570 |
-| Size: estimate ~1 300 → 2 578 lines (×2 again, as #551) | Minor | other | tests and docs of three rounds; first-round estimate ×1.3 | Architect |
+| Size: estimate ~1 300 → 2 585 lines (snapshot excluded, journal counted) (×2 again, as #551) | Minor | other | tests and docs of three rounds; first-round estimate ×1.3 | Architect |
 
 ### Process improvement proposals
 1. The "work queue" task-class row also covers recovery lists re-read until a flag is set, with #567 R1 as its example; a new row "Bulk start-up work" requires the first pass's call rate per external API against the rate budgets and a named spacing constant — **внедрено в #571: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
