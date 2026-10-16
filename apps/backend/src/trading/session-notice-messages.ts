@@ -40,7 +40,7 @@ export function pairOf(
   };
 }
 
-// What the claimed trade's turn sends (#551, docs/bot-session.md → The cycle message): a new
+// What the claimed trade's turn sends (#551, docs/bot-session.md → The state): a new
 // message showing the trades from `from` to the claimed one, or the edit of the session's cycle
 // message to the trades from its own `from`. `split` marks a new message the cycle message had no
 // room for.

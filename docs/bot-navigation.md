@@ -20,8 +20,8 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   (the exception list below). The reason is not sent; its type makes every such call name an entry.
 - `apps/backend/src/auth/client-push.ts`: `ClientPushMessage.reply_markup` is required, for the link
   push, every mailing ([mailing.md](mailing.md)) and the session's summary (#464); its one message
-  without a keyboard is `sendSessionTrade`, which takes the text alone (exception `session_trade`
-  below).
+  without a keyboard is the session's cycle message, sent by `sendSessionTrade` and edited by
+  `editSessionTrade` (#551), which take the text alone (exception `session_trade` below).
 - `send.typecheck.ts` holds the rule: a call without `reply_markup`, with it `undefined`, with a
   reply keyboard, and a reason outside the list each fail `tsc` (an `@ts-expect-error` that starts
   compiling fails `pnpm check`).
@@ -41,7 +41,7 @@ The backend's push has one exception of its own, by its method's type rather tha
 
 | Exception | Where | Why |
 |---|---|---|
-| `session_trade` (#464) | `sendSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); its type takes only the text | a settled trade of a running session, one of up to 60 in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the session's status message right above carries «🔄 Обновить» and «⏹ Остановить сессию», and the summary at the end «🏠 В меню»; a keyboard under every trade would repeat them up to 60 times |
+| `session_trade` (#464, #551) | `sendSessionTrade` and `editSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); their types take only the text | a cycle of a running session, its settled trades listed in one message edited at each step, one of up to 60 trades in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the session's status message right above carries «🔄 Обновить» and «⏹ Остановить сессию», and the summary at the end «🏠 В меню»; a keyboard under every cycle would repeat them |
 
 One more exception is not a `NoNextStepReason`, because it is not a message in the user's own
 chat with the bot:
@@ -149,7 +149,7 @@ no repeat.
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
-| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
+| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never

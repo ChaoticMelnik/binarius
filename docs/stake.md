@@ -101,7 +101,10 @@ The features: `settledTrades`; `consecutiveLosses` and `streakLoss`, walking the
 the end, where a loss counts and adds `-profit`, a tie and a rejected order are skipped, and a win
 of any size or the start of the history ends the walk; `realizedSessionLoss = max(0, -Σ profit)`
 over every settled trade; `sessionElapsedMs = nowMs - sessionStartedAtMs`; `step = 1` for `fixed`
-and `consecutiveLosses + 1` for `martingale`.
+and `consecutiveLosses + 1` for `martingale` — the raises `maxSteps` bounds. The step a trade's
+message prints counts the trades of its cycle, ties included (#551,
+[bot-session.md](bot-session.md#trade-messages-and-the-summary-464)), so with ties it can be above
+this one and above `maxSteps`.
 
 | Code | Source | What the orchestrator (#287) does |
 |---|---|---|
@@ -232,7 +235,8 @@ and its pin in `trading-session.test.ts`; then at 80-86 % step 4 stops as `max_s
 Rules of a session that the defaults do not change (#450 clarify):
 
 - A tie leaves the series as it is: the next stake is the same step (`orchestrator.db.test.ts` G2,
-  `steps-parity.test.ts`).
+  `steps-parity.test.ts`); the trade's message shows it as the next step of the same cycle
+  (#551).
 - The session ends at its N-th settled trade, in the middle of a series too (G9); its result shows
   the series' loss.
 - Only the base stake is checked against the balance at the start. A series that outgrows the
