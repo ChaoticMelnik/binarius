@@ -572,11 +572,8 @@ had no candidate.
    `user.data` of another user is `setup failed`.
 2. **Phase A: capacity** (60 s). The CLI subscribes the ids through the client, which sends them
    in 40-id chunks. It counts which ids got a tick, split open and closed, and the coverage per
-   chunk in send order. A per-socket cap shows as whole chunks without ticks. Then a raw probe on
-   a socket of its own sends one `price.subscribe` of the first 41 open ids, which the client's
-   contract cannot send. It listens for 5 s and records the event names, the ids the
-   `price.subscribed` echo carries, the ids with ticks, and whether the server dropped the
-   connection.
+   chunk in send order. A per-socket cap shows as whole chunks without ticks. Whether one
+   `price.subscribe` of 41 ids is refused by the broker or by our client is #555.
 3. **Phase B: accuracy** (`SPIKE_MINUTES`). Every tick of a chosen pair goes into two builders
    (`5s`, `15s`). The CLI records the receipt delay `now − tick time`, which mixes network
    latency and clock skew and can be negative. It also records ticks per second, every state
@@ -617,7 +614,7 @@ had no candidate.
 
 **The report** starts with a header (start, minutes, `complete` / `interrupted` / `ended by
 <state>`, the pairs table with the group and ticks per second, the catalog sizes). It then has
-a phase A table with the raw-probe row, phase B tables per interval (candles, decisions,
+a phase A table, phase B tables per interval (candles, decisions,
 display, `1s` aggregation), the load (receipt delay median/p95/min, ticks, late and invalid,
 CPU share, max RSS), and phase C (state changes, holes and the candles they cover). Last comes a
 summary for #404's architect. A share with nothing compared prints `0 of 0`. The run is one

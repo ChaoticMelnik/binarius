@@ -2,7 +2,6 @@ import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { pino } from 'pino';
-import { io } from 'socket.io-client';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { brokerAccounts, createDb } from '@binarius/db';
 import {
@@ -21,13 +20,7 @@ import {
 import { createBackendAccessTokenSource } from '../broker/access-token';
 import { createBrokerSocketClient, type BrokerSocketClient } from '../broker/socket';
 import { BACKEND_URL_RULES, BROKER_WS_URL_RULES } from '../env';
-import {
-  runSpike,
-  SPIKE_TIMING,
-  type RawSocket,
-  type SpikeDeps,
-  type SpikeRun,
-} from './candle-spike-run';
+import { runSpike, SPIKE_TIMING, type SpikeDeps, type SpikeRun } from './candle-spike-run';
 import { renderReport } from './candle-spike-report';
 
 // The candle spike (#392, docs/broker-socket.md -> The candle spike): candles built from the
@@ -181,12 +174,6 @@ export async function runCandleSpikeCli(
         clients.push(client);
         return client;
       },
-      openRawSocket: () =>
-        io(env.brokerWsUrl, {
-          transports: ['websocket'],
-          forceNew: true,
-          reconnection: false,
-        }) as unknown as RawSocket,
       rest: createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl }),
       credentials: { brokerUserId: account.brokerUserId, accessToken: token.accessToken },
       now: Date.now,

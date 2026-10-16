@@ -1,15 +1,12 @@
 import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
 import {
   BrokerRestErrorCode,
-  BrokerSocketEvent,
   comparePairsByPayout,
   isPairOpen,
   pairAcceptsDuration,
   pairPayoutAccepted,
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
-  safeDecodeSocketPayload,
-  safeParsePriceUpdate,
   type BinaryPair,
   type Candle,
   type PairTypeGroup,
@@ -39,17 +36,13 @@ import {
 } from './candle-spike-compare';
 
 // The wiring of the candle spike (#392, docs/broker-socket.md -> The candle spike): one socket of
-// the account, phase A (how many subscribed ids the broker serves, and one raw message of 41 ids
-// on a socket of its own), phase B (ticks of the chosen pairs into candle builders for
+// the account, phase A (how many subscribed ids the broker serves), phase B (ticks of the chosen pairs into candle builders for
 // SPIKE_MINUTES, with the receipt delay, the state changes and the process load), then the same
 // window from the public chart and the comparison. Writes nothing to the database, sends no
 // trade command, prints no token, URL, payload or broker user id.
 
 export const READY_TIMEOUT_MS = 15_000;
 export const CAPACITY_WINDOW_MS = 60_000;
-export const RAW_PROBE_WINDOW_MS = 5_000;
-// one id above MAX_PRICE_SUBSCRIPTION_ASSETS, which the client's contract cannot send
-export const RAW_PROBE_IDS = 41;
 export const REST_PACE_MS = 500;
 export const PROGRESS_EVERY_MS = 300_000;
 export const SAMPLE_EVERY_MS = 60_000;
@@ -71,7 +64,6 @@ const SPIKE_DURATION_SEC = 5;
 export interface SpikeTiming {
   readyTimeoutMs: number;
   capacityWindowMs: number;
-  rawProbeWindowMs: number;
   restPaceMs: number;
   progressEveryMs: number;
   sampleEveryMs: number;
@@ -80,7 +72,6 @@ export interface SpikeTiming {
 export const SPIKE_TIMING: SpikeTiming = {
   readyTimeoutMs: READY_TIMEOUT_MS,
   capacityWindowMs: CAPACITY_WINDOW_MS,
-  rawProbeWindowMs: RAW_PROBE_WINDOW_MS,
   restPaceMs: REST_PACE_MS,
   progressEveryMs: PROGRESS_EVERY_MS,
   sampleEveryMs: SAMPLE_EVERY_MS,
@@ -93,14 +84,6 @@ export interface SpikeOptions {
   subscribeAll: boolean;
 }
 
-// the socket.io-client surface the raw probe uses
-export interface RawSocket {
-  on(event: string, listener: (...args: unknown[]) => void): void;
-  onAny(listener: (event: string, ...args: unknown[]) => void): void;
-  emit(event: string, payload: unknown): void;
-  disconnect(): void;
-}
-
 export interface ProcessSample {
   cpuMicros: number;
   rssBytes: number;
@@ -108,7 +91,6 @@ export interface ProcessSample {
 
 export interface SpikeDeps {
   openClient(label: string): BrokerSocketClient;
-  openRawSocket(): RawSocket;
   rest: Pick<BrokerRestClient, 'listPairs' | 'getChart'>;
   credentials: BrokerCredentials;
   now(): number;
@@ -203,15 +185,6 @@ export interface CapacityResult {
   firstTickDelayMs?: { median: number; max: number };
 }
 
-export interface RawProbeResult {
-  outcome: 'ran' | 'not_run' | 'auth_failed' | 'refused';
-  detail?: string;
-  echoIds?: number;
-  events: string[];
-  idsWithTicks: number;
-  disconnectedByServer: boolean;
-}
-
 export interface StateChangeRecord {
   at: number;
   from: string;
@@ -264,7 +237,6 @@ export interface SpikeReportInput {
   operatorChoice: boolean;
   catalog: { rest: number; socket: number; socketOnly: number; restOnly: number };
   capacity: CapacityResult;
-  raw: RawProbeResult;
   pairs: PairResult[];
   delay?: Distribution;
   ticks: { total: number; late: number; invalid: number };
@@ -443,12 +415,6 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
     subscribeAt,
     nowMs: deps.now(),
   });
-  const openIds = socketCatalog
-    .filter((pair) => isPairOpen(pair, deps.now()))
-    .map((pair) => pair.id);
-  const raw = deps.stop.aborted
-    ? notRun('interrupted')
-    : await rawProbe(deps, openIds.slice(0, RAW_PROBE_IDS));
 
   // phase B: accuracy
   phase = 'B';
@@ -567,7 +533,6 @@ export async function runSpike(deps: SpikeDeps): Promise<SpikeRun> {
     operatorChoice: options.assetIds !== undefined,
     catalog,
     capacity: capacityResult,
-    raw,
     pairs,
     ...(delay === undefined ? {} : { delay }),
     ticks: {
@@ -629,96 +594,6 @@ function measureCapacity(
     ...(delay === undefined
       ? {}
       : { firstTickDelayMs: { median: delay.median, max: sorted(delays).at(-1)! } }),
-  };
-}
-
-const notRun = (detail: string): RawProbeResult => ({
-  outcome: 'not_run',
-  detail,
-  events: [],
-  idsWithTicks: 0,
-  disconnectedByServer: false,
-});
-
-// the number of ids a price.subscribed echo carries, whatever its shape
-function echoedIds(raw: unknown): number | undefined {
-  const decoded = safeDecodeSocketPayload(raw);
-  if (!decoded.ok) return undefined;
-  const value = decoded.value;
-  if (Array.isArray(value)) return value.length;
-  if (typeof value === 'object' && value !== null && 'assets' in value) {
-    const assets = (value as { assets: unknown }).assets;
-    if (Array.isArray(assets)) return assets.length;
-  }
-  return undefined;
-}
-
-async function rawProbe(deps: SpikeDeps, ids: readonly number[]): Promise<RawProbeResult> {
-  if (ids.length < RAW_PROBE_IDS) return notRun(`${ids.length} open ids, ${RAW_PROBE_IDS} needed`);
-  const events = new Set<string>();
-  const tickIds = new Set<number>();
-  let echoIds: number | undefined;
-  let authed = false;
-  let authFailed = false;
-  let refused = false;
-  let closing = false;
-  let disconnectedByServer = false;
-
-  const socket = deps.openRawSocket();
-  try {
-    socket.onAny((event, ...args) => {
-      events.add(event);
-      if (event === 'price.subscribed') echoIds ??= echoedIds(args[0]);
-      if (event === BrokerSocketEvent.PriceUpdate) {
-        const decoded = safeDecodeSocketPayload(args[0]);
-        const update = decoded.ok ? safeParsePriceUpdate(decoded.value) : undefined;
-        if (update?.success === true) tickIds.add(update.data[0]);
-      }
-    });
-    socket.on('connect', () => {
-      socket.emit(BrokerSocketEvent.UserAuth, {
-        id: deps.credentials.brokerUserId,
-        token: deps.credentials.accessToken,
-      });
-    });
-    socket.on(BrokerSocketEvent.UserAuthSuccess, () => {
-      if (authed) return;
-      authed = true;
-      socket.emit(BrokerSocketEvent.PriceSubscribe, { assets: [...ids] });
-    });
-    socket.on(BrokerSocketEvent.UserAuthError, () => {
-      authFailed = true;
-    });
-    socket.on('connect_error', () => {
-      refused = true;
-    });
-    socket.on('disconnect', () => {
-      if (!closing) disconnectedByServer = true;
-    });
-
-    const deadline = deps.now() + deps.timing.readyTimeoutMs;
-    while (!authed && !authFailed && !refused && deps.now() < deadline && !deps.stop.aborted) {
-      await deps.sleep(SETUP_STEP_MS);
-    }
-    if (authed) await waitFor(deps, deps.timing.rawProbeWindowMs);
-  } finally {
-    closing = true;
-    socket.disconnect();
-  }
-  const outcome: RawProbeResult['outcome'] = authed
-    ? 'ran'
-    : authFailed
-      ? 'auth_failed'
-      : refused
-        ? 'refused'
-        : 'not_run';
-  return {
-    outcome,
-    ...(outcome === 'not_run' ? { detail: 'no user.auth.success in time' } : {}),
-    ...(echoIds === undefined ? {} : { echoIds }),
-    events: [...events].sort(),
-    idsWithTicks: tickIds.size,
-    disconnectedByServer,
   };
 }
 
