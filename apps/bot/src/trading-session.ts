@@ -570,7 +570,8 @@ export function createTradingSessionComposer<C extends Context>({
   // The view in place of the message the button is under, then tracking on whichever message
   // shows it: its first poll records the message (#567), so a session started before the
   // recovery existed is recovered from then on; a done session's entry sends its summary card
-  // once and ends (#318).
+  // once and ends (#318). A message sent in place of a pressed one refused as gone replaces the
+  // pressed one in the record when that is the one recorded.
   async function showInPlace(
     ctx: Context,
     telegramUserId: string,
@@ -587,7 +588,7 @@ export function createTradingSessionComposer<C extends Context>({
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'gone') {
         const sent = await replyHtml(ctx, text, { reply_markup });
-        track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
+        track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id, messageId);
         return;
       }
       if (refusal !== 'shown') {
@@ -659,9 +660,14 @@ export function createTradingSessionComposer<C extends Context>({
     view: TradingSessionView,
     chatId: number,
     messageId: number,
+    replacesMessageId?: number,
   ): void {
     const target = { sessionId: view.id, telegramUserId, symbol, chatId, messageId };
-    follow(ctx.api, ctx.me.username, target, { view, record: true });
+    follow(ctx.api, ctx.me.username, target, {
+      view,
+      record: true,
+      ...(replacesMessageId === undefined ? {} : { replacesMessageId }),
+    });
   }
 
   // a private chat's id is its user's id (Telegram ids fit in 52 bits, so Number keeps them)
@@ -696,7 +702,12 @@ export function createTradingSessionComposer<C extends Context>({
       chatId: number;
       messageId: number;
     },
-    entry: { view: TradingSessionView | null; record: boolean; startedAt?: number },
+    entry: {
+      view: TradingSessionView | null;
+      record: boolean;
+      startedAt?: number;
+      replacesMessageId?: number;
+    },
   ): void {
     sessionTracker.track({
       sessionId,

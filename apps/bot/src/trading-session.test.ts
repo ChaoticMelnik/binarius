@@ -1535,4 +1535,24 @@ describe('the resume of a tracked session after a restart (#567)', () => {
       }).value,
     );
   });
+
+  it('RS4 a status sent in place of a gone message replaces the pressed one in its record', async () => {
+    const gone = setup();
+    gone.apiErrors.set('editMessageText', EDIT_GONE);
+    const update = callbackUpdate(REFRESH);
+    const pressedId = update.callback_query?.message?.message_id;
+    expect(pressedId).not.toBe(TEXT_CARD_MESSAGE_ID);
+    await gone.pressUpdate(update);
+    expect(gone.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
+      messageId: TEXT_CARD_MESSAGE_ID,
+      replacesMessageId: pressedId,
+      record: true,
+    });
+
+    const inPlace = setup();
+    await inPlace.press(REFRESH);
+    const entry = inPlace.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
+    expect(entry.record).toBe(true);
+    expect(entry.replacesMessageId).toBeUndefined();
+  });
 });
