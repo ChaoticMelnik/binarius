@@ -35,13 +35,14 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 
 | `NoNextStepReason` | Where | Why |
 |---|---|---|
+| `session_status` (#536) | the session message (`trading-session.ts`: `replyHtmlWithoutNextStep` at the start; `session-tracker.ts` through `editMessageTextByIdHtmlWithoutNextStep` at its edits) | the session's head — its mode, pair, stake and expiry — above its trades: the next step of a running session is «⏹ Остановить сессию» under the backend's waiting message, always the last message of the session, and of a stopped one the summary's and the card's; an edit without a keyboard also strips an old status message's buttons. A 404 while tracking draws «⚠️ Статус сессии недоступен.» under «🏠 В меню» ([bot-session.md](bot-session.md#the-session-message)) |
 | `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`: an edit of the pressed message, or a new message at once under a photo — the analysis card, the session's summary card, #482) | a text result replaces it with its keyboard within the signal's budget, and after a signal's card (#482) it is deleted; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, when the card's photo fails in transport and «⏳»'s edit is refused, or when its delete is refused, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the screen above it and /menu remain |
 
 The backend's push has one exception of its own, by its method's type rather than a reason:
 
 | Exception | Where | Why |
 |---|---|---|
-| `session_trade` (#464, #551) | `sendSessionTrade` and `editSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); their types take only the text | a cycle of a running session, its settled trades listed in one message edited at each step, one of up to 60 trades in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the session's status message right above carries «🔄 Обновить» and «⏹ Остановить сессию», and the summary at the end «🏠 В меню»; a keyboard under every cycle would repeat them |
+| `session_trade` (#464, #551) | `sendSessionTrade` and `editSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); their types take only the text | a cycle of a running session, its settled trades listed in one message edited at each step, one of up to 60 trades in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the waiting message right under the newest cycle (#536) carries «⏹ Остановить сессию», and the summary at the end «🏠 В меню»; a keyboard under every cycle would repeat them |
 
 One more exception is not a `NoNextStepReason`, because it is not a message in the user's own
 chat with the bot:
@@ -59,8 +60,10 @@ chat with the bot:
   `paysupportRefundCallbackData` (`ps:r:<payment id>`, #118), `demoAnalysisCallbackData`
   (`demo:an:<assetId>:<sec>`, moved from `demo.ts` by #484 for the analysis reminder), `supportUrl()`, and since #27
   `CASHIER_PAGE_PATH` (`/cashier`, the page `web` serves) and `cashierUrlOf(origin)` (the page's
-  URL on an https origin, none otherwise). The bot and the backend's push build their
-  buttons from it, so a pushed button lands on the bot's handler.
+  URL on an https origin, none otherwise), and since #536 `sessionStopCallbackData`
+  (`session:stop:<id>`, `:w` under the waiting message the backend sends) and
+  `SESSION_STOP_PATTERN`. The bot and the backend's push build their buttons from it, so a pushed
+  button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
   `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
   path's duration, `demo:sig:<sec>`, since #382; its `beforeMenu` rows go right above the menu);
@@ -86,7 +89,7 @@ read (#115). `/start` and
 ## The repeat
 
 «🔄 Повторить» carries the pressed data again **only after a read**: a demo screen, the signals
-screen, the picker's way back to /settings, the trade's and the session's refresh. A press that
+screen, the picker's way back to /settings, the trade's refresh. A press that
 writes — `demo:stake:`, `demo:sess:`, `real:sess:` (#327), `session:stop:`, `confirm:`, `resend`, `stk:s:`, `stk:z:`,
 `level:`, `ps:r:` (#118), the mode switches `mode:r:ok` and `mode:d` (#474) — never gets it: its failure leads back to where it was pressed (the analysis, the
 menu), so a lost answer never becomes a second trade or session. `testing.ts` → `captureApi` throws
@@ -141,16 +144,17 @@ no repeat.
 | every refusal or failure of the mode screen and its switches (`modeBelowMinimum`, `stakeBalanceMissing`, `tradingDemoOnly`, `unavailable`, `modeOutcomeUnknown`) | ⚙️ Режим (`mode:x`, a read) · 🏠 В меню — never a switch |
 | the mode screen's access refusals in demo (`accountNone`, `statusAmbiguous`, `stakeBalanceMissing`) | 🔗 Подключить · 🏠 В меню; 🏠 В меню |
 | the trade's refresh failed | 🔄 Повторить (`intent:<id>`) · 🏠 В меню; `intentStatusUnavailable` (404) → 🏠 В меню |
-| the session's refresh or stop failed | 🔄 Обновить (`session:<id>`) · 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню |
+| the session's stop failed (#536) | 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню; the pressed message stays, its «⏹» pressed again is safe |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 циклов (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
-| session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
-| session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 🔄 Обновить · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔄 Обновить · 🔀 Выбрать другую пару · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню |
-| `/stop` (#122), one session stopped | the session's status keyboard (the two rows above) |
+| the session message (#536) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
+| the waiting message (#536, sent by the backend) | ⏹ Остановить сессию (`session:stop:<id>:w`) |
+| the reply to the stop under the waiting message, `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню |
+| an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
-| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
+| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 | the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Новый анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration) — one button, as the chain's reminders |
 
@@ -162,8 +166,9 @@ refused for want of a signal is not offered its own pair again; the backend's su
 stop draws it from `signalsCallbackDataFor` (`bot-navigation.ts`). The trackers' edits take the view and, for a last
 edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
 (`not_found`, `deadline`), `SessionTrackRequest.edit(text, view, end?)` with `not_found` only. So
-the last edit draws its next step too: the end of the path on a stop status, the menu alone on a
-404, the refresh and the menu at the deadline of a live trade.
+the last edit draws its next step too: the end of the path on a trade's stop status, the menu alone
+on a 404, the refresh and the menu at the deadline of a live trade; the session message's edits
+draw none (#536, `session_status`).
 
 An old message sent before #350 keeps the keyboard it had: Telegram keeps old messages, and the rule
 applies to what is sent after the deploy.
