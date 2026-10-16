@@ -16,6 +16,7 @@ import {
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -23,7 +24,6 @@ import { createBot, levelCallbackData } from './bot';
 import {
   cycleStakeCallbackData,
   DEMO_GROUPS_CALLBACK_DATA,
-  demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoLaunchCallbackData,
   analysisMoreCallbackData,

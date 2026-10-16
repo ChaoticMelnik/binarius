@@ -1,8 +1,10 @@
 import type { PairsCatalog } from '@binarius/broker-rest';
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  errorLogFields,
   safeParseTradingSignalRequest,
   SignalFeedOutcome,
+  SignalKind,
   TRADING_SIGNAL_PATH,
   TradingSignalErrorCode,
   type TradingSignalResponse,
@@ -15,6 +17,13 @@ export interface SignalRoutesDeps {
   // the pair's digits for the tick floor (#379)
   catalog: Pick<PairsCatalog, 'read'>;
   internalApiToken: string;
+  // the analysis reminder's fact (#484): setLastAnalysis; false = no users row
+  lastAnalysis: {
+    set(
+      telegramUserId: bigint,
+      analysis: { assetId: number; durationSec: number } | null,
+    ): Promise<boolean>;
+  };
 }
 
 // Named fields only: the evaluation also carries the journal series and the request facts, which
@@ -38,10 +47,13 @@ export function toTradingSignalResponse(evaluation: SignalEvaluation): TradingSi
 // An encapsulated plugin so the auth hook covers exactly this route. A broker failure is a 200
 // with an outcome (docs/signal.md -> POST /trading/signal); a throw is the app's opaque 500. The
 // pair is looked up in the pairs cache before any chart GET, for its digits; whether it is open or
-// accepts a duration is the caller's check (an analysis of a closed pair stays allowed).
+// accepts a duration is the caller's check (an analysis of a closed pair stays allowed). With
+// `analysis` (the bot's analysis card, #484) a decision is recorded as the user's last analysis: a
+// signal with its pair and duration, no signal as none; a fetch failure records nothing. The
+// record is best-effort: its failure is logged and the decision is answered all the same.
 export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
   app,
-  { feed, catalog, internalApiToken },
+  { feed, catalog, internalApiToken, lastAnalysis },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -63,6 +75,19 @@ export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
       interval: parsed.data.interval,
       digits: pair.digits,
     });
+    const { analysis } = parsed.data;
+    if (analysis !== undefined && evaluation.outcome === SignalFeedOutcome.Decided) {
+      try {
+        await lastAnalysis.set(
+          BigInt(analysis.telegramUserId),
+          evaluation.entry.decision.kind === SignalKind.Signal
+            ? { assetId: parsed.data.assetId, durationSec: analysis.durationSec }
+            : null,
+        );
+      } catch (error) {
+        request.log.warn(errorLogFields(error), 'last analysis not recorded');
+      }
+    }
     return reply.send(toTradingSignalResponse(evaluation));
   });
 };

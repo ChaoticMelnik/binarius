@@ -5,7 +5,9 @@ import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
-  MAILING_MIN_OFFSET_HOURS,
+  ANALYSIS_UNUSED_AFTER_MS,
+  ANALYSIS_UNUSED_UNTIL_MS,
+  MAILING_MIN_OFFSET_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
@@ -331,7 +333,13 @@ describe('broker balance timing', () => {
       MAILING_SEND_TICK_MS,
     );
     expect(MAILING_SEND_PER_SECOND).toBeLessThan(TELEGRAM_BOT_SENDS_PER_SECOND);
-    expect(MAILING_PLAN_TICK_MS).toBeLessThan(MAILING_MIN_OFFSET_HOURS * 3_600_000);
+    expect(MAILING_PLAN_TICK_MS).toBeLessThan(MAILING_MIN_OFFSET_MS);
+    // #484: the earliest offset is the analysis reminder's, and a due one reaches the sender
+    // before its window closes (600 + 60 + 5 s < 3 600 s)
+    expect(MAILING_MIN_OFFSET_MS).toBeLessThanOrEqual(ANALYSIS_UNUSED_AFTER_MS);
+    expect(ANALYSIS_UNUSED_AFTER_MS + MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBeLessThan(
+      ANALYSIS_UNUSED_UNTIL_MS,
+    );
     // #464: the session notices share the bot's rate with the mailings; stop() waits for the gap,
     // a summary's balance refresh and its send
     expect(MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND).toBeLessThan(

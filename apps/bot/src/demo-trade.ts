@@ -17,6 +17,7 @@ import {
   TRADE_INTENT_TRANSITIONS,
   type TradeIntentView,
   type TradingAccessResponse,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -26,7 +27,6 @@ import {
 } from './backend-client';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
-  demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoLaunchCallbackData,
   effectiveStake,

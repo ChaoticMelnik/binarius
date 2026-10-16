@@ -12,7 +12,7 @@ import {
   SIGNAL_SCAN_INTERVALS,
 } from '@binarius/shared';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
-import { createDb, createTokenCipher, listBotTextOverrides } from '@binarius/db';
+import { createDb, createTokenCipher, listBotTextOverrides, setLastAnalysis } from '@binarius/db';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
 import { createBotProfileApi } from './bot-texts/publish';
@@ -216,6 +216,9 @@ const app = buildApp({
     feed: signalFeed,
     catalog: pairsCatalog,
     internalApiToken: env.internalApiToken,
+    lastAnalysis: {
+      set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
+    },
   },
   signals: {
     scanners: signalScanners,

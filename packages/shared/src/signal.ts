@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { BrokerRestErrorCode } from './broker';
 import { PairsCatalogErrorCode } from './catalog';
-import { createTradeIntentRequestSchema, tradeActionSchema } from './trading';
+import { createTradeIntentRequestSchema, telegramUserIdSchema, tradeActionSchema } from './trading';
 
 // The wire shape of a Signal module decision (docs/signal.md). The decider itself lives in
 // packages/signal; the codes and shapes live here because the backend's POST /trading/signal
@@ -308,8 +308,17 @@ export type SignalFeedOutcome = (typeof SignalFeedOutcome)[keyof typeof SignalFe
 export const tradingSignalRequestSchema = z.object({
   assetId: createTradeIntentRequestSchema.shape.assetId,
   interval: signalIntervalSchema,
+  // only the bot's analysis card sends it (#484): the decision is that user's analysis of this
+  // duration, which the route records for the analysis reminder (docs/signal.md)
+  analysis: z
+    .object({
+      telegramUserId: telegramUserIdSchema,
+      durationSec: createTradeIntentRequestSchema.shape.durationSec,
+    })
+    .optional(),
 });
 export type TradingSignalRequest = z.infer<typeof tradingSignalRequestSchema>;
+export type TradingSignalAnalysis = NonNullable<TradingSignalRequest['analysis']>;
 
 // A broker failure is an answer, not an HTTP error: the bot's client keeps only `error` from a
 // non-2xx body, and retryAfterSec has to reach the user.

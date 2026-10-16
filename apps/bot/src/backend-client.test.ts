@@ -966,6 +966,22 @@ describe('evaluateSignal', () => {
     expect(JSON.parse(capture.body ?? '')).toEqual({ assetId: 101, interval: '5m' });
   });
 
+  // #484: the analysis card names the user's analysis; every other caller sends the old body
+  it('posts the analysis when given one', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, SIGNAL_DECIDED);
+    });
+    await createBackendClient({ baseUrl, token: TOKEN }).evaluateSignal(101, '15s', {
+      telegramUserId: '4242',
+      durationSec: 15,
+    });
+    expect(JSON.parse(capture.body ?? '')).toStrictEqual({
+      assetId: 101,
+      interval: '15s',
+      analysis: { telegramUserId: '4242', durationSec: 15 },
+    });
+  });
+
   it('returns a fetch_failed answer as an answer, not an error', async () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 200, SIGNAL_FETCH_FAILED);

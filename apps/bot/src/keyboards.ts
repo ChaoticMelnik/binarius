@@ -10,8 +10,9 @@ import {
   STAR_PACKAGES,
   supportUrl,
   TradeMode,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
-import { demoAnalysisCallbackData, durationOf } from './demo';
+import { durationOf } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
 import { buyPackageLabel, inviteShareText, LABELS } from './texts';
 

@@ -1,16 +1,44 @@
-import { NotificationKind } from '@binarius/shared';
+import { InlineKeyboard } from 'grammy';
+import {
+  analysisUnusedPayloadSchema,
+  demoAnalysisCallbackData,
+  NotificationKind,
+} from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
-import { CLIENT_TEXTS } from '../auth/texts';
+import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 
-// What each kind sends (docs/mailing.md → The first-session chain), built when the job is sent so
-// a text override reaches it. The chain leads into the demo (#320's entry), the path to a session.
-// One entry per kind: a kind added to NotificationKind without a message does not compile.
+type Payload = Record<string, unknown>;
+
+// The first-session chain leads into the demo (#320's entry), the path to a session.
+const chainStep = (text: () => ClientPushMessage['text']) => (): ClientPushMessage => ({
+  text: text(),
+  reply_markup: demoKeyboard(),
+});
+
+// The analysis reminder (#484): a fresh analysis of the pair and duration the user analysed, since
+// the signal shown then is stale. A payload that does not parse throws, which the sender settles
+// as `mailing not built`.
+function analysisUnused(payload: Payload): ClientPushMessage {
+  const { assetId, durationSec } = analysisUnusedPayloadSchema.parse(payload);
+  return {
+    text: CLIENT_TEXTS.analysisUnusedReminder,
+    reply_markup: new InlineKeyboard().text(
+      CLIENT_LABELS.newAnalysisButton,
+      demoAnalysisCallbackData(assetId, durationSec),
+    ),
+  };
+}
+
+// What each kind sends (docs/mailing.md), built from the job's payload when the job is sent so a
+// text override reaches it. One entry per kind: a kind added to NotificationKind without a message
+// does not compile.
 const MAILING_MESSAGES = {
-  [NotificationKind.FirstSession1h]: () => CLIENT_TEXTS.firstSessionReminder1h,
-  [NotificationKind.FirstSession24h]: () => CLIENT_TEXTS.firstSessionReminder24h,
-  [NotificationKind.FirstSession72h]: () => CLIENT_TEXTS.firstSessionReminder72h,
-} as const satisfies Record<NotificationKind, () => ClientPushMessage['text']>;
+  [NotificationKind.FirstSession1h]: chainStep(() => CLIENT_TEXTS.firstSessionReminder1h),
+  [NotificationKind.FirstSession24h]: chainStep(() => CLIENT_TEXTS.firstSessionReminder24h),
+  [NotificationKind.FirstSession72h]: chainStep(() => CLIENT_TEXTS.firstSessionReminder72h),
+  [NotificationKind.AnalysisUnused]: analysisUnused,
+} as const satisfies Record<NotificationKind, (payload: Payload) => ClientPushMessage>;
 
-export function mailingMessage(kind: NotificationKind): ClientPushMessage {
-  return { text: MAILING_MESSAGES[kind](), reply_markup: demoKeyboard() };
+export function mailingMessage(kind: NotificationKind, payload: Payload): ClientPushMessage {
+  return MAILING_MESSAGES[kind](payload);
 }

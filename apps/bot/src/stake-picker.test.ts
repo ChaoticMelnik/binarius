@@ -12,6 +12,7 @@ import {
   CONNECT_CALLBACK_DATA,
   defaultBotTextSource,
   supportUrl,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -19,7 +20,6 @@ import {
   cycleCustomCallbackData,
   cycleStakeCallbackData,
   cycleStakeScreen,
-  demoAnalysisCallbackData,
   demoLaunchCallbackData,
   launchScreen,
   launchStakeCallbackData,

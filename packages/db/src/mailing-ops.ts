@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { NotificationKind } from '@binarius/shared';
 import type { Db } from './client';
 import { acceptsMailing, deliverable } from './delivery-ops';
-import { MAILING_SCENARIOS } from './mailing-scenarios';
+import { MAILING_SCENARIOS, type MailingScenario } from './mailing-scenarios';
 import { literal } from './schema/columns';
 import {
   NotificationJobStatus,
@@ -29,15 +29,18 @@ const KINDS = Object.values(NotificationKind);
 export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, number>> {
   const planned = {} as Record<NotificationKind, number>;
   for (const kind of KINDS) {
-    const { factAt, afterHours, dedupeKey, stillApplies } = MAILING_SCENARIOS[kind];
+    const scenario: MailingScenario = MAILING_SCENARIOS[kind];
+    const { factAt, afterMs, dedupeKey, stillApplies } = scenario;
+    const payload = scenario.payload ?? sql`'{}'::jsonb`;
+    const after = sql`make_interval(secs => ${afterMs / 1000})`;
     const result = await db.execute(sql`
-      insert into ${notificationJobs} (user_id, kind, dedupe_key, scheduled_at)
-      select ${users.id}, ${literal(kind)}, ${dedupeKey}, fact.at + make_interval(hours => ${afterHours})
+      insert into ${notificationJobs} (user_id, kind, dedupe_key, payload, scheduled_at)
+      select ${users.id}, ${literal(kind)}, ${dedupeKey}, ${payload}, fact.at + ${after}
       from ${users}
       cross join lateral (select ${factAt} as at) fact
       join ${notificationKinds} on ${notificationKinds.kind} = ${literal(kind)}
       where fact.at >= ${notificationKinds.plansFrom}
-        and fact.at + make_interval(hours => ${afterHours}) <= now()
+        and fact.at + ${after} <= now()
         and ${deliverable()}
         and ${stillApplies}
       on conflict (user_id, dedupe_key) where dedupe_key is not null do nothing`);
@@ -54,8 +57,15 @@ export interface ClaimedMailingJob {
   telegramUserId: bigint;
 }
 
+// A job applies while its scenario holds and its key is the one the scenario would plan now: a
+// newer fact (another analysis) leaves the old key's job stale. coalesce: with the fact gone (NULL)
+// the predicate is NULL, and a job neither cancelled nor claimed would stay at the head of `due`.
 const appliesByKind = sql`case ${notificationJobs.kind} ${sql.join(
-  KINDS.map((kind) => sql`when ${literal(kind)} then ${MAILING_SCENARIOS[kind].stillApplies}`),
+  KINDS.map(
+    (kind) =>
+      sql`when ${literal(kind)} then coalesce(${MAILING_SCENARIOS[kind].stillApplies}
+        and ${notificationJobs.dedupeKey} = ${MAILING_SCENARIOS[kind].dedupeKey}, false)`,
+  ),
   sql` `,
 )} else false end`;
 

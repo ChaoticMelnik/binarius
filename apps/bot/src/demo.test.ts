@@ -21,6 +21,7 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   demoSignalsCallbackData,
+  demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -35,7 +36,6 @@ import {
   demoLaunchCallbackData,
   effectiveStake,
   launchStakeCallbackData,
-  demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoPageCallbackData,
@@ -1530,7 +1530,10 @@ describe('the analysis', () => {
       message_id: press.messageId,
     });
     expect(readPairs).toHaveBeenCalledTimes(1);
-    expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '5s']]);
+    // the analysis of this user and duration, which the backend records for the reminder (#484)
+    expect(evaluateSignal.mock.calls).toEqual([
+      [PAIR_EURUSD.id, '5s', { telegramUserId: '4242', durationSec: 5 }],
+    ]);
     // the user's mode decides the session row (#121)
     expect(readTradingAccess.mock.calls).toEqual([['4242']]);
   });
@@ -1617,7 +1620,9 @@ describe('the analysis', () => {
   ] as const)('asks for the candles of a %i s trade at %s', async (durationSec, interval) => {
     const { press, evaluateSignal } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
-    expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, interval]]);
+    expect(evaluateSignal.mock.calls).toEqual([
+      [PAIR_EURUSD.id, interval, { telegramUserId: '4242', durationSec }],
+    ]);
   });
 
   it('covers every demo duration in the table above', () => {

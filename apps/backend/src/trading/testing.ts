@@ -59,7 +59,22 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
   },
   catalog: fakeCatalog(undefined),
   internalApiToken: PAIRS_TEST_TOKEN,
+  lastAnalysis: recordingLastAnalysis().lastAnalysis,
 });
+
+// a port of the last analysis (#484) that answers `answer` and records every call
+export function recordingLastAnalysis(
+  answer: () => Promise<boolean> = () => Promise.resolve(true),
+) {
+  const calls: Parameters<SignalRoutesDeps['lastAnalysis']['set']>[] = [];
+  const lastAnalysis: SignalRoutesDeps['lastAnalysis'] = {
+    set: (...args) => {
+      calls.push(args);
+      return answer();
+    },
+  };
+  return { lastAnalysis, calls };
+}
 
 // for suites that never call GET /trading/signals
 export const unusedSignalsDeps = (): SignalsRoutesDeps => ({
