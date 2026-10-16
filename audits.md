@@ -3296,7 +3296,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Reviewer | round 1 | 1 Major, 3 Minor → Todo. Plan Update (Opus), fresh implementer: 2 owner questions, 32/32 mutations. |
 | Reviewer | round 2 | 1 Major, 3 Minor → Todo. Iteration-2 stop: owner chose re-plan from scratch; architect re-plan (Opus), fresh implementer: 1 owner question, 1 settled by the standing answer; 46/46 mutations, m34/m35/m42 replaced and named. |
 | Reviewer | round 3 | No Blocker/Major, 6 Minor. Codex `task-mvbccg2n-3tk14j` at head `8b1228b`; tech-lead re-hashed (base, head, diff-sha256 match). Codex rated Minor 1 major, reviewer downgraded it; the merge question named both. |
-| Tech Lead | merge | Question → yes (Minors to Backlog) → `mergeable` re-checked → MERGED 19:19:31Z (rebase, branch deleted). #567 Done; 6 Minor → #570 (Backlog); 0055 migrated on the shared database; `binarius_impl_567` dropped; worktrees removed. Models: every spawn on its policy model. |
+| Tech Lead | merge | PR #569: question → yes (Minors to Backlog) → `mergeable` re-checked → MERGED 19:19:31Z (rebase, branch deleted). #567 Done; 6 Minor → #570 (Backlog); 0055 migrated on the shared database; `binarius_impl_567` dropped; worktrees removed. Models: every spawn on its policy model. |
 
 ### Review iterations: 3
 
