@@ -17,6 +17,7 @@ export * from './service-accounts';
 export * from './admin';
 export * from './admin-trading';
 export * from './ledger';
+export * from './bonus';
 export * from './stars';
 export * from './postback';
 export * from './deposit';

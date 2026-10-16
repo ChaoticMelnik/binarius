@@ -1,6 +1,12 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { TOKEN_LEDGER_NOTE_MAX, TokenLedgerKind, TokenLedgerRefType } from '@binarius/shared';
+import {
+  BonusRuleKind,
+  TOKEN_LEDGER_NOTE_MAX,
+  TokenLedgerKind,
+  TokenLedgerRefType,
+} from '@binarius/shared';
+import { bonusRules } from './bonus-rules';
 import { brokerAccounts } from './broker-accounts';
 import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
@@ -28,11 +34,13 @@ const kind = (value: TokenLedgerKind) => literal(value);
 //
 // Dedupe keys by kind: reserve/release/settle are keyed by intent, purchase and a
 // deposit-linked bonus by (deposit, kind), a Stars purchase and its refund by (star payment, kind)
-// (#117, #118), the starter pack (a bonus naming a broker account) by user. A bonus that names neither — a promo — has NO database-level dedupe key, and #13 must bring one when it defines those; an
+// (#117, #118), the starter pack (a bonus naming a broker account) by user. Every bonus names the
+// rule version it was credited under (bonus_rule_id, #13), and a bonus that names no reference — a
+// promo — is refused by token_ledger_bonus_rule_check, so no bonus row is without a dedupe key. An
 // `adjustment` is a deliberate manual act and carries a mandatory `note`
 // (token_ledger_adjustment_note_check); its writer is adjustTokens (token-adjustment-ops.ts, #246),
 // and its only dedupe is the writer's `expectedBalance`. The ledger is not self-protecting for
-// those two.
+// that one.
 export const tokenLedger = pgTable(
   'token_ledger',
   {
@@ -47,6 +55,10 @@ export const tokenLedger = pgTable(
     depositEventId: uuid('deposit_event_id'),
     brokerAccountId: uuid('broker_account_id'),
     starPaymentId: uuid('star_payment_id'),
+    // the rule version a bonus was credited under (#13); the kind is carried so the FK below can
+    // pin it to the kind the row's reference requires
+    bonusRuleId: uuid('bonus_rule_id'),
+    bonusRuleKind: text('bonus_rule_kind').$type<BonusRuleKind>(),
     refType: text('ref_type').$type<TokenLedgerRefType>(),
     refId: uuid('ref_id'),
     note: text('note'),
@@ -75,6 +87,11 @@ export const tokenLedger = pgTable(
       columns: [t.starPaymentId, t.userId],
       foreignColumns: [starPayments.id, starPayments.userId],
     }),
+    foreignKey({
+      name: 'token_ledger_bonus_rule_fk',
+      columns: [t.bonusRuleId, t.bonusRuleKind],
+      foreignColumns: [bonusRules.id, bonusRules.kind],
+    }).onDelete('restrict'),
     inList('token_ledger_kind_check', t.kind, TokenLedgerKind),
     inList('token_ledger_ref_type_check', t.refType, TokenLedgerRefType),
     check('token_ledger_delta_check', sql`${t.balanceDelta} <> 0 or ${t.reservedDelta} <> 0`),
@@ -101,6 +118,25 @@ export const tokenLedger = pgTable(
                 and ${t.refId} is null
             else ${t.intentId} is null and ${t.depositEventId} is null and ${t.brokerAccountId} is null
               and ${t.starPaymentId} is null
+          end`,
+    ),
+    // A bonus names a rule of the kind its reference requires: a starter pack a link_bonus rule, a
+    // deposit-linked bonus a deposit_bonus rule; a bonus naming neither is refused (#116 adds the
+    // referral branch). Every other kind names no rule. The `is not null` on the kind is load-bearing:
+    // a NULL kind would make the comparison NULL, pass the CHECK, and MATCH SIMPLE would skip the FK.
+    check(
+      'token_ledger_bonus_rule_check',
+      sql`case
+            when ${t.kind} = ${kind(TokenLedgerKind.Bonus)}
+              then ${t.bonusRuleId} is not null and ${t.bonusRuleKind} is not null
+                and case
+                  when ${t.brokerAccountId} is not null
+                    then ${t.bonusRuleKind} = ${literal(BonusRuleKind.LinkBonus)}
+                  when ${t.depositEventId} is not null
+                    then ${t.bonusRuleKind} = ${literal(BonusRuleKind.DepositBonus)}
+                  else false
+                end
+            else ${t.bonusRuleId} is null and ${t.bonusRuleKind} is null
           end`,
     ),
     // each kind moves its deltas in the direction its name promises; settle leaves
@@ -132,14 +168,13 @@ export const tokenLedger = pgTable(
     // One row per deposit PER KIND: a deposit admits one purchase and one deposit-linked
     // bonus. Keying on deposit alone would let whichever came first take the only slot and
     // block the other permanently, on a table nothing can delete from.
-    // Two consequences a reader arriving from #12 or #13 should not have to rediscover:
-    //  - exactly ONE bonus per deposit. If #13 lets two rules award on the same deposit, the
-    //    second row is a permanent 23505 here; widening the key (a bonus_rule_id, say) is
-    //    #13's call, since it owns what a bonus is keyed by.
+    // Two consequences a reader arriving from #386 should not have to rediscover:
+    //  - exactly ONE bonus per deposit, whichever deposit_bonus version credited it (#13 keeps
+    //    the key as it is: a rule change must not let a deposit be credited again).
     //  - `kind` is a self-declared label, which the header above warns against relying on.
     //    It is safe as a key *component* only because the discriminator already pins which
     //    kinds may carry a deposit at all. Binding a credit's AMOUNT to its deposit is not
-    //    enforced here and is #12's to do at credit time.
+    //    enforced here and is #386's to do at credit time.
     // The predicate is index scoping, not semantics — a unique index treats NULLs as
     // distinct, so rows without a deposit never conflict either way.
     uniqueIndex('token_ledger_deposit_event_idx')

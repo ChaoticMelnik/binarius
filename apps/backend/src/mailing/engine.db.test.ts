@@ -10,7 +10,6 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
-  LINK_BONUS_RULE_CODE,
   MAILING_OUTCOME_UNKNOWN,
   NotificationJobStatus,
   notificationJobs,
@@ -19,6 +18,7 @@ import {
   users,
 } from '@binarius/db';
 import {
+  bonusRuleRef,
   createTempDatabase,
   seedBrokerAccount,
   seedTradingSession,
@@ -73,7 +73,7 @@ async function linked(minutes: number): Promise<Linked> {
     kind: TokenLedgerKind.Bonus,
     balanceDelta: 100n,
     brokerAccountId: accountId,
-    note: LINK_BONUS_RULE_CODE,
+    ...(await bonusRuleRef(tmp.db, 'link_bonus')),
     createdAt: sql`now() - make_interval(mins => ${minutes})`,
   });
   return { ...user, accountId };

@@ -60,6 +60,7 @@ import * as botTextVars from './bot-text-vars';
 import * as botTextOverrides from './bot-text-overrides';
 import * as brokerBalance from './broker-balance';
 import * as audit from './audit';
+import * as bonus from './bonus';
 import * as brokerBudget from './broker-budget';
 import * as catalog from './catalog';
 import * as env from './env';
@@ -513,6 +514,7 @@ describe('contract coverage (issue #6)', () => {
       adminTrading,
       adminBotTexts,
       ledger,
+      bonus,
       stars,
       audit,
       money,

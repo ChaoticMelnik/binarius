@@ -79,6 +79,11 @@ export const AuditAction = {
   ServiceAccountsViewed: 'service_accounts_viewed',
   BrokerAccountServiceSet: 'broker_account_service_set',
   BrokerAccountServiceCleared: 'broker_account_service_cleared',
+  // the bonus-rule CLI (#13): a new inactive version, a version made the active one, a code left
+  // with no active version
+  BonusRuleVersionCreated: 'bonus_rule_version_created',
+  BonusRuleActivated: 'bonus_rule_activated',
+  BonusRuleDeactivated: 'bonus_rule_deactivated',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);
@@ -97,6 +102,7 @@ export const AuditEntityType = {
   TradeIntent: 'trade_intent',
   StarPayment: 'star_payment',
   BrokerAccount: 'broker_account',
+  BonusRule: 'bonus_rule',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 export const auditEntityTypeSchema = z.enum(AuditEntityType);

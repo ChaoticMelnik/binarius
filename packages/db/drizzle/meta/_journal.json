@@ -414,6 +414,13 @@
       "when": 1792219388881,
       "tag": "0058_analysis_unused_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792221335177,
+      "tag": "0059_bonus_rules",
+      "breakpoints": true
     }
   ]
 }
