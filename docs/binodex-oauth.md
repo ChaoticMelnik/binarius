@@ -480,11 +480,12 @@ handed out is not taken back by a later block; how long each caller goes on usin
 | user `blocked`                                              | `user_blocked`: nothing decrypted, exchanged or revoked. `users.status` is read in its own statement right after the account row is locked — a block committed while the lock was waited for is seen (#239) — without locking `users` (lock order, Rule 5) |
 | `status = pending`                                          | `account_pending` — nobody has confirmed it, so it may not act on the user's behalf                               |
 | `status = revoked`                                          | `account_revoked` — checked **before** the expiry, so a revoked account never hands out the token it still stores |
+| `serviceOnly` (the keeper, #391) and `service_since IS NULL` | `not_service`: nothing decrypted, exchanged or written — only with `mayRefresh` not `false`; the route's body has no `serviceOnly`, so the worker never gets it ([docs/service-accounts.md](service-accounts.md)) |
 | `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
 | ciphertext fails to decrypt under its own key id            | revoke `storage_inconsistent`                                                                                     |
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
 | access token still valid and `refusedToken` is its sha256   | `access_token_expires_at = now() - 1 day` (`markAccessTokenExpired`), then the rows below as for an expired token (#281) |
-| access token still valid (60 s skew)                        | return it, also when `refusedToken` names another token (someone already rotated the pair); a legacy row missing its hash gets one here, and only the hash |
+| access token still valid (60 s skew; `renewAheadMs` instead when the caller passes it with `mayRefresh` not `false` — the keeper's 24 h, #391) | return it, also when `refusedToken` names another token (someone already rotated the pair); a legacy row missing its hash gets one here, and only the hash |
 | `mayRefresh: false`                                         | `refresh_needed`: nothing exchanged and nothing revoked, the 90-day rule below included                           |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
@@ -501,6 +502,13 @@ are blocked by their active intent anyway. Whether `false` holds is decided here
 lock, with the same clock and comparison as the exchange (`token-service.db.test.ts`, including
 a process clock ahead of the database's). Its SQL selection of accounts with a valid token is an
 optimisation, not the guarantee.
+
+One more exception (#391): the service-account keeper of the backend exchanges by a timer, but
+only for rows whose `service_since` is set. It passes `serviceOnly: true`, and the mark is checked
+here, under the row lock — any other row is answered `not_service` with nothing exchanged
+(`token-service.db.test.ts` V1, `service-accounts.db.test.ts` K2). The failure rules are the
+ones above: one attempt, a 429 keeps the pair, the rest revoke. See
+[docs/service-accounts.md](service-accounts.md).
 
 A row encrypted under another key id is left strictly alone. During a key rollout both the old
 and the new process are running, and a process holding the old key would otherwise see every

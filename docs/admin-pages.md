@@ -47,7 +47,8 @@ row first and
 writes under it (staff-login.md → Changing your own password). A bot text save or reset touches the
 session, then locks `bot_text_overrides` (Bot texts below). A token adjustment touches the session,
 then locks the `users` row (Rule 5) and writes `token_ledger` and `users` (Корректировка токенов
-below).
+below). A service mark touches the session, then updates the `broker_accounts` row (Service
+accounts below).
 
 How `web` acts on a backend answer:
 
@@ -60,12 +61,13 @@ How `web` acts on a backend answer:
 | 404 `not_found` (intent card) | 404 «Заявка не найдена»; the row is already written |
 | 404 `not_found` (bot text) | 404 «Текст не найден»: web's catalog has a key the backend's lacks; the row is already written |
 | 404 `not_found` (token adjustment) | 404 «Пользователь не найден»; the row is already written, nothing else |
+| 404 `not_found` (service mark) | 404 «Аккаунт не найден»; the row is already written, nothing else |
 | anything else | 500, cookie kept, the error logged by name and code |
 
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты) and the account block («Сменить пароль · login — Выйти»: the link to the password
+Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты | Служебные аккаунты) and the account block («Сменить пароль · login — Выйти»: the link to the password
 page and the logout button). The login shown is the one in the `me` of the backend answer the page
 was built from; a page rendered without asking the backend (a refused search, a refused password
 form) shows no account block.
@@ -148,8 +150,9 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   them the «Корректировка» form (#246, its own section below).
 - **Брокерские аккаунты** — the account id (the uuid the ledger's «Основание» and the intent card
   print), broker id, address (a blank one is shown as «—»), partner client, status, revocation
-  reason, halt and its reason, token expiry and rotation, created and updated: the same table as
-  the broker accounts list (#342), without its owner column. The ciphertexts, the key id and the
+  reason, halt and its reason, token expiry and rotation, «Служебный» (#391: the mark's date and
+  «Снять», or «Сделать служебным»), created and updated: the same table as the broker accounts list
+  (#342), without its owner column. The ciphertexts, the key id and the
   refresh-token hash are never selected.
 
 - **Торговля** (#330) — «Всего заявок: N, активных: M» (active = not in a terminal status), the
@@ -359,7 +362,8 @@ per page, keyset on `(created_at, id)` as on the other lists: one `SELECT` joine
 owner's Telegram id (`listBrokerAccountsForAdmin`, `packages/db/src/admin-read-ops.ts`). Columns:
 the owner's Telegram id (a link to the user card), the account id, then the columns of the user
 card's section — broker id, address, partner client, status (its Russian label, as on the card),
-revocation reason, halt and its reason (both codes), token expiry and rotation, created and updated.
+revocation reason, halt and its reason (both codes), token expiry and rotation, «Служебный» (#391),
+created and updated.
 An empty value is shown as «—»; the times are the ISO instants the backend sent, the token expiry
 included — the page computes nothing against the clock. There is no account page.
 
@@ -382,7 +386,37 @@ links, the redirect and the request to the backend go through `adminBrokerAccoun
 What the page shows on production: an account linked by the bot's e-mail code login is `active` at
 once; one linked through the OAuth callback is `pending` until the user confirms it in the bot (Rule
 12); `revoked` with its reason after a refresh failure; halted with its reason by reconciliation
-(#90). The list is read-only: lifting a halt or revoking an account is not here.
+(#90). The list's one action is the service mark (#391, below); lifting a halt or revoking an
+account is not here.
+
+### Service accounts — `GET /admin/service-accounts`, `POST /admin/broker-accounts/:id/service`
+
+Every broker account marked as a service account (#391, [service-accounts.md](service-accounts.md)),
+working or not, oldest mark first; no pages (the pilot needs three). Above the table, «В работе N
+из минимум M (отмечено K)»: `N` is the count by the one definition of "working" the keeper and #404
+use (`serviceAccountWorkingSql`), `M` is `SERVICE_ACCOUNTS_MIN` from the backend's answer. Columns:
+address, broker id, the owner's Telegram id (a link to the card), status, «В работе» — «да», or
+«нет: <reason>» (`пользователь заблокирован`, `не подтверждён в боте`, `отозван (<the revocation
+reason>)`, `токен истёк`, in the token service's order of checks) —, token expiry, token rotation,
+«Служебный с» and the «Снять» button. One `SELECT` joined to `users` (`listServiceAccountStates`),
+through the same column constant as the card and the list.
+
+**Marking.** «Сделать служебным» (the card and the broker accounts list) and «Снять» (all three
+pages) post `service=on|off` and `return=<the page>` to `POST /admin/broker-accounts/<id>/service`.
+`web` checks the id against `UUID_PATTERN` (otherwise 303 to the service page, no backend call),
+the value against `on`/`off` (otherwise 400), and goes back 303 to `return` only when it is
+`/admin/service-accounts`, `/admin/broker-accounts` or `/admin/users/<uuid>` — anything else goes
+to the service page. The backend's `{ service: boolean }` is parsed before the session (400
+`validation`, no row); inside `asStaff` one conditional `UPDATE` (`setServiceMark`): a mark sets
+`service_since = now()`, a removal sets it to `NULL`, and a repeat of either changes nothing and
+answers `unchanged` — a re-mark keeps the first date. The answer is `{ me, outcome, account }`
+with `outcome` `marked`, `unmarked` or `unchanged`; an unknown account is 404. Not answered or a 5xx
+in `web`: «Результат неизвестен» — the mark may be written; the service page shows how it is, and
+pressing again is harmless.
+
+The mark survives a revocation and a re-login (owner's answer Q5): a re-login makes the account
+`active` again and it counts as working on the keeper's next tick. A service account may trade, in
+demo and real alike (Q1).
 
 ### Audit log — `GET /admin/audit?action=&entityType=&entityId=&actorId=&from=&to=&cursor=`
 
@@ -616,6 +650,10 @@ named and bounded; nothing else is recorded.
 | token adjustment, applied (#246) | `token_adjusted` | `user`, the id | `{ path: '/admin/users/:id/tokens', result: 'adjusted', userId, ledgerEntryId, delta, note, balanceBefore, balanceAfter, reserved }` — the amounts as decimal strings |
 | token adjustment, refused | `token_adjusted` | `user`, the id | `{ path, result, userId, delta, expectedBalance, balance, reserved }` — `result` is `insufficient_available` or `balance_changed`; no `note`: it was written nowhere |
 | token adjustment, no user | `token_adjusted` | — | `{ path, result: 'not_found', userId }`; an id that is not a uuid (direct backend call): `{ path, result: 'not_found' }` |
+| service accounts (#391) | `service_accounts_viewed` | — | `{ path: '/admin/service-accounts' }` |
+| service mark set or asked again | `broker_account_service_set` | `broker_account`, the id | `{ path: '/admin/broker-accounts/:id/service', result, accountId }` — `result` is `marked` or `unchanged` |
+| service mark removed or asked again | `broker_account_service_cleared` | `broker_account`, the id | the same with `result` `unmarked` or `unchanged` |
+| service mark, no account | the action of the request | — | `{ path, result: 'not_found', accountId }`; an id that is not a uuid (direct backend call): `{ path, result: 'not_found' }` |
 
 A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a
 uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row, with
@@ -660,7 +698,10 @@ What `web` refuses before asking the backend, with no row:
   `BOT_TEXT_SOURCE_MAX` code points) → 400;
 - a token adjustment for a user id that is not a uuid → 404; a form outside its shape or the shared
   schema (a field given twice, an unknown direction, an amount that is not 1–1000 without a leading
-  zero, a blank or over-long reason, a control character, no balance) → 400 with the message.
+  zero, a blank or over-long reason, a control character, no balance) → 400 with the message;
+- a service mark for an account id that is not a uuid → 303 to the service page; a `service` other
+  than `on` or `off` → 400; a `return` other than the three pages that carry the form → the service
+  page (no open redirect).
 
 An empty value (`q=`, `status=` from the form's empty option, a typed `halted=`) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
@@ -669,6 +710,7 @@ What the backend refuses before the session, with no row: a bad bearer (401 `una
 session token of the wrong shape (401 `session_invalid`), a list query outside the schema (400
 `validation`), a bot text body outside its schema (400 `validation`) or over
 `ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (413), a token adjustment body outside its schema (400
+`validation`) or over 4 KiB (413), a service mark body other than `{ service: boolean }` (400
 `validation`) or over 4 KiB (413). A card id that is not a uuid is checked *inside* the
 session, so the attempt leaves a row, without the id; so is a bot text key.
 
@@ -709,6 +751,10 @@ who pressed the button even if the session is revoked between the check and the 
   timeout of its own; `BACKEND_REQUEST_TIMEOUT_MS` bounds what `web` waits for, and a timeout is
   «Результат неизвестен». A refusal reads the card in the same transaction: the card's six `SELECT`s
   under the lock.
+- The service accounts page and the keeper read every marked account without an index on
+  `service_since`: a scan of `broker_accounts`, once a minute for the keeper. If `explain analyze` of
+  `listServiceBrokerAccounts` passes 50 ms, add a partial index on `(service_since, id) where
+  service_since is not null` in its own migration (docs/service-accounts.md → Limits).
 - The audit log: `audit_log_created_at_idx` serves the order and the dates, `audit_log_entity_idx`
   the filter by entity (the link from the user card); `action` and `actorId` have no index and scan.
   Assumed: up to 1 000 000 rows; if `explain analyze` of a page passes 200 ms there, add an index on
