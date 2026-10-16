@@ -199,6 +199,12 @@ export const BOT_TEXT_VARS = {
     'Ссылка-приглашение пользователя',
     'https://t.me/binarius_bot?start=ref_AbC123xY',
   ),
+  connected: shown('Сколько приглашённых подключили партнёрский аккаунт Binodex', '2'),
+  earnedTokens: variable({
+    description: 'Токены, полученные за приглашения',
+    sample: '100',
+    format: (count: string) => formatCount(count),
+  }),
 } as const;
 
 export type BotTextVars = typeof BOT_TEXT_VARS;

@@ -555,17 +555,25 @@ describe('POST /users/referral', () => {
     expect(response.json()).toEqual({ error: UserErrorCode.UserNotFound });
   });
 
-  it('U4 answers exactly status, code and invited, and the same code twice', async () => {
+  it('U4 answers exactly status, code, invited, connected and tokensEarned, and the same code twice', async () => {
     const telegramUserId = nextTelegramUserId();
     await post(body(telegramUserId));
     const first = await postReferral({ telegramUserId });
     expect(first.statusCode).toBe(200);
     const { user } = first.json<{ user: Record<string, unknown> }>();
-    expect(Object.keys(user).sort()).toEqual(['code', 'invited', 'status']);
+    expect(Object.keys(user).sort()).toEqual([
+      'code',
+      'connected',
+      'invited',
+      'status',
+      'tokensEarned',
+    ]);
     expect(user).toEqual({
       status: UserStatus.Active,
       code: expect.stringMatching(REFERRAL_CODE_PATTERN),
       invited: 0,
+      connected: 0,
+      tokensEarned: '0',
     });
     expect((await postReferral({ telegramUserId })).json()).toEqual({ user });
   });
@@ -594,7 +602,7 @@ describe('POST /users/referral', () => {
       },
     });
     expect((await postReferral({ telegramUserId: inviterId })).json()).toEqual({
-      user: { status: UserStatus.Active, code, invited: 1 },
+      user: { status: UserStatus.Active, code, invited: 1, connected: 0, tokensEarned: '0' },
     });
   });
 
@@ -606,7 +614,13 @@ describe('POST /users/referral', () => {
       .set({ status: UserStatus.Blocked })
       .where(eq(users.telegramUserId, BigInt(telegramUserId)));
     expect((await postReferral({ telegramUserId })).json()).toEqual({
-      user: { status: UserStatus.Blocked, code: null, invited: 0 },
+      user: {
+        status: UserStatus.Blocked,
+        code: null,
+        invited: 0,
+        connected: 0,
+        tokensEarned: '0',
+      },
     });
   });
 

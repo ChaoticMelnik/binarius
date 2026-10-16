@@ -8,7 +8,7 @@ import type { DbExecutor } from './trade-intent-ops';
 // users.token_balance / token_reserved are the cache of token_ledger's sums, and every ledger
 // writer moves the cache in the same transaction as its row: createInTransaction (reserve),
 // releaseTokens (release), applyBonus (a bonus under its rule version, #13 — the starter pack
-// through grantLinkBonus), consumeTokens (settle, #17), adjustTokens (the admin's manual
+// through grantLinkBonus, the inviter's reward through grantReferralReward, #116), consumeTokens (settle, #17), adjustTokens (the admin's manual
 // adjustment, #246), creditStarPayment / recordStarRefund (#117, #118). A new writer must keep that
 // rule, or this read lies by the missing delta (token-balance-ops.db.test.ts and
 // token-adjustment-ops.db.test.ts prove the equality for the writers above).

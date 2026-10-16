@@ -8,6 +8,7 @@ import {
   emailLoginResponseSchema,
   INIT_DATA_MAX_LENGTH,
   NotificationKind,
+  UserStatus,
 } from '@binarius/shared';
 import {
   NotificationJobStatus,
@@ -19,6 +20,7 @@ import {
   hashToken,
   notificationJobs,
   oauthStates,
+  referrals,
   tokenLedger,
   users,
 } from '@binarius/db';
@@ -338,7 +340,10 @@ describe('POST /auth/binodex/callback', () => {
   it('refuses a user blocked after their state was issued', async () => {
     const seeded = await seedUser(tmp.db);
     const state = await stateFor(seeded.telegramUserId);
-    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, seeded.userId));
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, seeded.userId));
 
     const response = await callback({
       state,
@@ -837,7 +842,7 @@ describe('POST /auth/binodex/confirm', () => {
     const { telegram, account } = await linked(false);
     await tmp.db
       .update(users)
-      .set({ status: 'blocked' })
+      .set({ status: UserStatus.Blocked })
       .where(eq(users.telegramUserId, BigInt(telegram)));
     const response = await confirm({ telegramUserId: telegram, accountId: account.id });
     expect(response.statusCode).toBe(409);
@@ -973,7 +978,10 @@ describe('the push after the callback', () => {
   it('tells a user blocked after their state was issued that access is restricted', async () => {
     const seeded = await seedUser(tmp.db);
     const state = await stateFor(seeded.telegramUserId);
-    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, seeded.userId));
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, seeded.userId));
 
     const response = await callback({
       state,
@@ -1693,6 +1701,138 @@ describe('the starter pack rule', () => {
       ]);
     } finally {
       await setActive(1);
+    }
+  });
+});
+
+// #116: the inviter's reward is paid in the activation; the routes answer as before, and the
+// outcome reaches only the log. The rule cases restore referral_reward v1 as the only active one.
+describe('the inviter’s reward', () => {
+  const confirm = (payload: unknown, instance: ReturnType<typeof testApp>) =>
+    postJson(instance, '/auth/binodex/confirm', payload, { authorization: `Bearer ${TOKEN}` });
+  const withLogs = async (run: (instance: ReturnType<typeof testApp>) => Promise<void>) => {
+    const lines: string[] = [];
+    const instance = await own({}, { write: (line: string) => void lines.push(line) });
+    try {
+      await run(instance);
+    } finally {
+      await instance.close();
+    }
+    return lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  };
+  const referralLines = (logs: Record<string, unknown>[]) =>
+    logs.filter((line) => typeof line.msg === 'string' && line.msg.startsWith('referral'));
+  // the inviter's row first, as a /start with its code can only follow its own (Rule 34)
+  const invitation = async () => {
+    const [inviterTelegram, inviteeTelegram] = [telegramId(), telegramId()];
+    const [inviter] = await tmp.db
+      .insert(users)
+      .values({ telegramUserId: BigInt(inviterTelegram) })
+      .returning({ id: users.id });
+    const [invitee] = await tmp.db
+      .insert(users)
+      .values({ telegramUserId: BigInt(inviteeTelegram) })
+      .returning({ id: users.id });
+    const [referral] = await tmp.db
+      .insert(referrals)
+      .values({ inviteeUserId: invitee!.id, inviterUserId: inviter!.id })
+      .returning({ id: referrals.id });
+    return { inviterId: inviter!.id, inviteeTelegram, referralId: referral!.id };
+  };
+  const pendingPartner = async (telegram: string) => {
+    const { response } = await login(telegram, `broker-${telegram}-${++seq}`, true);
+    return (response.json() as { account: { id: string } }).account.id;
+  };
+  const partnerEmail = () => {
+    const email = address('invitee');
+    stub.registerEmailUser({ email, brokerUserId: `broker-email-${++seq}`, isPartnerClient: true });
+    return email;
+  };
+  const rewarded = (referralId: string, inviterUserId: string) =>
+    expect.objectContaining({
+      level: 30,
+      msg: 'referral rewarded',
+      referralId,
+      inviterUserId,
+      tokens: '50',
+      ruleVersion: 1,
+    });
+
+  it('logs the reward of a confirm and answers as before', async () => {
+    const { inviterId, inviteeTelegram, referralId } = await invitation();
+    const accountId = await pendingPartner(inviteeTelegram);
+    let body: Record<string, unknown> = {};
+    const logs = await withLogs(async (instance) => {
+      const response = await confirm({ telegramUserId: inviteeTelegram, accountId }, instance);
+      expect(response.statusCode).toBe(200);
+      body = response.json();
+    });
+    expect(Object.keys(body).sort()).toEqual(['account', 'grant']);
+    expect(confirmLoginResponseSchema.safeParse(body).success).toBe(true);
+    expect(referralLines(logs)).toEqual([rewarded(referralId, inviterId)]);
+    expect(
+      (await tmp.db.select().from(users).where(eq(users.id, inviterId)))[0]?.tokenBalance,
+    ).toBe(50n);
+  });
+
+  it('logs the reward of an email login and answers as before', async () => {
+    const { inviterId, inviteeTelegram, referralId } = await invitation();
+    const email = partnerEmail();
+    let body: Record<string, unknown> = {};
+    const logs = await withLogs(async (instance) => {
+      const response = await loginByEmail(inviteeTelegram, email, instance);
+      expect(response.statusCode).toBe(200);
+      body = response.json();
+    });
+    expect(Object.keys(body).sort()).toEqual(['account', 'grant']);
+    expect(emailLoginResponseSchema.safeParse(body).success).toBe(true);
+    expect(referralLines(logs)).toEqual([rewarded(referralId, inviterId)]);
+  });
+
+  it('logs nothing about a reward for a user nobody invited', async () => {
+    const telegram = telegramId();
+    const accountId = await pendingPartner(telegram);
+    const logs = await withLogs(async (instance) => {
+      expect((await confirm({ telegramUserId: telegram, accountId }, instance)).statusCode).toBe(
+        200,
+      );
+    });
+    expect(referralLines(logs)).toEqual([]);
+  });
+
+  it('logs a blocked inviter’s skipped reward at info', async () => {
+    const { inviterId, inviteeTelegram, referralId } = await invitation();
+    await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, inviterId));
+    const accountId = await pendingPartner(inviteeTelegram);
+    const logs = await withLogs(async (instance) => {
+      const response = await confirm({ telegramUserId: inviteeTelegram, accountId }, instance);
+      expect(response.statusCode).toBe(200);
+    });
+    expect(referralLines(logs)).toEqual([
+      expect.objectContaining({
+        level: 30,
+        msg: 'referral reward skipped',
+        referralId,
+        reason: 'inviter_blocked',
+      }),
+    ]);
+  });
+
+  it('warns when no referral_reward version is active (email)', async () => {
+    const { inviteeTelegram, referralId } = await invitation();
+    const email = partnerEmail();
+    await tmp.pool.query(`update bonus_rules set is_active = false where code = 'referral_reward'`);
+    try {
+      const logs = await withLogs(async (instance) => {
+        expect((await loginByEmail(inviteeTelegram, email, instance)).statusCode).toBe(200);
+      });
+      expect(referralLines(logs)).toEqual([
+        expect.objectContaining({ level: 40, msg: 'referral_reward_no_active_rule', referralId }),
+      ]);
+    } finally {
+      await tmp.pool.query(
+        `update bonus_rules set is_active = true where code = 'referral_reward' and version = 1`,
+      );
     }
   });
 });

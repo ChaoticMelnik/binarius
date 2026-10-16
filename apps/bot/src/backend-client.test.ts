@@ -314,7 +314,13 @@ describe('readAccount', () => {
 });
 
 describe('readReferral (#115)', () => {
-  const view = { status: 'active', code: 'AbC123xY', invited: 2 };
+  const view = {
+    status: 'active',
+    code: 'AbC123xY',
+    invited: 2,
+    connected: 1,
+    tokensEarned: '50',
+  };
 
   it('posts the telegram id to /users/referral under the internal bearer', async () => {
     const { baseUrl, capture } = await serve((_request, response) => {
@@ -335,6 +341,22 @@ describe('readReferral (#115)', () => {
     );
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
+
+  // #116: an old backend answers without them, and the bot must not print «undefined»
+  it.each(['connected', 'tokensEarned'] as const)(
+    'reports a view without %s as a contract violation',
+    async (key) => {
+      const partial: Record<string, unknown> = { ...view };
+      delete partial[key];
+      const { baseUrl } = await serve((_request, response) => {
+        json(response, 200, { user: partial });
+      });
+      const error = await rejectionOf(
+        createBackendClient({ baseUrl, token: TOKEN }).readReferral('4242'),
+      );
+      expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+    },
+  );
 
   it('carries user_not_found as the reason of a 404', async () => {
     const { baseUrl } = await serve((_request, reply) => {
@@ -1898,6 +1920,8 @@ describe('body size', () => {
             status: UserStatus.Active,
             code: 'A'.repeat(REFERRAL_CODE_LENGTH),
             invited: NONNEGATIVE_INT,
+            connected: NONNEGATIVE_INT,
+            tokensEarned: TOKENS,
           },
         },
       },

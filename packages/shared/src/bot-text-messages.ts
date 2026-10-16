@@ -254,6 +254,10 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
     '?start='.length +
     REFERRAL_PAYLOAD_PREFIX.length +
     REFERRAL_CODE_LENGTH,
+  // a count(*) of the user's referrals, like `count` on the same screen
+  connected: () => w.count,
+  // the sum of the user's rewards, a bigint (formatCount)
+  earnedTokens: () => w.count,
 };
 
 const tradeNoticeWidths: Partial<Record<BotTextVarName, BotTextWidth>> = {
