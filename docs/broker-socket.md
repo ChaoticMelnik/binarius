@@ -654,8 +654,43 @@ broker-web. It ignores every event except ticks, `user.data` and `common.assets_
 
 #### The result on the pilot
 
-Recorded by a docs PR (`Refs #392`) after the owner's run. Until then the report is a comment on
-#392.
+One run on 2026-10-16 at 14:50 MSK, build `1a5685b`, on the owner's account: `SPIKE_MINUTES=30`,
+`SPIKE_PAIRS=10`, `SPIKE_SUBSCRIBE_ALL=1` (all 144 pairs of the catalog subscribed). Phase B ran
+its whole window, exit 0. The whole report is a comment on #392
+([#392 → the pilot run](https://github.com/ChaoticMelnik/binarius/issues/392#issuecomment-6215411225)).
+The pairs: NZD/USD, GBP/USD, USD/JPY (currency), MU, SNDK, CRCL (stock), XRP, BTC
+(cryptocurrency), I:DJI, I:SPX (index), payouts 85-96 %. The commodity and other groups had no
+candidate at 80 %.
+
+| Measure | `5s` and `15s` together |
+|---|---|
+| open / close equal | 98.9 % (4727 of 4780) / 98.9 % |
+| high / low within one quote step | 99.4 % (9507 of 9560) |
+| `REST only` / `ticks only` rows | 0 / 0 |
+| Signal decisions differ | 0.6 % (21 of 3620): 0-1.7 % per pair on `5s`, 0 of 610 on `15s` |
+| tick floor differs | 0 of 3620 |
+| display differs | MACD cross 0.2 %, MACD sign 0.1 %, MA50 1 of 3620, MA200 1 of 1600 (`15s` not measured) |
+| `1s` aggregation exact | 97.4 % (4656 of 4780) |
+| holes | 0 |
+| receipt delay | median 134 ms, p95 268 ms |
+| load, 144 pairs | 555.9 ticks/s (about 3.9 per pair), CPU 3.7 % of wall time, max RSS 118.8 MB |
+
+What it established:
+- **Tick candles can replace the REST candles for the decider.** About 1 % of candles differ,
+  0.6 % of `5s` decisions change and no `15s` decision does. Differences of three or more steps
+  in high or low are rare (about 0.5 % of candles); the report does not show their cause.
+- **"No tick, no candle" held:** the broker made no candle for a bucket without ticks.
+- **The `1s` aggregation is not exact for currency pairs.** GBP/USD matched 86.4 % (`5s`) and
+  83.2 % (`15s`), USD/JPY 89.7 % and 88.2 %, NZD/USD 99.4 % and 98.3 %. Stock, index and
+  cryptocurrency pairs matched 100 %. The 2026-10-09 probe's "one GET `1s` per pair covers both
+  series" does not hold for currencies. #404 designs its warm-up and backfill with this in mind.
+- **Load is not the limit on the pilot's 1 vCPU.** The whole stream of 144 pairs cost under 4 %
+  CPU.
+- **Phase C is not measured:** the socket did not change state in 30 minutes. #404 covers the
+  drop on the mock broker; a live drop is an owner's step after it.
+
+The pilot's services logged errors only in the two minutes of the deploy and the run's start.
+None were logged during the rest of the run.
 
 ## Boundaries
 
