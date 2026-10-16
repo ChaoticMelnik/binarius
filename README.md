@@ -11,7 +11,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
 - `packages/broker-rest` — the Binodex Broker REST client and the pairs catalog cache, shared by `apps/backend` and `apps/trading-worker`
-- `packages/signal` — Signal module v1 (the decider, the chart feed, its journal and cache), shared by `apps/backend` (`POST /trading/signal`, the background scanner behind `GET /trading/signals`) and `apps/trading-worker`
+- `packages/signal` — Signal module v2 (the decider, the chart feed, its journal and cache, and the tick-to-candle builder (#392)), shared by `apps/backend` (`POST /trading/signal`, the background scanner behind `GET /trading/signals`) and `apps/trading-worker`
 - `packages/signal-stand` — the Signal backtest stand (#381): a CLI over cached broker candles, imported by no app ([docs/signal-stand.md](docs/signal-stand.md))
 - `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
 

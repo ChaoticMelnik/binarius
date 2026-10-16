@@ -518,6 +518,138 @@ the run, then setting it back. `inconclusive`: rerun once the named condition is
 just rerun; the token: open the trade screen in the bot first). A `broadcast` means: unset
 `BROKER_WS_URL` until a correlation of answers exists.
 
+## The candle spike (#392)
+
+The signal scanner and the analysis take their `5s` and `15s` candles from the REST chart, and
+the broker's REST limit (600 requests a minute per IP) cannot cover every open pair on both
+intervals. The socket sends `price.update` ticks for subscribed pairs, but no candles. The spike
+measures whether candles built from those ticks can replace the REST candles. Its report is the
+input to #404 (the socket candle source) and #405 (its consumers). It changes nothing in
+production.
+
+Two parts:
+- **The builder** `createCandleBuilder` in `packages/signal/src/ticks.ts`. #404 uses it as it is.
+  A tick goes into the bucket `floor(ts / I) × I`. A new candle opens at the previous candle's
+  close (the first candle ever opens at its first tick). High and low include the open. Every
+  price is rounded at the pair's `digits`, so the broker's float artifacts
+  (`0.6946199999999999`) never reach a comparison. A tick of a bucket older than the current one
+  is `late` and dropped. A tick with a non-finite or non-positive price, or a non-finite
+  timestamp, is `invalid` and dropped. A bucket without a tick makes no candle. `markHole` drops
+  the candles that overlap a hole. `aggregateEndLabelled` turns the broker's `1s` rows, which
+  are labelled by their end (the row labelled `t + 1000` is the first second of the candle at
+  `t`), into complete `5s`/`15s` candles. "No tick, no candle" is a hypothesis the report tests
+  (the `REST only` column). If the broker makes flat candles for empty buckets, #404 changes the
+  rule.
+- **The CLI** `candle-spike` in `apps/trading-worker/src/cli/` (`candle-spike.ts` for env, wiring
+  and the exit code; `candle-spike-run.ts` for the phases and the fetch; `candle-spike-compare.ts`
+  and `candle-spike-report.ts`, both pure). It opens one socket of the account with the token
+  taken by `mayRefresh: false` (Rule 12: never an exchange). It sends no trade command and writes
+  nothing to the database. It prints no token, URL, payload or `broker_user_id`. The report goes
+  to stdout, progress and pino lines to stderr.
+
+**Env.** These are the same as `socket-probe`: `ACCOUNT_ID` (a `broker_accounts.id`),
+`BROKER_WS_URL`, `BACKEND_URL`, `INTERNAL_API_TOKEN`, `DATABASE_URL`, `BROKER_API_BASE_URL` and
+`LOG_LEVEL`. Added for the spike:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SPIKE_MINUTES` | 30 | phase B, 1..80 (80 keeps the `1s` fetch, `minutes × 60 + 6` rows, under the broker's 5000-row cap) |
+| `SPIKE_PAIRS` | 10 | how many pairs to choose, 1..40 |
+| `SPIKE_ASSET_IDS` | — | 1..40 comma-separated ids that replace the choice. Each must be in the REST catalog with `digits` the decider accepts; openness and the payout floor are not applied |
+| `SPIKE_SUBSCRIBE_ALL` | 1 | `1`: phase A subscribes every pair of `common.assets_list`; `0`: the chosen pairs only |
+
+**The pair choice** follows the scanner's rule since #460, without its rotation. The candidates
+are open pairs (`isPairOpen`) that accept 5 s and pay at least the cycle floor
+(`pairPayoutAccepted`, 80 %), with `digits` that `assertDigits` accepts. A pair failing on
+`digits` is counted in the header. The CLI takes one pair per group in `PAIR_TYPE_GROUPS` order,
+round after round, with the best payout first inside a group. The header names the groups that
+had no candidate.
+
+**The run.**
+1. **Setup.** The CLI reads the REST catalog and checks `SPIKE_ASSET_IDS` before any socket opens
+   (a failure names the index, never the id). Then it starts the socket. Within 15 s it must be
+   `ready` with a `user.data` of the account's own user and a `common.assets_list`. A
+   `user.data` of another user is `setup failed`.
+2. **Phase A: capacity** (60 s). The CLI subscribes the ids through the client, which sends them
+   in 40-id chunks. It counts which ids got a tick, split open and closed, and the coverage per
+   chunk in send order. A per-socket cap shows as whole chunks without ticks. Then a raw probe on
+   a socket of its own sends one `price.subscribe` of the first 41 open ids, which the client's
+   contract cannot send. It listens for 5 s and records the event names, the ids the
+   `price.subscribed` echo carries, the ids with ticks, and whether the server dropped the
+   connection.
+3. **Phase B: accuracy** (`SPIKE_MINUTES`). Every tick of a chosen pair goes into two builders
+   (`5s`, `15s`). The CLI records the receipt delay `now − tick time`, which mixes network
+   latency and clock skew and can be negative. It also records ticks per second, every state
+   change of the socket, and CPU and RSS once a minute. A drop (from `ready` to any other state)
+   is a hole from the last tick before it to the first tick after the socket is `ready` again.
+   Holes are recorded, not applied to the builders. `SIGINT` ends phase B early, and the fetch
+   and the comparison still run on the candles so far. A terminal state (`token_expired`,
+   `auth_failed`, `disconnected_by_server`) ends phase B the same way.
+4. **The fetch.** The CLI fetches three series per pair from the public chart, one GET per
+   500 ms: `5s`, `15s` and `1s`. The range of an interval runs from the first candle starting at
+   or after the pair's first tick to the last candle ended by its last tick. The broker's first
+   chart row opens at the first tick inside the requested window, not at the previous close
+   ([signal-stand.md → The cache](signal-stand.md#the-cache)). So every request starts one step
+   before the first wanted row, and the answer's first row is dropped. A `429` is retried once
+   after `Retry-After` (60 s without one). After that, or on any other error, the series is
+   `rest_unavailable` with its code, and the other series are compared as usual. These GETs come
+   from the pilot's IP, inside the 600/min window.
+5. **The comparison**, per pair and interval, at the pair's `digits`:
+   - **Candles:** equal open and close, the high/low difference in quote steps (0/1/2/≥3), the
+     `REST only` and `ticks only` rows, and the ATR(14) difference, mean and max.
+   - **Signal decisions.** A moment is the close of a candle in the range (`nowMs = ts + I + 1`).
+     Each series is cut the way production cuts it (`decisionRows`), and the decider runs on
+     both. The counts are moments, differences by category (`signal→no_signal`,
+     `no_signal→signal`, `up↔down`, `reason changed`, from REST to ticks), and the tick floor
+     (`atrTicks ≥ minAtrTicks` on one side only, on every decision that has features). A
+     tick-series hole shortens the window, so the decider refuses (`candle_gap`) and the moment
+     counts as a difference.
+   - **Display indicators (#482),** at the same moments, on the cut of the display fetch
+     (`chartWindow` of `SIGNAL_FETCH_LIMIT`) within the range: MACD cross and histogram sign,
+     the MA50/MA200 side (price above or below), and `ok` on one side only. An indicator never
+     computed on both sides prints «не измерено». With 30 minutes this is MA200 on `15s` (120
+     candles, fewer than 200).
+   - **The `1s` aggregation** against the native `5s`/`15s`: the share of candles equal on all
+     four prices. The chart probe of 2026-10-09 saw 29/29, the stand 961/1000, so the report
+     measures the share and does not assume it is exact.
+   - Candles that overlap a hole, and moments whose 60-candle decision window overlaps one, are
+     counted in their own column and left out of every share (the display too).
+
+**The report** starts with a header (start, minutes, `complete` / `interrupted` / `ended by
+<state>`, the pairs table with the group and ticks per second, the catalog sizes). It then has
+a phase A table with the raw-probe row, phase B tables per interval (candles, decisions,
+display, `1s` aggregation), the load (receipt delay median/p95/min, ticks, late and invalid,
+CPU share, max RSS), and phase C (state changes, holes and the candles they cover). Last comes a
+summary for #404's architect. A share with nothing compared prints `0 of 0`. The run is one
+sample of market conditions, and #404 may ask for another one (other `SPIKE_ASSET_IDS`, another
+hour). Exit 0 only when phase B ran its whole window and at least one candle was compared.
+
+**The owner's step on the pilot.** The worker's container already has the env (`BROKER_WS_URL`
+since 2026-10-08). The run takes about 32 minutes, and the worker keeps serving sessions
+meanwhile:
+
+```bash
+# the account id (broker_accounts.id) of the owner's account
+docker compose exec -T postgres psql -U binarius -d binarius -c \
+  "select ba.id, ba.broker_user_id, ba.status from broker_accounts ba join users u on u.id = ba.user_id where u.telegram_user_id = REPLACE_WITH_TG_ID"
+# the run; the report lands in spike-392.md, logs and progress on the terminal
+docker compose exec -T -e ACCOUNT_ID=REPLACE_WITH_ID -e SPIKE_MINUTES=30 -e SPIKE_PAIRS=10 \
+  trading-worker pnpm --silent --filter @binarius/trading-worker --fail-if-no-match candle-spike > spike-392.md; echo "exit $?"
+```
+
+`--silent` keeps pnpm's own banner out of `spike-392.md`, so the file holds the report only.
+
+`setup failed: token unavailable: refresh_needed` means the account's token has expired. Open
+the trade screen in the bot (that exchanges it on the user's action) and run again. The spike's
+socket is a third socket of the owner's user, beside the worker's session socket and
+broker-web. It ignores every event except ticks, `user.data` and `common.assets_list`
+([The two-socket probe](#the-two-socket-probe-285--result-safe-on-the-pilot-2026-10-08)).
+
+#### The result on the pilot
+
+Recorded by a docs PR (`Refs #392`) after the owner's run. Until then the report is a comment on
+#392.
+
 ## Boundaries
 
 - `packages/shared` (decoder, schemas, event maps, `modeEvent`) is used as it is and not changed
@@ -531,3 +663,6 @@ just rerun; the token: open the trade screen in the bot first). A `broadcast` me
   ([broker-session.md](broker-session.md)).
 - #104: the Socket.IO side of `packages/mock-broker`. The normalizer's tests use literal wire
   fixtures; the client's run against that package.
+- #392: the candle spike above, a measurement on the operator's account. The socket candle source
+  (rings on service accounts, warm-up, backfill) is #404, and its consumers (the feed, the
+  scanner on every pair) are #405.

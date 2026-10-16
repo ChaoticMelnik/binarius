@@ -769,7 +769,9 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
   request cap outside [The budget](#the-budget)'s three loops (it runs from another IP).
 - The decider makes no network calls, writes no logs and contains no user-facing text (the feed
   does the fetching and the logging). The Russian wording of a reason belongs to the bot (#126).
-- It does not read volume or price ticks. It works from the chart and the pair's `digits` only.
+- It does not read volume or price ticks; it works from the chart and the pair's `digits` only.
+  #392's spike measures tick-built candles ([broker-socket.md → The candle spike](broker-socket.md#the-candle-spike-392));
+  the socket source is #404 and its consumers #405.
 
 ## Boundaries
 
