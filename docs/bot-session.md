@@ -1,4 +1,4 @@
-# The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551)
+# The session in the bot: the button, the status, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on a signal (#360; since #509 never on «сигнала нет»); a finished single trade's message
@@ -41,21 +41,30 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   button's row in the analysis keyboard (in demo `demo:l:<assetId>:<sec>:a`, #476), and
   `launchScreen`'s «🚀 Запустить цикл · REAL» (#320, #327).
 - `apps/bot/src/trading-session.ts` — `createTradingSessionComposer({ backend, logger,
-  sessionTracker, connectKeyboard })` returns `{ composer, startSession }`: the start, refresh and
-  stop presses and the command `/stop` (#122); `startSession(ctx, data, catalog, { retryUnknown,
-  removeScreen })` is the one start path, which the amount screen's presses use too
-  (`cycle-stake.ts`, #476). Also
+  sessionTracker, connectKeyboard })` returns `{ composer, startSession, resume }`: the start,
+  refresh and stop presses and the command `/stop` (#122); `startSession(ctx, data, catalog, {
+  retryUnknown, removeScreen })` is the one start path, which the amount screen's presses use too
+  (`cycle-stake.ts`, #476); `resume(api, botUsername, trackedSession, label)` tracks a session
+  again on its recorded message after a restart (#567). Also
   `sessionRefreshCallbackData`, `sessionStopCallbackData`, their patterns, `sessionKeyboard`,
   `START_REFUSALS` and `sessionOutcomeUnknown`. `bot.ts` mounts it under its private-chat filter,
   right after the demo trade's composer.
 - `apps/bot/src/session-tracker.ts` — `createSessionTracker({ backend, logger, firstPollMs,
-  pollMs, deadlineMs, maxEntries?, now? })` → `{ track, stop, size }`, and `sessionTrackingDone`
+  pollMs, deadlineMs, maxEntries?, now? })` → `{ track, stop, size, has }`, and `sessionTrackingDone`
   (`isTradingSessionFinished` of `packages/shared/src/trading-session.ts`, #337).
   `index.ts` builds one and hands it to `createBot` and to `runBot`.
+- `apps/bot/src/session-resume.ts` (#567) — `createSessionResumer({ backend, tracker, logger,
+  intervalMs })` → `{ attach, start, stop }`: the passes that track the listed sessions again
+  ([Recovery after a restart](#recovery-after-a-restart-567)). `index.ts` builds it before
+  `createBot`, which attaches the composer's `resume`; `runBot` starts it after the profile and
+  drains it as its `session resume` step.
 - `apps/bot/src/backend-client.ts` — `startSession(request)` → `{ started }` or `{ active }`,
   `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId)`, `stopSessions(telegramUserId)`
   (#122, `POST /trading/sessions/stop`) ([The client](#the-client)),
-  `claimSessionSummary(id, telegramUserId)` → the summary or `null` (#318).
+  `claimSessionSummary(id, telegramUserId)` → the summary or `null` (#318),
+  `recordSessionMessage(id, telegramUserId, messageId)` → the view, and `listTrackedSessions()`
+  (#567, `GET /trading/sessions/tracked?limit=2000`, its own body ceiling
+  `MAX_TRACKED_SESSIONS_BODY_BYTES`, 2 MiB).
 - `apps/bot/src/session-share.ts` (#321) — `shareQuery`, `SHARE_PATTERN`, `INLINE_QUERY_LIMIT`,
   `shareButton`, `attachShareButton` (the card's edit after the send) and
   `createSessionShareComposer({ backend, logger })`: the inline query and the chosen result.
@@ -82,7 +91,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   summary ([Trade messages and the summary](#trade-messages-and-the-summary-464)).
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop`,
   `.sessionShare`, `.sessionShared` (#321) and
-  the four `SESSION_TRACK_*` constants ([Timing](#timing)).
+  the four `SESSION_TRACK_*` constants and the two `SESSION_RESUME_*` (#567) ([Timing](#timing)).
 - `packages/shared/src/bot-text-format.ts` — `formatSignedUsd`, the session's result with its sign
   (#337), next to `formatUsd`; the catalog's `profit` and `outcome` (#539) variables print through
   it.
@@ -97,7 +106,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
         (session:stop:<id>)
   bot → deleteMessage of the pressed launch screen when the datum carries :l; refused as can't be
         deleted → editMessageReplyMarkup without a keyboard (#418)
-  tracker: after 3 s, then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
+  tracker: after 3 s → POST /trading/sessions/<id>/status-message { telegramUserId, messageId }
+           (#567: records the message, the first one wins, and answers the view),
+           then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
            → editMessageText of that message when what it prints changes
            (a finished session whose balance predates its last trade: the backend asks the
            broker once more before it answers, #337 — trading-session.md → Routes)
@@ -108,6 +119,10 @@ session:<id>                       («🔄 Обновить»)
         POST /trading/sessions/<id>/summary { telegramUserId }   (#318, at most once)
         → sendPhoto to the status's chat: the card, its caption, «🔁 Ещё сессия» and the end of path
         → editMessageReplyMarkup of the card: «📤 Поделиться» on top of those rows (#321)
+the bot's start (after the profile), then every 10 min                          (#567)
+  bot → GET /trading/sessions/tracked?limit=2000 ∥ GET /trading/pairs
+  bot → each listed session the tracker does not hold: tracked on its recorded message, its
+        first poll a GET (the message is recorded already)
 inline query share:<sessionId>:<fileId>   («📤 Поделиться» → a chat picked, #321)
   bot → GET /trading/sessions/<id>?telegramUserId=<from.id> ∥ GET /trading/pairs
   bot → answerInlineQuery: the cached card with its caption for the owner's finished session;
@@ -236,7 +251,11 @@ code is `active_session_exists` is parsed with `safeParseTradingSessionRefusal` 
 non-2xx is `BackendError(http_status, { status, reason })`. Nothing of the body but the parsed view
 and the error code leaves the client. `readSession` and `stopSession` go through `request()`, the
 id `encodeURIComponent`-ed into its segment; both are scoped by the owner, so another user's id is
-the same 404 `not_found`.
+the same 404 `not_found`. `recordSessionMessage` posts `{ telegramUserId, messageId }` and reads
+the answer as `readSession` does, 404 `not_found` included; `listTrackedSessions` parses its body
+with `safeParseTrackedSessionsResponse` (`ContractViolation` otherwise) under
+`MAX_TRACKED_SESSIONS_BODY_BYTES`: 2 000 rows at their longest are about 360 KB, past a quarter of
+the common 1 MiB ceiling (Rule 26), and under a quarter of 2 MiB.
 
 ## The status message
 
@@ -337,8 +356,9 @@ refresh or stop offers the refresh and the menu, never the stop again.
 
 - **Refresh** reads the session and edits it in place («not modified» is done; gone sends it anew;
   a transport failure gets `warn` `trading session message not edited`). The session is tracked
-  again on the message that shows it: after a restart this button is how tracking resumes, and a
-  done session's entry sends its summary card, if it was never sent, and ends (#318). 404 → «⚠️ Статус сессии недоступен.»; any other failure → `unavailable` and `warn`
+  again on the message that shows it, and its first poll records that message if none is recorded
+  (#567): a session started before the recovery existed is recovered from then on. A done
+  session's entry sends its summary card, if it was never sent, and ends (#318). 404 → «⚠️ Статус сессии недоступен.»; any other failure → `unavailable` and `warn`
   `trading session status not read`.
 - **Stop** stops at once, with no confirmation (owner's decision); the reply is the stopped view in
   place, with «⏳ Открытая сделка доиграет до конца.» while its trade is open and not on manual
@@ -398,21 +418,53 @@ One entry per session id, in process memory, like the intent tracker
   balance.available|balance.current|lastIntent.id|lastIntent.status|lastIntent.lastError`; the
   message is edited only when it changes. `balance.ageSec` is left out: it moves on every poll and
   would edit a `manual_review` session's message every 10 s to the deadline.
-- Past `SESSION_TRACK_DEADLINE_MS`: one last edit, not retried — «⏳ Сессия ещё идёт — нажми
-  «🔄 Обновить», чтобы увидеть ход.» under a session that is not stopped, the final status otherwise
-  (a done one whose edit never landed, or a stopped one whose last trade is still on manual review).
+- Past `SESSION_TRACK_DEADLINE_MS` the message ends on its final text: «⏳ Сессия ещё идёт — нажми
+  «🔄 Обновить», чтобы увидеть ход.» under a session that is not stopped, the final status
+  otherwise (a done one, or a stopped one whose last trade is still on manual review). A poll past
+  the deadline draws that text at once; the deadline's own last edit, not retried, is made only
+  when the text is not on screen yet (the poll's edit failed, or a read failed after the last good
+  one). An entry that never read a view ends with no edit (#567).
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
   entry, retried until the deadline. Gone → stop. Anything else thrown → `error` `trading session
   tracking failed`, stop.
 - **The card** (#318): an entry calls it as it ends on a done view whose final edit landed and
   whose `noticesDone` is set (the backend's summary message went out, #464) — on the poll that sees
   it, or at the deadline — so once. A done view without `noticesDone` is polled on with no edit
-  (the render key leaves the flag out), and at the deadline it gets its final edit and no card. A
+  (the render key leaves the flag out), and at the deadline it gets its final edit, if not on
+  screen already, and no card. A
   failed edit means no card yet; a card that failed is not tried again: the entry has ended
   ([The summary card](#the-summary-card-318)).
 - `SESSION_TRACKER_MAX_ENTRIES` (10 000): the oldest entry goes first. `stop()` clears every timer,
   refuses new entries and waits for every attempt in flight; `runBot` drains it as its
   `session tracker` step.
+
+### Recovery after a restart (#567)
+
+- **The record.** Every entry made by a press (the start, «🔄 Обновить», «⏹», `/stop`) carries its
+  message's id; its first poll is `POST /trading/sessions/:id/status-message` in place of the GET,
+  one backend call as before, and its answer is the same view. The backend keeps
+  `trading_sessions.status_message_id`: **the first id wins**, a later message of the same session
+  is followed in memory only. A failed record (5xx, transport) is asked again on the next poll;
+  404 ends the entry as a read's would.
+- **The list.** `GET /trading/sessions/tracked` returns the sessions with a recorded message and no
+  card, except the finished ones with no settled trade whose summary was sent (no card ever comes
+  for them), oldest first, at most `TRACKED_SESSIONS_MAX` (2 000) —
+  [trading-session.md](trading-session.md#get-tradingsessionstrackedlimit-567).
+- **The pass** (`session-resume.ts`): at the bot's start, after the profile, and every
+  `SESSION_RESUME_INTERVAL_MS` (10 min), the list beside the pairs catalog — the pass's only two
+  calls. Each listed session `tracker.has()` does not hold is tracked on its message in the
+  owner's private chat (its chat id is the user's id): no view yet (the first poll draws what it
+  reads), its first poll a GET, its deadline counted from the session's `startedAt`. Edits and
+  the card are a pressed entry's ([The summary card](#the-summary-card-318)). A catalog that cannot
+  be read gives no label (the asset by its id); a list that cannot be read is `warn` `trading
+  sessions not resumed`, and the next pass reads it again. One pass at a time; `stop()` ends the
+  timer and waits for the pass in flight, whose entries are memory.
+- **A session past the deadline** (a stuck one, or a done one still waiting for its summary): the
+  first poll draws its final text and the entry ends, so each pass costs it one GET and at most
+  one edit; its card comes on the first pass after it is due.
+- **Not recovered:** a session with no recorded message — started before #567 and never refreshed,
+  a restart within the 3 s before the first poll, the CLI's — and a list longer than the ceiling,
+  whose newest rows wait.
 
 ## Timing
 
@@ -439,10 +491,16 @@ One entry per session id, in process memory, like the intent tracker
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
   `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 3 × 8 s = 34 s: an attempt's read and edit, then the card's
   claim and `sendPhoto` (#318) and the `editMessageReplyMarkup` that adds «📤 Поделиться» (#321).
+- `SESSION_RESUME_INTERVAL_MS` = 10 min (#567): one list and one catalog read per bot process per
+  pass; not a link of the chain, getting it wrong only changes how often the list is read.
+  `SESSION_RESUME_DRAIN_MS` = 2 × 5 s = 10 s: what the recovery's `stop()` waits for, the list and
+  the catalog counted one after the other. The recovery's calls are background work, as the
+  tracker's, and in no `HANDLER_CALLS` budget; the first poll stays one backend call.
 - The chain at import adds `TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   link #283 left to the bot), `TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   read and the stop wait on one balance GET for a finished session, #337), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
-  SESSION_TRACK_DEADLINE_MS` (imported, so checked) and drain < `SHUTDOWN_BUDGET_MS`.
+  SESSION_TRACK_DEADLINE_MS` (imported, so checked), drain < `SHUTDOWN_BUDGET_MS` and
+  `SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS` (#567).
 
 ## Logs
 
@@ -465,6 +523,10 @@ id or the symbol.
   (`method: editMessageReplyMarkup`, `updateId`)
 - `the launch screen was already gone` (#418, `info`): the delete found no message
 - `trading session tracking failed` (`error`)
+- `trading sessions not resumed` (#567): the recovery's list could not be read (`backendStatus`,
+  `backendReason`); nothing is tracked until the next pass
+- `trading sessions resumed` (#567, `info`): `listed`, `resumed`, only when a pass tracked any
+- `trading sessions resume failed` (#567, `error`): a pass threw outside the backend calls (a bug)
 - `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
   photo failed (`method: sendPhoto`, `telegramErrorCode`), or the render threw; with `sessionId`.
   A refused claim (409 `summary_unavailable`) logs nothing.
@@ -743,7 +805,11 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 
 ## Accepted risks
 
-1. **In-memory tracking.** A restart leaves each status at its last state until «🔄 Обновить».
+1. **In-memory tracking, recovered at the start** (#567). A restart drops every entry; the bot's
+   first recovery pass, right after the profile, tracks again each session with a recorded
+   message, and «🔄 Обновить» does too. A message shows its last state from the restart to that
+   pass. Falsifiable: a session's status not edited for over 10 minutes after a restart while it
+   runs.
 2. **An old button starts a new session** once the previous one has ended (owner's decision).
 3. **Poll load.** One `GET /trading/sessions/:id` per tracked session every 10 s: at most 1 000
    requests a second at 10 000 entries, ≤ 300 at the pilot's 1–3k sessions.
@@ -769,7 +835,8 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 10. **At most once, not exactly once** (#318, owner 2026-10-07): a crash or a lost answer between
     the claim and `sendPhoto` loses the card, and nothing retries it.
 11. **Sessions that ended before #318** have no mark and get their card on their next
-    «🔄 Обновить» — still one.
+    «🔄 Обновить» — still one; a recovery pass gets it to them only once that press recorded their
+    message (#567).
 12. **The musl build is not loaded by `pnpm check`** (#318): CI and the host install other builds.
     Falsifiable: the owner's container command above does not print `ok`.
 13. **Render cost** (#318): about 30 ms per finished session on the bot's event loop. Falsifiable:
@@ -822,7 +889,8 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 30. **A stopped session stuck on manual review** stays in the sender's scan until settled or
     rejected (#464): one cheap row each.
 31. **No card** when the backend has not sent the summary by the tracker's deadline (#464, about
-    70 min after the start); «🔄 Обновить» later gives it once the mark is set.
+    70 min after the start) — until the next recovery pass once the mark is set (#567), or
+    «🔄 Обновить» before it.
 32. **Sessions running at the deploy** (#464) get their later trades and their summary; the trades
     settled before it are not sent. Sessions that ended before it get no summary.
 33. **Doors drawn without reading the signal** (#509): «🔁 Ещё сессия» after another stop, the offer
@@ -846,6 +914,31 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     ставки» says so ([stake.md](stake.md)).
 38. **Edits share the notices' rate** (#551): an edit is one call of the 9 a second; long series of
     edits make the messages lag behind the trades, never drop (risk 27).
+39. **The first recorded message wins** (#567): a session's second status message (a press of the
+    session button again, «🔄 Обновить», `/stop`) is followed in memory; after a restart edits and
+    the card go to the first one. Both show the one session. Falsifiable: after a restart only the
+    upper of two messages of a session is edited.
+40. **Stuck sessions** (#567) — on manual review, or with a stalled worker, longer than
+    `SESSION_TRACK_DEADLINE_MS` from `started_at`: each recovery pass costs each one GET and at
+    most one `editMessageText` — the first poll draws the final text at once (the hint under a
+    session not stopped, the final status under a stopped one) and the entry ends; an unchanged
+    text is «not modified» (shown), a moved age line a silent edit. The card comes on the first pass
+    after the operator settles the trade and the summary is sent. Falsifiable: more than 100 rows
+    of the list with `startedAt` older than a day, or more than one `editMessageText` per session
+    per pass.
+41. **Sessions started before #567** have no recorded message: after a restart they are not
+    recovered until a press of «🔄 Обновить» records one. Likewise a restart in the 3 s before a
+    new status's first poll. Falsifiable: a card missing for a session started before the deploy
+    and finished after a restart of the bot.
+42. **The list's ceiling** (#567): with more than `TRACKED_SESSIONS_MAX` (2 000) open sessions the
+    newest wait for the oldest to close; the oldest first are the stuck ones, so with risk 40 it
+    bounds their number. Falsifiable: the list answering exactly 2 000 rows.
+43. **Up to 10 minutes** (#567) for an entry the tracker dropped later — evicted at
+    `SESSION_TRACKER_MAX_ENTRIES` or ended at the deadline before the summary — to be tracked
+    again; a restart itself waits for no interval, the first pass runs at the start.
+44. **The backend before the bot at a deploy** (#567): a bot whose backend does not know
+    `POST …/status-message` gets 404 on the first poll and shows «⚠️ Статус сессии недоступен.»
+    for the starts in that window.
 
 ## Running it locally
 
