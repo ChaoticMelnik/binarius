@@ -614,7 +614,7 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
 | the record refused (the cursor moved: another sender) | the other sender's record stands | at most repeated blocks, never a lost step |
 | the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; the session waits for the next tick |
-| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it |
+| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a finished session's summary does not start (no balance read) and goes after the next start |
 
 No ending leaves a session at the head of the queue without moving: the claim moves the cursor,
 and the order is the sessions' `created_at`. The summary's 429 or refusal takes its mark back only
@@ -628,8 +628,10 @@ Telegram's 30 a second for one bot (`TIMING_CHAIN_HOLDS`). An edit takes a token
 pacer as a send: Telegram counts it as a call. `SESSION_NOTICE_SCAN` = 200 pending sessions a
 tick, oldest first (`trading_sessions_notice_pending_idx`). `stop()` waits for the call in flight:
 the pace's gap, a summary's balance refresh and its send; or a step's edit, and when Telegram
-answers the cycle message is gone, a second pace and the new message (#551, `2 × (1000 / 9 +
-CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)`) — each under phase 1's budget.
+answers the cycle message is gone, a second pace and the new message, then the next trade's pace
+(#551, `2 × (1000 / 9 + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)`). A summary does not start after
+`stop()` (the check comes before its balance read), so the two paths never add up; each is under
+phase 1's budget.
 
 ### Logs (backend)
 
