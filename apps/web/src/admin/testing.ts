@@ -135,6 +135,7 @@ export const SAMPLE_LEDGER_ENTRY: AdminLedgerEntry = {
   depositEventId: null,
   brokerAccountId: null,
   starPaymentId: null,
+  referralId: null,
   refType: null,
   refId: null,
   note: null,

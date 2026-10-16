@@ -19,7 +19,7 @@ import {
   type AdminLedgerFilters,
 } from './admin-ledger-ops';
 import type { Db } from './client';
-import { depositEvents, tokenLedger } from './schema/index';
+import { depositEvents, referrals, tokenLedger } from './schema/index';
 import {
   bonusRuleRef,
   createTempDatabase,
@@ -266,11 +266,35 @@ describe('toAdminLedgerEntry', () => {
       depositEventId: null,
       brokerAccountId: null,
       starPaymentId: null,
+      referralId: null,
       refType: null,
       refId: null,
       note: 'seed <script>',
       createdAt: '2026-10-01T11:59:59.000Z',
     });
+    expect(adminLedgerEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  // #116: the inviter's reward names its referral, which the strict schema would otherwise drop
+  it('projects an inviter’s reward with its referral id', async () => {
+    const inviter = await seedUser(db());
+    const invitee = await seedUser(db());
+    const [referral] = await db()
+      .insert(referrals)
+      .values({ inviteeUserId: invitee.userId, inviterUserId: inviter.userId })
+      .returning({ id: referrals.id });
+    await db()
+      .insert(tokenLedger)
+      .values({
+        userId: inviter.userId,
+        kind: TokenLedgerKind.Bonus,
+        balanceDelta: 50n,
+        referralId: referral!.id,
+        ...(await bonusRuleRef(db(), 'referral_reward')),
+      });
+    const page = await list(db(), { filters: { userId: inviter.userId } });
+    const [entry] = page.rows.map(toAdminLedgerEntry);
+    expect(entry).toMatchObject({ referralId: referral!.id, brokerAccountId: null });
     expect(adminLedgerEntrySchema.safeParse(entry).success).toBe(true);
   });
 
