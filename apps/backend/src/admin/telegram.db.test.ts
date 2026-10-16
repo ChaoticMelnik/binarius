@@ -781,8 +781,10 @@ describe('notifyStaff', () => {
     const first = await seedStaff(tmp.db);
     const second = await seedStaff(tmp.db);
     const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
-    await admin.notifyStaff('notice');
+    const counts = await admin.notifyStaff('notice');
     const chats = callsTo(api.calls, 'sendMessage').map((call) => String(call.payload.chat_id));
+    // N1 (#391): every send counted; earlier cases of this file left staff of their own
+    expect(counts).toEqual({ sent: chats.length, failed: 0 });
     expect(chats).toEqual(
       expect.arrayContaining([first, second].map((s) => String(s.telegramUserId))),
     );
@@ -806,12 +808,41 @@ describe('notifyStaff', () => {
       }
       return true;
     });
-    await expect(admin.notifyStaff('notice')).resolves.toBeUndefined();
+    const counts = await admin.notifyStaff('notice');
     const chats = callsTo(api.calls, 'sendMessage').map((call) => String(call.payload.chat_id));
     expect(chats).toContain(String(next.telegramUserId));
+    expect(counts).toEqual({ sent: chats.length - 1, failed: 1 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.objectContaining({ name: 'GrammyError' }) as unknown }),
       'the staff notice could not be delivered',
     );
+  });
+
+  it('N2 sends nothing under an already-aborted signal', async () => {
+    await seedStaff(tmp.db);
+    const aborted = new AbortController();
+    aborted.abort();
+    expect(await admin.notifyStaff('notice', aborted.signal)).toEqual({ sent: 0, failed: 0 });
+    expect(callsTo(api.calls, 'sendMessage')).toEqual([]);
+  });
+
+  it('N3 passes the signal to the send and stops after the send it aborted', async () => {
+    await seedStaff(tmp.db);
+    await seedStaff(tmp.db);
+    const stopping = new AbortController();
+    let sends = 0;
+    // outside the capture: aborts the caller's signal while the first send is in flight and
+    // fails that send only if the signal reached it
+    admin.bot.api.config.use((prev, method, payload, signal) => {
+      if (method !== 'sendMessage') return prev(method, payload, signal);
+      sends += 1;
+      if (sends === 1) {
+        stopping.abort();
+        if (signal?.aborted === true) return Promise.reject(new Error('aborted by the signal'));
+      }
+      return prev(method, payload, signal);
+    });
+    expect(await admin.notifyStaff('notice', stopping.signal)).toEqual({ sent: 0, failed: 1 });
+    expect(sends).toBe(1);
   });
 });

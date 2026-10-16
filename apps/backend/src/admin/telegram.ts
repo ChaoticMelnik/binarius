@@ -60,9 +60,11 @@ export interface AdminTelegram {
 }
 
 export interface AdminBot extends AdminTelegram {
-  /** Plain text to every active staff member in turn (#118: a refund request from /paysupport).
-   *  A failed send is a warn per recipient and not repeated; it never throws for one. */
-  notifyStaff(text: string): Promise<void>;
+  /** Plain text to every active staff member in turn (#118: a refund request from /paysupport;
+   *  #391: the service-account alerts). A failed send is a warn per recipient and not repeated;
+   *  it never throws for one. An aborted signal ends the loop. The counts let a caller tell
+   *  "nobody got it" from "somebody did". */
+  notifyStaff(text: string, signal?: AbortSignal): Promise<{ sent: number; failed: number }>;
   start(): void;
   stop(): Promise<void>;
   readonly bot: GrammyBot;
@@ -345,18 +347,31 @@ export function createAdminBot({
       await settled;
     },
 
-    async notifyStaff(text) {
+    async notifyStaff(text, signal) {
+      let sent = 0;
+      let failed = 0;
       for (const telegramUserId of await listActiveStaffTelegramIds(db)) {
+        if (signal?.aborted === true) break;
         try {
           // a string chat_id, as sendLoginPrompt's
-          await bot.api.sendMessage(String(telegramUserId), text);
+          // grammY types the signal with its abort-controller shim; a native one is what its
+          // transport hands to fetch (probed with a hanging Bot API root, #391)
+          await bot.api.sendMessage(
+            String(telegramUserId),
+            text,
+            {},
+            signal as Parameters<typeof bot.api.sendMessage>[3],
+          );
+          sent += 1;
         } catch (error) {
+          failed += 1;
           logger.warn(
             { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage') },
             'the staff notice could not be delivered',
           );
         }
       }
+      return { sent, failed };
     },
 
     async sendLoginPrompt({ challengeId, telegramUserId, login, ip, userAgent }) {

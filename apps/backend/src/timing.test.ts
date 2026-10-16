@@ -40,6 +40,7 @@ import {
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 import {
+  ADMIN_TELEGRAM_API_TIMEOUT_MS,
   BALANCE_STALLED_RETRY_MS,
   BOT_PROFILE_PUBLISH_CALLS,
   BOT_PROFILE_PUBLISH_TIMEOUT_MS,
@@ -58,6 +59,11 @@ import {
   MAX_SIGNAL_SCAN_PER_MINUTE,
   MIN_BALANCE_RECONCILE_INTERVAL_MS,
   MIN_SIGNAL_SCAN_PER_MINUTE,
+  SERVICE_ACCOUNTS_TICK_MS,
+  SERVICE_RENEWALS_PER_TICK,
+  SERVICE_STALLED_RETRY_MS,
+  SERVICE_TOKEN_RENEW_AHEAD_MS,
+  SERVICE_TOKEN_ROTATION_GAP_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   SIGNAL_CACHE_MAX_TTL_MS,
@@ -290,6 +296,30 @@ describe('broker balance timing', () => {
     );
     expect(STARS_RECONCILE_TICK_MS).toBeLessThan(STARS_RECONCILE_WINDOW_S * 1000);
     expect(STARS_RECONCILE_PAGE_SIZE).toBeLessThanOrEqual(100);
+  });
+
+  // T1 (#391): restated so a change to the chain's conjuncts shows in review next to its test
+  it('fits a keeper tick inside its interval and nests the hold-back, the gap and the window (#391)', () => {
+    expect({
+      SERVICE_ACCOUNTS_TICK_MS,
+      SERVICE_TOKEN_RENEW_AHEAD_MS,
+      SERVICE_TOKEN_ROTATION_GAP_MS,
+      SERVICE_RENEWALS_PER_TICK,
+      SERVICE_STALLED_RETRY_MS,
+    }).toEqual({
+      SERVICE_ACCOUNTS_TICK_MS: 60_000,
+      SERVICE_TOKEN_RENEW_AHEAD_MS: 86_400_000,
+      SERVICE_TOKEN_ROTATION_GAP_MS: 3_600_000,
+      SERVICE_RENEWALS_PER_TICK: 5,
+      SERVICE_STALLED_RETRY_MS: 300_000,
+    });
+    expect(SERVICE_RENEWALS_PER_TICK * BROKER_HTTP_TIMEOUT_MS).toBeLessThan(
+      SERVICE_ACCOUNTS_TICK_MS,
+    );
+    expect(SERVICE_ACCOUNTS_TICK_MS).toBeLessThan(SERVICE_STALLED_RETRY_MS);
+    expect(SERVICE_STALLED_RETRY_MS).toBeLessThan(SERVICE_TOKEN_ROTATION_GAP_MS);
+    expect(SERVICE_TOKEN_ROTATION_GAP_MS).toBeLessThan(SERVICE_TOKEN_RENEW_AHEAD_MS);
+    expect(ADMIN_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it('ends a mailing stop inside phase 1 and a send inside its tick, and keeps the rate under Telegram’s (#202)', () => {
