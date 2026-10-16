@@ -103,11 +103,6 @@ function aggregationTable(rows: { id: number; result: IntervalResult }[]): strin
 }
 
 function summary(input: SpikeReportInput, totals: Totals): string[] {
-  const { capacity } = input;
-  const silent = capacity.chunks
-    .map((chunk, index) => ({ index, chunk }))
-    .filter(({ chunk }) => chunk.withTicks === 0)
-    .map(({ index }) => index + 1);
   const compared = sum(totals.candles, (c) => c.compared);
   const withinOne = sum(totals.candles, (c) => c.high[0] + c.high[1] + c.low[0] + c.low[1]);
   const moments = sum(totals.decisions, (d) => d.compared);
@@ -137,7 +132,7 @@ function summary(input: SpikeReportInput, totals: Totals): string[] {
   return [
     '## Summary (for #404)',
     '',
-    `- subscription cap: ${capacity.cut !== undefined ? `not measured (phase A cut: ${capacity.cut})` : silent.length === 0 ? `none observed up to ${capacity.subscribed} ids` : `chunks without ticks: ${silent.join(', ')} of ${capacity.chunks.length}`}`,
+    '- subscription cap: not measured here (#555)',
     `- open / close exact: ${share(
       sum(totals.candles, (c) => c.openEq),
       compared,
@@ -168,7 +163,7 @@ export function renderReport(input: SpikeReportInput): string {
     : input.endedBy !== undefined
       ? `ended by ${input.endedBy}`
       : 'complete';
-  const { choice, catalog, capacity } = input;
+  const { choice, catalog } = input;
   const seconds = input.phaseBMs / 1000;
   const lines = [
     '# Candle spike (#392)',
@@ -183,17 +178,6 @@ export function renderReport(input: SpikeReportInput): string {
     ...input.pairs.map(
       ({ pair, ticks }) =>
         `| ${pair.id} | ${pair.symbol} | ${pair.group} | ${pair.digits} | ${pair.payout} | ${ticks} | ${seconds > 0 ? fixed(ticks / seconds, 2) : '-'} |`,
-    ),
-    '',
-    '## Phase A: subscription capacity',
-    '',
-    `- subscribed ${capacity.subscribed}, with ticks ${capacity.withTicks}; open ${capacity.open.withTicks} of ${capacity.open.subscribed}, closed ${capacity.closed.withTicks} of ${capacity.closed.subscribed}${capacity.cut === undefined ? '' : `; window cut: ${capacity.cut}`}`,
-    `- first tick after the subscribe: ${capacity.firstTickDelayMs === undefined ? '-' : `median ${capacity.firstTickDelayMs.median} ms, max ${capacity.firstTickDelayMs.max} ms`}`,
-    '',
-    '| chunk (send order) | ids | with ticks |',
-    '|---|---|---|',
-    ...capacity.chunks.map(
-      (chunk, index) => `| ${index + 1} | ${chunk.size} | ${chunk.withTicks} |`,
     ),
   ];
 
@@ -235,7 +219,7 @@ export function renderReport(input: SpikeReportInput): string {
     '## Phase B: load',
     '',
     `- receipt delay (now − tick time): ${delay === undefined ? '-' : `median ${delay.median} ms, p95 ${delay.p95} ms, min ${delay.min} ms (${delay.count} ticks)`}`,
-    `- ticks: ${input.ticks.total} (${seconds > 0 ? fixed(input.ticks.total / seconds, 1) : '-'}/s); late ${input.ticks.late}, invalid ${input.ticks.invalid} (per builder)`,
+    `- ticks: ${input.ticks.total} (${seconds > 0 ? fixed(input.ticks.total / seconds, 1) : '-'}/s); late ${input.ticks.late} (per builder), invalid ${input.ticks.invalid}, skewed ${input.ticks.skewed}`,
     `- cpu ${fixed(input.process.cpuPct)} % of wall time, max RSS ${fixed(input.process.maxRssMb)} MB`,
     '',
     '## Phase C: drops',

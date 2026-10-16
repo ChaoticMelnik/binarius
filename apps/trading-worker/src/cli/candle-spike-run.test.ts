@@ -231,7 +231,6 @@ function harness(o: Options = {}): Harness {
     stop: h.stop.signal,
     timing: {
       readyTimeoutMs: 1_000,
-      capacityWindowMs: 2_000,
       restPaceMs: 10,
       progressEveryMs: 300_000,
       sampleEveryMs: 60_000,
@@ -287,36 +286,6 @@ describe('runSpike setup', () => {
       what: 'asset id 0 has digits out of range',
     });
     expect(wide.client.state).toBe(BrokerSocketState.Idle);
-  });
-});
-
-describe('runSpike phase A', () => {
-  it('R2 coverage per 40-id chunk', async () => {
-    const catalog = Array.from({ length: 90 }, (_, i) => pair(1_000 + i));
-    const h = harness({ catalog, ticking: (id) => id < 1_040, options: { minutes: 1 } });
-    const report = await ran(h);
-
-    expect(report.capacity.chunks).toEqual([
-      { size: 40, withTicks: 40 },
-      { size: 40, withTicks: 0 },
-      { size: 10, withTicks: 0 },
-    ]);
-    expect([report.capacity.subscribed, report.capacity.withTicks]).toEqual([90, 40]);
-  });
-
-  it('R10 a window cut by SIGINT or a drop measures no cap', async () => {
-    const interrupted = await ran(harness({ onSleep: (h) => h.stop.abort() }));
-    expect(renderReport(interrupted)).toContain(
-      'subscription cap: not measured (phase A cut: interrupted)',
-    );
-
-    const dropped = await ran(harness({ drop: { fromMs: T0 + 500, toMs: T0 + 1_500 } }));
-    expect(renderReport(dropped)).toContain('subscription cap: not measured (phase A cut: a drop)');
-    expect(dropped.stateChanges.map((change) => [change.from, change.to])).toEqual([
-      ['ready', 'reconnecting'],
-      ['reconnecting', 'ready'],
-    ]);
-    expect(dropped.holes).toEqual([]);
   });
 });
 
@@ -500,7 +469,94 @@ describe('runSpike phase B and the comparison', () => {
     expect(text).not.toContain('SECRET-');
     expect(text).toContain('## Summary (for #404)');
     expect(text).toMatch(/MA200 не измерено/);
-    expect(text).toContain('subscription cap: none observed up to 3 ids');
+    expect(text).toContain('subscription cap: not measured here (#555)');
+  });
+});
+
+describe('runSpike: ticks the builder refuses and the hole rules', () => {
+  const tick = (assetId: number, timestamp: number, price = priceAt(assetId, timestamp)) => ({
+    type: BrokerEventType.PriceUpdate,
+    update: { assetId, price, timestamp },
+  });
+
+  it('R12 a skewed or invalid tick reaches no range, watermark or delay', async () => {
+    let on103 = false;
+    const h = harness({
+      ticking: (id) => id !== 103 || on103,
+      onSleep: ({ client, clock }) => {
+        if (on103) return;
+        client.hear(tick(101, clock + 3_600_000));
+        client.hear(tick(103, clock - 10_000, 0));
+        client.hear(tick(103, clock - 3_600_000));
+        on103 = true;
+      },
+    });
+    const report = await ran(h);
+
+    expect([report.ticks.invalid, report.ticks.skewed]).toEqual([1, 2]);
+    expect(report.delay!.min).toBeGreaterThan(-1);
+    const end = T0 + 4 * 60_000;
+    for (const id of [101, 103]) {
+      const result = interval(report, id, '5s');
+      expect(result.range!.lastMs).toBeLessThan(end);
+      expect(result.candles!.restOnly).toBe(0);
+      expect(result.candles!.openEq).toBe(result.candles!.compared);
+    }
+    expect(Math.max(...h.chartCalls.map((call) => call.limit))).toBeLessThan(400);
+  });
+
+  it('R14 a hole closes only on a tick after its start, and never ends before it', async () => {
+    const fromMs = T0 + 60_000;
+    let step = 0;
+    const replay = harness({
+      onSleep: ({ client, clock }) => {
+        if (step === 0 && clock >= fromMs) {
+          client.fire(BrokerSocketState.Reconnecting, 'transport close');
+          step = 1;
+        } else if (step === 1 && clock >= fromMs + 20_000) {
+          client.fire(BrokerSocketState.Ready);
+          client.hear(tick(101, fromMs - 500));
+          step = 2;
+        }
+      },
+    });
+    const [hole] = (await ran(replay)).holes;
+    expect(hole!.span.toMs - hole!.span.fromMs).toBeGreaterThanOrEqual(19_000);
+
+    const ahead = harness({
+      options: { minutes: 1 },
+      onSleep: ({ client, clock }) => {
+        if (step === 2 && clock >= T0 + 50_000) {
+          client.hear(tick(101, clock + 30_000));
+          client.fire(BrokerSocketState.Reconnecting, 'transport close');
+          step = 3;
+        }
+      },
+    });
+    const [open] = (await ran(ahead)).holes;
+    expect(open!.span.toMs).toBeGreaterThanOrEqual(open!.span.fromMs);
+  });
+
+  it('R15 a drop before the first tick of phase B is a state change, not a hole', async () => {
+    let started = false;
+    const h = harness({
+      ticking: () => started,
+      onSleep: ({ client }) => {
+        if (started) return;
+        client.fire(BrokerSocketState.Reconnecting, 'transport close');
+        client.fire(BrokerSocketState.Ready);
+        started = true;
+      },
+    });
+    const report = await ran(h);
+    expect(report.stateChanges).toHaveLength(2);
+    expect(report.holes).toEqual([]);
+  });
+
+  it('R16 the chosen pairs are subscribed first', async () => {
+    const h = harness({ socketCatalog: [pair(100), ...CATALOG], options: { pairs: 2 } });
+    await ran(h);
+    expect([...h.subscribed]).toEqual([102, 103, 100, 101]);
   });
 });
 

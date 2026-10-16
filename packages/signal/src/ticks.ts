@@ -11,6 +11,21 @@ export interface Tick {
   timestamp: number;
 }
 
+// the most a tick's time may differ from its receipt; beyond it the tick is `skewed`
+export const TICK_MAX_SKEW_MS = 60_000;
+
+export type TickProblem = 'invalid' | 'skewed';
+
+// one rule for the builder and for every caller that reads a tick's time before it
+export function tickProblem(tick: Tick, receivedAtMs: number): TickProblem | undefined {
+  if (!Number.isFinite(receivedAtMs)) {
+    throw new RangeError('tick: receivedAtMs must be finite');
+  }
+  const { price, timestamp } = tick;
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(timestamp)) return 'invalid';
+  return Math.abs(receivedAtMs - timestamp) > TICK_MAX_SKEW_MS ? 'skewed' : undefined;
+}
+
 export interface CandleBuilderOptions {
   intervalMs: number;
   digits: number;
@@ -19,7 +34,8 @@ export interface CandleBuilderOptions {
 }
 
 export interface CandleBuilder {
-  push(tick: Tick): void;
+  // receivedAtMs: the local clock when the tick arrived
+  push(tick: Tick, receivedAtMs: number): void;
   // ascending, a copy
   candles(): Candle[];
   // the timestamp of the newest tick that was neither late nor invalid
@@ -33,6 +49,8 @@ export interface CandleBuilder {
   readonly holed: number;
   // ticks with a non-finite or non-positive price or a non-finite timestamp, dropped
   readonly invalid: number;
+  // ticks more than TICK_MAX_SKEW_MS from their receipt, dropped
+  readonly skewed: number;
 }
 
 function assertPositiveInteger(name: string, value: number): void {
@@ -53,18 +71,20 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
   // survives markHole: the next candle still opens at the last close the broker's series had
   let lastClose: number | undefined;
   let watermark: number | undefined;
-  // the first bucket no marked hole reaches
-  let holeUntil = Number.NEGATIVE_INFINITY;
+  // [from, until): the buckets a marked hole reaches; only those not yet behind the current one
+  let reached: { from: number; until: number }[] = [];
   let late = 0;
   let holed = 0;
   let invalid = 0;
+  let skewed = 0;
 
   return {
-    push({ price, timestamp }) {
-      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(timestamp)) {
-        invalid += 1;
-        return;
-      }
+    push(tick, receivedAtMs) {
+      const problem = tickProblem(tick, receivedAtMs);
+      if (problem === 'invalid') invalid += 1;
+      if (problem === 'skewed') skewed += 1;
+      if (problem !== undefined) return;
+      const { price, timestamp } = tick;
       const bucket = Math.floor(timestamp / intervalMs) * intervalMs;
       if (currentBucket !== undefined && bucket < currentBucket) {
         late += 1;
@@ -74,7 +94,7 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
       // an older tick inside the current bucket: close stays with the newest one
       const newest = watermark === undefined || timestamp >= watermark;
       const current = stored.at(-1);
-      if (bucket < holeUntil) {
+      if (reached.some((hole) => hole.from <= bucket && bucket < hole.until)) {
         holed += 1;
       } else if (current !== undefined && current.timestamp === bucket) {
         current.high = Math.max(current.high, value);
@@ -92,6 +112,7 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
         if (stored.length > capacity) stored.splice(0, stored.length - capacity);
       }
       currentBucket = bucket;
+      reached = reached.filter((hole) => hole.until > bucket);
       if (newest) {
         lastClose = value;
         watermark = timestamp;
@@ -109,7 +130,10 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
         (candle) => !(candle.timestamp <= toMs && candle.timestamp + intervalMs > fromMs),
       );
       stored.splice(0, stored.length, ...kept);
-      holeUntil = Math.max(holeUntil, Math.floor(toMs / intervalMs) * intervalMs + intervalMs);
+      reached.push({
+        from: Math.floor(fromMs / intervalMs) * intervalMs,
+        until: Math.floor(toMs / intervalMs) * intervalMs + intervalMs,
+      });
     },
     get late() {
       return late;
@@ -119,6 +143,9 @@ export function createCandleBuilder(options: CandleBuilderOptions): CandleBuilde
     },
     get invalid() {
       return invalid;
+    },
+    get skewed() {
+      return skewed;
     },
   };
 }
