@@ -340,7 +340,7 @@ describe('the session notices (#464)', () => {
     ]);
     expect(String(summary.payload.text).split('\n')).toEqual([
       '📈 EUR/USD OTC',
-      '🏁 Сессия завершена: 5 сделок — 2 в плюс, 2 в минус, 1 в ноль',
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 2 в плюс, 2 в минус, 1 в ноль',
       '💰 Результат: -$1.15',
       '🧪 Демобаланс: $10 002.50',
     ]);
@@ -877,7 +877,7 @@ describe('a martingale cycle is one message (#551)', () => {
 
   describe('D20 the length limit, under an override the registry accepts', () => {
     // a loss's block of about 440 characters: nine of them fit in 4096, ten do not; a session
-    // has at most MAX_SESSION_TRADES (20) trades, so a split takes such an override
+    // holds up to MAX_SESSION_SUMMARY_TRADES trades, so a split takes such an override
     const PAD = 'ж'.repeat(380);
     const source = {
       sourceOf: (key: BotTextKey) =>

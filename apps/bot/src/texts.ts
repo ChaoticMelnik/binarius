@@ -9,7 +9,7 @@ import {
   createSessionTexts,
   joinHtmlLines,
   pairLabel,
-  DEFAULT_SESSION_TRADES,
+  DEFAULT_SESSION_CYCLES,
   defaultBotTextSource,
   formatStake,
   formatUsd,
@@ -73,7 +73,7 @@ export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
 // packages/shared), printed with this bot's catalog.
 export const sessionTexts = createSessionTexts({ html, plain });
 export const { pluralTrades, sessionAssetLabel } = sessionTexts;
-const { tradesCount, scoreOf, resultOf, sessionClosingLines } = sessionTexts;
+const { tradesCount, cyclesCount, scoreOf, resultOf, sessionClosingLines } = sessionTexts;
 const joinLines = joinHtmlLines;
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
@@ -434,7 +434,7 @@ ${TEXTS.intentDeadline}`,
       ? [
           telegramHtml`
 
-${TEXTS.intentSessionOffer({ trades: tradesCount(DEFAULT_SESSION_TRADES) })}`,
+${TEXTS.intentSessionOffer({ cycles: cyclesCount(DEFAULT_SESSION_CYCLES) })}`,
         ]
       : []),
   ];
@@ -450,9 +450,9 @@ ${statusLineOfIntent(view)}${tail}`;
 const withModeLabel = (label: string, mode: TradeMode): string =>
   mode === TradeMode.Real ? `${label} · ${MODE_LABELS[TradeMode.Real]}` : label;
 // the session button of the analysis screen and of a finished trade (#360), with the number of
-// trades it starts
-export const sessionStartButtonLabel = (trades: number, mode: TradeMode): string =>
-  withModeLabel(plain.sessionStartButton({ trades: tradesCount(trades) }), mode);
+// cycles it starts (#552)
+export const sessionStartButtonLabel = (cycles: number, mode: TradeMode): string =>
+  withModeLabel(plain.sessionStartButton({ cycles: cyclesCount(cycles) }), mode);
 // the launch screen's cycle button (#320) and «🔁 Ещё сессия» under a finished session (#318)
 export const launchCycleButtonLabel = (mode: TradeMode): string =>
   withModeLabel(LABELS.launchCycleButton, mode);
@@ -471,7 +471,7 @@ const intentPlaysOut = (intent: TradeIntentView | null): intent is TradeIntentVi
 // What the session message shows of a session; nothing else of the view.
 type SessionStatusView = Pick<
   TradingSessionView,
-  'mode' | 'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent' | 'balance'
+  'mode' | 'status' | 'stopReason' | 'settings' | 'trades' | 'cycles' | 'lastIntent' | 'balance'
 >;
 
 // The summary card's words (#318, session-card.ts), read when the card is drawn so an override
@@ -506,14 +506,14 @@ export const sessionShareCaption = (
 
 // The session's one message (#284, docs/bot-session.md): the header by mode (#327) and the
 // settings, then
-// a live session's trade number, score and the last trade's status, or a stopped session's
+// a live session's cycle number, score and the last trade's status, or a stopped session's
 // reason and result. `symbol` is null when the catalog could not say.
 export function sessionStatusText(
   symbol: PairLabel | null,
   view: SessionStatusView,
   { deadline = false }: { deadline?: boolean } = {},
 ): TelegramHtml {
-  const { settings, trades, lastIntent } = view;
+  const { settings, trades, cycles, lastIntent } = view;
   const header = view.mode === TradeMode.Real ? TEXTS.sessionHeaderReal : TEXTS.sessionHeader;
   if (settings === null) {
     return telegramHtml`${header}
@@ -528,8 +528,8 @@ ${TEXTS.sessionSettingsUnavailable}`;
   const head = [header, TEXTS.sessionSettings({ line })];
   const body: TelegramHtml[] = [];
   if (view.status !== TradingSessionStatus.Stopped) {
-    const step = Math.min(trades.settled + 1, trades.planned);
-    head.push(TEXTS.sessionStep({ step: `${String(step)} из ${String(trades.planned)}` }));
+    const cycle = Math.min(cycles.closed + 1, cycles.planned);
+    head.push(TEXTS.sessionCycle({ cycle: String(cycle), cyclesPlanned: String(cycles.planned) }));
     if (trades.settled > 0) {
       head.push(TEXTS.sessionScore({ score: scoreOf(trades), profit: trades.profit }));
     }
@@ -722,7 +722,7 @@ export function launchText({
   durationSec,
   symbol,
   amount,
-  trades,
+  cycles,
   saved,
   mode = TradeMode.Demo,
 }: {
@@ -730,7 +730,7 @@ export function launchText({
   durationSec: DemoDurationSec;
   symbol: PairLabel | null;
   amount: DecimalString | null;
-  trades: number;
+  cycles: number;
   saved?: { amount: DecimalString | null; mode: TradeMode };
   mode?: TradeMode;
 }): TelegramHtml {
@@ -749,7 +749,7 @@ export function launchText({
       : TEXTS.launchStake({ ...context, stake: amount }),
     (mode === TradeMode.Real ? TEXTS.launchCycleReal : TEXTS.launchCycle)({
       ...context,
-      trades: tradesCount(trades),
+      cycles: cyclesCount(cycles),
     }),
   ];
   if (saved === undefined) return joinLines(lines);
@@ -771,7 +771,7 @@ export function cycleStakeText({
   broker,
   empty,
   saved,
-  trades = DEFAULT_SESSION_TRADES,
+  cycles = DEFAULT_SESSION_CYCLES,
 }: {
   firstName: string;
   durationSec: DemoDurationSec;
@@ -782,7 +782,7 @@ export function cycleStakeText({
   empty: boolean;
   saved?: { amount: DecimalString | null; mode: TradeMode };
   // a parameter so the length test reaches the widest plural, as launchText's
-  trades?: number;
+  cycles?: number;
 }): TelegramHtml {
   const context = { firstName, stake };
   const lines = [
@@ -794,7 +794,7 @@ export function cycleStakeText({
             subject: `${symbol} · ${DEMO_DURATION_LABELS[durationSec]}`,
           }),
         ]),
-    TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
+    TEXTS.launchCycle({ ...context, cycles: cyclesCount(cycles) }),
   ];
   const choose = empty
     ? TEXTS.stakePickerNoPresets({

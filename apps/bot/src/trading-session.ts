@@ -10,7 +10,7 @@ import {
 import {
   deleteRefusal,
   editRefusal,
-  DEFAULT_SESSION_TRADES,
+  DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
   TradeMode,
@@ -323,13 +323,13 @@ export function createTradingSessionComposer<C extends Context>({
     const from = ctx.from;
     if (from === undefined) return;
     const telegramUserId = String(from.id);
-    // trades sent explicitly, so the button's label, its check and the request use one number
+    // cycles sent explicitly, so the button's label, its check and the request use one number
     const request: CreateTradingSessionRequest = {
       telegramUserId,
       mode: data.mode,
       assetId: data.assetId,
       durationSec: data.durationSec,
-      trades: DEFAULT_SESSION_TRADES,
+      cycles: DEFAULT_SESSION_CYCLES,
     };
     // One more ask on an unknown outcome: a committed first attempt answers 409 with its session,
     // otherwise the session is created once. The amount press asks once (#476): its delete of the

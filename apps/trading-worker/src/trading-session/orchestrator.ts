@@ -23,6 +23,7 @@ import {
   isPairOpen,
   pairAcceptsDuration,
   safeParseTradingSessionSettings,
+  sessionProgress,
   sessionStakeParams,
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
@@ -268,9 +269,20 @@ export function createSessionOrchestrator({
       logger.info(ids, 'trading session has a live intent');
       return { kind: 'reschedule' };
     }
-    const settled = history.intents.filter((i) => i.status === TradeIntentStatus.Settled).length;
-    if (settled >= settings.trades) {
-      return { kind: 'stop', reason: TradingSessionStopReason.Completed, fields: { settled } };
+    const settledIntents = history.intents.filter((i) => i.status === TradeIntentStatus.Settled);
+    const settled = settledIntents.length;
+    // a settled intent whose profit does not read is no win: the sizer stops it as invalid_amount
+    const won = settledIntents.filter((i) => {
+      const profit = i.profit === null ? undefined : parseAmount(i.profit);
+      return profit !== undefined && profit > 0n;
+    }).length;
+    const progress = sessionProgress(settings, { settled, won });
+    if (progress.done >= progress.planned) {
+      return {
+        kind: 'stop',
+        reason: TradingSessionStopReason.Completed,
+        fields: { settled, cycles: progress.done },
+      };
     }
     const lastTwo = history.intents.slice(-2);
     if (lastTwo.length === 2 && lastTwo.every((i) => i.status === TradeIntentStatus.Rejected)) {

@@ -32,6 +32,7 @@ import {
   type AdminTokensQuery,
   type AdminTradingSessionsQuery,
   type AdminUsersQuery,
+  type DecimalString,
   type StaffSessionView,
 } from '@binarius/shared';
 import { buildWebApp } from './app';
@@ -1404,7 +1405,9 @@ describe('the trading sessions page, the card section and the overview breakdown
     );
     expect(response.body).toContain(`<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`);
     expect(response.body).toContain('<code>rejected_twice</code>');
-    expect(response.body).toMatch(/<td>101<\/td>\s*<td>60<\/td>\s*<td>5<\/td>\s*<td>1\.5<\/td>/);
+    expect(response.body).toMatch(
+      /<td>101<\/td>\s*<td>60<\/td>\s*<td>5 сделок<\/td>\s*<td>1\.5<\/td>/,
+    );
     expect(response.body).not.toContain(TEXTS.tradingSessionsNext);
     expect(response.body).not.toContain(TEXTS.tradingSessionsFirst);
   });
@@ -1420,6 +1423,35 @@ describe('the trading sessions page, the card section and the overview breakdown
 
     expect(response.statusCode).toBe(200);
     expect(response.body.match(/<td>\s*—\s*<\/td>/g)).toHaveLength(7);
+  });
+
+  // #552: settings v3 count the session in cycles, v1/v2 in trades
+  it('prints the length of a session by its settings version', async () => {
+    await app.close();
+    const stake = { strategy: 'fixed', baseStake: '1.5' as DecimalString, stakeScale: 1 } as const;
+    const v3 = { version: 3, assetId: 101, durationSec: 60, stake } as const;
+    app = build({
+      tradingSessions: () =>
+        Promise.resolve({
+          ...SAMPLE_TRADING_SESSIONS,
+          sessions: [
+            { ...SAMPLE_TRADING_SESSION, settings: { ...v3, cycles: 5 } },
+            { ...SAMPLE_TRADING_SESSION, settings: { ...v3, cycles: 1 } },
+            { ...SAMPLE_TRADING_SESSION, settings: { ...v3, cycles: 2 } },
+            { ...SAMPLE_TRADING_SESSION, settings: { ...v3, version: 2, trades: 3 } },
+          ],
+        }),
+    });
+
+    const response = await get('/admin/trading-sessions', withCookie);
+
+    expect(response.body.match(/<td>\d+ (циклов|цикл|цикла|сделки)<\/td>/g)).toEqual([
+      '<td>5 циклов</td>',
+      '<td>1 цикл</td>',
+      '<td>2 цикла</td>',
+      '<td>3 сделки</td>',
+    ]);
+    expect(response.body).toContain(`<th>${TEXTS.columnLength}</th>`);
   });
 
   it('escapes a broker id that is markup', async () => {

@@ -57,12 +57,12 @@ export type SessionPlan =
 export function planSessionStart(input: {
   assetId: number;
   durationSec: number;
-  trades: number;
+  cycles: number;
   minTradeAmount: DecimalString;
   // SESSION_STAKE_STRATEGY of the CLI's env (#450)
   strategy: SessionStakeStrategy;
 }): SessionPlan {
-  if (!sessionFitsDeadline(input.trades, input.durationSec)) {
+  if (!sessionFitsDeadline(input.cycles, input.durationSec, input.strategy)) {
     return { ok: false, reason: 'session_too_long' };
   }
   // a zero minimum is a valid snapshot, but a zero stake is no trade (#130 n1)
@@ -72,7 +72,7 @@ export function planSessionStart(input: {
   const parsed = buildSessionSettings({
     assetId: input.assetId,
     durationSec: input.durationSec,
-    trades: input.trades,
+    cycles: input.cycles,
     stake: stakeSettingsFor(input.minTradeAmount),
     strategy: input.strategy,
   });

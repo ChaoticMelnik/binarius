@@ -340,7 +340,6 @@ describe('readTradingSessionView', () => {
     const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
     expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
     expect(view!.trades).toEqual({
-      planned: 5,
       settled: 3,
       rejected: 1,
       won: 1,
@@ -348,6 +347,8 @@ describe('readTradingSessionView', () => {
       tied: 1,
       profit: '-0.15000000',
     });
+    // settings v1 count trades
+    expect(view!.cycles).toEqual({ planned: 5, closed: 3 });
     expect(view!.lastIntent).toMatchObject({ id: queued.id, status: 'queued' });
     expect(view).toMatchObject({
       id: session.id,
@@ -357,6 +358,36 @@ describe('readTradingSessionView', () => {
       endedAt: null,
       settings: sessionSettings(),
     });
+  });
+
+  // #552: the view's cycles are sessionProgress over the same counters the orchestrator reads
+  it.each([
+    ['v3 martingale: only a win closes a cycle', 3, 'martingale', 1],
+    ['v3 fixed: every settled trade is a cycle', 3, 'fixed', 3],
+    ['v2 martingale: settled trades, as before', 2, 'martingale', 3],
+  ] as const)('V1b %s', async (_, version, strategy, closed) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const stake =
+      strategy === 'martingale'
+        ? {
+            strategy,
+            baseStake: '1',
+            stakeScale: 0,
+            limits: { maxSteps: 4, maxStake: '12', maxSessionLoss: '20', maxSessionDurationMs: 1 },
+          }
+        : { strategy, baseStake: '1', stakeScale: 0 };
+    const length = version === 3 ? { cycles: 4 } : { trades: 4 };
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      settings: { version, assetId: 101, durationSec: 60, ...length, stake },
+    });
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '-1');
+    await settle((await sessionIntent(seed, session.id, 2)).intent, '0.85');
+    await settle((await sessionIntent(seed, session.id, 3)).intent, '-1');
+
+    const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
+    expect(view!.settings).not.toBeNull();
+    expect(view!.cycles).toEqual({ planned: 4, closed });
+    expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
   });
 
   it("V2 another user's telegram id reads nothing", async () => {
@@ -378,11 +409,11 @@ describe('readTradingSessionView', () => {
     ).toBeUndefined();
   });
 
-  it('V4 settings that fail v1 read as null with zero planned', async () => {
+  it('V4 settings that fail every version read as null with zero cycles', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { settings: {} });
     const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
-    expect(view).toMatchObject({ settings: null, trades: { planned: 0 } });
+    expect(view).toMatchObject({ settings: null, cycles: { planned: 0, closed: 0 } });
     expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
   });
 
@@ -391,8 +422,8 @@ describe('readTradingSessionView', () => {
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
     const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
     expect(view).toMatchObject({
+      cycles: { planned: 5, closed: 0 },
       trades: {
-        planned: 5,
         settled: 0,
         rejected: 0,
         won: 0,

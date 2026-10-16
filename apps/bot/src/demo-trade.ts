@@ -2,7 +2,7 @@ import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from '
 import {
   editRefusal,
   BrokerBalanceUnavailableReason,
-  DEFAULT_SESSION_TRADES,
+  DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
   pairPayoutAccepted,
@@ -83,7 +83,7 @@ export function intentKeyboard(
     keyboard
       .row()
       .text(
-        sessionStartButtonLabel(DEFAULT_SESSION_TRADES, view.mode),
+        sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, view.mode),
         view.mode === TradeMode.Demo
           ? demoLaunchCallbackData(view.assetId, offer, 'n')
           : sessionStartCallbackData(view.mode, view.assetId, offer),

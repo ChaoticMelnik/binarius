@@ -3,6 +3,7 @@ import {
   BOT_TEXTS_APPLIED_WITHIN_S,
   ServiceAccountNotWorkingReason,
   type BotProfileMethod,
+  type TradingSessionSettings,
 } from '@binarius/shared';
 
 // Everything the admin pages say. Russian, per the project's language convention.
@@ -172,7 +173,7 @@ export const TEXTS = {
   tradingSessionIntents: 'Заявки →',
   columnSessionId: 'ID сессии',
   columnStopReason: 'Причина остановки',
-  columnTrades: 'Сделок',
+  columnLength: 'Длина',
   columnStake: 'Ставка',
   columnStartedAt: 'Начата',
   columnEndedAt: 'Завершена',
@@ -420,3 +421,18 @@ export const TEXTS = {
   errorTitle: 'Внутренняя ошибка',
   errorBody: 'Что-то пошло не так. Попробуйте позже.',
 } as const;
+
+// the Russian plural form after a number: one for 1, 21, …; few for 2-4, 22-24, …; many otherwise
+const pluralRu = (count: number, one: string, few: string, many: string): string => {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+};
+
+// A session's length as its row stores it (#552): v3 in cycles, v1/v2 in trades
+export const sessionLengthLabel = (settings: TradingSessionSettings): string =>
+  settings.version === 3
+    ? `${String(settings.cycles)} ${pluralRu(settings.cycles, 'цикл', 'цикла', 'циклов')}`
+    : `${String(settings.trades)} ${pluralRu(settings.trades, 'сделка', 'сделки', 'сделок')}`;

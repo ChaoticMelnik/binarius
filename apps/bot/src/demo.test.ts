@@ -672,7 +672,7 @@ describe('the amount screen (#476)', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edited = payloadOf(calls, 'editMessageText');
     expect(plainTextOf(edited?.text as string)).toBe(
-      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
+      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 циклов подряд и перед каждой сделкой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
     );
     expect(rowsOf(edited)).toEqual(DEFAULT_ROWS);
     const labels = rowsOf(edited)
@@ -939,7 +939,7 @@ describe('the amount screen (#476)', () => {
     });
     await demo.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
     expect(rowsOf(payloadOf(demo.calls, 'sendPhoto'))[0]).toEqual([
-      button('🚀 Сессия из 5 сделок', `demo:l:${String(PAIR_EURUSD.id)}:15:a`),
+      button('🚀 Сессия из 5 циклов', `demo:l:${String(PAIR_EURUSD.id)}:15:a`),
     ]);
     const real = setup({
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
@@ -947,7 +947,7 @@ describe('the amount screen (#476)', () => {
     await real.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
     expect(rowsOf(payloadOf(real.calls, 'sendPhoto'))[0]).toEqual([
       button(
-        '🚀 Сессия из 5 сделок · REAL',
+        '🚀 Сессия из 5 циклов · REAL',
         sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
       ),
     ]);
@@ -990,7 +990,7 @@ describe('the amount screen (#476)', () => {
       [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
     ]);
     expect(plainTextOf(edited?.text as string)).toBe(
-      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
+      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 циклов подряд и перед каждой сделкой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
     );
   });
 
@@ -1445,7 +1445,7 @@ describe('the analysis', () => {
   const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
   // in demo the session row opens the amount screen in place (#476)
-  const SESSION = button('🚀 Сессия из 5 сделок', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
+  const SESSION = button('🚀 Сессия из 5 циклов', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
   const MORE = button(
     LABELS.analysisMoreButton,
     analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo),
@@ -1544,7 +1544,7 @@ describe('the analysis', () => {
     expect(rowsOf(cardOf(calls))).toEqual([
       [
         button(
-          '🚀 Сессия из 5 сделок · REAL',
+          '🚀 Сессия из 5 циклов · REAL',
           sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
         ),
       ],
@@ -1883,13 +1883,15 @@ describe('the analysis', () => {
     expect(SESSION_START_PATTERN.exec(`demo:sess:${String(PAIR_EURUSD.id)}:300`)).toBeNull();
   });
 
-  // the guard of the #313 addendum: every duration of the set fits DEFAULT_SESSION_TRADES, so
-  // the count is passed in to reach it
+  // the guard of the #313 addendum: every duration of the set fits DEFAULT_SESSION_CYCLES, so
+  // the count is passed in to reach it; the bot counts martingale's worst case (#552):
+  // 6 × 4 × (15 + 120) s ≤ 1 h, 7 × 4 × 135 s > 1 h
   it('starts nothing when the session does not fit the hour', () => {
     const match =
       SESSION_START_PATTERN.exec(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15)) ??
       '';
-    expect(sessionStartDataOf(match, 100)).toBeUndefined();
+    expect(sessionStartDataOf(match, 7)).toBeUndefined();
+    expect(sessionStartDataOf(match, 6)).toBeDefined();
     expect(sessionStartDataOf(match)).toEqual({
       mode: TradeMode.Demo,
       assetId: PAIR_EURUSD.id,
@@ -2046,7 +2048,7 @@ describe('«➕ Ещё» under the analysis', () => {
   const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo);
   const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
   // in demo the session row opens the amount screen in place (#476)
-  const SESSION = button('🚀 Сессия из 5 сделок', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
+  const SESSION = button('🚀 Сессия из 5 циклов', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
   const STAKE_MENU = button(
     LABELS.stakeMenuButton,
     stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
@@ -2128,7 +2130,7 @@ describe('«➕ Ещё» under the analysis', () => {
       const [session, [stake, menu], ...rest] = rows;
       expect(session).toEqual([
         button(
-          '🚀 Сессия из 5 сделок · REAL',
+          '🚀 Сессия из 5 циклов · REAL',
           sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
         ),
       ]);

@@ -425,15 +425,20 @@ describe('contract coverage (issue #6)', () => {
       | 'startedAt'
       | 'endedAt'
       | 'trades'
+      | 'cycles'
       | 'lastIntent'
       | 'balance'
       | 'noticesDone'
     >();
+    // #552: the session's length and its closed cycles
+    expectTypeOf<TradingSessionView['cycles']>().toEqualTypeOf<{
+      planned: number;
+      closed: number;
+    }>();
     // #464: the backend's summary message went out
     expectTypeOf<TradingSessionView['noticesDone']>().toEqualTypeOf<boolean>();
     expectTypeOf<TradingSessionView['status']>().toEqualTypeOf<'active' | 'paused' | 'stopped'>();
     expectTypeOf<TradingSessionView['trades']>().toEqualTypeOf<{
-      planned: number;
       settled: number;
       rejected: number;
       won: number;

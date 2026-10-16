@@ -280,7 +280,7 @@ describe('the session button', () => {
           mode: TradeMode.Demo,
           assetId: PAIR_EURUSD.id,
           durationSec: 5,
-          trades: 5,
+          cycles: 5,
         },
       ],
     ]);
@@ -669,8 +669,8 @@ describe("the session's stop button", () => {
     const completed = sessionView({
       ...STOPPED,
       stopReason: TradingSessionStopReason.Completed,
+      cycles: { planned: 5, closed: 5 },
       trades: {
-        planned: 5,
         settled: 5,
         rejected: 0,
         won: 3,

@@ -9,11 +9,12 @@ import {
   createTradeIntentRequestSchema,
   decimalLessThan,
   decimalStringSchema,
-  DEFAULT_SESSION_TRADES,
+  DEFAULT_SESSION_CYCLES,
   errorLogFields,
   normalizeDecimal,
   pairLabel,
   sessionFitsDeadline,
+  SessionStakeStrategy,
   intervalForDuration,
   MIN_CYCLE_PAYOUT_PCT,
   pairPayoutAccepted,
@@ -254,12 +255,13 @@ export const sessionStartCallbackData = (
   launch = false,
 ): string =>
   `${mode}:sess:${assetId}:${durationSec}${launch ? `:${SESSION_START_LAUNCH_TOKEN}` : ''}`;
-// The button shows only where a session of DEFAULT_SESSION_TRADES fits the worker's deadline
-// (after #313 every duration of DEMO_DURATIONS_SEC: 5 × (15 + 120) s ≤ 1 h); the handler checks
-// again, so an old or forged datum starts nothing. The count is a parameter so a test can reach
-// the refusal: with today's set every duration fits.
-export const sessionFits = (durationSec: number, trades = DEFAULT_SESSION_TRADES): boolean =>
-  sessionFitsDeadline(trades, durationSec);
+// The button shows only where a session of DEFAULT_SESSION_CYCLES fits the worker's deadline in
+// its worst case (#552): the bot does not know the backend's strategy, so it counts martingale's,
+// the default and the longer one (after #313 every duration of DEMO_DURATIONS_SEC:
+// 5 × 4 × (15 + 120) s ≤ 1 h); the handler checks again, so an old or forged datum starts nothing.
+// The count is a parameter so a test can reach the refusal: with today's set every duration fits.
+export const sessionFits = (durationSec: number, cycles = DEFAULT_SESSION_CYCLES): boolean =>
+  sessionFitsDeadline(cycles, durationSec, SessionStakeStrategy.Martingale);
 // 48 bits: unique among one user's own renders is all it needs, since the key is per user
 export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 
@@ -410,7 +412,7 @@ export function analysisMoreDataOf(match: RegExpMatchArray | string):
 // the duration does not fit a session.
 export function sessionStartDataOf(
   match: RegExpMatchArray | string,
-  trades = DEFAULT_SESSION_TRADES,
+  cycles = DEFAULT_SESSION_CYCLES,
 ): { mode: TradeMode; assetId: number; durationSec: DemoDurationSec; launch: boolean } | undefined {
   if (typeof match === 'string') return undefined;
   const mode = tradeModeSchema.safeParse(match[1]);
@@ -420,7 +422,7 @@ export function sessionStartDataOf(
     !mode.success ||
     assetId === undefined ||
     durationSec === undefined ||
-    !sessionFits(durationSec, trades)
+    !sessionFits(durationSec, cycles)
   ) {
     return undefined;
   }
@@ -571,7 +573,7 @@ export function signalsScreen(
   };
 }
 
-// The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the chosen duration (#320, #382):
+// The launch of a session of DEFAULT_SESSION_CYCLES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
 // The picker draws it too, after a save, unless the pair pays below the cycle floor
 // (stake-picker.ts). Since #476 it is drawn in real mode only (#327): the cycle button is marked
@@ -598,7 +600,7 @@ export function launchScreen({
     durationSec,
     symbol,
     amount,
-    trades: DEFAULT_SESSION_TRADES,
+    cycles: DEFAULT_SESSION_CYCLES,
     saved,
     mode,
   });
@@ -696,7 +698,7 @@ export function appendCycleBack(
     : keyboard.text(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(assetId, durationSec));
 }
 
-// The amount screen of a demo cycle of DEFAULT_SESSION_TRADES (#476, docs/bot-demo.md → The amount
+// The amount screen of a demo session of DEFAULT_SESSION_CYCLES (#476, docs/bot-demo.md → The amount
 // screen), in place of the launch screen in demo: the amounts, ✅ on the one in effect (the saved
 // demo stake, or the broker's minimum without one), then «✏️ Своя сумма» and the way back. No
 // amount (the balance is below the minimum): the picker's line and the way back only.
@@ -1460,7 +1462,7 @@ export function createDemoComposer<C extends Context>({
     // in demo the amount screen first (#476), edited in place of the analysis
     return keyboard
       .text(
-        sessionStartButtonLabel(DEFAULT_SESSION_TRADES, mode),
+        sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, mode),
         mode === TradeMode.Demo
           ? demoLaunchCallbackData(assetId, durationSec, 'a')
           : sessionStartCallbackData(mode, assetId, durationSec),

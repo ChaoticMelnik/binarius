@@ -287,9 +287,9 @@ describe('the real path (#121)', () => {
     ['the launch, no signal', 'По паре сейчас нет сигнала'],
     ['the launch, fetch_failed', 'Не удалось проверить сигнал пары'],
     ['a real session refused for no signal', '🔀 Выбрать другую пару'],
-    ['the analysis, a signal', '🚀 Сессия из 5 сделок · REAL'],
-    ['«➕ Ещё»', '🚀 Сессия из 5 сделок · REAL'],
-    ['the refresh of a settled real trade', '🚀 Сессия из 5 сделок · REAL'],
+    ['the analysis, a signal', '🚀 Сессия из 5 циклов · REAL'],
+    ['«➕ Ещё»', '🚀 Сессия из 5 циклов · REAL'],
+    ['the refresh of a settled real trade', '🚀 Сессия из 5 циклов · REAL'],
     // #474: the card's way to the mode screen, and the screen's way back to demo
     ['/menu', '🎮 Вернуться в демо'],
     ['the mode screen of a real user', 'Сейчас: <b>REAL</b>'],

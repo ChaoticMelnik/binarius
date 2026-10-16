@@ -151,8 +151,8 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     if (!parsed.success) {
       return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
     }
-    const { telegramUserId, mode, assetId, durationSec, trades } = parsed.data;
-    if (!sessionFitsDeadline(trades, durationSec)) {
+    const { telegramUserId, mode, assetId, durationSec, cycles } = parsed.data;
+    if (!sessionFitsDeadline(cycles, durationSec, stakeStrategy)) {
       return refuse(reply, TradingSessionErrorCode.SessionTooLong);
     }
 
@@ -261,7 +261,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     const stakeSettings = buildSessionSettings({
       assetId,
       durationSec,
-      trades,
+      cycles,
       stake: stakeSettingsFrom(savedStake, snapshot.minTradeAmount),
       strategy: stakeStrategy,
     });

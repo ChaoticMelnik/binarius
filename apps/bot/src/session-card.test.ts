@@ -3,7 +3,7 @@ import {
   BOT_TEXT_CATALOG,
   decimalStringSchema,
   defaultBotTextSource,
-  MAX_SESSION_TRADES,
+  MAX_SESSION_SUMMARY_TRADES,
   pairLabel,
   type BotTextKey,
   type SessionSummary,
@@ -140,15 +140,15 @@ describe('sessionCardSvg', () => {
     expect(circlesOf(svg, TIE)).toBe(1);
   });
 
-  it(`C7 ${String(MAX_SESSION_TRADES)} trades: as many columns`, () => {
+  it(`C7 ${String(MAX_SESSION_SUMMARY_TRADES)} trades: as many columns`, () => {
     const many: SessionSummary = {
       result: d('0'),
-      trades: Array.from({ length: MAX_SESSION_TRADES }, (_, i) => trade('0', i, i + 0.5)),
+      trades: Array.from({ length: MAX_SESSION_SUMMARY_TRADES }, (_, i) => trade('0', i, i + 0.5)),
     };
     const svg = sessionCardSvg(sessionCardModel(many, OTC_LABEL, 42));
-    expect(textsOf(svg)).toContain(`Сделка ${String(MAX_SESSION_TRADES)}`);
-    expect(svg.match(/<line /g)).toHaveLength(MAX_SESSION_TRADES - 1);
-    expect(pointsOf(svg)).toHaveLength(2 * MAX_SESSION_TRADES);
+    expect(textsOf(svg)).toContain(`Сделка ${String(MAX_SESSION_SUMMARY_TRADES)}`);
+    expect(svg.match(/<line /g)).toHaveLength(MAX_SESSION_SUMMARY_TRADES - 1);
+    expect(pointsOf(svg)).toHaveLength(2 * MAX_SESSION_SUMMARY_TRADES);
   });
 
   it('C8 equal prices put the line in the middle, every coordinate finite', () => {

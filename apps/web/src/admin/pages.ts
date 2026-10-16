@@ -59,7 +59,7 @@ import {
 import { html, layout, type SafeHtml } from '../html';
 import { encodePublishResults } from './publish-result';
 import { telegramPreview } from './telegram-preview';
-import { TEXTS } from './texts';
+import { sessionLengthLabel, TEXTS } from './texts';
 
 const error = (message: string | undefined): SafeHtml =>
   message === undefined ? html`` : html`<p class="error">${message}</p>`;
@@ -813,7 +813,7 @@ export const tradingSessionsHref = (query: AdminTradingSessionsQuery): string =>
   return params.size > 0 ? `/admin/trading-sessions?${params}` : '/admin/trading-sessions';
 };
 
-// settings are null when the row parses as neither version: each of its cells then prints "—"
+// settings are null when the row parses as no version: each of its cells then prints "—"
 const tradingSessionRow = (session: AdminTradingSessionView): SafeHtml => {
   const { settings } = session;
   return html`<tr>
@@ -828,7 +828,7 @@ const tradingSessionRow = (session: AdminTradingSessionView): SafeHtml => {
     <td>${code(session.stopReason)}</td>
     <td>${settings === null ? TEXTS.none : settings.assetId}</td>
     <td>${settings === null ? TEXTS.none : settings.durationSec}</td>
-    <td>${settings === null ? TEXTS.none : settings.trades}</td>
+    <td>${settings === null ? TEXTS.none : sessionLengthLabel(settings)}</td>
     <td>${settings === null ? TEXTS.none : settings.stake.baseStake}</td>
     <td>${when(session.startedAt)}</td>
     <td>${whenOrNone(session.endedAt)}</td>
@@ -859,7 +859,7 @@ export const tradingSessionsPage = (
                   <th>${TEXTS.columnStopReason}</th>
                   <th>${TEXTS.columnAsset}</th>
                   <th>${TEXTS.columnDuration}</th>
-                  <th>${TEXTS.columnTrades}</th>
+                  <th>${TEXTS.columnLength}</th>
                   <th>${TEXTS.columnStake}</th>
                   <th>${TEXTS.columnStartedAt}</th>
                   <th>${TEXTS.columnEndedAt}</th>

@@ -109,13 +109,15 @@ const renderKey = ({
   status,
   stopReason,
   trades,
+  cycles,
   lastIntent,
   balance,
 }: TradingSessionView): string =>
   [
     status,
     stopReason,
-    trades.planned,
+    cycles.planned,
+    cycles.closed,
     trades.settled,
     trades.won,
     trades.lost,

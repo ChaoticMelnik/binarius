@@ -56,7 +56,7 @@ export type SessionScore = Pick<TradingSessionView['trades'], 'won' | 'lost' | '
 // what a stopped session's closing lines print of its view
 export type SessionClosingView = Pick<
   TradingSessionView,
-  'mode' | 'stopReason' | 'trades' | 'balance'
+  'mode' | 'stopReason' | 'trades' | 'cycles' | 'balance'
 >;
 
 // a hole holding an array is joined without a separator, so the newlines are written here
@@ -82,19 +82,36 @@ export interface SessionTradeNotice {
   step: number;
 }
 
+// The Russian plural form after a number: one for 1, 21, …; few for 2-4, 22-24, …; many
+// otherwise. A form, not its text: only the text printed is read from the catalog (Rule 30).
+const PluralForm = { One: 0, Few: 1, Many: 2 } as const;
+type PluralForm = (typeof PluralForm)[keyof typeof PluralForm];
+function pluralFormOf(count: number): PluralForm {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return PluralForm.One;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return PluralForm.Few;
+  return PluralForm.Many;
+}
+
 const priceOf = (value: number, digits: number | null): string =>
   digits === null ? String(value) : formatPrice(value, digits);
 
 export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain: BotPlainTexts }) {
   // «сделка», «сделки» or «сделок» after the number
   const pluralTrades = (count: number): string => {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-    if (mod10 === 1 && mod100 !== 11) return plain.sessionTradeOne;
-    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return plain.sessionTradeFew;
-    return plain.sessionTradeMany;
+    const form = pluralFormOf(count);
+    if (form === PluralForm.One) return plain.sessionTradeOne;
+    return form === PluralForm.Few ? plain.sessionTradeFew : plain.sessionTradeMany;
   };
   const tradesCount = (count: number): string => `${String(count)} ${pluralTrades(count)}`;
+  // «цикл», «цикла» or «циклов» after the number (#552)
+  const pluralCycles = (count: number): string => {
+    const form = pluralFormOf(count);
+    if (form === PluralForm.One) return plain.sessionCycleOne;
+    return form === PluralForm.Few ? plain.sessionCycleFew : plain.sessionCycleMany;
+  };
+  const cyclesCount = (count: number): string => `${String(count)} ${pluralCycles(count)}`;
 
   // «3 в плюс, 1 в минус», with «в ноль» only when a trade tied
   const scoreOf = ({ won, lost, tied }: SessionScore): string =>
@@ -128,7 +145,13 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   // summary the backend sends is these lines under the pair (#464).
   const sessionClosingLines = (view: SessionClosingView): TelegramHtml[] => {
     if (view.stopReason === TradingSessionStopReason.Completed) {
-      return [html.sessionCompleted({ result: resultOf(view.trades) }), ...outcomeLines(view)];
+      return [
+        html.sessionCompleted({
+          cycles: cyclesCount(view.cycles.closed),
+          result: resultOf(view.trades),
+        }),
+        ...outcomeLines(view),
+      ];
     }
     const lines: TelegramHtml[] = [];
     if (view.stopReason === TradingSessionStopReason.NoSignalTimeout) {
@@ -181,6 +204,8 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   return {
     pluralTrades,
     tradesCount,
+    pluralCycles,
+    cyclesCount,
     scoreOf,
     resultOf,
     sessionAssetLabel,

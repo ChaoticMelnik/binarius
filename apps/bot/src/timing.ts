@@ -126,7 +126,7 @@ export const HANDLER_CALLS = {
   // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
-  // «🚀 Сессия из 5 сделок» (#284; in real the analysis, the row under a finished trade #360, «🔁 Ещё
+  // «🚀 Сессия из 5 циклов» (#284; in real the analysis, the row under a finished trade #360, «🔁 Ещё
   // сессия» #320 and the launch screen's «🚀 Запустить цикл» land here, and demo buttons sent
   // before #476): answerCallbackQuery ∥
   // readPairs — counted as sequential, as in confirm — then startSession and its one retry on an
