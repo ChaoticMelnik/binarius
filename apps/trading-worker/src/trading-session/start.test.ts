@@ -59,7 +59,7 @@ const plan = (patch: Partial<Parameters<typeof planSessionStart>[0]> = {}) =>
   planSessionStart({
     assetId: 101,
     durationSec: 60,
-    trades: 5,
+    cycles: 5,
     minTradeAmount: '1.00000000' as DecimalString,
     strategy: 'fixed',
     ...patch,
@@ -67,11 +67,24 @@ const plan = (patch: Partial<Parameters<typeof planSessionStart>[0]> = {}) =>
 
 describe('planSessionStart (#287)', () => {
   it('C4 refuses a session that cannot fit the deadline, the start route’s predicate', () => {
-    expect(plan({ trades: 20, durationSec: 600 })).toEqual({
+    expect(plan({ cycles: 20, durationSec: 600 })).toEqual({
       ok: false,
       reason: 'session_too_long',
     });
     expect(plan()).toMatchObject({ ok: true });
+  });
+
+  // #552: the worst case of the CLI's strategy, as the start route
+  it('counts martingale cycles at MARTINGALE_MAX_STEPS trades, fixed ones at one', () => {
+    expect(plan({ cycles: 5, durationSec: 300, strategy: 'fixed' })).toMatchObject({ ok: true });
+    expect(plan({ cycles: 5, durationSec: 300, strategy: 'martingale' })).toEqual({
+      ok: false,
+      reason: 'session_too_long',
+    });
+    expect(plan({ cycles: 5, durationSec: 60, strategy: 'martingale' })).toMatchObject({
+      ok: true,
+      settings: { version: 3, cycles: 5 },
+    });
   });
 
   it.each([
@@ -79,29 +92,29 @@ describe('planSessionStart (#287)', () => {
     ['0.50000000', { baseStake: '0.5', stakeScale: 1 }],
     ['1.25000000', { baseStake: '1.25', stakeScale: 2 }],
     ['0.00000001', { baseStake: '0.00000001', stakeScale: 8 }],
-  ])('C5 builds settings v2 fixed from a minimum of %s', (minTradeAmount, stake) => {
+  ])('C5 builds settings v3 fixed from a minimum of %s', (minTradeAmount, stake) => {
     expect(plan({ minTradeAmount: minTradeAmount as DecimalString })).toEqual({
       ok: true,
       settings: {
-        version: 2,
+        version: 3,
         assetId: 101,
         durationSec: 60,
-        trades: 5,
+        cycles: 5,
         stake: { strategy: 'fixed', ...stake },
       },
     });
   });
 
   // #450: the CLI's SESSION_STAKE_STRATEGY, with the default limits of the minimum
-  it('C8 builds settings v2 martingale with the limits of its base stake', () => {
+  it('C8 builds settings v3 martingale with the limits of its base stake', () => {
     expect(plan({ minTradeAmount: '1.25000000' as DecimalString, strategy: 'martingale' })).toEqual(
       {
         ok: true,
         settings: {
-          version: 2,
+          version: 3,
           assetId: 101,
           durationSec: 60,
-          trades: 5,
+          cycles: 5,
           stake: {
             strategy: 'martingale',
             baseStake: '1.25',
@@ -136,7 +149,7 @@ describe('planSessionStart (#287)', () => {
   );
 
   it('refuses a duration the intent schema refuses as invalid_settings', () => {
-    expect(plan({ durationSec: 0, trades: 1 })).toEqual({ ok: false, reason: 'invalid_settings' });
+    expect(plan({ durationSec: 4, cycles: 1 })).toEqual({ ok: false, reason: 'invalid_settings' });
   });
 });
 

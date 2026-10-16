@@ -290,10 +290,10 @@ describe('POST /trading/sessions', () => {
       endedAt: null,
       // #450: the process's default strategy, martingale, with the limits of the base stake
       settings: {
-        version: 2,
+        version: 3,
         assetId: ASSET,
         durationSec: 60,
-        trades: 5,
+        cycles: 5,
         stake: {
           strategy: 'martingale',
           baseStake: '1',
@@ -306,7 +306,8 @@ describe('POST /trading/sessions', () => {
           },
         },
       },
-      trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+      trades: { settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+      cycles: { planned: 5, closed: 0 },
       lastIntent: null,
     });
     const [row] = await tmp.db
@@ -321,9 +322,15 @@ describe('POST /trading/sessions', () => {
     const seed = await seedReady();
     const before = await sessionCount();
     const target = appWith();
-    const invalid = await start(target, bodyFor(seed, { trades: 0 }));
+    const invalid = await start(target, bodyFor(seed, { cycles: 0 }));
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json()).toMatchObject({ error: 'validation' });
+    // #552: the length is in cycles, and no trade is shorter than the signal's shortest candle
+    for (const patch of [{ trades: 5 }, { durationSec: 4 }]) {
+      const refused = await start(target, bodyFor(seed, patch));
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json()).toMatchObject({ error: 'validation' });
+    }
     expect((await start(target, bodyFor(seed), {})).statusCode).toBe(401);
     expect(await sessionCount()).toBe(before);
   });
@@ -422,6 +429,19 @@ describe('POST /trading/sessions', () => {
     expect(second.json()).toMatchObject({ session: { id: first.id, status: 'active' } });
   });
 
+  // #552: the worst case of the process's strategy: four trades a martingale cycle, one a fixed one
+  it.each([
+    [SessionStakeStrategy.Fixed, 201],
+    [SessionStakeStrategy.Martingale, 409],
+  ])('R5b five cycles of 300 s under %s answer %i', async (stakeStrategy, status) => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const response = await start(appWith({ stakeStrategy }), bodyFor(seed, { durationSec: 300 }));
+    expect(response.statusCode).toBe(status);
+    if (status === 409) await expectRefusal(response, 409, 'session_too_long', before);
+    else expect(sessionOf(response).settings).toMatchObject({ version: 3, cycles: 5 });
+  });
+
   it('R5 a session that cannot fit the deadline is refused before the catalog and the balance', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const target = appWith({ refresh: () => Promise.resolve() });
@@ -504,7 +524,11 @@ describe('POST /trading/sessions', () => {
 
   it("R30/R31 a signal starts; the feed is asked for the duration's candle and the pair's digits", async () => {
     const seed = await seedReady();
-    const response = await start(appWith(), bodyFor(seed, { durationSec: 300 }));
+    // fixed: five martingale cycles of 300 s cannot fit the hour (#552)
+    const response = await start(
+      appWith({ stakeStrategy: SessionStakeStrategy.Fixed }),
+      bodyFor(seed, { durationSec: 300 }),
+    );
     expect(response.statusCode).toBe(201);
     expect(signalCalls).toEqual([{ assetId: ASSET, interval: '5m', digits: pair.digits }]);
   });
@@ -796,7 +820,8 @@ describe('POST /trading/sessions', () => {
     expect(response.statusCode).toBe(201);
     const session = sessionOf(response);
     expect(session.settings).toMatchObject({
-      version: 2,
+      version: 3,
+      cycles: 5,
       stake: {
         strategy: 'martingale',
         baseStake: '1.55',
@@ -816,7 +841,7 @@ describe('POST /trading/sessions', () => {
     expect(row?.settings).toEqual(session.settings);
   });
 
-  it('R41 writes v2 fixed under SESSION_STAKE_STRATEGY=fixed, and a later process leaves the row as it is', async () => {
+  it('R41 writes v3 fixed under SESSION_STAKE_STRATEGY=fixed, and a later process leaves the row as it is', async () => {
     const seed = await seedReady();
     const response = await start(
       appWith({ stakeStrategy: SessionStakeStrategy.Fixed }),

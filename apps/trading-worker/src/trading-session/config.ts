@@ -23,7 +23,8 @@ import { isTimerMs } from '../broker/socket-config';
 //                                         two boundaries agree within the slack
 //   SESSION_MAX_DURATION_MS (shared)    — the session's deadline from started_at (database clock);
 //                                         the start route and the CLI refuse a session that
-//                                         cannot fit it (sessionFitsDeadline)
+//                                         cannot fit it in its strategy's worst case
+//                                         (sessionFitsDeadline: cycles × steps per cycle, #552)
 //   SESSION_NO_SIGNAL_TIMEOUT_MS (shared) — how long a session waits for a signal before it stops
 //                                         with no_signal_timeout (#509), from the later of
 //                                         started_at and its last intent's change (database clock)

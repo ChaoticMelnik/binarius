@@ -38,8 +38,8 @@ const DONE = sessionView({
   status: TradingSessionStatus.Stopped,
   stopReason: TradingSessionStopReason.Completed,
   endedAt: '2026-10-07T10:05:00.000Z',
+  cycles: { planned: 5, closed: 5 },
   trades: {
-    planned: 5,
     settled: 5,
     rejected: 0,
     won: 3,

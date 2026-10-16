@@ -168,7 +168,7 @@ const END_ROWS = [
 // #360: under a finished trade, the session on the same pair and duration before the end of the
 // path; in demo it opens the amount screen as a new message (#476)
 const SESSION_ROW = [
-  button('🚀 Сессия из 5 сделок', demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
+  button('🚀 Сессия из 5 циклов', demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
 ];
 const OFFER_END_ROWS = [SESSION_ROW, ...END_ROWS];
 const OFFER = '🤖 Дальше бот может торговать сам';
@@ -504,7 +504,7 @@ describe('the stake button', () => {
       expect(rowsOf(sent)).toEqual([
         [
           button(
-            '🚀 Сессия из 5 сделок · REAL',
+            '🚀 Сессия из 5 циклов · REAL',
             sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
           ),
         ],
@@ -1045,7 +1045,7 @@ describe('intentKeyboard', () => {
   it('offers the session of the trade pair and duration: the amount screen in demo (door «offer opens the amount screen»)', () => {
     const view = intentView({ status: TradeIntentStatus.Settled, assetId: 77, durationSec: 5 });
     expect(intentKeyboard(view, true).inline_keyboard[0]).toEqual([
-      button('🚀 Сессия из 5 сделок', 'demo:l:77:5:n'),
+      button('🚀 Сессия из 5 циклов', 'demo:l:77:5:n'),
     ]);
     const real = intentView({
       mode: TradeMode.Real,
@@ -1054,7 +1054,7 @@ describe('intentKeyboard', () => {
       durationSec: 5,
     });
     expect(intentKeyboard(real, true).inline_keyboard[0]).toEqual([
-      button('🚀 Сессия из 5 сделок · REAL', sessionStartCallbackData(TradeMode.Real, 77, 5)),
+      button('🚀 Сессия из 5 циклов · REAL', sessionStartCallbackData(TradeMode.Real, 77, 5)),
     ]);
   });
 

@@ -72,7 +72,7 @@ describe('session-start (#287)', () => {
   it('starts a demo session on the only active account and prints its id', async () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await account(user.userId);
-    const result = await run({ TELEGRAM_USER_ID: user.telegramUserId, TRADES: '3' });
+    const result = await run({ TELEGRAM_USER_ID: user.telegramUserId, CYCLES: '3' });
     expect(result.err).toEqual([]);
     expect(result.code).toBe(0);
     const [session] = await sessionsOf(brokerAccountId);
@@ -80,10 +80,10 @@ describe('session-start (#287)', () => {
     expect(session).toMatchObject({
       mode: TradeMode.Demo,
       settings: {
-        version: 2,
+        version: 3,
         assetId: 101,
         durationSec: 15,
-        trades: 3,
+        cycles: 3,
         // #450: SESSION_STAKE_STRATEGY unset is martingale, with the limits of the base stake
         stake: {
           strategy: 'martingale',
@@ -121,7 +121,7 @@ describe('session-start (#287)', () => {
     expect(fixed.code).toBe(0);
     const [session] = await sessionsOf(brokerAccountId);
     expect(session?.settings).toMatchObject({
-      version: 2,
+      version: 3,
       stake: { strategy: 'fixed', baseStake: '1', stakeScale: 0 },
     });
     expect(session?.settings).not.toHaveProperty('stake.limits');
@@ -217,7 +217,14 @@ describe('session-start (#287)', () => {
   >([
     ['no snapshot', { snapshot: false }, {}, /Нет снимка баланса/],
     ['a zero minimum', { minTradeAmount: '0.00' }, {}, /Минимальная ставка аккаунта — 0/],
-    ['a session past the deadline', {}, { TRADES: '20', DURATION_SEC: '600' }, /не уложится в час/],
+    ['a session past the deadline', {}, { CYCLES: '20', DURATION_SEC: '600' }, /не уложится в час/],
+    // #552: martingale's worst case, four trades a cycle: 5 × 4 × (61 + 120) s > 1 h
+    [
+      'five martingale cycles of 61 s',
+      {},
+      { CYCLES: '5', DURATION_SEC: '61' },
+      /не уложится в час: уменьшите CYCLES или DURATION_SEC/,
+    ],
   ])('refuses %s before writing anything', async (_label, options, env, text) => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await account(user.userId, options);
@@ -234,12 +241,13 @@ describe('session-start (#287)', () => {
     for (const env of <Record<string, string>[]>[
       { TELEGRAM_USER_ID: '-1' },
       { TELEGRAM_USER_ID: '1', ACCOUNT_ID: 'not-a-uuid' },
-      { TELEGRAM_USER_ID: '1', TRADES: '21' },
+      { TELEGRAM_USER_ID: '1', CYCLES: '21' },
+      { TELEGRAM_USER_ID: '1', DURATION_SEC: '4' },
     ]) {
       const result = await run(env);
       expect(result.code).toBe(1);
       expect(result.err).toHaveLength(1);
-      expect(result.err[0]).toMatch(/^Env (TELEGRAM_USER_ID|ACCOUNT_ID|TRADES) /);
+      expect(result.err[0]).toMatch(/^Env (TELEGRAM_USER_ID|ACCOUNT_ID|CYCLES|DURATION_SEC) /);
     }
   });
 

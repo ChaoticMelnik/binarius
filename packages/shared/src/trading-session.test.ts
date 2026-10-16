@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PairsCatalogErrorCode } from './catalog';
 import { decimalStringSchema } from './money';
+import { SIGNAL_SHORTEST_INTERVAL_MS } from './signal';
 import { INT4_MAX, TradeIntentStatus, type TradeIntentView } from './trading';
 import {
   TRACKED_SESSIONS_MAX,
@@ -8,9 +9,14 @@ import {
   safeParseRecordSessionStatusMessageRequest,
   safeParseTrackedSessionsQuery,
   safeParseTrackedSessionsResponse,
-  DEFAULT_SESSION_TRADES,
-  MAX_SESSION_TRADES,
+  DEFAULT_SESSION_CYCLES,
+  MAX_SESSION_CYCLES,
+  MAX_SESSION_SUMMARY_TRADES,
+  MIN_SESSION_DURATION_SEC,
+  SESSION_MAX_DURATION_MS,
   TRADING_SESSION_SETTINGS_VERSION,
+  safeParseSessionSummaryResponse,
+  sessionProgress,
   TradingSessionErrorCode,
   buildSessionSettings,
   martingaleLimitsFor,
@@ -36,8 +42,23 @@ const settings = {
   version: 1,
   assetId: 101,
   durationSec: 60,
-  trades: DEFAULT_SESSION_TRADES,
+  trades: 5,
   stake: { baseStake: '1', stakeScale: 0 },
+};
+
+const martingaleStake = {
+  strategy: 'martingale',
+  baseStake: '1',
+  stakeScale: 0,
+  limits: { maxSteps: 4, maxStake: '12', maxSessionLoss: '20', maxSessionDurationMs: 3_600_000 },
+};
+const settingsV2 = { ...settings, version: 2, stake: martingaleStake };
+const settingsV3 = {
+  version: 3,
+  assetId: 101,
+  durationSec: 60,
+  cycles: 5,
+  stake: martingaleStake,
 };
 
 const refused = (input: unknown) => safeParseTradingSessionSettings(input).success === false;
@@ -46,15 +67,39 @@ describe('tradingSessionSettingsSchema', () => {
   it('accepts the CLI object and the trades bounds', () => {
     expect(safeParseTradingSessionSettings(settings).success).toBe(true);
     expect(safeParseTradingSessionSettings({ ...settings, trades: 1 }).success).toBe(true);
-    expect(
-      safeParseTradingSessionSettings({ ...settings, trades: MAX_SESSION_TRADES }).success,
-    ).toBe(true);
+    expect(safeParseTradingSessionSettings({ ...settings, trades: 20 }).success).toBe(true);
   });
 
-  it('refuses trades outside [1, MAX_SESSION_TRADES]', () => {
+  it('refuses trades outside [1, 20]', () => {
     expect(refused({ ...settings, trades: 0 })).toBe(true);
-    expect(refused({ ...settings, trades: MAX_SESSION_TRADES + 1 })).toBe(true);
+    expect(refused({ ...settings, trades: 21 })).toBe(true);
     expect(refused({ ...settings, trades: 2.5 })).toBe(true);
+  });
+
+  // #552: v3 counts cycles, v1/v2 keep their trades
+  it('reads v3 with cycles in [1, MAX_SESSION_CYCLES], and v2 and v1 with trades', () => {
+    expect(safeParseTradingSessionSettings(settingsV3).success).toBe(true);
+    expect(safeParseTradingSessionSettings({ ...settingsV3, cycles: 1 }).success).toBe(true);
+    expect(
+      safeParseTradingSessionSettings({ ...settingsV3, cycles: MAX_SESSION_CYCLES }).success,
+    ).toBe(true);
+    expect(safeParseTradingSessionSettings(settingsV2).success).toBe(true);
+    expect(safeParseTradingSessionSettings(settings).success).toBe(true);
+    expect(refused({ ...settingsV3, cycles: 0 })).toBe(true);
+    expect(refused({ ...settingsV3, cycles: MAX_SESSION_CYCLES + 1 })).toBe(true);
+    expect(refused({ ...settingsV3, trades: 5 })).toBe(true);
+    expect(refused({ ...settingsV2, cycles: 5 })).toBe(true);
+    expect(refused({ ...settingsV3, stake: settings.stake })).toBe(true);
+  });
+
+  // #552: no trade is shorter than the signal's shortest candle
+  it('refuses durationSec below MIN_SESSION_DURATION_SEC in every version', () => {
+    expect(MIN_SESSION_DURATION_SEC).toBe(5);
+    expect(MIN_SESSION_DURATION_SEC * 1000).toBe(SIGNAL_SHORTEST_INTERVAL_MS);
+    for (const row of [settings, settingsV2, settingsV3]) {
+      expect(refused({ ...row, durationSec: 4 })).toBe(true);
+      expect(safeParseTradingSessionSettings({ ...row, durationSec: 5 }).success).toBe(true);
+    }
   });
 
   it('refuses a non-integer or non-positive assetId and durationSec', () => {
@@ -65,7 +110,7 @@ describe('tradingSessionSettingsSchema', () => {
   });
 
   it('refuses an unknown version, an extra key, a missing key and the empty default', () => {
-    expect(refused({ ...settings, version: 3 })).toBe(true);
+    expect(refused({ ...settings, version: 4 })).toBe(true);
     expect(refused({ ...settings, strategy: 'martingale' })).toBe(true);
     expect(refused({ ...settings, stake: { ...settings.stake, limits: {} } })).toBe(true);
     expect(refused({ ...settings, trades: undefined })).toBe(true);
@@ -97,10 +142,6 @@ describe('tradingSessionSettingsSchema v2', () => {
     stake: { strategy: 'fixed', baseStake: '1', stakeScale: 2 },
   };
   const martingale = { ...fixed, stake: { ...fixed.stake, strategy: 'martingale', limits } };
-
-  it('writes version 2', () => {
-    expect(TRADING_SESSION_SETTINGS_VERSION).toBe(2);
-  });
 
   it('accepts fixed and martingale', () => {
     expect(safeParseTradingSessionSettings(fixed).success).toBe(true);
@@ -173,17 +214,18 @@ describe('buildSessionSettings (#450)', () => {
   const input = {
     assetId: 101,
     durationSec: 60,
-    trades: 5,
+    cycles: 5,
     stake: { baseStake: decimalStringSchema.parse('1.55'), stakeScale: 2 },
   };
 
-  it('writes v2 martingale with the limits of the base stake', () => {
+  it('writes v3 martingale with the limits of the base stake', () => {
+    expect(TRADING_SESSION_SETTINGS_VERSION).toBe(3);
     const built = buildSessionSettings({ ...input, strategy: 'martingale' });
     expect(built.success && built.data).toEqual({
-      version: 2,
+      version: 3,
       assetId: 101,
       durationSec: 60,
-      trades: 5,
+      cycles: 5,
       stake: {
         strategy: 'martingale',
         baseStake: '1.55',
@@ -198,7 +240,7 @@ describe('buildSessionSettings (#450)', () => {
     });
   });
 
-  it('writes v2 fixed without limits', () => {
+  it('writes v3 fixed without limits', () => {
     const built = buildSessionSettings({ ...input, strategy: 'fixed' });
     expect(built.success && built.data.stake).toEqual({
       strategy: 'fixed',
@@ -276,18 +318,21 @@ describe('createTradingSessionRequestSchema', () => {
     expect(safeParseCreateTradingSessionRequest({ ...request, mode: 'bogus' }).success).toBe(false);
   });
 
-  it('defaults trades to DEFAULT_SESSION_TRADES and keeps an explicit value', () => {
+  it('defaults cycles to DEFAULT_SESSION_CYCLES and keeps an explicit value', () => {
     const parsed = safeParseCreateTradingSessionRequest(request);
-    expect(parsed.success && parsed.data.trades).toBe(DEFAULT_SESSION_TRADES);
-    const explicit = safeParseCreateTradingSessionRequest({ ...request, trades: 7 });
-    expect(explicit.success && explicit.data.trades).toBe(7);
+    expect(parsed.success && parsed.data.cycles).toBe(DEFAULT_SESSION_CYCLES);
+    const explicit = safeParseCreateTradingSessionRequest({ ...request, cycles: 7 });
+    expect(explicit.success && explicit.data.cycles).toBe(7);
   });
 
-  it('refuses trades outside the settings bounds, an extra key, a bad id and a fractional asset', () => {
+  it('refuses cycles outside the settings bounds, trades, a short duration, an extra key, a bad id and a fractional asset', () => {
     const refusedRequest = (input: unknown) =>
       safeParseCreateTradingSessionRequest(input).success === false;
-    expect(refusedRequest({ ...request, trades: 0 })).toBe(true);
-    expect(refusedRequest({ ...request, trades: MAX_SESSION_TRADES + 1 })).toBe(true);
+    expect(refusedRequest({ ...request, cycles: 0 })).toBe(true);
+    expect(refusedRequest({ ...request, cycles: MAX_SESSION_CYCLES + 1 })).toBe(true);
+    expect(refusedRequest({ ...request, trades: 5 })).toBe(true);
+    expect(refusedRequest({ ...request, durationSec: 4 })).toBe(true);
+    expect(refusedRequest({ ...request, durationSec: 5 })).toBe(false);
     expect(refusedRequest({ ...request, stake: '1' })).toBe(true);
     expect(refusedRequest({ ...request, brokerAccountId: 'nope' })).toBe(true);
     expect(refusedRequest({ ...request, assetId: 1.5 })).toBe(true);
@@ -303,18 +348,67 @@ describe('createTradingSessionRequestSchema', () => {
 });
 
 describe('sessionFitsDeadline', () => {
+  // #552: martingale counts MARTINGALE_MAX_STEPS trades a cycle, fixed one
   it.each([
-    [5, 5, true],
-    [5, 15, true],
-    [5, 60, true],
-    [5, 300, true],
-    [5, 900, false],
-    [20, 60, true],
-    [20, 61, false],
-  ])('%i trades of %i s -> %s', (trades, durationSec, fits) => {
-    expect(sessionFitsDeadline(trades, durationSec)).toBe(fits);
+    ['martingale', 5, 5, true],
+    ['martingale', 5, 15, true],
+    ['martingale', 5, 60, true],
+    ['martingale', 5, 61, false],
+    ['martingale', 5, 300, false],
+    ['martingale', 7, 5, true],
+    ['martingale', 8, 5, false],
+    ['fixed', 5, 300, true],
+    ['fixed', 5, 900, false],
+    ['fixed', 20, 60, true],
+    ['fixed', 20, 61, false],
+  ] as const)('%s: %i cycles of %i s -> %s', (strategy, cycles, durationSec, fits) => {
+    expect(sessionFitsDeadline(cycles, durationSec, strategy)).toBe(fits);
   });
 });
+
+describe('sessionProgress (#552)', () => {
+  const counts = { settled: 3, won: 1 };
+  it('v1 and v2 count settled trades against settings.trades', () => {
+    expect(sessionProgress(safeParse(settings), counts)).toEqual({ planned: 5, done: 3 });
+    expect(sessionProgress(safeParse(settingsV2), counts)).toEqual({ planned: 5, done: 3 });
+  });
+  it('v3 martingale counts the wins: only a win closes a cycle', () => {
+    expect(sessionProgress(safeParse(settingsV3), counts)).toEqual({ planned: 5, done: 1 });
+  });
+  it('v3 fixed counts every settled trade as a cycle', () => {
+    const fixed = { ...settingsV3, stake: { strategy: 'fixed', baseStake: '1', stakeScale: 0 } };
+    expect(sessionProgress(safeParse(fixed), counts)).toEqual({ planned: 5, done: 3 });
+  });
+  it('nothing settled is nothing done', () => {
+    expect(sessionProgress(safeParse(settingsV3), { settled: 0, won: 0 })).toEqual({
+      planned: 5,
+      done: 0,
+    });
+  });
+});
+
+describe('MAX_SESSION_SUMMARY_TRADES (#552)', () => {
+  it('is the hour over the shortest trade', () => {
+    expect(MAX_SESSION_SUMMARY_TRADES).toBe(720);
+    expect(MAX_SESSION_SUMMARY_TRADES).toBe(
+      SESSION_MAX_DURATION_MS / (MIN_SESSION_DURATION_SEC * 1000),
+    );
+  });
+  it('bounds the summary trades', () => {
+    const trades = (n: number) =>
+      Array.from({ length: n }, () => ({ profit: '0', openPrice: 1, closePrice: 1 }));
+    const parse = (n: number) =>
+      safeParseSessionSummaryResponse({ summary: { result: '0', trades: trades(n) } }).success;
+    expect(parse(MAX_SESSION_SUMMARY_TRADES)).toBe(true);
+    expect(parse(MAX_SESSION_SUMMARY_TRADES + 1)).toBe(false);
+  });
+});
+
+function safeParse(input: unknown) {
+  const parsed = safeParseTradingSessionSettings(input);
+  if (!parsed.success) throw new Error('fixture settings do not parse');
+  return parsed.data;
+}
 
 const view = {
   id: '00000000-0000-4000-8000-000000000001',
@@ -324,7 +418,8 @@ const view = {
   settings,
   startedAt: '2026-10-07T10:00:00.000Z',
   endedAt: null,
-  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
+  trades: { settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
+  cycles: { planned: 5, closed: 0 },
   lastIntent: null,
   balance: null,
   noticesDone: false,

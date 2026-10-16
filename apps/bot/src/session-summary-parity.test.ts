@@ -21,8 +21,8 @@ const BALANCES: TradingSessionView['balance'][] = [
   { available: '10002.5' as DecimalString, ageSec: 0, current: true },
 ];
 const TRADES: TradingSessionView['trades'][] = [
-  { planned: 5, settled: 5, rejected: 0, won: 3, lost: 2, tied: 0, profit: '2.5' as DecimalString },
-  { planned: 5, settled: 3, rejected: 1, won: 1, lost: 1, tied: 1, profit: '-1' as DecimalString },
+  { settled: 5, rejected: 0, won: 3, lost: 2, tied: 0, profit: '2.5' as DecimalString },
+  { settled: 3, rejected: 1, won: 1, lost: 1, tied: 1, profit: '-1' as DecimalString },
 ];
 
 // what follows the status message's header and settings line, and the blank line under them

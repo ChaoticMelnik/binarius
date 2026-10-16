@@ -14,6 +14,8 @@ import {
   INT4_MAX,
   LinkBonusSkipReason,
   MAX_PAIR_DIGITS,
+  MAX_SESSION_CYCLES,
+  MAX_SESSION_SUMMARY_TRADES,
   SessionTradeResult,
   NotificationLevel,
   MomentumDirection,
@@ -54,7 +56,6 @@ import {
   LINK_ACTIVE,
   PAIR_EURUSD,
   sessionView,
-  SESSION_VIEW,
   SIGNAL_PARAMS,
 } from './testing';
 import {
@@ -293,14 +294,17 @@ const sessionTexts = (
                       status,
                       stopReason,
                       settings: {
-                        ...SESSION_VIEW.settings!,
                         version: 1,
                         assetId: INT4_MAX,
                         durationSec,
+                        trades: 5,
                         stake: { baseStake: STAKE, stakeScale: 8 },
                       },
+                      cycles: {
+                        planned: MAX_SESSION_CYCLES,
+                        closed: Math.min(settled, MAX_SESSION_CYCLES),
+                      },
                       trades: {
-                        planned: N,
                         settled,
                         rejected: 0,
                         won: N,
@@ -439,21 +443,24 @@ const REAL: Record<string, () => TelegramHtml[]> = {
         Object.values(TradeMode).flatMap((mode) =>
           SESSION_BALANCES.flatMap((balance) =>
             // each plural of the count
-            [N, 992, 991].map((settled) =>
-              notices.sessionSummaryText(symbol, INT4_MAX, {
-                mode,
-                stopReason,
-                trades: {
-                  planned: N,
-                  settled,
-                  rejected: 0,
-                  won: N,
-                  lost: N,
-                  tied: N,
-                  profit: USD,
-                },
-                balance,
-              }),
+            [N, 992, 991].flatMap((settled) =>
+              // each plural of the cycles (#552), at most MAX_SESSION_CYCLES
+              [MAX_SESSION_CYCLES, 4, 1].map((closed) =>
+                notices.sessionSummaryText(symbol, INT4_MAX, {
+                  mode,
+                  stopReason,
+                  cycles: { planned: MAX_SESSION_CYCLES, closed },
+                  trades: {
+                    settled,
+                    rejected: 0,
+                    won: N,
+                    lost: N,
+                    tied: N,
+                    profit: USD,
+                  },
+                  balance,
+                }),
+              ),
             ),
           ),
         ),
@@ -539,7 +546,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       ]),
     ].flatMap((saved) =>
       [false, true].flatMap((empty) =>
-        [999, 992, 991].flatMap((trades) =>
+        [MAX_SESSION_CYCLES, 4, 1].flatMap((cycles) =>
           DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) =>
             cycleStakeText({
               firstName: NAME,
@@ -554,7 +561,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
               },
               broker: brokerBalance(),
               empty,
-              trades,
+              cycles,
               ...(saved === undefined ? {} : { saved }),
             }),
           ),
@@ -571,7 +578,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       ]),
     ].flatMap((saved) =>
       [null, STAKE].flatMap((amount) =>
-        [999, 992, 991].flatMap((trades) =>
+        [MAX_SESSION_CYCLES, 4, 1].flatMap((cycles) =>
           DEMO_DURATIONS_SEC.flatMap((durationSec: DemoDurationSec) =>
             // the cycle's line by mode (#327)
             Object.values(TradeMode).map((mode) =>
@@ -580,7 +587,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
                 durationSec,
                 symbol: pairLabel(pair),
                 amount,
-                trades,
+                cycles,
                 saved,
                 mode,
               }),
@@ -609,6 +616,11 @@ afterEach(() => {
 });
 
 describe('the assembled messages, against the real assembly', () => {
+  // #552: a session's counters are as wide as the most trades it can hold
+  it('counts a session in sessionCount digits: MAX_SESSION_SUMMARY_TRADES fits', () => {
+    expect(String(MAX_SESSION_SUMMARY_TRADES).length).toBeLessThanOrEqual(W.sessionCount);
+  });
+
   it('describes every message the bot assembles', () => {
     expect(ASSEMBLED.map((m) => m.id).sort()).toEqual(Object.keys(REAL).sort());
   });

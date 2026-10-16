@@ -7,7 +7,8 @@ import {
   StakeRefusal,
   INT4_MAX,
   LinkBonusSkipReason,
-  MAX_SESSION_TRADES,
+  MAX_SESSION_CYCLES,
+  MAX_SESSION_SUMMARY_TRADES,
   MomentumDirection,
   NotificationLevel,
   StarsCreditOutcome,
@@ -1153,7 +1154,7 @@ describe('startSession', () => {
     mode: TradeMode.Demo,
     assetId: 101,
     durationSec: 60,
-    trades: 5,
+    cycles: 5,
   };
   const startWith = async (status: number, body: unknown) => {
     const served = await serve((_request, reply) => {
@@ -1785,22 +1786,28 @@ describe('body size', () => {
       lastError: longest(Object.values(TradeIntentFailureReason)),
       updatedAt: DATETIME,
     };
+    const LIMITS = {
+      maxSteps: NONNEGATIVE_INT,
+      maxStake: AMOUNT,
+      maxSessionLoss: AMOUNT,
+      maxSessionDurationMs: NONNEGATIVE_INT,
+    };
     const SESSION = {
       id: UUID,
       mode: longest(Object.values(TradeMode)),
       status: longest(Object.values(TradingSessionStatus)),
       stopReason: longest(Object.values(TradingSessionStopReason)),
       settings: {
-        version: 1,
+        version: 3,
         assetId: INT4_MAX,
         durationSec: INT4_MAX,
-        trades: MAX_SESSION_TRADES,
-        stake: { baseStake: AMOUNT, stakeScale: 8 },
+        cycles: MAX_SESSION_CYCLES,
+        stake: { strategy: 'martingale', baseStake: AMOUNT, stakeScale: 8, limits: LIMITS },
       },
       startedAt: DATETIME,
       endedAt: DATETIME,
+      cycles: { planned: NONNEGATIVE_INT, closed: NONNEGATIVE_INT },
       trades: {
-        planned: NONNEGATIVE_INT,
         settled: NONNEGATIVE_INT,
         rejected: NONNEGATIVE_INT,
         won: NONNEGATIVE_INT,
@@ -2023,7 +2030,7 @@ describe('body size', () => {
         sample: {
           summary: {
             result: DECIMAL,
-            trades: Array.from({ length: MAX_SESSION_TRADES }, () => ({
+            trades: Array.from({ length: MAX_SESSION_SUMMARY_TRADES }, () => ({
               profit: DECIMAL,
               openPrice: NUMBER,
               closePrice: NUMBER,

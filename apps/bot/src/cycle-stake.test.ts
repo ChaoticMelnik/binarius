@@ -69,7 +69,7 @@ const STARTED = {
   mode: TradeMode.Demo,
   assetId: PAIR_EURUSD.id,
   durationSec: 15,
-  trades: 5,
+  cycles: 5,
 };
 const httpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });

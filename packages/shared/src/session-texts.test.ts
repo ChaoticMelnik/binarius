@@ -31,7 +31,8 @@ const trade = (patch: Partial<SessionTradeNotice> = {}): SessionTradeNotice => (
 const view = (patch: Partial<SessionClosingView> = {}): SessionClosingView => ({
   mode: TradeMode.Demo,
   stopReason: TradingSessionStopReason.Completed,
-  trades: { planned: 5, settled: 5, rejected: 0, won: 3, lost: 2, tied: 0, profit: d('2.5') },
+  trades: { settled: 5, rejected: 0, won: 3, lost: 2, tied: 0, profit: d('2.5') },
+  cycles: { planned: 5, closed: 5 },
   balance: { available: d('10002.5'), ageSec: 0, current: true },
   ...patch,
 });
@@ -45,6 +46,16 @@ describe('the session words', () => {
     [21, 'сделка'],
   ])('%i takes «%s»', (count, word) => {
     expect(session.pluralTrades(count)).toBe(word);
+  });
+
+  it.each([
+    [1, '1 цикл'],
+    [2, '2 цикла'],
+    [5, '5 циклов'],
+    [11, '11 циклов'],
+    [21, '21 цикл'],
+  ])('%i cycles read «%s» (#552)', (count, words) => {
+    expect(session.cyclesCount(count)).toBe(words);
   });
 
   it('scores «в ноль» only when a trade tied', () => {
@@ -128,10 +139,21 @@ describe('sessionSummaryText (#464)', () => {
   it('a completed session: the pair, the completion line, the result and the balance', () => {
     expect(lines(view())).toEqual([
       '📈 EUR/USD OTC',
-      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
       '💰 Результат: +$2.50',
       '🧪 Демобаланс: $10\u00a0002.50',
     ]);
+  });
+
+  // #552: the cycles are the session's length, the trades and the score stay by trade
+  it('a completed session counts its cycles apart from its trades: 5 циклов, 8 сделок', () => {
+    const summary = lines(
+      view({
+        cycles: { planned: 5, closed: 5 },
+        trades: { settled: 8, rejected: 0, won: 5, lost: 3, tied: 0, profit: d('2.5') },
+      }),
+    );
+    expect(summary[1]).toBe('🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус');
   });
 
   it('a session the user stopped: its stop line and the total, never «завершена»', () => {

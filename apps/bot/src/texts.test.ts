@@ -140,6 +140,8 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   digits: text,
   step: text,
   cycle: text,
+  cycles: text,
+  cyclesPlanned: text,
   outcome: d('22.08'),
   openPrice: text,
   closePrice: text,
@@ -1005,10 +1007,10 @@ describe('the demo trade status', () => {
     expect(hint).toContain(`«${LABELS.refreshIntentButton}»`);
   });
 
-  // #360: the offer names the session its row starts, DEFAULT_SESSION_TRADES (5) trades
+  // #360: the offer names the session its row starts, DEFAULT_SESSION_CYCLES (5) cycles
   it('appends the session offer only when asked, after a blank line', () => {
     const offer =
-      '🤖 Дальше бот может торговать сам: сессия из 5 сделок на этой паре, сигнал он проверяет перед каждой сделкой.';
+      '🤖 Дальше бот может торговать сам: сессия из 5 циклов на этой паре, сигнал он проверяет перед каждой сделкой.';
     const view = intentView({ status: TradeIntentStatus.Accepted });
     expect(plainTextOf(intentStatusText(lbl('X'), view, { sessionOffer: true }))).toBe(
       [
@@ -1096,16 +1098,17 @@ describe('the demo session status', () => {
   const plainOf = (...args: Parameters<typeof sessionStatusText>) =>
     plainTextOf(sessionStatusText(...args));
 
-  it('T1 lays out a live session with its trade number, score with the result and the last trade', () => {
+  it('T1 lays out a live session with its cycle number, score with the result and the last trade', () => {
     const view = sessionView({
       trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.5') }),
+      cycles: { planned: 5, closed: 1 },
       lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
     });
     expect(plainOf(pairLabel(PAIR_EURUSD), view)).toBe(
       [
         '🎮 Демо-сессия',
         '📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00',
-        '🔢 Сделка 3 из 5',
+        '🔁 Цикл 2 из 5',
         '📊 Счёт: 1 в плюс, 1 в минус · -$0.50',
         '',
         '✅ Сделка открыта у брокера.',
@@ -1131,7 +1134,7 @@ describe('the demo session status', () => {
       [
         '🎮 Демо-сессия',
         '📈 X · ⏱ 15 с · ставка $1.00',
-        '🔢 Сделка 1 из 5',
+        '🔁 Цикл 1 из 5',
         '',
         '🔎 Ждём сигнал для следующей сделки…',
       ].join('\n'),
@@ -1143,17 +1146,28 @@ describe('the demo session status', () => {
     expect(plainOf(lbl('X'), afterSettle)).toContain('🔎 Ждём сигнал для следующей сделки…');
   });
 
+  // #552: a loss keeps the cycle, a win moves to the next one; the number never passes the plan
+  it('numbers the cycle by the closed ones, at most the planned', () => {
+    const cycleLine = (closed: number) =>
+      plainOf(lbl('X'), sessionView({ cycles: { planned: 5, closed } })).split('\n')[2];
+    expect(cycleLine(0)).toBe('🔁 Цикл 1 из 5');
+    expect(cycleLine(1)).toBe('🔁 Цикл 2 из 5');
+    expect(cycleLine(4)).toBe('🔁 Цикл 5 из 5');
+    expect(cycleLine(5)).toBe('🔁 Цикл 5 из 5');
+  });
+
   it('names a tie only when a trade tied', () => {
     const completed = (tied: number) =>
       stopped(TradingSessionStopReason.Completed, {
         trades: settled({ settled: 5, won: 3, lost: 2 - tied, tied }),
+        cycles: { planned: 5, closed: 5 },
       });
     expect(plainOf(lbl('X'), completed(0))).toContain(
-      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
     );
     expect(plainOf(lbl('X'), completed(0))).not.toContain('в ноль');
     expect(plainOf(lbl('X'), completed(1))).toContain(
-      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
     );
   });
 
@@ -1183,6 +1197,7 @@ describe('the demo session status', () => {
   const finished = (patch: Partial<TradingSessionView> = {}) =>
     stopped(TradingSessionStopReason.Completed, {
       trades: settled({ settled: 5, won: 3, lost: 2, profit: d('2.5') }),
+      cycles: { planned: 5, closed: 5 },
       lastIntent: intentView({ status: TradeIntentStatus.Settled }),
       balance: { available: d('10002.5'), ageSec: 0, current: true },
       ...patch,
@@ -1190,7 +1205,7 @@ describe('the demo session status', () => {
 
   it('T2 a completed demo session shows its result and the demo balance, with no age', () => {
     expect(plainOf(lbl('X'), finished()).split('\n').slice(3)).toEqual([
-      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
       '💰 Результат: +$2.50',
       nbsp('🧪 Демобаланс: $10 002.50'),
     ]);
@@ -1209,7 +1224,10 @@ describe('the demo session status', () => {
       plainOf(lbl('X'), finished({ balance: null }))
         .split('\n')
         .slice(3),
-    ).toEqual(['🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус', '💰 Результат: +$2.50']);
+    ).toEqual([
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
+      '💰 Результат: +$2.50',
+    ]);
   });
 
   it('T5 a real session shows the real balance', () => {
@@ -1333,8 +1351,8 @@ describe('the demo session status', () => {
           trades: 20,
           stake: { baseStake: '999999999999.99999999', stakeScale: 8 },
         },
+        cycles: { planned: 20, closed: 20 },
         trades: {
-          planned: 20,
           settled: 20,
           rejected: 20,
           won: 20,
@@ -1354,8 +1372,8 @@ describe('the demo session status', () => {
 
   it('renders a live session with the longest rejected line as valid Telegram HTML', () => {
     const view = sessionView({
+      cycles: { planned: 20, closed: 19 },
       trades: {
-        planned: 20,
         settled: 19,
         rejected: 20,
         won: 19,
@@ -1390,16 +1408,16 @@ describe('the demo session status', () => {
   });
 
   // not in LABELS, so the LABELS-wide checks above do not see it
-  it('labels the session button plain and emoji-led, with the number of trades', () => {
+  it('labels the session button plain and emoji-led, with the number of cycles', () => {
     const label = sessionStartButtonLabel(5, TradeMode.Demo);
-    expect(label).toBe('🚀 Сессия из 5 сделок');
+    expect(label).toBe('🚀 Сессия из 5 циклов');
     expect(label).not.toMatch(MARKUP_OR_ENTITY);
     expect(label).toMatch(/^\p{Extended_Pictographic}/u);
   });
 
   // #327: a real session's doors are marked as the real stake button is
   it('marks every session door REAL in real mode only', () => {
-    expect(sessionStartButtonLabel(5, TradeMode.Real)).toBe('🚀 Сессия из 5 сделок · REAL');
+    expect(sessionStartButtonLabel(5, TradeMode.Real)).toBe('🚀 Сессия из 5 циклов · REAL');
     expect(launchCycleButtonLabel(TradeMode.Real)).toBe('🚀 Запустить цикл · REAL');
     expect(launchCycleButtonLabel(TradeMode.Demo)).toBe('🚀 Запустить цикл');
     expect(sessionAgainButtonLabel(TradeMode.Real)).toBe('🔁 Ещё сессия · REAL');

@@ -14,7 +14,11 @@ import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 import { STARS_PAYSUPPORT_LIST_LIMIT } from './stars';
 import { INT4_MAX } from './trading';
-import { DEFAULT_SESSION_TRADES, SESSION_NO_SIGNAL_TIMEOUT_MS } from './trading-session';
+import {
+  DEFAULT_SESSION_CYCLES,
+  MAX_SESSION_CYCLES,
+  SESSION_NO_SIGNAL_TIMEOUT_MS,
+} from './trading-session';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
 // messages). A key's own limit is checked with its variables' samples; these descriptions bound
@@ -89,7 +93,7 @@ export const BOT_TEXT_WIDTHS = {
   durationFallback: 14,
   // the /account lines: POST /users/account answers at most this many links
   accountLines: USER_ACCOUNT_LIST_LIMIT,
-  // a session's counters: sessionFitsDeadline starts at most 60 trades
+  // a session's counters: a session holds at most MAX_SESSION_SUMMARY_TRADES (720) trades
   sessionCount: 3,
   // a Telegram username, 5-32 characters (stated: Telegram's rule, not a schema of ours)
   botUsername: 32,
@@ -166,6 +170,8 @@ const volatility = (m: BotTextMeasure, word: number) =>
 
 const trades = (m: BotTextMeasure) =>
   m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany');
+const cycles = (m: BotTextMeasure) =>
+  m.longest('sessionCycleOne', 'sessionCycleFew', 'sessionCycleMany');
 // a balance prints a number only when fresh, its stand-in otherwise (bot-text-vars.ts)
 const balance = (m: BotTextMeasure) => Math.max(w.usd, m.length('balanceUnavailable'));
 
@@ -216,8 +222,11 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
     indicator(w.price),
   price: () => w.price,
   seconds: () => w.retryAfterSec,
-  // a trade's number in its session: sessionFitsDeadline starts at most 60 trades
+  // a cycle's number in its session: under fixed every trade is a cycle, so up to sessionCount
   cycle: () => w.sessionCount,
+  // «5 циклов»: settings.cycles, at most MAX_SESSION_CYCLES
+  cycles: (m) => String(MAX_SESSION_CYCLES).length + 1 + cycles(m),
+  cyclesPlanned: () => String(MAX_SESSION_CYCLES).length,
   // a session trade's profit, a numeric(20,8) printed by formatSignedUsd (#539)
   outcome: () => w.signedUsd,
   // formatPrice with the pair's digits, or String() without them (session-texts.ts → priceOf)
@@ -227,8 +236,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   line: (m) => tradeLine(m, m.longest('actionUp', 'actionDown') + SEPARATOR),
   assetId: () => w.assetId,
   digits: () => w.stakeDigits,
-  // «3 из 5»
-  step: () => w.sessionCount + ' из '.length + w.sessionCount,
+  // a trade's step in its cycle (#551)
+  step: () => w.sessionCount,
   score,
   // a session's result: '-$999 999 999 999.99999999' or '+$…' (formatSignedUsd)
   profit: () => w.signedUsd,
@@ -249,7 +258,6 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
 
 const tradeNoticeWidths: Partial<Record<BotTextVarName, BotTextWidth>> = {
   stake: () => w.stake,
-  step: () => w.sessionCount,
 };
 
 // Where a key's real assembly is narrower than a variable's default width.
@@ -279,6 +287,8 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   intentStake: { amount: () => w.stake },
   // asset · duration · stake (texts.ts → sessionStatusText)
   sessionSettings: { line: (m) => tradeLine(m, 0) },
+  // the live session's cycle, at most settings.cycles (#552)
+  sessionCycle: { cycle: () => String(MAX_SESSION_CYCLES).length },
   sessionWon: { count: () => w.sessionCount },
   sessionLost: { count: () => w.sessionCount },
   sessionTied: { count: () => w.sessionCount },
@@ -289,7 +299,7 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   paysupportLineHeld: { stars: () => w.starAmount },
   paysupportLineRequested: { stars: () => w.starAmount },
   paysupportLineRefunded: { stars: () => w.starAmount },
-  // the card's column: a trade's number in its session, at most MAX_SESSION_TRADES
+  // the card's column: a trade's number in its session, at most MAX_SESSION_SUMMARY_TRADES
   sessionCardTrade: { count: () => w.sessionCount },
   // a session trade's stake is its intent's amount, never the minimum's label; its step is a
   // number in the session's series
@@ -304,9 +314,9 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   modeConfirm: { stake: () => w.stake },
   modeStakeOutOfBounds: { stake: () => w.stake },
   // the offer under a finished trade names the session its row starts, always
-  // DEFAULT_SESSION_TRADES — 5, «сделок» (texts.ts → intentStatusText, #360)
+  // DEFAULT_SESSION_CYCLES — 5, «циклов» (texts.ts → intentStatusText, #360)
   intentSessionOffer: {
-    trades: (m) => String(DEFAULT_SESSION_TRADES).length + 1 + m.length('sessionTradeMany'),
+    cycles: (m) => String(DEFAULT_SESSION_CYCLES).length + 1 + m.length('sessionCycleMany'),
   },
 };
 
@@ -697,7 +707,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     body: [
       ...sessionHead,
       '\n',
-      k('sessionStep'),
+      k('sessionCycle'),
       '\n',
       k('sessionScore'),
       '\n\n',

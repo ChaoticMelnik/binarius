@@ -389,7 +389,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(lastPayload(calls)?.text).toBe(savedCycle(d('5')).text.value);
     expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
-      `✅ Демо-ставка сохранена: $5.00\n\n🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
+      `✅ Демо-ставка сохранена: $5.00\n\n🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 циклов подряд и перед каждой сделкой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
     );
     expect(rowsOf(lastPayload(calls))).toEqual([
       [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00 ✅')],

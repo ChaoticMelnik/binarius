@@ -15,6 +15,7 @@ import {
   type TradingSessionSettings,
   type TradingSessionView,
   safeParseTradingSessionSettings,
+  sessionProgress,
 } from '@binarius/shared';
 import { nullableAgeSec } from './balance-snapshot-ops';
 import type { Db } from './client';
@@ -670,6 +671,9 @@ export async function readTradingSessionView(
 
       const parsed = safeParseTradingSessionSettings(session.settings);
       const settings = parsed.success ? parsed.data : null;
+      const settled = counts?.settled ?? 0;
+      const won = counts?.won ?? 0;
+      const progress = settings === null ? undefined : sessionProgress(settings, { settled, won });
       return {
         id: session.id,
         mode: session.mode,
@@ -679,14 +683,14 @@ export async function readTradingSessionView(
         startedAt: session.startedAt.toISOString(),
         endedAt: session.endedAt === null ? null : session.endedAt.toISOString(),
         trades: {
-          planned: settings === null ? 0 : settings.trades,
-          settled: counts?.settled ?? 0,
+          settled,
           rejected: counts?.rejected ?? 0,
-          won: counts?.won ?? 0,
+          won,
           lost: counts?.lost ?? 0,
           tied: counts?.tied ?? 0,
           profit: counts?.profit ?? ZERO_PROFIT,
         },
+        cycles: { planned: progress?.planned ?? 0, closed: progress?.done ?? 0 },
         lastIntent: last === undefined ? null : toTradeIntentView(last, telegramUserId),
         balance:
           session.available === null || session.ageSec === null

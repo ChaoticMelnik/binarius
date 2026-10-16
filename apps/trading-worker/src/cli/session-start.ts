@@ -9,10 +9,11 @@ import {
 } from '@binarius/db';
 import {
   DATABASE_URL_RULES,
-  DEFAULT_SESSION_TRADES,
+  DEFAULT_SESSION_CYCLES,
   errorLogFields,
   INT4_MAX,
-  MAX_SESSION_TRADES,
+  MAX_SESSION_CYCLES,
+  MIN_SESSION_DURATION_SEC,
   parseBoundedIntegerEnv,
   parseDemoOnlyEnv,
   parseSessionStakeStrategyEnv,
@@ -29,7 +30,7 @@ import {
   SESSION_START_REFUSALS,
 } from '../trading-session/start';
 
-// Starts a demo session of TRADES trades for a user's account (#287, docs/trading-session.md ->
+// Starts a demo session of CYCLES cycles for a user's account (#287, docs/trading-session.md ->
 // The CLI). The session id on stdout and exit 0; any refusal or failure on stderr and exit 1.
 // The orchestrator in the running worker picks the session up on its next tick.
 const EXIT_OK = 0;
@@ -41,7 +42,7 @@ interface CliEnv {
   accountId?: string;
   assetId: number;
   durationSec: number;
-  trades: number;
+  cycles: number;
   demoOnly: boolean;
   stakeStrategy: SessionStakeStrategy;
 }
@@ -63,14 +64,14 @@ export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
     durationSec: parseBoundedIntegerEnv(
       readEnv(source, 'DURATION_SEC', '15'),
       'DURATION_SEC',
-      1,
+      MIN_SESSION_DURATION_SEC,
       INT4_MAX,
     ),
-    trades: parseBoundedIntegerEnv(
-      readEnv(source, 'TRADES', String(DEFAULT_SESSION_TRADES)),
-      'TRADES',
+    cycles: parseBoundedIntegerEnv(
+      readEnv(source, 'CYCLES', String(DEFAULT_SESSION_CYCLES)),
+      'CYCLES',
       1,
-      MAX_SESSION_TRADES,
+      MAX_SESSION_CYCLES,
     ),
     // the same fuse as the worker's (#396): a future real mode of this CLI meets the guard
     demoOnly: parseDemoOnlyEnv(source),
@@ -86,7 +87,7 @@ const ACCOUNT_PICK_REFUSALS = {
 } as const;
 
 const PLAN_REFUSALS = {
-  session_too_long: 'Сессия не уложится в час: уменьшите TRADES или DURATION_SEC',
+  session_too_long: 'Сессия не уложится в час: уменьшите CYCLES или DURATION_SEC',
   zero_min_trade_amount: 'Минимальная ставка аккаунта — 0: из неё не получится ставка сессии',
   invalid_settings: 'Настройки сессии не проходят проверку',
 } as const;
@@ -135,7 +136,7 @@ export async function runSessionStartCli(
     const plan = planSessionStart({
       assetId: env.assetId,
       durationSec: env.durationSec,
-      trades: env.trades,
+      cycles: env.cycles,
       minTradeAmount: snapshot.minTradeAmount,
       strategy: env.stakeStrategy,
     });

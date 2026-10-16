@@ -1791,22 +1791,40 @@ describe('restart recovery (#131)', () => {
   });
 });
 
-// #450: the strategy and the limits come from the session's row (settings v2), the default
+// #450: the strategy and the limits come from the session's row (settings v3 since #552), the default
 // limits of a base stake of 1 at stakeScale 2 (docs/stake.md -> Defaults). The signal alternates,
 // so a series of losses is never the pause of #379.
 describe('martingale (#450)', () => {
-  const settingsOf = (strategy: SessionStakeStrategy, trades = 5) => {
+  const settingsOf = (strategy: SessionStakeStrategy, cycles = 5) => {
     const built = buildSessionSettings({
       assetId: 101,
       durationSec: 60,
-      trades,
+      cycles,
       stake: { baseStake: '1' as DecimalString, stakeScale: 2 },
       strategy,
     });
     if (!built.success) throw new Error('the test settings fail the schema');
     return built.data;
   };
-  const martingale = (trades = 5) => settingsOf(SessionStakeStrategy.Martingale, trades);
+  const martingale = (cycles = 5) => settingsOf(SessionStakeStrategy.Martingale, cycles);
+  // a row written before #552: the same stake, its length in trades
+  const settingsV2Of = (strategy: SessionStakeStrategy, trades: number) => {
+    const { assetId, durationSec, stake } = settingsOf(strategy);
+    return { version: 2, assetId, durationSec, trades, stake };
+  };
+  // the mock broker has no tie: a won trade's stored profit is set to the live broker's tie, 0
+  const tieOnce = async (
+    orchestrator: ReturnType<typeof orchestratorOf>,
+    seed: Awaited<ReturnType<typeof seedSession>>,
+  ) => {
+    const intent = await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await tmp.db
+      .update(brokerTrades)
+      .set({ profit: '0.00000000' as DecimalString })
+      .where(eq(brokerTrades.intentId, intent.id));
+  };
+  const statusOf = async (seed: Awaited<ReturnType<typeof seedSession>>) =>
+    (await sessionRow(seed.session.id))?.status;
   const alternating = () => {
     let calls = 0;
     return signalsOf(() => ({
@@ -1922,7 +1940,7 @@ describe('martingale (#450)', () => {
   });
 
   it.each<[string, () => unknown]>([
-    ['settings v2 fixed', () => settingsOf(SessionStakeStrategy.Fixed)],
+    ['settings v3 fixed', () => settingsOf(SessionStakeStrategy.Fixed)],
     [
       'settings v1',
       () => sessionSettings({ stake: { baseStake: '1' as DecimalString, stakeScale: 2 } }),
@@ -1957,8 +1975,38 @@ describe('martingale (#450)', () => {
     await orchestrator.stop();
   });
 
-  it('G9 the N-th trade completes the session in the middle of a series', async () => {
+  // #552: a session of N cycles ends on its N-th win, never in the middle of a series
+  it("G9' losses never complete a martingale session: two cycles end on the second win", async () => {
     const seed = await seedSession({ settings: martingale(2) });
+    const orchestrator = at(80);
+    await losses(orchestrator, seed, 2);
+    await orchestrator.tick();
+    expect(await statusOf(seed)).toBe(TradingSessionStatus.Active);
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '5.07000000']);
+    // the third intent is live: this tick holds it, the win settles it and closes one cycle
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await orchestrator.tick();
+    expect(await statusOf(seed)).toBe(TradingSessionStatus.Active);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+    });
+    expect(await amountsOf(seed.session.id)).toEqual([
+      '1.00000000',
+      '2.25000000',
+      '5.07000000',
+      '1.00000000',
+    ]);
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ msg: 'trading session completed', settled: 4, cycles: 2 }),
+    );
+    await orchestrator.stop();
+  });
+
+  it('G10 a settings v2 martingale row still completes on its N-th trade', async () => {
+    const seed = await seedSession({ settings: settingsV2Of(SessionStakeStrategy.Martingale, 2) });
     const orchestrator = at(80);
     await losses(orchestrator, seed, 2);
     await orchestrator.tick();
@@ -1967,6 +2015,37 @@ describe('martingale (#450)', () => {
       stopReason: TradingSessionStopReason.Completed,
     });
     expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000']);
+    await orchestrator.stop();
+  });
+
+  it('G11 under fixed every trade is a cycle: two losses complete two cycles', async () => {
+    const seed = await seedSession({ settings: settingsOf(SessionStakeStrategy.Fixed, 2) });
+    const orchestrator = at(80);
+    await losses(orchestrator, seed, 2);
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+    });
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '1.00000000']);
+    await orchestrator.stop();
+  });
+
+  it('G12 a tie does not close the cycle: one cycle ends on the win after it', async () => {
+    const seed = await seedSession({ settings: martingale(1) });
+    const orchestrator = at(80);
+    await losses(orchestrator, seed, 1);
+    await tieOnce(orchestrator, seed);
+    await orchestrator.tick();
+    expect(await statusOf(seed)).toBe(TradingSessionStatus.Active);
+    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '2.25000000']);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+    });
+    expect(await amountsOf(seed.session.id)).toHaveLength(3);
     await orchestrator.stop();
   });
 });
