@@ -84,8 +84,16 @@ const candidates = (options: { limit?: number; exclude?: string[] } = {}) =>
 
 describe('listServiceBrokerAccounts (the #404 contract)', () => {
   it('O1: returns the working marked accounts only, oldest mark first, as id, broker id and date', async () => {
-    const later = await account({ serviceSince: at(`now() - interval '1 hour'`) });
-    const earlier = await account({ serviceSince: at(`now() - interval '2 hours'`) });
+    // the larger id has the older mark, so the order by id alone is the reverse of the right one
+    const [low = '', high = ''] = [await account(), await account()].sort();
+    const markedAgo = (id: string, hours: number) =>
+      tmp.db
+        .update(brokerAccounts)
+        .set({ serviceSince: sql`now() - make_interval(hours => ${hours})` })
+        .where(eq(brokerAccounts.id, id));
+    await markedAgo(high, 2);
+    await markedAgo(low, 1);
+    const [earlier, later] = [high, low];
     await account({ serviceSince: null });
     await account({ status: BrokerAccountStatus.Revoked });
     await account({ status: BrokerAccountStatus.Pending });
