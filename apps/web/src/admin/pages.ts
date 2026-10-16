@@ -894,7 +894,7 @@ export const tokensHref = (query: AdminTokensQuery): string => {
 };
 
 // At most one reference is set (token_ledger_reference_check). Only an intent has a page to link
-// to; a deposit, a broker account and a Stars payment are printed as their ids.
+// to; a deposit, a broker account, a Stars payment and a referral (#116) are printed as their ids.
 const ledgerReference = (entry: AdminLedgerEntry): SafeHtml | string => {
   if (entry.intentId !== null) {
     return html`<a href="/admin/intents/${entry.intentId}">${entry.intentId}</a>`;
@@ -902,6 +902,7 @@ const ledgerReference = (entry: AdminLedgerEntry): SafeHtml | string => {
   if (entry.depositEventId !== null) return code(entry.depositEventId);
   if (entry.brokerAccountId !== null) return code(entry.brokerAccountId);
   if (entry.starPaymentId !== null) return code(entry.starPaymentId);
+  if (entry.referralId !== null) return code(entry.referralId);
   if (entry.refType !== null && entry.refId !== null) {
     return code(`${entry.refType}:${entry.refId}`);
   }

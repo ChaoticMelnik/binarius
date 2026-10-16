@@ -329,6 +329,8 @@ export const adminLedgerEntrySchema = z.strictObject({
   brokerAccountId: z.uuid().nullable(),
   // a Stars purchase's payment (#117)
   starPaymentId: z.uuid().nullable(),
+  // an inviter's reward's referral (#116)
+  referralId: z.uuid().nullable(),
   refType: tokenLedgerRefTypeSchema.nullable(),
   // the bare uuid column, so UUID_PATTERN rather than z.uuid(): zod 4's RFC 9562 check refuses
   // ids PostgreSQL stores, and one such row would fail every page that lists it (#348)

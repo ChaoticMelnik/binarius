@@ -1723,11 +1723,12 @@ describe('the token ledger page and the card section (#109)', () => {
     expect(response.body).not.toContain(TEXTS.tokensFirst);
   });
 
-  it('prints a deposit, an account, a Stars payment and a manual reference as ids, and none for a missing note', async () => {
+  it('prints a deposit, an account, a Stars payment, a referral and a manual reference as ids, and none for a missing note', async () => {
     const deposit = '00000000-0000-4000-8000-0000000000d7';
     const account = '00000000-0000-4000-8000-0000000000d8';
     const ref = '00000000-0000-4000-8000-0000000000d9';
     const payment = '00000000-0000-4000-8000-0000000000da';
+    const referral = '00000000-0000-4000-8000-0000000000db';
     await app.close();
     app = build({
       tokens: () =>
@@ -1738,19 +1739,21 @@ describe('the token ledger page and the card section (#109)', () => {
             { ...SAMPLE_LEDGER_ADJUSTMENT, kind: 'bonus', brokerAccountId: account },
             { ...SAMPLE_LEDGER_ADJUSTMENT, refType: 'manual', refId: ref },
             { ...SAMPLE_LEDGER_ADJUSTMENT, kind: 'purchase', starPaymentId: payment, note: null },
+            { ...SAMPLE_LEDGER_ADJUSTMENT, kind: 'bonus', referralId: referral },
           ],
         }),
     });
 
     const response = await get('/admin/tokens', withCookie);
 
-    const [purchase = '', bonus = '', manual = '', stars = ''] = rowsOf(response.body);
+    const [purchase = '', bonus = '', manual = '', stars = '', reward = ''] = rowsOf(response.body);
     expect(purchase).toMatch(
       new RegExp(`<td><code>${deposit}</code></td>\\s*<td>\\s*—\\s*</td>\\s*</tr>`),
     );
     expect(bonus).toContain(`<td><code>${account}</code></td>`);
     expect(manual).toContain(`<td><code>manual:${ref}</code></td>`);
     expect(stars).toContain(`<td><code>${payment}</code></td>`);
+    expect(reward).toContain(`<td><code>${referral}</code></td>`);
   });
 
   it('says so when there are no entries, and keeps the filter in the first-page link', async () => {
