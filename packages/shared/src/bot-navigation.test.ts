@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CASHIER_PAGE_PATH, cashierUrlOf, demoAnalysisCallbackData } from './bot-navigation';
+import {
+  CASHIER_PAGE_PATH,
+  SESSION_STOP_PATTERN,
+  cashierUrlOf,
+  demoAnalysisCallbackData,
+  sessionStopCallbackData,
+} from './bot-navigation';
 
 describe('cashierUrlOf (#27)', () => {
   it('puts the cashier page under an https origin', () => {
@@ -19,4 +25,34 @@ describe('demoAnalysisCallbackData (#484)', () => {
     expect(longest).toBe('demo:an:2147483647:15');
     expect(new TextEncoder().encode(longest).length).toBe(21);
   });
+});
+
+describe('the session stop button (#536)', () => {
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+
+  it('carries the id, and `:w` under the waiting message, within 64 bytes', () => {
+    expect(sessionStopCallbackData(id)).toBe(`session:stop:${id}`);
+    expect(sessionStopCallbackData(id, { waiting: true })).toBe(`session:stop:${id}:w`);
+    expect(new TextEncoder().encode(sessionStopCallbackData(id))).toHaveLength(49);
+    expect(new TextEncoder().encode(sessionStopCallbackData(id, { waiting: true }))).toHaveLength(
+      51,
+    );
+  });
+
+  it('matches both forms and says which', () => {
+    expect(SESSION_STOP_PATTERN.exec(sessionStopCallbackData(id))?.slice(1)).toEqual([
+      id,
+      undefined,
+    ]);
+    expect(
+      SESSION_STOP_PATTERN.exec(sessionStopCallbackData(id, { waiting: true }))?.slice(1),
+    ).toEqual([id, 'w']);
+  });
+
+  it.each([`session:${id}`, `session:stop:${id}:x`, `session:stop:${id}:`, 'session:stop:nope'])(
+    'does not match %s',
+    (data) => {
+      expect(SESSION_STOP_PATTERN.test(data)).toBe(false);
+    },
+  );
 });

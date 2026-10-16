@@ -71,6 +71,17 @@ export const tradingSessions = pgTable(
     // forgetSessionStatusMessage's (the same id, the owner) once the bot reports it lost; read by
     // listTrackedSessions.
     statusMessageId: integer('status_message_id'),
+    // The waiting message under the session's messages (#536, docs/bot-session.md → The waiting
+    // message): Telegram's message_id of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there
+    // is none (not sent, deleted, or its send's outcome unknown); and its slot, the cycle message
+    // it was claimed after (`coalesce(cycle_message_id, 0)`, 0 before any cycle message), NULL
+    // until a waiting message was first claimed. Written only by the backend's sender:
+    // claimSessionWaiting's CAS claims the slot before the send, recordSessionWaitingMessage
+    // writes the id after it, releaseSessionWaiting frees the slot after a certain refusal,
+    // clearSessionWaitingMessage drops the id after the delete. A new cycle message leaves the
+    // slot behind, and the waiting message is then deleted and sent again under it.
+    waitingMessageId: integer('waiting_message_id'),
+    waitingAfterMessage: integer('waiting_after_message'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -102,6 +113,13 @@ export const tradingSessions = pgTable(
     check('trading_sessions_cycle_message_id_check', sql`${t.cycleMessageId} > 0`),
     check('trading_sessions_cycle_message_from_check', sql`${t.cycleMessageFrom} >= 0`),
     check('trading_sessions_status_message_id_check', sql`${t.statusMessageId} > 0`),
+    check('trading_sessions_waiting_message_id_check', sql`${t.waitingMessageId} > 0`),
+    check('trading_sessions_waiting_after_message_check', sql`${t.waitingAfterMessage} >= 0`),
+    // a live waiting message always stands on a claimed slot
+    check(
+      'trading_sessions_waiting_pair_check',
+      sql`${t.waitingMessageId} is null or ${t.waitingAfterMessage} is not null`,
+    ),
     uniqueIndex('trading_sessions_active_account_idx')
       .on(t.brokerAccountId)
       .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),

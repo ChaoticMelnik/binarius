@@ -428,6 +428,13 @@
       "when": 1792222608776,
       "tag": "0060_referral_reward",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792223564014,
+      "tag": "0061_session_waiting_message",
+      "breakpoints": true
     }
   ]
 }

@@ -50,9 +50,27 @@ const finishedSql = sql<boolean>`(${tradingSessions.status} = ${literal(TradingS
      and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
 ))`;
 
+// The waiting message (#536, docs/bot-session.md → The waiting message). Its slot is the cycle
+// message it stands under, 0 before any: an edit of a step keeps it, a new cycle message leaves it
+// behind. These two predicates alone decide what the sender does with it.
+const cycleSlotSql = sql<number>`coalesce(${tradingSessions.cycleMessageId}, 0)`;
+
+// The fragment both the list and the claim take: an active session with no live waiting message,
+// whose slot was not claimed yet, under a message of the session - the bot's status message
+// (#567) or a cycle message - so the waiting message never stands above the session's message.
+const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${cycleSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.cycleMessageId} is not null))`;
+
+// due: a waiting message is to be sent; nothing goes to a user who blocked the bot (Rule 19)
+const waitingDueSql = sql<boolean>`(${waitingClaimableSql} and ${users.telegramBlockedAt} is null)`;
+
+// stale: the live waiting message is to be deleted - the session stopped, or a new cycle message
+// went out under it
+const waitingStaleSql = sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or ${tradingSessions.waitingAfterMessage} <> ${cycleSlotSql}))`;
+
 export interface PendingSessionNotice {
   sessionId: string;
   mode: TradeMode;
+  status: TradingSessionStatus;
   // raw: the sender parses it
   settings: unknown;
   // the cursor: settled trades claimed so far
@@ -63,10 +81,14 @@ export interface PendingSessionNotice {
   telegramUserId: bigint;
   // users.telegram_blocked_at is set: nothing can be delivered (Rule 19)
   telegramBlocked: boolean;
+  // the live waiting message's id, NULL when there is none
+  waitingMessageId: number | null;
+  waitingDue: boolean;
 }
 
-// The sessions with something to send: no summary yet, and a settled trade past the cursor or a
-// finished session. Oldest first, on trading_sessions_notice_pending_idx.
+// The sessions with something to send: no summary yet, and a settled trade past the cursor, a
+// finished session, or a waiting message to send or to delete. Oldest first, on
+// trading_sessions_notice_pending_idx.
 export async function listPendingSessionNotices(
   db: Db,
   { limit }: { limit: number },
@@ -81,6 +103,9 @@ export async function listPendingSessionNotices(
       finished: finishedSql,
       telegramUserId: users.telegramUserId,
       telegramBlocked: sql<boolean>`${users.telegramBlockedAt} is not null`,
+      status: tradingSessions.status,
+      waitingMessageId: tradingSessions.waitingMessageId,
+      waitingDue: waitingDueSql,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -88,7 +113,7 @@ export async function listPendingSessionNotices(
     .where(
       and(
         isNull(tradingSessions.finalNoticeSentAt),
-        sql`(${settledCountSql} > ${tradingSessions.notifiedTrades} or ${finishedSql})`,
+        sql`(${settledCountSql} > ${tradingSessions.notifiedTrades} or ${finishedSql} or ${waitingDueSql} or ${waitingStaleSql})`,
       ),
     )
     .orderBy(asc(tradingSessions.createdAt), asc(tradingSessions.id))
@@ -237,7 +262,8 @@ export async function releaseSessionTradeNotice(
 }
 
 // The summary's at-most-once claim: one CAS sets final_notice_sent_at only on a finished session
-// whose every settled trade was claimed first, so the summary is the last message. A finished
+// whose every settled trade was claimed first and whose waiting message is gone (#536), so the
+// summary is the last message. A finished
 // session with no settled trade is granted too: the sender then sends nothing (no result to
 // report, as #337 and #318).
 export async function claimSessionFinalNotice(
@@ -253,6 +279,7 @@ export async function claimSessionFinalNotice(
         isNull(tradingSessions.finalNoticeSentAt),
         finishedSql,
         sql`${tradingSessions.notifiedTrades} = ${settledCountSql}`,
+        isNull(tradingSessions.waitingMessageId),
       ),
     )
     .returning({ id: tradingSessions.id });
@@ -275,6 +302,87 @@ export async function releaseSessionFinalNotice(
         isNotNull(tradingSessions.finalNoticeSentAt),
         isNull(tradingSessions.summarySentAt),
       ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+// Claims the waiting message's slot before the send (#536): one CAS on a claimable session sets
+// the slot to its current cycle message, so at most one waiting message goes out per slot. The
+// slot, or undefined when the CAS lost (another sender, or nothing to claim).
+export async function claimSessionWaiting(
+  db: Db,
+  { sessionId }: { sessionId: string },
+): Promise<{ slot: number } | undefined> {
+  const [won] = await db
+    .update(tradingSessions)
+    .set({ waitingAfterMessage: cycleSlotSql })
+    .where(
+      and(
+        eq(tradingSessions.id, sessionId),
+        waitingClaimableSql,
+        isNull(tradingSessions.finalNoticeSentAt),
+      ),
+    )
+    .returning({ slot: tradingSessions.waitingAfterMessage });
+  if (won === undefined) return undefined;
+  if (won.slot === null) throw new Error(`session ${sessionId} claimed no waiting slot`);
+  return { slot: won.slot };
+}
+
+// Records the sent waiting message's id on its slot: one CAS, only while the slot is still the
+// claimed one without an id and the session is active. False when refused: the sender then
+// deletes its own message.
+export async function recordSessionWaitingMessage(
+  db: Db,
+  { sessionId, slot, messageId }: { sessionId: string; slot: number; messageId: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ waitingMessageId: messageId })
+    .where(
+      and(
+        eq(tradingSessions.id, sessionId),
+        eq(tradingSessions.waitingAfterMessage, slot),
+        isNull(tradingSessions.waitingMessageId),
+        eq(tradingSessions.status, TradingSessionStatus.Active),
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+// Frees a claimed slot after a send Telegram certainly did not deliver (429, a definite refusal),
+// so the waiting message goes again. False when an id was recorded or the slot moved.
+export async function releaseSessionWaiting(
+  db: Db,
+  { sessionId, slot }: { sessionId: string; slot: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ waitingAfterMessage: null })
+    .where(
+      and(
+        eq(tradingSessions.id, sessionId),
+        eq(tradingSessions.waitingAfterMessage, slot),
+        isNull(tradingSessions.waitingMessageId),
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+// Drops the waiting message's id after its delete (or once it cannot be deleted): one CAS on that
+// id. The slot stays, so the same slot is not claimed again. False when the id is not that one.
+export async function clearSessionWaitingMessage(
+  db: Db,
+  { sessionId, messageId }: { sessionId: string; messageId: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ waitingMessageId: null })
+    .where(
+      and(eq(tradingSessions.id, sessionId), eq(tradingSessions.waitingMessageId, messageId)),
     )
     .returning({ id: tradingSessions.id });
   return rows.length > 0;
