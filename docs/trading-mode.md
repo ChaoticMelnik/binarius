@@ -116,7 +116,7 @@ an `error` line and nothing more, anything else → `bot.catch`). The screen:
 💵 Реальный баланс: $X                 — with a snapshot; «нет свежих данных» when it is not fresh
 💼 Сумма реальной сделки: $Y           — with a snapshot; Y = realStake ?? minTradeAmount
 (a blank line)
-⚠️ В реальном режиме сделки и сессии идут на реальные деньги.
+⚠️ В реальном режиме сделки и сессии идут на реальные деньги. В сессии ставка растёт после проигрыша.
 ⏹ Смена режима останавливает активную сессию.
 ⏸ Торговля сейчас приостановлена — …   — only while the switch is closed
 ```
@@ -270,8 +270,8 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 - **#473** — `/stop` returning the user to demo, after #474 (it calls the bot's `setTradingMode`).
 - **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)).
   **#327** (shipped) — real sessions.
-- **#450** — the Martingale of a session: whichever of #474 and #450 merges second adds «В сессии
-  ставка растёт после проигрыша.» to `modeWarning` (#474 clarify 1).
+- **#450** — the Martingale of a session: #450 merged first, so #474 added «В сессии ставка
+  растёт после проигрыша.» to `modeWarning` (#474 clarify 1).
 - **#37** — the grant for real trades with Binodex. The real branch of `open_trade` was not
   observed live ([broker-rest.md](broker-rest.md) → Observed live: one demo trade); the mock
   broker holds both modes.
