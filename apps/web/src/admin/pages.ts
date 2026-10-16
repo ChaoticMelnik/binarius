@@ -1,4 +1,5 @@
 import {
+  ServiceAccountNotWorkingReason,
   BOT_TEXT_CATALOG,
   BOT_TEXT_VARS,
   BOT_TEXT_GROUP_TITLES,
@@ -39,6 +40,8 @@ import {
   type AdminBrokerAccountListItem,
   type AdminBrokerAccountsQuery,
   type AdminBrokerAccountView,
+  type AdminServiceAccountsResponse,
+  type AdminServiceAccountView,
   type AdminDepositsQuery,
   type AdminDepositView,
   type AdminIntentsQuery,
@@ -140,6 +143,8 @@ const whenOrNone = (iso: string | null): SafeHtml | string =>
 const orNone = (value: string | null): string => value ?? TEXTS.none;
 const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 
+export const SERVICE_ACCOUNTS_PATH = '/admin/service-accounts';
+
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
 export type AdminNavKey =
@@ -152,7 +157,8 @@ export type AdminNavKey =
   | 'audit'
   | 'botTexts'
   | 'deposits'
-  | 'brokerAccounts';
+  | 'brokerAccounts'
+  | 'serviceAccounts';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
@@ -165,6 +171,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'botTexts', href: '/admin/bot-texts', label: TEXTS.navBotTexts },
   { key: 'deposits', href: '/admin/deposits', label: TEXTS.navDeposits },
   { key: 'brokerAccounts', href: '/admin/broker-accounts', label: TEXTS.navBrokerAccounts },
+  { key: 'serviceAccounts', href: SERVICE_ACCOUNTS_PATH, label: TEXTS.navServiceAccounts },
 ];
 
 /**
@@ -413,10 +420,22 @@ export const usersPage = (
       </p>`,
   });
 
+// --- Service accounts (#391, docs/service-accounts.md) -------------------------------------------
+
+// The one form that marks or unmarks: the card, the list and the service page each post it with
+// their own path to come back to.
+const serviceMarkForm = (accountId: string, service: boolean, returnPath: string): SafeHtml =>
+  html`<form method="post" action="/admin/broker-accounts/${accountId}/service">
+    <input type="hidden" name="service" value="${service ? 'on' : 'off'}" />
+    <input type="hidden" name="return" value="${returnPath}" />
+    <button type="submit">${service ? TEXTS.serviceMark : TEXTS.serviceUnmark}</button>
+  </form>`;
+
 // The accounts table of the list (#342, with the owner column) and of the user card (without it):
 // one set of columns. The account id is the uuid the ledger's «Основание» and the intent card print.
 const brokerAccountsTable = <T extends AdminBrokerAccountView>(
   accounts: readonly T[],
+  returnPath: string,
   owner?: (account: T) => SafeHtml,
 ): SafeHtml =>
   html`<table>
@@ -433,6 +452,7 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
         <th>${TEXTS.columnHaltedReason}</th>
         <th>${TEXTS.columnTokenExpiresAt}</th>
         <th>${TEXTS.columnTokenRotatedAt}</th>
+        <th>${TEXTS.columnService}</th>
         <th>${TEXTS.columnUserCreatedAt}</th>
         <th>${TEXTS.columnUpdatedAt}</th>
       </tr>
@@ -452,6 +472,14 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
             <td>${orNone(account.haltedReason)}</td>
             <td>${when(account.accessTokenExpiresAt)}</td>
             <td>${whenOrNone(account.tokenRotatedAt)}</td>
+            <td>
+              ${
+                account.serviceSince === null
+                  ? serviceMarkForm(account.id, true, returnPath)
+                  : html`${when(account.serviceSince)}
+                    ${serviceMarkForm(account.id, false, returnPath)}`
+              }
+            </td>
             <td>${when(account.createdAt)}</td>
             <td>${when(account.updatedAt)}</td>
           </tr>`,
@@ -573,7 +601,7 @@ export const userPage = (
       ${
         brokerAccounts.length === 0
           ? html`<p>${TEXTS.brokerAccountsEmpty}</p>`
-          : brokerAccountsTable(brokerAccounts)
+          : brokerAccountsTable(brokerAccounts, `/admin/users/${user.id}`)
       }
       <h2>${TEXTS.userTrading}</h2>
       <p>${TEXTS.userIntentsCounts(intents.total, intents.active)}</p>
@@ -1249,6 +1277,7 @@ export const brokerAccountsPage = (
           ? html`<p>${TEXTS.brokerAccountsEmpty}</p>`
           : brokerAccountsTable(
               accounts,
+              '/admin/broker-accounts',
               (account) =>
                 html`<a href="/admin/users/${account.userId}">${account.telegramUserId}</a>`,
             )
@@ -1269,6 +1298,71 @@ export const brokerAccountsPage = (
       </p>`,
   });
 };
+
+// «нет: отозван (refresh_outcome_unknown)»: the revocation's own reason is the one detail that
+// tells a failed exchange from a user's re-login to wait for
+const notWorkingLabel = (account: AdminServiceAccountView): string => {
+  if (account.notWorkingReason === null) return TEXTS.serviceWorking;
+  const label = TEXTS.serviceReason[account.notWorkingReason];
+  return TEXTS.serviceNotWorking(
+    account.notWorkingReason === ServiceAccountNotWorkingReason.Revoked &&
+      account.authRevokedReason !== null
+      ? `${label} (${account.authRevokedReason})`
+      : label,
+  );
+};
+
+export const serviceAccountsPage = ({
+  me,
+  min,
+  working,
+  accounts,
+}: AdminServiceAccountsResponse): SafeHtml =>
+  adminShell({
+    title: TEXTS.serviceAccountsTitle,
+    active: 'serviceAccounts',
+    login: me.login,
+    body: html`<h1>${TEXTS.serviceAccountsHeading}</h1>
+      <p class="counter">${TEXTS.serviceAccountsCounter(working, min, accounts.length)}</p>
+      <p class="hint">${TEXTS.serviceAccountsHint}</p>
+      ${
+        accounts.length === 0
+          ? html`<p>${TEXTS.serviceAccountsEmpty}</p>`
+          : html`<table>
+              <thead>
+                <tr>
+                  <th>${TEXTS.columnEmail}</th>
+                  <th>${TEXTS.columnBrokerUserId}</th>
+                  <th>${TEXTS.columnTelegramId}</th>
+                  <th>${TEXTS.columnStatus}</th>
+                  <th>${TEXTS.columnWorking}</th>
+                  <th>${TEXTS.columnTokenExpiresAt}</th>
+                  <th>${TEXTS.columnTokenRotatedAt}</th>
+                  <th>${TEXTS.columnServiceSince}</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${accounts.map(
+                  (account) =>
+                    html`<tr>
+                      <td>${orNone(account.email)}</td>
+                      <td>${account.brokerUserId}</td>
+                      <td>
+                        <a href="/admin/users/${account.userId}">${account.telegramUserId}</a>
+                      </td>
+                      <td>${TEXTS.accountStatus[account.status]}</td>
+                      <td>${notWorkingLabel(account)}</td>
+                      <td>${when(account.accessTokenExpiresAt)}</td>
+                      <td>${whenOrNone(account.tokenRotatedAt)}</td>
+                      <td>${whenOrNone(account.serviceSince)}</td>
+                      <td>${serviceMarkForm(account.id, false, SERVICE_ACCOUNTS_PATH)}</td>
+                    </tr>`,
+                )}
+              </tbody>
+            </table>`
+      }`,
+  });
 
 // --- Bot texts (#300, docs/admin-pages.md → Bot texts) -----------------------------------------
 

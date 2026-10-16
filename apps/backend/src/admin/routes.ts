@@ -41,13 +41,16 @@ import {
   safeParseAdminLinkCompleteRequest,
   safeParseAdminLinkInspectRequest,
   safeParseAdminLoginRequest,
+  safeParseAdminServiceMarkRequest,
   safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   LinkState,
+  SERVICE_ACCOUNTS_MIN,
   STAFF_SESSION_TOKEN_PATTERN,
   UUID_PATTERN,
+  type AdminServiceMarkResponse,
   type AdminTokenAdjustmentResponse,
   type StaffSessionView,
 } from '@binarius/shared';
@@ -80,7 +83,9 @@ import {
   listTradingSessionsForAdmin,
   listUsersForAdmin,
   markChallengePromptSent,
+  listServiceAccountStates,
   readAdminOverview,
+  readBrokerAccountForAdmin,
   readIntentForAdmin,
   readLiveStaffContext,
   readUserForAdmin,
@@ -91,6 +96,7 @@ import {
   registerPasswordFailure,
   revokeStaffSession,
   runAsStaff,
+  setServiceMark,
   StaffLoginChallengeStatus,
   StaffStatus,
   startLoginChallenge,
@@ -101,6 +107,7 @@ import {
   toAdminDepositView,
   toAdminLedgerEntry,
   toAdminOverview,
+  toAdminServiceAccountView,
   toAdminTradeIntentView,
   toAdminTradingSessionView,
   toAdminUserDetail,
@@ -1463,6 +1470,78 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
               };
             }
           }
+        },
+      );
+      if (answer === undefined) return reply;
+      if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
+      return reply.send(answer);
+    },
+  );
+
+  // --- Service accounts (#391, docs/service-accounts.md) ------------------------------------------
+
+  app.get('/admin/service-accounts', async (request, reply) => {
+    const path = '/admin/service-accounts';
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const states = await listServiceAccountStates(tx);
+      return {
+        result: {
+          me: meOf(ctx),
+          min: SERVICE_ACCOUNTS_MIN,
+          working: states.filter((state) => state.working).length,
+          accounts: states.map(toAdminServiceAccountView),
+        },
+        audit: { action: AuditAction.ServiceAccountsViewed, payload: { path } },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // 200 on every outcome of a known account, 404 on an unknown one. No lockStaff — only the
+  // caller's own session row is touched; the UPDATE then takes the broker_accounts row, and no
+  // writer takes broker_accounts before a staff table (Rule 5).
+  app.post(
+    '/admin/broker-accounts/:id/service',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      // before the session: a body outside the schema costs no transaction and leaves no row
+      const parsed = safeParseAdminServiceMarkRequest(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { service } = parsed.data;
+      const accountId = (request.params as { id?: unknown }).id;
+      const path = '/admin/broker-accounts/:id/service';
+      const action = service
+        ? AuditAction.BrokerAccountServiceSet
+        : AuditAction.BrokerAccountServiceCleared;
+      const answer = await asStaff(
+        request,
+        reply,
+        async (tx, ctx): Promise<StaffActionResult<AdminServiceMarkResponse | null>> => {
+          // an id that is not a uuid is arbitrary input, so it is not recorded (as token_adjusted)
+          if (typeof accountId !== 'string' || !UUID_PATTERN.test(accountId)) {
+            return { result: null, audit: { action, payload: { path, result: 'not_found' } } };
+          }
+          const outcome = await setServiceMark(tx, { accountId, service });
+          const audit = {
+            action,
+            entity: { type: AuditEntityType.BrokerAccount, id: accountId },
+            payload: { path, result: outcome, accountId },
+          };
+          if (outcome === 'not_found') {
+            return { result: null, audit: { action, payload: audit.payload } };
+          }
+          const row = await readBrokerAccountForAdmin(tx, accountId);
+          // the UPDATE or the SELECT just saw it inside this transaction, and nothing deletes it
+          if (row === undefined) throw new Error('the marked broker account disappeared');
+          return {
+            result: { me: meOf(ctx), outcome, account: toAdminBrokerAccountView(row) },
+            audit,
+          };
         },
       );
       if (answer === undefined) return reply;

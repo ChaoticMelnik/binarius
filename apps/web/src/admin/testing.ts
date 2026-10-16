@@ -1,4 +1,6 @@
 import {
+  AdminServiceMarkOutcome,
+  ServiceAccountNotWorkingReason,
   AccountHaltReason,
   AuditAction,
   AuditActorType,
@@ -23,6 +25,8 @@ import {
   type AdminBotTextView,
   type AdminBrokerAccountListItem,
   type AdminBrokerAccountsResponse,
+  type AdminServiceAccountsResponse,
+  type AdminServiceMarkResponse,
   type AdminBrokerAccountView,
   type AdminDepositsResponse,
   type AdminDepositView,
@@ -367,6 +371,45 @@ export const SAMPLE_BROKER_ACCOUNTS: AdminBrokerAccountsResponse = {
   me: SAMPLE_ME,
   accounts: [SAMPLE_BROKER_ACCOUNT_HALTED, SAMPLE_BROKER_ACCOUNT_ITEM],
   nextCursor: null,
+};
+
+// The service accounts page (#391): one working, one revoked by a failed exchange, one whose
+// token expired; the minimum is 3, so the page shows 1 of 3.
+const SERVICE_SINCE = '2026-10-01T00:00:00.000Z';
+export const SAMPLE_SERVICE_ACCOUNTS: AdminServiceAccountsResponse = {
+  me: SAMPLE_ME,
+  min: 3,
+  working: 1,
+  accounts: [
+    {
+      ...SAMPLE_BROKER_ACCOUNT_ITEM,
+      serviceSince: SERVICE_SINCE,
+      working: true,
+      notWorkingReason: null,
+    },
+    {
+      ...SAMPLE_BROKER_ACCOUNT_HALTED,
+      authRevokedReason: AuthRevokedReason.RefreshOutcomeUnknown,
+      serviceSince: SERVICE_SINCE,
+      working: false,
+      notWorkingReason: ServiceAccountNotWorkingReason.Revoked,
+    },
+    {
+      ...SAMPLE_BROKER_ACCOUNT_ITEM,
+      id: '00000000-0000-4000-8000-0000000000d3',
+      brokerUserId: 'broker-9',
+      email: 'eve@example.com',
+      serviceSince: SERVICE_SINCE,
+      working: false,
+      notWorkingReason: ServiceAccountNotWorkingReason.TokenExpired,
+    },
+  ],
+};
+
+export const SAMPLE_SERVICE_MARKED: AdminServiceMarkResponse = {
+  me: SAMPLE_ME,
+  outcome: AdminServiceMarkOutcome.Marked,
+  account: { ...SAMPLE_BROKER_ACCOUNT, serviceSince: SERVICE_SINCE },
 };
 
 // The bot texts section (#300): welcome overridden by a staff member, its connectButton fragment by

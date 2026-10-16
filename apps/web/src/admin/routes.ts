@@ -46,6 +46,8 @@ import {
   auditPage,
   brokerAccountsHref,
   brokerAccountsPage,
+  SERVICE_ACCOUNTS_PATH,
+  serviceAccountsPage,
   confirmPage,
   depositsHref,
   depositsPage,
@@ -174,6 +176,19 @@ const resetFormOf = (body: unknown) => {
 
 // Only the body's shape (a field sent twice arrives as an array), then the shared schema: the
 // limit and the note's bounds live there, so web holds no second copy of them.
+// The service mark's form (#391): `return` is only ever one of the pages that carry the form.
+const serviceMarkForm = z.object({
+  service: z.enum(['on', 'off']),
+  return: z.string().optional(),
+});
+const SERVICE_RETURN_PATH = new RegExp(
+  `^/admin/(?:service-accounts|broker-accounts|users/${UUID_PATTERN.source.slice(1, -1)})$`,
+  'i',
+);
+// anything else — another site, a path with `..`, a query — goes back to the service page
+const returnPathOf = (value: string | undefined): string =>
+  value !== undefined && SERVICE_RETURN_PATH.test(value) ? value : SERVICE_ACCOUNTS_PATH;
+
 const adjustForm = z.object({
   direction: z.enum(['credit', 'debit']),
   amount: z.string().regex(/^[1-9]\d{0,18}$/),
@@ -1065,6 +1080,55 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         409,
         userPage(card, me.login, { adjustment: { message, form: form.data } }),
       );
+    }),
+  );
+
+  // --- Service accounts (#391, docs/service-accounts.md) ----------------------------------------
+
+  app.get(SERVICE_ACCOUNTS_PATH, async (request, reply) =>
+    withStaffSession(request, reply, async (token) =>
+      sendHtml(reply, 200, serviceAccountsPage(await backend.serviceAccounts(token))),
+    ),
+  );
+
+  app.post('/admin/broker-accounts/:id/service', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const { id } = request.params as { id: string };
+      // a shape it cannot be never reaches the backend; the page shows what is there
+      if (!UUID_PATTERN.test(id)) return reply.redirect(SERVICE_ACCOUNTS_PATH, 303);
+      const form = serviceMarkForm.safeParse(request.body);
+      if (!form.success) {
+        return sendHtml(
+          reply,
+          400,
+          noticePage(TEXTS.serviceAccountsTitle, TEXTS.serviceMarkBadForm),
+        );
+      }
+      try {
+        await backend.setServiceMark(token, id, { service: form.data.service === 'on' });
+      } catch (error) {
+        if (isNotFound(error)) {
+          return sendHtml(
+            reply,
+            404,
+            noticePage(TEXTS.serviceAccountNotFoundTitle, TEXTS.serviceAccountNotFoundBody),
+          );
+        }
+        const answered = outcome(error);
+        // not answered or a 5xx: the mark may be written; the page shows it, and pressing again
+        // is `unchanged`
+        if (answered === undefined || answered.status >= 500) {
+          request.log.error(errorLogFields(error), 'the service mark outcome is unknown');
+          return sendHtml(
+            reply,
+            500,
+            noticePage(TEXTS.outcomeUnknownTitle, TEXTS.serviceMarkOutcomeUnknown),
+          );
+        }
+        // session_invalid clears the cookie in withStaffSession; anything else is our failure
+        throw error;
+      }
+      return reply.redirect(returnPathOf(form.data.return), 303);
     }),
   );
 

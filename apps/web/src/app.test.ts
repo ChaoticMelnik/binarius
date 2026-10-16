@@ -45,7 +45,10 @@ import {
   SAMPLE_BOT_TEXTS,
   SAMPLE_BROKER_ACCOUNT_HALTED,
   SAMPLE_BROKER_ACCOUNT_ITEM,
+  SAMPLE_BROKER_ACCOUNT,
   SAMPLE_BROKER_ACCOUNTS,
+  SAMPLE_SERVICE_ACCOUNTS,
+  SAMPLE_SERVICE_MARKED,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSIT_UNOWNED,
   SAMPLE_DEPOSITS,
@@ -114,6 +117,8 @@ interface Calls {
   deposits: [string, AdminDepositsQuery][];
   adjustTokens: unknown[][];
   brokerAccounts: [string, AdminBrokerAccountsQuery][];
+  serviceAccounts: string[];
+  setServiceMark: unknown[][];
   audit: [string, AdminAuditQuery][];
   changePassword: unknown[][];
   botTexts: unknown[];
@@ -147,6 +152,8 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     deposits: [],
     adjustTokens: [],
     brokerAccounts: [],
+    serviceAccounts: [],
+    setServiceMark: [],
     audit: [],
     changePassword: [],
     botTexts: [],
@@ -225,6 +232,14 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     brokerAccounts: async (token, query) => {
       calls.brokerAccounts.push([token, query]);
       return SAMPLE_BROKER_ACCOUNTS;
+    },
+    serviceAccounts: async (token) => {
+      calls.serviceAccounts.push(token);
+      return SAMPLE_SERVICE_ACCOUNTS;
+    },
+    setServiceMark: async (token, id, request) => {
+      calls.setServiceMark.push([token, id, request]);
+      return SAMPLE_SERVICE_MARKED;
     },
     audit: async (token, query) => {
       calls.audit.push([token, query]);
@@ -1331,6 +1346,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navBotTexts,
     TEXTS.navDeposits,
     TEXTS.navBrokerAccounts,
+    TEXTS.navServiceAccounts,
   ];
 
   it.each([
@@ -1346,7 +1362,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     '/admin/bot-texts',
     '/admin/deposits',
     '/admin/broker-accounts',
-  ])('%s carries the ten nav items in order, staff sessions named as such', async (url) => {
+    '/admin/service-accounts',
+  ])('%s carries the eleven nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -1361,6 +1378,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Тексты бота',
       'Депозиты',
       'Брокерские аккаунты',
+      'Служебные аккаунты',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -2013,7 +2031,7 @@ describe('the deposits page and the card section (#341)', () => {
     expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
     expect(nav.trimEnd()).toMatch(
-      /aria-current="page"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>$/,
+      /aria-current="page"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*Служебные аккаунты\s*<\/a\s*>$/,
     );
   });
 
@@ -2225,7 +2243,7 @@ describe('the broker accounts page (#342)', () => {
   const CHECKBOX_CHECKED =
     /<input\s+type="checkbox"\s+name="halted"\s+value="true"\s+checked\s*\/>/;
 
-  it('marks «Брокерские аккаунты» as the current page, last in the nav, and carries the login', async () => {
+  it('marks «Брокерские аккаунты» as the current page, right before «Служебные аккаунты», and carries the login', async () => {
     const response = await get('/admin/broker-accounts', withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -2233,7 +2251,9 @@ describe('the broker accounts page (#342)', () => {
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
     expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
-    expect(nav.trimEnd()).toMatch(/>\s*Брокерские аккаунты\s*<\/a\s*>$/);
+    expect(nav.trimEnd()).toMatch(
+      /aria-current="page"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*Служебные аккаунты\s*<\/a\s*>$/,
+    );
   });
 
   it.each([
@@ -2345,6 +2365,7 @@ describe('the broker accounts page (#342)', () => {
       'trade_mismatch',
       time(h.accessTokenExpiresAt),
       TEXTS.none,
+      expect.stringContaining(TEXTS.serviceMark) as unknown,
       time(h.createdAt),
       time(h.updatedAt),
     ]);
@@ -2361,6 +2382,7 @@ describe('the broker accounts page (#342)', () => {
       TEXTS.none,
       time(a.accessTokenExpiresAt),
       TEXTS.none,
+      expect.stringContaining(TEXTS.serviceMark) as unknown,
       time(a.createdAt),
       time(a.updatedAt),
     ]);
@@ -2987,12 +3009,13 @@ describe('the bot texts pages (#300)', () => {
   const versionsOf = (body: string) =>
     [...body.matchAll(/name="version" value="(\d+)"/g)].map((match) => match[1]);
 
-  // «Депозиты» (#341) and «Брокерские аккаунты» (#342) were appended after it
+  // «Депозиты» (#341), «Брокерские аккаунты» (#342) and «Служебные аккаунты» (#391) were appended
+  // after it
   it('W1 puts «Тексты бота» in the nav right before «Депозиты» and marks it current', async () => {
     const response = await get('/admin/bot-texts', withCookie);
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<\/nav>/,
+      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*Служебные аккаунты\s*<\/a\s*>\s*<\/nav>/,
     );
   });
 
@@ -3632,5 +3655,190 @@ describe('the token adjustment form (#246)', () => {
     });
     expect(response.statusCode).toBe(403);
     expect(calls.adjustTokens).toEqual([]);
+  });
+});
+
+describe('the service accounts (#391)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const ACCOUNT = SAMPLE_BROKER_ACCOUNT.id;
+  const url = `/admin/broker-accounts/${ACCOUNT}/service`;
+  const rebuild = async (backend: Partial<BackendClient>) => {
+    await app.close();
+    app = build(backend);
+  };
+  const rowsOf = (body: string) =>
+    [...(/<tbody>([\s\S]*?)<\/tbody>/.exec(body)?.[1] ?? '').matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(
+      (m) => m[1] ?? '',
+    );
+  const cellsOf = (row: string) =>
+    [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => (m[1] ?? '').trim());
+  const time = (iso: string) => `<time datetime="${iso}">${iso}</time>`;
+  const formOf = (service: 'on' | 'off', returnPath: string, id = ACCOUNT) =>
+    new RegExp(
+      `<form method="post" action="/admin/broker-accounts/${id}/service">\\s*` +
+        `<input type="hidden" name="service" value="${service}" />\\s*` +
+        `<input type="hidden" name="return" value="${returnPath}" />`,
+    );
+
+  it('W1 shows the counter, a row per account with its owner, its state and the «Снять» form', async () => {
+    const response = await get('/admin/service-accounts', withCookie);
+    expect(response.statusCode).toBe(200);
+    expect(calls.serviceAccounts).toEqual([TOKEN]);
+    expect(response.body).toContain(TEXTS.serviceAccountsCounter(1, 3, 3));
+    expect(response.body).toContain('В работе 1 из минимум 3 (отмечено 3)');
+    const rows = rowsOf(response.body);
+    expect(rows).toHaveLength(3);
+    const [working = '', revoked = '', expired = ''] = rows;
+    const [w, r, e] = SAMPLE_SERVICE_ACCOUNTS.accounts;
+    expect(cellsOf(working).slice(0, 8)).toEqual([
+      'ada@example.com',
+      'broker-7',
+      `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
+      TEXTS.accountStatus.active,
+      'да',
+      time(w?.accessTokenExpiresAt ?? ''),
+      TEXTS.none,
+      time(w?.serviceSince ?? ''),
+    ]);
+    expect(cellsOf(revoked).slice(0, 5)).toEqual([
+      TEXTS.none,
+      'broker-&lt;b&gt;',
+      `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
+      TEXTS.accountStatus.revoked,
+      'нет: отозван (refresh_outcome_unknown)',
+    ]);
+    expect(cellsOf(expired)[4]).toBe('нет: токен истёк');
+    expect(working).toMatch(formOf('off', '/admin/service-accounts', w?.id));
+    expect(revoked).toMatch(formOf('off', '/admin/service-accounts', r?.id));
+    expect(expired).toMatch(formOf('off', '/admin/service-accounts', e?.id));
+    expect(working).toContain(`<button type="submit">${TEXTS.serviceUnmark}</button>`);
+    expect(response.body).toContain(TEXTS.serviceAccountsHint);
+  });
+
+  it('W2 marks «Служебные аккаунты» as the current page, last in the nav', async () => {
+    const response = await get('/admin/service-accounts', withCookie);
+    expect(response.body).toMatch(/<a href="\/admin\/service-accounts"\s+aria-current="page"/);
+    expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
+    const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
+    expect(nav.trimEnd()).toMatch(/>\s*Служебные аккаунты\s*<\/a\s*>$/);
+  });
+
+  it('W3 offers «Сделать служебным» for an unmarked account and the date with «Снять» for a marked one', async () => {
+    const card = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+    expect(card.body).toMatch(formOf('on', `/admin/users/${SAMPLE_USER_ID}`));
+    expect(card.body).toContain(`<button type="submit">${TEXTS.serviceMark}</button>`);
+    expect(card.body).toContain(`<th>${TEXTS.columnService}</th>`);
+
+    const list = await get('/admin/broker-accounts', withCookie);
+    expect(list.body).toMatch(formOf('on', '/admin/broker-accounts'));
+
+    await rebuild({
+      user: async () => ({
+        ...SAMPLE_USER,
+        brokerAccounts: [{ ...SAMPLE_BROKER_ACCOUNT, serviceSince: '2026-10-01T00:00:00.000Z' }],
+      }),
+    });
+    const marked = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+    expect(marked.body).toMatch(formOf('off', `/admin/users/${SAMPLE_USER_ID}`));
+    expect(marked.body).toContain(time('2026-10-01T00:00:00.000Z'));
+    expect(marked.body).not.toMatch(formOf('on', `/admin/users/${SAMPLE_USER_ID}`));
+  });
+
+  it('W4 sends the mark and goes back to an allowed page, else to the service page', async () => {
+    const back = `/admin/users/${SAMPLE_USER_ID}`;
+    const marked = await post(url, { service: 'on', return: back }, withCookie);
+    expect([marked.statusCode, marked.headers.location]).toEqual([303, back]);
+    const unmarked = await post(
+      url,
+      { service: 'off', return: '/admin/broker-accounts' },
+      withCookie,
+    );
+    expect([unmarked.statusCode, unmarked.headers.location]).toEqual([
+      303,
+      '/admin/broker-accounts',
+    ]);
+    expect(calls.setServiceMark).toEqual([
+      [TOKEN, ACCOUNT, { service: true }],
+      [TOKEN, ACCOUNT, { service: false }],
+    ]);
+    for (const elsewhere of [
+      'https://evil.example/',
+      '//evil.example/admin/users',
+      '/admin/../x',
+      '/admin/users/not-a-uuid',
+      '/admin/broker-accounts?status=active',
+      undefined,
+    ]) {
+      const response = await post(
+        url,
+        elsewhere === undefined ? { service: 'on' } : { service: 'on', return: elsewhere },
+        withCookie,
+      );
+      expect([response.statusCode, response.headers.location]).toEqual([
+        303,
+        '/admin/service-accounts',
+      ]);
+    }
+  });
+
+  it('W5 refuses an id that is not a uuid without the backend, and a form value it does not know', async () => {
+    const bad = await post(
+      '/admin/broker-accounts/not-a-uuid/service',
+      { service: 'on' },
+      withCookie,
+    );
+    expect([bad.statusCode, bad.headers.location]).toEqual([303, '/admin/service-accounts']);
+    const maybe = await post(url, { service: 'maybe' }, withCookie);
+    expect(maybe.statusCode).toBe(400);
+    expect(maybe.body).toContain(TEXTS.serviceMarkBadForm);
+    expect(calls.setServiceMark).toEqual([]);
+  });
+
+  it('W6 answers an unknown account with 404 and clears a session the backend calls gone', async () => {
+    await rebuild({
+      setServiceMark: async () => Promise.reject(httpFailure(404, AdminErrorCode.NotFound)),
+    });
+    const missing = await post(url, { service: 'on' }, withCookie);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.body).toContain(TEXTS.serviceAccountNotFoundTitle);
+
+    await rebuild({
+      setServiceMark: async () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await post(url, { service: 'on' }, withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+  });
+
+  it.each([
+    ['unreachable', new BackendError(BackendErrorCode.Unreachable), 'unreachable'],
+    ['a 500', httpFailure(500), 'http_status'],
+  ])(
+    'W7 says the outcome is unknown when %s, logged by name and code',
+    async (_label, failure, code) => {
+      await rebuild({ setServiceMark: async () => Promise.reject(failure) });
+      const response = await post(url, { service: 'off' }, withCookie);
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toContain(TEXTS.serviceMarkOutcomeUnknown);
+      expect(response.body).toContain('/admin/service-accounts');
+      const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      const entry = logged.find((line) => line.msg === 'the service mark outcome is unknown');
+      expect(entry?.err).toEqual({ name: 'BackendError', code });
+    },
+  );
+
+  it('refuses a POST from another origin before the backend is asked', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url,
+      headers: {
+        origin: 'https://evil.example',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'service=on',
+      cookies: withCookie,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(calls.setServiceMark).toEqual([]);
   });
 });

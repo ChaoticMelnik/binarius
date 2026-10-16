@@ -1,6 +1,7 @@
 import {
   ADMIN_SEARCH_MAX_LENGTH,
   BOT_TEXTS_APPLIED_WITHIN_S,
+  ServiceAccountNotWorkingReason,
   type BotProfileMethod,
 } from '@binarius/shared';
 
@@ -53,6 +54,7 @@ export const TEXTS = {
   navBotTexts: 'Тексты бота',
   navDeposits: 'Депозиты',
   navBrokerAccounts: 'Брокерские аккаунты',
+  navServiceAccounts: 'Служебные аккаунты',
   navLabel: 'Разделы админки',
 
   overviewTitle: 'Сводка',
@@ -232,6 +234,33 @@ export const TEXTS = {
   brokerAccountsFirst: 'В начало',
   brokerAccountsBadFilter:
     'Фильтр не подходит: статус — из списка, остановка торговли — только флажок',
+
+  // the service accounts (#391, docs/service-accounts.md)
+  serviceAccountsTitle: 'Служебные аккаунты',
+  serviceAccountsHeading: 'Служебные аккаунты брокера',
+  serviceAccountsCounter: (working: number, min: number, marked: number) =>
+    `В работе ${String(working)} из минимум ${String(min)} (отмечено ${String(marked)})`,
+  serviceAccountsEmpty: 'Служебных аккаунтов нет.',
+  serviceAccountsHint:
+    'Добавить: карточка пользователя или список брокерских аккаунтов → «Сделать служебным».',
+  columnWorking: 'В работе',
+  columnServiceSince: 'Служебный с',
+  columnService: 'Служебный',
+  serviceWorking: 'да',
+  serviceNotWorking: (reason: string) => `нет: ${reason}`,
+  serviceReason: {
+    [ServiceAccountNotWorkingReason.UserBlocked]: 'пользователь заблокирован',
+    [ServiceAccountNotWorkingReason.Pending]: 'не подтверждён в боте',
+    [ServiceAccountNotWorkingReason.Revoked]: 'отозван',
+    [ServiceAccountNotWorkingReason.TokenExpired]: 'токен истёк',
+  } satisfies Record<ServiceAccountNotWorkingReason, string>,
+  serviceMark: 'Сделать служебным',
+  serviceUnmark: 'Снять',
+  serviceAccountNotFoundTitle: 'Аккаунт не найден',
+  serviceAccountNotFoundBody: 'Такого брокерского аккаунта нет.',
+  serviceMarkBadForm: 'Форма не подходит: отметка — только «Сделать служебным» или «Снять».',
+  serviceMarkOutcomeUnknown:
+    'Отметка могла измениться — откройте «Служебные аккаунты» (/admin/service-accounts): там видно, как есть. Повторное нажатие ничего не испортит.',
 
   auditTitle: 'Журнал аудита',
   auditHeading: 'Журнал аудита',
