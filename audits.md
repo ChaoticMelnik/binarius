@@ -3246,3 +3246,31 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 1. Тест-двойники и фикстуры плана отличаются от нормализации кода по проверяемой оси (abort у фейкового sleep, неотсортированный каталог, повтор перехода) — **внедрено в #560: `.claude/skills/architect/SKILL.md` → Step 6 → Validation checklist**
 2. Оставшиеся Minor — **вынесено в #559**; фаза A и сырая проба 41 id — **вынесено в #555**
+
+---
+
+## #551 — Сообщения сессии: один цикл мартингейла — одно сообщение, «Адаптивная ставка» один раз на цикл (+ #539) (2026-10-16)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Preflight clean. Fable limit cleared (the owner reported the reset 2026-10-16). Codex ready. |
+| Architect | first plan | Fable (`claude-fable-5-1`). 4 clarify questions, all answered by the owner: #539 goes into this PR, #551 merges before #536, the limit counts raises. Plan posted before In Progress. Estimate ~1 450 lines. |
+| Implementer | round 1 | Opus. 1 clarify question (D20: 20 trades + long text override). 9 commits, 1 390 lines plus the 0054 snapshot. 23/23 mutations, `pnpm check` 0. Two fix-up commits (rewrap, and a revert of prettier's reflow). |
+| Reviewer | round 1 | Clean, 4 Minor. Codex skipped: usage limit until 16.10 17:30 (job `task-mvb0qxlc-sujdgv`). The owner chose to fix m1 before the merge. |
+| Architect / Implementer | Plan Update / fix | Opus. m1 fixed: `sendSummary` checks `stopped` first; new test D22; 24/24 mutations. |
+| Reviewer | round 2 | Clean, 4 new Minor. Codex `task-mvb31ok4-4qlhnb` at head `ebf738f`; tech-lead re-hashed the marker (base, head and diff-sha256 match). |
+| Tech Lead | merge | Question → yes → `mergeable` re-checked → MERGED 14:56:28Z. #551 and #539 Done. 0054 migrated on the shared database. m2-m8 → #563. Models: every phase on its policy model. |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1: the worst path of `stop()` added the summary's 3 s balance refresh to the step's edit + gone + send (~9.3 of 10 s) | Minor | unverified-claim | the timing link modelled the step path and the summary path as alternatives without checking where `sendSummary` tests `stopped` | Architect (timing link) |
+| m6: docs promise "never a lost step" with two senders; edits do not keep that | Minor | instance-vs-class | the guarantee was carried over from new messages to edits without checking the edit path | Architect / Implementer (docs) |
+| Prettier's reflow of unrelated tests in `schema.db.test.ts` (fix-up commit `abaf9e4`) | process | other | the implementer rule says to format only changed files, but a changed existing file gets reflowed as a whole | Implementer |
+
+### Process improvement proposals
+1. In an existing file, format only the lines you wrote and read `git diff` before `git add` — **внедрено в #565: `.claude/skills/implementer/SKILL.md` → Step 4**
+2. Exclude `.claude/worktrees/` from the codegraph index; the architect got copies instead of main — **вынесено в #564**
