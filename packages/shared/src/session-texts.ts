@@ -11,9 +11,9 @@ import {
   type TradingSessionView,
 } from './trading-session';
 
-// The session's words that both the bot's status message and the backend's session notices print
-// (#464, docs/bot-session.md): one source, so the summary the backend sends cannot drift from the
-// status message's final lines. Every builder takes the catalog it prints with, so each side's
+// The session's words that both the bot's session message and the backend's session notices
+// print (#464, docs/bot-session.md): one source, so the summary the backend sends cannot drift
+// from the session message's end line (#536). Every builder takes the catalog it prints with, so each side's
 // overrides apply (Rule 30).
 
 // A session's stop reasons but completed, by key (#284). kill_switch reads the single
@@ -140,33 +140,45 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     return lines;
   };
 
+  // The stopped session's first line (#536): the completed line with its result, or the stop
+  // reason; undefined with no reason, which the CHECKs refuse and the view's schema allows.
+  const stopLine = ({
+    stopReason,
+    trades,
+    cycles,
+  }: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles'>): TelegramHtml | undefined => {
+    if (stopReason === TradingSessionStopReason.Completed) {
+      return html.sessionCompleted({
+        cycles: cyclesCount(cycles.closed),
+        result: resultOf(trades),
+      });
+    }
+    if (stopReason === TradingSessionStopReason.NoSignalTimeout) {
+      return html.sessionStopNoSignalTimeout({
+        noSignalMinutes: String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000),
+      });
+    }
+    return stopReason === null ? undefined : html[SESSION_STOP_LINES[stopReason]];
+  };
+
   // A stopped session's closing lines: the completion line, or the stop reason and the total, then
-  // the result and the balance. The status message adds its live-trade lines after them; the
-  // summary the backend sends is these lines under the pair (#464).
+  // the result and the balance; the summary the backend sends is these lines under the pair (#464).
   const sessionClosingLines = (view: SessionClosingView): TelegramHtml[] => {
-    if (view.stopReason === TradingSessionStopReason.Completed) {
-      return [
-        html.sessionCompleted({
-          cycles: cyclesCount(view.cycles.closed),
-          result: resultOf(view.trades),
-        }),
-        ...outcomeLines(view),
-      ];
+    const first = stopLine(view);
+    if (view.stopReason === TradingSessionStopReason.Completed && first !== undefined) {
+      return [first, ...outcomeLines(view)];
     }
-    const lines: TelegramHtml[] = [];
-    if (view.stopReason === TradingSessionStopReason.NoSignalTimeout) {
-      lines.push(
-        html.sessionStopNoSignalTimeout({
-          noSignalMinutes: String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000),
-        }),
-      );
-    } else if (view.stopReason !== null) {
-      lines.push(html[SESSION_STOP_LINES[view.stopReason]]);
-    }
+    const lines: TelegramHtml[] = first === undefined ? [] : [first];
     if (view.trades.settled > 0) lines.push(html.sessionTotal({ result: resultOf(view.trades) }));
     lines.push(...outcomeLines(view));
     return lines;
   };
+
+  // What the session message ends on once its session stopped, and the first line of the reply to
+  // the stop (#536): the summary's (#464) first line under its pair, the same text.
+  const sessionEndLine = (
+    view: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles'>,
+  ): TelegramHtml => stopLine(view) ?? html.sessionStatusUnavailable;
 
   // The summary message (#464): the pair, then the closing lines.
   const sessionSummaryText = (
@@ -210,6 +222,7 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     resultOf,
     sessionAssetLabel,
     sessionClosingLines,
+    sessionEndLine,
     sessionSummaryText,
     sessionCycleText,
   };

@@ -71,6 +71,7 @@ import {
   intentStatusText,
   sessionCardFooter,
   sessionStatusText,
+  sessionStopReplyText,
   sessionTexts as notices,
   setBotTextSource,
   settingsText,
@@ -315,7 +316,6 @@ const sessionTexts = (
                       lastIntent,
                       balance,
                     }),
-                    { deadline: true },
                   ),
                 ),
               ),
@@ -411,6 +411,27 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionCompleted: () =>
     sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
+  // the reply to the stop (#536): every end line, with the open trade's line or without
+  sessionStopReply: () =>
+    [...Object.values(TradingSessionStopReason), null].flatMap((stopReason) =>
+      [1, 2, N].flatMap((settled) =>
+        [null, ...Object.values(TradeIntentStatus).map((s) => intentView({ status: s }))].map(
+          (lastIntent) =>
+            sessionStopReplyText(
+              sessionView({
+                status: TradingSessionStatus.Stopped,
+                stopReason,
+                trades: { settled, rejected: 0, won: N, lost: N, tied: N, profit: USD },
+                cycles: {
+                  planned: MAX_SESSION_CYCLES,
+                  closed: Math.min(settled, MAX_SESSION_CYCLES),
+                },
+                lastIntent,
+              }),
+            ),
+        ),
+      ),
+    ),
   // a unit of a session's cycle message, sent by the backend through the same builder (#551):
   // one trade's block, at step 2 with the adaptive line above it and at another step without it,
   // each class, the prices with the most digits a pair has and as String() prints the widest double

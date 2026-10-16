@@ -17,6 +17,10 @@ export const NO_NEXT_STEP_REASONS = {
   // keyboard, or goes as a photo and deletes it (the analysis card, #482), and none on it keeps
   // the same button from being pressed twice («⏳ Анализирую…»)
   InProgress: 'in_progress',
+  // the session message (#536, docs/bot-session.md → The session message): its head, the session's
+  // pair and settings above its trades; the next step stands under the backend's waiting message
+  // (its «⏹») and under the summary and its card once the session ended
+  SessionStatus: 'session_status',
 } as const;
 export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];
 
@@ -84,6 +88,19 @@ export const editMessageTextByIdHtml = (
   text: TelegramHtml,
   extra: WithNextStep<EditByIdExtra>,
 ) => api.editMessageText(chatId, messageId, text.value, { ...extra, parse_mode: 'HTML' });
+
+// The same without a keyboard: an edit without reply_markup removes the inline keyboard on
+// screen. `reason` as above.
+export const editMessageTextByIdHtmlWithoutNextStep = (
+  api: Pick<Api, 'editMessageText'>,
+  chatId: number,
+  messageId: number,
+  text: TelegramHtml,
+  reason: NoNextStepReason,
+) => {
+  void reason;
+  return api.editMessageText(chatId, messageId, text.value, { parse_mode: 'HTML' });
+};
 
 export const replyWithVideoHtml = (
   ctx: Context,

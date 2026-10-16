@@ -1447,25 +1447,22 @@ export const BOT_TEXT_CATALOG = {
     'Сессия: заголовок сообщения статуса реальной сессии (#327).',
     `💼 <b>Реальная сессия</b>`,
   ),
-  sessionSettings: html(
+  sessionPair: html(g.Session, 'Сессия: строка торговой пары.', `🔹 Торговая пара: {symbol}`, {
+    vars: ['symbol'],
+  }),
+  sessionStake: html(g.Session, 'Сессия: строка суммы сделки.', `🔹 Сумма сделки: {stake}`, {
+    vars: ['stake'],
+  }),
+  sessionExpiry: html(
     g.Session,
-    'Сессия: строка с активом, длительностью и ставкой.',
-    `📈 {line}`,
-    { vars: ['line'] },
+    'Сессия: строка времени экспирации сделки.',
+    `🔹 Время экспирации: {duration}`,
+    { vars: ['duration'] },
   ),
-  sessionCycle: html(
+  sessionRunning: html(
     g.Session,
-    'Сессия: номер текущего цикла из всех (#552); цикл закрывает выигрыш, при фиксированной ставке — каждая сделка.',
-    `🔁 Цикл {cycle} из {cyclesPlanned}`,
-    { vars: ['cycle', 'cyclesPlanned'] },
-  ),
-  sessionScore: html(
-    g.Session,
-    'Сессия: счёт закрытых сделок и результат в $, пока сессия идёт.',
-    `📊 Счёт: {score} · {profit}`,
-    {
-      vars: ['score', 'profit'],
-    },
+    'Сессия: под параметрами сессии, пока она идёт.',
+    `Торговая сессия запущена…`,
   ),
   sessionWon: plain(g.Session, 'Сессия: число сделок в плюс, в счёте и итоге.', '{count} в плюс', {
     vars: ['count'],
@@ -1504,7 +1501,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionWaitingSignal: html(
     g.Session,
-    'Сессия: пока следующая сделка не открыта.',
+    'Сессия: сообщение ожидания под сообщениями сессии, с кнопкой остановки; шлёт backend.',
     `🔎 Ждём сигнал для следующей сделки…`,
   ),
   sessionCompleted: html(
@@ -1545,12 +1542,6 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Сессия: настройки сессии не прочитаны.',
     `⚠️ Настройки сессии не прочитаны — напиши в поддержку: /support`,
-  ),
-  sessionDeadline: html(
-    g.Session,
-    'Сессия: под статусом, когда бот перестал его обновлять, с названием кнопки обновления.',
-    `⏳ Сессия ещё идёт — нажми «{sessionRefreshButton}», чтобы увидеть ход.`,
-    { fragments: { sessionRefreshButton: 'sessionRefreshButton' } },
   ),
   sessionStatusUnavailable: html(
     g.Session,
@@ -1921,12 +1912,11 @@ export const BOT_TEXT_CATALOG = {
     '🔄 Обновить статус',
   ),
   supportButton: plain(g.Buttons, '/support: кнопка чата с поддержкой.', '💬 Написать в поддержку'),
-  sessionRefreshButton: plain(
+  sessionStopButton: plain(
     g.Buttons,
-    'Сессия: кнопка обновления статуса; её название цитирует текст о долгой сессии.',
-    '🔄 Обновить',
+    'Сессия: кнопка остановки под сообщением ожидания; шлёт backend.',
+    '⏹ Остановить сессию',
   ),
-  sessionStopButton: plain(g.Buttons, 'Сессия: кнопка остановки сессии.', '⏹ Остановить сессию'),
   stakeMenuButton: plain(
     g.Buttons,
     'Раскрытие «➕ Ещё» на анализе, /settings и отказы сделки: кнопка экрана суммы.',

@@ -23,6 +23,7 @@ import {
   BUY_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  sessionStopCallbackData,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -59,15 +60,15 @@ import {
   textUpdate,
   type ApiCall,
 } from './testing';
-import { sessionAssetLabel, sessionStatusText, TEXTS, textOf, LABELS } from './texts';
 import {
-  sessionCardKeyboard,
-  sessionOutcomeUnknown,
-  sessionKeyboard,
-  sessionRefreshCallbackData,
-  sessionStopCallbackData,
-  START_REFUSALS,
-} from './trading-session';
+  sessionAssetLabel,
+  sessionStatusText,
+  sessionStopReplyText,
+  TEXTS,
+  textOf,
+  LABELS,
+} from './texts';
+import { sessionCardKeyboard, sessionOutcomeUnknown, START_REFUSALS } from './trading-session';
 import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
 import { INLINE_QUERY_LIMIT, shareQuery } from './session-share';
@@ -77,8 +78,10 @@ const REAL_START = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5);
 // the sizes of the card's sendPhoto result, smallest first (#321)
 const SMALL_FILE_ID = 'AgACAgIAAxkBAAIBsmall';
 const CARD_FILE_ID = 'AgACAgIAAxkBAAIBlarge';
-const REFRESH = sessionRefreshCallbackData(SESSION_ID);
+// the old status message's buttons (before #536), and the stop under the waiting message
+const REFRESH = `session:${SESSION_ID}`;
 const STOP = sessionStopCallbackData(SESSION_ID);
+const WAITING_STOP = sessionStopCallbackData(SESSION_ID, { waiting: true });
 
 interface Button {
   text: string;
@@ -210,10 +213,9 @@ const httpError = (status: number, reason?: string) =>
   });
 const statusOf = (view: TradingSessionView) =>
   sessionStatusText(pairLabel(PAIR_EURUSD), view).value;
+// the reply to «⏹» under the waiting message and to /stop of one session (#536)
+const replyOf = (view: TradingSessionView) => sessionStopReplyText(view).value;
 
-const LIVE_ROWS = [
-  [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
-];
 // SESSION_VIEW's own pair and duration; a demo session's opens the amount screen as a new message
 // (#476)
 const AGAIN = button(LABELS.sessionAgainButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'));
@@ -231,15 +233,8 @@ const newAnalysis = (durationSec: 5 | 15) => [
 const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
 // «💳 Пополнить» (#27): the cashier Mini App, right above the invite at the end of a session
 const DEPOSIT: Button[] = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
-const STOPPED_ROWS = [
-  [button(LABELS.sessionRefreshButton, REFRESH)],
-  [AGAIN],
-  newAnalysis(15),
-  toSignals(15),
-  DEPOSIT,
-  INVITE,
-  MENU,
-];
+// a stopped session's end of the path: under the stop reply, the card and an old status (#536)
+const STOPPED_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), DEPOSIT, INVITE, MENU];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 // #350: a refusal of the start leads back to the analysis and to the menu; a blocked user to support
 const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
@@ -251,8 +246,6 @@ const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
 // for want of tokens, the purchase, then the deposit (#27), above the way back (#117)
 const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
 const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], DEPOSIT, ...BACK_ROWS];
-// a failed read of the session, after the refresh or the stop: its refresh, never the stop again
-const SESSION_REFRESH_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], MENU_ROW];
 // #509: no signal on the pair, the signals of the same duration and the menu
 const OTHER_PAIR_ROWS = [
   [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:5`)],
@@ -268,7 +261,7 @@ const EDIT_GONE: ApiError = {
 };
 
 describe('the session button', () => {
-  it('starts a session of five, sends its status with both buttons, and tracks it', async () => {
+  it('S1 starts a session of five, sends its message without a keyboard (#536), and tracks it', async () => {
     const { press, calls, startSession, sessionTracker } = setup();
     await press(START);
 
@@ -286,9 +279,10 @@ describe('the session button', () => {
     ]);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(SESSION_VIEW));
-    expect(sent?.text).toContain('EUR/USD OTC · ⏱');
+    expect(sent?.text).toContain('🔹 Торговая пара: EUR/USD OTC');
     expect(sent?.parse_mode).toBe('HTML');
-    expect(rowsOf(sent)).toEqual(LIVE_ROWS);
+    // the «⏹» is under the backend's waiting message
+    expect(sent).not.toHaveProperty('reply_markup');
     expect(sessionTracker.track).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
       sessionId: SESSION_ID,
@@ -298,7 +292,7 @@ describe('the session button', () => {
     });
   });
 
-  it("hands the tracker an edit of the status message's own id, its keyboard following the view", async () => {
+  it("hands the tracker an edit of the session message's own id, without a keyboard (#536)", async () => {
     const { press, calls, sessionTracker } = setup();
     await press(START);
     const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
@@ -309,8 +303,10 @@ describe('the session button', () => {
       chat_id: USER.id,
       message_id: TEXT_CARD_MESSAGE_ID,
       text: 'edited',
+      parse_mode: 'HTML',
     });
-    expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
+    // an edit without reply_markup strips an old status message's buttons too
+    expect(edit).not.toHaveProperty('reply_markup');
 
     // #350: a session gone from the backend gets the menu only
     await entry.edit(telegramHtml`gone`, null, 'not_found');
@@ -583,86 +579,172 @@ describe('the session button', () => {
   });
 });
 
-describe("the session's refresh button", () => {
-  it('reads the session and edits it in place, tracking a live one on this message', async () => {
-    const { press, calls, readSession, sessionTracker } = setup();
+describe("an old status message's «🔄 Обновить» (#536)", () => {
+  it('LG2 strips its keyboard and reads or sends nothing', async () => {
+    const { press, calls, readSession, readPairs, sessionTracker } = setup();
     await press(REFRESH);
-    expect(readSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
-    const edit = payloadOf(calls, 'editMessageText');
-    expect(edit?.text).toBe(statusOf(SESSION_VIEW));
-    expect(rowsOf(edit)).toEqual(LIVE_ROWS);
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
-    const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
-    await entry.edit(telegramHtml`again`, SESSION_VIEW);
-    const second = calls.filter((call) => call.method === 'editMessageText')[1];
-    expect(second?.payload).toMatchObject({
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    expect(readSession).not.toHaveBeenCalled();
+    expect(readPairs).not.toHaveBeenCalled();
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+  });
+});
+
+describe('«⏹ Остановить сессию» under the waiting message (#536)', () => {
+  const open = sessionView({
+    ...STOPPED,
+    lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+  });
+  const DELETE_GONE: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: message to delete not found',
+  };
+  const DELETE_FORBIDDEN: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: message can't be deleted",
+  };
+
+  it('SW1 stops, deletes the pressed message, then replies with the end of the path', async () => {
+    const { pressUpdate, calls, stopSession, readPairs, sessionTracker, logger } = setup();
+    const update = callbackUpdate(WAITING_STOP);
+    await pressUpdate(update);
+    expect(stopSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
+    expect(payloadOf(calls, 'deleteMessage')).toEqual({
       chat_id: USER.id,
-      message_id: (edit as { message_id?: number } | undefined)?.message_id,
+      message_id: update.callback_query?.message?.message_id,
     });
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(STOPPED));
+    expect(sent?.text).toBe('⏹ Сессия остановлена по твоей команде.');
+    expect(sent?.parse_mode).toBe('HTML');
+    expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
+    // the session message is tracked already; no catalog: no pair in the reply
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+    expect(readPairs).not.toHaveBeenCalled();
+    expect(warnings(logger)).toEqual([]);
   });
 
-  it('tracks a session that is done too, so its entry sends the summary card once (#318)', async () => {
-    const { press, calls, sessionTracker } = setup({ readSession: () => Promise.resolve(STOPPED) });
-    await press(REFRESH);
-    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(STOPPED_ROWS);
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
-    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
+  it('SW2 a session that had already ended: read, and its end line', async () => {
+    const completed = sessionView({
+      ...STOPPED,
+      stopReason: TradingSessionStopReason.Completed,
+      trades: { ...STOPPED.trades, settled: 5, won: 3, lost: 2 },
+      cycles: { planned: 5, closed: 5 },
+    });
+    const { press, calls, readSession } = setup({
+      stopSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive)),
+      readSession: () => Promise.resolve(completed),
+    });
+    await press(WAITING_STOP);
+    expect(readSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
+    );
   });
 
-  it('sends the status anew when the message is gone, and tracks the new one', async () => {
-    const { press, calls, apiErrors, sessionTracker } = setup();
-    apiErrors.set('editMessageText', EDIT_GONE);
-    await press(REFRESH);
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(SESSION_VIEW));
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
-  });
+  it('SW3 a failed stop or read: the menu, the pressed message kept for another press', async () => {
+    const broken = setup({ stopSession: () => Promise.reject(httpError(500)) });
+    await broken.press(WAITING_STOP);
+    expect(methods(broken.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual([MENU_ROW]);
+    expect(broken.stopSession).toHaveBeenCalledTimes(1);
+    expect(warnings(broken.logger)).toEqual(['trading session not stopped']);
 
-  it('says the status is unavailable on a 404, and warns on any other failure', async () => {
-    const missing = setup({ readSession: () => Promise.reject(httpError(404, 'not_found')) });
-    await missing.press(REFRESH);
+    const missing = setup({ stopSession: () => Promise.reject(httpError(404, 'not_found')) });
+    await missing.press(WAITING_STOP);
+    expect(methods(missing.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     expect(payloadOf(missing.calls, 'sendMessage')?.text).toBe(
       TEXTS.sessionStatusUnavailable.value,
     );
     expect(rowsOf(payloadOf(missing.calls, 'sendMessage'))).toEqual([MENU_ROW]);
     expect(warnings(missing.logger)).toEqual([]);
 
-    const broken = setup({
+    const unread = setup({
+      stopSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive)),
       readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
-    await broken.press(REFRESH);
-    expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
-    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual(SESSION_REFRESH_ROWS);
-    expect(warnings(broken.logger)).toEqual(['trading session status not read']);
+    await unread.press(WAITING_STOP);
+    expect(methods(unread.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(warnings(unread.logger)).toEqual(['trading session status not read']);
+  });
+
+  it('SW4 the delete refused: the reply goes all the same', async () => {
+    const gone = setup();
+    gone.apiErrors.set('deleteMessage', DELETE_GONE);
+    await gone.press(WAITING_STOP);
+    expect(methods(gone.calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
+    expect(gone.logger.info.mock.calls.map((call) => call[1])).toContain(
+      'the pressed message was already gone',
+    );
+
+    const old = setup();
+    old.apiErrors.set('deleteMessage', DELETE_FORBIDDEN);
+    await old.press(WAITING_STOP);
+    // older than 48 h: it stays as it is, its «⏹» pressed again answers 409 → the reply
+    expect(methods(old.calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
+    expect(warnings(old.logger)).toEqual(['the pressed message was not deleted']);
+  });
+
+  it('SW5 an open trade plays out: the reply says so', async () => {
+    const { press, calls } = setup({ stopSession: () => Promise.resolve(open) });
+    await press(WAITING_STOP);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+      ['⏹ Сессия остановлена по твоей команде.', '⏳ Открытая сделка доиграет до конца.'].join(
+        '\n',
+      ),
+    );
+  });
+
+  it('SW6 a real session: the same reply, its again button marked REAL', async () => {
+    const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
+    const { press, calls } = setup({ stopSession: () => Promise.resolve(realStopped) });
+    await press(WAITING_STOP);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(realStopped));
+    expect(rowsOf(sent)[0]).toEqual([
+      button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15)),
+    ]);
+  });
+
+  it('ignores a press in a group', async () => {
+    const { press, calls, stopSession } = setup();
+    await press(WAITING_STOP, 'group');
+    expect(calls).toEqual([]);
+    expect(stopSession).not.toHaveBeenCalled();
   });
 });
 
-describe("the session's stop button", () => {
-  it('stops the session and shows it stopped in place, without the stop button', async () => {
+describe("an old status message's «⏹» (before #536)", () => {
+  it('LG1 stops the session and draws it in place, under the end of the path, tracked', async () => {
     const { press, calls, stopSession, sessionTracker } = setup();
     await press(STOP);
     expect(stopSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit?.text).toBe(statusOf(STOPPED));
     expect(edit?.text).toContain('⏹ Сессия остановлена по твоей команде.');
-    expect(edit?.text).not.toContain('доиграет');
     expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
     // done at once: tracked all the same, so its entry sends the summary card (#318)
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
   });
 
-  it('says an open trade plays out, and keeps following it', async () => {
-    const open = sessionView({
-      ...STOPPED,
-      lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+  it('LG1 the old message gone: the session message anew, replacing it in the record', async () => {
+    const { pressUpdate, calls, apiErrors, sessionTracker } = setup();
+    apiErrors.set('editMessageText', EDIT_GONE);
+    const update = callbackUpdate(STOP);
+    await pressUpdate(update);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(STOPPED));
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(STOPPED_ROWS);
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
+      messageId: TEXT_CARD_MESSAGE_ID,
+      replacesMessageId: update.callback_query?.message?.message_id,
     });
-    const { press, calls, sessionTracker } = setup({ stopSession: () => Promise.resolve(open) });
-    await press(STOP);
-    expect(payloadOf(calls, 'editMessageText')?.text).toContain(
-      '⏳ Открытая сделка доиграет до конца.',
-    );
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
   });
 
   it('shows how a session that had already ended ended', async () => {
@@ -699,7 +781,7 @@ describe("the session's stop button", () => {
     await broken.press(STOP);
     expect(broken.stopSession).toHaveBeenCalledTimes(1);
     expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
-    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual(SESSION_REFRESH_ROWS);
+    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual([MENU_ROW]);
     expect(warnings(broken.logger)).toEqual(['trading session not stopped']);
   });
 
@@ -721,44 +803,31 @@ describe('/stop (#122)', () => {
     return payloadOf(calls, 'sendMessage');
   };
 
-  it('B1 one stopped session without a trade: its status and keyboard, tracked for the card', async () => {
-    const { send, calls, sessionTracker } = setup();
+  // #536: the reply to «⏹» under the waiting message; the session message is tracked already
+  it('B1 one stopped session: the stop reply under the end of the path, nothing tracked', async () => {
+    const { send, calls, sessionTracker, readPairs } = setup();
     await send('/stop');
     const sent = onlyMessage(calls);
-    expect(sent?.text).toBe(statusOf(STOPPED));
+    expect(sent?.text).toBe(replyOf(STOPPED));
     expect(sent?.parse_mode).toBe('HTML');
     expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
-    // done at once: tracked all the same, so its entry sends the summary card (#318), as «⏹»
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
-    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+    expect(readPairs).not.toHaveBeenCalled();
   });
 
-  // the acceptance criterion: an open trade is not closed, it plays out and is followed
-  it('B2 an open trade plays out: the status says so and tracking moves to the new message', async () => {
+  // the acceptance criterion: an open trade is not closed, it plays out
+  it('B2 an open trade plays out: the reply says so', async () => {
     const { send, calls, sessionTracker, stopSessions, stopSession, readSession } = setup({
       stopSessions: () => Promise.resolve([open]),
     });
     await send('/stop');
     const sent = onlyMessage(calls);
-    expect(sent?.text).toBe(statusOf(open));
+    expect(sent?.text).toBe(replyOf(open));
     expect(sent?.text).toContain(TEXTS.sessionOpenTradePlaysOut.value);
     expect(stopSessions.mock.calls).toEqual([[String(USER.id)]]);
     expect(stopSession).not.toHaveBeenCalled();
     expect(readSession).not.toHaveBeenCalled();
-
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
-    const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
-    expect(entry).toMatchObject({
-      sessionId: open.id,
-      telegramUserId: String(USER.id),
-      label: pairLabel(PAIR_EURUSD),
-      view: open,
-    });
-    await entry.edit(telegramHtml`edited`, open);
-    expect(payloadOf(calls, 'editMessageText')).toMatchObject({
-      chat_id: USER.id,
-      message_id: TEXT_CARD_MESSAGE_ID,
-    });
+    expect(sessionTracker.track).not.toHaveBeenCalled();
   });
 
   it('B3 no active session: the text and the menu, nothing tracked', async () => {
@@ -801,14 +870,6 @@ describe('/stop (#122)', () => {
     }
   });
 
-  it('B6 a failed catalog names the asset by its id', async () => {
-    const { send, calls } = setup({
-      readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    });
-    await send('/stop');
-    expect(onlyMessage(calls)?.text).toBe(sessionStatusText(null, STOPPED).value);
-  });
-
   it('B7 a group is ignored; /stop@bot and a trailing text are the command', async () => {
     const group = setup();
     await group.send('/stop', 'group');
@@ -818,7 +879,7 @@ describe('/stop (#122)', () => {
     for (const text of [`/stop@${BOT_INFO.username}`, '/stop что-то']) {
       const { send, calls, stopSessions } = setup();
       await send(text);
-      expect(onlyMessage(calls)?.text).toBe(statusOf(STOPPED));
+      expect(onlyMessage(calls)?.text).toBe(replyOf(STOPPED));
       expect(stopSessions).toHaveBeenCalledTimes(1);
     }
   });
@@ -850,7 +911,7 @@ describe('/stop resets the mode (#473)', () => {
     expect(setTradingMode.mock.calls).toEqual([[String(USER.id), TradeMode.Demo]]);
   });
 
-  it('ST2 a switch out of real: the mode line with the menu first, then the stopped status', async () => {
+  it('ST2 a switch out of real: the mode line with the menu first, then the stop reply', async () => {
     const { send, calls, sessionTracker } = setup({
       setTradingMode: () => Promise.resolve({ ...RESET, stoppedSessions: 1 }),
     });
@@ -861,8 +922,8 @@ describe('/stop resets the mode (#473)', () => {
     expect(line?.text).toBe('🎮 Режим: DEMO — следующие сделки пойдут на демо.');
     expect(rowsOf(line)).toEqual([MENU]);
     // the switch's own count is not read: the stop before it answered for the session
-    expect(status?.text).toBe(statusOf(STOPPED));
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(status?.text).toBe(replyOf(STOPPED));
+    expect(sessionTracker.track).not.toHaveBeenCalled();
   });
 
   it('ST3 a user already in demo gets the message of #122 only', async () => {
@@ -871,7 +932,7 @@ describe('/stop resets the mode (#473)', () => {
         Promise.resolve({ tradingMode: TradeMode.Demo, changed: false, stoppedSessions: 0 }),
     });
     await send('/stop');
-    expect(sends(calls).map((payload) => payload.text)).toEqual([statusOf(STOPPED)]);
+    expect(sends(calls).map((payload) => payload.text)).toEqual([replyOf(STOPPED)]);
     expect(setTradingMode).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
   });
@@ -881,11 +942,11 @@ describe('/stop resets the mode (#473)', () => {
       setTradingMode: () => Promise.reject(httpError(404, TradingModeErrorCode.UserNotFound)),
     });
     await send('/stop');
-    expect(sends(calls).map((payload) => payload.text)).toEqual([statusOf(STOPPED)]);
+    expect(sends(calls).map((payload) => payload.text)).toEqual([replyOf(STOPPED)]);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('ST5 a 4xx refusal: «не переключён» with the menu and a warning, the status after it', async () => {
+  it('ST5 a 4xx refusal: «не переключён» with the menu and a warning, the reply after it', async () => {
     const { send, calls, logger, sessionTracker } = setup({
       setTradingMode: () => Promise.reject(httpError(400)),
     });
@@ -895,8 +956,8 @@ describe('/stop resets the mode (#473)', () => {
     expect(rowsOf(line)).toEqual([MENU]);
     expect(sentText(calls, TEXTS.modeOutcomeUnknown.value)).toBeUndefined();
     expect(warnings(logger)).toEqual(['trading mode not reset']);
-    expect(sentText(calls, statusOf(STOPPED))).toBeDefined();
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(sentText(calls, replyOf(STOPPED))).toBeDefined();
+    expect(sessionTracker.track).not.toHaveBeenCalled();
   });
 
   it('ST6 a 5xx, no answer, a body off the contract or any throw: the outcome is unknown', async () => {
@@ -913,7 +974,7 @@ describe('/stop resets the mode (#473)', () => {
       expect(rowsOf(line)).toEqual(MODE_ROWS);
       expect(sentText(calls, TEXTS.modeNotReset.value)).toBeUndefined();
       expect(warnings(logger)).toEqual(['trading mode outcome unknown']);
-      expect(sentText(calls, statusOf(STOPPED))).toBeDefined();
+      expect(sentText(calls, replyOf(STOPPED))).toBeDefined();
     }
   });
 
@@ -933,7 +994,7 @@ describe('/stop resets the mode (#473)', () => {
     expect(warnings(logger)).toEqual(['trading sessions not stopped']);
   });
 
-  it('ST8 Telegram refuses the mode line: a warning with its method and code, the status still sent', async () => {
+  it('ST8 Telegram refuses the mode line: a warning with its method and code, the reply still sent', async () => {
     const { send, calls, logger, sessionTracker, answers } = setup({
       setTradingMode: () => Promise.resolve(RESET),
     });
@@ -954,13 +1015,13 @@ describe('/stop resets the mode (#473)', () => {
       sends(calls)
         .map((payload) => payload.text)
         .sort(),
-    ).toEqual([TEXTS.modeStopReset.value, statusOf(STOPPED)].sort());
+    ).toEqual([TEXTS.modeStopReset.value, replyOf(STOPPED)].sort());
     expect(warnings(logger)).toEqual(['trading mode line not sent']);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
       method: 'sendMessage',
       telegramErrorCode: 403,
     });
-    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(sessionTracker.track).not.toHaveBeenCalled();
   });
 
   it('ST9 no keyboard of /stop carries a switch: the screen is a read, the switches stay on it', async () => {
@@ -982,13 +1043,13 @@ describe('/stop resets the mode (#473)', () => {
 });
 
 describe('«🔁 Ещё сессия»', () => {
-  it('is on a stopped session only, with its pair and duration', () => {
-    const rows = (view: TradingSessionView) => sessionKeyboard(view, CASHIER_URL).inline_keyboard;
+  it('leads the end of the path, with its pair and duration', () => {
+    const rows = (view: TradingSessionView) =>
+      sessionCardKeyboard(view, CASHIER_URL).inline_keyboard;
     expect(rows(STOPPED)).toEqual(STOPPED_ROWS);
     expect(
       rows(sessionView({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 5 } })),
     ).toEqual([
-      [button(LABELS.sessionRefreshButton, REFRESH)],
       [button(LABELS.sessionAgainButton, `demo:l:${String(PAIR_EURUSD.id)}:5:n`)],
       newAnalysis(5),
       toSignals(5),
@@ -1003,15 +1064,11 @@ describe('«🔁 Ещё сессия»', () => {
       stopReason: TradingSessionStopReason.NoSignalTimeout,
     });
     expect(rows(noSignal)).toEqual([
-      [button(LABELS.sessionRefreshButton, REFRESH)],
       [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
       DEPOSIT,
       INVITE,
       MENU,
     ]);
-    // S5: the live session's keyboard has no invite
-    expect(rows(SESSION_VIEW)).toEqual(LIVE_ROWS);
-    expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
   });
 
   // #450: a martingale limit's stop prints its own line and keeps the stopped session's keyboard
@@ -1024,8 +1081,8 @@ describe('«🔁 Ещё сессия»', () => {
     const view = sessionView({ ...STOPPED, stopReason });
     expect(statusOf(view)).toContain(words);
     expect(statusOf(view)).not.toContain(TEXTS.sessionStopStakeStop.value);
-    expect(sessionKeyboard(view, CASHIER_URL).inline_keyboard).toEqual(
-      sessionKeyboard(STOPPED, CASHIER_URL).inline_keyboard,
+    expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard).toEqual(
+      sessionCardKeyboard(STOPPED, CASHIER_URL).inline_keyboard,
     );
   });
 
@@ -1033,11 +1090,6 @@ describe('«🔁 Ещё сессия»', () => {
   it('ends a stopped session of either mode with the deposit, the invite and the menu', () => {
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
     for (const view of [STOPPED, realStopped]) {
-      expect(sessionKeyboard(view, CASHIER_URL).inline_keyboard.slice(-3), view.mode).toEqual([
-        DEPOSIT,
-        INVITE,
-        MENU,
-      ]);
       expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard.slice(-3), view.mode).toEqual([
         DEPOSIT,
         INVITE,
@@ -1045,31 +1097,25 @@ describe('«🔁 Ещё сессия»', () => {
       ]);
     }
     const withoutDeposit = STOPPED_ROWS.filter((row) => row !== DEPOSIT);
-    expect(sessionKeyboard(STOPPED, undefined).inline_keyboard).toEqual(withoutDeposit);
-    expect(sessionKeyboard({ ...STOPPED, settings: null }, undefined).inline_keyboard).toEqual([
-      [button(LABELS.sessionRefreshButton, REFRESH)],
+    expect(sessionCardKeyboard(STOPPED, undefined).inline_keyboard).toEqual(withoutDeposit);
+    expect(sessionCardKeyboard({ ...STOPPED, settings: null }, undefined).inline_keyboard).toEqual([
       INVITE,
       MENU,
     ]);
-    expect(sessionKeyboard(SESSION_VIEW, CASHIER_URL).inline_keyboard).toEqual(LIVE_ROWS);
   });
 
   it('is not drawn without settings or on a duration the demo no longer offers', () => {
-    const refresh = [button(LABELS.sessionRefreshButton, REFRESH)];
     // without settings only the deposit, the invite and the menu follow: no pair to analyse
-    expect(sessionKeyboard({ ...STOPPED, settings: null }, CASHIER_URL).inline_keyboard).toEqual([
-      refresh,
-      DEPOSIT,
-      INVITE,
-      MENU,
-    ]);
+    expect(
+      sessionCardKeyboard({ ...STOPPED, settings: null }, CASHIER_URL).inline_keyboard,
+    ).toEqual([DEPOSIT, INVITE, MENU]);
     // an old duration: no «🔁 Ещё сессия» and no «📊 Новый анализ», the signals and the menu stay
     expect(
-      sessionKeyboard(
+      sessionCardKeyboard(
         { ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } },
         CASHIER_URL,
       ).inline_keyboard,
-    ).toEqual([refresh, TO_DURATIONS, DEPOSIT, INVITE, MENU]);
+    ).toEqual([TO_DURATIONS, DEPOSIT, INVITE, MENU]);
   });
 
   // #476: the door «again opens the amount screen»; the session starts from an amount
@@ -1093,7 +1139,6 @@ describe('«🔁 Ещё сессия»', () => {
       '🔁 Ещё сессия · REAL',
       sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
     );
-    expect(sessionKeyboard(realStopped, CASHIER_URL).inline_keyboard[1]).toEqual([realAgain]);
     expect(sessionCardKeyboard(realStopped, CASHIER_URL).inline_keyboard[0]).toEqual([realAgain]);
     const { press, startSession } = setup();
     await press(realAgain.callback_data ?? '');
@@ -1109,12 +1154,13 @@ describe('the summary card (#318)', () => {
   });
   const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), DEPOSIT, INVITE, MENU];
   // the tracker's entry of a refresh on a done session: its card is what the tracker calls
+  // the tracker's entry of a started session: its card is what the tracker calls
   const entryOf = async (setupResult: ReturnType<typeof setup>) => {
-    await setupResult.press(REFRESH);
+    await setupResult.press(START);
     return setupResult.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
   };
 
-  it('K1 is the stopped status keyboard without «🔄 Обновить»; the invite and the menu alone without settings', () => {
+  it('K1 is the end of the path; the invite and the menu alone without settings', () => {
     const rows = (view: TradingSessionView) =>
       sessionCardKeyboard(view, CASHIER_URL).inline_keyboard;
     expect(rows(DONE)).toEqual(CARD_ROWS);
@@ -1297,7 +1343,7 @@ describe('the summary card (#318)', () => {
 
   it("K6 without settings, the asset is the last trade's and the keyboard the invite and the menu", async () => {
     const bare = sessionView({ ...DONE, settings: null });
-    const scene = setup({ readSession: () => Promise.resolve(bare) });
+    const scene = setup({ startSession: () => Promise.resolve({ started: bare }) });
     await (await entryOf(scene)).card(bare);
     const photo = payloadOf(scene.calls, 'sendPhoto');
     expect(photo?.caption).toBe(
@@ -1351,7 +1397,7 @@ describe('the launch screen after the start (#418)', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
     expect(payloadOf(calls, 'deleteMessage')).toEqual(pressed);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(SESSION_VIEW));
-    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(LIVE_ROWS);
+    expect(payloadOf(calls, 'sendMessage')).not.toHaveProperty('reply_markup');
     expect(sessionTracker.track).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: SESSION_VIEW });
     expect(warnings(logger)).toEqual([]);
@@ -1511,7 +1557,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
       message_id: RESUMED_MESSAGE_ID,
       text: 'edited',
     });
-    expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
+    expect(edit).not.toHaveProperty('reply_markup');
   });
 
   it("RS2 the card goes to the owner's chat with the resume's bot username", async () => {
@@ -1539,7 +1585,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
   it('RS4 a status sent in place of a gone message replaces the pressed one in its record', async () => {
     const gone = setup();
     gone.apiErrors.set('editMessageText', EDIT_GONE);
-    const update = callbackUpdate(REFRESH);
+    const update = callbackUpdate(STOP);
     const pressedId = update.callback_query?.message?.message_id;
     expect(pressedId).not.toBe(TEXT_CARD_MESSAGE_ID);
     await gone.pressUpdate(update);
@@ -1550,7 +1596,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
     });
 
     const inPlace = setup();
-    await inPlace.press(REFRESH);
+    await inPlace.press(STOP);
     const entry = inPlace.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
     expect(entry.record).toBe(true);
     expect(entry.replacesMessageId).toBeUndefined();

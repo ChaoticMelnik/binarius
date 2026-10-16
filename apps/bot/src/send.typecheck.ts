@@ -8,6 +8,7 @@ import {
   answerInlineQueryEmpty,
   answerInlineQueryPhotoHtml,
   editMessageTextByIdHtml,
+  editMessageTextByIdHtmlWithoutNextStep,
   editMessageTextHtml,
   replyHtml,
   replyHtmlWithoutNextStep,
@@ -67,6 +68,19 @@ export const viaEditNoKeyboard = editMessageTextHtml(ctx, text);
 export const viaEditByIdNoKeyboard = editMessageTextByIdHtml(api, 1, 2, text);
 // @ts-expect-error a reason outside NO_NEXT_STEP_REASONS does not compile (TS2345)
 export const viaUnlistedReason = replyHtmlWithoutNextStep(ctx, text, 'because');
+// #536: the session message's edit without a keyboard names its reason
+// @ts-expect-error the edit by id without a keyboard needs its reason (TS2554)
+export const viaEditByIdNoReason = editMessageTextByIdHtmlWithoutNextStep(api, 1, 2, text);
+// @ts-expect-error nor a reason outside NO_NEXT_STEP_REASONS (TS2345)
+export const viaEditByIdUnlisted = editMessageTextByIdHtmlWithoutNextStep(api, 1, 2, text, 'x');
+export const viaEditByIdRaw = editMessageTextByIdHtmlWithoutNextStep(
+  api,
+  1,
+  2,
+  // @ts-expect-error nor a raw string (TS2345)
+  'raw',
+  'session_status',
+);
 // @ts-expect-error the photo by id needs one too (TS2554)
 export const viaPhotoByIdNoKeyboard = sendPhotoByIdHtml(api, 1, 'id', text);
 export const viaPhotoByIdUndefinedKeyboard = sendPhotoByIdHtml(api, 1, 'id', text, {
