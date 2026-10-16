@@ -646,6 +646,23 @@ describe('the analysis reminder: planning', () => {
     ]);
   });
 
+  // a cycle of five short trades ends within minutes: a session started after the analysis and
+  // already stopped is an action on it all the same
+  it('A3d plans nothing once a session started after the analysis has stopped', async () => {
+    const user = await analysed(11);
+    const session = await seedTradingSession(tmp.db, user.accountId);
+    await tmp.db
+      .update(tradingSessions)
+      .set({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.Completed,
+        endedAt: sql`now()`,
+      })
+      .where(eq(tradingSessions.id, session.id));
+    await planMailingJobs(tmp.db);
+    expect(await jobsOf(user.userId)).toEqual([]);
+  });
+
   it('A3c plans nothing for a user in real mode, blocked by the admin, or after an analysis with no signal', async () => {
     const real = await analysed(11);
     await setTradingMode(tmp.db, real.telegramUserId, TradeMode.Real);
