@@ -162,11 +162,14 @@ export interface BackendClient {
   // every active session of the user, stopped (#122); empty when there was none
   stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
   // the first poll of a status message (#567): records its id, the first one recorded wins, and
-  // answers the view readSession does; scoped by the owner like readSession
+  // answers the view readSession does; scoped by the owner like readSession. replacesMessageId is
+  // the pressed message this one was sent in place of after a gone refusal: the record replaces it
+  // when it is the one recorded
   recordSessionMessage(
     id: string,
     telegramUserId: string,
     messageId: number,
+    replacesMessageId?: number,
   ): Promise<TradingSessionView>;
   // the sessions to track again after a restart (#567), oldest first, at most TRACKED_SESSIONS_MAX
   listTrackedSessions(): Promise<TrackedSession[]>;
@@ -515,11 +518,12 @@ export function createBackendClient({
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
     },
-    async recordSessionMessage(id, telegramUserId, messageId) {
+    async recordSessionMessage(id, telegramUserId, messageId, replacesMessageId) {
       return sessionOf(
         await post(`trading/sessions/${encodeURIComponent(id)}${SESSION_STATUS_MESSAGE_SUFFIX}`, {
           telegramUserId,
           messageId,
+          ...(replacesMessageId === undefined ? {} : { replacesMessageId }),
         }),
       );
     },
