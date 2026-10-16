@@ -85,7 +85,7 @@ Every ending of an attempt:
 
 | Ending | The row | The queue |
 |---|---|---|
-| `ok` (exchanged, or another caller had rotated it first) | expiry about 7 days ahead, `token_rotated_at = now()` | leaves the window; `renewed` |
+| `ok` (exchanged, or another caller had rotated it first) | the pair's expiry as the broker answered (7 days), `token_rotated_at` of that exchange — the keeper's or the earlier caller's | leaves the window; `renewed` |
 | `refresh_rate_limited` | nothing (the pair is intact) | ends this tick's renewals — the limit is per IP, the next account would get it too; first again next tick |
 | `account_revoked` (`refresh_outcome_unknown`, `refresh_invalid_grant`, `refresh_expired`, `storage_inconsistent`) | `revoked` by the token service | leaves the set; `refused`, a `warn` with the reason; the count of the same tick sees it |
 | `user_blocked` after the exchange (blocked while it ran) | the rotated pair is stored | leaves the set by the `users` predicate |
@@ -133,7 +133,7 @@ SERVICE_STALLED_RETRY_MS < SERVICE_TOKEN_ROTATION_GAP_MS < SERVICE_TOKEN_RENEW_A
 `ADMIN_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (`stop()` waits for one send in flight;
 `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` already holds for one exchange). Exchanges are
 outside the per-minute GET shares (`BROKER_BUDGET_HOLDS` is unchanged): at most five a minute in the
-worst case, about one per service account per week in practice.
+worst case, about one per service account every six days in practice.
 
 ## Start and shutdown
 
@@ -146,7 +146,8 @@ A timer never exchanges a token (docs/binodex-oauth.md → Refresh), with this o
 by the owner: the keeper exchanges a service account's token by its age. It holds because
 `ensureFreshAccessToken` checks the mark itself, under the row lock and after the status checks:
 `serviceOnly: true` on a row with `service_since IS NULL` answers `not_service` with nothing
-decrypted, exchanged or written (`token-service.db.test.ts` V1), and the keeper's candidate list
+decrypted, exchanged or written (`token-service.db.test.ts` V1) and before the refused-token branch,
+so an unmarked row's token is never marked expired (V6), and the keeper's candidate list
 never names an unmarked account (`service-accounts.db.test.ts` K2, `service-account-ops.db.test.ts`
 O6). The SQL list is an optimisation; the lock is the guarantee. Both options are read only when
 `mayRefresh` is not `false` (V5), and the worker's `POST /trading/accounts/:id/access-token` has no
@@ -170,10 +171,11 @@ one attempt, a 429 keeps the pair, any other failure that may have spent it revo
    stops as `account_unavailable` on its next attempt; an open real trade still closes at the
    broker, and its result is written by the settlement catch-up once the user logs in again by
    e-mail (until then the catch-up's token is refused and the account is held back), the reserve
-   held until that write; the mark survives, so the account works again on the next tick; the staff
-   bot names the account and the reason within a minute.
+   held until that write; the mark survives, so after that re-login the account counts as working
+   again on the next tick; when the revocation leaves fewer than `SERVICE_ACCOUNTS_MIN` working, the
+   staff bot names the account and the reason on the same tick.
 2. **A 401 on a call in flight at the rotation instant**, if the broker invalidates the old access
-   token on a refresh (not verified): at most once a week per service account, a day before the
+   token on a refresh (not verified): about once every six days per service account, a day before the
    token would have expired anyway; the refused-token path (#281) restarts the consumer with the
    new token. Falsifiable: a worker `warn` `refused token reported` on a service account within a
    minute of a tick line with `renewed ≥ 1`.
@@ -211,7 +213,7 @@ Bringing it up the first time) and the backend and web running:
      where telegram_user_id = 391"
    ```
 2. Open `http://127.0.0.1:3001/admin/users`, find `service@example.com`, open the card and press
-   «Сделать служебным». Within a minute the staff bot sends «Служебных аккаунтов брокера в работе: 1
+   «Сделать служебным». On the next tick (about a minute) the staff bot sends «Служебных аккаунтов брокера в работе: 1
    из минимум 3 (отмечено: 1).»; «Служебные аккаунты» shows «В работе 1 из минимум 3 (отмечено 1)».
 3. Make its token due:
    ```bash
@@ -231,10 +233,15 @@ Bringing it up the first time) and the backend and web running:
 
 ## Running it on the pilot (the owner's step)
 
-After the deploy: admin → «Пользователи» → search `dimmelya@gmail.com` → the card → «Брокерские
-аккаунты» → «Сделать служебным». Within 60 s every active staff member gets «Служебных аккаунтов
-брокера в работе: 1 из минимум 3 (отмечено: 1).» — expected until two more are marked. «Служебные
-аккаунты» shows the account with «Токен до» about 7 days ahead. On the server:
+After the deploy, the first tick (a minute after the backend starts) finds no service account and
+tells every active staff member once: «Служебных аккаунтов брокера в работе: 0 из минимум 3
+(отмечено: 0).» A process started below the minimum says so once (The alert). Then: admin →
+«Пользователи» → search `dimmelya@gmail.com` → the card → «Брокерские аккаунты» → «Сделать
+служебным». On the next tick (about a minute) every active staff member gets «Служебных аккаунтов
+брокера в работе: 1 из минимум 3 (отмечено: 1).» This is expected until two more are marked. An
+account that is not working is listed under «Не в работе:» with its reason. «Служебные аккаунты»
+shows the account. «Токен до» is the current token's expiry, up to 7 days ahead: the mark rotates
+nothing. On the server:
 
 ```bash
 docker compose logs --since 3m backend | grep -E 'service accounts tick|service accounts alert'
@@ -242,5 +249,7 @@ docker compose exec -T postgres psql -U binarius -d binarius -c "select email, s
 docker compose exec -T postgres psql -U binarius -d binarius -c "select action, entity_type, payload from audit_log where action like 'broker_account_service%' or action = 'service_accounts_viewed' order by created_at desc limit 5"
 ```
 
-The first automatic exchange comes about six days later, a day before the token's expiry: a tick
-line with `renewed: 1`, and `token_rotated_at` moved.
+The first automatic exchange comes on the first tick inside the last 24 h before that expiry. That
+is the next tick if less than a day is left or the token has already expired, though never within
+an hour of the token's last rotation. It shows as a tick line with `renewed: 1`, `token_rotated_at`
+moved and «Токен до» about 7 days ahead.

@@ -405,7 +405,8 @@ through the same column constant as the card and the list.
 pages) post `service=on|off` and `return=<the page>` to `POST /admin/broker-accounts/<id>/service`.
 `web` checks the id against `UUID_PATTERN` (otherwise 303 to the service page, no backend call),
 the value against `on`/`off` (otherwise 400), and goes back 303 to `return` only when it is
-`/admin/service-accounts`, `/admin/broker-accounts` or `/admin/users/<uuid>` — anything else goes
+exactly `/admin/service-accounts`, `/admin/broker-accounts` or `/admin/users/<uuid>` (in that letter
+case) — anything else goes
 to the service page. The backend's `{ service: boolean }` is parsed before the session (400
 `validation`, no row); inside `asStaff` one conditional `UPDATE` (`setServiceMark`): a mark sets
 `service_since = now()`, a removal sets it to `NULL`, and a repeat of either changes nothing and

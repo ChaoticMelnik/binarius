@@ -506,7 +506,7 @@ optimisation, not the guarantee.
 One more exception (#391): the service-account keeper of the backend exchanges by a timer, but
 only for rows whose `service_since` is set. It passes `serviceOnly: true`, and the mark is checked
 here, under the row lock — any other row is answered `not_service` with nothing exchanged
-(`token-service.db.test.ts` V1, `service-accounts.db.test.ts` K2). The failure rules are the
+(`token-service.db.test.ts` V1, V6, `service-accounts.db.test.ts` K2). The failure rules are the
 ones above: one attempt, a 429 keeps the pair, the rest revoke. See
 [docs/service-accounts.md](service-accounts.md).
 
