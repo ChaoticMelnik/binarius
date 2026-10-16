@@ -356,6 +356,9 @@ describe('the proxy guard', () => {
       '/admin/users/:id',
       '/trading/intents/:id',
       '/admin/sessions/:id/revoke',
+      // the bot's session recovery (#567)
+      '/trading/sessions/tracked',
+      '/trading/sessions/:id/status-message',
       // public by initData, but reached from web on the internal network only (#11)
       '/deposit/widget-session',
       '/deposit/credited',

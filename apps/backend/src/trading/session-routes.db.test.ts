@@ -3,10 +3,13 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
   SessionSummaryErrorCode,
   TRADING_SESSIONS_PATH,
   TRADING_SESSIONS_STOP_PATH,
+  TRADING_SESSIONS_TRACKED_PATH,
+  TRACKED_SESSIONS_MAX,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -20,6 +23,7 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
+  safeParseTrackedSessionsResponse,
   type BinaryPair,
   type BrokerUser,
   type PairsCatalogView,
@@ -1481,5 +1485,152 @@ describe('POST /trading/sessions/stop (#122)', () => {
       status: 'stopped',
       stopReason: 'user_stopped',
     });
+  });
+});
+
+describe('the recovery routes (#567)', () => {
+  const record = (
+    target: FastifyInstance,
+    id: string,
+    body: object,
+    headers: Record<string, string> = auth,
+  ) =>
+    target.inject({
+      method: 'POST',
+      url: `${TRADING_SESSIONS_PATH}/${id}${SESSION_STATUS_MESSAGE_SUFFIX}`,
+      headers,
+      payload: body,
+    });
+  const tracked = (
+    target: FastifyInstance,
+    query: string = '',
+    headers: Record<string, string> = auth,
+  ) => target.inject({ method: 'GET', url: `${TRADING_SESSIONS_TRACKED_PATH}${query}`, headers });
+  const recordedOf = async (id: string) =>
+    (
+      await tmp.db
+        .select({ v: tradingSessions.statusMessageId })
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, id))
+    )[0]!.v;
+  const listedOf = (response: { json: () => unknown }) => {
+    const parsed = safeParseTrackedSessionsResponse(response.json());
+    if (!parsed.success) throw new Error(`not a tracked list: ${parsed.error.message}`);
+    return parsed.data.sessions;
+  };
+
+  it('T1 records the id and answers the view, a finished session with its refreshed balance', async () => {
+    const seed = await finishedSession();
+    const response = await record(appWith({ refresh: writeAfterSession }), seed.sessionId, {
+      telegramUserId: seed.telegramUserId,
+      messageId: 41,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(sessionOf(response)).toMatchObject({
+      id: seed.sessionId,
+      trades: { settled: 1 },
+      balance: { available: '10000.85000000', current: true },
+    });
+    expect(refreshCalls).toHaveLength(1);
+    expect(await recordedOf(seed.sessionId)).toBe(41);
+  });
+
+  it('T2 a second id answers 200 and the first stays', async () => {
+    const seed = await seedSession();
+    const target = appWith();
+    const body = { telegramUserId: seed.telegramUserId };
+    expect((await record(target, seed.sessionId, { ...body, messageId: 41 })).statusCode).toBe(200);
+    const second = await record(target, seed.sessionId, { ...body, messageId: 42 });
+    expect(second.statusCode).toBe(200);
+    expect(sessionOf(second).id).toBe(seed.sessionId);
+    expect(await recordedOf(seed.sessionId)).toBe(41);
+  });
+
+  it('T3 GET /trading/sessions/tracked answers the list, not the /:id route', async () => {
+    const response = await tracked(appWith());
+    expect(response.statusCode).toBe(200);
+    expect(Array.isArray(listedOf(response))).toBe(true);
+  });
+
+  it("T4 another user's id and a non-uuid id are 404 not_found and record nothing", async () => {
+    const seed = await seedSession();
+    const other = await seedUser(tmp.db);
+    const target = appWith();
+    const foreign = await record(target, seed.sessionId, {
+      telegramUserId: other.telegramUserId,
+      messageId: 41,
+    });
+    expect([foreign.statusCode, foreign.json()]).toEqual([404, { error: 'not_found' }]);
+    const missing = await record(target, '00000000-0000-4000-8000-000000000000', {
+      telegramUserId: seed.telegramUserId,
+      messageId: 41,
+    });
+    expect([missing.statusCode, missing.json()]).toEqual([404, { error: 'not_found' }]);
+    const nonUuid = await record(target, 'nope', {
+      telegramUserId: seed.telegramUserId,
+      messageId: 41,
+    });
+    expect(nonUuid.statusCode).toBe(404);
+    expect(await recordedOf(seed.sessionId)).toBeNull();
+  });
+
+  it('T5 a body outside the schema is 400 and records nothing', async () => {
+    const seed = await seedSession();
+    const target = appWith();
+    for (const body of [
+      { telegramUserId: seed.telegramUserId },
+      { telegramUserId: seed.telegramUserId, messageId: 0 },
+      { telegramUserId: seed.telegramUserId, messageId: 2_147_483_648 },
+      { telegramUserId: seed.telegramUserId, messageId: 1, extra: true },
+    ]) {
+      expect((await record(target, seed.sessionId, body)).statusCode).toBe(400);
+    }
+    expect(await recordedOf(seed.sessionId)).toBeNull();
+  });
+
+  it('T6 a limit past the ceiling is 400; without one the list is capped at the ceiling', async () => {
+    const target = appWith();
+    const over = await tracked(target, `?limit=${TRACKED_SESSIONS_MAX + 1}`);
+    expect([over.statusCode, (over.json() as { error: string }).error]).toEqual([
+      400,
+      'validation',
+    ]);
+    expect((await tracked(target, '?limit=0')).statusCode).toBe(400);
+    expect((await tracked(target, `?limit=${TRACKED_SESSIONS_MAX}`)).statusCode).toBe(200);
+  });
+
+  it('T7 both routes need the bearer', async () => {
+    const seed = await seedSession();
+    const target = appWith();
+    const none = {};
+    expect(
+      (
+        await record(
+          target,
+          seed.sessionId,
+          { telegramUserId: seed.telegramUserId, messageId: 41 },
+          none,
+        )
+      ).statusCode,
+    ).toBe(401);
+    expect((await tracked(target, '', none)).statusCode).toBe(401);
+    expect(await recordedOf(seed.sessionId)).toBeNull();
+  });
+
+  it('T8 a row carries the owner, the message, the pair and started_at, oldest first', async () => {
+    const target = appWith();
+    const seeded = [];
+    for (const startedAt of ['1999-01-02T00:00:00.000Z', '1999-01-01T00:00:00.000Z']) {
+      const seed = await seedUserWithAccount(tmp.db);
+      const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+        startedAt: new Date(startedAt),
+      });
+      await record(target, session.id, { telegramUserId: seed.telegramUserId, messageId: 9 });
+      seeded.push({ id: session.id, telegramUserId: seed.telegramUserId, startedAt });
+    }
+    const rows = listedOf(await tracked(target, '?limit=2'));
+    expect(rows).toEqual(
+      [seeded[1]!, seeded[0]!].map((row) => ({ ...row, messageId: 9, assetId: ASSET })),
+    );
   });
 });
