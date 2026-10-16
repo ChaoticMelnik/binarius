@@ -54,7 +54,9 @@ where the broker balance snapshot comes from and how fresh it is kept is in
 received, journaled and deduplicated (nothing is credited yet) is in
 [docs/postbacks.md](docs/postbacks.md); how the cashier gets a session of the broker's deposit
 widget, the owner's probe of it, and the Mini App page that embeds it is in
-[docs/deposit.md](docs/deposit.md).
+[docs/deposit.md](docs/deposit.md); which broker accounts are service accounts, how their tokens
+renew themselves and when the staff bot is told there are too few is in
+[docs/service-accounts.md](docs/service-accounts.md).
 
 ## Requirements
 

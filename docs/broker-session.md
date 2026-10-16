@@ -90,9 +90,10 @@ a tainted connection, which the executor sends over REST.
 
 ## The token
 
-Every fetch passes `mayRefresh: false` (Rule 12: a timer never exchanges a token; the exchange
-happens on the user's trade over the REST fallback, where the executor passes the default
-`true`), and the manager's stop signal. The fetch after `token_expired`/`auth_failed` also passes
+Every fetch passes `mayRefresh: false` (Rule 12: a timer never exchanges a token — the one timer
+that does is the backend's service-account keeper, only for marked rows, #391,
+docs/service-accounts.md; the exchange happens on the user's trade over the REST fallback, where
+the executor passes the default `true`), and the manager's stop signal. The fetch after `token_expired`/`auth_failed` also passes
 `refusedToken`, the sha256 of the session's token: the backend marks that token expired and
 answers `refresh_needed`, or hands out the pair someone already rotated
 ([binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)).
