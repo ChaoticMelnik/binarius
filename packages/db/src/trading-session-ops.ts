@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -808,23 +808,31 @@ export async function readActiveTradingSessionView(
 }
 
 // Records the bot's status message of the session (#567, docs/bot-session.md → Recovery after a
-// restart): one CAS UPDATE, only while none is recorded (the first one wins while it lives: a lost
-// one is forgotten, and the next record writes) and only on the owner's session (Rule 13: a
-// foreign id writes nothing, like a missing one). True when it wrote.
+// restart): one CAS UPDATE, only while none is recorded, or the recorded one is the message this
+// one replaces (the bot sent it in place of a pressed message Telegram refused as gone) - the
+// first one wins while it lives: a lost one is forgotten, and the next record writes - and only on
+// the owner's session (Rule 13: a foreign id writes nothing, like a missing one). True when it
+// wrote.
 export async function recordSessionStatusMessage(
   db: Db,
-  { id, telegramUserId, messageId }: { id: string; telegramUserId: string; messageId: number },
+  {
+    id,
+    telegramUserId,
+    messageId,
+    replacesMessageId,
+  }: { id: string; telegramUserId: string; messageId: number; replacesMessageId?: number },
 ): Promise<boolean> {
+  const free =
+    replacesMessageId === undefined
+      ? isNull(tradingSessions.statusMessageId)
+      : or(
+          isNull(tradingSessions.statusMessageId),
+          eq(tradingSessions.statusMessageId, replacesMessageId),
+        );
   const rows = await db
     .update(tradingSessions)
     .set({ statusMessageId: messageId })
-    .where(
-      and(
-        eq(tradingSessions.id, id),
-        isNull(tradingSessions.statusMessageId),
-        sessionOwnedBy(telegramUserId),
-      ),
-    )
+    .where(and(eq(tradingSessions.id, id), free, sessionOwnedBy(telegramUserId)))
     .returning({ id: tradingSessions.id });
   return rows.length > 0;
 }
@@ -872,8 +880,9 @@ end`;
 // The sessions the bot tracks again after a restart (#567): a status message recorded, no summary
 // card sent, and not finished with no settled trade and its summary message sent - such a session
 // never gets a card, so there is nothing left to follow. A row leaves the list when its card is
-// claimed, when it finishes so, or when its message is lost (forgetSessionStatusMessage). Oldest first, at most `limit`. Not scoped
-// by a user: the bot's internal recovery list (Rule 13), each row naming its owner's chat.
+// claimed, when it finishes so, or when its message is lost (forgetSessionStatusMessage). Oldest
+// first, at most `limit`. Not scoped by a user: the bot's internal recovery list (Rule 13), each
+// row naming its owner's chat.
 export async function listTrackedSessions(
   db: Db,
   { limit }: { limit: number },
