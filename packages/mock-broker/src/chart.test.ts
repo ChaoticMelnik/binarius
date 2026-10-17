@@ -7,7 +7,7 @@ import {
   parseIntervalMs,
   validateChartQuery,
 } from './chart';
-import { rawPriceAt, roundTo } from './price';
+import { rawPriceAt, roundTo, wickAt } from './price';
 
 const PAIR: BinaryPairWire = {
   id: 7,
@@ -187,5 +187,21 @@ describe('buildCandles', () => {
 
   it('produces candles the shared contract parses', () => {
     expect(safeParseCandles(buildCandles(PAIR, step, START, 10, now)).success).toBe(true);
+  });
+
+  // #105: a curve of another scale than the waves, so the wick has to follow it as well
+  it('follows a given curve: open at the start, close at the end, the wick at its scale', () => {
+    const curve = (assetId: number, atMs: number) =>
+      assetId === PAIR.id ? 1.5 + ((atMs / step) % 7) * 0.001 : Number.NaN;
+    const candles = buildCandles(PAIR, step, START, 20, now, curve);
+    expect(candles).toHaveLength(11);
+    for (const [ts, open, high, low, close] of candles) {
+      expect(open).toBe(roundTo(curve(PAIR.id, ts), PAIR.digits));
+      expect(close).toBe(roundTo(curve(PAIR.id, ts + step), PAIR.digits));
+      const wick = wickAt(PAIR.id, ts, curve(PAIR.id, ts));
+      expect(high - Math.max(open, close)).toBeLessThanOrEqual(wick + 10 ** -PAIR.digits);
+      expect(Math.min(open, close) - low).toBeLessThanOrEqual(wick + 10 ** -PAIR.digits);
+    }
+    expect(candles[0]?.[1]).not.toBe(buildCandles(PAIR, step, START, 1, now)[0]?.[1]);
   });
 });

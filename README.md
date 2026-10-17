@@ -15,6 +15,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `packages/signal` — Signal module v2 (the decider, the chart feed, its journal and cache, and the tick-to-candle builder (#392)), shared by `apps/backend` (`POST /trading/signal`, the background scanner behind `GET /trading/signals`) and `apps/trading-worker`
 - `packages/signal-stand` — the Signal backtest stand (#381): a CLI over cached broker candles, imported by no app ([docs/signal-stand.md](docs/signal-stand.md))
 - `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
+- `packages/e2e` — test-only: the demo cycle end to end over the real backend, bot and worker, the mock broker and a stand-in Telegram ([docs/e2e-demo-cycle.md](docs/e2e-demo-cycle.md))
 
 How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
 [docs/trade-intent-transport.md](docs/trade-intent-transport.md); how a user links a Binodex
@@ -80,6 +81,7 @@ pnpm lint                # eslint .
 pnpm test                # vitest run — needs a migrated Postgres, see Database below
 pnpm test apps/backend   # one package's tests (path filter)
 pnpm test --project unit # the tests that need no Postgres or Redis
+pnpm test packages/e2e   # the demo cycle end to end, docs/e2e-demo-cycle.md
 STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand run   # the Signal backtest, docs/signal-stand.md
 ```
 

@@ -32,5 +32,11 @@
     "@binarius/mock-broker": "workspace:*",
     "@binarius/web": "workspace:*",
     "@types/pg": "^8.23.1"
+  },
+  "exports": {
+    "./e2e": {
+      "types": "./src/e2e.ts",
+      "default": "./src/e2e.ts"
+    }
   }
 }

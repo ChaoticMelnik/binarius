@@ -20,6 +20,7 @@ import {
   MockTradeStatus,
   startMockBroker,
   type MockBroker,
+  type MockOAuthEndpoint,
   type MockRestEndpoint,
 } from '@binarius/mock-broker';
 import {
@@ -74,8 +75,11 @@ async function caught(promise: Promise<unknown>): Promise<BrokerRestError> {
   throw new Error('the call resolved');
 }
 
+// the mock's OAuth routes belong to the backend's OAuth client (#105), not to this one
+type RestEndpoint = Exclude<MockRestEndpoint, MockOAuthEndpoint>;
+
 // one call per endpoint, so the status table below runs against every row
-const calls: Record<MockRestEndpoint, (c: BrokerRestClient) => Promise<unknown>> = {
+const calls: Record<RestEndpoint, (c: BrokerRestClient) => Promise<unknown>> = {
   user: (c) => c.getUser(auth),
   pairs: (c) => c.listPairs(),
   tradesList: (c) => c.listTrades(auth),
@@ -83,11 +87,11 @@ const calls: Record<MockRestEndpoint, (c: BrokerRestClient) => Promise<unknown>>
   chart: (c) => c.getChart(chartRequest()),
   widgetSession: (c) => c.createWidgetSession(auth, widgetRequest),
 };
-const endpoints = Object.keys(calls) as MockRestEndpoint[];
+const endpoints = Object.keys(calls) as RestEndpoint[];
 
 describe('the endpoint table', () => {
   it('has the mock broker endpoints as its keys', () => {
-    expectTypeOf<keyof typeof BROKER_REST_ENDPOINTS>().toEqualTypeOf<MockRestEndpoint>();
+    expectTypeOf<keyof typeof BROKER_REST_ENDPOINTS>().toEqualTypeOf<RestEndpoint>();
     expect(Object.keys(BROKER_REST_ENDPOINTS).sort()).toEqual([...endpoints].sort());
   });
 

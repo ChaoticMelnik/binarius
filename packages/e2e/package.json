@@ -1,0 +1,23 @@
+{
+  "name": "@binarius/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@binarius/backend": "workspace:*",
+    "@binarius/bot": "workspace:*",
+    "@binarius/broker-rest": "workspace:*",
+    "@binarius/db": "workspace:*",
+    "@binarius/mock-broker": "workspace:*",
+    "@binarius/shared": "workspace:*",
+    "@binarius/signal": "workspace:*",
+    "@binarius/trading-worker": "workspace:*",
+    "@types/pg": "^8.23.1",
+    "bullmq": "^6.3.8",
+    "drizzle-orm": "^0.45.3",
+    "grammy": "^1.46.0",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1"
+  }
+}

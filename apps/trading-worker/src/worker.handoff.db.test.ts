@@ -37,8 +37,6 @@ import {
 import {
   AccessTokenRefusal,
   logOptions,
-  SESSION_MAX_DURATION_MS,
-  SESSION_NO_SIGNAL_TIMEOUT_MS,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -51,6 +49,7 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import type { Env } from './env';
+import { TEST_WORKER_TUNING, watchSockets } from './testing';
 import { eurUsd, signalAnswer } from './trading-session/testing';
 import { createWorker, type ShutdownResult, type TradingWorker, type WorkerTuning } from './worker';
 
@@ -74,50 +73,6 @@ if (redisUrl === undefined || redisUrl === '') {
 const EURUSD = 101;
 const prefix = `test-${randomBytes(4).toString('hex')}`;
 
-// production's order and chains, with the waits a test can afford; the lease itself keeps
-// production's TTL and fence, so no lease lapses inside a case
-const TUNING: Partial<WorkerTuning> = {
-  sessions: {
-    tickMs: 100,
-    idleGraceMs: 60_000,
-    retryMs: 300,
-    refusalRetryMs: 1_500,
-    maxSessions: 50,
-    startConcurrency: 4,
-    stopBudgetMs: 1_000,
-    watchWindowMs: 600_000,
-    leaseTtlMs: 30_000,
-    leaseRenewMs: 6_000,
-    leaseRenewTimeoutMs: 3_000,
-    leaseFenceMs: 25_000,
-    lossGraceMs: 2_000,
-  },
-  socketTiming: {
-    connectTimeoutMs: 1_000,
-    authTimeoutMs: 500,
-    reconnectDelayMs: 20,
-    reconnectDelayMaxMs: 40,
-    jitter: 0,
-  },
-  orchestrator: {
-    tickMs: 100,
-    batchSize: 50,
-    attemptTimeoutMs: 2_000,
-    retryMs: 1_000,
-    candleSlackMs: 0,
-    maxDurationMs: SESSION_MAX_DURATION_MS,
-    noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
-  },
-  // above the held submit of H3 (HELD_REST_MS): the sweeper never overtakes a call still in flight
-  staleSubmittingMs: 3_000,
-  sweepIntervalMs: 100,
-  reconcileTickMs: 100,
-  reconcileRetryMs: 1_000,
-  catchupTickMs: 1_000,
-  catchupGraceMs: 10_000,
-  phase1BudgetMs: 10_000,
-  phase2BudgetMs: 4_000,
-};
 // a phase 1 that cannot outlast a held submit
 const DIRTY_PHASE1_MS = 200;
 const HELD_SOCKET_MS = 800;
@@ -206,7 +161,7 @@ function startWorker(
     redis,
     logger,
     testing: {
-      tuning: { ...TUNING, ...tuning },
+      tuning: { ...TEST_WORKER_TUNING, ...tuning },
       queuePrefix: prefix,
       tokens: {
         accessToken: (accountId) => {
@@ -340,29 +295,6 @@ const OPEN_OR_SETTLED: readonly string[] = [TradeIntentStatus.Accepted, TradeInt
 const socketsOf = (brokerUserId: number) =>
   broker.socket.sockets().filter((socket) => socket.userId === brokerUserId);
 
-// H2's oracle: at every poll, at most one connected socket per broker user
-function watchSockets() {
-  let worst = 0;
-  let polls = 0;
-  const poll = () => {
-    polls += 1;
-    const perUser = new Map<number, number>();
-    for (const socket of broker.socket.sockets()) {
-      if (socket.userId === undefined) continue;
-      perUser.set(socket.userId, (perUser.get(socket.userId) ?? 0) + 1);
-    }
-    for (const count of perUser.values()) worst = Math.max(worst, count);
-  };
-  const timer = setInterval(poll, 2);
-  return {
-    stop: () => {
-      clearInterval(timer);
-      poll();
-      return { worst, polls };
-    },
-  };
-}
-
 const snapshotted = async (accounts: readonly Account[]) => {
   const rows = await tmp.db
     .select({ id: brokerBalanceSnapshots.brokerAccountId })
@@ -383,7 +315,7 @@ describe.each([
   it(`H1${sockets ? '/H2' : ''} a stream of intents across the handoff: every one accepted once, none lost`, async () => {
     const accounts = await Promise.all([1, 2, 3, 4].map(() => seedAccount()));
     const [first, second, third, fourth] = accounts as [Account, Account, Account, Account];
-    const watch = watchSockets();
+    const watch = watchSockets(broker);
     const a = startWorker('A', { sockets });
 
     // A's two jobs are held at the broker when the deploy stops it
@@ -540,7 +472,7 @@ describe('a demo session across the handoff', () => {
         async () => (await statusOf(intent.id)) === TradeIntentStatus.Settled,
       );
     };
-    const watch = watchSockets();
+    const watch = watchSockets(broker);
 
     const a = startWorker('A', { sockets: true });
     await until('step 1 open over A', async () => {

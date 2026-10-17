@@ -41,7 +41,9 @@ export function roundTo(value: number, digits: number): number {
   return Number(value.toFixed(digits));
 }
 
-// the deviation of a candle's high and low beyond its open and close, at most 0.05% of the base
-export function wickAt(assetId: number, atMs: number): number {
-  return unit(hashAt(assetId, atMs)) * basePrice(assetId) * 0.0005;
+// the deviation of a candle's high and low beyond its open and close, at most 0.05% of the
+// price it is measured against: the candle's own open, so a curve passed in place of the waves
+// (#105) keeps wicks of its own scale
+export function wickAt(assetId: number, atMs: number, price: number): number {
+  return unit(hashAt(assetId, atMs)) * price * 0.0005;
 }
