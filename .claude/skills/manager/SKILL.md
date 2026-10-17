@@ -156,7 +156,7 @@ Started as a background `Bash` after every spawn **and after every `SendMessage`
 
 ### Substitutions
 
-**1. Clarify relay → the manager answers** (CLAUDE.md → «Вопросы владельцу не задаются» — the only text of the answering rule). Replaces tech-lead "Clarify relay" for every question a phase returns and for every checkpoint question that goes to the owner in the day (the change of approach). A question the phase marks as a plan defect goes to the architect for a Plan Update, as in the day. Before answering, post one comment per round on the issue:
+**1. Clarify relay → the manager answers** (CLAUDE.md → «Вопросы владельцу не задаются» — the only text of the answering rule). Replaces tech-lead "Clarify relay" for every question a phase returns and for every checkpoint question that goes to the owner in the day (the change of approach). A question the phase marks as a plan defect, or one whose text says the plan contradicts itself, goes to the architect for a Plan Update, as in the day (#590). Before answering, post one comment per round on the issue:
 ```
 ## Решение менеджера (сессия <YYYY-MM-DD>, <architect|implementer> clarify, раунд <k>)
 1. <вопрос> — варианты: (a) …; (b) …; (c) … → **(a)** — рекомендуемый вариант | постоянный ответ «<тема>»
