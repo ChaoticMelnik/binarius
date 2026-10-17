@@ -50,7 +50,7 @@ import {
 import {
   appendEndOfPath,
   backToAnalysisKeyboard,
-  depositRows,
+  depositButtons,
   inviteButton,
   MODE_CALLBACK_DATA,
   menuKeyboard,
@@ -108,7 +108,7 @@ const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 // duration and mode (#320, #327) - in real the session button's data, so the start handler checks
 // it as any other; in demo the amount screen (#476) - while the demo offers its duration, then the
 // end of the path with «💳 Пополнить» (#27) and «👥 Пригласить друга»
-// (#115) right above the menu; the deposit, the invite and the menu alone when its settings could
+// (#115) in one row right above the menu; the deposit, the invite and the menu alone when its settings could
 // not be read. A no_signal_timeout stop (#509) offers another pair instead of the same one again.
 function appendSessionEnd(
   keyboard: InlineKeyboard,
@@ -133,7 +133,7 @@ function appendSessionEnd(
     keyboard,
     settings.assetId,
     settings.durationSec,
-    [...depositRows(cashierUrl), [inviteButton()]],
+    [[...depositButtons(cashierUrl), inviteButton()]],
     { otherPair },
   );
 }

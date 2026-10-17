@@ -151,18 +151,23 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
-// for want of tokens, the purchase, then the deposit (#27), above the way back (#117)
+// for want of tokens, the purchase and the deposit (#27) in one row, above the way back (#117)
 const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
 const BUY_ROWS = [
-  [button(LABELS.buyButton, BUY_CALLBACK_DATA)],
-  [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }],
+  [
+    button(LABELS.buyButton, BUY_CALLBACK_DATA),
+    { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
+  ],
   ...BACK_ROWS,
 ];
-// the end of the path (#350): the analysis of the same pair and duration, the signals, the menu
+// the end of the path (#350): the analysis of the same pair and duration and the signals in one
+// row (#506), the menu
 const END_ROWS = [
-  [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
-  // the list of the trade's duration (#382)
-  [button(LABELS.toSignalsButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
+  [
+    button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),
+    // the list of the trade's duration (#382)
+    button(LABELS.toSignalsButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`),
+  ],
   MENU_ROW,
 ];
 // #360: under a finished trade, the session on the same pair and duration before the end of the
