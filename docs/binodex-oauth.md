@@ -406,7 +406,9 @@ Accounts confirmed before migration `0008` received nothing; there was no produc
 the active `referral_reward` version's tokens, once per referral, in the same transaction. It does
 not depend on the pack. The routes' answers are unchanged; the outcome is logged
 ([referrals.md → The reward](referrals.md#the-reward)). The OAuth callback (`activate: false`)
-pays neither.
+pays no pack; it pays the reward when it leaves an account confirmed before (`active`/`revoked`)
+active, and nothing for one it leaves pending. The inviter's `users` row is locked right after the
+user's, before the account ([referrals.md → Locks](referrals.md#the-reward)).
 
 ## Email login (issue #162)
 
