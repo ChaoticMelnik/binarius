@@ -1,4 +1,11 @@
-import type { Candle, SignalDecision, SignalDecisionV1, TradeAction } from '@binarius/shared';
+import type {
+  Candle,
+  SignalDecision,
+  SignalDecisionV1,
+  SignalIndicators,
+  TradeAction,
+} from '@binarius/shared';
+import { DEFAULT_SIGNAL_PARAMS, displayIndicators, SIGNAL_FETCH_LIMIT } from '@binarius/signal';
 import { DECISION_SLACK_MS, SETTLE_TICK_MS, TRADE_INTERVALS, type TradeInterval } from './config';
 import { outcomeOf, type Outcome, type PriceAt } from './price';
 import {
@@ -10,11 +17,21 @@ import {
 } from './variants';
 import { seriesAt } from './window';
 
+// Pure functions of (interval, nowMs), so a repeated boundary is a lookup and the result is the
+// same (docs/signal-stand.md -> The cadence model): v2 at the production point and the indicators.
+export interface IntervalMemo {
+  v2: Map<number, SignalDecision>;
+  indicators: Map<number, SignalIndicators | undefined>;
+}
+export type DecisionMemo = Partial<Record<TradeInterval, IntervalMemo>>;
+export const createDecisionMemo = (): DecisionMemo => ({});
+
 export interface Market {
   assetId: number;
   digits: number;
   series: Partial<Record<TradeInterval, readonly Candle[]>>;
   price: PriceAt;
+  memo?: DecisionMemo;
 }
 
 export interface SimConfig {
@@ -50,13 +67,41 @@ export function decisionContext(
   nowMs: number,
 ): DecisionContext {
   const { intervalMs } = TRADE_INTERVALS[interval];
-  const candles = () => seriesAt(market.series[interval] ?? [], intervalMs, nowMs);
+  const series = market.series[interval] ?? [];
+  const candles = () => seriesAt(series, intervalMs, nowMs);
   const { digits } = market;
+  const memo =
+    market.memo === undefined
+      ? undefined
+      : (market.memo[interval] ??= { v2: new Map(), indicators: new Map() });
   return {
     nowMs,
     v1: (): SignalDecisionV1 => v1Decider.decide({ candles: candles(), intervalMs, nowMs }),
-    v2: (point): SignalDecision =>
-      v2Decider(point).decide({ candles: candles(), intervalMs, nowMs, digits }),
+    v2: (point): SignalDecision => {
+      const decide = () =>
+        v2Decider(point).decide({ candles: candles(), intervalMs, nowMs, digits });
+      if (point !== undefined || memo === undefined) return decide();
+      let decision = memo.v2.get(nowMs);
+      if (decision === undefined) {
+        decision = decide();
+        memo.v2.set(nowMs, decision);
+      }
+      return decision;
+    },
+    indicators: (): SignalIndicators | undefined => {
+      const compute = () =>
+        displayIndicators(
+          seriesAt(series, intervalMs, nowMs, SIGNAL_FETCH_LIMIT),
+          intervalMs,
+          nowMs,
+          DEFAULT_SIGNAL_PARAMS,
+        );
+      if (memo === undefined) return compute();
+      if (memo.indicators.has(nowMs)) return memo.indicators.get(nowMs);
+      const indicators = compute();
+      memo.indicators.set(nowMs, indicators);
+      return indicators;
+    },
     v2OneMinute: (): SignalDecision => {
       const minuteMs = TRADE_INTERVALS['1m'].intervalMs;
       const minute = seriesAt(market.series['1m'] ?? [], minuteMs, nowMs);

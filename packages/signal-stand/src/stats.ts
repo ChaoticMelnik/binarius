@@ -1,3 +1,4 @@
+import { MIN_KEPT_SHARE_PCT } from './config';
 import type { SimTrade } from './simulate';
 
 const Z95 = 1.959964;
@@ -96,4 +97,73 @@ export function selectPoint<T>(
     if (best === undefined || rate > best.rate) best = { point, rate };
   }
   return best?.point;
+}
+
+export interface Samples {
+  inSample: Tally;
+  outOfSample: Tally;
+}
+
+export type AgainstV2Verdict = 'better' | 'worse' | 'inconclusive' | 'no evidence';
+
+export interface AgainstV2 {
+  // the variant's priced trades (W + L + T) out of sample, in % of v2's
+  keptPct?: number;
+  deltaPct?: number;
+  inSampleDeltaPct?: number;
+  verdict: AgainstV2Verdict;
+}
+
+// #483's rule, fixed before the run: `better` needs the variant's whole out-of-sample interval
+// above v2's rate, the kept-share floor and the same sign in sample
+export function againstV2({ variant, v2 }: { variant: Samples; v2: Samples }): AgainstV2 {
+  const keptPct =
+    v2.outOfSample.trades === 0
+      ? undefined
+      : (100 * variant.outOfSample.trades) / v2.outOfSample.trades;
+  const rate = winRatePct(variant.outOfSample);
+  const v2Rate = winRatePct(v2.outOfSample);
+  const inRate = winRatePct(variant.inSample);
+  const v2InRate = winRatePct(v2.inSample);
+  const deltaPct = rate === undefined || v2Rate === undefined ? undefined : rate - v2Rate;
+  const inSampleDeltaPct =
+    inRate === undefined || v2InRate === undefined ? undefined : inRate - v2InRate;
+  if (
+    keptPct === undefined ||
+    v2Rate === undefined ||
+    deltaPct === undefined ||
+    inSampleDeltaPct === undefined
+  ) {
+    return { keptPct, deltaPct, inSampleDeltaPct, verdict: 'no evidence' };
+  }
+  const ci = intervalOf(variant.outOfSample);
+  let verdict: AgainstV2Verdict = 'inconclusive';
+  if (ci.low > v2Rate && keptPct >= MIN_KEPT_SHARE_PCT && inSampleDeltaPct > 0) verdict = 'better';
+  else if (ci.high < v2Rate) verdict = 'worse';
+  return { keptPct, deltaPct, inSampleDeltaPct, verdict };
+}
+
+// the cadence of a non-stop simulated session per pair, not the scanner's list length
+export const tradesPerPairHour = (
+  tally: Tally,
+  pairs: number,
+  hours: number,
+): number | undefined => (pairs * hours === 0 ? undefined : tally.trades / (pairs * hours));
+
+// the points `better` on every interval the rows cover; the intervals are returned with them,
+// since #483's «added» needs 5s and 15s and a run may cover fewer
+export function betterOnAllIntervals(
+  rows: readonly { interval: string; variant: string; params: string; verdict: string }[],
+): { intervals: string[]; points: string[] } {
+  const intervals = [...new Set(rows.map((row) => row.interval))];
+  const better = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const key = `${row.variant} ${row.params}`;
+    if (!better.has(key)) better.set(key, new Set());
+    if (row.verdict === 'better') better.get(key)?.add(row.interval);
+  }
+  const points = [...better]
+    .filter(([, seen]) => intervals.length > 0 && intervals.every((i) => seen.has(i)))
+    .map(([key]) => key);
+  return { intervals, points };
 }
