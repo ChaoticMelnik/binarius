@@ -4,6 +4,7 @@ import {
   checkStake,
   decimalLessThan,
   parseStakeInput,
+  STAKE_AMOUNT_PATTERN,
   STAKE_RISK_THRESHOLD,
   StakeRefusal,
   stakeIsRisky,
@@ -137,6 +138,16 @@ describe('parseStakeInput', () => {
       const parsed = parseStakeInput(text);
       expect(parsed !== undefined && tradeAmountSchema.safeParse(parsed).success).toBe(true);
     }
+  });
+});
+
+describe('STAKE_AMOUNT_PATTERN', () => {
+  it('is numeric(20,8) without a capturing group', () => {
+    expect(STAKE_AMOUNT_PATTERN).toBe(String.raw`\d{1,12}(?:\.\d{1,8})?`);
+    const amount = new RegExp(`^${STAKE_AMOUNT_PATTERN}$`);
+    expect(amount.test('999999999999.99999999')).toBe(true);
+    expect(amount.test('1000000000000')).toBe(false);
+    expect(amount.test('0.000000001')).toBe(false);
   });
 });
 

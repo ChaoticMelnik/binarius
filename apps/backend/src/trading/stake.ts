@@ -7,11 +7,8 @@ import {
   StakeErrorCode,
   stakeScale,
   TradeMode,
-  type DecimalString,
 } from '@binarius/shared';
 import { readBalanceSnapshot, resolveBalanceAccount, setStake, type Db } from '@binarius/db';
-
-const canonical = (value: DecimalString) => normalizeDecimal(value);
 
 // POST /trading/stake (#297 demo, #326 real; docs/bot-demo-trade.md -> The stake): the bounds are
 // checked against the request mode's balance in the stored snapshot of any age, with no broker
@@ -47,8 +44,8 @@ export function registerStake(app: FastifyInstance, { db }: { db: Db }): void {
         return reply.code(409).send({
           error: refusal,
           limits: {
-            minTradeAmount: canonical(limits.minTradeAmount),
-            available: canonical(limits.available),
+            minTradeAmount: normalizeDecimal(limits.minTradeAmount),
+            available: normalizeDecimal(limits.available),
             scale: stakeScale(limits.minTradeAmount),
           },
         });

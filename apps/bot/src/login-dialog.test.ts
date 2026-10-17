@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createLoginDialog } from './login-dialog';
+import { TradeMode } from '@binarius/shared';
+import { createLoginDialog, endInputStep } from './login-dialog';
 
 const clock = (start = 1_000) => {
   let at = start;
@@ -73,5 +74,46 @@ describe('createLoginDialog', () => {
 
     expect(dialog.get(1)).toEqual({ step: 'email' });
     expect(dialog.get(2)).toEqual({ step: 'code', email: 'ada@example.test' });
+  });
+});
+
+describe('endInputStep', () => {
+  it('ends a typed stake and a typed cycle amount', () => {
+    const dialog = createLoginDialog();
+    dialog.set(1, { step: 'stake', mode: TradeMode.Demo, origin: { kind: 'settings' } });
+    dialog.set(2, { step: 'cycleStake', assetId: 7, durationSec: 15, back: 'l' });
+
+    endInputStep(dialog, 1);
+    endInputStep(dialog, 2);
+
+    expect(dialog.get(1)).toBeUndefined();
+    expect(dialog.get(2)).toBeUndefined();
+  });
+
+  it('leaves the login steps and their TTL as they were', () => {
+    const time = clock();
+    const dialog = createLoginDialog({ ttlMs: 100, now: time.now });
+    dialog.set(1, { step: 'email' });
+    dialog.set(2, { step: 'code', email: 'ada@example.test' });
+
+    time.advance(99);
+    endInputStep(dialog, 1);
+    endInputStep(dialog, 2);
+    expect(dialog.get(1)).toEqual({ step: 'email' });
+    expect(dialog.get(2)).toEqual({ step: 'code', email: 'ada@example.test' });
+
+    time.advance(1);
+    expect(dialog.get(1)).toBeUndefined();
+    expect(dialog.get(2)).toBeUndefined();
+  });
+
+  it('does nothing for a user without a dialog', () => {
+    const dialog = createLoginDialog();
+    dialog.set(2, { step: 'email' });
+
+    endInputStep(dialog, 1);
+
+    expect(dialog.get(1)).toBeUndefined();
+    expect(dialog.get(2)).toEqual({ step: 'email' });
   });
 });
