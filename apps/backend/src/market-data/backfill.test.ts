@@ -455,12 +455,24 @@ describe('the candle backfill (#590)', () => {
 
   it('B8 stop() aborts the GETs in flight at once, and nothing starts after it', async () => {
     const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })], config: { budgetMs: 10_000 } });
-    h.chart.next.push(slow(1_000));
+    // the answer the GET would get without the abort: stop() returning before it is the proof
+    let answered = false;
+    h.chart.next.push((call) =>
+      Promise.race([
+        hang(call),
+        new Promise<Candle[]>((resolve) =>
+          setTimeout(() => {
+            answered = true;
+            resolve([]);
+          }, 1_000),
+        ),
+      ]),
+    );
     const ticking = h.backfill.tick();
     expect(h.chart.calls).toHaveLength(1);
-    const started = Date.now();
     await h.backfill.stop();
-    expect(Date.now() - started).toBeLessThan(100);
+    expect(answered).toBe(false);
+    expect(h.chart.calls[0]?.signal?.aborted).toBe(true);
     await ticking;
     h.requests.add(1, '5s');
     h.clock.now += 60_000;
