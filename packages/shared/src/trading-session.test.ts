@@ -14,6 +14,9 @@ import {
   MAX_SESSION_SUMMARY_TRADES,
   MIN_SESSION_DURATION_SEC,
   SESSION_MAX_DURATION_MS,
+  SESSION_NO_SIGNAL_CANDLES,
+  sessionNoSignalTimeoutMs,
+  sessionSignalCandleMs,
   TRADING_SESSION_SETTINGS_VERSION,
   safeParseSessionSummaryResponse,
   safeParseSessionShareResponse,
@@ -365,6 +368,17 @@ describe('sessionFitsDeadline', () => {
     ['fixed', 20, 61, false],
   ] as const)('%s: %i cycles of %i s -> %s', (strategy, cycles, durationSec, fits) => {
     expect(sessionFitsDeadline(cycles, durationSec, strategy)).toBe(fits);
+  });
+});
+
+describe('the no-signal limit in candles (#637)', () => {
+  it('is 20 candles of the session signal interval', () => {
+    expect(SESSION_NO_SIGNAL_CANDLES).toBe(20);
+    expect(sessionNoSignalTimeoutMs(5)).toBe(100_000);
+    expect(sessionNoSignalTimeoutMs(15)).toBe(300_000);
+    expect(sessionNoSignalTimeoutMs(20)).toBe(300_000);
+    expect(sessionNoSignalTimeoutMs(60)).toBe(1_200_000);
+    expect(sessionSignalCandleMs(20)).toBe(15_000);
   });
 });
 

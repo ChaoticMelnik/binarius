@@ -28,12 +28,21 @@ const trade = (patch: Partial<SessionTradeNotice> = {}): SessionTradeNotice => (
   ...patch,
 });
 
+const settingsOf = (durationSec: number): SessionClosingView['settings'] => ({
+  version: 1,
+  assetId: 42,
+  durationSec,
+  trades: 5,
+  stake: { baseStake: d('1.00000000'), stakeScale: 8 },
+});
+
 const view = (patch: Partial<SessionClosingView> = {}): SessionClosingView => ({
   mode: TradeMode.Demo,
   stopReason: TradingSessionStopReason.Completed,
   trades: { settled: 5, rejected: 0, won: 3, lost: 2, tied: 0, profit: d('2.5') },
   cycles: { planned: 5, closed: 5 },
   balance: { available: d('10002.5'), ageSec: 0, current: true },
+  settings: settingsOf(15),
   ...patch,
 });
 
@@ -56,6 +65,16 @@ describe('the session words', () => {
     [21, '21 цикл'],
   ])('%i cycles read «%s» (#552)', (count, words) => {
     expect(session.cyclesCount(count)).toBe(words);
+  });
+
+  it.each([
+    [1, '1 свеча'],
+    [2, '2 свечи'],
+    [5, '5 свечей'],
+    [11, '11 свечей'],
+    [20, '20 свечей'],
+  ])('%i candles read «%s» (#637)', (count, words) => {
+    expect(session.candlesCount(count)).toBe(words);
   });
 
   it('scores «в ноль» only when a trade tied', () => {
@@ -194,11 +213,32 @@ describe('sessionSummaryText (#464)', () => {
     expect(lines(view({ stopReason }))[1]).toBe(line);
   });
 
-  // #509: the line carries the limit in minutes, from the constant the worker stops by
-  it('the stop reason no_signal_timeout prints the limit in minutes', () => {
-    expect(lines(view({ stopReason: TradingSessionStopReason.NoSignalTimeout }))[1]).toBe(
-      '⏳ Сессия остановлена: 2 мин по паре не было сигнала. Выбери другую пару.',
-    );
+  // #509, #637: the line carries the limit in candles of the session's signal interval, from the
+  // constant the worker stops by; the candle, not the trade (a 20 s session waits on 15 s candles)
+  it.each([
+    [15, '15'],
+    [5, '5'],
+    [20, '15'],
+  ])(
+    'the stop reason no_signal_timeout of a %i s session prints 20 candles of %s s',
+    (durationSec, sec) => {
+      expect(
+        lines(
+          view({
+            stopReason: TradingSessionStopReason.NoSignalTimeout,
+            settings: settingsOf(durationSec),
+          }),
+        )[1],
+      ).toBe(
+        `⏳ Сессия остановлена: по паре не было сигнала 20 свечей по ${sec} с. Выбери другую пару.`,
+      );
+    },
+  );
+
+  it('the stop reason no_signal_timeout without readable settings prints no figure (#637)', () => {
+    expect(
+      lines(view({ stopReason: TradingSessionStopReason.NoSignalTimeout, settings: null }))[1],
+    ).toBe('⏳ Сессия остановлена: по паре долго не было сигнала. Выбери другую пару.');
   });
 
   it('a real session prints the real balance; a balance read before the last trade, its age', () => {

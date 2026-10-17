@@ -10,7 +10,6 @@ import type { BotTextVariable } from './bot-text-template';
 import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import type { DecimalString } from './money';
 import { TradeMode } from './trading';
-import { SESSION_NO_SIGNAL_TIMEOUT_MS } from './trading-session';
 import { NotificationLevel } from './users';
 
 // The registry of the values a bot text can print (#358, docs/bot-texts.md → Variables): a key of
@@ -165,10 +164,8 @@ export const BOT_TEXT_VARS = {
   payout: shown('Выплата актива, %', '92'),
   breakEven: shown('Безубыточность при выплате актива: доля верных прогнозов, %', '55.6'),
   payoutFloor: shown('Порог выплаты для цикла сделок, %', String(MIN_CYCLE_PAYOUT_PCT)),
-  noSignalMinutes: shown(
-    'Лимит ожидания сигнала сессией, мин',
-    String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000),
-  ),
+  noSignalCandles: shown('Лимит ожидания сигнала сессией: число свечей со словом', '20 свечей'),
+  candleSec: shown('Длина свечи сигнала сессии, с', '15'),
   label: shown('Длительность сделки, подпись', '⏱ 15 с'),
   duration: shown('Время экспирации сделки сессии', '15 с'),
   subject: shown('Актив и длительность', 'EUR/USD OTC · ⏱ 15 с'),

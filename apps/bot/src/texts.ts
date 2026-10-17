@@ -528,7 +528,7 @@ export const sessionShareCaption = (referralLink: string): TelegramHtml =>
 // The reply to «⏹» under the waiting message and to /stop of one session (#536): the end line, and
 // the open trade's line while the worker still carries it to its end.
 export const sessionStopReplyText = (
-  view: Pick<SessionStatusView, 'stopReason' | 'trades' | 'cycles' | 'lastIntent'>,
+  view: Pick<SessionStatusView, 'stopReason' | 'trades' | 'cycles' | 'lastIntent' | 'settings'>,
 ): TelegramHtml =>
   joinLines([
     sessionEndLine(view),

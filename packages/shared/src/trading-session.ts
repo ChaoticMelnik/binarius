@@ -2,7 +2,11 @@ import * as z from 'zod';
 import { pairViewSchema } from './catalog';
 import { REFERRAL_CODE_PATTERN } from './referral';
 import { SessionStakeStrategy } from './session-steps';
-import { SIGNAL_SHORTEST_INTERVAL_MS } from './signal';
+import {
+  intervalForDuration,
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SHORTEST_INTERVAL_MS,
+} from './signal';
 import { multiplyDecimal, StakeRefusal, stakeScale } from './stake';
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import {
@@ -164,8 +168,9 @@ export const TradingSessionStopReason = {
   UserStopped: 'user_stopped',
   // the global trading switch is closed (#144, stopPausedSessions)
   KillSwitch: 'kill_switch',
-  // SESSION_NO_SIGNAL_TIMEOUT_MS since the later of started_at and the session's last intent
-  // change, on the database clock, while the session waited for a signal (#509)
+  // SESSION_NO_SIGNAL_CANDLES candles of the session's signal interval (#637) since the later of
+  // started_at and the session's last intent change, on the database clock, while the session
+  // waited for a signal (#509)
   NoSignalTimeout: 'no_signal_timeout',
 } as const;
 export type TradingSessionStopReason =
@@ -239,9 +244,21 @@ export function buildSessionSettings(input: {
   });
 }
 
-// A session that waits this long for a signal stops with no_signal_timeout (#509, owner): counted
-// from the later of started_at and its last intent's change, on the database clock
-export const SESSION_NO_SIGNAL_TIMEOUT_MS = 120_000;
+// A session that waits this many candles of its signal interval for a signal stops with
+// no_signal_timeout (#509; in candles since #637, owner 2026-10-18): counted from the later of
+// started_at and its last intent's change, on the database clock
+export const SESSION_NO_SIGNAL_CANDLES = 20;
+
+export function sessionSignalCandleMs(durationSec: number): number {
+  return SIGNAL_CHART_INTERVAL_MS[intervalForDuration(durationSec)];
+}
+
+export function sessionNoSignalTimeoutMs(
+  durationSec: number,
+  candles: number = SESSION_NO_SIGNAL_CANDLES,
+): number {
+  return candles * sessionSignalCandleMs(durationSec);
+}
 
 // The start's refusal of a session whose worst case cannot fit the hour (#552): under martingale a
 // cycle takes up to MARTINGALE_MAX_STEPS trades (the default limits' maxSteps), under fixed one.

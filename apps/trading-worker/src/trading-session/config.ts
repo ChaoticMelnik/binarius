@@ -1,6 +1,6 @@
 import {
   SESSION_MAX_DURATION_MS,
-  SESSION_NO_SIGNAL_TIMEOUT_MS,
+  SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   SIGNAL_SHORTEST_INTERVAL_MS,
@@ -25,16 +25,19 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         the start route and the CLI refuse a session that
 //                                         cannot fit it in its strategy's worst case
 //                                         (sessionFitsDeadline: cycles × steps per cycle, #552)
-//   SESSION_NO_SIGNAL_TIMEOUT_MS (shared) — how long a session waits for a signal before it stops
-//                                         with no_signal_timeout (#509), from the later of
+//   SESSION_NO_SIGNAL_CANDLES (shared)  — how many candles of its signal interval a session waits
+//                                         for a signal before it stops with no_signal_timeout
+//                                         (#509, in candles since #637), from the later of
 //                                         started_at and its last intent's change (database clock)
 // The chain: both backend calls fit one attempt (PAIRS + SIGNAL_BUDGET < ATTEMPT); a held-back
 // session skips at least one tick (TICK < RETRY); the candle wait never skips a candle
-// (SLACK < the shortest interval, 5s since #313); RETRY < NO_SIGNAL < MAX_DURATION, and the
-// longest candle the bot offers a session on (the scanner's, 15 s) is shorter than NO_SIGNAL, so
-// such a session gets several decisions before the limit; a longer candle (a direct POST or the
-// CLI only) may get one or two (accepted risk, docs/trading-session.md -> The no-signal limit);
-// every *_MS is an integer in [1, MAX_TIMER_MS].
+// (SLACK < the shortest interval, 5s since #313); the no-signal count is an integer >= 2, so a
+// session gets several decisions before the limit; a hold-back never outlives the shortest limit
+// (RETRY < NO_SIGNAL x the shortest candle); on the scanner's candles (15 s, the longest the bot
+// offers) the limit comes before the deadline (NO_SIGNAL x 15 s < MAX_DURATION); on 5m and longer
+// it does not, and the deadline ends the session (accepted risk, docs/trading-session.md -> The
+// no-signal limit); NO_SIGNAL x the longest candle (1h) stays a timer value, the bound of the
+// SQL ::int cast; every *_MS is an integer in [1, MAX_TIMER_MS].
 // The link to the shutdown budget is in intents/config.ts.
 export const TRADING_SESSION_TICK_MS = 5_000;
 const TRADING_SESSION_BATCH_SIZE = 200;
@@ -50,7 +53,7 @@ export interface SessionOrchestratorConfig {
   retryMs: number;
   candleSlackMs: number;
   maxDurationMs: number;
-  noSignalTimeoutMs: number;
+  noSignalCandles: number;
 }
 
 export const TRADING_SESSION_CONFIG: Readonly<SessionOrchestratorConfig> = Object.freeze({
@@ -60,12 +63,13 @@ export const TRADING_SESSION_CONFIG: Readonly<SessionOrchestratorConfig> = Objec
   retryMs: TRADING_SESSION_RETRY_MS,
   candleSlackMs: TRADING_SESSION_CANDLE_SLACK_MS,
   maxDurationMs: SESSION_MAX_DURATION_MS,
-  noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
+  noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
 });
 
 const LONGEST_SCAN_CANDLE_MS = Math.max(
   ...SIGNAL_SCAN_INTERVALS.map((interval) => SIGNAL_CHART_INTERVAL_MS[interval]),
 );
+const LONGEST_CANDLE_MS = Math.max(...Object.values(SIGNAL_CHART_INTERVAL_MS));
 
 export function sessionOrchestratorConfigHolds(
   config: SessionOrchestratorConfig,
@@ -77,16 +81,17 @@ export function sessionOrchestratorConfigHolds(
     isTimerMs(config.retryMs) &&
     isTimerMs(config.candleSlackMs) &&
     isTimerMs(config.maxDurationMs) &&
-    isTimerMs(config.noSignalTimeoutMs) &&
     isTimerMs(pairsTimeoutMs) &&
     Number.isSafeInteger(config.batchSize) &&
     config.batchSize >= 1 &&
     pairsTimeoutMs + TRADING_SIGNAL_BUDGET_MS < config.attemptTimeoutMs &&
     config.tickMs < config.retryMs &&
     config.candleSlackMs < SIGNAL_SHORTEST_INTERVAL_MS &&
-    config.retryMs < config.noSignalTimeoutMs &&
-    config.noSignalTimeoutMs < config.maxDurationMs &&
-    LONGEST_SCAN_CANDLE_MS < config.noSignalTimeoutMs
+    Number.isSafeInteger(config.noSignalCandles) &&
+    config.noSignalCandles >= 2 &&
+    config.retryMs < config.noSignalCandles * SIGNAL_SHORTEST_INTERVAL_MS &&
+    config.noSignalCandles * LONGEST_SCAN_CANDLE_MS < config.maxDurationMs &&
+    isTimerMs(config.noSignalCandles * LONGEST_CANDLE_MS)
   );
 }
 

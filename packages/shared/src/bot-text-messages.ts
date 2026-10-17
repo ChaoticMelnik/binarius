@@ -13,11 +13,12 @@ import {
 import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 import { STARS_PAYSUPPORT_LIST_LIMIT } from './stars';
+import { SIGNAL_CHART_INTERVAL_MS } from './signal';
 import { INT4_MAX } from './trading';
 import {
   DEFAULT_SESSION_CYCLES,
   MAX_SESSION_CYCLES,
-  SESSION_NO_SIGNAL_TIMEOUT_MS,
+  SESSION_NO_SIGNAL_CANDLES,
 } from './trading-session';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
@@ -64,7 +65,8 @@ export const BOT_TEXT_WIDTHS = {
   // formatBreakEven: 0.0-100.0, or a dash
   breakEven: 5,
   payoutFloor: String(MIN_CYCLE_PAYOUT_PCT).length,
-  noSignalMinutes: String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000).length,
+  // a session's signal candle in seconds: the longest of SIGNAL_CHART_INTERVAL_MS, 1h («3600»)
+  candleSec: String(Math.max(...Object.values(SIGNAL_CHART_INTERVAL_MS)) / 1000).length,
   // «999 из 999»
   page: 10,
   // formatPaymentDate: 'dd.mm.yyyy hh:mm'
@@ -209,7 +211,11 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   payout: () => w.payout,
   breakEven: () => w.breakEven,
   payoutFloor: () => w.payoutFloor,
-  noSignalMinutes: () => w.noSignalMinutes,
+  // candlesCount of SESSION_NO_SIGNAL_CANDLES: 20 takes the many form («20 свечей»), and the bot
+  // reads that key alone (M2)
+  noSignalCandles: (m) =>
+    String(SESSION_NO_SIGNAL_CANDLES).length + 1 + m.length('sessionCandleMany'),
+  candleSec: () => w.candleSec,
   // a session's duration in seconds, an int4 (texts.ts → sessionStatusText), and « с»
   duration: () => String(INT4_MAX).length + ' с'.length,
   label: (m) => m.longest(...durations),
@@ -742,7 +748,12 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     title: 'Ответ на остановку сессии',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      anyOf('sessionCompleted', ...sessionStopLines, 'sessionStatusUnavailable'),
+      anyOf(
+        'sessionCompleted',
+        ...sessionStopLines,
+        'sessionStopNoSignalTimeoutNoSettings',
+        'sessionStatusUnavailable',
+      ),
       '\n',
       k('sessionOpenTradePlaysOut'),
     ],
@@ -784,7 +795,14 @@ const ASSEMBLED: readonly BotTextMessage[] = [
         symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')),
       }),
       '\n',
-      oneOf([k('sessionCompleted')], [anyOf(...sessionStopLines), '\n', k('sessionTotal')]),
+      oneOf(
+        [k('sessionCompleted')],
+        [
+          anyOf(...sessionStopLines, 'sessionStopNoSignalTimeoutNoSettings'),
+          '\n',
+          k('sessionTotal'),
+        ],
+      ),
       ...sessionOutcome,
     ],
   },
