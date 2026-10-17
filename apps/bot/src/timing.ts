@@ -151,7 +151,8 @@ export const HANDLER_CALLS = {
   // «⏹ Остановить сессию» under an old status message (no `:w`, the worse path): answerCallbackQuery
   // ∥ stopSession ∥ readPairs, readSession after a 409 session_not_active, then editMessageText
   // refused as gone → sendMessage. Under the waiting message (`:w`, #536) it is 2 / 3:
-  // answerCallbackQuery ∥ stopSession, readSession after a 409, then deleteMessage, sendMessage
+  // answerCallbackQuery ∥ stopSession, readSession after a 409, then editMessageText refused as
+  // gone → sendMessage (#587: the reply in place of the pressed message)
   sessionStop: { backend: 3, telegram: 3 },
   // «📤 Поделиться»'s inline query (#321): readSession ∥ readPairs — counted as sequential, as in
   // confirm — then answerInlineQuery; a query of another shape is answered empty at once

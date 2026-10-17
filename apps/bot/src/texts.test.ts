@@ -1463,6 +1463,8 @@ describe('the facades over the catalog', () => {
         'repeatAnalysisButton',
         'resendButton',
         'sessionShareButton',
+        // drawn by the bot only after an unknown stop outcome under the waiting message (#587)
+        'sessionStopButton',
         'settingsCommand',
         'settingsStakeDemoButton',
         'settingsStakeRealButton',

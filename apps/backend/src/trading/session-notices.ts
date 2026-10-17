@@ -52,10 +52,12 @@ import { readFinishedSessionView } from './session-view';
 // too. Each trade is claimed by a CAS before the Telegram call (session-notice-ops.ts): a call
 // whose outcome is unknown is never repeated for that trade, so a trade's block can be lost but
 // a message never doubled by a retry; the next step's edit shows every block of its cycle again.
-// Under them stands the waiting message with its «⏹» (#536): deleted before a new cycle message
-// and sent again after it, deleted once the session stopped, before the summary. The bot's
-// restart and a backend restart send nothing twice: the cursor, the cycle message and the waiting
-// message are in trading_sessions.
+// Under them stands the waiting message with its «⏹» (#536): deleted before a new message of the
+// session (a cycle message, or a relaunch's status message, #587) and sent again after it, deleted
+// once the session stopped, before the summary - unless its «⏹» stopped the session: the stop
+// route then hands it to the bot, which draws its reply in place of it (#587), and the summary
+// follows with no delete. The bot's restart and a backend restart send nothing twice: the cursor,
+// the cycle message and the waiting message are in trading_sessions.
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -118,8 +120,11 @@ function failureOf(error: unknown): Failure {
 type Step = 'next' | 'skip' | 'pause';
 
 // how a delete of the waiting message ended: its id dropped (deleted, already gone, or never to
-// be deleted), kept for the next tick (outcome unknown), or Telegram asked to wait
-type Removal = { kind: 'cleared' } | { kind: 'kept' } | { kind: 'wait'; ms: number };
+// be deleted), kept for the next tick (outcome unknown), kept while the user is unreachable and
+// the session active (#587: deleted first once the user is reachable again), or Telegram asked to
+// wait
+type Removal =
+  { kind: 'cleared' } | { kind: 'kept' } | { kind: 'blocked' } | { kind: 'wait'; ms: number };
 
 // The memory's mirror of waitingDueSql once a step freed the slot or left it behind; the SQL
 // decides, so a wrong hint costs one refused claim or one tick.
@@ -197,10 +202,13 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     // waiting message is deleted first (#536), on the pace this call came with, and its slot
     // freed, so whatever becomes of the new message, the waiting message is due under it; the new
     // message then takes a pace of its own. A delete that did not clear puts the trade back, so
-    // no new message goes out under a waiting message that may still be there.
+    // no new message goes out under a waiting message that may still be there; one that found the
+    // user unreachable sends nothing more (Rule 19), the trade counting as sent and the waiting
+    // message's id kept, so it is deleted first once the user is reachable (#587).
     const sendNew = async (text: TelegramHtml, from: number): Promise<Step> => {
       if (session.waitingMessageId !== null) {
         const removal = await removeWaiting(session, session.waitingMessageId);
+        if (removal.kind === 'blocked') return 'next';
         if (removal.kind !== 'cleared') {
           // nothing was sent: the trade goes again after the pause, or next tick after the delete
           await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
@@ -311,7 +319,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   }
 
   // Deletes the waiting message (#536), drops its id and frees its slot, so an active session is
-  // due again; a blocked user's is dropped without a call (Rule 19). The caller has taken the pace.
+  // due again. Nothing is called for a user who blocked the bot (Rule 19): a stopped session's id
+  // is dropped without a call, so the summary can be claimed; an active session's is kept (#587),
+  // so once the user is reachable the message still in the chat is deleted before anything new is
+  // sent, never a second «⏹» beside it. The caller has taken the pace.
   async function removeWaiting(session: PendingSessionNotice, messageId: number): Promise<Removal> {
     const fields = { sessionId: session.sessionId };
     const clear = async (): Promise<Removal> => {
@@ -321,7 +332,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       session.waitingDue = true;
       return { kind: 'cleared' };
     };
-    if (session.telegramBlocked) return clear();
+    const unreachable = (): Promise<Removal> =>
+      session.status === TradingSessionStatus.Stopped
+        ? clear()
+        : Promise.resolve({ kind: 'blocked' });
+    if (session.telegramBlocked) return unreachable();
     try {
       await push.deleteSessionWaiting(session.telegramUserId, messageId);
       return await clear();
@@ -333,7 +348,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       };
       const refusal = error instanceof GrammyError ? deleteRefusal(error) : undefined;
       if (refusal === 'gone') {
-        // the user deleted it, or the bot did on a press of its «⏹»
+        // the user deleted it (or a bot before #587 did on a press of its «⏹»)
         logger.info(fields, 'session waiting message already gone');
         return clear();
       }
@@ -348,7 +363,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
           logger.warn(logged, 'session waiting message refused: the user is unreachable');
           await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
           session.telegramBlocked = true;
-          return clear();
+          return unreachable();
         case 'wait':
           return failure;
         case 'refused':
@@ -366,8 +381,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // The stale waiting message's own step (#536): the session stopped, or a new cycle message went
-  // out under it.
+  // The stale waiting message's own step (#536): the session stopped, or a newer message of the
+  // session went out under it. A message the user cannot be reached for stays (#587).
   async function deleteStaleWaiting(session: PendingSessionNotice): Promise<Step> {
     const messageId = session.waitingMessageId;
     if (messageId === null) return 'next';
@@ -380,7 +395,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
   // The waiting message's send (#536): its slot claimed first, so at most one goes out while none
   // is live; its id recorded after. A record the CAS refuses (the session stopped meanwhile, or
-  // another sender recorded first) deletes the message just sent.
+  // another sender recorded first) deletes the message just sent; a failed delete leaves it in the
+  // chat with its «⏹» (docs/bot-session.md, risk 65). Once recorded, the message is the sender's
+  // to delete, or the bot's to draw on when its «⏹» stops the session (the stop route takes it
+  // over, #587).
   async function sendWaiting(session: PendingSessionNotice): Promise<Step> {
     const fields = { sessionId: session.sessionId };
     await pace();

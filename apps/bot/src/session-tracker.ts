@@ -57,9 +57,6 @@ export interface SessionTrackRequest {
   // the first poll records messageId with the backend (#567) and reads the view from that answer;
   // false when the backend has it already (a recovered session)
   record: boolean;
-  // the pressed message this one was sent in place of, because Telegram refused its edit as gone:
-  // the record replaces it when it is the one recorded (#567)
-  replacesMessageId?: number;
   // edits the session message, without a keyboard (#536), or under the menu alone once the
   // session is gone (#350)
   edit: (text: TelegramHtml, ...rest: SessionEditArgs) => Promise<unknown>;
@@ -138,7 +135,10 @@ export function createSessionTracker({
   now = Date.now,
 }: SessionTrackerOptions): SessionTracker {
   const entries = new Map<string, Entry>();
-  // what an ended entry last drew on its message, so a recovered entry of it edits only on a change
+  // what an ended entry last drew on its message, so a recovered entry of it edits only on a change.
+  // Only this process's own draws enter it (finish() skips an entry with nothing rendered): such a
+  // message is a #536 one, without the old buttons mayDraw protects, so a memory hit may edit a
+  // running session's message (#587 finding 2, refuted by Y6)
   const drawn = new Map<string, { messageId: number; rendered: string }>();
   let nextResumeAt = Number.NEGATIVE_INFINITY;
   // every attempt under way, a replaced or evicted entry's included, so stop() waits for all
@@ -261,12 +261,7 @@ export function createSessionTracker({
     let view: TradingSessionView;
     try {
       view = entry.record
-        ? await backend.recordSessionMessage(
-            entry.sessionId,
-            entry.telegramUserId,
-            entry.messageId,
-            entry.replacesMessageId,
-          )
+        ? await backend.recordSessionMessage(entry.sessionId, entry.telegramUserId, entry.messageId)
         : await backend.readSession(entry.sessionId, entry.telegramUserId);
     } catch (error) {
       if (!(error instanceof BackendError)) {

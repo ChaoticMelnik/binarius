@@ -69,7 +69,8 @@ export const cashierUrlOf = (origin: string): string | undefined =>
 
 // «⏹ Остановить сессию» (#122; since #536 under the waiting message the backend sends, docs/
 // bot-session.md → The waiting message). `:w` says it was pressed under the waiting message, so
-// the bot deletes the pressed message; the data without it is the old status message's button.
+// the bot hands that message to the stop and draws its reply in place of it (#587); the data
+// without it is the old status message's button.
 // The id carries no authority: the backend stops only the presser's own session. 49 / 51 bytes.
 const SESSION_UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 export const sessionStopCallbackData = (

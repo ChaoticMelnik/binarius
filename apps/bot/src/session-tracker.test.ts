@@ -646,26 +646,12 @@ describe('the session tracker', () => {
       const { edits, edit } = target();
       tracker.track(request({ record: true, edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(recordSessionMessage.mock.calls).toEqual([
-        [SESSION_ID, String(USER.id), MESSAGE_ID, undefined],
-      ]);
+      expect(recordSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
       expect(readSession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL);
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
       expect(readSession).toHaveBeenCalledTimes(1);
       expect(texts(edits)).toEqual([shown(stoppedClosed)]);
-    });
-
-    it('P8 a record names the message it replaces; the next poll only reads', async () => {
-      const { tracker, readSession, recordSessionMessage, request } = setup({ script: [trading] });
-      tracker.track(request({ record: true, replacesMessageId: 76 }));
-      await vi.advanceTimersByTimeAsync(FIRST);
-      expect(recordSessionMessage.mock.calls).toEqual([
-        [SESSION_ID, String(USER.id), MESSAGE_ID, 76],
-      ]);
-      expect(readSession).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(POLL);
-      expect(readSession).toHaveBeenCalledTimes(1);
     });
 
     it('P2 a failed record is asked again on the next poll, logged once', async () => {
