@@ -3413,3 +3413,55 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. Architect task classes: a new row "Supervisor of external connections" — in the first plan, the transition table over slot states × each client state × in-flight work × list membership, each row with a test id, plus a liveness bound and safety invariants — **внедрено в #602: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
 2. Remaining findings — **вынесено в #601** (Minor; REST backfill stays #590)
+
+---
+
+## #105 — E2E: полный демоцикл /start → OAuth → демо-сессия → результат (2026-10-17)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Night session 2026-10-17 19:02; the first launch stopped at step 3 (main checkout on `docs/404-568-audit`, PR #602), relaunched after #602's merge. Postgres 5434, Redis, shared test DB = main (63 hashes), DEMO_ONLY (a)+(b). Pool: #537, #475, #158, #160 skipped (files of open day PRs), #124 (base #435 CONFLICTING), #380 (owner's business decision required), #274 (SSH probe). |
+| Architect | first plan | Fable (`claude-fable-5-1`). 8 clarify questions, the manager chose all recommended (6236548214). Plan 6236777461, ≈2 200 lines, fallback split «mock broker: OAuth + pricePath». Follow-up #603 (Backlog). |
+| Implementer | round 1 | Opus. 2 clarify questions (6236817143). PR #604, 4 commits, 2 240 lines, `pnpm check` 0, mutations 7/7 (6237192905). Commit 7b0871f red on `tooling/test-timing.test.ts` (F4), fixed in 7e761c1; no force-push at night → squash merge. Phase 3 audit 6237209316. |
+| Reviewer | round 1 | 1 Major (S8 waited on `summary_sent_at` and raced the bot's `sendPhoto`; confirmed by a 100 ms delay mutation), 5 Minor → Todo. Plan Update 6237488157 (Opus): the class «a stage waits on a DB mark committed before the effect» — S7 and S8 of 7 waits; all five Minors fixed (manager's decision). Fresh implementer: 1 clarify (6237527755), 8611565 + d98056d, 14 mutation rows (6237632214). |
+| Reviewer | round 2 | No Blocker/Major, 2 Minor (log oracle before teardown; harness without `'error'` listeners). CI green. Codex not run: a `/manager` PR (owner's decision 2026-10-15). |
+| Tech Lead | merge | `main` moved by #587/#538/#319/#206 after the review: the branch took a merge of `origin/main` (no conflicts, E2E passed against it unchanged), README line in 35a203b8 with a reviewer pass (no findings, 6238579541), mutations re-taken (6238562264), CI green. #609 retargeted to `main` first. Squash-merged b718aa3 on the owner's yes. Minors → #611. #105 Done. Models: every spawn on its policy model. |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 Major: S8 (and S7, Minor 1) waited on a DB mark written before the Telegram call it stands for; CI could go red at random | Major | instance-vs-class | the plan itself told both stages to wait on the claim marks | Architect |
+| Commit 7b0871f red on `tooling/test-timing.test.ts` (F4, a fixed `setTimeout`) | Minor | other | the per-commit check ran the touched packages only; the repo-wide scan was never started | Implementer Step 5 |
+| R1 Minors 2–5 (S7 comment wider than the check; `expect` in `afterAll` hid teardown errors; poller interval not cleared; tuning copied from the worker test) | Minor | other | fixed in round 1 | — |
+| R2 m1–m2 (log oracle before teardown; no `'error'` listeners on pool/redis) | Minor | other | left at the merge | → #611 |
+| CI green on a `main` two merges old; the squash target had moved | — | other | the night reviews against the main of its start | Tech Lead merge (caught) |
+
+### Process improvement proposals
+1. Implementer Step 5: the per-commit check also runs `tooling/test-timing.test.ts` when a commit adds or changes a test file — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»**
+2. Remaining findings — **вынесено в #611**
+
+---
+
+## #106 — E2E: повторные /start, дубли Telegram update и постбэков (2026-10-17)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Architect | first plan | Fable (`claude-fable-5-1`). Stacked on #105 (base In Review, Minor-only — manager stacking rule (c)). 6 clarify questions, all recommended (6238017484). Plan 6238153354, ≈570 lines. |
+| Implementer | round 1 | Opus. 2 clarify questions (6238182451; the R5 oracle `<= 1` passed at zero → «exactly 1 intent»). PR #609 on `feat/105-e2e-demo-cycle`, «Merge after #604», 2 commits, +560/−20, `pnpm check` 0, mutations 6/6 (6238301097). The per-commit check included `tooling/test-timing` (lesson of #105). Phase 3 audit 6238312133. |
+| Reviewer | round 1 | No Blocker/Major, 3 Minor (evidence quality of R2, R3a, R5). CI green. Codex not run: a `/manager` PR. Only 3c ran (tests and docs only). |
+| Manager | stop | Owner at 21:11: finish the current task and stop for the merge; no new task taken. |
+| Tech Lead | merge | Retargeted to `main` before #604's merge; rebase-only spawn: `rebase --onto origin/main d98056de`, no conflicts, `range-diff` `=` for both commits, per-commit checks and `pnpm check` 0, mutations 6/6 (6238745606); `closingIssuesReferences` = #106 after the retarget; CI green. Merged with rebase and branch deletion on the owner's yes; `feat/105-e2e-demo-cycle` deleted after no PR targeted it. Minors → #612. #106 Done. |
+
+### Review iterations: 1
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 m1–m3 (R2 repeat not shown reaching the bot; R3a keyboard check can match S2; R5 literal `startSignalAction`) | Minor | other | left at the merge | → #612 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #612**
