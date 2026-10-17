@@ -1,7 +1,12 @@
 // Test-only fixtures for the trading routes. Compiled by `tsc -b` alongside the *.test.ts files
 // next to it and imported by no runtime module.
 
-import { SessionStakeStrategy, type PairsCatalogView } from '@binarius/shared';
+import {
+  SessionStakeStrategy,
+  SignalKind,
+  TradeAction,
+  type PairsCatalogView,
+} from '@binarius/shared';
 import type { SignalEvaluation } from '@binarius/signal';
 import type { PairsRoutesDeps } from './pairs-routes';
 import type { TradingRoutesDeps } from './routes';
@@ -46,9 +51,15 @@ export function fakeSignalFeed(answer: SignalEvaluation | (() => Promise<SignalE
 }
 
 // A decided evaluation of `kind` for the session start's signal step (#509), which reads the
-// decision's kind alone; the journal fields are left out.
-export const sessionSignalEvaluation = (kind: 'signal' | 'no_signal'): SignalEvaluation =>
-  ({ outcome: 'decided', entry: { decision: { kind } } }) as unknown as SignalEvaluation;
+// decision's kind and a signal's direction (#568); the journal fields are left out.
+export const sessionSignalEvaluation = (
+  kind: SignalKind,
+  action: TradeAction = TradeAction.Up,
+): SignalEvaluation =>
+  ({
+    outcome: 'decided',
+    entry: { decision: kind === SignalKind.Signal ? { kind, action } : { kind } },
+  }) as unknown as SignalEvaluation;
 
 // for suites that never call POST /trading/signal
 export const unusedSignalDeps = (): SignalRoutesDeps => ({

@@ -2978,6 +2978,29 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
+  // #568: the direction of the signal the start route checked
+  it.each([null, 'up', 'down'] as const)('accepts start_signal_action %s', async (action) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values(session(seed.accountId, { startSignalAction: action }))
+        .returning();
+      expect(row!.startSignalAction).toBe(action);
+    });
+  });
+
+  it.each(['bogus', ''])('rejects start_signal_action %j', async (action) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradingSessions).values(session(seed.accountId, { startSignalAction: action })),
+        '23514',
+        'trading_sessions_start_signal_action_check',
+      );
+    });
+  });
+
   it.each([
     ['active', null, false],
     ['stopped', 'completed', true],

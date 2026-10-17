@@ -79,6 +79,8 @@ export interface CreateTradingSessionInput {
   brokerAccountId: string;
   mode: TradeMode;
   settings: TradingSessionSettings;
+  // the direction of the signal the start route checked (#568); the CLI's session-start has none
+  startSignalAction?: TradeAction;
 }
 
 export interface CreateTradingSessionOptions {
@@ -152,6 +154,7 @@ export async function createTradingSession(
           brokerAccountId: input.brokerAccountId,
           mode: input.mode,
           settings: input.settings,
+          startSignalAction: input.startSignalAction ?? null,
         })
         .returning();
       if (row === undefined) throw new Error('trading_sessions insert returned no row');
@@ -636,6 +639,7 @@ export async function readTradingSessionView(
           ageSec: nullableAgeSec(sessionObservedAt),
           current: sessionBalanceCurrent,
           noticesDone: sql<boolean>`${tradingSessions.finalNoticeSentAt} is not null`,
+          startSignalAction: tradingSessions.startSignalAction,
         })
         .from(tradingSessions)
         .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -692,6 +696,8 @@ export async function readTradingSessionView(
         },
         cycles: { planned: progress?.planned ?? 0, closed: progress?.done ?? 0 },
         lastIntent: last === undefined ? null : toTradeIntentView(last, telegramUserId),
+        // the bot's session picture (#568): the last attempt's direction, else the start's signal
+        signalAction: last?.action ?? session.startSignalAction ?? null,
         balance:
           session.available === null || session.ageSec === null
             ? null

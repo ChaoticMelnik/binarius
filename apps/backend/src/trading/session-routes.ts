@@ -10,6 +10,7 @@ import {
   TRADING_SESSIONS_TRACKED_PATH,
   TradeMode,
   TradingSessionErrorCode,
+  type TradeAction,
   TradingSessionStopReason,
   buildSessionSettings,
   errorLogFields,
@@ -192,11 +193,15 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     }
 
     // The pair's signal on the current candle (#509): no session starts on a pair without one. A
-    // broker failure or a throw is a refusal too, never a start on a signal nobody read.
+    // broker failure or a throw is a refusal too, never a start on a signal nobody read. Its
+    // direction is the session's first picture in the bot (#568).
     const readSignal = async (): Promise<
-      | typeof TradingSessionErrorCode.NoSignal
-      | typeof TradingSessionErrorCode.SignalUnavailable
-      | null
+      | {
+          refusal:
+            | typeof TradingSessionErrorCode.NoSignal
+            | typeof TradingSessionErrorCode.SignalUnavailable;
+        }
+      | { action: TradeAction }
     > => {
       try {
         const evaluation = await signals.evaluate({
@@ -205,14 +210,15 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
           digits: pair.digits,
         });
         if (evaluation.outcome === SignalFeedOutcome.FetchFailed) {
-          return TradingSessionErrorCode.SignalUnavailable;
+          return { refusal: TradingSessionErrorCode.SignalUnavailable };
         }
-        return evaluation.entry.decision.kind === SignalKind.Signal
-          ? null
-          : TradingSessionErrorCode.NoSignal;
+        const { decision } = evaluation.entry;
+        return decision.kind === SignalKind.Signal
+          ? { action: decision.action }
+          : { refusal: TradingSessionErrorCode.NoSignal };
       } catch (error) {
         request.log.error({ assetId, ...errorLogFields(error) }, 'session start signal threw');
-        return TradingSessionErrorCode.SignalUnavailable;
+        return { refusal: TradingSessionErrorCode.SignalUnavailable };
       }
     };
     // keeps the account in work for the backend's reconcile tick and the worker's sessions;
@@ -240,8 +246,8 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     };
     // in parallel, so the start's budget holds the longer of the two, not their sum; the signal's
     // refusal answers first
-    const [signalRefusal, snapshot] = await Promise.all([readSignal(), readSnapshot()]);
-    if (signalRefusal !== null) return refuse(reply, signalRefusal);
+    const [signal, snapshot] = await Promise.all([readSignal(), readSnapshot()]);
+    if ('refusal' in signal) return refuse(reply, signal.refusal);
     if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
 
     // the user's saved stake of the session's mode, or the broker's minimum without one (#297,
@@ -275,7 +281,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     try {
       created = await createTradingSession(
         db,
-        { telegramUserId, brokerAccountId, mode, settings },
+        { telegramUserId, brokerAccountId, mode, settings, startSignalAction: signal.action },
         { demoOnly },
       );
     } catch (error) {

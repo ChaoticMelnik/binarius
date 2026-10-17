@@ -428,9 +428,12 @@ describe('contract coverage (issue #6)', () => {
       | 'trades'
       | 'cycles'
       | 'lastIntent'
+      | 'signalAction'
       | 'balance'
       | 'noticesDone'
     >();
+    // #568: the direction of the bot's session picture
+    expectTypeOf<TradingSessionView['signalAction']>().toEqualTypeOf<'up' | 'down' | null>();
     // #552: the session's length and its closed cycles
     expectTypeOf<TradingSessionView['cycles']>().toEqualTypeOf<{
       planned: number;

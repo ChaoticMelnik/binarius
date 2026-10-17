@@ -428,6 +428,9 @@ export const SESSION_VIEW: TradingSessionView = tradingSessionViewSchema.parse({
   trades: { settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   cycles: { planned: 5, closed: 0 },
   lastIntent: null,
+  // no picture (#568): the scenes written before it keep the text message; a scene of the
+  // picture passes a direction
+  signalAction: null,
   balance: null,
   noticesDone: false,
 });

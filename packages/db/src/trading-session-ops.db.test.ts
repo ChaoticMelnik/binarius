@@ -237,6 +237,24 @@ describe('createTradingSession', () => {
     expect(row.startedAt.getTime()).toBeLessThanOrEqual(new Date(rows[0]!.now).getTime());
   });
 
+  it('C9 writes the start signal as given; without one the column is NULL (#568)', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const input = {
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      settings: sessionSettings(),
+    };
+    const signalled = await createSessionRow({ ...input, startSignalAction: TradeAction.Up });
+    expect((await sessionOf(signalled.id))!.startSignalAction).toBe('up');
+    await stopTradingSession(tmp.db, {
+      id: signalled.id,
+      reason: TradingSessionStopReason.UserStopped,
+    });
+    const plain = await createSessionRow(input);
+    expect((await sessionOf(plain.id))!.startSignalAction).toBeNull();
+  });
+
   it('C2 refuses a second active session of the account and leaves the first untouched', async () => {
     const seed = await seedSessionAccount();
     await sessionFailsWith(

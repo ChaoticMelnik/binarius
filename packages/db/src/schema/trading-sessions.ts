@@ -47,6 +47,10 @@ export const tradingSessions = pgTable(
     // the direction of the last attempt that decided anything, NULL after a no_signal or before
     // any decision: the pause after two losses holds while it stays the losing direction (#379)
     lastSignalAction: text('last_signal_action').$type<TradeAction>(),
+    // the direction of the signal the start route checked (#568): the bot's session picture until
+    // the session's first trade. Written only by createTradingSession from POST /trading/sessions,
+    // never updated; NULL on rows before #568 and on the CLI's session-start, which checks no signal
+    startSignalAction: text('start_signal_action').$type<TradeAction>(),
     // the summary card's at-most-once mark (#318): set by claimSessionSummary's one CAS, never
     // cleared; NULL on every session that has not sent its card
     summarySentAt: timestamp('summary_sent_at', { withTimezone: true }),
@@ -95,6 +99,7 @@ export const tradingSessions = pgTable(
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),
     inList('trading_sessions_stop_reason_check', t.stopReason, TradingSessionStopReason),
     inList('trading_sessions_last_signal_action_check', t.lastSignalAction, TradeAction),
+    inList('trading_sessions_start_signal_action_check', t.startSignalAction, TradeAction),
     // Two CHECKs, not one: a single `(stopped) = (reason and end)` accepts paused/reason/NULL and
     // active/NULL/now, because false = false holds. Each pair alone pins its column to `stopped`.
     check(
