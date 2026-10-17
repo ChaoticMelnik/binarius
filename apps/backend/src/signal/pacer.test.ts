@@ -6,11 +6,9 @@ import {
   MIN_SIGNAL_SCAN_PER_MINUTE,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
-  signalScanCapacity,
-  signalScanPairs,
-  signalScanPerMinute,
+  signalRestCapacity,
 } from '../timing';
-import { createScanPacer, joinSpare } from './pacer';
+import { createScanPacer } from './pacer';
 
 function pacer(overrides: { perMinute?: number; capacity?: number } = {}) {
   const clock = { now: 1_000_000 };
@@ -53,33 +51,32 @@ describe('scan pacer', () => {
     expect(taken.length).toBeLessThanOrEqual(26 + 3 * 100);
   });
 
-  // #382 review M1: the takes of a batch are one burst at the timer's millisecond, and a candle
-  // refills exactly one batch, so a fire earlier relative to its boundary than the one before
-  // must still find the whole batch
-  it.each([
-    [DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s'],
-    [DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'],
-    [MIN_SIGNAL_SCAN_PER_MINUTE, '5s'],
-    [MAX_SIGNAL_SCAN_PER_MINUTE, '15s'],
-    [MAX_SIGNAL_SCAN_PER_MINUTE, '5s'],
-  ] as const)(
-    'P9 at the ceiling %i the %s pacer gives the whole batch every candle under a jittery timer',
-    (ceiling, interval) => {
+  // #382 review M1, #405: the one signal pacer's bucket is a 5 s candle of on-demand GETs at one
+  // boundary plus a spare token; afterwards every 5 s candle refills its share, also when a fire
+  // comes a few ms earlier relative to its boundary than the one before
+  it.each([DEFAULT_SIGNAL_SCAN_PER_MINUTE, MIN_SIGNAL_SCAN_PER_MINUTE, MAX_SIGNAL_SCAN_PER_MINUTE])(
+    'P9 at the ceiling %i a full bucket gives one 5 s burst and every candle after it its share',
+    (ceiling) => {
       const start = 1_000_000;
       const clock = { now: start };
       const p = createScanPacer({
-        perMinute: signalScanPerMinute(ceiling, interval),
-        capacity: signalScanCapacity(ceiling, interval),
+        perMinute: ceiling,
+        capacity: signalRestCapacity(ceiling),
         backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
         backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
         now: () => clock.now,
       });
-      const batch = signalScanPairs(ceiling, interval);
+      const candleMs = SIGNAL_CHART_INTERVAL_MS['5s'];
       const taken = [1, 0, 2, 2, 1, 3, 0].map((lag, candle) => {
-        clock.now = start + candle * SIGNAL_CHART_INTERVAL_MS[interval] + 500 + lag;
-        return Array.from({ length: batch }, () => p.tryTake()).filter(Boolean).length;
+        clock.now = start + candle * candleMs + 500 + lag;
+        let n = 0;
+        while (p.tryTake()) n += 1;
+        return n;
       });
-      expect(taken).toEqual(Array.from({ length: 7 }, () => batch));
+      expect(taken[0]).toBe(Math.ceil((ceiling * candleMs) / 60_000) + 1);
+      for (const n of taken.slice(1)) {
+        expect(n).toBeGreaterThanOrEqual(Math.floor((ceiling * candleMs) / 60_000));
+      }
     },
   );
 
@@ -228,33 +225,5 @@ describe('scan pacer', () => {
     expect(p.tryTakeSpare()).toBe(false);
     clock.now += 1;
     expect(p.tryTakeSpare()).toBe(true);
-  });
-
-  it('P14 joinSpare takes from the first pacer with an overflow and passes the rest to all', () => {
-    const a = pacer({ perMinute: 60, capacity: 1 });
-    const b = pacer({ perMinute: 60, capacity: 1 });
-    const joined = joinSpare([a.p, b.p]);
-    a.clock.now += 1_500;
-    b.clock.now += 1_500;
-    expect(joined.tryTakeSpare()).toBe(true);
-    expect(a.p.tryTakeSpare()).toBe(false);
-    expect(joined.tryTakeSpare()).toBe(true);
-    expect(b.p.tryTakeSpare()).toBe(false);
-    expect(joined.tryTakeSpare()).toBe(false);
-
-    a.p.onRateLimited(30);
-    expect(joined.onRateLimited(20)).toBe(20_000);
-    expect(a.p.pausedUntil()).toBe(a.clock.now + 30_000);
-    expect(b.p.pausedUntil()).toBe(b.clock.now + 20_000);
-
-    a.clock.now += 30_000;
-    b.clock.now += 30_000;
-    a.p.onRateLimited(undefined);
-    b.p.onRateLimited(undefined);
-    a.clock.now += 15_000;
-    b.clock.now += 15_000;
-    joined.onDecided();
-    expect(a.p.onRateLimited(undefined)).toBe(15_000);
-    expect(b.p.onRateLimited(undefined)).toBe(15_000);
   });
 });

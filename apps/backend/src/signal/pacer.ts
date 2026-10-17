@@ -1,16 +1,14 @@
-// The signal scanner's share of the broker's per-IP window (docs/signal.md -> The scanner): a
-// token bucket refilled at perMinute / 60 s and holding at most one candle's batch plus one spare
-// token (signalScanCapacity in timing.ts), so a batch goes out right after the boundary even when
-// the timer fires a few ms earlier than the candle before, and any 60 s window carries at most
-// perMinute plus the capacity.
-// A rate_limited answer pauses it: for Retry-After held to [backoffMinMs, backoffMaxMs] when the
+// The one pacer of the signal chart GETs (docs/signal.md -> The budget, #405): perMinute tokens,
+// capacity at most (signalRestCapacity in timing.ts). tryTake is an on-demand GET of the feed when
+// the source has no window (no BROKER_WS_URL, no ready socket, or an interval the ring does not
+// build); tryTakeSpare is the candle backfill's (docs/market-data.md -> Backfill): only the
+// overflow, what refill discards above capacity, held to one token. On a clock that does not go
+// back no answer of tryTake depends on tryTakeSpare, and a 60 s window carries at most
+// perMinute + capacity + 1 of both together.
+// A rate_limited answer pauses both: for Retry-After held to [backoffMinMs, backoffMaxMs] when the
 // broker sent one, otherwise for a backoff that doubles from backoffMinMs to backoffMaxMs and
 // resets on the next decided answer. The calls in flight answer one 429 burst together, so a 429
 // without Retry-After during a pause is the same episode: it neither doubles nor extends it.
-// The scanner takes tokens; the candle backfill (docs/market-data.md -> Backfill) takes only the
-// overflow: what refill discards above capacity, held to one token, so no answer of tryTake depends
-// on tryTakeSpare, and a 60 s window carries at most perMinute + capacity + 1 of both together.
-// POST /trading/signal never waits for it.
 
 export interface ScanPacerOptions {
   perMinute: number;
@@ -96,16 +94,3 @@ export function createScanPacer(options: ScanPacerOptions): ScanPacer {
 }
 
 export type SpareTokenSource = Pick<ScanPacer, 'tryTakeSpare' | 'onRateLimited' | 'onDecided'>;
-
-// #590 only, while main has a pacer per scanner; #405 passes its single pacer and deletes this.
-// A 429 is the IP window's answer, so it pauses every pacer.
-export function joinSpare(pacers: readonly ScanPacer[]): SpareTokenSource {
-  return {
-    tryTakeSpare: () => pacers.some((pacer) => pacer.tryTakeSpare()),
-    onRateLimited: (retryAfterSec) =>
-      pacers.reduce((most, pacer) => Math.max(most, pacer.onRateLimited(retryAfterSec)), 0),
-    onDecided: () => {
-      for (const pacer of pacers) pacer.onDecided();
-    },
-  };
-}

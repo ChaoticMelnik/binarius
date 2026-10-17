@@ -4,9 +4,9 @@ import {
   createCandleBuilder,
   tickProblem,
   type CandleBuilder,
+  type CandleWindow,
   type Tick,
 } from '@binarius/signal';
-import type { CandleWindow } from './source';
 
 // The candles of the data socket (#404, docs/market-data.md -> The ring): one #392 builder per
 // (pair, interval), created on the pair's first tick. Two rules sit on top of the builders.
