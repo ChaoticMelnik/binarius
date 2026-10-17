@@ -20,12 +20,13 @@ const KEY_BYTES = 32;
 const SALT_BYTES = 16;
 const MIB = 1024 * 1024;
 
-// Bounds on what a stored string may ask for, checked before any work is done: the row is
-// trusted input today, but the cost of a hash is entirely in these three numbers, so a row
-// that asked for ln=25 would be a way to spend the process rather than a way to log in.
-const LN_RANGE = { min: 10, max: 17 } as const;
-const R_RANGE = { min: 1, max: 8 } as const;
-const P_RANGE = { min: 1, max: 2 } as const;
+// Every parameter set hashPassword has ever written, and the only ones verifyPassword accepts,
+// checked before any work is done: the cost of a hash is entirely in these three numbers, so a
+// row that asked for ln=25 would be a way to spend the process, and one that asked for ln=10 a
+// cheaper hash than any this module wrote — neither is a row this module produced. A rotation
+// changes SCRYPT_PARAMS and appends the previous set here, so the rows already written keep
+// verifying at their own cost.
+export const WRITTEN_SCRYPT_PARAMS: readonly ScryptParams[] = [SCRYPT_PARAMS];
 
 // `$scrypt$ln=17,r=8,p=1$<salt>$<hash>`, base64 without padding. Parsed strictly: anything
 // this does not match is not a hash this module wrote.
@@ -34,9 +35,9 @@ const PHC_PATTERN =
 
 // Node refuses when approximately 128 * N * r exceeds maxmem (default 32 MiB), so it has to be
 // raised deliberately. Derived from the parameters rather than fixed, plus a megabyte for
-// scrypt's own working buffers: at the bounds above this is 257 MiB, and at the parameters
-// hashPassword writes it is 129 MiB. The concurrency limit on top of it (apps/backend
-// password-queue.ts) is what bounds the process, not this number.
+// scrypt's own working buffers: at the parameters hashPassword writes it is 129 MiB, and a set
+// appended at a rotation is sized by the same expression. The concurrency limit on top of it
+// (apps/backend password-queue.ts) is what bounds the process, not this number.
 const maxmemFor = ({ ln, r, p }: ScryptParams): number => 128 * 2 ** ln * r * p + MIB;
 
 const b64 = (buffer: Buffer): string => buffer.toString('base64').replace(/=+$/, '');
@@ -64,30 +65,41 @@ export async function hashPassword(
   return `$${ALGORITHM}$ln=${params.ln},r=${params.r},p=${params.p}$${b64(salt)}$${b64(key)}`;
 }
 
-const inRange = (value: number, { min, max }: { min: number; max: number }): boolean =>
-  Number.isInteger(value) && value >= min && value <= max;
+const sameParams = (a: ScryptParams, b: ScryptParams): boolean =>
+  a.ln === b.ln && a.r === b.r && a.p === b.p;
 
-// Answers only true or false: the return value does not say whether the row was malformed, out
-// of range, or the password wrong. Timing does — a string that does not parse, or one that asks
-// for parameters outside the ranges above, returns without a derivation, ~250 ms before a wrong
-// password would. The ranges are there so a row cannot spend the process, not to hide which
-// branch ran; nothing in this repository writes the column except through `hashPassword`
-// (`createStaffAccount`, `resetStaffPassword`), so those branches are for a row edited by hand.
-export async function verifyPassword(stored: string, password: string): Promise<boolean> {
-  const match = PHC_PATTERN.exec(stored);
-  if (match === null) return false;
-  const [, ln, r, p, salt = '', expected = ''] = match;
-  const params = { ln: Number(ln), r: Number(r), p: Number(p) };
-  if (!inRange(params.ln, LN_RANGE) || !inRange(params.r, R_RANGE) || !inRange(params.p, P_RANGE)) {
-    return false;
+// A verifier that accepts only the given parameter sets. The fixtures hash at a cheaper set than
+// any production row (TEST_SCRYPT_PARAMS in testing.ts) and verify through a verifier of their
+// own; an empty list would refuse every staff member silently, so it is refused when built.
+export function passwordVerifier(
+  accepted: readonly ScryptParams[],
+): (stored: string, password: string) => Promise<boolean> {
+  if (accepted.length === 0) {
+    throw new RangeError('passwordVerifier needs at least one parameter set');
   }
-  const expectedKey = Buffer.from(expected, 'base64');
-  if (expectedKey.byteLength !== KEY_BYTES) return false;
-  const key = await derive(password, Buffer.from(salt, 'base64'), params);
-  // equal lengths by construction, but timingSafeEqual throws on a mismatch rather than
-  // answering, and a throw here would be a crash on a malformed row
-  return key.byteLength === expectedKey.byteLength && timingSafeEqual(key, expectedKey);
+  return async (stored, password) => {
+    const match = PHC_PATTERN.exec(stored);
+    if (match === null) return false;
+    const [, ln, r, p, salt = '', expected = ''] = match;
+    const params = { ln: Number(ln), r: Number(r), p: Number(p) };
+    if (!accepted.some((set) => sameParams(set, params))) return false;
+    const expectedKey = Buffer.from(expected, 'base64');
+    if (expectedKey.byteLength !== KEY_BYTES) return false;
+    const key = await derive(password, Buffer.from(salt, 'base64'), params);
+    // equal lengths by construction, but timingSafeEqual throws on a mismatch rather than
+    // answering, and a throw here would be a crash on a malformed row
+    return key.byteLength === expectedKey.byteLength && timingSafeEqual(key, expectedKey);
+  };
 }
+
+// Answers only true or false: the return value does not say whether the row was malformed, asked
+// for parameters not in WRITTEN_SCRYPT_PARAMS, or the password was wrong. Timing does — a string
+// that does not parse, or one with parameters not in the list, returns without a derivation,
+// ~250 ms before a wrong password would. The list is there so a row cannot choose its own cost,
+// not to hide which branch ran; nothing in this repository writes the column except through
+// `hashPassword` (`createStaffAccount`, `resetStaffPassword`), so those branches are for a row
+// edited by hand.
+export const verifyPassword = passwordVerifier(WRITTEN_SCRYPT_PARAMS);
 
 // A real hash of a password nobody holds, so an unknown login costs the same derivation a
 // known one does. Committed rather than generated at import: generating it would cost 250 ms

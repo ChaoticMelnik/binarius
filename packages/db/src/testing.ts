@@ -18,7 +18,12 @@ import {
 } from '@binarius/shared';
 import { bonusRules, brokerAccounts, staff, tradingSessions, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
-import { hashPassword, type ScryptParams } from './staff-password';
+import {
+  hashPassword,
+  passwordVerifier,
+  WRITTEN_SCRYPT_PARAMS,
+  type ScryptParams,
+} from './staff-password';
 import type { BrokerAccountRow } from './oauth-ops';
 import {
   createTradeIntent,
@@ -313,11 +318,13 @@ export async function seedTradingSession(
 
 // --- Staff fixtures ---------------------------------------------------------------------------
 
-// Cheap scrypt parameters for fixtures. verifyPassword reads the cost out of the stored string,
-// so a 2 ms fixture hash exercises exactly the code path a 250 ms production hash does — and
-// seeding at production cost would add a quarter of a second to every case that needs a staff
-// member. ln=10 is the floor verifyPassword accepts; staff-password.test.ts pins both ends.
+// Cheap scrypt parameters for fixtures: seeding at production cost would add a quarter of a
+// second to every case that needs a staff member. Not in WRITTEN_SCRYPT_PARAMS, so the production
+// verifyPassword refuses a fixture hash (staff-password.test.ts pins it); a test that verifies one
+// does so through verifyTestPassword, the same code at the fixtures' cost.
 export const TEST_SCRYPT_PARAMS: ScryptParams = { ln: 10, r: 8, p: 1 };
+
+export const verifyTestPassword = passwordVerifier([TEST_SCRYPT_PARAMS, ...WRITTEN_SCRYPT_PARAMS]);
 
 export const TEST_STAFF_PASSWORD = 'correct horse battery staple';
 

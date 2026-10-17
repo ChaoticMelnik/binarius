@@ -262,7 +262,7 @@ describe('startLoginChallenge', () => {
     const seeded = await seedStaff(tmp.db);
     await tmp.db
       .update(staff)
-      .set({ passwordHash: await hashPassword('something else', { ln: 10, r: 8, p: 1 }) })
+      .set({ passwordHash: await hashPassword('something else', TEST_SCRYPT_PARAMS) })
       .where(eq(staff.id, seeded.staffId));
 
     const started = await start(seeded);
@@ -990,7 +990,7 @@ describe('the CLI operations', () => {
   it('creates an account and records who it is', async () => {
     const created = await createStaffAccount(tmp.db, {
       login: 'ada.cli',
-      passwordHash: await hashPassword('x', { ln: 10, r: 8, p: 1 }),
+      passwordHash: await hashPassword('x', TEST_SCRYPT_PARAMS),
       telegramUserId: 995_001n,
       displayName: 'Ада',
     });
@@ -1041,7 +1041,7 @@ describe('the CLI operations', () => {
 
     await resetStaffPassword(tmp.db, {
       login: seeded.login,
-      passwordHash: await hashPassword('new one', { ln: 10, r: 8, p: 1 }),
+      passwordHash: await hashPassword('new one', TEST_SCRYPT_PARAMS),
     });
 
     expect((await challengeRow(challengeId)).status).toBe(StaffLoginChallengeStatus.Expired);
@@ -1065,7 +1065,7 @@ describe('the CLI operations', () => {
 
     const counts = await resetStaffPassword(tmp.db, {
       login: seeded.login,
-      passwordHash: await hashPassword('new one', { ln: 10, r: 8, p: 1 }),
+      passwordHash: await hashPassword('new one', TEST_SCRYPT_PARAMS),
     });
 
     expect(counts).toMatchObject({ revokedSessions: 1 });
@@ -1080,7 +1080,7 @@ describe('the CLI operations', () => {
       async (login: string) =>
         resetStaffPassword(tmp.db, {
           login,
-          passwordHash: await hashPassword('x', { ln: 10, r: 8, p: 1 }),
+          passwordHash: await hashPassword('x', TEST_SCRYPT_PARAMS),
         }),
     ],
   ])('answers nothing when %s names a login that does not exist', async (_label, run) => {
@@ -1109,7 +1109,7 @@ describe('the CLI operations racing a completeLogin', () => {
       label: 'reset-password',
       action: AuditAction.StaffPasswordReset,
       run: async (db: Db, seeded: SeededStaff) => {
-        const passwordHash = await hashPassword('new one', { ln: 10, r: 8, p: 1 });
+        const passwordHash = await hashPassword('new one', TEST_SCRYPT_PARAMS);
         const counts = await resetStaffPassword(db, { login: seeded.login, passwordHash });
         const staffRowCarriesTheOperation = async () =>
           expect((await staffRow(seeded.staffId)).passwordHash).toBe(passwordHash);

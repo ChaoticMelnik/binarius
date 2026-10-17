@@ -75,7 +75,6 @@ import {
   users,
   hashPassword,
   resetStaffPassword,
-  verifyPassword,
 } from '@binarius/db';
 import {
   createTempDatabase,
@@ -87,6 +86,7 @@ import {
   seedUser,
   TEST_SCRYPT_PARAMS,
   TEST_STAFF_PASSWORD,
+  verifyTestPassword,
   type SeededStaff,
   type TempDatabase,
 } from '@binarius/db/testing';
@@ -175,7 +175,7 @@ const build = (
       telegram,
       verify: (stored, password) => {
         derivations += 1;
-        return verifyPassword(stored, password);
+        return verifyTestPassword(stored, password);
       },
       hash: (password: string) => {
         hashCalls += 1;
@@ -390,10 +390,10 @@ describe('POST /admin/auth/login', () => {
     const seeded = await seedStaff(tmp.db);
     app = build({
       verify: async (stored: string, password: string) => {
-        const answer = await verifyPassword(stored, password);
+        const answer = await verifyTestPassword(stored, password);
         await resetStaffPassword(tmp.db, {
           login: seeded.login,
-          passwordHash: await hashPassword('something else', { ln: 10, r: 8, p: 1 }),
+          passwordHash: await hashPassword('something else', TEST_SCRYPT_PARAMS),
         });
         return answer;
       },
@@ -424,7 +424,7 @@ describe('POST /admin/auth/login', () => {
       verify: async (stored: string, password: string) => {
         inFlight += 1;
         await held;
-        return verifyPassword(stored, password);
+        return verifyTestPassword(stored, password);
       },
     });
     const seeded = await seedStaff(tmp.db);
@@ -1179,7 +1179,7 @@ describe('POST /admin/auth/password (#78)', () => {
     expect(response.json()).toEqual({ changed: true, revokedSessions: 1 });
     expect([derivations, hashCalls]).toEqual([1, 1]);
     const newHash = (await staffRow(seeded.staffId)).passwordHash;
-    expect(await verifyPassword(newHash, NEW_PASSWORD)).toBe(true);
+    expect(await verifyTestPassword(newHash, NEW_PASSWORD)).toBe(true);
 
     const rows = await passwordRows(seeded.staffId);
     expect(rows).toHaveLength(1);
@@ -1356,7 +1356,7 @@ describe('POST /admin/auth/password (#78)', () => {
           fired = true;
           await before();
         }
-        return verifyPassword(stored, password);
+        return verifyTestPassword(stored, password);
       };
     };
 
@@ -1586,7 +1586,7 @@ describe('POST /admin/auth/password (#78)', () => {
       verify: async (stored: string, password: string) => {
         inFlight += 1;
         await held;
-        return verifyPassword(stored, password);
+        return verifyTestPassword(stored, password);
       },
     });
     const blocking = change(current, valid(seeded));
@@ -3937,7 +3937,7 @@ describe('the password the fixtures use', () => {
   it('is what seedStaff wrote, so a wrong-password case is really wrong', async () => {
     const seeded = await seedStaff(tmp.db);
     expect(seeded.password).toBe(TEST_STAFF_PASSWORD);
-    expect(await verifyPassword(seeded.passwordHash, seeded.password)).toBe(true);
+    expect(await verifyTestPassword(seeded.passwordHash, seeded.password)).toBe(true);
   });
 });
 

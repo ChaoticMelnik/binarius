@@ -4,8 +4,10 @@ import {
   DUMMY_PASSWORD_HASH,
   generatePassword,
   hashPassword,
+  passwordVerifier,
   SCRYPT_PARAMS,
   verifyPassword,
+  WRITTEN_SCRYPT_PARAMS,
 } from './staff-password';
 
 // The real scrypt, counted: whether a derivation ran is read off the call, not off the clock.
@@ -18,6 +20,7 @@ const derivations = vi.mocked(scrypt);
 // Cheap parameters everywhere the test only needs a real hash; the cases about cost say so.
 const CHEAP = { ln: 10, r: 8, p: 1 };
 const PASSWORD = 'correct horse battery staple';
+const verifyCheap = passwordVerifier([CHEAP]);
 
 // Well-formed field values. A malformed-string case built with a short key would be refused
 // by the key-length check before the format was ever consulted, and would pass whatever the
@@ -39,8 +42,8 @@ describe('hashPassword', () => {
       hashPassword(PASSWORD, CHEAP),
     ]);
     expect(first).not.toBe(second);
-    expect(await verifyPassword(first, PASSWORD)).toBe(true);
-    expect(await verifyPassword(second, PASSWORD)).toBe(true);
+    expect(await verifyCheap(first, PASSWORD)).toBe(true);
+    expect(await verifyCheap(second, PASSWORD)).toBe(true);
   });
 
   it('pins the parameters production writes', () => {
@@ -59,43 +62,67 @@ describe('hashPassword', () => {
 describe('verifyPassword', () => {
   it('accepts the right password and refuses a wrong one', async () => {
     const stored = await hashPassword(PASSWORD, CHEAP);
-    expect(await verifyPassword(stored, PASSWORD)).toBe(true);
-    expect(await verifyPassword(stored, `${PASSWORD} `)).toBe(false);
-    expect(await verifyPassword(stored, '')).toBe(false);
+    expect(await verifyCheap(stored, PASSWORD)).toBe(true);
+    expect(await verifyCheap(stored, `${PASSWORD} `)).toBe(false);
+    expect(await verifyCheap(stored, '')).toBe(false);
   });
 
-  // The cost is not a constant in this file, it is whatever the row says. A hash written with
-  // other parameters has to keep verifying, or a rotation would lock everyone out.
+  it('pins the parameter sets production accepts to the one hashPassword writes', () => {
+    expect(WRITTEN_SCRYPT_PARAMS).toEqual([SCRYPT_PARAMS]);
+  });
+
+  // One case at the production cost (~250 ms per derivation): the list holds the set
+  // hashPassword writes by default in fact, not only by the equality of two objects.
+  it('round-trips a hash written at the production cost', async () => {
+    const stored = await hashPassword(PASSWORD);
+    expect(await verifyPassword(stored, PASSWORD)).toBe(true);
+    expect(await verifyPassword(stored, `${PASSWORD} `)).toBe(false);
+  });
+
+  // The finding of #155: the fixtures' cost is cheaper than any row this module wrote in
+  // production, so production refuses it — before any derivation — even with the right password.
+  it('refuses a hash written at the fixture cost, without deriving anything', async () => {
+    const stored = await hashPassword(PASSWORD, CHEAP);
+    derivations.mockClear();
+    expect(await verifyPassword(stored, PASSWORD)).toBe(false);
+    expect(derivations).not.toHaveBeenCalled();
+  });
+
+  // The cost is not a constant in this file, it is whatever the row says. A set appended to
+  // the accepted list at a rotation has to keep verifying, or a rotation would lock everyone out.
   it.each([
-    { ln: 10, r: 8, p: 1 },
     { ln: 15, r: 8, p: 1 },
     { ln: 12, r: 1, p: 1 },
     { ln: 12, r: 8, p: 2 },
   ])('reads ln=$ln,r=$r,p=$p back out of the string', async (params) => {
     const stored = await hashPassword(PASSWORD, params);
     expect(stored).toContain(`ln=${params.ln},r=${params.r},p=${params.p}`);
-    expect(await verifyPassword(stored, PASSWORD)).toBe(true);
+    expect(await passwordVerifier([CHEAP, params])(stored, PASSWORD)).toBe(true);
   });
 
   // Not a formatting preference: the cost of a derivation is entirely in these numbers, and
   // node's scrypt does not refuse a large one — it computes the maxmem it needs from them and
-  // then spends it (measured: ln=25 runs, it does not throw). So a row outside the range is a
-  // way to spend the process, and the bound is the only thing in the way.
+  // then spends it (measured: ln=25 runs, it does not throw). So a row whose set is not in the
+  // list is a way to choose its own cost, and the list is the only thing in the way.
   //
   // Each case is a hash this module really wrote at those parameters, checked with the right
   // password: the answer has to be `false` because the parameters are refused, and it would be
-  // `true` for every one of them if the bounds were not consulted. A fabricated string would
+  // `true` for every one of them if the list were not consulted. A fabricated string would
   // answer `false` either way and prove nothing.
   it.each([
-    ['ln below the floor', { ln: 9, r: 8, p: 1 }],
-    ['ln above the ceiling', { ln: 18, r: 8, p: 1 }],
-    ['r above the ceiling', { ln: 12, r: 9, p: 1 }],
-    ['p above the ceiling', { ln: 12, r: 8, p: 3 }],
+    ['ln cheaper than the list', { ln: 9, r: 8, p: 1 }],
+    ['ln dearer than the list', { ln: 18, r: 8, p: 1 }],
+    ['a set differing only in r', { ln: 10, r: 1, p: 1 }],
+    ['a set differing only in p', { ln: 10, r: 8, p: 2 }],
   ])('refuses %s even when the password is right', async (_label, params) => {
     const stored = await hashPassword(PASSWORD, params);
     derivations.mockClear();
-    expect(await verifyPassword(stored, PASSWORD)).toBe(false);
+    expect(await verifyCheap(stored, PASSWORD)).toBe(false);
     expect(derivations).not.toHaveBeenCalled();
+  });
+
+  it('refuses to build a verifier from an empty list', () => {
+    expect(() => passwordVerifier([])).toThrow(RangeError);
   });
 
   it.each([
@@ -108,7 +135,7 @@ describe('verifyPassword', () => {
     ['base64url instead of base64', `$scrypt$ln=10,r=8,p=1$-${SALT.slice(1)}$${KEY}`],
     ['trailing newline', `$scrypt$ln=10,r=8,p=1$${SALT}$${KEY}\n`],
   ])('refuses %s', async (_label, stored) => {
-    expect(await verifyPassword(stored, PASSWORD)).toBe(false);
+    expect(await verifyCheap(stored, PASSWORD)).toBe(false);
   });
 
   // A truncated row, not a password. Written at the parameters production uses, so the answer
