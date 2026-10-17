@@ -136,18 +136,24 @@ Timing (`apps/bot/src/timing.ts`): `HANDLER_CALLS.invite` = 1 / 1, `.inviteButto
 ## The reward
 
 **The target action** (owner, 2026-10-08) is the invitee's activation of a **partner** Binodex
-account: a confirm (`POST /auth/binodex/confirm`) or an email login. **The reward** is the active
+account: a confirm (`POST /auth/binodex/confirm`), an email login, or an OAuth re-login that leaves
+an account confirmed before (`active`/`revoked`) active. **The reward** is the active
 `referral_reward` version's tokens ([bonus-rules.md](bonus-rules.md)) to the inviter; the invitee
 gets nothing beyond the starter pack.
 
-**Where.** `grantReferralReward(tx, { inviteeUserId, account })` runs in the activation's
-transaction, after `grantLinkBonus`, in this order:
+**Where.** Two calls in the activation's transaction (`packages/db/src/referral-reward-ops.ts`).
+`lockReferralInviter(tx, inviteeUserId)` runs right after the invitee's `users` row is locked,
+before any other table: it reads the invitee's `referrals` row (no lock: it is never updated) and a
+ledger row naming it, and while the referral is unpaid locks the inviter's `users` row
+`FOR NO KEY UPDATE`. `grantReferralReward(tx, { referral, account })` runs after `grantLinkBonus`
+(on the callback re-login, without a pack) and takes no lock of its own; its answers, in this
+order:
 
 1. a non-partner account → `not_partner_client`;
-2. the invitee's `referrals` row (no lock: it is never updated) — none → `no_referral`;
+2. no `referrals` row → `no_referral`;
 3. a ledger row naming that referral → `already_rewarded`, **before** the rule is read, so a
    deactivated or broken rule neither changes this answer nor rolls a re-login back;
-4. the inviter's `users` row `FOR NO KEY UPDATE`; blocked → `inviter_blocked`;
+4. a blocked inviter → `inviter_blocked`;
 5. `applyBonus('referral_reward', { referralId })` → `rewarded` with the tokens and the version,
    or `no_active_rule`.
 
@@ -157,7 +163,8 @@ referral. A skipped one is paid at the invitee's next activation of a partner ac
 email login included. The starter pack does not gate it: with `link_bonus` off the invitee gets no
 pack and the inviter still gets the reward. An active version whose params do not parse throws
 `InvalidBonusRule` and rolls the activation back, as the pack does (Rule 40). The OAuth callback
-(`activate: false`) pays nothing until the confirm.
+(`activate: false`) pays nothing for an account it leaves pending — the confirm pays then — and
+pays the reward (no pack) when it leaves an account confirmed before active.
 
 **The ledger row.** `kind = bonus` on the inviter, `balance_delta` = the rule's tokens,
 `referral_id`, `bonus_rule_id`/`bonus_rule_kind` of the version read; no `broker_account_id`, so it
@@ -181,13 +188,28 @@ constraints rather than reads:
 - *At most one reward per `broker_user_id`*: one referral per invitee (`referrals_invitee_key`),
   one reward per referral (`token_ledger_referral_idx`), one owner per `broker_user_id`.
 
-**Locks (Rule 5).** The activation's order is `users`(invitee) → `broker_accounts` →
-`deposit_events` → `users`(inviter) → `token_ledger`. The inviter's row is the one second `users`
-row any writer locks. It cannot close a cycle: a referral is recorded only by the `/start` that
-created the invitee's row ([Recording](#recording)), so the inviter's row is always older, the
-invitation graph is a forest, and every wait among these writers runs from a newer row to an older
-one. Step 3's read is serialized by the invitee's own row, which every writer of this referral's
-reward holds first.
+**Locks (Rule 5).** Every activation path (the confirm, the email login, the callback re-login)
+takes `users`(invitee) → `users`(inviter, only while the referral is unpaid) → `broker_accounts` →
+`deposit_events` → `token_ledger` (FK `KEY SHARE` on `referrals`, `bonus_rules`) → the `users`
+UPDATEs of both rows, already held. No cycle, by two facts:
+
+- (a) a reward writer takes every `users` lock before its first lock of any other table, and no
+  writer waits on a `users` row while holding a `broker_accounts`, `deposit_events` or
+  `token_ledger` lock. The inviter's own login with the invitee's broker account holds only the
+  inviter's `users` row when it waits on that account; the reward used to lock the inviter after
+  the account, and that was a `40P01` (#577 review, round 1). The other writers: trading
+  (`createInTransaction`, `createTradingSession`, `rejectIntent`, `settleIntent`,
+  `concludeReconciled`) lock `users` first; the token refresh and `recordPostback` lock
+  `broker_accounts` and read `users` without a lock; `creditStarPayment`, `recordStarRefund`,
+  `adjustTokens` and the settings writers hold one `users` row.
+- (b) among `users` rows, waits run from a newer row to an older one: only reward writers hold
+  two, and the second is the inviter's, always older — a referral is recorded only by the `/start`
+  that created the invitee's row ([Recording](#recording)).
+
+A future writer keeps (a) (Rule 5). Step 3's read is serialized by the invitee's own row, which
+every writer of this referral's reward holds first; `token_ledger_referral_idx` stays the arbiter.
+The cost: while the referral is unpaid, every activation of the invitee holds the inviter's row to
+its commit, a non-partner one included.
 
 **The log**, after the commit (the routes' answers are unchanged): `info` `referral rewarded`
 `{ referralId, inviterUserId, tokens, ruleVersion }`; `warn` `referral_reward_no_active_rule`
