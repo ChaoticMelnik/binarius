@@ -289,9 +289,13 @@ candle starts ending on the current interval boundary. The last of them is the f
 which the decider drops. The decision uses the same `nowMs` the window was built from.
 
 The source's window is the ring's for the same `nowMs`: the closed candles of the 300 buckets
-ending on the boundary, from the same `startTime`, and the forming candle when the pair has one.
-The feed appends the forming candle to the closed ones, as a REST answer carries it, and decides
-on them as on a REST answer (F21). A closed bucket without a candle is a gap of the window
+ending on the boundary, from the same `startTime`, and the latest bucket the ring has not closed
+(`forming`) when the pair has a candle in it. The feed appends `forming` only when it is the
+current bucket of `nowMs`, as a REST answer carries its forming row, and the decider drops it
+(F21). Until the watermark or the clock margin closes the bucket before the boundary, `forming` is
+that bucket (`ring.test.ts` R3): the feed leaves it out, and the decision is on the candle before
+it - `unclosed`, not served by `GET /trading/signals` (F26, S34). Either way the rows are decided as
+a REST answer. A closed bucket without a candle is a gap of the window
 (`gaps`); any gap in the window, inside the decision's 60 or before it, calls `request()` once for
 the key, and the decision is what the decider makes of the rows as they are: a gap inside the
 decision window is `candle_gap`, too few closed candles `insufficient_candles` (an empty window:
@@ -539,7 +543,8 @@ the key: two requests for one key in one candle share one fetch and the first ca
 
 `fromSource(request)` (#405, the scanner's) answers a held decision of the key, otherwise the inner
 feed's `fromSource` and holds its decision by the same rule; without a window it holds nothing
-(C15, C16). A decision of the source replaces a refusal held from REST (C21), so a source that
+(C15, C16). A decision of the source replaces a refusal held from REST on both entries: `fromSource` (C21) and
+`evaluate`, which asks the source before it answers a held refusal (C22), so a source that
 came back is not hidden behind a `rate_limited` hold. A decision it holds is the hit of an
 `evaluate` in the same candle, the same object (C20).
 
@@ -568,7 +573,7 @@ and `fetch_failed` write no line (C18b, C19).
   the jump, a forward one shortens it. No timer: nothing to stop at shutdown.
 
 `cache.test.ts` (C1–C11) pins the table's rows, the shared fetch, the deadline, the bound and a
-backward clock jump; C15–C21 `fromSource` and the lazy journal.
+backward clock jump; C15–C22 `fromSource` and the lazy journal.
 
 So the broker sees at most two chart GETs per `1m`-or-longer key per minute (one per hold of up to
 30 s) and one per 429 window. On `5s` and `15s` the candle's end binds first: up to 12 and 4 GETs
@@ -647,8 +652,8 @@ boundary (S1 for each interval). After a start, nothing is served until the firs
   ([market-data.md → Closing a candle](market-data.md#closing-a-candle-and-holes)). At ~440 ticks a second
   the watermark crosses the boundary within milliseconds; on a quiet pair it may not have by the
   scan moment, and the decision is then on the candle before, which the route's freshness rule
-  does not serve. Such a decision (the window's `closedUntil` below the boundary) is counted as
-  `unclosed` (S29); the slack is not raised (2 s would be 40 % of a `5s` candle).
+  does not serve. Such a decision (the window's `closedUntil` below the boundary of the decision's
+  own `nowMs`; the feed leaves the unclosed candle out, F26) is counted as `unclosed` (S29, S34); the slack is not raised (2 s would be 40 % of a `5s` candle).
 
 **Each pair.** The scan is one synchronous loop over the eligible pairs, `fromSource` for each:
 
@@ -734,7 +739,7 @@ start, so the first `signal scanner` line is out:
 docker compose logs --no-log-prefix --since 2m backend | grep -F '"msg":"signal scanner"' | tail -2
 # every eligible pair is in the lists
 docker compose exec -T backend sh -c 'wget -qO- --header "Authorization: Bearer $INTERNAL_API_TOKEN" http://127.0.0.1:3000/trading/signals' | jq '.lists[] | {interval, scanned, signals: (.signals | length)}'
-# chart GETs outside the warm-up: backfill only (fetched ~ 0 once queued is 0), no "signal fetch" lines
+# chart GETs outside the warm-up: backfill only, besides a request for 1m or longer (never from the bot) (fetched ~ 0 once queued is 0), no "signal fetch" lines
 docker compose logs --no-log-prefix --since 10m backend | grep -F '"msg":"market data"' | tail -1 | jq .backfill
 docker compose logs --no-log-prefix --since 10m backend | grep -cF '"msg":"signal fetch'
 # the journal: lines only from POST /trading/signal and session starts, with source.kind socket
@@ -790,9 +795,10 @@ not find the bucket a fraction of a token short (#382 review M1; `pacer.test.ts`
 - `tryTakeSpare` is the candle backfill's ([market-data.md → Backfill](market-data.md#backfill-590),
   #590): only the overflow, what a refill discards above the capacity, held to one token, which
   `tryTake` never sees on a clock that does not go back (`pacer.test.ts` P10, P12). While the
-  source is live nothing calls `tryTake`, so the bucket stays full and the backfill gets the whole
-  share (P10; the scanner takes no token, S26). Without the source the GETs by demand take the
-  bucket first.
+  source is live only an interval the ring does not build calls `tryTake` (`1m` and longer - never
+  from the bot, #313), so the bucket stays nearly full and the backfill gets nearly the whole share
+  (P10; the scanner takes no token, S26). Without the source the GETs by demand take the bucket
+  first.
 - Together they carry at most `perMinute + capacity + 1` in any 60 s window (P11): 219 at the
   maximum.
 - A 429 of either pauses both - one object, one per-IP window: for `Retry-After` held to 15–120 s

@@ -165,7 +165,8 @@ const signalPacer = createScanPacer({
   backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
   now: Date.now,
 });
-// called by the feed on requests and by the scanners after listen(), when marketData exists
+// built only with BROKER_WS_URL; its streaming reads marketData, declared below: the feed reads the
+// source on requests and the scanners on scans, both only after listen()
 const marketDataSource =
   candleStore === undefined
     ? undefined
