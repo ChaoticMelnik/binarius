@@ -15,6 +15,7 @@ import { LABELS } from './texts';
 import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
+  decimalStringSchema,
   BrokerRestErrorCode,
   MacdCross,
   MomentumDirection,
@@ -28,6 +29,8 @@ import {
   TradeAction,
   TradeIntentStatus,
   TradeMode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   tradingSessionViewSchema,
   tradingSignalResponseSchema,
   TrendDirection,
@@ -38,6 +41,7 @@ import {
   type LinkedAccountView,
   type PairsCatalogResponse,
   type PairView,
+  type SessionShare,
   type PendingLinkedAccountView,
   type ScanInterval,
   type SignalDecision,
@@ -439,6 +443,44 @@ export const sessionView = (patch: Partial<TradingSessionView> = {}): TradingSes
   ...patch,
 });
 
+// POST /trading/sessions/:id/share's answer (#538): a finished session of three settled trades on
+// PAIR_EURUSD, and the sender's referral code
+export const SHARE_REFERRAL_CODE = 'AbC123xY';
+const decimal = (value: string) => decimalStringSchema.parse(value);
+export const sessionShare = (patch: Partial<SessionShare> = {}): SessionShare => ({
+  session: sessionView({
+    status: TradingSessionStatus.Stopped,
+    stopReason: TradingSessionStopReason.Completed,
+    endedAt: '2026-10-07T10:05:00.000Z',
+    cycles: { planned: 5, closed: 3 },
+    trades: { settled: 3, rejected: 0, won: 2, lost: 1, tied: 0, profit: decimal('0.70000000') },
+    lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+  }),
+  trades: [
+    {
+      action: TradeAction.Up,
+      profit: decimal('0.85000000'),
+      openPrice: 1.0871,
+      closePrice: 1.0875,
+    },
+    {
+      action: TradeAction.Down,
+      profit: decimal('-1.00000000'),
+      openPrice: 1.0875,
+      closePrice: 1.0879,
+    },
+    {
+      action: TradeAction.Up,
+      profit: decimal('0.85000000'),
+      openPrice: 1.0879,
+      closePrice: 1.0883,
+    },
+  ],
+  pair: { symbol: PAIR_EURUSD.symbol, isOtc: true, digits: PAIR_EURUSD.digits },
+  referralCode: SHARE_REFERRAL_CODE,
+  ...patch,
+});
+
 // A client where every method the scene does not give rejects, so an unexpected call fails the
 // scene instead of answering with a fixture. A method added to BackendClient adds a line here.
 export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient => {
@@ -462,6 +504,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     readSession: unused,
     stopSession: unused,
     claimSessionSummary: unused,
+    readSessionShare: unused,
     stopSessions: unused,
     recordSessionMessage: unused,
     listTrackedSessions: unused,

@@ -32,6 +32,10 @@ const logger = pino(logOptions(env.logLevel));
 // Telegram opens a Mini App over https only: local dev runs without «💳 Пополнить» (#27)
 const cashierUrl = cashierUrlOf(env.webPublicUrl);
 if (cashierUrl === undefined) logger.warn('cashier button off: WEB_PUBLIC_URL is not https');
+// the promo card needs a channel to get its file id from (#538): none, no «📤 Поделиться»
+if (env.shareStorageChatId === undefined) {
+  logger.warn('share button off: SHARE_STORAGE_CHAT_ID is not set');
+}
 
 const backend = createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken });
 
@@ -77,6 +81,7 @@ const bot = createBot({
   logger,
   welcomeVideoFileId: env.welcomeVideoFileId,
   cashierUrl,
+  shareStorageChatId: env.shareStorageChatId,
   intentTracker,
   sessionTracker,
   sessionResumer,

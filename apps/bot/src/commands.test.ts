@@ -39,6 +39,7 @@ describe('the command menu', () => {
       readSession: () => Promise.reject(new Error('not used here')),
       stopSession: () => Promise.reject(new Error('not used here')),
       claimSessionSummary: () => Promise.reject(new Error('not used here')),
+      readSessionShare: () => Promise.reject(new Error('not used here')),
       stopSessions: () => Promise.reject(new Error('not used here')),
       recordSessionMessage: () => Promise.reject(new Error('not used here')),
       listTrackedSessions: () => Promise.reject(new Error('not used here')),

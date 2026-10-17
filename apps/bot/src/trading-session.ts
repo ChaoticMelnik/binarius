@@ -164,6 +164,8 @@ export interface TradingSessionDeps {
   cashierUrl?: string;
   // the pictures of a signal's direction, shared with the analysis card (#568)
   setupCardPhotos: SetupCardPhotos;
+  // «📤 Поделиться» under the card (#538): only with the storage channel the promo card is posted to
+  shareEnabled: boolean;
 }
 
 interface Refusal {
@@ -301,6 +303,7 @@ export function createTradingSessionComposer<C extends Context>({
   connectKeyboard,
   cashierUrl,
   setupCardPhotos,
+  shareEnabled,
 }: TradingSessionDeps): {
   composer: Composer<C>;
   startSession: StartSession;
@@ -826,7 +829,7 @@ export function createTradingSessionComposer<C extends Context>({
         { reply_markup: keyboard, disable_notification: true },
       );
       // «📤 Поделиться» (#321): catches its own failures, so the warning below is the send's only
-      await attachShareButton(api, logger, view.id, sent, keyboard);
+      if (shareEnabled) await attachShareButton(api, logger, view.id, sent, keyboard);
     } catch (error) {
       logger.warn(
         {

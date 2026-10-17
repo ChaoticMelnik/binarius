@@ -14,6 +14,7 @@ import {
   botTextOverridesResponseSchema,
   readBody,
   type BotTextOverride,
+  safeParseSessionShareResponse,
   safeParseSessionSummaryRefusal,
   safeParseSessionSummaryResponse,
   safeParseTradeIntentView,
@@ -56,9 +57,11 @@ import {
   type NotificationLevel,
   type NotificationLevelResponse,
   type PairsCatalogResponse,
+  SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
+  type SessionShare,
   type SessionSummary,
   type SignalInterval,
   type TradingSignalAnalysis,
@@ -165,6 +168,9 @@ export interface BackendClient {
   // the finished session's card, claimed at most once (#318): null for the one refusal, which the
   // backend answers before any write; scoped by the owner like readSession
   claimSessionSummary(id: string, telegramUserId: string): Promise<SessionSummary | null>;
+  // what the shared promo card needs (#538): creates the caller's referral code on first use;
+  // scoped by the owner like readSession (404 not_found)
+  readSessionShare(id: string, telegramUserId: string): Promise<SessionShare>;
   // every active session of the user, stopped (#122); empty when there was none
   stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
   // the first poll of a status message (#567): records its id, the first one recorded wins, and
@@ -476,6 +482,15 @@ export function createBackendClient({
       }
       if (status === 409 && safeParseSessionSummaryRefusal(payload).success) return null;
       throw httpStatusError(status, payload);
+    },
+    async readSessionShare(id, telegramUserId) {
+      const parsed = safeParseSessionShareResponse(
+        await post(`trading/sessions/${encodeURIComponent(id)}${SESSION_SHARE_SUFFIX}`, {
+          telegramUserId,
+        }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.share;
     },
     async createStarsInvoice(telegramUserId, packageCode) {
       const parsed = starsInvoiceResponseSchema.safeParse(
