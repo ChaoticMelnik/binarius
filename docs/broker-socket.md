@@ -7,7 +7,7 @@ client that feeds it: the handshake, subscriptions, reconnection and the logging
 ([Client](#client-99)).
 
 ```bash
-pnpm test --project unit apps/trading-worker/src/broker   # needs no database or Redis
+pnpm test --project unit packages/broker-socket   # needs no database or Redis
 ```
 
 ## Pipeline
