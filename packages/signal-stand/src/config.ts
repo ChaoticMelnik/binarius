@@ -38,6 +38,9 @@ export const ATTEMPT_WINDOW_MS = 10_000;
 export const IN_SAMPLE_SHARE = 5 / 7;
 export const MIN_IN_SAMPLE_TRADES = 100;
 export const POOLED_BREAK_EVEN_PAYOUT = 80;
+// #483's product floor, fixed before the data: a filter keeping fewer of v2's trades empties
+// «Сигналы сейчас», so it cannot be `better` whatever its rate
+export const MIN_KEPT_SHARE_PCT = 10;
 
 // #379's merge (2026-10-09 16:13 UTC); the deploy time is not known, so the evening of 10-09 is
 // neither era

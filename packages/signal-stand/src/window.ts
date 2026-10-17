@@ -15,7 +15,7 @@ export function lowerBound(series: readonly Candle[], ms: number): number {
 
 // The rows the broker would answer the feed's request at nowMs: from chartWindow's start_time up
 // to the current boundary, the forming candle included (the decider drops it). `limit` is a
-// parameter so a variant needing a longer history (#483's MA200) plugs in unchanged.
+// parameter so the display indicators read the feed's longer fetch (#483's MACD and MA).
 export function seriesAt(
   series: readonly Candle[],
   intervalMs: number,
