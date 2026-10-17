@@ -130,6 +130,12 @@ link. «📤 Поделиться» is a URL button to
 its chat picker. An overridden `inviteScreen` may drop `{referralLink}` (no variable is required,
 [bot-texts.md](bot-texts.md)); the share button still carries the link.
 
+The same link is the caption of the promo card shared through «📤 Поделиться» under a session's
+card (#538, [bot-session.md](bot-session.md#sharing-the-card-321)): the backend's
+`POST /trading/sessions/:id/share` reads the code through `readUserReferral`, so a first share
+creates it as `/invite` does, and a blocked user gets none (the caption then carries
+`?start=share`).
+
 Timing (`apps/bot/src/timing.ts`): `HANDLER_CALLS.invite` = 1 / 1, `.inviteButton` = 1 / 2,
 `.commandRetry` stays 1 / 2.
 
@@ -238,5 +244,5 @@ new bot against an old backend shows `unavailable` on `/invite` until the backen
 
 - **#576** — the push to the inviter about a reward, through the mailing engine (after #574).
 - **#386** — deposit-based bonuses; rewards for an invitee's deposit are not in scope.
-- **#440** — the personal link in the summary card's caption and in #321's share.
-- Inline mode (`switch_inline_query`) and the admin card — not in scope.
+- **#440** — the personal link in the summary card's caption; #321's share carries it since #538.
+- Inline mode (`switch_inline_query`) for `/invite` and the admin card — not in scope.

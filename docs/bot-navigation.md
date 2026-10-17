@@ -51,7 +51,8 @@ chat with the bot:
 
 | Answer | Where | Why |
 |---|---|---|
-| the inline share result (#321) | `answerInlineQueryPhotoHtml` and `answerInlineQueryEmpty` (`send.ts`), from `session-share.ts`; their types take no `reply_markup` | the card is posted, «via @bot», into a chat the user picked; the bot's buttons there would act for whoever presses them. The link in its caption (`t.me/<bot>?start=share`) is the way into the bot |
+| the inline share result (#321, #538) | `answerInlineQueryPhotoHtml` and `answerInlineQueryEmpty` (`send.ts`), from `session-share.ts`; their types take no `reply_markup` | the promo card is posted, «via @bot», into a chat the user picked; the bot's buttons there would act for whoever presses them. The link in its caption (`t.me/<bot>?start=ref_<code>`, the sender's; `t.me/<bot>?start=share` for a sender without a code) is the way into the bot |
+| the promo card's post to the storage channel (#538) | `sendPhotoToStorage` (`send.ts`), from `session-share.ts`; its type takes no caption and no `reply_markup` (`send.typecheck.ts`) | not a message to a user: the post in the owner's private channel `SHARE_STORAGE_CHAT_ID` exists for the photo's `file_id`, which the inline answer names |
 
 ## Shared buttons
 
