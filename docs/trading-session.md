@@ -28,7 +28,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | Settings v1/v2/v3, statuses, stop reasons | `packages/shared/src/trading-session.ts` (`@binarius/shared/trading-session`) | `tradingSessionSettingsSchema`, `buildSessionSettings`, `sessionStakeParams`, `martingaleLimitsFor` (#450), `sessionProgress` (#552), `TradingSessionStatus`, `TradingSessionStopReason`, `stakeSettingsFor`, `MAX_SESSION_CYCLES` 20, `DEFAULT_SESSION_CYCLES` 5, `MIN_SESSION_DURATION_SEC` 5, `MAX_SESSION_SUMMARY_TRADES` 720 |
 | Wire contracts (#283) | the same file | the routes' request, view and refusal schemas, `TradingSessionErrorCode`, `sessionFitsDeadline`, `SESSION_MAX_DURATION_MS`, `TRADING_SESSION_START_BUDGET_MS` |
 | Pair predicates (#283) | `packages/shared/src/catalog.ts` | `isPairOpen`, `pairAcceptsDuration`; the bot's demo checks and the start route both call them |
-| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318), `POST /trading/sessions/stop` (#122), `POST /trading/sessions/:id/status-message`, `POST /trading/sessions/:id/status-message/lost` and `GET /trading/sessions/tracked` (#567) behind the internal bearer |
+| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318), `POST /trading/sessions/:id/share` (#538), `POST /trading/sessions/stop` (#122), `POST /trading/sessions/:id/status-message`, `POST /trading/sessions/:id/status-message/lost` and `GET /trading/sessions/tracked` (#567) behind the internal bearer |
 | Table | `packages/db/src/schema/trading-sessions.ts`, migration `0018_trading_session_orchestration` | the columns and constraints below |
 | Operations | `packages/db/src/trading-session-ops.ts` | create, the runnable scan, the two stop sweeps, the history, the CAS stop, the decision mark, the session intent; the start check and the owner-scoped view (#283) |
 | Session lock | `packages/db/src/trade-intent-ops.ts` → `createInTransaction` | the session row locked inside the intent's creation transaction |
@@ -326,6 +326,22 @@ bad body is 400. No broker call. Terminal intents and a stopped session cannot c
 read after the claim are the ones it checked. Two claims at once: the row lock serialises them and
 the second re-checks `summary_sent_at is null`, so one wins. A lost answer after the commit loses
 the card (accepted, [bot-session.md](bot-session.md#the-summary-card-318)).
+
+### POST /trading/sessions/:id/share (#538)
+
+What the shared promo card needs, in one call ([bot-session.md](bot-session.md#sharing-the-card-321)).
+Body `{ telegramUserId }` (`stopTradingSessionRequestSchema`); a non-uuid id is 404 `not_found`, a
+bad body 400. In order: `readTradingSessionView` — another user's or a missing session is 404
+`not_found` (Rule 13) before anything else is read or written; `readSessionShareTrades` — the
+settled intents' broker trades in creation order (`action`, `profit`, `open_price`,
+`close_price`), scoped by the owner too (`sessionOwnedBy`); the pair from the backend's catalog by
+the settings' asset, or the last trade's (`symbol`, `isOtc`, `digits`; `null` when the catalog is
+missing, not fresh or lists no such pair); `readUserReferral` — the caller's referral code,
+created on first use as `/invite` does (#115), `null` for a blocked user or one without a users
+row. 200 `{ share: { session, trades, pair, referralCode } }`, built field by field
+(`sessionShareResponseSchema`). The session need not be done: the bot decides that on the view.
+A POST because of the code; it writes nothing else, calls no broker and refreshes no balance (the
+view's `balance` is as stored).
 
 ### POST /trading/sessions/stop (#122)
 
