@@ -725,10 +725,18 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
       }),
     );
     const [active] = fakes.made;
-    h.answers.set(ACC1.id, () => Promise.resolve({ ok: false, reason: 'not_service' }));
+    // only the exchange is refused: a start without the hold-back would get a token and a client
+    h.answers.set(ACC1.id, (options) =>
+      Promise.resolve(
+        options.refusedToken === undefined
+          ? { ok: true, accessToken: 'SECRET-token-1c' }
+          : { ok: false, reason: 'not_service' },
+      ),
+    );
     active?.fire(BrokerSocketState.AuthFailed);
     await until('dropped', () => active?.stops === 1);
     expect(h.line()).toMatchObject({ held: 1, active: null, reserve: null });
+    expect(h.calls).toHaveLength(2);
     const calls = h.calls.length;
     await h.manager.tick();
     expect(h.calls).toHaveLength(calls);
