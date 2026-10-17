@@ -26,7 +26,14 @@ import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-res
 import { createTokenCipher, setLastAnalysis, type Db } from '@binarius/db';
 import { SessionStakeStrategy } from '@binarius/shared';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
-import { BOT_TOKEN, INTERNAL_API_TOKEN, MOCK_OAUTH, PARTNER_REF, REDIRECT_URI } from './env';
+import {
+  BOT_TOKEN,
+  E2E_POSTBACK_SECRET,
+  INTERNAL_API_TOKEN,
+  MOCK_OAUTH,
+  PARTNER_REF,
+  REDIRECT_URI,
+} from './env';
 import type { LogSink } from './logs';
 import type { createTelegram, TelegramSide } from './telegram';
 
@@ -143,6 +150,8 @@ export async function startE2eBackend(deps: {
       }),
     },
     users: { db, internalApiToken: INTERNAL_API_TOKEN },
+    // on as in production with POSTBACK_URL_SECRET set (docs/e2e-demo-cycle.md → Components)
+    postbacks: { db, secret: E2E_POSTBACK_SECRET },
     payments: unusedPaymentsDeps(),
     admin: unusedAdminDeps(),
     deposit: {

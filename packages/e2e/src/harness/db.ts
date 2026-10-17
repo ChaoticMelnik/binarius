@@ -1,7 +1,10 @@
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, count, eq, inArray, sql } from 'drizzle-orm';
 import {
   brokerAccounts,
   brokerTrades,
+  depositEvents,
+  postbackDeliveries,
+  referrals,
   tokenLedger,
   tradeIntents,
   tradingSessions,
@@ -16,6 +19,28 @@ export function e2eReads(db: Db) {
       const [row] = await db.select().from(users).where(eq(users.telegramUserId, telegramUserId));
       return row;
     },
+    async usersCount() {
+      const [row] = await db.select({ n: count() }).from(users);
+      return row?.n;
+    },
+    accountsOf: (userId: string) =>
+      db.select().from(brokerAccounts).where(eq(brokerAccounts.userId, userId)),
+    sessionsOf: (brokerAccountId: string) =>
+      db
+        .select()
+        .from(tradingSessions)
+        .where(eq(tradingSessions.brokerAccountId, brokerAccountId))
+        .orderBy(asc(tradingSessions.createdAt)),
+    referralsOf: (inviterUserId: string) =>
+      db.select().from(referrals).where(eq(referrals.inviterUserId, inviterUserId)),
+    depositsOf: (paymentId: string) =>
+      db.select().from(depositEvents).where(eq(depositEvents.paymentId, paymentId)),
+    deliveriesOf: (paymentId: string) =>
+      db
+        .select()
+        .from(postbackDeliveries)
+        .where(sql`${postbackDeliveries.payload} ->> 'payment_id' = ${paymentId}`)
+        .orderBy(asc(postbackDeliveries.createdAt)),
     async accountOf(userId: string) {
       const [row] = await db.select().from(brokerAccounts).where(eq(brokerAccounts.userId, userId));
       return row;

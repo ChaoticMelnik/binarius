@@ -1,3 +1,4 @@
+import type { User } from 'grammy/types';
 import type { BinaryPairWire } from '@binarius/shared';
 
 // The external services of the run: the integration project's Postgres and Redis (README → Test
@@ -24,9 +25,15 @@ export const BOT_TOKEN = '123456:e2e-public-bot-token';
 export const MOCK_OAUTH = { clientId: 'e2e-client', clientSecret: 'e2e-secret' } as const;
 export const PARTNER_REF = 'e2eref';
 export const REDIRECT_URI = 'https://binarius.example/auth/callback';
+// the broker's postback URL secret (POSTBACK_URL_SECRET_PATTERN): the route and the run's
+// deliveries share this one value
+export const E2E_POSTBACK_SECRET = 'e2e-postback-secret-0123456789abcdef';
 
 export const E2E_EMAIL = 'ada@example.test';
 export const E2E_BROKER_USER_ID = 7001;
+// the other two Telegram users of the repeat run (#106): B invites, C follows B's link
+export const E2E_USER_B: User = { id: 4343, is_bot: false, first_name: 'Bob' };
+export const E2E_USER_C: User = { id: 4444, is_bot: false, first_name: 'Cy' };
 
 // The only pair of the run: 15 s is within its timeframes, unlike the mock's EUR/USD (60 s), so the
 // bot offers it for the 15-second demo; a payout of 85 is above the session's floor of 80.
