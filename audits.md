@@ -3440,7 +3440,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | CI green on a `main` two merges old; the squash target had moved | — | other | the night reviews against the main of its start | Tech Lead merge (caught) |
 
 ### Process improvement proposals
-1. Implementer Step 5: the per-commit check also runs `tooling/test-timing.test.ts` when a commit adds or changes a test file — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»**
+1. Implementer Step 5: the per-commit check also runs `tooling/test-timing.test.ts` when a commit adds or changes a test file — **внедрено в #613: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»**
 2. Remaining findings — **вынесено в #611**
 
 ---
