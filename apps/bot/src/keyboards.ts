@@ -8,6 +8,7 @@ import {
   demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
   STAR_PACKAGES,
+  sessionStopCallbackData,
   supportUrl,
   TradeMode,
   demoAnalysisCallbackData,
@@ -25,6 +26,15 @@ export const menuKeyboard = (): InlineKeyboard =>
 // «🏠 В меню» in its own row under a screen's keyboard
 export const withMenu = (keyboard: InlineKeyboard): InlineKeyboard =>
   keyboard.row().text(LABELS.menuButton, MENU_CALLBACK_DATA);
+
+// The waiting message's «⏹» drawn again in place of the pressed one after a stop whose outcome is
+// unknown (#587): pressed again, it stops the session or reads how it ended (409). Its next step is
+// the stop itself, so no menu under it.
+export const waitingStopKeyboard = (sessionId: string): InlineKeyboard =>
+  new InlineKeyboard().text(
+    LABELS.sessionStopButton,
+    sessionStopCallbackData(sessionId, { waiting: true }),
+  );
 
 // the status card's entry, and the account card's since #350
 export const demoKeyboard = (): InlineKeyboard =>

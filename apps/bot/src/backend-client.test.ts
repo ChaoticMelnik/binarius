@@ -1327,6 +1327,17 @@ describe('stopSession', () => {
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
   });
 
+  it('posts the pressed waiting message beside the owner when given (#587)', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { session: SESSION_VIEW });
+    });
+    await createBackendClient({ baseUrl, token: TOKEN }).stopSession(SESSION_ID, '4242', 90);
+    expect(JSON.parse(capture.body ?? '')).toEqual({
+      telegramUserId: '4242',
+      waitingMessageId: 90,
+    });
+  });
+
   it('carries a 409 session_not_active as its reason', async () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 409, { error: TradingSessionErrorCode.SessionNotActive });
@@ -1457,23 +1468,6 @@ describe('recordSessionMessage (#567)', () => {
     expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/status-message`);
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', messageId: 77 });
-  });
-
-  it('posts the message it replaces when one is named', async () => {
-    const { baseUrl, capture } = await serve((_request, reply) => {
-      json(reply, 200, { session: SESSION_VIEW });
-    });
-    await createBackendClient({ baseUrl, token: TOKEN }).recordSessionMessage(
-      SESSION_ID,
-      '4242',
-      77,
-      76,
-    );
-    expect(JSON.parse(capture.body ?? '')).toEqual({
-      telegramUserId: '4242',
-      messageId: 77,
-      replacesMessageId: 76,
-    });
   });
 
   it('carries a 404 not_found as readSession does', async () => {

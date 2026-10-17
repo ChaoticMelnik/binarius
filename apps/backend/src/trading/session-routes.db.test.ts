@@ -1279,6 +1279,105 @@ describe('POST /trading/sessions/:id/stop', () => {
   });
 });
 
+// #587: the «⏹» under the waiting message hands that message to the bot
+describe('POST /trading/sessions/:id/stop: the waiting message handed over (#587)', () => {
+  const withWaiting = async (messageId = 50) => {
+    const seed = await seedSession();
+    await tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: 7, waitingMessageId: messageId, waitingAfterMessage: 7 })
+      .where(eq(tradingSessions.id, seed.sessionId));
+    return seed;
+  };
+  const waitingOf = async (id: string) => {
+    const [row] = await tmp.db
+      .select({
+        status: tradingSessions.status,
+        id: tradingSessions.waitingMessageId,
+        slot: tradingSessions.waitingAfterMessage,
+      })
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, id));
+    return [row!.status, row!.id, row!.slot];
+  };
+
+  it('T11 a stop naming the recorded waiting message: 200 with the stopped view, the waiting columns NULL', async () => {
+    const seed = await withWaiting();
+    const response = await stop(appWith(), seed.sessionId, {
+      telegramUserId: seed.telegramUserId,
+      waitingMessageId: 50,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(sessionOf(response)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+    });
+    expect(await waitingOf(seed.sessionId)).toEqual(['stopped', null, null]);
+  });
+
+  it('T12 a 409 naming the recorded waiting message clears it all the same; without the field, or with another id, nothing is cleared', async () => {
+    const target = appWith();
+    const named = await withWaiting();
+    await stopTradingSession(tmp.db, { id: named.sessionId, reason: 'completed' });
+    const refused = await stop(target, named.sessionId, {
+      telegramUserId: named.telegramUserId,
+      waitingMessageId: 50,
+    });
+    expect([refused.statusCode, refused.json()]).toEqual([
+      409,
+      { error: TradingSessionErrorCode.SessionNotActive },
+    ]);
+    expect(await waitingOf(named.sessionId)).toEqual(['stopped', null, null]);
+
+    for (const body of [{}, { waitingMessageId: 51 }]) {
+      const kept = await withWaiting();
+      await stopTradingSession(tmp.db, { id: kept.sessionId, reason: 'completed' });
+      const again = await stop(target, kept.sessionId, {
+        telegramUserId: kept.telegramUserId,
+        ...body,
+      });
+      expect(again.statusCode).toBe(409);
+      expect(await waitingOf(kept.sessionId)).toEqual(['stopped', 50, 7]);
+    }
+  });
+
+  it("T12b another user's stop naming the waiting message is 404 and clears nothing", async () => {
+    const seed = await withWaiting();
+    await stopTradingSession(tmp.db, { id: seed.sessionId, reason: 'completed' });
+    const other = await seedUser(tmp.db);
+    const response = await stop(appWith(), seed.sessionId, {
+      telegramUserId: other.telegramUserId,
+      waitingMessageId: 50,
+    });
+    expect(response.statusCode).toBe(404);
+    expect(await waitingOf(seed.sessionId)).toEqual(['stopped', 50, 7]);
+  });
+
+  it('T13 waitingMessageId outside 1..INT4_MAX or an extra key is 400; the stop-all route refuses the field', async () => {
+    const seed = await withWaiting();
+    const target = appWith();
+    for (const body of [
+      { waitingMessageId: 0 },
+      { waitingMessageId: 2_147_483_648 },
+      { waitingMessageId: 50, extra: true },
+    ]) {
+      const response = await stop(target, seed.sessionId, {
+        telegramUserId: seed.telegramUserId,
+        ...body,
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    const all = await target.inject({
+      method: 'POST',
+      url: TRADING_SESSIONS_STOP_PATH,
+      headers: auth,
+      payload: { telegramUserId: seed.telegramUserId, waitingMessageId: 50 },
+    });
+    expect(all.statusCode).toBe(400);
+    expect(await waitingOf(seed.sessionId)).toEqual(['active', 50, 7]);
+  });
+});
+
 describe('POST /trading/sessions/:id/summary (#318)', () => {
   const summary = (
     target: FastifyInstance,
@@ -1720,15 +1819,20 @@ describe('the recovery routes (#567)', () => {
     expect(await recordedOf(seed.sessionId)).toBe(41);
   });
 
-  it('T2 a second id answers 200 and the first stays', async () => {
+  // #587: the newest id wins
+  it("T2' a newer id replaces the recorded one and answers 200; an older one answers 200 and the newest stays", async () => {
     const seed = await seedSession();
     const target = appWith();
     const body = { telegramUserId: seed.telegramUserId };
     expect((await record(target, seed.sessionId, { ...body, messageId: 41 })).statusCode).toBe(200);
-    const second = await record(target, seed.sessionId, { ...body, messageId: 42 });
-    expect(second.statusCode).toBe(200);
-    expect(sessionOf(second).id).toBe(seed.sessionId);
-    expect(await recordedOf(seed.sessionId)).toBe(41);
+    const newer = await record(target, seed.sessionId, { ...body, messageId: 42 });
+    expect(newer.statusCode).toBe(200);
+    expect(sessionOf(newer).id).toBe(seed.sessionId);
+    expect(await recordedOf(seed.sessionId)).toBe(42);
+    const older = await record(target, seed.sessionId, { ...body, messageId: 41 });
+    expect(older.statusCode).toBe(200);
+    expect(sessionOf(older).id).toBe(seed.sessionId);
+    expect(await recordedOf(seed.sessionId)).toBe(42);
   });
 
   it('T3 GET /trading/sessions/tracked answers the list, not the /:id route', async () => {
@@ -1846,36 +1950,30 @@ describe('the recovery routes (#567)', () => {
     expect([again.statusCode, again.json()]).toEqual([200, { forgotten: false }]);
   });
 
-  it('T10 a record replacing the recorded message writes; the lost route refuses replacesMessageId', async () => {
+  it('T10 both the record and the lost route refuse replacesMessageId (#587)', async () => {
     const seed = await seedSession();
     const target = appWith();
     const body = { telegramUserId: seed.telegramUserId };
     expect((await record(target, seed.sessionId, { ...body, messageId: 41 })).statusCode).toBe(200);
-    const zero = await record(target, seed.sessionId, {
-      ...body,
-      messageId: 42,
-      replacesMessageId: 0,
-    });
-    expect(zero.statusCode).toBe(400);
-    expect(await recordedOf(seed.sessionId)).toBe(41);
     const replaced = await record(target, seed.sessionId, {
       ...body,
       messageId: 42,
       replacesMessageId: 41,
     });
-    expect(replaced.statusCode).toBe(200);
-    expect(sessionOf(replaced).id).toBe(seed.sessionId);
-    expect(await recordedOf(seed.sessionId)).toBe(42);
+    expect([replaced.statusCode, (replaced.json() as { error?: unknown }).error]).toEqual([
+      400,
+      'validation',
+    ]);
     const lost = await target.inject({
       method: 'POST',
       url: `${TRADING_SESSIONS_PATH}/${seed.sessionId}${SESSION_STATUS_MESSAGE_LOST_SUFFIX}`,
       headers: auth,
-      payload: { ...body, messageId: 42, replacesMessageId: 41 },
+      payload: { ...body, messageId: 41, replacesMessageId: 40 },
     });
     expect([lost.statusCode, (lost.json() as { error?: unknown }).error]).toEqual([
       400,
       'validation',
     ]);
-    expect(await recordedOf(seed.sessionId)).toBe(42);
+    expect(await recordedOf(seed.sessionId)).toBe(41);
   });
 });

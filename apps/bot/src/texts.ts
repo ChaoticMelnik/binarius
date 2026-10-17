@@ -569,10 +569,11 @@ ${state}`;
 // Button labels and the command descriptions: Telegram does not parse them, so they are plain
 // strings and are never escaped — an entity here would be shown literally. The catalog's
 // `buttons` and `commands` groups; the confirm button branches on the address here.
-// The waiting message's «⏹» (#536) is the backend's: the bot draws no stop button.
+// The waiting message's «⏹» (#536) is the backend's; the bot draws sessionStopButton only in place
+// of a pressed waiting message after an unknown stop outcome (#587, waitingStopKeyboard).
 type LabelKey = Exclude<
   BotTextKeyOfGroup<typeof BotTextGroup.Buttons | typeof BotTextGroup.Commands>,
-  'confirmButtonNoEmail' | 'sessionStopButton'
+  'confirmButtonNoEmail'
 >;
 interface LabelOverrides {
   confirmButton: (email: string | null) => string;
@@ -581,7 +582,7 @@ export const LABELS: Omit<Pick<BotPlainTexts, LabelKey>, keyof LabelOverrides> &
   facadeOf(
     plain,
     botTextKeysOf(BotTextGroup.Buttons, BotTextGroup.Commands).filter(
-      (key): key is LabelKey => key !== 'confirmButtonNoEmail' && key !== 'sessionStopButton',
+      (key): key is LabelKey => key !== 'confirmButtonNoEmail',
     ),
     { confirmButton: (email: string | null): string => confirmButtonLabel(plain, email) },
   );
