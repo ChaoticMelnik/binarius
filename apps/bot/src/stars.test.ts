@@ -130,6 +130,7 @@ describe('/buy and «⭐ Купить токены»', () => {
           notificationLevel: 'all' as const,
           demoStake: null,
           realStake: null,
+          language: 'ru' as const,
         }),
       ),
     });

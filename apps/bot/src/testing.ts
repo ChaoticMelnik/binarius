@@ -106,6 +106,7 @@ export const USER_VIEW: UserStartView = {
   notificationLevel: NotificationLevel.All,
   demoStake: null,
   realStake: null,
+  language: 'ru',
 };
 
 export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({

@@ -4,6 +4,7 @@ export * from './ids';
 export * from './trading';
 export * from './broker';
 export * from './oauth';
+export * from './bot-language';
 export * from './users';
 export * from './mailing';
 export * from './account';

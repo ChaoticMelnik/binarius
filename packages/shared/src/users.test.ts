@@ -12,6 +12,9 @@ import {
   safeParseNotificationLevelRequest,
   safeParseNotificationLevelResponse,
   safeParseUserStartRequest,
+  safeParseUserLanguageQuery,
+  safeParseUserLanguageRequest,
+  safeParseUserLanguageResponse,
   safeParseUserStartResponse,
   startPayloadSchema,
   userStatusSchema,
@@ -33,6 +36,7 @@ const view = (patch: Record<string, unknown> = {}) => ({
   notificationLevel: NotificationLevel.All,
   demoStake: null,
   realStake: null,
+  language: 'ru',
   ...patch,
 });
 
@@ -163,6 +167,8 @@ describe('userStartResponseSchema', () => {
     ],
     ['pendingBrokerAccounts is absent', { user: { ...view(), pendingBrokerAccounts: undefined } }],
     ['notificationLevel is absent', { user: { ...view(), notificationLevel: undefined } }],
+    ['language is absent', { user: { ...view(), language: undefined } }],
+    ['language is not a bot language', { user: view({ language: 'de' }) }],
     ['notificationLevel is unknown', { user: view({ notificationLevel: 'daily' }) }],
     ['demoStake is absent', { user: { ...view(), demoStake: undefined } }],
     ['demoStake is a number', { user: view({ demoStake: 5 }) }],
@@ -260,5 +266,23 @@ describe('notificationLevelResponseSchema', () => {
     expect(safeParseNotificationLevelResponse({ level: NotificationLevel.Off }).success).toBe(
       false,
     );
+  });
+});
+
+describe('the language routes (#508)', () => {
+  it('takes one of the two languages for an id', () => {
+    expect(safeParseUserLanguageRequest({ telegramUserId: '12345', language: 'en' }).success).toBe(
+      true,
+    );
+    expect(safeParseUserLanguageRequest({ telegramUserId: '12345', language: 'de' }).success).toBe(
+      false,
+    );
+    expect(safeParseUserLanguageRequest({ telegramUserId: '0', language: 'ru' }).success).toBe(
+      false,
+    );
+    expect(safeParseUserLanguageQuery({ telegramUserId: '12345' }).success).toBe(true);
+    expect(safeParseUserLanguageQuery({ telegramUserId: 'x' }).success).toBe(false);
+    expect(safeParseUserLanguageResponse({ language: 'ru' }).success).toBe(true);
+    expect(safeParseUserLanguageResponse({ language: 'EN' }).success).toBe(false);
   });
 });

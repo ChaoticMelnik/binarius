@@ -442,6 +442,13 @@
       "when": 1792239741188,
       "tag": "0062_session_start_signal",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792269946049,
+      "tag": "0063_users_language",
+      "breakpoints": true
     }
   ]
 }

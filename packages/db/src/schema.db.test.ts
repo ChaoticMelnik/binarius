@@ -199,6 +199,34 @@ const trade = (seed: { accountId: string }, patch: Record<string, unknown> = {})
   ...patch,
 });
 
+describe('users.language (#508)', () => {
+  it('takes ru and en, refuses another case, an empty string and NULL', async () => {
+    for (const language of ['ru', 'en'] as const) {
+      await rolledBack(async (tx) => {
+        await tx.insert(users).values({ telegramUserId: 970_007n, language });
+      });
+    }
+    for (const language of ['RU', '']) {
+      await rolledBack((tx) =>
+        rejectsWith(
+          tx.insert(users).values({ telegramUserId: 970_008n, language: language as never }),
+          '23514',
+          'users_language_check',
+        ),
+      );
+    }
+    await rolledBack(async (tx) => {
+      const error = await tx
+        .execute(sql`insert into users (telegram_user_id, language) values (970009, null)`)
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'language' });
+    });
+  });
+});
+
 // The enum CHECKs and the plain uniques are mechanical, but they are what keeps a typo in a
 // status list or a missing dedupe from reaching production, and the coverage gate at the end of
 // this file will not accept a constraint that nothing exercises.
@@ -213,6 +241,11 @@ describe('enum and uniqueness constraints', () => {
       'users_notification_level_check',
       async (tx: Tx) =>
         tx.insert(users).values({ telegramUserId: 970_002n, notificationLevel: 'bogus' as never }),
+    ],
+    [
+      'users_language_check',
+      async (tx: Tx) =>
+        tx.insert(users).values({ telegramUserId: 970_006n, language: 'de' as never }),
     ],
     [
       'users_trading_mode_check',
