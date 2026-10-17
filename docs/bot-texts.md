@@ -253,7 +253,7 @@ compile.
 | `sessionEnd` | the session's `ended_at`, Unix seconds (#538, the promo card) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, `cycle`, `step`, `openPrice`,
-`closePrice`, …) are a line's value the
+`closePrice`, `noSignalCandles`, `candleSec`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
 names what they hold.
 

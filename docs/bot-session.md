@@ -401,10 +401,11 @@ buttons](#the-stop-and-the-old-buttons-536)).
 | `invalid_settings` | ⚠️ Сессия остановлена из-за ошибки настроек — напиши в поддержку: /support |
 | `user_stopped` | ⏹ Сессия остановлена по твоей команде. |
 | `kill_switch` | the single trade's `tradingPaused`: ⏸ Торговля временно приостановлена, попробуйте позже. |
-| `no_signal_timeout` (#509) | ⏳ Сессия остановлена: 2 мин по паре не было сигнала. Выбери другую пару. (`sessionStopNoSignalTimeout`, the minutes from `SESSION_NO_SIGNAL_TIMEOUT_MS`) |
+| `no_signal_timeout` (#509) | ⏳ Сессия остановлена: по паре не было сигнала 20 свечей по 15 с. Выбери другую пару. (`sessionStopNoSignalTimeout`: `SESSION_NO_SIGNAL_CANDLES` with the candle word (`sessionCandleOne/Few/Many`) and the candle of `intervalForDuration(settings.durationSec)` in seconds, #637; without readable settings `sessionStopNoSignalTimeoutNoSettings`: ⏳ Сессия остановлена: по паре долго не было сигнала. Выбери другую пару.) |
 
 The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed' | 'no_signal_timeout'>, …>`;
-`no_signal_timeout`'s line carries a variable, so `sessionEndLine` builds it beside the map.
+`no_signal_timeout`'s line carries two variables and a fallback key, so `stopLine` builds it beside
+the map from the view's `settings`.
 
 **No keyboard** (#536). The session message is sent by `replyWithPhotoHtmlWithoutNextStep` or
 `replyHtmlWithoutNextStep` and edited by `editMessagePhotoByIdHtmlWithoutNextStep` or

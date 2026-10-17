@@ -522,7 +522,7 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 `AnalysisScreen.session` is true on a signal only (#509, owner: no session on a pair without a
 signal now). Until #509 it was true on every `decided` answer, and the session waited for a signal
 itself; the no-signal limit ([trading-session.md](trading-session.md#the-no-signal-limit-509)) now
-stops such a wait after 2 min. Where the candles were not read, no session row is drawn either.
+stops such a wait after 20 candles of the session's interval (#637: 100 s on 5 s, 300 s on 15 s). Where the candles were not read, no session row is drawn either.
 
 The card's block (#482) is a `<pre>`, so Telegram draws it monospaced with a copy button: eight
 rows of a label (`cardRowPair` … `cardRowDirection`) padded to the longest label after the
