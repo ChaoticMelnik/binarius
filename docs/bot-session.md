@@ -1396,18 +1396,18 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     are overridden alike** (#568): the message is that text until the next change of its drawing,
     which draws the picture. Falsifiable: such a text still on screen after its session stopped.
 
-61. **One storage channel for every user** (#538): Bot API allows about 20 messages a minute in
+72. **One storage channel for every user** (#538): Bot API allows about 20 messages a minute in
     one chat, so a burst of presses above it gets 429 and empty answers with `trading session
     promo not uploaded`. Falsifiable: that line with `telegramErrorCode: 429` more than once a day.
-62. **The channel grows by a post per press** (#538): no memory of the promo card's `file_id`, so a
+73. **The channel grows by a post per press** (#538): no memory of the promo card's `file_id`, so a
     press after Telegram's 300 s cache draws and posts again; a post whose answer failed is an
     orphan. The owner may clear the channel; nothing but Telegram's cache of an answered query
     relies on a post, and whether a `file_id` outlives its deleted message is not documented.
-63. **A blocked sender shares the plain link** (#538): `?start=share`, no referral code is created
+74. **A blocked sender shares the plain link** (#538): `?start=share`, no referral code is created
     for a blocked user (Rule 34).
-64. **The referral code is created at the press** (#538), even if the user then closes the picker:
+75. **The referral code is created at the press** (#538), even if the user then closes the picker:
     harmless, the code is personal and permanent, as /invite's.
-65. **A glyph outside Inter in an override of the promo card's texts** (an emoji) is dropped by
+76. **A glyph outside Inter in an override of the promo card's texts** (an emoji) is dropped by
     resvg without a word (#538), as on the #318 card.
 
 ## Running it locally
