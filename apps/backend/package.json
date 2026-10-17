@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@binarius/broker-rest": "workspace:*",
+    "@binarius/broker-socket": "workspace:*",
     "@binarius/db": "workspace:*",
     "@binarius/shared": "workspace:*",
     "@binarius/signal": "workspace:*",
