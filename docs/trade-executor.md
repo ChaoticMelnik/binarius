@@ -8,7 +8,7 @@ the answer into `accepted`, `rejected` or `unknown`. The processor
 the reconciliation row; the executor writes nothing.
 
 ```bash
-pnpm test --project unit apps/trading-worker/src/intents/trade-command-executor.test.ts apps/trading-worker/src/broker apps/trading-worker/src/intents/executor.test.ts
+pnpm test --project unit apps/trading-worker/src/intents/trade-command-executor.test.ts packages/broker-socket apps/trading-worker/src/intents/executor.test.ts
 # the processor on the production composition (TEST_DATABASE_URL and REDIS_URL as in README → Test database)
 pnpm test --project integration apps/trading-worker/src/intents/processor.db.test.ts
 ```

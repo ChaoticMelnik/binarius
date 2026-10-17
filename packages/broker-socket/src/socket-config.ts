@@ -15,7 +15,7 @@
 // longest one, a handshake is not allowed longer than a connection attempt, and the jitter is in
 // [0, 1) — at 1 a wait could shrink to 0. The command timeout is a separate operation, not ordered
 // against the others here. The links to the worker's shutdown budget and to the submit deadline's
-// floor are in intents/config.ts.
+// floor are in apps/trading-worker/src/intents/config.ts.
 export const BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 export const BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000;
 export const BROKER_SOCKET_COMMAND_TIMEOUT_MS = 5_000;
@@ -66,7 +66,9 @@ export function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {
 // a constant edited out of order fails at import, not on the first reconnect in prod
 const BROKER_SOCKET_TIMING_CHAIN_HOLDS = brokerSocketTimingHolds(DEFAULT_BROKER_SOCKET_TIMING);
 if (!BROKER_SOCKET_TIMING_CHAIN_HOLDS) {
-  throw new Error('broker socket timing constants are out of order (see broker-socket/src/socket-config.ts)');
+  throw new Error(
+    'broker socket timing constants are out of order (see broker-socket/src/socket-config.ts)',
+  );
 }
 
 // an override (tests shorten every wait) is held to the same chain
@@ -75,7 +77,9 @@ export function resolveBrokerSocketTiming(
 ): BrokerSocketTiming {
   const timing = { ...DEFAULT_BROKER_SOCKET_TIMING, ...override };
   if (!brokerSocketTimingHolds(timing)) {
-    throw new RangeError('broker socket timing is out of order (see broker-socket/src/socket-config.ts)');
+    throw new RangeError(
+      'broker socket timing is out of order (see broker-socket/src/socket-config.ts)',
+    );
   }
   return timing;
 }
