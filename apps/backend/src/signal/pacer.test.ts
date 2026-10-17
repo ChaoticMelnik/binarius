@@ -186,6 +186,8 @@ describe('scan pacer', () => {
       return seed / 2_147_483_648;
     };
     const taken: number[] = [];
+    // an idle minute first: a bucket full for long is where an unbounded overflow would pile up
+    clock.now += 60_000;
     for (let t = 0; t < 180_000; t += 100) {
       const spareFirst = random() < 0.5;
       if (spareFirst && p.tryTakeSpare()) taken.push(clock.now);
