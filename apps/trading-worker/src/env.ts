@@ -12,6 +12,7 @@ import {
   type LogLevel,
   type UrlEnvRules,
 } from '@binarius/shared';
+import { BROKER_WS_URL_RULES } from '@binarius/broker-socket';
 import {
   CIRCUIT_BREAKER_FAILURE_PERCENT,
   CIRCUIT_BREAKER_MIN_FAILURES,
@@ -28,10 +29,6 @@ const MAX_WORKER_CONCURRENCY = 100;
 // the backend is reached over the compose network in plain http, as the bot reaches it
 export const BACKEND_URL_RULES: UrlEnvRules = {
   protocols: ['http:', 'https:'],
-  allowIpv6Literal: false,
-};
-export const BROKER_WS_URL_RULES: UrlEnvRules = {
-  protocols: ['https:', 'wss:'],
   allowIpv6Literal: false,
 };
 

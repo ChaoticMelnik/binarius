@@ -8,6 +8,14 @@ import {
 } from '@binarius/mock-broker';
 import { logOptions, TradeAction, TradeMode } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
+import {
+  BrokerEventType,
+  BrokerSocketState,
+  createBrokerSocketClient,
+  type BrokerSocket,
+  type BrokerSocketClient,
+  type BrokerSocketClientOptions,
+} from '@binarius/broker-socket';
 import pino from 'pino';
 import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -16,14 +24,6 @@ import type {
   AccessTokenOutcome,
   AccessTokenSource,
 } from '../broker/access-token';
-import { BrokerEventType } from '../broker/events';
-import {
-  BrokerSocketState,
-  createBrokerSocketClient,
-  type BrokerSocket,
-  type BrokerSocketClient,
-  type BrokerSocketClientOptions,
-} from '../broker/socket';
 import type { TradeSessionSource } from '../broker/trade-session';
 import { observeExecutor } from '../circuit-breaker/observe-executor';
 import { createTradeCommandExecutor } from './trade-command-executor';

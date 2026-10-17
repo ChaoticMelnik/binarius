@@ -1,4 +1,5 @@
 import { BALANCE_WATCH_WINDOW_MS } from '@binarius/shared/broker-balance';
+import { MAX_TIMER_MS } from '@binarius/broker-socket';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_SESSIONS_PER_WORKER,
@@ -18,7 +19,6 @@ import {
   sessionManagerConfigHolds,
   type SessionManagerConfig,
 } from './session-config';
-import { MAX_TIMER_MS } from './socket-config';
 
 describe('the session constants', () => {
   it('hold the chain', () => {

@@ -1,5 +1,5 @@
 import { BALANCE_WATCH_WINDOW_MS } from '@binarius/shared/broker-balance';
-import { isTimerMs } from './socket-config';
+import { isTimerMs } from '@binarius/broker-socket';
 
 // The session manager's constants (docs/broker-session.md → Constants), each bounding one thing:
 //   SESSION_TICK_MS            — the candidate scan interval: one query and the bookkeeping; the

@@ -6,6 +6,7 @@
     { "path": "apps/web" },
     { "path": "apps/trading-worker" },
     { "path": "packages/broker-rest" },
+    { "path": "packages/broker-socket" },
     { "path": "packages/db" },
     { "path": "packages/mock-broker" },
     { "path": "packages/shared" },

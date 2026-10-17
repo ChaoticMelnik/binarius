@@ -66,7 +66,7 @@ export function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {
 // a constant edited out of order fails at import, not on the first reconnect in prod
 const BROKER_SOCKET_TIMING_CHAIN_HOLDS = brokerSocketTimingHolds(DEFAULT_BROKER_SOCKET_TIMING);
 if (!BROKER_SOCKET_TIMING_CHAIN_HOLDS) {
-  throw new Error('broker socket timing constants are out of order (see broker/socket-config.ts)');
+  throw new Error('broker socket timing constants are out of order (see broker-socket/src/socket-config.ts)');
 }
 
 // an override (tests shorten every wait) is held to the same chain
@@ -75,7 +75,7 @@ export function resolveBrokerSocketTiming(
 ): BrokerSocketTiming {
   const timing = { ...DEFAULT_BROKER_SOCKET_TIMING, ...override };
   if (!brokerSocketTimingHolds(timing)) {
-    throw new RangeError('broker socket timing is out of order (see broker/socket-config.ts)');
+    throw new RangeError('broker socket timing is out of order (see broker-socket/src/socket-config.ts)');
   }
   return timing;
 }

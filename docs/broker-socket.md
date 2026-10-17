@@ -1,8 +1,8 @@
 # Broker Socket.IO: the event normalizer (#97) and the client (#99)
 
-`apps/trading-worker/src/broker/events.ts` turns one raw Socket.IO event from the Binodex broker
+`packages/broker-socket/src/events.ts` turns one raw Socket.IO event from the Binodex broker
 into either a typed domain event or a problem a caller can log as it is. It is a pure function:
-no network, no logger, no counters. `apps/trading-worker/src/broker/socket.ts` is the Socket.IO
+no network, no logger, no counters. `packages/broker-socket/src/socket.ts` is the Socket.IO
 client that feeds it: the handshake, subscriptions, reconnection and the logging of problems
 ([Client](#client-99)).
 

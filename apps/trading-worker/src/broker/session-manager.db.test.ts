@@ -38,17 +38,16 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
+import { BrokerEventType, BrokerSocketState, type BrokerEvent } from '@binarius/broker-socket';
 import { processIntentJob, type ProcessorDeps } from '../intents/processor';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
 import type { AccessTokenOutcome } from './access-token';
-import { BrokerEventType, type BrokerEvent } from './events';
 import type { SessionManagerConfig } from './session-config';
 import {
   createBrokerSessionManager,
   type BrokerSessionManager,
   type SessionWriters,
 } from './session-manager';
-import { BrokerSocketState } from './socket';
 
 // The end-to-end scenario of #101 on the mock broker: connect → auth → subscribe → price → open
 // success/fail → close → balance, through the production composition (the session manager as

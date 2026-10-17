@@ -1,5 +1,5 @@
 import type { BrokerRestErrorCode, DecimalString } from '@binarius/shared';
-import { BrokerSocketState, type SocketOpenTradeResult } from '../broker/socket';
+import { BrokerSocketState, type SocketOpenTradeResult } from '@binarius/broker-socket';
 
 // The two-socket probe's verdict (#285, docs/broker-socket.md -> Observed live), a pure function
 // of what socket-probe-run.ts observed. Any open_trade answer heard by a socket that did not send

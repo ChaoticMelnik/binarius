@@ -43,6 +43,11 @@ x-watch-broker-rest: &watch-broker-rest
   target: /app/packages/broker-rest/src
   action: sync
 
+x-watch-broker-socket: &watch-broker-socket
+  path: ./packages/broker-socket/src
+  target: /app/packages/broker-socket/src
+  action: sync
+
 x-watch-signal: &watch-signal
   path: ./packages/signal/src
   target: /app/packages/signal/src
@@ -266,6 +271,7 @@ services:
         - *watch-shared
         - *watch-db
         - *watch-broker-rest
+        - *watch-broker-socket
         - *watch-signal
         - path: ./apps/trading-worker/package.json
           action: rebuild
@@ -274,6 +280,10 @@ services:
         - path: ./packages/broker-rest/package.json
           action: rebuild
         - path: ./packages/broker-rest/tsconfig.json
+          action: rebuild
+        - path: ./packages/broker-socket/package.json
+          action: rebuild
+        - path: ./packages/broker-socket/tsconfig.json
           action: rebuild
         - path: ./packages/signal/package.json
           action: rebuild

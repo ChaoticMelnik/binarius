@@ -340,7 +340,7 @@ per fixture:
 seen live. An `ArrayBuffer` or a typed array reaches a Node client as the same `Buffer`, so they
 are one form here. Shared's `decodeSocketPayload` turns each form back into the same object. The
 default is `object`, but the live broker sends `bytes`, so the broker socket client's suite (#99,
-`apps/trading-worker/src/broker/socket.test.ts`) runs under `'bytes'` and repeats the handshake
+`packages/broker-socket/src/socket.test.ts`) runs under `'bytes'` and repeats the handshake
 over all four. Any other value throws `RangeError` before the server
 listens.
 

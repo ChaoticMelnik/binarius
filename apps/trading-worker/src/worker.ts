@@ -18,10 +18,10 @@ import {
   upsertBalanceSnapshot,
   type Db,
 } from '@binarius/db';
+import type { BrokerSocketTiming } from '@binarius/broker-socket';
 import { createBackendAccessTokenSource, type AccessTokenSource } from './broker/access-token';
 import { SESSION_MANAGER_CONFIG, type SessionManagerConfig } from './broker/session-config';
 import { createBrokerSessionManager } from './broker/session-manager';
-import type { BrokerSocketTiming } from './broker/socket-config';
 import { noTradeSessions } from './broker/trade-session';
 import { createCircuitBreaker } from './circuit-breaker/breaker';
 import { observeExecutor } from './circuit-breaker/observe-executor';

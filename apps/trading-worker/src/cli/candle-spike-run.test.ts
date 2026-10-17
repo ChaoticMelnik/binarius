@@ -7,13 +7,14 @@ import {
   type Candle,
   type ChartRequest,
 } from '@binarius/shared';
-import { describe, expect, it } from 'vitest';
-import { BrokerEventType, type BrokerEvent } from '../broker/events';
 import {
+  BrokerEventType,
   BrokerSocketState,
+  type BrokerEvent,
   type BrokerSocketClient,
   type BrokerSocketStateChange,
-} from '../broker/socket';
+} from '@binarius/broker-socket';
+import { describe, expect, it } from 'vitest';
 import { exitCodeOf } from './candle-spike';
 import { renderReport } from './candle-spike-report';
 import {

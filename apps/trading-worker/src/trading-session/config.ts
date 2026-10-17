@@ -6,7 +6,7 @@ import {
   SIGNAL_SHORTEST_INTERVAL_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
-import { isTimerMs } from '../broker/socket-config';
+import { isTimerMs } from '@binarius/broker-socket';
 
 // The session orchestrator's constants (docs/trading-session.md -> Constants and the chain), each
 // bounding one thing:

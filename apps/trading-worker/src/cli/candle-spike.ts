@@ -17,9 +17,13 @@ import {
   UUID_PATTERN,
   type LogLevel,
 } from '@binarius/shared';
+import {
+  BROKER_WS_URL_RULES,
+  createBrokerSocketClient,
+  type BrokerSocketClient,
+} from '@binarius/broker-socket';
 import { createBackendAccessTokenSource } from '../broker/access-token';
-import { createBrokerSocketClient, type BrokerSocketClient } from '../broker/socket';
-import { BACKEND_URL_RULES, BROKER_WS_URL_RULES } from '../env';
+import { BACKEND_URL_RULES } from '../env';
 import { runSpike, SPIKE_TIMING, type SpikeDeps, type SpikeRun } from './candle-spike-run';
 import { renderReport } from './candle-spike-report';
 

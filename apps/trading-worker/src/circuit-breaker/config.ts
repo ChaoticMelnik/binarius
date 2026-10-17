@@ -1,10 +1,10 @@
-import { SOCKET_LOSS_GRACE_MS } from '../broker/session-config';
 import {
   BROKER_SOCKET_AUTH_TIMEOUT_MS,
   BROKER_SOCKET_CONNECT_TIMEOUT_MS,
   BROKER_SOCKET_RECONNECT_DELAY_MAX_MS,
   BROKER_SOCKET_RECONNECT_JITTER,
-} from '../broker/socket-config';
+} from '@binarius/broker-socket';
+import { SOCKET_LOSS_GRACE_MS } from '../broker/session-config';
 
 // The circuit breaker's constants (#96, docs/runbook-broker-outage.md), each bounding one thing:
 //   CIRCUIT_BREAKER_WINDOW_MS       — how far back failures count (env CIRCUIT_BREAKER_WINDOW_MS)

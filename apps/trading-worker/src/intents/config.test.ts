@@ -9,11 +9,11 @@ import {
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
-import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
 import {
   BROKER_SOCKET_COMMAND_TIMEOUT_MS,
   BROKER_SOCKET_CONNECT_TIMEOUT_MS,
-} from '../broker/socket-config';
+} from '@binarius/broker-socket';
+import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 import {
   BALANCE_CHECK_TIMEOUT_MS,

@@ -192,13 +192,13 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     reason: `${NEGATIVE} (expectQuiet, and the ack that must stay uncalled)`,
   },
   {
-    file: 'apps/trading-worker/src/broker/socket.test.ts',
+    file: 'packages/broker-socket/src/socket.test.ts',
     form: 'F4',
     match: 'await quiet();',
     reason: `${NEGATIVE} (QUIET_MS, sized past the longest reconnection delay of the test timing: no reconnection, no socket, no log line may follow)`,
   },
   {
-    file: 'apps/trading-worker/src/broker/socket.test.ts',
+    file: 'packages/broker-socket/src/socket.test.ts',
     form: 'F4',
     match: 'setTimeout(resolve, TIMING.authTimeoutMs)',
     reason: `${NEGATIVE} (sized to the auth timeout it must outlast: no auth timer may fire after a stop() inside the user.auth emit)`,
