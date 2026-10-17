@@ -4,6 +4,7 @@ import pino from 'pino';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
   BrokerSocketEvent,
+  SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   logOptions,
   toBinaryPair,
@@ -313,7 +314,8 @@ function harness(
             retryMs: 15_000,
             attempts: 3,
             budgetMs: 3_000,
-            concurrency: 2,
+            // fewer rounds of the 90 GETs inside the wait ceiling
+            concurrency: 8,
             slackMs: 500,
             candles: 300,
           },
@@ -1205,9 +1207,16 @@ describe('the market data manager and the backfill (#590)', () => {
       expect(h.ring.read(id, interval, Date.now()).gaps).toContain(t1);
     }
 
+    // the buckets closed by the clock before the first GET; one closing later is the next GET's,
+    // after the element's hold-back
+    const cut = Date.now() - 2_000;
     const pending = () =>
       IDS.flatMap((assetId) =>
-        SIGNAL_SCAN_INTERVALS.map((interval) => h.ring.read(assetId, interval, Date.now()).gaps),
+        SIGNAL_SCAN_INTERVALS.map((interval) =>
+          h.ring
+            .read(assetId, interval, Date.now())
+            .gaps.filter((bucket) => bucket + SIGNAL_CHART_INTERVAL_MS[interval] <= cut),
+        ),
       ).filter((gaps) => gaps.length > 0).length;
     await until('every window refilled', async () => {
       await h.backfill?.tick();
