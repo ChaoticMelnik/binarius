@@ -168,7 +168,7 @@ same in both modes.
 
 | Callback (≤ 45 bytes) | Action |
 | --- | --- |
-| `stk:o:<m>:<origin>` | open: read access, edit to the picker of mode `<m>`; also ends a stake input step |
+| `stk:o:<m>:<origin>` | open: read access, edit to the picker of mode `<m>` |
 | `stk:s:<amount>:<m>:<origin>` | a preset: save exactly this amount as the stake of `<m>` |
 | `stk:z:<m>:<origin>` | reset the stake of `<m>` to the broker minimum (`amount: null`) |
 | `stk:c:<m>:<origin>` | custom: the input step of `<m>`, the prompt in place with «↩️ Назад» → `stk:o:<m>:<origin>` |
@@ -207,6 +207,12 @@ so the email login and the stake input replace each other. The step carries the 
 the typed amount is saved in it. `parseStakeInput` takes digits with one `,` or `.` («2,50», «1.5»,
 «01.5» → `1.5`); «abc», «-5», «0», «1 000», «1e3» get «❌ Введи сумму числом…» and the step stays.
 A restart drops the step, as for the login. The result of a typed amount is a new message.
+Any inline button press and any command end the step before their handler runs (`bot.ts`'s
+`callback_query:data` and `message:text` middleware → `endInputStep`, `login-dialog.ts`, #319): the
+prompt's «↩️ Назад», every way back of a refusal, «🏠 В меню», an old button, `/menu`. A text that
+is no amount and the refusals of the table keep it until the next button, command or the TTL; a
+number typed after one of them is ignored, as any text outside a dialog (#162). The login steps are
+not touched by a button or a command.
 
 **The save** is `POST /trading/stake { mode }` ([trading-access.md](trading-access.md#post-tradingstake-297-326)),
 `BackendClient.setStake(telegramUserId, mode, amount)`. What its answer does (the real texts in
@@ -222,6 +228,8 @@ brackets):
 | 404 `user_not_found` | no users row | `unavailable`, `warn` `stake not saved` | ended |
 | 400 `validation`, any other 4xx | the bot's own bug | `unavailable`, `error` `stake not saved` | ended |
 | no answer, 5xx, a broken body | unknown: the UPDATE may have committed | «⚠️ Не удалось сохранить сумму…» + «💵 Сумма» + back, `warn` `stake save outcome unknown` | kept |
+
+«kept» lasts until the next inline button press, command or the TTL (#319).
 
 Both log lines carry the save's `mode` beside `err`, `backendStatus` and `backendReason`, never the
 amount or the Telegram id. A refusal names only the balance of its own mode (`limits.available`),
@@ -361,6 +369,7 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
   `stake save outcome unknown` (`warn`), `stake not saved` (`warn` for
   `user_not_found`, `error` otherwise), both with the save's `mode` — #297, #326
 - `pairs not read for the launch screen` (`warn`) — #320
+- `trading access not read for the launch screen` (`warn`, `stake-picker.ts`) — #121
 - `trade intent message not edited` (with `intentId` when the tracker writes it)
 
 ## Boundaries

@@ -269,7 +269,8 @@ refusals are the picker's (`stake-access.ts`): blocked, no account, an ambiguous
 snapshot, each with its keyboard and the way back. A failed access read says «⚠️ Сервис временно
 недоступен…» with «🔄 Повторить» (`demo:l:…`, a read; `:n` becomes `:a`, so the retry edits the
 refusal in place) and the way back, and logs `warn` `trading access not read for the amount
-screen`. A press of `demo:l` ends a typed amount's step left open. A pair refused by the check is
+screen`. Any button press or command ends a typed amount's step left open
+([bot-demo-trade.md → The stake](bot-demo-trade.md#the-stake-297-326), the custom input, #319). A pair refused by the check is
 the table below, as on the manual path; a pair whose payout fell below the floor since the list was
 drawn (`payout_too_low`, #379) says «🚫 {symbol}: выплата {payout}% — ниже 80%, цикл на этой паре
 не запускается. Безубыточность при такой выплате — {breakEven}% верных прогнозов.»
@@ -299,8 +300,9 @@ The typed amount is parsed as the picker's (`parseStakeInput`), saved and starte
 the start's one retry on an unknown outcome, as a new reply: the bot keeps no id of the prompt, so
 nothing is deleted. A text that is no amount, a bounds refusal, `balance_unavailable` and an unknown
 save keep the step; a save and a refusal the bot cannot act on end it. The step lives up to
-`LOGIN_DIALOG_TTL_MS` (10 min): a number typed within it starts a cycle even after other presses,
-unless one of them was `demo:l`.
+`LOGIN_DIALOG_TTL_MS` (10 min) or until the next inline button press or command, whichever comes
+first (#319): a number typed after «↩️ К списку», «↩️ К анализу», `/menu` or any other button
+starts nothing and saves nothing.
 
 ### The launch screen in real mode (#327)
 
