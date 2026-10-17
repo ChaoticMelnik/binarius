@@ -53,6 +53,7 @@ import {
   MODE_CALLBACK_DATA,
   menuKeyboard,
   supportKeyboard,
+  waitingStopKeyboard,
   withBuy,
   withInvite,
   withMenu,
@@ -82,7 +83,8 @@ import {
 
 // The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
 // buttons start one through POST /trading/sessions, one session message without buttons follows it
-// (session-tracker.ts), and the «⏹» under the backend's waiting message stops it (#536). The trades
+// (session-tracker.ts), and the «⏹» under the backend's waiting message stops it (#536), its reply
+// drawn in place of that message (#587). The trades
 // themselves are the worker's (#287), their messages the backend's (#464). The launch screen (#418)
 // and the amount screen of a demo cycle (#476) are deleted once the session message is sent.
 
@@ -350,7 +352,7 @@ export function createTradingSessionComposer<C extends Context>({
       NO_NEXT_STEP_REASONS.SessionStatus,
     );
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
-    if (removeScreen) await removePressedMessage(ctx, 'the launch screen', { stripKeyboard: true });
+    if (removeScreen) await removeLaunchScreen(ctx);
   }
 
   // an old status message's «🔄 Обновить» (#536): its keyboard stripped, nothing read or sent
@@ -359,16 +361,18 @@ export function createTradingSessionComposer<C extends Context>({
   );
 
   // «⏹ Остановить сессию». No confirmation and no retry: a second stop is harmless (409 → the
-  // session read). Under the waiting message (`:w`, #536) the pressed message is deleted and the
-  // reply is a new message; under an old status message (no `:w`) the reply is drawn in its place,
-  // as before #536, and tracked.
+  // session read). Under the waiting message (`:w`, #536) the stop names the pressed message, so the
+  // backend takes it over from its sender (#587), and the reply - or a failure - is drawn in its
+  // place: the summary the backend sends next comes under it. Under an old status message (no
+  // `:w`) the reply is drawn in its place, as before #536, and tracked.
   composer.callbackQuery(SESSION_STOP_PATTERN, async (ctx) => {
     const sessionId = ctx.match[1] ?? '';
     const waiting = ctx.match[2] !== undefined;
     const telegramUserId = String(ctx.from.id);
+    const pressed = waiting ? ctx.callbackQuery.message?.message_id : undefined;
     const [, stopped, catalog] = await Promise.all([
       answer(ctx),
-      settle(backend.stopSession(sessionId, telegramUserId)),
+      settle(backend.stopSession(sessionId, telegramUserId, pressed)),
       waiting ? undefined : settle(backend.readPairs()),
     ]);
     let view: TradingSessionView;
@@ -378,23 +382,25 @@ export function createTradingSessionComposer<C extends Context>({
       // it had ended already: show how
       const read = await settle(backend.readSession(sessionId, telegramUserId));
       if (!read.ok) {
-        await replyReadFailure(ctx, read.error, 'trading session status not read');
+        await stopFailure(ctx, read.error, 'trading session status not read', waiting && {});
         return;
       }
       view = read.value;
     } else {
-      await replyReadFailure(ctx, stopped.error, 'trading session not stopped');
+      const again = waiting && { sessionId };
+      await stopFailure(ctx, stopped.error, 'trading session not stopped', again);
       return;
     }
     if (waiting) {
-      // the waiting message goes with the stop: a refused delete never withholds the reply. A
-      // press starts no tracking: the session message is tracked from its start in this process,
-      // or by #567's pass once its id is recorded; one whose id is not recorded gets no card
-      // (docs/bot-session.md risk 56)
-      await removePressedMessage(ctx, 'the pressed message', { stripKeyboard: false });
-      await replyHtml(ctx, sessionStopReplyText(view), {
-        reply_markup: sessionCardKeyboard(view, cashierUrl),
-      });
+      // A press starts no tracking: the session message is tracked from its start in this
+      // process, or by #567's pass once its id is recorded; one whose id is not recorded gets no
+      // card (docs/bot-session.md risk 56)
+      await drawStopReply(
+        ctx,
+        sessionStopReplyText(view),
+        sessionCardKeyboard(view, cashierUrl),
+        'the pressed message was already gone',
+      );
       return;
     }
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
@@ -533,72 +539,131 @@ export function createTradingSessionComposer<C extends Context>({
     await replyHtml(ctx, textOf(text), { reply_markup });
   }
 
-  // A missing or foreign id is told as such; anything else is logged. The menu under either: the
-  // stop is a write and is not repeated, and the pressed message stays, its «⏹» pressed again is
-  // safe (409 → the session read).
-  async function replyReadFailure(ctx: Context, error: unknown, message: string): Promise<void> {
+  // A missing or foreign id is told as such; anything else is logged. The stop is a write and is
+  // not repeated. Under an old status message the failure is a reply with the menu, and the pressed
+  // message stays, its «⏹» pressed again is safe (409 → the session read). Under the waiting
+  // message (`inPlace`, #587) it is drawn in place of the pressed message, never as a message under
+  // it: a stop whose outcome is unknown (`inPlace.sessionId`) keeps the one «⏹» for another press,
+  // a missing session or a failed read after a 409 the menu. Refused as gone: the same text as a
+  // new message under «🏠 В меню» - the bot draws «⏹» only in place of the pressed message, never
+  // as a second «⏹» beside the sender's next one (#587 round 1).
+  async function stopFailure(
+    ctx: Context,
+    error: unknown,
+    message: string,
+    inPlace: false | { sessionId?: string },
+  ): Promise<void> {
     const notFound = isHttpError(error, SESSION_NOT_FOUND);
     if (!notFound) logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, message);
-    await replyHtml(ctx, notFound ? TEXTS.sessionStatusUnavailable : TEXTS.unavailable, {
-      reply_markup: menuKeyboard(),
-    });
+    const text = notFound ? TEXTS.sessionStatusUnavailable : TEXTS.unavailable;
+    if (inPlace === false) {
+      await replyHtml(ctx, text, { reply_markup: menuKeyboard() });
+      return;
+    }
+    const keyboard =
+      notFound || inPlace.sessionId === undefined
+        ? menuKeyboard()
+        : waitingStopKeyboard(inPlace.sessionId);
+    await drawStopReply(
+      ctx,
+      text,
+      keyboard,
+      'the pressed message was already gone',
+      menuKeyboard(),
+    );
+  }
+
+  // The reply under the waiting message (#587), in place of the pressed message. Logged and left
+  // when Telegram refused it otherwise: the summary and the card still follow.
+  async function drawStopReply(
+    ctx: Context,
+    text: TelegramHtml,
+    reply_markup: InlineKeyboard,
+    goneNote: string,
+    goneMarkup = reply_markup,
+  ): Promise<void> {
+    const drawn = await drawInPlace(ctx, text, reply_markup, goneNote, goneMarkup);
+    if (drawn.in === 'refused') {
+      logger.warn(
+        { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, 'editMessageText') },
+        'trading session stop reply not drawn',
+      );
+    }
+  }
+
+  // The pressed message edited in place; refused as gone (deleted, or past 48 h), the same text as
+  // a new message, under `goneMarkup` (the same keyboard by default); «not modified» counts as drawn; any other Telegram refusal or a
+  // transport failure is handed back to log; anything else is a bug, rethrown to bot.catch.
+  async function drawInPlace(
+    ctx: Context,
+    text: TelegramHtml,
+    reply_markup: InlineKeyboard,
+    goneNote?: string,
+    goneMarkup = reply_markup,
+  ): Promise<
+    | { in: 'place' }
+    | { in: 'new'; sent: { chat: { id: number }; message_id: number } }
+    | { in: 'refused'; error: HttpError }
+  > {
+    try {
+      await editMessageTextHtml(ctx, text, { reply_markup });
+      return { in: 'place' };
+    } catch (error) {
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      if (refusal === 'shown') return { in: 'place' };
+      if (refusal === 'gone') {
+        if (goneNote !== undefined) {
+          logger.info({ ...telegramErrorFields(error, 'editMessageText') }, goneNote);
+        }
+        return { in: 'new', sent: await replyHtml(ctx, text, { reply_markup: goneMarkup }) };
+      }
+      if (!(error instanceof HttpError)) throw error;
+      return { in: 'refused', error };
+    }
   }
 
   // An old status message's «⏹» (before #536): the session message in its place, under the
   // stopped session's end of the path, then tracking on whichever message shows it: its first poll
-  // records the message (#567); a done session's entry sends its summary card once and ends
-  // (#318). A message sent in place of a pressed one refused as gone replaces the pressed one in
-  // the record when that is the one recorded.
+  // records the message (#567), the newest id winning (#587); a done session's entry sends its
+  // summary card once and ends (#318).
   async function showInPlace(
     ctx: Context,
     telegramUserId: string,
     symbol: PairLabel | null,
     view: TradingSessionView,
   ): Promise<void> {
-    const text = sessionStatusText(symbol, view);
-    const reply_markup = sessionCardKeyboard(view, cashierUrl);
     const chatId = ctx.chat?.id;
     const messageId = ctx.callbackQuery?.message?.message_id;
-    try {
-      await editMessageTextHtml(ctx, text, { reply_markup });
-    } catch (error) {
-      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
-      if (refusal === 'gone') {
-        const sent = await replyHtml(ctx, text, { reply_markup });
-        track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id, messageId);
-        return;
-      }
-      if (refusal !== 'shown') {
-        if (!(error instanceof HttpError)) throw error;
-        logger.warn(
-          { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageText') },
-          'trading session message not edited',
-        );
-        return;
-      }
+    const drawn = await drawInPlace(
+      ctx,
+      sessionStatusText(symbol, view),
+      sessionCardKeyboard(view, cashierUrl),
+    );
+    if (drawn.in === 'refused') {
+      logger.warn(
+        { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, 'editMessageText') },
+        'trading session message not edited',
+      );
+      return;
+    }
+    if (drawn.in === 'new') {
+      track(ctx, telegramUserId, symbol, view, drawn.sent.chat.id, drawn.sent.message_id);
+      return;
     }
     if (chatId !== undefined && messageId !== undefined) {
       track(ctx, telegramUserId, symbol, view, chatId, messageId);
     }
   }
 
-  // The pressed message: the launch screen after the session message was sent (#418,
-  // docs/bot-session.md → The launch screen after the start), after it so a slow or refused delete
-  // never withholds it; the waiting message under a pressed «⏹» (#536), before the reply.
+  // The launch screen after the session message was sent (#418, docs/bot-session.md → The launch
+  // screen after the start), after it so a slow or refused delete never withholds it.
   //   deleted                                   → nothing more
   //   400 «message to delete not found»         → nothing, info
-  //   400 «…can't be deleted…» (48 h)          → the launch screen's keyboard stripped, the text
-  //                                               stays; the waiting message stays as it is, warn:
-  //                                               its «⏹» pressed again answers 409 → the reply,
-  //                                               and the strip would be a fourth Telegram call
-  //                                               (HANDLER_CALLS.sessionStop)
+  //   400 «…can't be deleted…» (48 h)          → its keyboard stripped, the text stays
   //   any other GrammyError or HttpError        → nothing, warn
   //   anything else                             → a bug, rethrown to bot.catch
-  async function removePressedMessage(
-    ctx: Context,
-    what: 'the launch screen' | 'the pressed message',
-    { stripKeyboard }: { stripKeyboard: boolean },
-  ): Promise<void> {
+  async function removeLaunchScreen(ctx: Context): Promise<void> {
+    const what = 'the launch screen';
     try {
       await ctx.deleteMessage();
       return;
@@ -609,7 +674,7 @@ export function createTradingSessionComposer<C extends Context>({
         logger.info({ ...telegramErrorFields(error, 'deleteMessage') }, `${what} was already gone`);
         return;
       }
-      if (refusal !== 'forbidden' || !stripKeyboard) {
+      if (refusal !== 'forbidden') {
         logger.warn(
           {
             ...errorLogFields(error),
@@ -643,14 +708,9 @@ export function createTradingSessionComposer<C extends Context>({
     view: TradingSessionView,
     chatId: number,
     messageId: number,
-    replacesMessageId?: number,
   ): void {
     const target = { sessionId: view.id, telegramUserId, symbol, chatId, messageId };
-    follow(ctx.api, ctx.me.username, target, {
-      view,
-      record: true,
-      ...(replacesMessageId === undefined ? {} : { replacesMessageId }),
-    });
+    follow(ctx.api, ctx.me.username, target, { view, record: true });
   }
 
   // a private chat's id is its user's id (Telegram ids fit in 52 bits, so Number keeps them)
@@ -689,7 +749,6 @@ export function createTradingSessionComposer<C extends Context>({
       view: TradingSessionView | null;
       record: boolean;
       startedAt?: number;
-      replacesMessageId?: number;
     },
   ): void {
     sessionTracker.track({

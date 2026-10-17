@@ -323,7 +323,11 @@ describe('the session button', () => {
     await press(START);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(running));
     expect(sessionTracker.track).toHaveBeenCalledTimes(1);
-    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: running });
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
+      view: running,
+      messageId: TEXT_CARD_MESSAGE_ID,
+      record: true,
+    });
   });
 
   it('asks for another press when the active session ended before the backend read it', async () => {
@@ -590,45 +594,50 @@ describe("an old status message's «🔄 Обновить» (#536)", () => {
   });
 });
 
-describe('«⏹ Остановить сессию» under the waiting message (#536)', () => {
+describe('«⏹ Остановить сессию» under the waiting message (#536, #587)', () => {
   const open = sessionView({
     ...STOPPED,
     lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
   });
-  const DELETE_GONE: ApiError = {
+  const NOT_MODIFIED: ApiError = {
     ok: false,
     error_code: 400,
-    description: 'Bad Request: message to delete not found',
+    description:
+      'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
   };
-  const DELETE_FORBIDDEN: ApiError = {
-    ok: false,
-    error_code: 400,
-    description: "Bad Request: message can't be deleted",
-  };
+  // the one «⏹» drawn again after a stop whose outcome is unknown
+  const STOP_AGAIN_ROW = [button(LABELS.sessionStopButton, WAITING_STOP)];
+  const pressedIdOf = (update: Update) => update.callback_query?.message?.message_id;
 
-  it('SW1 stops, deletes the pressed message, then replies with the end of the path', async () => {
-    const { pressUpdate, calls, stopSession, readPairs, sessionTracker, logger } = setup();
+  it("SW1' stops with the pressed message's id, then edits the pressed message in place: the end line under the end of the path", async () => {
+    const { pressUpdate, calls, stopSession, readPairs, readSession, sessionTracker, logger } =
+      setup();
     const update = callbackUpdate(WAITING_STOP);
     await pressUpdate(update);
-    expect(stopSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
-    expect(payloadOf(calls, 'deleteMessage')).toEqual({
-      chat_id: USER.id,
-      message_id: update.callback_query?.message?.message_id,
-    });
-    const sent = payloadOf(calls, 'sendMessage');
-    expect(sent?.text).toBe(replyOf(STOPPED));
-    expect(sent?.text).toBe('⏹ Сессия остановлена по твоей команде.');
-    expect(sent?.parse_mode).toBe('HTML');
-    expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const edit = payloadOf(calls, 'editMessageText');
+    expect(edit).toMatchObject({ chat_id: USER.id, message_id: pressedIdOf(update) });
+    expect(edit?.text).toBe(replyOf(STOPPED));
+    expect(edit?.text).toBe('⏹ Сессия остановлена по твоей команде.');
+    expect(edit?.parse_mode).toBe('HTML');
+    expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
     // a press starts no tracking (the session message is tracked from its start, or recovered by
     // #567 once its id is recorded); no catalog: no pair in the reply
     expect(sessionTracker.track).not.toHaveBeenCalled();
     expect(readPairs).not.toHaveBeenCalled();
+    expect(readSession).not.toHaveBeenCalled();
+    expect(stopSession).toHaveBeenCalledTimes(1);
     expect(warnings(logger)).toEqual([]);
   });
 
-  it('SW2 a session that had already ended: read, and its end line', async () => {
+  it('SW7 the stop body names the pressed waiting message', async () => {
+    const { pressUpdate, stopSession } = setup();
+    const update = callbackUpdate(WAITING_STOP);
+    await pressUpdate(update);
+    expect(stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), pressedIdOf(update)]]);
+  });
+
+  it("SW2' a session that had already ended: read, and its end line in place", async () => {
     const completed = sessionView({
       ...STOPPED,
       stopReason: TradingSessionStopReason.Completed,
@@ -641,28 +650,28 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     });
     await press(WAITING_STOP);
     expect(readSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(
       '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
     );
   });
 
-  it('SW3 a failed stop or read: the menu, the pressed message kept for another press', async () => {
+  it("SW3' a failed stop or read is drawn in place: an unknown stop keeps the «⏹», a missing session or a failed read the menu", async () => {
     const broken = setup({ stopSession: () => Promise.reject(httpError(500)) });
     await broken.press(WAITING_STOP);
-    expect(methods(broken.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
-    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual([MENU_ROW]);
+    expect(methods(broken.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(broken.calls, 'editMessageText')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(broken.calls, 'editMessageText'))).toEqual([STOP_AGAIN_ROW]);
     expect(broken.stopSession).toHaveBeenCalledTimes(1);
     expect(warnings(broken.logger)).toEqual(['trading session not stopped']);
 
     const missing = setup({ stopSession: () => Promise.reject(httpError(404, 'not_found')) });
     await missing.press(WAITING_STOP);
-    expect(methods(missing.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(payloadOf(missing.calls, 'sendMessage')?.text).toBe(
+    expect(methods(missing.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(missing.calls, 'editMessageText')?.text).toBe(
       TEXTS.sessionStatusUnavailable.value,
     );
-    expect(rowsOf(payloadOf(missing.calls, 'sendMessage'))).toEqual([MENU_ROW]);
+    expect(rowsOf(payloadOf(missing.calls, 'editMessageText'))).toEqual([MENU_ROW]);
     expect(warnings(missing.logger)).toEqual([]);
 
     const unread = setup({
@@ -670,31 +679,58 @@ describe('«⏹ Остановить сессию» under the waiting message (#
       readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
     await unread.press(WAITING_STOP);
-    expect(methods(unread.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(methods(unread.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(unread.calls, 'editMessageText')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(unread.calls, 'editMessageText'))).toEqual([MENU_ROW]);
     expect(warnings(unread.logger)).toEqual(['trading session status not read']);
   });
 
-  it('SW4 the delete refused: the reply goes all the same', async () => {
+  it("SW4' the edit refused as gone: the same reply as a new message; «not modified»: nothing more; a transport failure: a warning", async () => {
     const gone = setup();
-    gone.apiErrors.set('deleteMessage', DELETE_GONE);
+    gone.apiErrors.set('editMessageText', EDIT_GONE);
     await gone.press(WAITING_STOP);
-    expect(methods(gone.calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
+    expect(methods(gone.calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+    const sent = payloadOf(gone.calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(STOPPED));
+    expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
     expect(gone.logger.info.mock.calls.map((call) => call[1])).toContain(
       'the pressed message was already gone',
     );
+    expect(gone.sessionTracker.track).not.toHaveBeenCalled();
 
-    const old = setup();
-    old.apiErrors.set('deleteMessage', DELETE_FORBIDDEN);
-    await old.press(WAITING_STOP);
-    // older than 48 h: it stays as it is, its «⏹» pressed again answers 409 → the reply
-    expect(methods(old.calls)).toEqual(['answerCallbackQuery', 'deleteMessage', 'sendMessage']);
-    expect(warnings(old.logger)).toEqual(['the pressed message was not deleted']);
+    const failedGone = setup({ stopSession: () => Promise.reject(httpError(500)) });
+    failedGone.apiErrors.set('editMessageText', EDIT_GONE);
+    await failedGone.press(WAITING_STOP);
+    expect(methods(failedGone.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'sendMessage',
+    ]);
+    // the pressed message is gone, so the sender has moved on: its next waiting message carries
+    // the one «⏹», the new message the menu (#587 round 1)
+    expect(rowsOf(payloadOf(failedGone.calls, 'editMessageText'))).toEqual([STOP_AGAIN_ROW]);
+    expect(rowsOf(payloadOf(failedGone.calls, 'sendMessage'))).toEqual([MENU_ROW]);
+
+    const shown = setup();
+    shown.apiErrors.set('editMessageText', NOT_MODIFIED);
+    await shown.press(WAITING_STOP);
+    expect(methods(shown.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(warnings(shown.logger)).toEqual([]);
+
+    const broken = setup();
+    broken.apiErrors.set(
+      'editMessageText',
+      new HttpError("Network request for 'editMessageText' failed!", new Error('reset')),
+    );
+    await broken.press(WAITING_STOP);
+    expect(methods(broken.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(warnings(broken.logger)).toEqual(['trading session stop reply not drawn']);
   });
 
   it('SW5 an open trade plays out: the reply says so', async () => {
     const { press, calls } = setup({ stopSession: () => Promise.resolve(open) });
     await press(WAITING_STOP);
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(
       ['⏹ Сессия остановлена по твоей команде.', '⏳ Открытая сделка доиграет до конца.'].join(
         '\n',
       ),
@@ -705,9 +741,9 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
     const { press, calls } = setup({ stopSession: () => Promise.resolve(realStopped) });
     await press(WAITING_STOP);
-    const sent = payloadOf(calls, 'sendMessage');
-    expect(sent?.text).toBe(replyOf(realStopped));
-    expect(rowsOf(sent)[0]).toEqual([
+    const edit = payloadOf(calls, 'editMessageText');
+    expect(edit?.text).toBe(replyOf(realStopped));
+    expect(rowsOf(edit)[0]).toEqual([
       button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15)),
     ]);
   });
@@ -724,7 +760,8 @@ describe("an old status message's «⏹» (before #536)", () => {
   it('LG1 stops the session and draws it in place, under the end of the path, tracked', async () => {
     const { press, calls, stopSession, sessionTracker } = setup();
     await press(STOP);
-    expect(stopSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
+    // not a waiting message: nothing is handed over
+    expect(stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), undefined]]);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit?.text).toBe(statusOf(STOPPED));
@@ -734,17 +771,19 @@ describe("an old status message's «⏹» (before #536)", () => {
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
   });
 
-  it('LG1 the old message gone: the session message anew, replacing it in the record', async () => {
+  // #587: the new message's record wins by its newer id, so nothing names the pressed one
+  it('LG1 the old message gone: the session message anew, tracked and recorded on the new message', async () => {
     const { pressUpdate, calls, apiErrors, sessionTracker } = setup();
     apiErrors.set('editMessageText', EDIT_GONE);
     const update = callbackUpdate(STOP);
+    expect(update.callback_query?.message?.message_id).not.toBe(TEXT_CARD_MESSAGE_ID);
     await pressUpdate(update);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(STOPPED));
     expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(STOPPED_ROWS);
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
       messageId: TEXT_CARD_MESSAGE_ID,
-      replacesMessageId: update.callback_query?.message?.message_id,
+      record: true,
     });
   });
 
@@ -1582,25 +1621,5 @@ describe('the resume of a tracked session after a restart (#567)', () => {
         botUsername: 'resumed_bot',
       }).value,
     );
-  });
-
-  it('RS4 a status sent in place of a gone message replaces the pressed one in its record', async () => {
-    const gone = setup();
-    gone.apiErrors.set('editMessageText', EDIT_GONE);
-    const update = callbackUpdate(STOP);
-    const pressedId = update.callback_query?.message?.message_id;
-    expect(pressedId).not.toBe(TEXT_CARD_MESSAGE_ID);
-    await gone.pressUpdate(update);
-    expect(gone.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
-      messageId: TEXT_CARD_MESSAGE_ID,
-      replacesMessageId: pressedId,
-      record: true,
-    });
-
-    const inPlace = setup();
-    await inPlace.press(STOP);
-    const entry = inPlace.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
-    expect(entry.record).toBe(true);
-    expect(entry.replacesMessageId).toBeUndefined();
   });
 });

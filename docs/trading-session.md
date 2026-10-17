@@ -50,8 +50,8 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | `notified_trades` | the session notices' cursor (#464, [bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): how many of the session's settled trades, in creation order, the backend's sender claimed for sending; NOT NULL default 0, CHECK `trading_sessions_notified_trades_check` (`>= 0`); raised by one by `claimSessionTradeNotice`'s CAS, lowered by one only by `releaseSessionTradeNotice` |
 | `final_notice_sent_at` | NULL until the session's summary message is claimed (#464): set by `claimSessionFinalNotice`'s CAS — since #536 only with `waiting_message_id is null`, so the summary comes after the waiting message is gone — taken back only by `releaseSessionFinalNotice` while `summary_sent_at` is NULL; `trading_sessions_notice_pending_idx (created_at) where final_notice_sent_at is null` is the sender's scan |
 | `cycle_message_id`, `cycle_message_from` | the session's cycle message (#551, migration 0054, [bot-session.md](bot-session.md#the-state)): Telegram's `message_id` of the message the next step of the same martingale cycle edits, and the index (from 0, in the cursor's order) of the first settled trade it shows; both NULL until a new message of the session was sent, never cleared. CHECKs `trading_sessions_cycle_message_pair_check` (both or neither), `…_id_check` (`> 0`), `…_from_check` (`>= 0`). One writer: `recordSessionCycleMessage`, a CAS on `notified_trades = claimed + 1` and `final_notice_sent_at is null`, after Telegram answered the send |
-| `waiting_message_id`, `waiting_after_message` | the waiting message under the session's messages (#536, migration 0061, [bot-session.md](bot-session.md#the-waiting-message-536)): Telegram's `message_id` of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there is none; and its slot, `coalesce(cycle_message_id, 0)` when it was claimed, NULL while none is claimed. CHECKs `trading_sessions_waiting_message_id_check` (`> 0`), `…_waiting_after_message_check` (`>= 0`), `…_waiting_pair_check` (an id only on a claimed slot). Written only by the backend's sender, each a CAS on the row: `claimSessionWaiting` (the slot, before the send), `recordSessionWaitingMessage` (the id on its own slot, while active), `releaseSessionWaiting` (the slot freed after a certain refusal), `clearSessionWaitingMessage` (the id dropped and the slot freed after the delete). No backfill: NULL at the deploy, so a running session is due at the backend's start |
-| `status_message_id` | the bot's status message of the session (#567, migration 0055, [bot-session.md](bot-session.md#recovery-after-a-restart-567)): Telegram's `message_id` of the first status message the bot tracked the session on, NULL until its first poll recorded one, and again once the bot reports it lost; CHECK `trading_sessions_status_message_id_check` (`> 0`). Two writers, both CAS with the owner in the predicate: `recordSessionStatusMessage` on `status_message_id is null`, or equal to `replacesMessageId` when the record names the message it was sent in place of (the first id wins while it lives) and `forgetSessionStatusMessage` on `status_message_id = $messageId` (sets NULL); `trading_sessions_tracked_idx (started_at) where status_message_id is not null and summary_sent_at is null` is the recovery list's scan |
+| `waiting_message_id`, `waiting_after_message` | the waiting message under the session's messages (#536, migration 0061, [bot-session.md](bot-session.md#the-waiting-message-536)): Telegram's `message_id` of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there is none; and its slot, the session's latest message when it was claimed — `greatest(coalesce(cycle_message_id, 0), coalesce(status_message_id, 0))` (#587) — NULL while none is claimed. CHECKs `trading_sessions_waiting_message_id_check` (`> 0`), `…_waiting_after_message_check` (`>= 0`), `…_waiting_pair_check` (an id only on a claimed slot). Written by the backend's sender, each a CAS on the row: `claimSessionWaiting` (the slot, before the send), `recordSessionWaitingMessage` (the id on its own slot, while active), `releaseSessionWaiting` (the slot freed after a certain refusal), `clearSessionWaitingMessage` (the id dropped and the slot freed after the delete); and by `POST /trading/sessions/:id/stop` (#587): `stopTradingSession` with the pressed `waitingMessageId` drops the id and frees the slot in its own UPDATE when it is the recorded one, `clearSessionWaitingMessage` by that id on a 409. Both writers clear only by `(id, waiting_message_id)`; the sender re-reads the id right before its Telegram delete and leaves a message the route took over ([bot-session.md](bot-session.md#accepted-risks) risk 66 for the call in flight). No backfill: NULL at the deploy, so a running session is due at the backend's start |
+| `status_message_id` | the bot's status message of the session (#567, migration 0055, [bot-session.md](bot-session.md#recovery-after-a-restart-567)): Telegram's `message_id` of the newest status message the bot tracked the session on (#587), NULL until its first poll recorded one, and again once the bot reports it lost; CHECK `trading_sessions_status_message_id_check` (`> 0`). Two writers, both CAS with the owner in the predicate: `recordSessionStatusMessage` on `status_message_id is null or status_message_id < $messageId` (the newest id wins: message ids grow within a chat) and `forgetSessionStatusMessage` on `status_message_id = $messageId` (sets NULL); `trading_sessions_tracked_idx (started_at) where status_message_id is not null and summary_sent_at is null` is the recovery list's scan |
 | `last_signal_action` | `up`/`down` (CHECK `trading_sessions_last_signal_action_check` from `TradeAction`) or NULL: the direction the last deciding attempt saw — the traded action, the paused one — and NULL after a `no_signal` or before any decision ([The pause after two losses](#the-pause-after-two-losses-379), #379) |
 
 - **One active session per account:** `trading_sessions_active_account_idx`, unique on
@@ -297,9 +297,18 @@ a v1/v2 row counts its trades), `lastIntent` the same view `GET /trading/intents
 
 ### POST /trading/sessions/:id/stop
 
-Body `{ telegramUserId }`. The owner-scoped read first (404 `not_found` as above), then
-`stopTradingSession(id, user_stopped)`: 200 `{ session }` stopped, or 409 `session_not_active` when
-it was no longer active. The final read is the GET's `viewForReply`: a stop between trades is a
+Body `{ telegramUserId, waitingMessageId? }` (`stopOneTradingSessionRequestSchema`, strict;
+`waitingMessageId` an int from 1 to `INT4_MAX`, #587: the waiting message whose «⏹» the bot's user
+pressed). The owner-scoped read first (404 `not_found` as above), then
+`stopTradingSession(id, user_stopped, waitingMessageId)` — one UPDATE that stops the session and,
+when `waiting_message_id` equals the field, sets `waiting_message_id` and `waiting_after_message`
+to NULL in the same statement (`case when … then null else … end`; the pair CHECK holds): 200
+`{ session }` stopped, or 409 `session_not_active` when it was no longer active — then, with the
+field, `clearSessionWaitingMessage(id, waitingMessageId)`, a CAS by that id, before the 409. So the
+waiting message is handed to the bot, which draws its reply in place of it, and the backend's
+sender neither deletes it nor holds the summary for it
+([bot-session.md](bot-session.md#the-stop-and-the-old-buttons-536)). Another id, or none, clears
+nothing. Both clears run only after the owner-scoped read answered, as the stop's CAS does. The final read is the GET's `viewForReply`: a stop between trades is a
 finished session, so its answer carries the balance after the last trade (#337). The CAS is by id: a session's account and the account's user never
 change, so no interleaving lets it stop another user's session. A live intent of the session
 finishes on its own path.
@@ -342,21 +351,21 @@ UPDATE's predicate). A row gone between the UPDATE and its read is left out.
 
 ### POST /trading/sessions/:id/status-message (#567)
 
-Body `{ telegramUserId, messageId, replacesMessageId? }` (strict; `messageId` and
-`replacesMessageId` ints from 1 to `INT4_MAX`, the bounds of the column and its CHECK, so an id
-past them is a 400 rather than a 500). The bot's first poll
+Body `{ telegramUserId, messageId }` (strict, `replacesMessageId` is a 400 since #587; `messageId`
+an int from 1 to `INT4_MAX`, the bounds of the column and its CHECK, so an id past them is a 400
+rather than a 500). The bot's first poll
 of a status message ([bot-session.md](bot-session.md#recovery-after-a-restart-567)) calls it in
 place of the GET by id. The steps: a non-uuid id is 404 `not_found`; a body outside the schema is
 400 `validation`; `recordSessionStatusMessage` — one UPDATE `set status_message_id = $messageId
-where id = $id and status_message_id is null and <the owner, broker_accounts → users>`, with
-`replacesMessageId` the slot condition `(status_message_id is null or status_message_id =
-$replacesMessageId)` — then,
+where id = $id and (status_message_id is null or status_message_id < $messageId) and <the owner,
+broker_accounts → users>` — then,
 whatever it wrote, the GET's `viewForReply`: 200 `{ session }`, the same view with the same balance
-refresh of a finished session (#337), or 404 `not_found` when the view is undefined. **The first
-id wins**: a second call with another id writes nothing and answers 200 with the view, unless it
-names the recorded id as `replacesMessageId`. The bot sends that field only for a session message
-it sent anew after an old status message's «⏹» (data without `:w`, #536) had the pressed
-message's edit refused as gone; the field is the pressed message. Another
+refresh of a finished session (#337), or 404 `not_found` when the view is undefined. **The newest
+id wins** (#587): a newer id replaces the recorded one — a relaunch's message, or one the bot sent
+anew after an old status message's «⏹» had its edit refused as gone — and an older or the same id
+writes nothing and answers 200 with the view. Telegram's `message_id` grows within a chat; a
+violation costs one refused record or one extra delete and send of the waiting message
+([bot-session.md](bot-session.md#accepted-risks), risk 63). Another
 user's `telegramUserId` writes nothing (the owner is in the CAS) and answers as a missing session
 (Rule 13). Time: one statement plus the view, under `TRADING_SESSION_VIEW_BUDGET_MS`.
 
