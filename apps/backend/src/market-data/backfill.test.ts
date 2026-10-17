@@ -222,6 +222,14 @@ const hang = (call: Call) =>
 const slow = (ms: number) => (call: Call) =>
   Promise.race([hang(call), new Promise<Candle[]>((resolve) => setTimeout(() => resolve([]), ms))]);
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const unavailable = () => Promise.reject(new BrokerRestError(BrokerRestErrorCode.Unavailable));
 
 describe('the candle backfill (#590)', () => {
@@ -270,6 +278,61 @@ describe('the candle backfill (#590)', () => {
     expect(h.order()).toEqual(['3:5s', '2:15s', '1:15s']);
   });
 
+  it('B2b keeps a request that came while a proactive GET was in flight', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })] });
+    const answer = deferred();
+    h.chart.next.push((call) => {
+      const rows = rowsFor(call, h.chart);
+      return answer.promise.then(() => rows);
+    });
+    const first = h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s']);
+    h.stream.on = false;
+    h.requests.add(1, '5s');
+    const second = h.backfill.tick();
+    h.clock.now += 5_000;
+    answer.resolve();
+    await Promise.all([first, second]);
+
+    h.advance(15_000, [1]);
+    await h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s', '1:5s']);
+  });
+
+  it('B2c keeps a second request that came while the GET of the first was in flight', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })], streaming: false });
+    h.requests.add(1, '5s');
+    const answer = deferred();
+    h.chart.next.push((call) => {
+      const rows = rowsFor(call, h.chart);
+      return answer.promise.then(() => rows);
+    });
+    const first = h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s']);
+    h.requests.add(1, '5s');
+    const second = h.backfill.tick();
+    h.clock.now += 5_000;
+    answer.resolve();
+    await Promise.all([first, second]);
+
+    h.advance(15_000, [1]);
+    await h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s', '1:5s']);
+  });
+
+  it('B2d keeps the request after a failed GET, and serves it after the hold-back', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })], streaming: false });
+    h.requests.add(1, '5s');
+    h.chart.next.push(unavailable);
+    await h.backfill.tick();
+    expect(h.backfill.counters()).toMatchObject({ failed: 1 });
+
+    h.clock.now += 15_000;
+    await h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s', '1:5s']);
+    expect(gaps(h, 1, '5s')).toEqual([]);
+  });
+
   it('B3 refills a hole and keeps the tick-built candles', async () => {
     const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })] });
     h.clock.now = START - 60_000;
@@ -303,8 +366,9 @@ describe('the candle backfill (#590)', () => {
     const missing = chartWindow(START, 5_000, 300).startTime + 50 * 5_000;
     h.chart.omit.add(missing);
     const forming = Math.floor(START / 5_000) * 5_000;
+    // the broker answers the forming bucket as a partial row; the ring has closed it by the answer
     h.chart.next.push((call) => {
-      const rows = rowsFor(call, h.chart).filter((row) => row.timestamp < forming);
+      const rows = rowsFor(call, h.chart);
       h.clock.now += 5_000;
       return Promise.resolve(rows);
     });
@@ -319,6 +383,63 @@ describe('the candle backfill (#590)', () => {
     h.advance(15_000, [1]);
     await h.backfill.tick();
     expect(h.order()).toHaveLength(2);
+  });
+
+  it('B3c fills no bucket the watermark closed during the GET; the next GET does', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })] });
+    const forming = Math.floor(START / 5_000) * 5_000;
+    h.chart.next.push((call) => {
+      const rows = rowsFor(call, h.chart);
+      // the clock rule does not close the forming bucket yet, another pair's tick does
+      h.clock.now = forming + 5_000 + 100;
+      h.ring.push(2, 5, { price: TICK_PRICE, timestamp: forming + 5_000 + 50 }, h.clock.now);
+      return Promise.resolve(rows);
+    });
+    await h.backfill.tick();
+    expect(gaps(h, 1, '5s')).toEqual([forming]);
+    const at = h.ring.read(1, '5s', h.clock.now).candles.find((c) => c.timestamp === forming);
+    expect(at).toBeUndefined();
+
+    // past the hold-back and out of the next boundary's slack
+    h.advance(15_500, [1]);
+    await h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s', '1:5s']);
+    expect(gaps(h, 1, '5s')).toEqual([]);
+    const filled = h.ring.read(1, '5s', h.clock.now).candles.find((c) => c.timestamp === forming);
+    expect(filled?.close).toBe(REST_CLOSE);
+  });
+
+  it('B3d fills no bucket the ring had not closed when the GET was built, past the slack', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })] });
+    const boundary = T0 + 5_000;
+    // after the slack, inside the skew margin: no watermark, the clock rule closes up to T0 only
+    h.clock.now = boundary + 800;
+    h.chart.next.push((call) => {
+      const rows = rowsFor(call, h.chart);
+      h.clock.now += 2_000;
+      return Promise.resolve(rows);
+    });
+    await h.backfill.tick();
+    expect(gaps(h, 1, '5s')).toEqual([boundary - 5_000]);
+
+    h.advance(15_000, [1]);
+    await h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s', '1:5s']);
+    expect(gaps(h, 1, '5s')).toEqual([]);
+  });
+
+  it('B3e fills no bucket past the boundary of the GET, though a tick ahead closed it', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })] });
+    const forming = Math.floor(START / 5_000) * 5_000;
+    // the broker's clock ahead, within TICK_MAX_SKEW_MS: the watermark closes the forming bucket
+    h.ring.push(2, 5, { price: TICK_PRICE, timestamp: START + 10_000 }, START);
+    h.chart.next.push((call) => {
+      const rows = rowsFor(call, h.chart);
+      h.clock.now += 1_000;
+      return Promise.resolve(rows);
+    });
+    await h.backfill.tick();
+    expect(gaps(h, 1, '5s')).toEqual([forming]);
   });
 
   it('B4 gets no token while the scanner takes every one, and one at most after an idle minute', async () => {
@@ -385,6 +506,18 @@ describe('the candle backfill (#590)', () => {
       spare: 2,
     });
     expect(h.warns).toEqual([]);
+  });
+
+  it('B5b keeps the request after a 429: the next scan takes the element again', async () => {
+    const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })], streaming: false });
+    h.requests.add(1, '5s');
+    h.chart.next.push(() =>
+      Promise.reject(new BrokerRestError(BrokerRestErrorCode.RateLimited, { retryAfterSec: 20 })),
+    );
+    await h.backfill.tick();
+    expect(h.backfill.counters()).toMatchObject({ rateLimited: 1 });
+    await h.backfill.tick();
+    expect(h.order()).toEqual(['1:5s', '1:5s']);
   });
 
   it('B6 gives up after three failures in a row, warns with the code, and leaves the gaps alone', async () => {

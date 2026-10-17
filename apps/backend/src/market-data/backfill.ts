@@ -14,7 +14,7 @@ import { BrokerRestError, type BrokerRestClient, type PairsCatalog } from '@bina
 import { assertDigits, chartWindow } from '@binarius/signal';
 import { eligiblePairs } from '../signal/scanner';
 import type { SpareTokenSource } from '../signal/pacer';
-import type { CandleRing } from './ring';
+import { floorTo, type CandleRing } from './ring';
 import type { PendingRequests } from './source';
 
 // The REST backfill of the ring (#590, docs/market-data.md -> Backfill). An element is a
@@ -25,6 +25,8 @@ import type { PendingRequests } from './source';
 // set is the scanner's eligible pairs of the last fresh catalog with valid digits, and only while
 // the active socket is ready; a request is served for any such pair with valid digits, whatever
 // the socket. Every GET takes a spare token (the pacers' overflow, never a scanner's token).
+// A GET may cross a candle boundary: it fills only the buckets closed when it was built, and a
+// request that comes while it is in flight waits for the next attempt.
 
 export interface CandleBackfillConfig {
   scanMs: number;
@@ -39,7 +41,7 @@ export interface CandleBackfillConfig {
 }
 
 export interface CandleBackfillDeps {
-  ring: Pick<CandleRing, 'read' | 'fill'>;
+  ring: Pick<CandleRing, 'read' | 'fill' | 'closedUntil'>;
   requests: Pick<PendingRequests, 'pending'>;
   catalog: Pick<PairsCatalog, 'read'>;
   rest: Pick<BrokerRestClient, 'getChart'>;
@@ -86,7 +88,6 @@ interface Element {
 }
 
 const keyOf = (assetId: number, interval: ScanInterval) => `${assetId}:${interval}`;
-const floorTo = (value: number, step: number) => Math.floor(value / step) * step;
 const intervalRank = (interval: ScanInterval) => SIGNAL_SCAN_INTERVALS.indexOf(interval);
 const SHORTEST_MS = Math.min(
   ...SIGNAL_SCAN_INTERVALS.map((interval) => SIGNAL_CHART_INTERVAL_MS[interval]),
@@ -209,10 +210,10 @@ export function createCandleBackfill(deps: CandleBackfillDeps): CandleBackfill {
     queue = [...candidates].filter((element) => isDue(element, at)).sort(compare);
   }
 
-  // the buckets of the window still empty after a GET built on `boundary`; a bucket that closed
-  // since is a new one
-  function leftUnfilled(element: Element, boundary: number): Set<number> {
-    return new Set(gapsOf(element, now()).filter((bucket) => bucket < boundary));
+  // the buckets of the window still empty after a GET that could fill those before `closedAt`;
+  // a bucket that closed since is a new one
+  function leftUnfilled(element: Element, closedAt: number): Set<number> {
+    return new Set(gapsOf(element, now()).filter((bucket) => bucket < closedAt));
   }
 
   function settle(element: Element, at: number): void {
@@ -220,11 +221,19 @@ export function createCandleBackfill(deps: CandleBackfillDeps): CandleBackfill {
     element.lastAttemptAt = at;
   }
 
-  function failed(element: Element, boundary: number, code: string): void {
+  function failed(
+    element: Element,
+    closedAt: number,
+    served: number | undefined,
+    code: string,
+  ): void {
     totals.failed += 1;
     settle(element, now());
     element.failures += 1;
-    if (element.failures < config.attempts) return;
+    if (element.failures < config.attempts) {
+      element.requested ??= served;
+      return;
+    }
     logger.warn(
       {
         assetId: element.assetId,
@@ -234,16 +243,16 @@ export function createCandleBackfill(deps: CandleBackfillDeps): CandleBackfill {
       },
       'market data backfill gave up',
     );
-    element.unfilled = leftUnfilled(element, boundary);
+    element.unfilled = leftUnfilled(element, closedAt);
     element.failures = 0;
-    element.requested = undefined;
   }
 
-  async function attempt(element: Element): Promise<void> {
+  async function attempt(element: Element, at: number, served: number | undefined): Promise<void> {
     const { assetId, interval } = element;
     const intervalMs = SIGNAL_CHART_INTERVAL_MS[interval];
-    const at = now();
-    const boundary = floorTo(at, intervalMs);
+    // the buckets the GET may fill: ended before its boundary, and closed by the ring's rule at
+    // `at`; fill() alone would judge them at the answer, by a watermark the GET's time moved
+    const closedAt = Math.min(floorTo(at, intervalMs), ring.closedUntil(interval, at));
     const window = chartWindow(at, intervalMs, config.candles);
     const signal = AbortSignal.any([AbortSignal.timeout(config.budgetMs), stopping.signal]);
     let rows: Candle[];
@@ -258,31 +267,35 @@ export function createCandleBackfill(deps: CandleBackfillDeps): CandleBackfill {
         if (error.code === BrokerRestErrorCode.RateLimited) {
           totals.rateLimited += 1;
           pacer.onRateLimited(error.retryAfterSec);
+          element.requested ??= served;
           queue.unshift(element);
           return;
         }
-        failed(element, boundary, error.code);
+        failed(element, closedAt, served, error.code);
         return;
       }
       logger.warn({ assetId, interval, ...errorLogFields(error) }, 'market data backfill threw');
-      failed(element, boundary, 'threw');
+      failed(element, closedAt, served, 'threw');
       return;
     }
     if (stopped) return;
     pacer.onDecided();
     // the first row opens on the window's first tick, not on the close before it (#392 spike)
-    const { filled } = ring.fill(assetId, interval, rows.slice(1), now());
+    const closed = rows.slice(1).filter((row) => row.timestamp < closedAt);
+    const { filled } = ring.fill(assetId, interval, closed, now());
     totals.fetched += 1;
     totals.filled += filled;
     settle(element, now());
-    element.unfilled = leftUnfilled(element, boundary);
+    element.unfilled = leftUnfilled(element, closedAt);
     element.failures = 0;
-    element.requested = undefined;
   }
 
-  function launch(element: Element): void {
+  function launch(element: Element, at: number): void {
     element.inflight = true;
-    const work: Promise<void> = attempt(element)
+    // the request this attempt serves; one that comes while it is in flight is the next one's
+    const served = element.requested;
+    element.requested = undefined;
+    const work: Promise<void> = attempt(element, at, served)
       .catch((error: unknown) => {
         logger.error(errorLogFields(error), 'market data backfill tick failed');
       })
@@ -307,7 +320,7 @@ export function createCandleBackfill(deps: CandleBackfillDeps): CandleBackfill {
       if (!pacer.tryTakeSpare()) return;
       totals.spare += 1;
       queue.shift();
-      launch(head);
+      launch(head, at);
     }
   }
 
