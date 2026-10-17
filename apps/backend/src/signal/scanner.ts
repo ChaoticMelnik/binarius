@@ -228,9 +228,10 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     if (decision.kind === SignalKind.NoSignal) {
       period.noSignal[decision.reason] = (period.noSignal[decision.reason] ?? 0) + 1;
     }
-    // the ring had not closed the boundary's candle: the decision is on the candle before
-    // (docs/signal.md -> The scanner -> unclosed)
-    if (source.kind === 'socket' && source.closedUntil < boundary) period.unclosed += 1;
+    // the ring had not closed the candle before the decision's own boundary, the reading the feed's
+    // forming guard uses: the decision is on the candle before (docs/signal.md -> The scanner)
+    const decisionBoundary = Math.floor(nowMs / candleMs) * candleMs;
+    if (source.kind === 'socket' && source.closedUntil < decisionBoundary) period.unclosed += 1;
     period.lagsMs.push(now() - boundary);
   }
 

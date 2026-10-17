@@ -4,7 +4,9 @@ import type { Candle, SignalInterval } from '@binarius/shared';
 export interface CandleWindow {
   // closed candles of the window, ascending: tick-built, or REST rows fill() put into empty buckets
   candles: Candle[];
-  // the bucket still forming by the ring's rule, when the pair has one
+  // the latest bucket of the window the ring has not closed, when the pair has a candle in it: the
+  // current bucket of nowMs, or the one before it until the watermark or the clock margin closes it
+  // (docs/market-data.md -> Closing a candle); the feed uses it only when it is the current one
   forming?: Candle;
   // buckets ending at or before this are closed (docs/market-data.md -> Closing a candle)
   closedUntil: number;

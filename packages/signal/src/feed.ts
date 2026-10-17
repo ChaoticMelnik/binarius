@@ -170,9 +170,17 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
     const window = source?.read(request.assetId, request.interval, nowMs);
     if (source === undefined || window === undefined) return undefined;
     if (window.gaps.length > 0) source.request(request.assetId, request.interval);
-    // the forming candle goes in as REST's would; the decider drops it by nowMs
+    // The ring's forming candle is the latest bucket it has not closed: the current bucket of
+    // nowMs, or the one before it while neither the watermark nor the clock margin has closed it
+    // (ring.test.ts R3). Only the current one goes in, as REST's forming row, and the decider drops
+    // it by nowMs; the one before is left out, so the decision is on the candle before it, which
+    // the scanner counts as unclosed and GET /trading/signals does not serve.
+    const current = Math.floor(nowMs / intervalMs) * intervalMs;
+    const { forming } = window;
     const rows =
-      window.forming === undefined ? window.candles : [...window.candles, window.forming];
+      forming === undefined || forming.timestamp !== current
+        ? window.candles
+        : [...window.candles, forming];
     return decideRows(request, rows, intervalMs, nowMs, {
       kind: 'socket',
       startTime: window.startTime,

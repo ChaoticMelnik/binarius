@@ -636,6 +636,57 @@ describe('createSignalFeed with a candle source', () => {
     expect(without.decision).toStrictEqual(withForming.decision);
   });
 
+  it("F26 the ring's forming candle of the bucket before nowMs's is left out: the decision is on the candle before it", async () => {
+    // ring.test.ts R3: at nowMs in the next bucket, before the watermark or the clock margin closes
+    // B15, the ring's forming is B15, whose end the decider would count as closed
+    const nowMs = B15 + I15 + 500;
+    const start = chartWindow(nowMs, I15, SIGNAL_FETCH_LIMIT).startTime;
+    const rows = rows15();
+    const closed = rows.filter(({ timestamp }) => timestamp >= start && timestamp < B15);
+    const formingRow = rows.find(({ timestamp }) => timestamp === B15);
+    if (formingRow === undefined) throw new Error('rows15 has no B15 row');
+    const withoutForming: CandleWindow = {
+      candles: closed.map((row) => ({ ...row })),
+      closedUntil: B15,
+      startTime: start,
+      gaps: [],
+    };
+    const ringShaped: CandleWindow = { ...withoutForming, forming: { ...formingRow } };
+    const feedAt = (window: CandleWindow, at: number) => {
+      const fake = fakeSource(() => window);
+      const feed = createSignalFeed({
+        rest: noRest(),
+        source: fake.source,
+        logger: sink(),
+        now: () => at,
+      });
+      return { feed, requests: fake.requests };
+    };
+
+    const stale = feedAt(ringShaped, nowMs);
+    const result = await stale.feed.evaluate(req);
+    const entry = decided(result);
+    expect(entry.series.at(-1)?.[0]).toBe(B15 - I15);
+    expect(entry.series.some(([timestamp]) => timestamp === B15)).toBe(false);
+    const plain = await feedAt(withoutForming, nowMs).feed.evaluate(req);
+    expect(entry.decision).toStrictEqual(decided(plain).decision);
+    expect(result.outcome === 'decided' && result.indicators).toStrictEqual(
+      plain.outcome === 'decided' && plain.indicators,
+    );
+    expect(entry.source).toStrictEqual({
+      kind: 'socket',
+      startTime: start,
+      closedUntil: B15,
+      gaps: 0,
+    });
+    expect(B15).toBeLessThan(Math.floor(nowMs / I15) * I15);
+    expect(stale.requests).toStrictEqual([]);
+
+    // control: the same window while B15 is the current bucket ends the series on it, as F21
+    const current = decided(await feedAt(ringShaped, T15).feed.evaluate(req));
+    expect(current.series.at(-1)?.[0]).toBe(B15);
+  });
+
   it('F22 the indicators read the whole window: a gap early leaves MA200 short, the decision stands', async () => {
     const full = await socketFeed(windowOf(rows15())).feed.evaluate(req);
     expect(full).toMatchObject({ indicators: { ma200: { ok: true } } });
