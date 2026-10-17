@@ -42,7 +42,8 @@ describe('BOT_TEXT_VARS', () => {
     expect(BOT_TEXT_VARS.level.format('all', texts)).toBe('«levelAll»');
     expect(BOT_TEXT_VARS.level.format('reduced', texts)).toBe('«levelReduced»');
     expect(BOT_TEXT_VARS.level.format('off', texts)).toBe('«levelOff»');
-    expect(BOT_TEXT_VARS.age.format(75, texts)).toBe('1 мин');
+    expect(BOT_TEXT_VARS.age.format(75, texts)).toBe('1 «ageMinutesUnit»');
+    expect(BOT_TEXT_VARS.age.format(5, texts)).toBe('5 «ageSecondsUnit»');
     expect(BOT_TEXT_VARS.firstName.format(' Ада ', texts)).toBe('Ада');
     expect(BOT_TEXT_VARS.bonusTokens.format('100', texts)).toBe('100');
   });
@@ -63,7 +64,7 @@ describe('BOT_TEXT_VARS', () => {
     expect(formatUsd('0')).toHaveLength(W.zeroUsd);
     expect(formatCount(COUNT)).toHaveLength(W.count);
     expect(COUNT).toHaveLength(W.rawCount);
-    expect(formatAge(99_999 * 60)).toHaveLength(W.age);
+    expect(formatAge(99_999 * 60, { seconds: '', minutes: '' })).toHaveLength(W.ageNumber);
   });
 
   it.each(Object.entries(BOT_TEXT_VARS))(

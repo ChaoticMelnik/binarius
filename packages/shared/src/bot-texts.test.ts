@@ -87,6 +87,8 @@ describe('the bot texts catalog', () => {
     'levelAll',
     'levelReduced',
     'levelOff',
+    'ageSecondsUnit',
+    'ageMinutesUnit',
   ])('keeps the stand-in %s a plain text without variables', (key) => {
     expect(BOT_TEXT_CATALOG[key].kind).toBe(BotTextKind.Plain);
     expect(BOT_TEXT_CATALOG[key].vars).toEqual([]);
@@ -181,6 +183,7 @@ describe('the bot texts catalog', () => {
         'demoRetryButton',
         'inviteButton',
         'inviteShareButton',
+        'languageButton',
         'loginButton',
         'menuButton',
         'modeBackDemoButton',

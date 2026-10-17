@@ -1478,6 +1478,7 @@ describe('the facades over the catalog', () => {
         'inviteButton',
         'inviteCommand',
         'inviteShareButton',
+        'languageButton',
         'helpCommand',
         'loginButton',
         'menuButton',

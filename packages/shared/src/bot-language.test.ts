@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { BotLanguage, botLanguageOf, botLanguageSchema, DEFAULT_BOT_LANGUAGE } from './bot-language';
+import {
+  BotLanguage,
+  botLanguageOf,
+  botLanguageSchema,
+  DEFAULT_BOT_LANGUAGE,
+} from './bot-language';
 
 describe('botLanguageOf', () => {
   it.each([

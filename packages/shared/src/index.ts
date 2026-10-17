@@ -41,6 +41,7 @@ export * from './bot-text-template';
 export * from './bot-text-format';
 export * from './bot-text-vars';
 export * from './bot-texts';
+export * from './bot-texts-en';
 export * from './bot-text-messages';
 export * from './session-steps';
 export * from './session-texts';
