@@ -13,8 +13,8 @@ import {
 
 // The session's words that both the bot's session message and the backend's session notices
 // print (#464, docs/bot-session.md): one source, so the summary the backend sends cannot drift
-// from the session message's end line (#536). Every builder takes the catalog it prints with, so each side's
-// overrides apply (Rule 30).
+// from the session message's end line (#536). Every builder takes the catalog it prints with, so
+// each side's overrides apply (Rule 30).
 
 // A session's stop reasons but completed, by key (#284). kill_switch reads the single
 // trade's own refusal of the closed switch; no_signal_timeout's line carries the limit (#509).
@@ -165,11 +165,10 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   // the result and the balance; the summary the backend sends is these lines under the pair (#464).
   const sessionClosingLines = (view: SessionClosingView): TelegramHtml[] => {
     const first = stopLine(view);
-    if (view.stopReason === TradingSessionStopReason.Completed && first !== undefined) {
-      return [first, ...outcomeLines(view)];
-    }
     const lines: TelegramHtml[] = first === undefined ? [] : [first];
-    if (view.trades.settled > 0) lines.push(html.sessionTotal({ result: resultOf(view.trades) }));
+    if (view.stopReason !== TradingSessionStopReason.Completed && view.trades.settled > 0) {
+      lines.push(html.sessionTotal({ result: resultOf(view.trades) }));
+    }
     lines.push(...outcomeLines(view));
     return lines;
   };

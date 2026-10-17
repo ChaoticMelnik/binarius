@@ -621,7 +621,8 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     expect(sent?.text).toBe('⏹ Сессия остановлена по твоей команде.');
     expect(sent?.parse_mode).toBe('HTML');
     expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
-    // the session message is tracked already; no catalog: no pair in the reply
+    // a press starts no tracking (the session message is tracked from its start, or recovered by
+    // #567 once its id is recorded); no catalog: no pair in the reply
     expect(sessionTracker.track).not.toHaveBeenCalled();
     expect(readPairs).not.toHaveBeenCalled();
     expect(warnings(logger)).toEqual([]);
@@ -803,7 +804,8 @@ describe('/stop (#122)', () => {
     return payloadOf(calls, 'sendMessage');
   };
 
-  // #536: the reply to «⏹» under the waiting message; the session message is tracked already
+  // #536: the reply to «⏹» under the waiting message; /stop starts no tracking (the session
+  // message is tracked from its start, or recovered by #567 once its id is recorded)
   it('B1 one stopped session: the stop reply under the end of the path, nothing tracked', async () => {
     const { send, calls, sessionTracker, readPairs } = setup();
     await send('/stop');
