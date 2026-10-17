@@ -47,6 +47,9 @@ importers:
       '@binarius/broker-rest':
         specifier: workspace:*
         version: link:../../packages/broker-rest
+      '@binarius/broker-socket':
+        specifier: workspace:*
+        version: link:../../packages/broker-socket
       '@binarius/db':
         specifier: workspace:*
         version: link:../../packages/db

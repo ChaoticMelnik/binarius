@@ -1,4 +1,9 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
+import {
+  BROKER_SOCKET_RECONNECT_DELAY_MS,
+  BROKER_SOCKET_RECONNECT_JITTER,
+} from '@binarius/broker-socket';
+import { SIGNAL_FETCH_LIMIT, TICK_MAX_SKEW_MS } from '@binarius/signal';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import {
@@ -147,6 +152,25 @@ export const SERVICE_TOKEN_ROTATION_GAP_MS = 3_600_000;
 export const SERVICE_RENEWALS_PER_TICK = 5;
 // The hold-back of an account after key_unavailable or a throw.
 export const SERVICE_STALLED_RETRY_MS = 300_000;
+
+// --- The market data source (#404) -------------------------------------------------------------
+// docs/market-data.md. The manager's tick: the service accounts read again, the roles filled, the
+// catalog's new pairs subscribed on the active socket.
+export const MARKET_DATA_TICK_MS = 30_000;
+// the period of the `market data` log line
+export const MARKET_DATA_LOG_MS = 60_000;
+// How long the active socket may reconnect on its own before the warm reserve takes over (owner's
+// answer, 2026-10-17); a terminal state switches at once.
+export const MARKET_DATA_FAILOVER_GRACE_MS = 2_000;
+// A bucket closes by the process clock this long after its end when no tick moves the watermark
+// past it (a quiet stream: closed markets); the live tick delay's p95 was 268 ms.
+export const MARKET_DATA_SKEW_MARGIN_MS = 2_000;
+// the hold-back of a service account after a refusal, a server disconnect or a foreign user.data
+export const MARKET_DATA_ACCOUNT_RETRY_MS = 300_000;
+// candles kept per (pair, interval): the feed's window, MA200 included (#482)
+export const MARKET_DATA_RING_CANDLES = SIGNAL_FETCH_LIMIT;
+// the most (pair, interval) refill requests waiting for #590: every pair on both intervals
+export const MARKET_DATA_PENDING_MAX = 288;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -415,7 +439,20 @@ const TIMING_CHAIN_HOLDS =
   SERVICE_ACCOUNTS_TICK_MS < SERVICE_STALLED_RETRY_MS &&
   SERVICE_STALLED_RETRY_MS < SERVICE_TOKEN_ROTATION_GAP_MS &&
   SERVICE_TOKEN_ROTATION_GAP_MS < SERVICE_TOKEN_RENEW_AHEAD_MS &&
-  ADMIN_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  ADMIN_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the market data source (#404): the client's first reconnection, at its longest jitter, ends
+  // inside the grace, and the grace inside one 5s candle; the clock rule's margin closes a 5s
+  // bucket before the next one ends, and stays far inside the builder's skew bound; the line
+  // spans at least one tick; the keeper gets a tick to repair an account before it is retried.
+  // stop() waits for one accessToken in flight (BROKER_HTTP_TIMEOUT_MS, above); the clients' own
+  // stop() is synchronous
+  BROKER_SOCKET_RECONNECT_DELAY_MS * (1 + BROKER_SOCKET_RECONNECT_JITTER) <
+    MARKET_DATA_FAILOVER_GRACE_MS &&
+  MARKET_DATA_FAILOVER_GRACE_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
+  MARKET_DATA_SKEW_MARGIN_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
+  MARKET_DATA_SKEW_MARGIN_MS < TICK_MAX_SKEW_MS &&
+  MARKET_DATA_TICK_MS <= MARKET_DATA_LOG_MS &&
+  SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

@@ -12,6 +12,7 @@
     { "path": "../../packages/shared" },
     { "path": "../../packages/db" },
     { "path": "../../packages/broker-rest" },
+    { "path": "../../packages/broker-socket" },
     { "path": "../../packages/mock-broker" },
     { "path": "../../packages/signal" },
     { "path": "../web" }

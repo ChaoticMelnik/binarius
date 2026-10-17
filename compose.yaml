@@ -165,6 +165,7 @@ services:
         - *watch-shared
         - *watch-db
         - *watch-broker-rest
+        - *watch-broker-socket
         - *watch-signal
         - path: ./apps/backend/package.json
           action: rebuild
@@ -173,6 +174,10 @@ services:
         - path: ./packages/broker-rest/package.json
           action: rebuild
         - path: ./packages/broker-rest/tsconfig.json
+          action: rebuild
+        - path: ./packages/broker-socket/package.json
+          action: rebuild
+        - path: ./packages/broker-socket/tsconfig.json
           action: rebuild
         - path: ./packages/signal/package.json
           action: rebuild

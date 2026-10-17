@@ -3,6 +3,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import {
+  BROKER_SOCKET_RECONNECT_DELAY_MS,
+  BROKER_SOCKET_RECONNECT_JITTER,
+} from '@binarius/broker-socket';
+import { SIGNAL_FETCH_LIMIT, TICK_MAX_SKEW_MS } from '@binarius/signal';
+import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
@@ -58,6 +63,13 @@ import {
   SESSION_NOTICE_SEND_PER_SECOND,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
+  MARKET_DATA_ACCOUNT_RETRY_MS,
+  MARKET_DATA_FAILOVER_GRACE_MS,
+  MARKET_DATA_LOG_MS,
+  MARKET_DATA_PENDING_MAX,
+  MARKET_DATA_RING_CANDLES,
+  MARKET_DATA_SKEW_MARGIN_MS,
+  MARKET_DATA_TICK_MS,
   MAX_SIGNAL_SCAN_PER_MINUTE,
   MIN_BALANCE_RECONCILE_INTERVAL_MS,
   MIN_SIGNAL_SCAN_PER_MINUTE,
@@ -322,6 +334,40 @@ describe('broker balance timing', () => {
     expect(SERVICE_STALLED_RETRY_MS).toBeLessThan(SERVICE_TOKEN_ROTATION_GAP_MS);
     expect(SERVICE_TOKEN_ROTATION_GAP_MS).toBeLessThan(SERVICE_TOKEN_RENEW_AHEAD_MS);
     expect(ADMIN_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  // restated so a change to the chain's conjuncts shows in review next to its test
+  it('switches to the reserve after the client’s own first reconnection and within one 5s candle (#404)', () => {
+    expect({
+      MARKET_DATA_TICK_MS,
+      MARKET_DATA_LOG_MS,
+      MARKET_DATA_FAILOVER_GRACE_MS,
+      MARKET_DATA_SKEW_MARGIN_MS,
+      MARKET_DATA_ACCOUNT_RETRY_MS,
+      MARKET_DATA_RING_CANDLES,
+      MARKET_DATA_PENDING_MAX,
+    }).toEqual({
+      MARKET_DATA_TICK_MS: 30_000,
+      MARKET_DATA_LOG_MS: 60_000,
+      MARKET_DATA_FAILOVER_GRACE_MS: 2_000,
+      MARKET_DATA_SKEW_MARGIN_MS: 2_000,
+      MARKET_DATA_ACCOUNT_RETRY_MS: 300_000,
+      MARKET_DATA_RING_CANDLES: SIGNAL_FETCH_LIMIT,
+      MARKET_DATA_PENDING_MAX: 288,
+    });
+    expect(BROKER_SOCKET_RECONNECT_DELAY_MS * (1 + BROKER_SOCKET_RECONNECT_JITTER)).toBeLessThan(
+      MARKET_DATA_FAILOVER_GRACE_MS,
+    );
+    expect(MARKET_DATA_FAILOVER_GRACE_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['5s']);
+    expect(MARKET_DATA_SKEW_MARGIN_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['5s']);
+    expect(MARKET_DATA_SKEW_MARGIN_MS).toBeLessThan(TICK_MAX_SKEW_MS);
+    expect(MARKET_DATA_TICK_MS).toBeLessThanOrEqual(MARKET_DATA_LOG_MS);
+    expect(SERVICE_ACCOUNTS_TICK_MS).toBeLessThan(MARKET_DATA_ACCOUNT_RETRY_MS);
+  });
+
+  // the anchor forwards it valueless (intents/config.test.ts): unset leaves the source off
+  it('gives the backend BROKER_WS_URL only through the broker anchor (#404)', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'BROKER_WS_URL')).toBeUndefined();
   });
 
   it('ends a mailing stop inside phase 1 and a send inside its tick, and keeps the rate under Telegram’s (#202)', () => {
