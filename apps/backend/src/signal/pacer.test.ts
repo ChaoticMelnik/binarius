@@ -10,7 +10,7 @@ import {
   signalScanPairs,
   signalScanPerMinute,
 } from '../timing';
-import { createScanPacer } from './pacer';
+import { createScanPacer, joinSpare } from './pacer';
 
 function pacer(overrides: { perMinute?: number; capacity?: number } = {}) {
   const clock = { now: 1_000_000 };
@@ -155,5 +155,104 @@ describe('scan pacer', () => {
         now: () => 0,
       }),
     ).toThrow(RangeError);
+  });
+
+  it('P10 the overflow builds up to one token, and none while the bucket is short of full', () => {
+    const { clock, p, takeAll } = pacer({ perMinute: 60, capacity: 2 });
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 10_000;
+    expect(p.tryTakeSpare()).toBe(true);
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 5_000;
+    expect(takeAll()).toBe(2);
+    expect(p.tryTakeSpare()).toBe(true);
+    clock.now += 1_500;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 1_000;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 500;
+    expect(p.tryTakeSpare()).toBe(true);
+    clock.now += 600;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 400;
+    expect(p.tryTakeSpare()).toBe(true);
+  });
+
+  it('P11 tryTake and tryTakeSpare together carry at most perMinute + capacity + 1 per 60 s', () => {
+    const { clock, p } = pacer({ perMinute: 100, capacity: 26 });
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    const taken: number[] = [];
+    for (let t = 0; t < 180_000; t += 100) {
+      const spareFirst = random() < 0.5;
+      if (spareFirst && p.tryTakeSpare()) taken.push(clock.now);
+      if (random() < 0.3) while (p.tryTake()) taken.push(clock.now);
+      if (!spareFirst && p.tryTakeSpare()) taken.push(clock.now);
+      clock.now += 100;
+    }
+    for (const start of taken) {
+      const inWindow = taken.filter((at) => at >= start && at < start + 60_000).length;
+      expect(inWindow).toBeLessThanOrEqual(100 + 26 + 1);
+    }
+  });
+
+  it('P12 no answer of tryTake depends on the tryTakeSpare calls around it', () => {
+    const trace = (withSpare: boolean) => {
+      const { clock, p } = pacer({ perMinute: 100, capacity: 5 });
+      const answers: boolean[] = [];
+      for (let t = 0; t < 120_000; t += 250) {
+        if (withSpare) p.tryTakeSpare();
+        const takes = t % 15_000 === 0 ? 6 : t % 1_000 === 0 ? 1 : 0;
+        for (let i = 0; i < takes; i += 1) answers.push(p.tryTake());
+        if (withSpare) p.tryTakeSpare();
+        clock.now += 250;
+      }
+      return answers;
+    };
+    const plain = trace(false);
+    expect(plain).toContain(false);
+    expect(trace(true)).toEqual(plain);
+  });
+
+  it('P13 a pause closes tryTakeSpare too', () => {
+    const { clock, p } = pacer({ perMinute: 60, capacity: 1 });
+    clock.now += 5_000;
+    p.onRateLimited(20);
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 19_999;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 1;
+    expect(p.tryTakeSpare()).toBe(true);
+  });
+
+  it('P14 joinSpare takes from the first pacer with an overflow and passes the rest to all', () => {
+    const a = pacer({ perMinute: 60, capacity: 1 });
+    const b = pacer({ perMinute: 60, capacity: 1 });
+    const joined = joinSpare([a.p, b.p]);
+    a.clock.now += 1_500;
+    b.clock.now += 1_500;
+    expect(joined.tryTakeSpare()).toBe(true);
+    expect(a.p.tryTakeSpare()).toBe(false);
+    expect(joined.tryTakeSpare()).toBe(true);
+    expect(b.p.tryTakeSpare()).toBe(false);
+    expect(joined.tryTakeSpare()).toBe(false);
+
+    a.p.onRateLimited(30);
+    expect(joined.onRateLimited(20)).toBe(20_000);
+    expect(a.p.pausedUntil()).toBe(a.clock.now + 30_000);
+    expect(b.p.pausedUntil()).toBe(b.clock.now + 20_000);
+
+    a.clock.now += 30_000;
+    b.clock.now += 30_000;
+    a.p.onRateLimited(undefined);
+    b.p.onRateLimited(undefined);
+    a.clock.now += 15_000;
+    b.clock.now += 15_000;
+    joined.onDecided();
+    expect(a.p.onRateLimited(undefined)).toBe(15_000);
+    expect(b.p.onRateLimited(undefined)).toBe(15_000);
   });
 });

@@ -7,7 +7,10 @@
 // broker sent one, otherwise for a backoff that doubles from backoffMinMs to backoffMaxMs and
 // resets on the next decided answer. The calls in flight answer one 429 burst together, so a 429
 // without Retry-After during a pause is the same episode: it neither doubles nor extends it.
-// Only the scanner takes tokens; POST /trading/signal never waits for it.
+// The scanner takes tokens; the candle backfill (docs/market-data.md -> Backfill) takes only the
+// overflow: what refill discards above capacity, held to one token, so no answer of tryTake depends
+// on tryTakeSpare, and a 60 s window carries at most perMinute + capacity + 1 of both together.
+// POST /trading/signal never waits for it.
 
 export interface ScanPacerOptions {
   perMinute: number;
@@ -20,8 +23,11 @@ export interface ScanPacerOptions {
 export interface ScanPacer {
   // one GET's worth now, or false: paused, or the bucket is empty
   tryTake(): boolean;
+  // a token from the overflow only: what refill() discarded above capacity; never the bucket's own
+  tryTakeSpare(): boolean;
   // the ms this answer added to the pause
   onRateLimited(retryAfterSec: number | undefined): number;
+  // any answered 2xx resets the backoff; the backfill calls it too
   onDecided(): void;
   // the end of the current pause, or undefined when not paused
   pausedUntil(): number | undefined;
@@ -33,12 +39,15 @@ export function createScanPacer(options: ScanPacerOptions): ScanPacer {
     throw new RangeError('scan pacer: perMinute > 0, capacity >= 1 and 0 < min <= max backoff');
   }
   let tokens = capacity;
+  let overflow = 0;
   let refilledAt = now();
   let pauseEnd: number | undefined;
   let backoffs = 0;
 
   function refill(at: number): void {
-    tokens = Math.min(capacity, tokens + ((at - refilledAt) * perMinute) / 60_000);
+    const raw = tokens + ((at - refilledAt) * perMinute) / 60_000;
+    overflow = Math.min(1, overflow + Math.max(0, raw - capacity));
+    tokens = Math.min(capacity, raw);
     refilledAt = at;
   }
 
@@ -53,6 +62,13 @@ export function createScanPacer(options: ScanPacerOptions): ScanPacer {
       refill(at);
       if (paused(at) || tokens < 1) return false;
       tokens -= 1;
+      return true;
+    },
+    tryTakeSpare() {
+      const at = now();
+      refill(at);
+      if (paused(at) || overflow < 1) return false;
+      overflow -= 1;
       return true;
     },
     onRateLimited(retryAfterSec) {
@@ -75,6 +91,21 @@ export function createScanPacer(options: ScanPacerOptions): ScanPacer {
     },
     pausedUntil() {
       return paused(now()) ? pauseEnd : undefined;
+    },
+  };
+}
+
+export type SpareTokenSource = Pick<ScanPacer, 'tryTakeSpare' | 'onRateLimited' | 'onDecided'>;
+
+// #590 only, while main has a pacer per scanner; #405 passes its single pacer and deletes this.
+// A 429 is the IP window's answer, so it pauses every pacer.
+export function joinSpare(pacers: readonly ScanPacer[]): SpareTokenSource {
+  return {
+    tryTakeSpare: () => pacers.some((pacer) => pacer.tryTakeSpare()),
+    onRateLimited: (retryAfterSec) =>
+      pacers.reduce((most, pacer) => Math.max(most, pacer.onRateLimited(retryAfterSec)), 0),
+    onDecided: () => {
+      for (const pacer of pacers) pacer.onDecided();
     },
   };
 }
