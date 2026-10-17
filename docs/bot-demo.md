@@ -492,15 +492,18 @@ The card's photo and «⏳» after it (`sendCard`; the budget leaves one call af
 
 | Outcome | Then |
 |---|---|
-| sent | the `file_id` of its largest size remembered for the direction (none in the answer: `warn` `no_file_id`); «⏳» deleted: «message to delete not found» → `info`, anything else, a transport failure too → `warn` `the analysis «⏳» was not deleted`, nothing more |
+| sent | the `file_id` of its largest size remembered for the direction (none in the answer: `warn` `the setup card picture is not remembered`, `no_file_id`); «⏳» deleted: «message to delete not found» → `info`, anything else, a transport failure too → `warn` `the analysis «⏳» was not deleted`, nothing more |
 | refused by Telegram (`GrammyError`, a stale `file_id` among them) | the direction's `file_id` forgotten (`warn` `the analysis card photo was refused, sending its text`); the same caption and keyboard as text in place of «⏳» (any refusal → `warn`, nothing more), or as a new message where «⏳» is gone; the next press uploads the file |
 | failed in transport | the outcome unknown (`error` `the analysis card failed in transport`): «⏳» says «⚠️ Не удалось получить свечи…» with «🔄 Повторить анализ» and the way back (its refusal → nothing more); without «⏳» nothing more. A repeat after a card that did arrive gives a second card (accepted) |
 
 The pictures are `apps/bot/src/assets/setup-bull.png` and `setup-bear.png` (1280×640,
 `SETUP_CARD_PHOTO_PATHS`; `assets.test.ts` holds each a PNG within the Bot API's photo limits):
 replacing a file changes the card without a code change. The first card of each direction goes
-as the file, every later one by the `file_id` Telegram answered with, kept in the composer's memory:
-a restart, or a second bot process, uploads each picture once again.
+as the file, every later one by the `file_id` Telegram answered with, kept in process memory by
+`apps/bot/src/setup-card.ts` (`createSetupCardPhotos`), which the session message shares (#568,
+[bot-session.md](bot-session.md#the-session-message)): a restart, or a second bot process, uploads
+each picture once again. An answer with no size is `warn` `the setup card picture is not
+remembered` (`reason: no_file_id`).
 
 The screen (`analysisScreen`) is built from this press's pair and the answer only:
 

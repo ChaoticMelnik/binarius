@@ -1,4 +1,4 @@
-# The session in the bot: the button, the session message, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536)
+# The session in the bot: the button, the session message, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never on «сигнала нет»); a finished single trade's message
@@ -17,9 +17,11 @@ Pressing a session button, or an amount, starts a session of that mode — demo,
 real mode ([trading-mode.md](trading-mode.md)) — of `DEFAULT_SESSION_CYCLES` cycles (#552: a
 martingale cycle ends with a win, so a session is five wins; under fixed five trades) through
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one session
-message: the session's mode, pair, stake and expiry, without buttons (#536). The message follows
-the session through `GET /trading/sessions/:id` and is edited once, when the session stops, to its
-end line. The trades themselves are opened by the worker's orchestrator (#287): the bot only
+message: the picture of its signal's direction (#568, the analysis card's «BULLISH SETUP» or
+«BEARISH SETUP») with the session's mode, pair, stake, expiry and «📡 Сигнал: …» as its caption,
+without buttons (#536). The message follows the session through `GET /trading/sessions/:id` and is
+edited when the session stops, to its end line, and when a trade of the session goes the other
+way, to that direction's picture (#568). The trades themselves are opened by the worker's orchestrator (#287): the bot only
 starts, reads and stops the session. Every settled trade then shows in a message without sound — a
 martingale cycle in one message, each step added to it by an edit (#551) — and the finished
 session's summary comes with sound — both sent by the backend ([Trade messages and the
@@ -48,7 +50,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   button's row in the analysis keyboard (in demo `demo:l:<assetId>:<sec>:a`, #476), and
   `launchScreen`'s «🚀 Запустить цикл · REAL» (#320, #327).
 - `apps/bot/src/trading-session.ts` — `createTradingSessionComposer({ backend, logger,
-  sessionTracker, connectKeyboard, cashierUrl? })` returns `{ composer, startSession, resume }`:
+  sessionTracker, connectKeyboard, cashierUrl?, setupCardPhotos })` returns `{ composer, startSession, resume }`:
   the start and stop presses, an old status message's «🔄 Обновить» (#536) and the command `/stop`
   (#122); `startSession(ctx, data, catalog, { retryUnknown, removeScreen })` is the one start path,
   which the amount screen's presses use too (`cycle-stake.ts`, #476); `resume(api, botUsername,
@@ -60,7 +62,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `SESSION_STOP_PATTERN` (#536): the stop button's data, `session:stop:<id>` under an old status
   message, `session:stop:<id>:w` under the waiting message the backend sends (49 / 51 bytes).
 - `apps/bot/src/session-tracker.ts` — `createSessionTracker({ backend, logger, firstPollMs,
-  pollMs, deadlineMs, resumeGapMs, maxEntries?, now? })` → `{ track, stop, size, has }`, and
+  pollMs, deadlineMs, resumeGapMs, maxEntries?, now? })` → `{ track, stop, size, has }`,
+  `sessionEditMethod(view)` (#568: the one choice of the message's kind, `editMessageMedia` for a
+  view with a direction, else `editMessageText`), and
   `sessionTrackingDone`
   (`isTradingSessionFinished` of `packages/shared/src/trading-session.ts`, #337).
   `index.ts` builds one and hands it to `createBot` and to `runBot`.
@@ -107,8 +111,15 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `deleteSessionWaiting` of `apps/backend/src/auth/client-push.ts`) ([Trade messages and the
   summary](#trade-messages-and-the-summary-464)).
 - `apps/bot/src/send.ts` — `NO_NEXT_STEP_REASONS.SessionStatus` (`session_status`, #536): the
-  session message goes by `replyHtmlWithoutNextStep` and the tracker edits it by
-  `editMessageTextByIdHtmlWithoutNextStep`.
+  session message goes by `replyWithPhotoHtmlWithoutNextStep` (#568), or by
+  `replyHtmlWithoutNextStep` without a direction or after a refused photo, and the tracker edits it
+  by `editMessagePhotoByIdHtmlWithoutNextStep` (`editMessageMedia`, #568) or
+  `editMessageTextByIdHtmlWithoutNextStep`; a 404 by `editMessagePhotoByIdHtml` or
+  `editMessageTextByIdHtml` under the menu.
+- `apps/bot/src/setup-card.ts` (#568) — `createSetupCardPhotos(logger)` → `{ photo, remember,
+  forget }`: the pictures of a signal's direction, uploaded once per process and direction, then
+  sent by `file_id`. `bot.ts` builds one and hands it to the demo's composer (the analysis card,
+  #482) and to the session's.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop`,
   `.sessionShare`, `.sessionShared` (#321) and
   the four `SESSION_TRACK_*` constants and the two `SESSION_RESUME_*` (#567) ([Timing](#timing)).
@@ -122,14 +133,17 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 <mode>:sess:<assetId>:<sec>[:l]    (in real «🚀 Сессия из 5 циклов · REAL» under the analysis or a finished trade, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия · REAL», #327; demo buttons sent before #476; the longest, real:sess:2147483647:15:l, 25 bytes)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
-  bot → sendMessage: the session message, without a keyboard (#536)
+  bot → sendPhoto: the session message, the picture of view.signalAction with the text as its
+        caption, without a keyboard (#536, #568); without a direction sendMessage; the photo
+        refused → sendMessage of the same text, and the launch screen is then not deleted
   bot → deleteMessage of the pressed launch screen when the datum carries :l; refused as can't be
         deleted → editMessageReplyMarkup without a keyboard (#418)
   tracker: after 3 s → POST /trading/sessions/<id>/status-message { telegramUserId, messageId }
            (#567: records the message, the first one wins, and answers the view),
            then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
-           → editMessageText of that message, without a keyboard, when its text changes: once,
-           when the session stops (#536)
+           → editMessageMedia of that message (the picture and its caption, #568), or
+           editMessageText without a direction, without a keyboard, when its text changes: when
+           the session stops (#536) or its signal's direction turns (#568)
   backend's sender, its next tick once the message is recorded (#536):
         sendMessage: «🔎 Ждём сигнал для следующей сделки…», without sound, with
         «⏹ Остановить сессию» (session:stop:<id>:w); deleted before each new cycle message and sent
@@ -296,9 +310,41 @@ reference bot); the header is «💼 Реальная сессия» (`sessionHe
 🔹 Торговая пара: EUR/USD OTC         (sessionPair)
 🔹 Сумма сделки: $10.00               (sessionStake: the base stake, formatStake)
 🔹 Время экспирации: 15 с             (sessionExpiry: settings.durationSec)
+📡 Сигнал: ⬆️ Вверх                   (sessionSignalUp / sessionSignalDown: view.signalAction, #568)
 
 Торговая сессия запущена…             (sessionRunning, while the session is not stopped)
 ```
+
+**The picture** (#568, the owner's answers 6 and 7 of 2026-10-16 and of 2026-10-17). The text is
+the caption of the picture of `view.signalAction` — `setup-bull.png` («BULLISH SETUP») for `up`,
+`setup-bear.png` («BEARISH SETUP») for `down`, the analysis card's files (#482,
+[bot-demo.md](bot-demo.md#the-analysis)) through the same cache (`setup-card.ts`): each uploaded
+once per process and direction, then sent by its `file_id`. `signalAction` is the backend's
+([trading-session.md](trading-session.md#routes)): the last intent's direction, else the
+signal the start route checked; null only on a session started before #568 that has no trade yet,
+whose message stays a text. The line «📡 Сигнал: …» is the fifth line of the head (under the
+header when the settings cannot be read) and is absent without a direction. No figure of the
+analysis is printed: the features of a session trade's signal are stored nowhere. The caption's
+budget is `TELEGRAM_CAPTION_LIMIT` (1024, `BOT_TEXT_MESSAGES` → `sessionRunning`,
+`sessionCompleted`, `sessionStopped`, `sessionNoSettings`).
+
+The kind of the message follows `signalAction` at each call, with no memory of what was sent
+(`sessionEditMethod`, the owner's answer В2 of 2026-10-17): with a direction the send is
+`sendPhoto` and every edit `editMessageMedia` with that direction's picture and the caption, which
+turns a text message into the photo too (Bot API: «to replace a text or a rich message with a
+media»); without one, `sendMessage` and `editMessageText`. The picture changes with the first
+trade in the other direction, and stays as it is between trades («сигнала нет» changes no
+direction) and after the stop.
+
+| Event | What the bot does |
+| --- | --- |
+| `sendPhoto` sent | tracking on the photo; its largest size's `file_id` remembered |
+| `sendPhoto` refused (any Telegram refusal, a stale `file_id` among them; 429 too, the owner's answer of 2026-10-17) | the `file_id` forgotten, warn `the session photo was refused, sending its text`, the same text by `sendMessage`, tracking on it; the launch or amount screen is not deleted (the fifth call, [Timing](#timing)) |
+| `sendPhoto` failed in transport | thrown to `bot.catch`, as a text's: no second message after an unknown delivery (#126); the session runs without a session message (risk 64) |
+| `editMessageMedia` edited, or refused as not modified | drawn; an answer with the photo remembers its `file_id` |
+| `editMessageMedia` refused as gone or 403 | the message is lost, as for a text ([The tracker](#the-tracker)) |
+| `editMessageMedia` refused otherwise | the `file_id` forgotten, one warn per entry, again on the next poll, by the file |
+| `editMessageMedia` failed in transport | again on the next poll |
 
 Once the session stopped, the last line is its end line (`sessionEndLine`,
 `packages/shared/src/session-texts.ts`): «🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в
@@ -344,13 +390,15 @@ buttons](#the-stop-and-the-old-buttons-536)).
 The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed' | 'no_signal_timeout'>, …>`;
 `no_signal_timeout`'s line carries a variable, so `sessionEndLine` builds it beside the map.
 
-**No keyboard** (#536). The session message is sent by `replyHtmlWithoutNextStep` and edited by
-`editMessageTextByIdHtmlWithoutNextStep` with the reason `session_status`
+**No keyboard** (#536). The session message is sent by `replyWithPhotoHtmlWithoutNextStep` or
+`replyHtmlWithoutNextStep` and edited by `editMessagePhotoByIdHtmlWithoutNextStep` or
+`editMessageTextByIdHtmlWithoutNextStep` (#568) with the reason `session_status`
 ([bot-navigation.md](bot-navigation.md) → Exceptions): the next step of a running session is the
 waiting message's «⏹», of a stopped one the summary's and the card's. An edit without
 `reply_markup` removes the inline keyboard on screen, so an old status message sent before #536
 loses its «🔄 Обновить» and «⏹» on the tracker's edit at the stop. A 404 while tracking draws
-«⚠️ Статус сессии недоступен.» under «🏠 В меню». **The end of the path** (`sessionCardKeyboard`)
+«⚠️ Статус сессии недоступен.» under «🏠 В меню», as the caption of the picture when the last view
+read had a direction (`editMessagePhotoByIdHtml`), else as a text. **The end of the path** (`sessionCardKeyboard`)
 is the stopped session's next step under the reply to its stop, an old status message the stop
 drew in place and the summary card: «🔁 Ещё сессия» (#320) on the same pair and duration — drawn
 only when the view has `settings` and its duration is one the demo still offers (`durationOf`) —
@@ -442,8 +490,8 @@ One entry per session id, in process memory, like the intent tracker
   with an open trade is followed until that trade settles, so its counts are final. A last trade
   in `manual_review` still has edges, so that entry runs to the deadline.
 - **The render key is the printed text** (#536; #570 Minor 1): `sessionStatusText(label,
-  view).value`, so the message is edited only when its text changes — in practice once, when the
-  session stops — and the pair's label and the catalog's overrides are in the key as printed. The
+  view).value`, so the message is edited only when its text changes — when the session stops, and
+  when the direction line «📡 Сигнал: …» turns (#568), the picture with it — and the pair's label and the catalog's overrides are in the key as printed. The
   trades' counters, the last trade and the balance move nothing: the message does not print them.
   An entry that drew nothing on its message and remembers nothing of it (a recovered one) edits
   only a stopped session (`mayDraw`): the message may be one sent before #536, whose «🔄»/«⏹» stay
@@ -452,6 +500,11 @@ One entry per session id, in process memory, like the intent tracker
   hint pointed at «🔄 Обновить»): the deadline's own last edit, not retried, is made only when that
   text is not on screen yet (the poll's edit failed, or a read failed after the last good one). An
   entry that never read a view ends with no edit (#567).
+- **The kind of the edit** (#568): `sessionEditMethod(view)` — `editMessageMedia` (the picture of
+  `view.signalAction` with the text as its caption) for a view with a direction, else
+  `editMessageText`; a 404's edit goes by the last view the entry read, the text when it read none.
+  The same function names the method in the warn `trading session message not edited` of a
+  transport failure (a Telegram refusal names its own).
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
   entry, retried until the deadline. An edit refused as gone or with any 403 → the message is
   lost: reported (`POST …/status-message/lost`, [A lost message](#recovery-after-a-restart-567)),
@@ -536,14 +589,16 @@ One entry per session id, in process memory, like the intent tracker
 
 - `HANDLER_CALLS.sessionStart` = 3 backend calls and 4 Bot API calls: the catalog read beside the
   answer (counted as sequential, as in `confirm`), `startSession` and its retry, the session
-  message, then
+  message (`sendPhoto` with a direction, #568), then
   the launch screen's `deleteMessage` refused as forbidden and `editMessageReplyMarkup` (#418):
-  47 s, equal to `demoAnalysis`.
+  47 s, equal to `demoAnalysis`. A refused photo sends its text instead and the screen is not
+  deleted: the same count.
 - `HANDLER_CALLS.cycleStakePreset` = 3 / 4 (#476): `setStake` and the catalog read beside the
   answer (counted as sequential), `startSession` in one attempt — its retry would make it 4 / 4 =
   52 s, past the shutdown budget — the session message, then the amount screen's `deleteMessage` refused as
-  forbidden and `editMessageReplyMarkup`: 47 s. `HANDLER_CALLS.cycleStakeText` = 4 / 1: `setStake`
-  beside the catalog read, `startSession` and its retry, the session message: 28 s.
+  forbidden and `editMessageReplyMarkup`: 47 s; a refused photo, its text and no delete: 3 / 3.
+  `HANDLER_CALLS.cycleStakeText` = 4 / 2 (#568; 4 / 1 before): `setStake` beside the catalog read,
+  `startSession` and its retry, the photo and, refused, its text: 36 s.
   `HANDLER_CALLS.cycleStakeCustom` = 0 / 3: the prompt's edit refused as gone and sent anew.
 - `HANDLER_CALLS.sessionRefresh` = 0 / 2 (#536): an old «🔄 Обновить», the answer and the strip
   of its keyboard: 16 s.
@@ -592,7 +647,11 @@ id or the symbol.
 - `trading mode outcome unknown` (`/stop`, #473): the switch may have committed
 - `trading mode line not sent` (`/stop`, #473): Telegram refused the mode line (`method`,
   `telegramErrorCode`)
-- `trading session message not edited`
+- `trading session message not edited` (`method`: `editMessageMedia` or `editMessageText`, #568)
+- `the session photo was refused, sending its text` (#568): the session message's `sendPhoto` was
+  refused (`method: sendPhoto`, `telegramErrorCode`, `byFileId`); its text went instead
+- `the setup card picture is not remembered` (#568; the analysis card's before): a send or an
+  edit of a picture answered with no size (`reason: no_file_id`); the next one uploads the file
 - `trading session message not forgotten` (#567): the report of a lost status message failed
 - `the launch screen was not deleted` (#418): the delete refused other than gone or forbidden, or
   failed in transport (`method: deleteMessage`, `telegramErrorCode` or `transportError`, `updateId`)
@@ -1228,8 +1287,9 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 57. **Three Telegram calls per new cycle** (#536) instead of one — the delete, the cycle message,
     the waiting message — in the same 9 a second: the messages lag behind the trades, never drop
     (risk 27).
-58. **The tracker still polls every 10 s** (#536) though the text changes only at the stop: the
-    poll is what sees the stop and the card's moment; saving it is out of scope.
+58. **The tracker still polls every 10 s** (#536) though the text changes only at the stop and, since
+    #568, when the signal's direction turns: the poll is what sees them and the card's moment;
+    saving it is out of scope.
 59. **The deploy's window** (#536): the bot first, `docker compose up -d --no-deps bot` (without
     `--no-deps` Compose recreates the backend first — the architect's probe on Compose 2.40.3),
     then `binarius-deploy`; the other order would send `session:stop:<id>:w` to a bot that does
@@ -1243,6 +1303,37 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 60. **A recovered running session is not redrawn after a bot restart** (#536): a pair's label or an
     override of the session texts changed while the bot was down shows on its message only at the
     stop. Falsifiable: an edit of a recovered running session's message before its stop.
+61. **The deploy's window of the view's contract** (#568): `signalAction` is a required field of the
+    strict view schema on both sides; the bot and the backend go out in one `binarius-deploy`, and
+    in the seconds between them the old process answers `ContractViolation`: a start in the window
+    reads «⚠️ Исход неизвестен» (`sessionOutcomeUnknown`) and its session runs without a session
+    message (risk 56); a tracker's poll is one warn and a retry. Falsifiable: `trading session
+    status not read` with `contract_violation` later than a minute after the deploy.
+62. **A text turned into a photo rests on the Bot API's reference** (#568): `editMessageMedia`
+    replacing a text message was not observed here before the owner's probe before the merge.
+    Falsifiable: `trading session message not edited` with code 400 at the stop of a session started
+    before the deploy, or after a refused photo.
+63. **A media edit refused by the file is repeated each poll with an upload** (#568, the class of
+    risk 46): up to ~420 uploads of ~280 KB for one stuck entry until its deadline. Falsifiable:
+    `trading session message not edited` with 400 for one session on consecutive polls.
+64. **A transport failure of `sendPhoto` at the start is a `sendMessage` failure of before** (#568):
+    thrown, the session runs without a session message (risk 56). Falsifiable: `update handler
+    failed` with `sendPhoto` at a start.
+65. **The first media edit of each direction in a process uploads the file** (#568, 240–280 KB);
+    after a restart at most two per recovery pass; the rest go by `file_id`.
+66. **Sessions running at the deploy of #568 that had a trade get the picture at their stop** (one
+    edit of the recovered entry, `mayDraw`); without a trade they stay a text. Falsifiable: a
+    session started before the deploy, with a trade, that ended as a text.
+67. **`HANDLER_CALLS.cycleStakeText` 4 / 1 → 4 / 2** (#568, 36 s): a refused photo after a typed
+    amount sends its text; the 47 s ceiling does not grow.
+68. **An old «⏹» without `:w`** (before #536, `showInPlace`) draws the text in place under the end of
+    the path; a later change of its text is a media edit, a photo without the keyboard (the text
+    edit of #536 stripped it as well). No message from before #536 is left on the pilot.
+69. **A 404 on a photo of an entry that read no view** (a recovered one): its text edit is refused
+    as gone and the entry ends with no «⚠️ Статус сессии недоступен.» and no report — the error
+    path (rows are never deleted).
+70. **A second bot process, or a restart, uploads the pictures again** (memory only), as the
+    analysis card's (#482).
 
 ## Running it locally
 

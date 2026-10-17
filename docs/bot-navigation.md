@@ -12,11 +12,13 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 ## The rule, by type
 
 - `apps/bot/src/send.ts`: `replyHtml`, `editMessageTextHtml`, `editMessageTextByIdHtml`,
-  `replyWithVideoHtml`, `replyWithPhotoHtml` and `sendPhotoByIdHtml` (#318) require `reply_markup`, and only an inline keyboard
+  `replyWithVideoHtml`, `replyWithPhotoHtml`, `sendPhotoByIdHtml` (#318) and
+  `editMessagePhotoByIdHtml` (#568) require `reply_markup`, and only an inline keyboard
   (`InlineKeyboard` or `InlineKeyboardMarkup`) is accepted. A reply keyboard, `ForceReply` or
   `ReplyKeyboardRemove` does not compile.
-- A message without one goes only through `replyHtmlWithoutNextStep` or
-  `editMessageTextHtmlWithoutNextStep`, which take a `NoNextStepReason` from `NO_NEXT_STEP_REASONS`
+- A message without one goes only through `replyHtmlWithoutNextStep`,
+  `editMessageTextHtmlWithoutNextStep`, `editMessageTextByIdHtmlWithoutNextStep`,
+  `replyWithPhotoHtmlWithoutNextStep` or `editMessagePhotoByIdHtmlWithoutNextStep` (#568), which take a `NoNextStepReason` from `NO_NEXT_STEP_REASONS`
   (the exception list below). The reason is not sent; its type makes every such call name an entry.
 - `apps/backend/src/auth/client-push.ts`: `ClientPushMessage.reply_markup` is required, for the link
   push, every mailing ([mailing.md](mailing.md)) and the session's summary (#464); its one message
@@ -35,7 +37,7 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 
 | `NoNextStepReason` | Where | Why |
 |---|---|---|
-| `session_status` (#536) | the session message (`trading-session.ts`: `replyHtmlWithoutNextStep` at the start; `session-tracker.ts` through `editMessageTextByIdHtmlWithoutNextStep` at its edits) | the session's head — its mode, pair, stake and expiry — above its trades: the next step of a running session is «⏹ Остановить сессию» under the backend's waiting message, always the last message of the session, and of a stopped one the summary's and the card's; an edit without a keyboard also strips an old status message's buttons. A 404 while tracking draws «⚠️ Статус сессии недоступен.» under «🏠 В меню» ([bot-session.md](bot-session.md#the-session-message)) |
+| `session_status` (#536) | the session message (`trading-session.ts`: `replyWithPhotoHtmlWithoutNextStep` at the start — the picture of the signal's direction with the text as its caption (#568) — or `replyHtmlWithoutNextStep` without a direction or after a refused photo; `session-tracker.ts` through `editMessagePhotoByIdHtmlWithoutNextStep` (`editMessageMedia`) or `editMessageTextByIdHtmlWithoutNextStep` at its edits) | the session's head — its mode, pair, stake, expiry and signal's direction — above its trades: the next step of a running session is «⏹ Остановить сессию» under the backend's waiting message, always the last message of the session, and of a stopped one the summary's and the card's; an edit without a keyboard also strips an old status message's buttons. A 404 while tracking draws «⚠️ Статус сессии недоступен.» under «🏠 В меню» ([bot-session.md](bot-session.md#the-session-message)) |
 | `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`: an edit of the pressed message, or a new message at once under a photo — the analysis card, the session's summary card, #482) | a text result replaces it with its keyboard within the signal's budget, and after a signal's card (#482) it is deleted; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, when the card's photo fails in transport and «⏳»'s edit is refused, or when its delete is refused, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the screen above it and /menu remain |
 
 The backend's push has one exception of its own, by its method's type rather than a reason:
@@ -147,7 +149,7 @@ no repeat.
 | the session's stop failed (#536) | 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню; the pressed message stays, its «⏹» pressed again is safe |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 циклов (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
-| the session message (#536) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
+| the session message (#536; the picture of its signal's direction with the text as its caption, #568, or the text) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
 | the waiting message (#536, sent by the backend) | ⏹ Остановить сессию (`session:stop:<id>:w`) |
 | the reply to the stop under the waiting message, `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню |
 | an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
