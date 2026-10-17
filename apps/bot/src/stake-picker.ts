@@ -17,6 +17,7 @@ import {
   type TelegramHtml,
   type TradingAccessResponse,
   demoAnalysisCallbackData,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -43,7 +44,7 @@ import {
   type DemoDurationSec,
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { stakeAccess } from './stake-access';
 import { editMessageTextHtml, replyHtml } from './send';
 import { LABELS, stakePickerText, stakeSavedLine, TEXTS, userContextOf } from './texts';

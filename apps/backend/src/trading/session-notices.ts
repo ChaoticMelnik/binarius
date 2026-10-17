@@ -7,6 +7,7 @@ import {
   TradingSessionStopReason,
   type TelegramHtml,
   type TradingSessionSettings,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   claimSessionFinalNotice,
@@ -22,7 +23,6 @@ import type { PairsCatalog } from '@binarius/broker-rest';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
 import { createSendPacer } from '../mailing/engine';
-import { telegramErrorFields } from '../telegram-logging';
 import {
   SESSION_NOTICE_MAX_ATTEMPTS,
   SESSION_NOTICE_SCAN,

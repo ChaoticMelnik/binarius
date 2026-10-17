@@ -26,6 +26,7 @@ import {
   type TelegramHtml,
   type TrackedSession,
   type TradingSessionView,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -55,7 +56,7 @@ import {
   withInvite,
   withMenu,
 } from './keyboards';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml, sendPhotoByIdHtml } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
 import { attachShareButton } from './session-share';

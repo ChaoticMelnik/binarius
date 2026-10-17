@@ -12,10 +12,11 @@ import {
   UUID_PATTERN,
   type StarPaymentView,
   type TelegramHtml,
+  telegramErrorFields,
 } from '@binarius/shared';
 import { BackendError, backendErrorFields, type BackendClient } from './backend-client';
 import { retryKeyboard, supportKeyboard, withMenu } from './keyboards';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { replyHtml } from './send';
 import { LABELS, paysupportListLabel, paysupportRefundLabel, paysupportText, TEXTS } from './texts';
 

@@ -53,6 +53,7 @@ import {
   type AdminServiceMarkResponse,
   type AdminTokenAdjustmentResponse,
   type StaffSessionView,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   adjustTokens,
@@ -124,7 +125,6 @@ import {
 } from '@binarius/db';
 import { internalBearerAuth } from '../auth/internal';
 import { createPasswordQueue, PasswordQueueOverflow, type PasswordQueue } from './password-queue';
-import { telegramErrorFields } from '../telegram-logging';
 import {
   publishBotProfile,
   readBotProfileSource,

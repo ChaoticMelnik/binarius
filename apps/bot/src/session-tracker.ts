@@ -7,6 +7,7 @@ import {
   type PairLabel,
   type TelegramHtml,
   type TradingSessionView,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -14,7 +15,7 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { sessionStatusText, TEXTS } from './texts';
 
 // The session's status message follows its session (#284, docs/bot-session.md): the bot

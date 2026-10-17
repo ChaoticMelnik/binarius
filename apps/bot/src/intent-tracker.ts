@@ -8,6 +8,7 @@ import {
   type TelegramHtml,
   type TradeIntentFailureReason,
   type TradeIntentView,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -15,7 +16,7 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { durationOf, sessionFits } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
 import { intentStatusText, TEXTS } from './texts';

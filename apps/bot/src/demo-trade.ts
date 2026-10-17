@@ -18,6 +18,7 @@ import {
   type TradeIntentView,
   type TradingAccessResponse,
   demoAnalysisCallbackData,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -53,7 +54,7 @@ import {
   TRACKER_STOP_STATUSES,
   type IntentTracker,
 } from './intent-tracker';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
 import { intentStatusText, LABELS, sessionStartButtonLabel, TEXTS, textOf } from './texts';
 

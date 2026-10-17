@@ -6,6 +6,7 @@ import {
   type PairLabel,
   type PairsCatalogResponse,
   type TradingSessionView,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -13,7 +14,7 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { answerInlineQueryEmpty, answerInlineQueryPhotoHtml } from './send';
 import { SESSION_NOT_FOUND, sessionTrackingDone } from './session-tracker';
 import { LABELS, sessionShareCaption } from './texts';

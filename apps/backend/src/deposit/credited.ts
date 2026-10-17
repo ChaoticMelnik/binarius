@@ -10,6 +10,7 @@ import {
   errorLogFields,
   safeParseDepositCreditedRequest,
   type BotTextBalance,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   readBalanceSnapshot,
@@ -21,7 +22,6 @@ import {
 import type { InitDataVerifier } from '../auth/telegram-init-data';
 import type { ClientPush } from '../auth/client-push';
 import type { BalanceReconciler, BalanceRefreshOutcome } from '../broker/balance-reconciler';
-import { telegramErrorFields } from '../telegram-logging';
 import { DEPOSIT_CREDITED_REFRESH_BUDGET_MS } from '../timing';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 
