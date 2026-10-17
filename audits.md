@@ -3357,8 +3357,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process audit
 | Role | Step | Result |
 |------|------|--------|
-| Tech Lead | Phase 0 | Clean main 97bbb59, Codex ready with no limit, Fable reset reported 2026-10-16, previous audit's proposals all have a status. Ran in parallel with #404 (no shared files). |
-| Architect | first plan | Fable (`claude-fable-5-1`). 6 clarify questions, owner answered all (recommended); plan 6233283796 before In Progress; estimate ~1 100 (fact 1 098, 1 210 after round 1). Took #587 item 4 (Rule 31) by the owner's answer. |
+| Tech Lead | Phase 0 | Clean main 97bbb59, Codex ready with no limit, Fable reset reported 2026-10-16, previous audit's proposals all have a status. Ran in parallel with #404; the only shared file was `.claude/skills/architect/SKILL.md` (different Rules), rebased clean. |
+| Architect | first plan | Fable (`claude-fable-5-1`). 6 clarify questions, owner answered all (recommended); plan 6233283796 before In Progress; estimate ~1 100 (fact 1 098, ~1 220 after round 1, snapshot excluded). Took #587 item 4 (Rule 31) by the owner's answer. |
 | Implementer | round 1 | Opus. 1 owner question (429 on the start photo → as the #482 card). Own worktree and database `binarius_impl_568` (migration 0062); 14/14 mutations; `pnpm check` 0. |
 | Tech Lead | Phase 3 | Audit comment 6234024010 before the reviewer spawn. |
 | Reviewer | round 1 | 1 Major (Codex: render key from the caption only), 2 Minor → Todo. Plan Update 6234212765 (Opus), fresh implementer; 15/15 mutations. |
@@ -3393,7 +3393,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Implementer | PR 1 #592 | Package move, 171 lines, `Refs #404`; `pnpm check` 0. Reviewer round 1: 3 Minor, Codex `task-mvcdxohh-1k1xh1`; owner: merge, Minors fixed in PR 2. MERGED 12:45:43Z. |
 | Implementer | PR 2 #595 round 1 | 7 commits, 2 562 lines, 19/19 mutations; `pnpm check` 0. Audit comment 6234263716 before the reviewer. |
 | Reviewer | round 1 | 1 Major (a ready reserve never promoted into an empty active slot), 4 Minor (one: an uncaught `start()` throw kills the backend) → Todo. Plan Update 6234494921 (Opus), fresh implementer; 27/27 mutations, 2 897 lines. |
-| Reviewer | round 2 | 2 Major (active stuck in `connecting`; a running socket on an unmarked/blocked account) → Todo. Iteration-2 stop: owner chose re-plan of the manager; owner: an expired stored token does not evict. Re-plan 6235128270 (Opus) as an explicit state machine; owner: size exception up to ~3 100 if needed (not needed, 2 947). Fresh implementer; 34/34 mutations. |
+| Reviewer | round 2 | 2 Major (active stuck in `connecting`; a running socket on an unmarked/blocked account) → Todo. Iteration-2 stop: owner chose re-plan of the manager; owner: an expired stored token does not evict. Re-plan 6235128270 (Opus) as an explicit state machine; owner: size exception up to ~3 100 if needed (not needed, 2 946). Fresh implementer; 34/34 mutations. |
 | Reviewer | round 3 | No Blocker/Major, 8 Minor. Codex `task-mvcjynhx-i3uoqb` at 8c63361 rated m3 (unbounded row-lock wait at shutdown) Major, reviewer downgraded it (same wait already on main); the merge question named both. Tech-lead re-hashed both final passes (#592, #595). |
 | Tech Lead | merge | Minors → #601 (Backlog) without a question; PR #595 MERGED 15:42:08Z (rebase, branch deleted). #404 Done; no migration; worktrees removed. Models: every spawn on its policy model. |
 
