@@ -440,8 +440,9 @@ const TIMING_CHAIN_HOLDS =
   SERVICE_STALLED_RETRY_MS < SERVICE_TOKEN_ROTATION_GAP_MS &&
   SERVICE_TOKEN_ROTATION_GAP_MS < SERVICE_TOKEN_RENEW_AHEAD_MS &&
   ADMIN_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  // the market data source (#404): the client's first reconnection, at its longest jitter, ends
-  // inside the grace, and the grace inside one 5s candle; the clock rule's margin closes a 5s
+  // the market data source (#404): the client's first reconnection attempt, at its longest
+  // jitter, starts inside the grace (its handshake, connect and user.auth, is not bounded here: a
+  // slower one ends in the switch), and the grace ends inside one 5s candle; the clock rule's margin closes a 5s
   // bucket before the next one ends, and stays far inside the builder's skew bound; the line
   // spans at least one tick; the keeper gets a tick to repair an account before it is retried.
   // stop() waits for one accessToken in flight (BROKER_HTTP_TIMEOUT_MS, above); the clients' own
