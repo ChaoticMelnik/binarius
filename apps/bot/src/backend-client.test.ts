@@ -33,6 +33,7 @@ import {
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
   safeParsePairsCatalogResponse,
+  safeParseSessionShareResponse,
   safeParseSessionSummaryResponse,
   safeParseTradeIntentView,
   safeParseTradingAccessResponse,
@@ -1326,6 +1327,17 @@ describe('stopSession', () => {
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
   });
 
+  it('posts the pressed waiting message beside the owner when given (#587)', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { session: SESSION_VIEW });
+    });
+    await createBackendClient({ baseUrl, token: TOKEN }).stopSession(SESSION_ID, '4242', 90);
+    expect(JSON.parse(capture.body ?? '')).toEqual({
+      telegramUserId: '4242',
+      waitingMessageId: 90,
+    });
+  });
+
   it('carries a 409 session_not_active as its reason', async () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 409, { error: TradingSessionErrorCode.SessionNotActive });
@@ -1401,6 +1413,48 @@ describe('claimSessionSummary (#318)', () => {
   });
 });
 
+describe('readSessionShare (#538)', () => {
+  const SHARE = {
+    session: SESSION_VIEW,
+    trades: [{ profit: '0.85000000', openPrice: 1.1, closePrice: 1.2, action: 'up' }],
+    pair: { symbol: 'EUR/USD', digits: 5 },
+    referralCode: 'AbC123xY',
+  };
+  const readShare = (baseUrl: string) =>
+    createBackendClient({ baseUrl, token: TOKEN }).readSessionShare(SESSION_ID, '4242');
+
+  it('posts the owner to the share path and returns the share', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { share: SHARE });
+    });
+    expect(await readShare(baseUrl)).toEqual(SHARE);
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/share`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it('throws the 404 not_found as an HTTP status with its code', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: 'not_found' });
+    });
+    expect(await rejectionOf(readShare(baseUrl))).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
+  });
+
+  it('reports a 2xx outside the contract as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { share: { ...SHARE, referralCode: 'bad' } });
+    });
+    expect(await rejectionOf(readShare(baseUrl))).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+    });
+  });
+});
+
 describe('recordSessionMessage (#567)', () => {
   const record = (baseUrl: string) =>
     createBackendClient({ baseUrl, token: TOKEN }).recordSessionMessage(SESSION_ID, '4242', 77);
@@ -1414,23 +1468,6 @@ describe('recordSessionMessage (#567)', () => {
     expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/status-message`);
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', messageId: 77 });
-  });
-
-  it('posts the message it replaces when one is named', async () => {
-    const { baseUrl, capture } = await serve((_request, reply) => {
-      json(reply, 200, { session: SESSION_VIEW });
-    });
-    await createBackendClient({ baseUrl, token: TOKEN }).recordSessionMessage(
-      SESSION_ID,
-      '4242',
-      77,
-      76,
-    );
-    expect(JSON.parse(capture.body ?? '')).toEqual({
-      telegramUserId: '4242',
-      messageId: 77,
-      replacesMessageId: 76,
-    });
   });
 
   it('carries a 404 not_found as readSession does', async () => {
@@ -2076,6 +2113,23 @@ describe('body size', () => {
               openPrice: NUMBER,
               closePrice: NUMBER,
             })),
+          },
+        },
+      },
+      // the longest view, a full session's trades, the pair at its assumed longest and a code
+      readSessionShare: {
+        parse: safeParseSessionShareResponse,
+        sample: {
+          share: {
+            session: SESSION,
+            trades: Array.from({ length: MAX_SESSION_SUMMARY_TRADES }, () => ({
+              profit: DECIMAL,
+              openPrice: NUMBER,
+              closePrice: NUMBER,
+              action: longest(Object.values(TradeAction)),
+            })),
+            pair: { symbol: 's'.repeat(ASSUMED_LONGEST_PAIR_STRING), isOtc: false, digits: INT },
+            referralCode: 'x'.repeat(REFERRAL_CODE_LENGTH),
           },
         },
       },

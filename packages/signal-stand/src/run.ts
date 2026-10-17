@@ -17,10 +17,11 @@ import {
   PRICE_INTERVAL,
   PRICE_STEP_MS,
   TRADE_INTERVALS,
+  type TradeInterval,
 } from './config';
 import { priceIndex } from './price';
 import { buildReport, type AssetCell, type Cell, type RunData, type SeriesInfo } from './report';
-import { simulate, type Market, type SimTrade } from './simulate';
+import { createDecisionMemo, simulate, type Market, type SimTrade } from './simulate';
 import { addTrade, emptyTally, splitAt } from './stats';
 import { pointLabel, VARIANTS } from './variants';
 
@@ -63,6 +64,9 @@ export interface RunOptions {
   assets: readonly number[];
   out: string;
   headlineDelayMs?: number;
+  // the filters: every variant and every interval when absent
+  variants?: readonly string[];
+  intervals?: readonly TradeInterval[];
   io: { out: (line: string) => void; err: (line: string) => void };
 }
 
@@ -121,6 +125,13 @@ export function runBacktest(options: RunOptions): number {
   );
   if (warning !== undefined) io.err(warning);
 
+  const variants = VARIANTS.filter(
+    (variant) => options.variants === undefined || options.variants.includes(variant.name),
+  );
+  const intervals = (Object.keys(TRADE_INTERVALS) as TradeInterval[]).filter(
+    (interval) => options.intervals === undefined || options.intervals.includes(interval),
+  );
+
   const cells = new Map<string, Cell>();
   const series: SeriesInfo[] = [];
   for (const pair of pairs) {
@@ -142,9 +153,10 @@ export function runBacktest(options: RunOptions): number {
       series: Object.fromEntries(
         Object.keys(TRADE_INTERVALS).map((interval) => [interval, load(interval)]),
       ),
+      memo: createDecisionMemo(),
     };
-    for (const variant of VARIANTS) {
-      for (const interval of variant.intervals) {
+    for (const variant of variants) {
+      for (const interval of variant.intervals.filter((i) => intervals.includes(i))) {
         for (const point of variant.grid) {
           for (const pause of [false, true]) {
             for (const openDelayMs of OPEN_DELAY_GRID_MS) {
@@ -182,6 +194,8 @@ export function runBacktest(options: RunOptions): number {
   }
 
   const data: RunData = {
+    variants: variants.map((variant) => variant.name),
+    intervals,
     since,
     split,
     until,

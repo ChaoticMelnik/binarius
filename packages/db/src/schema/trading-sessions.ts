@@ -69,22 +69,25 @@ export const tradingSessions = pgTable(
     cycleMessageId: integer('cycle_message_id'),
     cycleMessageFrom: integer('cycle_message_from'),
     // The bot's status message of the session (#567, docs/bot-session.md → Recovery after a
-    // restart): Telegram's message_id of the first status message the bot tracked it on, so the
+    // restart): Telegram's message_id of the newest status message the bot tracked it on, so the
     // bot can track it again after a restart. Written by recordSessionStatusMessage's CAS (`is
-    // null`, or the id the record replaces; the owner in the predicate), cleared only by
-    // forgetSessionStatusMessage's (the same id, the owner) once the bot reports it lost; read by
-    // listTrackedSessions.
+    // null or < messageId`: message ids grow within a chat, #587; the owner in the predicate),
+    // cleared only by forgetSessionStatusMessage's (the same id, the owner) once the bot reports
+    // it lost; read by listTrackedSessions.
     statusMessageId: integer('status_message_id'),
     // The waiting message under the session's messages (#536, docs/bot-session.md → The waiting
     // message): Telegram's message_id of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there
-    // is none (not sent, deleted, or its send's outcome unknown); and its slot, the cycle message
-    // it was claimed after (`coalesce(cycle_message_id, 0)`, 0 before any cycle message), NULL
-    // when no waiting message is claimed. Written only by the backend's sender:
+    // is none (not sent, deleted, handed to the bot at a stop, or its send's outcome unknown); and
+    // its slot, the latest message of the session it was claimed after
+    // (`greatest(coalesce(cycle_message_id, 0), coalesce(status_message_id, 0))`, #587; 0 before
+    // either), NULL when no waiting message is claimed. Written by the backend's sender:
     // claimSessionWaiting's CAS claims the slot before the send, recordSessionWaitingMessage
     // writes the id after it, releaseSessionWaiting frees the slot after a certain refusal,
-    // clearSessionWaitingMessage drops the id and frees the slot after the delete. A new cycle
-    // message leaves the slot behind, and the waiting message is then deleted and sent again
-    // under it.
+    // clearSessionWaitingMessage drops the id and frees the slot after the delete; and by the stop
+    // route (#587): stopTradingSession with the pressed waiting message's id drops it in its own
+    // UPDATE, clearSessionWaitingMessage by that id on a 409; the sender re-reads the id before
+    // its delete (#587 round 1). A newer message of the session leaves the slot behind, and the
+    // waiting message is then deleted and sent again under it.
     waitingMessageId: integer('waiting_message_id'),
     waitingAfterMessage: integer('waiting_after_message'),
     createdAt: createdAt(),

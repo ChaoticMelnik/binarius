@@ -1,10 +1,16 @@
 import { TradeAction } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { DECISION_SLACK_MS, SETTLE_TICK_MS } from './config';
-import type { PriceAt } from './price';
-import { PAUSE_REFUSAL, simulate, type Market, type SimConfig } from './simulate';
-import { T0 } from './testing';
-import type { Variant } from './variants';
+import { priceIndex, type PriceAt } from './price';
+import {
+  createDecisionMemo,
+  PAUSE_REFUSAL,
+  simulate,
+  type Market,
+  type SimConfig,
+} from './simulate';
+import { aggregate, secondsPath, T0 } from './testing';
+import { VARIANTS, type Variant } from './variants';
 
 const STEP = 5_000;
 const { Up, Down } = TradeAction;
@@ -167,5 +173,38 @@ describe('simulate', () => {
         config(scripted([Up, Down, Up, undefined]), { pause: true }),
       );
     expect(JSON.stringify(run())).toBe(JSON.stringify(run()));
+  });
+
+  it('S10 the decision memo changes no result: both intervals, both pauses, one memo', () => {
+    const seconds = secondsPath(T0, 3 * 3600);
+    const base: Market = {
+      assetId: 1,
+      digits: 5,
+      price: priceIndex(seconds),
+      series: { '5s': aggregate(seconds, 5_000), '15s': aggregate(seconds, 15_000) },
+    };
+    const memoised: Market = { ...base, memo: createDecisionMemo() };
+    const variant = VARIANTS.find((v) => v.name === 'v2+macd+ma')!;
+    let traded = 0;
+    for (const interval of ['5s', '15s'] as const) {
+      for (const pause of [false, true]) {
+        const run = (market: Market) =>
+          simulate(market, {
+            variant,
+            point: { macd: 'hist', ma: '200' },
+            interval,
+            pause,
+            openDelayMs: 1_000,
+            from: T0,
+            until: T0 + 3 * 3600_000,
+          });
+        const plain = run(base);
+        expect(run(memoised)).toEqual(plain);
+        traded += plain.trades.length;
+      }
+    }
+    expect(traded).toBeGreaterThan(0);
+    expect(memoised.memo?.['5s']?.indicators.size).toBeGreaterThan(0);
+    expect(memoised.memo?.['15s']?.v2.size).toBeGreaterThan(0);
   });
 });

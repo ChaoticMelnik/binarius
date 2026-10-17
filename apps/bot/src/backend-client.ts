@@ -14,6 +14,7 @@ import {
   botTextOverridesResponseSchema,
   readBody,
   type BotTextOverride,
+  safeParseSessionShareResponse,
   safeParseSessionSummaryRefusal,
   safeParseSessionSummaryResponse,
   safeParseTradeIntentView,
@@ -56,9 +57,11 @@ import {
   type NotificationLevel,
   type NotificationLevelResponse,
   type PairsCatalogResponse,
+  SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
+  type SessionShare,
   type SessionSummary,
   type SignalInterval,
   type TradingSignalAnalysis,
@@ -161,21 +164,27 @@ export interface BackendClient {
   startSession(request: CreateTradingSessionRequest): Promise<StartSessionResult>;
   // both scoped by the owner like readIntent
   readSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
-  stopSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
+  // waitingMessageId: the waiting message whose «⏹» was pressed (#587): the backend takes it over
+  // from its sender, so the bot draws the reply in place of it
+  stopSession(
+    id: string,
+    telegramUserId: string,
+    waitingMessageId?: number,
+  ): Promise<TradingSessionView>;
   // the finished session's card, claimed at most once (#318): null for the one refusal, which the
   // backend answers before any write; scoped by the owner like readSession
   claimSessionSummary(id: string, telegramUserId: string): Promise<SessionSummary | null>;
+  // what the shared promo card needs (#538): creates the caller's referral code on first use;
+  // scoped by the owner like readSession (404 not_found)
+  readSessionShare(id: string, telegramUserId: string): Promise<SessionShare>;
   // every active session of the user, stopped (#122); empty when there was none
   stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
-  // the first poll of a status message (#567): records its id, the first one recorded wins, and
-  // answers the view readSession does; scoped by the owner like readSession. replacesMessageId is
-  // the pressed message this one was sent in place of after a gone refusal: the record replaces it
-  // when it is the one recorded
+  // the first poll of a status message (#567): records its id, the newest one wins (#587), and
+  // answers the view readSession does; scoped by the owner like readSession
   recordSessionMessage(
     id: string,
     telegramUserId: string,
     messageId: number,
-    replacesMessageId?: number,
   ): Promise<TradingSessionView>;
   // the sessions to track again after a restart (#567), oldest first, at most TRACKED_SESSIONS_MAX
   listTrackedSessions(): Promise<TrackedSession[]>;
@@ -458,9 +467,12 @@ export function createBackendClient({
       const query = new URLSearchParams({ telegramUserId });
       return sessionOf(await get(`trading/sessions/${encodeURIComponent(id)}?${query.toString()}`));
     },
-    async stopSession(id, telegramUserId) {
+    async stopSession(id, telegramUserId, waitingMessageId) {
       return sessionOf(
-        await post(`trading/sessions/${encodeURIComponent(id)}/stop`, { telegramUserId }),
+        await post(`trading/sessions/${encodeURIComponent(id)}/stop`, {
+          telegramUserId,
+          ...(waitingMessageId === undefined ? {} : { waitingMessageId }),
+        }),
       );
     },
     async claimSessionSummary(id, telegramUserId) {
@@ -476,6 +488,15 @@ export function createBackendClient({
       }
       if (status === 409 && safeParseSessionSummaryRefusal(payload).success) return null;
       throw httpStatusError(status, payload);
+    },
+    async readSessionShare(id, telegramUserId) {
+      const parsed = safeParseSessionShareResponse(
+        await post(`trading/sessions/${encodeURIComponent(id)}${SESSION_SHARE_SUFFIX}`, {
+          telegramUserId,
+        }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.share;
     },
     async createStarsInvoice(telegramUserId, packageCode) {
       const parsed = starsInvoiceResponseSchema.safeParse(
@@ -524,12 +545,11 @@ export function createBackendClient({
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
     },
-    async recordSessionMessage(id, telegramUserId, messageId, replacesMessageId) {
+    async recordSessionMessage(id, telegramUserId, messageId) {
       return sessionOf(
         await post(`trading/sessions/${encodeURIComponent(id)}${SESSION_STATUS_MESSAGE_SUFFIX}`, {
           telegramUserId,
           messageId,
-          ...(replacesMessageId === undefined ? {} : { replacesMessageId }),
         }),
       );
     },

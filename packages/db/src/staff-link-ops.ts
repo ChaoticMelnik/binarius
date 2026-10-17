@@ -6,7 +6,7 @@ import { hashToken } from './oauth-ops';
 import { millisecondsAgo, millisecondsFromNow, type Tx } from './trade-intent-ops';
 import { staff, StaffStatus } from './schema/staff';
 import { staffLoginLinks, StaffLoginLinkStatus } from './schema/staff-login-links';
-import { insertStaffSession, writeAuditEntry } from './staff-ops';
+import { insertStaffSession, writeAuditEntry, writeAuditEntryOnce } from './staff-ops';
 
 // --- Policy (#448) -----------------------------------------------------------------------------
 // Durations of the domain, next to the code-login policy in staff-ops.ts.
@@ -190,8 +190,9 @@ const linkStateOf = (reason: LinkRefusalReason): LinkState => {
   }
 };
 
-async function readLink(executor: Db | Tx, tokenHash: string) {
-  const [row] = await executor
+// `lock` holds the link's row for a writer that keys one row per event on it (refuseLink, #153).
+async function readLink(executor: Db | Tx, tokenHash: string, options: { lock?: boolean } = {}) {
+  const query = executor
     .select({
       id: staffLoginLinks.id,
       staffId: staffLoginLinks.staffId,
@@ -202,6 +203,8 @@ async function readLink(executor: Db | Tx, tokenHash: string) {
     .from(staffLoginLinks)
     .innerJoin(staff, eq(staff.id, staffLoginLinks.staffId))
     .where(eq(staffLoginLinks.tokenHash, tokenHash));
+  const [row] =
+    options.lock === true ? await query.for('no key update', { of: staffLoginLinks }) : await query;
   return row;
 }
 
@@ -271,21 +274,26 @@ export async function completeLinkLogin(
 }
 
 // Zero rows from the CAS. A token nobody was issued leaves no row (В5: rows are about known staff
-// members; the route logs it). Otherwise the row says why, in the same transaction.
+// members; the route logs it). Otherwise the row says why, in the same transaction — one row per
+// (link, reason) under the link's row lock (#153); a repeat writes nothing, the route logs it.
 async function refuseLink(tx: Tx, tokenHash: string, ip: string): Promise<CompleteLinkLoginResult> {
-  const row = await readLink(tx, tokenHash);
+  const row = await readLink(tx, tokenHash, { lock: true });
   if (row === undefined) return { ok: false, state: LinkState.Unavailable };
   const reason = linkRefusalReason(row);
-  await writeAuditEntry(tx, {
-    action: AuditAction.StaffLoginLinkRefused,
-    actorType: AuditActorType.System,
-    actorId: row.staffId,
-    entityType: AuditEntityType.StaffLoginLink,
-    entityId: row.id,
-    // `live` here would be a row the CAS missed and the re-read found usable: nothing in this
-    // feature moves a link back to `issued` or an owner back to active, so it is not expected
-    payload: { reason: reason === 'live' ? 'state_changed' : reason, via: 'web', ip },
-  });
+  await writeAuditEntryOnce(
+    tx,
+    {
+      action: AuditAction.StaffLoginLinkRefused,
+      actorType: AuditActorType.System,
+      actorId: row.staffId,
+      entityType: AuditEntityType.StaffLoginLink,
+      entityId: row.id,
+      // `live` here would be a row the CAS missed and the re-read found usable: nothing in this
+      // feature moves a link back to `issued` or an owner back to active, so it is not expected
+      payload: { reason: reason === 'live' ? 'state_changed' : reason, via: 'web', ip },
+    },
+    ['reason'],
+  );
   const state = linkStateOf(reason);
   return { ok: false, state: state === LinkState.Live ? LinkState.Unavailable : state };
 }

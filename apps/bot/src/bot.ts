@@ -64,6 +64,7 @@ import { createCycleStakeComposer } from './cycle-stake';
 import type { IntentTracker } from './intent-tracker';
 import {
   createLoginDialog,
+  endInputStep,
   type LoginDialog,
   type LoginDialogState,
   type LoginStep,
@@ -117,6 +118,8 @@ export interface CreateBotOptions {
   welcomeVideoFileId?: string;
   // «💳 Пополнить»'s page (#27): cashierUrlOf(WEB_PUBLIC_URL); none (not https), no button
   cashierUrl?: string;
+  // SHARE_STORAGE_CHAT_ID (#538): the channel the promo card is posted to; none, no share button
+  shareStorageChatId?: number;
   // the two seams the tests need: a bot that must not call getMe, and a client pointed at a
   // local server so the configured timeout can be observed rather than assumed
   botInfo?: UserFromGetMe;
@@ -140,6 +143,7 @@ export function createBot({
   logger,
   welcomeVideoFileId,
   cashierUrl,
+  shareStorageChatId,
   botInfo,
   apiRoot,
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
@@ -178,6 +182,18 @@ export function createBot({
   // Groups and channels are ignored entirely: this bot only ever talks to one person, and a
   // /start in a group would attribute a whole chat to one member's payload.
   const privateChats = bot.chatType('private');
+
+  // Any button and any command leave the typed amount (#319): a number typed after them is text
+  // outside a dialog. Registered before every handler, so `stk:c` and `demo:sc` set the step again.
+  // The login steps stay: resend and confirm read the code step.
+  privateChats.on('callback_query:data', async (ctx, next) => {
+    endInputStep(loginDialog, ctx.from.id);
+    await next();
+  });
+  privateChats.on('message:text', async (ctx, next) => {
+    if (ctx.message.text.startsWith('/')) endInputStep(loginDialog, ctx.from.id);
+    await next();
+  });
 
   privateChats.command('start', async (ctx) => {
     const from = ctx.from;
@@ -474,7 +490,6 @@ export function createBot({
       backend,
       logger,
       now,
-      dialog: loginDialog,
       connectKeyboard: welcomeKeyboard,
       setupCardPhotos,
     }),
@@ -510,6 +525,7 @@ export function createBot({
     connectKeyboard: welcomeKeyboard,
     cashierUrl,
     setupCardPhotos,
+    shareEnabled: shareStorageChatId !== undefined,
   });
   sessionResumer.attach(tradingSession.resume);
   // the amounts of a demo cycle's amount screen (#476), which start through the session's path;
@@ -530,7 +546,7 @@ export function createBot({
 
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
-  bot.use(createSessionShareComposer({ backend, logger }));
+  bot.use(createSessionShareComposer({ backend, logger, storageChatId: shareStorageChatId }));
 
   // /buy, «⭐ Купить токены» and the payment (#117, docs/stars.md), ahead of the text handler below,
   // which swallows commands; the pre-checkout query on the bot, for the same reason as the share
@@ -628,9 +644,9 @@ export function createBot({
   });
 
   // Registered after the command handlers, which do not call next(): none of them reaches this
-  // handler, so they neither feed the dialog nor reset it. Any other command is
-  // ignored here for the same reason. Text outside a dialog is ignored altogether (the owner's
-  // decision, #162).
+  // handler, so they never feed the dialog; a command ends only a typed amount (the middleware
+  // above, #319). Any other command is ignored here for the same reason. Text outside a dialog is
+  // ignored altogether (the owner's decision, #162).
   privateChats.on('message:text', async (ctx) => {
     const from = ctx.from;
     const text = ctx.message.text;

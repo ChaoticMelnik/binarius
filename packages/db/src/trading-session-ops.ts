@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -9,6 +9,7 @@ import {
   TradingSessionStopReason,
   UserStatus,
   type DecimalString,
+  type SessionShareTrade,
   type SessionSummary,
   type TradeAction,
   type TradeIntentFailureReason,
@@ -393,14 +394,28 @@ export async function readSessionHistory(
   };
 }
 
-// CAS on status = active: a second stop finds nothing and the first reason stays
+// CAS on status = active: a second stop finds nothing and the first reason stays. With
+// waitingMessageId (#587: the bot's «⏹» under the waiting message), the same UPDATE drops that
+// waiting message's id and frees its slot when it is the one recorded, so the bot draws its reply
+// in place of it and the sender neither deletes it nor waits for it before the summary.
 export async function stopTradingSession(
   db: Db,
-  { id, reason }: { id: string; reason: TradingSessionStopReason },
+  {
+    id,
+    reason,
+    waitingMessageId,
+  }: { id: string; reason: TradingSessionStopReason; waitingMessageId?: number },
 ): Promise<TradingSessionRow | undefined> {
+  const handedOver =
+    waitingMessageId === undefined
+      ? {}
+      : {
+          waitingMessageId: sql`case when ${tradingSessions.waitingMessageId} = ${waitingMessageId} then null else ${tradingSessions.waitingMessageId} end`,
+          waitingAfterMessage: sql`case when ${tradingSessions.waitingMessageId} = ${waitingMessageId} then null else ${tradingSessions.waitingAfterMessage} end`,
+        };
   const [row] = await db
     .update(tradingSessions)
-    .set(stoppedBy(reason))
+    .set({ ...stoppedBy(reason), ...handedOver })
     .where(and(eq(tradingSessions.id, id), eq(tradingSessions.status, TradingSessionStatus.Active)))
     .returning();
   return row;
@@ -790,6 +805,45 @@ export async function claimSessionSummary(
   });
 }
 
+// The settled trades the shared promo card draws (#538, docs/trading-session.md → Routes), in
+// creation order, with their direction. Scoped by the owner (Rule 13): a foreign or missing id
+// reads []. A read only: whether the session is done is the bot's call on the view.
+export async function readSessionShareTrades(
+  db: Db,
+  { id, telegramUserId }: { id: string; telegramUserId: string },
+): Promise<SessionShareTrade[]> {
+  const rows = await db
+    .select({
+      action: brokerTrades.action,
+      profit: brokerTrades.profit,
+      openPrice: brokerTrades.openPrice,
+      closePrice: brokerTrades.closePrice,
+    })
+    .from(tradeIntents)
+    .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+    .innerJoin(tradingSessions, eq(tradingSessions.id, tradeIntents.tradingSessionId))
+    .where(
+      and(
+        eq(tradeIntents.tradingSessionId, id),
+        eq(tradeIntents.status, TradeIntentStatus.Settled),
+        sessionOwnedBy(telegramUserId),
+      ),
+    )
+    .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
+  return rows.map((row) => {
+    // as in claimSessionSummary: a settled intent's trade is closed (settleIntent writes both)
+    if (row.profit === null || row.closePrice === null) {
+      throw new Error(`settled intent of session ${id} has an open broker trade`);
+    }
+    return {
+      profit: row.profit,
+      openPrice: row.openPrice,
+      closePrice: row.closePrice,
+      action: row.action,
+    };
+  });
+}
+
 // The account a session trades on, read by its owner only (Rule 13): the view route refreshes its
 // balance (#337). A foreign telegram id and a missing session both read undefined.
 export async function readTradingSessionAccount(
@@ -818,27 +872,19 @@ export async function readActiveTradingSessionView(
 }
 
 // Records the bot's status message of the session (#567, docs/bot-session.md → Recovery after a
-// restart): one CAS UPDATE, only while none is recorded, or the recorded one is the message this
-// one replaces (the bot sent it in place of a pressed message Telegram refused as gone) - the
-// first one wins while it lives: a lost one is forgotten, and the next record writes - and only on
-// the owner's session (Rule 13: a foreign id writes nothing, like a missing one). True when it
-// wrote.
+// restart): one CAS UPDATE, only while none is recorded or the recorded one is older - the newest
+// id wins (#587: Telegram's message ids grow within a chat, so a relaunch's message, or one sent in
+// place of a pressed message refused as gone, replaces the first; a lost one is forgotten, and the
+// next record writes) - and only on the owner's session (Rule 13: a foreign id writes nothing,
+// like a missing one). True when it wrote.
 export async function recordSessionStatusMessage(
   db: Db,
-  {
-    id,
-    telegramUserId,
-    messageId,
-    replacesMessageId,
-  }: { id: string; telegramUserId: string; messageId: number; replacesMessageId?: number },
+  { id, telegramUserId, messageId }: { id: string; telegramUserId: string; messageId: number },
 ): Promise<boolean> {
-  const free =
-    replacesMessageId === undefined
-      ? isNull(tradingSessions.statusMessageId)
-      : or(
-          isNull(tradingSessions.statusMessageId),
-          eq(tradingSessions.statusMessageId, replacesMessageId),
-        );
+  const free = or(
+    isNull(tradingSessions.statusMessageId),
+    lt(tradingSessions.statusMessageId, messageId),
+  );
   const rows = await db
     .update(tradingSessions)
     .set({ statusMessageId: messageId })

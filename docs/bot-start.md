@@ -312,8 +312,9 @@ Telegram documents for start parameters). Anything else — too long, a space, a
 Cyrillic — is treated as no payload at all, without an error message: the user did not compose
 the link. The bot stores the string as it arrived; splitting it into campaign fields belongs to
 whoever generates the links. The payload `share` comes from the link in the caption of a session
-card shared through «📤 Поделиться» (#321, [bot-session.md](bot-session.md#sharing-the-card-321)):
-it is stored like any other. A `ref_<code>` payload is a personal invite link (#115): it is stored
+card shared through «📤 Поделиться» (#321, [bot-session.md](bot-session.md#sharing-the-card-321))
+when its sender has no referral code (a blocked user); since #538 the caption carries the sender's
+`ref_<code>`. It is stored like any other. A `ref_<code>` payload is a personal invite link (#115): it is stored
 here like any other, and when the same `/start` created the user it also records the inviter
 ([referrals.md](referrals.md)).
 

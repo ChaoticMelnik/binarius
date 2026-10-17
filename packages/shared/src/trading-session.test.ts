@@ -16,6 +16,7 @@ import {
   SESSION_MAX_DURATION_MS,
   TRADING_SESSION_SETTINGS_VERSION,
   safeParseSessionSummaryResponse,
+  safeParseSessionShareResponse,
   sessionProgress,
   TradingSessionErrorCode,
   buildSessionSettings,
@@ -25,6 +26,7 @@ import {
   TradingSessionStopReason,
   safeParseCreateTradingSessionRequest,
   safeParseReadTradingSessionQuery,
+  safeParseStopOneTradingSessionRequest,
   safeParseStopTradingSessionRequest,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
@@ -580,6 +582,35 @@ describe('tradingSessionsStoppedResponseSchema (#122)', () => {
   });
 });
 
+describe('the stop body (#587)', () => {
+  const owner = '123456789';
+  it('the one-session stop accepts waitingMessageId from 1 to INT4_MAX, and none', () => {
+    expect(safeParseStopOneTradingSessionRequest({ telegramUserId: owner }).data).toEqual({
+      telegramUserId: owner,
+    });
+    for (const waitingMessageId of [1, INT4_MAX]) {
+      expect(
+        safeParseStopOneTradingSessionRequest({ telegramUserId: owner, waitingMessageId }).data,
+      ).toEqual({ telegramUserId: owner, waitingMessageId });
+    }
+  });
+  it.each([0, INT4_MAX + 1, 1.5, '7'])('the one-session stop refuses waitingMessageId %s', (id) => {
+    expect(
+      safeParseStopOneTradingSessionRequest({ telegramUserId: owner, waitingMessageId: id })
+        .success,
+    ).toBe(false);
+  });
+  it('the one-session stop refuses an extra key; the stop-all and summary body refuses waitingMessageId', () => {
+    expect(
+      safeParseStopOneTradingSessionRequest({ telegramUserId: owner, waitingMessageId: 1, x: 1 })
+        .success,
+    ).toBe(false);
+    expect(
+      safeParseStopTradingSessionRequest({ telegramUserId: owner, waitingMessageId: 1 }).success,
+    ).toBe(false);
+  });
+});
+
 describe('the recovery contract (#567)', () => {
   const owner = '123456789';
   it.each([0, INT4_MAX + 1, 1.5])('refuses a status messageId of %s', (messageId) => {
@@ -598,27 +629,15 @@ describe('the recovery contract (#567)', () => {
         .success,
     ).toBe(false);
   });
-  it('accepts replacesMessageId from 1 to INT4_MAX and refuses one past the bound', () => {
-    for (const replacesMessageId of [1, INT4_MAX]) {
-      expect(
-        safeParseRecordSessionStatusMessageRequest({
-          telegramUserId: owner,
-          messageId: 2,
-          replacesMessageId,
-        }).success,
-      ).toBe(true);
-    }
-    for (const replacesMessageId of [0, INT4_MAX + 1]) {
-      expect(
-        safeParseRecordSessionStatusMessageRequest({
-          telegramUserId: owner,
-          messageId: 2,
-          replacesMessageId,
-        }).success,
-      ).toBe(false);
-    }
-  });
-  it('the lost body names the message and refuses replacesMessageId', () => {
+  // #587: the newest id wins, so a record no longer names a message it replaces
+  it('the record and the lost bodies refuse replacesMessageId', () => {
+    expect(
+      safeParseRecordSessionStatusMessageRequest({
+        telegramUserId: owner,
+        messageId: 2,
+        replacesMessageId: 1,
+      }).success,
+    ).toBe(false);
     expect(
       safeParseForgetSessionStatusMessageRequest({ telegramUserId: owner, messageId: 1 }).success,
     ).toBe(true);
@@ -658,5 +677,35 @@ describe('the recovery contract (#567)', () => {
         sessions: Array.from({ length: TRACKED_SESSIONS_MAX + 1 }, () => row),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('sessionShareResponseSchema (#538)', () => {
+  const trade = { profit: '1.5', openPrice: 1.1, closePrice: 1.2, action: 'up' as const };
+  const share = {
+    session: view,
+    trades: [trade],
+    pair: { symbol: 'EURUSD', isOtc: true, digits: 5 },
+    referralCode: 'AbC123xY',
+  };
+  const parse = (patch: Record<string, unknown>) =>
+    safeParseSessionShareResponse({ share: { ...share, ...patch } }).success;
+
+  it('round-trips the share and accepts a null pair, code and an empty trade list', () => {
+    const parsed = safeParseSessionShareResponse({ share });
+    expect(parsed.success && parsed.data).toEqual({ share });
+    expect(parse({ pair: null, referralCode: null, trades: [] })).toBe(true);
+    expect(parse({ pair: { symbol: 'EURUSD', digits: 5 } })).toBe(true);
+  });
+  it('bounds the trades by MAX_SESSION_SUMMARY_TRADES', () => {
+    const trades = (n: number) => Array.from({ length: n }, () => trade);
+    expect(parse({ trades: trades(MAX_SESSION_SUMMARY_TRADES) })).toBe(true);
+    expect(parse({ trades: trades(MAX_SESSION_SUMMARY_TRADES + 1) })).toBe(false);
+  });
+  it('refuses a code off the pattern, a trade without its direction and an extra pair key', () => {
+    expect(parse({ referralCode: 'short' })).toBe(false);
+    expect(parse({ referralCode: 'AbC123x!' })).toBe(false);
+    expect(parse({ trades: [{ profit: '1', openPrice: 1, closePrice: 1 }] })).toBe(false);
+    expect(parse({ pair: { symbol: 'EURUSD', digits: 5, payout: 80 } })).toBe(false);
   });
 });

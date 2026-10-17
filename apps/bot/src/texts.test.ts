@@ -78,6 +78,8 @@ import {
   levelLabel,
   PROFILE,
   pluralTrades,
+  sessionPromoLabels,
+  sessionPromoWhen,
   sessionShareCaption,
   sessionAgainButtonLabel,
   sessionStartButtonLabel,
@@ -112,6 +114,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   tokenBalance: '162',
   stars: '250',
   paymentDate: 1_790_000_000,
+  sessionEnd: 1_790_000_000,
   demoBalance: { amount: d('10000'), fresh: true },
   realBalance: null,
   mode: TradeMode.Demo,
@@ -1386,32 +1389,31 @@ describe('the session words', () => {
   });
 });
 
-describe('the shared card caption (#321)', () => {
-  const trades = { ...SESSION_VIEW.trades, settled: 5, won: 3, lost: 2, profit: d('1.40000000') };
-
-  it('names the pair, the score without the $ sum, and the link with the payload share', () => {
-    expect(
-      plainTextOf(
-        sessionShareCaption(pairLabel(PAIR_EURUSD), PAIR_EURUSD.id, trades, 'binarius_bot'),
-      ),
-    ).toBe(
+describe('the shared promo card caption (#538)', () => {
+  it('invites with the link it is given, printed as plain text', () => {
+    expect(plainTextOf(sessionShareCaption('https://t.me/binarius_bot?start=ref_AbC123xY'))).toBe(
       [
-        '🏁 EUR/USD OTC: 5 сделок — 3 в плюс, 2 в минус',
-        '🤖 https://t.me/binarius_bot?start=share',
+        'Присоединяйся к Binarius — получи бесплатные токены!',
+        'https://t.me/binarius_bot?start=ref_AbC123xY',
       ].join('\n'),
     );
   });
 
-  it('names the asset by its id when the catalog cannot say, and «в ноль» when a trade tied', () => {
-    const caption = plainTextOf(
-      sessionShareCaption(null, 77, { ...trades, lost: 1, tied: 1 }, 'binarius_bot'),
-    );
-    expect(caption).toBe(
-      [
-        '🏁 актив #77: 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
-        '🤖 https://t.me/binarius_bot?start=share',
-      ].join('\n'),
-    );
+  it('escapes the link as text', () => {
+    expect(sessionShareCaption('a<b&c').value).toContain('a&lt;b&amp;c');
+  });
+});
+
+describe('the promo card texts (#538)', () => {
+  it('reads the labels and the end time in Moscow time', () => {
+    expect(sessionPromoLabels()).toEqual({
+      result: 'Мой результат сессии',
+      up: 'ВВЕРХ',
+      down: 'ВНИЗ',
+      brand: 'Binarius',
+      call: 'Торгуй со мной в Binarius и получи бесплатные токены!',
+    });
+    expect(sessionPromoWhen(Date.UTC(2026, 9, 12, 18, 32) / 1000)).toBe('12.10.2026 21:32 МСК');
   });
 });
 
@@ -1492,6 +1494,8 @@ describe('the facades over the catalog', () => {
         'repeatAnalysisButton',
         'resendButton',
         'sessionShareButton',
+        // drawn by the bot only after an unknown stop outcome under the waiting message (#587)
+        'sessionStopButton',
         'settingsCommand',
         'settingsStakeDemoButton',
         'settingsStakeRealButton',

@@ -175,6 +175,13 @@ export const sendPhotoByIdHtml = (
   extra: WithNextStep<PhotoByIdExtra>,
 ) => api.sendPhoto(chatId, photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });
 
+// The promo card's post to the private storage channel (#538, session-share.ts): not a message to
+// a user, so no caption and no keyboard by type, an exception (docs/bot-navigation.md → Exceptions).
+// It exists for the photo's file id, which the inline answer then names; without sound, since the
+// channel's members are the owner's staff.
+export const sendPhotoToStorage = (api: Pick<Api, 'sendPhoto'>, chatId: number, photo: InputFile) =>
+  api.sendPhoto(chatId, photo, { disable_notification: true });
+
 // A Telegram Stars invoice (#117, docs/stars.md): currency XTR, no provider token, one price.
 // Telegram parses none of its texts. The keyboard is required like every message's, and the Bot
 // API wants the pay button first: `pay` is that button's label and leads the keyboard; `then` is

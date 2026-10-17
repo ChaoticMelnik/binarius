@@ -22,6 +22,8 @@ import {
 } from './backend-client';
 import { MODE_CALLBACK_DATA, menuKeyboard, supportKeyboard, withMenu } from './keyboards';
 import type { Logger } from './logging';
+import { answerCallback } from './answer-callback';
+import { settle, type Settled } from './settled';
 import { editMessageTextHtml, replyHtml } from './send';
 import {
   LABELS,
@@ -57,13 +59,6 @@ interface Screen {
   keyboard: InlineKeyboard;
 }
 
-type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
-const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
-  promise.then(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error }),
-  );
-
 // the way back to the screen, then the menu: under every refusal and every unknown outcome
 const backToScreen = (): InlineKeyboard =>
   withMenu(new InlineKeyboard().text(LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA));
@@ -94,19 +89,19 @@ export function createTradingModeComposer<C extends Context>({
   const composer = new Composer<C>();
 
   composer.callbackQuery(MODE_CALLBACK_DATA, async (ctx) => {
-    const [, access] = await Promise.all([answer(ctx), readAccess(ctx.from.id)]);
+    const [, access] = await Promise.all([answerCallback(ctx, logger), readAccess(ctx.from.id)]);
     const screen = accessScreen(access, modeScreen);
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
   });
 
   composer.callbackQuery(MODE_SCREEN_CALLBACK_DATA, async (ctx) => {
-    const [, access] = await Promise.all([answer(ctx), readAccess(ctx.from.id)]);
+    const [, access] = await Promise.all([answerCallback(ctx, logger), readAccess(ctx.from.id)]);
     await editOrReply(ctx, accessScreen(access, modeScreen));
   });
 
   // the confirm names the amount a real trade stakes, so access is read again for it
   composer.callbackQuery(MODE_CONFIRM_CALLBACK_DATA, async (ctx) => {
-    const [, access] = await Promise.all([answer(ctx), readAccess(ctx.from.id)]);
+    const [, access] = await Promise.all([answerCallback(ctx, logger), readAccess(ctx.from.id)]);
     await editOrReply(ctx, accessScreen(access, confirmScreen));
   });
 
@@ -120,7 +115,7 @@ export function createTradingModeComposer<C extends Context>({
 
   async function switchTo(ctx: Context & { from: { id: number } }, mode: TradeMode): Promise<void> {
     const [, result] = await Promise.all([
-      answer(ctx),
+      answerCallback(ctx, logger),
       settle(backend.setTradingMode(String(ctx.from.id), mode)),
     ]);
     await editOrReply(ctx, await switchScreen(ctx.from.id, result));
@@ -257,15 +252,6 @@ export function createTradingModeComposer<C extends Context>({
         'the mode screen edit failed in transport, sending nothing more',
       );
     }
-  }
-
-  async function answer(ctx: Context): Promise<void> {
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logger.warn(
-        { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
-        'answering the callback query failed',
-      );
-    });
   }
 
   return composer;

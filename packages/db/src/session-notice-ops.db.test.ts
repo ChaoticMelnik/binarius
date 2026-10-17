@@ -7,6 +7,7 @@ import {
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
+  TradingSessionStatus,
   TradingSessionStopReason,
   decimalStringSchema,
   type DecimalString,
@@ -19,6 +20,7 @@ import {
   claimSessionWaiting,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
+  readSessionWaitingMessage,
   recordSessionWaitingMessage,
   releaseSessionFinalNotice,
   recordSessionCycleMessage,
@@ -464,9 +466,9 @@ describe('the waiting message (#536)', () => {
     // no message of the session yet: the waiting message would stand above it
     expect(await waitingClaim(target.session)).toBeUndefined();
     await statusMessage(target.session, 7);
-    expect(await waitingClaim(target.session)).toEqual({ slot: 0 });
+    expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
     expect(await waitingClaim(target.session)).toBeUndefined();
-    expect(await waitingOf(target.session)).toEqual([null, 0]);
+    expect(await waitingOf(target.session)).toEqual([null, 7]);
     // a new cycle message leaves the slot behind
     await cycleMessage(target, 0, 41);
     expect(await waitingClaim(target.session)).toEqual({ slot: 41 });
@@ -500,26 +502,26 @@ describe('the waiting message (#536)', () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
     const results = await Promise.all([waitingClaim(target.session), waitingClaim(target.session)]);
-    expect(results.filter((result) => result !== undefined)).toEqual([{ slot: 0 }]);
+    expect(results.filter((result) => result !== undefined)).toEqual([{ slot: 7 }]);
   });
 
   it('N14 the id is recorded only on its own claimed slot without an id, on an active session', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
     // nothing claimed
-    expect(await waitingRecord(target.session, 0, 50)).toBe(false);
+    expect(await waitingRecord(target.session, 7, 50)).toBe(false);
     await waitingClaim(target.session);
     expect(await waitingRecord(target.session, 41, 50)).toBe(false);
-    expect(await waitingRecord(target.session, 0, 50)).toBe(true);
-    expect(await waitingRecord(target.session, 0, 51)).toBe(false);
-    expect(await waitingOf(target.session)).toEqual([50, 0]);
+    expect(await waitingRecord(target.session, 7, 50)).toBe(true);
+    expect(await waitingRecord(target.session, 7, 51)).toBe(false);
+    expect(await waitingOf(target.session)).toEqual([50, 7]);
 
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
     await waitingClaim(stopped.session);
     await stop(stopped.session, TradingSessionStopReason.UserStopped);
-    expect(await waitingRecord(stopped.session, 0, 50)).toBe(false);
-    expect(await waitingOf(stopped.session)).toEqual([null, 0]);
+    expect(await waitingRecord(stopped.session, 7, 50)).toBe(false);
+    expect(await waitingOf(stopped.session)).toEqual([null, 7]);
   });
 
   it('N15 a release frees the claimed slot only while no id was recorded', async () => {
@@ -529,36 +531,68 @@ describe('the waiting message (#536)', () => {
     expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 41 })).toBe(
       false,
     );
-    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 0 })).toBe(
+    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 7 })).toBe(
       true,
     );
     expect(await waitingOf(target.session)).toEqual([null, null]);
-    expect(await waitingClaim(target.session)).toEqual({ slot: 0 });
-    await waitingRecord(target.session, 0, 50);
-    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 0 })).toBe(
+    expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
+    await waitingRecord(target.session, 7, 50);
+    expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 7 })).toBe(
       false,
     );
-    expect(await waitingOf(target.session)).toEqual([50, 0]);
+    expect(await waitingOf(target.session)).toEqual([50, 7]);
   });
 
   it('N16 a clear drops only its own id and frees the slot', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
     await waitingClaim(target.session);
-    await waitingRecord(target.session, 0, 50);
+    await waitingRecord(target.session, 7, 50);
     expect(await waitingClear(target.session, 51)).toBe(false);
-    expect(await waitingOf(target.session)).toEqual([50, 0]);
+    expect(await waitingOf(target.session)).toEqual([50, 7]);
     expect(await waitingClear(target.session, 50)).toBe(true);
     expect(await waitingOf(target.session)).toEqual([null, null]);
     // an active session is due again on the same cycle message
-    expect(await waitingClaim(target.session)).toEqual({ slot: 0 });
+    expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
+  });
+
+  it('N21 the re-read returns the live id and status; NULL after a clear or a hand-over at a stop (#587 round 1)', async () => {
+    const reread = (session: { id: string }) =>
+      readSessionWaitingMessage(tmp.db, { sessionId: session.id });
+    const cleared = await seedSession();
+    await statusMessage(cleared.session, 7);
+    await waitingClaim(cleared.session);
+    await waitingRecord(cleared.session, 7, 50);
+    expect(await reread(cleared.session)).toEqual({
+      waitingMessageId: 50,
+      status: TradingSessionStatus.Active,
+    });
+    await waitingClear(cleared.session, 50);
+    expect(await reread(cleared.session)).toEqual({
+      waitingMessageId: null,
+      status: TradingSessionStatus.Active,
+    });
+    const handedOver = await seedSession();
+    await statusMessage(handedOver.session, 7);
+    await waitingClaim(handedOver.session);
+    await waitingRecord(handedOver.session, 7, 50);
+    await stopTradingSession(tmp.db, {
+      id: handedOver.session.id,
+      reason: TradingSessionStopReason.UserStopped,
+      waitingMessageId: 50,
+    });
+    expect(await reread(handedOver.session)).toEqual({
+      waitingMessageId: null,
+      status: TradingSessionStatus.Stopped,
+    });
+    expect(await reread({ id: '00000000-0000-4000-8000-000000000000' })).toBeUndefined();
   });
 
   it('N17 the summary is refused while a waiting message is live, granted once it is cleared', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
     await waitingClaim(target.session);
-    await waitingRecord(target.session, 0, 50);
+    await waitingRecord(target.session, 7, 50);
     await stop(target.session, TradingSessionStopReason.UserStopped);
     expect(await finalClaim(target.session)).toBe(false);
     await waitingClear(target.session, 50);
@@ -573,11 +607,11 @@ describe('the waiting message (#536)', () => {
     const live = await seedSession();
     await statusMessage(live.session, 7);
     await waitingClaim(live.session);
-    await waitingRecord(live.session, 0, 50);
+    await waitingRecord(live.session, 7, 50);
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
     await waitingClaim(stopped.session);
-    await waitingRecord(stopped.session, 0, 50);
+    await waitingRecord(stopped.session, 7, 50);
     await rejected(stopped);
     await stop(stopped.session, TradingSessionStopReason.UserStopped);
     const blocked = await seedSession();
@@ -615,6 +649,50 @@ describe('the waiting message (#536)', () => {
       waitingMessageId: null,
       waitingDue: true,
       waitingStale: false,
+    });
+  });
+
+  it('N20 a status message recorded after the cycle message (a relaunch) moves the slot (#587)', async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    await cycleMessage(target, 0, 41);
+    expect(await waitingClaim(target.session)).toEqual({ slot: 41 });
+    await waitingRecord(target.session, 41, 50);
+    expect(await pendingOf(target.session)).toBeUndefined();
+    await statusMessage(target.session, 60);
+    expect(await pendingOf(target.session)).toMatchObject({
+      waitingMessageId: 50,
+      waitingDue: false,
+      waitingStale: true,
+    });
+    await waitingClear(target.session, 50);
+    expect(await waitingClaim(target.session)).toEqual({ slot: 60 });
+  });
+
+  it("N18' a blocked user's active session keeps its waiting message unlisted on a left-behind slot; a stopped one is stale (#587)", async () => {
+    const block = (target: Awaited<ReturnType<typeof seedSession>>) =>
+      tmp.db
+        .update(users)
+        .set({ telegramBlockedAt: sql`now()` })
+        .where(eq(users.id, target.seed.userId));
+    const active = await seedSession();
+    await statusMessage(active.session, 7);
+    await waitingClaim(active.session);
+    await waitingRecord(active.session, 7, 50);
+    await block(active);
+    await cycleMessage(active, 0, 41);
+    // its trade claimed: nothing else would list it
+    expect(await pendingOf(active.session)).toBeUndefined();
+    expect(await waitingOf(active.session)).toEqual([50, 7]);
+    const stopped = await seedSession();
+    await statusMessage(stopped.session, 7);
+    await waitingClaim(stopped.session);
+    await waitingRecord(stopped.session, 7, 50);
+    await block(stopped);
+    await stop(stopped.session, TradingSessionStopReason.UserStopped);
+    expect(await pendingOf(stopped.session)).toMatchObject({
+      waitingMessageId: 50,
+      waitingStale: true,
     });
   });
 
@@ -660,7 +738,7 @@ describe('migration 0050 (the backfill)', () => {
     await settled(ended, '0');
     await stop(ended.session);
     const ids = [running.session.id, ended.session.id];
-    // the waiting slot claimed on the current cycle message: only the trade notices under test
+    // the waiting slot claimed on the session's latest message: only the trade notices under test
     await tmp.db
       .update(tradingSessions)
       .set({ notifiedTrades: 0, finalNoticeSentAt: null, waitingAfterMessage: 0 })

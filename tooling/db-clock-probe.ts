@@ -11,6 +11,8 @@ import pg from 'pg';
 //
 // Exit codes: 0 clean; 1 a step back or a skew past SKEW_LIMIT_MS; 2 no sample at all (a probe
 // that measured nothing must not read as a clean clock); 64 bad usage; 70 the probe itself failed.
+//
+// SIGUSR2 logs a summary line at once (SIGUSR1 is Node's inspector signal).
 
 export const SKEW_LIMIT_MS = 1_000;
 const USAGE =
@@ -23,6 +25,25 @@ export interface ClockSample {
   dbUs: bigint;
   // the middle of the round trip, so the query's own latency splits evenly around it
   hostMs: number;
+}
+
+// anything that runs the one sampling query: pg.Client, or a fake in a test
+export interface ClockSource {
+  query(text: string): Promise<{ rows: Array<{ us: string }> }>;
+}
+
+// microseconds since the epoch as text, because a JS Date would round a sub-millisecond step away
+const SAMPLE_SQL = 'select (extract(epoch from clock_timestamp()) * 1000000)::bigint::text as us';
+
+// One reading of the database clock against this process's: the probe every 5 ms and the
+// preflight once use the same query and the same midpoint of the round trip.
+export async function sampleClock(source: ClockSource): Promise<ClockSample> {
+  const sentMs = Date.now();
+  const result = await source.query(SAMPLE_SQL);
+  const hostMs = (sentMs + Date.now()) / 2;
+  const row = result.rows[0];
+  if (row === undefined) throw new Error('clock_timestamp() returned no row');
+  return { dbUs: BigInt(row.us), hostMs };
 }
 
 export interface Classified {
@@ -48,9 +69,6 @@ export function exitCode(samples: number, steps: number, skewedSamples: number):
   if (samples === 0) return 2;
   return steps > 0 || skewedSamples > 0 ? 1 : 0;
 }
-
-// microseconds since the epoch as text, because a JS Date would round a sub-millisecond step away
-const SAMPLE_SQL = 'select (extract(epoch from clock_timestamp()) * 1000000)::bigint::text as us';
 
 function main(): void {
   let values: { seconds?: string; log?: string };
@@ -100,12 +118,8 @@ function main(): void {
   }
 
   async function sample(active: pg.Client): Promise<void> {
-    const sentMs = Date.now();
-    const result = await active.query<{ us: string }>(SAMPLE_SQL);
-    const hostMs = (sentMs + Date.now()) / 2;
-    const row = result.rows[0];
-    if (row === undefined) throw new Error('clock_timestamp() returned no row');
-    const current = { dbUs: BigInt(row.us), hostMs };
+    const current = await sampleClock(active);
+    const { hostMs } = current;
     const verdict = classifySample(previous, current);
     samples += 1;
     if (verdict.stepBackUs !== undefined) {
@@ -139,6 +153,8 @@ function main(): void {
 
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  // the counters on demand: check-stability.sh asks before and after each run
+  process.on('SIGUSR2', () => summary('summary'));
   if (seconds !== undefined) setTimeout(stop, seconds * 1000);
   setInterval(() => summary('summary'), SUMMARY_INTERVAL_MS).unref();
 

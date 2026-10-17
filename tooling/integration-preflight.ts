@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { SKEW_LIMIT_MS } from './db-clock-probe';
+import { sampleClock, SKEW_LIMIT_MS } from './db-clock-probe';
 
 // The integration project's globalSetup: one look at the database in TEST_DATABASE_URL before any
 // test file creates a temporary database in it. Each refusal names the README section that fixes
@@ -52,16 +52,12 @@ export default async function preflight(): Promise<void> {
   try {
     const version = await client.query<{ server_version_num: string }>('show server_version_num');
     const directory = await client.query<{ data_directory: string }>('show data_directory');
-    const sentMs = Date.now();
-    const clock = await client.query<{ ms: string }>(
-      'select (extract(epoch from clock_timestamp()) * 1000)::text as ms',
-    );
-    const hostMs = (sentMs + Date.now()) / 2;
+    const clock = await sampleClock(client);
     const problems = judgePreflight({
       serverVersionNum: Number(version.rows[0]?.server_version_num),
       dataDirectory: directory.rows[0]?.data_directory ?? '',
-      dbMs: Number(clock.rows[0]?.ms),
-      hostMs,
+      dbMs: Number(clock.dbUs) / 1000,
+      hostMs: clock.hostMs,
       platform: process.platform,
     });
     if (problems.length > 0) {

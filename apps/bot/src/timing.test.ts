@@ -122,6 +122,7 @@ import {
   signalsResponse,
   type ApiAnswer,
   SESSION_VIEW,
+  sessionShare,
   sessionView,
   stubSessionResumer,
   stubSessionTracker,
@@ -189,6 +190,9 @@ interface Branch {
   readIntent?: BackendClient['readIntent'];
   startSession?: BackendClient['startSession'];
   readSession?: BackendClient['readSession'];
+  readSessionShare?: BackendClient['readSessionShare'];
+  // no SHARE_STORAGE_CHAT_ID (#538)
+  shareOff?: true;
   stopSession?: BackendClient['stopSession'];
   stopSessions?: BackendClient['stopSessions'];
   setStake?: BackendClient['setStake'];
@@ -381,6 +385,10 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.stopSession ?? (() => Promise.resolve(STOPPED_SESSION)))(id, telegramUserId);
     },
+    readSessionShare: (id, telegramUserId) => {
+      backend += 1;
+      return (branch.readSessionShare ?? (() => Promise.resolve(SHARE)))(id, telegramUserId);
+    },
     // the session tracker's call (#318), between updates: no handler claims a card
     claimSessionSummary: () => {
       backend += 1;
@@ -468,6 +476,7 @@ async function observe(branch: Branch): Promise<Calls> {
     ...(branch.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: branch.welcomeVideoFileId }),
+    ...(branch.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
   });
   const api = captureApi(bot);
   // the analysis card reads the file_id of the photo it sent (#482)
@@ -1561,19 +1570,15 @@ const SESSION_REFRESH_BRANCHES: readonly Branch[] = [
   SESSION_REFRESH_WORST_CASE,
 ];
 
-// #321: «📤 Поделиться»'s inline query and its chosen result. No chat filter: a group's query is
-// answered like any other.
-const SHARE_QUERY = shareQuery(SESSION_VIEW.id, 'AgACAgIAAxkBAAIBcard');
-const DONE_SESSION = sessionView({
-  status: TradingSessionStatus.Stopped,
-  stopReason: TradingSessionStopReason.Completed,
-  trades: { ...SESSION_VIEW.trades, settled: 5, won: 3, lost: 2 },
-});
+// #321, #538: «📤 Поделиться»'s inline query and its chosen result. No chat filter: a group's
+// query is answered like any other.
+const SHARE_QUERY = shareQuery(SESSION_VIEW.id);
+const OLD_SHARE_QUERY = `${SHARE_QUERY}:AgACAgIAAxkBAAIBcard`;
+const SHARE = sessionShare();
 const SESSION_SHARE_WORST_CASE: Branch = {
-  label: "the owner's finished session is answered with the card",
+  label: "the owner's finished session: the promo card is posted, then answered with",
   update: inlineQueryUpdate(SHARE_QUERY),
-  readSession: () => Promise.resolve(DONE_SESSION),
-  expected: { backend: 2, telegram: 1 },
+  expected: { backend: 1, telegram: 2 },
 };
 const SESSION_SHARE_BRANCHES: readonly Branch[] = [
   {
@@ -1584,33 +1589,49 @@ const SESSION_SHARE_BRANCHES: readonly Branch[] = [
   {
     label: "another user's session is answered empty",
     update: inlineQueryUpdate(SHARE_QUERY),
-    readSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
-    expected: { backend: 2, telegram: 1 },
+    readSessionShare: () => Promise.reject(sessionHttpError(404, 'not_found')),
+    expected: { backend: 1, telegram: 1 },
   },
   {
     label: 'the read fails',
     update: inlineQueryUpdate(SHARE_QUERY),
-    readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 1 },
+    readSessionShare: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 1 },
   },
   {
     label: 'a live session is answered empty',
     update: inlineQueryUpdate(SHARE_QUERY),
-    expected: { backend: 2, telegram: 1 },
+    readSessionShare: () => Promise.resolve(sessionShare({ session: SESSION_VIEW })),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: "an old button is answered with its own card's file id",
+    update: inlineQueryUpdate(OLD_SHARE_QUERY),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'without the storage channel a new button is answered empty',
+    update: inlineQueryUpdate(SHARE_QUERY),
+    shareOff: true,
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the channel refuses the post',
+    update: inlineQueryUpdate(SHARE_QUERY),
+    apiErrors: [['sendPhoto', VIDEO_REFUSED]],
+    expected: { backend: 1, telegram: 2 },
   },
   SESSION_SHARE_WORST_CASE,
   {
     label: 'the query typed in a group is answered the same',
     update: inlineQueryUpdate(SHARE_QUERY, { chatType: 'group' }),
-    readSession: () => Promise.resolve(DONE_SESSION),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 1, telegram: 2 },
   },
   {
     label: 'the answer is refused',
     update: inlineQueryUpdate(SHARE_QUERY),
-    readSession: () => Promise.resolve(DONE_SESSION),
     apiErrors: [['answerInlineQuery', VIDEO_REFUSED]],
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 1, telegram: 2 },
   },
 ];
 const SESSION_SHARED_WORST_CASE: Branch = {
@@ -1672,27 +1693,27 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
   },
   SESSION_STOP_WORST_CASE,
   {
-    label: 'the waiting message: stopped, the pressed message deleted, the reply sent',
+    label: 'the waiting message: stopped, the reply drawn in its place',
     update: waitingStopUpdate(),
-    expected: { backend: 1, telegram: 3 },
+    expected: { backend: 1, telegram: 2 },
   },
   {
-    label: 'the waiting message: the session had ended, it is read, the reply sent',
-    update: waitingStopUpdate(),
-    stopSession: notActive,
-    readSession: () => Promise.resolve(STOPPED_SESSION),
-    expected: { backend: 2, telegram: 3 },
-  },
-  {
-    label: 'the waiting message: the session had ended, and the delete is forbidden',
+    label: 'the waiting message: the session had ended, it is read, the reply drawn in its place',
     update: waitingStopUpdate(),
     stopSession: notActive,
     readSession: () => Promise.resolve(STOPPED_SESSION),
-    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the waiting message: the session had ended, it is read, and the message is gone',
+    update: waitingStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(STOPPED_SESSION),
+    apiErrors: [['editMessageText', EDIT_GONE]],
     expected: { backend: 2, telegram: 3 },
   },
   {
-    label: 'the waiting message: the stop fails',
+    label: 'the waiting message: the stop fails, drawn in its place',
     update: waitingStopUpdate(),
     stopSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     expected: { backend: 1, telegram: 2 },

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import {
+  SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
@@ -12,6 +13,7 @@ import {
   TradingSessionErrorCode,
   type TradeAction,
   TradingSessionStopReason,
+  UserStatus,
   buildSessionSettings,
   errorLogFields,
   intervalForDuration,
@@ -22,6 +24,7 @@ import {
   safeParseForgetSessionStatusMessageRequest,
   safeParseReadTradingSessionQuery,
   safeParseRecordSessionStatusMessageRequest,
+  safeParseStopOneTradingSessionRequest,
   safeParseStopTradingSessionRequest,
   safeParseTrackedSessionsQuery,
   sessionFitsDeadline,
@@ -36,13 +39,16 @@ import {
   TradingSessionError,
   checkTradingSessionStart,
   claimSessionSummary,
+  clearSessionWaitingMessage,
   createTradingSession,
   forgetSessionStatusMessage,
   listTrackedSessions,
   readActiveTradingSessionView,
   readBalanceSnapshot,
+  readSessionShareTrades,
   readStakes,
   readTradingSessionView,
+  readUserReferral,
   recordSessionStatusMessage,
   stopTradingSession,
   stopUserSessions,
@@ -329,9 +335,10 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     return reply.send({ session });
   });
 
-  // The bot's first poll of a status message (#567): records its id, the first one recorded wins,
-  // unless the body names it as the message this one replaces, and answers the view GET /trading/sessions/:id gives. The owner is in the CAS and in the read,
-  // so another user's id writes nothing and answers as a missing one (Rule 13).
+  // The bot's first poll of a status message (#567): records its id, the newest one wins (#587:
+  // message ids grow within a chat, so a relaunch's message replaces the first), and answers the
+  // view GET /trading/sessions/:id gives. The owner is in the CAS and in the read, so another
+  // user's id writes nothing and answers as a missing one (Rule 13).
   const statusMessagePath = `${TRADING_SESSIONS_PATH}/:id${SESSION_STATUS_MESSAGE_SUFFIX}`;
   app.post(statusMessagePath, async (request, reply) => {
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
@@ -340,13 +347,8 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     if (!body.success) {
       return reply.code(400).send({ error: 'validation', issues: body.error.issues });
     }
-    const { telegramUserId, messageId, replacesMessageId } = body.data;
-    await recordSessionStatusMessage(db, {
-      id: id.data,
-      telegramUserId,
-      messageId,
-      replacesMessageId,
-    });
+    const { telegramUserId, messageId } = body.data;
+    await recordSessionStatusMessage(db, { id: id.data, telegramUserId, messageId });
     const session = await viewForReply(id.data, telegramUserId);
     if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     return reply.send({ session });
@@ -375,21 +377,31 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
 
   // Owner scope is the read; the CAS is by id. A session's account and the account's user never
   // change, so nothing between the two can make the CAS stop another user's session.
+  // waitingMessageId (#587) is the waiting message whose «⏹» was pressed: the stop's own UPDATE
+  // drops it when it is the one recorded, and on a 409 a CAS by that id does, so the bot draws its
+  // reply in place of it and the sender neither deletes it nor holds the summary for it. Both run
+  // only after the owner-scoped read, as the stop's CAS does.
   app.post(`${TRADING_SESSIONS_PATH}/:id/stop`, async (request, reply) => {
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
     if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
-    const body = safeParseStopTradingSessionRequest(request.body);
+    const body = safeParseStopOneTradingSessionRequest(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: 'validation', issues: body.error.issues });
     }
-    const { telegramUserId } = body.data;
+    const { telegramUserId, waitingMessageId } = body.data;
     const owned = await readTradingSessionView(db, id.data, telegramUserId);
     if (owned === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     const stopped = await stopTradingSession(db, {
       id: id.data,
       reason: TradingSessionStopReason.UserStopped,
+      waitingMessageId,
     });
-    if (stopped === undefined) return refuse(reply, TradingSessionErrorCode.SessionNotActive);
+    if (stopped === undefined) {
+      if (waitingMessageId !== undefined) {
+        await clearSessionWaitingMessage(db, { sessionId: id.data, messageId: waitingMessageId });
+      }
+      return refuse(reply, TradingSessionErrorCode.SessionNotActive);
+    }
     return reply.send({ session: await viewForReply(id.data, telegramUserId) });
   });
 
@@ -417,6 +429,53 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
           openPrice,
           closePrice,
         })),
+      },
+    });
+  });
+
+  // What the shared promo card needs, in one call (#538, docs/trading-session.md → Routes). The
+  // owner is checked by the view read first (Rule 13): another user's or a missing session is the
+  // same 404 and creates nothing. Then the trades, owner-scoped too, the pair from the catalog
+  // (null when it is not fresh or lists no such pair) and the caller's referral code, created on
+  // first use as /invite does (null for a blocked user). No broker call, no balance refresh: the
+  // bot reads no balance of this view.
+  app.post(`${TRADING_SESSIONS_PATH}/:id${SESSION_SHARE_SUFFIX}`, async (request, reply) => {
+    const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
+    const body = safeParseStopTradingSessionRequest(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'validation', issues: body.error.issues });
+    }
+    const { telegramUserId } = body.data;
+    const session = await readTradingSessionView(db, id.data, telegramUserId);
+    if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
+    const trades = await readSessionShareTrades(db, { id: id.data, telegramUserId });
+    const assetId = session.settings?.assetId ?? session.lastIntent?.assetId;
+    const listed = catalog.read();
+    const pair =
+      assetId === undefined || listed === undefined || !listed.fresh
+        ? undefined
+        : listed.pairs.find((candidate) => candidate.id === assetId);
+    const referral = await readUserReferral(db, BigInt(telegramUserId));
+    return reply.send({
+      share: {
+        session,
+        trades: trades.map(({ profit, openPrice, closePrice, action }) => ({
+          profit,
+          openPrice,
+          closePrice,
+          action,
+        })),
+        pair:
+          pair === undefined
+            ? null
+            : {
+                symbol: pair.symbol,
+                ...(pair.isOtc === undefined ? {} : { isOtc: pair.isOtc }),
+                digits: pair.digits,
+              },
+        referralCode:
+          referral?.status === UserStatus.Active && referral.code !== null ? referral.code : null,
       },
     });
   });

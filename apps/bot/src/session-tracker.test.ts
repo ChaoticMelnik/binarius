@@ -652,26 +652,12 @@ describe('the session tracker', () => {
       const { edits, edit } = target();
       tracker.track(request({ record: true, edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(recordSessionMessage.mock.calls).toEqual([
-        [SESSION_ID, String(USER.id), MESSAGE_ID, undefined],
-      ]);
+      expect(recordSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
       expect(readSession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL);
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
       expect(readSession).toHaveBeenCalledTimes(1);
       expect(texts(edits)).toEqual([shown(stoppedClosed)]);
-    });
-
-    it('P8 a record names the message it replaces; the next poll only reads', async () => {
-      const { tracker, readSession, recordSessionMessage, request } = setup({ script: [trading] });
-      tracker.track(request({ record: true, replacesMessageId: 76 }));
-      await vi.advanceTimersByTimeAsync(FIRST);
-      expect(recordSessionMessage.mock.calls).toEqual([
-        [SESSION_ID, String(USER.id), MESSAGE_ID, 76],
-      ]);
-      expect(readSession).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(POLL);
-      expect(readSession).toHaveBeenCalledTimes(1);
     });
 
     it('P2 a failed record is asked again on the next poll, logged once', async () => {
@@ -1138,6 +1124,29 @@ describe('the session tracker', () => {
       tracker.track(request({ ...recovered, edit: second.edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(second.edits)).toEqual([shown(stoppedOpen)]);
+    });
+
+    // #587 finding 2: only this process's own draws enter the memory, so a recovered entry that
+    // only read leaves nothing that would let mayDraw edit a running session's message
+    it('Y6 an entry this process did not draw leaves no memory: a running session recovered again with another label is not drawn; drawn once at the stop', async () => {
+      const { tracker, readSession, request, target } = setup({
+        script: [SESSION_VIEW, SESSION_VIEW, stoppedClosed],
+      });
+      const first = target();
+      tracker.track(request({ ...recovered, startedAt: past(), edit: first.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(first.edits).toEqual([]);
+      expect(tracker.size()).toBe(0);
+      const second = target();
+      tracker.track(request({ ...recovered, label: null, startedAt: past(), edit: second.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(readSession).toHaveBeenCalledTimes(2);
+      expect(second.edits).toEqual([]);
+      const third = target();
+      tracker.track(request({ ...recovered, label: null, edit: third.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(third.edits)).toEqual([sessionStatusText(null, stoppedClosed).value]);
     });
   });
 });

@@ -953,6 +953,64 @@ describe('stopTradingSession and markSessionDecision', () => {
     expect((await sessionOf(seed.session.id))!.stopReason).toBe('completed');
   });
 
+  // #587: the «⏹» under the waiting message hands that message to the bot in the stop's UPDATE
+  describe('the waiting message handed over (#587)', () => {
+    const live = async () => {
+      const seed = await seedSessionAccount();
+      await tmp.db
+        .update(tradingSessions)
+        .set({ statusMessageId: 7, waitingMessageId: 50, waitingAfterMessage: 7 })
+        .where(eq(tradingSessions.id, seed.session.id));
+      return seed;
+    };
+    const waitingOf = async (id: string) => {
+      const row = (await sessionOf(id))!;
+      return [row.status, row.waitingMessageId, row.waitingAfterMessage];
+    };
+
+    it('S1 the stop with the live waiting message clears its id and slot in the same statement', async () => {
+      const seed = await live();
+      const row = await stopTradingSession(tmp.db, {
+        id: seed.session.id,
+        reason: 'user_stopped',
+        waitingMessageId: 50,
+      });
+      expect(row).toMatchObject({
+        status: 'stopped',
+        waitingMessageId: null,
+        waitingAfterMessage: null,
+      });
+      expect(await waitingOf(seed.session.id)).toEqual(['stopped', null, null]);
+    });
+
+    it('S2 with another id, or without the field, the waiting columns stay', async () => {
+      const other = await live();
+      await stopTradingSession(tmp.db, {
+        id: other.session.id,
+        reason: 'user_stopped',
+        waitingMessageId: 51,
+      });
+      expect(await waitingOf(other.session.id)).toEqual(['stopped', 50, 7]);
+      const none = await live();
+      await stopTradingSession(tmp.db, { id: none.session.id, reason: 'user_stopped' });
+      expect(await waitingOf(none.session.id)).toEqual(['stopped', 50, 7]);
+    });
+
+    it('S3 the CAS still refuses a stopped session, and then clears nothing', async () => {
+      const seed = await live();
+      await stopTradingSession(tmp.db, { id: seed.session.id, reason: 'completed' });
+      expect(
+        await stopTradingSession(tmp.db, {
+          id: seed.session.id,
+          reason: 'user_stopped',
+          waitingMessageId: 50,
+        }),
+      ).toBeUndefined();
+      expect(await waitingOf(seed.session.id)).toEqual(['stopped', 50, 7]);
+      expect((await sessionOf(seed.session.id))!.stopReason).toBe('completed');
+    });
+  });
+
   it('D1 moves last_decision_at on an active session only', async () => {
     const active = await seedSessionAccount();
     await markSessionDecision(tmp.db, { id: active.session.id });
@@ -1125,12 +1183,21 @@ describe('createSessionIntent', () => {
 });
 
 describe('recordSessionStatusMessage (#567)', () => {
-  it('M1 records the first id once; a second id is refused and the first stays', async () => {
+  // #587: the newest id wins (Telegram's message ids grow within a chat): a relaunch's message
+  // replaces the first, a late record of an older one is refused
+  it("M1' the first id writes; a newer id replaces it; an older or the same id is refused; the list carries the newest", async () => {
     const seed = await seedSessionAccount();
     const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
     expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42 })).toBe(true);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(42);
+    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(false);
     expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42 })).toBe(false);
-    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(41);
+    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(42);
+    const row = (await listTrackedSessions(tmp.db, { limit: 2_000 })).find(
+      (listed) => listed.id === seed.session.id,
+    );
+    expect(row?.messageId).toBe(42);
   });
 
   it("M2 another user's telegramUserId writes nothing", async () => {
@@ -1152,47 +1219,9 @@ describe('recordSessionStatusMessage (#567)', () => {
         id: seed.session.id,
         telegramUserId: other.telegramUserId,
         messageId: 42,
-        replacesMessageId: 41,
       }),
     ).toBe(false);
     expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(41);
-  });
-
-  it('X1 a record replacing the recorded message writes, and the list carries the new one', async () => {
-    const seed = await seedSessionAccount();
-    const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
-    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
-    expect(
-      await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42, replacesMessageId: 41 }),
-    ).toBe(true);
-    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(42);
-    const row = (await listTrackedSessions(tmp.db, { limit: 2_000 })).find(
-      (listed) => listed.id === seed.session.id,
-    );
-    expect(row?.messageId).toBe(42);
-  });
-
-  it('X2 a record replacing another message than the recorded one writes nothing', async () => {
-    const seed = await seedSessionAccount();
-    const input = { id: seed.session.id, telegramUserId: seed.telegramUserId };
-    expect(await recordSessionStatusMessage(tmp.db, { ...input, messageId: 41 })).toBe(true);
-    expect(
-      await recordSessionStatusMessage(tmp.db, { ...input, messageId: 42, replacesMessageId: 40 }),
-    ).toBe(false);
-    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(41);
-  });
-
-  it('X3 an empty slot is free to a record that replaces a message', async () => {
-    const seed = await seedSessionAccount();
-    expect(
-      await recordSessionStatusMessage(tmp.db, {
-        id: seed.session.id,
-        telegramUserId: seed.telegramUserId,
-        messageId: 42,
-        replacesMessageId: 40,
-      }),
-    ).toBe(true);
-    expect((await sessionOf(seed.session.id))!.statusMessageId).toBe(42);
   });
 
   it('M3 a missing session writes nothing', async () => {
