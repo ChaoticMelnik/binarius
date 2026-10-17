@@ -190,8 +190,11 @@ brew services start postgresql@18   # and at every login
 /opt/homebrew/opt/postgresql@18/bin/createdb -h 127.0.0.1 -p 5434 -O binarius binarius
 ```
 
-The role is a superuser because `createTempDatabase` creates and force-drops databases. Homebrew's
-cluster trusts local connections, so the URL carries no password. Then migrate it as above.
+The role is a superuser (`-s`): that covers both rights the tests are known to need — `CREATEDB`,
+because `createTempDatabase` creates and force-drops databases, and `pg_read_all_settings`, because
+the preflight below reads `data_directory` (`show data_directory` is refused to any other role:
+`permission denied to examine "data_directory"`); a narrower role was not tried. Homebrew's cluster
+trusts local connections, so the URL carries no password. Then migrate it as above.
 
 `tooling/integration-preflight.ts` refuses to start the integration tests, with one message naming
 this section, when the database in `TEST_DATABASE_URL`:
@@ -210,7 +213,8 @@ node tooling/db-clock-probe.ts --seconds 900   # TEST_DATABASE_URL as above
 ```
 
 `tooling/check-stability.sh` repeats the suite and tabulates timeouts, time-order CHECK
-violations, and the probe's steps back and skew, which runs throughout. It needs
+violations, and, per run, the probe's steps back and skewed samples (its 5 ms readings more than
+1 s off the host; the probe runs throughout and logs its counters on `SIGUSR2`). It needs
 `TEST_DATABASE_URL` and `REDIS_URL` set as above and a shell that ran `fnm use`:
 
 ```bash
@@ -226,7 +230,7 @@ the swap. Logs and `summary.txt` go to `$STABILITY_OUT`, a fresh temporary direc
 `packages/db/src/schema.db.test.ts` uses the migrated test database itself; every other
 integration test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly,
 dropped afterwards, orphans older than an hour reaped on the next run) and a random BullMQ key
-prefix, so the role in `TEST_DATABASE_URL` needs `CREATEDB`.
+prefix — the `CREATEDB` half of the role's rights above.
 
 If another Postgres already owns host port 5432, set `POSTGRES_PORT=5433` in `.env` and use that
 port in `DATABASE_URL`.
