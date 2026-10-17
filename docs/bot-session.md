@@ -117,8 +117,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `editMessageTextByIdHtmlWithoutNextStep`; a 404 by `editMessagePhotoByIdHtml` or
   `editMessageTextByIdHtml` under the menu.
 - `apps/bot/src/setup-card.ts` (#568) — `createSetupCardPhotos(logger)` → `{ photo, remember,
-  forget }`: the pictures of a signal's direction, uploaded once per process and direction, then
-  sent by `file_id`. `bot.ts` builds one and hands it to the demo's composer (the analysis card,
+  forget }`: the pictures of a signal's direction, uploaded per process and direction until an
+  answer brings its `file_id`, then sent by it. `bot.ts` builds one and hands it to the demo's composer (the analysis card,
   #482) and to the session's.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop`,
   `.sessionShare`, `.sessionShared` (#321) and
@@ -142,8 +142,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
            (#567: records the message, the first one wins, and answers the view),
            then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
            → editMessageMedia of that message (the picture and its caption, #568), or
-           editMessageText without a direction, without a keyboard, when its text changes: when
-           the session stops (#536) or its signal's direction turns (#568)
+           editMessageText without a direction, without a keyboard, when its drawing changes:
+           when the session stops (#536) or its signal's direction turns (#568)
   backend's sender, its next tick once the message is recorded (#536):
         sendMessage: «🔎 Ждём сигнал для следующей сделки…», without sound, with
         «⏹ Остановить сессию» (session:stop:<id>:w); deleted before each new cycle message and sent
@@ -319,7 +319,7 @@ reference bot); the header is «💼 Реальная сессия» (`sessionHe
 the caption of the picture of `view.signalAction` — `setup-bull.png` («BULLISH SETUP») for `up`,
 `setup-bear.png` («BEARISH SETUP») for `down`, the analysis card's files (#482,
 [bot-demo.md](bot-demo.md#the-analysis)) through the same cache (`setup-card.ts`): each uploaded
-once per process and direction, then sent by its `file_id`. `signalAction` is the backend's
+per process and direction until an answer brings its `file_id`, then sent by it. `signalAction` is the backend's
 ([trading-session.md](trading-session.md#routes)): the last intent's direction, else the
 signal the start route checked; null only on a session started before #568 that has no trade yet,
 whose message stays a text. The line «📡 Сигнал: …» is the fifth line of the head (under the
@@ -328,12 +328,12 @@ analysis is printed: the features of a session trade's signal are stored nowhere
 budget is `TELEGRAM_CAPTION_LIMIT` (1024, `BOT_TEXT_MESSAGES` → `sessionRunning`,
 `sessionCompleted`, `sessionStopped`, `sessionNoSettings`).
 
-The kind of the message follows `signalAction` at each call, with no memory of what was sent
-(`sessionEditMethod`, the owner's answer В2 of 2026-10-17): with a direction the send is
+The kind of the message follows the drawing's picture (`view.signalAction`) at each call, with
+no memory of what was sent (`sessionEditMethod`, the owner's answer В2 of 2026-10-17): with a direction the send is
 `sendPhoto` and every edit `editMessageMedia` with that direction's picture and the caption, which
 turns a text message into the photo too (Bot API: «to replace a text or a rich message with a
 media»); without one, `sendMessage` and `editMessageText`. The picture changes with the first
-trade in the other direction, and stays as it is between trades («сигнала нет» changes no
+trade in the other direction, whatever the two direction lines' overrides, and stays as it is between trades («сигнала нет» changes no
 direction) and after the stop.
 
 | Event | What the bot does |
@@ -489,20 +489,24 @@ One entry per session id, in process memory, like the intent tracker
   `isTradingSessionFinished`, the predicate the backend refreshes the balance by (#337). A stopped session
   with an open trade is followed until that trade settles, so its counts are final. A last trade
   in `manual_review` still has edges, so that entry runs to the deadline.
-- **The render key is the printed text** (#536; #570 Minor 1): `sessionStatusText(label,
-  view).value`, so the message is edited only when its text changes — when the session stops, and
-  when the direction line «📡 Сигнал: …» turns (#568), the picture with it — and the pair's label and the catalog's overrides are in the key as printed. The
-  trades' counters, the last trade and the balance move nothing: the message does not print them.
+- **The render key is the drawing** (#536; #570 Minor 1; #568): `sessionDrawing(label, view)` —
+  the text `sessionStatusText(label, view)` and the picture `view.signalAction` — so the message
+  is edited only when either changes: when the session stops and when the signal's direction turns
+  (#568); the pair's label and the catalog's overrides are in the key as printed. The edit is
+  handed only the drawing (`SessionTrackRequest['edit']`), so it cannot draw what the key leaves
+  out: equal overrides of `sessionSignalUp` and `sessionSignalDown` do not hide a turn (#568,
+  review round 1 MJ1; `session-tracker.test.ts` Q1). The trades' counters, the last trade and the balance move nothing: the message does not print them.
   An entry that drew nothing on its message and remembers nothing of it (a recovered one) edits
   only a stopped session (`mayDraw`): the message may be one sent before #536, whose «🔄»/«⏹» stay
   while its session runs ([risk 55](#accepted-risks)).
-- Past `SESSION_TRACK_DEADLINE_MS` the entry ends on the last view's text, with no hint (#536: the
-  hint pointed at «🔄 Обновить»): the deadline's own last edit, not retried, is made only when that
-  text is not on screen yet (the poll's edit failed, or a read failed after the last good one). An
+- Past `SESSION_TRACK_DEADLINE_MS` the entry ends on the last view's drawing, with no hint (#536:
+  the hint pointed at «🔄 Обновить»): the deadline's own last edit, not retried, is made only when
+  that drawing is not on screen yet (the poll's edit failed, or a read failed after the last good one). An
   entry that never read a view ends with no edit (#567).
-- **The kind of the edit** (#568): `sessionEditMethod(view)` — `editMessageMedia` (the picture of
-  `view.signalAction` with the text as its caption) for a view with a direction, else
-  `editMessageText`; a 404's edit goes by the last view the entry read, the text when it read none.
+- **The kind of the edit** (#568): `sessionEditMethod(drawing.picture)` — `editMessageMedia` (the
+  picture of `view.signalAction` with the text as its caption) for a drawing with a picture, else
+  `editMessageText`; a 404's edit draws its text on the picture of the last view the entry read,
+  the text alone when it read none.
   The same function names the method in the warn `trading session message not edited` of a
   transport failure (a Telegram refusal names its own).
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
@@ -523,10 +527,10 @@ One entry per session id, in process memory, like the intent tracker
   the `track()`, and they carry over from one call to the next, so two passes in a row are paced
   together. A slot is an ordinary timer: `stop()` clears it like any other. An entry with a view
   (a press) polls after `firstPollMs` as before. When an entry ends, the tracker remembers what it
-  last drew on its message (its text), bounded by `SESSION_TRACKER_MAX_ENTRIES`, the oldest going
+  last drew on its message (its drawing's key), bounded by `SESSION_TRACKER_MAX_ENTRIES`, the oldest going
   first; an entry that ends on a lost message leaves no memory. A recovered entry of the same
-  message starts from that text, so its first poll edits only when the text changed — another
-  label or override included (#570 Minor 1).
+  message starts from that drawing, so its first poll edits only when the drawing changed — another
+  label, override or direction included (#570 Minor 1, #568).
 - `SESSION_TRACKER_MAX_ENTRIES` (10 000): the oldest entry goes first. `stop()` clears every timer,
   refuses new entries and waits for every attempt in flight; `runBot` drains it as its
   `session tracker` step.
@@ -1190,11 +1194,11 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     not one it already followed in memory, whose record came before the loss.
 40. **Stuck sessions** (#567) — on manual review, or with a stalled worker, longer than
     `SESSION_TRACK_DEADLINE_MS` from `started_at`: each recovery pass costs each one GET; an edit
-    only when its text changed since this process's last edit of it, plus one retry when that edit
-    did not land. The first pass after a restart edits each one once (its current text); an
-    unchanged text is «not modified» (shown). The card comes on the first pass after the operator settles the trade and
+    only when its drawing changed since this process's last edit of it, plus one retry when that
+    edit did not land. The first pass after a restart edits each one once (its current drawing); an
+    unchanged one is «not modified» (shown). The card comes on the first pass after the operator settles the trade and
     the summary is sent. Falsifiable: more than 100 rows of the list with `startedAt` older than
-    a day, or an `editMessageText` of a stuck session nothing of whose printed text changed since
+    a day, or an edit of a stuck session nothing of whose drawing changed since
     this process's last landed edit of it.
 41. **Sessions started before #567** have no recorded message: after a restart they are not
     recovered until a press of an old status message's «⏹» records one (#536: «🔄 Обновить» no
@@ -1319,21 +1323,27 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 64. **A transport failure of `sendPhoto` at the start is a `sendMessage` failure of before** (#568):
     thrown, the session runs without a session message (risk 56). Falsifiable: `update handler
     failed` with `sendPhoto` at a start.
-65. **The first media edit of each direction in a process uploads the file** (#568, 240–280 KB);
-    after a restart at most two per recovery pass; the rest go by `file_id`.
+65. **The first successful media edit of each direction in a process uploads the file** (#568,
+    240–280 KB); the rest go by its `file_id`. An answer «message is not modified» brings no
+    `file_id`, so the next edit of that direction uploads again: after a restart the uploads per
+    recovery pass are not bounded by two (review round 1 m1). Falsifiable: an upload of a direction
+    after a photo of it answered in the process with no refusal between.
 66. **Sessions running at the deploy of #568 that had a trade get the picture at their stop** (one
     edit of the recovered entry, `mayDraw`); without a trade they stay a text. Falsifiable: a
     session started before the deploy, with a trade, that ended as a text.
 67. **`HANDLER_CALLS.cycleStakeText` 4 / 1 → 4 / 2** (#568, 36 s): a refused photo after a typed
     amount sends its text; the 47 s ceiling does not grow.
 68. **An old «⏹» without `:w`** (before #536, `showInPlace`) draws the text in place under the end of
-    the path; a later change of its text is a media edit, a photo without the keyboard (the text
+    the path; a later change of its drawing is a media edit, a photo without the keyboard (the text
     edit of #536 stripped it as well). No message from before #536 is left on the pilot.
 69. **A 404 on a photo of an entry that read no view** (a recovered one): its text edit is refused
     as gone and the entry ends with no «⚠️ Статус сессии недоступен.» and no report — the error
     path (rows are never deleted).
 70. **A second bot process, or a restart, uploads the pictures again** (memory only), as the
     analysis card's (#482).
+71. **The text after a refused photo at the start shows no direction when the two direction lines
+    are overridden alike** (#568): the message is that text until the next change of its drawing,
+    which draws the picture. Falsifiable: such a text still on screen after its session stopped.
 
 ## Running it locally
 

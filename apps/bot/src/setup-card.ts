@@ -5,9 +5,10 @@ import { SETUP_CARD_PHOTO_PATHS } from './assets';
 import type { Logger } from './logging';
 
 // The pictures of a signal's direction (#482, #568): the analysis card's and the session
-// message's. Each is uploaded once per process and direction, then sent by the file_id Telegram
-// answered with. Memory only, so a restart, or a second bot process, uploads each once again; a
-// refused photo forgets its file_id, so the next one uploads the file.
+// message's. Each is uploaded per process and direction until an answer brings its file_id, then
+// sent by that file_id (a «not modified» answer brings none). Memory only, so a restart, or a
+// second bot process, uploads each again; a refused photo forgets its file_id, so the next one
+// uploads the file.
 export interface SetupCardPhotos {
   // the file_id when one is known, else the file
   photo: (action: TradeAction) => string | InputFile;
