@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Runs the test suite N times and tabulates every failure class #166 was about: hook and test
 # timeouts, time-order CHECK violations, the 42601 they cascade into, and the test database's
-# clock: steps back and skew against this host (tooling/db-clock-probe.ts runs for the whole
-# series).
+# clock: steps back and skewed 5 ms samples per run, from the counters of tooling/db-clock-probe.ts
+# (it runs for the whole series and logs them on SIGUSR2).
 #
 #   tooling/check-stability.sh quiet N   N sequential `pnpm check`
 #   tooling/check-stability.sh load N    N rounds of two parallel `vitest run` beside 4 CPU hogs
@@ -100,13 +100,34 @@ require_swap() {
   fi
 }
 
-steps_so_far() {
-  grep -c 'STEP BACK' "$probe_log" || true
+# The probe's counters at this moment: SIGUSR2 makes it log a `summary:` line at once (its own
+# one comes every 30 s and carries the same counters). Prints "<steps back> <skewed samples>",
+# or "? ?" when no new line came within 5 s (a dead probe; its exit code decides the verdict).
+probe_counts() {
+  local before line i
+  before=$(grep -c 'summary:' "$probe_log" || true)
+  kill -USR2 "$probe_pid" 2> /dev/null || {
+    echo '? ?'
+    return 0
+  }
+  i=0
+  while [ "$(grep -c 'summary:' "$probe_log" || true)" -le "$before" ]; do
+    i=$((i + 1))
+    if [ "$i" -gt 50 ]; then
+      echo '? ?'
+      return 0
+    fi
+    sleep 0.1
+  done
+  line=$(grep 'summary:' "$probe_log" | tail -n 1)
+  printf '%s %s\n' \
+    "$(printf '%s' "$line" | sed -nE 's/.* ([0-9]+) steps back.*/\1/p')" \
+    "$(printf '%s' "$line" | sed -nE 's/.* ([0-9]+) skewed samples.*/\1/p')"
 }
 
-# the probe logs SKEW when the clock enters that state and every 30 s inside it
-skews_so_far() {
-  grep -c 'SKEW' "$probe_log" || true
+# a column's growth over a run, or ? when either side was unknown
+delta() {
+  case "$1$2" in *\?*) echo '?' ;; *) echo $(($2 - $1)) ;; esac
 }
 
 failed_files() {
@@ -139,8 +160,9 @@ echo "mode=$mode runs=$runs out=$out $(uptime | sed 's/.*load/load/')" | tee -a 
 failures=0
 i=1
 while [ "$i" -le "$runs" ]; do
-  steps_before=$(steps_so_far)
-  skews_before=$(skews_so_far)
+  before=$(probe_counts)
+  steps_before=${before% *}
+  skewed_before=${before#* }
   t0=$(date +%s)
   if [ "$mode" = quiet ]; then
     # in the background, so a TERM is handled now and not after the whole check
@@ -150,8 +172,11 @@ while [ "$i" -le "$runs" ]; do
     wait "${suites[0]}" || rc=$?
     suites=()
     t1=$(date +%s)
-    printf '%-4s rc=%-3s wall=%4ss steps_back=%s skew=%s %s\n' "$i" "$rc" $((t1 - t0)) \
-      $(($(steps_so_far) - steps_before)) $(($(skews_so_far) - skews_before)) \
+    after=$(probe_counts)
+    steps_after=${after% *}
+    skewed_after=${after#* }
+    printf '%-4s rc=%-3s wall=%4ss steps_back=%s skewed_samples=%s %s\n' "$i" "$rc" $((t1 - t0)) \
+      "$(delta "$steps_before" "$steps_after")" "$(delta "$skewed_before" "$skewed_after")" \
       "$(suite_columns "$out/run-$i.log")" | tee -a "$summary"
     [ "$rc" -eq 0 ] || failures=$((failures + 1))
   else
@@ -176,9 +201,13 @@ while [ "$i" -le "$runs" ]; do
     suites=()
     kill "${hogs[@]}" 2> /dev/null || true
     hogs=()
+    after=$(probe_counts)
+    steps_after=${after% *}
+    skewed_after=${after#* }
     # wall time and the clock are the round's; the rest is each suite's own
-    printf 'round %s rc=a:%s,b:%s wall=%ss steps_back=%s skew=%s\n' "$i" "$ra" "$rb" $((t1 - t0)) \
-      $(($(steps_so_far) - steps_before)) $(($(skews_so_far) - skews_before)) | tee -a "$summary"
+    printf 'round %s rc=a:%s,b:%s wall=%ss steps_back=%s skewed_samples=%s\n' "$i" "$ra" "$rb" \
+      $((t1 - t0)) "$(delta "$steps_before" "$steps_after")" \
+      "$(delta "$skewed_before" "$skewed_after")" | tee -a "$summary"
     printf '  %s/a %s\n' "$i" "$(suite_columns "$out/run-$i-a.log")" | tee -a "$summary"
     printf '  %s/b %s\n' "$i" "$(suite_columns "$out/run-$i-b.log")" | tee -a "$summary"
     [ "$ra" -eq 0 ] || failures=$((failures + 1))

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { classifySample, exitCode, SKEW_LIMIT_MS } from './db-clock-probe';
+import { describe, expect, it, vi } from 'vitest';
+import { classifySample, exitCode, sampleClock, SKEW_LIMIT_MS } from './db-clock-probe';
 
 const HOST_MS = 1_790_933_395_686;
 const at = (dbMs: number, hostMs = HOST_MS) => ({ dbUs: BigInt(Math.round(dbMs * 1000)), hostMs });
@@ -42,5 +42,32 @@ describe('exitCode', () => {
     expect(exitCode(10, 1, 0)).toBe(1);
     expect(exitCode(10, 0, 1)).toBe(1);
     expect(exitCode(10, 0, 0)).toBe(0);
+  });
+});
+
+describe('sampleClock', () => {
+  const T = HOST_MS;
+  const source = (us: string, roundTripMs: number) => ({
+    query: async () => {
+      vi.setSystemTime(T + roundTripMs);
+      return { rows: [{ us }] };
+    },
+  });
+
+  it('stamps the middle of the round trip and keeps the microseconds as a bigint', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(T);
+      const sample = await sampleClock(source('1790933395686123', 100));
+      expect(sample).toEqual({ dbUs: 1_790_933_395_686_123n, hostMs: T + 50 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses a query that returned no row', async () => {
+    await expect(sampleClock({ query: async () => ({ rows: [] }) })).rejects.toThrow(
+      'returned no row',
+    );
   });
 });
