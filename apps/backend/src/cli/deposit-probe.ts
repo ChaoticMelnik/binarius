@@ -1,10 +1,9 @@
 import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { destination, pino } from 'pino';
-import * as z from 'zod';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { createDb, createTokenCipher } from '@binarius/db';
-import { AccessTokenRefusal, logOptions, readEnv } from '@binarius/shared';
+import { AccessTokenRefusal, logOptions, type EnvSource } from '@binarius/shared';
 import { ensureFreshAccessToken } from '../auth/token-service';
 import { createBrokerOAuthClient } from '../broker/oauth-client';
 import {
@@ -12,7 +11,8 @@ import {
   mintDepositWidgetSession,
   type DepositWidgetDeps,
 } from '../deposit/widget-session';
-import { parseEnv } from '../env';
+import { formatFailure } from './kill-switch';
+import { readProbeEnv } from './probe-env';
 
 // The owner's check of the cashier widget before the page is built (#11, docs/deposit.md -> The
 // probe): one widget session for one account, through the same path as POST /deposit/widget-session,
@@ -48,7 +48,14 @@ export async function runDepositProbe(
     print('refused: demo_only (this process runs DEMO_ONLY=true; docs/deposit.md -> The probe)');
     return EXIT_FAILED;
   }
-  const outcome = await mintDepositWidgetSession(widget(), { accountId, mayRefresh: false });
+  let outcome;
+  try {
+    outcome = await mintDepositWidgetSession(widget(), { accountId, mayRefresh: false });
+  } catch (error) {
+    // name and code only (Rule 8); whether the broker minted a session is not known here
+    print(`failed: ${formatFailure(error)}`);
+    return EXIT_FAILED;
+  }
   if (outcome.ok) {
     const { reported, session } = outcome;
     print('ok');
@@ -85,47 +92,66 @@ export async function runDepositProbe(
   return EXIT_FAILED;
 }
 
+export async function depositProbeMain(
+  source: EnvSource,
+  print: (line: string) => void,
+): Promise<number> {
+  let probeEnv: ReturnType<typeof readProbeEnv>;
+  try {
+    probeEnv = readProbeEnv(source);
+  } catch (error) {
+    // our own env messages name the variable, never its value
+    print(`failed: ${error instanceof Error ? error.message : String(error)}`);
+    return EXIT_FAILED;
+  }
+  const { env, accountId } = probeEnv;
+  let pool: Pool | undefined;
+  try {
+    return await runDepositProbe(
+      {
+        demoOnly: env.demoOnly,
+        accountId,
+        widget: () => {
+          pool = new Pool({ connectionString: env.databaseUrl });
+          const logger = pino(logOptions(env.logLevel), destination(2));
+          const tokenDeps = {
+            db: createDb(pool),
+            broker: createBrokerOAuthClient({
+              baseUrl: env.brokerApiBaseUrl,
+              clientId: env.brokerClientId,
+              clientSecret: env.brokerClientSecret,
+            }),
+            cipher: createTokenCipher({
+              keyId: env.tokenEncryptionKeyId,
+              key: env.tokenEncryptionKey,
+            }),
+            logger,
+          };
+          return {
+            accessToken: (id, options) => ensureFreshAccessToken(tokenDeps, id, options),
+            rest: createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl }),
+            logger,
+            webOrigin: env.webPublicUrl,
+            platformOrigin: new URL(env.brokerOauthAuthorizeUrl).origin,
+            clientId: env.brokerClientId,
+            widgetOrigins: env.depositWidgetOrigins,
+          };
+        },
+      },
+      print,
+    );
+  } finally {
+    await pool?.end().catch(() => undefined);
+  }
+}
+
 // The module is imported by its test, so the command only runs when this file is what node was
 // started with.
 const entrypoint = process.argv[1];
 if (entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href) {
-  const env = parseEnv(process.env);
-  const accountId = z.uuid().parse(readEnv(process.env, 'ACCOUNT_ID'));
-  let pool: Pool | undefined;
-  const code = await runDepositProbe(
-    {
-      demoOnly: env.demoOnly,
-      accountId,
-      widget: () => {
-        pool = new Pool({ connectionString: env.databaseUrl });
-        const logger = pino(logOptions(env.logLevel), destination(2));
-        const tokenDeps = {
-          db: createDb(pool),
-          broker: createBrokerOAuthClient({
-            baseUrl: env.brokerApiBaseUrl,
-            clientId: env.brokerClientId,
-            clientSecret: env.brokerClientSecret,
-          }),
-          cipher: createTokenCipher({
-            keyId: env.tokenEncryptionKeyId,
-            key: env.tokenEncryptionKey,
-          }),
-          logger,
-        };
-        return {
-          accessToken: (id, options) => ensureFreshAccessToken(tokenDeps, id, options),
-          rest: createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl }),
-          logger,
-          webOrigin: env.webPublicUrl,
-          platformOrigin: new URL(env.brokerOauthAuthorizeUrl).origin,
-          clientId: env.brokerClientId,
-          widgetOrigins: env.depositWidgetOrigins,
-        };
-      },
-    },
-    (line) => {
+  process.exit(
+    await depositProbeMain(process.env, (line) => {
       process.stdout.write(`${line}\n`);
-    },
-  ).finally(() => pool?.end());
-  process.exit(code);
+    }),
+  );
 }
