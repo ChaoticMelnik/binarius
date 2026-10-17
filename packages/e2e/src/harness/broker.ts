@@ -50,24 +50,3 @@ export async function startE2eBroker(): Promise<MockBroker> {
 
 export const tradesOf = (broker: MockBroker, userId: number): MockTradeWire[] =>
   broker.trades.list(userId).sort((a, b) => Number(a.id) - Number(b.id));
-
-// worker.handoff.db.test.ts's oracle: at every poll, at most one connected socket per broker user
-export function watchSockets(broker: MockBroker) {
-  let worst = 0;
-  const poll = () => {
-    const perUser = new Map<number, number>();
-    for (const socket of broker.socket.sockets()) {
-      if (socket.userId === undefined) continue;
-      perUser.set(socket.userId, (perUser.get(socket.userId) ?? 0) + 1);
-    }
-    for (const count of perUser.values()) worst = Math.max(worst, count);
-  };
-  const timer = setInterval(poll, 2);
-  return {
-    stop: () => {
-      clearInterval(timer);
-      poll();
-      return worst;
-    },
-  };
-}

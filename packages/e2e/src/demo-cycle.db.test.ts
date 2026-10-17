@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, onTestFinished } from 'vitest';
 import {
   cycleStakeLabel,
   DEMO_DURATION_LABELS,
@@ -29,10 +29,10 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
-import type { ShutdownResult, TradingWorker } from '@binarius/trading-worker/e2e';
+import { watchSockets, type TradingWorker } from '@binarius/trading-worker/e2e';
 import { startE2eBackend, type E2eBackend } from './harness/backend';
 import { startE2eBot, type E2eBot } from './harness/bot';
-import { startE2eBroker, tradesOf, watchSockets } from './harness/broker';
+import { startE2eBroker, tradesOf } from './harness/broker';
 import { e2eReads } from './harness/db';
 import {
   E2E_BROKER_USER_ID,
@@ -58,7 +58,6 @@ let broker: MockBroker;
 let backend: E2eBackend;
 let worker: TradingWorker;
 let bot: E2eBot;
-let workerShutdown: ShutdownResult | undefined;
 
 beforeAll(async () => {
   tmp = await createTempDatabase(TEST_DATABASE_URL);
@@ -97,7 +96,9 @@ afterAll(async () => {
   };
   await step(async () => bot?.stop());
   await step(async () => {
-    if (worker !== undefined) workerShutdown = await worker.shutdown('SIGTERM');
+    if (worker === undefined) return;
+    const shutdown = await worker.shutdown('SIGTERM');
+    if (shutdown !== 'clean') throw new Error(`the worker shutdown was ${shutdown}`);
   });
   await step(async () => backend?.stop());
   await step(async () => broker?.close());
@@ -111,7 +112,6 @@ afterAll(async () => {
     await redis.quit();
   });
   await step(async () => tmp?.drop());
-  expect(workerShutdown).toBe('clean');
   if (failures.length > 0) throw new AggregateError(failures, 'the teardown failed');
 });
 
@@ -123,12 +123,19 @@ const lastOf = (calls: ApiCall[], method: string) =>
 const labelsOf = (payload: Record<string, unknown> | undefined) =>
   inlineButtons(payload).map((button) => button.text);
 const textOf = (call: ApiCall) => String(call.payload.text ?? call.payload.caption ?? '');
+const isSummary = (call: ApiCall) =>
+  call.method === 'sendMessage' && labelsOf(call.payload).includes(LABELS.menuButton);
+const isWaiting = (call: ApiCall) =>
+  call.method === 'sendMessage' && labelsOf(call.payload).some((l) => l.startsWith('⏹'));
 
 it('runs /start → the email login → a demo session → its result', async () => {
   const reads = e2eReads(tmp.db);
   const telegramUserId = BigInt(USER.id);
   const botCalls = bot.telegram.calls;
   const sockets = watchSockets(broker);
+  onTestFinished(() => {
+    sockets.stop();
+  });
 
   // S1 /start
   await bot.start();
@@ -227,6 +234,7 @@ it('runs /start → the email login → a demo session → its result', async ()
     async () =>
       (await reads.sessionOf(account.id))?.statusMessageId === bot.telegram.messageIdOf(status),
   );
+  await until('the first waiting message is sent', () => backend.push.calls.some(isWaiting));
 
   // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it
   const amounts = [1, 2.18, 1, 1, 1, 1];
@@ -285,14 +293,12 @@ it('runs /start → the email login → a demo session → its result', async ()
     held: 0,
     total: 10004.25,
   });
-  expect(sockets.stop()).toBe(1);
+  expect(sockets.stop().worst).toBe(1);
 
   // S7 the backend's messages: the cycles silent and without a keyboard, the summary last
-  await until(
-    'the final notice is sent',
-    async () => (await reads.sessionOf(account.id))?.finalNoticeSentAt !== null,
-  );
   const push = backend.push.calls;
+  await until('the summary message is sent', () => push.some(isSummary));
+  expect((await reads.sessionOf(account.id))?.finalNoticeSentAt).not.toBeNull();
   const cycles = push.filter(
     (call) => call.method === 'sendMessage' && textOf(call).startsWith('⚡'),
   );
@@ -304,15 +310,25 @@ it('runs /start → the email login → a demo session → its result', async ()
   const edits = push.filter((call) => call.method === 'editMessageText');
   expect(edits).toHaveLength(1);
   expect(edits[0]?.payload.message_id).toBe(backend.push.messageIdOf(cycles[0]!));
-  // every waiting message that went out is gone before the next message and the summary
-  const waiting = push.filter((call) => labelsOf(call.payload).some((l) => l.startsWith('⏹')));
+  // every waiting message is deleted after it went out and before the next message the backend
+  // sends: a cycle message or the summary
+  const waiting = push.filter(isWaiting);
+  expect(waiting.length).toBeGreaterThanOrEqual(1);
   for (const call of waiting) {
+    const sent = push.indexOf(call);
     const deleted = push.findIndex(
       (other) =>
         other.method === 'deleteMessage' &&
         other.payload.message_id === backend.push.messageIdOf(call),
     );
-    expect(deleted).toBeGreaterThan(push.indexOf(call));
+    const nextSend = push.findIndex(
+      (other, index) => index > sent && other.method === 'sendMessage',
+    );
+    expect(deleted).toBeGreaterThan(sent);
+    expect(nextSend).toBeGreaterThan(-1);
+    expect(deleted, 'the waiting message is deleted before the next message').toBeLessThan(
+      nextSend,
+    );
   }
   const summary = push.at(-1);
   expect(summary?.method).toBe('sendMessage');
@@ -321,22 +337,20 @@ it('runs /start → the email login → a demo session → its result', async ()
   expect(textOf(summary!)).toContain('+$4.25');
 
   // S8 the bot: the status message finished, then the summary card
-  await until(
-    'the summary card is recorded',
-    async () => (await reads.sessionOf(account.id))?.summarySentAt !== null,
+  const cardCaption = TEXTS.sessionCardCaption({
+    symbol: pairLabel({ symbol: E2E_PAIR.symbol, isOtc: E2E_PAIR.is_otc }),
+    profit: '4.25' as DecimalString,
+    botUsername: 'binarius_bot',
+  }).value;
+  await until('the summary card is sent', () =>
+    botCalls.some((call) => call.method === 'sendPhoto' && call.payload.caption === cardCaption),
   );
+  expect((await reads.sessionOf(account.id))?.summarySentAt).not.toBeNull();
   const finished = lastOf(botCalls, 'editMessageMedia');
   expect(finished?.message_id).toBe(bot.telegram.messageIdOf(status));
   expect(JSON.stringify(finished)).toContain('🏁');
   const summaryCard = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
-  expect(summaryCard?.payload).toMatchObject({
-    disable_notification: true,
-    caption: TEXTS.sessionCardCaption({
-      symbol: pairLabel({ symbol: E2E_PAIR.symbol, isOtc: E2E_PAIR.is_otc }),
-      profit: '4.25' as DecimalString,
-      botUsername: 'binarius_bot',
-    }).value,
-  });
+  expect(summaryCard?.payload).toMatchObject({ disable_notification: true, caption: cardCaption });
   expect(labelsOf(summaryCard?.payload)).toContain(LABELS.menuButton);
 
   // S9 the tokens: the pack less one per trade, nothing left reserved
