@@ -244,9 +244,6 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
                 : OAuthErrorCode.BrokerAccountTaken,
           });
         }
-        if (linked.grant === null || linked.referral === null) {
-          throw new Error('an activating link returned no grant');
-        }
         warnIfNoActiveRule(request.log, linked.account, linked.grant);
         logReferralReward(request.log, linked.referral);
         return reply.send({
@@ -362,6 +359,8 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
             error: blocked ? OAuthErrorCode.UserBlocked : OAuthErrorCode.BrokerAccountTaken,
           });
         }
+        // a re-login of an account confirmed before pays the inviter's reward here (#116)
+        if (linked.referral !== null) logReferralReward(request.log, linked.referral);
         // the push and the response read one projection of the row, so they agree on the address
         const account = toBrokerAccountView(linked.account);
         // one button, for the account this login linked; any other waiting link is /start's

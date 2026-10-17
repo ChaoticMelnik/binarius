@@ -1789,6 +1789,34 @@ describe('the inviter’s reward', () => {
     expect(referralLines(logs)).toEqual([rewarded(referralId, inviterId)]);
   });
 
+  // decision 9: the callback's re-login of an account confirmed before leaves it active and pays
+  it('logs the reward of a callback re-login of a confirmed account and answers as before', async () => {
+    const { inviterId, inviteeTelegram, referralId } = await invitation();
+    const brokerUserId = `broker-${inviteeTelegram}-${++seq}`;
+    const first = await login(inviteeTelegram, brokerUserId, true);
+    const accountId = (first.response.json() as { account: { id: string } }).account.id;
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: 'revoked' as const })
+      .where(eq(brokerAccounts.id, accountId));
+    let body: Record<string, unknown> = {};
+    const logs = await withLogs(async (instance) => {
+      const state = await stateFor(inviteeTelegram);
+      const code = stub.issueCode({ brokerUserId, isPartnerClient: true });
+      const response = await callback({ state, code }, instance);
+      expect(response.statusCode).toBe(200);
+      body = response.json();
+    });
+    expect(Object.keys(body)).toEqual(['account']);
+    expect(body).toMatchObject({ account: { id: accountId, status: 'active' } });
+    const { email } = (body as { account: { email: string | null } }).account;
+    expect(pushesTo(inviteeTelegram).at(-1)?.text).toBe(CLIENT_TEXTS.linkedActive({ email }).value);
+    expect(referralLines(logs)).toEqual([rewarded(referralId, inviterId)]);
+    expect(
+      (await tmp.db.select().from(users).where(eq(users.id, inviterId)))[0]?.tokenBalance,
+    ).toBe(50n);
+  });
+
   it('logs nothing about a reward for a user nobody invited', async () => {
     const telegram = telegramId();
     const accountId = await pendingPartner(telegram);
