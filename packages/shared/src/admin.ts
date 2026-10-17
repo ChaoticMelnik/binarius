@@ -7,6 +7,7 @@ import {
   adminUserIntentsSectionSchema,
 } from './admin-trading';
 import { auditActionSchema, auditActorTypeSchema, auditEntityTypeSchema } from './audit';
+import { botLanguageSchema } from './bot-language';
 import {
   checkTokenDelta,
   checkTokenNote,
@@ -295,6 +296,8 @@ export const adminUserDetailSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
   displayName: z.string().nullable(),
   languageCode: z.string().nullable(),
+  // the language of the bot's texts (#508)
+  language: botLanguageSchema,
   status: userStatusSchema,
   acquisitionSource: z.string().nullable(),
   acquiredAt: isoDateTime.nullable(),

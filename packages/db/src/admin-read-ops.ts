@@ -114,6 +114,7 @@ export type AdminUserRow = Pick<
   | 'telegramUserId'
   | 'displayName'
   | 'languageCode'
+  | 'language'
   | 'status'
   | 'acquisitionSource'
   | 'acquiredAt'
@@ -181,6 +182,7 @@ export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUse
       telegramUserId: users.telegramUserId,
       displayName: users.displayName,
       languageCode: users.languageCode,
+      language: users.language,
       status: users.status,
       acquisitionSource: users.acquisitionSource,
       acquiredAt: users.acquiredAt,
@@ -306,6 +308,7 @@ export function toAdminUserDetail(row: AdminUserRow): AdminUserDetail {
     telegramUserId: row.telegramUserId.toString(),
     displayName: row.displayName,
     languageCode: row.languageCode,
+    language: row.language,
     status: row.status,
     acquisitionSource: row.acquisitionSource,
     acquiredAt: isoOrNull(row.acquiredAt),

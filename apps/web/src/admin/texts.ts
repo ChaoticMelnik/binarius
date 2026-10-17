@@ -97,7 +97,10 @@ export const TEXTS = {
   userTokens: 'Токены',
   userBrokerAccounts: 'Брокерские аккаунты',
   fieldId: 'ID',
-  fieldLanguage: 'Язык',
+  fieldLanguage: 'Язык Telegram',
+  // users.language (#508): the bot's texts, set at the first /start and by the user's choice
+  fieldBotLanguage: 'Язык бота',
+  botLanguage: { ru: 'русский', en: 'английский' } satisfies Record<BotLanguage, string>,
   fieldAcquisitionSource: 'Источник',
   fieldAcquiredAt: 'Пришёл по источнику',
   fieldTelegramBlockedAt: 'Бот недоступен с',
@@ -331,6 +334,8 @@ export const TEXTS = {
 
   botTextsTitle: 'Тексты бота',
   botTextsHeading: 'Тексты клиентского бота',
+  botTextsLanguagesNote:
+    'Переопределения действуют для русских текстов; английские показываются из каталога (#634).',
   columnBotTextKey: 'Ключ',
   columnBotTextDescription: 'Где показывается',
   columnBotTextState: 'Состояние',

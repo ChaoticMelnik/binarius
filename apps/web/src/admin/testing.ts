@@ -207,6 +207,7 @@ export const SAMPLE_USER: AdminUserResponse = {
     telegramUserId: '4242',
     displayName: 'Ада',
     languageCode: 'ru',
+    language: BotLanguage.Ru,
     status: UserStatus.Active,
     acquisitionSource: null,
     acquiredAt: null,

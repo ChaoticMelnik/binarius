@@ -16,6 +16,7 @@ import {
   BOT_COMMAND_SCOPE,
   BOT_TEXT_CATALOG,
   BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   ADMIN_SEARCH_MAX_LENGTH,
   ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
   AdminErrorCode,
@@ -1933,6 +1934,7 @@ describe('the read pages (#107)', () => {
       'telegramUserId',
       'displayName',
       'languageCode',
+      'language',
       'status',
       'acquisitionSource',
       'acquiredAt',
@@ -1964,6 +1966,7 @@ describe('the read pages (#107)', () => {
     expect(body.user).toMatchObject({
       displayName: null,
       languageCode: null,
+      language: BotLanguage.Ru,
       acquisitionSource: null,
       acquiredAt: null,
       telegramBlockedAt: null,

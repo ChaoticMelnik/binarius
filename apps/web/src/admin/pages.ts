@@ -568,6 +568,8 @@ export const userPage = (
         <dd>${orNone(user.displayName)}</dd>
         <dt>${TEXTS.fieldLanguage}</dt>
         <dd>${orNone(user.languageCode)}</dd>
+        <dt>${TEXTS.fieldBotLanguage}</dt>
+        <dd>${TEXTS.botLanguage[user.language]}</dd>
         <dt>${TEXTS.columnStatus}</dt>
         <dd>${TEXTS.userStatus[user.status]}</dd>
         <dt>${TEXTS.fieldAcquisitionSource}</dt>
@@ -1477,6 +1479,7 @@ export const botTextsPage = (
     active: 'botTexts',
     login,
     body: html`<h1>${TEXTS.botTextsHeading}</h1>
+      <p class="hint">${TEXTS.botTextsLanguagesNote}</p>
       ${notice(shown === undefined ? undefined : TEXTS.botTextsNotice[shown])}
       ${publishBlock(published)}
       ${Object.values(BotTextGroup).map(
