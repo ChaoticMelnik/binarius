@@ -22,9 +22,10 @@ pnpm test --project unit apps/backend/src/market-data   # mock broker and fake c
 
 The source is created only when `BROKER_WS_URL` is set. It reads the same variable as the worker's
 sessions (`https:` or `wss:`; an empty value fails the start). `apps/backend/src/index.ts` builds the
-ring, the request set, the backfill and the manager in one function (`createMarketDataSource`),
-starts the manager and then the backfill after `listen()` with the other loops, and stops the
-backfill and then the manager in shutdown phase 1. The start line
+ring and the request set (`candleStore`) before the signal feed, which #405 makes read them, then
+the backfill and the manager in one function (`createMarketData`), starts the manager and then the
+backfill after `listen()` with the other loops, and stops the backfill and then the manager in
+shutdown phase 1. The start line
 `market data source { enabled }` says whether it runs.
 
 ## The state machine
@@ -104,7 +105,10 @@ reaches are dropped, and no candle is built for the buckets it reaches. The rest
 
 `fill(assetId, interval, rows, nowMs)` is the backfill's entry. It puts REST rows only into closed buckets
 of the window that have no tick candle and no earlier fill. A tick candle is never replaced, because
-the tick series is continuous (each open is the previous close). `missing()` counts the empty closed
+the tick series is continuous (each open is the previous close). It judges closedness at `nowMs` by
+the watermark it has now, so the caller passes only rows of buckets that were closed when its
+request was built: a bucket the broker answered as forming may be closed by the time the answer
+arrives. `missing()` counts the empty closed
 buckets.
 
 ## Subscriptions
@@ -184,8 +188,12 @@ the repeats rotate by age, so no element starves.
 `w = chartWindow(now, I, MARKET_DATA_RING_CANDLES)` the request is
 `{ startTime: w.startTime − I, limit: w.limit + 1 }`, and the first row of the answer is dropped: it
 opens on the first tick of its bucket, not on the close before it (the #392 spike's `dropFirstRow`).
-The rest go to `ring.fill`, which puts them only into closed buckets of the window that have no tick
-candle and no earlier fill. No GET starts in the first `SIGNAL_SCAN_SLACK_MS` of a `5s` candle,
+A GET may cross a candle boundary. Of the rest, only the rows of buckets closed when the GET was
+built go to `ring.fill`: those that ended before its boundary and that the ring called closed at
+that moment, `timestamp < min(floor(at, I), ring.closedUntil(I, at))`. The bucket forming at `at`
+comes as a partial row and is never filled by that GET; a bucket that closed later is an empty
+bucket for the next one. `ring.fill` then puts the rows only into closed buckets of the window that
+have no tick candle and no earlier fill. No GET starts in the first `SIGNAL_SCAN_SLACK_MS` of a `5s` candle,
 because the broker publishes a just-closed candle about 150 ms after the boundary. Every GET runs
 under `MARKET_DATA_BACKFILL_BUDGET_MS` and the `stop()` signal.
 
@@ -197,9 +205,9 @@ and a 429 or a 2xx answer goes to both.
 
 | Outcome of an attempt | Counters | The element |
 |---|---|---|
-| 2xx, any rows (`[]` on a closed market too) | `fetched`, `filled +n` | held back; the window's empty buckets before the GET's boundary become `unfilled`; failures reset; the request served |
-| 429 | `rateLimited` | the pacers paused (`onRateLimited`); the element goes back to the head, its hold-back and failures untouched |
-| `unavailable`, `contract_violation`, `rejected`, `unauthorized`, `aborted` by the budget | `failed` | held back, failures +1; at `MARKET_DATA_BACKFILL_ATTEMPTS` `warn` `market data backfill gave up`, the empty buckets become `unfilled`, failures reset, the request dropped |
+| 2xx, any rows (`[]` on a closed market too) | `fetched`, `filled +n` | held back; the window's empty buckets that were closed when the GET was built become `unfilled`; failures reset; the request it served is dropped, one that came in flight stays |
+| 429 | `rateLimited` | the pacers paused (`onRateLimited`); the element goes back to the head, its hold-back and failures untouched; the request stays |
+| `unavailable`, `contract_violation`, `rejected`, `unauthorized`, `aborted` by the budget | `failed` | held back, failures +1, the request stays; at `MARKET_DATA_BACKFILL_ATTEMPTS` `warn` `market data backfill gave up`, the empty buckets closed when the GET was built become `unfilled`, failures reset, the request it served is dropped (one that came in flight stays) |
 | a throw that is not a `BrokerRestError` | `failed`, `warn` `market data backfill threw` | as a failure |
 | aborted by `stop()` | none | the loop is over |
 | no longer due at dispatch | none | off the queue |
@@ -276,15 +284,14 @@ The links:
   `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` already bounds.
 - The backfill: `BACKFILL_BUDGET < BROKER_REST_TIMEOUT_MS` (the budget, not the client, ends a slow
   GET) and `< SHUTDOWN_PHASE1_BUDGET_MS` (its `stop()` aborts and waits for at most one GET a worker,
-  at once); `SIGNAL_SCAN_SLACK_MS + BACKFILL_BUDGET < 5 s` (a GET started after the slack ends inside
-  the candle it was built on); `BACKFILL_POLL × MAX_SIGNAL_SCAN_PER_MINUTE ≤ 60 000` (no overflow
+  at once); `BACKFILL_POLL × MAX_SIGNAL_SCAN_PER_MINUTE ≤ 60 000` (no overflow
   token is lost between two polls); `BACKFILL_SCAN ≤ 5 s`.
 
 ## Tests
 
 - `ring.test.ts` R1-R9, R12, with R3b/R3c (`lateClose`).
 - `source.test.ts` S1-S3.
-- `backfill.test.ts` B1-B17 on a fake `getChart`, the real ring and the real pacer under an injected
+- `backfill.test.ts` B1-B17, with B2b-B2d, B3c-B3e and B5b, on a fake `getChart`, the real ring and the real pacer under an injected
   clock.
 - `manager.test.ts`:
   - M1-M6, M8-M14 on `packages/mock-broker`, with two users;
@@ -334,6 +341,15 @@ The links:
     pass the token service. Falsifiable: a `market data` line with an account unmarked > 60 s ago.
 13. **A 429 on an exchange holds only its account**, and each other account that hits it. Falsifiable:
     more than `n` lines `market data token refused { reason: 'refresh_rate_limited' }` in 5 min.
+14. **A bucket the watermark closed just before a backfill GET may come partial.** A bucket closed
+    less than about 150 ms (the broker's publication delay, #392 spike) before the request, while the
+    process clock runs behind the broker's by more than `SIGNAL_SCAN_SLACK_MS` minus 150 ms, can be
+    answered before the broker has published it: the same assumption as the scanner's slack
+    ([signal.md](signal.md)).
+15. **A bucket the ring had not closed when a GET was built waits for the hold-back** (≤ 15 s, one
+    more GET), as in a quiet stream within the first `MARKET_DATA_SKEW_MARGIN_MS` of a candle.
+    Falsifiable: `backfill.fetched` grows faster than the number of elements per period while
+    `filled` stays near 0.
 
 ## Owner's steps after the merge (pilot)
 
