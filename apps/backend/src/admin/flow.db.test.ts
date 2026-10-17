@@ -3,7 +3,12 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AuditAction } from '@binarius/shared';
 import { auditLog, staffSessions } from '@binarius/db';
-import { createTempDatabase, seedStaff, type TempDatabase } from '@binarius/db/testing';
+import {
+  createTempDatabase,
+  seedStaff,
+  verifyTestPassword,
+  type TempDatabase,
+} from '@binarius/db/testing';
 import { buildWebApp } from '@binarius/web/app';
 import { createBackendClient } from '@binarius/web/backend-client';
 import { buildApp } from '../app';
@@ -104,6 +109,7 @@ beforeAll(async () => {
       db: tmp.db,
       adminWebToken: WEB_TOKEN,
       telegram: adminBot,
+      verify: verifyTestPassword,
     },
   });
   await backend.listen({ port: 0, host: '127.0.0.1' });
