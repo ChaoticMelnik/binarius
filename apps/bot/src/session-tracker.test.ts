@@ -1054,5 +1054,28 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(second.edits)).toEqual([shown(stoppedOpen)]);
     });
+
+    // #587 finding 2: only this process's own draws enter the memory, so a recovered entry that
+    // only read leaves nothing that would let mayDraw edit a running session's message
+    it('Y6 an entry this process did not draw leaves no memory: a running session recovered again with another label is not drawn; drawn once at the stop', async () => {
+      const { tracker, readSession, request, target } = setup({
+        script: [SESSION_VIEW, SESSION_VIEW, stoppedClosed],
+      });
+      const first = target();
+      tracker.track(request({ ...recovered, startedAt: past(), edit: first.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(readSession).toHaveBeenCalledTimes(1);
+      expect(first.edits).toEqual([]);
+      expect(tracker.size()).toBe(0);
+      const second = target();
+      tracker.track(request({ ...recovered, label: null, startedAt: past(), edit: second.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(readSession).toHaveBeenCalledTimes(2);
+      expect(second.edits).toEqual([]);
+      const third = target();
+      tracker.track(request({ ...recovered, label: null, edit: third.edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(texts(third.edits)).toEqual([sessionStatusText(null, stoppedClosed).value]);
+    });
   });
 });
