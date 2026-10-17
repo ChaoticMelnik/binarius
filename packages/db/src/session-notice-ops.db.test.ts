@@ -617,6 +617,34 @@ describe('the waiting message (#536)', () => {
       waitingStale: false,
     });
   });
+
+  // No backfill (owner 2026-10-17): the DDL leaves both columns NULL on every session at the
+  // deploy, so a running one with its status or a claimed trade is due at the backend's start
+  it("N19 the deploy's state: a running session with an anchor is due, a stopped one is not", async () => {
+    const recorded = await seedSession();
+    await statusMessage(recorded.session, 7);
+    await cycleMessage(recorded, 0, 41);
+    const claimedOnly = await seedSession();
+    await settled(claimedOnly, '-5');
+    await claim(claimedOnly.session, 0);
+    const bare = await seedSession();
+    const ended = await seedSession();
+    await statusMessage(ended.session, 7);
+    await cycleMessage(ended, 0, 41);
+    await stop(ended.session, TradingSessionStopReason.UserStopped);
+    for (const target of [recorded, claimedOnly, bare, ended]) {
+      expect(await waitingOf(target.session)).toEqual([null, null]);
+    }
+
+    expect(await pendingOf(recorded.session)).toMatchObject({ waitingDue: true });
+    expect(await pendingOf(claimedOnly.session)).toMatchObject({ waitingDue: true });
+    expect(await pendingOf(bare.session)).toBeUndefined();
+    // listed for its summary, if at all, never for a waiting message
+    expect((await pendingOf(ended.session))?.waitingDue ?? false).toBe(false);
+    expect(await waitingClaim(recorded.session)).toEqual({ slot: 41 });
+    expect(await waitingClaim(claimedOnly.session)).toEqual({ slot: 0 });
+    expect(await waitingClaim(ended.session)).toBeUndefined();
+  });
 });
 
 // The backfill (0050) as the deploy runs it: the cursor at every session's settled trades, the
@@ -632,7 +660,7 @@ describe('migration 0050 (the backfill)', () => {
     await settled(ended, '0');
     await stop(ended.session);
     const ids = [running.session.id, ended.session.id];
-    // the waiting slot as the later backfill (0057) leaves it: only the trade notices under test
+    // the waiting slot claimed on the current cycle message: only the trade notices under test
     await tmp.db
       .update(tradingSessions)
       .set({ notifiedTrades: 0, finalNoticeSentAt: null, waitingAfterMessage: 0 })

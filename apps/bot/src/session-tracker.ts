@@ -5,6 +5,7 @@ import {
   isTradingSessionFinished,
   type PairLabel,
   type TelegramHtml,
+  TradingSessionStatus,
   type TradingSessionView,
   telegramErrorFields,
 } from '@binarius/shared';
@@ -96,8 +97,8 @@ export interface SessionTrackerOptions {
 
 interface Entry extends SessionTrackRequest {
   startedAt: number;
-  // the text on screen (finalOf's key); '' while nothing was read and nothing this process drew
-  // on the message is remembered, so the first good read draws
+  // the text on screen (finalOf's key); '' while nothing this process drew on the message is
+  // remembered, so the first good read of a stopped session draws (mayDraw)
   rendered: string;
   timer: ReturnType<typeof setTimeout> | undefined;
   readFailures: number;
@@ -118,6 +119,13 @@ const finalOf = (
 // The card waits for the done view's text on screen and the backend's summary message (#464)
 const cardDue = (entry: Entry, view: TradingSessionView, key: string): boolean =>
   sessionTrackingDone(view) && entry.rendered === key && view.noticesDone;
+
+// A message this process did not draw (a recovered entry, nothing remembered) may be one sent
+// before #536, with its «🔄»/«⏹» (owner's answer 5): it is drawn only once its session stopped,
+// so a running session keeps the old buttons until then. A #536 message prints nothing that
+// changes while its session runs.
+const mayDraw = (entry: Entry, view: TradingSessionView): boolean =>
+  entry.rendered !== '' || view.status === TradingSessionStatus.Stopped;
 
 export function createSessionTracker({
   backend,
@@ -156,10 +164,11 @@ export function createSessionTracker({
     }
   };
 
-  // An entry with no view edits unconditionally on its first poll after a restart (the bot cannot
-  // know what is on screen), and a pass hands up to TRACKED_SESSIONS_MAX of them at once, so their
-  // first polls go in slots resumeGapMs apart, no sooner than firstPollMs. The slots are timers:
-  // stop() clears them like any other (docs/bot-session.md → Rate and timing).
+  // An entry with no view reads on its first poll after a restart, and edits only a stopped
+  // session's message (mayDraw: the bot cannot know what is on screen). A pass hands up to
+  // TRACKED_SESSIONS_MAX of them at once, so their first polls go in slots resumeGapMs apart, no
+  // sooner than firstPollMs. The slots are timers: stop() clears them like any other
+  // (docs/bot-session.md → Rate and timing).
   const resumeSlot = (): number => {
     const t = now();
     const at = Math.max(t + firstPollMs, nextResumeAt);
@@ -292,7 +301,7 @@ export function createSessionTracker({
     if (!current(entry)) return;
     entry.view = view;
     const { key, text } = finalOf(entry.label, view);
-    if (key !== entry.rendered) {
+    if (key !== entry.rendered && mayDraw(entry, view)) {
       const goOn = await editTo(entry, text, key, view);
       if (!goOn) return;
     }
@@ -325,7 +334,7 @@ export function createSessionTracker({
       return;
     }
     const { key, text } = finalOf(entry.label, view);
-    if (entry.rendered !== key) await editTo(entry, text, key, view);
+    if (entry.rendered !== key && mayDraw(entry, view)) await editTo(entry, text, key, view);
     if (cardDue(entry, view, key)) {
       await entry.card(view);
     }

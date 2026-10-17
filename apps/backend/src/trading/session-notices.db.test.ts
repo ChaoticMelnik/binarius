@@ -22,9 +22,11 @@ import {
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
+  claimSessionTradeNotice,
   createSessionIntent,
   markIntentAccepted,
   markTelegramReachable,
+  recordSessionCycleMessage,
   settleIntent,
   stopTradingSession,
   takeIntent,
@@ -52,6 +54,7 @@ import {
 import { createClientPush } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
+import { SESSION_NOTICE_SEND_PER_SECOND } from '../timing';
 import {
   createSessionNoticeSender,
   type SessionNoticeConfig,
@@ -1614,28 +1617,12 @@ describe('the waiting message (#536)', () => {
         });
       },
     ],
-    [
-      'a record the CAS refuses',
-      (captured: CapturedApi, target: Target) => {
-        const answer = captured.answers.get('sendMessage')!;
-        captured.answers.set('sendMessage', async (payload) => {
-          // another sender moved the cursor past the claimed trade before Telegram answered
-          if (inlineButtons(payload).length === 0) {
-            await tmp.db
-              .update(tradingSessions)
-              .set({ notifiedTrades: sql`${tradingSessions.notifiedTrades} + 1` })
-              .where(eq(tradingSessions.id, target.session.id));
-          }
-          return answer(payload);
-        });
-      },
-    ],
   ])(
     'W17 the waiting message deleted, then a new cycle message not recorded (%s): the waiting message under it in the same tick',
     async (_name, arrange) => {
       const { target, run, id } = await waiting();
       await settled(target, '4.6');
-      arrange(run.captured, target);
+      arrange(run.captured);
       await run.notices.tick();
       expect(sequenceOf(run.captured.calls, target)).toEqual([
         'waiting',
@@ -1649,6 +1636,39 @@ describe('the waiting message (#536)', () => {
       expect((await waitingOf(target)).messageId).toBe(answered.get(next.payload));
     },
   );
+
+  // a state production reaches: a second sender claimed the next trade while the first one's
+  // message was on its way, so the first one's record is refused (#536 round 2, Minor 4)
+  it('W17 the waiting message deleted, then a new cycle message whose record a second sender refused: no waiting message in that tick, one on the next', async () => {
+    const { target, run } = await waiting();
+    await settled(target, '4.6');
+    await settled(target, '-5');
+    const answer = run.captured.answers.get('sendMessage')!;
+    let first = true;
+    run.captured.answers.set('sendMessage', async (payload) => {
+      if (first && inlineButtons(payload).length === 0) {
+        first = false;
+        await claimSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 1 });
+      }
+      return answer(payload);
+    });
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'trade']);
+    expect(await rowOf(target)).toMatchObject({
+      notifiedTrades: 2,
+      cycleMessageId: null,
+      waitingMessageId: null,
+      waitingAfterMessage: null,
+    });
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+    ]);
+    expect((await rowOf(target)).cycleMessageId).toBeNull();
+  });
 
   it('W17 the waiting message deleted, then the new cycle message refused three times: none while it is retried, then under it', async () => {
     const { target, run } = await waiting();
@@ -1710,6 +1730,62 @@ describe('the waiting message (#536)', () => {
       waitingMessageId: null,
       waitingAfterMessage: null,
     });
+  });
+
+  // No backfill (owner 2026-10-17): at the deploy the columns are NULL, so every running session
+  // with an anchor is due on the sender's first tick, at the sender's pace
+  it('W21 sessions running at the deploy: one waiting message each on the first tick, at the sender’s pace', async () => {
+    const targets: Target[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const target = await seedSession();
+      await statusMessage(target);
+      await settled(target, '4.6');
+      // what the backend before #536 left: the trade claimed and sent in a cycle message
+      await claimSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 0 });
+      await recordSessionCycleMessage(tmp.db, {
+        sessionId: target.session.id,
+        claimed: 0,
+        messageId: 900 + i,
+        from: 0,
+      });
+      expect(await waitingOf(target)).toEqual({ messageId: null, slot: null });
+      targets.push(target);
+    }
+    const clock = { now: 0 };
+    const run = sender(
+      {
+        sleep: async (ms) => {
+          clock.now += ms;
+        },
+      },
+      clock,
+    );
+    const sentAt = new Map<unknown, number>();
+    const answer = run.captured.answers.get('sendMessage')!;
+    run.captured.answers.set('sendMessage', (payload) => {
+      if (inlineButtons(payload).length > 0) sentAt.set(payload.chat_id, clock.now);
+      return answer(payload);
+    });
+    await run.notices.tick();
+    for (const target of targets) {
+      expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting']);
+      const [sent] = waitingTo(run.captured.calls, target);
+      expect(inlineButtons(sent!.payload)).toEqual([STOP(target)]);
+      expect(await waitingOf(target)).toEqual({
+        messageId: answered.get(sent!.payload),
+        slot: 900 + targets.indexOf(target),
+      });
+    }
+    const times = targets.map((target) => sentAt.get(target.seed.telegramUserId)!);
+    for (let i = 1; i < times.length; i += 1) {
+      expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(
+        1000 / SESSION_NOTICE_SEND_PER_SECOND - 1e-9,
+      );
+    }
+    await run.notices.tick();
+    for (const target of targets) {
+      expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting']);
+    }
   });
 
   it('W19 no status message, the first trade’s send outcome unknown: one waiting message on the next tick', async () => {
