@@ -533,6 +533,26 @@ describe('POST /trading/sessions', () => {
     expect(signalCalls).toEqual([{ assetId: ASSET, interval: '5m', digits: pair.digits }]);
   });
 
+  // #568: the checked signal's direction is the session's first picture in the bot
+  it.each([TradeAction.Down, TradeAction.Up])(
+    'R34 a start on a %s signal writes it to the row and answers it in the view',
+    async (action) => {
+      const seed = await seedReady();
+      const response = await start(
+        appWith({ signal: sessionSignalEvaluation('signal', action) }),
+        bodyFor(seed),
+      );
+      expect(response.statusCode).toBe(201);
+      const session = sessionOf(response);
+      expect(session.signalAction).toBe(action);
+      const [row] = await tmp.db
+        .select({ startSignalAction: tradingSessions.startSignalAction })
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, session.id));
+      expect(row!.startSignalAction).toBe(action);
+    },
+  );
+
   it('R32 a signal without a balance snapshot is 409 balance_unavailable', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const before = await sessionCount();
@@ -980,6 +1000,15 @@ describe('GET /trading/sessions/:id', () => {
     expect((await read(target, 'nope', seed.telegramUserId)).statusCode).toBe(404);
     expect((await read(target, seed.sessionId)).statusCode).toBe(400);
   });
+
+  it("R35 the session's trade in the other direction moves the view's signalAction (#568)", async () => {
+    const seed = await seedReady();
+    const target = appWith({ signal: sessionSignalEvaluation('signal', TradeAction.Up) });
+    const { id } = sessionOf(await start(target, bodyFor(seed)));
+    expect(sessionOf(await read(target, id, seed.telegramUserId)).signalAction).toBe('up');
+    await sessionIntent(seed, id, 1, TradeMode.Demo, TradeAction.Down);
+    expect(sessionOf(await read(target, id, seed.telegramUserId)).signalAction).toBe('down');
+  });
 });
 
 // #337: the final status carries the balance after the last trade
@@ -988,6 +1017,7 @@ const sessionIntent = (
   sessionId: string,
   step: number,
   mode: TradeMode = TradeMode.Demo,
+  action: TradeAction = TradeAction.Up,
 ) =>
   createSessionIntent(tmp.db, {
     sessionId,
@@ -997,7 +1027,7 @@ const sessionIntent = (
     mode,
     assetId: ASSET,
     amount: decimalStringSchema.parse('1'),
-    action: TradeAction.Up,
+    action,
     durationSec: 60,
   });
 

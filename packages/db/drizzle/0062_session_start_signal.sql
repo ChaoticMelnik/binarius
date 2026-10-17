@@ -1,0 +1,2 @@
+ALTER TABLE "trading_sessions" ADD COLUMN "start_signal_action" text;--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_start_signal_action_check" CHECK ("trading_sessions"."start_signal_action" in ('up', 'down'));

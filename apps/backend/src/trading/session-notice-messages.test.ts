@@ -218,6 +218,7 @@ describe('sessionSummaryMessage (#464)', () => {
     trades: { settled: 2, rejected: 0, won: 1, lost: 1, tied: 0, profit: d('-0.4') },
     cycles: { planned: 5, closed: 2 },
     lastIntent: null,
+    signalAction: null,
     balance: null,
     noticesDone: false,
   };

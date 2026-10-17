@@ -8,6 +8,7 @@ import {
   INT4_MAX,
   TRADE_INTENT_TRANSITIONS,
   telegramUserIdSchema,
+  tradeActionSchema,
   tradeAmountSchema,
   tradeIntentViewSchema,
   tradeModeSchema,
@@ -367,6 +368,9 @@ export const tradingSessionViewSchema = z.strictObject({
   // settings that do not read give 0 and 0
   cycles: z.strictObject({ planned: countSchema, closed: countSchema }),
   lastIntent: tradeIntentViewSchema.nullable(),
+  // the direction of the bot's session picture (#568): the last intent's, else the signal the
+  // start route checked; null only on a row from before #568 without a trade
+  signalAction: tradeActionSchema.nullable(),
   // null while the account has no snapshot
   balance: tradingSessionBalanceSchema.nullable(),
   // the backend's summary message of the session went out (#464): the bot's card waits for it

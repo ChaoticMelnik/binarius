@@ -1854,6 +1854,7 @@ describe('body size', () => {
         profit: DECIMAL,
       },
       lastIntent: INTENT,
+      signalAction: TradeAction.Down,
       balance: { available: DECIMAL, ageSec: NONNEGATIVE_INT, current: false },
       noticesDone: false,
     };

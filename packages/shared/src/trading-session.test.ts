@@ -421,6 +421,7 @@ const view = {
   trades: { settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   cycles: { planned: 5, closed: 0 },
   lastIntent: null,
+  signalAction: null,
   balance: null,
   noticesDone: false,
 };
@@ -486,6 +487,20 @@ describe('tradingSessionViewSchema', () => {
     expect(
       safeParseTradingSessionResponse({ session: { ...view, noticesDone: true } }).success,
     ).toBe(true);
+  });
+
+  it('requires the direction of the session picture, up, down or null (#568)', () => {
+    const withoutSignal: Partial<typeof view> = { ...view };
+    delete withoutSignal.signalAction;
+    expect(safeParseTradingSessionResponse({ session: withoutSignal }).success).toBe(false);
+    for (const signalAction of ['up', 'down', null]) {
+      expect(safeParseTradingSessionResponse({ session: { ...view, signalAction } }).success).toBe(
+        true,
+      );
+    }
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, signalAction: 'sideways' } }).success,
+    ).toBe(false);
   });
 });
 

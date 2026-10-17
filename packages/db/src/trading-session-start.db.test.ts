@@ -308,6 +308,7 @@ const sessionIntent = (
   sessionId: string,
   step: number,
   mode: TradeMode = TradeMode.Demo,
+  action: TradeAction = TradeAction.Up,
 ) =>
   createSessionIntent(tmp.db, {
     sessionId,
@@ -317,7 +318,7 @@ const sessionIntent = (
     mode,
     assetId: 101,
     amount: decimalStringSchema.parse('1'),
-    action: TradeAction.Up,
+    action,
     durationSec: 60,
   });
 
@@ -452,6 +453,48 @@ describe('readTradingSessionView', () => {
       status: TradingSessionStatus.Stopped,
       stopReason: TradingSessionStopReason.UserStopped,
       endedAt: row!.endedAt!.toISOString(),
+    });
+  });
+
+  // #568: the bot's session picture follows the last intent, else the signal the start checked
+  describe('signalAction (#568)', () => {
+    const startedOn = async (action: TradeAction | null) => {
+      const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+      const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+      await tmp.db
+        .update(tradingSessions)
+        .set({ startSignalAction: action })
+        .where(eq(tradingSessions.id, session.id));
+      return { seed, session };
+    };
+    const signalOf = async (seed: { telegramUserId: string }, id: string) => {
+      const view = await readTradingSessionView(tmp.db, id, seed.telegramUserId);
+      expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
+      return view!.signalAction;
+    };
+
+    it('V-sig1 the start signal, before any intent', async () => {
+      const { seed, session } = await startedOn(TradeAction.Up);
+      expect(await signalOf(seed, session.id)).toBe('up');
+    });
+
+    it("V-sig2 the last intent's direction over the start's, a rejected one included", async () => {
+      const { seed, session } = await startedOn(TradeAction.Up);
+      await reject(
+        (await sessionIntent(seed, session.id, 1, TradeMode.Demo, TradeAction.Down)).intent,
+      );
+      expect(await signalOf(seed, session.id)).toBe('down');
+    });
+
+    it('V-sig3 no start signal and no intent: null', async () => {
+      const { seed, session } = await startedOn(null);
+      expect(await signalOf(seed, session.id)).toBeNull();
+    });
+
+    it("V-sig4 no start signal: the intent's direction", async () => {
+      const { seed, session } = await startedOn(null);
+      await sessionIntent(seed, session.id, 1, TradeMode.Demo, TradeAction.Up);
+      expect(await signalOf(seed, session.id)).toBe('up');
     });
   });
 
