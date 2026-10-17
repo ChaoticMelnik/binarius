@@ -869,6 +869,15 @@ describe('the referral reward notification: planning', () => {
     const inviter = { userId: first.inviterId, telegramUserId: first.inviterTelegramId };
     const second = await rewarded(3, { tokens: 75n, inviter });
     const starterOnly = await linked(5);
+    // a row with no broker account that is not a reward either
+    const adjusted = await seedUser(tmp.db);
+    await tmp.db.insert(tokenLedger).values({
+      userId: adjusted.userId,
+      kind: TokenLedgerKind.Adjustment,
+      balanceDelta: 30n,
+      note: 'R1',
+      createdAt: sql`now() - interval '5 minutes'`,
+    });
 
     await planMailingJobs(tmp.db);
 
@@ -895,6 +904,7 @@ describe('the referral reward notification: planning', () => {
       },
     ]);
     expect(await rewardJobsOf(starterOnly.userId)).toEqual([]);
+    expect(await rewardJobsOf(adjusted.userId)).toEqual([]);
     expect(await jobsOf(first.inviteeId)).toEqual([]);
   });
 
