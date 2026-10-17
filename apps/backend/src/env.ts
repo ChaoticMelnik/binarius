@@ -23,6 +23,7 @@ import {
   POSTBACK_URL_SECRET_MAX_LENGTH,
   POSTBACK_URL_SECRET_PATTERN,
 } from '@binarius/shared/postback';
+import { BROKER_WS_URL_RULES } from '@binarius/broker-socket';
 import {
   DEFAULT_BROKER_PAIRS_TTL_MS,
   MAX_BROKER_PAIRS_TTL_MS,
@@ -87,6 +88,8 @@ export interface Env {
   depositWidgetOrigins: string[];
   // the postback route's path secret (#141); absent = the route is not registered
   postbackUrlSecret?: string;
+  // the broker's Socket.IO URL (#404); absent = no market data socket
+  brokerWsUrl?: string;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -154,6 +157,11 @@ export function parseEnv(source: EnvSource): Env {
       source.POSTBACK_URL_SECRET === undefined
         ? undefined
         : parsePostbackSecret(readEnv(source, 'POSTBACK_URL_SECRET'), 'POSTBACK_URL_SECRET'),
+    // as the worker reads it: readEnv refuses '', an absent variable leaves the source off
+    brokerWsUrl:
+      source.BROKER_WS_URL === undefined
+        ? undefined
+        : parseUrlEnv(readEnv(source, 'BROKER_WS_URL'), 'BROKER_WS_URL', BROKER_WS_URL_RULES),
     ...parseBotTokens(source),
     ...parseTokenEncryption(source),
   };

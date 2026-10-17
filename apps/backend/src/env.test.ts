@@ -250,6 +250,28 @@ describe('POSTBACK_URL_SECRET (#141)', () => {
   });
 });
 
+describe('BROKER_WS_URL (#404)', () => {
+  it('leaves the market data source off when absent', () => {
+    expect(parseEnv(valid).brokerWsUrl).toBeUndefined();
+  });
+
+  it.each(['https://broker-ws.binodex.app', 'wss://broker-ws.binodex.app/socket'])(
+    'reads BROKER_WS_URL=%s',
+    (value) => {
+      expect(parseEnv({ ...valid, BROKER_WS_URL: value }).brokerWsUrl).toBe(value);
+    },
+  );
+
+  it.each([
+    '',
+    'http://broker-ws.binodex.app',
+    'ws://broker-ws.binodex.app',
+    'wss://[::1]:443',
+  ])('refuses BROKER_WS_URL=%s', (value) => {
+    expect(() => parseEnv({ ...valid, BROKER_WS_URL: value })).toThrow('BROKER_WS_URL');
+  });
+});
+
 describe('INTERNAL_API_TOKEN', () => {
   it.each([
     ['short-token', 'Env INTERNAL_API_TOKEN must be at least 16 characters'],
