@@ -192,6 +192,12 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     reason: `${NEGATIVE} (expectQuiet, and the ack that must stay uncalled)`,
   },
   {
+    file: 'apps/backend/src/market-data/manager.test.ts',
+    form: 'F4',
+    match: 'await pastGrace();',
+    reason: `${NEGATIVE} (QUIET_MS, past the 300 ms grace: no failover may follow a reconnection inside it or a stop())`,
+  },
+  {
     file: 'packages/broker-socket/src/socket.test.ts',
     form: 'F4',
     match: 'await quiet();',
