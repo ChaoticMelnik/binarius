@@ -8,7 +8,7 @@ import {
   BROKER_SOCKET_RECONNECT_DELAY_MS,
   BROKER_SOCKET_RECONNECT_JITTER,
 } from '@binarius/broker-socket';
-import { SIGNAL_FETCH_LIMIT, TICK_MAX_SKEW_MS } from '@binarius/signal';
+import { SIGNAL_FETCH_LIMIT, SIGNAL_PACER_RETRY_SEC, TICK_MAX_SKEW_MS } from '@binarius/signal';
 import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
@@ -93,17 +93,14 @@ import {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
-  SIGNAL_SCAN_SHARES_PERCENT,
   SIGNAL_SCAN_SLACK_MS,
+  signalRestCapacity,
+  signalRestWorstWindow,
   STARS_RECONCILE_MAX_PAGES,
   STARS_RECONCILE_PAGE_SIZE,
   STARS_RECONCILE_TICK_MS,
   STARS_RECONCILE_WINDOW_S,
   STARS_TELEGRAM_API_TIMEOUT_MS,
-  scanDecisionsPerMinute,
-  signalScanCapacity,
-  signalScanPairs,
-  signalScanPerMinute,
   TELEGRAM_BOT_SENDS_PER_SECOND,
   TRADING_ACCESS_REFRESH_BUDGET_MS,
 } from './timing';
@@ -245,55 +242,33 @@ describe('broker balance timing', () => {
     expect(SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS).toBeLessThan(
       SIGNAL_CHART_INTERVAL_MS[interval],
     );
-    expect(Number.isInteger(scanDecisionsPerMinute(interval))).toBe(true);
   });
 
   it('keeps the scanner backoff bounds in order', () => {
     expect(SIGNAL_SCAN_BACKOFF_MIN_MS).toBeLessThanOrEqual(SIGNAL_SCAN_BACKOFF_MAX_MS);
   });
 
-  it('splits the scan ceiling into 13 pairs on 15s and 4 on 5s at the default (#382)', () => {
-    expect(signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(13);
-    expect(signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(4);
-    expect(signalScanPairs(MAX_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(26);
-    expect(signalScanPairs(MAX_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(8);
-    expect(signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(52);
-    expect(signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(48);
-    expect(
-      SIGNAL_SCAN_INTERVALS.reduce(
-        (sum, interval) => sum + SIGNAL_SCAN_SHARES_PERCENT[interval],
-        0,
-      ),
-    ).toBe(100);
-  });
-
-  it('gives each pacer one candle of pairs plus one spare token (#382 review M1)', () => {
-    expect(signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(14);
-    expect(signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(5);
-    expect(signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(27);
-    expect(signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(9);
-    expect(signalScanCapacity(MIN_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(4);
-    expect(signalScanCapacity(MIN_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(2);
-  });
-
-  it('scans one pair on every interval at the minimum ceiling, and none on 5s below it', () => {
+  // #405: one pacer for every signal chart GET; its bucket is one 5 s candle of on-demand GETs
+  // plus a spare token (#382 review M1)
+  it('sizes the signal pacer bucket to a 5 s candle of the ceiling plus one spare token', () => {
+    expect(signalRestCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE)).toBe(10);
+    expect(signalRestCapacity(MAX_SIGNAL_SCAN_PER_MINUTE)).toBe(18);
+    expect(signalRestCapacity(MIN_SIGNAL_SCAN_PER_MINUTE)).toBe(4);
+    expect(signalRestCapacity(MIN_SIGNAL_SCAN_PER_MINUTE)).toBeGreaterThanOrEqual(2);
     expect(MIN_SIGNAL_SCAN_PER_MINUTE).toBe(25);
-    expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(3);
-    expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(1);
-    expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE - 1, '5s')).toBe(0);
   });
 
-  // each pacer's one overflow token is the backfill's (#590, pacer.test.ts P11)
-  it("keeps the scanners' worst 60 s window at the highest ceiling below the broker window", () => {
-    const worst =
-      MAX_SIGNAL_SCAN_PER_MINUTE +
-      SIGNAL_SCAN_INTERVALS.reduce(
-        (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
-        0,
-      ) +
-      SIGNAL_SCAN_INTERVALS.length;
-    expect(worst).toBe(238);
-    expect(worst).toBeLessThan(BROKER_RATE_LIMIT_PER_MINUTE);
+  // the overflow token is the backfill's (#590, pacer.test.ts P11)
+  it("keeps the signal pacer's worst 60 s window at the highest ceiling below the broker window", () => {
+    expect(signalRestWorstWindow(MAX_SIGNAL_SCAN_PER_MINUTE)).toBe(219);
+    expect(signalRestWorstWindow(MAX_SIGNAL_SCAN_PER_MINUTE)).toBeLessThan(
+      BROKER_RATE_LIMIT_PER_MINUTE,
+    );
+  });
+
+  it('holds a pacer refusal no longer than the cache holds anything', () => {
+    expect(SIGNAL_PACER_RETRY_SEC).toBe(1);
+    expect(SIGNAL_PACER_RETRY_SEC * 1000).toBeLessThanOrEqual(SIGNAL_CACHE_MAX_TTL_MS);
   });
 
   it('ends a bot texts load before the next one starts and inside phase 1', () => {

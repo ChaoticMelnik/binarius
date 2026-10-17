@@ -9,7 +9,8 @@ export const BROKER_RATE_LIMIT_PER_MINUTE = 600;
 export const WORKER_BROKER_GETS_PER_MINUTE = 400;
 // the backend's balance refresh (BALANCE_POLL_MAX_PER_MINUTE overrides it)
 export const DEFAULT_BALANCE_POLL_PER_MINUTE = 100;
-// the backend's signal scanner (SIGNAL_SCAN_MAX_PER_MINUTE overrides it)
+// the backend's signal REST (SIGNAL_SCAN_MAX_PER_MINUTE overrides it): the on-demand chart GETs
+// without the data socket and the candle backfill's overflow, on one pacer (#405)
 export const DEFAULT_SIGNAL_SCAN_PER_MINUTE = 100;
 
 export const BROKER_BUDGET_HOLDS =
@@ -23,7 +24,7 @@ if (!BROKER_BUDGET_HOLDS) {
 
 // What the three loops may send a minute together under the backend's configured ceilings. Above
 // BROKER_RATE_LIMIT_PER_MINUTE it is an operator's choice the backend warns about at start; the
-// scanner's pause on a 429 is the backstop.
+// signal pacer's pause on a 429 is the backstop.
 export function brokerGetsPerMinute(ceilings: {
   balancePollPerMinute: number;
   signalScanPerMinute: number;
