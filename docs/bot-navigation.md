@@ -215,6 +215,7 @@ no repeat.
 | the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 | the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Новый анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration) — one button, as the chain's reminders |
+| the inviter's reward notification `referralRewarded` (#576, the backend's mailing, [mailing.md](mailing.md)) | 👥 Пригласить ещё (`cmd:invite`, the /invite screen as a new message) — one button, as the reminders |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
 a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals of the same
