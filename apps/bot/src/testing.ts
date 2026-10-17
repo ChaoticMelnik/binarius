@@ -791,6 +791,8 @@ export const WRITE_CALLBACK_PREFIXES = [
   // the mode switches (#474): «✅ Подтверждаю» and «🎮 Вернуться в демо» of the mode screen
   'mode:r:ok',
   'mode:d',
+  // a language of the language screen (#508); `lang` alone opens the screen, a read
+  'lang:',
 ] as const;
 
 // Every message a scene sends goes through here, so no scene can send a repeat of a write

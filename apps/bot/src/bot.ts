@@ -58,6 +58,7 @@ import { createSessionShareComposer } from './session-share';
 import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingModeComposer } from './trading-mode';
+import { createLanguageScreenComposer } from './language-screen';
 import { createSetupCardPhotos } from './setup-card';
 import { createTradingSessionComposer } from './trading-session';
 import { createCycleStakeComposer } from './cycle-stake';
@@ -554,6 +555,8 @@ export function createBot({
   privateChats.use(tradingSession.composer);
 
   // the mode screen behind the status card's mode button (#474, docs/trading-mode.md)
+  // «🌐 Язык / Language» on the status card (#508)
+  privateChats.use(createLanguageScreenComposer({ backend, languages, logger }));
   privateChats.use(
     createTradingModeComposer({ backend, logger, connectKeyboard: welcomeKeyboard }),
   );

@@ -27,6 +27,7 @@ import {
   BUY_CALLBACK_DATA,
   BotLanguage,
   BOT_TEXT_SOURCES_EN,
+  LANGUAGE_CALLBACK_DATA,
 } from '@binarius/shared';
 import { runWithLanguage, type UserLanguages } from './language';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
@@ -449,8 +450,9 @@ describe('/start', () => {
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
   // the demo, then the invite (#115) and the purchase (#117) in one row (#506), and the deposit
-  // (#27), the cashier Mini App
-  const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
+  // (#27), the cashier Mini App, beside the language (#508)
+  const LANGUAGE = { text: LABELS.languageButton, callback_data: LANGUAGE_CALLBACK_DATA };
+  const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }, LANGUAGE];
   // the entry and the mode screen share the first row (#474)
   const CARD_ROWS = [
     [
@@ -550,7 +552,10 @@ describe('the status card', () => {
         cashierUrl: null,
       });
       const rows = mode === TradeMode.Real ? REAL_CARD_ROWS : CARD_ROWS;
-      expect(inlineRows(sentPayload(calls, 'sendPhoto')), mode).toEqual(rows.slice(0, -1));
+      expect(inlineRows(sentPayload(calls, 'sendPhoto')), mode).toEqual([
+        ...rows.slice(0, -1),
+        [LANGUAGE],
+      ]);
     }
   });
 
@@ -784,6 +789,7 @@ describe('«🏠 В меню» (#350)', () => {
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
       { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
+      { text: LABELS.languageButton, callback_data: LANGUAGE_CALLBACK_DATA },
     ]);
   });
 

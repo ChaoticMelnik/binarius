@@ -23,6 +23,8 @@ import {
   TradingSessionStopReason,
   TRADING_SIGNAL_BUDGET_MS,
   UserErrorCode,
+  LANGUAGE_CALLBACK_DATA,
+  languageSetCallbackData,
   UserStatus,
   decimalStringSchema,
   type TradingAccessResponse,
@@ -3165,6 +3167,66 @@ const LEVEL_CURRENT_WORST_CASE: Branch = {
   expected: { backend: 0, telegram: 1 },
 };
 
+// the language screen (#508): USER is cached as Russian, so `lang:en` is a change
+const LANGUAGE_SET_UPDATE = callbackUpdate(languageSetCallbackData(BotLanguage.En));
+const LANGUAGE_WORST_CASE: Branch = {
+  label: 'the language screen is sent',
+  update: callbackUpdate(LANGUAGE_CALLBACK_DATA),
+  expected: { backend: 0, telegram: 2 },
+};
+const LANGUAGE_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(LANGUAGE_CALLBACK_DATA, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  LANGUAGE_WORST_CASE,
+];
+const LANGUAGE_SET_WORST_CASE: Branch = {
+  label: 'the edit is refused and the screen is sent anew',
+  update: LANGUAGE_SET_UPDATE,
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+const LANGUAGE_SET_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the backend fails',
+    update: LANGUAGE_SET_UPDATE,
+    setLanguage: () =>
+      Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'no users row',
+    update: LANGUAGE_SET_UPDATE,
+    setLanguage: () =>
+      Promise.reject(
+        new BackendError(BackendErrorCode.HttpStatus, {
+          status: 404,
+          reason: UserErrorCode.UserNotFound,
+        }),
+      ),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the screen is redrawn',
+    update: LANGUAGE_SET_UPDATE,
+    expected: { backend: 1, telegram: 2 },
+  },
+  LANGUAGE_SET_WORST_CASE,
+  {
+    label: 'the edit is refused as not modified',
+    update: LANGUAGE_SET_UPDATE,
+    apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+const LANGUAGE_CURRENT_WORST_CASE: Branch = {
+  label: 'the current language is pressed',
+  update: callbackUpdate(languageSetCallbackData(BotLanguage.Ru)),
+  expected: { backend: 0, telegram: 1 },
+};
+
 const SUPPORT_WORST_CASE: Branch = {
   label: 'the support message is sent',
   update: textUpdate('/support'),
@@ -3272,6 +3334,22 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     ['settingsShow', SETTINGS_SHOW],
   ] as const)('the stake picker (#297): %s', async (handler, { branches, worst }) => {
     await checkHandler(handler, branches, worst, HANDLER_CALLS[handler]);
+  });
+
+  it('the language screen (#508)', async () => {
+    await checkHandler('language', LANGUAGE_BRANCHES, LANGUAGE_WORST_CASE, HANDLER_CALLS.language);
+    await checkHandler(
+      'languageSet',
+      LANGUAGE_SET_BRANCHES,
+      LANGUAGE_SET_WORST_CASE,
+      HANDLER_CALLS.languageSet,
+    );
+    await checkHandler(
+      'languageCurrent',
+      [LANGUAGE_CURRENT_WORST_CASE],
+      LANGUAGE_CURRENT_WORST_CASE,
+      HANDLER_CALLS.languageCurrent,
+    );
   });
 
   it('/support', async () => {

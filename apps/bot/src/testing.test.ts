@@ -5,6 +5,8 @@ import {
   BOT_MESSAGE_SPACER,
   confirmCallbackData,
   NotificationLevel,
+  BotLanguage,
+  languageSetCallbackData,
   sessionStopCallbackData,
   TradeAction,
   TradeMode,
@@ -220,6 +222,7 @@ describe('WRITE_CALLBACK_PREFIXES', () => {
     ['a stake preset', stakePresetCallbackData('5', TradeMode.Demo, SETTINGS)],
     ['the stake reset', stakeResetCallbackData(TradeMode.Demo, SETTINGS)],
     ['a notification level', levelCallbackData(NotificationLevel.All)],
+    ['a language', languageSetCallbackData(BotLanguage.En)],
   ])('lists the prefix of %s', (_label, data) => {
     expect(WRITE_CALLBACK_PREFIXES.some((prefix) => data.startsWith(prefix))).toBe(true);
   });

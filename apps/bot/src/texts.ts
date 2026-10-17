@@ -129,6 +129,14 @@ const LEVEL_LABELS = labelsOf({
   [NotificationLevel.Off]: 'levelOff',
 } as const satisfies Record<NotificationLevel, BotStaticPlainKey>);
 
+// The language screen's buttons (#508), the current one marked as the level's is
+const LANGUAGE_LABELS = labelsOf({
+  [BotLanguage.Ru]: 'languageRuButton',
+  [BotLanguage.En]: 'languageEnButton',
+} as const satisfies Record<BotLanguage, BotStaticPlainKey>);
+export const languageLabel = (language: BotLanguage, current: boolean): string =>
+  current ? `${LANGUAGE_LABELS[language]} ✅` : LANGUAGE_LABELS[language];
+
 // A trade's direction in words: the analysis's stake button (#126) and #127's status texts; the
 // card names it with its own words (#482).
 export const ACTION_LABELS = labelsOf({
