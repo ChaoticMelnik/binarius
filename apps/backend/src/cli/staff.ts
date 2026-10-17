@@ -1,18 +1,30 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { Pool } from 'pg';
-import { DATABASE_URL_RULES, parseUrlEnv, readEnv, staffLoginSchema } from '@binarius/shared';
+import {
+  DATABASE_URL_RULES,
+  errorLogFields,
+  parseUrlEnv,
+  readEnv,
+  staffLoginSchema,
+} from '@binarius/shared';
 import {
   createDb,
   createStaffAccount,
   disableStaffAccount,
+  findStaffForLogin,
   generatePassword,
   hashPassword,
   resetStaffPassword,
+  StaffStatus,
   uniqueViolation,
+  verifyPassword,
+  type Db,
+  type StaffInvalidation,
 } from '@binarius/db';
+import { formatFailure } from './kill-switch';
 
-// 0 done, 1 the command could not be carried out, 2 the command was not understood
+// 0 done, 1 refused or the result is unknown, 2 the command was not understood
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
@@ -110,21 +122,32 @@ export async function runStaffCli(
     return EXIT_USAGE;
   }
 
-  const databaseUrl = parseUrlEnv(readEnv(source, 'DATABASE_URL'), 'DATABASE_URL', DATABASE_URL_RULES);
-  const pool = new Pool({ connectionString: databaseUrl });
-  const db = createDb(pool);
+  let databaseUrl: string;
   try {
+    databaseUrl = parseUrlEnv(readEnv(source, 'DATABASE_URL'), 'DATABASE_URL', DATABASE_URL_RULES);
+  } catch (error) {
+    // our own env messages name the variable, never its value
+    print(`Команда не выполнена: ${error instanceof Error ? error.message : String(error)}`);
+    return EXIT_FAILED;
+  }
+
+  let pool: Pool | undefined;
+  let db: Db | undefined;
+  let password: string | undefined;
+  // Every statement from here on sits inside this try, whose catch returns a code: that, not an
+  // audit of what each call can throw, is why the CLI never leaves on an unhandled rejection.
+  try {
+    pool = new Pool({ connectionString: databaseUrl });
+    db = createDb(pool);
     if (parsed.command === 'create') {
-      const password = generatePassword();
+      password = generatePassword();
       const created = await createStaffAccount(db, {
         login: parsed.login,
         passwordHash: await hashPassword(password),
         telegramUserId: parsed.telegramId as bigint,
         displayName: parsed.name,
       });
-      print(`Создана учётная запись ${created.login}`);
-      // printed once and never stored in plaintext: the row holds a hash
-      print(`Пароль: ${password}`);
+      for (const line of createdLines(created.login, password)) print(line);
       return EXIT_OK;
     }
 
@@ -134,13 +157,11 @@ export async function runStaffCli(
         print(`Учётная запись ${parsed.login} не найдена`);
         return EXIT_FAILED;
       }
-      print(
-        `Отключена ${parsed.login}: закрыто запросов на вход ${counts.closedChallenges}, ссылок ${counts.closedLinks}, отозвано сессий ${counts.revokedSessions}`,
-      );
+      for (const line of disabledLines(parsed.login, counts)) print(line);
       return EXIT_OK;
     }
 
-    const password = generatePassword();
+    password = generatePassword();
     const counts = await resetStaffPassword(db, {
       login: parsed.login,
       passwordHash: await hashPassword(password),
@@ -149,20 +170,104 @@ export async function runStaffCli(
       print(`Учётная запись ${parsed.login} не найдена`);
       return EXIT_FAILED;
     }
-    print(
-      `Пароль ${parsed.login} сброшен: закрыто запросов на вход ${counts.closedChallenges}, ссылок ${counts.closedLinks}, отозвано сессий ${counts.revokedSessions}`,
-    );
-    print(`Пароль: ${password}`);
+    for (const line of resetLines(parsed.login, password, counts)) print(line);
     return EXIT_OK;
   } catch (error) {
-    if (uniqueViolation(error) !== undefined) {
-      print('Такой логин или Telegram ID уже занят');
-      return EXIT_FAILED;
-    }
-    throw error;
+    // awaited here, so the finally below does not end the pool under the re-read
+    return await reportFailure(db, parsed, password, error, print);
   } finally {
-    await pool.end();
+    if (pool !== undefined) await pool.end().catch(() => undefined);
   }
+}
+
+const UNKNOWN_COUNTS = 'число закрытых запросов, ссылок и отозванных сессий неизвестно';
+
+const countsText = (counts: StaffInvalidation | undefined): string =>
+  counts === undefined
+    ? UNKNOWN_COUNTS
+    : `закрыто запросов на вход ${counts.closedChallenges}, ссылок ${counts.closedLinks}, отозвано сессий ${counts.revokedSessions}`;
+
+// printed once and never stored in plaintext: the row holds a hash
+const createdLines = (login: string, password: string): string[] => [
+  `Создана учётная запись ${login}`,
+  `Пароль: ${password}`,
+];
+
+const disabledLines = (login: string, counts?: StaffInvalidation): string[] => [
+  `Отключена ${login}: ${countsText(counts)}`,
+];
+
+const resetLines = (login: string, password: string, counts?: StaffInvalidation): string[] => [
+  `Пароль ${login} сброшен: ${countsText(counts)}`,
+  `Пароль: ${password}`,
+];
+
+function hasSqlState(error: unknown, code: string): boolean {
+  const { err, cause } = errorLogFields(error);
+  return err.code === code || cause?.code === code;
+}
+
+async function reportFailure(
+  db: Db | undefined,
+  parsed: Parsed,
+  password: string | undefined,
+  error: unknown,
+  print: (line: string) => void,
+): Promise<number> {
+  // only create's INSERT can meet a unique index on staff, so only there does it mean "taken"
+  if (parsed.command === 'create' && uniqueViolation(error) !== undefined) {
+    print('Такой логин или Telegram ID уже занят');
+    return EXIT_FAILED;
+  }
+  const refused = (): number => {
+    print(`Команда не выполнена: ${formatFailure(error)}`);
+    return EXIT_FAILED;
+  };
+  if (hasSqlState(error, '42P01')) {
+    refused();
+    print('База данных не мигрирована: выполните pnpm db:migrate');
+    return EXIT_FAILED;
+  }
+  // no pool, or no password yet: not a statement was sent
+  if (db === undefined || (parsed.command !== 'disable' && password === undefined)) {
+    return refused();
+  }
+  let landed: string | undefined;
+  try {
+    landed = await commandLanded(db, parsed, password);
+  } catch {
+    // the re-read's own error is almost always the same one; the original is what is printed
+    print(`Результат неизвестен: ${formatFailure(error)}`);
+    print('Проверьте учётную запись и повторите команду');
+    return EXIT_FAILED;
+  }
+  if (landed === undefined) return refused();
+  print(`Ответ потерян, но запрошенное состояние достигнуто: ${formatFailure(error)}`);
+  const lines =
+    parsed.command === 'disable'
+      ? disabledLines(landed)
+      : parsed.command === 'create'
+        ? createdLines(landed, password as string)
+        : resetLines(landed, password as string);
+  for (const line of lines) print(line);
+  return EXIT_OK;
+}
+
+// A failed answer does not say whether the commit landed, and a repeat would mint another
+// password, so the state is re-read: the login of the row in the requested state, if it is.
+async function commandLanded(
+  db: Db,
+  parsed: Parsed,
+  password: string | undefined,
+): Promise<string | undefined> {
+  const row = await findStaffForLogin(db, parsed.login);
+  if (row === undefined) return undefined;
+  if (parsed.command === 'disable') {
+    return row.status === StaffStatus.Disabled ? row.login : undefined;
+  }
+  return password !== undefined && (await verifyPassword(row.passwordHash, password))
+    ? row.login
+    : undefined;
 }
 
 // The module is imported by its test, so the command only runs when this file is what node was
