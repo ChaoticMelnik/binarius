@@ -7,6 +7,7 @@ import {
   type Api,
   type Context,
 } from 'grammy';
+import type { Message } from 'grammy/types';
 import {
   deleteRefusal,
   editRefusal,
@@ -25,6 +26,7 @@ import {
   type SetTradingModeResponse,
   type TelegramHtml,
   type TrackedSession,
+  type TradeAction,
   type TradingSessionView,
   telegramErrorFields,
 } from '@binarius/shared';
@@ -59,17 +61,21 @@ import {
 } from './keyboards';
 import type { Logger } from './logging';
 import {
+  editMessagePhotoByIdHtml,
+  editMessagePhotoByIdHtmlWithoutNextStep,
   editMessageTextByIdHtml,
   editMessageTextByIdHtmlWithoutNextStep,
   editMessageTextHtml,
   NO_NEXT_STEP_REASONS,
   replyHtml,
   replyHtmlWithoutNextStep,
+  replyWithPhotoHtmlWithoutNextStep,
   sendPhotoByIdHtml,
 } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
 import { attachShareButton } from './session-share';
-import { SESSION_NOT_FOUND, type SessionTracker } from './session-tracker';
+import { SESSION_NOT_FOUND, sessionEditMethod, type SessionTracker } from './session-tracker';
+import type { SetupCardPhotos } from './setup-card';
 import {
   LABELS,
   sessionAgainButtonLabel,
@@ -150,6 +156,8 @@ export interface TradingSessionDeps {
   connectKeyboard: () => InlineKeyboard;
   // «💳 Пополнить»'s page (#27): cashierUrlOf's; none, no button
   cashierUrl?: string;
+  // the pictures of a signal's direction, shared with the analysis card (#568)
+  setupCardPhotos: SetupCardPhotos;
 }
 
 interface Refusal {
@@ -286,6 +294,7 @@ export function createTradingSessionComposer<C extends Context>({
   sessionTracker,
   connectKeyboard,
   cashierUrl,
+  setupCardPhotos,
 }: TradingSessionDeps): {
   composer: Composer<C>;
   startSession: StartSession;
@@ -343,14 +352,73 @@ export function createTradingSessionComposer<C extends Context>({
       return;
     }
     const symbol = symbolOf(catalog, view);
-    // no keyboard (#536): the backend's waiting message under it carries the «⏹»
-    const sent = await replyHtmlWithoutNextStep(
+    const { sent, photoRefused } = await sendSessionMessage(
       ctx,
       sessionStatusText(symbol, view),
-      NO_NEXT_STEP_REASONS.SessionStatus,
+      view,
     );
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
-    if (removeScreen) await removePressedMessage(ctx, 'the launch screen', { stripKeyboard: true });
+    // the text after a refused photo took the delete's call (HANDLER_CALLS.sessionStart): the
+    // screen stays, and its button pressed again answers 409 with this session
+    if (removeScreen && !photoRefused) {
+      await removePressedMessage(ctx, 'the launch screen', { stripKeyboard: true });
+    }
+  }
+
+  // The session message, without a keyboard (#536): the backend's waiting message under it
+  // carries the «⏹». With a signal's direction it is that direction's picture with the text as
+  // its caption (#568); a refused photo (a stale file_id among others) forgets its file_id and
+  // sends the same text as a message. A transport failure is thrown, as a text's is: a second
+  // message after an unknown delivery could be a duplicate (#126).
+  async function sendSessionMessage(
+    ctx: Context,
+    text: TelegramHtml,
+    { signalAction }: Pick<TradingSessionView, 'signalAction'>,
+  ): Promise<{ sent: { chat: { id: number }; message_id: number }; photoRefused: boolean }> {
+    const reason = NO_NEXT_STEP_REASONS.SessionStatus;
+    if (signalAction === null) {
+      return { sent: await replyHtmlWithoutNextStep(ctx, text, reason), photoRefused: false };
+    }
+    const photo = setupCardPhotos.photo(signalAction);
+    try {
+      const sent = await replyWithPhotoHtmlWithoutNextStep(ctx, photo, text, reason);
+      setupCardPhotos.remember(signalAction, sent);
+      return { sent, photoRefused: false };
+    } catch (error) {
+      if (!(error instanceof GrammyError)) throw error;
+      setupCardPhotos.forget(signalAction);
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error),
+          byFileId: typeof photo === 'string',
+        },
+        'the session photo was refused, sending its text',
+      );
+      return { sent: await replyHtmlWithoutNextStep(ctx, text, reason), photoRefused: true };
+    }
+  }
+
+  // The session picture's edit by editMessageMedia (#568): an answer with the photo remembers its
+  // file_id; a refusal other than shown, gone or 403 forgets it, so the next poll uploads the file
+  // (a stale file_id is not told apart from other refusals); the tracker classifies the error.
+  async function editSessionPhoto(
+    action: TradeAction,
+    edit: (photo: string | InputFile) => Promise<Message | true>,
+  ): Promise<Message | true> {
+    try {
+      const result = await edit(setupCardPhotos.photo(action));
+      setupCardPhotos.remember(action, result);
+      return result;
+    } catch (error) {
+      if (error instanceof GrammyError) {
+        const refusal = editRefusal(error);
+        if (refusal !== 'shown' && refusal !== 'gone' && error.error_code !== 403) {
+          setupCardPhotos.forget(action);
+        }
+      }
+      throw error;
+    }
   }
 
   // an old status message's «🔄 Обновить» (#536): its keyboard stripped, nothing read or sent
@@ -699,17 +767,27 @@ export function createTradingSessionComposer<C extends Context>({
       label: symbol,
       ...entry,
       // the session message has no keyboard (#536): an edit without one strips an old status
-      // message's buttons too; a session gone leaves only the menu (#350)
-      edit: (text, ...[, end]) =>
-        end === 'not_found'
-          ? editMessageTextByIdHtml(api, chatId, messageId, text, { reply_markup: menuKeyboard() })
-          : editMessageTextByIdHtmlWithoutNextStep(
-              api,
-              chatId,
-              messageId,
-              text,
-              NO_NEXT_STEP_REASONS.SessionStatus,
-            ),
+      // message's buttons too; a session gone leaves only the menu (#350). Its kind follows the
+      // view drawn, or the last one read once the session is gone (#568, sessionEditMethod).
+      edit: (text, ...args) => {
+        const drawn = args[1] === 'not_found' ? args[2] : args[0];
+        const picture =
+          sessionEditMethod(drawn) === 'editMessageMedia' ? (drawn?.signalAction ?? null) : null;
+        const reason = NO_NEXT_STEP_REASONS.SessionStatus;
+        if (args[1] === 'not_found') {
+          const extra = { reply_markup: menuKeyboard() };
+          return picture === null
+            ? editMessageTextByIdHtml(api, chatId, messageId, text, extra)
+            : editSessionPhoto(picture, (photo) =>
+                editMessagePhotoByIdHtml(api, chatId, messageId, photo, text, extra),
+              );
+        }
+        return picture === null
+          ? editMessageTextByIdHtmlWithoutNextStep(api, chatId, messageId, text, reason)
+          : editSessionPhoto(picture, (photo) =>
+              editMessagePhotoByIdHtmlWithoutNextStep(api, chatId, messageId, photo, text, reason),
+            );
+      },
       card: (current) => sendCard(api, chatId, telegramUserId, symbol, botUsername, current),
     });
   }

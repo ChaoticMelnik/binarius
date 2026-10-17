@@ -7,6 +7,8 @@ import type { TelegramHtml } from '@binarius/shared';
 import {
   answerInlineQueryEmpty,
   answerInlineQueryPhotoHtml,
+  editMessagePhotoByIdHtml,
+  editMessagePhotoByIdHtmlWithoutNextStep,
   editMessageTextByIdHtml,
   editMessageTextByIdHtmlWithoutNextStep,
   editMessageTextHtml,
@@ -14,6 +16,7 @@ import {
   replyHtmlWithoutNextStep,
   replyWithInvoiceStars,
   replyWithPhotoHtml,
+  replyWithPhotoHtmlWithoutNextStep,
   replyWithVideoHtml,
   sendPhotoByIdHtml,
 } from './send';
@@ -91,6 +94,57 @@ export const viaPhotoByIdReplyKeyboard = sendPhotoByIdHtml(api, 1, 'id', text, {
   // @ts-expect-error nor a reply keyboard (TS2353)
   reply_markup: { keyboard: [] },
 });
+
+// #568: the session message as a photo, sent and edited without a keyboard under its reason
+// @ts-expect-error the photo without a keyboard needs its reason (TS2554)
+export const viaPhotoNoReason = replyWithPhotoHtmlWithoutNextStep(ctx, 'id', text);
+// @ts-expect-error nor a reason outside NO_NEXT_STEP_REASONS (TS2345)
+export const viaPhotoUnlisted = replyWithPhotoHtmlWithoutNextStep(ctx, 'id', text, 'x');
+// @ts-expect-error nor a raw caption (TS2345)
+export const viaPhotoRaw = replyWithPhotoHtmlWithoutNextStep(ctx, 'id', 'raw', 'session_status');
+export const viaPhotoExtra = replyWithPhotoHtmlWithoutNextStep(
+  ctx,
+  'id',
+  text,
+  'session_status',
+  // @ts-expect-error nor a fifth argument with caption_entities (TS2554)
+  { caption_entities: [] },
+);
+// @ts-expect-error the photo edit by id needs a keyboard (TS2554)
+export const viaMediaNoKeyboard = editMessagePhotoByIdHtml(api, 1, 2, 'id', text);
+export const viaMediaReplyKeyboard = editMessagePhotoByIdHtml(api, 1, 2, 'id', text, {
+  // @ts-expect-error nor a reply keyboard (TS2353)
+  reply_markup: { keyboard: [] },
+});
+export const viaMediaRaw = editMessagePhotoByIdHtml(
+  api,
+  1,
+  2,
+  'id',
+  // @ts-expect-error nor a raw caption (TS2345)
+  'raw',
+  { reply_markup: keyboard },
+);
+// @ts-expect-error the photo edit by id without a keyboard needs its reason (TS2554)
+export const viaMediaNoReason = editMessagePhotoByIdHtmlWithoutNextStep(api, 1, 2, 'id', text);
+export const viaMediaUnlisted = editMessagePhotoByIdHtmlWithoutNextStep(
+  api,
+  1,
+  2,
+  'id',
+  text,
+  // @ts-expect-error nor a reason outside NO_NEXT_STEP_REASONS (TS2345)
+  'x',
+);
+export const viaMediaWithoutRaw = editMessagePhotoByIdHtmlWithoutNextStep(
+  api,
+  1,
+  2,
+  'id',
+  // @ts-expect-error nor a raw caption (TS2345)
+  'raw',
+  'session_status',
+);
 
 // #321: the inline share answer takes TelegramHtml as its caption, and no keyboard at all
 // @ts-expect-error a raw string caption does not compile (TS2345)

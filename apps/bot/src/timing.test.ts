@@ -26,6 +26,7 @@ import {
   UserStatus,
   decimalStringSchema,
   type TradingAccessResponse,
+  type TradingSessionView,
   commandRetryCallbackData,
   CONNECT_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
@@ -1397,6 +1398,14 @@ const launchStartUpdate = () =>
   callbackUpdate(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5, true));
 const sessionHttpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });
+// the session message as its signal's picture (#568): a photo, or its text after a refused photo
+const PICTURED_SESSION = sessionView({ signalAction: 'up' });
+const startedPictured = () => Promise.resolve({ started: PICTURED_SESSION });
+const SESSION_PHOTO_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: wrong file identifier/HTTP URL specified',
+};
 const SESSION_START_WORST_CASE: Branch = {
   label:
     'the outcome is unknown, the retry learns the session, the status is sent, the launch screen is stripped',
@@ -1471,6 +1480,26 @@ const SESSION_START_BRANCHES: readonly Branch[] = [
   {
     label: 'the launch screen is deleted after the status',
     update: launchStartUpdate(),
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the photo is sent and the launch screen deleted (#568)',
+    update: launchStartUpdate(),
+    startSession: startedPictured,
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the photo is sent, the launch screen cannot be deleted and is stripped (#568)',
+    update: launchStartUpdate(),
+    startSession: startedPictured,
+    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+    expected: { backend: 2, telegram: 4 },
+  },
+  {
+    label: 'the photo is refused: the text goes and the launch screen stays (#568)',
+    update: launchStartUpdate(),
+    startSession: startedPictured,
+    apiErrors: [['sendPhoto', SESSION_PHOTO_REFUSED]],
     expected: { backend: 2, telegram: 3 },
   },
   {
@@ -3024,6 +3053,20 @@ const CYCLE_STAKE_PRESET_BRANCHES: readonly Branch[] = [
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
     expected: { backend: 3, telegram: 3 },
   },
+  {
+    label: 'the photo is sent, the screen cannot be deleted and is stripped (#568)',
+    update: cyclePressUpdate(),
+    startSession: startedPictured,
+    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+    expected: { backend: 3, telegram: 4 },
+  },
+  {
+    label: 'the photo is refused: the text goes and the screen stays (#568)',
+    update: cyclePressUpdate(),
+    startSession: startedPictured,
+    apiErrors: [['sendPhoto', SESSION_PHOTO_REFUSED]],
+    expected: { backend: 3, telegram: 3 },
+  },
   CYCLE_STAKE_PRESET_WORST_CASE,
 ];
 const CYCLE_STAKE_CUSTOM = pickerBranches(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'), 0, {
@@ -3042,25 +3085,39 @@ const cycleText = (label: string, text: string, expected: Calls, patch: Partial<
   expected,
   ...patch,
 });
+const unknownThenActive = (view: TradingSessionView) => {
+  let first = true;
+  return () => {
+    if (!first) return Promise.resolve({ active: view });
+    first = false;
+    return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+  };
+};
 const CYCLE_STAKE_TEXT_WORST_CASE: Branch = cycleText(
-  'the typed amount is saved, the start outcome is unknown and the retry learns the session',
+  'the typed amount is saved, the retry learns the session, its photo is refused and its text goes (#568)',
   '5',
-  { backend: 4, telegram: 1 },
+  { backend: 4, telegram: 2 },
   {
-    startSession: (() => {
-      let first = true;
-      return () => {
-        if (!first) return Promise.resolve({ active: SESSION_VIEW });
-        first = false;
-        return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
-      };
-    })(),
+    startSession: unknownThenActive(PICTURED_SESSION),
+    apiErrors: [['sendPhoto', SESSION_PHOTO_REFUSED]],
   },
 );
 const CYCLE_STAKE_TEXT_BRANCHES: readonly Branch[] = [
   cycleText('the text is not an amount', 'abc', { backend: 0, telegram: 1 }),
   cycleText('the save fails', '5', { backend: 2, telegram: 1 }, { setStake: unreachable }),
   cycleText('the typed amount is saved and the cycle starts', '5', { backend: 3, telegram: 1 }),
+  cycleText(
+    'the typed amount is saved, the start outcome is unknown and the retry learns the session',
+    '5',
+    { backend: 4, telegram: 1 },
+    { startSession: unknownThenActive(SESSION_VIEW) },
+  ),
+  cycleText(
+    'the typed amount is saved and the photo is sent (#568)',
+    '5',
+    { backend: 3, telegram: 1 },
+    { startSession: startedPictured },
+  ),
   CYCLE_STAKE_TEXT_WORST_CASE,
 ];
 

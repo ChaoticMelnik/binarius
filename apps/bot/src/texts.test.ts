@@ -1129,6 +1129,33 @@ describe('the demo session status', () => {
     expect(plainOf(pairLabel(PAIR_EURUSD), SESSION_VIEW)).toBe(running);
   });
 
+  // #568: the signal's direction is the head's fifth line, above the state
+  it.each([
+    ['up', '📡 Сигнал: ⬆️ Вверх'],
+    ['down', '📡 Сигнал: ⬇️ Вниз'],
+  ] as const)('T-sig1 prints the %s signal fifth, in both modes', (signalAction, line) => {
+    for (const mode of Object.values(TradeMode)) {
+      const lines = plainOf(lbl('X'), sessionView({ mode, signalAction })).split('\n');
+      expect(lines[4]).toBe(line);
+      expect(lines.slice(5)).toEqual(['', 'Торговая сессия запущена…']);
+    }
+  });
+
+  it('T-sig1 prints no signal line without a direction', () => {
+    expect(plainOf(lbl('X'), SESSION_VIEW)).not.toContain('📡');
+  });
+
+  it('T-sig1 puts the signal under the header when the settings cannot be read', () => {
+    expect(
+      plainOf(null, sessionView({ settings: null, signalAction: 'down' })).split('\n'),
+    ).toEqual([
+      '🎮 Демо-сессия',
+      '📡 Сигнал: ⬇️ Вниз',
+      '',
+      plainTextOf(TEXTS.sessionSettingsUnavailable),
+    ]);
+  });
+
   // #327: the header by the session's mode, the settings unavailable included
   it('heads a real session «💼 Реальная сессия» and a demo one «🎮 Демо-сессия»', () => {
     const real = sessionView({ mode: TradeMode.Real });
@@ -1253,9 +1280,11 @@ describe('the demo session status', () => {
         },
         balance: { available: d('999999999999.99999999'), ageSec: 2_147_483_647, current: false },
         lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+        signalAction: 'up',
       });
       const text = sessionStatusText(lbl(`<&>"`.repeat(20)), widest);
-      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      // the caption of the session's picture (#568)
+      expect(telegramTextProblems(text, TELEGRAM_CAPTION_LIMIT)).toEqual([]);
     },
   );
 

@@ -164,6 +164,7 @@ describe('the session tracker', () => {
   });
 
   // #536: the message prints nothing of the trades, so it is edited once, when the session stops
+  // (#568: and when its signal's direction turns; these views have none)
   it('no edit while the text is the same: one edit when the session stops', async () => {
     const tradedOn = sessionView({ ...trading, ...settledOne });
     const { tracker, readSession, request, target } = setup({
@@ -779,8 +780,54 @@ describe('the session tracker', () => {
       tracker.track(request({ view: null, startedAt: past(), edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
-      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found']]);
+      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found', null]]);
       expect(tracker.size()).toBe(0);
+    });
+  });
+
+  // #568: the session message's kind follows the view drawn, or the last one read once gone
+  describe('the session picture (#568)', () => {
+    const up = sessionView({ signalAction: 'up' });
+    const NOT_FOUND = () =>
+      new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: SESSION_NOT_FOUND });
+    const transport = () =>
+      new HttpError("Network request for 'editMessage' failed!", new Error('reset'));
+
+    it('P7g a 404 after a read view hands the edit that view as the last one', async () => {
+      const { tracker, request, target } = setup({ script: [NOT_FOUND()] });
+      const { edit } = target();
+      tracker.track(request({ view: up, edit }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found', up]]);
+    });
+
+    it.each([
+      ['a view with a direction', 'up', 'editMessageMedia'],
+      ['a view without one', null, 'editMessageText'],
+    ] as const)(
+      'K-method a transport failure of the edit of %s names %s',
+      async (_, signalAction, method) => {
+        const stopped = sessionView({ ...stoppedClosed, signalAction });
+        const { tracker, request, logger } = setup({ script: [stopped] });
+        tracker.track(request({ edit: () => Promise.reject(transport()) }));
+        await vi.advanceTimersByTimeAsync(FIRST);
+        expect(logger.warn.mock.calls[0]?.[1]).toBe('trading session message not edited');
+        expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method });
+      },
+    );
+
+    it('K-method a 404 after a view with a direction names editMessageMedia', async () => {
+      const { tracker, request, logger } = setup({ script: [NOT_FOUND()] });
+      tracker.track(request({ view: up, edit: () => Promise.reject(transport()) }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(logger.warn.mock.calls.map((call) => call[1])).toContain(
+        'trading session message not edited',
+      );
+      expect(
+        logger.warn.mock.calls.find(
+          (call) => call[1] === 'trading session message not edited',
+        )?.[0],
+      ).toMatchObject({ method: 'editMessageMedia' });
     });
   });
 

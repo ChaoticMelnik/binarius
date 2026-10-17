@@ -65,7 +65,7 @@ function pngSize(bytes: Buffer): { width: number; height: number } | undefined {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
-describe.each(Object.entries(SETUP_CARD_PHOTO_PATHS))('the analysis card picture %s', (_, path) => {
+describe.each(Object.entries(SETUP_CARD_PHOTO_PATHS))('the setup card picture %s', (_, path) => {
   const bytes = readFileSync(path);
 
   it('is a PNG', () => {
