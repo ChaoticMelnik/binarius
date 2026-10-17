@@ -250,6 +250,7 @@ compile.
 | `purchasedTokens`, `stars` | a Stars package's tokens and price (#117, [stars.md](stars.md)) | `formatCount` | — |
 | `tokenBalance` | `users.token_balance` after a Stars credit (#117) | `formatCount` | — |
 | `paymentDate` | a Stars payment's `paid_at`, Unix seconds (#118, /paysupport) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
+| `sessionEnd` | the session's `ended_at`, Unix seconds (#538, the promo card) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, `cycle`, `step`, `openPrice`,
 `closePrice`, …) are a line's value the
