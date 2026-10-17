@@ -66,6 +66,12 @@ import {
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
+  MARKET_DATA_BACKFILL_ATTEMPTS,
+  MARKET_DATA_BACKFILL_BUDGET_MS,
+  MARKET_DATA_BACKFILL_CONCURRENCY,
+  MARKET_DATA_BACKFILL_POLL_MS,
+  MARKET_DATA_BACKFILL_RETRY_MS,
+  MARKET_DATA_BACKFILL_SCAN_MS,
   MARKET_DATA_FAILOVER_GRACE_MS,
   MARKET_DATA_LOG_MS,
   MARKET_DATA_PENDING_MAX,
@@ -277,14 +283,16 @@ describe('broker balance timing', () => {
     expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE - 1, '5s')).toBe(0);
   });
 
+  // each pacer's one overflow token is the backfill's (#590, pacer.test.ts P11)
   it("keeps the scanners' worst 60 s window at the highest ceiling below the broker window", () => {
     const worst =
       MAX_SIGNAL_SCAN_PER_MINUTE +
       SIGNAL_SCAN_INTERVALS.reduce(
         (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
         0,
-      );
-    expect(worst).toBe(236);
+      ) +
+      SIGNAL_SCAN_INTERVALS.length;
+    expect(worst).toBe(238);
     expect(worst).toBeLessThan(BROKER_RATE_LIMIT_PER_MINUTE);
   });
 
@@ -371,6 +379,31 @@ describe('broker balance timing', () => {
     expect(MARKET_DATA_SKEW_MARGIN_MS).toBeLessThan(TICK_MAX_SKEW_MS);
     expect(MARKET_DATA_TICK_MS).toBeLessThanOrEqual(MARKET_DATA_LOG_MS);
     expect(SERVICE_ACCOUNTS_TICK_MS).toBeLessThan(MARKET_DATA_ACCOUNT_RETRY_MS);
+  });
+
+  it('ends a backfill GET by its own budget, inside phase 1 and inside the 5s candle (#590)', () => {
+    expect({
+      MARKET_DATA_BACKFILL_BUDGET_MS,
+      MARKET_DATA_BACKFILL_ATTEMPTS,
+      MARKET_DATA_BACKFILL_RETRY_MS,
+      MARKET_DATA_BACKFILL_SCAN_MS,
+      MARKET_DATA_BACKFILL_POLL_MS,
+      MARKET_DATA_BACKFILL_CONCURRENCY,
+    }).toEqual({
+      MARKET_DATA_BACKFILL_BUDGET_MS: 3_000,
+      MARKET_DATA_BACKFILL_ATTEMPTS: 3,
+      MARKET_DATA_BACKFILL_RETRY_MS: SIGNAL_CHART_INTERVAL_MS['15s'],
+      MARKET_DATA_BACKFILL_SCAN_MS: SIGNAL_CHART_INTERVAL_MS['5s'],
+      MARKET_DATA_BACKFILL_POLL_MS: 250,
+      MARKET_DATA_BACKFILL_CONCURRENCY: 2,
+    });
+    expect(MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(BROKER_REST_TIMEOUT_MS);
+    expect(MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(SIGNAL_SCAN_SLACK_MS + MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(
+      SIGNAL_CHART_INTERVAL_MS['5s'],
+    );
+    expect(MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE).toBeLessThanOrEqual(60_000);
+    expect(MARKET_DATA_BACKFILL_SCAN_MS).toBeLessThanOrEqual(SIGNAL_CHART_INTERVAL_MS['5s']);
   });
 
   // the anchor forwards it valueless (intents/config.test.ts): unset leaves the source off

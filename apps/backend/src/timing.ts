@@ -175,8 +175,23 @@ export const MARKET_DATA_SKEW_MARGIN_MS = 2_000;
 export const MARKET_DATA_ACCOUNT_RETRY_MS = 300_000;
 // candles kept per (pair, interval): the feed's window, MA200 included (#482)
 export const MARKET_DATA_RING_CANDLES = SIGNAL_FETCH_LIMIT;
-// the most (pair, interval) refill requests waiting for #590: every pair on both intervals
+// the most (pair, interval) refill requests waiting for the backfill: every pair on both intervals
 export const MARKET_DATA_PENDING_MAX = 288;
+// docs/market-data.md -> Backfill (#590). One backfill GET, by the call's own signal: below the
+// REST client's timeout, so that this, not the client, ends a slow chart.
+export const MARKET_DATA_BACKFILL_BUDGET_MS = 3_000;
+// failed attempts in a row on one (pair, interval) before it gives up
+export const MARKET_DATA_BACKFILL_ATTEMPTS = 3;
+// the hold-back of a (pair, interval) after any finished attempt: one GET in a 15s candle (owner,
+// 2026-10-17)
+export const MARKET_DATA_BACKFILL_RETRY_MS = 15_000;
+// the queue is rebuilt this often: a new hole or a cold pair is seen within one 5s candle
+export const MARKET_DATA_BACKFILL_SCAN_MS = 5_000;
+// how often a non-empty queue asks for a spare token: under one overflow token's refill at the
+// highest ceiling, so that no overflow token is lost between two polls
+export const MARKET_DATA_BACKFILL_POLL_MS = 250;
+// backfill GETs in flight at once
+export const MARKET_DATA_BACKFILL_CONCURRENCY = 2;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -372,12 +387,14 @@ const TIMING_CHAIN_HOLDS =
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
   MIN_SIGNAL_SCAN_PER_MINUTE <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&
   DEFAULT_SIGNAL_SCAN_PER_MINUTE <= MAX_SIGNAL_SCAN_PER_MINUTE &&
-  // the worst 60 s window of both scanners at the highest ceiling: the ceiling plus both buckets
+  // the worst 60 s window of both scanners at the highest ceiling: the ceiling plus both buckets,
+  // plus each pacer's one overflow token the backfill may take (#590)
   MAX_SIGNAL_SCAN_PER_MINUTE +
     SIGNAL_SCAN_INTERVALS.reduce(
       (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
       0,
-    ) <
+    ) +
+    SIGNAL_SCAN_INTERVALS.length <
     BROKER_RATE_LIMIT_PER_MINUTE &&
   // the worker's token route (#90): its longest path is one exchange under the account's row
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
@@ -462,6 +479,15 @@ const TIMING_CHAIN_HOLDS =
   MARKET_DATA_SKEW_MARGIN_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
   MARKET_DATA_SKEW_MARGIN_MS < TICK_MAX_SKEW_MS &&
   MARKET_DATA_TICK_MS <= MARKET_DATA_LOG_MS &&
+  // the backfill (#590): its GET ends by its own budget, inside phase 1 (stop() waits for at most
+  // one GET a worker, in parallel), and a GET started after the slack ends inside the candle, so
+  // fill() sees the boundary the request was built on and the dropped first row is always outside
+  // the window
+  MARKET_DATA_BACKFILL_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
+  MARKET_DATA_BACKFILL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  SIGNAL_SCAN_SLACK_MS + MARKET_DATA_BACKFILL_BUDGET_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
+  MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE <= 60_000 &&
+  MARKET_DATA_BACKFILL_SCAN_MS <= SIGNAL_CHART_INTERVAL_MS['5s'] &&
   SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
