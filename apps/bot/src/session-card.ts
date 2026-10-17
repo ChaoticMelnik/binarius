@@ -41,7 +41,7 @@ export interface SessionCardModel {
 
 // by the exact decimal, as the view counts won/lost/tied: a profit of 0.001 is a win, printed
 // +$0.001 (formatSignedUsd keeps every digit, #450)
-const toneOf = (amount: DecimalString): SessionCardTone =>
+export const toneOf = (amount: DecimalString): SessionCardTone =>
   !/[1-9]/.test(amount) ? 'tie' : amount.startsWith('-') ? 'loss' : 'win';
 
 export function sessionCardModel(
@@ -92,7 +92,7 @@ const CHART_TOP = 250;
 const CHART_BOTTOM = 540;
 const MARKER_RADIUS = 8;
 
-const COLOR = {
+export const COLOR = {
   background: '#0E1117',
   grid: '#262D3A',
   text: '#F2F4F8',
@@ -105,12 +105,12 @@ const COLOR = {
 } as const;
 
 // Catalog overrides (#299) can carry `<`, `&` or quotes: every text is escaped into the SVG.
-const escapeXml = (text: string): string =>
+export const escapeXml = (text: string): string =>
   text.replace(/[<>&"']/g, (char) => `&#${String(char.charCodeAt(0))};`);
 
 // The renderer measures nothing for us: a text shrinks to fit its slot by an upper estimate of
 // Inter's advance (bold capitals ≈ 0.68 em), so a long override or symbol never overflows.
-const fitSize = (text: string, width: number, max: number, bold: boolean): number =>
+export const fitSize = (text: string, width: number, max: number, bold: boolean): number =>
   Math.max(8, Math.min(max, Math.floor(width / (Math.max(text.length, 1) * (bold ? 0.68 : 0.62)))));
 
 interface TextOptions {
@@ -128,7 +128,7 @@ const text = (value: string, { x, y, width, size, bold = false, fill, anchor }: 
     bold ? ' font-weight="700"' : ''
   } fill="${fill}"${anchor === undefined ? '' : ` text-anchor="${anchor}"`}>${escapeXml(value)}</text>`;
 
-const round = (value: number): string => String(Math.round(value * 100) / 100);
+export const round = (value: number): string => String(Math.round(value * 100) / 100);
 
 const circle = (x: number, y: number, fill: string) =>
   `<circle cx="${round(x)}" cy="${round(y)}" r="${String(MARKER_RADIUS)}" fill="${fill}" stroke="${COLOR.background}" stroke-width="2"/>`;

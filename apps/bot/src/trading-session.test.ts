@@ -71,7 +71,7 @@ import {
 import { sessionCardKeyboard, sessionOutcomeUnknown, START_REFUSALS } from './trading-session';
 import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
-import { INLINE_QUERY_LIMIT, shareQuery } from './session-share';
+import { shareQuery } from './session-share';
 
 const START = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
 const REAL_START = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5);
@@ -117,6 +117,8 @@ function setup(
     readTradingAccess?: BackendClient['readTradingAccess'];
     // the pair's signal at a cycle door's press (#509): a signal by default
     evaluateSignal?: BackendClient['evaluateSignal'];
+    // no SHARE_STORAGE_CHAT_ID, so no «📤 Поделиться» (#538)
+    shareOff?: true;
   } = {},
 ) {
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
@@ -169,6 +171,7 @@ function setup(
     sessionTracker,
     sessionResumer,
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
+    ...(options.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -1268,12 +1271,12 @@ describe('the summary card (#318)', () => {
     expect(scene.logger.error).not.toHaveBeenCalled();
   });
 
-  // #321: «📤 Поделиться» on top, by one edit after the send, since the file id exists only then
+  // #321, #538: «📤 Поделиться» on top, by one edit after the send; the query names the session only
   const SHARE_ROW = [
     {
       text: LABELS.sessionShareButton,
       switch_inline_query_chosen_chat: {
-        query: shareQuery(SESSION_ID, CARD_FILE_ID),
+        query: shareQuery(SESSION_ID),
         allow_user_chats: true,
         allow_group_chats: true,
         allow_channel_chats: true,
@@ -1281,7 +1284,7 @@ describe('the summary card (#318)', () => {
     },
   ];
 
-  it("K8 puts «📤 Поделиться» over the card's own rows, with the largest size's file id", async () => {
+  it("K8 puts «📤 Поделиться» over the card's own rows, its query the session's id", async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE) });
     await (await entryOf(scene)).card(DONE);
     const sends = methods(scene.calls).filter((method) =>
@@ -1317,29 +1320,12 @@ describe('the summary card (#318)', () => {
     });
   });
 
-  it.each([
-    ['the result has no photo sizes', [], 'no_file_id'],
-    [
-      'the query would pass the inline query limit',
-      ['x'.repeat(INLINE_QUERY_LIMIT - shareQuery(SESSION_ID, '').length + 1)],
-      'query_too_long',
-    ],
-  ] as const)('K10 no edit when %s, and a warning', async (_label, fileIds, reason) => {
-    const scene = setup({ readSession: () => Promise.resolve(DONE) });
-    scene.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, fileIds));
+  it('K10 without the storage channel the card goes without «📤 Поделиться», and no warning', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE), shareOff: true });
     await (await entryOf(scene)).card(DONE);
     expect(methods(scene.calls)).toContain('sendPhoto');
     expect(methods(scene.calls)).not.toContain('editMessageReplyMarkup');
-    expect(warnings(scene.logger)).toEqual(['trading session share button not attached']);
-    expect(scene.logger.warn.mock.calls[0]?.[0]).toEqual({ sessionId: SESSION_ID, reason });
-  });
-
-  it('K11 a query exactly at the limit still gets the button', async () => {
-    const scene = setup({ readSession: () => Promise.resolve(DONE) });
-    const longest = 'x'.repeat(INLINE_QUERY_LIMIT - shareQuery(SESSION_ID, '').length);
-    scene.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, [longest]));
-    await (await entryOf(scene)).card(DONE);
-    expect(methods(scene.calls)).toContain('editMessageReplyMarkup');
+    expect(rowsOf(payloadOf(scene.calls, 'sendPhoto'))).toEqual(CARD_ROWS);
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
 

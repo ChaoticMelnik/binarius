@@ -17,6 +17,7 @@ describe('parseEnv', () => {
       logLevel: 'info',
       welcomeVideoFileId: undefined,
       webPublicUrl: 'https://web.example',
+      shareStorageChatId: undefined,
     });
   });
 
@@ -97,6 +98,22 @@ describe('parseEnv', () => {
       // Telegram always refuses, with no configuration error to point at
       expect(() => parseEnv({ ...base, WELCOME_VIDEO_FILE_ID: raw })).toThrow(
         'Env WELCOME_VIDEO_FILE_ID must not contain whitespace',
+      );
+    },
+  );
+
+  it('takes a channel id as the share storage chat (#538)', () => {
+    expect(parseEnv({ ...base, SHARE_STORAGE_CHAT_ID: '-1001234567890' }).shareStorageChatId).toBe(
+      -1001234567890,
+    );
+    expect(parseEnv({ ...base, SHARE_STORAGE_CHAT_ID: '42' }).shareStorageChatId).toBe(42);
+  });
+
+  it.each(['', 'abc', '1.5', ' 12', '12 ', '--12', '99999999999999999'])(
+    'refuses the share storage chat id %j',
+    (raw) => {
+      expect(() => parseEnv({ ...base, SHARE_STORAGE_CHAT_ID: raw })).toThrow(
+        'Env SHARE_STORAGE_CHAT_ID must be a Telegram chat id',
       );
     },
   );

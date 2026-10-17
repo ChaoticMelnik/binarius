@@ -851,6 +851,7 @@ function scene(options: SceneOptions = {}) {
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
+    readSessionShare: () => Promise.reject(new Error('not used by these scenes')),
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
     recordSessionMessage: () => Promise.reject(new Error('not used by these scenes')),
     listTrackedSessions: () => Promise.reject(new Error('not used by these scenes')),
