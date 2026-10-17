@@ -4,7 +4,7 @@ import { AccessTokenRefusal } from '@binarius/shared';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import type { DepositWidgetDeps } from '../deposit/widget-session';
-import { runDepositProbe } from './deposit-probe';
+import { depositProbeMain, runDepositProbe } from './deposit-probe';
 
 const ACCOUNT_ID = '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01';
 const TOKEN = 'probe-access-token';
@@ -131,5 +131,50 @@ describe('deposit-probe', () => {
       'broker_rejected: widget origin https://evil.example is not in DEPOSIT_WIDGET_ORIGINS',
     ]);
     expect(JSON.stringify([printed, logged])).not.toContain('wss_PROBE_ORIGIN');
+  });
+
+  // a DrizzleQueryError's shape: the query and its parameters in the message, SQLSTATE in the cause
+  it('P5 answers a database failure under the token with its name and code only', async () => {
+    const result = await runDepositProbe(
+      {
+        demoOnly: false,
+        accountId: ACCOUNT_ID,
+        widget: () => ({
+          ...deps(),
+          accessToken: () =>
+            Promise.reject(
+              new Error('Failed query: select … params: SECRET', {
+                cause: Object.assign(new Error('relation "x" does not exist'), {
+                  name: 'error',
+                  code: '42P01',
+                }),
+              }),
+            ),
+        }),
+      },
+      (line) => printed.push(line),
+    );
+    expect([result, printed]).toEqual([1, ['failed: Error (error 42P01)']]);
+    expect(JSON.stringify([printed, logged])).not.toContain('SECRET');
+    expect(broker.rest.journal).toEqual([]);
+  });
+
+  it('P6 answers a setup that threw', async () => {
+    const result = await runDepositProbe(
+      {
+        demoOnly: false,
+        accountId: ACCOUNT_ID,
+        widget: () => {
+          throw new Error('setup SECRET');
+        },
+      },
+      (line) => printed.push(line),
+    );
+    expect([result, printed]).toEqual([1, ['failed: Error']]);
+  });
+
+  it('P7 answers a missing ACCOUNT_ID with the variable', async () => {
+    expect(await depositProbeMain({}, (line) => printed.push(line))).toBe(1);
+    expect(printed).toEqual(['failed: Missing required env ACCOUNT_ID']);
   });
 });
