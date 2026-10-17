@@ -456,8 +456,8 @@ queue — the last call wins — and «Опубликовать заново» m
 
 A key's limit is checked with its variables' samples. `BOT_TEXT_MESSAGES` describes what that
 cannot bound: each message the bot builds from several keys (the account and status cards,
-`/help`, `/account`, the analysis screens, the trade status, the session message and the reply to
-its stop (#536), the demo screens,
+`/help`, `/account`, the analysis screens, the trade status, the session message — the caption of
+its picture since #568, a caption of 1024 — and the reply to its stop (#536), the demo screens,
 `/settings` with the stake line and the stake picker, the mode screen, its confirm and a switch's
 result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; a block of the session's cycle message with its
