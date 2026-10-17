@@ -352,3 +352,37 @@ describe('stars requests', () => {
     }
   });
 });
+
+// The one door against a database the CLI cannot reach (#150): a line and exit 1, no throw, and
+// Telegram is never asked.
+describe('stars against an unreachable database', () => {
+  it.each([
+    [['requests'], 'Не удалось прочитать заявки: Error (Error ECONNREFUSED).'],
+    [
+      ['refund', 'charge-unreachable', '--reason', 'x'],
+      'Не удалось прочитать оплату: Error (Error ECONNREFUSED). Telegram не вызывался.',
+    ],
+  ])('%j answers 1 with the error name and code', async (argv, line) => {
+    const telegram = fakeTelegram(() => Promise.resolve(true));
+    let created = 0;
+    const lines: string[] = [];
+    const code = await runStarsCli(
+      argv,
+      {
+        DATABASE_URL: 'postgres://binarius:secret@127.0.0.1:1/binarius',
+        TELEGRAM_BOT_TOKEN: TOKEN,
+      },
+      (printed) => lines.push(printed),
+      {
+        createApi: (options) => {
+          created += 1;
+          return telegram.deps.createApi(options);
+        },
+      },
+    );
+
+    expect([code, lines]).toEqual([1, [line]]);
+    expect(created).toBe(0);
+    expect(telegram.calls).toEqual([]);
+  });
+});

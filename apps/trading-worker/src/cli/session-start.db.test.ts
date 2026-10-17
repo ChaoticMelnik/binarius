@@ -271,3 +271,29 @@ describe('session-start (#287)', () => {
     expect(await sessionsOf(brokerAccountId)).toEqual([]);
   });
 });
+
+// The one door against a database the CLI cannot reach (#150): one line and exit 1, no throw,
+// and neither the host nor the password in it.
+describe('session-start against an unreachable database', () => {
+  it('answers 1 with the error name and code and how to check the state', async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runSessionStartCli(
+      {
+        DATABASE_URL: 'postgres://binarius:secret@127.0.0.1:1/binarius',
+        ASSET_ID: '101',
+        TELEGRAM_USER_ID: '1',
+      },
+      (line) => out.push(line),
+      (line) => err.push(line),
+    );
+
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(
+      /^Не удалось создать сессию: Error \(Error ECONNREFUSED\)\. Состояние могло измениться/,
+    );
+    expect(err[0]).not.toMatch(/secret|127\.0\.0\.1/);
+  });
+});

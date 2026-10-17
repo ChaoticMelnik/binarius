@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { MAX_SPIKE_MINUTES, parseSpikeEnv, runCandleSpikeCli } from './candle-spike';
 
@@ -42,5 +44,37 @@ describe('parseSpikeEnv', () => {
     expect(code).toBe(1);
     expect(out).toEqual([]);
     expect(err).toEqual(['setup failed: Env ACCOUNT_ID must be a broker_accounts.id (uuid)']);
+  });
+});
+
+// The one door against a database the CLI cannot reach (#150): one line and exit 1, no throw, and
+// neither the backend nor the broker asked for anything.
+describe('candle-spike against an unreachable database', () => {
+  it('answers setup failed with the error name and code', async () => {
+    let backendCalls = 0;
+    const backend = createServer((_request, response) => {
+      backendCalls += 1;
+      response.writeHead(500).end();
+    });
+    await new Promise<void>((resolve) => backend.listen(0, '127.0.0.1', resolve));
+    const { port } = backend.address() as AddressInfo;
+    try {
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = await runCandleSpikeCli(
+        {
+          ...valid,
+          BACKEND_URL: `http://127.0.0.1:${port}`,
+          DATABASE_URL: 'postgres://binarius:secret@127.0.0.1:1/binarius',
+        },
+        (line) => out.push(line),
+        (line) => err.push(line),
+      );
+
+      expect([code, out, err]).toEqual([1, [], ['setup failed: Error (Error ECONNREFUSED)']]);
+      expect(backendCalls).toBe(0);
+    } finally {
+      await new Promise((resolve) => backend.close(resolve));
+    }
   });
 });
