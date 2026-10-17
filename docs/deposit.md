@@ -419,6 +419,12 @@ Expected: `ok`, `expiresInSec 60`, and which widget fields came back. What the o
   docker compose exec -T -e DEMO_ONLY=false -e ACCOUNT_ID=<broker_accounts.id> backend pnpm --filter @binarius/backend deposit-probe
   ```
 
+- `failed: <name> (<name> <code>)` — the probe stopped on an error (the database, the token or
+  another step): only the error's name and code are printed (SQLSTATE for the database), never its
+  message; whether a session was minted is not reported, and none is printed;
+- `failed: <message>` — an env variable is missing or malformed: the message names the variable,
+  never its value.
+
 Exit code 0 on `ok`, 1 otherwise.
 
 ## Contracts for the next parts

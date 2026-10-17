@@ -124,8 +124,9 @@ that each is required on its own.
 Created from a CLI in the backend container, never from the environment — who did what is only
 answerable while every login belongs to someone. The generated password is printed once. On a
 migrated database: nothing in the stack applies migrations on start yet (#75), so a volume that
-has never been migrated answers `relation "staff" does not exist` (see «Bringing it up the first
-time» below, or `pnpm db:migrate` from the host).
+has never been migrated answers `Команда не выполнена: Error (error 42P01)` and
+`База данных не мигрирована: выполните pnpm db:migrate` (see «Bringing it up the first time»
+below, or `pnpm db:migrate` from the host).
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend staff create \
@@ -133,6 +134,18 @@ docker compose exec backend pnpm --filter @binarius/backend staff create \
 docker compose exec backend pnpm --filter @binarius/backend staff reset-password --login ada
 docker compose exec backend pnpm --filter @binarius/backend staff disable --login ada
 ```
+
+Exit codes: 0 — done; 1 — the command is not confirmed: the line says either why it was refused
+(a taken login or Telegram id, an account that is not there, or the database's answer by error
+name and SQLSTATE — never the driver's message, which carries the query with its parameters, the
+password hash among them (`formatFailure`, `apps/backend/src/cli/kill-switch.ts`)) or that the
+result is unknown and the account has to be checked before the command is repeated; 2 — the
+command was not understood (the reason, then the usage). When the database answered with an
+error, the CLI re-reads the account before it answers: a `create` or `reset-password` whose
+commit landed while the answer was lost prints its password after all and exits 0, a `disable`
+reports the state it found (the counts are unknown then); when the re-read fails too, the line
+says the result is unknown. A database without the `staff` table (42P01) is reported without the
+re-read.
 
 `disable` and `reset-password` invalidate everything issued under the old credentials in one
 transaction, in the order `staff → challenges → links → sessions`: open challenges are closed,
@@ -358,8 +371,8 @@ real Telegram. The first person to deploy it should walk this through once.
    ```
    It prints `migrations applied successfully!`. Nothing in the stack applies them on start yet
    (#75), so on a volume that has never been migrated — a fresh clone, a new deployment — step 6
-   would otherwise fail with `relation "staff" does not exist`. The command is idempotent, so
-   running it on an already-migrated volume is a no-op.
+   would otherwise answer `База данных не мигрирована: выполните pnpm db:migrate`. The command
+   is idempotent, so running it on an already-migrated volume is a no-op.
 5. **Learn your Telegram ID.** Send `/start` to the new bot. It answers «Доступа нет» with your
    own id.
 6. **Create an account**, with that id:

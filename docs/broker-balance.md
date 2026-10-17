@@ -254,8 +254,10 @@ on top of #99's socket client, which writes nothing itself:
   `apps/backend/src/cli/rate-limit-probe.ts` makes two authorized `GET /v1/broker/user` calls and
   prints each one's status and `x-ratelimit-*` headers, nothing else. It takes the token through
   `ensureFreshAccessToken` with `mayRefresh: false`. So it refuses an account that is not active,
-  of a blocked user, or whose access token needs an exchange, and it never exchanges one. The
-  result goes here.
+  of a blocked user, or whose access token needs an exchange, and it never exchanges one. A
+  failure on the way prints `failed:` with the error's name and code only (never the token or the
+  URL), a missing or malformed env variable `failed:` with the variable's name; either exits 1.
+  The result goes here.
 
 ## Accepted risks
 
