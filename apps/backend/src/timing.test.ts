@@ -337,7 +337,7 @@ describe('broker balance timing', () => {
   });
 
   // restated so a change to the chain's conjuncts shows in review next to its test
-  it('switches to the reserve after the client’s own first reconnection and within one 5s candle (#404)', () => {
+  it('switches to the reserve after the start of the client’s first reconnection attempt and within one 5s candle (#404)', () => {
     expect({
       MARKET_DATA_TICK_MS,
       MARKET_DATA_LOG_MS,
