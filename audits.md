@@ -3497,3 +3497,35 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 1. Clarify relay: a question whose text says the plan contradicts itself goes to the architect even when it offers options — **внедрено в #630: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents → Clarify relay; `.claude/skills/manager/SKILL.md` → 1. Clarify relay → the manager answers**
 2. Architect checklist: a decision taken after an `await` names the reading it uses; a state that moves during the `await` is not re-read to judge the request's result — **внедрено в #630: `.claude/skills/architect/SKILL.md` → Validation checklist**
 3. Remaining findings — **вынесено в #629**
+
+---
+
+## #405 — Потребители свечей из сокета: фид, кэш, сканер на все пары, снятие деления бюджета и журнал (2026-10-18)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Same preflight as #590 (same session). Planned in parallel with #590; the implementer waited for #590's merge. |
+| Architect | first plan | Fable (`claude-fable-5-1`). 6 clarify questions, all recommended; Q6 (one pacer) also governed #590. Plan 6238652966, ≈1 600 lines, fallback split «feed + cache + journal / scanner + shares». |
+| Architect | round-0 Plan Update | Opus, after #590's merge (6240477691), «новых развилок нет» (6240477335). |
+| Implementer | round 1 | Opus. 2 clarify questions; Q2 exposed tech-lead's blanket «no services» against the plan's procedure check (Step 7 rule of #391) — owner chose the stand run. PR #635, 3 commits, +1 809 / −1 058, `pnpm check` 0, mutations 21/21 (6241185637). The stand bound every interface. Phase 3 audit 6241202571. |
+| Reviewer | round 1 | 1 Major (a candle the ring had not closed decided and served as fresh), 3 Minor → Todo. Owner: fix all three. |
+| Architect | Plan Update 1 | Opus (6241653292): `forming` only when it is the current bucket; `unclosed` from the decision's own `nowMs`; `sourceDecision` in the cache; 23 mutation rows. |
+| Implementer | fix round 1 | Fresh Opus spawn, 1 clarify question (re-run the stand — yes). 3 commits, head c3f182b6, `pnpm check` 0, mutations 23/23 (6241884328); stand re-run on 127.0.0.1 via a preload. |
+| Reviewer | round 2 | No Blocker/Major, 1 Minor. CI green. Codex skipped: limit until 22.10 09:12 (job task-mvcue1zf-kjrgek). |
+| Tech Lead | merge | Owner: merge, Minor to Backlog. `--rebase --delete-branch`, MERGED 2026-10-17T22:20:50Z. Minor → #640; #629 Minor 2 closed by this PR. Done. Models: every spawn on its policy model. |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 Major: `fromWindow` appended the ring's `forming`, which can be the previous bucket (ring test R3); the decision was made on an unclosed candle and served by `freshSignals` | Major | unverified-claim | the plan assumed `forming` is always the current bucket; the ring's own test said otherwise | Architect (time-offset checklist item not applied to `forming`) |
+| Blanket «no services» in the implementer's spawn prompt against the plan's procedure check | Minor | instance-vs-class | tech-lead repeated #391's mistake; the Step 7 rule existed | Tech Lead Step 7 |
+| The first stand run listened on every interface | Minor | other | the backend binds `0.0.0.0`, no host setting; the prompt did not say loopback | Tech Lead Step 7 |
+| R1 Minors 2–4 | Minor | other | fixed in fix round 1 | — |
+| R2 Minor 1 (session-routes comment wider than the lazy journal) | Minor | other | left at the merge | → #640 |
+
+### Process improvement proposals
+1. Tech-lead Step 7 «A plan's stand check»: the prompt also names loopback binding and how (a preload; the backend has no host setting) — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Step 7 → «A plan's stand check is not forbidden by parallelism»**
+2. Remaining findings — **вынесено в #640**
