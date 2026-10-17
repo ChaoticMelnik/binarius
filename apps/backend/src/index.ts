@@ -10,6 +10,7 @@ import {
   errorLogFields,
   SERVICE_ACCOUNTS_MIN,
   SIGNAL_SCAN_INTERVALS,
+  type ScanInterval,
 } from '@binarius/shared';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import { createBrokerSocketClient } from '@binarius/broker-socket';
@@ -40,13 +41,20 @@ import { parseEnv } from './env';
 import { createMarketDataManager } from './market-data/manager';
 import { createCandleRing } from './market-data/ring';
 import { createPendingRequests } from './market-data/source';
+import { createCandleBackfill } from './market-data/backfill';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
-import { createScanPacer } from './signal/pacer';
+import { createScanPacer, joinSpare, type ScanPacer, type SpareTokenSource } from './signal/pacer';
 import { createSignalScanner } from './signal/scanner';
 import {
   BOT_TEXTS_LOAD_BUDGET_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
+  MARKET_DATA_BACKFILL_ATTEMPTS,
+  MARKET_DATA_BACKFILL_BUDGET_MS,
+  MARKET_DATA_BACKFILL_CONCURRENCY,
+  MARKET_DATA_BACKFILL_POLL_MS,
+  MARKET_DATA_BACKFILL_RETRY_MS,
+  MARKET_DATA_BACKFILL_SCAN_MS,
   MARKET_DATA_FAILOVER_GRACE_MS,
   MARKET_DATA_LOG_MS,
   MARKET_DATA_PENDING_MAX,
@@ -154,20 +162,27 @@ const signalFeed = createCachedSignalFeed(
 // The background scan of pairs chosen across the asset types (docs/signal.md -> The scanner, #460),
 // one scanner per interval, each on its own pacer and share of the ceiling (#382): through the same
 // cache, so a manual analysis of a scanned pair in that candle costs no second GET. Started with
-// the other loops after listen(), stopped in phase 1.
-const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
-  const pairs = signalScanPairs(env.signalScanMaxPerMinute, interval);
-  return createSignalScanner({
+// the other loops after listen(), stopped in phase 1. The candle backfill takes the pacers'
+// overflow (docs/market-data.md -> Backfill).
+const scanPacers = Object.fromEntries(
+  SIGNAL_SCAN_INTERVALS.map((interval) => [
     interval,
-    feed: signalFeed,
-    catalog: pairsCatalog,
-    pacer: createScanPacer({
+    createScanPacer({
       perMinute: signalScanPerMinute(env.signalScanMaxPerMinute, interval),
       capacity: signalScanCapacity(env.signalScanMaxPerMinute, interval),
       backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
       backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
       now: Date.now,
     }),
+  ]),
+) as Record<ScanInterval, ScanPacer>;
+const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
+  const pairs = signalScanPairs(env.signalScanMaxPerMinute, interval);
+  return createSignalScanner({
+    interval,
+    feed: signalFeed,
+    catalog: pairsCatalog,
+    pacer: scanPacers[interval],
     // the app's logger does not exist yet, and this one is first used by the first scan
     logger: {
       info: (object, message) => app.log.info(object, message),
@@ -345,34 +360,63 @@ const serviceAccounts = createServiceAccountKeeper({
   },
 });
 
-// docs/market-data.md: the candle ring over a data socket on a service account (#404), only with
-// BROKER_WS_URL; no consumer yet (#405). Started with the other loops after listen(), stopped in
-// phase 1.
-const brokerWsUrl = env.brokerWsUrl;
-const marketData =
-  brokerWsUrl === undefined
+// docs/market-data.md: the candle ring over a data socket on a service account (#404) and its REST
+// backfill (#590), only with BROKER_WS_URL; no consumer yet (#405). Started with the other loops
+// after listen(), stopped in phase 1.
+function createMarketDataSource(brokerWsUrl: string, pacer: SpareTokenSource) {
+  const ring = createCandleRing({
+    capacity: MARKET_DATA_RING_CANDLES,
+    skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
+    intervals: SIGNAL_SCAN_INTERVALS,
+  });
+  const requests = createPendingRequests(MARKET_DATA_PENDING_MAX);
+  const backfill = createCandleBackfill({
+    ring,
+    requests,
+    catalog: pairsCatalog,
+    rest: brokerRest,
+    pacer,
+    // called by the backfill's timers only, which start after the manager below exists
+    streaming: () => marketData.streaming(),
+    logger: app.log,
+    config: {
+      scanMs: MARKET_DATA_BACKFILL_SCAN_MS,
+      pollMs: MARKET_DATA_BACKFILL_POLL_MS,
+      retryMs: MARKET_DATA_BACKFILL_RETRY_MS,
+      attempts: MARKET_DATA_BACKFILL_ATTEMPTS,
+      budgetMs: MARKET_DATA_BACKFILL_BUDGET_MS,
+      concurrency: MARKET_DATA_BACKFILL_CONCURRENCY,
+      slackMs: SIGNAL_SCAN_SLACK_MS,
+      candles: MARKET_DATA_RING_CANDLES,
+    },
+  });
+  const marketData = createMarketDataManager({
+    listAccounts: () => listServiceBrokerAccounts(db),
+    accessToken,
+    catalog: pairsCatalog,
+    openClient: (label) =>
+      createBrokerSocketClient({ url: brokerWsUrl, logger: app.log.child({ socket: label }) }),
+    ring,
+    requests,
+    backfill,
+    logger: app.log,
+    config: {
+      tickMs: MARKET_DATA_TICK_MS,
+      logMs: MARKET_DATA_LOG_MS,
+      failoverGraceMs: MARKET_DATA_FAILOVER_GRACE_MS,
+      reserveReadyMs: MARKET_DATA_RESERVE_READY_MS,
+      accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
+    },
+  });
+  return { marketData, backfill };
+}
+const marketDataSource =
+  env.brokerWsUrl === undefined
     ? undefined
-    : createMarketDataManager({
-        listAccounts: () => listServiceBrokerAccounts(db),
-        accessToken,
-        catalog: pairsCatalog,
-        openClient: (label) =>
-          createBrokerSocketClient({ url: brokerWsUrl, logger: app.log.child({ socket: label }) }),
-        ring: createCandleRing({
-          capacity: MARKET_DATA_RING_CANDLES,
-          skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
-          intervals: SIGNAL_SCAN_INTERVALS,
-        }),
-        requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
-        logger: app.log,
-        config: {
-          tickMs: MARKET_DATA_TICK_MS,
-          logMs: MARKET_DATA_LOG_MS,
-          failoverGraceMs: MARKET_DATA_FAILOVER_GRACE_MS,
-          reserveReadyMs: MARKET_DATA_RESERVE_READY_MS,
-          accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
-        },
-      });
+    : createMarketDataSource(
+        env.brokerWsUrl,
+        joinSpare(SIGNAL_SCAN_INTERVALS.map((interval) => scanPacers[interval])),
+      );
 
 // docs/bot-session.md → Trade messages (#464): every settled trade of a session as its own silent
 // message and the finished session's summary; started with the other loops after listen(),
@@ -437,7 +481,10 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => sessionNotices.stop(),
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
-      () => marketData?.stop() ?? Promise.resolve(),
+      async () => {
+        await marketDataSource?.backfill.stop();
+        await marketDataSource?.marketData.stop();
+      },
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -474,7 +521,7 @@ if (!shuttingDown) {
   // #397's manager greps this line for "demoOnly":true before it drives a stand
   app.log.info({ demoOnly: env.demoOnly }, 'backend started');
   app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
-  app.log.info({ enabled: marketData !== undefined }, 'market data source');
+  app.log.info({ enabled: marketDataSource !== undefined }, 'market data source');
 }
 if (!shuttingDown) {
   publisher.start();
@@ -485,7 +532,8 @@ if (!shuttingDown) {
   sessionNotices.start();
   starReconciler.start();
   serviceAccounts.start();
-  marketData?.start();
+  marketDataSource?.marketData.start();
+  marketDataSource?.backfill.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

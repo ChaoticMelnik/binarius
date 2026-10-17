@@ -2,8 +2,9 @@
 
 The backend keeps a candle ring for every pair of the catalog on the `15s` and `5s` intervals, built
 from the broker's `price.update` ticks on a data socket of its own. That socket runs on a service
-account ([service-accounts.md](service-accounts.md), #391). This part has no consumer yet. The REST
-refill of gaps and cold starts is #590, and the feed and scanner move onto the source in #405.
+account ([service-accounts.md](service-accounts.md), #391). A REST backfill (#590, [Backfill](#backfill-590))
+closes the gaps of a cold start and of a hole on the spare tokens of the scanners' pacers. This part
+has no consumer yet: the feed and scanner move onto the source in #405.
 
 ```bash
 pnpm test --project unit apps/backend/src/market-data   # mock broker and fake clients, no database
@@ -15,12 +16,15 @@ pnpm test --project unit apps/backend/src/market-data   # mock broker and fake c
 |---|---|---|
 | `createCandleRing` | `apps/backend/src/market-data/ring.ts` | one #392 builder (`createCandleBuilder`, `packages/signal/src/ticks.ts`) per (pair, interval), the closing rule, holes, `read`/`fill`/`missing` |
 | `createMarketDataManager` | `apps/backend/src/market-data/manager.ts` | the two socket clients on service accounts, failover, token refusals, hold-back, subscriptions, the log line |
-| `CandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the interface #405 reads (`read`, `request`) and the bounded request set #590 drains (`pending()`) |
+| `CandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the interface #405 reads (`read`, `request`) and the bounded request set the backfill drains (`pending()`) |
+| `createCandleBackfill` | `apps/backend/src/market-data/backfill.ts` | the REST backfill: due elements, the queue, one native GET per (pair, interval), `fill` (#590) |
 | `BrokerSocketClient` | `packages/broker-socket` | the worker's socket client, unchanged ([broker-socket.md](broker-socket.md)) |
 
 The source is created only when `BROKER_WS_URL` is set. It reads the same variable as the worker's
-sessions (`https:` or `wss:`; an empty value fails the start). `apps/backend/src/index.ts` starts it
-after `listen()` with the other loops and stops it in shutdown phase 1. The start line
+sessions (`https:` or `wss:`; an empty value fails the start). `apps/backend/src/index.ts` builds the
+ring, the request set, the backfill and the manager in one function (`createMarketDataSource`),
+starts the manager and then the backfill after `listen()` with the other loops, and stops the
+backfill and then the manager in shutdown phase 1. The start line
 `market data source { enabled }` says whether it runs.
 
 ## The state machine
@@ -98,7 +102,7 @@ reaches are dropped, and no candle is built for the buckets it reaches. The rest
 - two drops before the pair's next tick make one hole;
 - a repeated tick not past the pair's watermark leaves the hole open.
 
-`fill(assetId, interval, rows, nowMs)` is #590's entry. It puts REST rows only into closed buckets
+`fill(assetId, interval, rows, nowMs)` is the backfill's entry. It puts REST rows only into closed buckets
 of the window that have no tick candle and no earlier fill. A tick candle is never replaced, because
 the tick series is continuous (each open is the previous close). `missing()` counts the empty closed
 buckets.
@@ -143,6 +147,66 @@ a mark or unmark in the admin pages, a blocked user or a revoked account takes e
 and for a running socket alike, within `MARKET_DATA_TICK_MS` plus the list's read (R1), and a mark
 plus any hold-back.
 
+## Backfill (#590)
+
+`createCandleBackfill` (`apps/backend/src/market-data/backfill.ts`) closes the empty buckets of the
+ring by REST. An **element** is a (pair, interval).
+
+**Which elements.**
+
+- **Proactive set:** the pairs of the last fresh catalog with valid `digits` that the scanner would
+  take (`eligiblePairs`: open by the schedule, accepting the interval's duration, paying at least
+  `MIN_CYCLE_PAYOUT_PCT`), on both intervals. It applies only while `MarketDataManager.streaming()`
+  is true (the active socket is `ready`). A closed pair, or one below the payout floor, is warmed
+  only on request.
+- **Requests:** `pending()` is drained on every scan, whatever the socket. A request for an id outside
+  the last fresh catalog, or with `digits` that fail `assertDigits`, is dropped: the ring holds no
+  pair outside the subscription. Before the first fresh catalog the requests wait in their set.
+
+**When an element is due.** Its hold-back (`MARKET_DATA_BACKFILL_RETRY_MS` after its last finished
+attempt) is over, and its window has a closed empty bucket the last GET did not leave unfilled. A
+request makes any closed empty bucket enough. So a hole, a cold start, a quiet bucket and a new
+catalog id all become due by themselves. A bucket the broker did not fill is not asked for again
+until a new bucket goes missing or a request comes. The unfilled buckets are forgotten once they
+leave the window.
+
+**Order** (rebuilt every `MARKET_DATA_BACKFILL_SCAN_MS`, and once at `start()`):
+
+1. the requests, in `pending()` order;
+2. the elements never attempted, by the pair's payout (`comparePairsByPayout`);
+3. the rest, by the age of their last attempt.
+
+Within a level `15s` comes before `5s` on an equal key. A cold pair is warmed before any repeat, and
+the repeats rotate by age, so no element starves.
+
+**The GET.** Every `MARKET_DATA_BACKFILL_POLL_MS`, while a worker is free
+(`MARKET_DATA_BACKFILL_CONCURRENCY`), the head is checked again and takes a spare token. With
+`w = chartWindow(now, I, MARKET_DATA_RING_CANDLES)` the request is
+`{ startTime: w.startTime − I, limit: w.limit + 1 }`, and the first row of the answer is dropped: it
+opens on the first tick of its bucket, not on the close before it (the #392 spike's `dropFirstRow`).
+The rest go to `ring.fill`, which puts them only into closed buckets of the window that have no tick
+candle and no earlier fill. No GET starts in the first `SIGNAL_SCAN_SLACK_MS` of a `5s` candle,
+because the broker publishes a just-closed candle about 150 ms after the boundary. Every GET runs
+under `MARKET_DATA_BACKFILL_BUDGET_MS` and the `stop()` signal.
+
+**Tokens.** Only the overflow of the scanners' pacers (`ScanPacer.tryTakeSpare`,
+[signal.md → The budget](signal.md#the-budget)): what `refill` discards above the bucket's capacity,
+held to one token per pacer. A full scan leaves almost nothing; an idle pacer gives its whole share.
+Until #405 the two pacers are joined by `joinSpare`: the first one with an overflow gives the token,
+and a 429 or a 2xx answer goes to both.
+
+| Outcome of an attempt | Counters | The element |
+|---|---|---|
+| 2xx, any rows (`[]` on a closed market too) | `fetched`, `filled +n` | held back; the window's empty buckets before the GET's boundary become `unfilled`; failures reset; the request served |
+| 429 | `rateLimited` | the pacers paused (`onRateLimited`); the element goes back to the head, its hold-back and failures untouched |
+| `unavailable`, `contract_violation`, `rejected`, `unauthorized`, `aborted` by the budget | `failed` | held back, failures +1; at `MARKET_DATA_BACKFILL_ATTEMPTS` `warn` `market data backfill gave up`, the empty buckets become `unfilled`, failures reset, the request dropped |
+| a throw that is not a `BrokerRestError` | `failed`, `warn` `market data backfill threw` | as a failure |
+| aborted by `stop()` | none | the loop is over |
+| no longer due at dispatch | none | off the queue |
+
+State lives only in memory: at most two elements per catalog pair, dropped with the pair. A restart
+warms cold again.
+
 ## The log
 
 | Message | Level | When |
@@ -161,11 +225,16 @@ plus any hold-back.
 | `market data catalog not fresh` | warn | once per streak of stale catalog reads |
 | `market data: no working service account` | warn | once per streak without an active |
 | `market data tick failed` | error | the tick threw (the account list's query) |
+| `market data backfill gave up` | warn | `{ assetId, interval, code, attempts }`: `MARKET_DATA_BACKFILL_ATTEMPTS` failed GETs in a row on one element |
+| `market data backfill threw` | warn | `{ assetId, interval, err }`: a GET threw something other than a `BrokerRestError` (name and code) |
+| `market data backfill tick failed` | error | `{ err }`: the backstop of the backfill's timers and of a GET's promise; no case reaches it |
 
 The `market data` line, with counters for the period since the previous line:
-`{ accounts, held, active: { accountId, socketState, connection, subscriptions } | null, reserve: { accountId, socketState } | null, ticks, ticksPerSec, late, invalid, skewed, holed, unknownAsset, skippedDigits, holes, lateClose: { watermark, clock }, failovers, watermarkLagMs, closed: { '15s', '5s' }, pairs, pending }`.
+`{ accounts, held, active: { accountId, socketState, connection, subscriptions } | null, reserve: { accountId, socketState } | null, ticks, ticksPerSec, late, invalid, skewed, holed, unknownAsset, skippedDigits, holes, lateClose: { watermark, clock }, failovers, watermarkLagMs, closed: { '15s', '5s' }, pairs, pending, backfill: { queued, fetched, filled, failed, rateLimited, spare } }`.
 `lateClose` counts ticks that changed a candle the ring already called closed, split by the rule
-that closed it. `closed` counts tick candles whose bucket closed in the period. The client's state is
+that closed it. `closed` counts tick candles whose bucket closed in the period. In `backfill`,
+`queued` is the queue's length now and the rest count the period: answered GETs, rows put into the
+ring, failed attempts, 429s, and spare tokens taken (one per GET started). The client's state is
 `socketState`, because the logger redacts every key named `state` (the OAuth state). No line carries a
 token, the socket URL or a payload (`manager.test.ts` M11).
 
@@ -182,7 +251,15 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 | `MARKET_DATA_SKEW_MARGIN_MS` | 2 000 | the clock rule of closing |
 | `MARKET_DATA_ACCOUNT_RETRY_MS` | 300 000 | an account's hold-back |
 | `MARKET_DATA_RING_CANDLES` | `SIGNAL_FETCH_LIMIT` (300) | candles per (pair, interval) |
-| `MARKET_DATA_PENDING_MAX` | 288 | `request()`s waiting for #590 (144 pairs × 2) |
+| `MARKET_DATA_PENDING_MAX` | 288 | `request()`s waiting for the backfill (144 pairs × 2) |
+| `MARKET_DATA_BACKFILL_BUDGET_MS` | 3 000 | one backfill GET, by the call's own signal |
+| `MARKET_DATA_BACKFILL_ATTEMPTS` | 3 | failed attempts in a row on one element before `gave up` |
+| `MARKET_DATA_BACKFILL_RETRY_MS` | 15 000 (`SIGNAL_CHART_INTERVAL_MS['15s']`) | an element's hold-back after any finished attempt |
+| `MARKET_DATA_BACKFILL_SCAN_MS` | 5 000 (`SIGNAL_CHART_INTERVAL_MS['5s']`) | the queue's rebuild |
+| `MARKET_DATA_BACKFILL_POLL_MS` | 250 | a spare token asked for while the queue is not empty |
+| `MARKET_DATA_BACKFILL_CONCURRENCY` | 2 | backfill GETs in flight |
+
+The backfill's slack is `SIGNAL_SCAN_SLACK_MS` (500) and its GET's limit `MARKET_DATA_RING_CANDLES + 1`.
 
 The links:
 
@@ -197,15 +274,23 @@ The links:
   is retried.
 - `stop()` waits for the `accessToken` calls in flight (at most two, at once), which
   `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` already bounds.
+- The backfill: `BACKFILL_BUDGET < BROKER_REST_TIMEOUT_MS` (the budget, not the client, ends a slow
+  GET) and `< SHUTDOWN_PHASE1_BUDGET_MS` (its `stop()` aborts and waits for at most one GET a worker,
+  at once); `SIGNAL_SCAN_SLACK_MS + BACKFILL_BUDGET < 5 s` (a GET started after the slack ends inside
+  the candle it was built on); `BACKFILL_POLL × MAX_SIGNAL_SCAN_PER_MINUTE ≤ 60 000` (no overflow
+  token is lost between two polls); `BACKFILL_SCAN ≤ 5 s`.
 
 ## Tests
 
 - `ring.test.ts` R1-R9, R12, with R3b/R3c (`lateClose`).
 - `source.test.ts` S1-S3.
+- `backfill.test.ts` B1-B17 on a fake `getChart`, the real ring and the real pacer under an injected
+  clock.
 - `manager.test.ts`:
   - M1-M6, M8-M14 on `packages/mock-broker`, with two users;
-  - M7-M7e, M10b, M15, M16 and M19-M25 on fake clients, because the mock has one token per user and
-    cannot authorise an exchanged one, its clients never throw, and its states cannot be held;
+  - M7-M7e, M10b, M15, M16, M19-M25 and M27 on fake clients, because the mock has one token per user
+    and cannot authorise an exchanged one, its clients never throw, and its states cannot be held;
+  - M26 on the mock broker with the real backfill and REST client: a failover's hole refilled;
   - M11 reads the log itself. It reads the lines of every case before it, so alone or shuffled it
     fails falsely; `vitest.config.ts` pins the order.
 - The timing pins are in `timing.test.ts`.
@@ -226,7 +311,11 @@ The links:
    watermark rule can close early because ticks of different pairs arrive out of timestamp order.
    No consumer exists in this part. Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in
    the line.
-4. **No refill until #590.** A hole or a cold start leaves the window short.
+4. **The backfill takes only the pacers' overflow** ([Backfill](#backfill-590)). While both scanners
+   scan in full, that is near zero. A hole after a failover in trading hours then stays in the window
+   for 25/75 min, until #405 moves the scanners onto the source. Falsifiable: a `market data` line
+   with `backfill.queued > 0` and `spare = 0` several periods running, with `skipped = 0` in the
+   `signal scanner` lines.
 5. **The subscription limit of one socket is unmeasured** (#555). 144 ids worked on one socket for
    30 minutes.
 6. **A pair that left the catalog stays subscribed** until a restart.
@@ -262,9 +351,16 @@ The links:
    - Thousands: there is fan-out, and that needs a task.
 3. Later, mark a second service account in the admin pages. The next `market data` line shows
    `reserve: { accountId, socketState: 'ready' }`.
+4. The backfill (#590), after the first night:
+   `docker compose logs --since 12h backend | grep -E '"market data"' | tail -3`. In `backfill`,
+   `fetched > 0` and `filled > 0`, and `queued` has fallen to 0. In the day, with the scanners scanning
+   in full, `spare` is about 0 and the `signal scanner` lines show `skipped = 0`, as before the deploy.
+5. After any `market data failover` at night, `queued` rises and is back to 0 within minutes. In the
+   day it stays up until #405 (risk 4).
 
 ## Boundaries
 
-- The REST refill (`fill`, `pending()`, the native `5s`/`15s` GETs) is #590.
-- The feed and the scanner reading the source, and the budget split of #382, are #405.
-- No trade command is sent on a data socket: the manager never calls `openTrade`.
+- The feed and the scanner reading the source, one pacer instead of two, and the budget split of
+  #382, are #405.
+- No trade command is sent on a data socket: the manager never calls `openTrade`, and the backfill
+  calls only `getChart`.
