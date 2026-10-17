@@ -106,6 +106,11 @@ export const BOT_TEXT_VARS = {
     sample: '15.10.2026 10:57',
     format: (unixSeconds: number) => formatPaymentDate(unixSeconds),
   }),
+  sessionEnd: variable({
+    description: 'Дата и время окончания сессии (МСК)',
+    sample: '12.10.2026 21:32',
+    format: (unixSeconds: number) => formatPaymentDate(unixSeconds),
+  }),
   demoBalance: balance(
     'Демобаланс Binodex; без свежего снимка — «нет свежих данных»',
     formatUsd('10000'),

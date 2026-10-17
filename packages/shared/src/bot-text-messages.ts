@@ -186,6 +186,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   tokenBalance: () => w.count,
   stars: () => w.count,
   paymentDate: () => w.paymentDate,
+  sessionEnd: () => w.paymentDate,
   demoBalance: balance,
   realBalance: balance,
   mode: () => w.mode,

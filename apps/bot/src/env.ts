@@ -22,6 +22,18 @@ export interface Env {
   welcomeVideoFileId?: string;
   // apps/web's origin, the cashier's (#27): the same variable and rule as web's and backend's
   webPublicUrl: string;
+  // the private channel the promo card is posted to for its file id (#538); unset, no share button
+  shareStorageChatId?: number;
+}
+
+// A Telegram chat id: a channel's is negative (-100…), which parseIntegerEnv refuses. An empty
+// value is refused here too, so a set but blank variable is a startup error, not "no channel".
+export function parseChatIdEnv(raw: string, name: string): number {
+  const value = Number(raw);
+  if (!/^-?\d{1,19}$/.test(raw) || !Number.isSafeInteger(value)) {
+    throw new Error(`Env ${name} must be a Telegram chat id`);
+  }
+  return value;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -45,5 +57,9 @@ export function parseEnv(source: EnvSource): Env {
         ? undefined
         : parseNoWhitespaceEnv(readEnv(source, 'WELCOME_VIDEO_FILE_ID'), 'WELCOME_VIDEO_FILE_ID'),
     webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
+    shareStorageChatId:
+      source.SHARE_STORAGE_CHAT_ID === undefined
+        ? undefined
+        : parseChatIdEnv(source.SHARE_STORAGE_CHAT_ID, 'SHARE_STORAGE_CHAT_ID'),
   };
 }

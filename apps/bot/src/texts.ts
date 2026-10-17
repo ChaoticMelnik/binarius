@@ -73,7 +73,7 @@ export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
 // packages/shared), printed with this bot's catalog.
 export const sessionTexts = createSessionTexts({ html, plain });
 export const { pluralTrades, sessionAssetLabel, sessionEndLine } = sessionTexts;
-const { tradesCount, cyclesCount, scoreOf, resultOf } = sessionTexts;
+const { tradesCount, cyclesCount, scoreOf } = sessionTexts;
 const joinLines = joinHtmlLines;
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
@@ -508,19 +508,22 @@ export const sessionCardTradeLabel = (index: number): string =>
 export const sessionCardFooter = (count: number, score: SessionScore): string =>
   plain.sessionCardFooter({ trades: tradesCount(count), score: scoreOf(score) });
 
-// The caption of the card shared through «📤 Поделиться» (#321, session-share.ts): the score
-// without the $ sum, which the image itself shows, and the bot's link.
-export const sessionShareCaption = (
-  symbol: PairLabel | null,
-  assetId: number,
-  trades: TradingSessionView['trades'],
-  botUsername: string,
-): TelegramHtml =>
-  TEXTS.sessionShareCaption({
-    symbol: sessionAssetLabel(symbol, assetId),
-    result: resultOf(trades),
-    botUsername,
-  });
+// The promo card's words (#538, session-promo.ts), read when the card is drawn so an override
+// reaches the next one; the time is the session's end, in Moscow time (formatPaymentDate).
+export const sessionPromoLabels = () => ({
+  result: plain.sessionPromoResult,
+  up: plain.sessionPromoUp,
+  down: plain.sessionPromoDown,
+  brand: plain.sessionPromoBrand,
+  call: plain.sessionPromoCall,
+});
+export const sessionPromoWhen = (unixSeconds: number): string =>
+  plain.sessionPromoWhen({ sessionEnd: unixSeconds });
+
+// The caption of the promo card shared through «📤 Поделиться» (#321, #538, session-share.ts):
+// the invitation and the sender's link, printed as plain text for Telegram to make a link of.
+export const sessionShareCaption = (referralLink: string): TelegramHtml =>
+  TEXTS.sessionShareCaption({ referralLink });
 
 // The reply to «⏹» under the waiting message and to /stop of one session (#536): the end line, and
 // the open trade's line while the worker still carries it to its end.
