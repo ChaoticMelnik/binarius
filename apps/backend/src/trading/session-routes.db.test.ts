@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
@@ -19,6 +20,7 @@ import {
   TradingSessionStopReason,
   SessionStakeStrategy,
   decimalStringSchema,
+  safeParseSessionShareResponse,
   safeParseSessionSummaryRefusal,
   safeParseSessionSummaryResponse,
   safeParseTradingSessionRefusal,
@@ -48,6 +50,8 @@ import {
   createTradeIntent,
   markIntentAccepted,
   openTrading,
+  readTradingSessionView,
+  referralCodes,
   setStake,
   setTradingMode,
   settleIntent,
@@ -1390,6 +1394,131 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
         .statusCode,
     ).toBe(401);
     expect(await sentAt(seed.sessionId)).toBeNull();
+  });
+});
+
+describe('POST /trading/sessions/:id/share (#538)', () => {
+  const share = (
+    target: FastifyInstance,
+    id: string,
+    body: object,
+    headers: Record<string, string> = auth,
+  ) =>
+    target.inject({
+      method: 'POST',
+      url: `${TRADING_SESSIONS_PATH}/${id}${SESSION_SHARE_SUFFIX}`,
+      headers,
+      payload: body,
+    });
+  const codesOf = async (userId: string) =>
+    (
+      await tmp.db
+        .select({ code: referralCodes.code })
+        .from(referralCodes)
+        .where(eq(referralCodes.userId, userId))
+    ).map((row) => row.code);
+  const finishedIn = async (mode: TradeMode) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: mode });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode });
+    await settled(seed, session.id, 1, '0.85', mode);
+    await settled(seed, session.id, 2, '-1', mode);
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.Completed,
+    });
+    return { ...seed, sessionId: session.id };
+  };
+
+  it.each([TradeMode.Demo, TradeMode.Real])(
+    'H1 the owner of a finished %s session gets the view, trades, pair and a code, the same code twice',
+    async (mode) => {
+      const seed = await finishedIn(mode);
+      const target = appWith();
+      const body = { telegramUserId: seed.telegramUserId };
+      const response = await share(target, seed.sessionId, body);
+      expect(response.statusCode).toBe(200);
+      expect(safeParseSessionShareResponse(response.json()).success).toBe(true);
+      const [code] = await codesOf(seed.userId);
+      expect(code).toBeDefined();
+      const view = await readTradingSessionView(tmp.db, seed.sessionId, seed.telegramUserId);
+      expect(response.json()).toEqual({
+        share: {
+          session: view,
+          trades: [
+            { profit: '0.85000000', openPrice: 1.08765, closePrice: 1.08712, action: 'up' },
+            { profit: '-1.00000000', openPrice: 1.08765, closePrice: 1.08712, action: 'up' },
+          ],
+          pair: { symbol: 'EUR/USD', digits: 5 },
+          referralCode: code,
+        },
+      });
+      const again = await share(target, seed.sessionId, body);
+      expect((again.json() as { share: { referralCode: string } }).share.referralCode).toBe(code);
+      expect(await codesOf(seed.userId)).toEqual([code]);
+    },
+  );
+
+  it("H2 another user's session is the missing one's 404 and creates no code", async () => {
+    const seed = await finishedIn(TradeMode.Demo);
+    const other = await seedUser(tmp.db);
+    const target = appWith();
+    const foreign = await share(target, seed.sessionId, { telegramUserId: other.telegramUserId });
+    expect({ status: foreign.statusCode, body: foreign.json() }).toEqual({
+      status: 404,
+      body: { error: TradingSessionErrorCode.NotFound },
+    });
+    const missing = await share(target, '00000000-0000-4000-8000-000000000000', {
+      telegramUserId: seed.telegramUserId,
+    });
+    expect(missing.json()).toEqual(foreign.json());
+    expect(await codesOf(other.userId)).toEqual([]);
+    expect(await codesOf(seed.userId)).toEqual([]);
+  });
+
+  it('H3 a blocked owner gets referralCode null and no code is created', async () => {
+    const seed = await finishedIn(TradeMode.Demo);
+    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, seed.userId));
+    const response = await share(appWith(), seed.sessionId, {
+      telegramUserId: seed.telegramUserId,
+    });
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { share: { referralCode: unknown } }).share.referralCode).toBeNull();
+    expect(await codesOf(seed.userId)).toEqual([]);
+  });
+
+  it.each([
+    ['no catalog', undefined],
+    ['a stale catalog', { ...freshCatalog(), fresh: false }],
+    ['a catalog without the pair', freshCatalog([{ ...pair, id: ASSET + 1 }])],
+  ] as const)('H4 %s answers pair null', async (_label, catalog) => {
+    const seed = await finishedIn(TradeMode.Demo);
+    const response = await share(appWith({ catalog }), seed.sessionId, {
+      telegramUserId: seed.telegramUserId,
+    });
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { share: { pair: unknown } }).share.pair).toBeNull();
+  });
+
+  it('H5 a non-uuid id is 404, a bad body 400, no bearer 401', async () => {
+    const seed = await finishedIn(TradeMode.Demo);
+    const target = appWith();
+    const body = { telegramUserId: seed.telegramUserId };
+    expect((await share(target, 'nope', body)).statusCode).toBe(404);
+    expect((await share(target, seed.sessionId, {})).statusCode).toBe(400);
+    expect((await share(target, seed.sessionId, body, {})).statusCode).toBe(401);
+    expect(await codesOf(seed.userId)).toEqual([]);
+  });
+
+  it('H6 an active session answers 200 with its settled trades, and the broker is not asked', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settled(seed, session.id, 1, '0.85');
+    const response = await share(appWith(), session.id, { telegramUserId: seed.telegramUserId });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      share: { session: { status: 'active' }, trades: [{ profit: '0.85000000' }] },
+    });
+    expect(refreshCalls).toEqual([]);
   });
 });
 

@@ -1,4 +1,6 @@
 import * as z from 'zod';
+import { pairViewSchema } from './catalog';
+import { REFERRAL_CODE_PATTERN } from './referral';
 import { SessionStakeStrategy } from './session-steps';
 import { SIGNAL_SHORTEST_INTERVAL_MS } from './signal';
 import { multiplyDecimal, StakeRefusal, stakeScale } from './stake';
@@ -532,3 +534,35 @@ export const safeParseForgetSessionStatusMessageRequest = (input: unknown) =>
   forgetSessionStatusMessageRequestSchema.safeParse(input);
 export const safeParseForgetSessionStatusMessageResponse = (input: unknown) =>
   forgetSessionStatusMessageResponseSchema.safeParse(input);
+
+// POST /trading/sessions/:id/share (#538, docs/trading-session.md → Routes): what the shared promo
+// card needs, in one call. The body is stopTradingSessionRequestSchema's. A POST because it creates
+// the caller's referral code on first use, as /invite does; it writes nothing else.
+export const SESSION_SHARE_SUFFIX = '/share';
+
+// a settled trade as the summary has it, plus its direction for the card's badge
+export const sessionShareTradeSchema = sessionSummaryTradeSchema.extend({
+  action: tradeActionSchema,
+});
+export type SessionShareTrade = z.infer<typeof sessionShareTradeSchema>;
+
+// the pair from the backend's catalog; digits place the price labels (Rule 20)
+export const sessionSharePairSchema = z.strictObject(
+  pairViewSchema.pick({ symbol: true, isOtc: true, digits: true }).shape,
+);
+
+// referralCode is null for a blocked user or one without a users row: the caption's link falls
+// back to the plain share payload
+export const sessionShareSchema = z.strictObject({
+  session: tradingSessionViewSchema,
+  trades: z.array(sessionShareTradeSchema).max(MAX_SESSION_SUMMARY_TRADES),
+  pair: sessionSharePairSchema.nullable(),
+  referralCode: z.string().regex(REFERRAL_CODE_PATTERN).nullable(),
+});
+export type SessionShare = z.infer<typeof sessionShareSchema>;
+
+export const sessionShareResponseSchema = z.strictObject({ share: sessionShareSchema });
+export type SessionShareResponse = z.infer<typeof sessionShareResponseSchema>;
+
+export const safeParseSessionShareResponse = (input: unknown) =>
+  sessionShareResponseSchema.safeParse(input);

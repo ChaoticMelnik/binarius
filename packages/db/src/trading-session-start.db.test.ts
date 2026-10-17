@@ -43,6 +43,7 @@ import {
   claimSessionSummary,
   createSessionIntent,
   readActiveTradingSessionView,
+  readSessionShareTrades,
   readTradingSessionAccount,
   readTradingSessionView,
   stopTradingSession,
@@ -870,5 +871,47 @@ describe('claimSessionSummary (#318)', () => {
     const { seed, session } = await finished(['0.85']);
     const results = await Promise.all([claim(session, seed), claim(session, seed)]);
     expect(results.filter((result) => result !== undefined)).toHaveLength(1);
+  });
+});
+
+describe('readSessionShareTrades (#538)', () => {
+  const read = (session: { id: string }, seed: { telegramUserId: string }) =>
+    readSessionShareTrades(tmp.db, { id: session.id, telegramUserId: seed.telegramUserId });
+
+  it('SH1 the settled trades of a finished session in creation order, with direction and prices', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    const up = await sessionIntent(seed, session.id, 1, TradeMode.Demo, TradeAction.Up);
+    await settle(up.intent, '0.85', { open: 1.1, close: 1.2 });
+    await reject((await sessionIntent(seed, session.id, 2)).intent);
+    const down = await sessionIntent(seed, session.id, 3, TradeMode.Demo, TradeAction.Down);
+    await settle(down.intent, '-1', { open: 1.3, close: 1.4 });
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.Completed,
+    });
+    expect(await read(session, seed)).toEqual([
+      { action: TradeAction.Up, profit: '0.85000000', openPrice: 1.1, closePrice: 1.2 },
+      { action: TradeAction.Down, profit: '-1.00000000', openPrice: 1.3, closePrice: 1.4 },
+    ]);
+  });
+
+  it("SH2 another user's telegram id reads nothing", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85', { open: 1, close: 2 });
+    const other = await seedUser(tmp.db);
+    expect(await read(session, other)).toEqual([]);
+    expect(await read(session, seed)).toHaveLength(1);
+  });
+
+  it('SH3 an active session with an open trade reads only its settled ones', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85', { open: 1, close: 2 });
+    await accept((await sessionIntent(seed, session.id, 2)).intent);
+    expect(await read(session, seed)).toEqual([
+      { action: TradeAction.Up, profit: '0.85000000', openPrice: 1, closePrice: 2 },
+    ]);
   });
 });
