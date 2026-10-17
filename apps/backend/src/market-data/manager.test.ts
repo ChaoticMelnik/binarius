@@ -42,6 +42,7 @@ const TOKEN_2 = 'SECRET-token-of-user-2';
 const ACC1: MarketDataAccount = { id: '00000000-0000-4000-8000-000000000001', brokerUserId: '1' };
 const ACC2: MarketDataAccount = { id: '00000000-0000-4000-8000-000000000002', brokerUserId: '2' };
 const ACC3: MarketDataAccount = { id: '00000000-0000-4000-8000-000000000003', brokerUserId: '3' };
+const ACC4: MarketDataAccount = { id: '00000000-0000-4000-8000-000000000004', brokerUserId: '4' };
 const TOKENS: Record<string, string> = {
   [ACC1.id]: TOKEN_1,
   [ACC2.id]: TOKEN_2,
@@ -115,8 +116,12 @@ interface FakeClient extends BrokerSocketClient {
   hear(event: BrokerEvent): void;
 }
 
-// the worker's fakeClients (session-manager.test.ts) with a subscription registry
-function fakeClients(readyOnStart: (index: number) => boolean = () => true) {
+// the worker's fakeClients (session-manager.test.ts) with a subscription registry; throwOnStart
+// throws as the client does on invalid credentials, before any state change (start: 1-based)
+function fakeClients(
+  readyOnStart: (index: number) => boolean = () => true,
+  throwOnStart: (index: number, start: number) => boolean = () => false,
+) {
   const made: FakeClient[] = [];
   const openClient = (): BrokerSocketClient => {
     const index = made.length;
@@ -141,6 +146,9 @@ function fakeClients(readyOnStart: (index: number) => boolean = () => true) {
       },
       start(credentials) {
         client.starts.push(credentials.accessToken);
+        if (throwOnStart(index, client.starts.length)) {
+          throw new TypeError('broker socket credentials are invalid');
+        }
         connections = 0;
         publish(readyOnStart(index) ? BrokerSocketState.Ready : BrokerSocketState.Authenticating);
       },
@@ -303,6 +311,13 @@ function harness(
     },
   };
 }
+
+// each subscribe() call's ids, sorted: the catalog's order is not the ids'
+const subscribed = (client: FakeClient | undefined) =>
+  client?.subscribeCalls.map((ids) => [...ids].sort((a, b) => a - b));
+
+// lets the work started inside an event handler run to its end
+const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const socketsOf = (userId: number) =>
   (broker?.socket.sockets() ?? []).filter((socket) => socket.userId === userId);
@@ -850,8 +865,216 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
   });
 });
 
+describe('the market data manager and an empty active slot (#404, I1)', () => {
+  it('M17a promotes a reserve that becomes ready after the switch left the active slot empty', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    const reserveToken = deferred<AccessTokenResult>();
+    h.answers.set(ACC2.id, () => reserveToken.promise);
+    const ticked = h.manager.tick();
+    await until('the reserve start waits', () => h.calls.length === 2);
+    const [active] = fakes.made;
+    active?.fire(BrokerSocketState.DisconnectedByServer);
+    expect(h.logs('market data failover')).toEqual([
+      expect.objectContaining({ from: ACC1.id, to: null }),
+    ]);
+    expect(active?.stops).toBe(1);
+
+    reserveToken.resolve({ ok: true, accessToken: TOKEN_2 });
+    await ticked;
+    const [, promoted] = fakes.made;
+    expect(subscribed(promoted)).toEqual([IDS]);
+    expect(h.logs('market data reserve promoted')).toEqual([
+      expect.objectContaining({ to: ACC2.id }),
+    ]);
+    expect(h.line()).toMatchObject({
+      active: { accountId: ACC2.id, socketState: 'ready', subscriptions: 45 },
+      reserve: null,
+      failovers: 1,
+    });
+    await h.manager.tick();
+    await h.manager.tick();
+    expect(h.logs('market data: no working service account')).toEqual([]);
+    expect(fakes.made).toHaveLength(2);
+  });
+
+  it('M17b promotes the reserve started with the refused token when the new active fails too', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    await h.manager.tick();
+    const [first, second] = fakes.made;
+    const exchange = deferred<AccessTokenResult>();
+    h.answers.set(ACC1.id, () => exchange.promise);
+    first?.fire(BrokerSocketState.TokenExpired);
+    second?.fire(BrokerSocketState.DisconnectedByServer);
+    expect(h.logs('market data failover')).toEqual([
+      expect.objectContaining({ from: ACC1.id, to: ACC2.id }),
+      expect.objectContaining({ from: ACC2.id, to: null }),
+    ]);
+
+    exchange.resolve({ ok: true, accessToken: 'SECRET-token-1b' });
+    await until('the promotion', () => h.logs('market data reserve promoted').length === 1);
+    const [, , third] = fakes.made;
+    expect(subscribed(third)).toEqual([IDS]);
+    expect(third?.starts).toEqual(['SECRET-token-1b']);
+    expect(h.logs('market data reserve promoted')[0]).toMatchObject({ to: ACC1.id });
+    expect(h.calls.filter((call) => call.accountId === ACC1.id)).toEqual([
+      { accountId: ACC1.id, options: SERVICE },
+      { accountId: ACC1.id, options: { ...SERVICE, refusedToken: hashToken(TOKEN_1) } },
+    ]);
+    expect(h.line()).toMatchObject({
+      failovers: 2,
+      active: { accountId: ACC1.id, socketState: 'ready' },
+    });
+  });
+
+  it.each([
+    ['the active start finds no client', [ACC1, ACC2, ACC3], 'not_service'],
+    [
+      'the broker rate limit ends the active start',
+      [ACC1, ACC2, ACC3, ACC4],
+      'refresh_rate_limited',
+    ],
+  ] as const)(
+    'M17c keeps a reserve that is not ready at the switch and promotes it when %s',
+    async (_label, accounts, reason) => {
+      // the reserve (client 1) stays authenticating until it is fired ready
+      const fakes = fakeClients((index) => index !== 1);
+      const h = harness({ accounts: [...accounts], openClient: fakes.openClient });
+      await h.manager.tick();
+      const [active, reserve] = fakes.made;
+      const answer = deferred<AccessTokenResult>();
+      h.answers.set(ACC3.id, () => answer.promise);
+      active?.fire(BrokerSocketState.DisconnectedByServer);
+      expect(reserve?.stops).toBe(0);
+      expect(h.calls.at(-1)?.accountId).toBe(ACC3.id);
+
+      reserve?.fire(BrokerSocketState.Ready);
+      expect(reserve?.subscribeCalls).toEqual([]);
+      expect(h.line().active).toMatchObject({ accountId: ACC3.id, socketState: 'starting' });
+
+      answer.resolve({ ok: false, reason });
+      await until('the promotion', () => h.logs('market data reserve promoted').length === 1);
+      await settled();
+      expect(subscribed(reserve)).toEqual([IDS]);
+      expect(h.logs('market data reserve promoted')[0]).toMatchObject({ to: ACC2.id });
+      expect(h.calls.map((call) => call.accountId)).not.toContain(ACC4.id);
+      expect(fakes.made).toHaveLength(2);
+      expect(h.line()).toMatchObject({
+        active: { accountId: ACC2.id, socketState: 'ready' },
+        reserve: null,
+      });
+    },
+  );
+
+  it('M17d keeps a reserve exchanging its token at the switch and promotes it after the exchange', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active, reserve] = fakes.made;
+    const exchange = deferred<AccessTokenResult>();
+    h.answers.set(ACC2.id, () => exchange.promise);
+    reserve?.fire(BrokerSocketState.TokenExpired);
+    active?.fire(BrokerSocketState.DisconnectedByServer);
+    expect(reserve?.stops).toBe(0);
+    expect(h.line()).toMatchObject({
+      active: null,
+      reserve: { accountId: ACC2.id, socketState: 'refreshing' },
+    });
+
+    exchange.resolve({ ok: true, accessToken: 'SECRET-token-2b' });
+    await until('the promotion', () => h.logs('market data reserve promoted').length === 1);
+    expect(reserve?.starts).toEqual([TOKEN_2, 'SECRET-token-2b']);
+    expect(subscribed(reserve)).toEqual([IDS]);
+    expect(fakes.made).toHaveLength(2);
+    expect(h.line()).toMatchObject({ active: { accountId: ACC2.id, socketState: 'ready' } });
+  });
+
+  it('M17e starts the active and a new reserve at once on a switch with no reserve', async () => {
+    const fakes = fakeClients();
+    const h = harness({ accounts: [ACC1, ACC2, ACC3, ACC4], openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active, reserve] = fakes.made;
+    reserve?.fire(BrokerSocketState.DisconnectedByServer);
+    expect(h.line().reserve).toBeNull();
+    const before = h.calls.length;
+    active?.fire(BrokerSocketState.DisconnectedByServer);
+    expect(h.calls.slice(before).map((call) => call.accountId)).toEqual([ACC3.id, ACC4.id]);
+    await until('the new pair of clients', () => fakes.made.length === 4);
+    const [, , nextActive, nextReserve] = fakes.made;
+    expect(subscribed(nextActive)).toEqual([IDS]);
+    expect(nextReserve?.subscribeCalls).toEqual([]);
+    expect(h.line()).toMatchObject({
+      active: { accountId: ACC3.id, socketState: 'ready' },
+      reserve: { accountId: ACC4.id, socketState: 'ready' },
+    });
+  });
+});
+
+describe('the market data manager and a throwing client start (#404, I3)', () => {
+  it('M18a holds an account back whose client throws on the tick, and goes on to the next', async () => {
+    const fakes = fakeClients(undefined, (index) => index === 0);
+    const h = harness({ accounts: [ACC1, ACC2, ACC3], openClient: fakes.openClient });
+    await h.manager.tick();
+    const [threw] = h.logs('market data socket start threw');
+    expect(threw).toMatchObject({
+      role: 'active',
+      accountId: ACC1.id,
+      err: { name: 'TypeError' },
+    });
+    expect(Object.keys((threw?.err as object | undefined) ?? {})).not.toContain('message');
+    expect(h.logs('market data tick failed')).toEqual([]);
+    const [broken, active] = fakes.made;
+    expect(broken?.stops).toBe(1);
+    // detached: its events reach no handler
+    broken?.fire(BrokerSocketState.DisconnectedByServer);
+    expect(h.logs('market data failover')).toEqual([]);
+    expect(subscribed(active)).toEqual([IDS]);
+    expect(h.line()).toMatchObject({
+      held: 1,
+      active: { accountId: ACC2.id, socketState: 'ready' },
+      reserve: { accountId: ACC3.id, socketState: 'ready' },
+    });
+  });
+
+  it('M18b holds an account back whose client throws in a reserve start after a switch', async () => {
+    const fakes = fakeClients(undefined, (index) => index === 2);
+    const h = harness({ accounts: [ACC1, ACC2, ACC3], openClient: fakes.openClient });
+    await h.manager.tick();
+    fakes.made[0]?.fire(BrokerSocketState.DisconnectedByServer);
+    await until('the reserve start', () => fakes.made.length === 3);
+    await settled();
+    expect(h.logs('market data socket start threw')).toEqual([
+      expect.objectContaining({ role: 'reserve', accountId: ACC3.id }),
+    ]);
+    expect(h.logs('market data work failed')).toEqual([]);
+    expect(h.line()).toMatchObject({
+      held: 2,
+      active: { accountId: ACC2.id, socketState: 'ready' },
+      reserve: null,
+    });
+  });
+
+  it('M18c fails the account over when the client throws on the start after an exchange', async () => {
+    const fakes = fakeClients(undefined, (index, start) => index === 0 && start === 2);
+    const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
+    await h.manager.tick();
+    h.answers.set(ACC1.id, () => Promise.resolve({ ok: true, accessToken: 'SECRET-token-1b' }));
+    fakes.made[0]?.fire(BrokerSocketState.TokenExpired);
+    await until('the second start', () => fakes.made[0]?.starts.length === 2);
+    await settled();
+    expect(h.logs('market data socket start threw')).toEqual([
+      expect.objectContaining({ role: 'active', accountId: ACC1.id }),
+    ]);
+    expect(h.logs('market data failover')).toEqual([
+      expect.objectContaining({ from: ACC1.id, to: null, reason: 'token_refused' }),
+    ]);
+    expect(h.line()).toMatchObject({ held: 1, active: null, reserve: null });
+  });
+});
+
 // docs/market-data.md -> The log: every message the manager writes is in the table, and every
-// row of the table was written by some case above
+// row of the table but the backstop was written by some case above
 const DOCUMENTED = [
   ...readFileSync(
     fileURLToPath(new URL('../../../../docs/market-data.md', import.meta.url)),
@@ -859,17 +1082,26 @@ const DOCUMENTED = [
   ).matchAll(/^\| `(market data[^`]*)` \|/gm),
 ].map((match) => match[1]);
 
+// track()'s catch: every work catches its own throws (I3), so no case reaches it
+const UNREACHABLE = ['market data work failed'];
+
 describe('the market data log (#404)', () => {
   afterAll(() => {
     allLines.length = 0;
   });
 
+  // reads the lines of every case above (allLines): alone (-t M11) or shuffled it fails falsely,
+  // never passes falsely; vitest.config.ts pins the order
   it('M11 writes the documented messages, the line with its fields, and no token, URL or payload', () => {
     const entries = allLines.map((line) => JSON.parse(line) as LogEntry);
     const written = new Set(
       entries.map((entry) => entry.msg).filter((msg) => msg.startsWith('market data')),
     );
-    expect([...written].sort()).toEqual([...new Set(DOCUMENTED)].sort());
+    const documented = new Set(DOCUMENTED);
+    expect([...written].filter((msg) => !documented.has(msg))).toEqual([]);
+    expect([...documented].filter((msg) => msg !== undefined && !written.has(msg))).toEqual(
+      UNREACHABLE,
+    );
     const line = entries.find((entry) => entry.msg === 'market data' && entry.active !== null);
     const own = Object.keys(line ?? {}).filter(
       (key) => !['level', 'time', 'pid', 'hostname', 'msg'].includes(key),

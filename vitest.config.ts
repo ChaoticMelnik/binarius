@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     // packages/db's constraint-coverage gate (every CHECK, unique index, FK and trigger) is the
     // last test in its file and asserts what the cases before it observed, so it must run last.
+    // The same holds for M11 of apps/backend/src/market-data/manager.test.ts, which reads the log
+    // lines of every case above it.
     // This pins the default only — an explicit `--sequence.shuffle` on the command line still
     // overrides it and fails the gate. That direction is safe (a false failure, never a false
     // pass). Both projects inherit it through `extends: true`.
