@@ -102,7 +102,7 @@ The mode comes from `POST /trading/access` only (`tradingMode`, required: a back
 real stake in force (#326). The first row is the entry and the mode button: «🎮 Демо-торговля» and
 «💼 Реальный режим» in demo, «🚀 Торговать» and «🎮 Вернуться в демо» in real (#474). The entry is
 `demo` in both; the mode button is `mode` in both and only opens the mode screen, it never switches
-by itself. Then «👥 Пригласить друга».
+by itself. Then «👥 Пригласить друга» beside «⭐ Купить токены» (#506), and «💳 Пополнить».
 
 **The mode screen** (#474, `trading-mode.ts`). `mode` sends it as a new message (the card, a
 photo or text by the fallback, is never edited); `mode:x` (`MODE_SCREEN_CALLBACK_DATA`, «↩️ Отмена»

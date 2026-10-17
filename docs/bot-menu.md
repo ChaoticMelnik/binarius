@@ -6,11 +6,11 @@ picture with a caption of the trading mode, the real balance, the demo balance, 
 status or age line when the broker balance is missing or old, a hint, and these rows: «🎮
 Демо-торговля» (#320; «🚀 Торговать» in real mode, #121, [trading-mode.md](trading-mode.md)) beside
 the mode button — «💼 Реальный режим» in demo, «🎮 Вернуться в демо» in real, both opening the
-mode screen (#474, [trading-mode.md](trading-mode.md#the-bot)) — then, each in its own row,
-«👥 Пригласить друга» (#115,
-[referrals.md](referrals.md)), «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)) and
-«💳 Пополнить» (#27, both modes, the cashier Mini App, [deposit.md](deposit.md); only when
-`WEB_PUBLIC_URL` is https, otherwise the card has the first three). It is
+mode screen (#474, [trading-mode.md](trading-mode.md#the-bot)) — then «👥 Пригласить друга» (#115,
+[referrals.md](referrals.md)) beside «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)) in
+one row (#506, [bot-navigation.md](bot-navigation.md#the-width-506)), and «💳 Пополнить» (#27, both
+modes, the cashier Mini App, [deposit.md](deposit.md)) in the last row, only when
+`WEB_PUBLIC_URL` is https (otherwise the card has the first two rows). It is
 pinned in place of whatever was pinned before.
 
 ## Components
