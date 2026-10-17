@@ -3347,5 +3347,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 1. Architect task classes: a new row "Part of a split feature built on an already merged part" — replay the merged part's start-up, recovery and periodic paths against the new states at the deploy and after a restart — **внедрено в #588: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
-2. Tech-lead's own 6-pre run names the already posted/tracked findings as known in the Codex prompt, so a re-run on a moved head reports only what is new — **внедрено в #588: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «Tech-lead's own 6-pre run», step 2**
+2. Tech-lead's own 6-pre run names as known in the Codex prompt only the findings the owner moved, open, into a follow-up issue (never a finding the PR fixed), so a re-run on a moved head reports only what is new — **внедрено в #588: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «Tech-lead's own 6-pre run», step 2**
 3. Remaining findings — **вынесено в #587** (Major, owner's yes) and **#584** (Minor)
