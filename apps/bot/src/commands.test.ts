@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BotLanguage } from '@binarius/shared';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
 import { botCommands } from './texts';
@@ -29,6 +30,8 @@ describe('the command menu', () => {
       emailLogin: () => Promise.reject(new Error('not used here')),
       recordChatMember: () => Promise.reject(new Error('not used here')),
       setNotificationLevel: () => Promise.reject(new Error('not used here')),
+      readLanguage: () => Promise.resolve(BotLanguage.Ru),
+      setLanguage: () => Promise.reject(new Error('not used here')),
       readTradingAccess: () => Promise.reject(new Error('not used here')),
       readPairs: () => Promise.reject(new Error('not used here')),
       readSignals: () => Promise.reject(new Error('not used here')),

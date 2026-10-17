@@ -25,7 +25,10 @@ import {
   RETRY_COMMANDS,
   supportUrl,
   BUY_CALLBACK_DATA,
+  BotLanguage,
+  BOT_TEXT_SOURCES_EN,
 } from '@binarius/shared';
+import { runWithLanguage, type UserLanguages } from './language';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -75,6 +78,7 @@ import {
   accountView,
   brokerBalance,
   userView,
+  userLanguagesWith,
   stubSessionResumer,
   stubSessionTracker,
   stubTracker,
@@ -129,6 +133,7 @@ function setup(
     now?: () => number;
     // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
     cashierUrl?: string | null;
+    languages?: UserLanguages;
   } = {},
 ) {
   const backend: BackendClient = {
@@ -144,6 +149,8 @@ function setup(
       vi.fn((_telegramUserId: string, level: NotificationLevel) =>
         Promise.resolve({ level, demoStake: null, realStake: null }),
       ),
+    readLanguage: vi.fn(() => Promise.resolve(BotLanguage.Ru)),
+    setLanguage: vi.fn(() => Promise.reject(new Error('not used here'))),
     readTradingAccess: options.readTradingAccess ?? vi.fn(() => Promise.resolve(ACCESS_VIEW)),
     readPairs: vi.fn(() => Promise.reject(new Error('not used here'))),
     readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),
@@ -172,6 +179,7 @@ function setup(
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
   if (options.dialog !== undefined) dialog.set(USER.id, options.dialog);
   const bot = createBot({
+    languages: options.languages ?? userLanguagesWith(),
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
@@ -242,6 +250,22 @@ const cardOf = (patch: Partial<AccountCardInput> = {}) =>
 const RECHECK_CARD = cardOf({ email: null, grant: null });
 
 describe('/start', () => {
+  // #508: an English user's /start, the welcome and its button from the English catalog
+  it('greets an English user in English', async () => {
+    const { bot, calls } = setup({
+      languages: userLanguagesWith(USER.id, BotLanguage.En),
+      recordStart: vi.fn(() => Promise.resolve(userView({ language: BotLanguage.En }))),
+    });
+    await bot.handleUpdate(startUpdate('/start'));
+
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(runWithLanguage(BotLanguage.En, () => TEXTS.welcome.value));
+    expect(message?.text).toContain('Binarius — trading on Binodex right in Telegram');
+    expect(inlineButtons(message)).toEqual([
+      { text: BOT_TEXT_SOURCES_EN.connectButton, callback_data: CONNECT_CALLBACK_DATA },
+    ]);
+  });
+
   it('greets a new user with the CTA and records the start without optional fields', async () => {
     const { bot, backend, calls } = setup();
     await bot.handleUpdate(startUpdate('/start'));
@@ -1570,6 +1594,7 @@ describe('the account card', () => {
       const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
       const bot = createBot({
+        languages: userLanguagesWith(),
         intentTracker: stubTracker(),
         sessionTracker: stubSessionTracker(),
         sessionResumer: stubSessionResumer(),
@@ -1583,6 +1608,8 @@ describe('the account card', () => {
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
+          readLanguage: vi.fn(() => Promise.resolve(BotLanguage.Ru)),
+          setLanguage: vi.fn(() => Promise.reject(new Error('not used here'))),
           readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
           readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
           readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),
@@ -1631,6 +1658,7 @@ describe('the account card', () => {
       const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
       const bot = createBot({
+        languages: userLanguagesWith(),
         intentTracker: stubTracker(),
         sessionTracker: stubSessionTracker(),
         sessionResumer: stubSessionResumer(),
@@ -1644,6 +1672,8 @@ describe('the account card', () => {
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
+          readLanguage: vi.fn(() => Promise.resolve(BotLanguage.Ru)),
+          setLanguage: vi.fn(() => Promise.reject(new Error('not used here'))),
           readTradingAccess: vi.fn(() => Promise.resolve(ACCESS_VIEW)),
           readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
           readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),
@@ -2776,6 +2806,7 @@ describe('the Bot API timeout', () => {
     const apiRoot = await listen(started);
 
     const bot = createBot({
+      languages: userLanguagesWith(),
       intentTracker: stubTracker(),
       sessionTracker: stubSessionTracker(),
       sessionResumer: stubSessionResumer(),
@@ -2790,6 +2821,8 @@ describe('the Bot API timeout', () => {
         emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
         setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
+        readLanguage: vi.fn(() => Promise.resolve(BotLanguage.Ru)),
+        setLanguage: vi.fn(() => Promise.reject(new Error('not used here'))),
         readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
         readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
         readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),

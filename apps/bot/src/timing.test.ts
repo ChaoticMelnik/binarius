@@ -43,6 +43,7 @@ import {
   TRACKED_SESSIONS_MAX,
   demoAnalysisCallbackData,
   sessionStopCallbackData,
+  BotLanguage,
 } from '@binarius/shared';
 import {
   composeDurationMs,
@@ -127,12 +128,15 @@ import {
   stubSessionResumer,
   stubSessionTracker,
   stubTracker,
+  userLanguagesWith,
 } from './testing';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   GRAMMY_POLLING_BACKOFF_MS,
+  HANDLER_BUDGET_MS,
   HANDLER_CALLS,
+  LANGUAGE_READ_TIMEOUT_MS,
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_DRAIN_MS,
   INTENT_TRACK_FIRST_POLL_MS,
@@ -182,6 +186,7 @@ interface Branch {
   emailLogin?: BackendClient['emailLogin'];
   recordChatMember?: BackendClient['recordChatMember'];
   setNotificationLevel?: BackendClient['setNotificationLevel'];
+  setLanguage?: BackendClient['setLanguage'];
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
   readSignals?: BackendClient['readSignals'];
@@ -349,6 +354,15 @@ async function observe(branch: Branch): Promise<Calls> {
         (() => Promise.resolve({ level, demoStake: null, realStake: null }))
       )(telegramUserId, level);
     },
+    // the cache below holds USER, so a cold read here is a call the budget would have to count
+    readLanguage: () => {
+      backend += 1;
+      return Promise.resolve(BotLanguage.Ru);
+    },
+    setLanguage: (telegramUserId, language) => {
+      backend += 1;
+      return (branch.setLanguage ?? (() => Promise.resolve(language)))(telegramUserId, language);
+    },
     readTradingAccess: (telegramUserId) => {
       backend += 1;
       return (branch.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)))(telegramUserId);
@@ -473,6 +487,9 @@ async function observe(branch: Branch): Promise<Calls> {
     logger: fakeLogger(),
     botInfo: BOT_INFO,
     loginDialog,
+    // the language read before the handler is bounded by its own constant (#508, timing.ts), not
+    // by HANDLER_CALLS: the user's language is already known here
+    languages: userLanguagesWith(),
     ...(branch.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: branch.welcomeVideoFileId }),
@@ -3686,9 +3703,18 @@ describe('the bounds shared with the backend', () => {
   it('answers a pre-checkout query inside Telegram’s deadline', () => {
     expect(STARS_PRECHECKOUT_BUDGET_MS).toBeLessThanOrEqual(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS);
     expect(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
-    expect(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS).toBeLessThan(
-      TELEGRAM_PRECHECKOUT_DEADLINE_MS,
-    );
+    // the user's language is read before the query's handler (#508)
+    expect(
+      LANGUAGE_READ_TIMEOUT_MS +
+        STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS +
+        PRECHECKOUT_ANSWER_RESERVE_MS,
+    ).toBeLessThan(TELEGRAM_PRECHECKOUT_DEADLINE_MS);
+  });
+
+  // #508: the language read is the first thing an update waits for, inside the shutdown budget
+  it('reads a language inside one backend call and an update inside the shutdown budget', () => {
+    expect(LANGUAGE_READ_TIMEOUT_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
+    expect(HANDLER_BUDGET_MS + LANGUAGE_READ_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 
   // the same for POST /trading/sessions (#283): a start inside its budget must not read as an

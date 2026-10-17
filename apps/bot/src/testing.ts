@@ -11,6 +11,7 @@ import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
+import { createUserLanguages, type UserLanguages } from './language';
 import { LABELS } from './texts';
 import {
   BrokerAccountStatus,
@@ -61,6 +62,7 @@ import {
   defaultBotTextSource,
   type BotTextKey,
   type BotTextSource,
+  BotLanguage,
 } from '@binarius/shared';
 import { stripMessageSpacer } from '@binarius/shared/testing';
 
@@ -106,7 +108,7 @@ export const USER_VIEW: UserStartView = {
   notificationLevel: NotificationLevel.All,
   demoStake: null,
   realStake: null,
-  language: 'ru',
+  language: BotLanguage.Ru,
 };
 
 export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({
@@ -483,6 +485,17 @@ export const sessionShare = (patch: Partial<SessionShare> = {}): SessionShare =>
   ...patch,
 });
 
+// A cache of languages that already holds `telegramUserId`: the scene's updates make no cold read
+// (language.ts), so a scene that counts backend calls counts its handler's only.
+export const userLanguagesWith = (
+  telegramUserId: number = USER.id,
+  language: BotLanguage = BotLanguage.Ru,
+): UserLanguages => {
+  const languages = createUserLanguages();
+  languages.set(telegramUserId, language);
+  return languages;
+};
+
 // A client where every method the scene does not give rejects, so an unexpected call fails the
 // scene instead of answering with a fixture. A method added to BackendClient adds a line here.
 export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient => {
@@ -496,6 +509,8 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     emailLogin: unused,
     recordChatMember: unused,
     setNotificationLevel: unused,
+    readLanguage: () => Promise.resolve(BotLanguage.Ru),
+    setLanguage: unused,
     readTradingAccess: unused,
     readPairs: unused,
     evaluateSignal: unused,

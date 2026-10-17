@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { defaultBotTextSource } from '@binarius/shared';
+import { BotLanguage, defaultBotTextSource } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -841,6 +841,8 @@ function scene(options: SceneOptions = {}) {
     emailLogin: () => Promise.reject(new Error('not used by these scenes')),
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
     setNotificationLevel: () => Promise.reject(new Error('not used by these scenes')),
+    readLanguage: () => Promise.resolve(BotLanguage.Ru),
+    setLanguage: () => Promise.reject(new Error('not used here')),
     readTradingAccess: () => Promise.reject(new Error('not used by these scenes')),
     readPairs: () => Promise.reject(new Error('not used by these scenes')),
     readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),

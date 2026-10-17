@@ -17,6 +17,7 @@ import {
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
   demoAnalysisCallbackData,
+  BotLanguage,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -121,6 +122,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     setNotificationLevel:
       scenario.setNotificationLevel ??
       ((_telegramUserId, level) => Promise.resolve({ level, demoStake: null, realStake: null })),
+    readLanguage: () => Promise.resolve(BotLanguage.Ru),
+    setLanguage: () => Promise.reject(new Error('not used here')),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
     readSignals: scenario.readSignals ?? (() => Promise.reject(new Error('not used here'))),

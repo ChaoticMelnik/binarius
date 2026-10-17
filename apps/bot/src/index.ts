@@ -24,6 +24,7 @@ import {
   SESSION_TRACK_FIRST_POLL_MS,
   SESSION_TRACK_POLL_MS,
 } from './timing';
+import { setMissingLanguageHandler } from './language';
 
 const env = parseEnv(process.env);
 
@@ -38,6 +39,15 @@ if (env.shareStorageChatId === undefined) {
 }
 
 const backend = createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken });
+
+// A text read outside any update's language is shown in Russian (#508, language.ts): logged once
+// per process, the canary for a sender this bot does not yet run under runWithLanguage.
+let missingLanguageLogged = false;
+setMissingLanguageHandler(() => {
+  if (missingLanguageLogged) return;
+  missingLanguageLogged = true;
+  logger.warn('text read outside a language context, Russian shown');
+});
 
 const intentTracker = createIntentTracker({
   backend,
