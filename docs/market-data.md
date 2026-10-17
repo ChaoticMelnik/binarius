@@ -3,8 +3,8 @@
 The backend keeps a candle ring for every pair of the catalog on the `15s` and `5s` intervals, built
 from the broker's `price.update` ticks on a data socket of its own. That socket runs on a service
 account ([service-accounts.md](service-accounts.md), #391). A REST backfill (#590, [Backfill](#backfill-590))
-closes the gaps of a cold start and of a hole on the spare tokens of the scanners' pacers. This part
-has no consumer yet: the feed and scanner move onto the source in #405.
+closes the gaps of a cold start and of a hole on the signal pacer's overflow. The signal feed and
+the scanners read it (#405, [signal.md](signal.md#feed-and-journal-133)).
 
 ```bash
 pnpm test --project unit apps/backend/src/market-data   # mock broker and fake clients, no database
@@ -16,13 +16,14 @@ pnpm test --project unit apps/backend/src/market-data   # mock broker and fake c
 |---|---|---|
 | `createCandleRing` | `apps/backend/src/market-data/ring.ts` | one #392 builder (`createCandleBuilder`, `packages/signal/src/ticks.ts`) per (pair, interval), the closing rule, holes, `read`/`fill`/`missing` |
 | `createMarketDataManager` | `apps/backend/src/market-data/manager.ts` | the two socket clients on service accounts, failover, token refusals, hold-back, subscriptions, the log line |
-| `CandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the interface #405 reads (`read`, `request`) and the bounded request set the backfill drains (`pending()`) |
+| `createCandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the adapter over the ring and the request set that implements the feed's port `SignalCandleSource` (`packages/signal/src/source.ts`, #405): a window only while the manager's `streaming()` is true and only for `SIGNAL_SCAN_INTERVALS`, `request` only for those; and the bounded request set the backfill drains (`pending()`) |
 | `createCandleBackfill` | `apps/backend/src/market-data/backfill.ts` | the REST backfill: due elements, the queue, one native GET per (pair, interval), `fill` (#590) |
 | `BrokerSocketClient` | `packages/broker-socket` | the worker's socket client, unchanged ([broker-socket.md](broker-socket.md)) |
 
 The source is created only when `BROKER_WS_URL` is set. It reads the same variable as the worker's
 sessions (`https:` or `wss:`; an empty value fails the start). `apps/backend/src/index.ts` builds the
-ring and the request set (`candleStore`) before the signal feed, which #405 makes read them, then
+ring and the request set (`candleStore`) before the signal feed, which reads them through
+`createCandleSource` (its `streaming` asks the manager, built below, only after `listen()`), then
 the backfill and the manager in one function (`createMarketData`), starts the manager and then the
 backfill after `listen()` with the other loops, and stops the backfill and then the manager in
 shutdown phase 1. The start line
@@ -197,16 +198,16 @@ have no tick candle and no earlier fill. No GET starts in the first `SIGNAL_SCAN
 because the broker publishes a just-closed candle about 150 ms after the boundary. Every GET runs
 under `MARKET_DATA_BACKFILL_BUDGET_MS` and the `stop()` signal.
 
-**Tokens.** Only the overflow of the scanners' pacers (`ScanPacer.tryTakeSpare`,
+**Tokens.** Only the overflow of the signal pacer (`ScanPacer.tryTakeSpare`,
 [signal.md → The budget](signal.md#the-budget)): what `refill` discards above the bucket's capacity,
-held to one token per pacer. A full scan leaves almost nothing; an idle pacer gives its whole share.
-Until #405 the two pacers are joined by `joinSpare`: the first one with an overflow gives the token,
-and a 429 or a 2xx answer goes to both.
+held to one token. While the source is live nothing else takes the pacer's tokens, so the backfill
+gets the whole share; without it the feed's GETs by demand take the bucket first. A 429 or a 2xx
+answer goes to the same pacer (#405).
 
 | Outcome of an attempt | Counters | The element |
 |---|---|---|
 | 2xx, any rows (`[]` on a closed market too) | `fetched`, `filled +n` | held back; the window's empty buckets that were closed when the GET was built become `unfilled`; failures reset; the request it served is dropped, one that came in flight stays |
-| 429 | `rateLimited` | the pacers paused (`onRateLimited`); the element goes back to the head, its hold-back and failures untouched; the request stays |
+| 429 | `rateLimited` | the pacer paused (`onRateLimited`); the element goes back to the head, its hold-back and failures untouched; the request stays |
 | `unavailable`, `contract_violation`, `rejected`, `unauthorized`, `aborted` by the budget | `failed` | held back, failures +1, the request stays; at `MARKET_DATA_BACKFILL_ATTEMPTS` `warn` `market data backfill gave up`, the empty buckets closed when the GET was built become `unfilled`, failures reset, the request it served is dropped (one that came in flight stays) |
 | a throw that is not a `BrokerRestError` | `failed`, `warn` `market data backfill threw` | as a failure |
 | aborted by `stop()` | none | the loop is over |
@@ -290,7 +291,7 @@ The links:
 ## Tests
 
 - `ring.test.ts` R1-R9, R12, with R3b/R3c (`lateClose`).
-- `source.test.ts` S1-S3.
+- `source.test.ts` S1-S3; S4-S6 the adapter `createCandleSource` (#405).
 - `backfill.test.ts` B1-B17, with B2b-B2d, B3c-B3e and B5b, on a fake `getChart`, the real ring and the real pacer under an injected
   clock.
 - `manager.test.ts`:
@@ -316,13 +317,12 @@ The links:
 3. **Closing may come before a bucket's last ticks.** The clock rule can close early when the
    process clock runs ahead of the broker's by more than the margin during a quiet stream. The
    watermark rule can close early because ticks of different pairs arrive out of timestamp order.
-   No consumer exists in this part. Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in
-   the line.
-4. **The backfill takes only the pacers' overflow** ([Backfill](#backfill-590)). While both scanners
-   scan in full, that is near zero. A hole after a failover in trading hours then stays in the window
-   for 25/75 min, until #405 moves the scanners onto the source. Falsifiable: a `market data` line
-   with `backfill.queued > 0` and `spare = 0` several periods running, with `skipped = 0` in the
-   `signal scanner` lines.
+   Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in the line.
+4. **A quiet pair's boundary candle may still be open at the scan** (#405). The scanner fires
+   `SIGNAL_SCAN_SLACK_MS` after the boundary, before the clock rule's margin; a pair with no tick
+   past the boundary yet is decided on the candle before, which is not served. The scanner counts
+   these as `unclosed` ([signal.md → The scanner](signal.md#the-scanner-343)). Falsifiable:
+   `unclosed / decided` above 5 % in trading hours.
 5. **The subscription limit of one socket is unmeasured** (#555). 144 ids worked on one socket for
    30 minutes.
 6. **A pair that left the catalog stays subscribed** until a restart.
@@ -369,14 +369,13 @@ The links:
    `reserve: { accountId, socketState: 'ready' }`.
 4. The backfill (#590), after the first night:
    `docker compose logs --since 12h backend | grep -E '"market data"' | tail -3`. In `backfill`,
-   `fetched > 0` and `filled > 0`, and `queued` has fallen to 0. In the day, with the scanners scanning
-   in full, `spare` is about 0 and the `signal scanner` lines show `skipped = 0`, as before the deploy.
-5. After any `market data failover` at night, `queued` rises and is back to 0 within minutes. In the
-   day it stays up until #405 (risk 4).
+   `fetched > 0` and `filled > 0`, and `queued` has fallen to 0; `spare` grows with `queued`, and the
+   `signal scanner` lines show `source: "live"`.
+5. After any `market data failover`, `queued` rises and is back to 0 within minutes, in the day too.
 
 ## Boundaries
 
-- The feed and the scanner reading the source, one pacer instead of two, and the budget split of
-  #382, are #405.
+- The feed and the scanner reading the source, one pacer instead of two, and the end of the budget
+  split of #382 shipped in #405 ([signal.md → The budget](signal.md#the-budget)).
 - No trade command is sent on a data socket: the manager never calls `openTrade`, and the backfill
   calls only `getChart`.
