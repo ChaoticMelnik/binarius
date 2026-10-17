@@ -3,6 +3,7 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
+  BOT_MESSAGE_SPACER,
   pairLabel,
   TradeIntentStatus,
   TradeMode,
@@ -1044,7 +1045,8 @@ describe('/stop resets the mode (#473)', () => {
     });
     const sendAnswer = messageAnswer(TEXT_CARD_MESSAGE_ID);
     answers.set('sendMessage', (payload, signal) => {
-      if (payload.text === TEXTS.modeStopReset.value) {
+      // an answer reads the payload as sent, the width spacer included
+      if (payload.text === TEXTS.modeStopReset.value + BOT_MESSAGE_SPACER) {
         throw new GrammyError(
           'refused',
           { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
