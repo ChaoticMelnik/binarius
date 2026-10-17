@@ -1,5 +1,7 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import {
+  BROKER_SOCKET_AUTH_TIMEOUT_MS,
+  BROKER_SOCKET_CONNECT_TIMEOUT_MS,
   BROKER_SOCKET_RECONNECT_DELAY_MS,
   BROKER_SOCKET_RECONNECT_JITTER,
 } from '@binarius/broker-socket';
@@ -159,9 +161,13 @@ export const SERVICE_STALLED_RETRY_MS = 300_000;
 export const MARKET_DATA_TICK_MS = 30_000;
 // the period of the `market data` log line
 export const MARKET_DATA_LOG_MS = 60_000;
-// How long the active socket may reconnect on its own before the warm reserve takes over (owner's
-// answer, 2026-10-17); a terminal state switches at once.
+// How long the active may be out of ready in any state (its start, connecting, reconnecting) while
+// a ready reserve waits, before the reserve takes over (owner's answer, 2026-10-17); a terminal
+// state switches at once.
 export const MARKET_DATA_FAILOVER_GRACE_MS = 2_000;
+// How long the reserve may be out of ready, from its start or from leaving ready, before it gives
+// way to the next account.
+export const MARKET_DATA_RESERVE_READY_MS = 25_000;
 // A bucket closes by the process clock this long after its end when no tick moves the watermark
 // past it (a quiet stream: closed markets); the live tick delay's p95 was 268 ms.
 export const MARKET_DATA_SKEW_MARGIN_MS = 2_000;
@@ -445,10 +451,13 @@ const TIMING_CHAIN_HOLDS =
   // slower one ends in the switch), and the grace ends inside one 5s candle; the clock rule's margin closes a 5s
   // bucket before the next one ends, and stays far inside the builder's skew bound; the line
   // spans at least one tick; the keeper gets a tick to repair an account before it is retried.
-  // stop() waits for one accessToken in flight (BROKER_HTTP_TIMEOUT_MS, above); the clients' own
-  // stop() is synchronous
+  // a fresh start on a broker that answers (the token with an exchange, the first engine open,
+  // user.auth) ends before the reserve's rotation. stop() waits for the accessToken calls in
+  // flight, at most two at once (BROKER_HTTP_TIMEOUT_MS, above); the clients' stop() is synchronous
   BROKER_SOCKET_RECONNECT_DELAY_MS * (1 + BROKER_SOCKET_RECONNECT_JITTER) <
     MARKET_DATA_FAILOVER_GRACE_MS &&
+  BROKER_HTTP_TIMEOUT_MS + BROKER_SOCKET_CONNECT_TIMEOUT_MS + BROKER_SOCKET_AUTH_TIMEOUT_MS <
+    MARKET_DATA_RESERVE_READY_MS &&
   MARKET_DATA_FAILOVER_GRACE_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
   MARKET_DATA_SKEW_MARGIN_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
   MARKET_DATA_SKEW_MARGIN_MS < TICK_MAX_SKEW_MS &&
