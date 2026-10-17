@@ -7,12 +7,12 @@ import {
   TradeAction,
   TradeIntentStatus,
   TradingSessionStopReason,
+  BOT_TEXT_LIMIT,
   botTextMessageOverflows,
   decimalStringSchema,
   defaultBotTextSource,
   logOptions,
   plainTextOf,
-  TELEGRAM_MESSAGE_LIMIT,
   type BinaryPair,
   type BotTextKey,
   type BrokerUser,
@@ -899,8 +899,9 @@ describe('a martingale cycle is one message (#551)', () => {
   );
 
   describe('D20 the length limit, under an override the registry accepts', () => {
-    // a loss's block of about 440 characters: nine of them fit in 4096, ten do not; a session
-    // holds up to MAX_SESSION_SUMMARY_TRADES trades, so a split takes such an override
+    // a loss's block of about 440 characters: eight of them fit in BOT_TEXT_LIMIT, nine do not —
+    // 4079, inside the Bot API's 4096; a session holds up to MAX_SESSION_SUMMARY_TRADES trades, so
+    // a split takes such an override
     const PAD = 'ж'.repeat(380);
     const source = {
       sourceOf: (key: BotTextKey) =>
@@ -922,22 +923,27 @@ describe('a martingale cycle is one message (#551)', () => {
       const chat = chatOf(captured.calls, target);
       expect(chat).toHaveLength(2);
       for (const text of chat) {
-        expect(plainTextOf(text).length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+        expect(plainTextOf(text).length).toBeLessThanOrEqual(BOT_TEXT_LIMIT);
       }
       const steps = (text: string) => heads(text).filter((line) => line.startsWith('⚡'));
       expect(steps(chat[0]!)).toEqual(
-        Array.from({ length: 9 }, (_, i) => `⚡ Цикл 1 Шаг ${i + 1}`),
+        Array.from({ length: 8 }, (_, i) => `⚡ Цикл 1 Шаг ${i + 1}`),
       );
-      expect(steps(chat[1]!)).toEqual(['⚡ Цикл 1 Шаг 10', '⚡ Цикл 1 Шаг 11', '⚡ Цикл 1 Шаг 12']);
+      expect(steps(chat[1]!)).toEqual([
+        '⚡ Цикл 1 Шаг 9',
+        '⚡ Цикл 1 Шаг 10',
+        '⚡ Цикл 1 Шаг 11',
+        '⚡ Цикл 1 Шаг 12',
+      ]);
       // the first message is not edited after the split
       const first = answered.get(sendsTo(captured.calls, target)[0]!.payload);
       const editsOfFirst = editsTo(captured.calls, target).filter(
         (call) => call.payload.message_id === first,
       );
-      expect(editsOfFirst).toHaveLength(8);
+      expect(editsOfFirst).toHaveLength(7);
       expect(await cycleStateOf(target)).toEqual({
         messageId: answered.get(sendsTo(captured.calls, target)[1]!.payload),
-        from: 9,
+        from: 8,
       });
       expect(
         logs().filter(
@@ -945,7 +951,7 @@ describe('a martingale cycle is one message (#551)', () => {
             entry.level === INFO &&
             entry.msg === 'session trade notice split: the cycle message is full',
         ),
-      ).toEqual([expect.objectContaining({ sessionId: target.session.id, claimed: 9, from: 9 })]);
+      ).toEqual([expect.objectContaining({ sessionId: target.session.id, claimed: 8, from: 8 })]);
     });
   });
 

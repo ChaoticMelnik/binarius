@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BOT_TEXT_LIMIT,
   botTextMessageOverflows,
   createBotTexts,
   createSessionTexts,
@@ -164,7 +165,8 @@ describe('sessionCycleMessage (#551)', () => {
   });
 
   describe('the length limit, under an override the registry accepts', () => {
-    // a loss's block of about 440 characters: nine losses of a cycle fit in 4096, ten do not
+    // a loss's block of about 440 characters: eight losses of a cycle fit in BOT_TEXT_LIMIT, nine
+    // do not — 4079, inside the Bot API's 4096
     const PAD = 'ж'.repeat(380);
     const source = {
       sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
@@ -180,28 +182,39 @@ describe('sessionCycleMessage (#551)', () => {
 
     it('a block that does not fit opens a new message from the claimed trade', () => {
       setBotTextSource(source);
-      const losses = Array.from({ length: 10 }, () => L);
+      const losses = Array.from({ length: 9 }, () => L);
       const edit = sessionCycleMessage(
-        claimed(losses.slice(0, 9), { messageId: 9, from: 0 }),
+        claimed(losses.slice(0, 8), { messageId: 9, from: 0 }),
         martingale,
         5,
       );
       expect(edit.kind).toBe('edit');
-      expect(plainTextOf(edit.text).length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
-      expect(plainTextOf(edit.text).length).toBeGreaterThan(TELEGRAM_MESSAGE_LIMIT - 450);
+      expect(plainTextOf(edit.text).length).toBeLessThanOrEqual(BOT_TEXT_LIMIT);
+      expect(plainTextOf(edit.text).length).toBeGreaterThan(BOT_TEXT_LIMIT - 450);
+      // the nine blocks would fit the Bot API's limit: only the width spacer leaves them out
+      const nine = createSessionTexts(createBotTexts(source)).sessionCycleText(
+        losses.map((result, i) => ({
+          ...row(result, i),
+          digits: 5,
+          cycle: 1,
+          step: i + 1,
+        })),
+      );
+      expect(plainTextOf(nine).length).toBeGreaterThan(BOT_TEXT_LIMIT);
+      expect(plainTextOf(nine).length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
       const split = sessionCycleMessage(claimed(losses, { messageId: 9, from: 0 }), martingale, 5);
-      expect(split).toMatchObject({ kind: 'send', from: 9, split: true });
-      expect(heads(split)).toEqual(['⚡ Цикл 1 Шаг 10']);
+      expect(split).toMatchObject({ kind: 'send', from: 8, split: true });
+      expect(heads(split)).toEqual(['⚡ Цикл 1 Шаг 9']);
       // without a cycle message, the whole cycle does not fit either
       expect(sessionCycleMessage(claimed(losses), martingale, 5)).toMatchObject({
         kind: 'send',
-        from: 9,
+        from: 8,
         split: true,
       });
       // the continuation is edited from its own from
       expect(
-        sessionCycleMessage(claimed([...losses, L], { messageId: 10, from: 9 }), martingale, 5),
-      ).toMatchObject({ kind: 'edit', messageId: 10, from: 9 });
+        sessionCycleMessage(claimed([...losses, L], { messageId: 10, from: 8 }), martingale, 5),
+      ).toMatchObject({ kind: 'edit', messageId: 10, from: 8 });
     });
   });
 });

@@ -1,13 +1,13 @@
 import {
   escapeTelegramHtml,
   plainTextOf,
-  TELEGRAM_MESSAGE_LIMIT,
   telegramHtmlProblems,
   telegramHtmlTagRanges,
   telegramHtmlTemplate,
   type TelegramHtml,
   type TelegramHtmlHole,
 } from './telegram-html';
+import { BOT_TEXT_LIMIT } from './bot-message-width';
 
 // The machinery behind the bot texts catalog (bot-texts.ts, docs/bot-texts.md): the entry shape,
 // the template grammar, the validator and the views the bot and the backend read. Generic over the
@@ -100,7 +100,7 @@ export const botHtmlText = <
   options: BotTextOptions<R> = {},
 ): BotTextEntry<typeof BotTextKind.Html, G, R> =>
   entryOf(BotTextKind.Html, group, description, source, options, {
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     singleLine: false,
   });
 
