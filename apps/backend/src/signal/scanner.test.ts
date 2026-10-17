@@ -6,6 +6,7 @@ import {
   type BinaryPair,
   type PairsCatalogView,
   type ScanInterval,
+  SIGNAL_SCAN_INTERVALS,
   type SignalDecision,
 } from '@binarius/shared';
 import {
@@ -17,8 +18,16 @@ import {
   type SignalDecidedEvaluation,
   type SignalFeedRequest,
   type SignalJournalSource,
+  type Tick,
 } from '@binarius/signal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createCandleRing } from '../market-data/ring';
+import { createCandleSource, createPendingRequests } from '../market-data/source';
+import {
+  MARKET_DATA_PENDING_MAX,
+  MARKET_DATA_RING_CANDLES,
+  MARKET_DATA_SKEW_MARGIN_MS,
+} from '../timing';
 import { createSignalScanner, eligiblePairs, freshSignals } from './scanner';
 
 // a 15 s boundary, so a 5 s one too
@@ -700,6 +709,80 @@ describe('signal scanner on the candle source (#405)', () => {
     expect(served).toEqual(pairs.map((p) => p.id).filter((id) => id % 3 !== 0));
     expect(h.scanner.snapshot().scanned).toHaveLength(122);
     await h.scanner.stop();
+  });
+
+  // #405 review, major 1: the ring, the source, the feed and the cache as the backend builds them.
+  // Four ticks per candle (open, high, low, close) of mildRise's shape (signal's testing.ts: 45
+  // sideways closes, then +0.06/-0.04 moves) up to bucket T - I, none stamped at or after the
+  // boundary T: at T + slack neither the watermark nor the clock margin has closed T - I, which the
+  // ring then reads as forming (ring.test.ts R3). The scanner's source is down until that scan, so
+  // the line counts it alone.
+  it('S34 on the real ring a candle the ring has not closed is left out: the decision is on the one before, unclosed, not served', async () => {
+    const T = B + 4 * CANDLE_15S_MS;
+    const lastBucket = T - CANDLE_15S_MS;
+    const closes = [100];
+    for (let i = 1; i < 45; i++) closes.push(closes[i - 1] + (i % 2 ? 0.03 : -0.03));
+    while (closes.length < 300) {
+      closes.push(closes[closes.length - 1] + (closes.length % 2 ? 0.06 : -0.04));
+    }
+    const price = (value: number) => Number(value.toFixed(5));
+    const ticks: Tick[] = closes.flatMap((rawClose, i) => {
+      const bucket = lastBucket - (closes.length - 1 - i) * CANDLE_15S_MS;
+      const open = Number((i === 0 ? rawClose : closes[i - 1]).toFixed(2));
+      const close = Number(rawClose.toFixed(2));
+      return [
+        { price: open, timestamp: bucket + 1_000 },
+        { price: price(Math.max(open, close) + 0.02), timestamp: bucket + 2_000 },
+        { price: price(Math.min(open, close) - 0.02), timestamp: bucket + 3_000 },
+        { price: close, timestamp: bucket + 4_000 },
+      ];
+    });
+
+    async function scanOnce(watermarkCrossed: boolean) {
+      vi.setSystemTime(B + 3_000);
+      const ring = createCandleRing({
+        capacity: MARKET_DATA_RING_CANDLES,
+        skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
+        intervals: SIGNAL_SCAN_INTERVALS,
+      });
+      for (const tick of ticks) ring.push(1, 5, tick, tick.timestamp + 50);
+      // another pair's tick at the boundary moves the watermark past T - I
+      if (watermarkCrossed) ring.push(2, 5, { price: 1.1, timestamp: T }, T + 50);
+      const source = createCandleSource({
+        ring,
+        requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
+        streaming: () => true,
+      });
+      const real = realFeed((assetId, nowMs) => source.read(assetId, '15s', nowMs));
+      const h = harness({ pairs: [pair(1)], feed: real.feed });
+      h.state.streaming = false;
+      h.scanner.start();
+      await vi.advanceTimersByTimeAsync(T + SLACK_MS - 1 - Date.now());
+      h.state.streaming = true;
+      await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+      const snapshot = h.scanner.snapshot();
+      await h.scanner.stop();
+      expect(real.getChart).not.toHaveBeenCalled();
+      return {
+        entry: snapshot.entries.get(1),
+        line: summary(h),
+        served: freshSignals(snapshot, Date.now()),
+      };
+    }
+
+    const unclosed = await scanOnce(false);
+    expect(unclosed.entry).toMatchObject({
+      kind: 'signal',
+      lastCandleTimestamp: T - 2 * CANDLE_15S_MS,
+    });
+    expect(unclosed.line).toMatchObject({ decided: 1, unclosed: 1, signals: 0 });
+    expect(unclosed.served).toStrictEqual([]);
+
+    // control: the same ticks with the watermark past the boundary - the side that is served
+    const closed = await scanOnce(true);
+    expect(closed.entry).toMatchObject({ kind: 'signal', lastCandleTimestamp: lastBucket });
+    expect(closed.line).toMatchObject({ decided: 1, unclosed: 0, signals: 1 });
+    expect(closed.served.map(({ assetId }) => assetId)).toStrictEqual([1]);
   });
 });
 
