@@ -51,10 +51,11 @@ through the token service only and never locks `users`.
 
 ## Working
 
-One SQL fragment, `serviceAccountWorkingSql`, is the definition: marked, `broker_accounts.status =
-'active'`, `users.status = 'active'` and `access_token_expires_at > now()` by the database clock.
-`listServiceBrokerAccounts(db)` (the #404 contract: `{ id, brokerUserId, serviceSince }`, oldest mark
-first, ties by id), the keeper's count and the admin page all read it. A marked account that is not
+Two SQL fragments are the definition. `serviceAccountInServiceSql`: marked, `broker_accounts.status =
+'active'`, `users.status = 'active'`; `listServiceBrokerAccounts(db)` (the #404 contract: `{ id,
+brokerUserId, serviceSince }`, oldest mark first, ties by id) reads it, because the stream's start
+exchanges an expired token itself. `serviceAccountWorkingSql` adds `access_token_expires_at > now()`
+by the database clock; the keeper's count and the admin page read it. A marked account that is not
 working has one reason, in the token service's order of checks:
 
 | Reason | When | The alert and the page say |

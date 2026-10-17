@@ -83,7 +83,7 @@ const candidates = (options: { limit?: number; exclude?: string[] } = {}) =>
   });
 
 describe('listServiceBrokerAccounts (the #404 contract)', () => {
-  it('O1: returns the working marked accounts only, oldest mark first, as id, broker id and date', async () => {
+  it('O1: returns the in-service marked accounts only, oldest mark first, as id, broker id and date', async () => {
     // the larger id has the older mark, so the order by id alone is the reverse of the right one
     const [low = '', high = ''] = [await account(), await account()].sort();
     const markedAgo = (id: string, hours: number) =>
@@ -116,14 +116,23 @@ describe('listServiceBrokerAccounts (the #404 contract)', () => {
     expect(rows.map((row) => row.id)).toEqual([a, b].sort());
   });
 
-  it('O2: a token expired now or a second ago is not working; one with a second left is', async () => {
-    await account({ expiresAt: at('now()') });
-    await account({ expiresAt: at(`now() - interval '1 second'`) });
+  it('O2: a token expired now or a second ago stays in service but is not working; one with a second left is', async () => {
+    const now = await account({ expiresAt: at('now()') });
+    const ago = await account({ expiresAt: at(`now() - interval '1 second'`) });
     const alive = await account({ expiresAt: at(`now() + interval '2 seconds'`) });
-    expect((await listServiceBrokerAccounts(tmp.db)).map((row) => row.id)).toEqual([alive]);
+    const listed = (await listServiceBrokerAccounts(tmp.db)).map((row) => row.id);
+    expect([...listed].sort()).toEqual([now, ago, alive].sort());
+    const states = await listServiceAccountStates(tmp.db);
+    expect(new Map(states.map((row) => [row.id, row.working] as const))).toEqual(
+      new Map([
+        [now, false],
+        [ago, false],
+        [alive, true],
+      ]),
+    );
   });
 
-  it("O3: a blocked user's marked account is not working", async () => {
+  it("O3: a blocked user's marked account is not in service", async () => {
     await account({ userStatus: UserStatus.Blocked });
     expect(await listServiceBrokerAccounts(tmp.db)).toEqual([]);
   });

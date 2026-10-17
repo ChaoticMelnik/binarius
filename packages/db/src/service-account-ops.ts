@@ -11,16 +11,20 @@ import { brokerAccounts } from './schema/broker-accounts';
 import { users } from './schema/users';
 import { millisecondsAgo, millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
 
-// Service accounts (#391, docs/service-accounts.md). The predicate below is the one definition of
-// a "working" service account: the price stream (#404), the backend's keeper and the admin page
-// all read it from here, so the three can never disagree about which accounts count. The
-// database clock decides the token's age.
+// Service accounts (#391, docs/service-accounts.md). The fragments below are the one definition of
+// which service accounts count: the price stream (#404) reads "in service", the backend's keeper
+// and the admin page read "working", so none of them can disagree about an account. The database
+// clock decides the token's age.
 
 const marked = isNotNull(brokerAccounts.serviceSince);
 
-export const serviceAccountWorkingSql: SQL = sql`(${marked}
+// marked, the account active, its user active: a market data socket may run on it (#404). A token
+// that merely expired does not take an account out: the stream's start exchanges it (serviceOnly)
+export const serviceAccountInServiceSql: SQL = sql`(${marked}
   and ${brokerAccounts.status} = ${BrokerAccountStatus.Active}
-  and ${users.status} = ${UserStatus.Active}
+  and ${users.status} = ${UserStatus.Active})`;
+
+export const serviceAccountWorkingSql: SQL = sql`(${serviceAccountInServiceSql}
   and ${brokerAccounts.accessTokenExpiresAt} > now())`;
 
 // The token service's order of checks: the user, then the account, then the token.
@@ -37,7 +41,7 @@ export interface ServiceBrokerAccount {
   serviceSince: Date;
 }
 
-// The #404 contract: the working service accounts, oldest mark first.
+// The #404 contract: the in-service accounts, oldest mark first.
 export async function listServiceBrokerAccounts(exec: DbExecutor): Promise<ServiceBrokerAccount[]> {
   const rows = await exec
     .select({
@@ -47,7 +51,7 @@ export async function listServiceBrokerAccounts(exec: DbExecutor): Promise<Servi
     })
     .from(brokerAccounts)
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
-    .where(serviceAccountWorkingSql)
+    .where(serviceAccountInServiceSql)
     .orderBy(asc(brokerAccounts.serviceSince), asc(brokerAccounts.id));
   return rows.map((row) => {
     // the predicate's first term; a NULL here would be a broken WHERE, not a state
