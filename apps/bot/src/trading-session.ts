@@ -86,9 +86,9 @@ import {
 // themselves are the worker's (#287), their messages the backend's (#464). The launch screen (#418)
 // and the amount screen of a demo cycle (#476) are deleted once the session message is sent.
 
-// The old status message's «🔄 Обновить» (before #536): its press only strips that keyboard.
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
-export const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
+// The old status message's «🔄 Обновить» (before #536): its press only strips that keyboard.
+const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 
 // A stopped session's next steps under `keyboard`'s rows: «🔁 Ещё сессия» on its own pair,
 // duration and mode (#320, #327) - in real the session button's data, so the start handler checks
@@ -350,7 +350,7 @@ export function createTradingSessionComposer<C extends Context>({
       NO_NEXT_STEP_REASONS.SessionStatus,
     );
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
-    if (removeScreen) await removePressedMessage(ctx, 'the launch screen');
+    if (removeScreen) await removePressedMessage(ctx, 'the launch screen', { stripKeyboard: true });
   }
 
   // an old status message's «🔄 Обновить» (#536): its keyboard stripped, nothing read or sent
@@ -387,9 +387,11 @@ export function createTradingSessionComposer<C extends Context>({
       return;
     }
     if (catalog === undefined) {
-      // the waiting message goes with the stop: a refused delete never withholds the reply, and
-      // the session message is tracked already (its first poll recorded it, #567)
-      await removePressedMessage(ctx, 'the pressed message');
+      // the waiting message goes with the stop: a refused delete never withholds the reply. A
+      // press starts no tracking: the session message is tracked from its start in this process,
+      // or by #567's pass once its id is recorded; one whose id is not recorded gets no card
+      // (docs/bot-session.md risk 56)
+      await removePressedMessage(ctx, 'the pressed message', { stripKeyboard: false });
       await replyHtml(ctx, sessionStopReplyText(view), {
         reply_markup: sessionCardKeyboard(view, cashierUrl),
       });
@@ -595,6 +597,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function removePressedMessage(
     ctx: Context,
     what: 'the launch screen' | 'the pressed message',
+    { stripKeyboard }: { stripKeyboard: boolean },
   ): Promise<void> {
     try {
       await ctx.deleteMessage();
@@ -606,7 +609,7 @@ export function createTradingSessionComposer<C extends Context>({
         logger.info({ ...telegramErrorFields(error, 'deleteMessage') }, `${what} was already gone`);
         return;
       }
-      if (refusal !== 'forbidden' || what === 'the pressed message') {
+      if (refusal !== 'forbidden' || !stripKeyboard) {
         logger.warn(
           {
             ...errorLogFields(error),
