@@ -710,4 +710,4 @@ None were logged during the rest of the run.
 - #392: the candle spike above, a measurement on the operator's account.
 - #404: the socket candle source on service accounts, built on this client
   ([market-data.md](market-data.md)). Its REST backfill is #590, and its consumers (the feed, the
-  scanner on every pair) are #405.
+  scanner on every pair) shipped in #405.

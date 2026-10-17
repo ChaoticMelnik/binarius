@@ -24,7 +24,8 @@ import type { PendingRequests } from './source';
 // the pair's payout, then the rest by the age of their last attempt; 15s before 5s on an equal key. The proactive
 // set is the scanner's eligible pairs of the last fresh catalog with valid digits, and only while
 // the active socket is ready; a request is served for any such pair with valid digits, whatever
-// the socket. Every GET takes a spare token (the pacers' overflow, never a scanner's token).
+// the socket. Every GET takes a spare token (the signal pacer's overflow, never a token of its
+// bucket, #405).
 // A GET may cross a candle boundary: it fills only the buckets closed when it was built, and a
 // request that comes while it is in flight waits for the next attempt.
 

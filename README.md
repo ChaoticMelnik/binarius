@@ -47,7 +47,7 @@ client bot text is written, the registry of variables a text can print, how its 
 validator work and what stays in code is in [docs/bot-texts.md](docs/bot-texts.md);
 how the signal package fetches candles, turns them into a direction or into a reason for none,
 and journals each decision, how the backend serves it on `POST /trading/signal`, and how its
-scanner keeps the signals of pairs chosen across the asset types for `GET /trading/signals` within the broker's per-IP budget,
+scanner keeps the signals of every eligible pair from the data socket's candles for `GET /trading/signals` (#405),
 is in [docs/signal.md](docs/signal.md); how the worker sizes the next
 stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a
 user's token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md);

@@ -37,7 +37,7 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 | `createTokenCipher` | the same, with a random key |
 | `createBrokerOAuthClient`, `createBrokerRestClient` | the same, on the mock's URL, with the mock's client credentials (`MOCK_OAUTH`) |
 | `createPairsCatalog` | the same; `ttlMs` 60 000. It is warmed before `listen()` and started, as in `index.ts` |
-| `createCachedSignalFeed(createSignalFeed(...))` | the same, on production's `SIGNAL_FETCH_BUDGET_MS` and `SIGNAL_CACHE_MAX_TTL_MS` |
+| `createCachedSignalFeed(createSignalFeed(...))` | the same, on production's `SIGNAL_FETCH_BUDGET_MS` and `SIGNAL_CACHE_MAX_TTL_MS`, with the signal pacer `index.ts` builds (#405): the run is the no-source mode, so every chart GET takes a `tryTake` token |
 | `createClientPush` | the same; its `api` goes through the Telegram transformer |
 | `accessToken` (`ensureFreshAccessToken`) | the same |
 | `buildApp` | the same, with the trading, pairs, sessions, signal, auth and users deps. `signals`, `payments` and `admin` take the `unused*Deps` of the suites, so a call there fails the test. `deposit` takes `unusedDepositDeps` with the real init-data verifier. Its logs go to the backend's sink |
@@ -46,7 +46,7 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 | `createSessionNoticeSender` | the same; `tickMs` 200, `perSecond` 50 (production: `SESSION_NOTICE_TICK_MS`, `SESSION_NOTICE_SEND_PER_SECOND`) |
 | `signalScanners` | not built: the run takes the manual path, not «Сигналы сейчас» |
 | `createAdminBot`, `createMailingEngine`, `createStarReconciler`, `createServiceAccountKeeper` | not built: no staff, mailing, Stars or service account takes part in the cycle |
-| `marketData` | not built: it exists only with the backend's `BROKER_WS_URL`, and nothing reads the ring yet (#405) |
+| `marketData` | not built: it exists only with the backend's `BROKER_WS_URL`; without it the feed reads REST (#405), as here |
 | `createBotTextRefresher` | not built: the texts are the catalog's defaults |
 | `postbacks` | `{ db, secret }` with the harness's secret (`E2E_POSTBACK_SECRET`), as with `POSTBACK_URL_SECRET` set; the demo cycle sends none, the repeat run sends four |
 
