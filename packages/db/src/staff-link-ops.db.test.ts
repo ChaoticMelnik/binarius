@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AuditAction, LinkState } from '@binarius/shared';
+import { AuditAction, AuditActorType, AuditEntityType, LinkState } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { type Db } from './client';
 import {
@@ -27,6 +27,7 @@ import {
   resetStaffPassword,
   runAsStaff,
   type StaffInvalidation,
+  writeAuditEntry,
 } from './staff-ops';
 import { hashPassword } from './staff-password';
 import { auditLog, staff, staffLoginLinks, staffSessions } from './schema/index';
@@ -497,6 +498,78 @@ describe('completeLinkLogin', () => {
     expect((await entriesFor(seeded.staffId)).at(-1)?.payload).toMatchObject({
       reason: 'disabled',
     });
+  });
+});
+
+describe('refuseLink: one row per (link, reason) (#153)', () => {
+  const refusals = async (seeded: SeededStaff) =>
+    (await entriesFor(seeded.staffId))
+      .filter((entry) => entry.action === AuditAction.StaffLoginLinkRefused)
+      .map((entry) => entry.payload);
+  const holdLink = (tx: Tx, linkId: string) =>
+    tx
+      .select({ id: staffLoginLinks.id })
+      .from(staffLoginLinks)
+      .where(eq(staffLoginLinks.id, linkId))
+      .for('no key update');
+
+  it('writes the first refusal of a used link and nothing for the next', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const issued = await issue(seeded);
+    await complete(issued.token);
+
+    expect(await complete(issued.token)).toEqual({ ok: false, state: LinkState.Used });
+    expect(await complete(issued.token)).toEqual({ ok: false, state: LinkState.Used });
+    expect(await refusals(seeded)).toEqual([{ reason: 'used', via: 'web', ip: IP }]);
+  });
+
+  // the first refusal's row written under the link's lock: the racing refusal has to wait for it
+  // and then see it (the row's shape is pinned by the case above)
+  it('waits on the link row and sees a racing first refusal', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const issued = await issue(seeded);
+    await complete(issued.token);
+    let late: Promise<CompleteLinkLoginResult> | undefined;
+
+    await tmp.db.transaction(async (tx) => {
+      await holdLink(tx, issued.linkId);
+      late = complete(issued.token);
+      await until('the refusal waits on the link row', async () => (await lockWaiters(tmp.db)) >= 1);
+      await writeAuditEntry(tx, {
+        action: AuditAction.StaffLoginLinkRefused,
+        actorType: AuditActorType.System,
+        actorId: seeded.staffId,
+        entityType: AuditEntityType.StaffLoginLink,
+        entityId: issued.linkId,
+        payload: { reason: 'used', via: 'web', ip: IP },
+      });
+    });
+
+    expect(await late).toEqual({ ok: false, state: LinkState.Used });
+    expect(await refusals(seeded)).toEqual([{ reason: 'used', via: 'web', ip: IP }]);
+  });
+
+  // GET spends nothing, so it takes no lock either: a held link row does not hold it back
+  it('reads a held link without waiting on it', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const issued = await issue(seeded);
+    await complete(issued.token);
+    let inspected: LinkState | undefined;
+
+    await tmp.db.transaction(async (tx) => {
+      await holdLink(tx, issued.linkId);
+      const reading = inspectLoginLink(tmp.db, issued.token).then((state) => {
+        inspected = state;
+      });
+      await until(
+        'the read to finish or to queue behind the link row',
+        async () => inspected !== undefined || (await lockWaiters(tmp.db)) >= 1,
+      );
+      expect(await lockWaiters(tmp.db)).toBe(0);
+      await reading;
+    });
+
+    expect(inspected).toBe(LinkState.Used);
   });
 });
 

@@ -256,19 +256,26 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         if (spent === 'refused') {
           return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
         }
-        await recordLoginRefusal(deps.db, {
-          staffId: staff?.id ?? null,
-          reason: staff === undefined ? 'unknown_login' : 'disabled',
-          ip,
-        });
+        // a login nobody holds leaves no audit_log row and its name is not logged (#153)
+        if (staff === undefined) {
+          request.log.info({ reason: 'unknown_login' }, 'a staff login was refused');
+        } else {
+          await recordLoginRefusal(deps.db, { staffId: staff.id, ip });
+        }
         return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
 
       // null unless a lockout is running right now, by the database's clock (findStaffForLogin);
       // re-read where it is recorded, so one that ended in between is not a refusal
       if (staff.lockedUntil !== null) {
-        const until = await recordLoginLockout(deps.db, { staffId: staff.id, ip });
-        if (until !== null) return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+        const lockout = await recordLoginLockout(deps.db, { staffId: staff.id, ip });
+        if (lockout !== null) {
+          // one audit_log row per lockout (#153): a repeat under it is only this line
+          if (!lockout.recorded) {
+            request.log.info({ reason: 'locked' }, 'a staff login was refused');
+          }
+          return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+        }
       }
 
       const correct = await hash(staff.passwordHash, password);
@@ -379,6 +386,11 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
           expiresAt: completed.expiresAt.toISOString(),
         });
       }
+      // an id nobody was issued, or a repeat of a refusal already in audit_log (#153): no row,
+      // and only the reason is logged — never the id
+      if (completed.recorded === false) {
+        request.log.info({ reason: completed.reason }, 'a staff login code was refused');
+      }
       // 401 while attempts remain, 410 on the last one: telling someone to retry a challenge
       // that the same call just exhausted costs them one more round trip to find out
       if (completed.reason === 'wrong_code' && completed.exhausted !== true) {
@@ -388,7 +400,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         return reply.code(409).send({ error: AdminErrorCode.AwaitingTelegram });
       }
       // every other reason — expired, denied, exhausted, failed, completed, a disabled owner,
-      // an id nobody was issued — is one answer: this attempt is over, start again
+      // an id nobody was issued (no row for it) — is one answer: this attempt is over, start again
       return reply.code(410).send({ error: AdminErrorCode.ChallengeUnavailable });
     },
   );
