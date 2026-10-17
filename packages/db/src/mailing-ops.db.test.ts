@@ -20,6 +20,7 @@ import {
   seedBrokerAccount,
   seedTradingSession,
   seedUser,
+  SEEDED_REFERRAL_REWARD_TOKENS,
   type TempDatabase,
 } from './testing';
 import {
@@ -27,6 +28,7 @@ import {
   NotificationJobStatus,
   notificationJobs,
   notificationKinds,
+  referrals,
   tokenLedger,
   tradingSessions,
   users,
@@ -34,6 +36,7 @@ import {
 import { createTradeIntent } from './trade-intent-ops';
 import { markTelegramBlocked, setNotificationLevel } from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
+import { grantReferralReward, lockReferralInviter } from './referral-reward-ops';
 import {
   claimMailingJob,
   MAILING_OUTCOME_UNKNOWN,
@@ -804,5 +807,262 @@ describe('the analysis reminder: the claim', () => {
     const jobId = await insertAnalysisJob(user.userId);
     expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
     expect((await jobRow(jobId)).status).toBe(NotificationJobStatus.Canceled);
+  });
+});
+
+interface Rewarded {
+  inviterId: string;
+  inviterTelegramId: bigint;
+  inviteeId: string;
+  rewardId: string;
+  rewardedAt: Date;
+}
+
+// An inviter's reward (#116) `minutes` ago: a new invitee, its referral and the reward's ledger
+// row, as grantReferralReward writes it but backdated and with any amount. Without `inviter`, a
+// new one.
+async function rewarded(
+  minutes: number,
+  {
+    tokens = 50n,
+    inviter,
+  }: { tokens?: bigint; inviter?: { userId: string; telegramUserId: bigint } } = {},
+): Promise<Rewarded> {
+  let inviterUser = inviter;
+  if (inviterUser === undefined) {
+    const user = await seedUser(tmp.db);
+    inviterUser = { userId: user.userId, telegramUserId: BigInt(user.telegramUserId) };
+  }
+  const invitee = await seedUser(tmp.db);
+  const [referral] = await tmp.db
+    .insert(referrals)
+    .values({ inviteeUserId: invitee.userId, inviterUserId: inviterUser.userId })
+    .returning({ id: referrals.id });
+  const [row] = await tmp.db
+    .insert(tokenLedger)
+    .values({
+      userId: inviterUser.userId,
+      kind: TokenLedgerKind.Bonus,
+      balanceDelta: tokens,
+      referralId: referral!.id,
+      ...(await bonusRuleRef(tmp.db, 'referral_reward')),
+      createdAt: sql`now() - make_interval(secs => ${minutes * 60})`,
+    })
+    .returning({ id: tokenLedger.id, createdAt: tokenLedger.createdAt });
+  return {
+    inviterId: inviterUser.userId,
+    inviterTelegramId: inviterUser.telegramUserId,
+    inviteeId: invitee.userId,
+    rewardId: row!.id,
+    rewardedAt: row!.createdAt,
+  };
+}
+
+const rewardJobsOf = async (userId: string) =>
+  (await jobsOf(userId)).filter((job) => job.kind === NotificationKind.ReferralRewarded);
+
+describe('the referral reward notification: planning', () => {
+  beforeAll(() => plansFromMinutesAgo(hours(200)));
+
+  it('R1 plans one job per reward at the reward’s moment, with the row’s tokens as text', async () => {
+    const first = await rewarded(5, { tokens: 50n });
+    const inviter = { userId: first.inviterId, telegramUserId: first.inviterTelegramId };
+    const second = await rewarded(3, { tokens: 75n, inviter });
+    const starterOnly = await linked(5);
+
+    await planMailingJobs(tmp.db);
+
+    const jobs = await rewardJobsOf(first.inviterId);
+    expect(
+      jobs.map((job) => ({
+        dedupeKey: job.dedupeKey,
+        payload: job.payload,
+        scheduledAt: job.scheduledAt,
+        status: job.status,
+      })),
+    ).toEqual([
+      {
+        dedupeKey: `referral_rewarded:${first.rewardId}`,
+        payload: { tokens: '50' },
+        scheduledAt: first.rewardedAt,
+        status: NotificationJobStatus.Pending,
+      },
+      {
+        dedupeKey: `referral_rewarded:${second.rewardId}`,
+        payload: { tokens: '75' },
+        scheduledAt: second.rewardedAt,
+        status: NotificationJobStatus.Pending,
+      },
+    ]);
+    expect(await rewardJobsOf(starterOnly.userId)).toEqual([]);
+    expect(await jobsOf(first.inviteeId)).toEqual([]);
+  });
+
+  it('R2 plans the job for a reward granted by the writer of #116, due at once', async () => {
+    const inviter = await seedUser(tmp.db);
+    const invitee = await seedUser(tmp.db);
+    await tmp.db
+      .insert(referrals)
+      .values({ inviteeUserId: invitee.userId, inviterUserId: inviter.userId });
+    const result = await tmp.db.transaction(async (tx) => {
+      const referral = await lockReferralInviter(tx, invitee.userId);
+      return grantReferralReward(tx, { referral, account: { isPartnerClient: true } });
+    });
+    expect(result.rewarded).toBe(true);
+
+    await planMailingJobs(tmp.db);
+
+    const jobs = await rewardJobsOf(inviter.userId);
+    expect(jobs.map((job) => job.payload)).toEqual([
+      { tokens: String(SEEDED_REFERRAL_REWARD_TOKENS) },
+    ]);
+    const [due] = await tmp.db
+      .execute<{ due: boolean }>(
+        sql`select ${jobs[0]!.scheduledAt.toISOString()}::timestamptz <= now() as due`,
+      )
+      .then((r) => r.rows);
+    expect(due?.due).toBe(true);
+  });
+
+  it('R3 plans a reward once however many planners run, and not again once sent or canceled', async () => {
+    const sent = await rewarded(2);
+    const canceled = await rewarded(2);
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    expect(await rewardJobsOf(sent.inviterId)).toHaveLength(1);
+    expect(await rewardJobsOf(canceled.inviterId)).toHaveLength(1);
+
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Sent, sentAt: sql`now()` })
+      .where(eq(notificationJobs.userId, sent.inviterId));
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.userId, canceled.inviterId));
+    await planMailingJobs(tmp.db);
+
+    expect((await rewardJobsOf(sent.inviterId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Sent,
+    ]);
+    expect((await rewardJobsOf(canceled.inviterId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Canceled,
+    ]);
+  });
+
+  it('R4 plans nothing for an inviter blocked by the admin, who blocked the bot or turned notifications off, and plans once they are back on', async () => {
+    const adminBlocked = await rewarded(2);
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, adminBlocked.inviterId));
+    const unreachable = await rewarded(2);
+    await markTelegramBlocked(tmp.db, unreachable.inviterTelegramId);
+    const off = await rewarded(2);
+    await setNotificationLevel(tmp.db, off.inviterTelegramId, NotificationLevel.Off);
+
+    await planMailingJobs(tmp.db);
+    for (const user of [adminBlocked, unreachable, off]) {
+      expect(await rewardJobsOf(user.inviterId)).toEqual([]);
+    }
+
+    await setNotificationLevel(tmp.db, off.inviterTelegramId, NotificationLevel.All);
+    await planMailingJobs(tmp.db);
+    expect((await rewardJobsOf(off.inviterId)).map((job) => job.dedupeKey)).toEqual([
+      `referral_rewarded:${off.rewardId}`,
+    ]);
+  });
+
+  it('CUT plans nothing for a reward before the kind’s plans_from, and the job for one after', async () => {
+    await plansFromMinutesAgo(30, NotificationKind.ReferralRewarded);
+    try {
+      const before = await rewarded(40);
+      const after = await rewarded(20);
+      await planMailingJobs(tmp.db);
+      expect(await jobsOf(before.inviterId)).toEqual([]);
+      expect((await jobsOf(after.inviterId)).map((job) => job.kind)).toEqual([
+        NotificationKind.ReferralRewarded,
+      ]);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+});
+
+describe('the referral reward notification: the claim', () => {
+  beforeAll(() => plansFromMinutesAgo(hours(200)));
+  // A claim takes the earliest due job of the database: whatever the earlier cases still plan is
+  // planned and drained first.
+  beforeEach(async () => {
+    await tmp.db
+      .update(users)
+      .set({ lastAnalysisAt: null, lastAnalysisAssetId: null, lastAnalysisDurationSec: null });
+    await planMailingJobs(tmp.db);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.status, NotificationJobStatus.Pending));
+  });
+
+  // an inviter whose reward job the planner wrote and the sender has not claimed yet
+  async function planned(): Promise<Rewarded & { jobId: string }> {
+    const reward = await rewarded(1);
+    await planMailingJobs(tmp.db);
+    const [job] = await rewardJobsOf(reward.inviterId);
+    if (job === undefined) throw new Error('nothing planned');
+    return { ...reward, jobId: job.id };
+  }
+
+  it('R6 claims the job with its payload and the inviter’s Telegram id', async () => {
+    const reward = await planned();
+    const { job } = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(job).toMatchObject({
+      id: reward.jobId,
+      kind: NotificationKind.ReferralRewarded,
+      payload: { tokens: '50' },
+      telegramUserId: reward.inviterTelegramId,
+    });
+  });
+
+  it('R7 cancels at the claim once the inviter was blocked by the admin after it was planned', async () => {
+    const reward = await planned();
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, reward.inviterId));
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(reward.jobId)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('R7r claims the job of an inviter in real mode: the reward is tokens, not the demo path', async () => {
+    const reward = await planned();
+    await setTradingMode(tmp.db, reward.inviterTelegramId, TradeMode.Real);
+    expect((await claimMailingJob(tmp.db, { scan: SCAN })).job?.id).toBe(reward.jobId);
+  });
+
+  it('R8 cancels at the claim a job whose key names no reward of this user', async () => {
+    const own = await rewarded(30);
+    const other = await rewarded(30);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.status, NotificationJobStatus.Pending));
+    const jobs = await tmp.db
+      .insert(notificationJobs)
+      .values(
+        [`referral_rewarded:${other.rewardId}`, `referral_rewarded:${crypto.randomUUID()}`].map(
+          (dedupeKey) => ({
+            userId: own.inviterId,
+            kind: NotificationKind.ReferralRewarded,
+            dedupeKey,
+            payload: { tokens: '50' },
+            scheduledAt: sql`now() - interval '1 minute'`,
+          }),
+        ),
+      )
+      .returning({ id: notificationJobs.id });
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 2 });
+    for (const job of jobs) {
+      expect((await jobRow(job.id)).status).toBe(NotificationJobStatus.Canceled);
+    }
   });
 });

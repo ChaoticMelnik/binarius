@@ -1,8 +1,10 @@
 import { InlineKeyboard } from 'grammy';
 import {
   analysisUnusedPayloadSchema,
+  commandRetryCallbackData,
   demoAnalysisCallbackData,
   NotificationKind,
+  referralRewardedPayloadSchema,
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
@@ -29,6 +31,19 @@ function analysisUnused(payload: Payload): ClientPushMessage {
   };
 }
 
+// The inviter's reward (#576): the amount is the ledger row's, carried as text (rule 2); the
+// button opens /invite as a new message, as the bot's own retry of the command does.
+function referralRewarded(payload: Payload): ClientPushMessage {
+  const { tokens } = referralRewardedPayloadSchema.parse(payload);
+  return {
+    text: CLIENT_TEXTS.referralRewarded({ rewardTokens: tokens }),
+    reply_markup: new InlineKeyboard().text(
+      CLIENT_LABELS.inviteMoreButton,
+      commandRetryCallbackData('invite'),
+    ),
+  };
+}
+
 // What each kind sends (docs/mailing.md), built from the job's payload when the job is sent so a
 // text override reaches it. One entry per kind: a kind added to NotificationKind without a message
 // does not compile.
@@ -37,6 +52,7 @@ const MAILING_MESSAGES = {
   [NotificationKind.FirstSession24h]: chainStep(() => CLIENT_TEXTS.firstSessionReminder24h),
   [NotificationKind.FirstSession72h]: chainStep(() => CLIENT_TEXTS.firstSessionReminder72h),
   [NotificationKind.AnalysisUnused]: analysisUnused,
+  [NotificationKind.ReferralRewarded]: referralRewarded,
 } as const satisfies Record<NotificationKind, (payload: Payload) => ClientPushMessage>;
 
 export function mailingMessage(kind: NotificationKind, payload: Payload): ClientPushMessage {

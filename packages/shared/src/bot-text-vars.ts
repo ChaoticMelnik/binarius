@@ -210,6 +210,11 @@ export const BOT_TEXT_VARS = {
     sample: '100',
     format: (count: string) => formatCount(count),
   }),
+  rewardTokens: variable({
+    description: 'Токены награды за одного приглашённого',
+    sample: '50',
+    format: (count: string) => formatCount(count),
+  }),
 } as const;
 
 export type BotTextVars = typeof BOT_TEXT_VARS;

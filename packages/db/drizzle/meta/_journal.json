@@ -449,6 +449,20 @@
       "when": 1792269946049,
       "tag": "0063_users_language",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1792275037552,
+      "tag": "0064_referral_rewarded",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1792275038031,
+      "tag": "0065_referral_rewarded_seed",
+      "breakpoints": true
     }
   ]
 }

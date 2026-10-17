@@ -38,6 +38,38 @@ describe('the analysis reminder message', () => {
   });
 });
 
+// #576
+describe('the referral reward message', () => {
+  it('sends the catalog text with the ledger row’s amount and one button: the /invite screen', () => {
+    const message = mailingMessage(NotificationKind.ReferralRewarded, { tokens: '75' });
+    expect(message.text).toStrictEqual(CLIENT_TEXTS.referralRewarded({ rewardTokens: '75' }));
+    expect(message.text.value).toContain('+75');
+    expect(message.text.value).toContain(`«${CLIENT_LABELS.inviteMoreButton}»`);
+    expect(buttonsOf(message)).toStrictEqual([
+      { text: CLIENT_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
+    ]);
+  });
+
+  it('promises no result', () => {
+    const text = CLIENT_TEXTS.referralRewarded({ rewardTokens: '50' }).value.toLowerCase();
+    for (const word of ['вероятност', 'точност', 'гарант', 'прибыл']) {
+      expect(text).not.toContain(word);
+    }
+  });
+
+  it.each([
+    {},
+    { tokens: 50 },
+    { tokens: '0' },
+    { tokens: '-5' },
+    { tokens: '1e3' },
+    { tokens: '' },
+    { tokens: '05' },
+  ])('throws on payload %j, which the sender settles as not built', (payload) => {
+    expect(() => mailingMessage(NotificationKind.ReferralRewarded, payload)).toThrow();
+  });
+});
+
 describe('the first-session chain messages', () => {
   it.each(FIRST_SESSION_CHAIN.map((step) => step.kind))(
     'sends %s with the demo button whatever the payload',
