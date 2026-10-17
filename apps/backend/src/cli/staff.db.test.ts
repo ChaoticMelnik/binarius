@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AuditAction } from '@binarius/shared';
 import {
@@ -7,6 +7,7 @@ import {
   confirmChallengeFromTelegram,
   markChallengeCodeSent,
   staff,
+  StaffStatus,
   startLoginChallenge,
   verifyPassword,
 } from '@binarius/db';
@@ -195,5 +196,143 @@ describe('a command that was not understood', () => {
     const code = await runStaffCli(['nonsense'], {}, (line) => lines.push(line));
 
     expect(code).toBe(2);
+  });
+});
+
+// The CLI's one door after the arguments (#150): every database failure is a line and exit 1,
+// never an unhandled rejection, and never the driver's message, which carries the query with its
+// parameters, the password hash among them.
+describe('a database that refuses the command', () => {
+  let storedHash: string;
+  let oldPassword: string;
+  beforeAll(async () => {
+    const created = await run('create', '--login', 'refused', '--telegram-id', '601');
+    oldPassword = created.lines[1]?.slice('Пароль: '.length) ?? '';
+    storedHash = (await staffRow('refused'))?.passwordHash ?? '';
+    await tmp.db.execute(
+      sql.raw(`create function staff_refuse() returns trigger language plpgsql as $$
+        begin raise exception 'refused' using errcode = 'P0001'; end $$`),
+    );
+    await tmp.db.execute(
+      sql.raw(
+        'create trigger staff_refuse before insert or update on staff for each row execute function staff_refuse()',
+      ),
+    );
+  });
+  afterAll(async () => {
+    await tmp.db.execute(sql.raw('drop trigger staff_refuse on staff'));
+    await tmp.db.execute(sql.raw('drop function staff_refuse()'));
+  });
+
+  const refusedLine = 'Команда не выполнена: Error (error P0001)';
+  const noDriverText = (lines: string[]) => {
+    const all = lines.join('\n');
+    for (const leak of ['Failed query', 'insert into', 'params:', 'ln=', storedHash]) {
+      expect(all).not.toContain(leak);
+    }
+  };
+
+  it('create answers 1, writes no row and prints no driver text', async () => {
+    const { code, lines } = await run('create', '--login', 'never-made', '--telegram-id', '602');
+
+    expect([code, lines]).toEqual([1, [refusedLine]]);
+    expect(await staffRow('never-made')).toBeUndefined();
+    noDriverText(lines);
+  });
+
+  it('disable answers 1 and the account stays active', async () => {
+    const { code, lines } = await run('disable', '--login', 'refused');
+
+    expect([code, lines]).toEqual([1, [refusedLine]]);
+    expect((await staffRow('refused'))?.status).toBe(StaffStatus.Active);
+    noDriverText(lines);
+  });
+
+  it('reset-password answers 1 and the old password still opens the hash', async () => {
+    const { code, lines } = await run('reset-password', '--login', 'refused');
+
+    expect([code, lines]).toEqual([1, [refusedLine]]);
+    expect(await verifyPassword((await staffRow('refused'))?.passwordHash ?? '', oldPassword)).toBe(
+      true,
+    );
+    noDriverText(lines);
+  });
+});
+
+describe('a database without the staff table', () => {
+  beforeAll(() => tmp.db.execute(sql.raw('alter table staff rename to staff_absent')));
+  afterAll(() => tmp.db.execute(sql.raw('alter table staff_absent rename to staff')));
+
+  it.each([
+    [['create', '--login', 'unmigrated', '--telegram-id', '603']],
+    [['disable', '--login', 'unmigrated']],
+  ])('%j says the database is not migrated', async (argv) => {
+    expect(await run(...argv)).toEqual({
+      code: 1,
+      lines: [
+        'Команда не выполнена: Error (error 42P01)',
+        'База данных не мигрирована: выполните pnpm db:migrate',
+      ],
+    });
+  });
+});
+
+describe('a database that does not exist', () => {
+  it('says the result is unknown and how to find out', async () => {
+    const url = new URL(tmp.url);
+    url.pathname = '/binarius_absent_150';
+    const lines: string[] = [];
+    const code = await runStaffCli(
+      ['disable', '--login', 'anyone'],
+      { DATABASE_URL: url.href },
+      (line) => lines.push(line),
+    );
+
+    expect([code, lines]).toEqual([
+      1,
+      ['Результат неизвестен: error 3D000', 'Проверьте учётную запись и повторите команду'],
+    ]);
+  });
+});
+
+describe('an environment the CLI cannot start from', () => {
+  it.each([
+    [{}, 'Команда не выполнена: Missing required env DATABASE_URL'],
+    [
+      { DATABASE_URL: 'mysql://u:SECRET@h/d' },
+      'Команда не выполнена: Env DATABASE_URL must use one of: postgres: postgresql:',
+    ],
+  ])('%j answers 1 with the variable, never its value', async (source, line) => {
+    const lines: string[] = [];
+    const code = await runStaffCli(['disable', '--login', 'anyone'], source, (printed) =>
+      lines.push(printed),
+    );
+
+    expect([code, lines]).toEqual([1, [line]]);
+    expect(lines.join('\n')).not.toContain('SECRET');
+  });
+});
+
+// Today no unique index on staff is reachable from disable; the index here makes one so the
+// "taken" answer is shown to belong to create alone.
+describe('a unique violation outside create', () => {
+  beforeAll(async () => {
+    await run('create', '--login', 'uv-one', '--telegram-id', '604');
+    await run('create', '--login', 'uv-two', '--telegram-id', '605');
+    await tmp.db.execute(
+      sql.raw(
+        `create unique index staff_one_disabled_idx on staff (status) where status = '${StaffStatus.Disabled}' and login in ('uv-one', 'uv-two')`,
+      ),
+    );
+  });
+  afterAll(() => tmp.db.execute(sql.raw('drop index staff_one_disabled_idx')));
+
+  it('disable answers 1 with the error, not «taken», and leaves the account active', async () => {
+    expect((await run('disable', '--login', 'uv-one')).code).toBe(0);
+
+    const { code, lines } = await run('disable', '--login', 'uv-two');
+
+    expect([code, lines]).toEqual([1, ['Команда не выполнена: Error (error 23505)']]);
+    expect((await staffRow('uv-two'))?.status).toBe(StaffStatus.Active);
   });
 });
