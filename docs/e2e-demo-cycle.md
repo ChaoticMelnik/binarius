@@ -12,6 +12,11 @@ sources. The worker reaches the broker over the socket and REST.
 It is an integration test (`*.db.test.ts`), so `pnpm check` runs it in CI against Postgres and
 Redis. It needs no browser and no running service, and it takes about 2.5 s locally.
 
+A second file on the same harness, `packages/e2e/src/repeat-events.db.test.ts` (#106), delivers
+the cycle's events twice: `/start`, the login texts, the amount press and the broker's postbacks
+([Repeated events](#repeated-events-106)). Each file has its own database, mock broker and queue
+prefix.
+
 ## Components
 
 `packages/e2e/src/harness/` repeats the wiring of the three `index.ts` files. The apps expose
@@ -43,7 +48,7 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 | `createAdminBot`, `createMailingEngine`, `createStarReconciler`, `createServiceAccountKeeper` | not built: no staff, mailing, Stars or service account takes part in the cycle |
 | `marketData` | not built: it exists only with the backend's `BROKER_WS_URL`, and nothing reads the ring yet (#405) |
 | `createBotTextRefresher` | not built: the texts are the catalog's defaults |
-| `postbacks` | absent, as without `POSTBACK_URL_SECRET` |
+| `postbacks` | `{ db, secret }` with the harness's secret (`E2E_POSTBACK_SECRET`), as with `POSTBACK_URL_SECRET` set; the demo cycle sends none, the repeat run sends four |
 
 ### Worker (`harness/worker.ts`, from `apps/trading-worker/src/index.ts`)
 
@@ -68,10 +73,15 @@ by `bot.handleUpdate`. The bot gets `botInfo`, so it never calls `getMe`.
 The bot's `captureApi` (it also refuses a «🔄 Повторить» that would repeat a write, #350) and the
 push's `capturePushApi` record every call. Both answer a send or an edit with a message from one
 shared `message_id` sequence, so an id the push sent can never be taken for one the bot sent. A
-photo gets two sizes with their own `file_id`. A press takes the newest message of the bot that
-carries a button with the given label, and sends its `callback_data` from that message. A press on
-a photo arrives as a photo's press (#482). Labels come from `LABELS` and the label builders, never
-from literals, and no callback data is built by hand.
+photo gets two sizes with their own `file_id`. A press takes the newest message of the bot in the
+chat of `USER` that carries a button with the given label, and sends its `callback_data` from that
+message; messages to the repeat run's other users are skipped. A press on a photo arrives as a
+photo's press (#482). Labels come from `LABELS` and the label builders, never from literals, and no
+callback data is built by hand.
+
+Every `start`, `send` and `press` returns the update it sent. `replay(update)` hands the same
+object to `bot.handleUpdate` again: Telegram's re-delivery, with the same `update_id` and
+`callback_query.id`.
 
 ## Sequence
 
@@ -104,6 +114,44 @@ never for a database mark committed before that action. `final_notice_sent_at` a
 `summary_sent_at` are such marks: the backend's `claimSessionFinalNotice` commits before
 `push.sendSessionSummary`, and `claimSessionSummary` commits before the bot draws the card and
 sends it. S7 and S8 read them after their wait, as assertions.
+
+## Repeated events (#106)
+
+The bot does not dedupe updates by `update_id`, so «the second time changes nothing» is held by the
+backend and the database: the `users` upsert, one active session per account and its 409
+`active_session_exists`, a text outside the login dialog being ignored, and the postbacks' keys
+(Rule 7). A repeat is the same `Update` object a second time, or the same postback query a second
+time; a new `/start` with a payload is a new update and is tested as one. Each oracle is a
+positive count read after the repeat (1 account, 1 session, 3 journal rows), not "nothing changed"
+from an empty start. The users are `USER` (A), `E2E_USER_B` and `E2E_USER_C`.
+
+| Stage | What the test does | Oracles |
+| --- | --- | --- |
+| S1 | `/start` | the connect button; A's `users` row `active`, 0 tokens, no acquisition source |
+| R1 | the same `/start` update again; then `/start promo-a` and `/start promo-b` | the welcome again; the same row (`id`, `created_at`, status, 0 tokens, no source); `promo-a` recorded with `acquired_at`, `promo-b` leaves both; 1 user |
+| S2 | the press, the address | one `emailSendCode` |
+| R3a | the address update again, on the code step | the text is taken as a code: one `emailLogin` the mock refuses, still one `emailSendCode`, the same code at the mock; the bot answers with the code step's keyboard (resend, change address) |
+| S3 | the code | the account card; the account `active`, broker user `7001`; 100 tokens; two `emailLogin` |
+| R3b | the code update again | no Telegram call at all; still two `emailLogin`, one account, one `bonus` row, 100 tokens |
+| R2 | B: `/start`, `/invite`; A: `/start ref_<B's code>`; C: the same, then that update again | the code is read from B's screen; A, who exists, gets the status card and no `referrals` row, and keeps `promo-a`; C gets one row (`invitee` C) and `acquisition_source` = the payload; C's repeat leaves the same row; 3 users |
+| R4 | postbacks for broker user `7001`: a deposit, the same query again, `ftd` of the same payment, a third id with amount 60 | `recorded`, `duplicate`, `repeated`, `repeated`; one `deposit_events` row (`received`, A's user and account, 50 USD, the same `id` throughout); `postback_deliveries` 1, 2, 3; the backend's `postback received` lines in that order and one `postback repeated with different fields` with `mismatch: ['amount']` and no `amount` key; 100 tokens, one ledger row |
+| S4–S5 | the manual door, the amount | the status message («15 с»); one session, `active`, `demo`; `demo_stake` 1 |
+| R5 | the amount press again | one more `sendPhoto` with «15 с» in A's chat; one session, the same `id`, `settings` and start signal; `demo_stake` 1 |
+| trade 1 | wait for the trade and its intent `accepted`, settle a win | exactly one intent of the session before the settle |
+| R6 | `/start` mid-session | the account card, pinned; the session still the one `active` row; 3 users |
+| trades 2–5 | the same cycle, all wins | the session `stopped` / `completed` |
+| totals | | 95 tokens, none reserved; the ledger `bonus` ×1, `reserve` ×5, `settle` ×5; 5 intents, 1 account, 1 session, 3 users, 1 referral, 1 deposit, 3 deliveries; `emailSendCode` 1, `emailLogin` 2; 5 trades at the mock, profit 0.85 each |
+| logs | | no line at `error` in any of the three logs (the refused code and the other amount are `warn`) |
+
+After R5 the bot shows the running session in a new message, and tracking moves to it. Which of
+the two messages `trading_sessions.status_message_id` holds is not asserted: PR #591 changes that
+rule from the first to the newest.
+
+R3a replays the address while the dialog is alive, the worst case: on the code step any text is a
+code ([bot-start.md → Email dialog](bot-start.md#email-dialog)), and the mock keeps a code a wrong
+attempt did not match. It spends one of the five attempts of `EMAIL_LOGIN_ATTEMPTS_PER_KEY`. In
+production a re-delivery comes after a restart, when the dialog is gone; that is R3b's case, where
+the text is ignored.
 
 ## The price path
 
@@ -161,7 +209,10 @@ S1–S9, never in their place.
 
 ## Boundaries
 
-- A repeated `/start`, a duplicate Telegram update or postback: #106, built on this harness.
+- Not repeated in #106: a restart of the bot (the dialog is lost, and the text is then ignored,
+  which R3b shows), the amount press after the session ended (it opens a new session by design),
+  `/stop` twice, `connect` again, a duplicate `successful_payment` (Stars reconciliation, #117), a
+  postback through the proxy header (`postbacks/routes.db.test.ts`), crediting a deposit (#386).
 - Moving the backend's `oauth-stub.ts` suites to the mock: #603.
 - Not covered: the «Сигналы сейчас» path (the scanners), the REST transport and a restart of the
   bot or the worker in the middle of a session.
