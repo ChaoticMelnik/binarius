@@ -74,7 +74,13 @@ import {
 } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
 import { attachShareButton } from './session-share';
-import { SESSION_NOT_FOUND, sessionEditMethod, type SessionTracker } from './session-tracker';
+import {
+  SESSION_NOT_FOUND,
+  type SessionDrawing,
+  sessionDrawing,
+  sessionEditMethod,
+  type SessionTracker,
+} from './session-tracker';
 import type { SetupCardPhotos } from './setup-card';
 import {
   LABELS,
@@ -352,11 +358,7 @@ export function createTradingSessionComposer<C extends Context>({
       return;
     }
     const symbol = symbolOf(catalog, view);
-    const { sent, photoRefused } = await sendSessionMessage(
-      ctx,
-      sessionStatusText(symbol, view),
-      view,
-    );
+    const { sent, photoRefused } = await sendSessionMessage(ctx, sessionDrawing(symbol, view));
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
     // the text after a refused photo took the delete's call (HANDLER_CALLS.sessionStart): the
     // screen stays, and its button pressed again answers 409 with this session
@@ -372,8 +374,7 @@ export function createTradingSessionComposer<C extends Context>({
   // message after an unknown delivery could be a duplicate (#126).
   async function sendSessionMessage(
     ctx: Context,
-    text: TelegramHtml,
-    { signalAction }: Pick<TradingSessionView, 'signalAction'>,
+    { text, picture: signalAction }: SessionDrawing,
   ): Promise<{ sent: { chat: { id: number }; message_id: number }; photoRefused: boolean }> {
     const reason = NO_NEXT_STEP_REASONS.SessionStatus;
     if (signalAction === null) {
@@ -616,7 +617,8 @@ export function createTradingSessionComposer<C extends Context>({
   // stopped session's end of the path, then tracking on whichever message shows it: its first poll
   // records the message (#567); a done session's entry sends its summary card once and ends
   // (#318). A message sent in place of a pressed one refused as gone replaces the pressed one in
-  // the record when that is the one recorded.
+  // the record when that is the one recorded. It is the view's drawing cut down to its text, with
+  // the keyboard: the tracker redraws it at the next change of the drawing (#568, risk 68).
   async function showInPlace(
     ctx: Context,
     telegramUserId: string,
@@ -768,13 +770,11 @@ export function createTradingSessionComposer<C extends Context>({
       ...entry,
       // the session message has no keyboard (#536): an edit without one strips an old status
       // message's buttons too; a session gone leaves only the menu (#350). Its kind follows the
-      // view drawn, or the last one read once the session is gone (#568, sessionEditMethod).
-      edit: (text, ...args) => {
-        const drawn = args[1] === 'not_found' ? args[2] : args[0];
-        const picture =
-          sessionEditMethod(drawn) === 'editMessageMedia' ? (drawn?.signalAction ?? null) : null;
+      // drawing's picture (#568, sessionEditMethod).
+      edit: ({ text, picture: drawn }, end) => {
+        const picture = sessionEditMethod(drawn) === 'editMessageMedia' ? drawn : null;
         const reason = NO_NEXT_STEP_REASONS.SessionStatus;
-        if (args[1] === 'not_found') {
+        if (end === 'not_found') {
           const extra = { reply_markup: menuKeyboard() };
           return picture === null
             ? editMessageTextByIdHtml(api, chatId, messageId, text, extra)

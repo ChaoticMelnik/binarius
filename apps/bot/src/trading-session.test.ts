@@ -33,7 +33,7 @@ import {
   sessionStartCallbackData,
   stakeMenuCallbackData,
 } from './demo';
-import type { SessionTrackRequest } from './session-tracker';
+import { sessionDrawing, type SessionTrackRequest } from './session-tracker';
 import {
   ACCESS_VIEW,
   BOT_INFO,
@@ -296,7 +296,7 @@ describe('the session button', () => {
     const { press, calls, sessionTracker } = setup();
     await press(START);
     const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
-    await entry.edit(telegramHtml`edited`, STOPPED);
+    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
 
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit).toMatchObject({
@@ -309,7 +309,7 @@ describe('the session button', () => {
     expect(edit).not.toHaveProperty('reply_markup');
 
     // #350: a session gone from the backend gets the menu only
-    await entry.edit(telegramHtml`gone`, null, 'not_found', null);
+    await entry.edit({ text: telegramHtml`gone`, picture: null }, 'not_found');
     expect(
       rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
     ).toEqual([MENU]);
@@ -1552,7 +1552,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
       record: false,
       startedAt: Date.parse(tracked.startedAt),
     });
-    await entry.edit(telegramHtml`edited`, STOPPED);
+    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
     const edit = payloadOf(scene.calls, 'editMessageText');
     expect(edit).toMatchObject({
       chat_id: USER.id,
@@ -1696,7 +1696,7 @@ describe('the session picture (#568)', () => {
   it('S-edit1 an edit of a view with a direction is editMessageMedia, without a keyboard', async () => {
     const scene = started(UP);
     await scene.press(START);
-    await entryOf(scene).edit(sessionStatusText(pairLabel(PAIR_EURUSD), UP_STOPPED), UP_STOPPED);
+    await entryOf(scene).edit(sessionDrawing(pairLabel(PAIR_EURUSD), UP_STOPPED));
     const edit = payloadOf(scene.calls, 'editMessageMedia');
     expect(edit).toMatchObject({ chat_id: USER.id, message_id: CARD_MESSAGE_ID });
     expect(edit).not.toHaveProperty('reply_markup');
@@ -1714,9 +1714,9 @@ describe('the session picture (#568)', () => {
       photoAnswer(CARD_MESSAGE_ID, ['bear-small', 'bear-large']),
     );
     const entry = entryOf(scene);
-    await entry.edit(telegramHtml`down`, DOWN);
-    await entry.edit(telegramHtml`down again`, DOWN);
-    await entry.edit(telegramHtml`up`, UP);
+    await entry.edit({ text: telegramHtml`down`, picture: DOWN.signalAction });
+    await entry.edit({ text: telegramHtml`down again`, picture: DOWN.signalAction });
+    await entry.edit({ text: telegramHtml`up`, picture: UP.signalAction });
     expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
       'setup-bear.png',
       'bear-large',
@@ -1729,11 +1729,15 @@ describe('the session picture (#568)', () => {
     await scene.press(START);
     const entry = entryOf(scene);
     scene.apiErrors.set('editMessageMedia', NOT_MODIFIED);
-    await expect(entry.edit(telegramHtml`same`, UP)).rejects.toBeInstanceOf(GrammyError);
+    await expect(
+      entry.edit({ text: telegramHtml`same`, picture: UP.signalAction }),
+    ).rejects.toBeInstanceOf(GrammyError);
     scene.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
-    await expect(entry.edit(telegramHtml`stale`, UP)).rejects.toBeInstanceOf(GrammyError);
+    await expect(
+      entry.edit({ text: telegramHtml`stale`, picture: UP.signalAction }),
+    ).rejects.toBeInstanceOf(GrammyError);
     scene.apiErrors.delete('editMessageMedia');
-    await entry.edit(telegramHtml`again`, UP);
+    await entry.edit({ text: telegramHtml`again`, picture: UP.signalAction });
     expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
       CARD_FILE_ID,
       CARD_FILE_ID,
@@ -1745,7 +1749,10 @@ describe('the session picture (#568)', () => {
     const scene = started(UP);
     await scene.press(START);
     const entry = entryOf(scene);
-    await entry.edit(TEXTS.sessionStatusUnavailable, null, 'not_found', UP);
+    await entry.edit(
+      { text: TEXTS.sessionStatusUnavailable, picture: UP.signalAction },
+      'not_found',
+    );
     const edit = payloadOf(scene.calls, 'editMessageMedia');
     expect(edit?.media).toMatchObject({
       type: 'photo',
@@ -1753,11 +1760,12 @@ describe('the session picture (#568)', () => {
       caption: TEXTS.sessionStatusUnavailable.value,
     });
     expect(rowsOf(edit)).toEqual([MENU]);
-    await entry.edit(TEXTS.sessionStatusUnavailable, null, 'not_found', SESSION_VIEW);
-    await entry.edit(TEXTS.sessionStatusUnavailable, null, 'not_found', null);
+    await entry.edit(
+      { text: TEXTS.sessionStatusUnavailable, picture: SESSION_VIEW.signalAction },
+      'not_found',
+    );
     expect(methods(scene.calls).filter((m) => m.startsWith('edit'))).toEqual([
       'editMessageMedia',
-      'editMessageText',
       'editMessageText',
     ]);
   });
@@ -1766,7 +1774,7 @@ describe('the session picture (#568)', () => {
     const scene = started(SESSION_VIEW);
     await scene.press(START);
     expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    await entryOf(scene).edit(telegramHtml`stopped`, STOPPED);
+    await entryOf(scene).edit({ text: telegramHtml`stopped`, picture: STOPPED.signalAction });
     expect(methods(scene.calls).at(-1)).toBe('editMessageText');
   });
 

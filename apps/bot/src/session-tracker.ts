@@ -5,6 +5,7 @@ import {
   isTradingSessionFinished,
   type PairLabel,
   type TelegramHtml,
+  type TradeAction,
   TradingSessionStatus,
   type TradingSessionView,
   telegramErrorFields,
@@ -19,9 +20,9 @@ import type { Logger } from './logging';
 import { sessionStatusText, TEXTS } from './texts';
 
 // The session's message follows its session (#284, docs/bot-session.md): the bot polls GET
-// /trading/sessions/:id and edits the message when its text changes - when the session stops
-// (#536) or its signal's direction turns (#568), the picture by editMessageMedia - then sends the
-// summary card (#318). In-process memory,
+// /trading/sessions/:id and edits the message when its drawing changes: its text (the session's
+// stop, #536) or its picture (the signal's direction turns, #568, by editMessageMedia) - then sends
+// the summary card (#318). In-process memory,
 // like the intent tracker; the first poll of a message records its id with the backend (#567), so
 // after a restart the bot's resumer (session-resume.ts) tracks the session again on it, the
 // recovered entries' first polls paced in slots and a message drawn in this process remembered.
@@ -39,19 +40,32 @@ const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 // balance for the same predicate (#337), so the two cannot drift.
 export const sessionTrackingDone = isTradingSessionFinished;
 
-// what an edit draws for: the view it shows, or none once the session is gone (#350), with the
-// last view read of it, whose picture the message carries (#568)
-export type SessionEditArgs =
-  | [view: TradingSessionView, end?: undefined]
-  | [view: null, end: 'not_found', last: TradingSessionView | null];
+// What the session message shows of its view: the text and the picture (the signal's direction;
+// null - a text message). The edit draws exactly this and the render key is made of all of it, so
+// nothing the edit draws can change unseen by the key (#568, review round 1 MJ1: equal overrides
+// of the two signal lines left a turn of direction out of a text-only key).
+export interface SessionDrawing {
+  text: TelegramHtml;
+  picture: TradeAction | null;
+}
+
+// the one derivation of the picture from a view
+const sessionPicture = (
+  view: Pick<TradingSessionView, 'signalAction'> | null,
+): TradeAction | null => view?.signalAction ?? null;
+
+export const sessionDrawing = (
+  label: PairLabel | null,
+  view: TradingSessionView,
+): SessionDrawing => ({ text: sessionStatusText(label, view), picture: sessionPicture(view) });
 
 // The one choice of the session message's kind (#568, docs/bot-session.md → The session message):
-// a view with a signal's direction is drawn as its picture, by editMessageMedia, which turns a text
-// message into a photo too; without one, or with no view read, it is the text of #536.
+// a drawing with a picture is drawn by editMessageMedia, which turns a text message into a photo
+// too; without one it is the text of #536.
 export const sessionEditMethod = (
-  view: Pick<TradingSessionView, 'signalAction'> | null,
+  picture: TradeAction | null,
 ): 'editMessageText' | 'editMessageMedia' =>
-  view === null || view.signalAction === null ? 'editMessageText' : 'editMessageMedia';
+  picture === null ? 'editMessageText' : 'editMessageMedia';
 
 export interface SessionTrackRequest {
   sessionId: string;
@@ -71,9 +85,9 @@ export interface SessionTrackRequest {
   // the pressed message this one was sent in place of, because Telegram refused its edit as gone:
   // the record replaces it when it is the one recorded (#567)
   replacesMessageId?: number;
-  // edits the session message, without a keyboard (#536), or under the menu alone once the
-  // session is gone (#350)
-  edit: (text: TelegramHtml, ...rest: SessionEditArgs) => Promise<unknown>;
+  // draws the drawing on the session message, without a keyboard (#536), or under the menu alone
+  // once the session is gone (#350)
+  edit: (drawing: SessionDrawing, end?: 'not_found') => Promise<unknown>;
   // sends the summary card under the final status (#318): called once, as the entry ends on a
   // done view whose final edit landed and whose summary message the backend sent (#464); it
   // handles its own failures
@@ -108,7 +122,7 @@ export interface SessionTrackerOptions {
 
 interface Entry extends SessionTrackRequest {
   startedAt: number;
-  // the text on screen (finalOf's key); '' while nothing this process drew on the message is
+  // the drawing on screen (finalOf's key); '' while nothing this process drew on the message is
   // remembered, so the first good read of a stopped session draws (mayDraw)
   rendered: string;
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -116,18 +130,19 @@ interface Entry extends SessionTrackRequest {
   editFailures: number;
 }
 
-// What the message shows of the view, and its key: the printed text itself (#536), so the edit
-// happens only when the text changes - the session's stop, a pair's label or an override of the
-// catalog's texts (#570) - and never because of a counter the message does not print.
+// What the message shows of the view, and its key: the whole drawing, its text and its picture
+// (#536, #568), so the edit happens only when either changes - the session's stop, a pair's label,
+// an override of the catalog's texts (#570), a turn of the signal's direction - and never because
+// of a counter the message does not print. The picture holds no newline, so the key is unambiguous.
 const finalOf = (
   label: PairLabel | null,
   view: TradingSessionView,
-): { key: string; text: TelegramHtml } => {
-  const text = sessionStatusText(label, view);
-  return { key: text.value, text };
+): { key: string; drawing: SessionDrawing } => {
+  const drawing = sessionDrawing(label, view);
+  return { key: `${drawing.picture ?? ''}\n${drawing.text.value}`, drawing };
 };
 
-// The card waits for the done view's text on screen and the backend's summary message (#464)
+// The card waits for the done view's drawing on screen and the backend's summary message (#464)
 const cardDue = (entry: Entry, view: TradingSessionView, key: string): boolean =>
   sessionTrackingDone(view) && entry.rendered === key && view.noticesDone;
 
@@ -230,12 +245,12 @@ export function createSessionTracker({
   // retried on the next poll, logged once per entry; anything else is a bug and stops the entry.
   async function editTo(
     entry: Entry,
-    text: TelegramHtml,
+    drawing: SessionDrawing,
     key: string,
-    ...args: SessionEditArgs
+    end?: 'not_found',
   ): Promise<boolean> {
     try {
-      await entry.edit(text, ...args);
+      await entry.edit(drawing, end);
       entry.rendered = key;
       return true;
     } catch (error) {
@@ -251,7 +266,7 @@ export function createSessionTracker({
           logger.warn(
             {
               ...errorLogFields(error),
-              ...telegramErrorFields(error, sessionEditMethod(args[0] ?? args[2] ?? null)),
+              ...telegramErrorFields(error, sessionEditMethod(drawing.picture)),
               sessionId: entry.sessionId,
             },
             'trading session message not edited',
@@ -260,7 +275,7 @@ export function createSessionTracker({
         entry.editFailures += 1;
         if (!lostForGood) return true;
         finish(entry, false);
-        if (args[0] !== null) await lost(entry);
+        if (end === undefined) await lost(entry);
         return false;
       }
       failed(entry, error);
@@ -298,11 +313,9 @@ export function createSessionTracker({
         if (current(entry)) {
           await editTo(
             entry,
-            TEXTS.sessionStatusUnavailable,
+            { text: TEXTS.sessionStatusUnavailable, picture: sessionPicture(entry.view) },
             SESSION_NOT_FOUND,
-            null,
             'not_found',
-            entry.view,
           );
         }
         finish(entry);
@@ -318,15 +331,15 @@ export function createSessionTracker({
     entry.record = false;
     if (!current(entry)) return;
     entry.view = view;
-    const { key, text } = finalOf(entry.label, view);
+    const { key, drawing } = finalOf(entry.label, view);
     if (key !== entry.rendered && mayDraw(entry, view)) {
-      const goOn = await editTo(entry, text, key, view);
+      const goOn = await editTo(entry, drawing, key);
       if (!goOn) return;
     }
     // The card goes once, then the entry ends, whatever the card did: a claim the backend
     // committed answers 409 the second time, so a retry could only lose it (docs/bot-session.md).
     // It waits for the backend's summary message (#464), so it never comes before it: a done
-    // session without it is polled on, with no edit while its text stays the same.
+    // session without it is polled on, with no edit while its drawing stays the same.
     if (cardDue(entry, view, key)) {
       await entry.card(view);
       finish(entry);
@@ -336,8 +349,8 @@ export function createSessionTracker({
   }
 
   // Re-arm, or past the deadline stop, with one last edit, not retried, only when the last view's
-  // text is not on screen yet (the poll's own edit failed, or a read failed after the last good
-  // one); then the card of a done session once that text is shown and the summary message went
+  // drawing is not on screen yet (the poll's own edit failed, or a read failed after the last good
+  // one); then the card of a done session once that drawing is shown and the summary message went
   // out (no card otherwise: it would come before the summary or without it). An entry that never
   // read a view ends with no edit: it has nothing to draw.
   async function next(entry: Entry): Promise<void> {
@@ -351,8 +364,8 @@ export function createSessionTracker({
       finish(entry);
       return;
     }
-    const { key, text } = finalOf(entry.label, view);
-    if (entry.rendered !== key && mayDraw(entry, view)) await editTo(entry, text, key, view);
+    const { key, drawing } = finalOf(entry.label, view);
+    if (entry.rendered !== key && mayDraw(entry, view)) await editTo(entry, drawing, key);
     if (cardDue(entry, view, key)) {
       await entry.card(view);
     }
