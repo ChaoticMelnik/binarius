@@ -12,8 +12,10 @@ import {
   type WidgetSessionRequestWire,
   type WidgetSessionResponseWire,
 } from '@binarius/shared';
+import type { PriceCurve } from './chart';
 import type { MockSocketPayload } from './encoding';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
+import type { MockOAuthOptions } from './oauth';
 import { parseCents, percentOf, requireCents, wireMoney } from './money';
 import { rawPriceAt, roundTo } from './price';
 
@@ -49,11 +51,23 @@ export interface MockBrokerOptions {
   rateLimit?: number;
   // how every server->client Socket.IO payload is delivered; 'object' when left out
   socketPayload?: MockSocketPayload;
+  // one curve for the chart, a trade's open_price and close_price and price.update (#105); the
+  // built-in waves when left out
+  pricePath?: PriceCurve;
+  // the client credentials and lifetimes of the OAuth and email-login routes (#105)
+  oauth?: Partial<MockOAuthOptions>;
 }
+
+// the ids of the users the email login registers: far above any id a suite seeds by hand
+export const MOCK_EMAIL_USER_ID_FROM = 1_000_000;
 
 export interface MockUserSeed {
   id: number;
-  accessToken: string;
+  // none: the user signs in through the email login or oauth/token, which issue one
+  accessToken?: string;
+  email?: string;
+  // what login and oauth/token answer as user.is_partner_client; true when left out
+  isPartnerClient?: boolean;
   level?: { code: string; rank: number };
   minTradeAmount?: string;
   demo?: { available: string };
@@ -152,6 +166,8 @@ interface Balance {
 
 interface UserRecord {
   id: number;
+  email?: string;
+  isPartnerClient: boolean;
   level: { code: string; rank: number };
   minTradeAmount: bigint;
   balances: Record<TradeMode, Balance>;
@@ -176,9 +192,22 @@ interface TradeRecord {
   profit?: bigint;
 }
 
+export interface MockUserProfile {
+  id: number;
+  email?: string;
+  isPartnerClient: boolean;
+}
+
 export interface BrokerState {
   readonly rateLimit: number;
   registerUser(seed: MockUserSeed): void;
+  // the email login's sign-up: a user with registerUser's defaults under the next id from
+  // MOCK_EMAIL_USER_ID_FROM, a partner client (the login carries the partner code)
+  registerEmailUser(email: string): number;
+  findUserByEmail(email: string): number | undefined;
+  userProfile(id: number): MockUserProfile;
+  // a further access token of the user; the earlier ones stay valid
+  addAccessToken(userId: number, token: string): void;
   revokeToken(token: string): void;
   authenticate(token: string): number | undefined;
   getUser(id: number): BrokerUserWireInput;
@@ -188,6 +217,8 @@ export interface BrokerState {
   openTrade(userId: number, request: OpenTradeRequestWire): OpenTradeResult;
   listTrades(userId: number, filter: MockTradeFilter): MockTradeWire[];
   settle(tradeId: number, input: MockSettleInput): MockClosedTradeWire;
+  // the curve's raw value; priceAt rounds it to the pair's digits
+  price(assetId: number, atMs: number): number;
   priceAt(assetId: number, atMs: number): number;
   createWidgetSession(userId: number, request: WidgetSessionRequestWire): WidgetSessionResponseWire;
   readonly widgetSessions: readonly MockWidgetSessionRecord[];
@@ -253,9 +284,14 @@ function wireOf(trade: TradeRecord): MockTradeWire {
 
 // a close price on the side of the open price the outcome needs, at least one tick away: the
 // curve's own price when it already agrees, its mirror image around the open price otherwise
-function closePriceFor(trade: TradeRecord, outcome: MockTradeOutcome, closeTs: number): number {
+function closePriceFor(
+  trade: TradeRecord,
+  outcome: MockTradeOutcome,
+  closeTs: number,
+  price: PriceCurve,
+): number {
   const tick = 10 ** -trade.digits;
-  const sampled = roundTo(rawPriceAt(trade.assetId, closeTs), trade.digits);
+  const sampled = roundTo(price(trade.assetId, closeTs), trade.digits);
   const rises = (outcome === MockTradeOutcome.Win) === (trade.action === TradeAction.Up);
   const distance = Math.max(Math.abs(sampled - trade.openPrice), tick);
   return roundTo(trade.openPrice + (rises ? distance : -distance), trade.digits);
@@ -270,9 +306,14 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
   const trades = new Map<number, TradeRecord>();
   const listeners = new Set<(change: MockChange) => void>();
   const widgetSessions: MockWidgetSessionRecord[] = [];
+  const price = options.pricePath ?? rawPriceAt;
   let lastTradeId = 0;
+  let lastEmailUser = 0;
 
   const listenerErrors: Error[] = [];
+
+  const emailIndex = (lowerCased: string): number | undefined =>
+    [...users.values()].find((user) => user.email === lowerCased)?.id;
 
   const emit = (change: MockChange) => {
     for (const listener of listeners) {
@@ -290,6 +331,37 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
     return user;
   }
 
+  const tokenFree = (token: string) => token !== '' && !tokens.has(token);
+
+  function registerUser(seed: MockUserSeed): void {
+    if (users.has(seed.id)) throw new RangeError(`mock user ${seed.id} already exists`);
+    if (seed.accessToken !== undefined && !tokenFree(seed.accessToken)) {
+      throw new RangeError(`mock user ${seed.id}: the access token is empty or taken`);
+    }
+    const email = seed.email?.toLowerCase();
+    if (email !== undefined && emailIndex(email) !== undefined) {
+      throw new RangeError(`mock user ${seed.id}: the email is taken`);
+    }
+    users.set(seed.id, {
+      id: seed.id,
+      ...(email === undefined ? {} : { email }),
+      isPartnerClient: seed.isPartnerClient ?? true,
+      level: { ...(seed.level ?? { code: 'standard', rank: 1 }) },
+      minTradeAmount: requireCents(seed.minTradeAmount ?? '1.00', 'minTradeAmount'),
+      balances: {
+        [TradeMode.Demo]: {
+          available: requireCents(seed.demo?.available ?? '10000.00', 'demo.available'),
+          held: 0n,
+        },
+        [TradeMode.Real]: {
+          available: requireCents(seed.real?.available ?? '0.00', 'real.available'),
+          held: 0n,
+        },
+      },
+    });
+    if (seed.accessToken !== undefined) tokens.set(seed.accessToken, seed.id);
+  }
+
   function pairRecord(id: number): BinaryPairWire {
     const pair = pairs.get(id);
     if (pair === undefined) throw new RangeError(`unknown mock asset ${id}`);
@@ -299,27 +371,32 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
   return {
     rateLimit: options.rateLimit ?? DEFAULT_RATE_LIMIT,
 
-    registerUser(seed) {
-      if (users.has(seed.id)) throw new RangeError(`mock user ${seed.id} already exists`);
-      if (seed.accessToken === '' || tokens.has(seed.accessToken)) {
-        throw new RangeError(`mock user ${seed.id}: the access token is empty or taken`);
+    registerUser,
+
+    registerEmailUser(email) {
+      lastEmailUser += 1;
+      const id = MOCK_EMAIL_USER_ID_FROM + lastEmailUser;
+      registerUser({ id, email });
+      return id;
+    },
+
+    findUserByEmail: (email) => emailIndex(email.toLowerCase()),
+
+    userProfile(id) {
+      const user = userRecord(id);
+      return {
+        id: user.id,
+        ...(user.email === undefined ? {} : { email: user.email }),
+        isPartnerClient: user.isPartnerClient,
+      };
+    },
+
+    addAccessToken(userId, token) {
+      userRecord(userId);
+      if (!tokenFree(token)) {
+        throw new RangeError(`mock user ${userId}: the access token is empty or taken`);
       }
-      users.set(seed.id, {
-        id: seed.id,
-        level: { ...(seed.level ?? { code: 'standard', rank: 1 }) },
-        minTradeAmount: requireCents(seed.minTradeAmount ?? '1.00', 'minTradeAmount'),
-        balances: {
-          [TradeMode.Demo]: {
-            available: requireCents(seed.demo?.available ?? '10000.00', 'demo.available'),
-            held: 0n,
-          },
-          [TradeMode.Real]: {
-            available: requireCents(seed.real?.available ?? '0.00', 'real.available'),
-            held: 0n,
-          },
-        },
-      });
-      tokens.set(seed.accessToken, seed.id);
+      tokens.set(token, userId);
     },
 
     revokeToken(token) {
@@ -389,7 +466,7 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
         amount,
         payout: pair.payout,
         potentialProfit: percentOf(amount, pair.payout),
-        openPrice: roundTo(rawPriceAt(pair.id, now), pair.digits),
+        openPrice: roundTo(price(pair.id, now), pair.digits),
         openTimestamp: now,
         closeTimestamp: now + request.duration * 1000,
         isDemo: request.is_demo,
@@ -427,16 +504,18 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
       if (won) balance.available += trade.amount + trade.potentialProfit;
       trade.status = MockTradeStatus.Closed;
       trade.closePrice =
-        input.closePrice ?? closePriceFor(trade, input.outcome, trade.closeTimestamp);
+        input.closePrice ?? closePriceFor(trade, input.outcome, trade.closeTimestamp, price);
       trade.profit = won ? trade.potentialProfit : -trade.amount;
       const wire = closedWire(trade, trade.closePrice, trade.profit);
       emit({ type: MockChangeType.TradeClosed, userId: trade.userId, trade: wire });
       return wire;
     },
 
+    price,
+
     priceAt(assetId, atMs) {
       const pair = pairRecord(assetId);
-      return roundTo(rawPriceAt(pair.id, atMs), pair.digits);
+      return roundTo(price(pair.id, atMs), pair.digits);
     },
 
     createWidgetSession(userId, request) {

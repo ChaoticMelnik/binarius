@@ -339,6 +339,24 @@ describe('price.subscribe and price.update', () => {
     expect(anonymous.received).toEqual([]);
   });
 
+  it('pushes the price of a curve given to the fixture (#105)', async () => {
+    const curve = (assetId: number, atMs: number) => (assetId === EURUSD ? 4 + atMs / 1e15 : 5);
+    const curved = await startMockBroker({ pricePath: curve });
+    try {
+      curved.users.register({ id: 1, accessToken: TOKEN });
+      const client = await authed(curved);
+      client.socket.emit(BrokerSocketEvent.PriceSubscribe, { assets: [EURUSD] });
+      await client.waitFor(OBSERVED_EXTRA_EVENTS.PriceSubscribed);
+      const atMs = 1_790_000_000_000;
+      expect(curved.socket.pushPrice(EURUSD, atMs)).toBe(1);
+      const [update] = await client.waitFor(BrokerSocketEvent.PriceUpdate);
+      expect(update).toEqual([EURUSD, Number(curve(EURUSD, atMs).toFixed(5)), atMs]);
+    } finally {
+      for (const socket of clients.splice(0)) socket.disconnect();
+      await curved.close();
+    }
+  });
+
   it('pushes every subscription at once, skipping ids without a pair', async () => {
     const client = await authed();
     client.socket.emit(BrokerSocketEvent.PriceSubscribe, { assets: [EURUSD, 999, AAPL] });

@@ -1,12 +1,15 @@
-# Mock broker: the REST and Socket.IO fixture (issues #103, #104)
+# Mock broker: the REST and Socket.IO fixture (issues #103, #104, #105)
 
 `packages/mock-broker` (`@binarius/mock-broker`) is a test-only stand-in for the Binodex Broker
 API. A test starts it on `127.0.0.1` with a random port and points its client at it. The fixture
 answers the four REST endpoints of #103: the user, the binary pairs, the user's trades (list and
 open), and the chart. A test can also script a failure for the next request on any of them: a
 429, a 5xx, a delay, or a request that never answers. The same server and the same store also
-speak the broker's Socket.IO protocol (#104, [Socket.IO](#socketio)). It is a library only.
-Nothing in the repo starts it as a process or a compose service; that is #105.
+speak the broker's Socket.IO protocol (#104, [Socket.IO](#socketio)), and the OAuth and
+email-login routes (#105, [OAuth and the email login](#oauth-and-the-email-login-105)). It is a
+library only: the end-to-end test of the demo cycle starts it in-process next to the backend, the
+worker and the bot ([e2e-demo-cycle.md](e2e-demo-cycle.md)); nothing starts it as a process or a
+compose service.
 
 ```bash
 pnpm test packages/mock-broker   # the fixture's own tests; they need no database
@@ -33,18 +36,24 @@ await broker.close();
 | --- | --- |
 | `url` | `http://127.0.0.1:<port>`, without the `/v1/broker` prefix; also the Socket.IO URL |
 | `state` | the store behind the routes and the socket (`createBrokerState()`); it announces `state.onChange` events (`trade_opened`, `trade_closed`, `pair_updated`, `token_revoked`) |
-| `users.register(seed)` | a user with a bearer token; defaults: level `standard`/1, `min_trade_amount` `1.00`, demo `10000.00` (#8), real `0.00`; the defaults are decimal-string seeds, on the wire they go out as JSON numbers (`1`, `10000`, `0`) |
+| `users.register(seed)` | a user, with a bearer token when `accessToken` is given (without one the user signs in through the [email login](#oauth-and-the-email-login-105) or `oauth/token`); `email` makes the email login sign in to it, `isPartnerClient` (default `true`) is what the login answers; defaults: level `standard`/1, `min_trade_amount` `1.00`, demo `10000.00` (#8), real `0.00`; the defaults are decimal-string seeds, on the wire they go out as JSON numbers (`1`, `10000`, `0`) |
 | `users.revokeToken(token)` | the token is answered `Invalid token` from then on, and every socket of its user gets `user.disconnect_token_expired` and is dropped |
 | `users.get(id)` | the `GET /user` body |
 | `pairs.list()` / `pairs.update(id, { payout?, scheduled_until? })` | the catalogue, `DEFAULT_PAIRS` unless `options.pairs` is given |
 | `trades.list(userId)` | every trade of the user, newest first |
 | `trades.settle(tradeId, { outcome, closePrice?, closeTimestamp? })` | closes an open trade; a second call throws |
-| `rest.failNext(endpoint, script)` | queues a script for the next request on `user`, `pairs`, `tradesList`, `openTrade` or `chart` |
+| `rest.failNext(endpoint, script)` | queues a script for the next request on `user`, `pairs`, `tradesList`, `openTrade`, `chart`, `widgetSession`, `oauthToken`, `emailSendCode`, `emailLogin` or `refresh` |
 | `rest.journal` / `rest.clearJournal()` | every request, without the token or any body value |
 | `rest.pendingHangs` | how many `hang` requests are still waiting for `close()`; one whose client aborted is dropped |
 | `socket` | the Socket.IO side: scripts, journal, connected sockets, price pushes ([Socket.IO](#socketio)) |
-| `priceAt(assetId, atMs)` | the one price curve that produces chart candles, `open_price`, the default `close_price` and `price.update` |
+| `oauth.codeFor(email)` / `oauth.issueCode({ userId, redirectUri, ttlMs? })` | the newest email code sent to an address, as the inbox would show it; an authorization code for `oauth/token`, as the authorize page would hand it out |
+| `priceAt(assetId, atMs)` | the one price curve that produces chart candles, `open_price`, the default `close_price` and `price.update`; built-in waves unless `options.pricePath(assetId, atMs)` is given (#105) |
 | `close()` | answers every hanging request with 503, drops every socket, then stops the server; rejects with an `AggregateError` if an `onChange` listener threw and the errors were not cleared ([Listeners](#listeners)) |
+
+Options of `startMockBroker`: `pairs`, `rateLimit`, `socketPayload` ([Payload forms](#payload-forms)),
+`pricePath` (a curve in place of the built-in waves; the candle's wick is at most 0.05 % of the
+curve's price at the candle's start, so it follows the curve's scale) and `oauth` (`clientId`,
+`clientSecret`, `partnerCode`, `expiresInSec`, `codeTtlMs` over `MOCK_OAUTH_DEFAULTS`).
 
 There are no timers and no fake clock. A trade stays open until a test settles it. Times come
 from `Date.now()`, so tests check relations between values (`close_timestamp = open_timestamp +
@@ -139,6 +148,50 @@ limit. A client classifies by status, never by text. All 4xx and 5xx responses u
 | body over 1 MiB (Fastify's `bodyLimit`), or any other client error Fastify raises | 413 (or Fastify's 4xx) | `Request failed` | fixture rule |
 | anything the fixture throws | 500 | `Internal error` | fixture rule |
 | `x-ratelimit-*` on every response | | | observed |
+
+## OAuth and the email login (#105)
+
+The four routes of [binodex-oauth.md → Broker contract](binodex-oauth.md#broker-contract-verified-2026-10-01),
+with the properties the backend's flow depends on. They take client credentials or the refresh
+token in the body, not a bearer, so the bearer check of the other routes does not apply; the
+journal records their body keys, never a value, so no code or token collects there.
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `POST /v1/broker/oauth/token` | form-urlencoded or JSON: `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret` | `{ access_token, refresh_token, token_type: "Bearer", expires_in, user: { id, email, is_partner_client } }` |
+| `POST /v1/broker/user-auth/refresh` | JSON `{ refresh_token }` | the pair alone, no `user` |
+| `POST /v1/broker/user-auth/email/send-code` | JSON `{ client_id, client_secret, email }` | `{ status: true }`; the code goes to `oauth.codeFor(email)` |
+| `POST /v1/broker/user-auth/email/login` | JSON `{ client_id, client_secret, email, code, partner_code }` | as `oauth/token` |
+
+Every issued access token is registered in the store, so `GET /user`, the trades and the socket's
+`user.auth` accept it. Tokens read `mock-access-<userId>-<n>` and `mock-refresh-<userId>-<n>`;
+`user.id` is a JSON number, as the live `user.id=101962`. An address the store does not know
+registers a new user on login, id `MOCK_EMAIL_USER_ID_FROM` (1 000 000) + n, with
+`users.register`'s defaults and `is_partner_client: true`. An email code reads `100000 + n`,
+belongs to its lower-cased address and is single-use; an authorization code belongs to its
+`redirect_uri` and is single-use; both expire after `codeTtlMs` (120 s by default). The refresh
+token of a user is a family: only the newest member is accepted, and presenting an older one
+kills the family, so the newest one is refused as well.
+
+The checks run in this order: client credentials (401), the request's fields (400), the partner
+code (email login only, when `oauth.partnerCode` is set; a refusal leaves the code usable), then
+the code. `oauth/token` with `grant_type=refresh_token` answers `"code" is required`, as live.
+
+| Case | Status | Text | Source |
+| --- | --- | --- | --- |
+| wrong `client_id` / `client_secret` (`oauth/token`, `send-code`, `login`) | 401 | `Authentication failed: Invalid client credentials` | observed |
+| an unknown, used, expired or foreign authorization code | 400 | `Invalid or expired authorization code` | observed (the binding to `redirect_uri` is a fixture rule) |
+| `oauth/token` without a code or with another grant; `login` without a code | 400 | `Validation failed: "code" is required` | observed |
+| an unknown or superseded refresh token, and the newest one after a replay | 401 | `Invalid token` | observed |
+| refresh without `refresh_token` | 400 | `Validation failed: "refresh_token" is required` | observed |
+| an address the broker does not take | 400 | `Validation failed: "email" is required` | observed |
+| a wrong, used, expired or foreign email code | 400 | `Invalid or expired code` | observed |
+| a `partner_code` other than `oauth.partnerCode` | 400 | `partner_code does not belong to your partner account` | fixture rule |
+| an access token issued before a refresh | 200 | (still valid) | fixture rule: not observed live, and the backend never presents the old one |
+| a new address on login | 200 | `is_partner_client: true` | fixture rule: the login carries the partner code |
+
+`apps/backend/src/broker/testing/oauth-stub.ts` still serves three backend suites with knobs these
+routes do not have (a hanging request, a refused refresh); moving them here is #603.
 
 ## Scripts: `failNext`
 
@@ -429,8 +482,9 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
   with the `BrokerSocketClient` and its subscriptions (docs/broker-socket.md → Client). The trade
   command executor landed in #100 (docs/trade-executor.md); the session manager and the
   end-to-end scenario landed in #101 (docs/broker-session.md).
-- The OAuth endpoints, moving `apps/backend/src/broker/testing/oauth-stub.ts` here, and a `bin`
-  or compose service: #105.
+- The OAuth endpoints and `pricePath` landed in #105, for the in-process end-to-end test
+  (docs/e2e-demo-cycle.md), which needs no `bin` or compose service. Moving the backend's
+  `oauth-stub.ts` suites here is #603.
 - Changes to `packages/shared`: money, chart and `{trades}` landed in #98; the fraction branch of
   `moneyWireSchema` and the number form of the fixture — #236; `symbol` and `close_timestamp`
   (Drift 4) remain. #104 changes nothing in shared (Drift 6-9).

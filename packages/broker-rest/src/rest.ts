@@ -76,8 +76,8 @@ export class BrokerRestError extends Error {
 }
 
 // The method, the path and the bearer rule travel together, so a call cannot reach one endpoint
-// while being authorized as another. The keys are the mock broker's MockRestEndpoint
-// (rest.test.ts checks the two agree).
+// while being authorized as another. The keys are the mock broker's MockRestEndpoint without its
+// OAuth routes, which the backend's OAuth client calls (rest.test.ts checks the two agree).
 export const BROKER_REST_ENDPOINTS = {
   user: { method: 'GET', path: '/v1/broker/user', bearer: true },
   pairs: { method: 'GET', path: '/v1/broker/pairs/binary', bearer: false },

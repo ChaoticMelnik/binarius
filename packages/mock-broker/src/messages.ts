@@ -10,6 +10,14 @@ export const LIVE_MESSAGES = {
     `Unsupported interval ${raw}; expected "250ms" / "5s" / "1m" / "1h" / "1d" / "1w" / "1M" forms`,
   notFound: (host: string, path: string, method: string) =>
     `Sorry, the ${host}${path} HTTP method ${method} resource you are looking for was not found.`,
+  // the OAuth and email-login routes (docs/binodex-oauth.md -> Broker contract, 2026-10-01)
+  invalidClientCredentials: 'Authentication failed: Invalid client credentials',
+  invalidAuthorizationCode: 'Invalid or expired authorization code',
+  codeRequired: 'Validation failed: "code" is required',
+  refreshInvalidToken: 'Invalid token',
+  refreshTokenRequired: 'Validation failed: "refresh_token" is required',
+  emailRequired: 'Validation failed: "email" is required',
+  invalidEmailCode: 'Invalid or expired code',
 };
 
 // Texts the fixture chose itself: the live answer was not observed (it needs credentials, a
@@ -34,6 +42,8 @@ export const FIXTURE_MESSAGES = {
   serviceUnavailable: 'Service unavailable',
   requestFailed: 'Request failed',
   closedByFixture: 'Connection closed by fixture',
+  // the email login with a partner_code that is not the installation's (the backend's stub text)
+  partnerCodeForeign: 'partner_code does not belong to your partner account',
 };
 
 export const brokerError = (message: string) => ({ error: { message, details: {} } });

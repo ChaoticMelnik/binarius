@@ -18,6 +18,7 @@ import {
   type MockScript,
 } from './faults';
 import { brokerError, FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
+import { attachMockOAuth, MOCK_OAUTH_DEFAULTS, type MockOAuth } from './oauth';
 import { attachMockSocket, type MockSocket } from './socket';
 import {
   createBrokerState,
@@ -62,6 +63,8 @@ export interface MockBroker {
     list(): readonly MockWidgetSessionRecord[];
   };
   socket: MockSocket;
+  // the email login's inbox and the authorize page's codes (#105)
+  oauth: MockOAuth;
   priceAt(assetId: number, atMs: number): number;
   // rejects with an AggregateError when an onChange listener threw and the test did not clear it
   close(): Promise<void>;
@@ -74,6 +77,11 @@ const ROUTES: Record<MockRestEndpoint, { method: 'GET' | 'POST'; url: string; au
   openTrade: { method: 'POST', url: '/v1/broker/user/trades', auth: true },
   chart: { method: 'GET', url: '/v1/broker/chart', auth: false },
   widgetSession: { method: 'POST', url: '/v1/broker/widget-sessions', auth: true },
+  // client credentials or the refresh token in the body, not a bearer
+  oauthToken: { method: 'POST', url: '/v1/broker/oauth/token', auth: false },
+  emailSendCode: { method: 'POST', url: '/v1/broker/user-auth/email/send-code', auth: false },
+  emailLogin: { method: 'POST', url: '/v1/broker/user-auth/email/login', auth: false },
+  refresh: { method: 'POST', url: '/v1/broker/user-auth/refresh', auth: false },
 };
 
 // a body that is not JSON: broken, empty, or another content type (Fastify answers that one 415)
@@ -387,8 +395,27 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     const query = validateChartQuery(request.query as Record<string, unknown>, state.findPair);
     if (!query.ok) return reply.code(400).send(brokerError(query.message));
     if (query.empty) return [];
-    return buildCandles(query.pair, query.stepMs, query.startTime, query.limit, Date.now());
+    return buildCandles(
+      query.pair,
+      query.stepMs,
+      query.startTime,
+      query.limit,
+      Date.now(),
+      state.price,
+    );
   });
+
+  const oauth = attachMockOAuth(
+    app,
+    state,
+    { ...MOCK_OAUTH_DEFAULTS, ...options.oauth },
+    {
+      oauthToken: ROUTES.oauthToken.url,
+      emailSendCode: ROUTES.emailSendCode.url,
+      emailLogin: ROUTES.emailLogin.url,
+      refresh: ROUTES.refresh.url,
+    },
+  );
 
   const socketLayer = attachMockSocket(app.server, state, socketPayload);
   const url = await app.listen({ port: 0, host: '127.0.0.1' });
@@ -423,6 +450,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
       list: () => [...state.widgetSessions],
     },
     socket: socketLayer.socket,
+    oauth,
     priceAt: (assetId, atMs) => state.priceAt(assetId, atMs),
     async close() {
       for (const entry of [...hanging]) {

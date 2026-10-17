@@ -3,9 +3,16 @@ export type { MockRequestRecord, MockRestEndpoint, MockScript } from './faults';
 export { encodeSocketPayload, MockSocketPayload } from './encoding';
 export { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
 export {
+  MOCK_OAUTH_DEFAULTS,
+  type MockOAuth,
+  type MockOAuthEndpoint,
+  type MockOAuthOptions,
+} from './oauth';
+export {
   createBrokerState,
   DEFAULT_PAIRS,
   DEFAULT_RATE_LIMIT,
+  MOCK_EMAIL_USER_ID_FROM,
   MOCK_WIDGET_SESSION_TTL_SEC,
   MockChangeType,
   MockTradeOutcome,
@@ -17,6 +24,7 @@ export {
   type MockOpenTradeWire,
   type MockSettleInput,
   type MockTradeWire,
+  type MockUserProfile,
   type MockUserSeed,
   type MockWidgetSessionRecord,
 } from './state';

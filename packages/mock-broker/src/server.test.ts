@@ -12,6 +12,7 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockRequestRecord, MockRestEndpoint, MockScript } from './faults';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
+import { roundTo } from './price';
 import { startMockBroker, type MockBroker } from './server';
 
 const TOKEN = 'access-token-of-user-1';
@@ -782,6 +783,10 @@ describe('the facade', () => {
     'openTrade',
     'chart',
     'widgetSession',
+    'oauthToken',
+    'emailSendCode',
+    'emailLogin',
+    'refresh',
   ];
   it.each(endpoints)('scripts endpoint %s', async (endpoint) => {
     broker.rest.failNext(endpoint, { status: 503 });
@@ -792,8 +797,46 @@ describe('the facade', () => {
       openTrade: () => openTrade(),
       chart: () => call('/v1/broker/chart'),
       widgetSession: () => createWidgetSession(),
+      oauthToken: () => call('/v1/broker/oauth/token', { method: 'POST', body: {} }),
+      emailSendCode: () =>
+        call('/v1/broker/user-auth/email/send-code', { method: 'POST', body: {} }),
+      emailLogin: () => call('/v1/broker/user-auth/email/login', { method: 'POST', body: {} }),
+      refresh: () => call('/v1/broker/user-auth/refresh', { method: 'POST', body: {} }),
     };
     expect((await paths[endpoint]()).status).toBe(503);
+  });
+});
+
+describe('a price curve given to the fixture (#105)', () => {
+  it('sets the chart, a trade open_price and priceAt', async () => {
+    const curve = (assetId: number, atMs: number) =>
+      assetId === EURUSD ? 2.5 + (Math.floor(atMs / 60_000) % 5) * 0.001 : 3;
+    const curved = await startMockBroker({ pricePath: curve });
+    try {
+      curved.users.register({ id: 1, accessToken: TOKEN });
+      const before = Date.now();
+      const response = await fetch(`${curved.url}/v1/broker/user/trades`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify(tradeBody()),
+      });
+      const after = Date.now();
+      const trade = (await response.json()) as { open_price: number };
+      const possible = new Set([before, after].map((at) => roundTo(curve(EURUSD, at), 5)));
+      expect(possible).toContain(trade.open_price);
+      expect(curved.priceAt(EURUSD, 1_790_000_000_000)).toBe(
+        roundTo(curve(EURUSD, 1_790_000_000_000), 5),
+      );
+      const start = 1_790_000_040_000;
+      const chart = await fetch(
+        `${curved.url}/v1/broker/chart?interval=1m&asset_id=${EURUSD}&start_time=${start}&limit=1`,
+      );
+      const [[, open, , , close] = []] = (await chart.json()) as number[][];
+      expect(open).toBe(roundTo(curve(EURUSD, start), 5));
+      expect(close).toBe(roundTo(curve(EURUSD, start + 60_000), 5));
+    } finally {
+      await curved.close();
+    }
   });
 });
 

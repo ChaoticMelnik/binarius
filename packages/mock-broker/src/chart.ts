@@ -81,10 +81,17 @@ export function validateChartQuery(
   return { ok: true, empty: false, pair, stepMs, startTime, limit };
 }
 
-export function candleAt(pair: BinaryPairWire, ts: number, stepMs: number): Candle5 {
-  const open = roundTo(rawPriceAt(pair.id, ts), pair.digits);
-  const close = roundTo(rawPriceAt(pair.id, ts + stepMs), pair.digits);
-  const wick = wickAt(pair.id, ts);
+export type PriceCurve = (assetId: number, atMs: number) => number;
+
+export function candleAt(
+  pair: BinaryPairWire,
+  ts: number,
+  stepMs: number,
+  price: PriceCurve = rawPriceAt,
+): Candle5 {
+  const open = roundTo(price(pair.id, ts), pair.digits);
+  const close = roundTo(price(pair.id, ts + stepMs), pair.digits);
+  const wick = wickAt(pair.id, ts, price(pair.id, ts));
   // open and close are already rounded, so rounding the widened bounds cannot cross them
   const high = roundTo(Math.max(open, close) + wick, pair.digits);
   const low = roundTo(Math.min(open, close) - wick, pair.digits);
@@ -97,6 +104,7 @@ export function buildCandles(
   startTime: number,
   limit: number,
   nowMs: number,
+  price: PriceCurve = rawPriceAt,
 ): Candle5[] {
   const candles: Candle5[] = [];
   for (
@@ -104,7 +112,7 @@ export function buildCandles(
     ts <= nowMs && candles.length < limit;
     ts += stepMs
   ) {
-    candles.push(candleAt(pair, ts, stepMs));
+    candles.push(candleAt(pair, ts, stepMs, price));
   }
   return candles;
 }
