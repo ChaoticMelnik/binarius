@@ -8,10 +8,13 @@ status or age line when the broker balance is missing or old, a hint, and these 
 the mode button — «💼 Реальный режим» in demo, «🎮 Вернуться в демо» in real, both opening the
 mode screen (#474, [trading-mode.md](trading-mode.md#the-bot)) — then «👥 Пригласить друга» (#115,
 [referrals.md](referrals.md)) beside «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)) in
-one row (#506, [bot-navigation.md](bot-navigation.md#the-width-506)), and «💳 Пополнить» (#27, both
-modes, the cashier Mini App, [deposit.md](deposit.md)) in the last row, only when
-`WEB_PUBLIC_URL` is https (otherwise the card has the first two rows). It is
-pinned in place of whatever was pinned before.
+one row (#506, [bot-navigation.md](bot-navigation.md#the-width-506)), and in the last row «💳
+Пополнить» (#27, both modes, the cashier Mini App, [deposit.md](deposit.md); only when
+`WEB_PUBLIC_URL` is https) beside «🌐 Язык / Language» (#508, the language screen,
+[bot-navigation.md](bot-navigation.md#the-language-screen-508)), which stands there alone without
+the cashier. It is pinned in place of whatever was pinned before. The card is in the user's
+language ([bot-texts.md](bot-texts.md#languages)); `/start`, `/menu` and «🏠 В меню» put the
+language their `/users/start` answer carries into the bot's cache.
 
 ## Components
 
@@ -29,7 +32,8 @@ pinned in place of whatever was pinned before.
   catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard` with
   `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` button by mode beside the `mode` button,
-  #474, then the `invite` button, #115, then the `buy` button, #117),
+  #474, then the `invite` button, #115, then the `buy` button, #117, then the deposit and the
+  `lang` button, #508),
   `pinCard`.
 - `packages/shared/src/bot-commands.ts` — `/menu` «Главное меню», right after `/start`.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.start`, `.menu`, `.demo`, and the conjunct

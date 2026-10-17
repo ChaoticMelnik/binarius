@@ -357,7 +357,7 @@ Publishing).
 
 ## Loading
 
-`resolveBotTextOverrides(rows)` decides which rows take effect, for the loaders and the writer
+The overrides apply to the Russian texts only (#508; per language: #634). `resolveBotTextOverrides(rows)` decides which rows take effect, for the loaders and the writer
 alike. A row is rejected, and its key shows the default, when its key is unknown,
 when `botTextProblems` refuses it against the other accepted texts, when it is a fragment that
 breaks a host still on its default, or when it is a part of an assembled message that would
@@ -383,6 +383,59 @@ key). So no row in the table, hand-inserted SQL included, fails the bot's parse 
 `GET /bot-texts`; a row that passes them and fails the resolver is rejected and shows the default
 in both processes. `schema.db.test.ts` holds the two sides equal on their boundary rows.
 
+## Languages
+
+The bot writes in Russian or English (#508; the owner's decisions of 2026-10-15). Parts 2 and 3
+translate the rest of the catalog (#632 `demo`, `analysis`, `trade`; #633 `session`, `stars`,
+`mailing`, `deposit` and the backend's pushes); #634 gives the overrides a language.
+
+- **The rule.** `botLanguageOf(language_code)` (`packages/shared/src/bot-language.ts`): Russian when
+  Telegram sends no tag or one whose first subtag is `ru` in any case (`ru`, `ru-RU`, `RU`),
+  English for any other tag, CIS languages included (`uk`, `be`, `kk`, `rus`). One rule for the
+  INSERT of a user, the bot's fallback and migration 0063, which gave every existing user the
+  language its stored `language_code` gives (`users-language-migration.db.test.ts` compares the SQL
+  with the function on one corpus).
+- **The column.** `users.language` (`ru` | `en`, `users_language_check` from `BotLanguage`). Two
+  writers: the INSERT of the first `/start` (`recordUserStart`; its conflict SET leaves it, so a
+  later `/start` from another client changes `language_code` and not the language) and
+  `setUserLanguage` from `POST /users/language`, the user's choice on the language screen
+  ([bot-navigation.md](bot-navigation.md#the-language-screen-508)). `GET /users/language` reads it;
+  `/users/start` answers it. Both routes are scoped by the caller's Telegram id, 404
+  `user_not_found` without a row.
+- **The bot.** `apps/bot/src/language.ts`: the first middleware, ahead of the private-chat filter
+  and every composer, puts the user's language into an `AsyncLocalStorage` store for the whole
+  update; `TEXTS`, `LABELS`, the label maps, `botCommands()` and `PROFILE` read the views of that
+  language at every access (`texts.ts`). The language comes from a cache (`LANGUAGE_CACHE_MAX`
+  users, oldest out, no TTL: the two writers above are the INSERT and this bot), filled by every
+  `/users/start` answer and by the language screen; a user not cached is read once per process
+  with `GET /users/language` in `LANGUAGE_READ_TIMEOUT_MS` (2 s). No row yet: the client's language
+  by the rule, not cached; a failed read: the same, a `warn` `user language not read`, not cached,
+  so the next update reads again. Only an update the bot can answer is read — a private chat's
+  message, button or chat-member update, an inline query, a pre-checkout query; a group's or
+  channel's update and `chosen_inline_result` take the client's language with no read (manager's
+  answer В1 of 2026-10-18).
+- **A sender outside an update.** The trade and session trackers carry the language of the press
+  in each entry and run their polls, edits and the session's card inside `runWithLanguage`; the
+  recovery after a restart takes the owner's language from `GET /trading/sessions/tracked`. A text
+  read outside any language is Russian and logs `text read outside a language context, Russian
+  shown` once per process (`index.ts`): the canary for a new timer-driven sender that forgot it.
+- **The English texts.** `BOT_TEXT_SOURCES_EN` (`packages/shared/src/bot-texts-en.ts`), the same
+  keys, placeholders and fragments as the defaults, checked by the same validator and by the
+  assembled messages' estimate (`bot-texts-en.test.ts`). `enBotTextSource` is static: an
+  untranslated key shows the catalog's Russian default, never an override, so every English
+  message is bounded by the test on the defaults. `UNTRANSLATED_BOT_TEXT_KEYS` is pinned by group:
+  exactly the groups of #632 and #633. Until those parts, a user in English sees the start, the
+  cards, the menu, `/settings`, `/help`, `/account`, `/invite`, `/support` and the buttons in
+  English, and the demo, the analysis, the trades, the sessions, Stars and every push of the
+  backend in Russian.
+- **Proofreading.** `pnpm -s exec tsx tooling/bot-texts-table.ts` prints «key | group | русский |
+  English» for every translated key under `head=` and the count (exit 1 with none); the PR carries
+  it for the owner.
+- **What stays Russian.** The overrides (the CLI, the admin section: Russian only until #634), the
+  backend's pushes (#633), the staff bot, the cashier Mini App and the sign-in pages (`apps/web`).
+  Numbers and dates print the same in both languages; only the words differ, `formatAge`'s units
+  included (`ageSecondsUnit`, `ageMinutesUnit`).
+
 ## The CLI
 
 On the server, inside the backend container (`-T` passes stdin; `-s` keeps pnpm's header out of
@@ -407,7 +460,10 @@ also publish to Telegram ([Publishing](#publishing)).
 
 Telegram keeps the command menu (`setMyCommands`, scope `all_private_chats`), the description and
 the short description on its side, so a change of one of those texts reaches users only once it is
-published. Three places publish, each from the rows as the loaders resolve them, never from the
+published. Each is published in both languages (#508): the Russian texts, overrides included, under
+`language_code: 'ru'`, the English ones (the catalog's) with no `language_code`, the default
+Telegram shows every other client. Telegram picks them by the client's interface language, not by
+the language chosen in the bot (a per-chat list would override the general one for good). Three places publish, each from the rows as the loaders resolve them, never from the
 text of a request:
 
 - **The bot at start.** `onStart` waits for the first texts load (`botTexts.loaded()`, bounded by
@@ -428,7 +484,8 @@ docker compose exec backend pnpm --filter @binarius/backend bot-text publish
 ```
 
 The CLI prints one line per method: `setMyCommands: опубликовано`, or
-`setMyCommands: ошибка — GrammyError, Telegram 400` / `… — HttpError (Error)`: the error's identity
+`setMyCommands (ru): ошибка — GrammyError, Telegram 400` / `… — HttpError (Error)`, naming the
+language whose call failed first: the error's identity
 and Telegram's `error_code`, never its description or the payload (Rule 8). On any failure a line
 on stderr says to run `bot-text publish`. A save or reset exits 0 whatever Telegram answered: the
 override is kept (#240, В6). `publish` exits 1 when any method failed. These runs read
@@ -436,9 +493,11 @@ override is kept (#240, В6). `publish` exits 1 when any method failed. These ru
 saved — and other keys never need it.
 
 `publishBotProfile` (`apps/backend/src/bot-texts/publish.ts`) does the backend's publishing: one
-attempt per method, one call after another, each caught on its own, one result per method sent. It
+attempt per call, the methods one after another and a method's two languages side by side, each
+call caught on its own, one result per method sent — `ok` when both languages were, else the first
+failure with its `language`. It
 uses a bare grammY `Api` on the public bot's token, which polls nothing. Each call is bounded by
-`BOT_PROFILE_PUBLISH_TIMEOUT_MS` (2 s) and the three by `BOT_PROFILE_PUBLISH_BUDGET_MS` (6 s,
+`BOT_PROFILE_PUBLISH_TIMEOUT_MS` (2 s) and the three methods by `BOT_PROFILE_PUBLISH_BUDGET_MS` (6 s,
 `packages/shared`), the bound web's request timeout sits above, since the admin routes publish
 inside a request (`apps/web/src/timing.ts`, #361). The backend's timing chain holds both. The CLI's
 publish is not audited, its save or reset is; the admin's publish is (`bot_profile_published`).

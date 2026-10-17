@@ -362,7 +362,9 @@ do not pass; the name cannot be, because the route requires it.
 
 The write is a single `INSERT ... ON CONFLICT (telegram_user_id) DO UPDATE`, so two `/start`
 updates racing on a new user produce one row. It refreshes `display_name` and, when one arrived,
-`language_code`; it does **not** write `status`, so a blocked user stays blocked — the route
+`language_code`; the INSERT alone sets `language`, the language of the bot's texts, from that tag
+(`botLanguageOf`, docs/bot-texts.md → Languages), so a later `/start` from another client never
+changes it, and the reply carries it; it does **not** write `status`, so a blocked user stays blocked — the route
 still answers `200`, with `status: 'blocked'`, and the bot shows the restricted text. The reply
 also carries `hasActiveBrokerAccount` and `pendingBrokerAccounts`, both read in the same
 transaction after the upsert, in the lock order `users → broker_accounts` the rest of the schema
@@ -688,8 +690,11 @@ no menu entry is invisible to that check.
 The scope is `all_private_chats`: the bot ignores every other chat type (`bot.chatType('private')`
 in `bot.ts`), so a menu there would offer commands nothing answers. For a user in a private chat
 Telegram consults this scope before `default`, so a list set earlier through @BotFather (which
-sets `default`) is shadowed where the bot talks and would still show in groups. No
-`language_code` is sent: one list for every interface language.
+sets `default`) is shadowed where the bot talks and would still show in groups. The list is sent
+twice (#508): the Russian one under `language_code: 'ru'`, the English one with no `language_code`
+— the default Telegram shows every other client. Telegram picks the list by the client's interface
+language, not by the language chosen in the bot's menu: a user with a Russian client who chose
+English still sees the Russian command menu, the bot's messages in English.
 
 `runBot` (`apps/bot/src/lifecycle.ts`) registers the list on every start, inside grammY's
 `onStart` — after `getMe` and `deleteWebhook` have succeeded and before the first `getUpdates` —
@@ -729,14 +734,15 @@ leading emoji, a line with a space at either end, and a line break in the short 
 
 `runBot` registers them on every start, inside grammY's `onStart`, after the first texts load and
 right after the command menu: `setMyCommands`, then `setMyDescription`, then
-`setMyShortDescription`, one call at a time and
-one attempt each. Every call is caught on its own — a refusal, a transport failure or the 8 s
+`setMyShortDescription`, one method at a time and
+one attempt each; a method's Russian and English calls run side by side under the one client
+timeout (#508), so `STARTUP_CALLS` counts the three methods. Every call is caught on its own — a refusal, a transport failure or the 8 s
 client timeout, anything else — and logged at `warn` by the error's identity and the method:
 `bot commands not registered`, `bot description not registered`,
-`bot short description not registered`. The next call is still made and polling begins as usual;
-a failure costs that part of the profile, and Telegram keeps the last value that did register
-until the next start repeats the call. No `language_code` is sent: one text for every interface
-language, as for the menu. The value typed into @BotFather is the same property, so the first
+`bot short description not registered`, with `botLanguage`. The other calls are still made and
+polling begins as usual; a failure costs that part of the profile in that language, and Telegram
+keeps the last value that did register until the next start repeats the call. The texts go in both
+languages, as the menu does: Russian under `language_code: 'ru'`, English as the default. The value typed into @BotFather is the same property, so the first
 successful registration replaces it.
 
 The bot's name and avatar are not registered: they stay with @BotFather (`setMyName` and

@@ -74,7 +74,8 @@ pairs is «👥 Пригласить друга»); a longer label keeps a row o
 alone, last. The pairs: «👥 Пригласить друга | ⭐ Купить токены» on the status card, «⭐ Купить
 токены | 💳 Пополнить» in the `insufficient_tokens` refusals (`withBuy`), «📊 Новый анализ | 📡 К
 сигналам» at the end of a path (`appendEndOfPath`), «💳 Пополнить | 👥 Пригласить друга» at the end of
-a session (`withInvite`, `appendSessionEnd`). Without an https cashier a pair shrinks to one button,
+a session (`withInvite`, `appendSessionEnd`), «💳 Пополнить | 🌐 Язык / Language» last on the status
+card (#508). Without an https cashier a pair shrinks to one button,
 never an empty row. The order of the buttons and their callback data did not change. Screens whose
 rows were already two or three wide, and /buy (a package label is 39 characters), keep theirs.
 
@@ -120,10 +121,12 @@ chat with the bot:
   invite in one row, then the menu) and `inviteKeyboard`
   ([referrals.md](referrals.md)); since #117 `buyButton`, `withBuy` (the purchase and the deposit in
   one row over the caller's rows) and `buyPackagesKeyboard`
-  ([stars.md](stars.md)); since #27 `depositButton`, `depositButtons` (#506, the button for a row
-  shared with another) and `depositRows` («💳 Пополнить», a `web_app`
+  ([stars.md](stars.md)); since #27 `depositButton` and `depositButtons` (#506, the button for a row
+  shared with another; «💳 Пополнить», a `web_app`
   button with no callback data; no button without a URL; the only builders, `keyboards.test.ts`,
-  [deposit.md](deposit.md)). The rows' shapes: `keyboards.test.ts` → «the rows (#506)».
+  [deposit.md](deposit.md)); since #508 `languageButton` (`lang`, «🌐 Язык / Language», the label in
+  both languages so a user who cannot read the bot's language still finds it). The rows' shapes:
+  `keyboards.test.ts` → «the rows (#506)».
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Новый анализ»,
   `toSignalsButton` «📡 К сигналам»; reused: `demoRetryButton` «🔄 Повторить»,
   `stakeBackAnalysisButton` «↩️ Назад к анализу», `supportButton`, `demoButton`.
@@ -157,7 +160,9 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить (unchanged) |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить (unchanged) |
-| status card | 🎮 Демо-торговля \| 💼 Реальный режим (in real: 🚀 Торговать \| 🎮 Вернуться в демо, both opening the mode screen, #474) · 👥 Пригласить друга (#115) \| ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) |
+| status card | 🎮 Демо-торговля \| 💼 Реальный режим (in real: 🚀 Торговать \| 🎮 Вернуться в демо, both opening the mode screen, #474) · 👥 Пригласить друга (#115) \| ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) \| 🌐 Язык / Language (#508) |
+| the language screen (`lang`, #508) | 🇷🇺 Русский \| 🇬🇧 English (the current one with ✅) · 🏠 В меню |
+| `languageNeedsStart`, `unavailable` after a language set (a write) | 🏠 В меню |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
@@ -225,6 +230,18 @@ draw none (#536, `session_status`).
 
 An old message sent before #350 keeps the keyboard it had: Telegram keeps old messages, and the rule
 applies to what is sent after the deploy.
+
+## The language screen (#508)
+
+«🌐 Язык / Language» (`lang`) on the status card sends the screen as a new message, in the user's
+language, «🇷🇺 Русский | 🇬🇧 English» with ✅ on the current one, then «🏠 В меню»
+(`apps/bot/src/language-screen.ts`). A language pressed (`lang:ru`, `lang:en`, a write in
+`WRITE_CALLBACK_PREFIXES`) saves it (`POST /users/language`), puts it into the bot's cache and
+redraws the same screen in place in the new language — an edit refused as gone sends it anew. The
+current language pressed is only answered. A user with no row yet (404 `user_not_found`) gets
+`languageNeedsStart`; any other failure `unavailable` under «🏠 В меню», with the cache entry
+dropped, so the next update reads the language again instead of inferring it from the failure
+([bot-texts.md](bot-texts.md#languages)).
 
 ## Timing
 

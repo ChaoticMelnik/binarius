@@ -142,7 +142,8 @@ parameter.
 
 The `users` row and its `broker_accounts`, newest first. Sections:
 
-- **Основное** — Telegram id, name, language, status, acquisition source and time, since when the
+- **Основное** — Telegram id, name, Telegram's language tag («Язык Telegram»), the language of the
+  bot's texts («Язык бота», `users.language`, #508), status, acquisition source and time, since when the
   bot cannot reach the user, notification level, demo stake and real stake (#326; each empty =
   «минимальная ставка брокера»), created and updated. The card only shows the notification level and the blocked
   time; what decides a send is still `deliverable()` (Rule 19).
@@ -526,7 +527,8 @@ the key (a link to the editor), where the text is shown, and its state — «и�
 версия N, login,» and the time (`CLI` for a row the CLI wrote). A row the loaders reject carries
 the reason and «Показан исходный текст». At the end, «Строки без ключа в каталоге»: rows whose key
 this build's catalog does not have (a renamed key), each with «Удалить» — a `POST …/reset` with the
-row's version. The section is absent when there are none. `?notice=removed|gone|changed` reports
+row's version. The section is absent when there are none. Under the heading, one line: the overrides
+apply to the Russian texts, the English ones come from the catalog (#508; per language: #634). `?notice=removed|gone|changed` reports
 the result of a delete; any other value shows nothing.
 
 **The editor** shows the key, its group and description, the state as on the list, and
@@ -567,10 +569,12 @@ kept). The list says «Меню команд и профиль бота публ
 editor of such a key says what its save publishes.
 
 The page after a publish learns the result from the redirect (`?notice=published|reset_published|
-republished&publish=…`): one segment a method, `method:ok` or `method:Name[.code][:telegramErrorCode]`,
-joined by `,` (`apps/web/src/admin/publish-result.ts`). It shows one line a method — «Меню команд
-(setMyCommands): опубликовано», «Описание бота (setMyDescription): ошибка — GrammyError, Telegram
-400» — and, after a failure, «Текст сохранён, но Telegram не принял публикацию. После восстановления
+republished&publish=…`): one segment a method, `method:ok` or
+`method:Name[.code][:telegramErrorCode][@language]`, joined by `,`
+(`apps/web/src/admin/publish-result.ts`); the language is the one whose call failed first, since a
+method is published in Russian and in English (#508). It shows one line a method — «Меню команд
+(setMyCommands): опубликовано», «Описание бота (setMyDescription): ошибка (en) — GrammyError,
+Telegram 400» — and, after a failure, «Текст сохранён, но Telegram не принял публикацию. После восстановления
 нажмите «Опубликовать заново».». A value outside the grammar — an unknown or repeated method, a
 name or code longer than the wire takes (128), the key given twice — shows no list: the notice falls
 back to the plain one («Сохранено…», «Исходный текст возвращён…»), and «Опубликовано заново:», which
