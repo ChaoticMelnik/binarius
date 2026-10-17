@@ -445,6 +445,9 @@ One entry per session id, in process memory, like the intent tracker
   view).value`, so the message is edited only when its text changes — in practice once, when the
   session stops — and the pair's label and the catalog's overrides are in the key as printed. The
   trades' counters, the last trade and the balance move nothing: the message does not print them.
+  An entry that drew nothing on its message and remembers nothing of it (a recovered one) edits
+  only a stopped session (`mayDraw`): the message may be one sent before #536, whose «🔄»/«⏹» stay
+  while its session runs ([risk 55](#accepted-risks)).
 - Past `SESSION_TRACK_DEADLINE_MS` the entry ends on the last view's text, with no hint (#536: the
   hint pointed at «🔄 Обновить»): the deadline's own last edit, not retried, is made only when that
   text is not on screen yet (the poll's edit failed, or a read failed after the last good one). An
@@ -498,8 +501,9 @@ One entry per session id, in process memory, like the intent tracker
 - **The pass** (`session-resume.ts`): at the bot's start, after the profile, and every
   `SESSION_RESUME_INTERVAL_MS` (10 min), the list beside the pairs catalog — the pass's only two
   calls. Each listed session `tracker.has()` does not hold is tracked on its message in the
-  owner's private chat (its chat id is the user's id): no view yet (the first poll draws what it
-  reads), its first poll a GET in the next slot, 4 a second (`resumeGapMs`, [The
+  owner's private chat (its chat id is the user's id): no view yet: the first poll reads, and draws
+  only a stopped session's message (a message sent before #536 keeps its «🔄»/«⏹» while its session
+  runs); its first poll a GET in the next slot, 4 a second (`resumeGapMs`, [The
   tracker](#the-tracker)), its
   deadline counted from the session's `startedAt`. Edits and
   the card are a pressed entry's ([The summary card](#the-summary-card-318)). A catalog that cannot
@@ -507,7 +511,8 @@ One entry per session id, in process memory, like the intent tracker
   sessions not resumed`, and the next pass reads it again. One pass at a time; `stop()` ends the
   timer and waits for the pass in flight, whose entries are memory.
 - **A session past the deadline** (a stuck one, or a done one still waiting for its summary): the
-  first poll draws its final text and the entry ends, so each pass costs it one GET, and an edit
+  first poll draws its final text and the entry ends — a stopped one's; a stuck active one draws
+  nothing (`mayDraw`) — so each pass costs it one GET, and an edit
   only when what it prints changed since this process last drew it, plus one retry when that edit
   failed (429, 5xx, transport); the first pass after a start edits it once, as nothing is
   remembered. Its card comes on the first pass after it is due.
@@ -773,8 +778,9 @@ CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)` = 9 333 ms < 10 000). A summary and the wa
 steps start with their pace and a check of `stop()` (the summary's before its balance read), so
 these paths never add up; each is under phase 1's budget. The waiting message takes the same
 pacer's tokens (a send and a delete are calls); a new cycle is three calls instead of one. The bot's recovery after a restart adds up to 4 first polls a second on the same
-token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 edits, 12 calls when each entry's card is due
-([risk 47](#accepted-risks)).
+token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and only a stopped
+session's is an edit (#536, `mayDraw`) — 12 calls when each entry's card is due ([risk
+47](#accepted-risks)).
 
 ### The waiting message (#536)
 
@@ -786,7 +792,7 @@ message of a running session (the owner's decision 2026-10-15): deleted before e
 message and sent again under it; an edit of a step leaves it where it is (#551); deleted once the
 session stopped — any reason — on the next tick, before the summary; never sent again after.
 
-**The state** (migrations 0056 and 0057): `trading_sessions.waiting_message_id`, Telegram's
+**The state** (migration 0059): `trading_sessions.waiting_message_id`, Telegram's
 `message_id` of the live waiting message, NULL when there is none; and `waiting_after_message`,
 its **slot**: `coalesce(cycle_message_id, 0)` when it was claimed — the cycle message it stands
 under, 0 before any — NULL while none is claimed (none yet, or freed). A positive id, a slot from 0, an id only on a
@@ -808,9 +814,10 @@ on the current cycle message, so at most one waiting message of unknown fate),
 (the id dropped and the slot freed after the delete, so an active session is due again whatever
 becomes of the cycle message sent next). `claimSessionFinalNotice` holds only with
 `waiting_message_id is null`: the summary is the last message by the predicate, not by the order of
-the code. The backfill 0057 claims the current slot of every session active at the deploy (the
-owner's answer 5): its waiting message comes after its next new cycle message, and nothing is sent
-at the start ([risk 54](#accepted-risks)).
+the code. No backfill: the columns are NULL for every session at the deploy, so a running one with
+an anchor is due at the backend's start and gets its waiting message on the sender's first tick,
+at its pace ([risk 54](#accepted-risks), [At the deploy and at a
+restart](#at-the-deploy-and-at-a-restart-536)).
 
 **One `serve` of a session** does, in this order: the trades past the cursor (a new cycle message
 deletes the waiting message first, above); then a stale waiting message's delete; then the summary
@@ -859,12 +866,36 @@ id ends stale, and the attempts in memory bound the refusals to three ticks, aft
 or the id is fixed in the database. A restart of the backend clears the attempts: a slot refused
 three times stays claimed. A running session with a reachable user is left without a live waiting
 message until its next recorded new cycle message only by these endings, each with its log line:
-the waiting message's send with an unknown outcome and not delivered (`… outcome unknown`, [risk
-50](#accepted-risks)); its third definite refusal (`… dropped`: Telegram refusing the message
-itself three times is a defect, not the network — a `session waiting message dropped` in a week is
-a reason for an issue); the backfill 0057 of a session running at the deploy ([risk
-54](#accepted-risks)); and a waiting message the user deleted (the sender learns it on its next
-delete, as gone).
+
+1. the waiting message's send with an unknown outcome and not delivered (`… outcome unknown`,
+   [risk 50](#accepted-risks));
+2. a 2xx without a positive `message_id`: the slot claimed, the message with the user but not
+   deletable (`… not recorded: no message id`, [risk 52](#accepted-risks));
+3. its third definite refusal (`… dropped`: Telegram refusing the message itself three times is a
+   defect, not the network — a `session waiting message dropped` in a week is a reason for an
+   issue);
+4. a waiting message the user deleted (the sender learns it on its next delete, as gone).
+
+#### At the deploy and at a restart (#536)
+
+- **Volume.** At the backend's start every active session with a recorded status message or a
+  claimed trade and a reachable user is due (no backfill, the owner's decision 2026-10-17). The
+  code does not bound their number (one active session per account); the planned figure is 2 000
+  (`TRACKED_SESSIONS_MAX`).
+- **Calls.** One `sendMessage` and two UPDATEs (claim, record) each, no broker call. Each send
+  takes a token of the sender's pacer (`SESSION_NOTICE_SEND_PER_SECOND`, 9 a second, shared with
+  the trades, edits, deletes and summaries; with the mailing 20 + 9 < 30, `TIMING_CHAIN_HOLDS`).
+  The list is read `SESSION_NOTICE_SCAN` (200) rows a tick, oldest first; a tick longer than the
+  interval makes the next one a no-op, so the catch-up is ticks at 9 calls a second, not a burst:
+  the last of N such sessions gets its waiting message within 3 s + N/9 s of the backend's start
+  (2 000 → about 225 s). A later session's trade messages wait behind them, once a deploy.
+- **The order of the deploy**: the bot first (`docker compose up -d --no-deps bot`), then the
+  backend (`binarius-deploy`); the steps are the PR's. The bot's recovery pass only reads a running
+  session (`mayDraw`): an old status message keeps its «🔄»/«⏹» until its session stops ([risk
+  55](#accepted-risks)), whatever the pause between the steps; a session started between them waits
+  for the new backend ([risk 59](#accepted-risks)).
+- **A restart of the bot** draws only the sessions stopped while it was down (their final edit and
+  card); a running one costs one GET and no Telegram call.
 
 ### Logs (backend)
 
@@ -1005,8 +1036,9 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
    than the GET timeout, so the race cannot happen there. Falsifiable: a summary whose
    «🧪 Демобаланс» differs from `/menu` read right after, with no «🕒» line.
 8. **Saved overrides of the keys #536 removed** (`sessionSettings`, `sessionStep`, `sessionCycle`
-   of #552, `sessionScore`, `sessionDeadline`, `sessionRefreshButton`) stay in `bot_text_overrides`; the loaders refuse such
-   a row with a `warn` and print the defaults (decision В2). The owner's step in the PR:
+   of #552, `sessionScore`, `sessionDeadline`, `sessionRefreshButton`) stay in
+   `bot_text_overrides`; the loaders refuse such a row with a `warn` and print the defaults
+   (decision В2). The owner's step in the PR:
    `bot-text list`, and `bot-text reset <key>` for each listed one.
 9. **One deploy for the backend and the bot** (#337): the view's schema is strict on both sides, so a
    bot older than the backend answers `ContractViolation` on every session read until redeployed.
@@ -1130,8 +1162,8 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 46. **An edit refused for good in words outside `editRefusal`** is retried on every pass: one GET
     and two edits. Falsifiable: `trading session message not edited` for one session on adjacent
     passes with a code that is neither 429 nor 5xx.
-47. **The recovery's pace on the bot's token** (#567): up to 4 first polls a second — up to 4
-    edits, up to 12 calls when each entry's card is due — for up to about 8.5 minutes after the
+47. **The recovery's pace on the bot's token** (#567): up to 4 first polls a second — only a
+    stopped session's is an edit (#536), up to 12 calls when each entry's card is due — for up to about 8.5 minutes after the
     start and up to about 500 s of each periodic pass with a full list. It comes on top of the
     backend's pacers, 20 + 9 a second (about 30 a second for Telegram: stated, not measured), and
     of the bot's unpaced replies to users, which came on top of those shares before. A restart
@@ -1172,13 +1204,19 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 53. **One more `deleteMessage` per stop by the button** (#536): the bot deletes the pressed waiting
     message, and the backend's next tick finds it gone and drops the id. Not handed to the stop
     route on purpose: the sender is the column's one writer.
-54. **Sessions running at the deploy of #536** get their waiting message after their next new cycle
-    message (the backfill claims their current slot; the owner's answer 2026-10-16): under
-    martingale mid-cycle that is the next cycle, not the next trade. Falsifiable: such a session's
-    waiting message before its next new cycle message.
-55. **An old status message loses its keyboard on the tracker's edit at the stop** (#536): an edit
-    without `reply_markup` strips it; the card (#318) and the summary (#464) carry the next step.
-    Falsifiable: an old status message without buttons while its session runs.
+54. **Sessions running at the deploy of #536** get their waiting message at the backend's start (the
+    owner's decision 2026-10-17): no backfill, the sender's first tick, its pace — at most 3 s +
+    N/9 s for N such sessions (2 000 → about 225 s); the trade messages of later sessions wait
+    behind them once. Falsifiable: a running session with a recorded status message or a claimed
+    trade and a reachable user without a waiting message 3 s + N/9 s + 10 s after the backend's
+    start, with no `session waiting message …` warn for it.
+55. **An old status message (before #536) keeps its old text and its «🔄»/«⏹» until its session
+    stops** (#536): a recovered entry draws only a stopped session (`mayDraw`); the final edit,
+    without `reply_markup`, strips the keyboard. Until then the chat has two «⏹» — the old one and
+    the waiting message's — and either stops the session; «🔄» strips its own keyboard only (answer
+    5); the old progress lines stay as the old bot last drew them. At most
+    `SESSION_MAX_DURATION_MS` after the deploy. Falsifiable: an old status message edited, or left
+    without buttons, while its session runs.
 56. **A session whose message id is not recorded gets no card after a bot restart** (#536): one
     started before #567 and never pressed, one started from the CLI, a bot restart in the 3 s
     before the first poll, a session message reported lost. No button records it any more, and
@@ -1192,9 +1230,19 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     (risk 27).
 58. **The tracker still polls every 10 s** (#536) though the text changes only at the stop: the
     poll is what sees the stop and the card's moment; saving it is out of scope.
-59. **The deploy's window** (#536): the bot first, then the backend right after (the owner's answer
-    2026-10-16). Between them a new session has no waiting message, so no «⏹» (`/stop` works); the
-    other order would send `session:stop:<id>:w` to a bot that does not answer it.
+59. **The deploy's window** (#536): the bot first, `docker compose up -d --no-deps bot` (without
+    `--no-deps` Compose recreates the backend first — the architect's probe on Compose 2.40.3),
+    then `binarius-deploy`; the other order would send `session:stop:<id>:w` to a bot that does
+    not answer it. A session started between them gets its session message without buttons and its
+    waiting message only on the new backend's first tick: the window is `binarius-deploy`'s run up
+    to its `up -d --wait` (the build, a cache hit after `docker compose build` in the first step,
+    the migrations, the worker swap — ready ≤ 120 s plus drain ≤ 40 s,
+    [worker-deploy.md](worker-deploy.md)) plus 3 s; `/stop` works. Sessions running before the
+    bot's restart keep their old buttons (risk 55). Falsifiable: a session started after the
+    backend's start with no waiting message within 10 s.
+60. **A recovered running session is not redrawn after a bot restart** (#536): a pair's label or an
+    override of the session texts changed while the bot was down shows on its message only at the
+    stop. Falsifiable: an edit of a recovered running session's message before its stop.
 
 ## Running it locally
 
