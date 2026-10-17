@@ -635,9 +635,13 @@ no 429 behind it (#382 review M1; `pacer.test.ts` P9 over every exposed shape, `
 S18 through the real scan loop). A batch goes out right after the boundary, and any 60 s window
 carries at most each share plus its bucket: 52 + 14 and 48 + 5 at the default (119 together),
 104 + 27 and 96 + 9 at the maximum (236; `pacer.test.ts` P2 measures the bound on its own
-fixture). A 429 pauses the pacer whose call got it; the other instance's next call meets the same
-per-IP window and pauses on its own 429. Only the scanner takes tokens: `POST /trading/signal`
-never waits for it, and a 429 the bot gets is the route's own answer.
+fixture), and one overflow token more on each pacer with the backfill's takes (238; P11). A 429
+pauses the pacer whose call got it; the other instance's next call meets the same per-IP window
+and pauses on its own 429. The scanner takes the bucket's tokens. The candle backfill
+([market-data.md → Backfill](market-data.md#backfill-590), #590) takes only the overflow
+(`tryTakeSpare`): what a refill discards above the capacity, held to one token, which `tryTake`
+never sees (`pacer.test.ts` P12). `POST /trading/signal` never waits for the pacer, and a 429 the
+bot gets is the route's own answer.
 
 **Stop.** Each instance's `stop()` runs in shutdown phase 1. It clears the timers and waits for the calls in flight.
 Each call is bounded by the cache's `SIGNAL_FETCH_BUDGET_MS` (3 s), already in the phase-1 chain.
@@ -744,8 +748,14 @@ stand (#381) is not one of them: it runs from another IP under its own cap
   backend writes one `warn` `broker budget over the per-IP limit` at start, and the scanner's pause
   on a 429 is the backstop.
 - Nothing counts the three processes together at run time (stated). The scanners' worst 60 s
-  window above their share is their two buckets (19 at the default, 36 at the maximum), bounded at
-  import at the maximum only.
+  window above their share is their two buckets plus one overflow token each (21 at the default, 38
+  at the maximum), bounded at import at the maximum only.
+- **The overflow (#590).** The candle backfill shares the scanners' pacers and takes only what
+  `refill` discards above a full bucket, at most one token held per pacer. Together, `tryTake` and
+  `tryTakeSpare` carry at most `perMinute + capacity + 1` in any 60 s window per pacer
+  (`pacer.test.ts` P11). A full scan leaves the backfill almost nothing, and an idle pacer gives it its
+  whole share (`scanner.test.ts` S25). Until #405 the two pacers are joined by `joinSpare`
+  (`pacer.ts`, P14), and a 429 of the backfill pauses both.
 - A worker deploy runs two workers for its overlap, the readiness wait (≤ `READY_TIMEOUT_S`, 120 s)
   plus the drain (≤ 40 s), longer after an interrupted run until an operator resolves it
   ([worker-deploy.md](worker-deploy.md), #95):
@@ -764,8 +774,9 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
   not links);
 - `SIGNAL_SCAN_BACKOFF_MIN_MS ≤ SIGNAL_SCAN_BACKOFF_MAX_MS`;
 - the env bounds around the default;
-- the worst 60 s window of both scanners at the highest ceiling, the ceiling plus both buckets
-  (200 + 27 + 9 = 236), below the broker's window. It is checked at the maximum only.
+- the worst 60 s window of both scanners at the highest ceiling, the ceiling plus both buckets plus
+  each pacer's overflow token (200 + 27 + 9 + 2 = 238), below the broker's window. It is checked at
+  the maximum only.
 
 ## MACD and MA on history (#483)
 
