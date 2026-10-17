@@ -46,12 +46,20 @@ const runningLockout = () =>
     staff.lockedUntil,
   );
 
-/** The running lockout of one account, read inside the caller's transaction. */
-async function readRunningLockout(executor: DbExecutor, staffId: string): Promise<Date | null> {
-  const [row] = await executor
+/**
+ * The running lockout of one account, read inside the caller's transaction; `lock` takes the
+ * `staff` row (Rule 5: first in the chain) for a writer that must see the rows of a racing one.
+ */
+async function readRunningLockout(
+  executor: DbExecutor,
+  staffId: string,
+  options: { lock?: boolean } = {},
+): Promise<Date | null> {
+  const query = executor
     .select({ lockedUntil: runningLockout() })
     .from(staff)
     .where(eq(staff.id, staffId));
+  const [row] = options.lock === true ? await query.for('no key update') : await query;
   return row?.lockedUntil ?? null;
 }
 
@@ -91,6 +99,44 @@ export async function writeAuditEntry(executor: DbExecutor, entry: AuditEntry): 
   });
 }
 
+/** An entry about a known entity: the only kind writeAuditEntryOnce can key an event on. */
+export type EntityAuditEntry = AuditEntry & {
+  entityType: AuditEntityType;
+  entityId: string;
+  payload: Record<string, unknown>;
+};
+
+/**
+ * Writes the entry unless a row of the same action about the same entity already carries the
+ * same values under `keys` — one row per event (a lockout; a challenge's or a link's reason), so
+ * a refusal repeated from the public login form cannot grow audit_log without bound (#153).
+ * Returns whether a row was written.
+ *
+ * Precondition: the caller's transaction holds the entity's row lock. Without it two concurrent
+ * first refusals both see no row and both write one; with it the second one's statement starts
+ * after the first one's commit and sees its row (READ COMMITTED takes a new snapshot).
+ */
+export async function writeAuditEntryOnce(
+  executor: DbExecutor,
+  entry: EntityAuditEntry,
+  keys: readonly string[],
+): Promise<boolean> {
+  const key = Object.fromEntries(keys.map((name) => [name, entry.payload[name]]));
+  const { rows } = await executor.execute<{ id: string }>(sql`
+    insert into ${auditLog} (actor_type, actor_id, action, entity_type, entity_id, payload)
+    select ${entry.actorType}, ${entry.actorId ?? null}, ${entry.action}, ${entry.entityType},
+           ${entry.entityId}, ${JSON.stringify(entry.payload)}::jsonb
+     where not exists (
+       select 1 from ${auditLog}
+        where action = ${entry.action}
+          and entity_type = ${entry.entityType}
+          and entity_id = ${entry.entityId}
+          and payload @> ${JSON.stringify(key)}::jsonb)
+    returning id
+  `);
+  return rows.length === 1;
+}
+
 const staffEvent = (
   action: AuditAction,
   staffId: string | null,
@@ -108,7 +154,7 @@ const challengeEvent = (
   staffId: string,
   challengeId: string,
   payload: Record<string, unknown>,
-): AuditEntry => ({
+): EntityAuditEntry => ({
   action,
   actorType: AuditActorType.System,
   actorId: staffId,
@@ -242,24 +288,19 @@ export async function registerPasswordFailure(
   });
 }
 
-/** Why a login was refused before the password was even worth checking. */
-export type LoginRefusalReason = 'unknown_login' | 'disabled';
-
 /**
- * A login attempt that ended before a challenge existed. `staffId` is NULL for a login nobody
- * holds — the entered login is deliberately not recorded, because an entry keyed on it would
- * be a log of near-misses against real accounts.
+ * A disabled account's login, refused before the password was worth checking. A login nobody
+ * holds leaves no row at all (#153, the rule of the link's В5: rows are about known staff
+ * members) — the route logs the refusal without the name, and an entry keyed on the entered
+ * login would be a log of near-misses against real accounts.
  */
 export async function recordLoginRefusal(
   db: Db,
-  input: { staffId: string | null; reason: LoginRefusalReason; ip: string },
+  input: { staffId: string; ip: string },
 ): Promise<void> {
   await writeAuditEntry(
     db,
-    staffEvent(AuditAction.StaffLoginFailed, input.staffId, {
-      reason: input.reason,
-      ip: input.ip,
-    }),
+    staffEvent(AuditAction.StaffLoginFailed, input.staffId, { reason: 'disabled', ip: input.ip }),
   );
 }
 
@@ -267,22 +308,31 @@ export async function recordLoginRefusal(
  * A locked account, refused without spending a KDF on it. The lockout the caller's lookup saw is
  * read again in the transaction that records it, so the row carries that reading: `null` means it
  * ended in between, nothing was written, and the caller goes on as if there had been none.
+ *
+ * One row per lockout, the first refusal (#153): the `staff` row is held while the row is
+ * written, and a later refusal under the same `lockedUntil` writes nothing (`recorded: false`) —
+ * the route logs it instead.
  */
 export async function recordLoginLockout(
   db: Db,
   input: { staffId: string; ip: string },
-): Promise<Date | null> {
+): Promise<{ lockedUntil: Date; recorded: boolean } | null> {
   return db.transaction(async (tx) => {
-    const lockedUntil = await readRunningLockout(tx, input.staffId);
+    const lockedUntil = await readRunningLockout(tx, input.staffId, { lock: true });
     if (lockedUntil === null) return null;
-    await writeAuditEntry(
+    const recorded = await writeAuditEntryOnce(
       tx,
-      staffEvent(AuditAction.StaffLoginLocked, input.staffId, {
-        ip: input.ip,
-        lockedUntil: lockedUntil.toISOString(),
-      }),
+      {
+        action: AuditAction.StaffLoginLocked,
+        actorType: AuditActorType.System,
+        actorId: input.staffId,
+        entityType: AuditEntityType.Staff,
+        entityId: input.staffId,
+        payload: { ip: input.ip, lockedUntil: lockedUntil.toISOString() },
+      },
+      ['lockedUntil'],
     );
-    return lockedUntil;
+    return { lockedUntil, recorded };
   });
 }
 
@@ -647,7 +697,7 @@ export type CodeRefusalReason =
 
 export type CompleteLoginResult =
   | { ok: true; sessionToken: string; expiresAt: Date; staffId: string }
-  | { ok: false; reason: CodeRefusalReason; exhausted?: boolean };
+  | { ok: false; reason: CodeRefusalReason; exhausted?: boolean; recorded?: boolean };
 
 /**
  * One CAS decides everything: the attempt is counted, the code is compared, and the status
@@ -760,7 +810,9 @@ export async function insertStaffSession(
 }
 
 // Zero rows from the CAS: the reason is read back so the caller can answer 409 (wait for
-// Telegram) apart from 410 (this attempt is over), and so the entry says which it was.
+// Telegram) apart from 410 (this attempt is over), and so the entry says which it was. An id
+// nobody was issued leaves no row (#153, as the link's В5); a known challenge gets one row per
+// reason, under its row lock — repeats are `recorded: false` and the route logs them.
 async function refuseCode(tx: Tx, challengeId: string, ip: string): Promise<CompleteLoginResult> {
   const [row] = await tx
     .select({
@@ -771,24 +823,18 @@ async function refuseCode(tx: Tx, challengeId: string, ip: string): Promise<Comp
     })
     .from(staffLoginChallenges)
     .innerJoin(staff, eq(staff.id, staffLoginChallenges.staffId))
-    .where(eq(staffLoginChallenges.id, challengeId));
+    .where(eq(staffLoginChallenges.id, challengeId))
+    .for('no key update', { of: staffLoginChallenges });
 
-  if (row === undefined) {
-    await writeAuditEntry(tx, {
-      action: AuditAction.StaffLoginCodeFailed,
-      actorType: AuditActorType.System,
-      actorId: null,
-      payload: { reason: 'unknown', ip },
-    });
-    return { ok: false, reason: 'unknown' };
-  }
+  if (row === undefined) return { ok: false, reason: 'unknown', recorded: false };
 
   const reason = refusalReason(row);
-  await writeAuditEntry(
+  const recorded = await writeAuditEntryOnce(
     tx,
     challengeEvent(AuditAction.StaffLoginCodeFailed, row.staffId, challengeId, { reason, ip }),
+    ['reason'],
   );
-  return { ok: false, reason };
+  return { ok: false, reason, recorded };
 }
 
 // The order matters: a disabled owner is why the CAS missed even when the challenge itself
@@ -1035,10 +1081,11 @@ export async function readLiveStaffContext(
 }
 
 /**
- * The change form's refusal under a running lockout (#78), the same shape as recordLoginLockout:
- * re-read in the recording transaction, `null` when it ended in between. Outside runAsStaff on
- * purpose — a refusal before any work, so a locked staff member hammering the form does not
- * extend the session's idle window; the session id is the pre-read's.
+ * The change form's refusal under a running lockout (#78), the same re-read as recordLoginLockout:
+ * in the recording transaction, `null` when it ended in between. Unlike the login's it writes a
+ * row per refusal — the form is behind a live session, and revoking it is the remedy (#153).
+ * Outside runAsStaff on purpose — a refusal before any work, so a locked staff member hammering
+ * the form does not extend the session's idle window; the session id is the pre-read's.
  */
 export async function recordPasswordChangeLockout(
   db: Db,

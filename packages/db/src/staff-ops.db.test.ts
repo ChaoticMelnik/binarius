@@ -37,12 +37,13 @@ import {
   STAFF_MAX_CODE_ATTEMPTS,
   STAFF_MAX_PASSWORD_ATTEMPTS,
   STAFF_SESSION_IDLE_MS,
+  writeAuditEntry,
 } from './staff-ops';
 import { hashPassword } from './staff-password';
 import { auditLog, staff, staffLoginChallenges, staffSessions } from './schema/index';
 import { StaffLoginChallengeStatus } from './schema/staff-login-challenges';
 import { StaffStatus } from './schema/staff';
-import { AuditAction } from '@binarius/shared';
+import { AuditAction, AuditActorType, AuditEntityType } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -113,6 +114,22 @@ const entriesFor = async (staffId: string) =>
     .from(auditLog)
     .where(eq(auditLog.actorId, staffId))
     .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
+
+type Settled = { ok: unknown } | { err: unknown };
+const settle = (work: Promise<unknown>): Promise<Settled> =>
+  work.then(
+    (ok) => ({ ok }),
+    (error: { cause?: { code?: unknown }; code?: unknown }) => ({
+      err: error.cause?.code ?? error.code ?? String(error),
+    }),
+  );
+
+/** Returns once the other side is queued behind a lock this transaction holds. */
+const waitForLockWaiter = () =>
+  until(
+    'the other transaction to queue behind a lock',
+    async () => (await lockWaiters(tmp.db)) > 0,
+  );
 
 const sessionCount = async (staffId: string) =>
   (
@@ -617,7 +634,7 @@ describe('completeLogin', () => {
 
     const replay = await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA });
 
-    expect(replay).toEqual({ ok: false, reason: 'completed' });
+    expect(replay).toEqual({ ok: false, reason: 'completed', recorded: true });
     expect(await sessionCount(seeded.staffId)).toBe(1);
   });
 
@@ -658,6 +675,7 @@ describe('completeLogin', () => {
     expect(await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA })).toEqual({
       ok: false,
       reason: 'exhausted',
+      recorded: true,
     });
     expect(await sessionCount(seeded.staffId)).toBe(0);
   });
@@ -673,7 +691,7 @@ describe('completeLogin', () => {
         ip: IP,
         userAgent: UA,
       }),
-    ).toEqual({ ok: false, reason: 'awaiting_telegram' });
+    ).toEqual({ ok: false, reason: 'awaiting_telegram', recorded: true });
   });
 
   it('refuses a code that was issued but not delivered', async () => {
@@ -692,7 +710,7 @@ describe('completeLogin', () => {
         ip: IP,
         userAgent: UA,
       }),
-    ).toEqual({ ok: false, reason: 'awaiting_telegram' });
+    ).toEqual({ ok: false, reason: 'awaiting_telegram', recorded: true });
   });
 
   it('refuses a code after the window closed', async () => {
@@ -709,6 +727,7 @@ describe('completeLogin', () => {
     expect(await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA })).toEqual({
       ok: false,
       reason: 'expired',
+      recorded: true,
     });
   });
 
@@ -723,11 +742,13 @@ describe('completeLogin', () => {
     expect(await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA })).toEqual({
       ok: false,
       reason: 'disabled',
+      recorded: true,
     });
     expect(await sessionCount(seeded.staffId)).toBe(0);
   });
 
-  it('refuses a challenge id nobody issued, without an owner to attribute it to', async () => {
+  // #153: a row about nobody, 300 a minute from the public form, would grow audit_log unbounded
+  it('refuses a challenge id nobody issued and leaves no row', async () => {
     const before = await tmp.db.select({ id: auditLog.id }).from(auditLog);
     const result = await completeLogin(tmp.db, {
       challengeId: '00000000-0000-4000-8000-0000000000ff',
@@ -740,10 +761,83 @@ describe('completeLogin', () => {
       .from(auditLog)
       .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
 
-    expect(result).toEqual({ ok: false, reason: 'unknown' });
-    expect(after.slice(before.length)).toEqual([
-      { action: AuditAction.StaffLoginCodeFailed, actorId: null },
-    ]);
+    expect(result).toEqual({ ok: false, reason: 'unknown', recorded: false });
+    expect(after.slice(before.length)).toEqual([]);
+  });
+
+  describe('one row per (challenge, reason) (#153)', () => {
+    const denied = async (seeded: SeededStaff) => {
+      const started = await start(seeded);
+      if (!started.ok) throw new Error('unreachable');
+      await denyChallengeFromTelegram(tmp.db, {
+        challengeId: started.challengeId,
+        telegramUserId: seeded.telegramUserId,
+      });
+      return started.challengeId;
+    };
+    const attempt = (challengeId: string) =>
+      completeLogin(tmp.db, { challengeId, code: '123456', ip: IP, userAgent: UA });
+    const refusals = async (seeded: SeededStaff) =>
+      (await entriesFor(seeded.staffId))
+        .filter((entry) => entry.action === AuditAction.StaffLoginCodeFailed)
+        .map((entry) => entry.payload);
+
+    it('writes the first refusal of a reason and only logs the repeat', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const challengeId = await denied(seeded);
+
+      expect(await attempt(challengeId)).toEqual({ ok: false, reason: 'denied', recorded: true });
+      expect(await attempt(challengeId)).toEqual({ ok: false, reason: 'denied', recorded: false });
+      expect(await refusals(seeded)).toEqual([{ reason: 'denied', ip: IP }]);
+    });
+
+    it('writes a new row when the reason changes', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const challengeId = await denied(seeded);
+      await attempt(challengeId);
+      await tmp.db
+        .update(staffLoginChallenges)
+        .set({
+          createdAt: sql`now() - interval '10 minutes'`,
+          expiresAt: sql`now() - interval '5 minutes'`,
+        })
+        .where(eq(staffLoginChallenges.id, challengeId));
+
+      expect(await attempt(challengeId)).toEqual({ ok: false, reason: 'expired', recorded: true });
+      expect(await refusals(seeded)).toEqual([
+        { reason: 'denied', ip: IP },
+        { reason: 'expired', ip: IP },
+      ]);
+    });
+
+    // the first refusal's row written under the challenge's lock: the racing refusal has to wait
+    // for it and then see it (the row's shape is pinned by the first case)
+    it('waits on the challenge row and sees a racing first refusal', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const challengeId = await denied(seeded);
+      let late: Promise<Settled> | undefined;
+
+      await tmp.db.transaction(async (tx) => {
+        await tx
+          .select({ id: staffLoginChallenges.id })
+          .from(staffLoginChallenges)
+          .where(eq(staffLoginChallenges.id, challengeId))
+          .for('no key update');
+        late = settle(attempt(challengeId));
+        await waitForLockWaiter();
+        await writeAuditEntry(tx, {
+          action: AuditAction.StaffLoginCodeFailed,
+          actorType: AuditActorType.System,
+          actorId: seeded.staffId,
+          entityType: AuditEntityType.StaffLoginChallenge,
+          entityId: challengeId,
+          payload: { reason: 'denied', ip: IP },
+        });
+      });
+
+      expect(await late).toEqual({ ok: { ok: false, reason: 'denied', recorded: false } });
+      expect(await refusals(seeded)).toEqual([{ reason: 'denied', ip: IP }]);
+    });
   });
 });
 
@@ -1048,6 +1142,7 @@ describe('the CLI operations', () => {
     expect(await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA })).toEqual({
       ok: false,
       reason: 'expired',
+      recorded: true,
     });
   });
 
@@ -1203,7 +1298,7 @@ describe('completeLogin under the code-sent race', () => {
       userAgent: UA,
     });
 
-    expect(early).toEqual({ ok: false, reason: 'awaiting_telegram' });
+    expect(early).toEqual({ ok: false, reason: 'awaiting_telegram', recorded: true });
     const row = await challengeRow(started.challengeId);
     expect([row.status, row.codeAttempts]).toEqual([StaffLoginChallengeStatus.Confirmed, 0]);
     const late = await completeLogin(tmp.db, {
@@ -1274,21 +1369,6 @@ describe('changing your own password (#78)', () => {
     return row;
   };
 
-  type Settled = { ok: unknown } | { err: unknown };
-  const settle = (work: Promise<unknown>): Promise<Settled> =>
-    work.then(
-      (ok) => ({ ok }),
-      (error: { cause?: { code?: unknown }; code?: unknown }) => ({
-        err: error.cause?.code ?? error.code ?? String(error),
-      }),
-    );
-
-  /** Returns once the other side is queued behind a lock this transaction holds. */
-  const waitForLockWaiter = () =>
-    until(
-      'the other transaction to queue behind a lock',
-      async () => (await lockWaiters(tmp.db)) > 0,
-    );
 
   describe('findStaffForPasswordChange', () => {
     it('reads the hash by a live session and no lockout', async () => {
@@ -1616,6 +1696,7 @@ describe('changing your own password (#78)', () => {
       record: (seeded: SeededStaff) =>
         recordLoginLockout(tmp.db, { staffId: seeded.staffId, ip: IP }),
       extra: {},
+      shape: (lockedUntil: Date | null): unknown => ({ lockedUntil, recorded: true }),
     },
     {
       name: 'recordPasswordChangeLockout',
@@ -1627,8 +1708,9 @@ describe('changing your own password (#78)', () => {
           ip: IP,
         }),
       extra: { reason: 'locked', sessionId: SESSION_ID },
+      shape: (lockedUntil: Date | null): unknown => lockedUntil,
     },
-  ])('$name', ({ action, record, extra }) => {
+  ])('$name', ({ action, record, extra, shape }) => {
     const lockFor = (seeded: SeededStaff, interval: string) =>
       tmp.db
         .update(staff)
@@ -1640,7 +1722,7 @@ describe('changing your own password (#78)', () => {
       await lockFor(seeded, "+ interval '15 minutes'");
       const { lockedUntil } = await staffRow(seeded.staffId);
 
-      expect(await record(seeded)).toEqual(lockedUntil);
+      expect(await record(seeded)).toEqual(shape(lockedUntil));
 
       const entries = (await entriesFor(seeded.staffId)).filter((entry) => entry.action === action);
       expect(entries.map((entry) => entry.payload)).toEqual([
@@ -1756,5 +1838,75 @@ describe('changing your own password (#78)', () => {
       expect(await served(changing)).toBeUndefined();
       expect(await served(revoking)).toBe('served');
     });
+  });
+});
+
+describe('recordLoginLockout: one row per lockout (#153)', () => {
+  const lockFor = (seeded: SeededStaff, interval: string) =>
+    tmp.db
+      .update(staff)
+      .set({ failedPasswordAttempts: 5, lockedUntil: sql.raw(`now() ${interval}`) })
+      .where(eq(staff.id, seeded.staffId));
+  const refuse = (seeded: SeededStaff) =>
+    recordLoginLockout(tmp.db, { staffId: seeded.staffId, ip: IP });
+  const lockedRows = async (seeded: SeededStaff) =>
+    (await entriesFor(seeded.staffId))
+      .filter((entry) => entry.action === AuditAction.StaffLoginLocked)
+      .map((entry) => entry.payload);
+
+  it('writes the first refusal under a lockout and nothing for the next', async () => {
+    const seeded = await seedStaff(tmp.db);
+    await lockFor(seeded, "+ interval '15 minutes'");
+    const { lockedUntil } = await staffRow(seeded.staffId);
+
+    expect(await refuse(seeded)).toEqual({ lockedUntil, recorded: true });
+    expect(await refuse(seeded)).toEqual({ lockedUntil, recorded: false });
+    expect(await lockedRows(seeded)).toEqual([{ ip: IP, lockedUntil: lockedUntil?.toISOString() }]);
+  });
+
+  it('writes a row for a new lockout after the last one ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    await lockFor(seeded, "+ interval '15 minutes'");
+    const first = (await staffRow(seeded.staffId)).lockedUntil;
+    await refuse(seeded);
+    await lockFor(seeded, "- interval '1 second'");
+    await lockFor(seeded, "+ interval '30 minutes'");
+    const second = (await staffRow(seeded.staffId)).lockedUntil;
+
+    expect(await refuse(seeded)).toEqual({ lockedUntil: second, recorded: true });
+    expect(await lockedRows(seeded)).toEqual([
+      { ip: IP, lockedUntil: first?.toISOString() },
+      { ip: IP, lockedUntil: second?.toISOString() },
+    ]);
+  });
+
+  // Rule 5: the refusal takes the staff row first, so a racing first refusal's row is seen, not
+  // doubled (the row's shape is pinned by the first case)
+  it('waits on the staff row and sees a racing first refusal', async () => {
+    const seeded = await seedStaff(tmp.db);
+    await lockFor(seeded, "+ interval '15 minutes'");
+    const { lockedUntil } = await staffRow(seeded.staffId);
+    let late: Promise<Settled> | undefined;
+
+    await tmp.db.transaction(async (tx) => {
+      await tx
+        .select({ id: staff.id })
+        .from(staff)
+        .where(eq(staff.id, seeded.staffId))
+        .for('no key update');
+      late = settle(refuse(seeded));
+      await waitForLockWaiter();
+      await writeAuditEntry(tx, {
+        action: AuditAction.StaffLoginLocked,
+        actorType: AuditActorType.System,
+        actorId: seeded.staffId,
+        entityType: AuditEntityType.Staff,
+        entityId: seeded.staffId,
+        payload: { ip: IP, lockedUntil: lockedUntil?.toISOString() },
+      });
+    });
+
+    expect(await late).toEqual({ ok: { lockedUntil, recorded: false } });
+    expect(await lockedRows(seeded)).toEqual([{ ip: IP, lockedUntil: lockedUntil?.toISOString() }]);
   });
 });
