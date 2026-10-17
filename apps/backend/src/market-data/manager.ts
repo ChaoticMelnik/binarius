@@ -17,6 +17,7 @@ import {
 } from '@binarius/broker-socket';
 import { assertDigits } from '@binarius/signal';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
+import type { CandleBackfill } from './backfill';
 import type { CandleRing } from './ring';
 import type { PendingRequests } from './source';
 
@@ -31,6 +32,8 @@ import type { PendingRequests } from './source';
 // R4 an empty active starts on the first candidate; R5 an empty reserve likewise;
 // R6 the active subscribes the fresh catalog's new ids;
 // R7 one timer, at the nearest deadline of R2 or R3.
+// The REST backfill (#590, backfill.ts) reads streaming(), and the `market data` line carries its
+// counters.
 
 export interface MarketDataConfig {
   tickMs: number;
@@ -54,6 +57,7 @@ export interface MarketDataManagerDeps {
   openClient: (label: string) => BrokerSocketClient;
   ring: CandleRing;
   requests: Pick<PendingRequests, 'size'>;
+  backfill: Pick<CandleBackfill, 'counters'>;
   logger: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>;
   now?: () => number;
   config: MarketDataConfig;
@@ -66,6 +70,8 @@ export interface MarketDataManager {
   // the `market data` line, for the period since the last one
   report(): void;
   stop(): Promise<void>;
+  // the active socket is ready: its ticks build the ring
+  streaming(): boolean;
 }
 
 type Role = 'active' | 'reserve';
@@ -101,7 +107,17 @@ const sinceOf = (slot: Slot): number | undefined =>
   slot.kind === 'starting' ? slot.since : slot.kind === 'running' ? slot.live.since : undefined;
 
 export function createMarketDataManager(deps: MarketDataManagerDeps): MarketDataManager {
-  const { listAccounts, accessToken, catalog, openClient, ring, requests, logger, config } = deps;
+  const {
+    listAccounts,
+    accessToken,
+    catalog,
+    openClient,
+    ring,
+    requests,
+    backfill,
+    logger,
+    config,
+  } = deps;
   const now = deps.now ?? Date.now;
   const slots: Record<Role, Slot> = { active: EMPTY, reserve: EMPTY };
   // account id → when it may be tried again
@@ -129,6 +145,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   let failovers = 0;
   let reportedAt = now();
   let reportedCounters = ring.counters();
+  let reportedBackfill = backfill.counters();
   const reportedClosedUntil = new Map<ScanInterval, number>();
 
   const isHeld = (accountId: string) => (held.get(accountId) ?? 0) > now();
@@ -530,6 +547,9 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
       );
       reportedClosedUntil.set(interval, until);
     }
+    const filling = backfill.counters();
+    const filled = (key: 'fetched' | 'filled' | 'failed' | 'rateLimited' | 'spare') =>
+      filling[key] - reportedBackfill[key];
     const periodMs = Math.max(at - reportedAt, 1);
     logger.info(
       {
@@ -555,11 +575,20 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         closed,
         pairs: counters.pairs,
         pending: requests.size,
+        backfill: {
+          queued: filling.queued,
+          fetched: filled('fetched'),
+          filled: filled('filled'),
+          failed: filled('failed'),
+          rateLimited: filled('rateLimited'),
+          spare: filled('spare'),
+        },
       },
       'market data',
     );
     reportedAt = at;
     reportedCounters = counters;
+    reportedBackfill = filling;
     ticks = 0;
     unknownAsset = 0;
     failovers = 0;
@@ -574,6 +603,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     },
     tick,
     report,
+    streaming: () => !stopped && isReady(slots.active),
     async stop() {
       stopped = true;
       clearInterval(tickTimer);

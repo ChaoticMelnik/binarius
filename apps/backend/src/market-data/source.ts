@@ -1,7 +1,7 @@
 import type { Candle, ScanInterval } from '@binarius/shared';
 
 // The candle source over the data socket (#404, docs/market-data.md). No consumer yet: the feed
-// moves onto it in #405, and the REST refill that reads pending() is #590.
+// moves onto it in #405, and the REST backfill (#590, backfill.ts) reads pending().
 
 export interface CandleWindow {
   // closed candles of the window, ascending: tick-built, or REST rows fill() put into empty buckets
@@ -18,7 +18,7 @@ export interface CandleWindow {
 
 export interface CandleSource {
   read(assetId: number, interval: ScanInterval, nowMs: number): CandleWindow;
-  // asks for a refill of the pair's window; remembered until #590's pending() takes it
+  // asks for a refill of the pair's window; remembered until the backfill's pending() takes it
   request(assetId: number, interval: ScanInterval): { queued: boolean };
 }
 

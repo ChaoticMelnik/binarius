@@ -21,6 +21,7 @@ import {
 import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  MARKET_DATA_BACKFILL_POLL_MS,
   MAX_SIGNAL_SCAN_PER_MINUTE,
   MIN_SIGNAL_SCAN_PER_MINUTE,
   signalScanCapacity,
@@ -684,6 +685,38 @@ describe('signal scanner', () => {
       skipped: 0,
       rateLimited: 0,
     });
+    await h.scanner.stop();
+  });
+
+  // acceptance of #590: the backfill polling for spare tokens takes none from a full scan, and
+  // the scan skips no pair. Before the first scan the bucket sits full, and its overflow is the
+  // backfill's: an idle pacer gives its share
+  it('S25 a full scan leaves the backfill no spare token and skips no pair', async () => {
+    const lags = [0, 1, 0, 2, 2, 1, 3, 0, 1, 0, 2, 2, 1];
+    const pacer = createScanPacer({
+      perMinute: signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
+      capacity: signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
+      backoffMinMs: 15_000,
+      backoffMaxMs: 120_000,
+      now: () => Date.now() + (lags[Math.floor((Date.now() - B) / CANDLE_5S_MS)] ?? 0),
+    });
+    const h = harness({
+      interval: '5s',
+      pairs: [1, 2, 3, 4].map((id) => pair(id)),
+      maxPairs: 4,
+      pacer,
+    });
+    const spare: number[] = [];
+    const poll = setInterval(() => {
+      if (pacer.tryTakeSpare()) spare.push(Date.now());
+    }, MARKET_DATA_BACKFILL_POLL_MS);
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    clearInterval(poll);
+    expect(h.calls).toHaveLength(48);
+    expect(h.logger.info.mock.calls[0]?.[0]).toMatchObject({ scanned: 4, skipped: 0 });
+    expect(spare.length).toBeGreaterThan(0);
+    expect(spare.filter((at) => at > B + CANDLE_5S_MS + SLACK_MS)).toEqual([]);
     await h.scanner.stop();
   });
 
