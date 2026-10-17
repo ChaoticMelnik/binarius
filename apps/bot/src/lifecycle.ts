@@ -1,8 +1,8 @@
 import type { Api, PollingOptions } from 'grammy';
-import { BOT_COMMAND_SCOPE, closeAll, errorLogFields } from '@binarius/shared';
+import { BOT_COMMAND_SCOPE, closeAll, errorLogFields, telegramErrorFields } from '@binarius/shared';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionTracker } from './session-tracker';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { botCommands, PROFILE } from './texts';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 

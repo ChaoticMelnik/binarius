@@ -6,6 +6,7 @@ import {
   MENU_CALLBACK_DATA,
   parseStarsInvoicePayload,
   STARS_CURRENCY,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   creditStarPayment,
@@ -19,7 +20,6 @@ import {
 } from '@binarius/db';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
-import { telegramErrorFields } from '../telegram-logging';
 import {
   STARS_RECONCILE_MAX_PAGES,
   STARS_RECONCILE_PAGE_SIZE,

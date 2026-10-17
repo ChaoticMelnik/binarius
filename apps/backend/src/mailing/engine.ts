@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { GrammyError } from 'grammy';
-import { errorIdentity, errorLogFields } from '@binarius/shared';
+import { errorIdentity, errorLogFields, telegramErrorFields } from '@binarius/shared';
 import {
   claimMailingJob,
   planMailingJobs,
@@ -10,7 +10,6 @@ import {
   type MailingOutcome,
 } from '@binarius/db';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
-import { telegramErrorFields } from '../telegram-logging';
 import {
   MAILING_CLAIM_SCAN,
   MAILING_MAX_ATTEMPTS,

@@ -12,6 +12,7 @@ import {
   type SetTradingModeResponse,
   type TelegramHtml,
   type TradingAccessResponse,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -20,7 +21,7 @@ import {
   type BackendClient,
 } from './backend-client';
 import { MODE_CALLBACK_DATA, menuKeyboard, supportKeyboard, withMenu } from './keyboards';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { editMessageTextHtml, replyHtml } from './send';
 import {
   LABELS,

@@ -44,6 +44,7 @@ import {
   MENU_CALLBACK_DATA,
   signalsCallbackDataFor,
   demoAnalysisCallbackData,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   analysisScreen,
@@ -73,7 +74,7 @@ import {
   type DemoTradeRead,
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import {
   editMessageTextByIdHtml,
   editMessageTextHtml,

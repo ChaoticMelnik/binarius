@@ -33,6 +33,7 @@ import {
   MENU_CALLBACK_DATA,
   RETRY_COMMANDS,
   type RetryCommand,
+  telegramErrorFields,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import {
@@ -66,7 +67,7 @@ import {
   type LoginDialogState,
   type LoginStep,
 } from './login-dialog';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
 import { createStakePicker, SETTINGS_CALLBACK_DATA, stakeOpenCallbackData } from './stake-picker';

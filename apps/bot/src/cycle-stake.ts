@@ -7,6 +7,7 @@ import {
   TradeMode,
   type PairsCatalogResponse,
   type TelegramHtml,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -25,7 +26,7 @@ import {
   type CycleStakeStep,
 } from './demo';
 import type { LoginDialog } from './login-dialog';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { editMessageTextHtml, replyHtml } from './send';
 import { refusalText } from './stake-picker';
 import { LABELS, TEXTS } from './texts';

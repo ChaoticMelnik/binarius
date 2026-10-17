@@ -14,6 +14,7 @@ import {
   safeParseEmailLoginRequest,
   safeParseEmailSendCodeRequest,
   safeParseOAuthCallbackRequest,
+  telegramErrorFields,
 } from '@binarius/shared';
 import {
   confirmBrokerAccount,
@@ -34,7 +35,6 @@ import {
   BrokerOAuthErrorCode,
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
-import { telegramErrorFields } from '../telegram-logging';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import { internalBearerAuth } from './internal';
 import { LinkPushKind, type ClientPush, type LinkPushOutcome } from './client-push';

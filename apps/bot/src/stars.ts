@@ -9,6 +9,7 @@ import {
   StarsErrorCode,
   UserErrorCode,
   UserStatus,
+  telegramErrorFields,
 } from '@binarius/shared';
 import { BackendError, backendErrorFields, type BackendClient } from './backend-client';
 import {
@@ -18,7 +19,7 @@ import {
   supportKeyboard,
   withMenu,
 } from './keyboards';
-import { telegramErrorFields, type Logger } from './logging';
+import type { Logger } from './logging';
 import { replyHtml, replyWithInvoiceStars } from './send';
 import {
   starsInvoiceDescription,

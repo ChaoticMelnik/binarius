@@ -11,9 +11,9 @@ import {
   type BotTextKey,
   type BotTextSource,
   type ErrorLogFields,
+  telegramErrorFields,
 } from '@binarius/shared';
 import { listBotTextOverrides, type DbExecutor } from '@binarius/db';
-import { telegramErrorFields } from '../telegram-logging';
 import { BOT_PROFILE_PUBLISH_TIMEOUT_MS } from '../timing';
 
 // Publishing the client bot's command menu and profile (#301, docs/bot-texts.md → Publishing):
