@@ -401,6 +401,10 @@ docker compose up -d trading-worker
 docker compose logs -f trading-worker | grep -E 'broker socket ready|broker session|trade command'
 ```
 
+The same variable turns on the backend's market data source on the service accounts (#404,
+[market-data.md](market-data.md)); the backend reads it at start, so it takes
+`docker compose up -d backend` as well.
+
 The plain `up -d` recreates the worker with a gap in which no process takes jobs;
 `scripts/deploy-worker.sh` makes the same change with an overlap (the new container gets the new
 `.env`, [worker-deploy.md](worker-deploy.md)).
