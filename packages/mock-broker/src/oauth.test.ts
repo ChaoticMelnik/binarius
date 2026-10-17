@@ -5,6 +5,7 @@ import {
   safeParseOAuthTokenResponse,
   safeParseRefreshTokenResponse,
 } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
@@ -132,8 +133,10 @@ describe('the email login', () => {
     await broker.close();
     await start({ codeTtlMs: 1 });
     await sendCode();
+    const sentBy = Date.now();
     const short = broker.oauth.codeFor(EMAIL) ?? '';
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // the code lives 1 ms past its send, and the send was answered by sentBy
+    await until('the code is past its TTL', () => Date.now() > sentBy + 1);
     expectRefusal(await emailLogin(short), 400, LIVE_MESSAGES.invalidEmailCode);
   });
 
