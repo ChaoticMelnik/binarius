@@ -293,7 +293,8 @@ export const BOT_TEXTS_LOAD_BUDGET_MS = 3_000;
 
 // --- Publishing the command menu and the profile (#301) ---------------------------------------
 // docs/bot-texts.md → Publishing. Each Bot API call of publishBotProfile (grammY's
-// ApiClientOptions.timeoutSeconds), one attempt, made one after another; the calls of one
+// ApiClientOptions.timeoutSeconds), one attempt; the methods one after another, the two languages
+// of a method side by side (#508), so a method is one slot of the timeout. The slots of one
 // publish, which bot-texts/publish.test.ts compares with BOT_PROFILE_METHODS (@binarius/shared).
 export const BOT_PROFILE_PUBLISH_TIMEOUT_MS = 2_000;
 export const BOT_PROFILE_PUBLISH_CALLS = 3;

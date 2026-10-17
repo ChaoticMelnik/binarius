@@ -2,11 +2,12 @@ import { EventEmitter } from 'node:events';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { BotLanguage, defaultBotTextSource } from '@binarius/shared';
+import { BOT_TEXT_SOURCES_EN, BotLanguage, defaultBotTextSource } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
+import { runWithLanguage } from './language';
 import { PROFILE, setBotTextSource } from './texts';
 import { STARTUP_CALLS } from './timing';
 import {
@@ -16,7 +17,6 @@ import {
   stubText,
   stubTextSource,
   fakeLogger,
-  sentPayload,
   startUpdate,
   type FakeLogger,
   stubSessionResumer,
@@ -102,6 +102,37 @@ const REGISTRATIONS = [
   ['setMyDescription', 'bot description not registered'],
   ['setMyShortDescription', 'bot short description not registered'],
 ] as const;
+// each method once per language, Russian first (#508)
+const LANGUAGES = [BotLanguage.Ru, BotLanguage.En] as const;
+const STARTUP_EVENTS = REGISTRATIONS.flatMap(([method]) => LANGUAGES.map(() => method));
+const inRussian = <T>(read: () => T): T => runWithLanguage(BotLanguage.Ru, read);
+// literals on purpose: the command list and its scope are the values asserted
+const RU_COMMANDS = [
+  { command: 'start', description: 'Начать' },
+  { command: 'menu', description: 'Главное меню' },
+  { command: 'stop', description: 'Остановить сессию' },
+  { command: 'account', description: 'Аккаунт Binodex' },
+  { command: 'buy', description: 'Купить токены' },
+  { command: 'settings', description: 'Настройки уведомлений' },
+  { command: 'invite', description: 'Пригласить друга' },
+  { command: 'help', description: 'Помощь' },
+  { command: 'support', description: 'Поддержка' },
+  { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
+];
+const EN_COMMANDS = [
+  { command: 'start', description: 'Start' },
+  { command: 'menu', description: 'Main menu' },
+  { command: 'stop', description: 'Stop the session' },
+  { command: 'account', description: 'Binodex account' },
+  { command: 'buy', description: 'Buy tokens' },
+  { command: 'settings', description: 'Notification settings' },
+  { command: 'invite', description: 'Invite a friend' },
+  { command: 'help', description: 'Help' },
+  { command: 'support', description: 'Support' },
+  { command: 'paysupport', description: 'Stars payment questions and refunds' },
+];
+const payloadsOf = (calls: readonly { method: string; payload: unknown }[], method: string) =>
+  calls.filter((call) => call.method === method).map((call) => call.payload);
 
 // pino takes either (message) or (fields, message), so the message is the last argument
 const errorMessages = (log: FakeLogger): unknown[] =>
@@ -147,29 +178,24 @@ describe('runBot', () => {
 
     // literals for the same reason: the command list and its scope are the values asserted
     await fake.options[0]?.onStart?.(BOT_INFO);
-    expect(fake.api.setMyCommands).toHaveBeenCalledTimes(1);
-    expect(fake.api.setMyCommands).toHaveBeenCalledWith(
-      [
-        { command: 'start', description: 'Начать' },
-        { command: 'menu', description: 'Главное меню' },
-        { command: 'stop', description: 'Остановить сессию' },
-        { command: 'account', description: 'Аккаунт Binodex' },
-        { command: 'buy', description: 'Купить токены' },
-        { command: 'settings', description: 'Настройки уведомлений' },
-        { command: 'invite', description: 'Пригласить друга' },
-        { command: 'help', description: 'Помощь' },
-        { command: 'support', description: 'Поддержка' },
-        { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
-      ],
-      { scope: { type: 'all_private_chats' } },
-    );
-    // the profile texts by reference: their content is checked where it lives, texts.test.ts;
-    // one argument each, so no language_code
-    expect(fake.api.setMyDescription.mock.calls).toEqual([[PROFILE.description]]);
-    expect(fake.api.setMyShortDescription.mock.calls).toEqual([[PROFILE.shortDescription]]);
+    // L-lang (#508): Russian under language_code ru, English as the default for every other
+    // client
+    expect(fake.api.setMyCommands.mock.calls).toEqual([
+      [RU_COMMANDS, { scope: { type: 'all_private_chats' }, language_code: 'ru' }],
+      [EN_COMMANDS, { scope: { type: 'all_private_chats' } }],
+    ]);
+    // the profile texts by reference: their content is checked where it lives, texts.test.ts
+    expect(fake.api.setMyDescription.mock.calls).toEqual([
+      [inRussian(() => PROFILE.description), { language_code: 'ru' }],
+      [BOT_TEXT_SOURCES_EN.profileDescription, {}],
+    ]);
+    expect(fake.api.setMyShortDescription.mock.calls).toEqual([
+      [inRussian(() => PROFILE.shortDescription), { language_code: 'ru' }],
+      [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
+    ]);
     expect(log.info).toHaveBeenCalledWith('bot started');
     expect(log.info.mock.invocationCallOrder[0]).toBeGreaterThan(
-      fake.api.setMyShortDescription.mock.invocationCallOrder[0] ?? Infinity,
+      Math.max(...fake.api.setMyShortDescription.mock.invocationCallOrder),
     );
     fake.resolveStart();
   });
@@ -204,7 +230,11 @@ describe('runBot', () => {
         command: 'menu',
         description: 'Главное меню',
       });
-      expect(fake.api.setMyDescription.mock.calls).toEqual([[stubText('profileDescription')]]);
+      // the overrides are Russian's only (#508): the English description is the catalog's
+      expect(fake.api.setMyDescription.mock.calls).toEqual([
+        [stubText('profileDescription'), { language_code: 'ru' }],
+        [BOT_TEXT_SOURCES_EN.profileDescription, {}],
+      ]);
     } finally {
       setBotTextSource(defaultBotTextSource);
       fake.resolveStart();
@@ -240,15 +270,16 @@ describe('runBot', () => {
     expect(log.info).not.toHaveBeenCalledWith('bot started');
   });
 
-  // call order alone cannot tell this apart from Promise.all, which invokes all three at once
-  it('makes one request at a time', async () => {
+  // call order alone cannot tell this apart from Promise.all, which invokes all three at once;
+  // a method's two languages go together (#508), under one client timeout
+  it('makes one method at a time, both languages of it together', async () => {
     const fake = fakeBot();
     const log = fakeLogger();
-    let release = (): void => {};
+    const releases: (() => void)[] = [];
     fake.api.setMyCommands.mockImplementation(
       () =>
         new Promise<true>((resolve) => {
-          release = () => resolve(true);
+          releases.push(() => resolve(true));
         }),
     );
     runBot({
@@ -263,22 +294,25 @@ describe('runBot', () => {
     });
 
     const onStart = fake.options[0]?.onStart?.(BOT_INFO);
-    await until('setMyCommands', () => fake.api.setMyCommands.mock.calls.length >= 1);
-    expect(fake.api.setMyCommands).toHaveBeenCalledTimes(1);
+    await until('setMyCommands', () => fake.api.setMyCommands.mock.calls.length >= 2);
+    expect(fake.api.setMyCommands).toHaveBeenCalledTimes(2);
     expect(fake.api.setMyDescription).not.toHaveBeenCalled();
     expect(fake.api.setMyShortDescription).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
 
-    release();
+    releases[0]?.();
+    await settle();
+    expect(fake.api.setMyDescription).not.toHaveBeenCalled();
+    releases[1]?.();
     await onStart;
-    expect(fake.api.setMyDescription).toHaveBeenCalledTimes(1);
-    expect(fake.api.setMyShortDescription).toHaveBeenCalledTimes(1);
-    expect(fake.api.setMyDescription.mock.invocationCallOrder[0]).toBeLessThan(
-      fake.api.setMyShortDescription.mock.invocationCallOrder[0] ?? -Infinity,
+    expect(fake.api.setMyDescription).toHaveBeenCalledTimes(2);
+    expect(fake.api.setMyShortDescription).toHaveBeenCalledTimes(2);
+    expect(Math.max(...fake.api.setMyDescription.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...fake.api.setMyShortDescription.mock.invocationCallOrder),
     );
     expect(log.info.mock.calls).toEqual([['bot started']]);
     expect(log.info.mock.invocationCallOrder[0]).toBeGreaterThan(
-      fake.api.setMyShortDescription.mock.invocationCallOrder[0] ?? Infinity,
+      Math.max(...fake.api.setMyShortDescription.mock.invocationCallOrder),
     );
     fake.resolveStart();
   });
@@ -305,8 +339,13 @@ describe('runBot', () => {
       });
 
       await expect(fake.options[0]?.onStart?.(BOT_INFO)).resolves.toBeUndefined();
-      expect(log.warn.mock.calls).toEqual([[{ err: { name: 'TypeError' }, method }, message]]);
-      for (const [other] of REGISTRATIONS) expect(fake.api[other]).toHaveBeenCalledTimes(1);
+      expect(log.warn.mock.calls).toEqual(
+        LANGUAGES.map((botLanguage) => [
+          { err: { name: 'TypeError' }, method, botLanguage },
+          message,
+        ]),
+      );
+      for (const [other] of REGISTRATIONS) expect(fake.api[other]).toHaveBeenCalledTimes(2);
       expect(exit).not.toHaveBeenCalled();
       expect(log.info).toHaveBeenCalledWith('bot started');
       expect(log.info.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -625,7 +664,7 @@ describe('runBot', () => {
     });
     expect(sessionResumer.start).not.toHaveBeenCalled();
     await fake.options[0]?.onStart?.(BOT_INFO);
-    expect(order).toEqual(['profile', 'resume']);
+    expect(order).toEqual(['profile', 'profile', 'resume']);
     fake.resolveStart();
 
     const held = heldTexts();
@@ -1021,42 +1060,32 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
 
     expect(s.events).toEqual([
       'deleteWebhook',
-      'setMyCommands',
-      'setMyDescription',
-      'setMyShortDescription',
+      ...STARTUP_EVENTS,
       'info:bot started',
       'getUpdates#1',
     ]);
-    expect(sentPayload(s.api.calls, 'setMyCommands')).toEqual({
-      commands: [
-        { command: 'start', description: 'Начать' },
-        { command: 'menu', description: 'Главное меню' },
-        { command: 'stop', description: 'Остановить сессию' },
-        { command: 'account', description: 'Аккаунт Binodex' },
-        { command: 'buy', description: 'Купить токены' },
-        { command: 'settings', description: 'Настройки уведомлений' },
-        { command: 'invite', description: 'Пригласить друга' },
-        { command: 'help', description: 'Помощь' },
-        { command: 'support', description: 'Поддержка' },
-        { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
-      ],
-      scope: { type: 'all_private_chats' },
-    });
-    // equality on the whole payload: a language_code would fail it
-    expect(sentPayload(s.api.calls, 'setMyDescription')).toEqual({
-      description: PROFILE.description,
-    });
-    expect(sentPayload(s.api.calls, 'setMyShortDescription')).toEqual({
-      short_description: PROFILE.shortDescription,
-    });
+    // equality on the whole payloads: language_code only on the Russian ones (#508)
+    expect(payloadsOf(s.api.calls, 'setMyCommands')).toEqual([
+      { commands: RU_COMMANDS, scope: { type: 'all_private_chats' }, language_code: 'ru' },
+      { commands: EN_COMMANDS, scope: { type: 'all_private_chats' } },
+    ]);
+    expect(payloadsOf(s.api.calls, 'setMyDescription')).toEqual([
+      { description: inRussian(() => PROFILE.description), language_code: 'ru' },
+      { description: BOT_TEXT_SOURCES_EN.profileDescription },
+    ]);
+    expect(payloadsOf(s.api.calls, 'setMyShortDescription')).toEqual([
+      { short_description: inRussian(() => PROFILE.shortDescription), language_code: 'ru' },
+      { short_description: BOT_TEXT_SOURCES_EN.profileShortDescription },
+    ]);
     // the calls the budget in timing.ts is computed from: everything onStart sends
     const methods = s.methods();
     const startup = methods.slice(
       methods.indexOf('deleteWebhook') + 1,
       methods.indexOf('getUpdates'),
     );
-    expect(startup).toEqual(REGISTRATIONS.map(([method]) => method));
-    expect(startup).toHaveLength(STARTUP_CALLS);
+    expect(startup).toEqual(STARTUP_EVENTS);
+    // a slot a method: its two languages under one client timeout (timing.ts)
+    expect(new Set(startup).size).toBe(STARTUP_CALLS);
     // The premise the fake above stands on: the options object runBot hands start() is what
     // grammY puts in getUpdates. Only the first poll — after one succeeds grammY stops sending
     // allowed_updates, because Telegram keeps the last setting (out/bot.js, loop()).
@@ -1077,7 +1106,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
   // the failed call's event is never pushed: captureApi answers a programmed failure first
   const eventsWithout = (failed: string): string[] => [
     'deleteWebhook',
-    ...REGISTRATIONS.map(([method]) => method).filter((method) => method !== failed),
+    ...STARTUP_EVENTS.filter((method) => method !== failed),
     'info:bot started',
     'getUpdates#1',
   ];
@@ -1090,9 +1119,12 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
 
     expect(s.exit).not.toHaveBeenCalled();
     expect(errorMessages(s.log)).toEqual([]);
-    expect(s.log.warn.mock.calls).toEqual([
-      [{ err: { name: 'GrammyError' }, method, telegramErrorCode: 400 }, message],
-    ]);
+    expect(s.log.warn.mock.calls).toEqual(
+      LANGUAGES.map((botLanguage) => [
+        { err: { name: 'GrammyError' }, method, telegramErrorCode: 400, botLanguage },
+        message,
+      ]),
+    );
     expect(s.events).toEqual(eventsWithout(method));
   });
 
@@ -1102,9 +1134,12 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
 
     expect(s.exit).not.toHaveBeenCalled();
     expect(errorMessages(s.log)).toEqual([]);
-    expect(s.log.warn.mock.calls).toEqual([
-      [{ err: { name: 'HttpError' }, method, transportError: { name: 'Error' } }, message],
-    ]);
+    expect(s.log.warn.mock.calls).toEqual(
+      LANGUAGES.map((botLanguage) => [
+        { err: { name: 'HttpError' }, method, transportError: { name: 'Error' }, botLanguage },
+        message,
+      ]),
+    );
     expect(s.events).toEqual(eventsWithout(method));
   });
 
@@ -1132,8 +1167,11 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.events).toEqual([
       'deleteWebhook',
       'setMyCommands',
+      'setMyCommands',
       'info:shutting down',
       'setMyDescription',
+      'setMyDescription',
+      'setMyShortDescription',
       'setMyShortDescription',
       'info:bot started',
     ]);

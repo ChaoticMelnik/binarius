@@ -43,6 +43,7 @@ import {
   type AdminUserListItem,
   type AdminUserResponse,
   type DecimalString,
+  BotLanguage,
 } from '@binarius/shared';
 
 // Backend answers for the read pages (#107, #108, #330, #109, #110, #341, #342) and the token
@@ -437,15 +438,22 @@ export const SAMPLE_BOT_TEXTS: AdminBotTextsResponse = {
   ],
 };
 
-// A publish of all three (#361): the description refused by Telegram, the rest through.
+// A publish of all three (#361): the English description refused by Telegram (#508), the rest
+// through.
 export const SAMPLE_PUBLISHED: AdminBotProfileMethodResult[] = [
   { method: 'setMyCommands', ok: true },
-  { method: 'setMyDescription', ok: false, err: { name: 'GrammyError' }, telegramErrorCode: 400 },
+  {
+    method: 'setMyDescription',
+    ok: false,
+    err: { name: 'GrammyError' },
+    telegramErrorCode: 400,
+    language: BotLanguage.En,
+  },
   { method: 'setMyShortDescription', ok: true },
 ];
 // what it puts in the query, encoded
 export const SAMPLE_PUBLISHED_QUERY =
-  'setMyCommands%3Aok%2CsetMyDescription%3AGrammyError%3A400%2CsetMyShortDescription%3Aok';
+  'setMyCommands%3Aok%2CsetMyDescription%3AGrammyError%3A400%40en%2CsetMyShortDescription%3Aok';
 
 export const SAMPLE_BOT_TEXT: AdminBotTextView = {
   key: 'welcome',

@@ -18,11 +18,13 @@ describe('the publish result in the query (#361)', () => {
         ok: false,
         err: { name: 'GrammyError' },
         telegramErrorCode: 400,
+        language: 'en',
       },
       { method: 'setMyShortDescription', ok: false, err: { name: 'HttpError', code: 'ETIMEDOUT' } },
     ];
+    // #508: the language whose call failed, after the rest
     expect(encodePublishResults(results)).toBe(
-      'setMyCommands:ok,setMyDescription:GrammyError:400,setMyShortDescription:HttpError.ETIMEDOUT',
+      'setMyCommands:ok,setMyDescription:GrammyError:400@en,setMyShortDescription:HttpError.ETIMEDOUT',
     );
     expect(through(results)).toEqual(results);
   });

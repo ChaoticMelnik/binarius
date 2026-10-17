@@ -3096,7 +3096,7 @@ describe('the bot texts pages (#300)', () => {
       /<li>\s*Меню команд \(setMyCommands\):\s*опубликовано\s*<\/li>/,
     );
     expect(republished.body).toMatch(
-      /<li class="error">\s*Описание бота \(setMyDescription\):\s*ошибка — GrammyError, Telegram 400\s*<\/li>/,
+      /<li class="error">\s*Описание бота \(setMyDescription\):\s*ошибка \(en\) — GrammyError, Telegram 400\s*<\/li>/,
     );
     expect(republished.body).toContain(TEXTS.botProfilePublishFailedHint);
     expect(republished.body).not.toMatch(/<style|<script/);

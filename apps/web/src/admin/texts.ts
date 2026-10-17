@@ -2,6 +2,7 @@ import {
   ADMIN_SEARCH_MAX_LENGTH,
   BOT_TEXTS_APPLIED_WITHIN_S,
   ServiceAccountNotWorkingReason,
+  type BotLanguage,
   type BotProfileMethod,
   type TradingSessionSettings,
 } from '@binarius/shared';
@@ -393,10 +394,15 @@ export const TEXTS = {
     setMyShortDescription: 'Короткое описание',
   } satisfies Record<BotProfileMethod, string>,
   botProfilePublished: 'опубликовано',
-  botProfileFailed: (name: string, code?: string, telegramErrorCode?: number) =>
-    `ошибка — ${name}${code === undefined ? '' : ` (${code})`}${
-      telegramErrorCode === undefined ? '' : `, Telegram ${telegramErrorCode}`
-    }`,
+  botProfileFailed: (
+    name: string,
+    code?: string,
+    telegramErrorCode?: number,
+    language?: BotLanguage,
+  ) =>
+    `ошибка${language === undefined ? '' : ` (${language})`} — ${name}${
+      code === undefined ? '' : ` (${code})`
+    }${telegramErrorCode === undefined ? '' : `, Telegram ${telegramErrorCode}`}`,
   botProfilePublishFailedHint:
     'Текст сохранён, но Telegram не принял публикацию. После восстановления нажмите «Опубликовать заново».',
   botProfileRepublish: 'Опубликовать заново',

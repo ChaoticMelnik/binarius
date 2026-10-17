@@ -254,7 +254,7 @@ function publishLine(result: BotProfileMethodResult): string {
   const cause = result.cause === undefined ? '' : ` (${one(result.cause)})`;
   const telegram =
     result.telegramErrorCode === undefined ? '' : `, Telegram ${result.telegramErrorCode}`;
-  return `${result.method}: ошибка — ${one(result.err)}${cause}${telegram}`;
+  return `${result.method} (${result.language}): ошибка — ${one(result.err)}${cause}${telegram}`;
 }
 
 const PUBLISH_HINT = 'Публикация не удалась: после восстановления выполните bot-text publish.';

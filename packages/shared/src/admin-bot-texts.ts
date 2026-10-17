@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { adminMeSchema } from './admin';
+import { botLanguageSchema } from './bot-language';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_PROFILE_METHODS,
@@ -144,6 +145,8 @@ export const adminBotProfileMethodResultSchema = z.discriminatedUnion('ok', [
     err: identity,
     cause: identity.optional(),
     telegramErrorCode: telegramErrorCode.optional(),
+    // the language whose call failed first (#508): a method is published in both
+    language: botLanguageSchema.optional(),
   }),
 ]);
 export type AdminBotProfileMethodResult = z.infer<typeof adminBotProfileMethodResultSchema>;

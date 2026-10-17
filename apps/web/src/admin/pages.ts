@@ -1407,7 +1407,12 @@ const publishBlock = (published: readonly AdminBotProfileMethodResult[] | undefi
                 </li>`
               : html`<li class="error">
                   ${TEXTS.botProfileMethod[result.method]} (${result.method}):
-                  ${TEXTS.botProfileFailed(result.err.name, result.err.code, result.telegramErrorCode)}
+                  ${TEXTS.botProfileFailed(
+                    result.err.name,
+                    result.err.code,
+                    result.telegramErrorCode,
+                    result.language,
+                  )}
                 </li>`,
           )}
         </ul>

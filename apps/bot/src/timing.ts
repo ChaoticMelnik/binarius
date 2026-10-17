@@ -51,8 +51,10 @@ export const LANGUAGE_CACHE_MAX = 10_000;
 // The Bot API calls onStart makes one after another before the first getUpdates: the command
 // menu, the description, the short description (lifecycle.ts). Not a handler path — no update is
 // in flight while they run — but grammY awaits onStart to completion and bot.stop() cancels none
-// of them, so a signal during the registration waits for all of them. lifecycle.test.ts compares
-// this number with the calls the real start makes.
+// of them, so a signal during the registration waits for all of them. Each is a slot of two calls
+// side by side, Russian and English (#508), both bounded by the one client timeout, so the slots
+// are what the budget counts: six calls in a row would be 53 000 ms, past SHUTDOWN_BUDGET_MS.
+// lifecycle.test.ts compares this number with the methods the real start calls.
 export const STARTUP_CALLS = 3;
 // Before them onStart waits for the texts' first load (#301), which the refresher bounds by the
 // budgetMs index.ts gives it — BACKEND_REQUEST_TIMEOUT_MS, a wiring premise this chain cannot

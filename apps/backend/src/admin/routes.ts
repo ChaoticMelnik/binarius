@@ -1593,6 +1593,7 @@ function toWirePublishResult(result: BotProfileMethodResult): AdminBotProfileMet
     ...(telegramErrorCode !== undefined && isAdminTelegramErrorCode(telegramErrorCode)
       ? { telegramErrorCode }
       : {}),
+    language: result.language,
   };
 }
 
