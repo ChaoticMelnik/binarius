@@ -766,8 +766,12 @@ who pressed the button even if the session is revoked between the check and the 
 - A row's payload on the page is at most `ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS` characters (≤ 4 096
   bytes), so a page of the audit log stays within ≈ 225 KB whatever the writers stored.
 - Every view writes one `audit_log` row that is never deleted — viewing the audit log included, so
-  the log grows with each look at it. Retention is #153. A bot text save or reset records both
-  texts, up to 2 × 16 384 characters a row.
+  the log grows with each look at it. There is no retention path (#153, 2026-10-17): the table is
+  append-only by design, and what bounds it is that every row is about a known actor or entity —
+  the anonymous login paths write none, and a refusal about a known account, challenge or link is
+  one row per event ([staff-login.md](staff-login.md) → Limits → Rows per path); the authenticated
+  writers add one row per admin request. A bot text save or reset records both texts, up to
+  2 × 16 384 characters a row.
 - A bot text POST body is at most `ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (128 KiB: a JSON-escaped
   source of `BOT_TEXT_SOURCE_MAX` code points). A save holds the table lock and the session row for
   the check of the whole set: 7–10 ms with 150 overrides in the #300 plan's probe, well inside

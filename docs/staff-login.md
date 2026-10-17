@@ -243,6 +243,9 @@ audit filter outside its schema (400), which `apps/web` also refuses before aski
 (#448) adds to those: its GET (inspect), a link token of the wrong shape (404 at `web`, 400 at the
 backend), a token nobody was issued, and the bot's refusal of a sender who is nobody's account —
 those go to the process log only (owner's answer В5: rows are about known staff members). The
+same rule holds at login since #153: a login nobody holds (after the same derivation a live one
+costs) and a challenge id nobody was issued leave no row either — the process log says `reason`
+(`unknown_login` / `unknown`) and nothing else, neither the name nor the id. The
 bot's refusal of a known disabled account is written after its reply has gone, so the reply takes
 the same time either way. The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
@@ -251,13 +254,13 @@ a token, a raw error object, or the login someone typed for an account that does
 | Event | `action` |
 |---|---|
 | CLI create / disable / reset-password | `staff_created` / `staff_disabled` / `staff_password_reset` |
-| unknown login, disabled account, wrong password, state changed under the KDF | `staff_login_failed` |
-| refused because the account is locked out | `staff_login_locked` |
+| disabled account, wrong password, state changed under the KDF | `staff_login_failed` |
+| refused because the account is locked out — one row per lockout, the first refusal; later refusals under the same lockout go to the process log (#153) | `staff_login_locked` |
 | password accepted, challenge opened or reused | `staff_login_password_ok` |
 | Telegram would not take the invitation or the code | `staff_login_telegram_failed` |
 | «Подтвердить вход» | `staff_login_telegram_confirmed` |
 | «Это не я» | `staff_login_denied` |
-| wrong or unusable code | `staff_login_code_failed` |
+| wrong code (a row per attempt, at most five), or an unusable challenge — one row per (challenge, reason), repeats to the process log; an id nobody was issued leaves no row (#153) | `staff_login_code_failed` |
 | session created | `staff_login_completed` |
 | sessions listed | `staff_sessions_viewed` |
 | session revoked, or a revoke that found nothing | `staff_session_revoked` |
@@ -279,7 +282,7 @@ a token, a raw error object, or the login someone typed for an account that does
 | own password changed | `staff_password_changed` |
 | own password change refused: wrong current password, locked out, state changed under the KDF | `staff_password_change_failed` |
 | login link sent by the bot (#448) | `staff_login_link_issued` |
-| login link refused: the bot to a disabled account (`reason: disabled`, `via: start` or `button`), the per-staff limit (`rate_limited`), or a link opened that is `used`, `expired`, `superseded` or `revoked`, or whose owner is disabled (`disabled`); `state_changed` when the CAS missed a link the re-read still finds usable, which nothing in this feature produces | `staff_login_link_refused` |
+| login link refused: the bot to a disabled account (`reason: disabled`, `via: start` or `button`), the per-staff limit (`rate_limited`), or a link opened that is `used`, `expired`, `superseded` or `revoked`, or whose owner is disabled (`disabled`); `state_changed` when the CAS missed a link the re-read still finds usable, which nothing in this feature produces; a link opened again after its refusal writes no second row for the same reason — one row per (link, reason) (#153) | `staff_login_link_refused` |
 | session created from a login link | `staff_login_link_completed` |
 
 The read pages behind the session, and what each of their rows carries, are in
@@ -313,6 +316,33 @@ and lives in the database.
   holds its slot for two reads of the `staff` row and up to two derivations; those two reads are
   bounded by the pool's `query_timeout`, not by the timing chain. Over any of those limits the
   request is refused with 429 and no derivation runs.
+
+### Rows per path (#153)
+
+There is no retention path: `audit_log` is append-only (Rule 3, triggers against UPDATE, DELETE
+and TRUNCATE), so its growth is bounded in the writers, not by a sweep. Every row is about a known
+account, challenge or link; a refusal from the public login form about a known one is written once
+per event (`writeAuditEntryOnce`, under that row's lock), and the repeats go to the process log.
+Measured on PostgreSQL 18: a `staff_login_failed` row is about 197 bytes with its indexes, a row
+carrying an entity and a timestamp (`staff_login_locked`) about 470.
+
+| Path | Row | Bound |
+|---|---|---|
+| login nobody holds | none — one derivation and one log line | ≤ 120/min, the login ceiling (before #153: about 173 000 rows, 34 MB, a day without a single account) |
+| disabled account | `staff_login_failed {disabled}` | ≤ 5 per name per 15 minutes (the unknown-name window; evicting a key takes 10 000 other names, about 83 minutes at the ceiling — longer than the window) |
+| locked account | `staff_login_locked` | 1 per lockout (≤ 96 a day per account); the rest only in the log |
+| wrong password | `staff_login_failed {wrong_password}` | ≤ 5 per lockout window |
+| challenge id nobody was issued | none — one log line | ≤ 300/min, the confirm ceiling |
+| unusable challenge | `staff_login_code_failed` | ≤ 1 per (challenge, reason); a closed challenge is swept after an hour and then reads as unknown — no row |
+| wrong code | `staff_login_code_failed {wrong_code}` | ≤ 5 per challenge |
+| dead login link | `staff_login_link_refused` | ≤ 1 per (link, reason), and it takes the token; a token nobody was issued writes none (#448) |
+
+What a flood still costs is the process's, not the table's: up to 2 scrypt derivations at a time
+and the log lines (about 200 bytes each, about 35 MB a day at both ceilings), which the host
+rotates. Rows written by the anonymous paths before #153 (`actor_id` NULL, `reason`
+`unknown_login` or `unknown`) stay, since the table cannot drop them; the owner's check after the
+deploy counts them: `select count(*) from audit_log where actor_id is null and action in
+('staff_login_failed', 'staff_login_code_failed')`.
 
 «Это не я» closes that challenge and records the press; it changes nothing on the account — the
 password hash, the status, the failure counter and the lockout stay as they were

@@ -61,6 +61,7 @@ import {
   recordPostback,
   saveBotTextOverride,
   confirmChallengeFromTelegram,
+  denyChallengeFromTelegram,
   depositEvents,
   markChallengeCodeSent,
   staff,
@@ -235,6 +236,17 @@ const entriesFor = async (staffId: string) =>
     .where(eq(auditLog.actorId, staffId))
     .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
 
+/** Rebuilds the app with its log at `info` into the returned list, parsed line by line. */
+async function withInfoLog(): Promise<{ lines: string[]; logged: () => Record<string, unknown>[] }> {
+  const lines: string[] = [];
+  await app.close();
+  app = build({}, { write: (line) => lines.push(line) }, 'info');
+  return {
+    lines,
+    logged: () => lines.map((line) => JSON.parse(line) as Record<string, unknown>),
+  };
+}
+
 describe('the narrow bearer', () => {
   it.each([
     ['POST', '/admin/auth/login'],
@@ -310,6 +322,26 @@ describe('POST /admin/auth/login', () => {
     expect([derivationsAfterUnknown, derivations]).toEqual([1, 2]);
   });
 
+  // #153: a row about nobody, 120 a minute from the public form, would grow audit_log unbounded
+  it('leaves no row for a login nobody holds and logs the refusal without the name', async () => {
+    const log = await withInfoLog();
+    const name = `nobody-153-${Date.now()}`;
+    const before = await auditCount();
+
+    const response = await login({ login: name, password: 'whatever', ...CLIENT });
+
+    expect(response.statusCode).toBe(401);
+    expect(derivations).toBe(1);
+    expect(await auditCount()).toBe(before);
+    expect(
+      log
+        .logged()
+        .filter((line) => line.msg === 'a staff login was refused')
+        .map((line) => line.reason),
+    ).toEqual(['unknown_login']);
+    expect(log.lines.join('')).not.toContain(name);
+  });
+
   it('answers a disabled account the same way, and records why', async () => {
     const seeded = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
 
@@ -366,6 +398,37 @@ describe('POST /admin/auth/login', () => {
       ip: CLIENT.ip,
       lockedUntil: (await staffRow(seeded.staffId)).lockedUntil?.toISOString(),
     });
+  });
+
+  // #153: one row per lockout, the repeats under it only in the log
+  it('records the first refusal under a lockout and logs the rest', async () => {
+    const log = await withInfoLog();
+    const seeded = await seedStaff(tmp.db);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await login({ login: seeded.login, password: 'no', ...CLIENT });
+    }
+
+    const statuses = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      statuses.push((await login({ login: seeded.login, password: 'no', ...CLIENT })).statusCode);
+    }
+
+    expect(statuses).toEqual([429, 429, 429]);
+    const locked = (await entriesFor(seeded.staffId)).filter(
+      (entry) => entry.action === AuditAction.StaffLoginLocked,
+    );
+    expect(locked.map((entry) => entry.payload)).toEqual([
+      {
+        ip: CLIENT.ip,
+        lockedUntil: (await staffRow(seeded.staffId)).lockedUntil?.toISOString(),
+      },
+    ]);
+    expect(
+      log
+        .logged()
+        .filter((line) => line.msg === 'a staff login was refused')
+        .map((line) => line.reason),
+    ).toEqual(['locked', 'locked']);
   });
 
   // The other side of the lockout flag: an expired one is not a lockout. The database decides
@@ -735,8 +798,10 @@ describe('POST /admin/auth/confirm', () => {
   });
 
   // the id web forwards from the cookie: PostgreSQL's uuid column takes it, RFC 9562 does not.
-  // Before #152 the schema refused it as malformed, and web looped on the 400
-  it('answers 410 for a challenge id PostgreSQL stores but RFC 9562 does not, and records it (#152)', async () => {
+  // Before #152 the schema refused it as malformed, and web looped on the 400. Since #153 an id
+  // nobody was issued leaves no row, and the log says only the reason
+  it('answers 410 for a challenge id PostgreSQL stores but RFC 9562 does not, and logs it (#152)', async () => {
+    const log = await withInfoLog();
     const ip = '198.51.100.152';
     const response = await confirm({
       challengeId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -757,7 +822,46 @@ describe('POST /admin/auth/confirm', () => {
           sql`${auditLog.payload}->>'ip' = ${ip}`,
         ),
       );
-    expect(entries).toEqual([{ actorId: null, payload: { reason: 'unknown', ip } }]);
+    expect(entries).toEqual([]);
+    expect(
+      log
+        .logged()
+        .filter((line) => line.msg === 'a staff login code was refused')
+        .map((line) => line.reason),
+    ).toEqual(['unknown']);
+    expect(log.lines.join('')).not.toContain('aaaaaaaa-aaaa');
+  });
+
+  // #153: one row per (challenge, reason), the repeat only in the log
+  it('records the first refusal of a closed challenge and logs the repeat', async () => {
+    const log = await withInfoLog();
+    const seeded = await seedStaff(tmp.db);
+    const { challengeId } = await login({
+      login: seeded.login,
+      password: seeded.password,
+      ...CLIENT,
+    }).then((response) => response.json<{ challengeId: string }>());
+    await denyChallengeFromTelegram(tmp.db, {
+      challengeId,
+      telegramUserId: seeded.telegramUserId,
+    });
+
+    const first = await confirm({ challengeId, code: '123456', ...CLIENT });
+    const second = await confirm({ challengeId, code: '123456', ...CLIENT });
+
+    expect([first.statusCode, second.statusCode]).toEqual([410, 410]);
+    expect(
+      (await entriesFor(seeded.staffId))
+        .filter((entry) => entry.action === AuditAction.StaffLoginCodeFailed)
+        .map((entry) => entry.payload),
+    ).toEqual([{ reason: 'denied', ip: CLIENT.ip }]);
+    expect(
+      log
+        .logged()
+        .filter((line) => line.msg === 'a staff login code was refused')
+        .map((line) => line.reason),
+    ).toEqual(['denied']);
+    expect(log.lines.join('')).not.toContain(challengeId);
   });
 
   it('refuses everything once the confirm ceiling is reached', async () => {
