@@ -40,9 +40,9 @@ pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timesta
 `run --variants` and `--intervals` narrow a run; the report covers exactly what ran and names it
 in its header. An unknown or repeated name is a usage error, and so is a variant that compares
 with `v2` (`v2+…`) without `v2` in the list. A variant with none of its intervals left is skipped.
-#483's run is `--variants v2,v2+macd,v2+ma,v2+macd+ma --intervals 5s,15s`: about 66 s per pair on
-the 2026-10-15 cache, so about 31 min for the 28 (`NODE_OPTIONS=--max-old-space-size=4096`;
-one pair peaked at about 1 GB resident).
+#483's run is `--variants v2,v2+macd,v2+ma,v2+macd+ma --intervals 5s,15s`: on the 2026-10-15
+cache the 28 pairs took about 16 min (2026-10-17, `de95942`; the smoke run of EUR/USD alone took
+about 66 s) with `NODE_OPTIONS=--max-old-space-size=4096` (one pair peaked at about 1 GB resident).
 
 `--days` bounds only a series' first fetch. A later fetch continues from the cache's last row and
 never extends a series backwards: to widen the range, fetch into an empty `$STAND_DIR`. `run`
@@ -508,6 +508,8 @@ out of pooling.
 - #380: `v2+1m` and the 60 s trades are its two variants.
 - #392: socket candles could fill the same cache format later.
 - #483: `v2+macd`, `v2+ma` and `v2+macd+ma` (Variants) and table (h)'s verdict; the run's
-  numbers and the decision are in [signal.md](signal.md).
+  numbers and the decision are in [signal.md](signal.md#macd-and-ma-on-history-483). The run of
+  2026-10-17 found every point `inconclusive` on 5s and 15s: no indicator is added and no
+  Signal v3 task is created.
 - #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`. `v2+1m` adds the
   `1m` trend as a confirmation, not as the analysis interval.

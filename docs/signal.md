@@ -121,8 +121,9 @@ period 2 `= [3, 4.5]`; `sma([1, 2, 4, 8, 16], 3) = [7/3, 14/3, 28/3]`;
 ### Display indicators (#482)
 
 `displayIndicators(candles, intervalMs, nowMs, params)` (`display.ts`) computes what the analysis
-card shows beside the decision; the decision never reads it (MACD and MA join it only after the
-#483 backtest). The periods are `DISPLAY_INDICATOR_PARAMS` (shared): MACD 12, 26, 9, MA50, MA200.
+card shows beside the decision; the decision never reads it. #483's backtest found no MACD or MA
+gate that beats v2 on history, so neither joins it
+([MACD and MA on history](#macd-and-ma-on-history-483)). The periods are `DISPLAY_INDICATOR_PARAMS` (shared): MACD 12, 26, 9, MA50, MA200.
 It runs over the unbroken tail of the response: the rows after its last break, a step other than
 `intervalMs` or a candle that fails the per-candle checks (`invalid_candle`). The tail passes the
 same `prepareCandles` with a floor of one closed candle (the forming candle, a candle in the
@@ -766,6 +767,95 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
 - the worst 60 s window of both scanners at the highest ceiling, the ceiling plus both buckets
   (200 + 27 + 9 = 236), below the broker's window. It is checked at the maximum only.
 
+## MACD and MA on history (#483)
+
+The question (owner, 2026-10-14): do the MACD cross and the MA50/MA200 trend filter the card shows
+(#482) improve the win rate at the payout? Answered on the #381 stand ([signal-stand.md](signal-stand.md)),
+the cache of 2026-10-01…10-15 (28 pairs, split at 2026-10-11T09:27Z, headline delay 1000 ms from
+calibrate, the pause on), run on 2026-10-17 at `de95942` (the code of PR #589) with
+`STAND_DIR=~/binarius-stand/stand NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @binarius/signal-stand stand run --variants v2,v2+macd,v2+ma,v2+macd+ma --intervals 5s,15s --out ~/binarius-stand/stand/out/483-de95942`
+(28 of 28 pairs, about 16 min); the report is `~/binarius-stand/stand/out/483-de95942/report.md`,
+outside the repository, quoted in PR #589.
+
+Each variant starts from Signal v2 at the production point (15/5) and reads production's
+`displayIndicators` over the 300-row window: `v2+macd` — `cross` (the histogram crosses zero in the
+direction on the last closed candle) or `hist` (its sign agrees); `v2+ma` — the close on the
+direction's side of MA200, of MA50, or of both; `v2+macd+ma` — both. The rule, fixed before the run
+(owner's clarify answer В1, 2026-10-17): a point is `better` when its Wilson 95 % lower bound is
+above v2's rate, it keeps ≥ 10 % of v2's trades (`MIN_KEPT_SHARE_PCT`) and its in-sample rate is
+above v2's; an indicator is added only if one point is `better` on 5s and on 15s. The verdict is
+the stand's own (table (h)), not computed by hand.
+
+Out-of-sample (2026-10-11T09:27Z…10-15, 96.4 h), pooled over the 25 pairs paying ≥ 80 %
+(break-even 55.6 %), the pause on, delay 1000 ms; trades = W + L + T, win % = W / (W + L):
+
+| interval | variant | point | trades | kept % | win % | 95 % CI | v2 win % | Δ pp | in-sample Δ pp | trades/pair-h | PnL/trade | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 5s | v2 | production 15/5 | 339481 | 100 | 49.9 | 49.7-50.0 | — | — | — | 140.89 | -0.05 | (reference) |
+| 5s | v2+macd | cross | 32268 | 9.5 | 49.9 | 49.4-50.5 | 49.9 | 0.1 | 0.1 | 13.39 | -0.05 | inconclusive |
+| 5s | v2+macd | hist | 264231 | 77.8 | 49.8 | 49.6-50.0 | 49.9 | -0.1 | 0.0 | 109.66 | -0.05 | inconclusive |
+| 5s | v2+ma | 200 | 241306 | 71.1 | 50.0 | 49.8-50.2 | 49.9 | 0.2 | 0.0 | 100.15 | -0.05 | inconclusive |
+| 5s | v2+ma | 50 | 333621 | 98.3 | 49.9 | 49.7-50.0 | 49.9 | 0.0 | -0.0 | 138.46 | -0.05 | inconclusive |
+| 5s | v2+ma | 50+200 | 239781 | 70.6 | 50.0 | 49.8-50.2 | 49.9 | 0.2 | 0.1 | 99.52 | -0.05 | inconclusive |
+| 5s | v2+macd+ma | cross, 200 | 25699 | 7.6 | 49.9 | 49.3-50.5 | 49.9 | 0.0 | -0.1 | 10.67 | -0.05 | inconclusive |
+| 5s | v2+macd+ma | cross, 50 | 32267 | 9.5 | 49.9 | 49.4-50.5 | 49.9 | 0.1 | 0.1 | 13.39 | -0.05 | inconclusive |
+| 5s | v2+macd+ma | cross, 50+200 | 25698 | 7.6 | 49.9 | 49.3-50.5 | 49.9 | 0.0 | -0.1 | 10.67 | -0.05 | inconclusive |
+| 5s | v2+macd+ma | hist, 200 | 174302 | 51.3 | 50.0 | 49.7-50.2 | 49.9 | 0.1 | 0.1 | 72.34 | -0.05 | inconclusive |
+| 5s | v2+macd+ma | hist, 50 | 258488 | 76.1 | 49.8 | 49.6-50.0 | 49.9 | -0.0 | 0.0 | 107.28 | -0.05 | inconclusive |
+| 5s | v2+macd+ma | hist, 50+200 | 172773 | 50.9 | 49.9 | 49.7-50.2 | 49.9 | 0.1 | 0.1 | 71.71 | -0.05 | inconclusive |
+| 15s | v2 | production 15/5 | 174250 | 100 | 50.0 | 49.8-50.2 | — | — | — | 72.32 | -0.05 | (reference) |
+| 15s | v2+macd | cross | 11420 | 6.6 | 49.9 | 48.9-50.8 | 50.0 | -0.1 | -0.2 | 4.74 | -0.05 | inconclusive |
+| 15s | v2+macd | hist | 133364 | 76.5 | 50.2 | 49.9-50.4 | 50.0 | 0.2 | -0.0 | 55.35 | -0.05 | inconclusive |
+| 15s | v2+ma | 200 | 119356 | 68.5 | 50.0 | 49.7-50.3 | 50.0 | 0.0 | -0.1 | 49.54 | -0.05 | inconclusive |
+| 15s | v2+ma | 50 | 170818 | 98.0 | 50.0 | 49.8-50.2 | 50.0 | -0.0 | 0.0 | 70.89 | -0.05 | inconclusive |
+| 15s | v2+ma | 50+200 | 118463 | 68.0 | 50.0 | 49.7-50.3 | 50.0 | 0.0 | -0.1 | 49.17 | -0.05 | inconclusive |
+| 15s | v2+macd+ma | cross, 200 | 8813 | 5.1 | 49.8 | 48.7-50.9 | 50.0 | -0.2 | -0.1 | 3.66 | -0.05 | inconclusive |
+| 15s | v2+macd+ma | cross, 50 | 11419 | 6.6 | 49.9 | 48.9-50.8 | 50.0 | -0.1 | -0.2 | 4.74 | -0.05 | inconclusive |
+| 15s | v2+macd+ma | cross, 50+200 | 8812 | 5.1 | 49.8 | 48.7-50.8 | 50.0 | -0.2 | -0.1 | 3.66 | -0.05 | inconclusive |
+| 15s | v2+macd+ma | hist, 200 | 83952 | 48.2 | 50.2 | 49.8-50.5 | 50.0 | 0.2 | -0.0 | 34.84 | -0.05 | inconclusive |
+| 15s | v2+macd+ma | hist, 50 | 130001 | 74.6 | 50.2 | 49.9-50.4 | 50.0 | 0.2 | 0.0 | 53.95 | -0.05 | inconclusive |
+| 15s | v2+macd+ma | hist, 50+200 | 83051 | 47.7 | 50.2 | 49.8-50.5 | 50.0 | 0.1 | -0.0 | 34.47 | -0.05 | inconclusive |
+
+Every point is within 0.2 pp of v2, no lower bound clears v2's rate, and no point is `worse`
+either; every row, v2 included, is below the 55.6 % break-even. The in-sample selection picked
+`cross` / `50+200` / `cross, 50` on 5s and `hist` / `50` / `hist, 50` on 15s — different points on
+the two intervals.
+
+By pair type (table (i), out-of-sample, pooled within the type), win % of the selected points:
+
+| interval | variant | point | currency | commodity | stock | cryptocurrency | index |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 5s | v2 | production | 49.5 | no trades | 50.1 | 50.0 | 50.0 |
+| 5s | v2+macd | cross | 49.3 | no trades | 50.3 | 49.7 | 50.4 |
+| 5s | v2+ma | 50+200 | 49.6 | no trades | 50.5 | 49.8 | 50.3 |
+| 5s | v2+macd+ma | cross, 50 | 49.3 | no trades | 50.3 | 49.7 | 50.4 |
+| 15s | v2 | production | 49.6 | 50.1 | 49.6 | 49.9 | 50.6 |
+| 15s | v2+macd | hist | 50.0 | 50.4 | 49.8 | 49.9 | 50.7 |
+| 15s | v2+ma | 50 | 49.7 | 49.9 | 49.6 | 49.9 | 50.5 |
+| 15s | v2+macd+ma | hist, 50 | 50.0 | 50.2 | 49.7 | 49.8 | 50.7 |
+
+No type reaches 55.6 % under any point; the best cell is 50.7 % (15s, index, `hist`). The one
+commodity pair (XAG) makes no 5s trade at the production point (the whole range, not only
+out-of-sample).
+
+Refusal shares (table (e), whole range, % of decisions) of the new gates at the selected points:
+5s `cross` — `macd_no_cross` 34.5; 5s `50+200` — `ma200_disagrees` 11.2, `ma200_no_data` 0.8,
+`ma50_disagrees` 0.2; 15s `hist` — `macd_hist_disagrees` 10.6; 15s `50` — `ma50_disagrees` 0.8.
+`indicators_unavailable` never occurs.
+
+Decision (В1):
+
+- **MACD cross** — not added: it keeps 9.5 % (5s) and 6.6 % (15s) of v2's trades, below the
+  10 % floor, at 49.9 % against v2's 49.9 % and 50.0 %.
+- **MACD histogram sign** — not added: 49.8 % against 49.9 % on 5s (Δ −0.1 pp), 50.2 % against
+  50.0 % on 15s with the lower bound 49.9 % under v2's rate and an in-sample Δ of −0.0 pp.
+- **MA200 / MA50 / both** — not added: Δ 0.0…0.2 pp on both intervals with every lower bound
+  under v2's rate; MA50 keeps 98 % of v2's trades, so it barely filters.
+- **MACD and MA together** — not added: no one of the six points is `better` on either interval.
+
+Signal v3: not created — table (h)'s line «Points better on every interval of this run (5s, 15s):
+none». The decision stays Signal v2; MACD and MA stay on the card only.
+
 ## What it is not
 
 - It gives no probability and no confidence score. The decision is the direction or the reason,
@@ -793,3 +883,5 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
   ([bot-demo.md](bot-demo.md#the-analysis)). #127: the stake button's press and the intent status. Stake size: docs/stake.md.
 - The decision's wire shape and codes are in `packages/shared/src/signal.ts` (#258).
   `packages/db` is not changed.
+- #483: MACD and MA as decision gates, backtested on the stand and not added
+  ([MACD and MA on history](#macd-and-ma-on-history-483)); no Signal v3 task follows from it.
