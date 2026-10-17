@@ -38,24 +38,24 @@ export type ReferralRewardSkipReason =
 export const userReferralRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
 export type UserReferralRequest = z.infer<typeof userReferralRequestSchema>;
 
-const invited = z.number().int().nonnegative();
-// invitees with a confirmed partner account, and the tokens their rewards paid (#116): a decimal
-// string, the amount is a bigint in the backend. While the reward rule is off the two differ.
-const connected = invited;
-// an active user always has a code; a blocked one never gets one created
+const count = z.number().int().nonnegative();
+// An active user always has a code; a blocked one never gets one created. `connected`: invitees
+// with a confirmed partner account; `tokensEarned`: the tokens their rewards paid (#116), a
+// decimal string, the amount is a bigint in the backend. While the reward rule is off the two
+// differ.
 export const userReferralViewSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal(UserStatus.Active),
     code: z.string().regex(REFERRAL_CODE_PATTERN),
-    invited,
-    connected,
+    invited: count,
+    connected: count,
     tokensEarned: tokenCountSchema,
   }),
   z.object({
     status: z.literal(UserStatus.Blocked),
     code: z.null(),
-    invited,
-    connected,
+    invited: count,
+    connected: count,
     tokensEarned: tokenCountSchema,
   }),
 ]);

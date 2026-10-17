@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { BrokerAccountStatus, UserStatus, type OAuthTokens } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
@@ -99,10 +99,10 @@ const emailLogin = (user: SeededUser, isPartnerClient = true, brokerUserId?: str
     activate: true,
   });
 
-const callbackLink = (user: SeededUser) =>
+const callbackLink = (user: SeededUser, isPartnerClient = true, brokerUserId?: string) =>
   linkBrokerAccount(tmp.db, {
     telegramUserId: BigInt(user.telegramUserId),
-    tokens: brokerTokens(true),
+    tokens: brokerTokens(isPartnerClient, brokerUserId),
     cipher,
     activate: false,
   });
@@ -317,7 +317,7 @@ describe('the inviter’s reward on an activation (#116)', () => {
     expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
   });
 
-  it('W9 the OAuth callback pays nothing until the confirm', async () => {
+  it('W9 a callback that leaves the account pending pays nothing until the confirm', async () => {
     const { inviter, invitee, referralId } = await invitation();
     const linked = await callbackLink(invitee);
     expect(linked).toMatchObject({ ok: true, grant: null, referral: null });
@@ -326,6 +326,50 @@ describe('the inviter’s reward on an activation (#116)', () => {
     expect(await confirm(invitee, linked.account.id)).toMatchObject({
       referral: { rewarded: true },
     });
+    expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
+  });
+
+  // decision 9: a re-login of an account confirmed before leaves it active, so it pays
+  it('W11 the callback re-login of a revoked partner account pays the unpaid reward', async () => {
+    const { inviter, invitee, referralId } = await invitation();
+    const brokerUserId = `broker-z${++seq}`;
+    await seedBrokerAccount(tmp.db, invitee.userId, {
+      status: BrokerAccountStatus.Revoked,
+      isPartnerClient: true,
+      brokerUserId,
+    });
+    expect(await callbackLink(invitee, true, brokerUserId)).toMatchObject({
+      ok: true,
+      account: { status: 'active' },
+      grant: null,
+      referral: { rewarded: true, referralId, tokens: SEEDED_REFERRAL_REWARD_TOKENS },
+    });
+    expect(await rewardsOf(referralId)).toHaveLength(1);
+    expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
+    expect(await balanceOf(invitee.userId)).toBe(0n);
+  });
+
+  it('W12 an active account the broker now reports partner pays on a callback re-login, once', async () => {
+    const { inviter, invitee, referralId } = await invitation();
+    const brokerUserId = `broker-z${++seq}`;
+    const accountId = await seedBrokerAccount(tmp.db, invitee.userId, {
+      status: BrokerAccountStatus.Pending,
+      isPartnerClient: false,
+      brokerUserId,
+    });
+    expect(await confirm(invitee, accountId)).toMatchObject({
+      referral: { rewarded: false, reason: 'not_partner_client' },
+    });
+    expect(await callbackLink(invitee, true, brokerUserId)).toMatchObject({
+      ok: true,
+      grant: null,
+      referral: { rewarded: true, referralId },
+    });
+    expect(await callbackLink(invitee, true, brokerUserId)).toMatchObject({
+      ok: true,
+      referral: { rewarded: false, reason: 'already_rewarded', referralId },
+    });
+    expect(await rewardsOf(referralId)).toHaveLength(1);
     expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
   });
 
@@ -357,18 +401,14 @@ describe('the inviter’s reward on an activation (#116)', () => {
 });
 
 describe('the reward’s locks (Rule 5)', () => {
-  // holds the users row of `userId` until the returned release is called
-  async function holdUser(userId: string) {
+  // holds the rows `query` locks until the returned release is called
+  async function holdRows(query: SQL) {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let markHeld!: () => void;
     const held = new Promise<void>((resolve) => (markHeld = resolve));
     const holder = tmp.db.transaction(async (tx) => {
-      await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.id, userId))
-        .for('no key update');
+      await tx.execute(query);
       markHeld();
       await gate;
     });
@@ -378,6 +418,14 @@ describe('the reward’s locks (Rule 5)', () => {
       await holder;
     };
   }
+
+  const holdUser = (userId: string) =>
+    holdRows(sql`select 1 from ${users} where ${users.id} = ${userId} for no key update`);
+
+  // parks an activation after its account lock: the pack's ledger insert takes KEY SHARE on the
+  // link_bonus rule row through its FK
+  const holdLinkBonusRule = () =>
+    holdRows(sql`select 1 from bonus_rules where code = 'link_bonus' and is_active for update`);
 
   it('L1 waits on the inviter’s held users row and pays after its release', async () => {
     const { inviter, invitee, referralId } = await invitation();
@@ -423,10 +471,93 @@ describe('the reward’s locks (Rule 5)', () => {
     );
   });
 
-  it('L3 two concurrent confirms of the invitee’s two partner accounts pay one reward', async () => {
+  // the inviter logs in with the invitee's broker account (decision 6's self-invite): its link
+  // holds the inviter's users row and waits on the account the invitee's activation holds
+  const partnerAccount = async (
+    user: SeededUser,
+    status: BrokerAccountStatus,
+    isPartnerClient = true,
+  ) => {
+    const brokerUserId = `broker-z${++seq}`;
+    const accountId = await seedBrokerAccount(tmp.db, user.userId, {
+      status,
+      isPartnerClient,
+      brokerUserId,
+    });
+    return { accountId, brokerUserId };
+  };
+
+  // a rejected activation shows its SQLSTATE in the diff (40P01 for a deadlock)
+  const rejection = (error: unknown) => {
+    const cause = (error as { cause?: { code?: string } }).cause;
+    return { rejected: cause?.code ?? (error as { code?: string }).code ?? String(error) };
+  };
+
+  async function raceInviterLogin(
+    activation: () => Promise<unknown>,
+    inviterLogin: () => Promise<unknown>,
+  ) {
+    const release = await holdLinkBonusRule();
+    let both: Promise<unknown[]> | undefined;
+    try {
+      const b = activation();
+      await until('the invitee’s activation to park on the rule row', async () => {
+        return (await lockWaiters(tmp.db)) === 1;
+      });
+      const a = inviterLogin();
+      await until('the inviter’s login to queue', async () => (await lockWaiters(tmp.db)) === 2);
+      both = Promise.all([b, a].map((p) => p.catch(rejection)));
+    } finally {
+      await release();
+    }
+    return both;
+  }
+
+  it('L4a the invitee’s confirm and the inviter’s callback login with the same account do not deadlock', async () => {
+    const { inviter, invitee, referralId } = await invitation();
+    const z = await partnerAccount(invitee, BrokerAccountStatus.Pending);
+    const [b, a] = await raceInviterLogin(
+      () => confirm(invitee, z.accountId),
+      () => callbackLink(inviter, true, z.brokerUserId),
+    );
+    expect(b).toMatchObject({ ok: true, referral: { rewarded: true } });
+    expect(a).toEqual({ ok: false, reason: 'broker_account_taken' });
+    expect(await rewardsOf(referralId)).toHaveLength(1);
+    expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
+    expect(await balanceOf(invitee.userId)).toBe(SEEDED_LINK_BONUS_TOKENS);
+  });
+
+  it('L4b the invitee’s email login inserting an account and the inviter’s with the same one do not deadlock', async () => {
+    const { inviter, invitee, referralId } = await invitation();
+    const brokerUserId = `broker-z${++seq}`;
+    const [b, a] = await raceInviterLogin(
+      () => emailLogin(invitee, true, brokerUserId),
+      () => emailLogin(inviter, true, brokerUserId),
+    );
+    expect(b).toMatchObject({ ok: true, referral: { rewarded: true } });
+    expect(a).toEqual({ ok: false, reason: 'broker_account_taken' });
+    expect(await rewardsOf(referralId)).toHaveLength(1);
+    expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
+  });
+
+  // The outcome of two confirms queued at once, not which guard decides it: the invitee's row,
+  // the inviter's row, the paid read and token_ledger_referral_idx each serialize it, so no single
+  // mutation reddens this test and none is listed for it.
+  it('L3 two confirms of the invitee’s two partner accounts queued at once pay one reward', async () => {
     const { inviter, invitee, referralId } = await invitation();
     const [first, second] = [await pending(invitee), await pending(invitee)];
-    const results = await Promise.all([confirm(invitee, first), confirm(invitee, second)]);
+    const release = await holdUser(invitee.userId);
+    let both: Promise<Awaited<ReturnType<typeof confirm>>[]> | undefined;
+    try {
+      const queued = [confirm(invitee, first), confirm(invitee, second)];
+      await until('both confirms to queue behind the invitee’s row', async () => {
+        return (await lockWaiters(tmp.db)) === 2;
+      });
+      both = Promise.all(queued);
+    } finally {
+      await release();
+    }
+    const results = await both;
     expect(results.map((r) => (r.ok ? r.referral.rewarded : r.reason)).sort()).toEqual([
       false,
       true,
@@ -436,5 +567,60 @@ describe('the reward’s locks (Rule 5)', () => {
     );
     expect(await rewardsOf(referralId)).toHaveLength(1);
     expect(await balanceOf(inviter.userId)).toBe(SEEDED_REFERRAL_REWARD_TOKENS);
+  });
+
+  // the order oracle: an activation waiting on the inviter's row holds no broker_accounts lock yet
+  async function accountLock(accountId: string): Promise<string> {
+    const client = await tmp.pool.connect();
+    try {
+      await client.query('begin');
+      await client.query('select 1 from broker_accounts where id = $1 for no key update nowait', [
+        accountId,
+      ]);
+      return 'free';
+    } catch (error) {
+      return (error as { code?: string }).code ?? String(error);
+    } finally {
+      await client.query('rollback');
+      client.release();
+    }
+  }
+
+  it.each([
+    {
+      id: 'a',
+      path: 'the confirm of a pending account',
+      status: BrokerAccountStatus.Pending,
+      activate: (b: SeededUser, z: { accountId: string }) => confirm(b, z.accountId),
+    },
+    {
+      id: 'b',
+      path: 'the email re-login of an active account',
+      status: BrokerAccountStatus.Active,
+      activate: (b: SeededUser, z: { brokerUserId: string }) => emailLogin(b, true, z.brokerUserId),
+    },
+    {
+      id: 'c',
+      path: 'the callback re-login of a revoked account',
+      status: BrokerAccountStatus.Revoked,
+      activate: (b: SeededUser, z: { brokerUserId: string }) =>
+        callbackLink(b, true, z.brokerUserId),
+    },
+  ])('L5$id $path locks the inviter’s row before the account', async ({ status, activate }) => {
+    const { inviter, invitee, referralId } = await invitation();
+    const z = await partnerAccount(invitee, status);
+    const release = await holdUser(inviter.userId);
+    let activating: Promise<unknown> | undefined;
+    try {
+      activating = activate(invitee, z).catch(rejection);
+      await until('the activation to queue behind the inviter’s row', async () => {
+        return (await lockWaiters(tmp.db)) === 1;
+      });
+      expect(await accountLock(z.accountId)).toBe('free');
+    } finally {
+      await release();
+    }
+    expect(await activating).toMatchObject({ ok: true, referral: { rewarded: true } });
+    expect(await rewardsOf(referralId)).toHaveLength(1);
   });
 });

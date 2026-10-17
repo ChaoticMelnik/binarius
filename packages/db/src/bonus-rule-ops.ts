@@ -21,7 +21,8 @@ import type { DbExecutor, Tx } from './trade-intent-ops';
 // The bonus rule engine (#13, docs/bonus-rules.md). A credit is bound to the version that was
 // active when it was written, and a rule change writes no ledger rows, so changing a rule never
 // re-credits what was already credited: the dedupe keys of each reference (the starter pack per
-// user, the deposit per kind, the inviter's reward per referral) keep a later version from paying the same event again.
+// user, the deposit per kind, the inviter's reward per referral) keep a later version from
+// paying the same event again.
 //
 // bonus_rules sits outside the users → … lock chain (Rule 5): applyBonus reads it without a lock
 // (the ledger insert's FK takes KEY SHARE on the rule row), and the CLI's writers lock only the

@@ -799,7 +799,12 @@ describe('linkBrokerAccount with activate (the email login, issue #162)', () => 
       cipher,
       activate: false,
     });
-    expect(created).toMatchObject({ ok: true, account: { status: 'pending' }, grant: null });
+    expect(created).toMatchObject({
+      ok: true,
+      account: { status: 'pending' },
+      grant: null,
+      referral: null,
+    });
     if (!created.ok) return;
     await tmp.db
       .update(brokerAccounts)
@@ -811,7 +816,13 @@ describe('linkBrokerAccount with activate (the email login, issue #162)', () => 
       cipher,
       activate: false,
     });
-    expect(again).toMatchObject({ ok: true, account: { status: 'active' }, grant: null });
+    // the account is left active, so the inviter's reward runs (#116): nobody invited this user
+    expect(again).toMatchObject({
+      ok: true,
+      account: { status: 'active' },
+      grant: null,
+      referral: { rewarded: false, reason: 'no_referral' },
+    });
     expect(await ledgerOf(created.account.userId)).toEqual([]);
   });
 

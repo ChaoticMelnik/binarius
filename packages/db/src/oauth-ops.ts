@@ -13,7 +13,12 @@ import type { Db } from './client';
 import type { TokenCipher } from './crypto';
 import { TokenField } from './crypto';
 import { grantLinkBonus, type LinkBonusGrant } from './link-bonus-ops';
-import { grantReferralReward, type ReferralRewardResult } from './referral-reward-ops';
+import {
+  grantReferralReward,
+  lockReferralInviter,
+  type ReferralInviter,
+  type ReferralRewardResult,
+} from './referral-reward-ops';
 import { attachDepositsToAccount } from './postback-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { oauthStates } from './schema/oauth-states';
@@ -92,15 +97,18 @@ export async function consumeOAuthState(
   return row;
 }
 
-// `grant` and `referral` are null exactly when `activate` was false: only an activating login pays.
-export type LinkBrokerAccountResult =
-  | {
-      ok: true;
-      account: BrokerAccountRow;
-      grant: LinkBonusGrant | null;
-      referral: ReferralRewardResult | null;
-    }
-  | { ok: false; reason: 'broker_account_taken' | 'user_blocked' };
+export type LinkRefusal = { ok: false; reason: 'broker_account_taken' | 'user_blocked' };
+
+// the email login (activate: true) pays the pack and the inviter's reward
+export type ActivatingLinkResult =
+  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant; referral: ReferralRewardResult }
+  | LinkRefusal;
+
+// The callback (activate: false) pays no pack; `referral` is null exactly when the account is
+// left pending, and the confirm pays it then.
+export type CallbackLinkResult =
+  | { ok: true; account: BrokerAccountRow; grant: null; referral: ReferralRewardResult | null }
+  | LinkRefusal;
 
 export interface LinkBrokerAccountInput {
   telegramUserId: bigint;
@@ -117,14 +125,24 @@ export interface LinkBrokerAccountInput {
 // Two steps, because the ciphertext is authenticated against the row id (crypto.ts AAD):
 // a single ON CONFLICT DO UPDATE would write ciphertext bound to a candidate id into a row
 // that already has a different one, and nothing could decrypt it afterwards.
+export function linkBrokerAccount(
+  db: Db,
+  input: LinkBrokerAccountInput & { activate: true },
+): Promise<ActivatingLinkResult>;
+export function linkBrokerAccount(
+  db: Db,
+  input: LinkBrokerAccountInput & { activate: false },
+): Promise<CallbackLinkResult>;
 export async function linkBrokerAccount(
   db: Db,
   { telegramUserId, tokens, cipher, activate }: LinkBrokerAccountInput,
-): Promise<LinkBrokerAccountResult> {
+): Promise<ActivatingLinkResult | CallbackLinkResult> {
   return db.transaction(async (tx) => {
-    // lock order users → broker_accounts, as every other writer in this schema does
+    // lock order users (the caller, then its inviter while the reward is unpaid) →
+    // broker_accounts (Rule 5, referral-reward-ops.ts)
     const user = await upsertUser(tx, telegramUserId);
     if (user === undefined) return { ok: false, reason: 'user_blocked' };
+    const inviter = await lockReferralInviter(tx, user.id);
 
     const candidateId = randomUUID();
     const expiresAt = sql`now() + (${tokens.expiresInSec}::int * interval '1 second')`;
@@ -153,7 +171,11 @@ export async function linkBrokerAccount(
       .onConflictDoNothing({ target: brokerAccounts.brokerUserId })
       .returning();
     if (inserted !== undefined) {
-      return { ok: true, account: inserted, ...(await grantIf(tx, activate, user.id, inserted)) };
+      return {
+        ok: true,
+        account: inserted,
+        ...(await creditActivation(tx, { activate, userId: user.id, account: inserted, inviter })),
+      };
     }
 
     // the account exists: lock it, check who owns it, then re-encrypt under its real id.
@@ -202,30 +224,43 @@ export async function linkBrokerAccount(
       .where(eq(brokerAccounts.id, existing.id))
       .returning();
     if (updated === undefined) throw new Error('broker account update returned no row');
-    return { ok: true, account: updated, ...(await grantIf(tx, activate, user.id, updated)) };
+    return {
+      ok: true,
+      account: updated,
+      ...(await creditActivation(tx, { activate, userId: user.id, account: updated, inviter })),
+    };
   });
 }
 
-// Called on every activating login, not only the first: one pack per user is the index's
-// (grantLinkBonus), and the partner flag is the one this login just wrote. The users row is
-// still held by upsertUser, so the lock order is the one confirmBrokerAccount takes. The
-// trader's unattributed postbacks are attached here too (#141), after broker_accounts. The
-// inviter's reward (#116) comes last and locks a second users row, the inviter's: an older row
-// than this one, which is why it cannot close a cycle (referral-reward-ops.ts).
-async function grantIf(
+// The pack is paid on every activating login, not only the first: one pack per user is the
+// index's (grantLinkBonus), and the partner flag is the one this login just wrote. The trader's
+// unattributed postbacks are attached here too (#141), after broker_accounts. The inviter's reward
+// (#116) is paid whenever the login leaves the account active, the callback's re-login of an
+// account confirmed before included; a pending one is the confirm's to pay. No lock is taken
+// here that the order users → broker_accounts does not already hold (lockReferralInviter).
+async function creditActivation(
   tx: Tx,
-  activate: boolean,
-  userId: string,
-  account: BrokerAccountRow,
-): Promise<{ grant: LinkBonusGrant | null; referral: ReferralRewardResult | null }> {
-  if (!activate) return { grant: null, referral: null };
+  {
+    activate,
+    userId,
+    account,
+    inviter,
+  }: { activate: boolean; userId: string; account: BrokerAccountRow; inviter: ReferralInviter },
+): Promise<
+  | { grant: LinkBonusGrant; referral: ReferralRewardResult }
+  | { grant: null; referral: ReferralRewardResult | null }
+> {
+  if (!activate) {
+    if (account.status !== BrokerAccountStatus.Active) return { grant: null, referral: null };
+    return { grant: null, referral: await grantReferralReward(tx, { referral: inviter, account }) };
+  }
   await attachDepositsToAccount(tx, {
     accountId: account.id,
     userId,
     brokerUserId: account.brokerUserId,
   });
   const grant = await grantLinkBonus(tx, { userId, account });
-  const referral = await grantReferralReward(tx, { inviteeUserId: userId, account });
+  const referral = await grantReferralReward(tx, { referral: inviter, account });
   return { grant, referral };
 }
 
@@ -382,7 +417,8 @@ export type ConfirmBrokerAccountResult =
 
 // The step that turns "someone authorized at the broker" into "this Telegram user owns that
 // account". The user row is read under the same transaction as the account, in the lock order
-// every other writer here uses, so a block landing concurrently cannot slip past. The first
+// every other writer here uses (users, then the inviter's while the reward is unpaid, then
+// broker_accounts - Rule 5), so a block landing concurrently cannot slip past. The first
 // activation is also what earns the starter pack and the inviter's reward, in the same
 // transaction: an account that stays pending, or a confirm that rolls back, pays nothing.
 export async function confirmBrokerAccount(
@@ -397,6 +433,7 @@ export async function confirmBrokerAccount(
       .for('no key update');
     if (user === undefined) return { ok: false, reason: 'not_found' };
     if (user.status === UserStatus.Blocked) return { ok: false, reason: 'user_blocked' };
+    const inviter = await lockReferralInviter(tx, user.id);
 
     // the account id comes from the caller, so ownership is part of the lookup rather than a
     // check afterwards: a row that is not theirs must be indistinguishable from one that is gone
@@ -425,8 +462,7 @@ export async function confirmBrokerAccount(
       brokerUserId: confirmed.brokerUserId,
     });
     const grant = await grantLinkBonus(tx, { userId: user.id, account });
-    // the inviter's reward (#116): a second users row, the inviter's (referral-reward-ops.ts)
-    const referral = await grantReferralReward(tx, { inviteeUserId: user.id, account });
+    const referral = await grantReferralReward(tx, { referral: inviter, account });
     return { ok: true, account: confirmed, grant, referral };
   });
 }
