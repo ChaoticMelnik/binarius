@@ -276,6 +276,8 @@ const SESSION_BALANCES: TradingSessionView['balance'][] = [
   { available: USD, ageSec: 99_999 * 60, current: false },
   { available: USD, ageSec: 0, current: true },
 ];
+// the session picture's direction, or none (#568)
+const SIGNAL_ACTIONS = [null, ...Object.values(TradeAction)];
 const sessionTexts = (
   status: TradingSessionStatus,
   stopReasons: (TradingSessionStopReason | null)[],
@@ -287,35 +289,38 @@ const sessionTexts = (
           [null, ...Object.values(TradeIntentStatus).map((s) => intentView({ status: s }))].flatMap(
             (lastIntent) =>
               Object.values(TradeMode).flatMap((mode) =>
-                SESSION_BALANCES.map((balance) =>
-                  sessionStatusText(
-                    symbol,
-                    sessionView({
-                      mode,
-                      status,
-                      stopReason,
-                      settings: {
-                        version: 1,
-                        assetId: INT4_MAX,
-                        durationSec,
-                        trades: 5,
-                        stake: { baseStake: STAKE, stakeScale: 8 },
-                      },
-                      cycles: {
-                        planned: MAX_SESSION_CYCLES,
-                        closed: Math.min(settled, MAX_SESSION_CYCLES),
-                      },
-                      trades: {
-                        settled,
-                        rejected: 0,
-                        won: N,
-                        lost: N,
-                        tied: N,
-                        profit: USD,
-                      },
-                      lastIntent,
-                      balance,
-                    }),
+                SESSION_BALANCES.flatMap((balance) =>
+                  SIGNAL_ACTIONS.map((signalAction) =>
+                    sessionStatusText(
+                      symbol,
+                      sessionView({
+                        signalAction,
+                        mode,
+                        status,
+                        stopReason,
+                        settings: {
+                          version: 1,
+                          assetId: INT4_MAX,
+                          durationSec,
+                          trades: 5,
+                          stake: { baseStake: STAKE, stakeScale: 8 },
+                        },
+                        cycles: {
+                          planned: MAX_SESSION_CYCLES,
+                          closed: Math.min(settled, MAX_SESSION_CYCLES),
+                        },
+                        trades: {
+                          settled,
+                          rejected: 0,
+                          won: N,
+                          lost: N,
+                          tied: N,
+                          profit: USD,
+                        },
+                        lastIntent,
+                        balance,
+                      }),
+                    ),
                   ),
                 ),
               ),
@@ -401,8 +406,10 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   demoDurations: () => [demoDurationsScreen(pair)],
   // the header by the session's mode (#327)
   sessionNoSettings: () =>
-    Object.values(TradeMode).map((mode) =>
-      sessionStatusText(null, sessionView({ mode, settings: null })),
+    Object.values(TradeMode).flatMap((mode) =>
+      SIGNAL_ACTIONS.map((signalAction) =>
+        sessionStatusText(null, sessionView({ mode, settings: null, signalAction })),
+      ),
     ),
   sessionRunning: () =>
     [TradingSessionStatus.Active, TradingSessionStatus.Paused].flatMap((status) =>

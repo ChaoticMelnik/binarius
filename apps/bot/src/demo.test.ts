@@ -2882,7 +2882,7 @@ describe('the analysis card', () => {
     expect(photos(calls).map(fileName)).toEqual(['setup-bull.png', 'setup-bull.png']);
     expect(logger.warn.mock.calls).toContainEqual([
       { reason: 'no_file_id' },
-      'the analysis card picture is not remembered',
+      'the setup card picture is not remembered',
     ]);
   });
 

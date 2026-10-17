@@ -1459,6 +1459,16 @@ export const BOT_TEXT_CATALOG = {
     `🔹 Время экспирации: {duration}`,
     { vars: ['duration'] },
   ),
+  sessionSignalUp: html(
+    g.Session,
+    'Сессия: строка направления сигнала вверх, пятая строка шапки (#568).',
+    '📡 Сигнал: ⬆️ Вверх',
+  ),
+  sessionSignalDown: html(
+    g.Session,
+    'Сессия: строка направления сигнала вниз, пятая строка шапки (#568).',
+    '📡 Сигнал: ⬇️ Вниз',
+  ),
   sessionRunning: html(
     g.Session,
     'Сессия: под параметрами сессии, пока она идёт.',

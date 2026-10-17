@@ -1,4 +1,4 @@
-import { InlineKeyboard, type Api, type Context } from 'grammy';
+import { InlineKeyboard, type Api, type Context, type InputFile } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
 
@@ -17,9 +17,10 @@ export const NO_NEXT_STEP_REASONS = {
   // keyboard, or goes as a photo and deletes it (the analysis card, #482), and none on it keeps
   // the same button from being pressed twice («⏳ Анализирую…»)
   InProgress: 'in_progress',
-  // the session message (#536, docs/bot-session.md → The session message): its head, the session's
-  // pair and settings above its trades; the next step stands under the backend's waiting message
-  // (its «⏹») and under the summary and its card once the session ended
+  // the session message (#536, #568, docs/bot-session.md → The session message): its head, the
+  // session's pair and settings above its trades, the caption of the signal's picture or a text;
+  // the next step stands under the backend's waiting message (its «⏹») and under the summary and
+  // its card once the session ended
   SessionStatus: 'session_status',
 } as const;
 export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];
@@ -48,6 +49,8 @@ type PhotoByIdExtra = Omit<
   NonNullable<Parameters<Api['sendPhoto']>[2]>,
   'parse_mode' | 'caption' | 'caption_entities'
 >;
+// the caption, its parse_mode and entities travel in the media, which the seam builds
+type MediaEditExtra = NonNullable<Parameters<Api['editMessageMedia']>[3]>;
 
 export const replyHtml = (ctx: Context, text: TelegramHtml, extra: WithNextStep<ReplyExtra>) =>
   ctx.reply(text.value, { ...extra, parse_mode: 'HTML' });
@@ -115,6 +118,53 @@ export const replyWithPhotoHtml = (
   caption: TelegramHtml,
   extra: WithNextStep<PhotoExtra>,
 ) => ctx.replyWithPhoto(photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });
+
+// A photo without a keyboard (the session message, #568); `reason` as above.
+export const replyWithPhotoHtmlWithoutNextStep = (
+  ctx: Context,
+  photo: Parameters<Context['replyWithPhoto']>[0],
+  caption: TelegramHtml,
+  reason: NoNextStepReason,
+) => {
+  void reason;
+  return ctx.replyWithPhoto(photo, { caption: caption.value, parse_mode: 'HTML' });
+};
+
+// Outside an update (the session tracker, #568): the message named by its chat and id becomes this
+// photo with this caption, whether it was a photo or a text (Bot API editMessageMedia).
+export const editMessagePhotoByIdHtml = (
+  api: Pick<Api, 'editMessageMedia'>,
+  chatId: number,
+  messageId: number,
+  photo: string | InputFile,
+  caption: TelegramHtml,
+  extra: WithNextStep<MediaEditExtra>,
+) =>
+  api.editMessageMedia(
+    chatId,
+    messageId,
+    { type: 'photo', media: photo, caption: caption.value, parse_mode: 'HTML' },
+    extra,
+  );
+
+// The same without a keyboard: an edit without reply_markup removes the inline keyboard on
+// screen. `reason` as above.
+export const editMessagePhotoByIdHtmlWithoutNextStep = (
+  api: Pick<Api, 'editMessageMedia'>,
+  chatId: number,
+  messageId: number,
+  photo: string | InputFile,
+  caption: TelegramHtml,
+  reason: NoNextStepReason,
+) => {
+  void reason;
+  return api.editMessageMedia(chatId, messageId, {
+    type: 'photo',
+    media: photo,
+    caption: caption.value,
+    parse_mode: 'HTML',
+  });
+};
 
 // Outside an update (the session tracker's summary card, #318): a photo to the chat named by id.
 export const sendPhotoByIdHtml = (

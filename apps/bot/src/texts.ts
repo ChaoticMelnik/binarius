@@ -481,7 +481,15 @@ const intentPlaysOut = (intent: TradeIntentView | null): intent is TradeIntentVi
 // What the session message shows of a session; nothing else of the view.
 type SessionStatusView = Pick<
   TradingSessionView,
-  'mode' | 'status' | 'stopReason' | 'settings' | 'trades' | 'cycles' | 'lastIntent' | 'balance'
+  | 'mode'
+  | 'status'
+  | 'stopReason'
+  | 'settings'
+  | 'trades'
+  | 'cycles'
+  | 'lastIntent'
+  | 'balance'
+  | 'signalAction'
 >;
 
 // The summary card's words (#318, session-card.ts), read when the card is drawn so an override
@@ -524,15 +532,20 @@ export const sessionStopReplyText = (
     ...(intentPlaysOut(view.lastIntent) ? [TEXTS.sessionOpenTradePlaysOut] : []),
   ]);
 
-// The session's message (#284, #536, docs/bot-session.md → The session message): the header by
-// mode (#327), the pair, the stake and the expiry, then «Торговая сессия запущена…» while it runs
-// and its end line once it stopped. Nothing of its trades: they are the backend's messages, and the
+// The session's message (#284, #536, #568, docs/bot-session.md → The session message): the caption
+// of the session's picture, or the text when it has none. The header by mode (#327), the pair, the
+// stake and the expiry, the signal's direction, then «Торговая сессия запущена…» while it runs and
+// its end line once it stopped. Nothing of its trades: they are the backend's messages, and the
 // result and balance its summary's (#464). `symbol` is null when the catalog could not say.
 export function sessionStatusText(symbol: PairLabel | null, view: SessionStatusView): TelegramHtml {
   const { settings } = view;
   const header = view.mode === TradeMode.Real ? TEXTS.sessionHeaderReal : TEXTS.sessionHeader;
+  const signal =
+    view.signalAction === null
+      ? []
+      : [view.signalAction === TradeAction.Up ? TEXTS.sessionSignalUp : TEXTS.sessionSignalDown];
   if (settings === null) {
-    return telegramHtml`${header}
+    return telegramHtml`${joinLines([header, ...signal])}
 
 ${TEXTS.sessionSettingsUnavailable}`;
   }
@@ -541,6 +554,7 @@ ${TEXTS.sessionSettingsUnavailable}`;
     TEXTS.sessionPair({ symbol: sessionAssetLabel(symbol, settings.assetId) }),
     TEXTS.sessionStake({ stake: settings.stake.baseStake }),
     TEXTS.sessionExpiry({ duration: `${String(settings.durationSec)} с` }),
+    ...signal,
   ]);
   const state =
     view.status === TradingSessionStatus.Stopped ? sessionEndLine(view) : TEXTS.sessionRunning;

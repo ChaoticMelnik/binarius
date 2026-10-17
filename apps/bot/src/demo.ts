@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   deleteRefusal,
   editRefusal,
@@ -52,7 +52,6 @@ import {
   analysisUnavailableScreen,
   type AnalysisScreen,
 } from './analysis';
-import { SETUP_CARD_PHOTO_PATHS } from './assets';
 import { backendErrorFields, type BackendClient } from './backend-client';
 import {
   checkDemoCycle,
@@ -84,6 +83,7 @@ import {
   replyHtmlWithoutNextStep,
   replyWithPhotoHtml,
 } from './send';
+import type { SetupCardPhotos } from './setup-card';
 import { stakeAccess } from './stake-access';
 import {
   cycleStakeLabel,
@@ -817,6 +817,8 @@ export interface DemoComposerDeps {
   dialog: LoginDialog;
   // the welcome's connect button, for a user with no account to trade on
   connectKeyboard: () => InlineKeyboard;
+  // the card's pictures, shared with the session message (#568)
+  setupCardPhotos: SetupCardPhotos;
 }
 
 export function createDemoComposer<C extends Context>({
@@ -825,11 +827,9 @@ export function createDemoComposer<C extends Context>({
   now,
   dialog,
   connectKeyboard,
+  setupCardPhotos,
 }: DemoComposerDeps): Composer<C> {
   const composer = new Composer<C>();
-  // The file_id Telegram answered the first card of each direction with (#482): memory only, so a
-  // restart, or a second bot process, uploads each picture once again.
-  const photoIds = new Map<TradeAction, string>();
 
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
@@ -1178,23 +1178,18 @@ export function createDemoComposer<C extends Context>({
     pair: PairView,
     durationSec: DemoDurationSec,
   ): Promise<void> {
-    const known = photoIds.get(action);
+    const photo = setupCardPhotos.photo(action);
     let sent;
     try {
-      sent = await replyWithPhotoHtml(
-        ctx,
-        known ?? new InputFile(SETUP_CARD_PHOTO_PATHS[action]),
-        text,
-        { reply_markup: keyboard },
-      );
+      sent = await replyWithPhotoHtml(ctx, photo, text, { reply_markup: keyboard });
     } catch (error) {
       if (error instanceof GrammyError) {
-        photoIds.delete(action);
+        setupCardPhotos.forget(action);
         logger.warn(
           {
             ...errorLogFields(error),
             ...telegramErrorFields(error),
-            byFileId: known !== undefined,
+            byFileId: typeof photo === 'string',
           },
           'the analysis card photo was refused, sending its text',
         );
@@ -1222,15 +1217,7 @@ export function createDemoComposer<C extends Context>({
       }
       return;
     }
-    if (known === undefined) {
-      // the largest size is last; any size names the same photo to Telegram
-      const fileId = sent.photo.at(-1)?.file_id;
-      if (fileId === undefined) {
-        logger.warn({ reason: 'no_file_id' }, 'the analysis card picture is not remembered');
-      } else {
-        photoIds.set(action, fileId);
-      }
-    }
+    setupCardPhotos.remember(action, sent);
     if (waiting !== null) await deleteWaiting(ctx, waiting);
   }
 

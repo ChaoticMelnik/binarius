@@ -309,7 +309,7 @@ describe('the session button', () => {
     expect(edit).not.toHaveProperty('reply_markup');
 
     // #350: a session gone from the backend gets the menu only
-    await entry.edit(telegramHtml`gone`, null, 'not_found');
+    await entry.edit(telegramHtml`gone`, null, 'not_found', null);
     expect(
       rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
     ).toEqual([MENU]);
@@ -1602,5 +1602,178 @@ describe('the resume of a tracked session after a restart (#567)', () => {
     const entry = inPlace.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
     expect(entry.record).toBe(true);
     expect(entry.replacesMessageId).toBeUndefined();
+  });
+});
+
+// #568: the session message is the picture of its signal's direction, the text its caption
+describe('the session picture (#568)', () => {
+  const UP = sessionView({ signalAction: 'up' });
+  const DOWN = sessionView({ signalAction: 'down' });
+  const UP_STOPPED = sessionView({ ...STOPPED, signalAction: 'up' });
+  const LAUNCH = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5, true);
+  const PHOTO_REFUSED: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: wrong file identifier/HTTP URL specified',
+  };
+  const NOT_MODIFIED: ApiError = {
+    ok: false,
+    error_code: 400,
+    description:
+      'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
+  };
+  const fileName = (photo: unknown) => (photo instanceof InputFile ? photo.filename : photo);
+  const photos = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'sendPhoto').map((call) => fileName(call.payload.photo));
+  const media = (calls: readonly ApiCall[]) =>
+    calls
+      .filter((call) => call.method === 'editMessageMedia')
+      .map((call) => call.payload.media as Record<string, unknown>);
+  const started = (view: TradingSessionView) =>
+    setup({ startSession: () => Promise.resolve({ started: view }) });
+  const entryOf = (scene: ReturnType<typeof setup>, index = 0) =>
+    scene.sessionTracker.track.mock.calls[index]?.[0] as SessionTrackRequest;
+
+  it('S-photo1 sends the up picture, its caption the session text with the signal fifth, and tracks it', async () => {
+    const scene = started(UP);
+    await scene.press(START);
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendPhoto']);
+    const sent = payloadOf(scene.calls, 'sendPhoto');
+    expect(fileName(sent?.photo)).toBe('setup-bull.png');
+    expect(sent?.caption).toBe(statusOf(UP));
+    expect(String(sent?.caption).split('\n')[4]).toBe('📡 Сигнал: ⬆️ Вверх');
+    expect(sent?.parse_mode).toBe('HTML');
+    expect(sent).not.toHaveProperty('reply_markup');
+    expect(entryOf(scene)).toMatchObject({ messageId: CARD_MESSAGE_ID, view: UP });
+    // the second start goes by the file_id the first one was answered with
+    await scene.press(START);
+    expect(photos(scene.calls)).toEqual(['setup-bull.png', CARD_FILE_ID]);
+  });
+
+  it('S-photo2 a down signal sends the bear picture', async () => {
+    const scene = started(DOWN);
+    await scene.press(START);
+    const sent = payloadOf(scene.calls, 'sendPhoto');
+    expect(fileName(sent?.photo)).toBe('setup-bear.png');
+    expect(String(sent?.caption).split('\n')[4]).toBe('📡 Сигнал: ⬇️ Вниз');
+  });
+
+  it('S-photo3 a refused photo: the same text as a message, tracked, the launch screen kept, the file_id forgotten', async () => {
+    const scene = started(UP);
+    await scene.press(START);
+    scene.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await scene.pressUpdate(callbackUpdate(LAUNCH));
+    expect(methods(scene.calls).slice(2)).toEqual([
+      'answerCallbackQuery',
+      'sendPhoto',
+      'sendMessage',
+    ]);
+    expect(payloadOf(scene.calls, 'sendMessage')?.text).toBe(statusOf(UP));
+    expect(payloadOf(scene.calls, 'sendMessage')).not.toHaveProperty('reply_markup');
+    expect(entryOf(scene, 1)).toMatchObject({ messageId: TEXT_CARD_MESSAGE_ID });
+    expect(warnings(scene.logger)).toEqual(['the session photo was refused, sending its text']);
+    expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      method: 'sendPhoto',
+      telegramErrorCode: 400,
+      byFileId: true,
+    });
+    scene.apiErrors.delete('sendPhoto');
+    await scene.press(START);
+    expect(photos(scene.calls)).toEqual(['setup-bull.png', CARD_FILE_ID, 'setup-bull.png']);
+  });
+
+  it('S-photo4 a photo failed in transport: thrown, no second message, nothing tracked', async () => {
+    const scene = started(UP);
+    scene.apiErrors.set(
+      'sendPhoto',
+      new HttpError("Network request for 'sendPhoto' failed!", new Error('reset')),
+    );
+    await expect(scene.press(START)).rejects.toThrow();
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendPhoto']);
+    expect(scene.sessionTracker.track).not.toHaveBeenCalled();
+  });
+
+  it('S-edit1 an edit of a view with a direction is editMessageMedia, without a keyboard', async () => {
+    const scene = started(UP);
+    await scene.press(START);
+    await entryOf(scene).edit(sessionStatusText(pairLabel(PAIR_EURUSD), UP_STOPPED), UP_STOPPED);
+    const edit = payloadOf(scene.calls, 'editMessageMedia');
+    expect(edit).toMatchObject({ chat_id: USER.id, message_id: CARD_MESSAGE_ID });
+    expect(edit).not.toHaveProperty('reply_markup');
+    expect(media(scene.calls)).toEqual([
+      { type: 'photo', media: CARD_FILE_ID, caption: statusOf(UP_STOPPED), parse_mode: 'HTML' },
+    ]);
+    expect(methods(scene.calls)).not.toContain('editMessageText');
+  });
+
+  it('S-edit2/3 a turn to down uploads the bear picture, then edits by the file_id it answered', async () => {
+    const scene = started(UP);
+    await scene.press(START);
+    scene.answers.set(
+      'editMessageMedia',
+      photoAnswer(CARD_MESSAGE_ID, ['bear-small', 'bear-large']),
+    );
+    const entry = entryOf(scene);
+    await entry.edit(telegramHtml`down`, DOWN);
+    await entry.edit(telegramHtml`down again`, DOWN);
+    await entry.edit(telegramHtml`up`, UP);
+    expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
+      'setup-bear.png',
+      'bear-large',
+      CARD_FILE_ID,
+    ]);
+  });
+
+  it('S-edit4 a refused media edit forgets the file_id and is thrown to the tracker; not modified keeps it', async () => {
+    const scene = started(UP);
+    await scene.press(START);
+    const entry = entryOf(scene);
+    scene.apiErrors.set('editMessageMedia', NOT_MODIFIED);
+    await expect(entry.edit(telegramHtml`same`, UP)).rejects.toBeInstanceOf(GrammyError);
+    scene.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
+    await expect(entry.edit(telegramHtml`stale`, UP)).rejects.toBeInstanceOf(GrammyError);
+    scene.apiErrors.delete('editMessageMedia');
+    await entry.edit(telegramHtml`again`, UP);
+    expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
+      CARD_FILE_ID,
+      CARD_FILE_ID,
+      'setup-bull.png',
+    ]);
+  });
+
+  it('S-edit5 a session gone: the picture under the menu after a view with a direction, the text after none', async () => {
+    const scene = started(UP);
+    await scene.press(START);
+    const entry = entryOf(scene);
+    await entry.edit(TEXTS.sessionStatusUnavailable, null, 'not_found', UP);
+    const edit = payloadOf(scene.calls, 'editMessageMedia');
+    expect(edit?.media).toMatchObject({
+      type: 'photo',
+      media: CARD_FILE_ID,
+      caption: TEXTS.sessionStatusUnavailable.value,
+    });
+    expect(rowsOf(edit)).toEqual([MENU]);
+    await entry.edit(TEXTS.sessionStatusUnavailable, null, 'not_found', SESSION_VIEW);
+    await entry.edit(TEXTS.sessionStatusUnavailable, null, 'not_found', null);
+    expect(methods(scene.calls).filter((m) => m.startsWith('edit'))).toEqual([
+      'editMessageMedia',
+      'editMessageText',
+      'editMessageText',
+    ]);
+  });
+
+  it('S-photo5 a view without a direction keeps the text message and its text edit', async () => {
+    const scene = started(SESSION_VIEW);
+    await scene.press(START);
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    await entryOf(scene).edit(telegramHtml`stopped`, STOPPED);
+    expect(methods(scene.calls).at(-1)).toBe('editMessageText');
+  });
+
+  it("LG1 an old status message's «⏹» draws the caption text with its signal line, in place", async () => {
+    const scene = setup({ stopSession: () => Promise.resolve(UP_STOPPED) });
+    await scene.press(STOP);
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(scene.calls, 'editMessageText')?.text).toContain('📡 Сигнал: ⬆️ Вверх');
   });
 });

@@ -482,8 +482,10 @@ const sessionStopLines = [
   'sessionStopNoSignalTimeout',
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
+// the session picture's direction line (#568), absent while the session has none
+const sessionSignal = oneOf([], ['\n', anyOf('sessionSignalUp', 'sessionSignalDown')]);
 // the session message's head (#536, texts.ts → sessionStatusText): the mode's header, the pair,
-// the stake, the expiry
+// the stake, the expiry, the signal's direction
 const sessionHead = [
   anyOf('sessionHeader', 'sessionHeaderReal'),
   '\n',
@@ -492,6 +494,7 @@ const sessionHead = [
   k('sessionStake'),
   '\n',
   k('sessionExpiry'),
+  sessionSignal,
 ];
 // a finished session's result and the balance after it, by mode, with the age when it predates
 // the last trade (#337, texts.ts → outcomeLines)
@@ -704,25 +707,31 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'sessionNoSettings',
     title: 'Сессия: настройки не прочитаны',
-    limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [anyOf('sessionHeader', 'sessionHeaderReal'), '\n\n', k('sessionSettingsUnavailable')],
+    // the session message is the caption of its picture (#568)
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [
+      anyOf('sessionHeader', 'sessionHeaderReal'),
+      sessionSignal,
+      '\n\n',
+      k('sessionSettingsUnavailable'),
+    ],
   },
   {
     id: 'sessionRunning',
     title: 'Сессия идёт',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [...sessionHead, '\n\n', k('sessionRunning')],
   },
   {
     id: 'sessionCompleted',
     title: 'Сессия завершена',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [...sessionHead, '\n\n', k('sessionCompleted')],
   },
   {
     id: 'sessionStopped',
     title: 'Сессия остановлена',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [...sessionHead, '\n\n', anyOf(...sessionStopLines, 'sessionStatusUnavailable')],
   },
   {

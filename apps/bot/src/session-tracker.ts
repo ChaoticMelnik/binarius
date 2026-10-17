@@ -19,8 +19,9 @@ import type { Logger } from './logging';
 import { sessionStatusText, TEXTS } from './texts';
 
 // The session's message follows its session (#284, docs/bot-session.md): the bot polls GET
-// /trading/sessions/:id and edits the message when its text changes - once, when the session
-// stops (#536) - then sends the summary card (#318). In-process memory,
+// /trading/sessions/:id and edits the message when its text changes - when the session stops
+// (#536) or its signal's direction turns (#568), the picture by editMessageMedia - then sends the
+// summary card (#318). In-process memory,
 // like the intent tracker; the first poll of a message records its id with the backend (#567), so
 // after a restart the bot's resumer (session-resume.ts) tracks the session again on it, the
 // recovered entries' first polls paced in slots and a message drawn in this process remembered.
@@ -38,9 +39,19 @@ const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 // balance for the same predicate (#337), so the two cannot drift.
 export const sessionTrackingDone = isTradingSessionFinished;
 
-// what an edit draws for: the view it shows, or none once the session is gone (#350)
+// what an edit draws for: the view it shows, or none once the session is gone (#350), with the
+// last view read of it, whose picture the message carries (#568)
 export type SessionEditArgs =
-  [view: TradingSessionView, end?: undefined] | [view: null, end: 'not_found'];
+  | [view: TradingSessionView, end?: undefined]
+  | [view: null, end: 'not_found', last: TradingSessionView | null];
+
+// The one choice of the session message's kind (#568, docs/bot-session.md → The session message):
+// a view with a signal's direction is drawn as its picture, by editMessageMedia, which turns a text
+// message into a photo too; without one, or with no view read, it is the text of #536.
+export const sessionEditMethod = (
+  view: Pick<TradingSessionView, 'signalAction'> | null,
+): 'editMessageText' | 'editMessageMedia' =>
+  view === null || view.signalAction === null ? 'editMessageText' : 'editMessageMedia';
 
 export interface SessionTrackRequest {
   sessionId: string;
@@ -240,7 +251,7 @@ export function createSessionTracker({
           logger.warn(
             {
               ...errorLogFields(error),
-              ...telegramErrorFields(error, 'editMessageText'),
+              ...telegramErrorFields(error, sessionEditMethod(args[0] ?? args[2] ?? null)),
               sessionId: entry.sessionId,
             },
             'trading session message not edited',
@@ -285,7 +296,14 @@ export function createSessionTracker({
       if (notFound) {
         // polling cannot fix a missing or foreign id; a replaced entry leaves the old message be
         if (current(entry)) {
-          await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND, null, 'not_found');
+          await editTo(
+            entry,
+            TEXTS.sessionStatusUnavailable,
+            SESSION_NOT_FOUND,
+            null,
+            'not_found',
+            entry.view,
+          );
         }
         finish(entry);
         return;

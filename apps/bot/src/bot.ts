@@ -58,6 +58,7 @@ import { createSessionShareComposer } from './session-share';
 import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingModeComposer } from './trading-mode';
+import { createSetupCardPhotos } from './setup-card';
 import { createTradingSessionComposer } from './trading-session';
 import { createCycleStakeComposer } from './cycle-stake';
 import type { IntentTracker } from './intent-tracker';
@@ -463,6 +464,9 @@ export function createBot({
     await replyHtml(ctx, helpText(botCommands()), { reply_markup: menuKeyboard() });
   });
 
+  // the pictures of a signal's direction: the analysis card's and the session message's (#568)
+  const setupCardPhotos = createSetupCardPhotos(logger);
+
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
   privateChats.use(
@@ -472,6 +476,7 @@ export function createBot({
       now,
       dialog: loginDialog,
       connectKeyboard: welcomeKeyboard,
+      setupCardPhotos,
     }),
   );
 
@@ -504,6 +509,7 @@ export function createBot({
     sessionTracker,
     connectKeyboard: welcomeKeyboard,
     cashierUrl,
+    setupCardPhotos,
   });
   sessionResumer.attach(tradingSession.resume);
   // the amounts of a demo cycle's amount screen (#476), which start through the session's path;

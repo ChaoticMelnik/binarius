@@ -130,21 +130,23 @@ export const HANDLER_CALLS = {
   // сессия» #320 and the launch screen's «🚀 Запустить цикл» land here, and demo buttons sent
   // before #476): answerCallbackQuery ∥
   // readPairs — counted as sequential, as in confirm — then startSession and its one retry on an
-  // unknown outcome, then sendMessage; after it, the launch screen's deleteMessage refused as
-  // forbidden and editMessageReplyMarkup (#418), so the status is never withheld by them. 47 s,
-  // equal to demoAnalysis.
+  // unknown outcome, then sendMessage, or sendPhoto with a signal's direction (#568); after it, the
+  // launch screen's deleteMessage refused as forbidden and editMessageReplyMarkup (#418), so the
+  // status is never withheld by them. A refused photo sends its text instead, and the screen is
+  // then not deleted: the same count. 47 s, equal to demoAnalysis.
   sessionStart: { backend: 3, telegram: 4 },
   // an amount of the amount screen (#476, cycle-stake.ts): answerCallbackQuery ∥ setStake ∥
   // readPairs — counted as sequential, as in confirm — then startSession in one attempt (its retry
-  // would make it 4 / 4 = 52 s, past SHUTDOWN_BUDGET_MS), sendMessage, then the screen's
-  // deleteMessage refused as forbidden and editMessageReplyMarkup (#418). 47 s, equal to
-  // sessionStart.
+  // would make it 4 / 4 = 52 s, past SHUTDOWN_BUDGET_MS), sendMessage or sendPhoto (#568), then the
+  // screen's deleteMessage refused as forbidden and editMessageReplyMarkup (#418); a refused photo
+  // sends its text and keeps the screen, 3 / 3. 47 s, equal to sessionStart.
   cycleStakePreset: { backend: 3, telegram: 4 },
   // its «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
   cycleStakeCustom: { backend: 0, telegram: 3 },
   // a text on that step: setStake ∥ readPairs — counted as sequential — then startSession and its
-  // one retry on an unknown outcome, then sendMessage; nothing is deleted
-  cycleStakeText: { backend: 4, telegram: 1 },
+  // one retry on an unknown outcome, then sendMessage, or sendPhoto and, refused, sendMessage
+  // (#568); nothing is deleted. 36 s
+  cycleStakeText: { backend: 4, telegram: 2 },
   // an old status message's «🔄 Обновить» (#536): answerCallbackQuery, then
   // editMessageReplyMarkup, as legacyDuration
   sessionRefresh: { backend: 0, telegram: 2 },
