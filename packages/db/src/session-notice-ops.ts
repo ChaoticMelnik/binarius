@@ -52,13 +52,15 @@ const finishedSql = sql<boolean>`(${tradingSessions.status} = ${literal(TradingS
 
 // The waiting message (#536, docs/bot-session.md → The waiting message). Its slot is the cycle
 // message it stands under, 0 before any: an edit of a step keeps it, a new cycle message leaves it
-// behind. These two predicates alone decide what the sender does with it.
+// behind, the waiting message's delete frees it. The fragments below alone decide what the sender
+// does with it.
 const cycleSlotSql = sql<number>`coalesce(${tradingSessions.cycleMessageId}, 0)`;
 
 // The fragment both the list and the claim take: an active session with no live waiting message,
-// whose slot was not claimed yet, under a message of the session - the bot's status message
-// (#567) or a cycle message - so the waiting message never stands above the session's message.
-const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${cycleSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.cycleMessageId} is not null))`;
+// whose slot was not claimed yet, under a message of the session - the bot's recorded status
+// message (#567) or a claimed trade, whose message goes only after the session's, recorded or not
+// - so the waiting message never stands above the session's message.
+const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${cycleSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0))`;
 
 // due: a waiting message is to be sent; nothing goes to a user who blocked the bot (Rule 19)
 const waitingDueSql = sql<boolean>`(${waitingClaimableSql} and ${users.telegramBlockedAt} is null)`;
@@ -265,9 +267,8 @@ export async function releaseSessionTradeNotice(
 
 // The summary's at-most-once claim: one CAS sets final_notice_sent_at only on a finished session
 // whose every settled trade was claimed first and whose waiting message is gone (#536), so the
-// summary is the last message. A finished
-// session with no settled trade is granted too: the sender then sends nothing (no result to
-// report, as #337 and #318).
+// summary is the last message. A finished session with no settled trade is granted too: the
+// sender then sends nothing (no result to report, as #337 and #318).
 export async function claimSessionFinalNotice(
   db: Db,
   { sessionId }: { sessionId: string },
@@ -310,8 +311,9 @@ export async function releaseSessionFinalNotice(
 }
 
 // Claims the waiting message's slot before the send (#536): one CAS on a claimable session sets
-// the slot to its current cycle message, so at most one waiting message goes out per slot. The
-// slot, or undefined when the CAS lost (another sender, or nothing to claim).
+// the slot to its current cycle message, so at most one waiting message of unknown fate exists:
+// none goes out while one is live or its slot claimed on the current cycle message. The slot, or
+// undefined when the CAS lost (another sender, or nothing to claim).
 export async function claimSessionWaiting(
   db: Db,
   { sessionId }: { sessionId: string },
@@ -374,15 +376,16 @@ export async function releaseSessionWaiting(
   return rows.length > 0;
 }
 
-// Drops the waiting message's id after its delete (or once it cannot be deleted): one CAS on that
-// id. The slot stays, so the same slot is not claimed again. False when the id is not that one.
+// Drops the waiting message's id after its delete (or once it cannot be deleted) and frees its
+// slot: one CAS on that id. An active session is due again, whatever becomes of the cycle message
+// sent next. False when the id is not that one.
 export async function clearSessionWaitingMessage(
   db: Db,
   { sessionId, messageId }: { sessionId: string; messageId: number },
 ): Promise<boolean> {
   const rows = await db
     .update(tradingSessions)
-    .set({ waitingMessageId: null })
+    .set({ waitingMessageId: null, waitingAfterMessage: null })
     .where(and(eq(tradingSessions.id, sessionId), eq(tradingSessions.waitingMessageId, messageId)))
     .returning({ id: tradingSessions.id });
   return rows.length > 0;
