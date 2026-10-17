@@ -69,6 +69,7 @@ describe('promoDirection', () => {
   it('P1 the majority, the last trade on a tie, none without a trade', () => {
     expect(promoDirection([Up, Down, Up])).toBe(Up);
     expect(promoDirection([Down, Up, Down])).toBe(Down);
+    expect(promoDirection([Up, Up, Down])).toBe(Up);
     expect(promoDirection([Up, Down])).toBe(Down);
     expect(promoDirection([Down, Up])).toBe(Up);
     expect(promoDirection([Down])).toBe(Down);
