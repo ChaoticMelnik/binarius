@@ -7,7 +7,13 @@ import {
   type OpenTradeRequestWire,
 } from '@binarius/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { createBrokerState, DEFAULT_PAIRS, type MockChange, type MockOpenTradeWire } from './state';
+import {
+  createBrokerState,
+  DEFAULT_PAIRS,
+  MOCK_EMAIL_USER_ID_FROM,
+  type MockChange,
+  type MockOpenTradeWire,
+} from './state';
 
 const EURUSD = 101;
 const AAPL = 202;
@@ -104,6 +110,50 @@ describe('users', () => {
     state.revokeToken('token-1');
     state.revokeToken('token-1');
     expect(changes).toEqual([{ type: 'token_revoked', userId: 1 }]);
+  });
+});
+
+describe('users of the email login (#105)', () => {
+  it('registers without a token, and a later token is added alongside the earlier ones', () => {
+    const state = createBrokerState();
+    state.registerUser({ id: 5 });
+    expect(state.authenticate('')).toBeUndefined();
+    state.addAccessToken(5, 'first');
+    state.addAccessToken(5, 'second');
+    expect(state.authenticate('first')).toBe(5);
+    expect(state.authenticate('second')).toBe(5);
+  });
+
+  it('refuses a taken or empty token and a token for an unknown user', () => {
+    const state = stateWithUser();
+    expect(() => state.addAccessToken(1, 'token-1')).toThrow(RangeError);
+    expect(() => state.addAccessToken(1, '')).toThrow(RangeError);
+    expect(() => state.addAccessToken(99, 'fresh')).toThrow(/unknown mock user/);
+  });
+
+  it('finds a user by email regardless of case and refuses a taken address', () => {
+    const state = stateWithUser({ email: 'Ada@Example.test', isPartnerClient: false });
+    expect(state.findUserByEmail('ada@example.TEST')).toBe(1);
+    expect(state.findUserByEmail('bob@example.test')).toBeUndefined();
+    expect(state.userProfile(1)).toEqual({
+      id: 1,
+      email: 'ada@example.test',
+      isPartnerClient: false,
+    });
+    expect(() => state.registerUser({ id: 2, email: 'ADA@example.test' })).toThrow(/taken/);
+  });
+
+  it('signs up a new address as a partner client with the defaults', () => {
+    const state = createBrokerState();
+    const id = state.registerEmailUser('New@Example.test');
+    expect(id).toBe(MOCK_EMAIL_USER_ID_FROM + 1);
+    expect(state.registerEmailUser('other@example.test')).toBe(MOCK_EMAIL_USER_ID_FROM + 2);
+    expect(state.userProfile(id)).toEqual({
+      id,
+      email: 'new@example.test',
+      isPartnerClient: true,
+    });
+    expect(state.getUser(id).demo).toEqual({ available: 10000, held: 0, total: 10000 });
   });
 });
 

@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../shared" },
+    { "path": "../db" },
+    { "path": "../broker-rest" },
+    { "path": "../signal" },
+    { "path": "../mock-broker" },
+    { "path": "../../apps/backend" },
+    { "path": "../../apps/bot" },
+    { "path": "../../apps/trading-worker" }
+  ]
+}
