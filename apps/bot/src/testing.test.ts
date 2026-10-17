@@ -67,8 +67,8 @@ describe('captureApi', () => {
 
     const result: unknown = await bot.api.sendMessage(USER.id, HI);
 
-    // the answer gets the payload as sent
-    expect(result).toEqual({ message_id: 7, text: HI });
+    // the answer gets the recorded payload, the width spacer taken off
+    expect(result).toEqual({ message_id: 7, text: 'hi' });
   });
 
   it('answers an unprogrammed method with true, and records the call either way', async () => {
@@ -81,6 +81,21 @@ describe('captureApi', () => {
     expect(api.calls).toEqual([
       { method: 'sendMessage', payload: { chat_id: USER.id, text: 'hi' } },
     ]);
+  });
+
+  // the e2e harness keys the message ids it answers with by the payload object (#506)
+  it('hands the answer the very payload object it records', async () => {
+    const { bot, api } = captured();
+    const seen: unknown[] = [];
+    api.answers.set('sendMessage', (payload) => {
+      seen.push(payload);
+      return SENT;
+    });
+
+    await bot.api.sendMessage(USER.id, HI);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(api.calls[0]?.payload);
   });
 
   it('refuses a text sent without the width spacer and records nothing (#506)', async () => {

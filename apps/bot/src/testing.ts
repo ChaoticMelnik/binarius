@@ -794,7 +794,8 @@ export function refuseWriteRetried(method: string, payload: Record<string, unkno
 
 // The width spacer (#506, docs/bot-navigation.md → The width) on every text message a scene sends
 // and on nothing else. A text without it throws; with it, the call is recorded without it, so the
-// suites read the text the seam was given. A caption, an inline answer or a toast holding U+2800
+// suites read the text the seam was given. The answer gets that same recorded object: the e2e
+// harness keys the message ids it answers with by the payload object. A caption, an inline answer or a toast holding U+2800
 // throws: a picture or no bubble at all sets their width.
 const TEXT_METHODS: ReadonlySet<string> = new Set(['sendMessage', 'editMessageText']);
 const BRAILLE_BLANK = '\u2800';
@@ -830,7 +831,8 @@ export function captureApi(bot: Bot): CapturedApi {
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ) => {
-    captured.calls.push({ method, payload: refuseWidthSpacerMisuse(method, payload) });
+    const recorded = refuseWidthSpacerMisuse(method, payload);
+    captured.calls.push({ method, payload: recorded });
     refuseWriteRetried(method, payload);
     const failure = captured.apiErrors.get(method);
     if (failure !== undefined) {
@@ -839,7 +841,7 @@ export function captureApi(bot: Bot): CapturedApi {
     }
     const answer = captured.answers.get(method);
     if (answer !== undefined) {
-      return Promise.resolve(answer(payload, signal)).then((result) => ({ ok: true, result }));
+      return Promise.resolve(answer(recorded, signal)).then((result) => ({ ok: true, result }));
     }
     return Promise.resolve({ ok: true, result: true });
   }) as Parameters<typeof bot.api.config.use>[0]);
