@@ -274,7 +274,7 @@ export const BOT_PROFILE_PUBLISH_CALLS = 3;
 
 // the broker call is the other bounded operation phase 1 can be waiting on: a login handler
 // holds no lock, but a refresh does, and its transaction must fit in the budget
-export const TIMING_CHAIN_HOLDS =
+const TIMING_CHAIN_HOLDS =
   DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the callback's longest path: the code exchange, then the push. The contract constant lives

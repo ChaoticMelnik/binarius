@@ -297,7 +297,7 @@ export const SESSION_RESUME_GAP_MS = 1000 / SESSION_RESUME_PER_SECOND;
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
 // /trading/signal (#126), POST /trading/sessions (#283) and a session's view and stop (#337):
 // waiting at least that long keeps a broker GET inside its budget from reading as an outage here.
-export const TIMING_CHAIN_HOLDS =
+const TIMING_CHAIN_HOLDS =
   POLLING_BATCH_LIMIT === 1 &&
   TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
