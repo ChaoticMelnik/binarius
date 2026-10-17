@@ -13,12 +13,12 @@ describe('BOT_MESSAGE_SPACER', () => {
 
   it('is 26 braille blanks after the line break and nothing else', () => {
     expect(BOT_MESSAGE_SPACER_LENGTH).toBe(26);
-    expect(BOT_MESSAGE_SPACER.slice(1)).toBe('⠀'.repeat(26));
+    expect(BOT_MESSAGE_SPACER.slice(1)).toBe('\u2800'.repeat(26));
   });
 
   it('ends with a character JS does not count as whitespace, so a trim keeps it', () => {
     expect(/\s$/u.test(BOT_MESSAGE_SPACER)).toBe(false);
-    expect(BOT_MESSAGE_SPACER.trim()).toBe('⠀'.repeat(26));
+    expect(BOT_MESSAGE_SPACER.trim()).toBe('\u2800'.repeat(26));
   });
 
   it('counts 27 code units after entities parsing and changes nothing about the HTML', () => {
@@ -49,7 +49,7 @@ describe('BOT_TEXT_LIMIT', () => {
 describe('stripMessageSpacer', () => {
   it('returns the text the seam was given', () => {
     expect(stripMessageSpacer('x' + BOT_MESSAGE_SPACER)).toBe('x');
-    expect(stripMessageSpacer('⠀x' + BOT_MESSAGE_SPACER)).toBe('⠀x');
+    expect(stripMessageSpacer('\u2800x' + BOT_MESSAGE_SPACER)).toBe('\u2800x');
   });
 
   it('is undefined when the spacer is not at the end', () => {

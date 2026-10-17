@@ -13,7 +13,7 @@ import { TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 // were not measured; the owner tunes N here after looking at the clients.
 export const BOT_MESSAGE_SPACER_LENGTH = 26;
 
-export const BOT_MESSAGE_SPACER = '\n' + '⠀'.repeat(BOT_MESSAGE_SPACER_LENGTH);
+export const BOT_MESSAGE_SPACER = '\n' + '\u2800'.repeat(BOT_MESSAGE_SPACER_LENGTH);
 
 // What a text message may hold after entities parsing: the seams append the spacer to every one.
 export const BOT_TEXT_LIMIT = TELEGRAM_MESSAGE_LIMIT - BOT_MESSAGE_SPACER.length;

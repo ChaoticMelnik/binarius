@@ -20,7 +20,7 @@ import {
 } from './send';
 
 // a text already holding U+2800 inside and ending with a block: the spacer still goes after it
-const TEXT = telegramHtml`<b>Привет</b> ⠀ ${'x'}\n<pre>code</pre>`;
+const TEXT = telegramHtml`<b>Привет</b> \u2800 ${'x'}\n<pre>code</pre>`;
 const CAPTION = telegramHtml`<b>Карта</b>`;
 const keyboard = new InlineKeyboard().text('🏠 В меню', 'menu');
 const REASON = NO_NEXT_STEP_REASONS.InProgress;
@@ -125,6 +125,6 @@ describe('captions, inline answers and the invoice go without it', () => {
       { pay: 'Оплатить', then: keyboard },
     );
     const [title, description] = ctx.replyWithInvoice.mock.calls[0] ?? [];
-    expect(`${title}${description}`).not.toContain('⠀');
+    expect(`${title}${description}`).not.toContain('\u2800');
   });
 });
