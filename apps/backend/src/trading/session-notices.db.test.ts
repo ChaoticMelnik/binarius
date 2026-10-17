@@ -1080,7 +1080,9 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     callback_data: data,
   });
   const MENU = { text: CLIENT_LABELS.menuButton, callback_data: 'menu' };
-  const STOP_LINE = '⏳ Сессия остановлена: 2 мин по паре не было сигнала. Выбери другую пару.';
+  // #637: 20 candles of the session's signal interval, the candle in seconds
+  const stopLine = (candleSec: number) =>
+    `⏳ Сессия остановлена: по паре не было сигнала 20 свечей по ${String(candleSec)} с. Выбери другую пару.`;
 
   async function seedOf(durationSec: number): Promise<Target> {
     const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
@@ -1098,7 +1100,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(1);
     expect(sends[0]!.payload.disable_notification).toBeUndefined();
-    expect(String(sends[0]!.payload.text).split('\n')).toEqual(['📈 EUR/USD OTC', STOP_LINE]);
+    expect(String(sends[0]!.payload.text).split('\n')).toEqual(['📈 EUR/USD OTC', stopLine(15)]);
     expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig:15'), MENU]);
     expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
     await notices.tick();
@@ -1125,7 +1127,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     const summary = sends[1]!;
     expect(String(summary.payload.text).split('\n').slice(0, 3)).toEqual([
       '📈 EUR/USD OTC',
-      STOP_LINE,
+      stopLine(60),
       '📊 Итог: 1 сделка — 1 в плюс, 0 в минус',
     ]);
     // 60 s is no duration the scanner lists: the duration screen

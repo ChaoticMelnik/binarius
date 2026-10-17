@@ -12,7 +12,8 @@ import {
   isClosedTrade,
   SessionStakeStrategy,
   SESSION_MAX_DURATION_MS,
-  SESSION_NO_SIGNAL_TIMEOUT_MS,
+  SESSION_NO_SIGNAL_CANDLES,
+  sessionNoSignalTimeoutMs,
   SIGNAL_CHART_INTERVAL_MS,
   TradeAction,
   TradeIntentFailureReason,
@@ -122,7 +123,7 @@ const CONFIG: SessionOrchestratorConfig = {
   retryMs: 60_000,
   candleSlackMs: 5_000,
   maxDurationMs: SESSION_MAX_DURATION_MS,
-  noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
+  noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
 };
 
 // the orchestrator's clock: the hold-backs and the sizer read it, the sweeps read the database's
@@ -648,7 +649,7 @@ describe('the attempt and the sequence (#287)', () => {
         'the later deadline on the database clock',
         async () =>
           (await readSessionHistory(tmp.db, later.session.id, {
-            noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
+            noSignalTimeoutMs: sessionNoSignalTimeoutMs(60),
             maxDurationMs: SESSION_MAX_DURATION_MS,
           }))!.expired,
       );
@@ -1199,11 +1200,12 @@ describe('the pause after two losses (#379)', () => {
   });
 });
 
-// #509 (owner): two minutes waiting for a signal stop the session, on the database clock, from the
-// later of started_at and the session's last intent change; the tests move those rows relative to
-// the production limit
+// #509 (owner): 20 candles of the session's signal interval waiting for a signal stop it (#637), on
+// the database clock, from the later of started_at and the session's last intent change; the
+// tests compute the limit from sessionNoSignalTimeoutMs and move those rows relative to it (the
+// default seed's 60 s session waits on 1m candles)
 describe('the no-signal limit (#509)', () => {
-  const LIMIT = SESSION_NO_SIGNAL_TIMEOUT_MS;
+  const LIMIT = sessionNoSignalTimeoutMs(60);
   const ago = (ms: number) => sql`now() - (${ms}::int * interval '1 millisecond')`;
   const startedAgo = (id: string, ms: number) =>
     tmp.db
@@ -1227,13 +1229,13 @@ describe('the no-signal limit (#509)', () => {
     );
     return { ...row, ledger: rows[0]!.n };
   };
-  const expectStopped = async (sessionId: string, waited: string) => {
+  const expectStopped = async (sessionId: string, waited: string, limitMs: number = LIMIT) => {
     expect(await sessionRow(sessionId)).toMatchObject({
       status: TradingSessionStatus.Stopped,
       stopReason: TradingSessionStopReason.NoSignalTimeout,
     });
     expect(stopLines(sessionId)).toEqual([
-      expect.objectContaining({ level: 40, reason: 'no_signal_timeout', waited }),
+      expect.objectContaining({ level: 40, reason: 'no_signal_timeout', waited, limitMs }),
     ]);
   };
   const expectActive = async (sessionId: string) =>
@@ -1268,7 +1270,7 @@ describe('the no-signal limit (#509)', () => {
     let answer: SignalOutcome = { ok: true, response: signalAnswer(TradeAction.Up) };
     const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
     await tradeOnce(orchestrator, seed);
-    await startedAgo(seed.session.id, 300_000);
+    await startedAgo(seed.session.id, LIMIT + 300_000);
     await changedAgo(seed.session.id, 30_000);
     answer = noSignal;
     await orchestrator.tick();
@@ -1289,7 +1291,7 @@ describe('the no-signal limit (#509)', () => {
     const orchestrator = orchestratorOf({ signals });
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    await startedAgo(seed.session.id, 300_000);
+    await startedAgo(seed.session.id, LIMIT + 300_000);
     await changedAgo(seed.session.id, LIMIT + 5_000);
     await orchestrator.tick();
     expect(await intentsOf(seed.session.id)).toHaveLength(2);
@@ -1350,6 +1352,42 @@ describe('the no-signal limit (#509)', () => {
     await second.tick();
     await expectStopped(seed.session.id, 'no_signal');
     await second.stop();
+  });
+
+  // #637: the limit is the session's, 20 candles of intervalForDuration(durationSec); sessions of
+  // one age that differ only in durationSec
+  const shortPair = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
+  const seedOn = (durationSec: number) =>
+    seedSession({ settings: sessionSettings({ assetId: 202, durationSec }) });
+
+  it('W9 at 150 s without a signal a 5 s session stops, 15 s and 60 s ones wait on', async () => {
+    const five = await seedOn(5);
+    const fifteen = await seedOn(15);
+    const sixty = await seedOn(60);
+    for (const seed of [five, fifteen, sixty]) await startedAgo(seed.session.id, 150_000);
+    const orchestrator = orchestratorOf({
+      signals: signalsOf(noSignal),
+      pairs: pairsOf(fresh([shortPair])),
+    });
+    await orchestrator.tick();
+    await expectStopped(five.session.id, 'no_signal', 100_000);
+    await expectActive(fifteen.session.id);
+    await expectActive(sixty.session.id);
+    await orchestrator.stop();
+  });
+
+  it('W10 at 305 s without a signal a 15 s session stops, a 60 s one waits on', async () => {
+    const fifteen = await seedOn(15);
+    const sixty = await seedOn(60);
+    for (const seed of [fifteen, sixty]) await startedAgo(seed.session.id, 305_000);
+    const orchestrator = orchestratorOf({
+      signals: signalsOf(noSignal),
+      pairs: pairsOf(fresh([shortPair])),
+    });
+    await orchestrator.tick();
+    await expectStopped(fifteen.session.id, 'no_signal', 300_000);
+    await expectActive(sixty.session.id);
+    await orchestrator.stop();
   });
 });
 

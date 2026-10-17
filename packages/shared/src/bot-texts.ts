@@ -1509,6 +1509,21 @@ export const BOT_TEXT_CATALOG = {
     'Сессия: слово после остальных чисел («5 циклов», «11 циклов»).',
     'циклов',
   ),
+  sessionCandleOne: plain(
+    g.Session,
+    'Сессия: слово «свеча» после числа 1, 21, 31… («21 свеча», #637).',
+    'свеча',
+  ),
+  sessionCandleFew: plain(
+    g.Session,
+    'Сессия: слово «свеча» после числа 2–4, 22–24… («22 свечи», #637).',
+    'свечи',
+  ),
+  sessionCandleMany: plain(
+    g.Session,
+    'Сессия: слово «свеча» после остальных чисел («20 свечей», #637).',
+    'свечей',
+  ),
   sessionWaitingSignal: html(
     g.Session,
     'Сессия: сообщение ожидания под сообщениями сессии, с кнопкой остановки; шлёт backend.',
@@ -1607,9 +1622,14 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionStopNoSignalTimeout: html(
     g.Session,
-    'Сессия остановлена: по паре долго не было сигнала (#509).',
-    `⏳ Сессия остановлена: {noSignalMinutes} мин по паре не было сигнала. Выбери другую пару.`,
-    { vars: ['noSignalMinutes'] },
+    'Сессия остановлена: по паре не было сигнала столько свечей интервала сессии (#509, #637).',
+    `⏳ Сессия остановлена: по паре не было сигнала {noSignalCandles} по {candleSec} с. Выбери другую пару.`,
+    { vars: ['noSignalCandles', 'candleSec'] },
+  ),
+  sessionStopNoSignalTimeoutNoSettings: html(
+    g.Session,
+    'Сессия остановлена без сигнала, настройки сессии не читаются — строка без числа свечей (#637).',
+    `⏳ Сессия остановлена: по паре долго не было сигнала. Выбери другую пару.`,
   ),
   sessionStopManualReview: html(
     g.Session,

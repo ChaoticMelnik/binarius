@@ -7,7 +7,7 @@ import {
   TradeIntentStatus,
   TradeMode,
   TradingSessionStopReason,
-  SESSION_NO_SIGNAL_TIMEOUT_MS,
+  sessionNoSignalTimeoutMs,
   decimalStringSchema,
   type DecimalString,
   type TradeIntentErrorCode,
@@ -71,7 +71,7 @@ if (baseUrl === undefined || baseUrl === '') {
 }
 
 const HOUR_MS = 3_600_000;
-const LIMITS = { maxDurationMs: HOUR_MS, noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS };
+const LIMITS = { maxDurationMs: HOUR_MS, noSignalTimeoutMs: sessionNoSignalTimeoutMs(15) };
 
 let tmp: TempDatabase;
 beforeAll(async () => {
@@ -880,7 +880,7 @@ describe('readSessionHistory: waitExpired (#509)', () => {
     tmp.db.execute(sql`update trade_intents set updated_at = ${ago(ms)} where id = ${id}`);
   const waitExpired = async (id: string) =>
     (await readSessionHistory(tmp.db, id, LIMITS))!.waitExpired;
-  const LIMIT = SESSION_NO_SIGNAL_TIMEOUT_MS;
+  const LIMIT = LIMITS.noSignalTimeoutMs;
 
   it('NS1 a session without an intent counts from started_at: past the limit it expired', async () => {
     const seed = await seedSessionAccount();
@@ -888,11 +888,11 @@ describe('readSessionHistory: waitExpired (#509)', () => {
     expect(await waitExpired(seed.session.id)).toBe(true);
   });
 
-  it("NS2 the session's intent changed 30 s ago: not expired though started 5 min ago", async () => {
+  it("NS2 the session's intent changed 30 s ago: not expired though started 10 min ago", async () => {
     const seed = await seedSessionAccount();
     const { intent } = await createSessionIntent(tmp.db, intentInput(seed));
     await settle(intent, '0.82');
-    await startedAgo(seed.session.id, 300_000);
+    await startedAgo(seed.session.id, LIMIT + 300_000);
     await changedAgo(intent.id, 30_000);
     expect(await waitExpired(seed.session.id)).toBe(false);
     await changedAgo(intent.id, LIMIT + 5_000);
