@@ -1,7 +1,9 @@
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  defaultBotTextSource,
   pairLabel,
+  resolveBotTextOverrides,
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -25,7 +27,7 @@ import {
   sessionView,
   USER,
 } from './testing';
-import { sessionStatusText, TEXTS } from './texts';
+import { sessionStatusText, setBotTextSource, TEXTS } from './texts';
 import {
   SESSION_RESUME_GAP_MS,
   SESSION_TRACK_DEADLINE_MS,
@@ -91,8 +93,8 @@ function setup({
   });
   const target = () => {
     const edits: TelegramHtml[] = [];
-    const edit = vi.fn<SessionTrackRequest['edit']>((...[text]) => {
-      edits.push(text);
+    const edit = vi.fn<SessionTrackRequest['edit']>((drawing) => {
+      edits.push(drawing.text);
       return Promise.resolve(true);
     });
     return { edits, edit };
@@ -164,7 +166,7 @@ describe('the session tracker', () => {
   });
 
   // #536: the message prints nothing of the trades, so it is edited once, when the session stops
-  // (#568: and when its signal's direction turns; these views have none)
+  // (#568: and when its picture, the signal's direction, turns; these views have none)
   it('no edit while the text is the same: one edit when the session stops', async () => {
     const tradedOn = sessionView({ ...trading, ...settledOne });
     const { tracker, readSession, request, target } = setup({
@@ -209,12 +211,15 @@ describe('the session tracker', () => {
     expect(shown(moved)).toBe(shown(older));
   });
 
-  it('hands the edit the view it draws, so the keyboard can follow it', async () => {
+  it('hands the edit its drawing: the text and the picture', async () => {
     const { tracker, request, target } = setup({ script: [stoppedClosed] });
     const { edit } = target();
     tracker.track(request({ edit }));
     await vi.advanceTimersByTimeAsync(FIRST);
-    expect(edit.mock.calls[0]?.[1]).toEqual(stoppedClosed);
+    expect(edit.mock.calls[0]?.[0]).toEqual({
+      text: sessionStatusText(LABEL, stoppedClosed),
+      picture: stoppedClosed.signalAction,
+    });
   });
 
   it('finishes on a stopped session whose last trade settled', async () => {
@@ -304,8 +309,8 @@ describe('the session tracker', () => {
       script: [stoppedOpen, stoppedClosed],
     });
     const old = target();
-    const heldEdit = vi.fn<SessionTrackRequest['edit']>((...[text]) => {
-      old.edits.push(text);
+    const heldEdit = vi.fn<SessionTrackRequest['edit']>((drawing) => {
+      old.edits.push(drawing.text);
       return new Promise((resolve) => {
         finishEdit = () => resolve(true);
       });
@@ -395,7 +400,7 @@ describe('the session tracker', () => {
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
     // #350: the session is gone, so its keyboard is the menu only
-    expect(edit.mock.calls.map((call) => call[2])).toEqual(['not_found']);
+    expect(edit.mock.calls.map((call) => call[1])).toEqual(['not_found']);
     expect(readSession).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
@@ -780,7 +785,9 @@ describe('the session tracker', () => {
       tracker.track(request({ view: null, startedAt: past(), edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
-      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found', null]]);
+      expect(edit.mock.calls).toEqual([
+        [{ text: TEXTS.sessionStatusUnavailable, picture: null }, 'not_found'],
+      ]);
       expect(tracker.size()).toBe(0);
     });
   });
@@ -793,12 +800,41 @@ describe('the session tracker', () => {
     const transport = () =>
       new HttpError("Network request for 'editMessage' failed!", new Error('reset'));
 
-    it('P7g a 404 after a read view hands the edit that view as the last one', async () => {
+    it("P7g a 404 after a read view draws the unavailable text on that view's picture", async () => {
       const { tracker, request, target } = setup({ script: [NOT_FOUND()] });
       const { edit } = target();
       tracker.track(request({ view: up, edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[null, 'not_found', up]]);
+      expect(edit.mock.calls).toEqual([
+        [{ text: TEXTS.sessionStatusUnavailable, picture: 'up' }, 'not_found'],
+      ]);
+    });
+
+    // review round 1 MJ1: equal overrides of the two signal lines leave the text unchanged by a
+    // turn of direction, so only the picture in the render key makes the turn drawn
+    describe('Q1 the two signal lines overridden alike', () => {
+      afterEach(() => {
+        setBotTextSource(defaultBotTextSource);
+      });
+
+      it('a turn of direction is still drawn, once', async () => {
+        const same = '📡 Сигнал получен';
+        const resolved = resolveBotTextOverrides([
+          { key: 'sessionSignalUp', source: same },
+          { key: 'sessionSignalDown', source: same },
+        ]);
+        expect([...resolved.texts.keys()].sort()).toEqual(['sessionSignalDown', 'sessionSignalUp']);
+        setBotTextSource(resolved.source);
+        const down = sessionView({ signalAction: 'down' });
+        expect(sessionStatusText(LABEL, down).value).toBe(sessionStatusText(LABEL, up).value);
+        const { tracker, request, target } = setup({ script: [down] });
+        const { edit } = target();
+        tracker.track(request({ view: up, edit }));
+        await vi.advanceTimersByTimeAsync(FIRST);
+        expect(edit.mock.calls.map((call) => call[0].picture)).toEqual(['down']);
+        await vi.advanceTimersByTimeAsync(POLL * 2);
+        expect(edit).toHaveBeenCalledTimes(1);
+      });
     });
 
     it.each([
@@ -849,7 +885,9 @@ describe('the session tracker', () => {
       expect(edits).toEqual([]);
       await vi.advanceTimersByTimeAsync(POLL);
       expect(texts(edits)).toEqual([shown(stoppedClosed)]);
-      expect(edit.mock.calls.map((call) => call.slice(1))).toEqual([[stoppedClosed]]);
+      expect(edit.mock.calls).toEqual([
+        [{ text: sessionStatusText(LABEL, stoppedClosed), picture: null }, undefined],
+      ]);
     });
 
     it('R2 a stopped session is drawn on the first poll', async () => {
@@ -1076,7 +1114,7 @@ describe('the session tracker', () => {
       expect(texts(second.edits)).toEqual([shown(reviewed)]);
     });
 
-    // #570 Minor 1: the key is the printed text, so a label the memory did not draw is drawn
+    // #570 Minor 1: the key is the drawing, so a label the memory did not draw is drawn
     it('Y5 a recovered entry with another label than the one drawn edits once', async () => {
       const { tracker, request, target } = setup({ script: [reviewed] });
       tracker.track(request({ ...recovered, startedAt: past(), edit: target().edit }));
