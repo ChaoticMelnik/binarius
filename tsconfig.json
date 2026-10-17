@@ -8,6 +8,7 @@
     { "path": "packages/broker-rest" },
     { "path": "packages/broker-socket" },
     { "path": "packages/db" },
+    { "path": "packages/e2e" },
     { "path": "packages/mock-broker" },
     { "path": "packages/shared" },
     { "path": "packages/signal" },
