@@ -70,11 +70,11 @@ export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
     if (pair === undefined) {
       return reply.code(409).send({ error: TradingSignalErrorCode.PairUnknown });
     }
-    const evaluation = await feed.evaluate({
-      assetId: parsed.data.assetId,
-      interval: parsed.data.interval,
-      digits: pair.digits,
-    });
+    // every decision this route answers is replayable from its own journal line (#405)
+    const evaluation = await feed.evaluate(
+      { assetId: parsed.data.assetId, interval: parsed.data.interval, digits: pair.digits },
+      { journal: true },
+    );
     const { analysis } = parsed.data;
     if (analysis !== undefined && evaluation.outcome === SignalFeedOutcome.Decided) {
       try {

@@ -52,14 +52,16 @@ const feed = createSignalFeed({ rest, logger: pino(logOptions(level)) });
 const result = await feed.evaluate({ assetId, interval, digits });
 
 if (result.outcome === SignalFeedOutcome.Decided) {
-  const { decision, fetch } = result.entry;
+  const { decision, source } = result.entry;
   const summary =
     decision.kind === SignalKind.Signal
       ? `signal ${decision.action}, ${decision.features.closedCandles} closed candles`
       : 'features' in decision
         ? `no_signal ${decision.reason}, ${decision.features.closedCandles} closed candles`
         : `no_signal ${decision.reason} ${JSON.stringify(decision.detail)}`;
-  process.stderr.write(`decided: ${summary}; ${fetch.rows} rows in ${fetch.durationMs} ms\n`);
+  // the probe's feed has no candle source, so the series is always a REST GET's
+  const facts = source.kind === 'rest' ? `; ${source.rows} rows in ${source.durationMs} ms` : '';
+  process.stderr.write(`decided: ${summary}${facts}\n`);
 } else {
   const parts = [`fetch_failed ${result.code}`];
   if (result.status !== undefined) parts.push(`status ${result.status}`);

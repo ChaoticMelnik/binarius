@@ -8,7 +8,14 @@ import { describe, expect, it } from 'vitest';
 import { createCachedSignalFeed } from './cache';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
-import type { SignalEvaluation, SignalFeed, SignalFeedRequest, SignalFetchFacts } from './feed';
+import type {
+  SignalDecidedEvaluation,
+  SignalEvaluation,
+  SignalFeed,
+  SignalFeedRequest,
+  SignalFetchFacts,
+} from './feed';
+import type { SignalJournalEntry } from './journal';
 
 const MINUTE = SIGNAL_CHART_INTERVAL_MS['1m'];
 const HOUR = SIGNAL_CHART_INTERVAL_MS['1h'];
@@ -41,7 +48,7 @@ function decided(request: SignalFeedRequest): SignalEvaluation {
       digits: request.digits,
       intervalMs,
       nowMs,
-      fetch: { startTime: 0, limit: 60, rows: 0, durationMs: 1 },
+      source: { kind: 'rest', startTime: 0, limit: 60, rows: 0, durationMs: 1 },
       version: SIGNAL_ALGORITHM_VERSION,
       params: DEFAULT_SIGNAL_PARAMS,
       series: [],
@@ -69,17 +76,36 @@ type Answer = (
   signal: AbortSignal | undefined,
 ) => Promise<SignalEvaluation>;
 
-function stubFeed(answer: Answer = (request) => Promise.resolve(decided(request))) {
+type SourceAnswer = (request: SignalFeedRequest) => SignalDecidedEvaluation | undefined;
+
+function stubFeed(
+  answer: Answer = (request) => Promise.resolve(decided(request)),
+  sourceAnswer: SourceAnswer = () => undefined,
+) {
   const calls: SignalFeedRequest[] = [];
+  const journals: { journal: boolean | undefined }[] = [];
+  const sourceCalls: SignalFeedRequest[] = [];
+  const lines: SignalJournalEntry[] = [];
   const feed: SignalFeed = {
     decider: createSignalDecider(),
     evaluate(request, options) {
       calls.push(request);
+      journals.push({ journal: options?.journal });
       return answer(request, options?.signal);
     },
+    fromSource(request) {
+      sourceCalls.push(request);
+      return sourceAnswer(request);
+    },
+    journal(entry) {
+      lines.push(entry);
+    },
   };
-  return { feed, calls };
+  return { feed, calls, journals, sourceCalls, lines };
 }
+
+const decidedOnly = (request: SignalFeedRequest): SignalDecidedEvaluation =>
+  decided(request) as SignalDecidedEvaluation;
 
 const cached = (feed: SignalFeed, maxEntries?: number) =>
   createCachedSignalFeed(feed, { fetchBudgetMs: 3_000, maxTtlMs: MAX_TTL_MS, maxEntries, now });
@@ -343,6 +369,113 @@ describe('createCachedSignalFeed', () => {
     const second = await cache.evaluate(req('1m', 101, 3));
     expect(calls).toStrictEqual([req('1m', 101, 5)]);
     expect(second).toBe(first);
+  });
+
+  it('C15 fromSource holds a decision to the end of its candle; the second call reads nothing', () => {
+    const { feed, sourceCalls, calls } = stubFeed(undefined, decidedOnly);
+    const cache = cached(feed);
+    at(10_000);
+    const first = cache.fromSource(req('15s'));
+    at(14_000);
+    expect(cache.fromSource(req('15s'))).toBe(first);
+    expect(sourceCalls).toHaveLength(1);
+    at(15_000);
+    cache.fromSource(req('15s'));
+    expect(sourceCalls).toHaveLength(2);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('C16 fromSource without a window holds nothing; the next evaluate fetches', async () => {
+    const { feed, sourceCalls, calls } = stubFeed();
+    const cache = cached(feed);
+    at(10_000);
+    expect(cache.fromSource(req('15s'))).toBeUndefined();
+    expect(cache.fromSource(req('15s'))).toBeUndefined();
+    expect(sourceCalls).toHaveLength(2);
+    await cache.evaluate(req('15s'));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('C17 a scanned decision is journalled once, by the first evaluate with journal: true', async () => {
+    const { feed, lines, calls } = stubFeed(undefined, decidedOnly);
+    const cache = cached(feed);
+    at(10_000);
+    const scanned = cache.fromSource(req('15s'));
+    expect(lines).toHaveLength(0);
+    at(11_000);
+    await cache.evaluate(req('15s'));
+    expect(lines).toHaveLength(0);
+    const answered = await cache.evaluate(req('15s'), { journal: true });
+    expect(answered).toBe(scanned);
+    expect(lines).toStrictEqual([scanned?.entry]);
+    expect(lines[0]).toBe(scanned?.entry);
+    await cache.evaluate(req('15s'), { journal: true });
+    expect(lines).toHaveLength(1);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('C18 an own fetch and a joiner write one line after the answer; the inner call never journals', async () => {
+    const pending = deferred();
+    const { feed, lines, journals } = stubFeed(() => pending.promise);
+    const cache = cached(feed);
+    at(10_000);
+    const own = cache.evaluate(req(), { journal: true });
+    const joiner = cache.evaluate(req(), { journal: true });
+    const silent = cache.evaluate(req());
+    expect(lines).toHaveLength(0);
+    const result = decided(req());
+    pending.resolve(result);
+    await Promise.all([own, joiner, silent]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe((result as SignalDecidedEvaluation).entry);
+    expect(journals).toStrictEqual([{ journal: false }]);
+  });
+
+  it('C18b without journal: true no call writes a line', async () => {
+    const { feed, lines } = stubFeed();
+    const cache = cached(feed);
+    at(10_000);
+    await cache.evaluate(req());
+    await cache.evaluate(req(), { journal: false });
+    expect(lines).toHaveLength(0);
+  });
+
+  it('C19 fetch_failed is never journalled', async () => {
+    const { feed, lines } = stubFeed((request) =>
+      Promise.resolve(failed('rate_limited', 5)(request)),
+    );
+    const cache = cached(feed);
+    at(10_000);
+    await cache.evaluate(req(), { journal: true });
+    await cache.evaluate(req(), { journal: true });
+    expect(lines).toHaveLength(0);
+  });
+
+  it('C20 a fromSource decision is the hit of an evaluate in the same candle, the same object', async () => {
+    const { feed, calls } = stubFeed(undefined, decidedOnly);
+    const cache = cached(feed);
+    at(10_000);
+    const scanned = cache.fromSource(req('5s'));
+    at(14_000);
+    expect(await cache.evaluate(req('5s'))).toBe(scanned);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('C21 a decision of the source replaces a refusal held from REST', async () => {
+    let window = false;
+    const { feed, calls } = stubFeed(
+      (request) => Promise.resolve(failed('rate_limited', 20)(request)),
+      (request) => (window ? decidedOnly(request) : undefined),
+    );
+    const cache = cached(feed);
+    at(10_000);
+    await cache.evaluate(req('15s'));
+    window = true;
+    at(11_000);
+    const scanned = cache.fromSource(req('15s'));
+    expect(scanned?.outcome).toBe('decided');
+    expect(await cache.evaluate(req('15s'))).toBe(scanned);
+    expect(calls).toHaveLength(1);
   });
 
   it('exposes the inner decider', () => {

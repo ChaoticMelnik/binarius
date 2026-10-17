@@ -10,6 +10,7 @@ import {
   toJournalCandle,
   type SignalJournalEntry,
   type SignalJournalEntryV1,
+  type SignalJournalEntryV2Fetch,
   type StoredSignalJournalEntry,
 } from './journal';
 import { burst, closedNow, INTERVAL_MS, mildRise, seriesFrom, trending } from './testing';
@@ -28,7 +29,8 @@ function entryFor(
     digits: DIGITS,
     intervalMs: INTERVAL_MS,
     nowMs,
-    fetch: {
+    source: {
+      kind: 'rest',
       startTime: candles[0]?.timestamp ?? 0,
       limit: SIGNAL_CHART_LIMIT,
       rows: candles.length,
@@ -43,13 +45,18 @@ function entryFor(
 
 function entryForV1(candles: readonly Candle[], nowMs: number): SignalJournalEntryV1 {
   const decider = createSignalDeciderV1();
-  const { assetId, interval, intervalMs, fetch, series } = entryFor(candles, nowMs);
+  const { assetId, interval, intervalMs, series } = entryFor(candles, nowMs);
   return {
     assetId,
     interval,
     intervalMs,
     nowMs,
-    fetch,
+    fetch: {
+      startTime: candles[0]?.timestamp ?? 0,
+      limit: 60,
+      rows: candles.length,
+      durationMs: 3,
+    },
     series,
     version: decider.version,
     params: decider.params,
@@ -160,6 +167,22 @@ describe('signal journal', () => {
     expect(replaySignalJournalEntry(v1)).toStrictEqual(v1.decision);
     expect(replaySignalJournalEntry(v2)).toMatchObject({ reason: 'rsi_overbought' });
     expect(replaySignalJournalEntry(v2)).toStrictEqual(v2.decision);
+  });
+
+  it('J7 a v2 line of the socket and a v2 line written before #405 with fetch replay alike', () => {
+    const entry = entryFor(rising, closedNow(rising));
+    const socket = throughLine({
+      ...entry,
+      source: { kind: 'socket', startTime: 0, closedUntil: closedNow(rising), gaps: 0 },
+    });
+    const line: Partial<SignalJournalEntry> & Pick<SignalJournalEntryV2Fetch, 'fetch'> = {
+      ...throughLine(entry),
+      fetch: { startTime: 0, limit: 60, rows: rising.length, durationMs: 3 },
+    };
+    delete line.source;
+    const legacy = line as SignalJournalEntryV2Fetch;
+    expect(replaySignalJournalEntry(socket)).toStrictEqual(entry.decision);
+    expect(replaySignalJournalEntry(legacy)).toStrictEqual(entry.decision);
   });
 
   it('J6 a v2 line without digits throws instead of deciding', () => {

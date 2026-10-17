@@ -25,31 +25,47 @@ export interface SignalJournalFetch {
   durationMs: number;
 }
 
+// where the series came from (#405): a REST GET with its facts, or the data socket's window, with
+// the number of its closed buckets that had no candle
+export type SignalJournalSource =
+  | ({ kind: 'rest' } & SignalJournalFetch)
+  | { kind: 'socket'; startTime: number; closedUntil: number; gaps: number };
+
 interface SignalJournalEntryBase {
   assetId: number;
   interval: SignalInterval;
   intervalMs: number;
   nowMs: number;
-  fetch: SignalJournalFetch;
   series: readonly JournalCandle[];
 }
 
-// Everything the decision was computed from: replaySignalJournalEntry recomputes it from this alone.
-// The feed writes the current version; a line of an older one stays replayable (#379).
-export interface SignalJournalEntry extends SignalJournalEntryBase {
+interface SignalJournalEntryV2Base extends SignalJournalEntryBase {
   version: 'v2';
   digits: number;
   params: Readonly<SignalParams>;
   decision: SignalDecision;
 }
 
+// Everything the decision was computed from: replaySignalJournalEntry recomputes it from this alone.
+// The feed writes the current version; a line of an older one stays replayable (#379).
+export interface SignalJournalEntry extends SignalJournalEntryV2Base {
+  source: SignalJournalSource;
+}
+
+// a v2 line written before #405: the REST facts under fetch
+export interface SignalJournalEntryV2Fetch extends SignalJournalEntryV2Base {
+  fetch: SignalJournalFetch;
+}
+
 export interface SignalJournalEntryV1 extends SignalJournalEntryBase {
   version: 'v1';
+  fetch: SignalJournalFetch;
   params: Readonly<SignalParamsV1>;
   decision: SignalDecisionV1;
 }
 
-export type StoredSignalJournalEntry = SignalJournalEntry | SignalJournalEntryV1;
+export type StoredSignalJournalEntry =
+  SignalJournalEntry | SignalJournalEntryV2Fetch | SignalJournalEntryV1;
 
 export function toJournalCandle(candle: Candle): JournalCandle {
   return [candle.timestamp, candle.open, candle.high, candle.low, candle.close];
@@ -60,7 +76,9 @@ export function fromJournalCandle([timestamp, open, high, low, close]: JournalCa
 }
 
 // Each line is re-decided by the rules of its own version, never by the current decider.
-export function replaySignalJournalEntry(entry: SignalJournalEntry): SignalDecision;
+export function replaySignalJournalEntry(
+  entry: SignalJournalEntry | SignalJournalEntryV2Fetch,
+): SignalDecision;
 export function replaySignalJournalEntry(entry: SignalJournalEntryV1): SignalDecisionV1;
 export function replaySignalJournalEntry(
   entry: StoredSignalJournalEntry,

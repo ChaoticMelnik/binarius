@@ -16,31 +16,40 @@ const fives = aggregate(secondsPath(T0, 3_600), STEP);
 const nowMs = T0 + 1_800_000 + 2_500;
 const candles = seriesAt(fives, STEP, nowMs);
 
-function entry(version: 'v1' | 'v2'): StoredSignalJournalEntry {
+const fetch = { startTime: candles[0].timestamp, limit: 60, rows: candles.length, durationMs: 80 };
+
+// v2-fetch is a v2 line written before #405; v2 and v2-rest carry its source
+function entry(version: 'v1' | 'v2' | 'v2-rest' | 'v2-fetch' = 'v2'): StoredSignalJournalEntry {
   const base = {
     assetId: PAIR.id,
     interval: '5s' as const,
     intervalMs: STEP,
     nowMs,
-    fetch: { startTime: candles[0].timestamp, limit: 60, rows: candles.length, durationMs: 80 },
     series: candles.map(toJournalCandle),
   };
   if (version === 'v1') {
     const decider = createSignalDeciderV1();
     return {
       ...base,
+      fetch,
       version,
       params: decider.params,
       decision: decider.decide({ candles, intervalMs: STEP, nowMs }),
     };
   }
   const decider = createSignalDecider();
-  return {
+  const v2 = {
     ...base,
-    version,
+    version: 'v2' as const,
     digits: PAIR.digits,
     params: decider.params,
     decision: decider.decide({ candles, intervalMs: STEP, nowMs, digits: PAIR.digits }),
+  };
+  if (version === 'v2-fetch') return { ...v2, fetch };
+  if (version === 'v2-rest') return { ...v2, source: { kind: 'rest', ...fetch } };
+  return {
+    ...v2,
+    source: { kind: 'socket', startTime: candles[0].timestamp, closedUntil: nowMs, gaps: 2 },
   };
 }
 
@@ -87,5 +96,26 @@ describe('parseJournalLine', () => {
       expect(parsed.entry.version).toBe(version);
       expect(replaySignalJournalEntry(parsed.entry)).toEqual(parsed.entry.decision);
     }
+  });
+
+  // #405: a v2 line carries source; one written before it carries fetch, and still parses
+  it.each(['v2', 'v2-rest', 'v2-fetch'] as const)(
+    'JL %s parses whole and replays to its decision',
+    (version) => {
+      const line = entry(version);
+      const parsed = parseJournalLine(pino(line));
+      expect(parsed).toStrictEqual({ kind: 'entry', entry: line });
+      if (parsed.kind !== 'entry') throw new Error(`expected an entry, got ${parsed.kind}`);
+      expect(replaySignalJournalEntry(parsed.entry)).toEqual(line.decision);
+    },
+  );
+
+  it('JL a v2 line with neither source nor fetch, or a socket source without gaps, is malformed', () => {
+    const bare: Record<string, unknown> = { ...entry('v2-fetch') };
+    delete bare.fetch;
+    expect(parseJournalLine(pino(bare))).toEqual({ kind: 'malformed_line' });
+    expect(
+      parseJournalLine(pino({ ...entry('v2'), source: { kind: 'socket', startTime: 0 } })),
+    ).toEqual({ kind: 'malformed_line' });
   });
 });

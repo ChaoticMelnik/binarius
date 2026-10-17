@@ -6,5 +6,6 @@ export * from './config';
 export * from './feed';
 export * from './feed-config';
 export * from './journal';
+export * from './source';
 export * from './cache';
 export * from './ticks';

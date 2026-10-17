@@ -210,11 +210,11 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       | { action: TradeAction }
     > => {
       try {
-        const evaluation = await signals.evaluate({
-          assetId,
-          interval: intervalForDuration(durationSec),
-          digits: pair.digits,
-        });
+        // the start's decision gets its own journal line (#509, #405)
+        const evaluation = await signals.evaluate(
+          { assetId, interval: intervalForDuration(durationSec), digits: pair.digits },
+          { journal: true },
+        );
         if (evaluation.outcome === SignalFeedOutcome.FetchFailed) {
           return { refusal: TradingSessionErrorCode.SignalUnavailable };
         }
