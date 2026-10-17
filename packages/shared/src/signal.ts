@@ -240,8 +240,9 @@ export type SignalDecision = z.infer<typeof signalDecisionSchema>;
 
 // --- Display indicators (#482) ---------------------------------------------------------------
 
-// Shown on the analysis card, never read by the decision (MACD and MA join it only after #483's
-// backtest). The one source of the periods: the feed computes with them and the card prints them.
+// Shown on the analysis card, never read by the decision (#483's backtest found no MACD or MA gate
+// better than v2; docs/signal.md → MACD and MA on history). The one source of the periods: the
+// feed computes with them and the card prints them.
 export const DISPLAY_INDICATOR_PARAMS = {
   macdFast: 12,
   macdSlow: 26,

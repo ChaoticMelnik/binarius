@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { main } from './main';
 import { cacheWith, PAIR, secondsPath, T0, tempDir } from './testing';
@@ -25,6 +25,15 @@ describe('the stand CLI', () => {
     [['fetch', '--intervals', 'constructor'], '--intervals: constructor is not a stand interval'],
     [['fetch', '--intervals', '__proto__'], '--intervals: __proto__ is not a stand interval'],
     [['run', '--headline-delay', '500'], '--headline-delay must be one of 0, 1000, 3000'],
+    [['run', '--variants', 'v1,nope'], '--variants: nope is not a variant'],
+    [['run', '--variants', 'v2+macd'], '--variants: v2+macd compares with v2; add v2'],
+    [['run', '--variants', 'v2,v2+ma+macd'], '--variants: v2+ma+macd is not a variant'],
+    [['run', '--variants', 'v2,v2'], '--variants: a name is repeated'],
+    [['run', '--intervals', '5s,2s'], '--intervals: 2s is not a trade interval'],
+    [['run', '--intervals', '1s'], '--intervals: 1s is not a trade interval'],
+    [['run', '--intervals', 'constructor'], '--intervals: constructor is not a trade interval'],
+    [['run', '--intervals', '15s,15s'], '--intervals: an interval is repeated'],
+    [['fetch', '--variants', 'v2'], '--variants is not an option of fetch'],
   ])('refuses %j with exit 2 and the usage', async (argv, message) => {
     const { code, err } = await call(argv);
     expect(code).toBe(2);
@@ -71,5 +80,34 @@ describe('the stand CLI', () => {
     });
     expect(code).toBe(0);
     expect(out.at(-1)).toBe(`report: ${dir}/o/report.md`);
+  });
+
+  it('runs only the variants and intervals asked for', async () => {
+    const dir = cacheWith(secondsPath(T0, 3_600));
+    const { code } = await call(
+      [
+        'run',
+        '--assets',
+        String(PAIR.id),
+        '--out',
+        `${dir}/o`,
+        '--variants',
+        'v2,v2+ma',
+        '--intervals',
+        '5s',
+      ],
+      { STAND_DIR: dir },
+    );
+    expect(code).toBe(0);
+    const json = JSON.parse(readFileSync(`${dir}/o/report.json`, 'utf8')) as {
+      selections: { variant: string; interval: string }[];
+      variants: string[];
+      intervals: string[];
+    };
+    expect(json.selections.map((s) => `${s.variant} ${s.interval}`)).toEqual(['v2 5s', 'v2+ma 5s']);
+    expect([json.variants, json.intervals]).toEqual([['v2', 'v2+ma'], ['5s']]);
+    expect(readFileSync(`${dir}/o/report.md`, 'utf8')).toContain(
+      'Variants: v2, v2+ma; intervals: 5s.',
+    );
   });
 });

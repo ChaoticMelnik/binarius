@@ -550,7 +550,9 @@ MA200         цена ниже 1.08612
   in bounds); «⬆️ ВВЕРХ 🟢» / «⬇️ ВНИЗ 🔴» by the action.
 
 The direction is the decision's (Signal v2 on its 60 candles); MACD and MA are shown, not decided
-on, until #483, so «рост» beside «MA200: цена ниже» is possible.
+on — #483's backtest found no MACD or MA gate better than v2
+([signal.md](signal.md#macd-and-ma-on-history-483)) — so «рост» beside «MA200: цена ниже» is
+possible.
 
 The feature lines of a rule refusal, every number from the answer:
 

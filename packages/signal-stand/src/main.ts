@@ -17,14 +17,18 @@ import {
   STAND_DEFAULT_DAYS,
   STAND_DEFAULT_GETS_PER_MINUTE,
   STAND_MAX_DAYS,
+  TRADE_INTERVALS,
+  type TradeInterval,
 } from './config';
 import { fetchCandles, FETCH_STEP_MS } from './fetch';
 import { createPacer, systemClock, type Clock } from './pacer';
 import { runBacktest } from './run';
+import { comparesWithV2, VARIANTS } from './variants';
 
 export const USAGE = `usage: stand <fetch|run|calibrate> [options]
   fetch      [--assets <id,...>] [--days <1-${STAND_MAX_DAYS}>] [--intervals <1s,5s,15s,1m>]
   run        [--assets <id,...>] [--out <dir>] [--headline-delay <${OPEN_DELAY_GRID_MS.join('|')}>]
+             [--variants <${VARIANTS.map((variant) => variant.name).join(',')}>] [--intervals <${Object.keys(TRADE_INTERVALS).join(',')}>]
   calibrate  [--journal <file>] [--trades <file>] [--session-candles <dir>]
 env: STAND_DIR (required); BROKER_API_BASE_URL (fetch); STAND_MAX_GETS_PER_MINUTE (fetch, optional)`;
 
@@ -44,6 +48,35 @@ function list(raw: string | undefined, fallback: readonly number[]): number[] {
   });
   if (new Set(ids).size !== ids.length) throw new UsageError('--assets: an id is repeated');
   return ids;
+}
+
+function runVariants(raw: string | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  const names = raw.split(',');
+  const unknown = names.find((name) => !VARIANTS.some((variant) => variant.name === name));
+  if (unknown !== undefined) throw new UsageError(`--variants: ${unknown} is not a variant`);
+  if (new Set(names).size !== names.length) throw new UsageError('--variants: a name is repeated');
+  const orphan = names.find((name) => comparesWithV2(name) && !names.includes('v2'));
+  if (orphan !== undefined) throw new UsageError(`--variants: ${orphan} compares with v2; add v2`);
+  return names;
+}
+
+function runIntervals(raw: string | undefined): TradeInterval[] | undefined {
+  if (raw === undefined) return undefined;
+  const intervals: TradeInterval[] = [];
+  for (const item of raw.split(',')) {
+    const interval = (Object.keys(TRADE_INTERVALS) as TradeInterval[]).find(
+      (candidate) => candidate === item,
+    );
+    if (interval === undefined) {
+      throw new UsageError(`--intervals: ${item} is not a trade interval`);
+    }
+    intervals.push(interval);
+  }
+  if (new Set(intervals).size !== intervals.length) {
+    throw new UsageError('--intervals: an interval is repeated');
+  }
+  return intervals;
 }
 
 function integer(
@@ -67,6 +100,7 @@ const OPTIONS = {
   intervals: { type: 'string' },
   out: { type: 'string' },
   'headline-delay': { type: 'string' },
+  variants: { type: 'string' },
   journal: { type: 'string' },
   trades: { type: 'string' },
   'session-candles': { type: 'string' },
@@ -74,7 +108,7 @@ const OPTIONS = {
 
 const ALLOWED: Record<string, readonly (keyof typeof OPTIONS)[]> = {
   fetch: ['assets', 'days', 'intervals'],
-  run: ['assets', 'out', 'headline-delay'],
+  run: ['assets', 'out', 'headline-delay', 'variants', 'intervals'],
   calibrate: ['journal', 'trades', 'session-candles'],
 };
 
@@ -143,6 +177,8 @@ export async function main(argv: readonly string[], env: EnvSource, io: MainIo):
           values.out ??
           path.join(dir, 'out', new Date(clock.now()).toISOString().replace(/[:.]/g, '-')),
         headlineDelayMs: delay === undefined ? undefined : Number(delay),
+        variants: runVariants(values.variants),
+        intervals: runIntervals(values.intervals),
         io,
       });
     }
