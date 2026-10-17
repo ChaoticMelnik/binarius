@@ -1,6 +1,7 @@
 import { Api, InlineKeyboard } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import {
+  BOT_MESSAGE_SPACER,
   CONNECT_CALLBACK_DATA,
   confirmButtonLabel,
   confirmCallbackData,
@@ -136,23 +137,25 @@ export function createClientPush({
   // This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the bot's: the
   // only place here that sets parse_mode and unwraps TelegramHtml, which is why ESLint allows a
   // raw sendMessage in this file alone outside tests. The button label is plain: Telegram does
-  // not parse it.
+  // not parse it. Every text ends with the width spacer, as the bot's do (#506,
+  // docs/bot-navigation.md → The width).
+  const sent = (text: TelegramHtml) => text.value + BOT_MESSAGE_SPACER;
   const send = async (telegramUserId: bigint, { text, reply_markup }: ClientPushMessage) => {
-    await api.sendMessage(String(telegramUserId), text.value, { parse_mode: 'HTML', reply_markup });
+    await api.sendMessage(String(telegramUserId), sent(text), { parse_mode: 'HTML', reply_markup });
   };
   const sendSessionTrade = async (telegramUserId: bigint, text: TelegramHtml) => {
-    const sent = await api.sendMessage(String(telegramUserId), text.value, {
+    const message = await api.sendMessage(String(telegramUserId), sent(text), {
       parse_mode: 'HTML',
       disable_notification: true,
     });
-    return sent.message_id;
+    return message.message_id;
   };
   const editSessionTrade = async (
     telegramUserId: bigint,
     messageId: number,
     text: TelegramHtml,
   ) => {
-    await api.editMessageText(String(telegramUserId), messageId, text.value, {
+    await api.editMessageText(String(telegramUserId), messageId, sent(text), {
       parse_mode: 'HTML',
     });
   };
@@ -160,12 +163,12 @@ export function createClientPush({
     telegramUserId: bigint,
     { text, reply_markup }: ClientPushMessage,
   ) => {
-    const sent = await api.sendMessage(String(telegramUserId), text.value, {
+    const message = await api.sendMessage(String(telegramUserId), sent(text), {
       parse_mode: 'HTML',
       disable_notification: true,
       reply_markup,
     });
-    return sent.message_id;
+    return message.message_id;
   };
   const deleteSessionWaiting = async (telegramUserId: bigint, messageId: number) => {
     await api.deleteMessage(String(telegramUserId), messageId);

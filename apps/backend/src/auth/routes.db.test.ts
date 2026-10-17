@@ -43,6 +43,7 @@ import {
   callsTo,
   captureApi,
   inlineButtons,
+  pushedText,
   unusedAdminDeps,
   unusedPaymentsDeps,
   type CapturedApi,
@@ -635,7 +636,7 @@ describe('the Telegram proof on the callback', () => {
 
     expect(stub.tokenRequests).toBe(before);
     expect(await accountsOf(`broker-${owner}`)).toEqual([]);
-    expect(pushesTo(owner).map((push) => [push.text, inlineButtons(push)])).toEqual([
+    expect(pushesTo(owner).map((push) => [pushedText(push), inlineButtons(push)])).toEqual([
       [CLIENT_TEXTS.oauthLoginFailed.value, CONNECT_AGAIN],
     ]);
     expect(pushesTo(other)).toEqual([]);
@@ -900,7 +901,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(1);
-    expect(pushes[0]?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(pushes[0])).toBe(CLIENT_TEXTS.confirmPrompt.value);
     expect(pushes[0]?.parse_mode).toBe('HTML');
     expect(inlineButtons(pushes[0])).toEqual([
       {
@@ -936,7 +937,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(2);
-    expect(pushes[1]?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(pushes[1])).toBe(CLIENT_TEXTS.confirmPrompt.value);
     expect(inlineButtons(pushes[1])).toHaveLength(1);
   });
 
@@ -953,7 +954,7 @@ describe('the push after the callback', () => {
       const pushes = pushesTo(telegram);
       expect(pushes).toHaveLength(2);
       const { email } = (again.response.json() as { account: { email: string | null } }).account;
-      expect(pushes[1]?.text).toBe(CLIENT_TEXTS.linkedActive({ email }).value);
+      expect(pushedText(pushes[1])).toBe(CLIENT_TEXTS.linkedActive({ email }).value);
       expect(inlineButtons(pushes[1])).toEqual([
         { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
       ]);
@@ -968,7 +969,7 @@ describe('the push after the callback', () => {
     const { response } = await login(intruder, brokerUserId);
     expect(response.statusCode).toBe(409);
 
-    expect(pushesTo(intruder).map((push) => [push.text, inlineButtons(push)])).toEqual([
+    expect(pushesTo(intruder).map((push) => [pushedText(push), inlineButtons(push)])).toEqual([
       [CLIENT_TEXTS.accountTaken.value, CONNECT_AGAIN],
     ]);
     // the owner heard only about their own login
@@ -988,7 +989,7 @@ describe('the push after the callback', () => {
       code: stub.issueCode({ brokerUserId: `broker-${seeded.telegramUserId}` }),
     });
     expect(response.statusCode).toBe(409);
-    expect(pushesTo(seeded.telegramUserId).map((push) => push.text)).toEqual([
+    expect(pushesTo(seeded.telegramUserId).map((push) => pushedText(push))).toEqual([
       CLIENT_TEXTS.blocked.value,
     ]);
   });
@@ -999,7 +1000,7 @@ describe('the push after the callback', () => {
     const response = await callback({ state, code: 'never-issued' });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'invalid_code' });
-    expect(pushesTo(telegram).map((push) => push.text)).toEqual([
+    expect(pushesTo(telegram).map((push) => pushedText(push))).toEqual([
       CLIENT_TEXTS.oauthLoginFailed.value,
     ]);
   });
@@ -1019,7 +1020,7 @@ describe('the push after the callback', () => {
     } finally {
       await instance.close();
     }
-    expect(pushesTo(telegram).map((push) => push.text)).toEqual([
+    expect(pushesTo(telegram).map((push) => pushedText(push))).toEqual([
       CLIENT_TEXTS.oauthLoginFailed.value,
     ]);
   });
@@ -1810,7 +1811,9 @@ describe('the inviter’s reward', () => {
     expect(Object.keys(body)).toEqual(['account']);
     expect(body).toMatchObject({ account: { id: accountId, status: 'active' } });
     const { email } = (body as { account: { email: string | null } }).account;
-    expect(pushesTo(inviteeTelegram).at(-1)?.text).toBe(CLIENT_TEXTS.linkedActive({ email }).value);
+    expect(pushedText(pushesTo(inviteeTelegram).at(-1))).toBe(
+      CLIENT_TEXTS.linkedActive({ email }).value,
+    );
     expect(referralLines(logs)).toEqual([rewarded(referralId, inviterId)]);
     expect(
       (await tmp.db.select().from(users).where(eq(users.id, inviterId)))[0]?.tokenBalance,

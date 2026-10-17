@@ -29,6 +29,7 @@ import {
   captureApi,
   callsTo,
   inlineButtons,
+  pushedText,
   sentPayload,
   unusedAdminDeps,
   unusedPaymentsDeps,
@@ -281,12 +282,12 @@ describe('POST /deposit/credited', () => {
     expect(sends).toHaveLength(1);
     const payload = sentPayload(sends, 'sendMessage');
     expect(payload?.parse_mode).toBe('HTML');
-    expect(payload?.text).toBe(
+    expect(pushedText(payload)).toBe(
       CLIENT_TEXTS.depositCredited({
         realBalance: { amount: '1234.50000000' as DecimalString, fresh: true },
       }).value,
     );
-    expect(payload?.text).toContain(formatUsd('1234.5'));
+    expect(pushedText(payload)).toContain(formatUsd('1234.5'));
     expect(inlineButtons(payload)).toEqual([
       { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
     ]);
@@ -492,7 +493,7 @@ describe('POST /deposit/credited', () => {
     expectOutcome(await creditedFor(user.telegramUserId, stubbed), 'refreshed');
     expectOutcome(await creditedFor(user.telegramUserId, stubbed), 'refreshed');
     expect(sendsTo(pushes.calls, user.telegramUserId)).toHaveLength(1);
-    expect(sentPayload(pushes.calls, 'sendMessage')?.text).toContain(formatUsd('100'));
+    expect(pushedText(sentPayload(pushes.calls, 'sendMessage'))).toContain(formatUsd('100'));
 
     const started = Date.now();
     await until(

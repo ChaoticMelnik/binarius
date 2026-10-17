@@ -15,7 +15,7 @@ import {
   type SeededAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { captureApi, callsTo, inlineButtons } from '../admin/testing';
+import { captureApi, callsTo, inlineButtons, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 import { createStarReconciler, type StarReconcilerConfig } from './star-reconciler';
@@ -190,7 +190,7 @@ describe('the Stars reconciler', () => {
     const payload = sends[0]!.payload;
     expect(payload.chat_id).toBe(seed.telegramUserId);
     expect(payload.parse_mode).toBe('HTML');
-    expect(payload.text).toBe(
+    expect(pushedText(payload)).toBe(
       CLIENT_TEXTS.starsCredited({ purchasedTokens: '50', tokenBalance: '57' }).value,
     );
     expect(inlineButtons(payload)).toEqual([

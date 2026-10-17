@@ -25,7 +25,7 @@ import {
   seedUser,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { captureApi, callsTo, inlineButtons } from '../admin/testing';
+import { captureApi, callsTo, inlineButtons, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 import { MAILING_SEND_PER_SECOND } from '../timing';
@@ -127,8 +127,8 @@ describe('the first-session chain through the engine', () => {
         [NotificationKind.FirstSession24h]: CLIENT_TEXTS.firstSessionReminder24h,
         [NotificationKind.FirstSession72h]: CLIENT_TEXTS.firstSessionReminder72h,
       };
-      expect(payload.text).toBe(texts[kind].value);
-      expect(payload.text).toContain(`«${CLIENT_LABELS.demoButton}»`);
+      expect(pushedText(payload)).toBe(texts[kind].value);
+      expect(pushedText(payload)).toContain(`«${CLIENT_LABELS.demoButton}»`);
       expect(payload.parse_mode).toBe('HTML');
       expect(inlineButtons(payload)).toEqual([
         { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
@@ -180,7 +180,7 @@ describe('the analysis reminder through the engine', () => {
     const sends = sendsTo(captured.calls, user.telegramUserId);
     expect(sends).toHaveLength(1);
     const payload = sends[0]!.payload;
-    expect(payload.text).toBe(CLIENT_TEXTS.analysisUnusedReminder.value);
+    expect(pushedText(payload)).toBe(CLIENT_TEXTS.analysisUnusedReminder.value);
     expect(payload.parse_mode).toBe('HTML');
     expect(payload).not.toHaveProperty('disable_notification');
     expect(inlineButtons(payload)).toEqual([

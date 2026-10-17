@@ -50,6 +50,7 @@ import {
   callsTo,
   captureApi,
   inlineButtons,
+  pushedText,
   type ApiCall,
   type CapturedApi,
 } from '../admin/testing';
@@ -277,7 +278,7 @@ const deletesTo = (calls: readonly ApiCall[], target: Target) =>
     .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
     .map((call) => Number(call.payload.message_id));
 const textsTo = (calls: readonly ApiCall[], target: Target) =>
-  sendsTo(calls, target).map((call) => String(call.payload.text));
+  sendsTo(calls, target).map((call) => pushedText(call.payload));
 const editsTo = (calls: readonly ApiCall[], target: Target) =>
   callsTo(calls, 'editMessageText').filter(
     (call) => call.payload.chat_id === target.seed.telegramUserId,
@@ -293,7 +294,7 @@ function chatOf(calls: readonly ApiCall[], target: Target): string[] {
         : edited.has(call.payload)
           ? Number(call.payload.message_id)
           : undefined;
-    if (id !== undefined) shown.set(id, String(call.payload.text));
+    if (id !== undefined) shown.set(id, pushedText(call.payload));
   }
   return [...shown.values()];
 }
@@ -346,7 +347,7 @@ describe('the session notices (#464)', () => {
       expect(call.payload.reply_markup).toBeUndefined();
       expect(call.payload.parse_mode).toBe('HTML');
     }
-    expect(trades.map((call) => String(call.payload.text))).toEqual([
+    expect(trades.map((call) => pushedText(call.payload))).toEqual([
       '⚡ Цикл 1 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$4.60\n📊 Цена: 0.10000 → 0.10010</pre>',
       '⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 0.20000 → 0.20010</pre>',
       '⚡ Цикл 3 Шаг 1\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 0.30000 → 0.30010</pre>',
@@ -358,7 +359,7 @@ describe('the session notices (#464)', () => {
     expect(inlineButtons(summary.payload)).toEqual([
       { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
     ]);
-    expect(String(summary.payload.text).split('\n')).toEqual([
+    expect(pushedText(summary.payload).split('\n')).toEqual([
       '📈 EUR/USD OTC',
       '🏁 Сессия завершена: 5 циклов, 5 сделок — 2 в плюс, 2 в минус, 1 в ноль',
       '💰 Результат: -$1.15',
@@ -729,8 +730,8 @@ describe('a martingale cycle is one message (#551)', () => {
       expect(edit.payload.parse_mode).toBe('HTML');
       expect(edit.payload.reply_markup).toBeUndefined();
     }
-    expect(String(edits[0]!.payload.text)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
-    expect(String(edits[1]!.payload.text)).toBe(
+    expect(pushedText(edits[0]!.payload)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
+    expect(pushedText(edits[1]!.payload)).toBe(
       [
         loss(1),
         ADAPTIVE,
@@ -744,7 +745,7 @@ describe('a martingale cycle is one message (#551)', () => {
     await notices.tick();
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(2);
-    expect(String(sends[1]!.payload.text)).toBe(loss(1, 2, 4));
+    expect(pushedText(sends[1]!.payload)).toBe(loss(1, 2, 4));
     expect(sends[1]!.payload.disable_notification).toBe(true);
     expect(await cycleStateOf(target)).toEqual({
       messageId: answered.get(sends[1]!.payload),
@@ -761,7 +762,7 @@ describe('a martingale cycle is one message (#551)', () => {
     expect(chatOf(captured.calls, target).map(heads)).toEqual([
       ['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2'],
     ]);
-    expect(String(editsTo(captured.calls, target)[0]!.payload.text)).toContain(
+    expect(pushedText(editsTo(captured.calls, target)[0]!.payload)).toContain(
       '⚪ Ставка: $5.00 → $0.00, ставка вернулась',
     );
   });
@@ -780,7 +781,7 @@ describe('a martingale cycle is one message (#551)', () => {
     expect(edit?.payload.message_id).toBe(
       answered.get(sendsTo(first.captured.calls, target)[0]!.payload),
     );
-    expect(heads(String(edit?.payload.text))).toEqual([
+    expect(heads(pushedText(edit?.payload))).toEqual([
       '⚡ Цикл 1 Шаг 1',
       ADAPTIVE,
       '⚡ Цикл 1 Шаг 2',
@@ -804,7 +805,7 @@ describe('a martingale cycle is one message (#551)', () => {
       captured.apiErrors.delete('editMessageText');
       const sends = sendsTo(captured.calls, target);
       expect(sends).toHaveLength(2);
-      expect(String(sends[1]!.payload.text)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
+      expect(pushedText(sends[1]!.payload)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
       const id = answered.get(sends[1]!.payload);
       expect(await cycleStateOf(target)).toEqual({ messageId: id, from: 0 });
       expect(messagesOf(logs(), WARN)).toEqual([
@@ -815,7 +816,7 @@ describe('a martingale cycle is one message (#551)', () => {
       await notices.tick();
       const edits = editsTo(captured.calls, target);
       expect(edits.at(-1)?.payload.message_id).toBe(id);
-      expect(heads(String(edits.at(-1)?.payload.text))).toEqual([
+      expect(heads(pushedText(edits.at(-1)?.payload))).toEqual([
         '⚡ Цикл 1 Шаг 1',
         ADAPTIVE,
         '⚡ Цикл 1 Шаг 2',
@@ -860,7 +861,7 @@ describe('a martingale cycle is one message (#551)', () => {
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(2);
     expect(editsTo(captured.calls, target)).toHaveLength(0);
-    expect(String(sends[1]!.payload.text)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
+    expect(pushedText(sends[1]!.payload)).toBe([loss(1), ADAPTIVE, loss(2)].join('\n\n'));
     expect(await cycleStateOf(target)).toEqual({
       messageId: answered.get(sends[1]!.payload),
       from: 0,
@@ -1104,7 +1105,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(1);
     expect(sends[0]!.payload.disable_notification).toBeUndefined();
-    expect(String(sends[0]!.payload.text).split('\n')).toEqual(['📈 EUR/USD OTC', STOP_LINE]);
+    expect(pushedText(sends[0]!.payload).split('\n')).toEqual(['📈 EUR/USD OTC', STOP_LINE]);
     expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig:15'), MENU]);
     expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
     await notices.tick();
@@ -1129,7 +1130,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(2);
     const summary = sends[1]!;
-    expect(String(summary.payload.text).split('\n').slice(0, 3)).toEqual([
+    expect(pushedText(summary.payload).split('\n').slice(0, 3)).toEqual([
       '📈 EUR/USD OTC',
       STOP_LINE,
       '📊 Итог: 1 сделка — 1 в плюс, 0 в минус',
@@ -1166,7 +1167,7 @@ describe('the waiting message (#536)', () => {
         call.method === 'sendMessage'
           ? isWaiting(call)
             ? 'waiting'
-            : /Цикл/.test(String(call.payload.text))
+            : /Цикл/.test(pushedText(call.payload))
               ? 'trade'
               : 'summary'
           : call.method,
@@ -1213,7 +1214,7 @@ describe('the waiting message (#536)', () => {
     await notices.tick();
     const sent = waitingTo(captured.calls, target);
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.payload).toMatchObject({
+    expect({ ...sent[0]!.payload, text: pushedText(sent[0]!.payload) }).toMatchObject({
       text: CLIENT_TEXTS.sessionWaitingSignal.value,
       parse_mode: 'HTML',
       disable_notification: true,
