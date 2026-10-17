@@ -3313,3 +3313,39 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. The "work queue" task-class row also covers recovery lists re-read until a flag is set, with #567 R1 as its example; a new row "Bulk start-up work" requires the first pass's call rate per external API against the rate budgets and a named spacing constant — **внедрено в #571: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
 2. Remaining Minors — **вынесено в #570**
+
+---
+
+## #536 — Сессия: сообщение сессии как у референса, «Ждём сигнал» всегда последним с «⏹», без «Обновить» (часть B) (2026-10-17)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Part B started after #567 merged (A → B → C, owner's order); main clean; Codex limit of 16.10 reset. |
+| Architect | first plan | Fable (`claude-fable-5-1`). 4 clarify questions, owner answered all; plan 6223849495 before In Progress, endings tables per the #567 audit's task classes; estimate ~1 850 (fact 2 780). |
+| Implementer | round 1 | Opus. 3 owner questions. 6 commits, migrations 0056/0057, 26/26 mutations, `pnpm check` 0. Dropped the plan's 48 h keyboard strip for the `:w` budget without returning it to the architect (disclosed). |
+| Tech Lead | Phase 3 | Audit comment 6224690039 before the reviewer spawn. |
+| Reviewer | round 1 | 1 Major (`sendNew` left no waiting message when the new cycle message was not recorded), 4 Minor → Todo. Plan Update (Opus) + addendum Р9 for a plan defect the fix-round implementer found (Rule 19: a trade sent to a just-blocked user); 2 owner questions. 31/31 mutations. |
+| Reviewer | round 2 | 1 Major (deploy window: #567's resume stripped the old «⏹» of running sessions while 0057 withheld the waiting message), 4 Minor → Todo. Iteration-2 stop: owner chose re-plan; owner revised answer 5 (waiting message right at backend start). Re-plan (Opus): no backfill, `mayDraw`, `--no-deps` deploy (Compose probe), rebase onto #552. 3 owner questions. 35/35 mutations. |
+| Reviewer | round 3 | 1 Blocker — migration number taken on main (#13), 5 Minor; Codex `task-mvc31e4q-uazp4r` at 407edab (no Blocker/Major). Owner: rebase-only fix outside the round count, Minors → #584. |
+| Tech Lead | own 6-pre ×2 | 4413e1a (migration 0061): Codex `task-mvc441s7-q152wf` 2 Major + 2 Minor → owner: new issue #587 + merge. Right before the merge the PR turned CONFLICTING (#155 moved `telegramErrorFields`); rebase-only spawn → 40c9957, range-diff imports only; Codex `task-mvc7xpwk-9czzr5` 2 more Major → owner: into #587, merge yes for the new head. |
+| Tech Lead | merge | PR #573 MERGED 10:00:37Z (rebase, branch deleted). #536 Done; 0057–0061 migrated on the shared database; `binarius_impl_536` dropped; worktrees removed. Models: every spawn on its policy model. |
+
+### Review iterations: 3 (+2 rebase-only fixes and 2 tech-lead 6-pre runs at the round limit)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 M1: deleting the waiting message first left the slot claimed when the new cycle message was not recorded — no waiting message, no «⏹» | Major | instance-vs-class | the endings table covered the waiting send and delete, not every ending of the new-cycle send after the delete | Architect (endings table) |
+| Plan defect: a 403 on the delete marked the user blocked, then the trade still went (Rule 19) | Minor | instance-vs-class | the table row for 403 said "as now" without tracing the next call | Architect (caught at implementer clarify) |
+| Plan: the 48 h keyboard strip did not fit the `:w` handler budget; dropped by the implementer, disclosed | Minor | unverified-claim | decision 6 / SW4 not checked against `HANDLER_CALLS` | Architect; Implementer did not return it |
+| R2 M1: at the deploy, #567's resume edited running sessions' old status messages without a keyboard while 0057's backfill withheld the waiting message — only `/stop` left | Major | other | part B's plan did not replay merged part A's recovery path against B's new message format and its backfill | Architect (split-feature interaction) |
+| R2 m1–m4, Rules 28/31 wording, a docs ending, simplify, an unreachable test fake | Minor | other | fixed in round 3 | Implementer / Architect |
+| R3 B1 and the CONFLICTING merge: main took 0057–0060 and moved `telegramErrorFields` during the review (#574, #13, #116, #155 from parallel sessions); migration renumbered 0056 → 0057 → 0059 → 0061 | Blocker | env-parity | a busy main with parallel sessions; the rule "mergeable right before the merge" caught it | — (process worked) |
+| Codex at the round limit: 4 Major + 2 Minor over two re-runs (two «⏹» after an unblock, drawn-memo edit, re-launch ordering, stop reply after the summary) | Major | other | message-ordering edge cases between the bot and the backend senders | → #587 (owner's yes) |
+| R3 m1–m5 | Minor | other | left at the round limit | → #584 |
+
+### Process improvement proposals
+1. Architect task classes: a new row "Part of a split feature built on an already merged part" — replay the merged part's start-up, recovery and periodic paths against the new states at the deploy and after a restart — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+2. Tech-lead's own 6-pre run names the already posted/tracked findings as known in the Codex prompt, so a re-run on a moved head reports only what is new — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «Tech-lead's own 6-pre run», step 2**
+3. Remaining findings — **вынесено в #587** (Major, owner's yes) and **#584** (Minor)
