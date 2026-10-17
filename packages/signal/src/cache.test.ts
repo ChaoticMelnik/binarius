@@ -478,6 +478,57 @@ describe('createCachedSignalFeed', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('C22 evaluate asks the source before it answers a held refusal, and the decision replaces it', async () => {
+    let window = false;
+    const { feed, calls, sourceCalls, lines } = stubFeed(
+      (request) => Promise.resolve(failed('rate_limited', 20)(request)),
+      (request) => (window ? decidedOnly(request) : undefined),
+    );
+    const cache = cached(feed);
+    at(10_000);
+    await cache.evaluate(req('15s'));
+    at(11_000);
+    expect(await cache.evaluate(req('15s'))).toMatchObject({
+      outcome: 'fetch_failed',
+      code: 'rate_limited',
+      retryAfterSec: 19,
+    });
+    expect(sourceCalls).toHaveLength(1);
+    window = true;
+    at(12_000);
+    const answered = await cache.evaluate(req('15s'), { journal: true });
+    expect(answered.outcome).toBe('decided');
+    expect(lines).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(cache.fromSource(req('15s'))).toBe(answered);
+  });
+
+  it('C22 a source that throws on a held refusal rejects the evaluate and leaves the hold', async () => {
+    let throws = true;
+    const { feed, calls } = stubFeed(
+      (request) => Promise.resolve(failed('rate_limited', 20)(request)),
+      () => {
+        if (throws) throw new RangeError('signal input: digits');
+        return undefined;
+      },
+    );
+    const cache = cached(feed);
+    at(10_000);
+    await cache.evaluate(req('15s'));
+    at(11_000);
+    let pending: Promise<SignalEvaluation> | undefined;
+    expect(() => {
+      pending = cache.evaluate(req('15s'));
+    }).not.toThrow();
+    await expect(pending).rejects.toThrow(RangeError);
+    throws = false;
+    expect(await cache.evaluate(req('15s'))).toMatchObject({
+      code: 'rate_limited',
+      retryAfterSec: 19,
+    });
+    expect(calls).toHaveLength(1);
+  });
+
   it('exposes the inner decider', () => {
     const { feed } = stubFeed();
     expect(cached(feed).decider).toBe(feed.decider);

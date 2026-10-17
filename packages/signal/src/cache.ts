@@ -42,7 +42,8 @@ interface Held {
 // boundary). No timer is kept.
 // The journal is lazy (#405): the inner feed never writes a line; the first evaluate with
 // journal: true that gets a decision - a hit, a join or its own fetch - writes that decision's line,
-// and no later call writes it again. The scanner's fromSource writes none.
+// and no later call writes it again. The scanner's fromSource writes none. A refusal held from REST
+// gives way to a decision of the source on either entry.
 export function createCachedSignalFeed(
   inner: SignalFeed,
   options: CachedSignalFeedOptions,
@@ -120,24 +121,39 @@ export function createCachedSignalFeed(
     return result;
   }
 
+  // the source's decision for the key, held by the same rule; it replaces whatever refusal was held
+  function sourceDecision(
+    key: string,
+    request: SignalFeedRequest,
+  ): SignalDecidedEvaluation | undefined {
+    const result = inner.fromSource(request);
+    if (result === undefined) return undefined;
+    held.delete(key);
+    const until = holdUntil(result);
+    if (until !== undefined) hold(key, { until, result });
+    return result;
+  }
+
   return {
     decider: inner.decider,
     fromSource(request) {
       const key = `${request.assetId}:${request.interval}`;
       const hit = fromHold(key);
       if (hit?.outcome === SignalFeedOutcome.Decided) return hit;
-      const result = inner.fromSource(request);
-      if (result === undefined) return undefined;
-      // a refusal held from REST does not outlast a decision of the source
-      if (hit !== undefined) held.delete(key);
-      const until = holdUntil(result);
-      if (until !== undefined) hold(key, { until, result });
-      return result;
+      return sourceDecision(key, request);
     },
     evaluate(request, options) {
       const journal = options?.journal;
       const key = `${request.assetId}:${request.interval}`;
-      const hit = fromHold(key);
+      let hit = fromHold(key);
+      if (hit?.outcome === SignalFeedOutcome.FetchFailed) {
+        // a refusal held from REST does not outlast a window of the source (#405 review, minor 2)
+        try {
+          hit = sourceDecision(key, request) ?? hit;
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      }
       if (hit !== undefined) return Promise.resolve(journalIfDue(hit, journal));
       const intervalMs: number | undefined = SIGNAL_CHART_INTERVAL_MS[request.interval];
       // an unknown interval keeps the plain key; the inner feed refuses it
