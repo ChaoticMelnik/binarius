@@ -312,12 +312,13 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     }
     const rows = await listTrackedSessions(db, { limit: query.data.limit });
     return reply.send({
-      sessions: rows.map(({ id, telegramUserId, messageId, assetId, startedAt }) => ({
+      sessions: rows.map(({ id, telegramUserId, messageId, assetId, startedAt, language }) => ({
         id,
         telegramUserId,
         messageId,
         assetId,
         startedAt: startedAt.toISOString(),
+        language,
       })),
     });
   });

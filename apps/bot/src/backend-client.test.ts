@@ -1582,6 +1582,7 @@ describe('listTrackedSessions (#567)', () => {
     messageId: 77,
     assetId: 101,
     startedAt: SESSION_VIEW.startedAt,
+    language: BotLanguage.En,
   };
   const list = (baseUrl: string) =>
     createBackendClient({ baseUrl, token: TOKEN }).listTrackedSessions();
@@ -2151,6 +2152,7 @@ describe('body size', () => {
             messageId: INT4_MAX,
             assetId: INT4_MAX,
             startedAt: DATETIME,
+            language: longest(Object.values(BotLanguage)),
           })),
         },
         limit: MAX_TRACKED_SESSIONS_BODY_BYTES / 4,

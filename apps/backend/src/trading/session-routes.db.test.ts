@@ -32,6 +32,7 @@ import {
   type PairsCatalogView,
   type SessionStakeStrategy as StakeStrategy,
   type TradingSessionView,
+  BotLanguage,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
@@ -65,6 +66,7 @@ import {
   upsertBalanceSnapshot,
   users,
   type TradeIntentRow,
+  setUserLanguage,
 } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
@@ -1933,16 +1935,20 @@ describe('the recovery routes (#567)', () => {
     expect(await recordedOf(seed.sessionId)).toBeNull();
   });
 
-  it('T8 a row carries the owner, the message, the pair and started_at, oldest first', async () => {
+  it("T8 a row carries the owner, the owner's language (#508), the message, the pair and started_at, oldest first", async () => {
     const target = appWith();
     const seeded = [];
-    for (const startedAt of ['1999-01-02T00:00:00.000Z', '1999-01-01T00:00:00.000Z']) {
+    for (const [startedAt, language] of [
+      ['1999-01-02T00:00:00.000Z', BotLanguage.En],
+      ['1999-01-01T00:00:00.000Z', BotLanguage.Ru],
+    ] as const) {
       const seed = await seedUserWithAccount(tmp.db);
+      await setUserLanguage(tmp.db, BigInt(seed.telegramUserId), language);
       const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
         startedAt: new Date(startedAt),
       });
       await record(target, session.id, { telegramUserId: seed.telegramUserId, messageId: 9 });
-      seeded.push({ id: session.id, telegramUserId: seed.telegramUserId, startedAt });
+      seeded.push({ id: session.id, telegramUserId: seed.telegramUserId, startedAt, language });
     }
     const rows = listedOf(await tracked(target, '?limit=2'));
     expect(rows).toEqual(

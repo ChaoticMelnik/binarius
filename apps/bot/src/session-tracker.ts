@@ -9,6 +9,7 @@ import {
   TradingSessionStatus,
   type TradingSessionView,
   telegramErrorFields,
+  type BotLanguage,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -17,6 +18,7 @@ import {
   type BackendClient,
 } from './backend-client';
 import type { Logger } from './logging';
+import { runWithLanguage } from './language';
 import { sessionStatusText, TEXTS } from './texts';
 
 // The session's message follows its session (#284, docs/bot-session.md): the bot polls GET
@@ -74,6 +76,9 @@ export interface SessionTrackRequest {
   messageId: number;
   // the pair's label as the catalog gave it at the press, or null
   label: PairLabel | null;
+  // the language of the user's texts (#508): the polls, their edits and the summary card run
+  // outside any update; a recovered session's comes from the backend's list
+  language: BotLanguage;
   // what the message shows now, or null when nothing of it was read yet (a recovered session)
   view: TradingSessionView | null;
   // when the entry's deadline starts, epoch ms: the session's started_at for a recovered one;
@@ -227,7 +232,7 @@ export function createSessionTracker({
   const arm = (entry: Entry, delayMs: number): void => {
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
-      const run = attempt(entry)
+      const run = runWithLanguage(entry.language, () => attempt(entry))
         .catch((error: unknown) => {
           failed(entry, error);
         })
@@ -378,12 +383,13 @@ export function createSessionTracker({
       }
       const memo = drawn.get(request.sessionId);
       drawn.delete(request.sessionId);
+      const { view } = request;
       const entry: Entry = {
         ...request,
         startedAt: previous?.startedAt ?? request.startedAt ?? now(),
         rendered:
-          request.view !== null
-            ? finalOf(request.label, request.view).key
+          view !== null
+            ? runWithLanguage(request.language, () => finalOf(request.label, view).key)
             : memo?.messageId === request.messageId
               ? memo.rendered
               : '',

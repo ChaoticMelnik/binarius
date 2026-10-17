@@ -7,8 +7,10 @@ import {
   TradeMode,
   type TelegramHtml,
   type TradeIntentView,
+  BotLanguage,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import { currentLanguage, missingLanguageReads } from './language';
 import {
   createIntentTracker,
   INTENT_NOT_FOUND,
@@ -91,6 +93,7 @@ function setup({
     intentId: INTENT_ID,
     telegramUserId: String(USER.id),
     label: LABEL,
+    language: BotLanguage.Ru,
     payoutAccepted: true,
     view: intentView(),
     edit,
@@ -124,6 +127,25 @@ afterEach(() => {
 });
 
 describe('the intent tracker', () => {
+  // #508: a poll runs outside any update, in the language the press had
+  it('I-lang edits in the language of the request, tracked outside any update', async () => {
+    const { tracker, request } = setup({ script: [accepted] });
+    const languages: string[] = [];
+    const before = missingLanguageReads();
+    tracker.track(
+      request({
+        language: BotLanguage.En,
+        edit: () => {
+          languages.push(currentLanguage());
+          return Promise.resolve(true);
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(languages).toEqual([BotLanguage.En]);
+    expect(missingLanguageReads()).toBe(before);
+  });
+
   // the one place a status literal is written: the set the graph must derive
   it('stops at settled, rejected and accepted', () => {
     expect(new Set(TRACKER_STOP_STATUSES)).toEqual(new Set(['settled', 'rejected', 'accepted']));

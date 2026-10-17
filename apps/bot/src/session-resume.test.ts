@@ -1,6 +1,11 @@
 import type { Api } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { pairLabel, type PairsCatalogResponse, type TrackedSession } from '@binarius/shared';
+import {
+  pairLabel,
+  type PairsCatalogResponse,
+  type TrackedSession,
+  BotLanguage,
+} from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createSessionResumer } from './session-resume';
 import type { ResumeSession } from './trading-session';
@@ -16,6 +21,7 @@ const row = (id: string, patch: Partial<TrackedSession> = {}): TrackedSession =>
   messageId: 77,
   assetId: PAIR_EURUSD.id,
   startedAt: '2026-10-07T10:00:00.000Z',
+  language: BotLanguage.Ru,
   ...patch,
 });
 const A = '00000000-0000-4000-8000-00000000000a';

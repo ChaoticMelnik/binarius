@@ -24,6 +24,7 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   sessionStopCallbackData,
+  BotLanguage,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -1551,6 +1552,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
     messageId: RESUMED_MESSAGE_ID,
     assetId: PAIR_EURUSD.id,
     startedAt: '2026-10-07T10:00:00.000Z',
+    language: BotLanguage.En,
   };
   const resumed = (scene: ReturnType<typeof setup>, label: PairLabel | null) => {
     const resume = scene.sessionResumer.attach.mock.calls[0]?.[0];
@@ -1571,6 +1573,8 @@ describe('the resume of a tracked session after a restart (#567)', () => {
       view: null,
       record: false,
       startedAt: Date.parse(tracked.startedAt),
+      // #508: the owner's language from the list, not the store of an update
+      language: BotLanguage.En,
     });
     await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
     const edit = payloadOf(scene.calls, 'editMessageText');

@@ -1554,6 +1554,7 @@ describe('what the bot writes about a demo trade', () => {
         intentId: INTENT_ID,
         telegramUserId: String(USER.id),
         label: pairLabel(PAIR_EURUSD),
+        language: BotLanguage.Ru,
         payoutAccepted: true,
         view: INTENT_VIEW,
         edit: () =>

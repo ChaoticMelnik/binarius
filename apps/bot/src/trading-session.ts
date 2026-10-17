@@ -29,6 +29,7 @@ import {
   type TradeAction,
   type TradingSessionView,
   telegramErrorFields,
+  type BotLanguage,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -61,6 +62,7 @@ import {
   withMenu,
 } from './keyboards';
 import type { Logger } from './logging';
+import { currentLanguage } from './language';
 import {
   editMessagePhotoByIdHtml,
   editMessagePhotoByIdHtmlWithoutNextStep,
@@ -783,7 +785,7 @@ export function createTradingSessionComposer<C extends Context>({
     messageId: number,
   ): void {
     const target = { sessionId: view.id, telegramUserId, symbol, chatId, messageId };
-    follow(ctx.api, ctx.me.username, target, { view, record: true });
+    follow(ctx.api, ctx.me.username, target, { view, record: true, language: currentLanguage() });
   }
 
   // a private chat's id is its user's id (Telegram ids fit in 52 bits, so Number keeps them)
@@ -799,6 +801,8 @@ export function createTradingSessionComposer<C extends Context>({
       view: null,
       record: false,
       startedAt: Date.parse(session.startedAt),
+      // the owner's language, from the backend's list (#508)
+      language: session.language,
     });
   };
 
@@ -822,6 +826,7 @@ export function createTradingSessionComposer<C extends Context>({
       view: TradingSessionView | null;
       record: boolean;
       startedAt?: number;
+      language: BotLanguage;
     },
   ): void {
     sessionTracker.track({
