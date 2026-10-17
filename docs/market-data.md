@@ -42,8 +42,22 @@ The active hands over in these cases:
 | `token_expired` / `auth_failed` with the reserve `ready` | the same switch at once (decision 7a). The next reserve starts on the old account with `refusedToken` (below) |
 | `token_expired` / `auth_failed` without a ready reserve | the token is exchanged in place: the same client `start()`s with the new token, and its registry goes out with the next auth |
 
-A reserve that is not `ready` at the switch is no reserve. It is stopped, and a fresh active starts
-on the next account. After every switch a new reserve starts on the next free account.
+A reserve that is not `ready` at the switch keeps its slot, and the active starts at once on the
+next free account (the reserve's account is not free). Whichever comes first takes the active role:
+a start that opens a client becomes the active, and the reserve stays the reserve. The ready reserve
+is promoted into an empty active slot on three entries (`promote()`):
+
+1. the switch itself, when the reserve is `ready` at that moment;
+2. the end of an active start that found no client (every account refused, or the broker's rate
+   limit ended the run);
+3. the reserve reaching `ready` while the active slot is empty.
+
+A promotion sends `subscribe()` with every id of the fresh catalog (the switch sends the old
+active's registry), and logs `market data reserve promoted` on entries 2 and 3. After a promotion
+and after a switch with no ready reserve, an empty reserve slot starts at once on the next free
+account. The one exception is a promotion after the rate limit: that run is not continued, and the
+reserve starts on the next tick. While the active is `starting` or `refreshing`, a reserve that
+turns `ready` waits for the outcome of that start (risk 11).
 
 The reserve's own events: its prices are ignored. `disconnected_by_server` or a foreign `user.data`
 stops it and holds its account back, and a new reserve starts on the next tick. A token refusal is
@@ -51,7 +65,18 @@ exchanged in place, with no subscription and no switch.
 
 Each slot is `empty`, `starting` or `refreshing` (both waiting on `accessToken`), or `running`. The
 tick fills only an empty slot, so there are never more than two clients. `stop()` stops both clients
-at once, then waits for an `accessToken` in flight, and opens nothing after its answer.
+at once, then waits for an `accessToken` in flight, and opens nothing after its answer. The
+invariants:
+
+- I1: no handler ends with the active slot empty and the reserve `running` and `ready` (the three
+  entries above).
+- I2: every start and exchange ends by writing its own slot (`running`, `empty`, or a failover), or
+  leaves on `stop()`.
+- I3: a throw of the client (`start()` on invalid credentials or a second start) is the account's
+  failure: the client is detached and stopped, the account is held back, and the start goes on to
+  the next candidate; after an exchange the account fails over as on a refused exchange.
+- I4: every work nobody awaits has a rejection handler (`market data work failed`), a backstop that
+  by I3 no case reaches.
 
 ## Closing a candle and holes
 
@@ -108,6 +133,7 @@ old token, because once the token is marked, any later call exchanges anyway.
 | `not_service`, `user_blocked`, `account_pending`, `account_not_found` | yes | `info` `market data token refused` |
 | `key_unavailable`, `refresh_needed` | yes | `warn` `market data token refused` |
 | `accessToken` threw | yes | `error` `market data token threw` (name and code) |
+| `start()` threw (a new client or an exchange in place) | yes | `error` `market data socket start threw` (name and code) |
 | exchange in place `ok` | no | `info` `market data token refreshed` |
 | `disconnected_by_server` | yes | `warn` `market data socket disconnected by server` |
 | foreign `user.data` | yes | `warn` `market data foreign user` (the other user's id is not logged) |
@@ -129,6 +155,9 @@ a mark or unmark in the admin pages, or a repair by the keeper, takes effect wit
 | `market data token refused` | info / warn | the table above |
 | `market data token threw` | error | `{ role, accountId, err }` |
 | `market data token refreshed` | info | an in-place exchange succeeded |
+| `market data reserve promoted` | info | `{ to }`: the reserve reached `ready` while the active slot was empty, or took it when the active's start found no client |
+| `market data socket start threw` | error | `{ role, accountId, err }` |
+| `market data work failed` | error | `{ err }`: a backstop for a throw outside the client's tries; no case reaches it |
 | `market data catalog not fresh` | warn | once per streak of stale catalog reads |
 | `market data: no working service account` | warn | once per streak without an active |
 | `market data tick failed` | error | the tick threw (the account list's query) |
@@ -156,8 +185,9 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 
 The links:
 
-- `BROKER_SOCKET_RECONNECT_DELAY_MS × (1 + JITTER) < GRACE`: the client's first reconnection comes in
-  time.
+- `BROKER_SOCKET_RECONNECT_DELAY_MS × (1 + JITTER) < GRACE`: the client's first reconnection attempt,
+  at its longest jitter, starts inside the grace. Its handshake (connect, then `user.auth`) is not
+  bounded here: a slower one ends in the switch.
 - `GRACE < 5 s`: the switch happens within one `5s` candle.
 - `SKEW_MARGIN < 5 s` and `< TICK_MAX_SKEW_MS`.
 - `TICK ≤ LOG`.
@@ -172,9 +202,11 @@ The links:
 - `source.test.ts` S1-S3.
 - `manager.test.ts`:
   - M1-M6, M8-M14 on `packages/mock-broker`, with two users;
-  - M7-M7d, M15, M16 and the in-flight case of M10 on fake clients, because the mock has one token
-    per user and cannot authorise an exchanged one;
-  - M11 reads the log itself.
+  - M7-M7d, M15, M16, the in-flight case of M10, M17a-M17e (the promotion and the reserve after a
+    switch) and M18a-M18c (a throwing `start()`) on fake clients, because the mock has one token
+    per user and cannot authorise an exchanged one, and its clients never throw;
+  - M11 reads the log itself. It reads the lines of every case before it, so alone or shuffled it
+    fails falsely; `vitest.config.ts` pins the order.
 - The timing pins are in `timing.test.ts`.
 
 ## Accepted risks
@@ -203,6 +235,16 @@ The links:
 10. **A refused token while an exchange is in flight:** if the reserve turns `ready` during an
     in-place exchange of the active, the switch no longer happens. The window is
     ≤ `BROKER_HTTP_TIMEOUT_MS`.
+11. **A reserve that turns `ready` while the active is `starting` waits for that start.** The window
+    is the `accessToken` answer (usually a database read; up to `BROKER_HTTP_TIMEOUT_MS`, 5 000,
+    with an exchange) plus the new active's connection. Promoting in the middle of a start would mean
+    redirecting the start in flight to another slot. Falsifiable: `market data failover { to: null }`,
+    then `market data socket started { role: 'active' }` more than 5 s after the reserve's `ready`
+    in the same period.
+12. **A reserve that reconnects without end keeps its account.** The client retries forever
+    (`reconnectionAttempts: Infinity`) and the reserve has no grace, so with two accounts and a
+    failed active the stream waits for that reconnection. Falsifiable: a `market data` line with
+    `reserve.socketState: 'reconnecting'` in two periods in a row.
 
 ## Owner's steps after the merge (pilot)
 
