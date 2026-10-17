@@ -706,7 +706,10 @@ describe('«⏹ Остановить сессию» under the waiting message (#
       'editMessageText',
       'sendMessage',
     ]);
-    expect(rowsOf(payloadOf(failedGone.calls, 'sendMessage'))).toEqual([STOP_AGAIN_ROW]);
+    // the pressed message is gone, so the sender has moved on: its next waiting message carries
+    // the one «⏹», the new message the menu (#587 round 1)
+    expect(rowsOf(payloadOf(failedGone.calls, 'editMessageText'))).toEqual([STOP_AGAIN_ROW]);
+    expect(rowsOf(payloadOf(failedGone.calls, 'sendMessage'))).toEqual([MENU_ROW]);
 
     const shown = setup();
     shown.apiErrors.set('editMessageText', NOT_MODIFIED);
