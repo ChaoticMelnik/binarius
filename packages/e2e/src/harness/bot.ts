@@ -1,4 +1,4 @@
-import type { Update } from 'grammy/types';
+import type { Update, User } from 'grammy/types';
 import {
   BOT_INFO,
   createBackendClient,
@@ -14,6 +14,7 @@ import {
   SESSION_TRACK_DEADLINE_MS,
   startUpdate,
   textUpdate,
+  USER,
 } from '@binarius/bot/e2e';
 import { BOT_TOKEN, INTERNAL_API_TOKEN } from './env';
 import type { LogSink } from './logs';
@@ -25,10 +26,15 @@ export const E2E_BOT_TUNING = { sessionFirstPollMs: 200, sessionPollMs: 300 } as
 
 export interface E2eBot {
   telegram: TelegramSide;
-  start(): Promise<void>;
-  send(text: string): Promise<void>;
-  // presses the newest button whose label matches, on the message that carries it
-  press(label: string | ((label: string) => boolean)): Promise<void>;
+  // each sends a new update as USER (or `from`) and returns it, for replay
+  start(payload?: string): Promise<Update>;
+  startAs(from: User, payload?: string): Promise<Update>;
+  send(text: string): Promise<Update>;
+  sendAs(from: User, text: string): Promise<Update>;
+  // presses the newest button in USER's chat whose label matches, on the message that carries it
+  press(label: string | ((label: string) => boolean)): Promise<Update>;
+  // Telegram's re-delivery: the same update, its update_id and callback_query.id, a second time
+  replay(update: Update): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -73,17 +79,26 @@ export function startE2eBot(deps: {
     sessionResumer,
   });
   const telegram = deps.telegram.bot(bot);
-  const handle = (update: Update) => bot.handleUpdate(update);
+  const handle = async (update: Update) => {
+    await bot.handleUpdate(update);
+    return update;
+  };
+  const startText = (payload?: string) => (payload === undefined ? '/start' : `/start ${payload}`);
 
   return {
     telegram,
-    start: () => handle(startUpdate('/start')),
+    start: (payload) => handle(startUpdate(startText(payload))),
+    startAs: (from, payload) => handle(startUpdate(startText(payload), 'private', from)),
     send: (text) => handle(textUpdate(text)),
+    sendAs: (from, text) => handle(textUpdate(text, 'private', from)),
     async press(label) {
       const match = typeof label === 'string' ? (text: string) => text === label : label;
-      const button = findButton(telegram, match);
+      const button = findButton(telegram, match, USER.id);
       if (button === undefined) throw new Error(`no button ${String(label)} on the bot's messages`);
-      await handle(pressUpdate(button));
+      return handle(pressUpdate(button));
+    },
+    async replay(update) {
+      await bot.handleUpdate(update);
     },
     async stop() {
       await sessionTracker.stop();

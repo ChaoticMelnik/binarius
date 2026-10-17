@@ -69,12 +69,14 @@ export function createTelegram() {
 
 const isPhoto = (call: ApiCall) => PHOTO_METHODS.includes(call.method);
 
-// The newest message of the bot carrying a button that matches; the press goes to that message,
-// a photo's press as a photo's (#482).
-export function findButton(side: TelegramSide, match: (label: string) => boolean) {
+// The newest message of the bot in the chat carrying a button that matches; the press goes to that
+// message, a photo's press as a photo's (#482). Other chats are skipped: in the repeat run (#106)
+// B and C get welcomes with the same connect button.
+export function findButton(side: TelegramSide, match: (label: string) => boolean, chatId: number) {
   for (let index = side.calls.length - 1; index >= 0; index -= 1) {
     const call = side.calls[index];
     if (call === undefined || call.payload.reply_markup === undefined) continue;
+    if (call.payload.chat_id !== chatId) continue;
     const button = inlineButtons(call.payload).find((candidate) => match(candidate.text));
     if (button?.callback_data === undefined) continue;
     const messageId = side.messageIdOf(call);
