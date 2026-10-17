@@ -6,12 +6,14 @@ below on that cache and writes a report. `calibrate` checks the stand against th
 trades and journal. No process imports the package: no `apps/*` manifest names it, and
 `grep -rn signal-stand apps/` is empty. It reuses production code unchanged:
 - `createBrokerRestClient().getChart`/`listPairs`, with the wire parser;
-- `chartWindow` and `SIGNAL_CHART_LIMIT`;
+- `chartWindow`, `SIGNAL_CHART_LIMIT` and `SIGNAL_FETCH_LIMIT`;
 - `createSignalDecider`/`createSignalDeciderV1`;
+- `displayIndicators` (#482), the MACD and MA50/MA200 the analysis card shows;
 - `replaySignalJournalEntry`;
 - `breakEvenPct`, `MIN_CYCLE_PAYOUT_PCT` and `PAIR_TYPE_GROUPS`.
 
-The stand computes no indicator of its own. Every variant reads a production decider's decision.
+The stand computes no indicator of its own. Every variant reads a production decider's decision,
+and the MACD/MA variants also read production's `displayIndicators`.
 
 The report and the cache stay outside the repository. A run's summary goes to #381 as a comment.
 
@@ -32,8 +34,15 @@ pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timesta
 | Command | Options (defaults) | Env |
 |---|---|---|
 | `fetch` | `--assets <id,…>` (`STAND_ASSET_IDS`, the 28 below), `--days <1-30>` (`STAND_DEFAULT_DAYS` 14), `--intervals` (`1s,5s,15s,1m`) | `BROKER_API_BASE_URL` (https, or http to localhost); `STAND_MAX_GETS_PER_MINUTE` (1..600, default 120) |
-| `run` | `--assets` (the 28), `--out <dir>` (`$STAND_DIR/out/<ISO time>`), `--headline-delay <0\|1000\|3000>` | — |
+| `run` | `--assets` (the 28), `--out <dir>` (`$STAND_DIR/out/<ISO time>`), `--headline-delay <0\|1000\|3000>`, `--variants <name,…>` (every variant), `--intervals <5s,15s,1m>` (all three) | — |
 | `calibrate` | `--journal` (`$STAND_DIR/live/journal-381.jsonl`), `--trades` (`$STAND_DIR/live/trades-381.json`), `--session-candles` (`$STAND_DIR/candles-sessions`) | — |
+
+`run --variants` and `--intervals` narrow a run; the report covers exactly what ran and names it
+in its header. An unknown or repeated name is a usage error, and so is a variant that compares
+with `v2` (`v2+…`) without `v2` in the list. A variant with none of its intervals left is skipped.
+#483's run is `--variants v2,v2+macd,v2+ma,v2+macd+ma --intervals 5s,15s`: about 66 s per pair on
+the 2026-10-15 cache, so about 31 min for the 28 (`NODE_OPTIONS=--max-old-space-size=4096`;
+one pair peaked at about 1 GB resident).
 
 `--days` bounds only a series' first fetch. A later fetch continues from the cache's last row and
 never extends a series backwards: to widen the range, fetch into an empty `$STAND_DIR`. `run`
@@ -132,6 +141,11 @@ decision in that direction is then skipped and counted as `pause_after_two_losse
 or opposite decision clears the pause. A tie breaks the streak, and an unpriced trade is skipped
 by it. Every variant runs with and without the pause.
 
+**The memo.** `v2` at the production point and the display indicators depend only on the interval
+and `D`, so each pair keeps them per interval and `D` while it runs (`createDecisionMemo`), and the
+six pause × delay runs of a point read them back. A memoised run equals an unmemoised one
+(`simulate.test.ts` S10). `v2` at an explicit grid point is not memoised.
+
 ## Pricing
 
 `priceAt(ms)` is the close of the `1s` row labelled `floor(ms / 1000) × 1000`. A missing row
@@ -169,6 +183,9 @@ bucket in most trades.
 | `v2` | 5s, 15s, 1m | `rsiExtremeBand` {10, 15, 20} × `minAtrTicks` {3, 5, 8} | on (production) |
 | `revert` | 5s, 15s | `band` {10, 15, 20} | on |
 | `v2+1m` | 5s, 15s | — | on |
+| `v2+macd` | 5s, 15s | `macd` {cross, hist} | on |
+| `v2+ma` | 5s, 15s | `ma` {200, 50, 50+200} | on |
+| `v2+macd+ma` | 5s, 15s | `macd` {cross, hist} × `ma` {200, 50, 50+200} | on |
 
 - **`v1`** is `createSignalDeciderV1(DEFAULT_SIGNAL_PARAMS_V1)`. It is the reference and the v1
   era's comparison.
@@ -186,8 +203,26 @@ bucket in most trades.
 - **60 s trades** are `v1` and `v2` on the `1m` interval, where the cadence runs on minute
   boundaries.
 
-A variant's window length is `seriesAt`'s `limit` parameter (default `SIGNAL_CHART_LIMIT`). A
-variant needing a longer history, such as #483's MA200, plugs in without touching the simulator.
+- **`v2+macd`, `v2+ma`, `v2+macd+ma`** are #483's. Each starts from `v2`'s decision at the
+  production point; its refusal stands. Then it reads `displayIndicators` over
+  `seriesAt(…, SIGNAL_FETCH_LIMIT)`, the 300 rows the feed fetches since #482, with
+  `DEFAULT_SIGNAL_PARAMS`: the numbers the analysis card shows at the same moment. No indicators
+  (the tail failed the candle checks) is `indicators_unavailable`. The gates come in this order,
+  and the first one that holds names the refusal in table (e):
+  - `macd=cross`: the histogram crossed zero in the action's direction on the last closed candle
+    (`macd.cross === action`), else `macd_no_cross`;
+  - `macd=hist`: the histogram's sign agrees (`> 0` for `up`, `< 0` for `down`; zero agrees with
+    neither), else `macd_hist_disagrees`;
+  - `ma=200` / `ma=50`: the last close is on the action's side of the average (above for `up`,
+    below for `down`; equal is neither side), else `ma200_disagrees` / `ma50_disagrees`;
+  - `ma=50+200`: both, MA200 first;
+  - an indicator short of rows is `macd_no_data`, `ma200_no_data` or `ma50_no_data`.
+
+  A point of the wrong shape (a string where a number belongs, a mode outside the grid) is a
+  `RangeError`, never a default (V14).
+
+The decision's window is `seriesAt`'s default `limit`, `SIGNAL_CHART_LIMIT` (60 rows), as in
+production; only the indicators read the longer `SIGNAL_FETCH_LIMIT` window (V12).
 
 ## Statistics
 
@@ -207,12 +242,29 @@ variant needing a longer history, such as #483's MA200, plugs in without touchin
 - **Verdict.** `beats break-even` needs the interval's lower bound above the break-even.
   `below` means the upper bound is under it. Anything else is `inconclusive`, including a bound
   that equals the break-even.
+- **Against v2** (#483, fixed before the run). Every point of a `v2+…` variant is compared with
+  `v2` at the production point, out-of-sample, pooled, at the headline delay with the pause on
+  (`againstV2`, T6–T9):
+  - `no evidence`: the variant or `v2` has no decided trade in the in-sample or the
+    out-of-sample part;
+  - `better`: the variant's Wilson lower bound is above `v2`'s rate, it keeps at least
+    `MIN_KEPT_SHARE_PCT` (10) % of `v2`'s priced trades (W + L + T), and its in-sample rate is
+    above `v2`'s;
+  - `worse`: the upper bound is below `v2`'s rate;
+  - `inconclusive`: anything else.
+
+  An indicator is added only if one and the same point is `better` on `5s` and on `15s`. At the
+  pooled payout of 80 the PnL per trade is monotone in the rate, so the verdict is on the rate.
+- **Trades per pair-hour** is a row's trades over its pairs (pooled pairs, the type's pooled
+  pairs, or 1) times the hours of its sample: in-sample `split − since`, out-of-sample
+  `until − split` (`run.test.ts` R9). Pooled pairs with a range shorter than the run's by more
+  than a day (R5's warning) are under-counted by it.
 
 ## Reading the report
 
-`report.md` has seven tables, and `report.json` holds every number they print. `run` prints table
+`report.md` has nine tables, and `report.json` holds every number they print. `run` prints table
 (a) to stdout. Each row shows the interval, variant, parameters, pause, delay, scope, trades,
-W/L/T, win %, its interval, break-even, verdict and PnL.
+W/L/T, win %, its interval, break-even, verdict, PnL and `trades/pair-h`.
 
 - **(a) Headline.** The selected point of each variant and interval, out-of-sample, pooled. `v2`
   also gets the production point. A variant with no point at 100 in-sample trades keeps a line:
@@ -228,10 +280,21 @@ W/L/T, win %, its interval, break-even, verdict and PnL.
 - **(e)** The refusal shares by reason, over the whole range, for each selected point.
 - **(f)** The full in-sample grid, pooled. Selection reads it.
 - **(g)** The pairs snapshot (`fetchedAt`), and each series' rows, first and last timestamp.
+- **(h) Against v2 production.** One row per point of every `v2+…` variant and interval of the
+  run, the selected point marked `(selected)`: trades, `kept %` of `v2` production's trades,
+  W/L/T, win % and its interval, `v2`'s rate, the out-of-sample and in-sample differences in
+  percentage points, `trades/pair-h`, PnL per trade and the verdict above (`run.test.ts` R7,
+  R7b). Its first line names the points `better` on every interval of the run, with those
+  intervals, and reminds that adding an indicator needs 5s and 15s. A run with no `v2+…` variant
+  prints `no variant against v2 in this run`.
+- **(i) Per pair type.** `v2` production and each `v2+…` variant's selected point, out-of-sample,
+  pooled within each `PAIR_TYPE_GROUPS` type over its paying pairs, break-even at 80. A type with
+  no pooled pair has no row (R8).
 
 The header names the range, the split, the headline delay and where that delay came from: the
 `--headline-delay` flag, `calibration.json`, or the fallback 0 ms when `calibrate` has not
-run. It also names the pairs left out of pooling.
+run. It also names the run's variants and intervals, the hours behind `trades/pair-h`, and the
+pairs left out of pooling.
 
 ## Calibration
 
@@ -426,6 +489,17 @@ out of pooling.
 13. **The mock broker pages differently.** It caps a page by rows, not by the time window. The
     pager's next-window rule is right under both: `fetch.test.ts` F1 runs on the mock, and F1b
     runs on a time-window fake with a long gap.
+14. **Display indicators on the cache against production's answer.** Production computes them on
+    the broker's 300-row answer, whose first row's `open` is the window's first tick (The cache);
+    that row can fail the candle checks and cut the tail by one row. MACD and MA read closes only
+    and need at most 200 of the 299 closed rows, so the values are the same. Stated, not tested.
+15. **`trades/pair-h` is a non-stop simulated session's cadence** (one trade at a time, settle tick
+    5 s), not the length of the scanner's list. Falsifiable: the scanner's signals per minute in
+    its log against the stand's rate × the scanned pairs / 60.
+16. **Selection among 2, 3 or 6 points may pick a lucky in-sample point** (as risk 6). Table (h)
+    prints every point, and «added» needs the same point `better` on both intervals.
+17. **The 10 % floor is a product choice made before the data**, a constant, not derived from
+    the cache.
 
 ## Boundaries
 
@@ -433,6 +507,7 @@ out of pooling.
   values is #379's follow-up, not here.
 - #380: `v2+1m` and the 60 s trades are its two variants.
 - #392: socket candles could fill the same cache format later.
-- #483: more variants (MACD, MA50/MA200) through `seriesAt`'s `limit`.
+- #483: `v2+macd`, `v2+ma` and `v2+macd+ma` (Variants) and table (h)'s verdict; the run's
+  numbers and the decision are in [signal.md](signal.md).
 - #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`. `v2+1m` adds the
   `1m` trend as a confirmation, not as the analysis interval.
