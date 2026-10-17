@@ -93,7 +93,7 @@ function decided(request: SignalFeedRequest, decision: SignalDecision): SignalEv
       digits: request.digits,
       intervalMs: SIGNAL_CHART_INTERVAL_MS[request.interval],
       nowMs: Date.now(),
-      fetch: { startTime: 0, limit: 60, rows: 0, durationMs: 1 },
+      source: { kind: 'rest', startTime: 0, limit: 60, rows: 0, durationMs: 1 },
       version: SIGNAL_ALGORITHM_VERSION,
       params: DEFAULT_SIGNAL_PARAMS,
       series: [],

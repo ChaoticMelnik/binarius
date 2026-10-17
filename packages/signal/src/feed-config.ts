@@ -9,6 +9,11 @@ export const SIGNAL_CHART_LIMIT = 60;
 // indicators the unbroken tail of the answer (MA200 needs 200 closed candles, #482)
 export const SIGNAL_FETCH_LIMIT = 300;
 
+// retryAfterSec of a GET the pacer refused without a pause (docs/signal.md -> Outcomes, #405): a
+// token comes within 60 / perMinute s, at most 2.4 s at the lowest ceiling; the cache holds the
+// refusal as long
+export const SIGNAL_PACER_RETRY_SEC = 1;
+
 // the forming candle and up to maxStaleIntervals trailing rows the broker has not published yet
 // leave limit - 1 - maxStaleIntervals closed candles in the worst accepted case
 export function assertFeedLimit(limit: number, params: SignalParamsV1): void {

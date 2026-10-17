@@ -56,7 +56,7 @@ function liveSession(count: number, onlyWins = false) {
       digits: PAIR.digits,
       intervalMs: STEP,
       nowMs,
-      fetch: { startTime: series[0][0], limit: 60, rows: series.length, durationMs: 90 },
+      source: { kind: 'socket', startTime: series[0][0], closedUntil: nowMs, gaps: 0 },
       version: 'v2',
       params: DEFAULT_SIGNAL_PARAMS,
       series,
