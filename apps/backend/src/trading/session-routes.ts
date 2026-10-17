@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import {
+  SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
   SESSION_SUMMARY_SUFFIX,
@@ -12,6 +13,7 @@ import {
   TradingSessionErrorCode,
   type TradeAction,
   TradingSessionStopReason,
+  UserStatus,
   buildSessionSettings,
   errorLogFields,
   intervalForDuration,
@@ -41,8 +43,10 @@ import {
   listTrackedSessions,
   readActiveTradingSessionView,
   readBalanceSnapshot,
+  readSessionShareTrades,
   readStakes,
   readTradingSessionView,
+  readUserReferral,
   recordSessionStatusMessage,
   stopTradingSession,
   stopUserSessions,
@@ -417,6 +421,53 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
           openPrice,
           closePrice,
         })),
+      },
+    });
+  });
+
+  // What the shared promo card needs, in one call (#538, docs/trading-session.md → Routes). The
+  // owner is checked by the view read first (Rule 13): another user's or a missing session is the
+  // same 404 and creates nothing. Then the trades, owner-scoped too, the pair from the catalog
+  // (null when it is not fresh or lists no such pair) and the caller's referral code, created on
+  // first use as /invite does (null for a blocked user). No broker call, no balance refresh: the
+  // bot reads no balance of this view.
+  app.post(`${TRADING_SESSIONS_PATH}/:id${SESSION_SHARE_SUFFIX}`, async (request, reply) => {
+    const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return refuse(reply, TradingSessionErrorCode.NotFound);
+    const body = safeParseStopTradingSessionRequest(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'validation', issues: body.error.issues });
+    }
+    const { telegramUserId } = body.data;
+    const session = await readTradingSessionView(db, id.data, telegramUserId);
+    if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
+    const trades = await readSessionShareTrades(db, { id: id.data, telegramUserId });
+    const assetId = session.settings?.assetId ?? session.lastIntent?.assetId;
+    const listed = catalog.read();
+    const pair =
+      assetId === undefined || listed === undefined || !listed.fresh
+        ? undefined
+        : listed.pairs.find((candidate) => candidate.id === assetId);
+    const referral = await readUserReferral(db, BigInt(telegramUserId));
+    return reply.send({
+      share: {
+        session,
+        trades: trades.map(({ profit, openPrice, closePrice, action }) => ({
+          profit,
+          openPrice,
+          closePrice,
+          action,
+        })),
+        pair:
+          pair === undefined
+            ? null
+            : {
+                symbol: pair.symbol,
+                ...(pair.isOtc === undefined ? {} : { isOtc: pair.isOtc }),
+                digits: pair.digits,
+              },
+        referralCode:
+          referral?.status === UserStatus.Active && referral.code !== null ? referral.code : null,
       },
     });
   });

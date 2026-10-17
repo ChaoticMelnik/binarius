@@ -39,6 +39,7 @@ import type { AccountHaltReason } from './oauth';
 import type { TradingAccessResponse } from './trading-access';
 import type { UserReferralResponse } from './referral';
 import type {
+  SessionShareResponse,
   SessionSummaryRefusal,
   SessionSummaryResponse,
   TradingSessionRefusal,
@@ -492,6 +493,24 @@ describe('contract coverage (issue #6)', () => {
       trades: { profit: DecimalString; openPrice: number; closePrice: number }[];
     }>();
     expectTypeOf<SessionSummaryRefusal['error']>().toEqualTypeOf<'summary_unavailable'>();
+  });
+
+  it('Session share card (issue #538)', () => {
+    expectTypeOf<keyof SessionShareResponse>().toEqualTypeOf<'share'>();
+    expectTypeOf<keyof SessionShareResponse['share']>().toEqualTypeOf<
+      'session' | 'trades' | 'pair' | 'referralCode'
+    >();
+    expectTypeOf<SessionShareResponse['share']['trades'][number]>().toEqualTypeOf<{
+      profit: DecimalString;
+      openPrice: number;
+      closePrice: number;
+      action: 'up' | 'down';
+    }>();
+    expectTypeOf<SessionShareResponse['share']['pair']>().toEqualTypeOf<{
+      symbol: string;
+      isOtc?: boolean | undefined;
+      digits: number;
+    } | null>();
   });
 
   it('Stop of every session of the user (issue #122)', () => {

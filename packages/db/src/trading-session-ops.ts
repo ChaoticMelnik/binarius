@@ -9,6 +9,7 @@ import {
   TradingSessionStopReason,
   UserStatus,
   type DecimalString,
+  type SessionShareTrade,
   type SessionSummary,
   type TradeAction,
   type TradeIntentFailureReason,
@@ -786,6 +787,45 @@ export async function claimSessionSummary(
         }
         return { profit: row.profit, openPrice: row.openPrice, closePrice: row.closePrice };
       }),
+    };
+  });
+}
+
+// The settled trades the shared promo card draws (#538, docs/trading-session.md → Routes), in
+// creation order, with their direction. Scoped by the owner (Rule 13): a foreign or missing id
+// reads []. A read only: whether the session is done is the bot's call on the view.
+export async function readSessionShareTrades(
+  db: Db,
+  { id, telegramUserId }: { id: string; telegramUserId: string },
+): Promise<SessionShareTrade[]> {
+  const rows = await db
+    .select({
+      action: brokerTrades.action,
+      profit: brokerTrades.profit,
+      openPrice: brokerTrades.openPrice,
+      closePrice: brokerTrades.closePrice,
+    })
+    .from(tradeIntents)
+    .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+    .innerJoin(tradingSessions, eq(tradingSessions.id, tradeIntents.tradingSessionId))
+    .where(
+      and(
+        eq(tradeIntents.tradingSessionId, id),
+        eq(tradeIntents.status, TradeIntentStatus.Settled),
+        sessionOwnedBy(telegramUserId),
+      ),
+    )
+    .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
+  return rows.map((row) => {
+    // as in claimSessionSummary: a settled intent's trade is closed (settleIntent writes both)
+    if (row.profit === null || row.closePrice === null) {
+      throw new Error(`settled intent of session ${id} has an open broker trade`);
+    }
+    return {
+      profit: row.profit,
+      openPrice: row.openPrice,
+      closePrice: row.closePrice,
+      action: row.action,
     };
   });
 }

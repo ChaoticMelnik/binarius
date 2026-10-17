@@ -16,6 +16,7 @@ import {
   SESSION_MAX_DURATION_MS,
   TRADING_SESSION_SETTINGS_VERSION,
   safeParseSessionSummaryResponse,
+  safeParseSessionShareResponse,
   sessionProgress,
   TradingSessionErrorCode,
   buildSessionSettings,
@@ -658,5 +659,35 @@ describe('the recovery contract (#567)', () => {
         sessions: Array.from({ length: TRACKED_SESSIONS_MAX + 1 }, () => row),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('sessionShareResponseSchema (#538)', () => {
+  const trade = { profit: '1.5', openPrice: 1.1, closePrice: 1.2, action: 'up' as const };
+  const share = {
+    session: view,
+    trades: [trade],
+    pair: { symbol: 'EURUSD', isOtc: true, digits: 5 },
+    referralCode: 'AbC123xY',
+  };
+  const parse = (patch: Record<string, unknown>) =>
+    safeParseSessionShareResponse({ share: { ...share, ...patch } }).success;
+
+  it('round-trips the share and accepts a null pair, code and an empty trade list', () => {
+    const parsed = safeParseSessionShareResponse({ share });
+    expect(parsed.success && parsed.data).toEqual({ share });
+    expect(parse({ pair: null, referralCode: null, trades: [] })).toBe(true);
+    expect(parse({ pair: { symbol: 'EURUSD', digits: 5 } })).toBe(true);
+  });
+  it('bounds the trades by MAX_SESSION_SUMMARY_TRADES', () => {
+    const trades = (n: number) => Array.from({ length: n }, () => trade);
+    expect(parse({ trades: trades(MAX_SESSION_SUMMARY_TRADES) })).toBe(true);
+    expect(parse({ trades: trades(MAX_SESSION_SUMMARY_TRADES + 1) })).toBe(false);
+  });
+  it('refuses a code off the pattern, a trade without its direction and an extra pair key', () => {
+    expect(parse({ referralCode: 'short' })).toBe(false);
+    expect(parse({ referralCode: 'AbC123x!' })).toBe(false);
+    expect(parse({ trades: [{ profit: '1', openPrice: 1, closePrice: 1 }] })).toBe(false);
+    expect(parse({ pair: { symbol: 'EURUSD', digits: 5, payout: 80 } })).toBe(false);
   });
 });
