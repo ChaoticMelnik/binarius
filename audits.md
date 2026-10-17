@@ -3527,5 +3527,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R2 Minor 1 (session-routes comment wider than the lazy journal) | Minor | other | left at the merge | → #640 |
 
 ### Process improvement proposals
-1. Tech-lead Step 7 «A plan's stand check»: the prompt also names loopback binding and how (a preload; the backend has no host setting) — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Step 7 → «A plan's stand check is not forbidden by parallelism»**
+1. Tech-lead Step 7 «A plan's stand check»: the prompt also names loopback binding and how (a preload; the backend has no host setting) — **внедрено в #641: `.claude/skills/tech-lead/SKILL.md` → Step 7 → «A plan's stand check is not forbidden by parallelism»**
 2. Remaining findings — **вынесено в #640**
