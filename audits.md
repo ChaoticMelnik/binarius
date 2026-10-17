@@ -3349,3 +3349,67 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 1. Architect task classes: a new row "A later part of a split feature (its predecessor merged, open or stacked)" — replay the predecessor part's start-up, recovery and periodic paths against the new states at the deploy and after a restart — **внедрено в #588: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
 2. Tech-lead's own 6-pre run names as known in the Codex prompt only the findings the owner moved, open, into a follow-up issue (never a finding the PR fixed), so a re-run on a moved head reports only what is new — **внедрено в #588: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «Tech-lead's own 6-pre run», step 2; `.claude/codex-review-prompt.md` → the "Known, moved open into a follow-up issue" field**
 3. Remaining findings — **вынесено в #587** (Major, owner's yes) and **#584** (Minor)
+
+---
+
+## #568 — Сессия: картинка направления в сообщении сессии, строка «📡 Сигнал» (часть C) (2026-10-17)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Clean main 97bbb59, Codex ready with no limit, Fable reset reported 2026-10-16, previous audit's proposals all have a status. Ran in parallel with #404 (no shared files). |
+| Architect | first plan | Fable (`claude-fable-5-1`). 6 clarify questions, owner answered all (recommended); plan 6233283796 before In Progress; estimate ~1 100 (fact 1 098, 1 210 after round 1). Took #587 item 4 (Rule 31) by the owner's answer. |
+| Implementer | round 1 | Opus. 1 owner question (429 on the start photo → as the #482 card). Own worktree and database `binarius_impl_568` (migration 0062); 14/14 mutations; `pnpm check` 0. |
+| Tech Lead | Phase 3 | Audit comment 6234024010 before the reviewer spawn. |
+| Reviewer | round 1 | 1 Major (Codex: render key from the caption only), 2 Minor → Todo. Plan Update 6234212765 (Opus), fresh implementer; 15/15 mutations. |
+| Reviewer | round 2 | No Blocker/Major, 3 Minor. Codex `task-mvcfbhvs-z6y9k2` at 4d9af8e; tech-lead re-hashed (base, head, diff-sha256 match). |
+| Tech Lead | merge | Owner: merge without the pre-merge `editMessageMedia` probe (plan В5 A) — recorded on the PR with the falsifier (risk 62); Minors → #596 (Backlog). PR #593 MERGED 13:29:53Z (rebase, branch deleted). #568 Done; 0062 migrated on the shared database; `binarius_impl_568` dropped. Models: every spawn on its policy model. |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 MJ1: the tracker's render key was the printed caption; with equal admin overrides of `sessionSignalUp`/`sessionSignalDown` (Rule 30) an up→down turn was never redrawn — the bull picture stayed on a down signal | Major | unverified-claim | the plan assumed a direction change always changes the text; true only for the default texts | Architect (render key vs everything visible) |
+| R1 m1: risk 65 promised at most two uploads per recovery pass; a cold-cache "not modified" skips `remember` | Minor | unverified-claim | wording stronger than the code | Architect |
+| R1 m2: the drawn view derived by two expressions | Minor | single-source | — | Implementer |
+| R2 m1–m3 (stale `sessionEditMethod` signature in docs, "null only before #568" ignores CLI starts, review history in a comment) | Minor | other | left at the merge (owner) | → #596 |
+| The owner's pre-merge probe was not run; merged on the Bot API reference | — | other | owner's decision at the merge | — |
+
+### Process improvement proposals
+1. Architect task classes: a new row "Render / dedupe key" — the key covers everything the user sees change, not only the printed text; a test with the texts forced equal — **внедрено в #XXX: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+2. Remaining Minors — **вынесено в #596**
+
+---
+
+## #404 — Источник свечей из сокета: пакет клиента, кольцо свечей, сокет данных в backend на служебных аккаунтах (часть 2a-1) (2026-10-17)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | As #568 (same session, parallel). |
+| Architect | first plan | Fable (`claude-fable-5-1`). 4 clarify questions (owner: 3 recommended, deploy with one service account). Step 4a: 3.1–3.4k → split, REST backfill → #590; plan 6233311225. |
+| Implementer | clarify | Opus. 2 plan defects (decision 7 vs tests on `token_expired`; `lateClose` missing) → round-0 Plan Update 6233889166 (Opus); estimate grew to ~3 040 → owner: two PRs on #404. |
+| Implementer | PR 1 #592 | Package move, 171 lines, `Refs #404`; `pnpm check` 0. Reviewer round 1: 3 Minor, Codex `task-mvcdxohh-1k1xh1`; owner: merge, Minors fixed in PR 2. MERGED 12:45:43Z. |
+| Implementer | PR 2 #595 round 1 | 7 commits, 2 562 lines, 19/19 mutations; `pnpm check` 0. Audit comment 6234263716 before the reviewer. |
+| Reviewer | round 1 | 1 Major (a ready reserve never promoted into an empty active slot), 4 Minor (one: an uncaught `start()` throw kills the backend) → Todo. Plan Update 6234494921 (Opus), fresh implementer; 27/27 mutations, 2 897 lines. |
+| Reviewer | round 2 | 2 Major (active stuck in `connecting`; a running socket on an unmarked/blocked account) → Todo. Iteration-2 stop: owner chose re-plan of the manager; owner: an expired stored token does not evict. Re-plan 6235128270 (Opus) as an explicit state machine; owner: size exception up to ~3 100 if needed (not needed, 2 947). Fresh implementer; 34/34 mutations. |
+| Reviewer | round 3 | No Blocker/Major, 8 Minor. Codex `task-mvcjynhx-i3uoqb` at 8c63361 rated m3 (unbounded row-lock wait at shutdown) Major, reviewer downgraded it (same wait already on main); the merge question named both. Tech-lead re-hashed both final passes (#592, #595). |
+| Tech Lead | merge | Minors → #601 (Backlog) without a question; PR #595 MERGED 15:42:08Z (rebase, branch deleted). #404 Done; no migration; worktrees removed. Models: every spawn on its policy model. |
+
+### Review iterations: 3 (PR 2) + 1 (PR 1)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan defect: decision 7 (terminal → switch at once) vs the event section and M7/M7b (exchange in place first) | Minor | single-source | the owner's answer applied in one section, not in every place the behaviour was described | Architect (caught at implementer clarify) |
+| R1 Major: failover without a ready reserve kept a `starting` reserve that, once ready, was never promoted; no ticks until hold-back expired | Major | instance-vs-class | the supervisor was planned as prose and branches, without a transition table | Architect (first plan) |
+| R1 Minor 2: a throw from `client.start()` escaped `track()` → unhandled rejection ends the backend | Minor | other | promises without error handling not enumerated | Architect |
+| R2 Major 1: an active client in `connecting` (socket.io retries forever) is never switched away from | Major | instance-vs-class | the round-1 table lumped `connecting`/`authenticating`/`reconnecting` | Architect (Plan Update) |
+| R2 Major 2: a running socket whose account left the list is never stopped (Rule 41, invariant 9) | Major | instance-vs-class | the table never re-checked a running slot against the list | Architect (Plan Update) |
+| R3 m1–m8 (m3: unbounded shutdown wait, Codex Major, downgraded; Job-fence tests on refusal/throw; uncovered plan cells; docs bounds; rule ranges) | Minor | other | left at the round limit | → #601 |
+| Size: 2.7–2.9k → ~3.04k after the round-0 Plan Update → split into two PRs | Minor | other | the round-0 fixes added the fake client and four token tests | Architect |
+
+### Process improvement proposals
+1. Architect task classes: a new row "Supervisor of external connections" — in the first plan, the transition table over slot states × each client state × in-flight work × list membership, each row with a test id, plus a liveness bound and safety invariants — **внедрено в #XXX: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+2. Remaining findings — **вынесено в #601** (Minor; REST backfill stays #590)
