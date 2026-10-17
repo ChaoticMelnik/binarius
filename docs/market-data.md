@@ -92,8 +92,9 @@ A bucket `b` of interval `I` is **closed** when either rule says so:
   (closed markets): the tick delay's p95 on the pilot was 268 ms.
 
 Both offsets count from the bucket's end, `b + I`. `read()` returns the closed candles of the window
-(`chartWindow(nowMs, I, 300)`, the same window as the feed's fetch), the forming one apart, and the
-empty closed buckets as `gaps`.
+(`chartWindow(nowMs, I, 300)`, the same window as the feed's fetch), the latest unclosed bucket
+apart as `forming` (the current bucket, or the one before it until a rule closes it; the feed uses
+it only when it is the current one, [signal.md](signal.md)), and the empty closed buckets as `gaps`.
 
 **Holes are per pair, in broker time.** When the active leaves `ready`, every pair keeps its own
 watermark. Its first tick past that watermark, from whichever socket is active by then, marks
@@ -200,8 +201,10 @@ under `MARKET_DATA_BACKFILL_BUDGET_MS` and the `stop()` signal.
 
 **Tokens.** Only the overflow of the signal pacer (`ScanPacer.tryTakeSpare`,
 [signal.md → The budget](signal.md#the-budget)): what `refill` discards above the bucket's capacity,
-held to one token. While the source is live nothing else takes the pacer's tokens, so the backfill
-gets the whole share; without it the feed's GETs by demand take the bucket first. A 429 or a 2xx
+held to one token. While the source is live nothing but the on-demand GETs of intervals the ring
+does not build (`1m` and longer - never from the bot, #313) takes the pacer's tokens, so the
+backfill gets nearly the whole share; without the source the feed's GETs by demand take the bucket
+first. A 429 or a 2xx
 answer goes to the same pacer (#405).
 
 | Outcome of an attempt | Counters | The element |
