@@ -3377,7 +3377,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | The owner's pre-merge probe was not run; merged on the Bot API reference | — | other | owner's decision at the merge | — |
 
 ### Process improvement proposals
-1. Architect task classes: a new row "Render / dedupe key" — the key covers everything the user sees change, not only the printed text; a test with the texts forced equal — **внедрено в #XXX: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+1. Architect task classes: a new row "Render / dedupe key" — the key covers everything the user sees change, not only the printed text; a test with the texts forced equal — **внедрено в #602: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
 2. Remaining Minors — **вынесено в #596**
 
 ---
@@ -3411,5 +3411,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Size: 2.7–2.9k → ~3.04k after the round-0 Plan Update → split into two PRs | Minor | other | the round-0 fixes added the fake client and four token tests | Architect |
 
 ### Process improvement proposals
-1. Architect task classes: a new row "Supervisor of external connections" — in the first plan, the transition table over slot states × each client state × in-flight work × list membership, each row with a test id, plus a liveness bound and safety invariants — **внедрено в #XXX: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
+1. Architect task classes: a new row "Supervisor of external connections" — in the first plan, the transition table over slot states × each client state × in-flight work × list membership, each row with a test id, plus a liveness bound and safety invariants — **внедрено в #602: `.claude/skills/architect/SKILL.md` → Step 6 → task classes table**
 2. Remaining findings — **вынесено в #601** (Minor; REST backfill stays #590)
