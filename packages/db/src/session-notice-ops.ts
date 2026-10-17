@@ -315,8 +315,8 @@ export async function releaseSessionFinalNotice(
 
 // Claims the waiting message's slot before the send (#536): one CAS on a claimable session sets
 // the slot to its latest message, so at most one waiting message of unknown fate exists:
-// none goes out while one is live or its slot claimed on the current cycle message. The slot, or
-// undefined when the CAS lost (another sender, or nothing to claim).
+// none goes out while one is live or its slot claimed on the session's latest message (cycle or
+// status). The slot, or undefined when the CAS lost (another sender, or nothing to claim).
 export async function claimSessionWaiting(
   db: Db,
   { sessionId }: { sessionId: string },
@@ -393,4 +393,18 @@ export async function clearSessionWaitingMessage(
     .where(and(eq(tradingSessions.id, sessionId), eq(tradingSessions.waitingMessageId, messageId)))
     .returning({ id: tradingSessions.id });
   return rows.length > 0;
+}
+
+// The sender's check right before a Telegram call on the waiting message: a value read earlier
+// may have been taken over by the stop route since (#587 round 1). No lock: a read of the
+// session's own row, as the list's.
+export async function readSessionWaitingMessage(
+  db: Db,
+  { sessionId }: { sessionId: string },
+): Promise<{ waitingMessageId: number | null; status: TradingSessionStatus } | undefined> {
+  const [row] = await db
+    .select({ waitingMessageId: tradingSessions.waitingMessageId, status: tradingSessions.status })
+    .from(tradingSessions)
+    .where(eq(tradingSessions.id, sessionId));
+  return row;
 }

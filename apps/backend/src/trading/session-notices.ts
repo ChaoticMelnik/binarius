@@ -17,6 +17,7 @@ import {
   claimSessionWaiting,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
+  readSessionWaitingMessage,
   recordSessionCycleMessage,
   recordSessionWaitingMessage,
   releaseSessionFinalNotice,
@@ -56,7 +57,9 @@ import { readFinishedSessionView } from './session-view';
 // session (a cycle message, or a relaunch's status message, #587) and sent again after it, deleted
 // once the session stopped, before the summary - unless its «⏹» stopped the session: the stop
 // route then hands it to the bot, which draws its reply in place of it (#587), and the summary
-// follows with no delete. The bot's restart and a backend restart send nothing twice: the cursor,
+// follows with no delete. The sender re-reads the waiting message's id right before each delete,
+// so a message the stop route took over is not deleted (#587 round 1; the call in flight: docs
+// risk 82). The bot's restart and a backend restart send nothing twice: the cursor,
 // the cycle message and the waiting message are in trading_sessions.
 
 export interface SessionNoticeConfig {
@@ -119,10 +122,10 @@ function failureOf(error: unknown): Failure {
 // pause the whole sender (Telegram asked to wait)
 type Step = 'next' | 'skip' | 'pause';
 
-// how a delete of the waiting message ended: its id dropped (deleted, already gone, or never to
-// be deleted), kept for the next tick (outcome unknown), kept while the user is unreachable and
-// the session active (#587: deleted first once the user is reachable again), or Telegram asked to
-// wait
+// how a delete of the waiting message ended: its id dropped (deleted, already gone, never to be
+// deleted, or taken over by the stop route), kept for the next tick (outcome unknown), kept while
+// the user is unreachable and the session active (#587: deleted first once the user is reachable
+// again), or Telegram asked to wait
 type Removal =
   { kind: 'cleared' } | { kind: 'kept' } | { kind: 'blocked' } | { kind: 'wait'; ms: number };
 
@@ -322,12 +325,19 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // due again. Nothing is called for a user who blocked the bot (Rule 19): a stopped session's id
   // is dropped without a call, so the summary can be claimed; an active session's is kept (#587),
   // so once the user is reachable the message still in the chat is deleted before anything new is
-  // sent, never a second «⏹» beside it. The caller has taken the pace.
+  // sent, never a second «⏹» beside it. The caller has taken the pace. The row's id is re-read
+  // right before the delete (#587 round 1): the caller's value comes from the tick's list, and in
+  // between the «⏹» may have stopped the session and handed the message to the bot, which draws
+  // its reply in place of it; another id or NULL is not deleted. A hand-over committed during the
+  // delete call itself shows as a clear that finds the id gone, logged (docs risk 82).
   async function removeWaiting(session: PendingSessionNotice, messageId: number): Promise<Removal> {
     const fields = { sessionId: session.sessionId };
-    const clear = async (): Promise<Removal> => {
+    const clear = async (afterDelete = false): Promise<Removal> => {
       attempts.delete(`${session.sessionId}:delete:${String(messageId)}`);
-      await clearSessionWaitingMessage(db, { sessionId: session.sessionId, messageId });
+      const own = await clearSessionWaitingMessage(db, { sessionId: session.sessionId, messageId });
+      if (afterDelete && !own) {
+        logger.warn(fields, 'session waiting message deleted after the stop took it over');
+      }
       session.waitingMessageId = null;
       session.waitingDue = true;
       return { kind: 'cleared' };
@@ -337,9 +347,17 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         ? clear()
         : Promise.resolve({ kind: 'blocked' });
     if (session.telegramBlocked) return unreachable();
+    const row = await readSessionWaitingMessage(db, { sessionId: session.sessionId });
+    if (row?.waitingMessageId !== messageId) {
+      attempts.delete(`${session.sessionId}:delete:${String(messageId)}`);
+      session.waitingMessageId = null;
+      if (row !== undefined) session.status = row.status;
+      logger.info(fields, 'session waiting message taken over: not deleted');
+      return { kind: 'cleared' };
+    }
     try {
       await push.deleteSessionWaiting(session.telegramUserId, messageId);
-      return await clear();
+      return await clear(true);
     } catch (error) {
       const logged = {
         ...fields,

@@ -23,6 +23,7 @@ import {
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
   claimSessionTradeNotice,
+  clearSessionWaitingMessage,
   createSessionIntent,
   markIntentAccepted,
   markTelegramReachable,
@@ -1848,6 +1849,97 @@ describe('the waiting message (#536)', () => {
       'waiting',
       'summary',
     ]);
+  });
+
+  // #587 round 1, Major 1: the sender's row is from the tick's list; a session served before it
+  // gives the «⏹» time to hand the waiting message over, and the bot then draws in place of it
+  async function handedOverMidTick(onWaitingToA: (b: Target, id: number) => Promise<void>) {
+    const a = await seedSession();
+    const b = await waiting();
+    return {
+      a,
+      ...b,
+      arm: async () => {
+        await statusMessage(a);
+        const answer = b.run.captured.answers.get('sendMessage')!;
+        let done = false;
+        b.run.captured.answers.set('sendMessage', async (payload) => {
+          const toA = payload.chat_id === a.seed.telegramUserId;
+          if (!done && toA && inlineButtons(payload).length > 0) {
+            done = true;
+            await onWaitingToA(b.target, b.id);
+          }
+          return answer(payload);
+        });
+      },
+    };
+  }
+
+  it('W27 a hand-over between the list read and the session’s turn, before a new cycle message: no delete, the trade, then the summary', async () => {
+    const run = await handedOverMidTick(async (b, id) => {
+      await stopTradingSession(tmp.db, {
+        id: b.session.id,
+        reason: TradingSessionStopReason.UserStopped,
+        waitingMessageId: id,
+      });
+    });
+    await settled(run.target, '4.6');
+    await run.arm();
+    await run.run.notices.tick();
+    expect(deletesTo(run.run.captured.calls, run.target)).toEqual([]);
+    expect(sequenceOf(run.run.captured.calls, run.target)).toEqual(['waiting', 'trade']);
+    expect(messagesOf(run.run.logs(), INFO)).toContain(
+      'session waiting message taken over: not deleted',
+    );
+    await run.run.notices.tick();
+    expect(sequenceOf(run.run.captured.calls, run.target)).toEqual(['waiting', 'trade', 'summary']);
+    expect((await rowOf(run.target)).finalNoticeSentAt).toBeInstanceOf(Date);
+  });
+
+  it('W28 the 409 clear between the list read and a stale delete: no delete, the summary in the same tick', async () => {
+    let live = 0;
+    const run = await handedOverMidTick(async (b) => {
+      await clearSessionWaitingMessage(tmp.db, { sessionId: b.session.id, messageId: live });
+    });
+    await settled(run.target, '4.6');
+    await run.run.notices.tick();
+    expect(sequenceOf(run.run.captured.calls, run.target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+    ]);
+    live = (await waitingOf(run.target)).messageId!;
+    await stop(run.target);
+    await run.arm();
+    await run.run.notices.tick();
+    expect(deletesTo(run.run.captured.calls, run.target)).toEqual([run.id]);
+    expect(sequenceOf(run.run.captured.calls, run.target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+      'summary',
+    ]);
+    expect(messagesOf(run.run.logs(), INFO)).toContain(
+      'session waiting message taken over: not deleted',
+    );
+  });
+
+  // docs/bot-session.md risk 82 (a): what the re-read cannot close is logged
+  it('W29 a hand-over during the delete call itself: the delete made, the clear finds the id gone, logged; the mark all the same', async () => {
+    const { target, run, id } = await waiting();
+    await stop(target, TradingSessionStopReason.UserStopped);
+    run.captured.answers.set('deleteMessage', async () => {
+      await clearSessionWaitingMessage(tmp.db, { sessionId: target.session.id, messageId: id });
+      return true;
+    });
+    await run.notices.tick();
+    expect(deletesTo(run.captured.calls, target)).toEqual([id]);
+    expect(messagesOf(run.logs(), WARN)).toContain(
+      'session waiting message deleted after the stop took it over',
+    );
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
   });
 
   // #587 finding 3 (#584 m3): both lines are read from the log
