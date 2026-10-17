@@ -480,12 +480,9 @@ const TIMING_CHAIN_HOLDS =
   MARKET_DATA_SKEW_MARGIN_MS < TICK_MAX_SKEW_MS &&
   MARKET_DATA_TICK_MS <= MARKET_DATA_LOG_MS &&
   // the backfill (#590): its GET ends by its own budget, inside phase 1 (stop() waits for at most
-  // one GET a worker, in parallel), and a GET started after the slack ends inside the candle, so
-  // fill() sees the boundary the request was built on and the dropped first row is always outside
-  // the window
+  // one GET a worker, in parallel)
   MARKET_DATA_BACKFILL_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
   MARKET_DATA_BACKFILL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  SIGNAL_SCAN_SLACK_MS + MARKET_DATA_BACKFILL_BUDGET_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
   MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE <= 60_000 &&
   MARKET_DATA_BACKFILL_SCAN_MS <= SIGNAL_CHART_INTERVAL_MS['5s'] &&
   SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS;

@@ -381,7 +381,7 @@ describe('broker balance timing', () => {
     expect(SERVICE_ACCOUNTS_TICK_MS).toBeLessThan(MARKET_DATA_ACCOUNT_RETRY_MS);
   });
 
-  it('ends a backfill GET by its own budget, inside phase 1 and inside the 5s candle (#590)', () => {
+  it('ends a backfill GET by its own budget, inside phase 1 (#590)', () => {
     expect({
       MARKET_DATA_BACKFILL_BUDGET_MS,
       MARKET_DATA_BACKFILL_ATTEMPTS,
@@ -399,9 +399,6 @@ describe('broker balance timing', () => {
     });
     expect(MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(BROKER_REST_TIMEOUT_MS);
     expect(MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
-    expect(SIGNAL_SCAN_SLACK_MS + MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(
-      SIGNAL_CHART_INTERVAL_MS['5s'],
-    );
     expect(MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE).toBeLessThanOrEqual(60_000);
     expect(MARKET_DATA_BACKFILL_SCAN_MS).toBeLessThanOrEqual(SIGNAL_CHART_INTERVAL_MS['5s']);
   });

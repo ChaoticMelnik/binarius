@@ -17,9 +17,11 @@ import {
 } from '@binarius/broker-socket';
 import { assertDigits } from '@binarius/signal';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
-import type { CandleBackfill } from './backfill';
+import type { BackfillCounters, CandleBackfill } from './backfill';
 import type { CandleRing } from './ring';
 import type { PendingRequests } from './source';
+
+type BackfillTotal = Exclude<keyof BackfillCounters, 'queued'>;
 
 // The data socket of the backend (#404, docs/market-data.md → The state machine). At most two
 // broker socket clients, both on service accounts (#391): the active one, subscribed to every pair
@@ -548,8 +550,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
       reportedClosedUntil.set(interval, until);
     }
     const filling = backfill.counters();
-    const filled = (key: 'fetched' | 'filled' | 'failed' | 'rateLimited' | 'spare') =>
-      filling[key] - reportedBackfill[key];
+    const backfillSince = (key: BackfillTotal) => filling[key] - reportedBackfill[key];
     const periodMs = Math.max(at - reportedAt, 1);
     logger.info(
       {
@@ -577,11 +578,11 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         pending: requests.size,
         backfill: {
           queued: filling.queued,
-          fetched: filled('fetched'),
-          filled: filled('filled'),
-          failed: filled('failed'),
-          rateLimited: filled('rateLimited'),
-          spare: filled('spare'),
+          fetched: backfillSince('fetched'),
+          filled: backfillSince('filled'),
+          failed: backfillSince('failed'),
+          rateLimited: backfillSince('rateLimited'),
+          spare: backfillSince('spare'),
         },
       },
       'market data',

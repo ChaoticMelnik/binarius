@@ -145,6 +145,21 @@ const pairsCatalog = createPairsCatalog({
   },
 });
 
+// docs/market-data.md: the candle ring and its refill requests (#404, #590), only with
+// BROKER_WS_URL; built before the signal feed, which is to read them (#405)
+const candleStore =
+  env.brokerWsUrl === undefined
+    ? undefined
+    : {
+        brokerWsUrl: env.brokerWsUrl,
+        ring: createCandleRing({
+          capacity: MARKET_DATA_RING_CANDLES,
+          skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
+          intervals: SIGNAL_SCAN_INTERVALS,
+        }),
+        requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
+      };
+
 // POST /trading/signal (docs/signal.md -> POST /trading/signal): one public chart GET per
 // (asset, interval) per candle at most, on the same REST client. No timer: nothing to stop.
 const signalFeed = createCachedSignalFeed(
@@ -360,16 +375,13 @@ const serviceAccounts = createServiceAccountKeeper({
   },
 });
 
-// docs/market-data.md: the candle ring over a data socket on a service account (#404) and its REST
-// backfill (#590), only with BROKER_WS_URL; no consumer yet (#405). Started with the other loops
-// after listen(), stopped in phase 1.
-function createMarketDataSource(brokerWsUrl: string, pacer: SpareTokenSource) {
-  const ring = createCandleRing({
-    capacity: MARKET_DATA_RING_CANDLES,
-    skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
-    intervals: SIGNAL_SCAN_INTERVALS,
-  });
-  const requests = createPendingRequests(MARKET_DATA_PENDING_MAX);
+// docs/market-data.md: the data socket on a service account that builds the candle store's ring
+// (#404) and its REST backfill (#590); no consumer yet (#405). Started with the other loops after
+// listen(), stopped in phase 1.
+function createMarketData(
+  { brokerWsUrl, ring, requests }: NonNullable<typeof candleStore>,
+  pacer: SpareTokenSource,
+) {
   const backfill = createCandleBackfill({
     ring,
     requests,
@@ -377,7 +389,7 @@ function createMarketDataSource(brokerWsUrl: string, pacer: SpareTokenSource) {
     rest: brokerRest,
     pacer,
     // called by the backfill's timers only, which start after the manager below exists
-    streaming: () => marketData.streaming(),
+    streaming: () => manager.streaming(),
     logger: app.log,
     config: {
       scanMs: MARKET_DATA_BACKFILL_SCAN_MS,
@@ -390,7 +402,7 @@ function createMarketDataSource(brokerWsUrl: string, pacer: SpareTokenSource) {
       candles: MARKET_DATA_RING_CANDLES,
     },
   });
-  const marketData = createMarketDataManager({
+  const manager = createMarketDataManager({
     listAccounts: () => listServiceBrokerAccounts(db),
     accessToken,
     catalog: pairsCatalog,
@@ -408,13 +420,13 @@ function createMarketDataSource(brokerWsUrl: string, pacer: SpareTokenSource) {
       accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
     },
   });
-  return { marketData, backfill };
+  return { manager, backfill };
 }
-const marketDataSource =
-  env.brokerWsUrl === undefined
+const marketData =
+  candleStore === undefined
     ? undefined
-    : createMarketDataSource(
-        env.brokerWsUrl,
+    : createMarketData(
+        candleStore,
         joinSpare(SIGNAL_SCAN_INTERVALS.map((interval) => scanPacers[interval])),
       );
 
@@ -482,8 +494,8 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
       async () => {
-        await marketDataSource?.backfill.stop();
-        await marketDataSource?.marketData.stop();
+        await marketData?.backfill.stop();
+        await marketData?.manager.stop();
       },
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
@@ -521,7 +533,7 @@ if (!shuttingDown) {
   // #397's manager greps this line for "demoOnly":true before it drives a stand
   app.log.info({ demoOnly: env.demoOnly }, 'backend started');
   app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
-  app.log.info({ enabled: marketDataSource !== undefined }, 'market data source');
+  app.log.info({ enabled: marketData !== undefined }, 'market data source');
 }
 if (!shuttingDown) {
   publisher.start();
@@ -532,8 +544,8 @@ if (!shuttingDown) {
   sessionNotices.start();
   starReconciler.start();
   serviceAccounts.start();
-  marketDataSource?.marketData.start();
-  marketDataSource?.backfill.start();
+  marketData?.manager.start();
+  marketData?.backfill.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();
