@@ -11,7 +11,6 @@ import type { PairsCatalog } from '@binarius/broker-rest';
 import {
   BrokerEventType,
   BrokerSocketState,
-  isTerminalBrokerSocketState,
   type BrokerEvent,
   type BrokerSocketClient,
   type BrokerSocketStateChange,
@@ -21,16 +20,23 @@ import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-servic
 import type { CandleRing } from './ring';
 import type { PendingRequests } from './source';
 
-// The data socket of the backend (#404, docs/market-data.md). At most two broker socket clients,
-// both on service accounts (#391): the active one, subscribed to every pair of the fresh catalog,
-// whose ticks build the ring, and a warm reserve, authenticated and subscribed to nothing. The
-// reserve takes over at once on a terminal state of the active, and after the grace on its
-// reconnection. No trade command is ever sent on these sockets.
+// The data socket of the backend (#404, docs/market-data.md → The state machine). At most two
+// broker socket clients, both on service accounts (#391): the active one, subscribed to every pair
+// of the fresh catalog, whose ticks build the ring, and a warm reserve, authenticated and
+// subscribed to nothing. No trade command is ever sent on these sockets. Every handler changes
+// only its own slot and ends in reconcile(), which applies, in order:
+// R1 a slot whose account left the list is vacated, without a hold-back;
+// R2 a reserve not ready for reserveReadyMs gives way, held back, when another account can take it;
+// R3 a ready reserve becomes the active when the active is empty, or not ready past the grace;
+// R4 an empty active starts on the first candidate; R5 an empty reserve likewise;
+// R6 the active subscribes the fresh catalog's new ids;
+// R7 one timer, at the nearest deadline of R2 or R3.
 
 export interface MarketDataConfig {
   tickMs: number;
   logMs: number;
   failoverGraceMs: number;
+  reserveReadyMs: number;
   accountRetryMs: number;
 }
 
@@ -40,7 +46,7 @@ export interface MarketDataAccount {
 }
 
 export interface MarketDataManagerDeps {
-  // the working service accounts, in the order they are tried
+  // the in-service service accounts, in the order they are tried
   listAccounts: () => Promise<readonly MarketDataAccount[]>;
   accessToken: (accountId: string, options: AccessTokenOptions) => Promise<AccessTokenResult>;
   catalog: Pick<PairsCatalog, 'read'>;
@@ -63,36 +69,36 @@ export interface MarketDataManager {
 }
 
 type Role = 'active' | 'reserve';
+const ROLES: readonly Role[] = ['active', 'reserve'];
 
 interface Live {
   account: MarketDataAccount;
   client: BrokerSocketClient;
   token: string;
+  // the start of the current period out of ready; undefined while the client is ready
+  since: number | undefined;
   detach: () => void;
 }
 
-// starting and refreshing wait on accessToken; the tick fills only an empty slot, so there are
-// never more than two clients. I1: no handler ends with the active empty and the reserve ready
-// (promote()). I2: every start and exchange ends by writing its own slot, or by stopped
-type Slot =
-  | { kind: 'empty' }
-  | { kind: 'starting'; accountId: string }
-  | { kind: 'running'; live: Live }
-  | { kind: 'refreshing'; live: Live };
+// waits on accessToken; only the slot that still holds this object takes its answer
+interface Job {
+  kind: 'starting';
+  account: MarketDataAccount;
+  since: number;
+}
+
+type Slot = { kind: 'empty' } | Job | { kind: 'running'; live: Live };
 
 const EMPTY: Slot = { kind: 'empty' };
 
-interface Refused {
-  account: MarketDataAccount;
-  // hashToken of the token the broker refused
-  hash: string;
-}
+const accountOf = (slot: Slot): MarketDataAccount | undefined =>
+  slot.kind === 'starting' ? slot.account : slot.kind === 'running' ? slot.live.account : undefined;
 
-const liveOf = (slot: Slot): Live | undefined =>
-  slot.kind === 'running' || slot.kind === 'refreshing' ? slot.live : undefined;
+const isReady = (slot: Slot): boolean =>
+  slot.kind === 'running' && slot.live.client.state === BrokerSocketState.Ready;
 
-const accountOf = (slot: Slot): string | undefined =>
-  slot.kind === 'starting' ? slot.accountId : liveOf(slot)?.account.id;
+const sinceOf = (slot: Slot): number | undefined =>
+  slot.kind === 'starting' ? slot.since : slot.kind === 'running' ? slot.live.since : undefined;
 
 export function createMarketDataManager(deps: MarketDataManagerDeps): MarketDataManager {
   const { listAccounts, accessToken, catalog, openClient, ring, requests, logger, config } = deps;
@@ -100,6 +106,10 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   const slots: Record<Role, Slot> = { active: EMPTY, reserve: EMPTY };
   // account id → when it may be tried again
   const held = new Map<string, number>();
+  // account id → hashToken of the token the broker refused, until a start reports it
+  const refused = new Map<string, string>();
+  // account id → its last token refusal by the broker
+  const lastRefusal = new Map<string, number>();
   const inflight = new Set<Promise<void>>();
   let order: readonly MarketDataAccount[] = [];
   let digitsById = new Map<number, number>();
@@ -111,7 +121,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   let running: Promise<void> | undefined;
   let tickTimer: NodeJS.Timeout | undefined;
   let logTimer: NodeJS.Timeout | undefined;
-  let graceTimer: NodeJS.Timeout | undefined;
+  let deadlineTimer: NodeJS.Timeout | undefined;
 
   // the period's counters, reset by report()
   let ticks = 0;
@@ -126,9 +136,10 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   const other = (role: Role): Role => (role === 'active' ? 'reserve' : 'active');
 
   function roleOf(live: Live): Role | undefined {
-    if (liveOf(slots.active) === live) return 'active';
-    if (liveOf(slots.reserve) === live) return 'reserve';
-    return undefined;
+    return ROLES.find((role) => {
+      const slot = slots[role];
+      return slot.kind === 'running' && slot.live === live;
+    });
   }
 
   // every work below catches its own throws; the catch is a backstop against an unhandled rejection
@@ -141,15 +152,10 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     inflight.add(tracked);
   }
 
-  const settle = (work: Promise<boolean>) => track(work.then(() => undefined));
-
-  // the accounts a role may start on, first the one named (a refused token's own account)
-  function candidates(role: Role, first?: MarketDataAccount): MarketDataAccount[] {
-    const taken = accountOf(slots[other(role)]);
-    const rest = order.filter((account) => account.id !== first?.id && !isHeld(account.id));
-    return [...(first === undefined ? [] : [first]), ...rest].filter(
-      (account) => account.id !== taken,
-    );
+  // the accounts a role may start on: listed, not held back, not in the other slot
+  function candidates(role: Role): MarketDataAccount[] {
+    const taken = accountOf(slots[other(role)])?.id;
+    return order.filter((account) => account.id !== taken && !isHeld(account.id));
   }
 
   function readCatalog(): boolean {
@@ -181,12 +187,12 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     return true;
   }
 
-  function subscribeNew(): void {
-    const active = slots.active;
-    if (active.kind !== 'running' || !catalogFresh) return;
-    const have = new Set(active.live.client.subscriptions());
+  // the active only (S4): open('active'), R3 and R6
+  function subscribeNew(client: BrokerSocketClient): void {
+    if (!catalogFresh) return;
+    const have = new Set(client.subscriptions());
     const added = [...digitsById.keys()].filter((id) => !have.has(id));
-    if (added.length > 0) active.live.client.subscribe(added);
+    if (added.length > 0) client.subscribe(added);
   }
 
   function logRefusal(role: Role, accountId: string, result: AccessTokenResult & { ok: false }) {
@@ -216,81 +222,80 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     }
   }
 
+  // silent: stop() and a client that threw at its start
   function drop(role: Role): void {
-    const live = liveOf(slots[role]);
+    const slot = slots[role];
     slots[role] = EMPTY;
-    if (live === undefined) return;
-    live.detach();
-    live.client.stop();
+    if (slot.kind !== 'running') return;
+    slot.live.detach();
+    slot.live.client.stop();
   }
 
-  function clearGrace(): void {
-    clearTimeout(graceTimer);
-    graceTimer = undefined;
+  function vacate(role: Role, reason: string, hold: boolean): void {
+    const slot = slots[role];
+    const account = accountOf(slot);
+    if (account === undefined) return;
+    if (role === 'active' && isReady(slot)) ring.onDrop();
+    drop(role);
+    if (hold) holdBack(account.id);
+    if (role === 'active') {
+      failovers += 1;
+      logger.warn({ from: account.id, reason, heldBack: hold }, 'market data failover');
+    } else {
+      logger.info({ accountId: account.id, reason, heldBack: hold }, 'market data reserve stopped');
+    }
   }
 
-  // the role's starts, one account after another until one opens a client; every refusal holds
-  // its account back. True when the broker's rate limit ended the run
-  async function startRole(
-    role: Role,
-    list: MarketDataAccount[],
-    refused?: Refused,
-  ): Promise<boolean> {
-    let limited = false;
-    for (const account of list) {
-      if (stopped) break;
-      // the roles may have moved while an earlier attempt waited
-      if (
-        account.id === accountOf(slots[other(role)]) ||
-        (isHeld(account.id) && account.id !== refused?.account.id)
-      ) {
-        continue;
-      }
-      slots[role] = { kind: 'starting', accountId: account.id };
-      const options: AccessTokenOptions = {
-        mayRefresh: true,
-        serviceOnly: true,
-        ...(refused?.account.id === account.id ? { refusedToken: refused.hash } : {}),
-      };
+  function startJob(role: Role, account: MarketDataAccount): Promise<void> {
+    const job: Job = { kind: 'starting', account, since: now() };
+    slots[role] = job;
+    // reported once: a later call exchanges anyway, the stored token is marked expired by then
+    const refusedToken = refused.get(account.id);
+    refused.delete(account.id);
+    const options: AccessTokenOptions = {
+      mayRefresh: true,
+      serviceOnly: true,
+      ...(refusedToken === undefined ? {} : { refusedToken }),
+    };
+    const work = (async () => {
       let result: AccessTokenResult;
       try {
         result = await accessToken(account.id, options);
       } catch (error) {
+        if (slots[role] !== job) return;
         // a database error carries the statement and the row's values: name and code only
         logger.error(
           { role, accountId: account.id, ...errorLogFields(error) },
           'market data token threw',
         );
         holdBack(account.id);
-        continue;
+        slots[role] = EMPTY;
+        reconcile();
+        return;
       }
-      if (stopped) break;
-      if (result.ok) {
-        if (open(role, account, result.accessToken)) return false;
-        continue;
+      // vacated, promoted over or stopped while it waited: the answer opens nothing
+      if (slots[role] !== job) return;
+      if (!result.ok) {
+        holdBack(account.id);
+        logRefusal(role, account.id, result);
+        slots[role] = EMPTY;
+        reconcile();
+        return;
       }
-      holdBack(account.id);
-      logRefusal(role, account.id, result);
-      // the pair is intact and the limit is per address: the next account would get it too
-      if (result.reason === AccessTokenRefusal.RefreshRateLimited) {
-        limited = true;
-        break;
-      }
-    }
-    slots[role] = EMPTY;
-    // a run cut by the rate limit is not continued on the reserve's side either
-    if (role === 'active' && !stopped) promoteReserve(!limited);
-    return limited;
+      open(role, job, result.accessToken);
+      reconcile();
+    })();
+    track(work);
+    return work;
   }
 
-  // false when the client threw (invalid credentials, a second start): the account is held back
-  function open(role: Role, account: MarketDataAccount, token: string): boolean {
-    // sent with the pass after user.auth.success; a stale catalog leaves it to a later tick
-    const ids = role === 'active' && readCatalog() ? [...digitsById.keys()] : undefined;
+  // a throw of the client (invalid credentials) is the account's failure: held back
+  function open(role: Role, job: Job, token: string): void {
+    const { account } = job;
     let live: Live | undefined;
     try {
       const client = openClient(account.id);
-      const opened: Live = { account, client, token, detach: () => undefined };
+      const opened: Live = { account, client, token, since: job.since, detach: () => undefined };
       live = opened;
       const offState = client.onState((change) => onState(opened, change));
       const offEvent = client.onEvent((event) => onEvent(opened, event));
@@ -300,8 +305,12 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
       };
       // before start(): a client may deliver a state change inside it
       slots[role] = { kind: 'running', live: opened };
-      if (role === 'active') noAccountWarned = false;
-      if (ids !== undefined) client.subscribe(ids);
+      if (role === 'active') {
+        noAccountWarned = false;
+        // sent with the pass after user.auth.success; a stale catalog leaves it to a later tick
+        readCatalog();
+        subscribeNew(client);
+      }
       client.start({ brokerUserId: account.brokerUserId, accessToken: token });
     } catch (error) {
       logger.error(
@@ -309,174 +318,130 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         'market data socket start threw',
       );
       if (live !== undefined) {
-        if (liveOf(slots[role]) === live) slots[role] = EMPTY;
+        const at = roleOf(live);
+        if (at !== undefined) slots[at] = EMPTY;
         live.detach();
         live.client.stop();
       }
+      if (slots[role] === job) slots[role] = EMPTY;
       holdBack(account.id);
-      return false;
+      return;
     }
-    logger.info({ role, accountId: account.id }, 'market data socket started');
-    return true;
+    // start() may have delivered ready, and a nested reconcile() moved the client already
+    const at = roleOf(live);
+    if (at === undefined) return;
+    logger.info({ role: at, accountId: account.id }, 'market data socket started');
   }
 
-  // the ready reserve takes the empty active slot; ids: the old active's registry, else the catalog
-  function promote(ids?: readonly number[]): Live | undefined {
+  function promote(): void {
     const reserve = slots.reserve;
-    if (
-      slots.active.kind !== 'empty' ||
-      reserve.kind !== 'running' ||
-      reserve.live.client.state !== BrokerSocketState.Ready
-    ) {
-      return undefined;
-    }
-    // a fresh reserve was never subscribed; a stale catalog leaves it to a later tick
-    const subscribe = ids ?? (readCatalog() ? [...digitsById.keys()] : []);
-    if (subscribe.length > 0) reserve.live.client.subscribe(subscribe);
+    if (reserve.kind !== 'running') return;
+    vacate('active', 'not_ready', false);
     slots.active = reserve;
     slots.reserve = EMPTY;
     noAccountWarned = false;
-    return reserve.live;
+    subscribeNew(reserve.live.client);
+    logger.info({ to: reserve.live.account.id }, 'market data reserve promoted');
   }
 
-  function startReserve(refused?: Refused): void {
-    const list = candidates('reserve', refused?.account);
-    if (list.length > 0) settle(startRole('reserve', list, refused));
+  function armDeadline(at: number): void {
+    clearTimeout(deadlineTimer);
+    deadlineTimer = undefined;
+    const deadlines: number[] = [];
+    const active = sinceOf(slots.active);
+    const reserve = sinceOf(slots.reserve);
+    if (active !== undefined) deadlines.push(active + config.failoverGraceMs);
+    if (reserve !== undefined) deadlines.push(reserve + config.reserveReadyMs);
+    const next = Math.min(...deadlines.filter((deadline) => deadline > at));
+    if (!Number.isFinite(next)) return;
+    deadlineTimer = setTimeout(() => {
+      deadlineTimer = undefined;
+      try {
+        reconcile();
+      } catch (error) {
+        logger.error(errorLogFields(error), 'market data work failed');
+      }
+    }, next - at);
   }
 
-  // a promotion with no failover: the switch was counted when the active left
-  function promoteReserve(thenStartReserve: boolean): void {
-    const promoted = promote();
-    if (promoted === undefined) return;
-    logger.info({ to: promoted.account.id }, 'market data reserve promoted');
-    if (thenStartReserve) startReserve();
-  }
-
-  function failover(reason: string, refused?: Refused): void {
-    clearGrace();
-    failovers += 1;
-    const old = liveOf(slots.active);
-    const subscriptions = old?.client.subscriptions() ?? [];
-    if (old !== undefined && old.client.state === BrokerSocketState.Ready) ring.onDrop();
-    drop('active');
-    // the registry of the old active goes over whole
-    const promoted = promote(subscriptions);
-    if (promoted !== undefined) {
-      logger.warn(
-        { from: old?.account.id ?? null, to: promoted.account.id, reason },
-        'market data failover',
-      );
-      startReserve(refused);
-      return;
+  // synchronous and idempotent; the starts it began, for the tick to wait on
+  function reconcile(): Promise<void>[] {
+    if (stopped) return [];
+    readCatalog();
+    const at = now();
+    const started: Promise<void>[] = [];
+    for (const role of ROLES) {
+      const account = accountOf(slots[role]);
+      if (account !== undefined && !order.some((listed) => listed.id === account.id)) {
+        vacate(role, 'not_working', false);
+      }
     }
-    // a reserve that is not ready keeps its slot; whichever comes first takes the active role
-    logger.warn({ from: old?.account.id ?? null, to: null, reason }, 'market data failover');
-    const list = candidates('active');
-    if (list.length > 0) settle(startRole('active', list));
-    if (slots.reserve.kind === 'empty') startReserve();
-  }
-
-  // the same client, a new token: the token service marks the refused one expired and exchanges
-  function refresh(role: Role, live: Live): void {
-    slots[role] = { kind: 'refreshing', live };
-    const current = () =>
-      !stopped && liveOf(slots[role]) === live && slots[role].kind === 'refreshing';
-    const fail = () => {
-      holdBack(live.account.id);
-      if (role === 'active') failover('token_refused');
-      else drop('reserve');
-    };
-    track(
-      (async () => {
-        let result: AccessTokenResult;
-        try {
-          result = await accessToken(live.account.id, {
-            mayRefresh: true,
-            serviceOnly: true,
-            refusedToken: hashToken(live.token),
-          });
-        } catch (error) {
-          if (!current()) return;
-          logger.error(
-            { role, accountId: live.account.id, ...errorLogFields(error) },
-            'market data token threw',
-          );
-          fail();
-          return;
-        }
-        if (!current()) return;
-        if (result.ok) {
-          live.token = result.accessToken;
-          slots[role] = { kind: 'running', live };
-          try {
-            live.client.start({ brokerUserId: live.account.brokerUserId, accessToken: live.token });
-          } catch (error) {
-            logger.error(
-              { role, accountId: live.account.id, ...errorLogFields(error) },
-              'market data socket start threw',
-            );
-            fail();
-            return;
-          }
-          logger.info({ role, accountId: live.account.id }, 'market data token refreshed');
-          return;
-        }
-        logRefusal(role, live.account.id, result);
-        fail();
-      })(),
-    );
+    const reserveSince = sinceOf(slots.reserve);
+    const reserveId = accountOf(slots.reserve)?.id;
+    if (
+      !isReady(slots.reserve) &&
+      reserveSince !== undefined &&
+      at >= reserveSince + config.reserveReadyMs &&
+      candidates('reserve').some((account) => account.id !== reserveId)
+    ) {
+      vacate('reserve', 'not_ready', true);
+    }
+    const activeSince = sinceOf(slots.active);
+    if (
+      isReady(slots.reserve) &&
+      !isReady(slots.active) &&
+      (slots.active.kind === 'empty' ||
+        (activeSince !== undefined && at >= activeSince + config.failoverGraceMs))
+    ) {
+      promote();
+    }
+    if (slots.active.kind === 'empty') {
+      const [first] = candidates('active');
+      if (first !== undefined) started.push(startJob('active', first));
+      else if (slots.reserve.kind === 'empty' && !noAccountWarned) {
+        logger.warn(
+          { accounts: order.length, held: held.size },
+          'market data: no working service account',
+        );
+        noAccountWarned = true;
+      }
+    }
+    if (slots.reserve.kind === 'empty') {
+      const [first] = candidates('reserve');
+      if (first !== undefined) started.push(startJob('reserve', first));
+    }
+    const active = slots.active;
+    if (active.kind === 'running') subscribeNew(active.live.client);
+    armDeadline(at);
+    return started;
   }
 
   function onState(live: Live, change: BrokerSocketStateChange): void {
     const role = roleOf(live);
-    if (role === undefined || slots[role].kind !== 'running') return;
-    if (role === 'reserve' && change.to === BrokerSocketState.Ready) {
-      promoteReserve(true);
-      return;
+    if (role === undefined) return;
+    if (change.to === BrokerSocketState.Ready) live.since = undefined;
+    else if (change.from === BrokerSocketState.Ready) {
+      live.since = now();
+      if (role === 'active') ring.onDrop();
     }
-    if (role === 'active') {
-      if (change.to === BrokerSocketState.Ready) {
-        clearGrace();
-        return;
-      }
-      if (change.from === BrokerSocketState.Ready) ring.onDrop();
-      if (change.to === BrokerSocketState.Reconnecting) {
-        graceTimer ??= setTimeout(() => {
-          graceTimer = undefined;
-          if (liveOf(slots.active) === live && live.client.state !== BrokerSocketState.Ready) {
-            failover('reconnect_timeout');
-          }
-        }, config.failoverGraceMs);
-        return;
-      }
-    }
-    if (!isTerminalBrokerSocketState(change.to)) return;
-    if (role === 'active') clearGrace();
-    if (
+    if (change.to === BrokerSocketState.DisconnectedByServer) {
+      logger.warn(
+        { role, accountId: live.account.id, reason: change.reason ?? null },
+        'market data socket disconnected by server',
+      );
+      vacate(role, change.to, true);
+    } else if (
       change.to === BrokerSocketState.TokenExpired ||
       change.to === BrokerSocketState.AuthFailed
     ) {
-      const reserve = slots.reserve;
-      // decision 7a: a ready reserve takes over at once, and the old account's refused token is
-      // reported by the start of the next reserve on it
-      if (
-        role === 'active' &&
-        reserve.kind === 'running' &&
-        reserve.live.client.state === BrokerSocketState.Ready
-      ) {
-        failover(change.to, { account: live.account, hash: hashToken(live.token) });
-        return;
-      }
-      refresh(role, live);
-      return;
+      // the first refusal in the window costs one start; a second one holds the account back
+      const id = live.account.id;
+      const repeated = now() - (lastRefusal.get(id) ?? -Infinity) < config.accountRetryMs;
+      lastRefusal.set(id, now());
+      refused.set(id, hashToken(live.token));
+      vacate(role, change.to, repeated);
     }
-    logger.warn(
-      { role, accountId: live.account.id, reason: change.reason ?? null },
-      'market data socket disconnected by server',
-    );
-    holdBack(live.account.id);
-    if (role === 'active') failover(change.to);
-    else drop('reserve');
+    reconcile();
   }
 
   function onEvent(live: Live, event: BrokerEvent): void {
@@ -499,9 +464,8 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         if (event.user.id === live.account.brokerUserId) return;
         // the other user's id is theirs: not logged
         logger.warn({ role, accountId: live.account.id }, 'market data foreign user');
-        holdBack(live.account.id);
-        if (role === 'active') failover('foreign_user');
-        else drop('reserve');
+        vacate(role, 'foreign_user', true);
+        reconcile();
         return;
       }
       default:
@@ -511,33 +475,14 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
 
   async function runTick(): Promise<void> {
     order = await listAccounts();
-    if (stopped) return;
     const at = now();
     for (const [accountId, retryAt] of held) {
       if (retryAt <= at) held.delete(accountId);
     }
-    readCatalog();
-    if (slots.active.kind === 'empty') {
-      const list = candidates('active');
-      if (list.length === 0) {
-        if (!noAccountWarned) {
-          logger.warn(
-            { accounts: order.length, held: held.size },
-            'market data: no working service account',
-          );
-          noAccountWarned = true;
-        }
-      } else if (await startRole('active', list)) {
-        return;
-      }
+    for (const [accountId, refusedAt] of lastRefusal) {
+      if (refusedAt + config.accountRetryMs <= at) lastRefusal.delete(accountId);
     }
-    if (stopped) return;
-    if (slots.reserve.kind === 'empty') {
-      const list = candidates('reserve');
-      if (list.length > 0 && (await startRole('reserve', list))) return;
-    }
-    if (stopped) return;
-    subscribeNew();
+    await Promise.allSettled(reconcile());
   }
 
   // a tick longer than the interval makes the next one a no-op
@@ -557,17 +502,16 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   function roleView(role: Role) {
     const slot = slots[role];
     if (slot.kind === 'empty') return null;
-    if (slot.kind === 'starting') return { accountId: slot.accountId, socketState: 'starting' };
+    if (slot.kind === 'starting') return { accountId: slot.account.id, socketState: 'starting' };
     const { client, account } = slot.live;
-    const socketState = slot.kind === 'refreshing' ? 'refreshing' : client.state;
     return role === 'active'
       ? {
           accountId: account.id,
-          socketState,
+          socketState: client.state,
           connection: client.connections,
           subscriptions: client.subscriptions().length,
         }
-      : { accountId: account.id, socketState };
+      : { accountId: account.id, socketState: client.state };
   }
 
   function report(): void {
@@ -636,12 +580,11 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
       clearInterval(logTimer);
       tickTimer = undefined;
       logTimer = undefined;
-      clearGrace();
+      clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
       drop('active');
       drop('reserve');
       await Promise.allSettled([running, ...inflight]);
-      slots.active = EMPTY;
-      slots.reserve = EMPTY;
     },
   };
 }

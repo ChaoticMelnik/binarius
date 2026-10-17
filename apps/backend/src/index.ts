@@ -50,6 +50,7 @@ import {
   MARKET_DATA_FAILOVER_GRACE_MS,
   MARKET_DATA_LOG_MS,
   MARKET_DATA_PENDING_MAX,
+  MARKET_DATA_RESERVE_READY_MS,
   MARKET_DATA_RING_CANDLES,
   MARKET_DATA_SKEW_MARGIN_MS,
   MARKET_DATA_TICK_MS,
@@ -368,6 +369,7 @@ const marketData =
           tickMs: MARKET_DATA_TICK_MS,
           logMs: MARKET_DATA_LOG_MS,
           failoverGraceMs: MARKET_DATA_FAILOVER_GRACE_MS,
+          reserveReadyMs: MARKET_DATA_RESERVE_READY_MS,
           accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
         },
       });

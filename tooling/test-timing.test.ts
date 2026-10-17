@@ -195,7 +195,7 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     file: 'apps/backend/src/market-data/manager.test.ts',
     form: 'F4',
     match: 'await pastGrace();',
-    reason: `${NEGATIVE} (QUIET_MS, past the 300 ms grace: no failover may follow a reconnection inside it or a stop())`,
+    reason: `${NEGATIVE} (QUIET_MS, past the grace and every test's reserve budget: no failover, promotion or rotation may follow)`,
   },
   {
     file: 'packages/broker-socket/src/socket.test.ts',
