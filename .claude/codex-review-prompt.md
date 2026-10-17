@@ -8,6 +8,7 @@ Branch: <branch name>
 Scope: the whole feature — `git diff origin/main...HEAD` (the PR diff from its merge base, inlined below). Never an iteration's diff: a defect whose two halves sit in different commits is invisible to a review of either commit alone.
 Out of scope: <files/areas>
 Accepted risks (from the plan — do not re-raise): <list, or "none">
+Known, moved open into a follow-up issue by the owner (do not re-raise; a finding this PR fixed is never listed here): <list with the issue number, or "none">
 
 Invariants:
 - the project's list: `.claude/skills/architect/SKILL.md` → "Architecture Rules to Enforce in Every Plan" (read it; flag any change that breaks one)

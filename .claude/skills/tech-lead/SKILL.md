@@ -319,7 +319,7 @@ It posted the ready-to-merge comment or returned the classifier's refusal (Merge
 
 **Tech-lead's own 6-pre run** (Phase 4 iteration 3 after a round-3 Blocker fix). Not a review round.
 1. `gh pr checks <N>` at the current head: wait while running. Red → report it to the owner; no run, no merge question.
-2. The reviewer's Step 6-pre command, from the main context, at the current head. The prompt names as known ("do not re-raise") only the findings the owner has already moved, open, into a follow-up issue (the round-limit issue or a Backlog issue), so a re-run on a moved head reports only what is new; a finding this PR fixed is never on that list — the pass must still see an incomplete fix (#536: two re-runs after rebases re-listed tracked findings).
+2. The reviewer's Step 6-pre command, from the main context, at the current head. The prompt's "Known, moved open into a follow-up issue" field (`.claude/codex-review-prompt.md`) lists only the findings the owner has already moved, open, into a follow-up issue (the round-limit issue or a Backlog issue), so a re-run on a moved head reports only what is new; a finding this PR fixed is never on that list — the pass must still see an incomplete fix (#536: two re-runs after rebases re-listed tracked findings).
 3. Outcome:
    - Clean → the job id goes into the merge question.
    - Blocker/Major → post it as a PR comment. On a PR whose last review round was 3, go to the Phase 4 iteration 3 branches (a Blocker holds the merge; a Major goes into the new issue on the owner's yes). Otherwise the owner decides via `AskUserQuestion`: a Plan Update round (the count continues) or close the PR.
