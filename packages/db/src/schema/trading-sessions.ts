@@ -81,8 +81,9 @@ export const tradingSessions = pgTable(
     // writes the id after it, releaseSessionWaiting frees the slot after a certain refusal,
     // clearSessionWaitingMessage drops the id and frees the slot after the delete; and by the stop
     // route (#587): stopTradingSession with the pressed waiting message's id drops it in its own
-    // UPDATE, clearSessionWaitingMessage by that id on a 409. A newer message of the session
-    // leaves the slot behind, and the waiting message is then deleted and sent again under it.
+    // UPDATE, clearSessionWaitingMessage by that id on a 409; the sender re-reads the id before
+    // its delete (#587 round 1). A newer message of the session leaves the slot behind, and the
+    // waiting message is then deleted and sent again under it.
     waitingMessageId: integer('waiting_message_id'),
     waitingAfterMessage: integer('waiting_after_message'),
     createdAt: createdAt(),
