@@ -72,9 +72,8 @@ export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
 // The session's words shared with the backend's session notices (#464, session-texts.ts in
 // packages/shared), printed with this bot's catalog.
 export const sessionTexts = createSessionTexts({ html, plain });
-export const { pluralTrades, sessionAssetLabel } = sessionTexts;
+export const { pluralTrades, sessionAssetLabel, sessionEndLine } = sessionTexts;
 const { tradesCount, cyclesCount, scoreOf, resultOf } = sessionTexts;
-export const { sessionEndLine } = sessionTexts;
 const joinLines = joinHtmlLines;
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
@@ -472,7 +471,7 @@ export const sessionAgainButtonLabel = (mode: TradeMode): string =>
 
 // A trade with an outgoing edge in the shared graph: it can still settle or be rejected, so the
 // session's counters can still move (manual_review included).
-export const sessionIntentLive = (intent: TradeIntentView | null): intent is TradeIntentView =>
+const sessionIntentLive = (intent: TradeIntentView | null): intent is TradeIntentView =>
   intent !== null && TRADE_INTENT_TRANSITIONS[intent.status].length > 0;
 
 // A trade the worker carries to its end without a person: live, and not on manual review.

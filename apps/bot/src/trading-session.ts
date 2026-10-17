@@ -244,13 +244,13 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
   );
 
 // the pair's label only, so any catalog will do, a stale one included; null names the asset by
-// its id
+// its id, as does no catalog read
 const symbolOf = (
-  catalog: Settled<PairsCatalogResponse>,
+  catalog: Settled<PairsCatalogResponse> | undefined,
   view: Pick<TradingSessionView, 'settings'>,
 ): PairLabel | null => {
   const pair =
-    catalog.ok && view.settings !== null
+    catalog?.ok === true && view.settings !== null
       ? catalog.value.pairs.find((listed) => listed.id === view.settings?.assetId)
       : undefined;
   return pair === undefined ? null : pairLabel(pair);
@@ -386,7 +386,7 @@ export function createTradingSessionComposer<C extends Context>({
       await replyReadFailure(ctx, stopped.error, 'trading session not stopped');
       return;
     }
-    if (catalog === undefined) {
+    if (waiting) {
       // the waiting message goes with the stop: a refused delete never withholds the reply. A
       // press starts no tracking: the session message is tracked from its start in this process,
       // or by #567's pass once its id is recorded; one whose id is not recorded gets no card
