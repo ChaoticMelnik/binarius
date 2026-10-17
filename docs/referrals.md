@@ -222,6 +222,15 @@ its commit, a non-partner one included.
 `{ referralId }`; `info` `referral reward skipped` `{ referralId, reason: 'inviter_blocked' }`;
 nothing for `not_partner_client`, `no_referral` or `already_rewarded`.
 
+**The notification** (#576). The reward's ledger row is the fact of the mailing kind
+`referral_rewarded` ([mailing.md](mailing.md) → The referral reward notification): the engine's
+planner and sender, not the activation, send the inviter one message per reward with the row's
+amount and a «👥 Пригласить ещё» button to /invite, at most `MAILING_PLAN_TICK_MS +
+MAILING_SEND_TICK_MS` (65 s) after the commit. Rewards granted before its deploy
+(`0065_referral_rewarded_seed.sql`) get none; the engine's rules (bot blocked, `off`, `reduced`,
+an inviter blocked by the admin) apply as to every mailing. The activation writes nothing more
+for it.
+
 **Deploy.** Backend before the bot: the bot's schema requires `connected` and `tokensEarned`, so a
 new bot against an old backend shows `unavailable` on `/invite` until the backend is up.
 
@@ -237,12 +246,12 @@ new bot against an old backend shows `unavailable` on `/invite` until the backen
 5. Two Telegram accounts of one person with two different partner broker accounts earn the reward:
    anti-fraud is by broker account only (owner, 2026-10-08).
 6. A missed reward (rule off, inviter blocked, a non-partner account) is paid only at a later
-   activation, which may be long after or never; the inviter sees it on `/invite`. No push tells
-   the inviter about a reward yet (#576).
+   activation, which may be long after or never; the inviter sees it on `/invite` and gets the
+   reward notification (#576) once it is paid.
 
 ## Boundaries
 
-- **#576** — the push to the inviter about a reward, through the mailing engine (after #574).
+- **#633** — the English text of the reward notification (#576 sends it in Russian).
 - **#386** — deposit-based bonuses; rewards for an invitee's deposit are not in scope.
 - **#440** — the personal link in the summary card's caption; #321's share carries it since #538.
 - Inline mode (`switch_inline_query`) for `/invite` and the admin card — not in scope.

@@ -5,9 +5,10 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries two scenarios: the **first-session chain**, three reminders that lead a user who
-connected an account but has not started a trading session into the demo, and the **analysis
-reminder** (#484), one reminder after an analysis card nobody acted on. #123 (the low-token
+Today it carries three scenarios: the **first-session chain**, three reminders that lead a user who
+connected an account but has not started a trading session into the demo, the **analysis
+reminder** (#484), one reminder after an analysis card nobody acted on, and the **referral reward
+notification** (#576), one message to an inviter per reward. #123 (the low-token
 nudge) and #124 (retention) add their scenarios to the same engine.
 
 ```bash
@@ -20,10 +21,15 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 - `packages/shared/src/mailing.ts` — `NotificationKind` (the kinds, and the CHECK on
   `notification_jobs.kind` and `notification_kinds.kind`), `FIRST_SESSION_CHAIN` (the steps and
   their offsets), `ANALYSIS_UNUSED_AFTER_MS`/`ANALYSIS_UNUSED_UNTIL_MS` and
-  `analysisUnusedPayloadSchema` (#484), and `MAILING_MIN_OFFSET_MS`, the earliest offset.
-- `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the fact it counts
-  from, the offset (`afterMs`), the dedupe key (an SQL expression over the user's row), the
-  job's payload (jsonb, `'{}'` when absent) and the predicate it holds while it applies.
+  `analysisUnusedPayloadSchema` (#484), `REFERRAL_REWARDED_AFTER_MS` and
+  `referralRewardedPayloadSchema` (#576), and `MAILING_MIN_OFFSET_MS`, the earliest offset among
+  the kinds that wait.
+- `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
+  from (`facts`, a lateral row source over the user's row with a column `at`), the offset
+  (`afterMs`), the dedupe key and the job's payload (SQL over the user's row and the fact; the
+  payload `'{}'` when absent), the predicate it holds while it applies (`stillApplies`) and the
+  claim's key predicate (`keyApplies`). A kind with one fact per user goes through `oneFact`: its
+  facts are one row, its key reads the user's row only and the claim compares it directly.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
@@ -35,8 +41,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 
 `MAILING_SCENARIOS` and `MAILING_MESSAGES` are checked with `satisfies Record<NotificationKind, …>`:
 a kind without either does not compile. The tests named below by their ids are in
-`packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484), `apps/backend/src/mailing/engine.db.test.ts`
-(M7–M11, E1–E2; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
+`packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484; R1–R8 for #576), `apps/backend/src/mailing/engine.db.test.ts`
+(M7–M11, E1–E2, E-R1–E-R2; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
 the pacer alone) and `apps/backend/src/mailing/messages.test.ts`.
 
 ## The first-session chain
@@ -81,6 +87,8 @@ without its seed stays silent rather than mailing everyone's history. Tests:
 one a minute after gets the step; no row, nothing; a fresh database holds one row per kind, at
 one moment). The analysis reminder's row is seeded by `0058_analysis_unused_seed.sql` the same
 way; its fact is written only by a backend that has that migration, so its cutoff is formal.
+The referral reward notification's row is seeded by `0065_referral_rewarded_seed.sql`: rewards
+granted before its deploy get no notification and stay visible in /invite only.
 
 ## The analysis reminder (#484)
 
@@ -130,14 +138,60 @@ What becomes of a job of this kind:
 Tests: `mailing-ops.db.test.ts` A1–A8 and CUT, `engine.db.test.ts` E1–E2, `messages.test.ts`,
 `signal-routes.test.ts` R10–R17, `user-ops.db.test.ts` LA1–LA3.
 
+## The referral reward notification (#576)
+
+| Kind                | Sent                                        | Text (`mailing` group) | Button                             |
+| ------------------- | ------------------------------------------- | ---------------------- | ---------------------------------- |
+| `referral_rewarded` | at the next ticks after an inviter's reward | `referralRewarded`     | «👥 Пригласить ещё» (`cmd:invite`) |
+
+An inviter whose invitee connected a Binodex partner account gets the reward of #116
+([referrals.md](referrals.md) → The reward) and, through this kind, one message per reward: the
+amount, and a button that opens /invite as a new message (`commandRetryCallbackData('invite')`,
+the bot's own retry of the command). The text names the amount as «Начислено токенов за
+приглашение: +N», which reads for any N without a plural form.
+
+- **The fact** is the reward's `token_ledger` row: `referral_id` is not null, `user_id` is the
+  inviter. A user may have several, so the kind's `facts` is a lateral subquery of those rows,
+  each its own job. The row is append-only (rule 3) and its one writer is `grantReferralReward`
+  (rule 34): the fact never goes away.
+- **It applies** while the inviter is not blocked by the admin (`users.status = active`), checked
+  when planning and again at the claim. The trading mode is not read: the reward is tokens, not
+  the demo path. The bot block, `off` and `reduced` are the engine's own rules (Delivery rules):
+  under `reduced` a second reward waits for the 24-hour window; a reward while notifications are
+  `off` or the bot is blocked is planned once they are back, with no window of its own.
+- **One notification per reward.** The dedupe key is `referral_rewarded:` and the ledger row's
+  id; with `token_ledger_referral_idx` (one reward per referral) that is at most one notification
+  per invitee. The payload is the row's `balance_delta` as text (a bigint, rule 2), which the
+  message parses with `referralRewardedPayloadSchema`; one that does not parse is `mailing not
+built` (retried, then `failed`). At the claim, `keyApplies` holds while the key names a reward of
+  this user — always, for a key the planner wrote.
+- **Timing.** `REFERRAL_REWARDED_AFTER_MS` is 0: the job is due at the reward's own moment, so the
+  message comes at the planner's and the sender's next ticks, at most
+  `MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS` (65 s) after the activation commits. The kind is not
+  in `MAILING_MIN_OFFSET_MS`, the earliest offset of the kinds that wait: the link
+  `MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_MS` concerns only those.
+
+What becomes of a job of this kind:
+
+| Outcome                                                               | The job                                                                    |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| the claim: the inviter is active and the key names their reward       | `sent` with `outcome_unknown`, then the sender's table below               |
+| the claim: blocked by the admin, or the key names no reward of theirs | `canceled` in the same statement; its key stays taken, never planned again |
+| the planner: bot blocked or notifications `off`                       | not created yet; planned on the first tick after they are back             |
+| the planner: a reward before `plans_from`                             | never created                                                              |
+
+Tests: `mailing-ops.db.test.ts` R1–R8 and its CUT, `engine.db.test.ts` E-R1–E-R2,
+`messages.test.ts`, the pin in `timing.test.ts`.
+
 ## The planner
 
-Every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset, `MAILING_MIN_OFFSET_MS`) the planner runs one
+Every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
 `INSERT … SELECT … ON CONFLICT (user_id, dedupe_key) DO NOTHING` per kind: a job for every user
 whose fact plus the offset has come, whose fact is at or after the kind's `plans_from`, whom the
 bot may reach (`deliverable()`: not blocked in Telegram, notifications not `off`), and for whom the
-scenario applies. `scheduled_at` is the fact plus the offset, and `payload` the scenario's. The
-dedupe key (`first_session:1h`, `…:24h`, `…:72h`; `analysis_unused:<epoch>`) makes it idempotent: a second run, a second backend process or a restart
+scenario applies — one job per row of the kind's `facts` (`cross join lateral`). `scheduled_at` is
+the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
+`…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again.
 
@@ -217,12 +271,18 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
 2. A custom migration (`pnpm db:generate --custom --name <kind>_seed`) that inserts its
    `notification_kinds` row with `now()`, so it reaches only facts from its deploy on — or an
    explicit earlier `plans_from` if the owner wants history mailed.
-3. Its entry in `MAILING_SCENARIOS` (the fact, the offset in ms, the dedupe key as SQL over the
-   user's row, the payload if the message needs data, the predicate) and in `MAILING_MESSAGES`
-   (the text from the catalog's `mailing` group, the keyboard, from the payload). The claim
-   cancels a job whose key the scenario would not plan now, so a key that changes with the fact
-   makes the newest fact win; a constant key is always current.
-4. A link in `TIMING_CHAIN_HOLDS` if its offset is shorter than `MAILING_PLAN_TICK_MS` allows.
+3. Its entry in `MAILING_SCENARIOS` and in `MAILING_MESSAGES` (the text from the catalog's
+   `mailing` group, the keyboard, from the payload). A kind with one fact per user goes through
+   `oneFact` (the fact's moment as SQL over the user's row, the offset in ms, the dedupe key over
+   the user's row, the payload if the message needs data, the predicate): the claim cancels a job
+   whose key the scenario would not plan now, so a key that changes with the fact makes the
+   newest fact win; a constant key is always current. A kind with several facts per user (#576)
+   gives `facts` as a lateral subquery, reads its key and payload from `fact.<column>`, and gives
+   `keyApplies`, the claim's predicate over the user's row and the job that the key is still one
+   it would plan.
+4. A link in `TIMING_CHAIN_HOLDS` only for a kind that waits: its offset counts in
+   `MAILING_MIN_OFFSET_MS`, which the planner's tick must stay under; a kind due at its fact (0)
+   is left out of it.
 5. Tests in `mailing-ops.db.test.ts` for its planning and stop conditions.
 
 ## Accepted risks

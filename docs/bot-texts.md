@@ -61,8 +61,9 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - **group** — the screen or scenario the admin section lists it under: `start`, `card`,
   `account`, `menu`, `settings`, `support`, `help`, `demo`, `analysis`, `trade`, `session`,
   `deposit`, `mailing`, `buttons`, `commands`, `profile`. `mailing` holds the texts only the
-  backend's mailing engine sends (#202: the first-session chain; #484: `analysisUnusedReminder`), so
-  the bot's `TEXTS` leaves the group out. `deposit`
+  backend's mailing engine sends (#202: the first-session chain; #484: `analysisUnusedReminder`;
+  #576: `referralRewarded` and its button's label `inviteMoreButton`, a label of the backend's
+  message only, so here and not in `buttons`), so the bot's `TEXTS` leaves the group out. `deposit`
   holds the backend's push after a deposit in the cashier (`depositCredited`, #112), left out of
   `TEXTS` by name. `buttons` is exactly
   the bot's `LABELS` buttons plus
@@ -248,6 +249,7 @@ compile.
 | `referralLink` | the user's personal link, `referralLinkOf` (#115) | as is | — |
 | `connected` | invitees with a confirmed partner account, `/invite` (#116) | as is | — |
 | `earnedTokens` | the tokens the user's invitations paid, `/invite` (#116) | `formatCount` | — |
+| `rewardTokens` | one reward's tokens, the ledger row's `balance_delta`, `referralRewarded` (#576) | `formatCount` | — |
 | `purchasedTokens`, `stars` | a Stars package's tokens and price (#117, [stars.md](stars.md)) | `formatCount` | — |
 | `tokenBalance` | `users.token_balance` after a Stars credit (#117) | `formatCount` | — |
 | `paymentDate` | a Stars payment's `paid_at`, Unix seconds (#118, /paysupport) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
