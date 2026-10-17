@@ -53,8 +53,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   (#122); `startSession(ctx, data, catalog, { retryUnknown, removeScreen })` is the one start path,
   which the amount screen's presses use too (`cycle-stake.ts`, #476); `resume(api, botUsername,
   trackedSession, label)` tracks a session again on its recorded message after a restart (#567).
-  Also `LEGACY_SESSION_REFRESH_PATTERN`, `sessionCardKeyboard` (the end of the path under a stopped
-  session), `START_REFUSALS` and `sessionOutcomeUnknown`. `bot.ts` mounts it under its
+  Also `sessionCardKeyboard` (the end of the path under a stopped session), `START_REFUSALS` and
+  `sessionOutcomeUnknown`. `bot.ts` mounts it under its
   private-chat filter, right after the demo trade's composer.
 - `packages/shared/src/bot-navigation.ts` — `sessionStopCallbackData(id, { waiting? })` and
   `SESSION_STOP_PATTERN` (#536): the stop button's data, `session:stop:<id>` under an old status
@@ -375,8 +375,10 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   Открытая сделка доиграет до конца.» while the last trade is live and not on manual review
   (`sessionStopReplyText`, decision В1), under the end of the path. The result and the balance
   come with the backend's summary. No catalog read (no pair in the reply) and no `track()`: the
-  session message is tracked already, or recovered by the pass of #567 (a waiting message exists
-  only once the session message was recorded). 404 → «⚠️ Статус сессии недоступен.»; any other
+  session message is tracked from its start in this bot process, or recovered by the pass of #567
+  once its id is recorded; a session whose id is not recorded (started from the CLI, a bot restart
+  in the 3 s before the first poll, a message reported lost) is not tracked after a bot restart, so
+  it gets no card and no end line on its message ([risk 56](#accepted-risks)). 404 → «⚠️ Статус сессии недоступен.»; any other
   failure → `unavailable` and `warn` `trading session not stopped` (or `trading session status
   not read` for the read after a 409), both under «🏠 В меню», and the pressed message is not
   deleted: the outcome is not known, and a second press is harmless. The backend deletes the
@@ -409,7 +411,7 @@ message below goes on. Then one message answers, always with a keyboard (Rule 31
 | The route answered | The message | Keyboard | Tracking |
 |---|---|---|---|
 | no session (`[]`) | «Активных сессий нет.» (`sessionNoneActive`) | «🏠 В меню» | — |
-| one session | the reply to «⏹» under the waiting message (#536, the owner's answer 4): the end line, «⏳ Открытая сделка доиграет до конца.» while its trade plays out | the end of the path (`sessionCardKeyboard`) | — : the session message is tracked already, its card comes from there |
+| one session | the reply to «⏹» under the waiting message (#536, the owner's answer 4): the end line, «⏳ Открытая сделка доиграет до конца.» while its trade plays out | the end of the path (`sessionCardKeyboard`) | — : the session message is tracked from its start or recovered by #567 once its id is recorded, its card comes from there ([risk 56](#accepted-risks)) |
 | two or more | «⏹ Остановлено сессий: N. Открытые сделки доиграют до конца.» (`sessionsStopped`) | «🏠 В меню» | — |
 | any failure (`Unreachable`, non-2xx, `ContractViolation`) | `unavailable`, `warn` `trading sessions not stopped` | «🏠 В меню», no «🔄 Повторить» — `/stop` is a write | — |
 
@@ -743,7 +745,7 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | 403 (send or edit) | stays claimed; the user is marked unreachable | later trades claimed without a call |
 | 429 (send or edit) | put back (`releaseSessionTradeNotice`; the summary's by `releaseSessionFinalNotice`); unchanged | the whole sender pauses for `retry_after`; the same trade first after it |
 | another 4xx (send or edit) | put back, an attempt counted in memory; unchanged | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped`; the next step's edit still shows the block |
-| a new message with a waiting message on screen (#536) | before the send, after its own pace, the waiting message deleted ([its endings](#the-waiting-message-536)); a 429 on that delete puts the trade back and pauses the sender; an unknown outcome leaves its id, and the trade goes on | the new message after one more pace; the waiting message under it in the same `serve` |
+| a new message with a waiting message on screen (#536) | before the send, after its own pace, the waiting message deleted ([its endings](#the-waiting-message-536)); a 429 on that delete puts the trade back and pauses the sender; an unknown outcome puts the trade back and skips the session (the next tick deletes first); a 403 counts the trade as sent without a call | the new message after one more pace; the waiting message under it in the same `serve` |
 | 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
 | 5xx, a timeout, the transport — an edit | stays claimed; unchanged | `warn` … `edit outcome unknown`; the next step's edit shows the block; a cycle's last step is lost |
 | a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
@@ -787,21 +789,24 @@ session stopped — any reason — on the next tick, before the summary; never s
 **The state** (migrations 0056 and 0057): `trading_sessions.waiting_message_id`, Telegram's
 `message_id` of the live waiting message, NULL when there is none; and `waiting_after_message`,
 its **slot**: `coalesce(cycle_message_id, 0)` when it was claimed — the cycle message it stands
-under, 0 before any — NULL while none was claimed. A positive id, a slot from 0, an id only on a
+under, 0 before any — NULL while none is claimed (none yet, or freed). A positive id, a slot from 0, an id only on a
 claimed slot (three CHECKs). Two SQL predicates in `session-notice-ops.ts` alone decide:
 
 - **due**: the session is active, no live waiting message, its slot is not the current cycle
   message (`is distinct from`), the session has a message to stand under — the bot's recorded
-  status message (#567) or a cycle message — and the user has not blocked the bot;
+  status message (#567) or a claimed trade (`notified_trades > 0`: a trade's message goes only
+  after the session message, recorded or not) — and the user has not blocked the bot;
 - **stale**: a live waiting message, and the session stopped or a new cycle message left its slot
   behind.
 
 `listPendingSessionNotices` lists a session with either (both inside `final_notice_sent_at is
 null`, so the index is the same). The writers, each one CAS UPDATE of the session's row:
-`claimSessionWaiting` (the slot, before the send: at most one waiting message per slot),
+`claimSessionWaiting` (the slot, before the send: only with no live id and on a slot not claimed
+on the current cycle message, so at most one waiting message of unknown fate),
 `recordSessionWaitingMessage` (the id, on its own slot, while the session is active),
 `releaseSessionWaiting` (the slot freed after a certain refusal), `clearSessionWaitingMessage`
-(the id dropped after the delete; the slot stays). `claimSessionFinalNotice` holds only with
+(the id dropped and the slot freed after the delete, so an active session is due again whatever
+becomes of the cycle message sent next). `claimSessionFinalNotice` holds only with
 `waiting_message_id is null`: the summary is the last message by the predicate, not by the order of
 the code. The backfill 0057 claims the current slot of every session active at the deploy (the
 owner's answer 5): its waiting message comes after its next new cycle message, and nothing is sent
@@ -809,15 +814,16 @@ at the start ([risk 54](#accepted-risks)).
 
 **One `serve` of a session** does, in this order: the trades past the cursor (a new cycle message
 deletes the waiting message first, above); then a stale waiting message's delete; then the summary
-of a finished session, or the waiting message due. Each step of the waiting message starts with
-its pace and a check of `stop()`.
+of a finished session, or the waiting message due — while the session is active and the user
+reachable as this `serve` left them (a 403 in a step before it sends nothing more). Each step of
+the waiting message starts with its pace and a check of `stop()`.
 
 | A send of the waiting message | Columns | Listed after? | Then |
 | --- | --- | --- | --- |
 | 2xx with a positive `message_id`, recorded | `waiting_message_id` = it | no | — |
 | 2xx, the record refused (the session stopped between, or another sender recorded first) | the slot claimed, no id | no | one more pace, its own message deleted (`info` `… removed: not recorded`; a failure `warn` `… not removed`) |
 | 2xx with a `message_id` that is not a positive integer | the slot claimed, no id | no | `warn` `… not recorded: no message id`; the next one after the next cycle message |
-| 403 | the slot claimed; the user marked unreachable | no (due needs `telegram_blocked_at is null`) | `warn` `… refused: the user is unreachable` |
+| 403 | the slot freed; the user marked unreachable | no (due needs `telegram_blocked_at is null`) | `warn` `… refused: the user is unreachable`; due again after `markTelegramReachable` while the session runs |
 | 429 | the slot freed | yes | the whole sender pauses for `retry_after`, then the send again |
 | another 4xx | the slot freed, an attempt counted in memory | yes, until the third, then the slot stays claimed | `warn` `… refused`, then `… dropped` |
 | 5xx, a timeout, the transport | the slot claimed, no id | no | `warn` `… outcome unknown`; a delivered one is never deleted ([risk 50](#accepted-risks)) |
@@ -826,19 +832,39 @@ its pace and a check of `stop()`.
 
 | A delete of the waiting message | Columns | Listed after? | Then |
 | --- | --- | --- | --- |
-| deleted | the id dropped | by the other predicates (an active session's slot behind → due → a new one; a stopped one → the summary) | — |
-| 400 «message to delete not found» (`deleteRefusal` gone: the user deleted it, or the bot did on its «⏹») | the id dropped | the same | `info` `… already gone` |
-| 400 «can't be deleted» (older than 48 h) | the id dropped | the same | `warn` `… not deleted`; it stays with its button ([risk 51](#accepted-risks)) |
-| 403 | the id dropped; the user marked unreachable | the same | `warn` `… refused: the user is unreachable` |
+| deleted | the id dropped, the slot freed | by the other predicates (an active session → due → a new one; a stopped one → the summary) | — |
+| 400 «message to delete not found» (`deleteRefusal` gone: the user deleted it, or the bot did on its «⏹») | the id dropped, the slot freed | the same | `info` `… already gone` |
+| 400 «can't be deleted» (older than 48 h) | the id dropped, the slot freed | the same | `warn` `… not deleted`; it stays with its button ([risk 51](#accepted-risks)) |
+| 403 | the id dropped, the slot freed; the user marked unreachable | the same (due once the user is reachable) | `warn` `… refused: the user is unreachable`; before a new cycle message the trade counts as sent without a call (Rule 19) |
 | 429 | the id kept | yes (stale) | the sender pauses; before a new cycle message the trade is put back first |
-| another 4xx | the id dropped | the same | `warn` `… not deleted` |
-| 5xx, a timeout, the transport | the id kept, an attempt counted in memory | yes (stale), until the third, then the id dropped and `warn` `… delete dropped` | `warn` `… delete outcome unknown`; the delete is idempotent; before a new cycle message the trade goes on |
-| the user blocked the bot (read flag) | the id dropped without a call | the same | — |
+| another 4xx | the id dropped, the slot freed | the same | `warn` `… not deleted` |
+| 5xx, a timeout, the transport | the id kept, an attempt counted in memory | yes (stale), until the third, then the id dropped, the slot freed and `warn` `… delete dropped` | `warn` `… delete outcome unknown`; the delete is idempotent; before a new cycle message the trade is put back and the session skipped: the next tick deletes first, then the trade |
+| the user blocked the bot (read flag) | the id dropped and the slot freed without a call | the same | before a new cycle message the trade counts as sent |
+
+| A new cycle message after the delete (the id dropped, the slot freed) | The waiting message after it |
+| --- | --- |
+| 2xx, `recordSessionCycleMessage` recorded it | due under it: sent by the same `serve` |
+| 2xx, the record's CAS refused (another sender); 2xx without a positive `message_id`; 5xx, a timeout, the transport; another 4xx the third time (`… dropped`) | due all the same (the slot is free): sent by the same `serve`, under whatever went out |
+| another 4xx, the first or second time | the trade put back, the session skipped; the next tick sends the trade (no delete: no id), then the waiting message |
+| 429 | the trade put back, the sender pauses; after it the trade, then the waiting message |
+| 403 | the user marked unreachable, nothing more; due again after `markTelegramReachable` |
+
+A new cycle message with no waiting message before it (the first trade, or after an unknown
+outcome of the waiting message's send) leaves the slot where it was: a free slot is due under a
+claimed trade by the next tick; a slot claimed on the current cycle message (an unknown outcome,
+[risk 50](#accepted-risks)) waits for the next recorded cycle message.
 
 No ending leaves a session listed with nothing to take it out: a claimed slot ends due, a dropped
 id ends stale, and the attempts in memory bound the refusals to three ticks, after which the slot
 or the id is fixed in the database. A restart of the backend clears the attempts: a slot refused
-three times stays claimed.
+three times stays claimed. A running session with a reachable user is left without a live waiting
+message until its next recorded new cycle message only by these endings, each with its log line:
+the waiting message's send with an unknown outcome and not delivered (`… outcome unknown`, [risk
+50](#accepted-risks)); its third definite refusal (`… dropped`: Telegram refusing the message
+itself three times is a defect, not the network — a `session waiting message dropped` in a week is
+a reason for an issue); the backfill 0057 of a session running at the deploy ([risk
+54](#accepted-risks)); and a waiting message the user deleted (the sender learns it on its next
+delete, as gone).
 
 ### Logs (backend)
 
@@ -1131,13 +1157,18 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
     outcome unknown` above 0.1 % of the sends.
 51. **A waiting message older than 48 h is not deleted** (#536, Telegram's limit): only a session
     stuck on manual review that long; it stays with its button, and a press answers 409 → the end
-    line. The bot does not strip it either (a fourth Telegram call in `HANDLER_CALLS.sessionStop`).
-    Falsifiable: `session waiting message not deleted` with code 400 for a session younger than
+    line. The bot does not strip it either (a fourth Telegram call in `HANDLER_CALLS.sessionStop`;
+    the plan's decision, Plan Update of review round 1). Falsifiable: `session waiting message not deleted` with code 400 for a session younger than
     48 h.
-52. **«Always the last» holds by the order of the calls, not by state** (#536): a cycle message's
-    record refused (a second sender) or an id that is not a positive integer leaves the waiting
-    message above the new cycle message until the next cycle. Falsifiable: a waiting message above
-    a cycle message with one sender and `session trade notice not recorded` at 0.
+52. **«Always the last» holds by the order of the calls in one `serve`, not by state** (#536): the
+    waiting message is deleted before a new cycle message and its slot freed, so whatever becomes
+    of the new message, a new waiting message is due under it. A waiting message stays above a new
+    cycle message only when the sender cannot delete it: an orphan of risk 50, a send without a
+    positive `message_id`, a delete given up after three unknown outcomes, one older than 48 h
+    (risk 51). A second sender between the delete and the trade's message could claim a waiting
+    message above it — the backend runs one sender (stated). Falsifiable: a waiting message above a
+    cycle message with one sender and no `session waiting message outcome unknown`, `… not
+    recorded: no message id` or `… delete dropped`.
 53. **One more `deleteMessage` per stop by the button** (#536): the bot deletes the pressed waiting
     message, and the backend's next tick finds it gone and drops the id. Not handed to the stop
     route on purpose: the sender is the column's one writer.
@@ -1148,10 +1179,14 @@ carries the card's `file_id`, and the owner proof is the backend's read of the s
 55. **An old status message loses its keyboard on the tracker's edit at the stop** (#536): an edit
     without `reply_markup` strips it; the card (#318) and the summary (#464) carry the next step.
     Falsifiable: an old status message without buttons while its session runs.
-56. **Sessions started before #567 and never pressed** get no card after #536 (no button records
-    their message); none is left at the deploy (#567 runs on the pilot since 2026-10-16, a session
-    lasts at most an hour and its settlement). Falsifiable: a missing card of a session with an
-    empty `status_message_id` started after the deploy of #567.
+56. **A session whose message id is not recorded gets no card after a bot restart** (#536): one
+    started before #567 and never pressed, one started from the CLI, a bot restart in the 3 s
+    before the first poll, a session message reported lost. No button records it any more, and
+    neither «⏹» under the waiting message nor `/stop` starts tracking: no #318 card and no end line
+    on its message; the summary (#464, the result and the balance) and the reply to «⏹» come all
+    the same. None from before #567 is left at the deploy (#567 runs on the pilot since 2026-10-16,
+    a session lasts at most an hour and its settlement). Falsifiable: a missing card of a session
+    with a recorded `status_message_id`.
 57. **Three Telegram calls per new cycle** (#536) instead of one — the delete, the cycle message,
     the waiting message — in the same 9 a second: the messages lag behind the trades, never drop
     (risk 27).
