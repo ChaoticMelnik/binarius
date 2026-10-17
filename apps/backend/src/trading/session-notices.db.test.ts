@@ -27,6 +27,7 @@ import {
   markIntentAccepted,
   markTelegramReachable,
   recordSessionCycleMessage,
+  recordSessionStatusMessage,
   settleIntent,
   stopTradingSession,
   takeIntent,
@@ -1138,11 +1139,13 @@ describe('the waiting message (#536)', () => {
     text: CLIENT_LABELS.sessionStopButton,
     callback_data: `session:stop:${target.session.id}:w`,
   });
-  // the bot recorded its status message (#567)
+  // the bot recorded its status message (#567); id 1, below every id the harness answers a send
+  // with, as the session's first message in its chat
+  const STATUS_ID = 1;
   const statusMessage = (target: Target) =>
     tmp.db
       .update(tradingSessions)
-      .set({ statusMessageId: 7 })
+      .set({ statusMessageId: STATUS_ID })
       .where(eq(tradingSessions.id, target.session.id));
   const waitingOf = async (target: Target) => {
     const row = await rowOf(target);
@@ -1209,7 +1212,11 @@ describe('the waiting message (#536)', () => {
       disable_notification: true,
     });
     expect(inlineButtons(sent[0]!.payload)).toEqual([STOP(target)]);
-    expect(await waitingOf(target)).toEqual({ messageId: answered.get(sent[0]!.payload), slot: 0 });
+    // the slot is the session's latest message, here its status message (#587)
+    expect(await waitingOf(target)).toEqual({
+      messageId: answered.get(sent[0]!.payload),
+      slot: STATUS_ID,
+    });
     await notices.tick();
     expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
   });
@@ -1415,7 +1422,7 @@ describe('the waiting message (#536)', () => {
       failNext(captured, { sendMessage: [failure()] });
       await notices.tick();
       await notices.tick();
-      expect(await waitingOf(target)).toEqual({ messageId: null, slot: 0 });
+      expect(await waitingOf(target)).toEqual({ messageId: null, slot: STATUS_ID });
       expect(messagesOf(logs(), WARN)).toEqual(['session waiting message outcome unknown']);
       expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
       await settled(target, '4.6');
@@ -1439,7 +1446,7 @@ describe('the waiting message (#536)', () => {
       'session waiting message refused',
       'session waiting message dropped',
     ]);
-    expect(await waitingOf(target)).toEqual({ messageId: null, slot: 0 });
+    expect(await waitingOf(target)).toEqual({ messageId: null, slot: STATUS_ID });
   });
 
   it('W9 a 429 on the send: the slot is freed, and it goes once after the pause', async () => {
@@ -1492,7 +1499,7 @@ describe('the waiting message (#536)', () => {
     const [sent] = waitingTo(captured.calls, target);
     expect(deletesTo(captured.calls, target)).toEqual([answered.get(sent!.payload)]);
     expect(messagesOf(logs(), INFO)).toContain('session waiting message removed: not recorded');
-    expect(await waitingOf(target)).toEqual({ messageId: null, slot: 0 });
+    expect(await waitingOf(target)).toEqual({ messageId: null, slot: STATUS_ID });
     await notices.tick();
     expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
     expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
@@ -1718,8 +1725,9 @@ describe('the waiting message (#536)', () => {
     ]);
   });
 
-  it('W17 a 403 on the delete before a new cycle message: the user is marked, the trade counts as sent without a call', async () => {
-    const { target, run } = await waiting();
+  // #587: the waiting message is still in the chat, so its id is kept while the session runs
+  it('W17 a 403 on the delete before a new cycle message: the user is marked, the trade counts as sent without a call, the id kept', async () => {
+    const { target, run, id } = await waiting();
     await settled(target, '4.6');
     failNext(run.captured, { deleteMessage: [telegramError(403)] });
     await run.notices.tick();
@@ -1727,9 +1735,164 @@ describe('the waiting message (#536)', () => {
     expect(await blockedAt(target)).toBeInstanceOf(Date);
     expect(await rowOf(target)).toMatchObject({
       notifiedTrades: 1,
+      waitingMessageId: id,
+      waitingAfterMessage: STATUS_ID,
+    });
+  });
+
+  // #587 finding 1: the waiting message a blocked user still has is deleted first once the user is
+  // reachable again, never a second «⏹» beside it
+  it('W22 a 403 on the delete keeps the id while the session runs; after the unblock the next trade deletes it first: one «⏹»', async () => {
+    const { target, run, id } = await waiting();
+    await settled(target, '4.6');
+    failNext(run.captured, { deleteMessage: [telegramError(403)] });
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
+    expect(await waitingOf(target)).toEqual({ messageId: id, slot: STATUS_ID });
+    expect(await blockedAt(target)).toBeInstanceOf(Date);
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+    expect(messagesOf(run.logs(), WARN)).toEqual([
+      'session waiting message refused: the user is unreachable',
+    ]);
+    await markTelegramReachable(tmp.db, BigInt(target.seed.telegramUserId));
+    await run.notices.tick();
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
+    await settled(target, '4.6');
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'deleteMessage',
+      'trade',
+      'waiting',
+    ]);
+    expect(deletesTo(run.captured.calls, target)).toEqual([id, id]);
+    const [trade] = sendsTo(run.captured.calls, target);
+    const next = waitingTo(run.captured.calls, target)[1]!;
+    expect(await waitingOf(target)).toEqual({
+      messageId: answered.get(next.payload),
+      slot: answered.get(trade!.payload),
+    });
+  });
+
+  it('W14b the flag read with the list: a trade of the running session is claimed without a call and the id kept; after the stop it is dropped without a call', async () => {
+    const { target, run, id } = await waiting();
+    await blocked(target);
+    await settled(target, '4.6');
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting']);
+    expect(await rowOf(target)).toMatchObject({ notifiedTrades: 1, waitingMessageId: id });
+    await stop(target, TradingSessionStopReason.UserStopped);
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting']);
+    expect(await rowOf(target)).toMatchObject({
       waitingMessageId: null,
       waitingAfterMessage: null,
+      finalNoticeSentAt: expect.any(Date),
     });
+  });
+
+  // #587 finding 5: a relaunch's status message, recorded by the bot's first poll, is newer than
+  // the waiting message's slot, so the waiting message moves under it
+  it('W25 a newer status message recorded (a relaunch): the waiting message deleted and sent again under it', async () => {
+    const { target, run, id } = await waiting();
+    messageIds += 1;
+    const relaunch = messageIds;
+    expect(
+      await recordSessionStatusMessage(tmp.db, {
+        id: target.session.id,
+        telegramUserId: target.seed.telegramUserId,
+        messageId: relaunch,
+      }),
+    ).toBe(true);
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'waiting']);
+    expect(deletesTo(run.captured.calls, target)).toEqual([id]);
+    const next = waitingTo(run.captured.calls, target)[1]!;
+    expect(await waitingOf(target)).toEqual({
+      messageId: answered.get(next.payload),
+      slot: relaunch,
+    });
+    await run.notices.tick();
+    expect(waitingTo(run.captured.calls, target)).toHaveLength(2);
+  });
+
+  // #587 finding 6: the bot's «⏹» hands the waiting message over; the bot draws its reply there
+  it('W26 a stop that took the waiting message over: no delete; the summary next, or the mark alone', async () => {
+    const quiet = await waiting();
+    await stopTradingSession(tmp.db, {
+      id: quiet.target.session.id,
+      reason: TradingSessionStopReason.UserStopped,
+      waitingMessageId: quiet.id,
+    });
+    await quiet.run.notices.tick();
+    await quiet.run.notices.tick();
+    expect(sequenceOf(quiet.run.captured.calls, quiet.target)).toEqual(['waiting']);
+    expect((await rowOf(quiet.target)).finalNoticeSentAt).toBeInstanceOf(Date);
+
+    const traded = await waiting();
+    await settled(traded.target, '4.6');
+    await traded.run.notices.tick();
+    const tradeWaiting = waitingTo(traded.run.captured.calls, traded.target)[1]!;
+    await stopTradingSession(tmp.db, {
+      id: traded.target.session.id,
+      reason: TradingSessionStopReason.UserStopped,
+      waitingMessageId: answered.get(tradeWaiting.payload)!,
+    });
+    await traded.run.notices.tick();
+    expect(sequenceOf(traded.run.captured.calls, traded.target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+      'summary',
+    ]);
+  });
+
+  // #587 finding 3 (#584 m3): both lines are read from the log
+  it('W23 a waiting send answered without a usable message_id: logged, the slot claimed with no id, nothing more until a new message of the session', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    const { notices, captured, logs } = sender();
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', (payload) =>
+      inlineButtons(payload).length > 0 && waitingTo(captured.calls, target).length === 1
+        ? { message_id: 0 }
+        : answer(payload),
+    );
+    await notices.tick();
+    await notices.tick();
+    expect(messagesOf(logs(), WARN)).toEqual([
+      'session waiting message not recorded: no message id',
+    ]);
+    expect(await waitingOf(target)).toEqual({ messageId: null, slot: STATUS_ID });
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
+    await settled(target, '4.6');
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'trade', 'waiting']);
+  });
+
+  it('W24 a refused record whose clean-up delete fails: logged, the message stays, the summary still goes', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    const { notices, captured, logs } = sender();
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', async (payload) => {
+      if (inlineButtons(payload).length > 0) {
+        await stop(target, TradingSessionStopReason.UserStopped);
+      }
+      return answer(payload);
+    });
+    failNext(captured, { deleteMessage: [telegramError(502)] });
+    await notices.tick();
+    const [sent] = waitingTo(captured.calls, target);
+    expect(deletesTo(captured.calls, target)).toEqual([answered.get(sent!.payload)]);
+    expect(messagesOf(logs(), WARN)).toEqual(['session waiting message not removed']);
+    expect(await waitingOf(target)).toEqual({ messageId: null, slot: STATUS_ID });
+    await notices.tick();
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
   });
 
   // No backfill (owner 2026-10-17): at the deploy the columns are NULL, so every running session

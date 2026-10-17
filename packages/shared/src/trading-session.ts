@@ -330,10 +330,23 @@ export const createTradingSessionRequestSchema = z.strictObject({
 export type CreateTradingSessionRequest = z.infer<typeof createTradingSessionRequestSchema>;
 
 export const readTradingSessionQuerySchema = z.object({ telegramUserId: telegramUserIdSchema });
-// the body of both stop routes: one session by id, and all of the user's (#122)
+// the body of POST /trading/sessions/stop (all of the user's, #122) and of the summary claim
 export const stopTradingSessionRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
 });
+
+// A Telegram message id as trading_sessions stores it (integer, CHECK > 0): an id past the bound
+// is a 400, not a 500.
+const telegramMessageIdSchema = z.int().min(1).max(INT4_MAX);
+
+// POST /trading/sessions/:id/stop: waitingMessageId is the waiting message whose «⏹» was pressed
+// (#587). The stop hands it to the bot: the route clears it in the stop's own UPDATE when it is
+// the one recorded, and the bot draws its reply in place of that message.
+export const stopOneTradingSessionRequestSchema = z.strictObject({
+  telegramUserId: telegramUserIdSchema,
+  waitingMessageId: telegramMessageIdSchema.optional(),
+});
+export type StopOneTradingSessionRequest = z.infer<typeof stopOneTradingSessionRequestSchema>;
 
 const countSchema = z.int().min(0);
 
@@ -417,6 +430,8 @@ export const safeParseReadTradingSessionQuery = (input: unknown) =>
   readTradingSessionQuerySchema.safeParse(input);
 export const safeParseStopTradingSessionRequest = (input: unknown) =>
   stopTradingSessionRequestSchema.safeParse(input);
+export const safeParseStopOneTradingSessionRequest = (input: unknown) =>
+  stopOneTradingSessionRequestSchema.safeParse(input);
 export const safeParseTradingSessionResponse = (input: unknown) =>
   tradingSessionResponseSchema.safeParse(input);
 export const safeParseTradingSessionsStoppedResponse = (input: unknown) =>
@@ -463,19 +478,14 @@ export const safeParseSessionSummaryRefusal = (input: unknown) =>
   sessionSummaryRefusalSchema.safeParse(input);
 
 // POST /trading/sessions/:id/status-message (#567, docs/bot-session.md → Recovery after a
-// restart): the bot's first poll of a status message records its id, the first one recorded
-// wins; the answer is the view GET /trading/sessions/:id gives. The id is the bound of
-// trading_sessions.status_message_id (integer, CHECK > 0), so an id past it is a 400, not a 500.
+// restart): the bot's first poll of a status message records its id, the newest id wins (#587:
+// message ids grow within a chat, so a relaunch's message replaces the first one); the answer is
+// the view GET /trading/sessions/:id gives.
 export const SESSION_STATUS_MESSAGE_SUFFIX = '/status-message';
-
-const telegramMessageIdSchema = z.int().min(1).max(INT4_MAX);
 
 export const recordSessionStatusMessageRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
   messageId: telegramMessageIdSchema,
-  // the message this one was sent in place of, because Telegram refused the pressed one's edit as
-  // gone: the record replaces it when it is the one recorded
-  replacesMessageId: telegramMessageIdSchema.optional(),
 });
 export type RecordSessionStatusMessageRequest = z.infer<
   typeof recordSessionStatusMessageRequestSchema

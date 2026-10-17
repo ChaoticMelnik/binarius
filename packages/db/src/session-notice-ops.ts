@@ -50,24 +50,27 @@ const finishedSql = sql<boolean>`(${tradingSessions.status} = ${literal(TradingS
      and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
 ))`;
 
-// The waiting message (#536, docs/bot-session.md → The waiting message). Its slot is the cycle
-// message it stands under, 0 before any: an edit of a step keeps it, a new cycle message leaves it
-// behind, the waiting message's delete frees it. The fragments below alone decide what the sender
-// does with it.
-const cycleSlotSql = sql<number>`coalesce(${tradingSessions.cycleMessageId}, 0)`;
+// The waiting message (#536, docs/bot-session.md → The waiting message). Its slot is the latest
+// message of the session it stands under (#587): the cycle message or the bot's recorded status
+// message, whichever is newer (Telegram's message ids grow within a chat), 0 before either. An
+// edit of a step keeps it; a new cycle message or a relaunch's status message leaves it behind;
+// the waiting message's delete, or its hand-over to the bot at a stop by its «⏹», frees it. The
+// fragments below alone decide what the sender does with it.
+const sessionSlotSql = sql<number>`greatest(coalesce(${tradingSessions.cycleMessageId}, 0), coalesce(${tradingSessions.statusMessageId}, 0))`;
 
 // The fragment both the list and the claim take: an active session with no live waiting message,
 // whose slot was not claimed yet, under a message of the session - the bot's recorded status
 // message (#567) or a claimed trade, whose message goes only after the session's, recorded or not
 // - so the waiting message never stands above the session's message.
-const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${cycleSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0))`;
+const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0))`;
 
 // due: a waiting message is to be sent; nothing goes to a user who blocked the bot (Rule 19)
 const waitingDueSql = sql<boolean>`(${waitingClaimableSql} and ${users.telegramBlockedAt} is null)`;
 
-// stale: the live waiting message is to be deleted - the session stopped, or a new cycle message
-// went out under it
-const waitingStaleSql = sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or ${tradingSessions.waitingAfterMessage} <> ${cycleSlotSql}))`;
+// stale: the live waiting message is to be deleted - the session stopped, or a newer message of
+// the session went out under it and the user can be reached: a blocked user's active session keeps
+// its waiting message's id until the user is reachable again (#587), so it is not listed each tick
+const waitingStaleSql = sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or (${tradingSessions.waitingAfterMessage} <> ${sessionSlotSql} and ${users.telegramBlockedAt} is null)))`;
 
 export interface PendingSessionNotice {
   sessionId: string;
@@ -311,7 +314,7 @@ export async function releaseSessionFinalNotice(
 }
 
 // Claims the waiting message's slot before the send (#536): one CAS on a claimable session sets
-// the slot to its current cycle message, so at most one waiting message of unknown fate exists:
+// the slot to its latest message, so at most one waiting message of unknown fate exists:
 // none goes out while one is live or its slot claimed on the current cycle message. The slot, or
 // undefined when the CAS lost (another sender, or nothing to claim).
 export async function claimSessionWaiting(
@@ -320,7 +323,7 @@ export async function claimSessionWaiting(
 ): Promise<{ slot: number } | undefined> {
   const [won] = await db
     .update(tradingSessions)
-    .set({ waitingAfterMessage: cycleSlotSql })
+    .set({ waitingAfterMessage: sessionSlotSql })
     .where(
       and(
         eq(tradingSessions.id, sessionId),
@@ -378,7 +381,8 @@ export async function releaseSessionWaiting(
 
 // Drops the waiting message's id after its delete (or once it cannot be deleted) and frees its
 // slot: one CAS on that id. An active session is due again, whatever becomes of the cycle message
-// sent next. False when the id is not that one.
+// sent next. False when the id is not that one. The sender calls it, and the stop route on a 409
+// for the message its body handed over (#587), after the owner-scoped read.
 export async function clearSessionWaitingMessage(
   db: Db,
   { sessionId, messageId }: { sessionId: string; messageId: number },

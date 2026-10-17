@@ -26,6 +26,7 @@ import {
   TradingSessionStopReason,
   safeParseCreateTradingSessionRequest,
   safeParseReadTradingSessionQuery,
+  safeParseStopOneTradingSessionRequest,
   safeParseStopTradingSessionRequest,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
@@ -581,6 +582,35 @@ describe('tradingSessionsStoppedResponseSchema (#122)', () => {
   });
 });
 
+describe('the stop body (#587)', () => {
+  const owner = '123456789';
+  it('the one-session stop accepts waitingMessageId from 1 to INT4_MAX, and none', () => {
+    expect(safeParseStopOneTradingSessionRequest({ telegramUserId: owner }).data).toEqual({
+      telegramUserId: owner,
+    });
+    for (const waitingMessageId of [1, INT4_MAX]) {
+      expect(
+        safeParseStopOneTradingSessionRequest({ telegramUserId: owner, waitingMessageId }).data,
+      ).toEqual({ telegramUserId: owner, waitingMessageId });
+    }
+  });
+  it.each([0, INT4_MAX + 1, 1.5, '7'])('the one-session stop refuses waitingMessageId %s', (id) => {
+    expect(
+      safeParseStopOneTradingSessionRequest({ telegramUserId: owner, waitingMessageId: id })
+        .success,
+    ).toBe(false);
+  });
+  it('the one-session stop refuses an extra key; the stop-all and summary body refuses waitingMessageId', () => {
+    expect(
+      safeParseStopOneTradingSessionRequest({ telegramUserId: owner, waitingMessageId: 1, x: 1 })
+        .success,
+    ).toBe(false);
+    expect(
+      safeParseStopTradingSessionRequest({ telegramUserId: owner, waitingMessageId: 1 }).success,
+    ).toBe(false);
+  });
+});
+
 describe('the recovery contract (#567)', () => {
   const owner = '123456789';
   it.each([0, INT4_MAX + 1, 1.5])('refuses a status messageId of %s', (messageId) => {
@@ -599,27 +629,15 @@ describe('the recovery contract (#567)', () => {
         .success,
     ).toBe(false);
   });
-  it('accepts replacesMessageId from 1 to INT4_MAX and refuses one past the bound', () => {
-    for (const replacesMessageId of [1, INT4_MAX]) {
-      expect(
-        safeParseRecordSessionStatusMessageRequest({
-          telegramUserId: owner,
-          messageId: 2,
-          replacesMessageId,
-        }).success,
-      ).toBe(true);
-    }
-    for (const replacesMessageId of [0, INT4_MAX + 1]) {
-      expect(
-        safeParseRecordSessionStatusMessageRequest({
-          telegramUserId: owner,
-          messageId: 2,
-          replacesMessageId,
-        }).success,
-      ).toBe(false);
-    }
-  });
-  it('the lost body names the message and refuses replacesMessageId', () => {
+  // #587: the newest id wins, so a record no longer names a message it replaces
+  it('the record and the lost bodies refuse replacesMessageId', () => {
+    expect(
+      safeParseRecordSessionStatusMessageRequest({
+        telegramUserId: owner,
+        messageId: 2,
+        replacesMessageId: 1,
+      }).success,
+    ).toBe(false);
     expect(
       safeParseForgetSessionStatusMessageRequest({ telegramUserId: owner, messageId: 1 }).success,
     ).toBe(true);
