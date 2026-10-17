@@ -8,8 +8,8 @@ export const ACCOUNT_CARD_PHOTO_PATH = fileURLToPath(
 );
 
 // The analysis card's pictures (#482), by the signal's direction: a file replaced in place changes
-// the card without a code change. Sent as a file once per process and direction, then by the
-// file_id Telegram answered with (demo.ts); assets.test.ts gates both files.
+// the card without a code change. Sent as a file per process and direction until an answer brings
+// its file_id, then by that file_id (demo.ts); assets.test.ts gates both files.
 export const SETUP_CARD_PHOTO_PATHS = {
   up: fileURLToPath(new URL('./assets/setup-bull.png', import.meta.url)),
   down: fileURLToPath(new URL('./assets/setup-bear.png', import.meta.url)),

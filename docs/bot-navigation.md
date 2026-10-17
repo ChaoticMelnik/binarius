@@ -165,9 +165,9 @@ a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» ope
 duration (`demo:sig:<sec>`, #382), or the main path's duration screen (`demo:sig`) on a duration the
 demo no longer offers. «🔀 Выбрать другую пару» (#509) carries the same data: a session stopped or
 refused for want of a signal is not offered its own pair again; the backend's summary of such a
-stop draws it from `signalsCallbackDataFor` (`bot-navigation.ts`). The trackers' edits take the view and, for a last
+stop draws it from `signalsCallbackDataFor` (`bot-navigation.ts`). The trackers' edits take what they draw and, for a last
 edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
-(`not_found`, `deadline`), `SessionTrackRequest.edit(text, view, end?)` with `not_found` only. So
+(`not_found`, `deadline`), `SessionTrackRequest.edit(drawing, end?)` with `not_found` only. So
 the last edit draws its next step too: the end of the path on a trade's stop status, the menu alone
 on a 404, the refresh and the menu at the deadline of a live trade; the session message's edits
 draw none (#536, `session_status`).
