@@ -220,7 +220,6 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     scoreOf,
     resultOf,
     sessionAssetLabel,
-    sessionClosingLines,
     sessionEndLine,
     sessionSummaryText,
     sessionCycleText,
