@@ -3465,3 +3465,35 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 1. Remaining findings — **вынесено в #612**
+
+---
+
+## #590 — Источник свечей из сокета: дозаполнение по REST (2026-10-17)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Clean `main` a53c499, Codex ready, no usage limit, Fable reset reported 2026-10-16 (last refusal 2026-10-10), previous audit closed. #590 and #405 planned in parallel (read-only architects); #405's Q6 (one pacer) relayed to #590's architect before its plan. Codegraph index lacked `apps/backend/src/market-data/`; `codegraph sync` did not add it, a full `codegraph index` did. |
+| Architect | first plan | Fable (`claude-fable-5-1`). 4 clarify questions, all recommended. Plan 6238462870, ≈1 400 lines, «Интерфейс для #405» (single `SpareTokenSource`). |
+| Implementer | round 1 | Opus. 3 clarify questions; Q1 named a self-contradiction of the plan and was relayed to the owner instead of a Plan Update (Minor, tech-lead). PR #614, 7 commits, `pnpm check` 0, mutations 23/23 (6239164493). Commits 44422107 and 644ea75a carried a flaky M26, fixed by 4d648b24. Phase 3 audit 6239194684. |
+| Reviewer | round 1 | 1 Major (a forming bucket filled as closed), 3 Minor → Todo. Agents: 3c, 3b (broker GETs), 3d. Owner: fix all three Minors. |
+| Architect | Plan Update 1 | Opus. 6239658055: `closedAt = min(floorTo(at), closedUntil(at))` before the GET; served request cleared at launch; `candleStore` before the feed for #405; 31 mutation rows. |
+| Implementer | fix round 1 | Fresh Opus spawn, 2 clarify questions (recommended). 3fe374ad + 815b77b6 (rebased ids), `pnpm check` 0, mutations 31/31 (6239953443). |
+| Reviewer | round 2 | No Blocker/Major, 7 Minor; Codex 6-pre `task-mvctqmck-4a64qj` (gpt-5.6-sol, high), re-hash by tech-lead matched base/head/diff-sha256. CI green. |
+| Tech Lead | merge | Owner: no Minors before the merge, merge yes. `--rebase --delete-branch`, MERGED 2026-10-17T20:14:17Z. Minors → #629. Done. Models: every spawn on its policy model. |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 Major: the backfill built its GET on `at` and judged the rows closed by `ring.fill(…, now())`; the bucket forming at `at` could be filled as a closed candle | Major | unverified-claim | plan decision 6 prescribed `fill(…, now())` and claimed a GET cannot cross a boundary; its test double dropped the forming row | Architect (plan) |
+| Plan self-contradiction (`request()` for a pair with invalid `digits`) relayed to the owner as a choice | Minor | other | the relay rule covered only questions the agent marks as defects | Tech Lead clarify relay |
+| Flaky M26 in two commits, fixed later without rewriting history | Minor | other | a real-clock wait raced a bucket closing during the drain | Implementer Step 5 |
+| R1 Minors 2–4 | Minor | other | fixed in fix round 1 | — |
+| R2 Minors 1–7 | Minor | other | left at the merge | → #629 |
+
+### Process improvement proposals
+1. Clarify relay: a question whose text says the plan contradicts itself goes to the architect even when it offers options — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents → Clarify relay**
+2. Architect checklist: a decision taken after an `await` names the reading it uses; a state that moves during the `await` is not re-read to judge the request's result — **внедрено в #PRNUM: `.claude/skills/architect/SKILL.md` → Validation checklist**
+3. Remaining findings — **вынесено в #629**
