@@ -10,6 +10,7 @@ export const NotificationKind = {
   FirstSession24h: 'first_session_24h',
   FirstSession72h: 'first_session_72h',
   AnalysisUnused: 'analysis_unused',
+  ReferralRewarded: 'referral_rewarded',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -34,7 +35,21 @@ export const analysisUnusedPayloadSchema = z.object({
 });
 export type AnalysisUnusedPayload = z.infer<typeof analysisUnusedPayloadSchema>;
 
-// the earliest a scenario plans anything after its fact; the planner's tick must be shorter
+// The inviter's reward notification (#576, docs/mailing.md → The referral reward notification):
+// due at the reward's own moment, so its delay is the planner's and the sender's next ticks, not a
+// wait of its own.
+export const REFERRAL_REWARDED_AFTER_MS = 0;
+
+// The job's payload: the reward's tokens, the ledger row's balance_delta as text (a bigint, rule 2);
+// a referral reward is a bonus row, so always positive.
+export const referralRewardedPayloadSchema = z.object({
+  tokens: z.string().regex(/^[1-9]\d*$/),
+});
+export type ReferralRewardedPayload = z.infer<typeof referralRewardedPayloadSchema>;
+
+// The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
+// immediate kind (referral_rewarded, 0) is not in it: the link about the planner's tick concerns
+// only a kind that waits.
 export const MAILING_MIN_OFFSET_MS = Math.min(
   ...FIRST_SESSION_CHAIN.map((step) => step.afterHours * 3_600_000),
   ANALYSIS_UNUSED_AFTER_MS,

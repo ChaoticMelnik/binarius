@@ -14,6 +14,7 @@ import {
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
+  REFERRAL_REWARDED_AFTER_MS,
   MAILING_MIN_OFFSET_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
@@ -399,6 +400,11 @@ describe('broker balance timing', () => {
     expect(ANALYSIS_UNUSED_AFTER_MS + MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBeLessThan(
       ANALYSIS_UNUSED_UNTIL_MS,
     );
+    // #576: the reward notification is due at the reward and not counted in the earliest offset,
+    // so its delay is the two ticks (≤ 65 s)
+    expect(REFERRAL_REWARDED_AFTER_MS).toBe(0);
+    expect(MAILING_MIN_OFFSET_MS).toBeGreaterThan(0);
+    expect(MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBe(65_000);
     // #464: the session notices share the bot's rate with the mailings; stop() waits for the gap,
     // a summary's balance refresh and its send
     expect(MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND).toBeLessThan(

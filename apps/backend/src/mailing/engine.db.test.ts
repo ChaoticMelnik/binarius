@@ -14,6 +14,7 @@ import {
   NotificationJobStatus,
   notificationJobs,
   notificationKinds,
+  referrals,
   tokenLedger,
   users,
 } from '@binarius/db';
@@ -216,6 +217,87 @@ describe('the analysis reminder through the engine', () => {
       { level: ERROR, jobId: row!.id, kind: NotificationKind.AnalysisUnused },
     ]);
     const [job] = await jobsOf(user.userId);
+    expect(job).toMatchObject({ status: NotificationJobStatus.Pending, attempts: 1 });
+    await mailing.stop();
+  });
+});
+
+// #576
+describe('the referral reward notification through the engine', () => {
+  // an inviter whose invitee's activation granted `tokens` a minute ago, as grantReferralReward
+  // writes it but with any amount
+  async function rewarded(tokens: bigint) {
+    const inviter = await seedUser(tmp.db);
+    const invitee = await seedUser(tmp.db);
+    const [referral] = await tmp.db
+      .insert(referrals)
+      .values({ inviteeUserId: invitee.userId, inviterUserId: inviter.userId })
+      .returning({ id: referrals.id });
+    const [reward] = await tmp.db
+      .insert(tokenLedger)
+      .values({
+        userId: inviter.userId,
+        kind: TokenLedgerKind.Bonus,
+        balanceDelta: tokens,
+        referralId: referral!.id,
+        ...(await bonusRuleRef(tmp.db, 'referral_reward')),
+        createdAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: tokenLedger.id });
+    return { inviter, invitee, rewardId: reward!.id };
+  }
+
+  it('E-R1 sends one notification with the ledger row’s amount and the /invite button', async () => {
+    // not the rule's 50: the amount must come from the row
+    const { inviter, invitee } = await rewarded(75n);
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const sends = sendsTo(captured.calls, inviter.telegramUserId);
+    expect(sends).toHaveLength(1);
+    const payload = sends[0]!.payload;
+    expect(pushedText(payload)).toBe(CLIENT_TEXTS.referralRewarded({ rewardTokens: '75' }).value);
+    expect(pushedText(payload)).toContain('+75');
+    expect(pushedText(payload)).toContain(`«${CLIENT_LABELS.inviteMoreButton}»`);
+    expect(payload.parse_mode).toBe('HTML');
+    expect(payload).not.toHaveProperty('disable_notification');
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
+    ]);
+    const [job] = await jobsOf(inviter.userId);
+    expect(job).toMatchObject({
+      kind: NotificationKind.ReferralRewarded,
+      status: NotificationJobStatus.Sent,
+      lastError: null,
+    });
+    expect(sendsTo(captured.calls, invitee.telegramUserId)).toEqual([]);
+    await mailing.stop();
+  });
+
+  it('E-R2 a payload that does not build is logged as not built and retried, nothing is sent', async () => {
+    const { inviter, rewardId } = await rewarded(50n);
+    // the planner would write this key itself; the job is written first, with no payload
+    const [row] = await tmp.db
+      .insert(notificationJobs)
+      .values({
+        userId: inviter.userId,
+        kind: NotificationKind.ReferralRewarded,
+        dedupeKey: `referral_rewarded:${rewardId}`,
+        payload: {},
+        scheduledAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: notificationJobs.id });
+    const { mailing, captured, logs } = engine();
+    await mailing.sendTick();
+
+    expect(sendsTo(captured.calls, inviter.telegramUserId)).toEqual([]);
+    expect(logs().filter((line) => line.msg === 'mailing not built')).toMatchObject([
+      { level: ERROR, jobId: row!.id, kind: NotificationKind.ReferralRewarded },
+    ]);
+    const [job] = await jobsOf(inviter.userId);
     expect(job).toMatchObject({ status: NotificationJobStatus.Pending, attempts: 1 });
     await mailing.stop();
   });

@@ -1896,6 +1896,22 @@ export const BOT_TEXT_CATALOG = {
 👇 Нажми «{newAnalysisButton}».`,
     { fragments: { newAnalysisButton: 'newAnalysisButton' } },
   ),
+  // with the «inviteMoreButton» button, the /invite screen (#576)
+  referralRewarded: html(
+    g.Mailing,
+    'Уведомление пригласившему о награде за приглашённого, который подключил партнёрский аккаунт Binodex (#116): сумма — из строки начисления.',
+    `🎁 <b>Друг подключил Binodex</b>
+
+🪙 Начислено токенов за приглашение: +{rewardTokens}
+👇 Нажми «{inviteMoreButton}», чтобы пригласить ещё.`,
+    { vars: ['rewardTokens'], fragments: { inviteMoreButton: 'inviteMoreButton' } },
+  ),
+  // a label of the backend's message only, so in this group and not in «Кнопки» (#576)
+  inviteMoreButton: plain(
+    g.Mailing,
+    'Уведомление о награде за приглашение: кнопка экрана приглашения (/invite).',
+    '👥 Пригласить ещё',
+  ),
 
   // ---- Кнопки -------------------------------------------------------------------------------
   confirmButton: plain(

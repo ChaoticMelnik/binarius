@@ -267,6 +267,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   connected: () => w.count,
   // the sum of the user's rewards, a bigint (formatCount)
   earnedTokens: () => w.count,
+  rewardTokens: () => w.count,
 };
 
 const tradeNoticeWidths: Partial<Record<BotTextVarName, BotTextWidth>> = {

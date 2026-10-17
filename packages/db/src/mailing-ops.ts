@@ -30,14 +30,14 @@ export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, 
   const planned = {} as Record<NotificationKind, number>;
   for (const kind of KINDS) {
     const scenario: MailingScenario = MAILING_SCENARIOS[kind];
-    const { factAt, afterMs, dedupeKey, stillApplies } = scenario;
+    const { facts, afterMs, dedupeKey, stillApplies } = scenario;
     const payload = scenario.payload ?? sql`'{}'::jsonb`;
     const after = sql`make_interval(secs => ${afterMs / 1000})`;
     const result = await db.execute(sql`
       insert into ${notificationJobs} (user_id, kind, dedupe_key, payload, scheduled_at)
       select ${users.id}, ${literal(kind)}, ${dedupeKey}, ${payload}, fact.at + ${after}
       from ${users}
-      cross join lateral (select ${factAt} as at) fact
+      cross join lateral ${facts} fact
       join ${notificationKinds} on ${notificationKinds.kind} = ${literal(kind)}
       where fact.at >= ${notificationKinds.plansFrom}
         and fact.at + ${after} <= now()
@@ -57,14 +57,15 @@ export interface ClaimedMailingJob {
   telegramUserId: bigint;
 }
 
-// A job applies while its scenario holds and its key is the one the scenario would plan now: a
-// newer fact (another analysis) leaves the old key's job stale. coalesce: with the fact gone (NULL)
-// the predicate is NULL, and a job neither cancelled nor claimed would stay at the head of `due`.
+// A job applies while its scenario holds and its key is one the scenario would plan now
+// (keyApplies): a newer fact (another analysis) leaves the old key's job stale. coalesce: with the
+// fact gone (NULL) the predicate is NULL, and a job neither cancelled nor claimed would stay at
+// the head of `due`.
 const appliesByKind = sql`case ${notificationJobs.kind} ${sql.join(
   KINDS.map(
     (kind) =>
       sql`when ${literal(kind)} then coalesce(${MAILING_SCENARIOS[kind].stillApplies}
-        and ${notificationJobs.dedupeKey} = ${MAILING_SCENARIOS[kind].dedupeKey}, false)`,
+        and ${MAILING_SCENARIOS[kind].keyApplies}, false)`,
   ),
   sql` `,
 )} else false end`;
