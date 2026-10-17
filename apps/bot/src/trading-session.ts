@@ -616,7 +616,9 @@ export function createTradingSessionComposer<C extends Context>({
   // message stays, its «⏹» pressed again is safe (409 → the session read). Under the waiting
   // message (`inPlace`, #587) it is drawn in place of the pressed message, never as a message under
   // it: a stop whose outcome is unknown (`inPlace.sessionId`) keeps the one «⏹» for another press,
-  // a missing session or a failed read after a 409 the menu.
+  // a missing session or a failed read after a 409 the menu. Refused as gone: the same text as a
+  // new message under «🏠 В меню» - the bot draws «⏹» only in place of the pressed message, never
+  // as a second «⏹» beside the sender's next one (#587 round 1).
   async function stopFailure(
     ctx: Context,
     error: unknown,
@@ -634,7 +636,13 @@ export function createTradingSessionComposer<C extends Context>({
       notFound || inPlace.sessionId === undefined
         ? menuKeyboard()
         : waitingStopKeyboard(inPlace.sessionId);
-    await drawStopReply(ctx, text, keyboard, 'the pressed message was already gone');
+    await drawStopReply(
+      ctx,
+      text,
+      keyboard,
+      'the pressed message was already gone',
+      menuKeyboard(),
+    );
   }
 
   // The reply under the waiting message (#587), in place of the pressed message. Logged and left
@@ -644,8 +652,9 @@ export function createTradingSessionComposer<C extends Context>({
     text: TelegramHtml,
     reply_markup: InlineKeyboard,
     goneNote: string,
+    goneMarkup = reply_markup,
   ): Promise<void> {
-    const drawn = await drawInPlace(ctx, text, reply_markup, goneNote);
+    const drawn = await drawInPlace(ctx, text, reply_markup, goneNote, goneMarkup);
     if (drawn.in === 'refused') {
       logger.warn(
         { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, 'editMessageText') },
@@ -654,14 +663,15 @@ export function createTradingSessionComposer<C extends Context>({
     }
   }
 
-  // The pressed message edited in place; refused as gone (deleted, or past 48 h), the same text
-  // and keyboard as a new message; «not modified» counts as drawn; any other Telegram refusal or a
+  // The pressed message edited in place; refused as gone (deleted, or past 48 h), the same text as
+  // a new message, under `goneMarkup` (the same keyboard by default); «not modified» counts as drawn; any other Telegram refusal or a
   // transport failure is handed back to log; anything else is a bug, rethrown to bot.catch.
   async function drawInPlace(
     ctx: Context,
     text: TelegramHtml,
     reply_markup: InlineKeyboard,
     goneNote?: string,
+    goneMarkup = reply_markup,
   ): Promise<
     | { in: 'place' }
     | { in: 'new'; sent: { chat: { id: number }; message_id: number } }
@@ -677,7 +687,7 @@ export function createTradingSessionComposer<C extends Context>({
         if (goneNote !== undefined) {
           logger.info({ ...telegramErrorFields(error, 'editMessageText') }, goneNote);
         }
-        return { in: 'new', sent: await replyHtml(ctx, text, { reply_markup }) };
+        return { in: 'new', sent: await replyHtml(ctx, text, { reply_markup: goneMarkup }) };
       }
       if (!(error instanceof HttpError)) throw error;
       return { in: 'refused', error };

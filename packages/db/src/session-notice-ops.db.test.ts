@@ -7,6 +7,7 @@ import {
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
+  TradingSessionStatus,
   TradingSessionStopReason,
   decimalStringSchema,
   type DecimalString,
@@ -19,6 +20,7 @@ import {
   claimSessionWaiting,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
+  readSessionWaitingMessage,
   recordSessionWaitingMessage,
   releaseSessionFinalNotice,
   recordSessionCycleMessage,
@@ -554,6 +556,38 @@ describe('the waiting message (#536)', () => {
     expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
   });
 
+  it('N21 the re-read returns the live id and status; NULL after a clear or a hand-over at a stop (#587 round 1)', async () => {
+    const reread = (session: { id: string }) =>
+      readSessionWaitingMessage(tmp.db, { sessionId: session.id });
+    const cleared = await seedSession();
+    await statusMessage(cleared.session, 7);
+    await waitingClaim(cleared.session);
+    await waitingRecord(cleared.session, 7, 50);
+    expect(await reread(cleared.session)).toEqual({
+      waitingMessageId: 50,
+      status: TradingSessionStatus.Active,
+    });
+    await waitingClear(cleared.session, 50);
+    expect(await reread(cleared.session)).toEqual({
+      waitingMessageId: null,
+      status: TradingSessionStatus.Active,
+    });
+    const handedOver = await seedSession();
+    await statusMessage(handedOver.session, 7);
+    await waitingClaim(handedOver.session);
+    await waitingRecord(handedOver.session, 7, 50);
+    await stopTradingSession(tmp.db, {
+      id: handedOver.session.id,
+      reason: TradingSessionStopReason.UserStopped,
+      waitingMessageId: 50,
+    });
+    expect(await reread(handedOver.session)).toEqual({
+      waitingMessageId: null,
+      status: TradingSessionStatus.Stopped,
+    });
+    expect(await reread({ id: '00000000-0000-4000-8000-000000000000' })).toBeUndefined();
+  });
+
   it('N17 the summary is refused while a waiting message is live, granted once it is cleared', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
@@ -704,7 +738,7 @@ describe('migration 0050 (the backfill)', () => {
     await settled(ended, '0');
     await stop(ended.session);
     const ids = [running.session.id, ended.session.id];
-    // the waiting slot claimed on the current cycle message: only the trade notices under test
+    // the waiting slot claimed on the session's latest message: only the trade notices under test
     await tmp.db
       .update(tradingSessions)
       .set({ notifiedTrades: 0, finalNoticeSentAt: null, waitingAfterMessage: 0 })
