@@ -3494,6 +3494,6 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R2 Minors 1–7 | Minor | other | left at the merge | → #629 |
 
 ### Process improvement proposals
-1. Clarify relay: a question whose text says the plan contradicts itself goes to the architect even when it offers options — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents → Clarify relay**
-2. Architect checklist: a decision taken after an `await` names the reading it uses; a state that moves during the `await` is not re-read to judge the request's result — **внедрено в #PRNUM: `.claude/skills/architect/SKILL.md` → Validation checklist**
+1. Clarify relay: a question whose text says the plan contradicts itself goes to the architect even when it offers options — **внедрено в #630: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents → Clarify relay**
+2. Architect checklist: a decision taken after an `await` names the reading it uses; a state that moves during the `await` is not re-read to judge the request's result — **внедрено в #630: `.claude/skills/architect/SKILL.md` → Validation checklist**
 3. Remaining findings — **вынесено в #629**
