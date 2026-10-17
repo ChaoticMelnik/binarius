@@ -10,6 +10,7 @@ import {
   StakeErrorCode,
   StakeRefusal,
   stakePresets,
+  STAKE_AMOUNT_PATTERN,
   tradeAmountSchema,
   TradeMode,
   telegramHtml,
@@ -44,6 +45,8 @@ import {
   type DemoDurationSec,
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
+import { answerCallback } from './answer-callback';
+import { settle, type Settled } from './settled';
 import type { Logger } from './logging';
 import { stakeAccess } from './stake-access';
 import { editMessageTextHtml, replyHtml } from './send';
@@ -103,7 +106,7 @@ export const stakeCustomCallbackData = (mode: TradeMode, origin: StakeOrigin): s
 // carried no duration.
 const pickerPatterns = (mode: string, origin: string) => ({
   open: new RegExp(`^${STAKE_PICKER_PREFIX}o:${mode}${origin}$`),
-  preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(\\d{1,12}(?:\\.\\d{1,8})?):${mode}${origin}$`),
+  preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(${STAKE_AMOUNT_PATTERN}):${mode}${origin}$`),
   reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${mode}${origin}$`),
   custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${mode}${origin}$`),
 });
@@ -186,13 +189,6 @@ interface Screen {
   keyboard: InlineKeyboard;
 }
 
-type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
-const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
-  promise.then(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error }),
-  );
-
 function backTo(keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard {
   switch (origin.kind) {
     case 'settings':
@@ -232,16 +228,14 @@ export function createStakePicker<C extends Context>({
 
   composer.callbackQuery(LEGACY_PICKER_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
-  // also the custom input's «↩️ Назад», so it ends a stake step left open
   composer.callbackQuery(PICKER.open, async (ctx) => {
     const step = stepOf(ctx.match[1], ctx.match[2]);
     if (step === undefined) {
-      await answer(ctx);
+      await answerCallback(ctx, logger);
       return;
     }
-    endStakeStep(ctx.from.id);
     const [, access] = await Promise.all([
-      answer(ctx),
+      answerCallback(ctx, logger),
       settle(backend.readTradingAccess(String(ctx.from.id))),
     ]);
     const screen = pickerScreen(access, step, ctx.from.first_name);
@@ -252,7 +246,7 @@ export function createStakePicker<C extends Context>({
     const amount = tradeAmountSchema.safeParse(ctx.match[1]);
     const step = stepOf(ctx.match[2], ctx.match[3]);
     if (!amount.success || step === undefined) {
-      await answer(ctx);
+      await answerCallback(ctx, logger);
       return;
     }
     await saveInPlace(ctx, amount.data, step);
@@ -261,7 +255,7 @@ export function createStakePicker<C extends Context>({
   composer.callbackQuery(PICKER.reset, async (ctx) => {
     const step = stepOf(ctx.match[1], ctx.match[2]);
     if (step === undefined) {
-      await answer(ctx);
+      await answerCallback(ctx, logger);
       return;
     }
     await saveInPlace(ctx, null, step);
@@ -272,11 +266,11 @@ export function createStakePicker<C extends Context>({
   composer.callbackQuery(PICKER.custom, async (ctx) => {
     const step = stepOf(ctx.match[1], ctx.match[2]);
     if (step === undefined) {
-      await answer(ctx);
+      await answerCallback(ctx, logger);
       return;
     }
     dialog.set(ctx.from.id, { step: 'stake', ...step });
-    await answer(ctx);
+    await answerCallback(ctx, logger);
     await editOrReply(
       ctx,
       step.mode === TradeMode.Real ? TEXTS.stakeInputPromptReal : TEXTS.stakeInputPrompt,
@@ -312,7 +306,7 @@ export function createStakePicker<C extends Context>({
     step: StakeStep,
   ): Promise<void> {
     const [, saved] = await Promise.all([
-      answer(ctx),
+      answerCallback(ctx, logger),
       settle(backend.setStake(String(ctx.from.id), step.mode, amount)),
     ]);
     const screen = await savedScreen(ctx.from, saved, step);
@@ -373,8 +367,9 @@ export function createStakePicker<C extends Context>({
 
   // What a save answered, by where the answer came from (docs/bot-demo-trade.md -> The stake).
   // A typed amount's step stays open for a refusal before the write and an unknown outcome,
-  // so the user can type again; it ends on a save and on a refusal the bot cannot act on. A save
-  // opened from a launch screen returns to it with the saved amount (#320).
+  // so the user can type again, until the next button press or command (bot.ts, #319); it ends on
+  // a save and on a refusal the bot cannot act on. A save opened from a launch screen returns to
+  // it with the saved amount (#320).
   async function savedScreen(
     from: { id: number; first_name: string },
     saved: Settled<SetStakeResult>,
@@ -382,51 +377,48 @@ export function createStakePicker<C extends Context>({
   ): Promise<Screen> {
     const { id, first_name: firstName } = from;
     const real = mode === TradeMode.Real;
-    if (saved.ok && 'saved' in saved.value) {
+    if (!saved.ok) {
+      const { error } = saved;
+      const fields = { ...errorLogFields(error), ...backendErrorFields(error), mode };
+      const http = error instanceof BackendError && error.code === BackendErrorCode.HttpStatus;
+      if (http && error.reason === StakeErrorCode.BalanceUnavailable) {
+        keepStakeStep(id);
+        return { text: TEXTS.stakeBalanceMissing, keyboard: backKeyboard(origin) };
+      }
+      // no answer, a 5xx or a broken body: the UPDATE may have committed; saving the same amount
+      // again is harmless, and the picker's «Сейчас:» line shows what is saved
+      if (error instanceof BackendError && (!http || (error.status ?? 0) >= 500)) {
+        keepStakeStep(id);
+        logger.warn(fields, 'stake save outcome unknown');
+        return { text: TEXTS.stakeSaveUnknown, keyboard: retryKeyboard(mode, origin) };
+      }
+      endStakeStep(id);
+      // no users row: before the first /start; anything else here is the bot's own bug
+      if (http && error.reason === StakeErrorCode.UserNotFound)
+        logger.warn(fields, 'stake not saved');
+      else logger.error(fields, 'stake not saved');
+      return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
+    }
+    const result = saved.value;
+    if ('saved' in result) {
       endStakeStep(id);
       switch (origin.kind) {
         case 'settings':
         case 'analysis': {
-          const context = { stake: saved.value.saved, firstName };
+          const context = { stake: result.saved, firstName };
           return {
             text: real ? TEXTS.stakeSavedReal(context) : TEXTS.stakeSaved(context),
             keyboard: backKeyboard(origin),
           };
         }
         case 'pair':
-          return savedLaunchScreen(origin, { amount: saved.value.saved, mode }, from);
+          return savedLaunchScreen(origin, { amount: result.saved, mode }, from);
         default:
           return origin satisfies never;
       }
     }
-    if (saved.ok && 'refused' in saved.value) {
-      keepStakeStep(id);
-      return {
-        text: refusalText(mode, saved.value.refused),
-        keyboard: retryKeyboard(mode, origin),
-      };
-    }
-    if (saved.ok) throw new Error('unreachable: a save result is saved or refused');
-    const { error } = saved;
-    const fields = { ...errorLogFields(error), ...backendErrorFields(error), mode };
-    const http = error instanceof BackendError && error.code === BackendErrorCode.HttpStatus;
-    if (http && error.reason === StakeErrorCode.BalanceUnavailable) {
-      keepStakeStep(id);
-      return { text: TEXTS.stakeBalanceMissing, keyboard: backKeyboard(origin) };
-    }
-    // no answer, a 5xx or a broken body: the UPDATE may have committed; saving the same amount
-    // again is harmless, and the picker's «Сейчас:» line shows what is saved
-    if (error instanceof BackendError && (!http || (error.status ?? 0) >= 500)) {
-      keepStakeStep(id);
-      logger.warn(fields, 'stake save outcome unknown');
-      return { text: TEXTS.stakeSaveUnknown, keyboard: retryKeyboard(mode, origin) };
-    }
-    endStakeStep(id);
-    // no users row: before the first /start; anything else here is the bot's own bug
-    if (http && error.reason === StakeErrorCode.UserNotFound)
-      logger.warn(fields, 'stake not saved');
-    else logger.error(fields, 'stake not saved');
-    return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
+    keepStakeStep(id);
+    return { text: refusalText(mode, result.refused), keyboard: retryKeyboard(mode, origin) };
   }
 
   // Any catalog will do, a stale one included: the symbol, and the payout, so a pair below the
@@ -521,15 +513,6 @@ ${refusal.text}`,
         'the stake screen edit failed in transport, sending nothing more',
       );
     }
-  }
-
-  async function answer(ctx: Context): Promise<void> {
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logger.warn(
-        { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
-        'answering the callback query failed',
-      );
-    });
   }
 
   return { composer, onStakeText };

@@ -10,6 +10,8 @@ import {
   type DecimalString,
   demoSignalsCallbackData,
   demoAnalysisCallbackData,
+  MENU_CALLBACK_DATA,
+  StakeRefusal,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -402,5 +404,53 @@ describe('a typed amount of the cycle', () => {
     await type('7');
     expect(startSession).toHaveBeenCalledTimes(2);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionOutcomeUnknown.value);
+  });
+});
+
+describe('a typed amount of the cycle left by a button or a command (#319)', () => {
+  const refused = () =>
+    Promise.resolve({
+      refused: {
+        error: StakeRefusal.BelowMinimum,
+        limits: { minTradeAmount: d('1'), available: d('50'), scale: 2 },
+      },
+    });
+
+  it('ends the step on «↩️ К списку» after a refusal, and a number then starts nothing', async () => {
+    const { press, type, setStake, startSession, loginDialog } = setup({
+      dialog: ON_STEP,
+      setStake: refused,
+    });
+    await type('0.5');
+    expect(loginDialog.get(USER.id)).toEqual(ON_STEP);
+
+    await press(demoSignalsCallbackData(15));
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+
+    await type('7');
+    expect(setStake).toHaveBeenCalledTimes(1);
+    expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it('ends the step on «↩️ К анализу»', async () => {
+    const { press, loginDialog } = setup({ dialog: { ...ON_STEP, back: 'a' } });
+    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('ends the step on any other button', async () => {
+    const { press, loginDialog } = setup({ dialog: ON_STEP });
+    await press(MENU_CALLBACK_DATA);
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('ends the step on a command, and a number then saves and starts nothing', async () => {
+    const { type, setStake, startSession, loginDialog } = setup({ dialog: ON_STEP });
+    await type('/menu');
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+
+    await type('7');
+    expect(setStake).not.toHaveBeenCalled();
+    expect(startSession).not.toHaveBeenCalled();
   });
 });

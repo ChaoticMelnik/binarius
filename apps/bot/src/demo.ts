@@ -10,6 +10,7 @@ import {
   decimalLessThan,
   decimalStringSchema,
   DEFAULT_SESSION_CYCLES,
+  STAKE_AMOUNT_PATTERN,
   errorLogFields,
   normalizeDecimal,
   pairLabel,
@@ -72,7 +73,6 @@ import {
   type DemoDurationSec,
   type DemoTradeRead,
 } from './demo-catalog';
-import type { LoginDialog } from './login-dialog';
 import type { Logger } from './logging';
 import {
   editMessageTextByIdHtml,
@@ -291,7 +291,7 @@ const DEMO_SIGNALS_PATTERN = new RegExp(`^demo:sig:(${DURATIONS})$`);
 const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})(?::(a|n))?$`);
 // the amount as the picker's preset (stake-picker.ts), parsed by tradeAmountSchema
 export const CYCLE_STAKE_PATTERN = new RegExp(
-  `^demo:sa:(\\d{1,10}):(${DURATIONS}):(\\d{1,12}(?:\\.\\d{1,8})?):(l|a)$`,
+  `^demo:sa:(\\d{1,10}):(${DURATIONS}):(${STAKE_AMOUNT_PATTERN}):(l|a)$`,
 );
 export const CYCLE_CUSTOM_PATTERN = new RegExp(`^demo:sc:(\\d{1,10}):(${DURATIONS}):(l|a)$`);
 // the floor's token is optional: a button #360 drew before #379 has none
@@ -813,8 +813,6 @@ export interface DemoComposerDeps {
   >;
   logger: Logger;
   now: () => number;
-  // the typed amount's step of the amount screen (#476), which a press of a pair ends
-  dialog: LoginDialog;
   // the welcome's connect button, for a user with no account to trade on
   connectKeyboard: () => InlineKeyboard;
   // the card's pictures, shared with the session message (#568)
@@ -825,7 +823,6 @@ export function createDemoComposer<C extends Context>({
   backend,
   logger,
   now,
-  dialog,
   connectKeyboard,
   setupCardPhotos,
 }: DemoComposerDeps): Composer<C> {
@@ -860,7 +857,7 @@ export function createDemoComposer<C extends Context>({
   // launch screen in real (#327). The pair is checked against the catalog read at this press, never
   // the one the list was drawn from, and so is its signal (#509): a door drawn without one — «🔁 Ещё
   // сессия», the offer under a single trade, an old message — opens no session on a pair that has
-  // no signal now. The press ends a typed amount's step left open: its prompt's «↩️ Назад» is one.
+  // no signal now.
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -869,7 +866,6 @@ export function createDemoComposer<C extends Context>({
       return;
     }
     const origin: CycleOrigin = ctx.match[3] === 'a' ? 'a' : ctx.match[3] === 'n' ? 'n' : 'l';
-    if (dialog.get(ctx.from.id)?.step === 'cycleStake') dialog.delete(ctx.from.id);
     const [read, access, signal] = await answerAnd(
       ctx,
       Promise.all([

@@ -26,11 +26,13 @@ import {
   type CycleStakeStep,
 } from './demo';
 import type { LoginDialog } from './login-dialog';
+import { answerCallback } from './answer-callback';
+import { settle, type Settled } from './settled';
 import type { Logger } from './logging';
 import { editMessageTextHtml, replyHtml } from './send';
 import { refusalText } from './stake-picker';
 import { LABELS, TEXTS } from './texts';
-import type { Settled, StartSession } from './trading-session';
+import type { StartSession } from './trading-session';
 
 // The amount screen's presses (#476, docs/bot-demo.md → The amount screen): an amount is saved as
 // the demo stake through POST /trading/stake, and only once it is saved the cycle starts through
@@ -52,12 +54,6 @@ interface Screen {
   keyboard: InlineKeyboard;
 }
 
-const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
-  promise.then(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error }),
-  );
-
 // «💵 Сумма» under a refusal: the amount screen again, as a new message under the refusal, then
 // the way back
 const retryKeyboard = (step: CycleStakeStep): InlineKeyboard =>
@@ -71,7 +67,8 @@ const backKeyboard = (step: CycleStakeStep): InlineKeyboard =>
   appendCycleBack(new InlineKeyboard(), step);
 
 // A save that did not answer `saved`, by where the answer came from, as the picker's savedScreen
-// (stake-picker.ts): `keep` leaves a typed amount's step open, so the user can type again.
+// (stake-picker.ts): `keep` leaves a typed amount's step open, so the user can type again, until
+// the next button press or command (bot.ts, #319).
 type NotSaved = { keep: boolean; screen: Screen };
 
 export function createCycleStakeComposer<C extends Context>({
@@ -90,11 +87,11 @@ export function createCycleStakeComposer<C extends Context>({
   composer.callbackQuery(CYCLE_STAKE_PATTERN, async (ctx) => {
     const data = cycleStakeDataOf(ctx.match);
     if (data === undefined) {
-      await answer(ctx);
+      await answerCallback(ctx, logger);
       return;
     }
     const [, saved, catalog] = await Promise.all([
-      answer(ctx),
+      answerCallback(ctx, logger),
       settle(backend.setStake(String(ctx.from.id), TradeMode.Demo, data.amount)),
       settle(backend.readPairs()),
     ]);
@@ -111,11 +108,11 @@ export function createCycleStakeComposer<C extends Context>({
   composer.callbackQuery(CYCLE_CUSTOM_PATTERN, async (ctx) => {
     const step = cycleCustomDataOf(ctx.match);
     if (step === undefined) {
-      await answer(ctx);
+      await answerCallback(ctx, logger);
       return;
     }
     dialog.set(ctx.from.id, { step: 'cycleStake', ...step });
-    await answer(ctx);
+    await answerCallback(ctx, logger);
     await editOrReply(
       ctx,
       TEXTS.stakeInputPrompt,
@@ -168,40 +165,41 @@ export function createCycleStakeComposer<C extends Context>({
 
   // undefined on a save
   function notSaved(saved: Settled<SetStakeResult>, step: CycleStakeStep): NotSaved | undefined {
-    if (saved.ok && 'saved' in saved.value) return undefined;
-    if (saved.ok && 'refused' in saved.value) {
-      return {
-        keep: true,
-        screen: {
-          text: refusalText(TradeMode.Demo, saved.value.refused),
-          keyboard: retryKeyboard(step),
-        },
+    if (!saved.ok) {
+      const { error } = saved;
+      const fields = {
+        ...errorLogFields(error),
+        ...backendErrorFields(error),
+        mode: TradeMode.Demo,
       };
+      const http = error instanceof BackendError && error.code === BackendErrorCode.HttpStatus;
+      if (http && error.reason === StakeErrorCode.BalanceUnavailable) {
+        return {
+          keep: true,
+          screen: { text: TEXTS.stakeBalanceMissing, keyboard: backKeyboard(step) },
+        };
+      }
+      // no answer, a 5xx or a broken body: the UPDATE may have committed, and saving the same
+      // amount again is harmless; nothing starts on an unknown save
+      if (error instanceof BackendError && (!http || (error.status ?? 0) >= 500)) {
+        logger.warn(fields, 'stake save outcome unknown');
+        return {
+          keep: true,
+          screen: { text: TEXTS.stakeSaveUnknown, keyboard: retryKeyboard(step) },
+        };
+      }
+      // no users row: before the first /start; anything else here is the bot's own bug
+      if (http && error.reason === StakeErrorCode.UserNotFound)
+        logger.warn(fields, 'stake not saved');
+      else logger.error(fields, 'stake not saved');
+      return { keep: false, screen: { text: TEXTS.unavailable, keyboard: backKeyboard(step) } };
     }
-    if (saved.ok) throw new Error('unreachable: a save result is saved or refused');
-    const { error } = saved;
-    const fields = { ...errorLogFields(error), ...backendErrorFields(error), mode: TradeMode.Demo };
-    const http = error instanceof BackendError && error.code === BackendErrorCode.HttpStatus;
-    if (http && error.reason === StakeErrorCode.BalanceUnavailable) {
-      return {
-        keep: true,
-        screen: { text: TEXTS.stakeBalanceMissing, keyboard: backKeyboard(step) },
-      };
-    }
-    // no answer, a 5xx or a broken body: the UPDATE may have committed, and saving the same amount
-    // again is harmless; nothing starts on an unknown save
-    if (error instanceof BackendError && (!http || (error.status ?? 0) >= 500)) {
-      logger.warn(fields, 'stake save outcome unknown');
-      return {
-        keep: true,
-        screen: { text: TEXTS.stakeSaveUnknown, keyboard: retryKeyboard(step) },
-      };
-    }
-    // no users row: before the first /start; anything else here is the bot's own bug
-    if (http && error.reason === StakeErrorCode.UserNotFound)
-      logger.warn(fields, 'stake not saved');
-    else logger.error(fields, 'stake not saved');
-    return { keep: false, screen: { text: TEXTS.unavailable, keyboard: backKeyboard(step) } };
+    const result = saved.value;
+    if ('saved' in result) return undefined;
+    return {
+      keep: true,
+      screen: { text: refusalText(TradeMode.Demo, result.refused), keyboard: retryKeyboard(step) },
+    };
   }
 
   // only the cycle's step: a login or a picker step the user has open is left alone
@@ -232,15 +230,6 @@ export function createCycleStakeComposer<C extends Context>({
         'the amount prompt edit failed in transport, sending nothing more',
       );
     }
-  }
-
-  async function answer(ctx: Context): Promise<void> {
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logger.warn(
-        { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
-        'answering the callback query failed',
-      );
-    });
   }
 
   return { composer, onText };
