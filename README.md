@@ -11,7 +11,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
 - `packages/broker-rest` — the Binodex Broker REST client and the pairs catalog cache, shared by `apps/backend` and `apps/trading-worker`
-- `packages/broker-socket` — the Binodex Broker Socket.IO client and its event normalizer, used by `apps/trading-worker`
+- `packages/broker-socket` — the Binodex Broker Socket.IO client and its event normalizer, shared by `apps/backend` (the market data source, #404) and `apps/trading-worker`
 - `packages/signal` — Signal module v2 (the decider, the chart feed, its journal and cache, and the tick-to-candle builder (#392)), shared by `apps/backend` (`POST /trading/signal`, the background scanner behind `GET /trading/signals`) and `apps/trading-worker`
 - `packages/signal-stand` — the Signal backtest stand (#381): a CLI over cached broker candles, imported by no app ([docs/signal-stand.md](docs/signal-stand.md))
 - `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
@@ -30,7 +30,9 @@ the broker REST client sends to the broker and how it classifies answers is in
 [docs/broker-rest.md](docs/broker-rest.md); how the worker sends a trade command over the socket
 or, when nothing was sent, over REST, and which answer means what, is in
 [docs/trade-executor.md](docs/trade-executor.md); how the backend caches the broker's pairs and serves
-them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); what
+them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); how the
+backend builds candles from the price stream of a service account's socket is in
+[docs/market-data.md](docs/market-data.md); what
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the signals, the

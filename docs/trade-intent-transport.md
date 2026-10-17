@@ -481,7 +481,9 @@ could inherit: `compose.yaml` uses `${VAR:?}`, `.env.example` leaves it empty, a
 in the tree are CI's and the tests' own fixtures — see `.env.example` and
 docs/binodex-oauth.md → Configuration. Publisher constants live in
 `apps/backend/src/outbox/publisher.ts` (`DEFAULT_PUBLISHER_CONFIG`). Optional: `DEMO_ONLY`
-(default `false`; `true` or `false`, anything else or empty stops the backend at start, #396).
+(default `false`; `true` or `false`, anything else or empty stops the backend at start, #396), and
+`BROKER_WS_URL` (the same rules as the worker's below; unset → no market data source, #404,
+[market-data.md](market-data.md)).
 
 Worker, required (#90): `BACKEND_URL` (compose: `http://backend:3000`), `INTERNAL_API_TOKEN` (the
 backend's value), `BROKER_API_BASE_URL` (https, the backend's value through compose's

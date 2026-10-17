@@ -192,7 +192,8 @@ one attempt, a 429 keeps the pair, any other failure that may have spent it revo
 ## Boundaries
 
 - The keeper reads no `DEMO_ONLY` (Rule 33): a token exchange moves no money.
-- The keeper never opens a trade, a socket or a session; the price stream is #404's.
+- The keeper never opens a trade, a socket or a session; the price stream is the market data
+  source's ([market-data.md](market-data.md), #404).
 - No email login from the admin (Q2) and no settings table (Q3).
 
 ## Running it locally

@@ -106,8 +106,10 @@ supported form. Shared decodes the top level only, so it fails as `schema` too.
 ## Client (#99)
 
 `createBrokerSocketClient({ url, logger, timing?, openSocket? })` in `socket.ts`. One client holds
-one socket for one set of credentials at a time. The session manager
-([broker-session.md](broker-session.md), #101) holds one per broker account in work.
+one socket for one set of credentials at a time. The worker's session manager
+([broker-session.md](broker-session.md), #101) holds one per broker account in work; the backend's
+market data manager ([market-data.md](market-data.md), #404) holds two, the active and the reserve,
+on service accounts.
 
 | Member | What it does |
 |---|---|
@@ -705,6 +707,7 @@ None were logged during the rest of the run.
   ([broker-session.md](broker-session.md)).
 - #104: the Socket.IO side of `packages/mock-broker`. The normalizer's tests use literal wire
   fixtures; the client's run against that package.
-- #392: the candle spike above, a measurement on the operator's account. The socket candle source
-  (rings on service accounts, warm-up, backfill) is #404, and its consumers (the feed, the
+- #392: the candle spike above, a measurement on the operator's account.
+- #404: the socket candle source on service accounts, built on this client
+  ([market-data.md](market-data.md)). Its REST backfill is #590, and its consumers (the feed, the
   scanner on every pair) are #405.
