@@ -13,6 +13,8 @@ import {
   defaultBotTextSource,
   supportUrl,
   demoAnalysisCallbackData,
+  MENU_CALLBACK_DATA,
+  StakeRefusal,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -759,7 +761,68 @@ describe('a typed stake', () => {
     const { press, calls, loginDialog } = setup({ dialog: ON_STAKE_STEP });
     await press('resend');
     expect(lastPayload(calls)?.text).toBe(TEXTS.codeRequestStale.value);
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+});
+
+describe('a typed stake left by a button or a command (#319)', () => {
+  const refused = () =>
+    Promise.resolve({
+      refused: {
+        error: StakeRefusal.BelowMinimum,
+        limits: { minTradeAmount: d('1'), available: d('50'), scale: 2 },
+      },
+    });
+
+  it("ends the step on /settings's way back after a refusal, and a number then saves nothing", async () => {
+    const { press, type, calls, loginDialog, setStake } = setup({
+      dialog: ON_STAKE_STEP,
+      setStake: refused,
+    });
+    await type('0.5');
     expect(loginDialog.get(USER.id)).toEqual(ON_STAKE_STEP);
+
+    await press(SETTINGS_CALLBACK_DATA);
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+
+    const before = calls.length;
+    await type('5');
+    expect(setStake).toHaveBeenCalledTimes(1);
+    expect(calls.slice(before)).toEqual([]);
+  });
+
+  it("ends the step on the analysis's way back", async () => {
+    const { press, loginDialog } = setup({
+      dialog: { step: 'stake', mode: TradeMode.Demo, origin: ANALYSIS },
+    });
+    await press(demoAnalysisCallbackData(101, 5));
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it("ends the step on the launch screen's way back", async () => {
+    const { press, loginDialog } = setup({
+      dialog: { step: 'stake', mode: TradeMode.Demo, origin: PAIR },
+    });
+    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 15));
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('ends the step on any other button', async () => {
+    const { press, loginDialog } = setup({ dialog: ON_STAKE_STEP });
+    await press(MENU_CALLBACK_DATA);
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('ends the step on a command, and a number then saves nothing; a login stays', async () => {
+    const stake = setup({ dialog: ON_STAKE_STEP });
+    await stake.type('/menu');
+    expect(stake.loginDialog.get(USER.id)).toBeUndefined();
+    await stake.type('5');
+    expect(stake.setStake).not.toHaveBeenCalled();
+
+    const login = setup({ dialog: { step: 'email' } });
+    await login.type('/menu');
+    expect(login.loginDialog.get(USER.id)).toEqual({ step: 'email' });
   });
 });
 

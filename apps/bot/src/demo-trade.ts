@@ -55,6 +55,7 @@ import {
   type IntentTracker,
 } from './intent-tracker';
 import type { Logger } from './logging';
+import { settle, type Settled } from './settled';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
 import { intentStatusText, LABELS, sessionStartButtonLabel, TEXTS, textOf } from './texts';
 
@@ -169,13 +170,6 @@ type CreateOutcome =
   | { ok: true; intent: TradeIntentView }
   | { ok: false; unknown: true; error: unknown }
   | { ok: false; unknown: false; error: unknown };
-
-type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
-const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
-  promise.then(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error }),
-  );
 
 export function createDemoTradeComposer<C extends Context>({
   backend,

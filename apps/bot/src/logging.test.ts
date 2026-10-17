@@ -33,7 +33,7 @@ import { intentCallbackData } from './demo-trade';
 import { createIntentTracker } from './intent-tracker';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
-import { stakePresetCallbackData } from './stake-picker';
+import { stakeOpenCallbackData, stakePresetCallbackData } from './stake-picker';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
@@ -777,6 +777,70 @@ describe('what the bot writes about the demo', () => {
     });
     expect(fieldsOf(lines)).not.toContain(String(USER.id));
     expect(fieldsOf(lines)).not.toContain('$7.00');
+  });
+
+  // #319: the picker's access read, a save the bot cannot act on, and the launch screen's access read
+  it('names an access read the stake picker did not get by error, code, status and reason, without the user', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(stakeOpenCallbackData(TradeMode.Demo, { kind: 'settings' })),
+      level: 'trace',
+      readTradingAccess: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 500, reason: 'internal' }),
+        ),
+    });
+    expect(lineWith(lines, 'trading access not read for the stake picker')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+      backendReason: 'internal',
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+  });
+
+  it.each([
+    ['a warning for user_not_found', 404, 'user_not_found', 40],
+    ['an error for anything else', 400, 'validation', 50],
+  ])(
+    'names a stake not saved as %s, by status, reason and mode, without the user or the amount',
+    async (_case, status, reason, level) => {
+      const { lines } = await linesFrom({
+        update: callbackUpdate(stakePresetCallbackData('5', TradeMode.Demo, { kind: 'settings' })),
+        level: 'trace',
+        setStake: () =>
+          Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason })),
+      });
+      expect(lineWith(lines, 'stake not saved')).toMatchObject({
+        level,
+        err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+        backendStatus: status,
+        backendReason: reason,
+        mode: TradeMode.Demo,
+      });
+      expect(fieldsOf(lines)).not.toContain(String(USER.id));
+      expect(fieldsOf(lines)).not.toContain('$5.00');
+    },
+  );
+
+  it('names an access read the launch screen did not get by error and code, without the user or the amount', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(
+        stakePresetCallbackData('5', TradeMode.Demo, {
+          kind: 'pair',
+          assetId: PAIR_EURUSD.id,
+          durationSec: 15,
+        }),
+      ),
+      level: 'trace',
+      setStake: (_id, _mode, amount) => Promise.resolve({ saved: amount }),
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    expect(lineWith(lines, 'trading access not read for the launch screen')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(fieldsOf(lines)).not.toContain('$5.00');
   });
 
   // #126

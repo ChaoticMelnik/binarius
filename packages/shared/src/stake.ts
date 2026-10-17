@@ -94,9 +94,10 @@ export function stakePresets(limits: StakeLimits): DecimalString[] {
     .map(fromUnits);
 }
 
-const INPUT_PATTERN = new RegExp(
-  `^\\d{1,${NUMERIC_INTEGER_DIGITS}}(\\.\\d{1,${NUMERIC_FRACTION_DIGITS}})?$`,
-);
+// an amount inside numeric(20,8), unanchored and without a capturing group: the source of the typed
+// input's check and of the bot's callback data that carry an amount
+export const STAKE_AMOUNT_PATTERN = `\\d{1,${NUMERIC_INTEGER_DIGITS}}(?:\\.\\d{1,${NUMERIC_FRACTION_DIGITS}})?`;
+const INPUT_PATTERN = new RegExp(`^${STAKE_AMOUNT_PATTERN}$`);
 
 // What the user typed: one ',' or '.' as the separator, digits only, > 0, canonical. The scale
 // and the bounds are the backend's (checkStake), so «1.234» parses here.

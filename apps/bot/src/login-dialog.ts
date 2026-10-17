@@ -4,7 +4,8 @@ import type { StakeStep } from './stake-picker';
 // The text dialog of each Telegram user: the email login — waiting for an address, then for the
 // code sent to it — a typed stake of one mode (#297, #326, stake-picker.ts), or the typed amount of
 // a demo cycle (#476, cycle-stake.ts). One entry per user, so the login and the inputs exclude
-// each other: opening one replaces the other. The
+// each other: opening one replaces the other. Any inline button press and any command end the
+// two inputs (endInputStep, bot.ts, #319); the login steps are not touched. The
 // module keeps the login's name. In process memory by the owner's decision (#162): a restart drops
 // the step and the user presses the button again. The address lives here and nowhere else in the
 // bot — never logged — and leaves with the entry.
@@ -66,4 +67,10 @@ export function createLoginDialog({
       entries.delete(telegramUserId);
     },
   };
+}
+
+// get without set: a login step's TTL does not move.
+export function endInputStep(dialog: LoginDialog, telegramUserId: number): void {
+  const step = dialog.get(telegramUserId)?.step;
+  if (step === 'stake' || step === 'cycleStake') dialog.delete(telegramUserId);
 }
