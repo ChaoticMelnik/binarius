@@ -792,7 +792,7 @@ message of a running session (the owner's decision 2026-10-15): deleted before e
 message and sent again under it; an edit of a step leaves it where it is (#551); deleted once the
 session stopped — any reason — on the next tick, before the summary; never sent again after.
 
-**The state** (migration 0059): `trading_sessions.waiting_message_id`, Telegram's
+**The state** (migration 0061): `trading_sessions.waiting_message_id`, Telegram's
 `message_id` of the live waiting message, NULL when there is none; and `waiting_after_message`,
 its **slot**: `coalesce(cycle_message_id, 0)` when it was claimed — the cycle message it stands
 under, 0 before any — NULL while none is claimed (none yet, or freed). A positive id, a slot from 0, an id only on a
