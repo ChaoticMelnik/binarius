@@ -1,6 +1,6 @@
 import { BrokerRestErrorCode, decimalStringSchema } from '@binarius/shared';
+import { BrokerSocketState } from '@binarius/broker-socket';
 import { describe, expect, it } from 'vitest';
-import { BrokerSocketState } from '../broker/socket';
 import {
   compareDecimal,
   PHASE_SENDER,

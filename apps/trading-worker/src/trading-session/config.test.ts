@@ -6,7 +6,7 @@ import {
   SIGNAL_SHORTEST_INTERVAL_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
-import { MAX_TIMER_MS } from '../broker/socket-config';
+import { MAX_TIMER_MS } from '@binarius/broker-socket';
 import {
   sessionOrchestratorConfigHolds,
   TRADING_SESSION_ATTEMPT_TIMEOUT_MS,

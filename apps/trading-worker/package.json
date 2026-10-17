@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@binarius/broker-rest": "workspace:*",
+    "@binarius/broker-socket": "workspace:*",
     "@binarius/db": "workspace:*",
     "@binarius/shared": "workspace:*",
     "@binarius/signal": "workspace:*",
@@ -19,11 +20,11 @@
     "drizzle-orm": "^0.45.3",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0",
-    "pino": "^10.3.1",
-    "socket.io-client": "^4.8.4"
+    "pino": "^10.3.1"
   },
   "devDependencies": {
     "@binarius/mock-broker": "workspace:*",
-    "@types/pg": "^8.23.1"
+    "@types/pg": "^8.23.1",
+    "socket.io-client": "^4.8.4"
   }
 }

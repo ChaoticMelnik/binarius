@@ -18,13 +18,14 @@ import {
   tickProblem,
   type CandleBuilder,
 } from '@binarius/signal';
-import { BrokerEventType, type BrokerEvent } from '../broker/events';
 import {
+  BrokerEventType,
   BrokerSocketState,
   isTerminalBrokerSocketState,
   type BrokerCredentials,
+  type BrokerEvent,
   type BrokerSocketClient,
-} from '../broker/socket';
+} from '@binarius/broker-socket';
 import {
   compareAggregation,
   compareDecisions,

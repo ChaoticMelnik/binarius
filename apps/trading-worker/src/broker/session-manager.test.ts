@@ -8,6 +8,16 @@ import {
 import { MockSocketPayload, startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { AccessTokenRefusal, BrokerSocketEvent, logOptions, TradeMode } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
+import {
+  BrokerSocketState,
+  createBrokerSocketClient,
+  type BrokerEvent,
+  type BrokerSocket,
+  type BrokerSocketClient,
+  type BrokerSocketClientOptions,
+  type BrokerSocketOptions,
+  type BrokerSocketStateChange,
+} from '@binarius/broker-socket';
 import pino from 'pino';
 import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +27,6 @@ import {
   type AccessTokenOutcome,
 } from './access-token';
 import type { DeadLetter, DeadLetterSink } from '../dead-letter';
-import type { BrokerEvent } from './events';
 import type { SessionManagerConfig } from './session-config';
 import {
   createBrokerSessionManager,
@@ -26,15 +35,6 @@ import {
   type SessionLossObserver,
   type SessionWriters,
 } from './session-manager';
-import {
-  BrokerSocketState,
-  createBrokerSocketClient,
-  type BrokerSocket,
-  type BrokerSocketClient,
-  type BrokerSocketClientOptions,
-  type BrokerSocketOptions,
-  type BrokerSocketStateChange,
-} from './socket';
 
 const TIMING = {
   connectTimeoutMs: 1_000,

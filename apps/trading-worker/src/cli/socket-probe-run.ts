@@ -7,13 +7,14 @@ import {
   type DecimalString,
   type SocketOpenTradeRequest,
 } from '@binarius/shared';
-import { BrokerEventType, type BrokerEvent } from '../broker/events';
 import {
+  BrokerEventType,
   BrokerSocketState,
   type BrokerCredentials,
+  type BrokerEvent,
   type BrokerSocketClient,
   type SocketOpenTradeResult,
-} from '../broker/socket';
+} from '@binarius/broker-socket';
 import {
   compareDecimal,
   PHASE_SENDER,

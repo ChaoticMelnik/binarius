@@ -14,22 +14,23 @@ import {
   type BrokerUser,
   type ClosedTrade,
 } from '@binarius/shared';
+import {
+  BrokerEventType,
+  BrokerSocketState,
+  createBrokerSocketClient,
+  type BrokerEvent,
+  type BrokerSocketClient,
+  type BrokerSocketClientOptions,
+  type BrokerSocketStateChange,
+  type BrokerSocketTiming,
+} from '@binarius/broker-socket';
 import type pino from 'pino';
 import {
   AccessTokenUnavailable,
   type AccessTokenOutcome,
   type AccessTokenSource,
 } from './access-token';
-import { BrokerEventType, type BrokerEvent } from './events';
 import { DEAD_LETTER_WRITE_TIMEOUT_MS, type SessionManagerConfig } from './session-config';
-import {
-  BrokerSocketState,
-  createBrokerSocketClient,
-  type BrokerSocketClient,
-  type BrokerSocketClientOptions,
-  type BrokerSocketStateChange,
-} from './socket';
-import type { BrokerSocketTiming } from './socket-config';
 import type { TradeSessionSource } from './trade-session';
 import {
   deadLetterSessionWrite,

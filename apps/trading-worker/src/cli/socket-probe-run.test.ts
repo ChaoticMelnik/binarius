@@ -9,14 +9,15 @@ import {
   type OpenTradeRequest,
   type SocketOpenTradeRequest,
 } from '@binarius/shared';
-import { describe, expect, it } from 'vitest';
-import { BrokerEventType, type BrokerEvent } from '../broker/events';
 import {
+  BrokerEventType,
   BrokerSocketState,
+  type BrokerEvent,
   type BrokerSocketClient,
   type BrokerSocketStateChange,
   type SocketOpenTradeResult,
-} from '../broker/socket';
+} from '@binarius/broker-socket';
+import { describe, expect, it } from 'vitest';
 import { PROBE_PRECONDITIONS, runProbe, type ProbeDeps, type ProbeRun } from './socket-probe-run';
 import { PROBE_PHASES, verdict, type ProbeSocket, type VerdictInput } from './socket-probe-verdict';
 

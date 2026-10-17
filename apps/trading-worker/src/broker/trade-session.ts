@@ -1,4 +1,4 @@
-import type { BrokerSocketClient } from './socket';
+import type { BrokerSocketClient } from '@binarius/broker-socket';
 
 export type TradeSession = Pick<BrokerSocketClient, 'state' | 'openTrade'>;
 
