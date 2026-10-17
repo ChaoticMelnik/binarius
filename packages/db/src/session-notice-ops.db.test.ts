@@ -459,7 +459,7 @@ describe('the waiting message (#536)', () => {
     return [row.waitingMessageId, row.waitingAfterMessage];
   };
 
-  it('N13 claims a slot once, only on an active session under its status or cycle message', async () => {
+  it('N13 claims a slot once, only on an active session under its status or a claimed trade', async () => {
     const target = await seedSession();
     // no message of the session yet: the waiting message would stand above it
     expect(await waitingClaim(target.session)).toBeUndefined();
@@ -482,6 +482,13 @@ describe('the waiting message (#536)', () => {
     const cycleOnly = await seedSession();
     await cycleMessage(cycleOnly, 0, 41);
     expect(await waitingClaim(cycleOnly.session)).toEqual({ slot: 41 });
+
+    // a claimed trade whose message was not recorded: its message went after the session's
+    const claimedOnly = await seedSession();
+    await settled(claimedOnly, '-5');
+    expect(await waitingClaim(claimedOnly.session)).toBeUndefined();
+    await claim(claimedOnly.session, 0);
+    expect(await waitingClaim(claimedOnly.session)).toEqual({ slot: 0 });
 
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
@@ -534,7 +541,7 @@ describe('the waiting message (#536)', () => {
     expect(await waitingOf(target.session)).toEqual([50, 0]);
   });
 
-  it('N16 a clear drops only its own id and keeps the slot', async () => {
+  it('N16 a clear drops only its own id and frees the slot', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
     await waitingClaim(target.session);
@@ -542,9 +549,9 @@ describe('the waiting message (#536)', () => {
     expect(await waitingClear(target.session, 51)).toBe(false);
     expect(await waitingOf(target.session)).toEqual([50, 0]);
     expect(await waitingClear(target.session, 50)).toBe(true);
-    expect(await waitingOf(target.session)).toEqual([null, 0]);
-    // the same slot is not claimed again
-    expect(await waitingClaim(target.session)).toBeUndefined();
+    expect(await waitingOf(target.session)).toEqual([null, null]);
+    // an active session is due again on the same cycle message
+    expect(await waitingClaim(target.session)).toEqual({ slot: 0 });
   });
 
   it('N17 the summary is refused while a waiting message is live, granted once it is cleared', async () => {
@@ -625,9 +632,10 @@ describe('migration 0050 (the backfill)', () => {
     await settled(ended, '0');
     await stop(ended.session);
     const ids = [running.session.id, ended.session.id];
+    // the waiting slot as the later backfill (0057) leaves it: only the trade notices under test
     await tmp.db
       .update(tradingSessions)
-      .set({ notifiedTrades: 0, finalNoticeSentAt: null })
+      .set({ notifiedTrades: 0, finalNoticeSentAt: null, waitingAfterMessage: 0 })
       .where(sql`${tradingSessions.id} in (${sql.join(ids, sql`, `)})`);
 
     const file = path.resolve(

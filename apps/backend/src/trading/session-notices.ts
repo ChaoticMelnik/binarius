@@ -121,6 +121,11 @@ type Step = 'next' | 'skip' | 'pause';
 // be deleted), kept for the next tick (outcome unknown), or Telegram asked to wait
 type Removal = { kind: 'cleared' } | { kind: 'kept' } | { kind: 'wait'; ms: number };
 
+// The memory's mirror of waitingDueSql once a step freed the slot or left it behind; the SQL
+// decides, so a wrong hint costs one refused claim or one tick.
+const waitingMayGo = (session: PendingSessionNotice): boolean =>
+  session.status === TradingSessionStatus.Active && !session.telegramBlocked;
+
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): SessionNoticeSender {
@@ -134,8 +139,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   });
   // the definite refusals of one send, by `${sessionId}:${claimed}`, `${sessionId}:summary` or
   // `${sessionId}:waiting:${slot}`, and the unknown outcomes of a waiting message's delete, by
-  // `${sessionId}:delete:${messageId}`; in memory: a restart gives each send its attempts again, which is a bounded retry, never a
-  // second delivery
+  // `${sessionId}:delete:${messageId}`; in memory: a restart gives each send its attempts again,
+  // which is a bounded retry, never a second delivery
   const attempts = new Map<string, number>();
   let stopped = false;
   let pausedUntil = -Infinity;
@@ -189,18 +194,21 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
     // A new message: the cycle message from now on, recorded only once Telegram answered with its
     // id. An id that is not a positive integer is not recorded: the next step sends anew. The
-    // waiting message goes first (#536), on the pace this call came with, so it stays the last:
-    // the new message then takes a pace of its own.
+    // waiting message is deleted first (#536), on the pace this call came with, and its slot
+    // freed, so whatever becomes of the new message, the waiting message is due under it; the new
+    // message then takes a pace of its own. A delete that did not clear puts the trade back, so
+    // no new message goes out under a waiting message that may still be there.
     const sendNew = async (text: TelegramHtml, from: number): Promise<Step> => {
       if (session.waitingMessageId !== null) {
         const removal = await removeWaiting(session, session.waitingMessageId);
-        if (removal.kind === 'wait') {
-          // nothing was sent: the trade goes again after the pause
+        if (removal.kind !== 'cleared') {
+          // nothing was sent: the trade goes again after the pause, or next tick after the delete
           await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
-          return pauseFor(removal.ms);
+          return removal.kind === 'wait' ? pauseFor(removal.ms) : 'skip';
         }
-        // kept: the trade is claimed and goes now; the stale rule deletes it next tick
-        if (removal.kind === 'kept') session.waitingStale = false;
+        // the delete found the user unreachable: nothing more is delivered (Rule 19), the trade
+        // counts as sent
+        if (session.telegramBlocked) return 'next';
         await pace();
       }
       let messageId: number;
@@ -221,10 +229,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         from,
       });
       // a new cycle message: the waiting message is due under it
-      if (recorded && session.waitingMessageId === null) {
-        session.waitingDue =
-          session.status === TradingSessionStatus.Active && !session.telegramBlocked;
-      }
+      if (recorded && session.waitingMessageId === null) session.waitingDue = true;
       return 'next';
     };
 
@@ -305,14 +310,15 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // Deletes the waiting message (#536) and drops its id; a blocked user's is dropped without a
-  // call (Rule 19). The caller has taken the pace.
+  // Deletes the waiting message (#536), drops its id and frees its slot, so an active session is
+  // due again; a blocked user's is dropped without a call (Rule 19). The caller has taken the pace.
   async function removeWaiting(session: PendingSessionNotice, messageId: number): Promise<Removal> {
     const fields = { sessionId: session.sessionId };
     const clear = async (): Promise<Removal> => {
       attempts.delete(`${session.sessionId}:delete:${String(messageId)}`);
       await clearSessionWaitingMessage(db, { sessionId: session.sessionId, messageId });
       session.waitingMessageId = null;
+      session.waitingDue = true;
       return { kind: 'cleared' };
     };
     if (session.telegramBlocked) return clear();
@@ -369,15 +375,12 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     if (stopped) return 'skip';
     const removal = await removeWaiting(session, messageId);
     if (removal.kind === 'wait') return pauseFor(removal.ms);
-    if (removal.kind === 'kept') return 'skip';
-    // an active session's waiting message is stale only behind a new cycle message: due under it
-    session.waitingDue = session.status === TradingSessionStatus.Active && !session.telegramBlocked;
-    return 'next';
+    return removal.kind === 'kept' ? 'skip' : 'next';
   }
 
-  // The waiting message's send (#536): its slot claimed first, so at most one goes out per slot;
-  // its id recorded after. A record the CAS refuses (the session stopped meanwhile, or another
-  // sender recorded first) deletes the message just sent.
+  // The waiting message's send (#536): its slot claimed first, so at most one goes out while none
+  // is live; its id recorded after. A record the CAS refuses (the session stopped meanwhile, or
+  // another sender recorded first) deletes the message just sent.
   async function sendWaiting(session: PendingSessionNotice): Promise<Step> {
     const fields = { sessionId: session.sessionId };
     await pace();
@@ -400,8 +403,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       };
       switch (failure.kind) {
         case 'forbidden':
+          // certainly not delivered: the slot is freed, due again once the user is reachable
           logger.warn(logged, 'session waiting message refused: the user is unreachable');
           await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
+          await releaseSessionWaiting(db, { sessionId: session.sessionId, slot: claim.slot });
+          session.telegramBlocked = true;
           return 'next';
         case 'wait':
           await releaseSessionWaiting(db, { sessionId: session.sessionId, slot: claim.slot });
@@ -522,7 +528,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
     // a finished session's trades are all settled or rejected: none appears after the list's read
     if (session.finished) return sendSummary(session);
-    return session.waitingDue ? sendWaiting(session) : 'next';
+    return session.waitingDue && waitingMayGo(session) ? sendWaiting(session) : 'next';
   }
 
   async function runTick(): Promise<void> {

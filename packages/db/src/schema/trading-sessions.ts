@@ -75,11 +75,12 @@ export const tradingSessions = pgTable(
     // message): Telegram's message_id of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there
     // is none (not sent, deleted, or its send's outcome unknown); and its slot, the cycle message
     // it was claimed after (`coalesce(cycle_message_id, 0)`, 0 before any cycle message), NULL
-    // until a waiting message was first claimed. Written only by the backend's sender:
+    // when no waiting message is claimed. Written only by the backend's sender:
     // claimSessionWaiting's CAS claims the slot before the send, recordSessionWaitingMessage
     // writes the id after it, releaseSessionWaiting frees the slot after a certain refusal,
-    // clearSessionWaitingMessage drops the id after the delete. A new cycle message leaves the
-    // slot behind, and the waiting message is then deleted and sent again under it.
+    // clearSessionWaitingMessage drops the id and frees the slot after the delete. A new cycle
+    // message leaves the slot behind, and the waiting message is then deleted and sent again
+    // under it.
     waitingMessageId: integer('waiting_message_id'),
     waitingAfterMessage: integer('waiting_after_message'),
     createdAt: createdAt(),
