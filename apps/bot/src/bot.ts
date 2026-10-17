@@ -117,6 +117,8 @@ export interface CreateBotOptions {
   welcomeVideoFileId?: string;
   // «💳 Пополнить»'s page (#27): cashierUrlOf(WEB_PUBLIC_URL); none (not https), no button
   cashierUrl?: string;
+  // SHARE_STORAGE_CHAT_ID (#538): the channel the promo card is posted to; none, no share button
+  shareStorageChatId?: number;
   // the two seams the tests need: a bot that must not call getMe, and a client pointed at a
   // local server so the configured timeout can be observed rather than assumed
   botInfo?: UserFromGetMe;
@@ -140,6 +142,7 @@ export function createBot({
   logger,
   welcomeVideoFileId,
   cashierUrl,
+  shareStorageChatId,
   botInfo,
   apiRoot,
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
@@ -510,6 +513,7 @@ export function createBot({
     connectKeyboard: welcomeKeyboard,
     cashierUrl,
     setupCardPhotos,
+    shareEnabled: shareStorageChatId !== undefined,
   });
   sessionResumer.attach(tradingSession.resume);
   // the amounts of a demo cycle's amount screen (#476), which start through the session's path;
@@ -530,7 +534,7 @@ export function createBot({
 
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
-  bot.use(createSessionShareComposer({ backend, logger }));
+  bot.use(createSessionShareComposer({ backend, logger, storageChatId: shareStorageChatId }));
 
   // /buy, «⭐ Купить токены» and the payment (#117, docs/stars.md), ahead of the text handler below,
   // which swallows commands; the pre-checkout query on the bot, for the same reason as the share

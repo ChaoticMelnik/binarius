@@ -1713,12 +1713,50 @@ export const BOT_TEXT_CATALOG = {
 🤖 @{botUsername}`,
     { ...caption, vars: ['symbol', 'profit', 'botUsername'] },
   ),
+  // The promo card shared by «📤 Поделиться» (#538, docs/bot-session.md → Sharing the card): a
+  // card of its own, drawn when the share is pressed; each limit the width of its slot there.
+  sessionPromoResult: plain(
+    g.Session,
+    'Промо-карточка «Поделиться»: подпись над результатом в $.',
+    'Мой результат сессии',
+    { limit: 32 },
+  ),
+  sessionPromoUp: plain(
+    g.Session,
+    'Промо-карточка «Поделиться»: плашка направления вверх.',
+    'ВВЕРХ',
+    { limit: 12 },
+  ),
+  sessionPromoDown: plain(
+    g.Session,
+    'Промо-карточка «Поделиться»: плашка направления вниз.',
+    'ВНИЗ',
+    { limit: 12 },
+  ),
+  sessionPromoBrand: plain(
+    g.Session,
+    'Промо-карточка «Поделиться»: название бота у знака.',
+    'Binarius',
+    { limit: 24 },
+  ),
+  sessionPromoCall: plain(
+    g.Session,
+    'Промо-карточка «Поделиться»: призыв под названием бота.',
+    'Торгуй со мной в Binarius и получи бесплатные токены!',
+    { limit: 80 },
+  ),
+  sessionPromoWhen: plain(
+    g.Session,
+    'Промо-карточка «Поделиться»: время и дата окончания сессии.',
+    '{sessionEnd} МСК',
+    { vars: ['sessionEnd'], limit: 32 },
+  ),
   sessionShareCaption: html(
     g.Session,
-    'Картинка-итог, которой делятся кнопкой «📤 Поделиться»: подпись в выбранном чате. Без суммы в $ — она на самой картинке; ссылка — простым текстом, Telegram сделает её ссылкой.',
-    `🏁 {symbol}: {result}
-🤖 https://t.me/{botUsername}?start=share`,
-    { ...caption, vars: ['symbol', 'result', 'botUsername'] },
+    'Промо-карточка «📤 Поделиться»: подпись в выбранном чате. Ссылка — реферальная ссылка отправителя (без кода — общая ссылка бота), простым текстом.',
+    `Присоединяйся к Binarius — получи бесплатные токены!
+{referralLink}`,
+    { ...caption, vars: ['referralLink'] },
   ),
 
   // Sent by the backend only (#464, #551, docs/bot-session.md → Trade messages): a message per

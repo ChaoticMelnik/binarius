@@ -2,7 +2,7 @@
 // oracle that a raw string reaches neither the send seam nor a message constant, and that a
 // caller cannot hand the seam entities in place of parse_mode. If any of them starts compiling,
 // tsc reports TS2578 (unused directive) and `pnpm check` fails.
-import type { Api, Context, InlineKeyboard } from 'grammy';
+import type { Api, Context, InlineKeyboard, InputFile } from 'grammy';
 import type { TelegramHtml } from '@binarius/shared';
 import {
   answerInlineQueryEmpty,
@@ -19,12 +19,14 @@ import {
   replyWithPhotoHtmlWithoutNextStep,
   replyWithVideoHtml,
   sendPhotoByIdHtml,
+  sendPhotoToStorage,
 } from './send';
 
 declare const ctx: Context;
 declare const api: Api;
 declare const text: TelegramHtml;
 declare const keyboard: InlineKeyboard;
+declare const png: InputFile;
 // @ts-expect-error the seam takes TelegramHtml, not a string (TS2345)
 export const viaSeam = replyHtml(ctx, 'raw');
 // @ts-expect-error entities replace parse_mode, so the seam does not take them (TS2353)
@@ -168,3 +170,7 @@ const invoice = { title: 't', description: 'd', payload: 'p', label: 'l', stars:
 export const viaInvoiceNoKeyboard = replyWithInvoiceStars(ctx, invoice);
 // @ts-expect-error nor without what follows the pay button (TS2741)
 export const viaInvoiceNoNextStep = replyWithInvoiceStars(ctx, invoice, { pay: 'pay' });
+
+// #538: the storage post takes no caption and no keyboard, so a fourth argument does not compile
+// @ts-expect-error a caption or reply_markup cannot reach the storage post (TS2554)
+export const viaStorageExtra = sendPhotoToStorage(api, 1, png, { reply_markup: keyboard });
