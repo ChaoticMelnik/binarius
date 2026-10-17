@@ -23,60 +23,59 @@ sessions (`https:` or `wss:`; an empty value fails the start). `apps/backend/src
 after `listen()` with the other loops and stops it in shutdown phase 1. The start line
 `market data source { enabled }` says whether it runs.
 
-## Roles and failover
+## The state machine
 
-At most two clients per process, both on working service accounts (`listServiceBrokerAccounts`,
-ordered by `service_since asc, id asc`, read again on every tick):
+At most two clients per process, both on in-service service accounts (`listServiceBrokerAccounts`:
+marked, the account `active`, its user `active`, ordered by `service_since asc, id asc`, read again
+on every tick). A token that merely expired does not take an account out of the list: the start
+exchanges it (owner's decision, 2026-10-17).
 
 - **active:** subscribed to every pair of the fresh catalog. Only its ticks reach the ring.
-- **reserve:** a separate client on another account, authenticated and subscribed to nothing. A
-  client that was never asked to `subscribe()` is the only kind that stays without subscriptions:
-  `stop()` keeps the registry, and every auth sends all of it again.
+- **reserve:** a separate client on another account, authenticated and subscribed to nothing (a
+  client's registry survives `stop()` and goes out with every auth, so only a new client is empty).
 
-The active hands over in these cases:
+Each slot is `empty`, `starting` (waiting on `accessToken`) or `running`. A slot out of `ready` has
+`since`: the job's start, kept by its client, or the moment the client left `ready`. Every start is
+a new client, started once. An answer opens a client only in the slot that still holds its job.
 
-| The active | What happens |
+Every handler changes only its own slot and ends in `reconcile()`, which applies, in order:
+
+1. **R1** a slot whose account is not in the list: vacated, without a hold-back.
+2. **R2** a reserve out of `ready` for `MARKET_DATA_RESERVE_READY_MS`, when another account could
+   take its place: vacated with a hold-back.
+3. **R3** a `ready` reserve, when the active is empty, or out of `ready` (any state, `starting`
+   too) for `MARKET_DATA_FAILOVER_GRACE_MS`: the active is vacated (`not_ready`, no hold-back), and
+   the reserve becomes the active.
+4. **R4**, **R5** an empty slot starts on the first candidate (listed, not held back, not in the
+   other slot); no active and no candidate nor reserve: `market data: no working service account`.
+5. **R6** the active subscribes the fresh catalog's ids it lacks; **R7** one timer, at the nearest
+   deadline of R2 or R3.
+
+| Event on a slot | What happens |
 |---|---|
-| `disconnected_by_server`, or a `user.data` of another user | its account is held back; a ready reserve gets `subscribe(<the active's registry>)` and becomes the active, and the old client is stopped and forgotten |
-| `reconnecting` | after `MARKET_DATA_FAILOVER_GRACE_MS` without coming back to `ready`, the same switch, without a hold-back: a transport drop is not the account's fault, so the account is the first candidate for the next reserve |
-| `token_expired` / `auth_failed` with the reserve `ready` | the same switch at once (decision 7a). The next reserve starts on the old account with `refusedToken` (below) |
-| `token_expired` / `auth_failed` without a ready reserve | the token is exchanged in place: the same client `start()`s with the new token, and its registry goes out with the next auth |
+| `accessToken` `ok`, the slot still holds the job | a new client; the active subscribes the catalog before `start()` |
+| any other answer, or a throw of the client's start | the slot empties, the account is held back ([Tokens and hold-back](#tokens-and-hold-back)) |
+| an answer to a slot that no longer holds the job | dropped, no client |
+| `connecting`, `authenticating`, `reconnecting` | the slot waits; R3 bounds the active, R2 the reserve, by `since` |
+| `ready` / leaving `ready` | `since` cleared / set; the active leaving `ready` marks the drop in the ring |
+| `disconnected_by_server`, a foreign `user.data`, `token_expired`, `auth_failed` | the slot empties (hold-back: the table below) |
+| `stop()` | both clients stopped, the timer cleared, the starts in flight awaited, nothing opened after |
 
-A reserve that is not `ready` at the switch keeps its slot, and the active starts at once on the
-next free account (the reserve's account is not free). Whichever comes first takes the active role:
-a start that opens a client becomes the active, and the reserve stays the reserve. The ready reserve
-is promoted into an empty active slot on three entries (`promote()`):
+**A refused token.** The `hashToken` of the client's token goes, as `refusedToken`, to the next start
+on that account, exactly once. The first refusal of an account within `MARKET_DATA_ACCOUNT_RETRY_MS`
+vacates without a hold-back, a second one with it: at most two exchanges per account in that window.
+With a ready reserve, R3 promotes it at once and R5 starts the next reserve on the old account;
+without one, R4 starts the active on the first free account, usually the same one.
 
-1. the switch itself, when the reserve is `ready` at that moment;
-2. the end of an active start that found no client (every account refused, or the broker's rate
-   limit ended the run);
-3. the reserve reaching `ready` while the active slot is empty.
-
-A promotion sends `subscribe()` with every id of the fresh catalog (the switch sends the old
-active's registry), and logs `market data reserve promoted` on entries 2 and 3. After a promotion
-and after a switch with no ready reserve, an empty reserve slot starts at once on the next free
-account. The one exception is a promotion after the rate limit: that run is not continued, and the
-reserve starts on the next tick. While the active is `starting` or `refreshing`, a reserve that
-turns `ready` waits for the outcome of that start (risk 11).
-
-The reserve's own events: its prices are ignored. `disconnected_by_server` or a foreign `user.data`
-stops it and holds its account back, and a new reserve starts on the next tick. A token refusal is
-exchanged in place, with no subscription and no switch.
-
-Each slot is `empty`, `starting` or `refreshing` (both waiting on `accessToken`), or `running`. The
-tick fills only an empty slot, so there are never more than two clients. `stop()` stops both clients
-at once, then waits for an `accessToken` in flight, and opens nothing after its answer. The
-invariants:
-
-- I1: no handler ends with the active slot empty and the reserve `running` and `ready` (the three
-  entries above).
-- I2: every start and exchange ends by writing its own slot (`running`, `empty`, or a failover), or
-  leaves on `stop()`.
-- I3: a throw of the client (`start()` on invalid credentials or a second start) is the account's
-  failure: the client is detached and stopped, the account is held back, and the start goes on to
-  the next candidate; after an exchange the account fails over as on a refused exchange.
-- I4: every work nobody awaits has a rejection handler (`market data work failed`), a backstop that
-  by I3 no case reaches.
+Guarantees (`manager.test.ts`): S1, S2 at most two live clients, exactly those in the slots, no
+account in both (`expectSafe` ends every fake-client case); S3 an account that left the list keeps
+a slot for at most a tick plus the read, after a database error until the next good read (M19); S4
+only the active is subscribed (M1, M7c, M7d, M20); S5 every promise has a handler, and
+`market data work failed` is a backstop no case reaches; S6 every failure holds its account back,
+except the first token refusal in the window, R1 and R3 (M7e); S7 a refusal is reported once (M7c).
+Liveness: with an account that the broker accepts listed from `t0`, the active is `ready` by
+`t0 + ACCOUNT_RETRY + TICK + (n + 1) × RESERVE_READY + GRACE` for `n` accounts (407 s for two);
+every state out of `ready` is bounded by R2 or R3 through `since` (M21, M23).
 
 ## Closing a candle and holes
 
@@ -119,29 +118,30 @@ same list and `digits` as the scanner and the bot. The socket's `common.assets_l
 
 ## Tokens and hold-back
 
-Every token comes from `accessToken(id, { mayRefresh: true, serviceOnly: true, refusedToken? })`. An
-exchange happens here only if the keeper missed it (the keeper renews a day ahead). After a broker
-refusal, the token service sees `refusedToken` (the `hashToken` of the refused token), marks the
-stored one expired and exchanges it (#281). The refusal is reported only by the call that holds the
-old token, because once the token is marked, any later call exchanges anyway.
+Every token comes from `accessToken(id, { mayRefresh: true, serviceOnly: true, refusedToken? })`:
+an exchange happens here only if the keeper missed it, or after a refusal, which the token service
+marks expired first (#281); once marked, any later call exchanges anyway, so it is reported once.
 
 | Outcome | Hold-back (`MARKET_DATA_ACCOUNT_RETRY_MS`) | Log |
 |---|---|---|
 | `ok` | no | `info` `market data socket started { role, accountId }` |
-| `refresh_rate_limited` | yes; the run over the accounts stops (the limit is per IP) | `warn` `market data token refused` |
+| `refresh_rate_limited` | yes, this account only: the next one usually reads a live token without an exchange | `warn` `market data token refused` |
 | `account_revoked` | yes | `warn` `market data token refused` with `revokedReason` |
 | `not_service`, `user_blocked`, `account_pending`, `account_not_found` | yes | `info` `market data token refused` |
 | `key_unavailable`, `refresh_needed` | yes | `warn` `market data token refused` |
 | `accessToken` threw | yes | `error` `market data token threw` (name and code) |
-| `start()` threw (a new client or an exchange in place) | yes | `error` `market data socket start threw` (name and code) |
-| exchange in place `ok` | no | `info` `market data token refreshed` |
+| `start()` or `openClient` threw | yes | `error` `market data socket start threw` (name and code) |
+| the client's token refused (`token_expired`, `auth_failed`) | the first in the window no, a second yes | `warn` `market data failover` / `info` `market data reserve stopped` |
 | `disconnected_by_server` | yes | `warn` `market data socket disconnected by server` |
 | foreign `user.data` | yes | `warn` `market data foreign user` (the other user's id is not logged) |
-| `reconnecting` past the grace | no | `warn` `market data failover` |
+| R1: the account left the list | no | `reason: 'not_working'` |
+| R2: the reserve out of `ready` past its budget | yes | `reason: 'not_ready'` |
+| R3: the active out of `ready` past the grace | no | `reason: 'not_ready'` |
 
 Hold-backs are kept in process memory and lapse by time. The account list is read on every tick, so
-a mark or unmark in the admin pages, or a repair by the keeper, takes effect within
-`MARKET_DATA_TICK_MS` plus any hold-back.
+a mark or unmark in the admin pages, a blocked user or a revoked account takes effect, for a start
+and for a running socket alike, within `MARKET_DATA_TICK_MS` plus the list's read (R1), and a mark
+plus any hold-back.
 
 ## The log
 
@@ -149,15 +149,15 @@ a mark or unmark in the admin pages, or a repair by the keeper, takes effect wit
 |---|---|---|
 | `market data` | info | every `MARKET_DATA_LOG_MS`, the line below |
 | `market data socket started` | info | a client opened for a role |
-| `market data failover` | warn | `{ from, to, reason }`; `to: null` when no ready reserve took over |
+| `market data failover` | warn | `{ from, reason, heldBack }`: the active vacated |
+| `market data reserve stopped` | info | `{ accountId, reason, heldBack }`: the reserve vacated |
+| `market data reserve promoted` | info | `{ to }`: R3, a ready reserve took an empty active slot, or one out of `ready` past the grace |
 | `market data socket disconnected by server` | warn | `{ role, accountId, reason }` |
 | `market data foreign user` | warn | `{ role, accountId }` |
 | `market data token refused` | info / warn | the table above |
 | `market data token threw` | error | `{ role, accountId, err }` |
-| `market data token refreshed` | info | an in-place exchange succeeded |
-| `market data reserve promoted` | info | `{ to }`: the reserve reached `ready` while the active slot was empty, or took it when the active's start found no client |
 | `market data socket start threw` | error | `{ role, accountId, err }` |
-| `market data work failed` | error | `{ err }`: a backstop for a throw outside the client's tries; no case reaches it |
+| `market data work failed` | error | `{ err }`: the backstop of `track()` and of the timer; no case reaches it |
 | `market data catalog not fresh` | warn | once per streak of stale catalog reads |
 | `market data: no working service account` | warn | once per streak without an active |
 | `market data tick failed` | error | the tick threw (the account list's query) |
@@ -177,7 +177,8 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 |---|---|---|
 | `MARKET_DATA_TICK_MS` | 30 000 | the tick: accounts, roles, new pairs |
 | `MARKET_DATA_LOG_MS` | 60 000 | the `market data` line |
-| `MARKET_DATA_FAILOVER_GRACE_MS` | 2 000 | the active's own reconnection before the switch |
+| `MARKET_DATA_FAILOVER_GRACE_MS` | 2 000 | the active out of `ready` (start, connection, reconnection) while a ready reserve waits |
+| `MARKET_DATA_RESERVE_READY_MS` | 25 000 | the reserve out of `ready` before it gives way to the next account |
 | `MARKET_DATA_SKEW_MARGIN_MS` | 2 000 | the clock rule of closing |
 | `MARKET_DATA_ACCOUNT_RETRY_MS` | 300 000 | an account's hold-back |
 | `MARKET_DATA_RING_CANDLES` | `SIGNAL_FETCH_LIMIT` (300) | candles per (pair, interval) |
@@ -189,12 +190,13 @@ The links:
   at its longest jitter, starts inside the grace. Its handshake (connect, then `user.auth`) is not
   bounded here: a slower one ends in the switch.
 - `GRACE < 5 s`: the switch happens within one `5s` candle.
+- `BROKER_HTTP_TIMEOUT_MS + SOCKET_CONNECT + SOCKET_AUTH < RESERVE_READY` (20 s < 25 s): a start ends first.
 - `SKEW_MARGIN < 5 s` and `< TICK_MAX_SKEW_MS`.
 - `TICK ≤ LOG`.
 - `SERVICE_ACCOUNTS_TICK_MS < ACCOUNT_RETRY`: the keeper gets a tick to repair an account before it
   is retried.
-- `stop()` waits for at most one `accessToken`, which `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`
-  already bounds.
+- `stop()` waits for the `accessToken` calls in flight (at most two, at once), which
+  `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` already bounds.
 
 ## Tests
 
@@ -202,9 +204,8 @@ The links:
 - `source.test.ts` S1-S3.
 - `manager.test.ts`:
   - M1-M6, M8-M14 on `packages/mock-broker`, with two users;
-  - M7-M7d, M15, M16, the in-flight case of M10, M17a-M17e (the promotion and the reserve after a
-    switch) and M18a-M18c (a throwing `start()`) on fake clients, because the mock has one token
-    per user and cannot authorise an exchanged one, and its clients never throw;
+  - M7-M7e, M10b, M15, M16 and M19-M25 on fake clients, because the mock has one token per user and
+    cannot authorise an exchanged one, its clients never throw, and its states cannot be held;
   - M11 reads the log itself. It reads the lines of every case before it, so alone or shuffled it
     fails falsely; `vitest.config.ts` pins the order.
 - The timing pins are in `timing.test.ts`.
@@ -218,8 +219,8 @@ The links:
    line for such a session runs to thousands.
 2. **One service account on the pilot.** On the active, any of these leaves the stream without a
    socket for `MARKET_DATA_ACCOUNT_RETRY_MS` (5 min): `disconnected_by_server`, a foreign
-   `user.data`, or a refused token exchange. A token the broker refuses while the exchange works
-   costs only the exchange (≤ `BROKER_HTTP_TIMEOUT_MS`).
+   `user.data`, a refused exchange, or a second token refusal within 5 min. The first token refusal
+   costs one start.
 3. **Closing may come before a bucket's last ticks.** The clock rule can close early when the
    process clock runs ahead of the broker's by more than the margin during a quiet stream. The
    watermark rule can close early because ticks of different pairs arrive out of timestamp order.
@@ -232,19 +233,18 @@ The links:
 7. **Memory:** 144 × 2 × 300 candles, about 5 MB plus the builders.
 8. **One backend process.** Two replicas would open two active sockets. There is no lease (#93).
 9. **A change of a pair's `digits`** applies after a restart.
-10. **A refused token while an exchange is in flight:** if the reserve turns `ready` during an
-    in-place exchange of the active, the switch no longer happens. The window is
-    ≤ `BROKER_HTTP_TIMEOUT_MS`.
-11. **A reserve that turns `ready` while the active is `starting` waits for that start.** The window
-    is the `accessToken` answer (usually a database read; up to `BROKER_HTTP_TIMEOUT_MS`, 5 000,
-    with an exchange) plus the new active's connection. Promoting in the middle of a start would mean
-    redirecting the start in flight to another slot. Falsifiable: `market data failover { to: null }`,
-    then `market data socket started { role: 'active' }` more than 5 s after the reserve's `ready`
-    in the same period.
-12. **A reserve that reconnects without end keeps its account.** The client retries forever
-    (`reconnectionAttempts: Infinity`) and the reserve has no grace, so with two accounts and a
-    failed active the stream waits for that reconnection. Falsifiable: a `market data` line with
-    `reserve.socketState: 'reconnecting'` in two periods in a row.
+10. **An active out of `ready` with no ready reserve is not vacated:** the stream waits for its own
+    reconnection (≤ 15 s apart), or for a reserve R2 finds by rotation. Falsifiable: a `market data`
+    line with `active.socketState` not `ready` two periods in a row and `reserve: null`.
+11. **A fresh active slower than the grace gives way to a ready reserve.** The answer of the dropped
+    start, perhaps with an exchange, is not lost: the token stays in the row, and the old account
+    starts as the reserve. The cost is one more `accessToken` and perhaps a socket. Falsifiable: more
+    than a few `market data failover { reason: 'not_ready' }` an hour with a healthy broker.
+12. **The list stops a socket on the next tick, not at once** (an unmark, a blocked user, a revoked
+    account; after a database error, on the next good read); a new start of a blocked user does not
+    pass the token service. Falsifiable: a `market data` line with an account unmarked > 60 s ago.
+13. **A 429 on an exchange holds only its account**, and each other account that hits it. Falsifiable:
+    more than `n` lines `market data token refused { reason: 'refresh_rate_limited' }` in 5 min.
 
 ## Owner's steps after the merge (pilot)
 
