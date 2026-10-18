@@ -8,6 +8,7 @@ import Fastify, {
 } from 'fastify';
 import pino, { type DestinationStream } from 'pino';
 import { errorLogFields, logOptions, type LogLevel } from '@binarius/shared';
+import { adminNoticePage } from './admin/pages';
 import { adminRoutes } from './admin/routes';
 import { TEXTS } from './admin/texts';
 import { sendHtml } from './html';
@@ -35,7 +36,9 @@ export interface WebAppDeps {
 
 const ADMIN_CSP = [
   "default-src 'none'",
+  "script-src 'self'",
   "style-src 'self'",
+  "font-src 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
@@ -45,6 +48,16 @@ const ADMIN_CSP = [
 // "append a request Origin header"), which the origin check refuses (#241). same-origin keeps
 // the real Origin on them and still sends no Referer off this origin.
 const ADMIN_REFERRER_POLICY = 'same-origin';
+
+// An /admin path gets its refusals and errors in the admin design system (#459); the Mini App and
+// anything else keep the plain notice page.
+const isAdminPath = (url: string): boolean => {
+  const path = url.split('?', 1)[0] ?? '';
+  return path === '/admin' || path.startsWith('/admin/');
+};
+
+const notice = (url: string, title: string, body: string) =>
+  isAdminPath(url) ? adminNoticePage(title, body) : noticePage(title, body);
 
 export function buildWebApp({
   backend,
@@ -89,7 +102,7 @@ export function buildWebApp({
     if (request.method !== 'POST') return undefined;
     if (request.headers.origin === publicOrigin) return undefined;
     request.log.warn({ method: request.method }, 'a POST arrived from another origin');
-    return sendHtml(reply, 403, noticePage(TEXTS.forbiddenTitle, TEXTS.forbiddenBody));
+    return sendHtml(reply, 403, notice(request.url, TEXTS.forbiddenTitle, TEXTS.forbiddenBody));
   });
 
   // The Mini App pages set a policy of their own (oauth/routes.ts, cashier/routes.ts), one that
@@ -118,8 +131,8 @@ export function buildWebApp({
   void app.register(oauthRoutes, { backend, publicOrigin, brokerAuthorizeUrl });
   void app.register(cashierRoutes, { backend, widgetOrigins: depositWidgetOrigins });
 
-  app.setNotFoundHandler(async (_request, reply) =>
-    sendHtml(reply, 404, noticePage(TEXTS.notFoundTitle, TEXTS.notFoundBody)),
+  app.setNotFoundHandler(async (request, reply) =>
+    sendHtml(reply, 404, notice(request.url, TEXTS.notFoundTitle, TEXTS.notFoundBody)),
   );
 
   // Fastify's default handler echoes error.message, and a message here can carry a form value
@@ -133,10 +146,10 @@ export function buildWebApp({
       statusCode >= 400 &&
       statusCode < 500
     ) {
-      return sendHtml(reply, statusCode, noticePage(TEXTS.errorTitle, TEXTS.errorBody));
+      return sendHtml(reply, statusCode, notice(request.url, TEXTS.errorTitle, TEXTS.errorBody));
     }
     request.log.error(errorLogFields(error), 'unhandled request error');
-    return sendHtml(reply, 500, noticePage(TEXTS.errorTitle, TEXTS.errorBody));
+    return sendHtml(reply, 500, notice(request.url, TEXTS.errorTitle, TEXTS.errorBody));
   });
 
   return app;

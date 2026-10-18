@@ -85,4 +85,46 @@ describe('layout', () => {
       '<body data-page="login">',
     );
   });
+
+  // the Mini App pages and the notice page pass none of the #459 fields: their markup is the one
+  // layout produced before them, captured from main 06b5848d
+  it('L1 renders a page without the new fields byte for byte as before', () => {
+    expect(
+      layout({
+        title: 't',
+        body: html`<p>x</p>`,
+        head: html`<script src="/x.js"></script>`,
+        page: 'cashier',
+      }).value,
+    ).toBe(
+      '<!doctype html>\n<html lang="ru">\n  <head>\n    <meta charset="utf-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1" />\n    <title>t</title>\n    <link rel="stylesheet" href="/admin/static/app.css" /><script src="/x.js"></script>\n  </head>\n  <body data-page="cashier">\n    <main><p>x</p></main>\n  </body>\n</html>\n',
+    );
+    expect(layout({ title: 't', body: html`<p>x</p>` }).value).toBe(
+      '<!doctype html>\n<html lang="ru">\n  <head>\n    <meta charset="utf-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1" />\n    <title>t</title>\n    <link rel="stylesheet" href="/admin/static/app.css" />\n  </head>\n  <body>\n    <main><p>x</p></main>\n  </body>\n</html>\n',
+    );
+  });
+
+  it('L2 puts the root class, the body class and the stylesheet where they are asked for', () => {
+    const page = layout({
+      title: 't',
+      body: html``,
+      rootClass: 'no-js',
+      bodyClass: 'auth',
+      page: 'x',
+      stylesheet: '/s.css',
+    }).value;
+    expect(page).toContain('<html lang="ru" class="no-js">');
+    expect(page).toContain('<body class="auth" data-page="x">');
+    expect(page).toContain('<link rel="stylesheet" href="/s.css" />');
+    expect(page).not.toContain('app.css');
+    expect(layout({ title: 't', body: html``, bodyClass: 'auth' }).value).toContain(
+      '<body class="auth">',
+    );
+  });
+
+  it('L3 leaves the <main> to the page when asked to', () => {
+    const page = layout({ title: 't', body: html`<p>x</p>`, wrapMain: false }).value;
+    expect(page).not.toContain('<main');
+    expect(page).toMatch(/<body>\s*<p>x<\/p>\s*<\/body>/);
+  });
 });

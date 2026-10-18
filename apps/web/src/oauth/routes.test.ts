@@ -115,7 +115,7 @@ const postCallback = (payload: unknown, origin: string | null = ORIGIN) =>
 const BODY = { state: STATE, code: CODE, initData: INIT_DATA };
 
 const ADMIN_CSP_LITERAL =
-  "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 const logged = () => lines.join('\n');
 
@@ -198,6 +198,9 @@ describe('GET /oauth/login', () => {
     expect(response.statusCode).toBe(400);
     expect(response.body).toContain(OAUTH_TEXTS.refusedLogin);
     expect(response.body).not.toContain('<script');
+    // the Mini App's notice keeps its own stylesheet, not the admin design system's (#459)
+    expect(response.body).toContain('href="/admin/static/app.css"');
+    expect(response.body).not.toContain('admin.css');
     const line = lines.find((entry) => entry.includes('a Mini App login link was refused'));
     expect(JSON.parse(line ?? '{}')).toMatchObject({ reason });
     expect(logged()).not.toContain(STATE);

@@ -1,0 +1,931 @@
+/* The admin design system (#459). Tokens come from theme.ts (prepended when served); this file
+   only reads them. docs/admin-design-system.md lists the components and their markup. */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/admin/static/fonts/Inter-Regular.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/admin/static/fonts/Inter-Medium.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/admin/static/fonts/Inter-SemiBold.woff2) format('woff2');
+}
+
+/* ---- base ---- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 var(--space-3);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: var(--text-2xl);
+}
+
+h2 {
+  font-size: var(--text-lg);
+  margin-top: var(--space-6);
+}
+
+h3 {
+  font-size: var(--text-base);
+  margin-top: var(--space-5);
+  color: var(--color-fg-muted);
+}
+
+h1 + h2,
+.section > h2:first-child {
+  margin-top: 0;
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+code {
+  padding: 0.05em 0.35em;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre code {
+  padding: 0;
+  background: none;
+}
+
+time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+}
+
+.no-js .no-js-hidden {
+  display: none;
+}
+
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 100;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-bg);
+  color: var(--color-on-accent);
+  font-weight: 500;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+/* ---- shell: sidebar, top bar, content ---- */
+
+.shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.content {
+  min-width: 0;
+}
+
+/* The sidebar is a popover drawer below 64rem and a static column above. No `display` here: it
+   would override the browser's rule that hides a closed popover, and the drawer would cover the
+   page. */
+.sidebar {
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  overflow-y: auto;
+}
+
+.sidebar[popover] {
+  margin: 0;
+  inset: 0 auto 0 0;
+  width: min(18rem, 85vw);
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-right: 1px solid var(--color-border);
+}
+
+.sidebar[popover]:popover-open {
+  display: flex;
+}
+
+.sidebar[popover]::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.5rem;
+  margin-bottom: var(--space-3);
+  padding: 0 var(--space-1) 0 var(--space-2);
+}
+
+.brand {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-fg);
+}
+
+.sidebar a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-fg-muted);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.sidebar a:hover {
+  background: var(--color-surface-2);
+  color: var(--color-fg);
+}
+
+.sidebar a[aria-current='page'] {
+  background: var(--color-surface-2);
+  color: var(--color-fg);
+  box-shadow: inset 2px 0 0 var(--color-accent-bg);
+}
+
+.sidebar a[aria-current='page'] .icon {
+  color: var(--color-accent);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--topbar-h);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-left: auto;
+  min-width: 0;
+}
+
+.topbar-actions form {
+  margin: 0;
+}
+
+.login {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-fg-muted);
+  font-weight: 500;
+}
+
+.page {
+  max-width: 80rem;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+}
+
+@media (min-width: 64rem) {
+  .shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  }
+
+  .sidebar[popover] {
+    position: sticky;
+    top: 0;
+    display: flex;
+    width: auto;
+    height: 100vh;
+    height: 100dvh;
+    inset: auto;
+    overflow-y: auto;
+  }
+
+  .burger,
+  .sidebar-close {
+    display: none;
+  }
+
+  .page {
+    padding: var(--space-6);
+  }
+}
+
+/* On a phone the login is left out, so the switch, the password link and «Выйти» fit one row. */
+@media (max-width: 30rem) {
+  .topbar {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .topbar-actions {
+    flex-wrap: nowrap;
+    gap: var(--space-2);
+  }
+
+  .topbar-actions .login {
+    display: none;
+  }
+
+  .topbar-actions .btn {
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
+/* ---- buttons ---- */
+
+button,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button:hover,
+.btn:hover {
+  border-color: var(--color-fg-muted);
+  text-decoration: none;
+}
+
+button:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button[type='submit'],
+.btn-primary {
+  border-color: var(--color-accent-bg);
+  background: var(--color-accent-bg);
+  color: var(--color-on-accent);
+}
+
+button[type='submit']:hover,
+.btn-primary:hover {
+  border-color: var(--color-accent-bg);
+  filter: brightness(1.1);
+}
+
+.btn-secondary,
+button.btn-secondary {
+  border-color: var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-fg);
+}
+
+.btn-secondary:hover,
+button.btn-secondary:hover {
+  border-color: var(--color-fg-muted);
+  filter: none;
+}
+
+.btn-danger,
+button.btn-danger {
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.icon-btn {
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  padding: var(--space-2);
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-fg-muted);
+}
+
+.icon-btn:hover {
+  border-color: var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-fg);
+}
+
+/* ---- forms ---- */
+
+form {
+  margin: 0 0 var(--space-4);
+}
+
+form.stack {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 24rem;
+}
+
+label,
+.field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+label.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-fg);
+  font-size: var(--text-base);
+  font-weight: 400;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: max(16px, var(--text-base));
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  width: 1rem;
+  min-height: 0;
+  height: 1rem;
+  padding: 0;
+  accent-color: var(--color-accent-bg);
+}
+
+textarea {
+  min-height: 8rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--color-fg-muted);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
+  border-color: var(--color-focus);
+}
+
+fieldset {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+legend {
+  padding: 0 var(--space-1);
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+form.search,
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+form.search label {
+  flex: 1 1 12rem;
+}
+
+form.search input {
+  min-width: 0;
+}
+
+form.editor {
+  display: grid;
+  gap: var(--space-3);
+}
+
+form.editor .buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+p.error,
+ul.error {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  font-weight: 500;
+}
+
+ul.error {
+  padding-left: var(--space-6);
+}
+
+p.notice,
+.notice {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-sm);
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  font-weight: 500;
+}
+
+p.hint {
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+}
+
+p.counter {
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+ul.publish li.error {
+  color: var(--color-danger);
+}
+
+/* ---- tables ---- */
+
+table {
+  width: 100%;
+  margin: 0 0 var(--space-4);
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  font-size: var(--text-base);
+}
+
+th,
+td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--color-surface-2);
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+thead th:first-child,
+tr:first-child > th:first-child {
+  border-top-left-radius: var(--radius);
+}
+
+thead th:last-child,
+tr:first-child > th:last-child {
+  border-top-right-radius: var(--radius);
+}
+
+tr:last-child > td {
+  border-bottom: 0;
+}
+
+tbody tr:hover > td {
+  background: var(--color-surface-2);
+}
+
+td form {
+  margin: 0;
+}
+
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+td.agent {
+  max-width: 22rem;
+  overflow-wrap: anywhere;
+}
+
+td.payload {
+  max-width: 28rem;
+}
+
+code.payload {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+tr.current > td {
+  font-weight: 600;
+}
+
+.table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: var(--space-4);
+}
+
+.table-wrap > table {
+  margin: 0;
+}
+
+/* Until #656 turns rows into cards: an old table is as wide as its content and scrolls inside
+   itself when that is wider than the page, so the page itself never scrolls sideways. */
+main table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ---- description lists, cards ---- */
+
+dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+
+dt {
+  color: var(--color-fg-muted);
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 30rem) {
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0 var(--space-4);
+  }
+
+  dd {
+    margin-bottom: var(--space-2);
+  }
+}
+
+.props {
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.card {
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.section {
+  margin-bottom: var(--space-6);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.metric dt {
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+}
+
+.metric dd {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.metrics-dense {
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: var(--space-2);
+}
+
+.metrics-dense .metric {
+  padding: var(--space-3);
+}
+
+.metrics-dense .metric dd {
+  font-size: var(--text-xl);
+}
+
+.metric code {
+  padding: 0;
+  background: none;
+  font-size: var(--text-sm);
+}
+
+/* ---- badges, empty state, pager ---- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem var(--space-2);
+  border-radius: 999px;
+  background: var(--color-neutral-bg);
+  color: var(--color-fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.badge-success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.badge-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.badge-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.badge-info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.badge-neutral {
+  background: var(--color-neutral-bg);
+  color: var(--color-fg);
+}
+
+.empty {
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-fg-muted);
+  text-align: center;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-4);
+}
+
+/* ---- details, quotes, the bot text preview ---- */
+
+details {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+blockquote {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--color-border);
+  color: var(--color-fg-muted);
+}
+
+blockquote.expandable {
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+/* pre-wrap: the template's own line breaks and indentation would show, so pages.ts writes the bubble without any */
+.tg-bubble {
+  max-width: 32rem;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  background: var(--color-surface-2);
+  white-space: pre-wrap;
+}
+
+.tg-spoiler {
+  background: var(--color-fg-muted);
+  color: transparent;
+}
+
+.tg-spoiler:hover {
+  color: inherit;
+  background: none;
+}
+
+.tg-label {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- sign-in and notice pages ---- */
+
+.auth {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.auth-main {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-4);
+}
+
+.auth-card {
+  width: min(100%, 24rem);
+}
+
+.auth-card .brand {
+  display: block;
+  margin-bottom: var(--space-5);
+}
+
+.auth-card h1 {
+  font-size: var(--text-xl);
+}
+
+.auth-card form.stack {
+  max-width: none;
+}
+
+.auth-card button[type='submit'] {
+  width: 100%;
+}
+
+.auth-tools {
+  display: flex;
+  justify-content: center;
+}

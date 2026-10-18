@@ -1,4 +1,5 @@
 import type { FastifyReply } from 'fastify';
+import { MINI_APP_STYLESHEET_PATH } from './admin/static';
 
 /**
  * A fragment that is already HTML. The class is not exported and it carries a private member, so
@@ -58,18 +59,35 @@ export interface PageOptions {
   head?: SafeHtml;
   /** `data-page` on `<body>`, for a page script to tell the pages apart */
   page?: string;
+  /** the stylesheet link; the Mini App's unless a page names another (#459) */
+  stylesheet?: string;
+  /** `class` on `<html>` */
+  rootClass?: string;
+  /** `class` on `<body>` */
+  bodyClass?: string;
+  /** false: `body` goes straight into `<body>`, the page builds its own `<main>` */
+  wrapMain?: boolean;
 }
 
-export const layout = ({ title, body, head, page }: PageOptions): SafeHtml => html`<!doctype html>
-<html lang="ru">
+export const layout = ({
+  title,
+  body,
+  head,
+  page,
+  stylesheet = MINI_APP_STYLESHEET_PATH,
+  rootClass,
+  bodyClass,
+  wrapMain = true,
+}: PageOptions): SafeHtml => html`<!doctype html>
+<html lang="ru"${rootClass === undefined ? '' : html` class="${rootClass}"`}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
-    <link rel="stylesheet" href="/admin/static/app.css" />${head}
+    <link rel="stylesheet" href="${stylesheet}" />${head}
   </head>
-  <body${page === undefined ? '' : html` data-page="${page}"`}>
-    <main>${body}</main>
+  <body${bodyClass === undefined ? '' : html` class="${bodyClass}"`}${page === undefined ? '' : html` data-page="${page}"`}>
+    ${wrapMain ? html`<main>${body}</main>` : body}
   </body>
 </html>
 `;
