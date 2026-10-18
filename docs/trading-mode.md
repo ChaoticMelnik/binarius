@@ -208,8 +208,7 @@ session («🚀 Сессия из 5 циклов · REAL», #327).
 (demo now draws the amount screen, [bot-demo.md](bot-demo.md#the-amount-screen-476)): «💵 Ставка:
 $X» with the real stake in force, «🤖 Бот проведёт 5 циклов подряд… Реальный режим: сделки идут на реальные
 деньги.» (`launchCycleReal`), «🚀 Запустить цикл · REAL» (`real:sess:…`), «💵 Изменить ставку» of
-the real picker (`stk:o:r:p:…`) and «↩️ К списку»; a pair below the cycle floor gets the floor's
-refusal as in demo. The single real trade stays on the manual path. A stake saved from a launch
+the real picker (`stk:o:r:p:…`) and «↩️ К списку», at any payout as in demo (#631). The single real trade stays on the manual path. A stake saved from a launch
 screen reads the mode the same way and draws the same screen under the saved line of the saved
 stake's mode. A failed access read draws the amount screen's refusal («⚠️ Сервис временно
 недоступен…» with «🔄 Повторить», #476): without the read no screen of either mode can be drawn.

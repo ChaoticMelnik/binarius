@@ -196,9 +196,8 @@ session:<id>                       (an old status message's «🔄 Обнови�
 
 - On the analysis it is drawn on a signal only (#360, #509: before #509 «сигнала нет» drew it too,
   and the session waited for a signal itself; the owner wants no session on a pair without one) —
-  as the first row, above «➕ Ещё»; not on «сигнала нет», `fetch_failed` or a failed signal call,
-  and not on a pair paying below the cycle floor (`pairPayoutAccepted`, #379; the screen
-  says why, and «➕ Ещё» carries the verdict in its datum). It is drawn only where `sessionFits(durationSec)` holds: 5 × 4 × (5 + 120) s and 5 × 4 × (15 + 120) s fit the worker's hour (#552: five cycles of up to four trades), so
+  as the first row, above «➕ Ещё»; not on «сигнала нет», `fetch_failed` or a failed signal call;
+  at any payout (#631; #379 withheld it below 80 %). It is drawn only where `sessionFits(durationSec)` holds: 5 × 4 × (5 + 120) s and 5 × 4 × (15 + 120) s fit the worker's hour (#552: five cycles of up to four trades), so
   after #313 every duration of the set has the button; the guard stays, in the keyboard and in
   `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_CYCLES` with
   `cyclesCount` («5 циклов», #552), and the request sends the same number as `cycles`, so the label, the check and the request
@@ -228,10 +227,8 @@ session:<id>                       (an old status message's «🔄 Обнови�
   or `rejected`, draws «🚀 Сессия из 5 циклов» with `real:sess:<assetId>:<sec>` of a real trade
   (#327) or `demo:l:<assetId>:<sec>:n` of a demo one (the amount screen, #476), above
   the end of the path, by the tracker's edits and by «🔄 Обновить статус» (`sessionOfferOf`,
-  [bot-demo-trade.md](bot-demo-trade.md#the-status-message)), and only when the pair paid at least
-  the cycle floor (#379) as the catalog had it at the press or at the refresh; unknown — the read
-  failed or the id is not listed — draws no offer. A press while a session runs shows the
-  running one and starts none, as from any door.
+  [bot-demo-trade.md](bot-demo-trade.md#the-status-message)), at any payout (#631). A press while
+  a session runs shows the running one and starts none, as from any door.
 
 ## Outcomes of the start
 
@@ -248,7 +245,6 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
 | 409 `balance_unavailable` | the same (no snapshot, or a zero minimum) | «⏳ Баланс Binodex ещё не получен — попробуй через минуту.» |
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
-| 409 `payout_too_low` | the same: the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80, #379) — an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell; the bot's own screens offer no session there | «🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.» (`sessionPayoutTooLow`) + the way back to the analysis, which, re-read, shows the note and no session button |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
 | 409 `no_signal` | the same (#509): the pair's signal on the current candle is «сигнала нет» — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig:<sec>`) and «🏠 В меню» |
@@ -324,7 +320,7 @@ reference bot); the header is «💼 Реальная сессия» (`sessionHe
 
 ```text
 🎮 Демо-сессия
-🔹 Торговая пара: EUR/USD OTC         (sessionPair)
+🔹 Торговая пара: EUR/USD             (sessionPair)
 🔹 Сумма сделки: $10.00               (sessionStake: the base stake, formatStake)
 🔹 Время экспирации: 15 с             (sessionExpiry: settings.durationSec)
 📡 Сигнал: ⬆️ Вверх                   (sessionSignalUp / sessionSignalDown: view.signalAction, #568)
@@ -376,8 +372,8 @@ buttons](#the-stop-and-the-old-buttons-536)).
 
 - **`settings: null`** (a hand-written row): the header and «⚠️ Настройки сессии не прочитаны —
   напиши в поддержку: /support», whatever the status.
-- The pair's label ([`pairLabel`](pairs-catalog.md#the-pairs-label-428), #428): the symbol capped
-  at 64 characters, « OTC» by `isOtc`; without a catalog «актив #<id>» stands in. The stake is
+- The pair's label ([`pairLabel`](pairs-catalog.md#the-pairs-label-428-631), #428, #631): the
+  symbol without « OTC», capped at 64 characters; without a catalog «актив #<id>» stands in. The stake is
   `settings.stake.baseStake` through `formatStake`, never a number; the expiry is the settings'
   seconds and « с».
 - **The figures of the summary** (#337) — the result, `trades.profit`, the backend's SQL sum of the

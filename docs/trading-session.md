@@ -164,8 +164,8 @@ keeps the broker minimum.
 | `kill_switch` | the global trading switch is closed ([kill-switch.md](kill-switch.md)) | `stopPausedSessions` (#144), the tick's first sweep; the attempt on `trading_paused` |
 | `no_signal_timeout` | the session waited for a signal `SESSION_NO_SIGNAL_CANDLES` (20) candles of its signal interval — 100 s on `5s`, 300 s on `15s` (#637) — a closed pair, `no_signal`, the pause after two losses ([The no-signal limit](#the-no-signal-limit-509)) | the orchestrator (#509) |
 
-Since #509 a pair whose payout fell below the floor after the start neither waits nor stops: the
-session trades on its signals ([The payout floor](#the-payout-floor-379)).
+Since #509 a pair whose payout fell below 80 % after the start neither waits nor stops: the
+session trades on its signals ([The payout order key](#the-payout-order-key-379-631)).
 
 ## Operations
 
@@ -229,7 +229,6 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 3 | `checkTradingSessionStart({ mode })` | 409 `trading_paused` first; 404 `user_not_found`; 409 `user_blocked`; 409 `mode_not_allowed` when `mode` is not the user's `trading_mode` (#327, before any account read); 404 `broker_account_not_found`; 409 `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
-| 4b | `!pairPayoutAccepted(pair)`: the payout below `MIN_CYCLE_PAYOUT_PCT` (#379) | 409 `payout_too_low` (R19; exactly 80 starts, R20); the signal is not asked (R33) |
 | 4c | the pair's signal on the current candle (#509): `signals.evaluate({ assetId, interval: intervalForDuration(durationSec), digits })`, the cached feed `POST /trading/signal` reads, in parallel with steps 5–5b; its refusal answers before theirs (R32b); a signal's direction goes to step 7 as `start_signal_action` (#568, R34) | 503 `signal_unavailable` on `fetch_failed` (`rate_limited` included) or a throw (R29); 409 `no_signal` on a `no_signal` decision (R28) |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
@@ -479,7 +478,7 @@ keeps the first reason.
 | | the pair absent, or `!pairAcceptsDuration(pair, durationSec)` | stop `pair_unavailable` (E9c, E9d) |
 | | `!isPairOpen(pair, now)` and `waitExpired` | stop `no_signal_timeout`, `waited: pair_closed` (W5) |
 | | `!isPairOpen(pair, now)` | hold back `min(scheduledUntil − now, TRADING_SESSION_RETRY_MS)` (E9e) |
-| | the payout below `MIN_CYCLE_PAYOUT_PCT` | nothing: the floor is the start's alone since #509, the session trades on (P6) |
+| | the payout below `MIN_CYCLE_PAYOUT_PCT` | nothing: no payout holds a session (#509), and since #631 none refuses its start either; the session trades on (P6) |
 | `signals.evaluate({ assetId, interval: intervalForDuration(durationSec) })` | a backend failure | hold back `TRADING_SESSION_RETRY_MS` (E5) |
 | | `fetch_failed` | hold back `retryAfterSec` when given (0 included), else `TRADING_SESSION_RETRY_MS` (E5) |
 | | `no_signal` and `waitExpired` | stop `no_signal_timeout`, `waited: no_signal` (W1) |
@@ -572,22 +571,27 @@ under the lease (Rule 32); a dead owner's lease lapses after `SESSION_LEASE_TTL_
 REST (Rules 15, 27). A `close_trade` sent while the worker was down is lost; the catch-up settles
 that trade (R4).
 
-## The payout floor (#379)
+## The payout order key (#379, #631)
 
-`MIN_CYCLE_PAYOUT_PCT = 80` (`packages/shared/src/catalog.ts`, `pairPayoutAccepted`): no cycle of
-trades starts or continues on a pair paying less. A win pays `stake × payout / 100`, a loss costs
-the stake, so a fixed stake breaks even at `100 / (100 + payout)` right forecasts
-(`breakEvenPct`). The owner's seven demo sessions of 2026-10-07…08 (Signal v1) had three on pairs
-paying 54–56 %, which break even only at 64–65 % right forecasts; at 80 % the share is 55.6 %. The
-value is an expert one (owner, 2026-10-09); the backtest stand (#381) tunes it.
+`MIN_CYCLE_PAYOUT_PCT = 80` (`packages/shared/src/catalog.ts`, `pairPayoutAccepted`). A win pays
+`stake × payout / 100`, a loss costs the stake, so a fixed stake breaks even at
+`100 / (100 + payout)` right forecasts (`breakEvenPct`). The owner's seven demo sessions of
+2026-10-07…08 (Signal v1) had three on pairs paying 54–56 %, which break even only at 64–65 % right
+forecasts; at 80 % the share is 55.6 %. The value is an expert one (owner, 2026-10-09); the
+backtest stand (#381) tunes it.
 
-Where it applies — every place a cycle starts: the start route (step 4b, 409 `payout_too_low`),
-the backend's scanner (a pair below the floor is neither scanned nor served,
-[signal.md](signal.md) → The scanner), and the bot's cycle entries ([bot-demo.md](bot-demo.md) →
-The check). A running session is not held by it (owner, #509): a payout that fell below the floor
-after the start leaves the session trading on its signals (P6); until #509 the orchestrator's
-attempt waited for the payout. The manual path's single trade and its pair lists are not
-restricted (owner, #379); the pair screens show the payout and the break-even share.
+Since #631 (owner, 2026-10-17: «порог 80 % — только для порядка») it refuses nothing: the start
+route has no payout step (`payout_too_low` is gone from the contract; R19': 79 % starts, R20:
+80 % starts), the backend's scanner decides and serves every open pair whatever it pays
+([signal.md](signal.md) → The scanner, S19'), and the bot's cycle entries check the pair as the
+manual path does ([bot-demo.md](bot-demo.md) → The check). Where it applies is the bot's signals
+list alone (`signalsShown`): the pairs at or above it come first, the pairs below it only fill a
+list shorter than five ([bot-demo.md](bot-demo.md#the-signals-screen-320)). The pair screens and
+the analysis show the payout and the break-even share. A running session was never held by it
+(owner, #509, P6). From #379 to #631 it refused a cycle below 80 % at the start (409
+`payout_too_low`), in the scanner and in the bot's cycle entries; the signal stand
+(`packages/signal-stand`) and the spike CLI (`candle-spike-run.ts`) still measure the cycle's
+economy at it.
 
 ## The no-signal limit (#509)
 

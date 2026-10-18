@@ -161,10 +161,11 @@ ring by REST. An **element** is a (pair, interval).
 **Which elements.**
 
 - **Proactive set:** the pairs of the last fresh catalog with valid `digits` that the scanner would
-  take (`eligiblePairs`: open by the schedule, accepting the interval's duration, paying at least
-  `MIN_CYCLE_PAYOUT_PCT`), on both intervals. It applies only while `MarketDataManager.streaming()`
-  is true (the active socket is `ready`). A closed pair, or one below the payout floor, is warmed
-  only on request.
+  take (`eligiblePairs`: open by the schedule, accepting the interval's duration, at any payout
+  since #631), on both intervals. It applies only while `MarketDataManager.streaming()` is true
+  (the active socket is `ready`). A closed pair is warmed only on request (B14; a pair paying less
+  than 80 % without one, B14b). The set grew with #631 by the pairs below 80 %: the warm-up after a
+  start takes longer at the same budget, one spare token a refill.
 - **Requests:** `pending()` is drained on every scan, whatever the socket. A request for an id outside
   the last fresh catalog, or with `digits` that fail `assertDigits`, is dropped: the ring holds no
   pair outside the subscription. Before the first fresh catalog the requests wait in their set.
