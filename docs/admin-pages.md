@@ -67,10 +67,20 @@ How `web` acts on a backend answer:
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты | Служебные аккаунты) and the account block («Сменить пароль · login — Выйти»: the link to the password
+Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты | Служебные аккаунты) and the account block («login · Сменить пароль · Выйти»: the login, the link to the password
 page and the logout button). The login shown is the one in the `me` of the backend answer the page
 was built from; a page rendered without asking the backend (a refused search, a refused password
 form) shows no account block.
+
+The shell is the admin design system's (#459, [admin-design-system.md](admin-design-system.md)):
+the nav is a sidebar with an icon per section — a static column from 64rem up, below that a drawer
+behind the «Меню» button in the top bar (a native popover: Esc, a tap outside or «Закрыть меню»
+close it, no script). The top bar holds the theme switch and the account block; on a phone the
+login is left out of it. The sign-in pages and the notice pages of `/admin` routes (not found,
+refused, error) are a card on the same design system; a notice outside `/admin` keeps the Mini
+App's plain page. The theme is dark by default, light by the system setting, and the switch
+(system → dark → light) is remembered in this browser's `localStorage`; without JavaScript the
+switch is hidden and the system setting decides.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
 `/admin/sessions`. Timestamps are printed as the ISO instants the backend sent.
 

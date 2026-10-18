@@ -83,6 +83,7 @@ pnpm test apps/backend   # one package's tests (path filter)
 pnpm test --project unit # the tests that need no Postgres or Redis
 pnpm test packages/e2e   # the demo cycle end to end, docs/e2e-demo-cycle.md
 STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand run   # the Signal backtest, docs/signal-stand.md
+pnpm --filter @binarius/web admin:export <dir> [--serve <port>]   # the admin pages as static files, docs/admin-design-system.md
 ```
 
 `pnpm check` runs `tsc -b --clean`, then the tests, then `tsc -b`, then `eslint .`. The order is
