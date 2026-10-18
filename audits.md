@@ -3665,5 +3665,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R2 Minors 1–3 (planner locks a sent row every tick; docs/mailing.md wider than the code; docs/deposit.md names the wrong file) | Minor | other | left at the merge | → #654 |
 
 ### Process improvement proposals
-1. Tech-lead Phase 2: a spawn prompt for an issue with an open PR states its review rounds counted by `## Review round` headings — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Mode 2 → Phase 2**
+1. Tech-lead Phase 2: a spawn prompt for an issue with an open PR states its review rounds counted by `## Review round` headings — **внедрено в #655: `.claude/skills/tech-lead/SKILL.md` → Mode 2 → Phase 2**
 2. Remaining findings — **вынесено в #654**
