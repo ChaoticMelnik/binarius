@@ -1,11 +1,12 @@
 import { eq, sql } from 'drizzle-orm';
 import { HttpError } from 'grammy';
 import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FIRST_SESSION_CHAIN,
   logOptions,
   NotificationKind,
+  TOKEN_NUDGES,
   TokenLedgerKind,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
@@ -56,6 +57,7 @@ beforeEach(async () => {
 });
 
 const PUSH_TOKEN = '123456:AA-mailing-push-token';
+const CASHIER_URL = 'https://web.example/cashier';
 const WARN = 40;
 const ERROR = 50;
 
@@ -65,9 +67,10 @@ interface Linked {
   accountId: string;
 }
 
-// connected `minutes` ago: an active account and the starter pack's ledger row, backdated
-async function linked(minutes: number): Promise<Linked> {
-  const user = await seedUser(tmp.db);
+// connected `minutes` ago: an active account and the starter pack's ledger row, backdated. The
+// balance is the whole pack, so no low-token nudge (#123), or `balance`.
+async function linked(minutes: number, balance = 100n): Promise<Linked> {
+  const user = await seedUser(tmp.db, { balance });
   const accountId = await seedBrokerAccount(tmp.db, user.userId, { isPartnerClient: true });
   await tmp.db.insert(tokenLedger).values({
     userId: user.userId,
@@ -97,6 +100,7 @@ function engine(
     push,
     logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
     config,
+    cashierUrl: CASHIER_URL,
     ...(clock === 'default' ? {} : { now: () => clock.now }),
     sleep,
   });
@@ -689,4 +693,92 @@ it('writes sent_at on the database clock', async () => {
     .where(eq(notificationJobs.userId, user.userId));
   expect(row?.recent).toBe(true);
   await mailing.stop();
+});
+
+// #123
+describe('the low-token nudge through the engine', () => {
+  const [, LOW, OUT] = TOKEN_NUDGES;
+  const seeded: string[] = [];
+  const nudged = async (balance: bigint) => {
+    const user = await linked(0, balance);
+    seeded.push(user.userId);
+    return user;
+  };
+  const setBalance = (userId: string, balance: bigint) =>
+    tmp.db.update(users).set({ tokenBalance: balance }).where(eq(users.id, userId));
+  // the planner takes a canceled nudge back: a later case's planTick must not reach these users
+  afterEach(async () => {
+    for (const userId of seeded.splice(0)) await setBalance(userId, 100n);
+  });
+
+  const cashierRows = [
+    [{ text: CLIENT_LABELS.depositButton, web_app: { url: CASHIER_URL } }],
+    [{ text: CLIENT_LABELS.buyButton, callback_data: 'buy' }],
+  ];
+
+  it.each([
+    [LOW.kind, 20n, CLIENT_TEXTS.tokensLow({ nudgeTokens: '20' })],
+    [OUT.kind, 0n, CLIENT_TEXTS.tokensOut({ nudgeTokens: '0' })],
+  ] as const)('sends %s once, with the cashier and the purchase', async (kind, balance, text) => {
+    const user = await nudged(balance);
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const sends = sendsTo(captured.calls, user.telegramUserId);
+    expect(sends).toHaveLength(1);
+    const payload = sends[0]!.payload;
+    expect(pushedText(payload)).toBe(text.value);
+    expect(payload.parse_mode).toBe('HTML');
+    expect((payload.reply_markup as { inline_keyboard: unknown }).inline_keyboard).toEqual(
+      cashierRows,
+    );
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+      [kind, NotificationJobStatus.Sent],
+    ]);
+    await mailing.stop();
+  });
+
+  it('sends only the 100 % nudge after a jump from 51 to 0', async () => {
+    const user = await nudged(51n);
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await setBalance(user.userId, 0n);
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const sends = sendsTo(captured.calls, user.telegramUserId);
+    expect(sends.map((send) => pushedText(send.payload))).toEqual([
+      CLIENT_TEXTS.tokensOut({ nudgeTokens: '0' }).value,
+    ]);
+    expect((await jobsOf(user.userId)).map((job) => job.kind)).toEqual([OUT.kind]);
+    await mailing.stop();
+  });
+
+  it('cancels a nudge whose balance went back up, plans it again once spent, and sends it once', async () => {
+    const user = await nudged(0n);
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await setBalance(user.userId, 80n);
+    await mailing.sendTick();
+    expect((await jobsOf(user.userId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Canceled,
+    ]);
+
+    await setBalance(user.userId, 0n);
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    expect(sendsTo(captured.calls, user.telegramUserId)).toHaveLength(1);
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+      [OUT.kind, NotificationJobStatus.Sent],
+    ]);
+    await mailing.stop();
+  });
 });

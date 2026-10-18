@@ -11,6 +11,9 @@ export const NotificationKind = {
   FirstSession72h: 'first_session_72h',
   AnalysisUnused: 'analysis_unused',
   ReferralRewarded: 'referral_rewarded',
+  TokensHalf: 'tokens_half',
+  TokensLow: 'tokens_low',
+  TokensOut: 'tokens_out',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -47,9 +50,28 @@ export const referralRewardedPayloadSchema = z.object({
 });
 export type ReferralRewardedPayload = z.infer<typeof referralRewardedPayloadSchema>;
 
+// The low-token nudge (#123, docs/mailing.md → The low-token nudge; owner 2026-10-08, 2026-10-10,
+// 2026-10-18): the share of the user's own starter pack used, lowest first. A user gets one push,
+// for the highest threshold reached, and no lower one while the higher one's job is not canceled.
+export const TOKEN_NUDGES = [
+  { kind: NotificationKind.TokensHalf, usedPercent: 50 },
+  { kind: NotificationKind.TokensLow, usedPercent: 80 },
+  { kind: NotificationKind.TokensOut, usedPercent: 100 },
+] as const satisfies readonly { kind: NotificationKind; usedPercent: number }[];
+
+// The nudges are due at the planning moment: their delay is the planner's and the sender's ticks.
+export const TOKEN_NUDGE_AFTER_MS = 0;
+
+// The job's payload: the threshold's balance, floor(pack × (100 − usedPercent) / 100), as text (a
+// bigint, rule 2); 0 for the last threshold.
+export const tokenNudgePayloadSchema = z.object({
+  tokens: z.string().regex(/^\d+$/),
+});
+export type TokenNudgePayload = z.infer<typeof tokenNudgePayloadSchema>;
+
 // The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
-// immediate kind (referral_rewarded, 0) is not in it: the link about the planner's tick concerns
-// only a kind that waits.
+// immediate kinds (referral_rewarded and the low-token nudges, 0) are not in it: the link about
+// the planner's tick concerns only a kind that waits.
 export const MAILING_MIN_OFFSET_MS = Math.min(
   ...FIRST_SESSION_CHAIN.map((step) => step.afterHours * 3_600_000),
   ANALYSIS_UNUSED_AFTER_MS,

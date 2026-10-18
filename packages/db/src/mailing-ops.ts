@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { NotificationKind } from '@binarius/shared';
+import { NotificationKind, type TradeMode } from '@binarius/shared';
 import type { Db } from './client';
 import { acceptsMailing, deliverable } from './delivery-ops';
 import { MAILING_SCENARIOS, type MailingScenario } from './mailing-scenarios';
@@ -22,15 +22,23 @@ export const MAILING_OUTCOME_UNKNOWN = 'outcome_unknown';
 
 const KINDS = Object.values(NotificationKind);
 
+// A scenario with replansCanceled takes a canceled job of its key back. Only a canceled one: a
+// canceled job never reached Telegram (only pending jobs are canceled, and a pending one was never
+// handed over), while a sent or failed one is final and a pending one already waits.
+const replanCanceled = sql`do update set status = ${literal(NotificationJobStatus.Pending)},
+    payload = excluded.payload, scheduled_at = excluded.scheduled_at, sent_at = null,
+    attempts = 0, last_error = null, updated_at = now()
+  where ${notificationJobs.status} = ${literal(NotificationJobStatus.Canceled)}`;
+
 // One INSERT … SELECT per kind, idempotent through notification_jobs_dedupe_key_idx: a second
 // planner, a restart or a slow tick inserts nothing twice. A job is planned only once due, for a
 // fact at or after the kind's plans_from, to a user the bot may reach, while the scenario applies.
-// Returns how many jobs each kind gained.
+// Returns how many jobs each kind gained, re-planned ones included.
 export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, number>> {
   const planned = {} as Record<NotificationKind, number>;
   for (const kind of KINDS) {
     const scenario: MailingScenario = MAILING_SCENARIOS[kind];
-    const { facts, afterMs, dedupeKey, stillApplies } = scenario;
+    const { facts, afterMs, dedupeKey, stillApplies, replansCanceled } = scenario;
     const payload = scenario.payload ?? sql`'{}'::jsonb`;
     const after = sql`make_interval(secs => ${afterMs / 1000})`;
     const result = await db.execute(sql`
@@ -43,7 +51,8 @@ export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, 
         and fact.at + ${after} <= now()
         and ${deliverable()}
         and ${stillApplies}
-      on conflict (user_id, dedupe_key) where dedupe_key is not null do nothing`);
+      on conflict (user_id, dedupe_key) where dedupe_key is not null
+      ${replansCanceled === true ? replanCanceled : sql`do nothing`}`);
     planned[kind] = result.rowCount ?? 0;
   }
   return planned;
@@ -55,6 +64,8 @@ export interface ClaimedMailingJob {
   payload: Record<string, unknown>;
   attempts: number;
   telegramUserId: bigint;
+  // the user's mode at the claim, for a button whose label follows it (#123)
+  tradingMode: TradeMode;
 }
 
 // A job applies while its scenario holds and its key is one the scenario would plan now
@@ -86,6 +97,7 @@ export async function claimMailingJob(
     payload: Record<string, unknown> | null;
     attempts: number | null;
     telegram_user_id: string | null;
+    trading_mode: TradeMode | null;
   }>(sql`
     with due as (
       select ${notificationJobs.id} as id, ${notificationJobs.scheduledAt} as scheduled_at,
@@ -111,13 +123,19 @@ export async function claimMailingJob(
       returning id, user_id, kind, payload, attempts
     )
     select (select count(*)::int from canceled) as canceled, claimed.id, claimed.kind,
-      claimed.payload, claimed.attempts, ${users.telegramUserId}::text as telegram_user_id
+      claimed.payload, claimed.attempts, ${users.telegramUserId}::text as telegram_user_id,
+      ${users.tradingMode} as trading_mode
     from (select 1) one
     left join claimed on true
     left join ${users} on ${users.id} = claimed.user_id`);
   const row = result.rows[0];
   const canceled = row?.canceled ?? 0;
-  if (row?.id == null || row.kind === null || row.telegram_user_id === null) {
+  if (
+    row?.id == null ||
+    row.kind === null ||
+    row.telegram_user_id === null ||
+    row.trading_mode === null
+  ) {
     return { job: undefined, canceled };
   }
   return {
@@ -127,6 +145,7 @@ export async function claimMailingJob(
       payload: row.payload ?? {},
       attempts: row.attempts ?? 0,
       telegramUserId: BigInt(row.telegram_user_id),
+      tradingMode: row.trading_mode,
     },
     canceled,
   };
