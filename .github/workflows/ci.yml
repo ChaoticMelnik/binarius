@@ -1,9 +1,13 @@
 name: CI
 
+# Process text and the audit log only: no test, script or CI step reads them, so a change of these
+# alone runs nothing (#646). docs/ is not here - tests compare code with it.
 on:
   push:
     branches: [main]
+    paths-ignore: ['.claude/**', 'audits.md']
   pull_request:
+    paths-ignore: ['.claude/**', 'audits.md']
 
 permissions:
   contents: read
