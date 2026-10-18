@@ -17,7 +17,6 @@ import {
   sessionFitsDeadline,
   SessionStakeStrategy,
   intervalForDuration,
-  MIN_CYCLE_PAYOUT_PCT,
   pairPayoutAccepted,
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
@@ -55,8 +54,8 @@ import {
 } from './analysis';
 import { backendErrorFields, type BackendClient } from './backend-client';
 import {
-  checkDemoCycle,
   checkDemoPair,
+  checkDemoTrade,
   DEMO_DURATIONS_SEC,
   durationOptions,
   LEGACY_DEMO_DURATIONS_SEC,
@@ -65,11 +64,9 @@ import {
   pageOf,
   pairsOf,
   readDemoCatalog,
-  readDemoCycle,
   readDemoTrade,
   SIGNALS_DURATIONS_SEC,
   type DemoCatalogRead,
-  type DemoCycleRead,
   type DemoDurationSec,
   type DemoTradeRead,
 } from './demo-catalog';
@@ -92,7 +89,6 @@ import {
   demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
-  formatBreakEven,
   groupButtonLabel,
   LABELS,
   launchCycleButtonLabel,
@@ -166,11 +162,10 @@ export const demoAssetCallbackData = (assetId: number): string => `demo:a:${asse
 export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:d:${assetId}:${durationSec}`;
 // «➕ Ещё» under the analysis on a signal (#360): the press draws the single trade's row in place
-// of the collapsed keyboard. The direction, the payout floor's verdict (`s` the session row was
-// drawn, `n` withheld, #379) and the mode the analysis text was drawn in (`d`/`r`, #121) are the
-// render's: the expansion draws a stake button only in that mode, so a REAL button never sits under
-// the demo disclaimer, nor a demo one under the real. The longest,
-// `demo:more:2147483647:15:down:n:r`, is 32 bytes.
+// of the collapsed keyboard. The direction and the mode the analysis text was drawn in (`d`/`r`,
+// #121) are the render's: the expansion draws a stake button only in that mode, so a REAL button
+// never sits under the demo disclaimer, nor a demo one under the real. The longest,
+// `demo:more:2147483647:15:down:r`, is 30 bytes.
 const ANALYSIS_MORE_PREFIX = 'demo:more:';
 // also the stake picker's mode segment (#326, stake-picker.ts)
 export const MODE_TOKENS = {
@@ -181,10 +176,8 @@ export const analysisMoreCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
   action: TradeAction,
-  payoutAccepted: boolean,
   mode: TradeMode,
-): string =>
-  `${ANALYSIS_MORE_PREFIX}${assetId}:${durationSec}:${action}:${payoutAccepted ? 's' : 'n'}:${MODE_TOKENS[mode]}`;
+): string => `${ANALYSIS_MORE_PREFIX}${assetId}:${durationSec}:${action}:${MODE_TOKENS[mode]}`;
 // The stake button behind «➕ Ещё» (#126, #360); the press opens the trade (#127, demo-trade.ts).
 // The nonce is drawn once per expansion and is the trade's idempotency key: the same button
 // pressed again replays its intent, a new expansion allows a new trade. The fingerprint is the amount the
@@ -294,9 +287,10 @@ export const CYCLE_STAKE_PATTERN = new RegExp(
   `^demo:sa:(\\d{1,10}):(${DURATIONS}):(${STAKE_AMOUNT_PATTERN}):(l|a)$`,
 );
 export const CYCLE_CUSTOM_PATTERN = new RegExp(`^demo:sc:(\\d{1,10}):(${DURATIONS}):(l|a)$`);
-// the floor's token is optional: a button #360 drew before #379 has none
+// both tokens are optional: a button #360 drew before #379 has neither, one #379 to #631 drew has
+// the payout floor's verdict (`s`/`n`), ignored since the floor refuses nothing (#631)
 export const ANALYSIS_MORE_PATTERN = new RegExp(
-  `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})(?::(s|n)(?::(d|r))?)?$`,
+  `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})(?::(s|n))?(?::(d|r))?$`,
 );
 const DEMO_DURATION_PATTERN = demoDurationPattern(DURATIONS);
 const DEMO_ANALYSIS_PATTERN = demoAnalysisPattern(DURATIONS);
@@ -381,16 +375,14 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
   return { assetId, durationSec, action, nonce, fingerprint: match[5] };
 }
 
-// «➕ Ещё»'s data from an ANALYSIS_MORE_PATTERN match, undefined when forged. A datum without
-// the floor's token was drawn before #379 and keeps its session row: that press meets the route's
-// 409 payout_too_low, as every pre-#379 session button does. A datum without the mode token was
-// drawn before #121, in demo.
+// «➕ Ещё»'s data from an ANALYSIS_MORE_PATTERN match, undefined when forged. The floor's token
+// (group 4) is read by nobody: every datum keeps its session row (#631). A datum without the mode
+// token was drawn before #121, in demo.
 export function analysisMoreDataOf(match: RegExpMatchArray | string):
   | {
       assetId: number;
       durationSec: DemoDurationSec;
       action: TradeAction;
-      payoutAccepted: boolean;
       renderedMode: TradeMode;
     }
   | undefined {
@@ -403,7 +395,6 @@ export function analysisMoreDataOf(match: RegExpMatchArray | string):
     assetId,
     durationSec,
     action,
-    payoutAccepted: match[4] !== 'n',
     renderedMode: match[5] === 'r' ? TradeMode.Real : TradeMode.Demo,
   };
 }
@@ -514,8 +505,10 @@ export function signalsShown(
 ): ShownSignal[] {
   const checked: ShownSignal[] = [];
   for (const signal of signals) {
-    const check = checkDemoCycle(catalog, signal.assetId, durationSec, nowMs);
-    if (check.ok) checked.push({ pair: check.pair, action: signal.action });
+    const check = checkDemoTrade(catalog, signal.assetId, durationSec, nowMs);
+    if (check.ok && pairPayoutAccepted(check.pair)) {
+      checked.push({ pair: check.pair, action: signal.action });
+    }
   }
   const byPayout = (a: ShownSignal, b: ShownSignal) => comparePairsByPayout(a.pair, b.pair);
   checked.sort(byPayout);
@@ -575,8 +568,7 @@ export function signalsScreen(
 
 // The launch of a session of DEFAULT_SESSION_CYCLES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
-// The picker draws it too, after a save, unless the pair pays below the cycle floor
-// (stake-picker.ts). Since #476 it is drawn in real mode only (#327): the cycle button is marked
+// The picker draws it too, after a save (stake-picker.ts). Since #476 it is drawn in real mode only (#327): the cycle button is marked
 // REAL and starts a real session, the picker is the real one; demo draws the amount screen.
 export function launchScreen({
   assetId,
@@ -788,24 +780,6 @@ ${screen.text}`,
   });
 }
 
-// A launch refused for a pair below the cycle floor (#379): the way back to the list and to the
-// manual path, whose single trade the floor does not restrict. The launch press draws it, and so
-// does the picker after a save (stake-picker.ts).
-export function payoutTooLowScreen(pair: PairView, durationSec: DemoDurationSec): DemoScreen {
-  return {
-    text: TEXTS.demoPayoutTooLow({
-      symbol: pairLabel(pair),
-      payout: String(pair.payout),
-      payoutFloor: String(MIN_CYCLE_PAYOUT_PCT),
-      breakEven: formatBreakEven(pair.payout),
-    }),
-    keyboard: new InlineKeyboard()
-      .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec))
-      .row()
-      .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
-  };
-}
-
 export interface DemoComposerDeps {
   backend: Pick<
     BackendClient,
@@ -869,7 +843,7 @@ export function createDemoComposer<C extends Context>({
     const [read, access, signal] = await answerAnd(
       ctx,
       Promise.all([
-        readDemoCycle(backend, assetId, durationSec, now),
+        readDemoTrade(backend, assetId, durationSec, now),
         readAccess(ctx.from.id),
         readLaunchSignal(assetId, durationSec),
       ]),
@@ -877,8 +851,7 @@ export function createDemoComposer<C extends Context>({
     const firstName = ctx.from.first_name;
     const step = { assetId, durationSec, back: cycleBackOf(origin) };
     const screen = !read.ok
-      ? // a pair below the cycle floor gets the floor's refusal in either mode (#327)
-        launchFailure(ctx, read, assetId, durationSec)
+      ? tradeFailure(ctx, read, assetId)
       : signal === 'unavailable'
         ? { text: TEXTS.sessionSignalUnavailable, keyboard: retryWithMenu(ctx.callbackQuery.data) }
         : signal === 'no_signal'
@@ -983,7 +956,7 @@ export function createDemoComposer<C extends Context>({
       TEXTS.analyzing({ subject: analysisSubject(read.pair, durationSec) }),
     );
     if (waiting === 'unknown') return;
-    const amounts = cardAmountsOf(stake.access, pairPayoutAccepted(read.pair), durationSec);
+    const amounts = cardAmountsOf(stake.access, durationSec);
     const screen = await evaluate(
       ctx.from.id,
       read.pair,
@@ -991,7 +964,7 @@ export function createDemoComposer<C extends Context>({
       stake.mode,
       amounts !== null,
     );
-    const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair, stake.mode, amounts);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, stake.mode, amounts);
     if (screen.photo === null) await showResult(ctx, waiting, screen.text, keyboard);
     else await sendCard(ctx, waiting, screen.photo, screen.text, keyboard, read.pair, durationSec);
   });
@@ -1016,9 +989,8 @@ export function createDemoComposer<C extends Context>({
             data.durationSec,
             data.action,
             amount,
-            data.payoutAccepted,
             mode,
-            cardAmountsOf(access, data.payoutAccepted, data.durationSec),
+            cardAmountsOf(access, data.durationSec),
           )
         : appendAnalysisTail(new InlineKeyboard(), data.assetId, data.durationSec),
     );
@@ -1266,16 +1238,15 @@ export function createDemoComposer<C extends Context>({
   }
 
   // The amounts under a signal's card and in its «➕ Ещё» (#482): in demo, with a broker snapshot
-  // to draw them from (stakeAccess: a blocked user gets none), on a pair and a duration a cycle
-  // may start on — the session row's conditions. Otherwise null, and the session row stays: its
-  // press opens the amount screen, which says why.
+  // to draw them from (stakeAccess: a blocked user gets none), on a duration a cycle may start on —
+  // the session row's condition. Otherwise null, and the session row stays: its press opens the
+  // amount screen, which says why.
   function cardAmountsOf(
     access: TradingAccessResponse | null,
-    payoutAccepted: boolean,
     durationSec: DemoDurationSec,
   ): CycleAmounts | null {
     if (access === null || access.tradingMode !== TradeMode.Demo) return null;
-    if (!payoutAccepted || !sessionFits(durationSec)) return null;
+    if (!sessionFits(durationSec)) return null;
     const checked = stakeAccess(access, (keyboard) => keyboard, connectKeyboard);
     if (!('broker' in checked)) return null;
     const shown = cycleAmountsOf(access, checked.broker);
@@ -1377,30 +1348,27 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The session row first on a signal (#360; never on «сигнала нет», #509) of a pair paying at
-  // least the cycle floor (#379, the screen says why otherwise), in the user's mode (#327) — under
-  // a signal's card in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then
+  // The session row first on a signal (#360; never on «сигнала нет», #509) at any payout (#631),
+  // in the user's mode (#327) — under a signal's card in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then
   // «🔄 Повторить анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     screen: AnalysisScreen,
-    pair: PairView,
     mode: TradeMode,
     amounts: CycleAmounts | null,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
-    const payoutAccepted = pairPayoutAccepted(pair);
     if (screen.photo !== null && amounts !== null) {
       appendCycleAmounts(keyboard, { assetId, durationSec, back: 'a' }, amounts).row();
     } else if (screen.session) {
-      appendSessionRow(keyboard, assetId, durationSec, payoutAccepted, mode);
+      appendSessionRow(keyboard, assetId, durationSec, mode);
     }
     if (screen.stake !== null) {
       keyboard
         .text(
           LABELS.analysisMoreButton,
-          analysisMoreCallbackData(assetId, durationSec, screen.stake, payoutAccepted, mode),
+          analysisMoreCallbackData(assetId, durationSec, screen.stake, mode),
         )
         .row();
     }
@@ -1416,7 +1384,6 @@ export function createDemoComposer<C extends Context>({
     durationSec: DemoDurationSec,
     action: TradeAction,
     amount: DecimalString | null,
-    payoutAccepted: boolean,
     mode: TradeMode,
     amounts: CycleAmounts | null,
   ): InlineKeyboard {
@@ -1430,7 +1397,7 @@ export function createDemoComposer<C extends Context>({
     const label = stakeButtonLabel(action, amount, mode);
     const keyboard = (
       amounts === null
-        ? appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted, mode)
+        ? appendSessionRow(new InlineKeyboard(), assetId, durationSec, mode)
         : appendCycleAmounts(
             new InlineKeyboard(),
             { assetId, durationSec, back: 'a' },
@@ -1449,10 +1416,9 @@ export function createDemoComposer<C extends Context>({
     keyboard: InlineKeyboard,
     assetId: number,
     durationSec: DemoDurationSec,
-    payoutAccepted: boolean,
     mode: TradeMode,
   ): InlineKeyboard {
-    if (!sessionFits(durationSec) || !payoutAccepted) return keyboard;
+    if (!sessionFits(durationSec)) return keyboard;
     // in demo the amount screen first (#476), edited in place of the analysis
     return keyboard
       .text(
@@ -1609,16 +1575,6 @@ export function createDemoComposer<C extends Context>({
             .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA),
         };
     }
-  }
-
-  function launchFailure(
-    ctx: Context,
-    read: Exclude<DemoCycleRead, { ok: true }>,
-    assetId: number,
-    durationSec: DemoDurationSec,
-  ): DemoScreen {
-    if (read.reason !== 'payout_too_low') return tradeFailure(ctx, read, assetId);
-    return payoutTooLowScreen(read.pair, durationSec);
   }
 
   // The types present in the catalog, each with its count of open pairs; a type with no pair

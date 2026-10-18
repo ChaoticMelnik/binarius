@@ -4,7 +4,6 @@ import {
   intervalForDuration,
   pairAcceptsDuration,
   pairLabel,
-  pairPayoutAccepted,
   pairTypeGroupOf,
   SIGNAL_SCAN_INTERVALS,
   type PairsCatalogResponse,
@@ -172,37 +171,4 @@ export async function readDemoTrade(
   const read = await readDemoCatalog(backend);
   if (!read.ok) return read;
   return { ...checkDemoTrade(read.catalog, assetId, durationSec, now()), catalog: read.catalog };
-}
-
-// A cycle of trades (the signals screen's list, the launch, the analysis's session button) also
-// needs the payout floor (#379); the manual path's single trade keeps checkDemoTrade.
-export type DemoCycleCheck =
-  DemoTradeCheck | { ok: false; reason: 'payout_too_low'; pair: PairView };
-
-export function checkDemoCycle(
-  catalog: PairsCatalogResponse,
-  assetId: number,
-  durationSec: number,
-  nowMs: number,
-): DemoCycleCheck {
-  const checked = checkDemoTrade(catalog, assetId, durationSec, nowMs);
-  if (!checked.ok) return checked;
-  if (!pairPayoutAccepted(checked.pair)) {
-    return { ok: false, reason: 'payout_too_low', pair: checked.pair };
-  }
-  return checked;
-}
-
-export type DemoCycleRead =
-  Exclude<DemoCatalogRead, { ok: true }> | (DemoCycleCheck & { catalog: PairsCatalogResponse });
-
-export async function readDemoCycle(
-  backend: Pick<BackendClient, 'readPairs'>,
-  assetId: number,
-  durationSec: number,
-  now: () => number,
-): Promise<DemoCycleRead> {
-  const read = await readDemoCatalog(backend);
-  if (!read.ok) return read;
-  return { ...checkDemoCycle(read.catalog, assetId, durationSec, now()), catalog: read.catalog };
 }

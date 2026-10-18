@@ -135,7 +135,6 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   page: text,
   payout: text,
   breakEven: text,
-  payoutFloor: text,
   noSignalCandles: text,
   candleSec: text,
   label: text,

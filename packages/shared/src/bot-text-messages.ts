@@ -1,7 +1,7 @@
 import { USER_ACCOUNT_LIST_LIMIT } from './account';
 import { BOT_COMMANDS } from './bot-commands';
 import { REFERRAL_CODE_LENGTH, REFERRAL_PAYLOAD_PREFIX } from './referral';
-import { MIN_CYCLE_PAYOUT_PCT, PAIR_LABEL_MAX_LENGTH } from './catalog';
+import { PAIR_LABEL_MAX_LENGTH } from './catalog';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_TEXT_CATALOG,
@@ -65,7 +65,6 @@ export const BOT_TEXT_WIDTHS = {
   payout: 6,
   // formatBreakEven: 0.0-100.0, or a dash
   breakEven: 5,
-  payoutFloor: String(MIN_CYCLE_PAYOUT_PCT).length,
   // a session's signal candle in seconds: the longest of SIGNAL_CHART_INTERVAL_MS, 1h («3600»)
   candleSec: String(Math.max(...Object.values(SIGNAL_CHART_INTERVAL_MS)) / 1000).length,
   // «999 из 999»
@@ -211,7 +210,6 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   page: () => w.page,
   payout: () => w.payout,
   breakEven: () => w.breakEven,
-  payoutFloor: () => w.payoutFloor,
   // candlesCount of SESSION_NO_SIGNAL_CANDLES: 20 takes the many form («20 свечей»), and the bot
   // reads that key alone (M2)
   noSignalCandles: (m) =>
@@ -445,9 +443,6 @@ const card = (title: BotHtmlKey, direction: BotPlainKey): BotTextSegment[] => [
   k(direction),
   '\n',
   k('demoPayout'),
-  // a pair paying below the cycle floor gets no session row, the note says why (on every
-  // decided answer, #379; in both modes, #327)
-  oneOf([], ['\n', k('analysisCycleUnavailable')]),
   '\n\n',
   // real mode (#121): its own disclaimer
   anyOf('analysisDisclaimer', 'analysisDisclaimerReal'),
@@ -619,7 +614,6 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       k('analysisNoSignal', { reason: (m) => m.longest(...dataReasons) }),
       '\n\n',
       k('analysisDataHint'),
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
     ],
   },
   {
@@ -634,7 +628,6 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features,
       '\n\n',
       k('analysisNoSignalHint'),
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
     ],
   },
   {

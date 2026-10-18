@@ -244,47 +244,35 @@ describe('the stake button', () => {
       intentId: INTENT_ID,
       telegramUserId: String(USER.id),
       label: 'EUR/USD OTC',
-      payoutAccepted: true,
       view: INTENT_VIEW,
     });
   });
 
-  // #379: the session offer under the finished trade follows the pair's payout at the press
-  describe('on a pair at the cycle floor', () => {
+  // #631: the session offer under the finished trade does not depend on the payout (#379 withheld
+  // it below 80 %)
+  describe('on a pair below or at 80 percent', () => {
     const settled = intentView({ status: TradeIntentStatus.Settled });
     const catalogAt = (payout: number) => () =>
       Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout }] }));
 
-    it.each([
-      [79, false],
-      [80, true],
-    ] as const)('at %i percent offers the session: %s', async (payout, offered) => {
+    it.each([79, 80])('at %i percent offers the session', async (payout) => {
       const { press, calls } = setup({
         readPairs: catalogAt(payout),
         createIntent: () => Promise.resolve(settled),
       });
       await press(STAKE);
       const sent = payloadOf(calls, 'sendMessage');
-      expect(sent?.text).toBe(statusOf(settled, offered));
-      expect(rowsOf(sent)).toEqual(offered ? OFFER_END_ROWS : END_ROWS);
+      expect(sent?.text).toBe(statusOf(settled, true));
+      expect(rowsOf(sent)).toEqual(OFFER_END_ROWS);
     });
 
-    it.each([
-      [79, false],
-      [80, true],
-    ] as const)(
-      'at %i percent hands the tracker payoutAccepted %s, its edits following it',
-      async (payout, offered) => {
-        const { press, calls, intentTracker } = setup({ readPairs: catalogAt(payout) });
-        await press(STAKE);
-        const entry = intentTracker.track.mock.calls[0]?.[0] as IntentTrackRequest;
-        expect(entry.payoutAccepted).toBe(offered);
-        await entry.edit(telegramHtml`settled`, settled);
-        expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(
-          offered ? OFFER_END_ROWS : END_ROWS,
-        );
-      },
-    );
+    it.each([79, 80])('at %i percent the tracker edits offer the session too', async (payout) => {
+      const { press, calls, intentTracker } = setup({ readPairs: catalogAt(payout) });
+      await press(STAKE);
+      const entry = intentTracker.track.mock.calls[0]?.[0] as IntentTrackRequest;
+      await entry.edit(telegramHtml`settled`, settled);
+      expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(OFFER_END_ROWS);
+    });
   });
 
   it("hands the tracker an edit of the status message's own id, its keyboard following the view", async () => {
@@ -356,7 +344,7 @@ describe('the stake button', () => {
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(intent, true));
     expect(sent?.text).toContain(OFFER);
-    expect(rowsOf(sent)).toEqual(intentKeyboard(intent, true).inline_keyboard);
+    expect(rowsOf(sent)).toEqual(intentKeyboard(intent).inline_keyboard);
     expect(rowsOf(sent)).toContainEqual(SESSION_ROW);
     expect(intentTracker.track).not.toHaveBeenCalled();
   });
@@ -905,11 +893,8 @@ describe('the refresh button', () => {
     expect(JSON.stringify(rowsOf(edit))).not.toContain('demo:sess:');
   });
 
-  // #379: the floor's verdict is the catalog's at this press
-  it.each([
-    [79, false],
-    [80, true],
-  ] as const)('at %i percent draws the session offer: %s', async (payout, offered) => {
+  // #631: the payout draws no part of the offer (#379 withheld it below 80 %)
+  it.each([79, 80])('at %i percent draws the session offer', async (payout) => {
     const settled = intentView({ status: TradeIntentStatus.Settled });
     const { press, calls } = setup({
       readIntent: () => Promise.resolve(settled),
@@ -917,8 +902,8 @@ describe('the refresh button', () => {
     });
     await press(REFRESH);
     const edit = payloadOf(calls, 'editMessageText');
-    expect(edit?.text).toBe(statusOf(settled, offered));
-    expect(rowsOf(edit)).toEqual(offered ? OFFER_END_ROWS : END_ROWS);
+    expect(edit?.text).toBe(statusOf(settled, true));
+    expect(rowsOf(edit)).toEqual(OFFER_END_ROWS);
   });
 
   it.each([
@@ -930,15 +915,17 @@ describe('the refresh button', () => {
       'the catalog does not list the id',
       () => Promise.resolve(pairsResponse({ pairs: [PAIR_CLOSED] })),
     ],
-  ] as const)('draws no session offer when %s: the payout is unknown', async (_case, readPairs) => {
-    const settled = intentView({ status: TradeIntentStatus.Settled });
-    const { press, calls } = setup({ readIntent: () => Promise.resolve(settled), readPairs });
-    await press(REFRESH);
-    const edit = payloadOf(calls, 'editMessageText');
-    expect(edit?.text).toBe(intentStatusText(null, settled).value);
-    expect(edit?.text).not.toContain(OFFER);
-    expect(rowsOf(edit)).toEqual(END_ROWS);
-  });
+  ] as const)(
+    'draws the session offer when %s: only the symbol is missing',
+    async (_case, readPairs) => {
+      const settled = intentView({ status: TradeIntentStatus.Settled });
+      const { press, calls } = setup({ readIntent: () => Promise.resolve(settled), readPairs });
+      await press(REFRESH);
+      const edit = payloadOf(calls, 'editMessageText');
+      expect(edit?.text).toBe(intentStatusText(null, settled, { sessionOffer: true }).value);
+      expect(rowsOf(edit)).toEqual(OFFER_END_ROWS);
+    },
+  );
 
   it('stands the asset id in for the symbol when the catalog cannot say', async () => {
     const { press, calls } = setup({
@@ -1030,7 +1017,7 @@ describe('the refresh button', () => {
 // path once the tracker stops
 describe('intentKeyboard', () => {
   const rows = (status: TradeIntentStatus) =>
-    intentKeyboard(intentView({ status }), true).inline_keyboard;
+    intentKeyboard(intentView({ status })).inline_keyboard;
 
   it('offers only the refresh while the tracker follows the trade', () => {
     expect(rows(TradeIntentStatus.Queued)).toEqual(REFRESH_ROWS);
@@ -1049,7 +1036,7 @@ describe('intentKeyboard', () => {
   // #476: the demo offer opens the amount screen under the trade, the real one starts at once
   it('offers the session of the trade pair and duration: the amount screen in demo (door «offer opens the amount screen»)', () => {
     const view = intentView({ status: TradeIntentStatus.Settled, assetId: 77, durationSec: 5 });
-    expect(intentKeyboard(view, true).inline_keyboard[0]).toEqual([
+    expect(intentKeyboard(view).inline_keyboard[0]).toEqual([
       button('🚀 Сессия из 5 циклов', 'demo:l:77:5:n'),
     ]);
     const real = intentView({
@@ -1058,15 +1045,8 @@ describe('intentKeyboard', () => {
       assetId: 77,
       durationSec: 5,
     });
-    expect(intentKeyboard(real, true).inline_keyboard[0]).toEqual([
+    expect(intentKeyboard(real).inline_keyboard[0]).toEqual([
       button('🚀 Сессия из 5 циклов · REAL', sessionStartCallbackData(TradeMode.Real, 77, 5)),
     ]);
-  });
-
-  // #379: below the cycle floor the end of the path stays, the session row goes
-  it('draws no session row on a pair below the cycle floor', () => {
-    expect(
-      intentKeyboard(intentView({ status: TradeIntentStatus.Settled }), false).inline_keyboard,
-    ).toEqual(END_ROWS);
   });
 });

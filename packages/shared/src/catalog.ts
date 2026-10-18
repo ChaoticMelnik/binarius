@@ -75,8 +75,10 @@ export const pairAcceptsDuration = (
   durationSec: number,
 ): boolean => durationSec >= pair.minTimeframe && durationSec <= pair.maxTimeframe;
 
-// No cycle starts on a pair paying less (#379, docs/trading-session.md -> The payout floor): at
-// 80 % a session breaks even at 55.6 % right forecasts. Single trades are not restricted.
+// The payout order key (docs/trading-session.md -> The payout order key): at 80 % a session
+// breaks even at 55.6 % right forecasts. Since #631 it refuses nothing (#379 refused a cycle below
+// it): it bounds the first part of the bot's signals list; the signal stand and the spike CLI
+// measure the cycle's economy by it.
 export const MIN_CYCLE_PAYOUT_PCT = 80;
 
 export const pairPayoutAccepted = (pair: { payout: number }): boolean =>

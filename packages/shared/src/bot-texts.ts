@@ -823,12 +823,6 @@ export const BOT_TEXT_CATALOG = {
     `🔒 {symbol} сейчас закрыт по расписанию. Выбери другой актив.`,
     { vars: ['symbol'] },
   ),
-  demoPayoutTooLow: html(
-    g.Demo,
-    'Сигналы сейчас: выплата пары ниже порога цикла сделок.',
-    `🚫 {symbol}: выплата {payout}% — ниже {payoutFloor}%, цикл на этой паре не запускается. Безубыточность при такой выплате — {breakEven}% верных прогнозов.`,
-    { vars: ['symbol', 'payout', 'payoutFloor', 'breakEven'] },
-  ),
   demoDurationUnsupported: html(
     g.Demo,
     'Демо: выбранная длительность не подходит активу.',
@@ -920,12 +914,6 @@ export const BOT_TEXT_CATALOG = {
   analysisLastPrice: html(g.Analysis, 'Анализ: последняя цена.', `💲 Последняя цена: {price}`, {
     vars: ['price'],
   }),
-  analysisCycleUnavailable: html(
-    g.Analysis,
-    'Анализ: под сигналом на паре с выплатой ниже порога цикла — кнопки сессии нет.',
-    `🚫 Цикл на этой паре не запускается: выплата ниже {payoutFloor}%.`,
-    { vars: ['payoutFloor'] },
-  ),
   analysisDisclaimer: html(
     g.Analysis,
     'Анализ: оговорка под сигналом.',
@@ -1639,11 +1627,6 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Кнопка сессии: сигнал пары не удалось проверить (#509).',
     `⚠️ Не удалось проверить сигнал пары — повтори анализ.`,
-  ),
-  sessionPayoutTooLow: html(
-    g.Session,
-    'Кнопка сессии: выплата пары ниже порога цикла сделок.',
-    `🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.`,
   ),
   sessionStopNoSignalTimeout: html(
     g.Session,
