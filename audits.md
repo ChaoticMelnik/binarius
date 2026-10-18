@@ -3570,7 +3570,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 |------|------|--------|
 | Manager | night 2026-10-17 22:12 | Pool given by the owner (#506, #508, #440, #594, #576, #22); #594 (no logo file), #22 (closed), #440 (merged into #537 at 22:46) skipped. Phase 0 clean, shared test DB = main. |
 | Architect | first plan | Fable. 4 clarify questions, manager chose the recommended (6239612413: N = 26 spacer, photo cards unchanged, 2-column table, spacer on every text send). Plan 6239737317, ≈730 lines. |
-| Implementer | clarify | Opus. Plan defect (cycle tests compared with 4096) → Plan Update r0 on Opus 6239871239: class closed by grep (9 sites), the cycle case rewritten (9 losses = 4079 lies between 4069 and 4096), M11–M13. |
+| Implementer | clarify | Opus. Marked a plan defect: the cycle tests compared with 4096; the manager routed it to the architect (6239771923). |
+| Architect | Plan Update r0 | Opus, 6239871239: class closed by grep (9 sites), the cycle case rewritten (9 losses = 4079 lies between 4069 and 4096), M11–M13. |
 | Implementer | PR #628 | 7 commits, +813/−240, `pnpm check` 0, mutations 13/13 (6240132644). Commits 184c5d1d–696c2127 red on `packages/e2e` (the gate handed the e2e harness a different payload object), fixed in 0c21a606; no force-push at night → squash. |
 | Reviewer | round 1 | No Blocker/Major, 2 Minor; send-path coverage checked across the whole domain. Codex not run (manager PR). |
 | Tech Lead | merge | `main` gained #590/#405/#637 after the review (texts and tests #628 measures): merge of `origin/main` into the branch, one test conflict (`STOP_LINE` → `stopLine(15)`), no adaptations, delta re-checked against the approved one, mutations re-taken (6246639738), CI green. #636 retargeted first. Squash 3f6d907 on the owner's yes; Minors → #645. |
@@ -3639,5 +3640,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | A foreign session's stand in the night's services snapshot | — | other | the snapshot sees every host process; the manager rule had no way to tell a foreign one | Manager (caught) |
 
 ### Process improvement proposals
-1. Manager → Services baseline: a process of another session (cwd/env outside this night's worktrees) is recorded, not a stop — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
+1. Manager → Services baseline: a host process of another session (cwd/env outside this night's worktrees) is recorded, not a stop; a Docker service still stops the task — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
 2. Remaining findings — **вынесено в #650**
