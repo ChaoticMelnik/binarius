@@ -406,7 +406,7 @@ describe('the session notices (#464)', () => {
     expect(new Set(texts).size).toBe(4);
   });
 
-  it('D5 a user who blocked the bot: the trades and the summary are claimed, nothing is sent', async () => {
+  it('D5 a user who blocked the bot: the trades and the summary are claimed, nothing is sent, no balance read', async () => {
     const target = await seedSession();
     await settled(target, '4.6');
     await stop(target);
@@ -414,13 +414,14 @@ describe('the session notices (#464)', () => {
       .update(users)
       .set({ telegramBlockedAt: sql`now()` })
       .where(eq(users.id, target.seed.userId));
-    const { notices, captured } = sender();
+    const { notices, captured, refreshCalls } = sender();
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(0);
     expect(await rowOf(target)).toMatchObject({
       notifiedTrades: 1,
       finalNoticeSentAt: expect.any(Date),
     });
+    expect(refreshCalls).toHaveLength(0);
   });
 
   it("D6 each session's notices go to its owner only", async () => {
@@ -1077,6 +1078,28 @@ describe('a martingale cycle is one message (#551)', () => {
       .where(eq(users.id, target.seed.userId));
     expect(user?.at).toBeInstanceOf(Date);
     expect((await rowOf(target)).notifiedTrades).toBe(3);
+  });
+
+  it("D23 the gone-edit warn carries the error's name, the method and its code (#620)", async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender();
+    await settled(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    captured.apiErrors.set('editMessageText', refusal('Bad Request: message to edit not found'));
+    await notices.tick();
+    captured.apiErrors.delete('editMessageText');
+    const gone = logs().find(
+      (entry) => entry.msg === 'session trade notice edited anew: the cycle message is gone',
+    );
+    expect(gone).toMatchObject({
+      level: WARN,
+      sessionId: target.session.id,
+      claimed: 1,
+      err: { name: 'GrammyError' },
+      method: 'editMessageText',
+      telegramErrorCode: 400,
+    });
   });
 });
 
