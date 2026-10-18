@@ -15,8 +15,8 @@ import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 
 // The session notices' state (#464, docs/bot-session.md → Trade messages): the backend's sender
-// sends every settled trade of a session as its own message and, once the session is finished,
-// one summary. A session's trades are strictly sequential (one non-terminal intent per account,
+// sends every settled trade of a session - one message per martingale cycle, edited step by step
+// (#551, below) - and, once the session is finished, one summary. A session's trades are strictly sequential (one non-terminal intent per account,
 // Rule 7), so settlement order is creation order and a cursor «the first k settled trades are
 // claimed» is the whole state; trade_intents is only read (Rule 6). Every claim is a CAS before
 // the Telegram call: at most once, never twice (the mailing engine's rule). Each operation locks

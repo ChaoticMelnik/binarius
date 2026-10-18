@@ -81,16 +81,20 @@ export function sessionCycleMessage(
       step: position.step,
     };
   });
+  const last = blocks.at(-1);
+  if (last === undefined) throw new Error('a claim carries no trade');
   const claimed = blocks.length - 1;
-  const last = blocks[claimed];
-  if (last === undefined) throw new Error('a claimed trade has no position in its session');
   const render = (from: number) => notices.sessionCycleText(blocks.slice(from));
   const fits = (text: TelegramHtml) => plainTextOf(text).length <= BOT_TEXT_LIMIT;
+  const splitFromClaimed = (): SessionCycleNotice => ({
+    kind: 'send',
+    text: render(claimed),
+    from: claimed,
+    split: true,
+  });
   const sendFrom = (from: number): SessionCycleNotice => {
     const text = render(from);
-    return fits(text)
-      ? { kind: 'send', text, from, split: false }
-      : { kind: 'send', text: render(claimed), from: claimed, split: true };
+    return fits(text) ? { kind: 'send', text, from, split: false } : splitFromClaimed();
   };
 
   // the step is the trade's number in its cycle, so the cycle starts that many trades back
@@ -100,7 +104,7 @@ export function sessionCycleMessage(
     return sendFrom(cycleStart);
   }
   const text = render(cycleMessage.from);
-  if (!fits(text)) return { kind: 'send', text: render(claimed), from: claimed, split: true };
+  if (!fits(text)) return splitFromClaimed();
   return { kind: 'edit', messageId: cycleMessage.messageId, text, from: cycleMessage.from };
 }
 
