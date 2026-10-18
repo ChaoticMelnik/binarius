@@ -3640,5 +3640,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | A foreign session's stand in the night's services snapshot | — | other | the snapshot sees every host process; the manager rule had no way to tell a foreign one | Manager (caught) |
 
 ### Process improvement proposals
-1. Manager → Services baseline: a host process of another session (cwd/env outside this night's worktrees) is recorded, not a stop; a Docker service still stops the task — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
+1. Manager → Services baseline: a host process with positive proof of another session (its command line names another session's scratchpad) is recorded, not a stop; anything else, Docker services included, fails closed — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
 2. Remaining findings — **вынесено в #650**
