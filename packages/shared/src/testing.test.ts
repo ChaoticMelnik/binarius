@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { BOT_TEXT_LIMIT } from './bot-message-width';
 import { telegramHtml } from './telegram-html';
 import { parseClosedTrade, parseOpenTrade, type ClosedTrade, type OpenTrade } from './broker';
 import type { DecimalString } from './money';
@@ -84,10 +85,10 @@ describe('telegramTextProblems', () => {
     ]);
   });
 
-  it('measures against the message limit by default', () => {
-    expect(telegramTextProblems(telegramHtml`${'a'.repeat(4096)}`)).toEqual([]);
-    expect(telegramTextProblems(telegramHtml`${'a'.repeat(4097)}`)).toEqual([
-      '4097 UTF-16 code units after entities parsing, the limit is 4096',
+  it('measures against the bot text limit by default', () => {
+    expect(telegramTextProblems(telegramHtml`${'a'.repeat(BOT_TEXT_LIMIT)}`)).toEqual([]);
+    expect(telegramTextProblems(telegramHtml`${'a'.repeat(BOT_TEXT_LIMIT + 1)}`)).toEqual([
+      `${BOT_TEXT_LIMIT + 1} UTF-16 code units after entities parsing, the limit is ${BOT_TEXT_LIMIT}`,
     ]);
   });
 

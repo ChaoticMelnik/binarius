@@ -241,7 +241,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `active_session_exists` with `null` | that session ended between the backend's check and its read | «⏳ Предыдущая сессия только что завершилась. Нажми кнопку ещё раз.» |
 | 404 `broker_account_not_found`, 409 `account_revoked` | refusal before the side effect | `accountNone` / `accountRevoked` + the connect button |
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
-| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «⭐ Купить токены» (#117, [stars.md](stars.md)), then «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) above the way back |
+| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) and «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) in one row above the way back |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
 | 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396): a real door pressed by a user left in real mode; the bot does not know the flag | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
@@ -420,10 +420,11 @@ is the stopped session's next step under the reply to its stop, an old status me
 drew in place and the summary card: «🔁 Ещё сессия» (#320) on the same pair and duration — drawn
 only when the view has `settings` and its duration is one the demo still offers (`durationOf`) —
 then (#350, [bot-navigation.md](bot-navigation.md)) «📊 Новый анализ» on the same pair and
-duration (when the demo still offers it), «📡 К сигналам», «💳 Пополнить» (#27,
-[deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https), «👥 Пригласить друга» (#115,
-[referrals.md](referrals.md)), «🏠 В меню»; without `settings` only «💳 Пополнить», «👥 Пригласить
-друга» and «🏠 В меню». A session stopped by the no-signal limit (`no_signal_timeout`, #509) offers
+duration (when the demo still offers it) and «📡 К сигналам» in one row, «💳 Пополнить» (#27,
+[deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https) and «👥 Пригласить друга» (#115,
+[referrals.md](referrals.md)) in one row, «🏠 В меню» (the rows: bot-navigation.md → The width,
+#506); without `settings` only «💳 Пополнить» and «👥 Пригласить друга» in one row and «🏠 В
+меню». A session stopped by the no-signal limit (`no_signal_timeout`, #509) offers
 another pair, not the same one again: no «🔁 Ещё сессия» and no «📊 Новый анализ», and «🔀 Выбрать
 другую пару» in place of «📡 К сигналам», on the same data (`demo:sig:<sec>`;
 `appendEndOfPath(…, { otherPair: true })`). A failed start, `sessionJustEnded`, leads back to the
@@ -784,8 +785,10 @@ cycle, so every trade is a new message of one block, as before #551.
   above steps 3, 4…; under the fixed strategy there is no step 2, so no line. No text says
   «Мартингейл».
 - **The length.** Before an edit the sender measures the text as Telegram counts it after parsing
-  the entities (`plainTextOf`, as `telegramTextProblems`); a text past 4096
-  (`TELEGRAM_MESSAGE_LIMIT`) opens a new message of the same cycle from the trade that did not fit,
+  the entities (`plainTextOf`, as `telegramTextProblems`); a text past `BOT_TEXT_LIMIT` (4069: the
+  Bot API's 4096 less the width spacer the seam appends,
+  [bot-navigation.md](bot-navigation.md#the-width-506)) opens a new message of the same cycle from
+  the trade that did not fit,
   and the full one stays as it is. The defaults never get there — a cycle has at most `maxSteps`
   (4) trades plus its ties, of about 100 characters each — so only an override can; the assembled-messages registry
   (`sessionTrade`, [bot-texts.md](bot-texts.md)) keeps one block with its adaptive line within the
@@ -861,7 +864,7 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
 | 5xx, a timeout, the transport — an edit | stays claimed; unchanged | `warn` … `edit outcome unknown`; the next step's edit shows the block; a cycle's last step is lost |
 | a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
-| the block does not fit (4096) | a new message from this trade; recorded from it | `info` … `split` |
+| the block does not fit (`BOT_TEXT_LIMIT`, 4069) | a new message from this trade; recorded from it | `info` … `split` |
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
 | the record refused (the cursor moved: another sender) | the other sender's record stands | at most repeated blocks, never a lost step |
 | the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; the session waits for the next tick |
@@ -1096,9 +1099,10 @@ Telegram's own forwarding.
 - **The caption** is `sessionCardCaption`: «🏁 {symbol}: итог сессии {profit}» and «🤖 @{botUsername}»,
   the bot's `ctx.me.username` from the press that started tracking.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
-  сессия» while the demo offers the duration, «📊 Новый анализ»,
-  «📡 К сигналам», «💳 Пополнить» (#27, https only), «👥 Пригласить друга» (#115), «🏠 В меню»;
-  «💳 Пополнить», «👥 Пригласить друга» and «🏠 В меню» alone without `settings`
+  сессия» while the demo offers the duration, «📊 Новый анализ» and
+  «📡 К сигналам» in one row, «💳 Пополнить» (#27, https only) and «👥 Пригласить друга» (#115) in
+  one row, «🏠 В меню»; «💳 Пополнить» and «👥 Пригласить друга» in one row and «🏠 В меню» alone
+  without `settings`
   (`sessionCardKeyboard`); under a `no_signal_timeout` stop «🔀 Выбрать другую пару» in place of the
   first three (#509). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321).

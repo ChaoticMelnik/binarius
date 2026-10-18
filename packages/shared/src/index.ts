@@ -30,6 +30,7 @@ export * from './logging';
 export * from './link-confirmation';
 export * from './bot-navigation';
 export * from './telegram-html';
+export * from './bot-message-width';
 export * from './catalog';
 export * from './signal';
 export * from './trading-session';

@@ -152,7 +152,8 @@ block, and a dynamic `import()` is not caught; the check on every call holds eit
 
 ## Limits
 
-- html: 4096 (`TELEGRAM_MESSAGE_LIMIT`); 1024 (`TELEGRAM_CAPTION_LIMIT`) for the parts of a
+- html: `BOT_TEXT_LIMIT` (4069 = 4096 − 27: the Bot API's 4096 less the width spacer the seams
+  append, [bot-navigation.md](bot-navigation.md#the-width-506)); 1024 (`TELEGRAM_CAPTION_LIMIT`) for the parts of a
   caption — `welcome` (the video's), the account card's `card*` and `featureLines`, the status
   card's `status*`. The analysis card (#482) is a caption too: its keys keep the message limit
   each, and the card as a whole is bounded by `analysisCard` below.
@@ -466,7 +467,8 @@ adaptive line — the unit the backend never splits; it splits a cycle's message
 between blocks, #551 — and the summary, which the backend sends through the shared builders of
 `packages/shared/src/session-texts.ts`, #464; the
 analysis card, `analysisCard`, a caption of 1024, #482), and
-each html key with variables in no such message. The card's block is measured as the bot pads it:
+each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
+a caption by 1024. The card's block is measured as the bot pads it:
 each of its eight rows is the longest of the eight labels, a space and the value, and each
 direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
 widest — the key's width in `BOT_TEXT_VAR_WIDTHS`, else the variable's in

@@ -11,7 +11,8 @@ import {
   type BotTextKey,
 } from './bot-texts';
 import type { BotTextVarName } from './bot-text-vars';
-import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
+import { BOT_TEXT_LIMIT } from './bot-message-width';
+import { plainTextOf, TELEGRAM_CAPTION_LIMIT } from './telegram-html';
 import { STARS_PAYSUPPORT_LIST_LIMIT } from './stars';
 import { SIGNAL_CHART_INTERVAL_MS } from './signal';
 import { INT4_MAX } from './trading';
@@ -549,13 +550,13 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'help',
     title: '/help',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [k('helpAbout'), '\n\n', k('helpConnect'), '\n\n', k('helpCommands'), ...commandLines],
   },
   {
     id: 'account',
     title: '/account',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       anyOf('accountConnected', 'accountPending', 'accountRevoked'),
       '\n\n',
@@ -569,7 +570,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'paysupport',
     title: '/paysupport',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       k('paysupportScreen'),
       '\n\n',
@@ -590,7 +591,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'analysisFailed',
     title: 'Анализ: свечи не получены',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [k('analysisHeader'), '\n', anyOf('analysisRateLimited', 'analysisUnavailable')],
   },
   {
@@ -608,7 +609,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'analysisNoData',
     title: 'Анализ: мало данных',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       k('analysisHeader'),
       '\n',
@@ -621,7 +622,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'analysisNoSignal',
     title: 'Анализ: сигнала нет',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       k('analysisHeader'),
       '\n',
@@ -636,7 +637,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'intentStatus',
     title: 'Статус сделки',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       anyOf('intentHeader', 'intentHeaderReal'),
       '\n',
@@ -650,7 +651,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'settings',
     title: '/settings',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [k('settings'), '\n\n', k('settingsStake'), '\n', k('settingsStakeReal')],
   },
   // the mode screen (#474): the balance and the real stake only with a snapshot, the paused line
@@ -658,7 +659,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'tradingMode',
     title: 'Экран режима',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       k('modeHeader'),
       '\n',
@@ -674,7 +675,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'tradingModeConfirm',
     title: 'Экран режима: подтверждение',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       k('modeConfirm'),
       // only when the real stake fails checkStake against the snapshot
@@ -686,7 +687,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'tradingModeResult',
     title: 'Экран режима: итог переключения',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       anyOf('modeEnabled', 'modeDisabled'),
       // only when the switch stopped an active session (#327)
@@ -696,7 +697,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'stakePicker',
     title: 'Экран суммы',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       // by the picker's mode (#326)
       anyOf('stakePickerHeader', 'stakePickerHeaderReal'),
@@ -746,7 +747,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     // session's end line, and the open trade's line when it plays out
     id: 'sessionStopReply',
     title: 'Ответ на остановку сессии',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       anyOf(
         'sessionCompleted',
@@ -765,7 +766,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     // the limit, never inside a unit, so this unit is what must fit
     id: 'sessionTrade',
     title: 'Сообщение сделки сессии',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       oneOf(
         [anyOf('sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied')],
@@ -788,7 +789,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     // only with a settled trade, so the total always stands under a stop reason
     id: 'sessionSummary',
     title: 'Итог сессии',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       // the pair, or the asset's id when the catalog could not say (sessionAssetLabel)
       k('sessionSummarySymbol', {
@@ -817,7 +818,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'demoLaunch',
     title: 'Демо: запуск цикла',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       // only after a saved stake, in the saved stake's mode (#326)
       anyOf('stakeSavedLine', 'stakeSavedLineReal'),
@@ -834,7 +835,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     // the amount screen of a demo cycle (#476, texts.ts → cycleStakeText)
     id: 'demoCycleStake',
     title: 'Демо: выбор суммы цикла',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       // only after a save in the stake picker opened from an old launch screen, in its mode
       anyOf('stakeSavedLine', 'stakeSavedLineReal'),
@@ -850,19 +851,19 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'demoPairs',
     title: 'Демо: список активов',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [k('demoPairsHeader'), '\n', k('demoPage')],
   },
   {
     id: 'demoDurations',
     title: 'Демо: выбор длительности',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [k('demoAsset'), '\n', k('demoPayout'), '\n\n', k('demoChooseDuration')],
   },
   {
     id: 'demoSummary',
     title: 'Демо: итог выбора',
-    limit: TELEGRAM_MESSAGE_LIMIT,
+    limit: BOT_TEXT_LIMIT,
     body: [
       k('demoAsset'),
       '\n',

@@ -2,6 +2,7 @@ import { Bot, GrammyError, HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
 import {
+  BOT_MESSAGE_SPACER,
   confirmCallbackData,
   NotificationLevel,
   sessionStopCallbackData,
@@ -17,6 +18,7 @@ import {
   USER,
   WRITE_CALLBACK_PREFIXES,
   captureApi,
+  refuseWidthSpacerMisuse,
   refuseWriteRetried,
   rejectionOf,
 } from './testing';
@@ -30,6 +32,7 @@ import { LABELS } from './texts';
 const TOKEN = '123456:AA-bot-token';
 const REFUSED: ApiError = { ok: false, error_code: 429, description: 'Too Many Requests' };
 const SENT = { message_id: 7 };
+const HI = 'hi' + BOT_MESSAGE_SPACER;
 
 const captured = () => {
   const bot = new Bot(TOKEN, { botInfo: BOT_INFO });
@@ -42,7 +45,7 @@ describe('captureApi', () => {
     api.apiErrors.set('sendMessage', REFUSED);
     api.answers.set('sendMessage', () => SENT);
 
-    const error = await rejectionOf(bot.api.sendMessage(USER.id, 'hi'));
+    const error = await rejectionOf(bot.api.sendMessage(USER.id, HI));
 
     expect(error).toBeInstanceOf(GrammyError);
     expect(error).toMatchObject({ method: 'sendMessage', error_code: 429 });
@@ -55,27 +58,112 @@ describe('captureApi', () => {
     api.answers.set('sendMessage', () => SENT);
 
     // the very instance, because the suites that program one assert on its identity
-    expect(await rejectionOf(bot.api.sendMessage(USER.id, 'hi'))).toBe(failure);
+    expect(await rejectionOf(bot.api.sendMessage(USER.id, HI))).toBe(failure);
   });
 
   it('returns what the answer returned, as the result of an ok response', async () => {
     const { bot, api } = captured();
     api.answers.set('sendMessage', (payload) => ({ ...SENT, text: payload.text }));
 
-    const result: unknown = await bot.api.sendMessage(USER.id, 'hi');
+    const result: unknown = await bot.api.sendMessage(USER.id, HI);
 
+    // the answer gets the recorded payload, the width spacer taken off
     expect(result).toEqual({ message_id: 7, text: 'hi' });
   });
 
   it('answers an unprogrammed method with true, and records the call either way', async () => {
     const { bot, api } = captured();
 
-    const result: unknown = await bot.api.sendMessage(USER.id, 'hi');
+    const result: unknown = await bot.api.sendMessage(USER.id, HI);
 
     expect(result).toBe(true);
+    // recorded without the width spacer
     expect(api.calls).toEqual([
       { method: 'sendMessage', payload: { chat_id: USER.id, text: 'hi' } },
     ]);
+  });
+
+  // the e2e harness keys the message ids it answers with by the payload object (#506)
+  it('hands the answer the very payload object it records', async () => {
+    const { bot, api } = captured();
+    const seen: unknown[] = [];
+    api.answers.set('sendMessage', (payload) => {
+      seen.push(payload);
+      return SENT;
+    });
+
+    await bot.api.sendMessage(USER.id, HI);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(api.calls[0]?.payload);
+  });
+
+  it('refuses a text sent without the width spacer and records nothing (#506)', async () => {
+    const { bot, api } = captured();
+
+    const error = await rejectionOf(bot.api.sendMessage(USER.id, 'raw'));
+
+    expect(String(error)).toContain('sendMessage sends a text without the width spacer');
+    expect(api.calls).toEqual([]);
+  });
+});
+
+describe('refuseWidthSpacerMisuse (#506)', () => {
+  const keyboard = { inline_keyboard: [[{ text: 'x', callback_data: 'menu' }]] };
+
+  it('a sendMessage without the spacer throws', () => {
+    expect(() => refuseWidthSpacerMisuse('sendMessage', { chat_id: 1, text: 'x' })).toThrow(
+      'sendMessage sends a text without the width spacer',
+    );
+    expect(() => refuseWidthSpacerMisuse('sendMessage', { chat_id: 1 })).toThrow(
+      'sendMessage sends a text without the width spacer',
+    );
+  });
+
+  it('an editMessageText without the spacer, or with it not at the end, throws', () => {
+    expect(() => refuseWidthSpacerMisuse('editMessageText', { text: 'x' })).toThrow(
+      'editMessageText sends a text without the width spacer',
+    );
+    expect(() =>
+      refuseWidthSpacerMisuse('editMessageText', { text: BOT_MESSAGE_SPACER + 'x' }),
+    ).toThrow('editMessageText sends a text without the width spacer');
+  });
+
+  it('a text with the spacer is recorded without it, every other field in place', () => {
+    const payload = {
+      chat_id: 1,
+      message_id: 2,
+      text: 'x' + BOT_MESSAGE_SPACER,
+      reply_markup: keyboard,
+    };
+    expect(refuseWidthSpacerMisuse('editMessageText', payload)).toEqual({
+      chat_id: 1,
+      message_id: 2,
+      text: 'x',
+      reply_markup: keyboard,
+    });
+    expect(payload.text).toBe('x' + BOT_MESSAGE_SPACER);
+  });
+
+  it.each([
+    ['sendPhoto', { caption: 'x\u2800' }],
+    ['sendVideo', { caption: '\u2800' }],
+    ['editMessageMedia', { media: { type: 'photo', caption: 'x' + BOT_MESSAGE_SPACER } }],
+    ['answerInlineQuery', { results: [{ type: 'photo', caption: 'x\u2800' }] }],
+    ['answerCallbackQuery', { text: 'x' + BOT_MESSAGE_SPACER }],
+  ])('%s with a braille blank throws', (method, payload) => {
+    expect(() => refuseWidthSpacerMisuse(method, payload)).toThrow(
+      `${method} carries the width spacer outside a text message`,
+    );
+  });
+
+  it('a caption, a toast and any other method without one pass as they are', () => {
+    const photo = { caption: 'x', reply_markup: keyboard };
+    expect(refuseWidthSpacerMisuse('sendPhoto', photo)).toBe(photo);
+    const toast = { text: 'готово' };
+    expect(refuseWidthSpacerMisuse('answerCallbackQuery', toast)).toBe(toast);
+    const getMe = {};
+    expect(refuseWidthSpacerMisuse('getMe', getMe)).toBe(getMe);
   });
 });
 

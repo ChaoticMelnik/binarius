@@ -62,6 +62,7 @@ import {
   type BotTextKey,
   type BotTextSource,
 } from '@binarius/shared';
+import { stripMessageSpacer } from '@binarius/shared/testing';
 
 // A text source for the tests of the source swap (#240): the named keys read a marked text of
 // their own kind, with every variable the key has; every other key its default.
@@ -791,6 +792,37 @@ export function refuseWriteRetried(method: string, payload: Record<string, unkno
   }
 }
 
+// The width spacer (#506, docs/bot-navigation.md → The width) on every text message a scene sends
+// and on nothing else. A text without it throws; with it, the call is recorded without it, so the
+// suites read the text the seam was given. The answer gets that same recorded object: the e2e
+// harness keys the message ids it answers with by the payload object. A caption, an inline answer or a toast holding U+2800
+// throws: a picture or no bubble at all sets their width.
+const TEXT_METHODS: ReadonlySet<string> = new Set(['sendMessage', 'editMessageText']);
+const BRAILLE_BLANK = '\u2800';
+const hasBlank = (value: unknown) => typeof value === 'string' && value.includes(BRAILLE_BLANK);
+
+export function refuseWidthSpacerMisuse(
+  method: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (TEXT_METHODS.has(method)) {
+    const text = typeof payload.text === 'string' ? stripMessageSpacer(payload.text) : undefined;
+    if (text === undefined) throw new Error(`${method} sends a text without the width spacer`);
+    return { ...payload, text };
+  }
+  const media = payload.media as { caption?: unknown } | undefined;
+  const results = Array.isArray(payload.results)
+    ? (payload.results as { caption?: unknown }[])
+    : [];
+  const blank =
+    hasBlank(payload.caption) ||
+    hasBlank(media?.caption) ||
+    results.some((result) => hasBlank(result.caption)) ||
+    (method === 'answerCallbackQuery' && hasBlank(payload.text));
+  if (blank) throw new Error(`${method} carries the width spacer outside a text message`);
+  return payload;
+}
+
 export function captureApi(bot: Bot): CapturedApi {
   const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
   bot.api.config.use(((
@@ -799,7 +831,8 @@ export function captureApi(bot: Bot): CapturedApi {
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ) => {
-    captured.calls.push({ method, payload });
+    const recorded = refuseWidthSpacerMisuse(method, payload);
+    captured.calls.push({ method, payload: recorded });
     refuseWriteRetried(method, payload);
     const failure = captured.apiErrors.get(method);
     if (failure !== undefined) {
@@ -808,7 +841,7 @@ export function captureApi(bot: Bot): CapturedApi {
     }
     const answer = captured.answers.get(method);
     if (answer !== undefined) {
-      return Promise.resolve(answer(payload, signal)).then((result) => ({ ok: true, result }));
+      return Promise.resolve(answer(recorded, signal)).then((result) => ({ ok: true, result }));
     }
     return Promise.resolve({ ok: true, result: true });
   }) as Parameters<typeof bot.api.config.use>[0]);

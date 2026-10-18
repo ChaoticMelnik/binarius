@@ -60,14 +60,16 @@ export const depositButton = (cashierUrl: string): InlineKeyboardButton.WebAppBu
   text: LABELS.depositButton,
   web_app: { url: cashierUrl },
 });
+export const depositButtons = (cashierUrl: string | undefined): InlineKeyboardButton[] =>
+  cashierUrl === undefined ? [] : [depositButton(cashierUrl)];
 export const depositRows = (cashierUrl: string | undefined): InlineKeyboardButton[][] =>
-  cashierUrl === undefined ? [] : [[depositButton(cashierUrl)]];
+  cashierUrl === undefined ? [] : [depositButtons(cashierUrl)];
 
 // The mode screen (#474, trading-mode.ts), opened from the status card as a new message
 export const MODE_CALLBACK_DATA = 'mode';
 
-// The status card's: the entry and the mode screen, then the invite (#115), the purchase (#117)
-// and the deposit (#27). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA:
+// The status card's: the entry and the mode screen, then the invite (#115) and the purchase (#117)
+// in one row, then the deposit (#27) (rows: docs/bot-navigation.md → The width). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA:
 // the path is the same up to the stake button (#121); the mode button reads «🎮 Вернуться в демо»
 // there and opens the screen too, it never switches by itself (#474). The account card keeps
 // demoKeyboard.
@@ -85,17 +87,15 @@ export const statusCardKeyboard = (
           button(LABELS.demoButton, DEMO_CALLBACK_DATA),
           button(LABELS.modeButton, MODE_CALLBACK_DATA),
         ],
-    [inviteButton()],
-    [buyButton()],
+    [inviteButton(), buyButton()],
     ...depositRows(cashierUrl),
   ]);
 
-// The purchase, then the deposit (#27), above `keyboard`'s rows: the `insufficient_tokens`
+// The purchase and the deposit (#27) in one row above `keyboard`'s rows: the `insufficient_tokens`
 // refusals (#117)
 export const withBuy = (keyboard: InlineKeyboard, cashierUrl: string | undefined): InlineKeyboard =>
   new InlineKeyboard([
-    [buyButton()],
-    ...depositRows(cashierUrl),
+    [buyButton(), ...depositButtons(cashierUrl)],
     ...keyboard.inline_keyboard.filter((row) => row.length > 0),
   ]);
 
@@ -108,16 +108,15 @@ export const buyPackagesKeyboard = (): InlineKeyboard => {
   return keyboard.text(LABELS.menuButton, MENU_CALLBACK_DATA);
 };
 
-// the deposit row (#27), the invite row, then the menu row, under `keyboard`'s rows; an empty
-// keyboard gets no empty first row
+// the deposit (#27) and the invite in one row, then the menu row, under `keyboard`'s rows; an
+// empty keyboard gets no empty first row
 export const withInvite = (
   keyboard: InlineKeyboard,
   cashierUrl: string | undefined,
 ): InlineKeyboard =>
   new InlineKeyboard([
     ...keyboard.inline_keyboard.filter((row) => row.length > 0),
-    ...depositRows(cashierUrl),
-    [inviteButton()],
+    [...depositButtons(cashierUrl), inviteButton()],
     [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
   ]);
 
@@ -150,9 +149,9 @@ export const backToAnalysisKeyboard = (assetId: number, durationSec: DemoDuratio
   );
 
 // The end of a path: a trade the tracker no longer follows, a stopped session (#350). The
-// analysis of the same pair and duration while the demo still offers it, the signals of that
-// duration (the duration screen when the demo no longer offers it, #382), the menu;
-// each in its own row, under the rows a caller already put in `keyboard` (or none). `beforeMenu`
+// analysis of the same pair and duration while the demo still offers it and the signals of that
+// duration (the duration screen when the demo no longer offers it, #382) in one row, the menu in
+// its own, under the rows a caller already put in `keyboard` (or none). `beforeMenu`
 // rows go right above the menu (the session result's invite, #115). `otherPair`, a session that
 // stopped for want of a signal (#509): no analysis of that pair, «🔀 Выбрать другую пару» in
 // place of «📡 К сигналам» on the same data.
@@ -165,10 +164,10 @@ export function appendEndOfPath(
 ): InlineKeyboard {
   const demoDuration = durationOf(String(durationSec));
   const rows = [
-    ...(demoDuration === undefined || otherPair
-      ? []
-      : [[button(LABELS.newAnalysisButton, demoAnalysisCallbackData(assetId, demoDuration))]]),
     [
+      ...(demoDuration === undefined || otherPair
+        ? []
+        : [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(assetId, demoDuration))]),
       button(
         otherPair ? LABELS.otherPairButton : LABELS.toSignalsButton,
         demoDuration === undefined

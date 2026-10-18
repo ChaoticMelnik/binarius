@@ -5,6 +5,7 @@ import type { Api, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { BotProfileMethod } from '@binarius/shared';
+import { stripMessageSpacer } from '@binarius/shared/testing';
 import type { BotProfileApi } from '../bot-texts/publish';
 import type { PaymentsRoutesDeps } from '../payments/routes';
 import type { AdminRoutesDeps } from './routes';
@@ -125,6 +126,15 @@ export const sentPayload = (
   calls: readonly ApiCall[],
   method: string,
 ): Record<string, unknown> | undefined => calls.find((call) => call.method === method)?.payload;
+
+// The text a client push was given, without the width spacer its seam appends (#506); throws when
+// the spacer is missing, so a push that skipped it fails the assertion reading it. The staff bot
+// sends without one: its suites read payload.text.
+export const pushedText = (payload: Record<string, unknown> | undefined): string => {
+  const text = stripMessageSpacer(String(payload?.text));
+  if (text === undefined) throw new Error('the push sent a text without the width spacer');
+  return text;
+};
 
 export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
   (

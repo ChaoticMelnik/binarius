@@ -20,7 +20,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TELEGRAM_CAPTION_LIMIT,
-  TELEGRAM_MESSAGE_LIMIT,
+  BOT_TEXT_LIMIT,
   USER_ACCOUNT_LIST_LIMIT,
   TradeMode,
   TradingSessionStatus,
@@ -343,7 +343,7 @@ describe('texts', () => {
       (_kind, link) => {
         const links = Array.from({ length: USER_ACCOUNT_LIST_LIMIT }, () => link);
         expect(telegramTextProblems(accountStatus(links))).toEqual([]);
-        expect(lengthOf(link, 16)).toBeGreaterThan(TELEGRAM_MESSAGE_LIMIT);
+        expect(lengthOf(link, 16)).toBeGreaterThan(BOT_TEXT_LIMIT);
       },
     );
 
@@ -487,7 +487,7 @@ describe('texts', () => {
       `/${command} — ${description}`;
 
     it('keeps the message valid Telegram HTML, inside the message limit', () => {
-      expect(telegramTextProblems(helpText(botCommands()), TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      expect(telegramTextProblems(helpText(botCommands()), BOT_TEXT_LIMIT)).toEqual([]);
     });
 
     it('is the three blocks one blank line apart, the command lines after the last', () => {
@@ -526,7 +526,7 @@ describe('texts', () => {
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;');
-      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      expect(telegramTextProblems(text, BOT_TEXT_LIMIT)).toEqual([]);
       expect(plainTextOf(text)).toContain(`/${HOSTILE_ARGUMENT} — ${HOSTILE_ARGUMENT}`);
       expect(text.value).toContain(`/${escaped} — ${escaped}`);
     });
@@ -807,7 +807,7 @@ describe('the demo screens', () => {
   it.each(Object.entries(screens))(
     'keeps the %s screen valid Telegram HTML, inside the message limit',
     (_name, text) => {
-      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      expect(telegramTextProblems(text, BOT_TEXT_LIMIT)).toEqual([]);
     },
   );
 
@@ -960,7 +960,7 @@ describe('the demo trade status', () => {
       };
       for (const tail of [{}, { deadline: true }, { sessionOffer: true }]) {
         const text = intentStatusText(lbl(HOSTILE_SYMBOL), widest, tail);
-        expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+        expect(telegramTextProblems(text, BOT_TEXT_LIMIT)).toEqual([]);
       }
     },
   );

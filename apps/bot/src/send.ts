@@ -1,6 +1,6 @@
 import { InlineKeyboard, type Api, type Context, type InputFile } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
-import { STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
+import { BOT_MESSAGE_SPACER, STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
 
 // The bot's one send seam for user texts (the backend's is auth/client-push.ts): the only place
 // that sets parse_mode HTML and unwraps TelegramHtml, so a raw string cannot reach the user as
@@ -11,6 +11,10 @@ import { STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
 // Every message carries an inline keyboard, the user's next step (#350, docs/bot-navigation.md):
 // `reply_markup` is required and only an inline one counts. A message without one goes through a
 // `…WithoutNextStep` function, which names its reason from NO_NEXT_STEP_REASONS.
+//
+// Every text message ends with the width spacer (#506, docs/bot-navigation.md → The width): a line
+// of braille blanks that makes each bubble, and so its keyboard, as wide as the longest. Captions,
+// inline answers and the invoice go without it: a picture sets their width.
 
 export const NO_NEXT_STEP_REASONS = {
   // a screen in place while the bot waits for an answer; the next screen replaces it with a
@@ -24,6 +28,8 @@ export const NO_NEXT_STEP_REASONS = {
   SessionStatus: 'session_status',
 } as const;
 export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];
+
+const sent = (text: TelegramHtml) => text.value + BOT_MESSAGE_SPACER;
 
 type NextStep = { reply_markup: InlineKeyboard | InlineKeyboardMarkup };
 type WithNextStep<T> = Omit<T, 'reply_markup'> & NextStep;
@@ -53,7 +59,7 @@ type PhotoByIdExtra = Omit<
 type MediaEditExtra = NonNullable<Parameters<Api['editMessageMedia']>[3]>;
 
 export const replyHtml = (ctx: Context, text: TelegramHtml, extra: WithNextStep<ReplyExtra>) =>
-  ctx.reply(text.value, { ...extra, parse_mode: 'HTML' });
+  ctx.reply(sent(text), { ...extra, parse_mode: 'HTML' });
 
 // A message without a keyboard. `reason` is not sent: its type makes each such call name an entry
 // of NO_NEXT_STEP_REASONS, which docs/bot-navigation.md lists.
@@ -63,7 +69,7 @@ export const replyHtmlWithoutNextStep = (
   reason: NoNextStepReason,
 ) => {
   void reason;
-  return ctx.reply(text.value, { parse_mode: 'HTML' });
+  return ctx.reply(sent(text), { parse_mode: 'HTML' });
 };
 
 // On a callback query, grammY edits the message the pressed button is under.
@@ -71,7 +77,7 @@ export const editMessageTextHtml = (
   ctx: Context,
   text: TelegramHtml,
   extra: WithNextStep<EditExtra>,
-) => ctx.editMessageText(text.value, { ...extra, parse_mode: 'HTML' });
+) => ctx.editMessageText(sent(text), { ...extra, parse_mode: 'HTML' });
 
 // An edit that removes the keyboard on screen on purpose; `reason` as above.
 export const editMessageTextHtmlWithoutNextStep = (
@@ -80,7 +86,7 @@ export const editMessageTextHtmlWithoutNextStep = (
   reason: NoNextStepReason,
 ) => {
   void reason;
-  return ctx.editMessageText(text.value, { parse_mode: 'HTML' });
+  return ctx.editMessageText(sent(text), { parse_mode: 'HTML' });
 };
 
 // Outside an update (the intent tracker, #127): the message named by its chat and id.
@@ -90,7 +96,7 @@ export const editMessageTextByIdHtml = (
   messageId: number,
   text: TelegramHtml,
   extra: WithNextStep<EditByIdExtra>,
-) => api.editMessageText(chatId, messageId, text.value, { ...extra, parse_mode: 'HTML' });
+) => api.editMessageText(chatId, messageId, sent(text), { ...extra, parse_mode: 'HTML' });
 
 // The same without a keyboard: an edit without reply_markup removes the inline keyboard on
 // screen. `reason` as above.
@@ -102,7 +108,7 @@ export const editMessageTextByIdHtmlWithoutNextStep = (
   reason: NoNextStepReason,
 ) => {
   void reason;
-  return api.editMessageText(chatId, messageId, text.value, { parse_mode: 'HTML' });
+  return api.editMessageText(chatId, messageId, sent(text), { parse_mode: 'HTML' });
 };
 
 export const replyWithVideoHtml = (

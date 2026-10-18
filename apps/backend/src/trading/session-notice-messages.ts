@@ -1,5 +1,6 @@
 import { InlineKeyboard } from 'grammy';
 import {
+  BOT_TEXT_LIMIT,
   createSessionTexts,
   DEMO_SIGNALS_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
@@ -10,7 +11,6 @@ import {
   sessionStakeParams,
   sessionTradeSteps,
   signalsCallbackDataFor,
-  TELEGRAM_MESSAGE_LIMIT,
   TradingSessionStopReason,
   type PairLabel,
   type PairsCatalogView,
@@ -53,9 +53,9 @@ export type SessionCycleNotice =
 // the session's trades up to it, by the session's own strategy (#450; settings that cannot be read
 // count as fixed, so every trade is a cycle of its own and a new message). The cycle message is
 // edited when it shows this trade's cycle; otherwise a new message shows the cycle so far. A text
-// longer than Telegram's limit, measured as Telegram counts it after parsing the entities (as
-// telegramTextProblems does), opens a new message from the claimed trade, so a cycle splits only
-// between blocks.
+// longer than BOT_TEXT_LIMIT (Telegram's limit less the width spacer the seam appends, #506),
+// measured as Telegram counts it after parsing the entities (as telegramTextProblems does), opens
+// a new message from the claimed trade, so a cycle splits only between blocks.
 export function sessionCycleMessage(
   { trades, cycleMessage }: ClaimedSessionTrade,
   settings: TradingSessionSettings | null,
@@ -85,7 +85,7 @@ export function sessionCycleMessage(
   const last = blocks[claimed];
   if (last === undefined) throw new Error('a claimed trade has no position in its session');
   const render = (from: number) => notices.sessionCycleText(blocks.slice(from));
-  const fits = (text: TelegramHtml) => plainTextOf(text).length <= TELEGRAM_MESSAGE_LIMIT;
+  const fits = (text: TelegramHtml) => plainTextOf(text).length <= BOT_TEXT_LIMIT;
   const sendFrom = (from: number): SessionCycleNotice => {
     const text = render(from);
     return fits(text)

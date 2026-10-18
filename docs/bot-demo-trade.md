@@ -112,7 +112,7 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `ambiguous_broker_account` | `statusAmbiguous` |
 | 409 `account_not_confirmed` | «⏳ Привязка Binodex ждёт подтверждения — открой /account.» |
 | 409 `account_halted` | «⛔ Торговля по аккаунту остановлена — напиши в поддержку: /support» |
-| 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.»; «⭐ Купить токены» (#117, [stars.md](stars.md)), then «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) above the way back |
+| 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) and «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) in one row above the way back |
 | 409 `active_intent_exists` | «⏳ Предыдущая сделка ещё не завершена…» |
 | 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed amount; the fingerprint normally refuses it first) |
 | 409 `trading_paused` | «⏸ Торговля временно приостановлена, попробуйте позже.» (the global switch, [kill-switch.md](kill-switch.md)) |
@@ -267,8 +267,9 @@ Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that 
 **The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить статус» while the
 status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
 (`TRACKER_STOP_STATUSES`), the session offer (#360) and the end of the path under it —
-«🚀 Сессия из 5 циклов», then «📊 Новый анализ» (the same pair and duration), «📡 К сигналам»,
-«🏠 В меню» ([bot-navigation.md](bot-navigation.md)). An accepted trade gets all five rows.
+«🚀 Сессия из 5 циклов», then «📊 Новый анализ» (the same pair and duration) and «📡 К сигналам» in
+one row (#506), «🏠 В меню» ([bot-navigation.md](bot-navigation.md)). An accepted trade gets all
+four rows.
 
 **The session offer (#360).** On `accepted`, `settled` and `rejected` alike, the message ends with
 «🤖 Дальше бот может торговать сам: сессия из 5 циклов на этой паре, сигнал он проверяет перед

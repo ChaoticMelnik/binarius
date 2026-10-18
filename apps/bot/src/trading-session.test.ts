@@ -234,10 +234,11 @@ const newAnalysis = (durationSec: 5 | 15) => [
 ];
 // «👥 Пригласить друга» right above the menu at every end of a session (#115)
 const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
-// «💳 Пополнить» (#27): the cashier Mini App, right above the invite at the end of a session
+// «💳 Пополнить» (#27): the cashier Mini App, beside the invite at the end of a session (#506)
 const DEPOSIT: Button[] = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
+const DEPOSIT_INVITE = [...DEPOSIT, ...INVITE];
 // a stopped session's end of the path: under the stop reply, the card and an old status (#536)
-const STOPPED_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), DEPOSIT, INVITE, MENU];
+const STOPPED_ROWS = [[AGAIN], [...newAnalysis(15), ...toSignals(15)], DEPOSIT_INVITE, MENU];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 // #350: a refusal of the start leads back to the analysis and to the menu; a blocked user to support
 const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
@@ -246,9 +247,9 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
-// for want of tokens, the purchase, then the deposit (#27), above the way back (#117)
+// for want of tokens, the purchase and the deposit (#27) in one row, above the way back (#117)
 const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
-const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], DEPOSIT, ...BACK_ROWS];
+const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA), ...DEPOSIT], ...BACK_ROWS];
 // #509: no signal on the pair, the signals of the same duration and the menu
 const OTHER_PAIR_ROWS = [
   [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:5`)],
@@ -1095,10 +1096,8 @@ describe('«🔁 Ещё сессия»', () => {
       rows(sessionView({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 5 } })),
     ).toEqual([
       [button(LABELS.sessionAgainButton, `demo:l:${String(PAIR_EURUSD.id)}:5:n`)],
-      newAnalysis(5),
-      toSignals(5),
-      DEPOSIT,
-      INVITE,
+      [...newAnalysis(5), ...toSignals(5)],
+      DEPOSIT_INVITE,
       MENU,
     ]);
     // #509: a session the no-signal limit stopped offers another pair: no «🔁 Ещё сессия», no
@@ -1109,8 +1108,7 @@ describe('«🔁 Ещё сессия»', () => {
     });
     expect(rows(noSignal)).toEqual([
       [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
-      DEPOSIT,
-      INVITE,
+      DEPOSIT_INVITE,
       MENU,
     ]);
   });
@@ -1134,13 +1132,12 @@ describe('«🔁 Ещё сессия»', () => {
   it('ends a stopped session of either mode with the deposit, the invite and the menu', () => {
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
     for (const view of [STOPPED, realStopped]) {
-      expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard.slice(-3), view.mode).toEqual([
-        DEPOSIT,
-        INVITE,
+      expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard.slice(-2), view.mode).toEqual([
+        DEPOSIT_INVITE,
         MENU,
       ]);
     }
-    const withoutDeposit = STOPPED_ROWS.filter((row) => row !== DEPOSIT);
+    const withoutDeposit = STOPPED_ROWS.map((row) => (row === DEPOSIT_INVITE ? INVITE : row));
     expect(sessionCardKeyboard(STOPPED, undefined).inline_keyboard).toEqual(withoutDeposit);
     expect(sessionCardKeyboard({ ...STOPPED, settings: null }, undefined).inline_keyboard).toEqual([
       INVITE,
@@ -1152,14 +1149,14 @@ describe('«🔁 Ещё сессия»', () => {
     // without settings only the deposit, the invite and the menu follow: no pair to analyse
     expect(
       sessionCardKeyboard({ ...STOPPED, settings: null }, CASHIER_URL).inline_keyboard,
-    ).toEqual([DEPOSIT, INVITE, MENU]);
+    ).toEqual([DEPOSIT_INVITE, MENU]);
     // an old duration: no «🔁 Ещё сессия» and no «📊 Новый анализ», the signals and the menu stay
     expect(
       sessionCardKeyboard(
         { ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } },
         CASHIER_URL,
       ).inline_keyboard,
-    ).toEqual([TO_DURATIONS, DEPOSIT, INVITE, MENU]);
+    ).toEqual([TO_DURATIONS, DEPOSIT_INVITE, MENU]);
   });
 
   // #476: the door «again opens the amount screen»; the session starts from an amount
@@ -1196,7 +1193,7 @@ describe('the summary card (#318)', () => {
     trades: { ...STOPPED.trades, settled: 2, won: 1, lost: 1, profit: SUMMARY.result },
     lastIntent: intentView({ status: TradeIntentStatus.Settled }),
   });
-  const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), DEPOSIT, INVITE, MENU];
+  const CARD_ROWS = [[AGAIN], [...newAnalysis(15), ...toSignals(15)], DEPOSIT_INVITE, MENU];
   // the tracker's entry of a refresh on a done session: its card is what the tracker calls
   // the tracker's entry of a started session: its card is what the tracker calls
   const entryOf = async (setupResult: ReturnType<typeof setup>) => {
@@ -1209,17 +1206,16 @@ describe('the summary card (#318)', () => {
       sessionCardKeyboard(view, CASHIER_URL).inline_keyboard;
     expect(rows(DONE)).toEqual(CARD_ROWS);
     // S4: no empty first row
-    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([DEPOSIT, INVITE, MENU]);
+    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([DEPOSIT_INVITE, MENU]);
     expect(
       rows(sessionView({ ...DONE, settings: { ...DONE.settings!, durationSec: 60 } })),
-    ).toEqual([TO_DURATIONS, DEPOSIT, INVITE, MENU]);
+    ).toEqual([TO_DURATIONS, DEPOSIT_INVITE, MENU]);
     // #509: under a no_signal_timeout card, another pair instead of the same one again
     expect(
       rows(sessionView({ ...DONE, stopReason: TradingSessionStopReason.NoSignalTimeout })),
     ).toEqual([
       [button(LABELS.otherPairButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
-      DEPOSIT,
-      INVITE,
+      DEPOSIT_INVITE,
       MENU,
     ]);
   });
@@ -1380,11 +1376,10 @@ describe('the summary card (#318)', () => {
         botUsername: BOT_INFO.username,
       }).value,
     );
-    expect(rowsOf(photo)).toEqual([DEPOSIT, INVITE, MENU]);
+    expect(rowsOf(photo)).toEqual([DEPOSIT_INVITE, MENU]);
     expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
       SHARE_ROW,
-      DEPOSIT,
-      INVITE,
+      DEPOSIT_INVITE,
       MENU,
     ]);
   });

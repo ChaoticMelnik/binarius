@@ -15,7 +15,6 @@ import {
 } from './bot-text-overrides';
 import { BOT_TEXT_MESSAGES, estimateBotTextMessage } from './bot-text-messages';
 import { BOT_TEXT_CATALOG, BotTextGroup, botTextKeysOf, type BotTextKey } from './bot-texts';
-import { TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 
 const row = (key: string, source: string, version = 1): BotTextOverrideRow => ({
   key,
@@ -32,7 +31,7 @@ const longer = (key: BotTextKey, extra: number) =>
 
 // a welcome that fits its caption with a one-letter connect button, and not with the default one
 const tightWelcome = `${'я'.repeat(1022)} {connectButton}`;
-// alone within /help's own limit, with the rest of /help over 4096
+// alone within /help's own limit, with the rest of /help over the message limit
 const longHelpAbout = 'я'.repeat(3900);
 
 describe('resolveBotTextOverrides', () => {
@@ -170,7 +169,7 @@ describe('resolveBotTextOverrides', () => {
     const base = estimateBotTextMessage(intent, resolveBotTextOverrides([]).source);
     // 30 characters below the limit on its own (the offer is the wider of the message's two
     // tails, #360); the label adds 63 shown characters
-    const filler = 'я'.repeat(TELEGRAM_MESSAGE_LIMIT - 30 - base - 1);
+    const filler = 'я'.repeat(intent.limit - 30 - base - 1);
     const offer = row(
       'intentSessionOffer',
       `${BOT_TEXT_CATALOG.intentSessionOffer.source}\n${filler}`,

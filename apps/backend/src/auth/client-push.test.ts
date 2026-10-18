@@ -3,13 +3,14 @@ import type { AddressInfo } from 'node:net';
 import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BOT_MESSAGE_SPACER,
   defaultBotTextSource,
   formatUsd,
   telegramHtml,
   type DecimalString,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
+import { captureApi, inlineButtons, pushedText, sentPayload } from '../admin/testing';
 import {
   createClientPush,
   type ClientPush,
@@ -69,7 +70,7 @@ describe('the link push message', () => {
       kind: LinkPushKind.Pending,
       account: { id: ACCOUNT_ID, email: 'ada@example.test' },
     });
-    expect(payload?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(payload)).toBe(CLIENT_TEXTS.confirmPrompt.value);
     expect(inlineButtons(payload)).toEqual([
       { text: '✅ Подтвердить: ada@example.test', callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
@@ -93,7 +94,7 @@ describe('the link push message', () => {
     expect(inlineButtons(payload)).toEqual([
       { text: `✅ Подтвердить: ${email}`, callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
-    expect(payload?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(payload)).toBe(CLIENT_TEXTS.confirmPrompt.value);
   });
 
   // #350: every push has its next step, the bot's own buttons
@@ -103,7 +104,9 @@ describe('the link push message', () => {
   ];
   it('sends active with the account address in its text, and the demo button', async () => {
     const payload = await sent({ kind: LinkPushKind.Active, email: 'ada@example.test' });
-    expect(payload?.text).toBe(CLIENT_TEXTS.linkedActive({ email: 'ada@example.test' }).value);
+    expect(pushedText(payload)).toBe(
+      CLIENT_TEXTS.linkedActive({ email: 'ada@example.test' }).value,
+    );
     expect(inlineButtons(payload)).toEqual([
       { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
     ]);
@@ -117,9 +120,9 @@ describe('the link push message', () => {
     });
     try {
       const known = await sent({ kind: LinkPushKind.Active, email: 'a&b@example.test' });
-      expect(known?.text).toBe('✅ a&amp;b@example.test подключён');
+      expect(pushedText(known)).toBe('✅ a&amp;b@example.test подключён');
       const unknown = await sent({ kind: LinkPushKind.Active, email: null });
-      expect(unknown?.text).toBe('✅ адрес неизвестен подключён');
+      expect(pushedText(unknown)).toBe('✅ адрес неизвестен подключён');
     } finally {
       setBotTextSource(defaultBotTextSource);
     }
@@ -136,7 +139,7 @@ describe('the link push message', () => {
     [LinkPushKind.Mismatch, CLIENT_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
   ] as const)('sends %s with its next step', async (kind, text, buttons) => {
     const payload = await sent({ kind });
-    expect(payload?.text).toBe(text.value);
+    expect(pushedText(payload)).toBe(text.value);
     expect(inlineButtons(payload)).toEqual(buttons);
   });
 });
@@ -154,7 +157,7 @@ describe('the mailing push', () => {
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.chat_id).toBe('9007199254740993');
     expect(payload?.parse_mode).toBe('HTML');
-    expect(payload?.text).toBe('<b>a &amp; b</b>');
+    expect(pushedText(payload)).toBe('<b>a &amp; b</b>');
     expect(inlineButtons(payload)).toEqual([
       { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
     ]);
@@ -170,7 +173,8 @@ describe('the session notices (#464)', () => {
       4242,
     );
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
-    expect(sentPayload(calls, 'sendMessage')).toEqual({
+    const payload = sentPayload(calls, 'sendMessage');
+    expect({ ...payload, text: pushedText(payload) }).toEqual({
       chat_id: '9007199254740993',
       text: '<pre>a &amp; b</pre>',
       parse_mode: 'HTML',
@@ -183,7 +187,8 @@ describe('the session notices (#464)', () => {
     const { calls } = captureApi(push);
     await push.editSessionTrade(TELEGRAM_USER_ID, 4242, telegramHtml`<pre>a &amp; b</pre>`);
     expect(calls.map((call) => call.method)).toEqual(['editMessageText']);
-    expect(sentPayload(calls, 'editMessageText')).toEqual({
+    const payload = sentPayload(calls, 'editMessageText');
+    expect({ ...payload, text: pushedText(payload) }).toEqual({
       chat_id: '9007199254740993',
       message_id: 4242,
       text: '<pre>a &amp; b</pre>',
@@ -218,7 +223,7 @@ describe('the waiting message (#536)', () => {
     ).toBe(4243);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     const payload = sentPayload(calls, 'sendMessage');
-    expect(payload).toMatchObject({
+    expect({ ...payload, text: pushedText(payload) }).toMatchObject({
       chat_id: '9007199254740993',
       text: '<b>ждём</b>',
       parse_mode: 'HTML',
@@ -259,21 +264,57 @@ describe('the deposit push', () => {
 
   it('prints a fresh real balance from its DecimalString, with the menu button', async () => {
     const payload = await sent({ amount: money('1234.50000000'), fresh: true });
-    expect(payload?.text).toBe(
+    expect(pushedText(payload)).toBe(
       `💳 <b>Пополнение получено</b>\nРеальный баланс: ${formatUsd('1234.50000000')}`,
     );
-    expect(payload?.text).toMatch(/\$1\D234\.50$/);
+    expect(pushedText(payload)).toMatch(/\$1\D234\.50$/);
   });
 
   it('says there is no fresh data for a stale or missing snapshot', async () => {
     const stale = await sent({ amount: money('1234.5'), fresh: false });
-    expect(stale?.text).toBe(
+    expect(pushedText(stale)).toBe(
       CLIENT_TEXTS.depositCredited({ realBalance: { amount: money('1234.5'), fresh: false } })
         .value,
     );
-    expect(stale?.text).not.toContain('1234');
+    expect(pushedText(stale)).not.toContain('1234');
     const missing = await sent(null);
-    expect(missing?.text).toBe(stale?.text);
+    expect(pushedText(missing)).toBe(pushedText(stale));
+  });
+});
+
+// #506: every text of this seam ends with the width spacer, read here as sent
+describe('the width spacer (#506)', () => {
+  const SPACED = '<b>x</b>' + BOT_MESSAGE_SPACER;
+  const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.menuButton, 'menu');
+  const pushed = () => {
+    const push = createClientPush({ token: TOKEN });
+    return { push, ...captureApi(push) };
+  };
+
+  it('send appends the width spacer', async () => {
+    const { push, calls } = pushed();
+    await push.sendMailing(TELEGRAM_USER_ID, { text: telegramHtml`<b>x</b>`, reply_markup });
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(SPACED);
+  });
+
+  it('sendSessionTrade appends the width spacer', async () => {
+    const { push, calls, answers } = pushed();
+    answers.set('sendMessage', () => ({ message_id: 1 }));
+    await push.sendSessionTrade(TELEGRAM_USER_ID, telegramHtml`<b>x</b>`);
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(SPACED);
+  });
+
+  it('editSessionTrade appends the width spacer', async () => {
+    const { push, calls } = pushed();
+    await push.editSessionTrade(TELEGRAM_USER_ID, 1, telegramHtml`<b>x</b>`);
+    expect(sentPayload(calls, 'editMessageText')?.text).toBe(SPACED);
+  });
+
+  it('sendSessionWaiting appends the width spacer', async () => {
+    const { push, calls, answers } = pushed();
+    answers.set('sendMessage', () => ({ message_id: 1 }));
+    await push.sendSessionWaiting(TELEGRAM_USER_ID, { text: telegramHtml`<b>x</b>`, reply_markup });
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(SPACED);
   });
 });
 

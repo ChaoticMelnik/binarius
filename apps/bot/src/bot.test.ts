@@ -424,7 +424,7 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // the demo, then the invite in a row of its own (#115), the purchase (#117) and the deposit
+  // the demo, then the invite (#115) and the purchase (#117) in one row (#506), and the deposit
   // (#27), the cashier Mini App
   const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
   // the entry and the mode screen share the first row (#474)
@@ -433,8 +433,10 @@ describe('the status card', () => {
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
       { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
     ],
-    [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
-    [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
+    [
+      { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
+      { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
+    ],
     DEPOSIT_ROW,
   ];
   // in real mode the entry reads «🚀 Торговать» (#121) and the mode button «🎮 Вернуться в демо»,
@@ -444,8 +446,10 @@ describe('the status card', () => {
       { text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA },
       { text: LABELS.modeBackDemoButton, callback_data: MODE_CALLBACK_DATA },
     ],
-    [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
-    [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }],
+    [
+      { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
+      { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
+    ],
     DEPOSIT_ROW,
   ];
   // the line's default holds none of its variables

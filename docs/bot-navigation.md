@@ -33,6 +33,51 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   (not messages), and the staff bot (`apps/backend/src/admin`, plain text by the owner's decision
   2026-10-02). A send method used outside the two seams is ESLint's to refuse (Rule 18).
 
+## The width (#506)
+
+Telegram sizes a message bubble to its longest line, and an inline keyboard takes the bubble's
+width, so a short text would leave narrow buttons and no room for two in a row. The Bot API has no
+width setting. Every **text** message therefore ends with the width spacer `BOT_MESSAGE_SPACER`
+(`packages/shared/src/bot-message-width.ts`): a line break, then `BOT_MESSAGE_SPACER_LENGTH` = 26
+characters U+2800 BRAILLE PATTERN BLANK. The character is a symbol, not whitespace, so the Bot API's
+trim keeps it; 26 of them with no break between make one line about 302 pt wide on an iPhone at the
+default font size (0.684 em measured in the macOS system font), the full text width of the bubble
+with one empty-looking line between the text and the keyboard; on Telegram Desktop it is about
+230 px of 430. It goes on a line of its own after the text, so the chat preview and the
+notification open with the text and the text's last word never wraps onto it.
+
+- Where: the two seams append it when they unwrap `TelegramHtml` — the bot's `replyHtml`,
+  `editMessageTextHtml`, `editMessageTextByIdHtml` and their `…WithoutNextStep` forms
+  (`send.ts`), the backend's `send` (the link push, mailings, the deposit and Stars pushes, the
+  summary), `sendSessionTrade`, `editSessionTrade` and `sendSessionWaiting` (`client-push.ts`).
+  Nothing before the seams sees it: the catalog, the overrides, the texts' builders and the
+  trackers' dedupe keys hold the text alone.
+- Not on captions (a photo or a video, `editMessageMedia`, the inline share result), the Stars
+  invoice, callback toasts or the staff bot: a picture sets a caption's width, and the others are
+  not bubbles of the client chat.
+- The limit: a text message holds `BOT_TEXT_LIMIT` = 4096 − 27 = 4069 characters after entities
+  parsing (`botHtmlText`'s default, the text descriptions of `BOT_TEXT_MESSAGES`, the session
+  cycle's `fits`, `telegramTextProblems`' default); captions keep 1024. An override longer than
+  that after parsing is refused as `too_long` ([bot-texts.md](bot-texts.md#limits)).
+- Tuning: the owner sets N by looking at the clients — two empty lines on a phone mean N is too
+  large, a bubble narrower than the screen too small. Windows and Android glyph widths were not
+  measured.
+- Held by: `send.test.ts` (each function of the bot's seam), `client-push.test.ts` (each method of
+  the backend's), `captureApi` (`apps/bot/src/testing.ts` → `refuseWidthSpacerMisuse`: in every
+  scene of every bot test a `sendMessage` or `editMessageText` without the spacer at its end
+  throws, and a caption, an inline answer or a toast with U+2800 throws; the call is recorded
+  without the spacer), `pushedText` in the backend's suites (`apps/backend/src/admin/testing.ts`),
+  `bot-message-width.test.ts` (the spacer, the limit, no text limit above it).
+
+**Rows.** Two buttons share a row when both labels are at most 18 characters (the longest of the
+pairs is «👥 Пригласить друга»); a longer label keeps a row of its own, and «🏠 В меню» is always
+alone, last. The pairs: «👥 Пригласить друга | ⭐ Купить токены» on the status card, «⭐ Купить
+токены | 💳 Пополнить» in the `insufficient_tokens` refusals (`withBuy`), «📊 Новый анализ | 📡 К
+сигналам» at the end of a path (`appendEndOfPath`), «💳 Пополнить | 👥 Пригласить друга» at the end of
+a session (`withInvite`, `appendSessionEnd`). Without an https cashier a pair shrinks to one button,
+never an empty row. The order of the buttons and their callback data did not change. Screens whose
+rows were already two or three wide, and /buy (a package label is 39 characters), keep theirs.
+
 ## Exceptions
 
 | `NoNextStepReason` | Where | Why |
@@ -69,12 +114,16 @@ chat with the bot:
   button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
   `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
-  path's duration, `demo:sig:<sec>`, since #382; its `beforeMenu` rows go right above the menu);
-  since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` and `inviteKeyboard`
-  ([referrals.md](referrals.md)); since #117 `buyButton`, `withBuy` and `buyPackagesKeyboard`
-  ([stars.md](stars.md)); since #27 `depositButton` and `depositRows` («💳 Пополнить», a `web_app`
-  button with no callback data; no row without a URL; the only builders, `keyboards.test.ts`,
-  [deposit.md](deposit.md)).
+  path's duration, `demo:sig:<sec>`, since #382; «📊 Новый анализ» and it share a row, #506; its
+  `beforeMenu` rows go right above the menu);
+  since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` (the deposit and the
+  invite in one row, then the menu) and `inviteKeyboard`
+  ([referrals.md](referrals.md)); since #117 `buyButton`, `withBuy` (the purchase and the deposit in
+  one row over the caller's rows) and `buyPackagesKeyboard`
+  ([stars.md](stars.md)); since #27 `depositButton`, `depositButtons` (#506, the button for a row
+  shared with another) and `depositRows` («💳 Пополнить», a `web_app`
+  button with no callback data; no button without a URL; the only builders, `keyboards.test.ts`,
+  [deposit.md](deposit.md)). The rows' shapes: `keyboards.test.ts` → «the rows (#506)».
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Новый анализ»,
   `toSignalsButton` «📡 К сигналам»; reused: `demoRetryButton` «🔄 Повторить»,
   `stakeBackAnalysisButton` «↩️ Назад к анализу», `supportButton`, `demoButton`.
@@ -108,7 +157,7 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить (unchanged) |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить (unchanged) |
-| status card | 🎮 Демо-торговля and 💼 Реальный режим in one row (in real: 🚀 Торговать and 🎮 Вернуться в демо, both opening the mode screen, #474) · 👥 Пригласить друга (#115) · ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) |
+| status card | 🎮 Демо-торговля \| 💼 Реальный режим (in real: 🚀 Торговать \| 🎮 Вернуться в демо, both opening the mode screen, #474) · 👥 Пригласить друга (#115) \| ⭐ Купить токены (#117) · 💳 Пополнить (#27, https only) |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
@@ -133,7 +182,7 @@ no repeat.
 | `paysupportEmpty` | the support URL · 🏠 В меню |
 | `unavailable` after `/paysupport` (a read) | 🔄 Повторить (`ps:l`) · 🏠 В меню |
 | every answer to «Нужен возврат» (a write), `unavailable` included | ↩️ К списку оплат (`ps:l`) · 🏠 В меню |
-| the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены · 💳 Пополнить (#27, https only) · ↩️ Назад к анализу · 🏠 В меню |
+| the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены \| 💳 Пополнить (#27, https only) · ↩️ Назад к анализу · 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
 | demo screens, the signals and launch screens (#320), the amount screen (#476), the picker | their own keyboards (unchanged); the launch screen and the amount screen are deleted once the session's status is sent (#418) |
@@ -150,15 +199,15 @@ no repeat.
 | the session's stop failed under an old status message (#536) | 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню; the pressed message stays, its «⏹» pressed again is safe |
 | the session's stop failed under the waiting message (#587), drawn in place of it | a stop whose outcome is unknown: ⏹ Остановить сессию again (`waitingStopKeyboard`, `session:stop:<id>:w`; its next step is the stop itself); `sessionStatusUnavailable` (404) and a failed read after a 409 → 🏠 В меню; as a new message when the edit is refused as gone: 🏠 В меню — never a second «⏹» |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
-| trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 циклов (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
+| trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 циклов (#360, on a duration the demo still offers) · 📊 Новый анализ \| 📡 К сигналам (📡 К сигналам alone on a duration the demo no longer offers) · 🏠 В меню |
 | the session message (#536; the picture of its signal's direction with the text as its caption, #568, or the text) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
 | the waiting message (#536, sent by the backend) | ⏹ Остановить сессию (`session:stop:<id>:w`) |
-| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару · 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню |
+| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару · 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню |
 | an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
-| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 💳 Пополнить (#27, https only) · 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
+| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 | the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Новый анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration) — one button, as the chain's reminders |
 

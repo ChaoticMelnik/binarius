@@ -4,12 +4,8 @@ import { expect } from 'vitest';
 import type { ClosedTrade, OpenTrade } from './broker';
 import type { DecimalString } from './money';
 import { TradeMode, type TradeAction } from './trading';
-import {
-  plainTextOf,
-  TELEGRAM_MESSAGE_LIMIT,
-  telegramHtmlProblems,
-  type TelegramHtml,
-} from './telegram-html';
+import { BOT_MESSAGE_SPACER, BOT_TEXT_LIMIT } from './bot-message-width';
+import { plainTextOf, telegramHtmlProblems, type TelegramHtml } from './telegram-html';
 
 // --- Waiting in tests (#205) ------------------------------------------------------------------
 // One ceiling per vitest project, each below that project's test budget so a wait that never ends
@@ -143,8 +139,9 @@ export function composeDurationMs(value: string | undefined): number | undefined
 
 // Everything the texts' tests check about one message: valid Telegram HTML, non-empty after
 // entities parsing, inside the limit (UTF-16 code units of the parsed text, as the Bot API
-// counts), no line starting or ending with a space. Empty when the text is fine.
-export function telegramTextProblems(text: TelegramHtml, limit = TELEGRAM_MESSAGE_LIMIT): string[] {
+// counts; by default the text message's, the width spacer already taken off), no line starting or
+// ending with a space. Empty when the text is fine.
+export function telegramTextProblems(text: TelegramHtml, limit = BOT_TEXT_LIMIT): string[] {
   const problems = telegramHtmlProblems(text.value);
   const plain = plainTextOf(text);
   if (plain.trim() === '') problems.push('empty after entities parsing');
@@ -157,6 +154,12 @@ export function telegramTextProblems(text: TelegramHtml, limit = TELEGRAM_MESSAG
     if (line !== line.trim()) problems.push(`line ${index + 1} starts or ends with a space`);
   });
   return problems;
+}
+
+// A text as a seam sent it, without the width spacer (#506); undefined when the spacer is not at
+// its end — the caller's assertion fails on that rather than on a text that merely differs.
+export function stripMessageSpacer(sent: string): string | undefined {
+  return sent.endsWith(BOT_MESSAGE_SPACER) ? sent.slice(0, -BOT_MESSAGE_SPACER.length) : undefined;
 }
 
 // --- Broker trade builders (#17) ---------------------------------------------------------------

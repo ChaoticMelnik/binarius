@@ -16,7 +16,7 @@ import {
   SignalFeedOutcome,
   SignalKind,
   TELEGRAM_CAPTION_LIMIT,
-  TELEGRAM_MESSAGE_LIMIT,
+  BOT_TEXT_LIMIT,
   TradeAction,
   TradeMode,
   TrendDirection,
@@ -545,13 +545,13 @@ MA200         цена ниже 1.08612
         chooseAmount: true,
       });
       // a signal is a caption (#482)
-      const limit = photo === null ? TELEGRAM_MESSAGE_LIMIT : TELEGRAM_CAPTION_LIMIT;
+      const limit = photo === null ? BOT_TEXT_LIMIT : TELEGRAM_CAPTION_LIMIT;
       expect(telegramTextProblems(text, limit)).toEqual([]);
       expect(plainTextOf(text)).toContain(pair.symbol);
       expect(text.value).not.toContain('&amp;amp;');
     }
     expect(
-      telegramTextProblems(analysisUnavailableScreen(pair, 15).text, TELEGRAM_MESSAGE_LIMIT),
+      telegramTextProblems(analysisUnavailableScreen(pair, 15).text, BOT_TEXT_LIMIT),
     ).toEqual([]);
   });
 });
