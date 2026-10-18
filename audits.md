@@ -3642,3 +3642,28 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. Manager → Services baseline: a host process with positive proof of another session (its command line names another session's scratchpad) is recorded, not a stop; anything else, Docker services included, fails closed — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
 2. Remaining findings — **вынесено в #650**
+
+---
+
+## #123 — Low-token nudge по проценту использования демо-пакета (2026-10-18)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Main ec01fb75. PR #435 (opened 2026-10-10, round 1 with 5 Minor, then idle) CONFLICTING: migrations 0041/0042 vs main's 0065; #117 and #27 merged meanwhile with requirements «for whoever merges second». Codex limit until 22.10 09:12. |
+| Architect | round-0 Plan Update | Opus. 2 new owner forks (thresholds from the user's own starter pack; once per user), both recommended. Plan Update 6247527249: new engine API, #117/#27 buttons, new balance writers, migrations 0066/0067, ≈780 lines, 14 mutations. Branch decision: fresh `feat/123-low-token-nudge-v2`, #435 superseded. Corrected tech-lead's prompt: #435 had a review round. |
+| Implementer | round 1 | Opus. 2 clarify questions (button label by trading mode at send; draft texts), both recommended. PR #652, 3 commits, ≈965 lines without snapshots, own DB `binarius_impl_123`, `pnpm check` 0, mutations 16/16 (6247958996). #435 closed «superseded by #652». Phase 3 audit 6247968642. |
+| Reviewer | round 2 | No Blocker/Major, 3 Minor; all 5 round-1 fixes carried over; `sql.raw` takes only constants. 3b + 3c (3d skipped: ≈265 code lines). CI green. Codex skipped: limit until 22.10 09:12 (job task-mvcue1zf-kjrgek). |
+| Tech Lead | merge | Owner: merge, Minors to Backlog. `--rebase --delete-branch`, MERGED 2026-10-18T09:41:00Z; shared test DB migrated to 0067; `binarius_impl_123` dropped. Minors → #654. Done. Models: every spawn on its policy model. |
+
+### Review iterations: 2 (round 1 on #435)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Round-0 spawn prompt said #435 had no review | Minor | unverified-claim | tech-lead read an empty `reviews` field; round 1 was posted otherwise | Tech Lead Phase 2 |
+| R2 Minors 1–3 (planner locks a sent row every tick; docs/mailing.md wider than the code; docs/deposit.md names the wrong file) | Minor | other | left at the merge | → #654 |
+
+### Process improvement proposals
+1. Tech-lead Phase 2: a spawn prompt for an issue with an open PR states its review rounds counted by `## Review round` headings — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Mode 2 → Phase 2**
+2. Remaining findings — **вынесено в #654**

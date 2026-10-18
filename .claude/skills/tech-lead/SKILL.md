@@ -283,7 +283,7 @@ If this repo's CLAUDE.md has waived the commit/PR stop points: no text between p
 
 #### Phase 2 — Implementer
 
-Before the spawn, a plan more than a day old or written by another session is checked against `main`: `git log --oneline <plan's base sha>..origin/main -- <files the plan names>`. Any output → the architect writes a round-0 Plan Update first (all seven plans of 2026-10-06..09 taken on 2026-10-10 needed one; #396 and #397 on 2026-10-09).
+Before the spawn, a plan more than a day old or written by another session is checked against `main`: `git log --oneline <plan's base sha>..origin/main -- <files the plan names>`. Any output → the architect writes a round-0 Plan Update first (all seven plans of 2026-10-06..09 taken on 2026-10-10 needed one; #396 and #397 on 2026-10-09). When the issue already has an open PR, the spawn prompt states its review rounds counted by the `## Review round` headings of its reviews and comments (reviewer Step 6-pre) — an empty `gh pr view --json reviews` is not «no review» (#123: PR #435's round 1 was missed, 2026-10-18).
 
 Spawn the implementer (`Agent`, `model: "opus"`). Round 1 returns its clarify questions (implementer Step 0) → clarify relay; plan defects among them go to the architect first (a fresh architect spawn on `opus` for the Plan Update, with the plan URL and the defects) → the implementer continues with the answers and the Plan Update. Never perform implementer steps inline.
 
