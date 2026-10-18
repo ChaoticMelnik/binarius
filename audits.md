@@ -3529,3 +3529,33 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. Tech-lead Step 7 «A plan's stand check»: the prompt also names loopback binding and how (a preload; the backend has no host setting) — **внедрено в #641: `.claude/skills/tech-lead/SKILL.md` → Step 7 → «A plan's stand check is not forbidden by parallelism»**
 2. Remaining findings — **вынесено в #640**
+
+---
+
+## #637 — Лимит ожидания сигнала сессии - в свечах интервала, а не 120 с (2026-10-18)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech-lead | Phase 0 | Preflight clean (main synced, Codex ready without limit, no Fable refusal in 7 days, previous audit proposals all have a status); issue created from the owner's request with the production data |
+| Architect | Plan (Fable) | 4 clarify questions answered by the owner; plan posted before implementation, ~390 lines, one PR |
+| Architect | Plan | Three refusal rows failed a second conjunct, m2/m9 had no assertion to redden; width estimate `m.longest` contradicted M2; plan said the stops were mostly the pause, the data says 16/17 `no_signal` - Minor |
+| Architect | Plan Update (Opus) | Implementer's clarify defect relayed to the architect, not the owner; fixed rows, m10, M7, `limitMs` in `expectStopped` |
+| Implementer | Implementation | Branch/commits/PR #639 per convention; one `pnpm check` at head; 10/10 mutations in one call; deviations disclosed in the PR |
+| Reviewer | Round 1 | Clean, two Minor (docs); `/security-review` and `/simplify` skipped by diff content; Codex 6-pre at a032dd53 |
+| Tech-lead | Merge | PR turned CONFLICTING after #405 merged; rebase-only implementer (range-diff `=` on code), mutations re-taken, own 6-pre run at 1c77cff7, owner asked again; merged with rebase |
+| Tech-lead | Own 6-pre run | "Known" field left empty: Codex re-raised the Minor already in #643 as a Major; owner merged with it tracked - Minor |
+
+### Review iterations: 1
+
+### Findings (if any)
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Old `sessionStopNoSignalTimeout` overrides with `{noSignalMinutes}` are rejected (no data migration); 0 such rows on production | Minor (Codex: Major) | other | Variable set changed, Rule 30 read as rename-only | Architect plan |
+| `docs/trading-session.md:185` stale `readSessionHistory` signature (since #509) | Minor | single-source | Signature duplicated in docs | #509 review |
+| Non-discriminating refusal rows / mutations in the first plan | Minor | unverified-claim | New predicate had no code to run rows against | Architect validation |
+
+### Process improvement proposals (if any)
+1. Architect validation: a check the plan adds is evaluated row by row against every conjunct of a scratch copy of the planned predicate — **внедрено в #PR: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. Tech-lead merge after a rebase: own 6-pre run at the new head with the "Known" field filled from the Backlog issue — **внедрено в #PR: `.claude/skills/tech-lead/SKILL.md` → Mergeability right before the merge**
+3. Remaining findings — **вынесено в #643**
