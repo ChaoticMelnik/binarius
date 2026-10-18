@@ -3585,7 +3585,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R1 m1–m2 (gate misses invoice/album; «4 096» in docs/bot-account.md) | Minor | other | left at the merge | → #645 |
 
 ### Process improvement proposals
-1. Implementer Step 5: the per-commit check is `pnpm typecheck`, `pnpm lint` and `vitest run` of every project — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»**
+1. Implementer Step 5: the per-commit check is `pnpm typecheck`, `pnpm lint` and `vitest run` of every project — **внедрено в #651: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»**
 2. Remaining findings — **вынесено в #645**
 
 ---
@@ -3611,8 +3611,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1–m5 (language choice lost after a failed cold read; `upsertUser` without `botLanguageOf`; a text promising what /start does not do; id in the access log; the publish rule written twice) | Minor | other | left at the merge | → #649 |
 
 ### Process improvement proposals
-1. Same as #506 proposal 1 — **внедрено в #<PR>** (one edit)
-2. Manager → task selection (5): an owner's board note releasing the task is not a taken signal — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task selection → Skip**
+1. Same as #506 proposal 1 — **внедрено в #651** (one edit)
+2. Manager → task selection (5): an owner's board note releasing the task is not a taken signal — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task selection → Skip**
 3. Remaining findings — **вынесено в #649**; flaky test — **вынесено в #638**
 
 ---
@@ -3637,5 +3637,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | A foreign session's stand in the night's services snapshot | — | other | the snapshot sees every host process; the manager rule had no way to tell a foreign one | Manager (caught) |
 
 ### Process improvement proposals
-1. Manager → Services baseline: a process of another session (cwd/env outside this night's worktrees) is recorded, not a stop — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
+1. Manager → Services baseline: a process of another session (cwd/env outside this night's worktrees) is recorded, not a stop — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
 2. Remaining findings — **вынесено в #650**
