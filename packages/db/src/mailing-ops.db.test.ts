@@ -1390,9 +1390,10 @@ describe('the low-token nudge', () => {
   });
 
   it('T14 plans nothing for a user without the starter pack, and cancels at the claim a job written for one', async () => {
-    // tokens from a referral reward or a Stars purchase only: no pack to count from
+    // tokens from a referral reward only, all spent: the reward is a bonus row too, but not the
+    // pack (no broker account on it), so there is nothing to count from
     const rewardedOnly = await rewarded(1, { tokens: 10n });
-    await setBalance(rewardedOnly.inviterId, 10n);
+    await setBalance(rewardedOnly.inviterId, 0n);
     const noPack = await seedUser(tmp.db, { balance: 0n });
     await seedBrokerAccount(tmp.db, noPack.userId);
 
