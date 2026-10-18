@@ -360,7 +360,7 @@ MA200         цена ниже 1.08612
   // #631: a pair paying below 80 % reads as one paying above it: no note under the payout or the
   // hints in either mode (#379 noted that no cycle starts on it)
   it.each([TradeMode.Demo, TradeMode.Real])(
-    'draws the screens of a pair paying 79 %% with no cycle note in %s',
+    'draws the screens of a pair paying 79 percent with no cycle note in %s',
     (mode) => {
       const low = { ...PAIR_EURUSD, payout: 79 };
       const signal = linesOf(SIGNAL_DECIDED, low, mode);
