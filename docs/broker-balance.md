@@ -130,10 +130,12 @@ for another caller's exchange on the row lock
   session, in parallel), and the session notices' summary (#464) (`readFinishedSessionView` in
   `apps/backend/src/trading/session-view.ts`).
   Only for a finished session (`isTradingSessionFinished`) with `settled > 0` whose snapshot is
-  not `current` — older than the session's last `settle` row of `token_ledger` (`readTradingSessionView`).
+  not `current` — older than the session's last `settle` row of `token_ledger`, or missing
+  (`readTradingSessionView`, `balance: null`).
   `mayRefresh: false` (the bot's poll is a timer, Rule 12), no `requested` (a poll does not keep the
   account in work), the same 3 s signal. After an `ok` the snapshot is current for good, so a
-  session costs at most one GET ([trading-session.md](trading-session.md#get-tradingsessionsidtelegramuserid)).
+  session costs at most one successful GET; a refresh that did not answer `ok` is repeated by each
+  later read of the finished view ([trading-session.md](trading-session.md#get-tradingsessionsidtelegramuserid)).
 
 ## The background tick
 

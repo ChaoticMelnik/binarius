@@ -755,8 +755,8 @@ Every settled trade of a session shows in a message **without sound**
 (`disable_notification: true`) and without buttons, in the trades' order; once the session is
 finished, one summary message comes **with sound**. Under them stands the waiting message with
 «⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)). The backend sends all
-three, not the bot: a restart of either sends nothing twice and skips nothing but what the endings
-below lose.
+three, not the bot: a restart of either repeats no send by a retry — a block can show twice only by
+the endings [risk 35](#accepted-risks) names — and skips nothing but what the endings below lose.
 
 **One cycle, one message** (#551, the owner's decision 2026-10-16, after the reference bot). A
 cycle's first trade sends a new message with its block; each later trade of the same cycle edits
@@ -817,8 +817,9 @@ cycle, so every trade is a new message of one block, as before #551.
   end line (#536): «🏁 Сессия завершена: …» for a
   completed session, otherwise the stop line and «📊 Итог: …», then «💰 Результат» (the SQL sum,
   #337), the balance of the session's mode and its age line when it predates the last trade. Its
-  balance is read as the route reads it (`readFinishedSessionView`): at most one broker GET per
-  session, `mayRefresh: false`. Under it «🏠 В меню»; under a `no_signal_timeout` stop (#509)
+  balance is read as the route reads it (`readFinishedSessionView`): at most one successful broker
+  GET per session — a refresh that did not answer `ok` is repeated by each later read of the
+  finished view — `mayRefresh: false`. Under it «🏠 В меню»; under a `no_signal_timeout` stop (#509)
   «🔀 Выбрать другую пару» above it — `demo:sig:<sec>` when the duration is one the scanner lists
   (`signalsCallbackDataFor`, `packages/shared/src/bot-navigation.ts`), `demo:sig` otherwise (D10,
   D12).
@@ -833,8 +834,9 @@ cycle, so every trade is a new message of one block, as before #551.
   mark and no message.
 - **Who.** The session's owner by join (`trading_sessions → broker_accounts →
   users.telegram_user_id`); no id comes from outside. A user with `telegram_blocked_at` set gets
-  nothing, and the cursor moves on. The notification level does not apply: trade results are
-  outside it (Rule 19).
+  nothing: the trades are claimed without a call, and the summary's mark is set without reading the
+  view — no balance GET for a user nothing can reach (#620, D5). The notification level does not
+  apply: trade results are outside it (Rule 19).
 
 ### The state
 
@@ -845,7 +847,11 @@ is creation order and a count is the whole state. `final_notice_sent_at` is the 
 Every trade is claimed by a CAS UPDATE before the Telegram call (`claimSessionTradeNotice`,
 `claimSessionFinalNotice` in `packages/db/src/session-notice-ops.ts`): at most once, the mailing
 engine's rule. The migration's backfill (0050) set every existing session's cursor at its settled
-trades and marked every stopped session, so nothing settled before the deploy is sent.
+trades and marked every stopped session, so nothing settled before the deploy is sent. A session
+stopped before that deploy with a trade still on manual review was marked too: when an operator
+settles the trade later, neither its message nor a summary goes out — the mark keeps the session
+out of the list and refuses the claim (#534 m5; the 0050 test's third session); the bot's card
+(#318) is not held by it.
 
 **The cycle message** (#551, migration 0054): `cycle_message_id` is Telegram's `message_id` of
 the message the next step of the same cycle edits, `cycle_message_from` the index (from 0, in the
@@ -875,24 +881,28 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | an edit sent | stays claimed; unchanged | the next trade |
 | an edit answered «message is not modified» | as sent | the next trade |
 | an edit answered «message to edit not found», «message can't be edited» or «there is no text in the message to edit» (`editRefusal` → gone: the user deleted it, or it is too old to edit) | stays claimed; after one more pace a new message with the gone message's blocks (`from` to the claimed trade), recorded | the next trade; `warn` … `edited anew` |
-| the user blocked the bot (read flag) | claimed, no call; unchanged | the next trade |
+| the user blocked the bot (read flag) — a trade, or the summary | claimed, no call; unchanged; the summary's mark set without the view's read (no balance GET, #620) | the next trade; for the summary nothing |
 | 403 (send or edit) | stays claimed; the user is marked unreachable | later trades claimed without a call |
 | 429 (send or edit) | put back (`releaseSessionTradeNotice`; the summary's by `releaseSessionFinalNotice`); unchanged | the whole sender pauses for `retry_after`; the same trade first after it |
-| another 4xx (send or edit) | put back, an attempt counted in memory; unchanged | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped`; the next step's edit still shows the block |
+| another 4xx (send or edit) | put back, an attempt counted in memory; unchanged | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped`; the block comes back only with the next step's edit of the same cycle message — a cycle's last step, and a step before a split (the next message starts from the claimed trade), stay lost, as the unknown edit's row |
 | a new message with a waiting message on screen (#536) | before the send, after its own pace, the waiting message deleted ([its endings](#the-waiting-message-536)); a 429 on that delete puts the trade back and pauses the sender; an unknown outcome puts the trade back and skips the session (the next tick deletes first); a 403 counts the trade as sent without a call | the new message after one more pace; the waiting message under it in the same `serve` |
 | 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
 | 5xx, a timeout, the transport — an edit | stays claimed; unchanged | `warn` … `edit outcome unknown`; the next step's edit shows the block; a cycle's last step is lost |
 | a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
 | the block does not fit (`BOT_TEXT_LIMIT`, 4069) | a new message from this trade; recorded from it | `info` … `split` |
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
-| the record refused (the cursor moved: another sender) | the other sender's record stands | at most repeated blocks, never a lost step |
-| the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; the session waits for the next tick |
+| the record refused (the cursor moved: another sender) | the other sender's record stands | a new message: at most repeated blocks, never a lost step; an edit: two senders' edits of one cycle message can land out of order and show the older step until the next step's edit ([risk 35](#accepted-risks); one sender in production) |
+| the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the summary: the session stays in the list at its `created_at`, tried every tick ([risk 84](#accepted-risks)) |
+| a statement or the summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error`; the session is tried again next tick at its place in the list, every tick while it throws ([risk 84](#accepted-risks)) |
 | `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a finished session's summary does not start (no balance read) and goes after the next start |
 
-No ending leaves a session at the head of the queue without moving: the claim moves the cursor,
-and the order is the sessions' `created_at`. The summary's 429 or refusal takes its mark back only
-while the card (#318) has not been claimed on it; the card waits for the mark, so in practice
-always.
+Every ending after a claim moves the cursor, so no sent trade holds a session's place. Two endings
+before any claim do not: a summary that cannot be built, and a thrown statement or refresh (the two
+rows above) leave the session listed at its `created_at` and tried every tick; the list is
+oldest-first and `SESSION_NOTICE_SCAN` (200) rows, so 200 such sessions would starve every newer
+one ([risk 84](#accepted-risks); the hold-back is #660). The summary's 429 or refusal takes its
+mark back only while the card (#318) has not been claimed on it; the card waits for the mark, so
+in practice always.
 
 ### Rate and timing
 
@@ -910,6 +920,17 @@ pacer's tokens (a send and a delete are calls); a new cycle is three calls inste
 token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and only a stopped
 session's is an edit (#536, `mayDraw`) — 12 calls when each entry's card is due ([risk
 47](#accepted-risks)).
+
+The list's query evaluates each correlated subquery twice per row — in the select list and in the
+filter, over the sessions with `final_notice_sent_at` null: Postgres plans one SubPlan per
+occurrence. `EXPLAIN` of the query as drizzle sends it, on an empty migrated database
+(PostgreSQL 18.6, 2026-10-18): 4 SubPlans — the settled count twice as an index probe by session
+id, the select list's «finished» as an index probe and the filter's as a hashed SubPlan over
+`trade_intents` by status; the same two subqueries under `WITH … AS MATERIALIZED`, which drizzle
+0.45 cannot emit: 2 SubPlans, both index probes. The plan at the pilot's volume is not measured
+([risk 85](#accepted-risks)). A claim reads the session's settled trades up to the claimed one, so
+a session's sends read Σ ≤ 406 rows at ≤ 28 settled trades (Rule 28), ≤ 260 k at the 720 ceiling
+(`MAX_SESSION_SUMMARY_TRADES`; risk 85, #660).
 
 ### The waiting message (#536)
 
@@ -1302,12 +1323,18 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     `session trade notice outcome unknown` and `… edit outcome unknown` above 0.1 % of calls.
 27. **The notices' rate** (#464): at most 9 a second (540 a minute) for every session together;
     above it the messages lag behind the trades, never drop. The bot's own replies and edits are
-    outside that budget, as before.
+    outside that budget, as before. Telegram also asks for no more than about one message a second
+    to one chat (stated, not measured): a session's backlog — after a restart, a pause or an
+    unblock — goes to its one chat at the sender's 9 a second, up to 28 trades plus the waiting
+    message's delete and send, so a 429 on that chat pauses the whole sender for `retry_after`; no
+    loss, no double, the other sessions wait too. A rate per chat is #660 (#534 m2).
 28. **Latency** (#464): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
     after its settle.
 29. Closed by #539: the trade lines print the profit and add up to «💰 Результат».
-30. **A stopped session stuck on manual review** stays in the sender's scan until settled or
-    rejected (#464): one cheap row each.
+30. **A stopped session stuck on manual review** (#464) is not in the sender's list once its
+    settled trades are claimed (`finishedSql` is false, the cursor equals the settled count, no
+    waiting message): it costs nothing until an operator settles or rejects the trade, when it is
+    listed again for that trade and the summary (N8).
 31. **No card** when the backend has not sent the summary by the tracker's deadline (#464, about
     70 min after the start) — until the next recovery pass once the mark is set (#567).
 32. **Sessions running at the deploy** (#464) get their later trades and their summary; the trades
@@ -1322,7 +1349,9 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     limit and stops with no trade. That is the limit, by the owner's decision.
 35. **Repeated blocks** (#551): a new message whose outcome was unknown (the next step sends the
     cycle anew), and a second sender in a deploy's window (its record refused, its message sent),
-    can show a cycle's blocks twice, within one cycle; no step is lost by it. Falsifiable: two
+    can show a cycle's blocks twice, within one cycle; no step is lost by it in a new message; two
+    senders' edits of one cycle message can land out of order, so the message shows the older step
+    until the next step's edit — production runs one sender (stated). Falsifiable: two
     messages of one cycle with common blocks more often than `session trade notice outcome
     unknown`.
 36. **Sessions mid-cycle at the deploy of #551** have no cycle message: their next step sends a new
@@ -1560,6 +1589,17 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     and inside Telegram's 48-hour edit window of that message; after that every such session is
     stopped, every read answers the stopped view, and no stale edit exists. Falsifiable: a message
     sent before #536 showing «Торговая сессия запущена…» under a summary card.
+84. **A session whose turn ends before any claim stays listed** (#534 m4): a summary that cannot be
+    built (`session summary not built`) or a thrown statement or balance refresh (`session notices
+    failed for a session`) leaves the session in the list at its `created_at`, tried every tick —
+    for the thrown refresh one view read and one refresh attempt a tick. The list is oldest-first,
+    200 rows a tick, so 200 such sessions would starve every newer one; nothing in the sender frees
+    the slot (the hold-back is #660). Falsifiable: the same `sessionId` in one of those two `error`
+    lines on consecutive ticks.
+85. **The list's duplicated subqueries and the claim's growing read** (#534 m7): the numbers of
+    [Rate and timing](#rate-and-timing); a tick longer than `SESSION_NOTICE_TICK_MS` makes the next
+    one a no-op, never two ticks at once. Falsifiable: `EXPLAIN ANALYZE` of the list's query on the
+    pilot's database over 300 ms (an owner's step; #660 holds the `MATERIALIZED` form).
 
 ## Running it locally
 

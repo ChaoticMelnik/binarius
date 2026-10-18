@@ -288,14 +288,17 @@ a v1/v2 row counts its trades), `lastIntent` the same view `GET /trading/intents
 - **The refresh** (`readFinishedSessionView` in `session-view.ts`, which the routes' `viewForReply`
   and the session notices' summary (#464) both call, #337): when the view is finished
   (`isTradingSessionFinished`: stopped, and the last intent has no transition left), `settled > 0`
-  and `balance.current` is not true, the route reads the session's account
+  and `balance.current` is not true — a snapshot older than the last settlement, or no snapshot row
+  at all (`balance: null`; the refresh then writes the account's first row) — the route reads the session's account
   (`readTradingSessionAccount`, owner-scoped) and calls `balance.refresh(accountId, { signal:
   AbortSignal.timeout(TRADING_ACCESS_REFRESH_BUDGET_MS), mayRefresh: false })` — no token exchange
   from a timer-driven poll (Rule 12), no `requested`. On `'ok'` it reads the view again; any other
   outcome answers the stored snapshot, which the bot shows with its age. A thrown refresh is the
   opaque 500. After one `'ok'` the snapshot is current for good (nothing of a finished session
-  can settle any more), so a session costs at most one broker GET. A `manual_review` session is
-  not finished and is not refreshed.
+  can settle any more), so a session costs at most one successful broker GET; a refresh that did
+  not answer `'ok'` is repeated by each later read of the finished view — the tracker's last poll,
+  the stop route's reply, the notices' summary — one GET each under the same budget. A
+  `manual_review` session is not finished and is not refreshed.
 - **Time**: under `TRADING_SESSION_VIEW_BUDGET_MS` (4 s), inside the backend's shutdown phase 1
   and no longer than the bot's request timeout (both chains asserted at import). The same bound
   covers both stop routes.
