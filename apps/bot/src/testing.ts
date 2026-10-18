@@ -206,8 +206,8 @@ export const PAIR_EURUSD: PairView = {
   scheduledUntil: 0,
 };
 // PAIR_EURUSD's regular twin (#428): the live catalog lists a symbol twice, OTC by is_otc only,
-// and omits the field on a regular pair. A higher id than the OTC pair's, so an order by symbol
-// and id alone would list the OTC one first. Only in the catalogs of the tests that name it.
+// and omits the field on a regular pair. The twins share the label (#631) and go by id, the OTC
+// one first. Only in the catalogs of the tests that name it.
 export const PAIR_EURUSD_REGULAR: PairView = {
   id: 707,
   symbol: 'EUR/USD',

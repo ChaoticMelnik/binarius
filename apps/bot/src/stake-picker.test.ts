@@ -406,7 +406,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const at5: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 };
     const { press, calls } = setup({ readTradingAccess: savedAccess(d('5')) });
     await press(stakePresetCallbackData('5', TradeMode.Demo, at5));
-    expect(lastPayload(calls)?.text).toContain('EUR/USD OTC · ⏱ 5 с');
+    expect(lastPayload(calls)?.text).toContain('EUR/USD · ⏱ 5 с');
     expect(rowsOf(lastPayload(calls))[0]).toEqual([
       amount('1', '$1.00', 5),
       amount('2', '$2.00', 5),

@@ -832,7 +832,8 @@ describe('the demo screens', () => {
 
   it("shows the pair's label, escaped once in the markup", () => {
     for (const text of [screens.durations, screens.summary]) {
-      expect(plainTextOf(text)).toContain(`${SYMBOL} OTC`);
+      expect(plainTextOf(text)).toContain(SYMBOL);
+      expect(plainTextOf(text)).not.toContain(`${SYMBOL} OTC`);
       expect(text.value).not.toContain('&amp;amp;');
     }
   });
@@ -847,7 +848,7 @@ describe('the demo screens', () => {
 
   it('lays out the summary: the asset, the duration, the payout, then what comes next', () => {
     expect(plainTextOf(demoSummary(PAIR_EURUSD, 15))).toBe(
-      `🎯 Актив: EUR/USD OTC
+      `🎯 Актив: EUR/USD
 ⏱ Длительность: ⏱ 15 с
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
 
@@ -866,7 +867,7 @@ describe('the demo screens', () => {
     ]);
     expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual(['⏱ 5 с', '⏱ 15 с']);
     expect(groupButtonLabel('currency', 46)).toBe('💱 Валюты · 46');
-    expect(pairButtonLabel(pairLabel(PAIR_EURUSD), 85)).toBe('EUR/USD OTC 85%');
+    expect(pairButtonLabel(pairLabel(PAIR_EURUSD), 85)).toBe('EUR/USD 85%');
   });
 
   // these buttons are not in LABELS, so the LABELS-wide checks above do not see them
@@ -1126,7 +1127,7 @@ describe('the demo session status', () => {
     });
     const running = [
       '🎮 Демо-сессия',
-      '🔹 Торговая пара: EUR/USD OTC',
+      '🔹 Торговая пара: EUR/USD',
       '🔹 Сумма сделки: $1.00',
       '🔹 Время экспирации: 15 с',
       '',

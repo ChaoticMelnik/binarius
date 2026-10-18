@@ -81,7 +81,7 @@ describe('sessionPromoModel', () => {
   it("P2 the view's result and tone, the pair's label and digits, the end in Moscow time", () => {
     const model = sessionPromoModel(MIXED, viewOf('-0.15000000'), 42);
     expect(model).toMatchObject({
-      asset: 'AUD/CHF OTC',
+      asset: 'AUD/CHF',
       direction: Up,
       directionLabel: 'ВВЕРХ',
       resultLabel: 'Мой результат сессии',
@@ -120,7 +120,7 @@ describe('sessionPromoSvg', () => {
     expect(badgeOf(svg)?.[3]).toBe(WIN);
     expect(textsOf(svg)).toEqual(
       expect.arrayContaining([
-        'AUD/CHF OTC',
+        'AUD/CHF',
         'ВВЕРХ',
         'Мой результат сессии',
         '-$0.15',

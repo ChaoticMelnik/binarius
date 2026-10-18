@@ -5,7 +5,6 @@ import {
   comparePairsByPayout,
   MIN_CYCLE_PAYOUT_PCT,
   PAIR_LABEL_MAX_LENGTH,
-  PAIR_SYMBOL_LIMIT,
   pairLabel,
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
@@ -17,6 +16,7 @@ import {
   safeParsePairsCatalogResponse,
   toPairView,
   toPairsCatalogResponse,
+  type PairView,
 } from './catalog';
 
 const pair: BinaryPair = {
@@ -211,32 +211,37 @@ describe('comparePairsByPayout (#460)', () => {
   });
 });
 
-// #428: the live catalog keeps OTC out of the symbol, in is_otc, and omits the field on a regular
-// pair
+// #631: the label is the symbol without « OTC» (#428 added it by is_otc); the live catalog keeps
+// OTC out of the symbol, in is_otc
 describe('pairLabel', () => {
-  it('T1 an OTC pair gets « OTC» after its symbol', () => {
-    expect(pairLabel({ symbol: 'NZD/USD', isOtc: true })).toBe('NZD/USD OTC');
+  it("T1' does not read isOtc: an OTC pair is printed as its symbol", () => {
+    const otc: PairView = toPairView({ ...pair, symbol: 'NZD/USD', isOtc: true });
+    expect(pairLabel(otc)).toBe('NZD/USD');
+    const regular: PairView = { ...otc, isOtc: false };
+    expect(pairLabel(regular)).toBe('NZD/USD');
   });
 
   it('T2 a pair without the field is printed as its symbol', () => {
     expect(pairLabel({ symbol: 'NZD/USD' })).toBe('NZD/USD');
   });
 
-  it('T3 a pair with isOtc false is printed as its symbol', () => {
-    expect(pairLabel({ symbol: 'NZD/USD', isOtc: false })).toBe('NZD/USD');
+  it("T4' a symbol that ends in « OTC» loses it", () => {
+    expect(pairLabel({ symbol: 'NZD/USD OTC' })).toBe('NZD/USD');
   });
 
-  it('T4 a symbol that already ends in « OTC» does not get it twice', () => {
-    expect(pairLabel({ symbol: 'NZD/USD OTC', isOtc: true })).toBe('NZD/USD OTC');
+  it("T5' the suffix goes before the cut, so a symbol of 64 with it is not cut", () => {
+    expect(pairLabel({ symbol: `${'S'.repeat(62)} OTC` })).toBe('S'.repeat(62));
   });
 
-  it('T5 a long OTC symbol is cut before the suffix, which survives', () => {
-    const label = pairLabel({ symbol: 'S'.repeat(70), isOtc: true });
-    expect(label).toBe(`${'S'.repeat(64)} OTC`);
-    expect(label).toHaveLength(PAIR_LABEL_MAX_LENGTH);
+  it('T6 a long symbol is cut to PAIR_LABEL_MAX_LENGTH', () => {
+    expect(PAIR_LABEL_MAX_LENGTH).toBe(64);
+    expect(pairLabel({ symbol: 'S'.repeat(70) })).toBe('S'.repeat(64));
   });
 
-  it('T6 a long regular symbol is cut to the limit', () => {
-    expect(pairLabel({ symbol: 'S'.repeat(70) })).toBe('S'.repeat(PAIR_SYMBOL_LIMIT));
+  it('T7 only the exact suffix goes, and only once', () => {
+    expect(pairLabel({ symbol: 'X OTC OTC' })).toBe('X OTC');
+    expect(pairLabel({ symbol: 'x otc' })).toBe('x otc');
+    expect(pairLabel({ symbol: 'X (OTC)' })).toBe('X (OTC)');
+    expect(pairLabel({ symbol: ' OTC' })).toBe('');
   });
 });

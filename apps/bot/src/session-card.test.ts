@@ -49,7 +49,7 @@ const pointsOf = (svg: string): [number, number][] =>
 const textsOf = (svg: string): string[] =>
   [...svg.matchAll(/<text [^>]*>([^<]*)<\/text>/g)].map((match) => match[1] ?? '');
 
-const OTC_LABEL = pairLabel({ symbol: 'EUR/USD', isOtc: true });
+const LABEL = pairLabel({ symbol: 'EUR/USD' });
 
 afterEach(() => {
   setBotTextSource(defaultBotTextSource);
@@ -57,9 +57,9 @@ afterEach(() => {
 
 describe('sessionCardModel', () => {
   it('C1 a mix with a tie: each trade by its sign, the result as the backend summed it', () => {
-    const model = sessionCardModel(MIXED, OTC_LABEL, 42);
+    const model = sessionCardModel(MIXED, LABEL, 42);
     expect(model).toMatchObject({
-      asset: 'EUR/USD OTC',
+      asset: 'EUR/USD',
       title: 'СЕССИЯ ЗАВЕРШЕНА',
       resultLabel: 'ИТОГ',
       result: '-$0.15',
@@ -75,7 +75,7 @@ describe('sessionCardModel', () => {
   });
 
   it('C2 only losses: the footer has no tie, every exit is a loss', () => {
-    const model = sessionCardModel(LOSSES, OTC_LABEL, 42);
+    const model = sessionCardModel(LOSSES, LABEL, 42);
     expect(model.footer).toBe('3 сделки · 0 в плюс, 3 в минус');
     expect(model.result).toBe('-$3.00');
     expect(model.trades.every((t) => t.tone === 'loss')).toBe(true);
@@ -83,7 +83,7 @@ describe('sessionCardModel', () => {
 
   // #450: every fraction digit is printed, so a sub-cent profit is shown as the win it is
   it('C3 a sub-cent profit is a win, printed with its digits, as the view counts it', () => {
-    const model = sessionCardModel({ result: d('0.001'), trades: [trade('0.001')] }, OTC_LABEL, 42);
+    const model = sessionCardModel({ result: d('0.001'), trades: [trade('0.001')] }, LABEL, 42);
     expect(model.trades[0]).toMatchObject({ profit: '+$0.001', tone: 'win' });
     expect(model.result).toBe('+$0.001');
     expect(model.resultTone).toBe('win');
@@ -99,11 +99,11 @@ describe('sessionCardModel', () => {
 
 describe('sessionCardSvg', () => {
   it('C5 the mixed card: a column, a line through entry and exit, and markers per trade', () => {
-    const svg = sessionCardSvg(sessionCardModel(MIXED, OTC_LABEL, 42));
+    const svg = sessionCardSvg(sessionCardModel(MIXED, LABEL, 42));
     expect(svg).toContain(`width="${String(SESSION_CARD_WIDTH)}"`);
     expect(svg).toContain(`height="${String(SESSION_CARD_HEIGHT)}"`);
     expect(textsOf(svg)).toEqual([
-      'EUR/USD OTC',
+      'EUR/USD',
       'СЕССИЯ ЗАВЕРШЕНА',
       'ИТОГ',
       '-$0.15',
@@ -134,7 +134,7 @@ describe('sessionCardSvg', () => {
   });
 
   it('C6 only losses: every exit marker is red, none green or grey but the legend', () => {
-    const svg = sessionCardSvg(sessionCardModel(LOSSES, OTC_LABEL, 42));
+    const svg = sessionCardSvg(sessionCardModel(LOSSES, LABEL, 42));
     expect(circlesOf(svg, LOSS)).toBe(4);
     expect(circlesOf(svg, WIN)).toBe(1);
     expect(circlesOf(svg, TIE)).toBe(1);
@@ -145,7 +145,7 @@ describe('sessionCardSvg', () => {
       result: d('0'),
       trades: Array.from({ length: MAX_SESSION_SUMMARY_TRADES }, (_, i) => trade('0', i, i + 0.5)),
     };
-    const svg = sessionCardSvg(sessionCardModel(many, OTC_LABEL, 42));
+    const svg = sessionCardSvg(sessionCardModel(many, LABEL, 42));
     expect(textsOf(svg)).toContain(`Сделка ${String(MAX_SESSION_SUMMARY_TRADES)}`);
     expect(svg.match(/<line /g)).toHaveLength(MAX_SESSION_SUMMARY_TRADES - 1);
     expect(pointsOf(svg)).toHaveLength(2 * MAX_SESSION_SUMMARY_TRADES);
@@ -156,7 +156,7 @@ describe('sessionCardSvg', () => {
       result: d('0'),
       trades: [trade('0', 1.5, 1.5), trade('0', 1.5, 1.5)],
     };
-    const svg = sessionCardSvg(sessionCardModel(flat, OTC_LABEL, 42));
+    const svg = sessionCardSvg(sessionCardModel(flat, LABEL, 42));
     const ys = new Set(pointsOf(svg).map(([, y]) => y));
     expect([...ys]).toEqual([(250 + 540) / 2]);
     expect(svg).not.toMatch(/NaN|Infinity/);
@@ -188,7 +188,7 @@ const IHDR = (png: Buffer) => ({
 
 describe('renderSessionCard', () => {
   it('R1 draws a PNG of the card size under 1 MB', () => {
-    const png = renderSessionCard(sessionCardSvg(sessionCardModel(MIXED, OTC_LABEL, 42)));
+    const png = renderSessionCard(sessionCardSvg(sessionCardModel(MIXED, LABEL, 42)));
     expect(IHDR(png)).toEqual({
       signature: '89504e470d0a1a0a',
       chunk: 'IHDR',
@@ -201,7 +201,7 @@ describe('renderSessionCard', () => {
   // resvg drops text it has no font for without an error: without the card's own fonts the same
   // SVG renders with no text, so equal bytes would mean the fonts are not used
   it('R2 draws the text with the bundled fonts: without them the image differs and is smaller', () => {
-    const svg = sessionCardSvg(sessionCardModel(MIXED, OTC_LABEL, 42));
+    const svg = sessionCardSvg(sessionCardModel(MIXED, LABEL, 42));
     const withFonts = renderSessionCard(svg);
     const withoutFonts = renderSessionCard(svg, []);
     expect(withoutFonts.equals(withFonts)).toBe(false);

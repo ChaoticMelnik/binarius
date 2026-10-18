@@ -51,8 +51,8 @@ export const pairsOf = (catalog: PairsCatalogResponse, group: PairTypeGroup): Pa
   );
 
 // Sorted by label in code-unit order, ties by id, so a page holds the same pairs on every read of
-// the same catalog. A regular pair's label is a prefix of its OTC twin's (#428), so the regular
-// one comes right before it.
+// the same catalog. A regular pair and its OTC twin share the label (#631), so they stand side by
+// side, by id.
 export const openPairsOf = (
   catalog: PairsCatalogResponse,
   group: PairTypeGroup,
