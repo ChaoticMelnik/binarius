@@ -59,6 +59,10 @@ export function formatPaymentDate(unixSeconds: number): string {
   return `${two(at.getUTCDate())}.${two(at.getUTCMonth() + 1)}.${String(at.getUTCFullYear())} ${two(at.getUTCHours())}:${two(at.getUTCMinutes())}`;
 }
 
-// whole seconds under a minute, whole minutes (floor) from one
-export const formatAge = (seconds: number): string =>
-  seconds < 60 ? `${seconds} с` : `${Math.floor(seconds / 60)} мин`;
+// whole seconds under a minute, whole minutes (floor) from one; the units are the catalog's
+// (ageSecondsUnit, ageMinutesUnit), so each language prints its own (#508)
+export const formatAge = (
+  seconds: number,
+  units: { readonly seconds: string; readonly minutes: string },
+): string =>
+  seconds < 60 ? `${seconds} ${units.seconds}` : `${Math.floor(seconds / 60)} ${units.minutes}`;

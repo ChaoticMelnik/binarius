@@ -1,6 +1,13 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, integer, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
-import { NotificationLevel, START_PAYLOAD_PATTERN, TradeMode, UserStatus } from '@binarius/shared';
+import {
+  BotLanguage,
+  DEFAULT_BOT_LANGUAGE,
+  NotificationLevel,
+  START_PAYLOAD_PATTERN,
+  TradeMode,
+  UserStatus,
+} from '@binarius/shared';
 import {
   createdAt,
   id,
@@ -23,6 +30,10 @@ export const users = pgTable(
     telegramUserId: bigint('telegram_user_id', { mode: 'bigint' }).notNull(),
     displayName: text('display_name'),
     languageCode: text('language_code'),
+    // The language of the bot's texts (#508, docs/bot-texts.md → Languages): botLanguageOf
+    // (language_code) when recordUserStart inserts the row, then only setUserLanguage, the
+    // user's own choice in the bot. language_code above keeps following Telegram.
+    language: text('language').$type<BotLanguage>().notNull().default(DEFAULT_BOT_LANGUAGE),
     status: text('status').$type<UserStatus>().notNull().default(UserStatus.Active),
     // Where this user came from: the raw start payload of the first /start that carried one
     // (first touch), and the database clock at that moment. A /start without a payload leaves
@@ -68,6 +79,7 @@ export const users = pgTable(
     uniqueIndex('users_telegram_user_id_idx').on(t.telegramUserId),
     inList('users_status_check', t.status, UserStatus),
     inList('users_notification_level_check', t.notificationLevel, NotificationLevel),
+    inList('users_language_check', t.language, BotLanguage),
     inList('users_trading_mode_check', t.tradingMode, TradeMode),
     // The CHECK spells the same rule as startPayloadSchema, from the same regex source rather
     // than from a copy of it: PostgreSQL's POSIX engine and JavaScript's are not the same

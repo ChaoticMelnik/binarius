@@ -39,11 +39,22 @@ export const TELEGRAM_PRECHECKOUT_DEADLINE_MS = 10_000;
 export const STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS = 3_000;
 export const PRECHECKOUT_ANSWER_RESERVE_MS = 2_000;
 
+// The language middleware's read of a user it has not cached (#508, language.ts): one GET
+// /users/language before the update's handler, bounded by its own timeout because every update
+// of that user waits for it. Shorter than a handler's backend call: a slow read costs one message
+// in the language of the Telegram client, not the update.
+export const LANGUAGE_READ_TIMEOUT_MS = 2_000;
+// The cache of users' languages: one entry per user who wrote since the start, the oldest out
+// first past this many.
+export const LANGUAGE_CACHE_MAX = 10_000;
+
 // The Bot API calls onStart makes one after another before the first getUpdates: the command
 // menu, the description, the short description (lifecycle.ts). Not a handler path — no update is
 // in flight while they run — but grammY awaits onStart to completion and bot.stop() cancels none
-// of them, so a signal during the registration waits for all of them. lifecycle.test.ts compares
-// this number with the calls the real start makes.
+// of them, so a signal during the registration waits for all of them. Each is a slot of two calls
+// side by side, Russian and English (#508), both bounded by the one client timeout, so the slots
+// are what the budget counts: six calls in a row would be 53 000 ms, past SHUTDOWN_BUDGET_MS.
+// lifecycle.test.ts compares this number with the methods the real start calls.
 export const STARTUP_CALLS = 3;
 // Before them onStart waits for the texts' first load (#301), which the refresher bounds by the
 // budgetMs index.ts gives it — BACKEND_REQUEST_TIMEOUT_MS, a wiring premise this chain cannot
@@ -228,6 +239,14 @@ export const HANDLER_CALLS = {
   // «Нужен возврат» (`ps:r:<id>`): answerCallbackQuery ∥ requestStarsRefund — counted as
   // sequential, as in confirm — then sendMessage
   paysupportRequest: { backend: 1, telegram: 2 },
+  // the language screen (#508, language-screen.ts) from the status card: answerCallbackQuery, then
+  // sendMessage
+  language: { backend: 0, telegram: 2 },
+  // a language pressed: answerCallbackQuery ∥ setLanguage — counted as sequential, as in confirm —
+  // then editMessageText refused as gone → sendMessage
+  languageSet: { backend: 1, telegram: 3 },
+  // the current language pressed: answerCallbackQuery only
+  languageCurrent: { backend: 0, telegram: 1 },
   // /support: sendMessage; no backend call
   support: { backend: 0, telegram: 1 },
   // /help: sendMessage; no backend call
@@ -311,6 +330,9 @@ const TIMING_CHAIN_HOLDS =
   TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
+  // the language read runs before the handler, inside the same update (#508)
+  LANGUAGE_READ_TIMEOUT_MS < BACKEND_REQUEST_TIMEOUT_MS &&
+  HANDLER_BUDGET_MS + LANGUAGE_READ_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   GRAMMY_POLLING_BACKOFF_MS < SHUTDOWN_BUDGET_MS &&
@@ -331,7 +353,7 @@ const TIMING_CHAIN_HOLDS =
   // the pre-checkout: the route inside the call, the call and the answer inside Telegram's 10 s
   STARS_PRECHECKOUT_BUDGET_MS <= STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS &&
   STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
-  STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS <
+  LANGUAGE_READ_TIMEOUT_MS + STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS <
     TELEGRAM_PRECHECKOUT_DEADLINE_MS &&
   // a texts load ends before the next one starts (#299), and inside the shutdown budget
   BACKEND_REQUEST_TIMEOUT_MS < BOT_TEXTS_REFRESH_MS &&

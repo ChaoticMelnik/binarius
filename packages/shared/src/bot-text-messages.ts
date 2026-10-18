@@ -56,8 +56,8 @@ export const BOT_TEXT_WIDTHS = {
   count: 25,
   // a bigint printed as it arrives: the link bonus
   rawCount: 19,
-  // formatAge: up to 99999 мин
-  age: 9,
+  // formatAge's number and the space before its unit: up to «99999 »; the unit is a catalog key
+  ageNumber: 6,
   // MODE_LABELS: DEMO, REAL
   mode: 4,
   // the pair's label (pairLabel): the symbol cut to PAIR_SYMBOL_LIMIT, then " OTC"
@@ -199,7 +199,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   minStake: () => w.stake,
   demoAvailable: () => w.stake,
   realAvailable: () => w.stake,
-  age: () => w.age,
+  age: (m) => w.ageNumber + m.longest('ageSecondsUnit', 'ageMinutesUnit'),
   // stakePickerText: the saved stake, or «label (minimum)»
   amount: (m) =>
     Math.max(w.stake, m.length('stakeMinimumLabel') + ' ('.length + w.stake + ')'.length),

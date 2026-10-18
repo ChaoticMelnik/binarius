@@ -11,9 +11,11 @@ import {
   decimalStringSchema,
   type DecimalString,
   type TradeIntentErrorCode,
+  BotLanguage,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import { brokerAccounts, tokenLedger, tradeIntents, tradingSessions, users } from './schema/index';
+import { setUserLanguage } from './user-ops';
 import {
   closeTradingSwitch,
   createTempDatabase,
@@ -1280,8 +1282,15 @@ describe('listTrackedSessions (#567)', () => {
         messageId: 7,
         assetId: 101,
         startedAt: seed.session.startedAt,
+        language: BotLanguage.Ru,
       });
     }
+  });
+
+  it("L-lang carries the owner's language of the bot's texts (#508)", async () => {
+    const seed = await tracked();
+    await setUserLanguage(tmp.db, BigInt(seed.telegramUserId), BotLanguage.En);
+    expect((await listed()).get(seed.session.id)?.language).toBe(BotLanguage.En);
   });
 
   it('L2 leaves out a session with no message, one with its card sent and a finished one with no settled trade and its summary sent', async () => {

@@ -26,7 +26,9 @@ export type BotTextVarFallbackKey =
   | 'stakeMinimumLabel'
   | 'levelAll'
   | 'levelReduced'
-  | 'levelOff';
+  | 'levelOff'
+  | 'ageSecondsUnit'
+  | 'ageMinutesUnit';
 
 export interface BotTextVar<I> extends BotTextVariable<I> {
   format(input: I, texts: (key: BotTextVarFallbackKey) => string): string;
@@ -153,7 +155,8 @@ export const BOT_TEXT_VARS = {
   age: variable({
     description: 'Возраст снимка баланса',
     sample: '5 мин',
-    format: (seconds: number) => formatAge(seconds),
+    format: (seconds: number, texts) =>
+      formatAge(seconds, { seconds: texts('ageSecondsUnit'), minutes: texts('ageMinutesUnit') }),
   }),
   amount: shown('Сумма этой строки, как в исходном тексте', formatUsd('10000')),
   count: shown('Число этой строки (свечи, сделки, сессии)', '12'),

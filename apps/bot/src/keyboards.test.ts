@@ -6,6 +6,7 @@ import {
   BUY_CALLBACK_DATA,
   DEMO_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
+  LANGUAGE_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
@@ -62,12 +63,13 @@ describe('the rows (#506)', () => {
   const INVITE = button(LABELS.inviteButton, INVITE_CALLBACK_DATA);
   const BUY = button(LABELS.buyButton, BUY_CALLBACK_DATA);
   const MENU = button(LABELS.menuButton, MENU_CALLBACK_DATA);
+  const LANGUAGE = button(LABELS.languageButton, LANGUAGE_CALLBACK_DATA);
   const ANALYSIS = button(LABELS.newAnalysisButton, demoAnalysisCallbackData(101, 15));
   const SIGNALS = button(LABELS.toSignalsButton, demoSignalsCallbackData(15));
   const BACK = button('↩️', 'back');
   const back = () => new InlineKeyboard([[BACK]]);
 
-  it('the status card: the entry and the mode, the invite and the purchase, the deposit', () => {
+  it('the status card: the entry and the mode, the invite and the purchase, the deposit and the language', () => {
     const demo = [
       button(LABELS.demoButton, DEMO_CALLBACK_DATA),
       button(LABELS.modeButton, MODE_CALLBACK_DATA),
@@ -79,16 +81,17 @@ describe('the rows (#506)', () => {
     expect(statusCardKeyboard(TradeMode.Demo, CASHIER).inline_keyboard).toEqual([
       demo,
       [INVITE, BUY],
-      [DEPOSIT],
+      [DEPOSIT, LANGUAGE],
     ]);
     expect(statusCardKeyboard(TradeMode.Real, CASHIER).inline_keyboard).toEqual([
       real,
       [INVITE, BUY],
-      [DEPOSIT],
+      [DEPOSIT, LANGUAGE],
     ]);
     expect(statusCardKeyboard(TradeMode.Demo, undefined).inline_keyboard).toEqual([
       demo,
       [INVITE, BUY],
+      [LANGUAGE],
     ]);
   });
 

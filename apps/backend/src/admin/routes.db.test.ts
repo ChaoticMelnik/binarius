@@ -15,6 +15,8 @@ import {
   adminBotProfilePublishResponseSchema,
   BOT_COMMAND_SCOPE,
   BOT_TEXT_CATALOG,
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   ADMIN_SEARCH_MAX_LENGTH,
   ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
   AdminErrorCode,
@@ -1932,6 +1934,7 @@ describe('the read pages (#107)', () => {
       'telegramUserId',
       'displayName',
       'languageCode',
+      'language',
       'status',
       'acquisitionSource',
       'acquiredAt',
@@ -1963,6 +1966,7 @@ describe('the read pages (#107)', () => {
     expect(body.user).toMatchObject({
       displayName: null,
       languageCode: null,
+      language: BotLanguage.Ru,
       acquisitionSource: null,
       acquiredAt: null,
       telegramBlockedAt: null,
@@ -3191,6 +3195,24 @@ describe('the bot texts pages (#300)', () => {
     { command: 'support', description: 'Поддержка' },
     { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
   ];
+  // #508: each method in both languages, Russian under language_code ru, English as the default
+  const RU = { language_code: 'ru' };
+  const EN_MENU = [
+    { command: 'start', description: 'Start' },
+    { command: 'menu', description: 'Main menu' },
+    { command: 'stop', description: 'Stop the session' },
+    { command: 'account', description: 'Binodex account' },
+    { command: 'buy', description: 'Buy tokens' },
+    { command: 'settings', description: 'Notification settings' },
+    { command: 'invite', description: 'Invite a friend' },
+    { command: 'help', description: 'Help' },
+    { command: 'support', description: 'Support' },
+    { command: 'paysupport', description: 'Stars payment questions and refunds' },
+  ];
+  const EN_MENU_CALL = {
+    method: 'setMyCommands',
+    args: [EN_MENU, { scope: BOT_COMMAND_SCOPE }],
+  };
   const withProfileApi = async (options: Parameters<typeof fakeBotProfileApi>[0] = {}) => {
     const fake = fakeBotProfileApi(options);
     await app.close();
@@ -3227,9 +3249,13 @@ describe('the bot texts pages (#300)', () => {
       published: [{ method: 'setMyCommands', ok: true }],
     });
     expect(await botTextRows()).toMatchObject([{ key: 'startCommand', source: 'Старт' }]);
-    expect(seenByTelegram).toEqual([['Старт']]);
+    expect(seenByTelegram).toEqual([['Старт'], ['Старт']]);
     expect(fake.calls).toEqual([
-      { method: 'setMyCommands', args: [menuWithStart('Старт'), { scope: BOT_COMMAND_SCOPE }] },
+      {
+        method: 'setMyCommands',
+        args: [menuWithStart('Старт'), { scope: BOT_COMMAND_SCOPE, ...RU }],
+      },
+      EN_MENU_CALL,
     ]);
     const added = (await entriesFor(seeded.staffId)).slice(before);
     expect(added.map((row) => row.action)).toEqual([
@@ -3369,11 +3395,13 @@ describe('the bot texts pages (#300)', () => {
       source: 'Меню',
       expectedVersion: 0,
     });
+    // both languages refused: the first, Russian, is the one reported
     const failed = {
       method: 'setMyCommands',
       ok: false,
       err: { name: 'GrammyError' },
       telegramErrorCode: 400,
+      language: 'ru',
     };
     expect(response.statusCode).toBe(200);
     expect(adminBotTextSaveResponseSchema.parse(response.json())).toMatchObject({
@@ -3397,6 +3425,7 @@ describe('the bot texts pages (#300)', () => {
       method: 'setMyCommands',
       err: { name: 'GrammyError' },
       telegramErrorCode: 400,
+      language: 'ru',
     });
     expect(lines.join('\n')).not.toContain('SECRET');
     expect(response.body).not.toContain('SECRET');
@@ -3418,7 +3447,11 @@ describe('the bot texts pages (#300)', () => {
     expect(fake.calls).toEqual([
       {
         method: 'setMyShortDescription',
-        args: [BOT_TEXT_CATALOG.profileShortDescription.source],
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source, RU],
+      },
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
       },
     ]);
     expect((await publishRows(seeded.staffId)).map((row) => row.payload)).toEqual([
@@ -3439,7 +3472,7 @@ describe('the bot texts pages (#300)', () => {
       expectedVersion: orphan!.version,
     });
     expect(removed.body).toMatchObject({ outcome: 'reset', text: null, published: [] });
-    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls).toHaveLength(2);
     expect(await publishRows(seeded.staffId)).toHaveLength(1);
   });
 
@@ -3470,7 +3503,7 @@ describe('the bot texts pages (#300)', () => {
     const response = await postAsStaff('/admin/bot-texts/publish', token, {});
     const published = [
       { method: 'setMyCommands', ok: true },
-      { method: 'setMyDescription', ok: false, err: { name: 'HttpError' } },
+      { method: 'setMyDescription', ok: false, err: { name: 'HttpError' }, language: 'ru' },
       { method: 'setMyShortDescription', ok: true },
     ];
     expect(response.statusCode).toBe(200);
@@ -3479,11 +3512,20 @@ describe('the bot texts pages (#300)', () => {
       published,
     });
     expect(fake.calls).toEqual([
-      { method: 'setMyCommands', args: [menuWithStart('Поехали'), { scope: BOT_COMMAND_SCOPE }] },
-      { method: 'setMyDescription', args: ['Про бота'] },
+      {
+        method: 'setMyCommands',
+        args: [menuWithStart('Поехали'), { scope: BOT_COMMAND_SCOPE, ...RU }],
+      },
+      EN_MENU_CALL,
+      { method: 'setMyDescription', args: ['Про бота', RU] },
+      { method: 'setMyDescription', args: [BOT_TEXT_SOURCES_EN.profileDescription, {}] },
       {
         method: 'setMyShortDescription',
-        args: [BOT_TEXT_CATALOG.profileShortDescription.source],
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source, RU],
+      },
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
       },
     ]);
     const added = (await entriesFor(seeded.staffId)).slice(before);
@@ -3540,13 +3582,14 @@ describe('the bot texts pages (#300)', () => {
 
     const response = await postAsStaff('/admin/bot-texts/publish', token, {});
     const published = [
-      { method: 'setMyCommands', ok: false, err: { name: 'Error' } },
+      { method: 'setMyCommands', ok: false, err: { name: 'Error' }, language: 'ru' },
       {
         method: 'setMyDescription',
         ok: false,
         err: { name: 'E'.repeat(128), code: 'C'.repeat(128) },
+        language: 'ru',
       },
-      { method: 'setMyShortDescription', ok: false, err: { name: 'string' } },
+      { method: 'setMyShortDescription', ok: false, err: { name: 'string' }, language: 'ru' },
     ];
     expect(adminBotProfilePublishResponseSchema.parse(response.json()).published).toEqual(
       published,
@@ -3593,7 +3636,8 @@ describe('the bot texts pages (#300)', () => {
     });
     const later = await second!;
 
-    expect(callsWhileHeld).toBe(1);
+    // the first publish's two languages, and nothing of the second
+    expect(callsWhileHeld).toBe(2);
     for (const answer of [first, later]) {
       expect(answer.body).toMatchObject({
         outcome: 'saved',
@@ -3605,8 +3649,13 @@ describe('the bot texts pages (#300)', () => {
         command.command === 'menu' ? { ...command, description: menu } : command,
       );
     expect(fake.calls).toEqual([
-      { method: 'setMyCommands', args: [withMenu('Главное меню'), { scope: BOT_COMMAND_SCOPE }] },
-      { method: 'setMyCommands', args: [withMenu('Меню'), { scope: BOT_COMMAND_SCOPE }] },
+      {
+        method: 'setMyCommands',
+        args: [withMenu('Главное меню'), { scope: BOT_COMMAND_SCOPE, ...RU }],
+      },
+      EN_MENU_CALL,
+      { method: 'setMyCommands', args: [withMenu('Меню'), { scope: BOT_COMMAND_SCOPE, ...RU }] },
+      EN_MENU_CALL,
     ]);
     expect(
       (await publishRows(signed.seeded.staffId)).map((row) => (row.payload as { key: string }).key),

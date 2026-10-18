@@ -12,6 +12,8 @@ import {
   pairLabel,
   DEFAULT_SESSION_CYCLES,
   defaultBotTextSource,
+  enBotTextSource,
+  BotLanguage,
   formatStake,
   formatUsd,
   stakeIsRisky,
@@ -53,6 +55,7 @@ import {
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
 import type { DemoDurationSec } from './demo-catalog';
+import { currentLanguage } from './language';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
 // is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had,
@@ -64,7 +67,21 @@ let active: BotTextSource<BotTextKey> = defaultBotTextSource;
 export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
   active = source;
 };
-const { html, plain } = createBotTexts({ sourceOf: (key) => active.sourceOf(key) });
+// One set of views per language (#508): Russian over the active source, overrides included;
+// English over the static enBotTextSource, whose untranslated keys show the Russian defaults.
+const VIEWS = {
+  [BotLanguage.Ru]: createBotTexts({ sourceOf: (key) => active.sourceOf(key) }),
+  [BotLanguage.En]: createBotTexts(enBotTextSource),
+} as const;
+type Views = (typeof VIEWS)[BotLanguage];
+// `html` and `plain` read the views of the language of the update at hand (language.ts) on every
+// access, so each function of this file and every facade below is in the user's language.
+const inCurrentLanguage = <V extends object>(viewOf: (views: Views) => V): V =>
+  new Proxy(viewOf(VIEWS[BotLanguage.Ru]), {
+    get: (_target, key) => Reflect.get(viewOf(VIEWS[currentLanguage()]), key),
+  });
+const html = inCurrentLanguage((views) => views.html);
+const plain = inCurrentLanguage((views) => views.plain);
 
 // A message part by its key, for the maps that name a text rather than hold it (the refusals).
 export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
@@ -111,6 +128,14 @@ const LEVEL_LABELS = labelsOf({
   [NotificationLevel.Reduced]: 'levelReduced',
   [NotificationLevel.Off]: 'levelOff',
 } as const satisfies Record<NotificationLevel, BotStaticPlainKey>);
+
+// The language screen's buttons (#508), the current one marked as the level's is
+const LANGUAGE_LABELS = labelsOf({
+  [BotLanguage.Ru]: 'languageRuButton',
+  [BotLanguage.En]: 'languageEnButton',
+} as const satisfies Record<BotLanguage, BotStaticPlainKey>);
+export const languageLabel = (language: BotLanguage, current: boolean): string =>
+  current ? `${LANGUAGE_LABELS[language]} ✅` : LANGUAGE_LABELS[language];
 
 // A trade's direction in words: the analysis's stake button (#126) and #127's status texts; the
 // card names it with its own words (#482).

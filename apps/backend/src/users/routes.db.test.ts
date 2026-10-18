@@ -168,6 +168,7 @@ describe('POST /users/start', () => {
         notificationLevel: NotificationLevel.All,
         demoStake: null,
         realStake: null,
+        language: 'ru',
       },
     });
   });
@@ -501,6 +502,117 @@ describe('POST /users/notification-level', () => {
   });
 });
 
+// --- POST/GET /users/language (#508) ----------------------------------------------------------
+
+const postLanguage = (
+  payload: unknown,
+  authorization: string | null = `Bearer ${TOKEN}`,
+  instance = app,
+) =>
+  instance.inject({
+    method: 'POST',
+    url: '/users/language',
+    headers: {
+      'content-type': 'application/json',
+      ...(authorization === null ? {} : { authorization }),
+    },
+    payload: JSON.stringify(payload),
+  });
+const getLanguage = (telegramUserId: string, authorization: string | null = `Bearer ${TOKEN}`) =>
+  app.inject({
+    method: 'GET',
+    url: `/users/language?telegramUserId=${encodeURIComponent(telegramUserId)}`,
+    headers: authorization === null ? {} : { authorization },
+  });
+const languageOf = async (telegramUserId: string) => {
+  const [row] = await tmp.db
+    .select({ language: users.language })
+    .from(users)
+    .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+  return row?.language;
+};
+
+describe('the language routes (#508)', () => {
+  it('R-lang 1 /users/start answers the language of the first /start, and keeps it on the next', async () => {
+    const telegramUserId = nextTelegramUserId();
+    expect((await post(body(telegramUserId, { languageCode: 'en-US' }))).json().user).toMatchObject(
+      { language: 'en' },
+    );
+    expect((await post(body(telegramUserId, { languageCode: 'ru' }))).json().user).toMatchObject({
+      language: 'en',
+    });
+  });
+
+  it('R-lang 2 POST saves the language, GET and /users/start read it back', async () => {
+    const { telegramUserId } = await started();
+    const response = await postLanguage({ telegramUserId, language: 'en' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ language: 'en' });
+    expect(await languageOf(telegramUserId)).toBe('en');
+    const read = await getLanguage(telegramUserId);
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({ language: 'en' });
+    expect((await post(body(telegramUserId))).json().user).toMatchObject({ language: 'en' });
+  });
+
+  it.each([
+    ['no header', null],
+    ['another bearer', 'Bearer some-other-token'],
+  ])('R-lang 3 refuses %s on both routes and writes nothing', async (_label, authorization) => {
+    const { telegramUserId } = await started();
+    const set = await postLanguage({ telegramUserId, language: 'en' }, authorization);
+    expect(set.statusCode).toBe(401);
+    expect((await getLanguage(telegramUserId, authorization)).statusCode).toBe(401);
+    expect(await languageOf(telegramUserId)).toBe('ru');
+  });
+
+  it.each([
+    ['an empty body', {}],
+    ['an unknown language', { telegramUserId: '600001', language: 'de' }],
+    ['a non-numeric telegram id', { telegramUserId: 'abc', language: 'en' }],
+  ])('R-lang 4 POST refuses %s with 400', async (_label, payload) => {
+    const response = await postLanguage(payload);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'validation' });
+  });
+
+  it('R-lang 5 GET refuses a non-numeric id with 400', async () => {
+    const response = await getLanguage('abc');
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'validation' });
+  });
+
+  it('R-lang 6 answers 404 user_not_found on both routes for an id without a row, and creates none', async () => {
+    const telegramUserId = nextTelegramUserId();
+    const set = await postLanguage({ telegramUserId, language: 'en' });
+    expect(set.statusCode).toBe(404);
+    expect(set.json()).toEqual({ error: UserErrorCode.UserNotFound });
+    const read = await getLanguage(telegramUserId);
+    expect(read.statusCode).toBe(404);
+    expect(read.json()).toEqual({ error: UserErrorCode.UserNotFound });
+    expect(await languageOf(telegramUserId)).toBeUndefined();
+  });
+
+  it('R-lang 7 logs the language without the Telegram id', async () => {
+    const { telegramUserId } = await started('7351902468135795');
+    const lines: string[] = [];
+    const instance = testApp({ write: (line: string) => void lines.push(line) });
+    await instance.ready();
+    try {
+      expect(
+        (await postLanguage({ telegramUserId, language: 'en' }, undefined, instance)).statusCode,
+      ).toBe(200);
+    } finally {
+      await instance.close();
+    }
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(parsed.filter((line) => line.msg === 'language set')).toEqual([
+      expect.objectContaining({ level: 30, botLanguage: 'en' }),
+    ]);
+    expect(lines.join('\n')).not.toContain(telegramUserId);
+  });
+});
+
 // --- POST /users/referral (#115) ---------------------------------------------------------------
 
 const postReferral = (
@@ -599,6 +711,7 @@ describe('POST /users/referral', () => {
         notificationLevel: NotificationLevel.All,
         demoStake: null,
         realStake: null,
+        language: 'ru',
       },
     });
     expect((await postReferral({ telegramUserId: inviterId })).json()).toEqual({

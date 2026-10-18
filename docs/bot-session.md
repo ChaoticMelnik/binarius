@@ -165,8 +165,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
         → editMessageReplyMarkup of the card: «📤 Поделиться» on top of those rows (#321)
 the bot's start (after the profile), then every 10 min                          (#567)
   bot → GET /trading/sessions/tracked?limit=2000 ∥ GET /trading/pairs
-  bot → each listed session the tracker does not hold: tracked on its recorded message, its
-        first poll a GET (the message is recorded already)
+  bot → each listed session the tracker does not hold: tracked on its recorded message in the
+        owner's language from the list (#508), its first poll a GET (the message is recorded
+        already)
 inline query share:<sessionId>   («📤 Поделиться» → a chat picked, #321, #538)
   bot → POST /trading/sessions/<id>/share { telegramUserId: <from.id> }
   bot → sendPhoto of the promo card to SHARE_STORAGE_CHAT_ID, without sound

@@ -54,7 +54,9 @@ import * as adminTrading from './admin-trading';
 import * as adminBotTexts from './admin-bot-texts';
 import * as broker from './broker';
 import * as botTextTemplate from './bot-text-template';
+import * as botLanguage from './bot-language';
 import * as botTexts from './bot-texts';
+import * as botTextsEn from './bot-texts-en';
 import * as botTextFormat from './bot-text-format';
 import * as botTextMessages from './bot-text-messages';
 import * as botTextVars from './bot-text-vars';
@@ -574,10 +576,12 @@ describe('contract coverage (issue #6)', () => {
       stake,
       signal,
       tradingSession,
+      botLanguage,
       botTextTemplate,
       botTextFormat,
       botTextVars,
       botTexts,
+      botTextsEn,
       botTextMessages,
       botTextOverrides,
       exhaustive,

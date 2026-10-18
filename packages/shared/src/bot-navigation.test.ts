@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   CASHIER_PAGE_PATH,
+  LANGUAGE_CALLBACK_DATA,
+  LANGUAGE_SET_PATTERN,
   SESSION_STOP_PATTERN,
   cashierUrlOf,
   demoAnalysisCallbackData,
+  languageSetCallbackData,
   sessionStopCallbackData,
 } from './bot-navigation';
 
@@ -55,4 +58,14 @@ describe('the session stop button (#536)', () => {
       expect(SESSION_STOP_PATTERN.test(data)).toBe(false);
     },
   );
+});
+
+describe('the language buttons (#508)', () => {
+  it('saves one of the two languages and nothing else', () => {
+    expect(languageSetCallbackData('en')).toBe('lang:en');
+    expect(LANGUAGE_SET_PATTERN.exec('lang:ru')?.[1]).toBe('ru');
+    expect(LANGUAGE_SET_PATTERN.exec(languageSetCallbackData('en'))?.[1]).toBe('en');
+    expect(LANGUAGE_SET_PATTERN.test('lang:de')).toBe(false);
+    expect(LANGUAGE_SET_PATTERN.test(LANGUAGE_CALLBACK_DATA)).toBe(false);
+  });
 });

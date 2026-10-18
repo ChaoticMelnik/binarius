@@ -3,6 +3,7 @@
 // sends is one the bot handles when it is pressed (precedent: link-confirmation.ts). Callback data
 // is 1-64 bytes.
 
+import { BotLanguage } from './bot-language';
 import { SIGNAL_CHART_INTERVAL_MS, SIGNAL_SCAN_INTERVALS } from './signal';
 
 // «Сигналы сейчас» (#320): `demo:sig` is the duration screen (#382), every old «🔄 Обновить»,
@@ -33,6 +34,14 @@ export const DEMO_CALLBACK_DATA = 'demo';
 export const CONNECT_CALLBACK_DATA = 'connect';
 // «🏠 В меню» (#350): the status card, as /menu.
 export const MENU_CALLBACK_DATA = 'menu';
+// «🌐 Язык / Language» on the status card (#508): the language screen, a read; `lang:<language>`
+// on that screen saves the choice, a write. Only the bot draws them, kept beside «🏠 В меню».
+export const LANGUAGE_CALLBACK_DATA = 'lang';
+export const languageSetCallbackData = (language: BotLanguage): string =>
+  `${LANGUAGE_CALLBACK_DATA}:${language}`;
+export const LANGUAGE_SET_PATTERN = new RegExp(
+  `^${LANGUAGE_CALLBACK_DATA}:(${Object.values(BotLanguage).join('|')})$`,
+);
 // «🔄 Повторить» under a command's failure (#350): the command again. /start and /menu repeat as
 // «🏠 В меню»; the longest, `cmd:settings`, is 12 bytes. /invite's read creates the user's code
 // on first use, idempotently, so repeating it is a read (#115).

@@ -6,6 +6,8 @@ import {
   AuditEntityType,
   BrokerAccountStatus,
   TradeMode,
+  botLanguageOf,
+  type BotLanguage,
   decimalStringSchema,
   referralCodeOf,
   normalizeDecimal,
@@ -30,6 +32,7 @@ export type UserStartRow = Pick<
   | 'notificationLevel'
   | 'demoStake'
   | 'realStake'
+  | 'language'
 >;
 
 export interface RecordUserStartInput {
@@ -65,6 +68,8 @@ export async function recordUserStart(
         telegramUserId,
         displayName,
         languageCode: languageCode ?? null,
+        // only here: the conflict's SET below leaves it, so a later /start never changes it
+        language: botLanguageOf(languageCode),
         acquisitionSource: source,
         // the database clock, so the moment does not depend on the bot host's time
         acquiredAt: source === null ? null : sql`now()`,
@@ -93,6 +98,7 @@ export async function recordUserStart(
         notificationLevel: users.notificationLevel,
         demoStake: users.demoStake,
         realStake: users.realStake,
+        language: users.language,
         // PostgreSQL 18: `old` is NULL exactly when the upsert inserted the row
         inserted: sql<boolean>`old.id is null`,
       });
@@ -173,7 +179,37 @@ export function toUserStartView(
     notificationLevel: row.notificationLevel,
     demoStake: canonicalStake(row.demoStake),
     realStake: canonicalStake(row.realStake),
+    language: row.language,
   };
+}
+
+// The user's choice on the bot's language screen (#508), with the INSERT in recordUserStart the
+// only writer of users.language: one autocommit UPDATE of the user's own row, no other table and
+// no lock beyond the row's own (Rule 5). users.status is not read: the language is a preference,
+// like the notification level. undefined = no users row.
+export async function setUserLanguage(
+  db: Db,
+  telegramUserId: bigint,
+  language: BotLanguage,
+): Promise<BotLanguage | undefined> {
+  const [row] = await db
+    .update(users)
+    .set({ language })
+    .where(eq(users.telegramUserId, telegramUserId))
+    .returning({ language: users.language });
+  return row?.language;
+}
+
+// undefined = no users row
+export async function readUserLanguage(
+  db: Db,
+  telegramUserId: bigint,
+): Promise<BotLanguage | undefined> {
+  const [row] = await db
+    .select({ language: users.language })
+    .from(users)
+    .where(eq(users.telegramUserId, telegramUserId));
+  return row?.language;
 }
 
 // numeric(20,8) answers '5.00000000'; the wire carries '5'

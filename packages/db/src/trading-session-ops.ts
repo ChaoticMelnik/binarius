@@ -17,6 +17,7 @@ import {
   type TradingSessionView,
   safeParseTradingSessionSettings,
   sessionProgress,
+  type BotLanguage,
 } from '@binarius/shared';
 import { nullableAgeSec } from './balance-snapshot-ops';
 import type { Db } from './client';
@@ -923,6 +924,8 @@ export interface TrackedSessionRow {
   // null when settings carry no positive int4 assetId (a hand-written row)
   assetId: number | null;
   startedAt: Date;
+  // the owner's language of the bot's texts (#508)
+  language: BotLanguage;
 }
 
 // settings->>'assetId' as an int4, NULL for anything else: CASE keeps the cast behind the shape
@@ -951,6 +954,7 @@ export async function listTrackedSessions(
       messageId: sql<number>`${tradingSessions.statusMessageId}`,
       assetId: settingsAssetIdSql,
       startedAt: tradingSessions.startedAt,
+      language: users.language,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))

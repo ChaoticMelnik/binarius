@@ -8,6 +8,7 @@ import {
   TradeMode,
   START_PAYLOAD_PATTERN,
   UserStatus,
+  botLanguageOf,
   startPayloadSchema,
   userStartViewSchema,
   type DecimalString,
@@ -34,10 +35,12 @@ import {
 } from './schema/index';
 import {
   readStakes,
+  readUserLanguage,
   recordUserStart,
   setLastAnalysis,
   setStake,
   setTradingMode,
+  setUserLanguage,
   toUserStartView,
 } from './user-ops';
 
@@ -372,6 +375,7 @@ describe('toUserStartView', () => {
       'acquisitionSource',
       'demoStake',
       'hasActiveBrokerAccount',
+      'language',
       'notificationLevel',
       'pendingBrokerAccounts',
       'realStake',
@@ -386,6 +390,7 @@ describe('toUserStartView', () => {
       pendingBrokerAccounts: [],
       notificationLevel: NotificationLevel.All,
       demoStake: null,
+      language: 'ru',
     });
     expect(userStartViewSchema.safeParse(view).success).toBe(true);
   });
@@ -893,5 +898,64 @@ describe('recordUserStart: referral (#115)', () => {
     );
     expect(Object.keys(view)).not.toContain('referred');
     expect(Object.keys(started.row)).not.toContain('inserted');
+  });
+});
+
+describe('the bot language (#508)', () => {
+  const languageOf = async (telegramUserId: bigint) => {
+    const [row] = await tmp.db
+      .select({ language: users.language, languageCode: users.languageCode })
+      .from(users)
+      .where(eq(users.telegramUserId, telegramUserId));
+    return row;
+  };
+
+  it('U-lang 1 a first /start sets the language botLanguageOf gives its tag', async () => {
+    for (const languageCode of ['ru', 'ru-RU', 'RU', 'en', 'uk', 'de-DE', undefined]) {
+      const telegramUserId = nextTelegramUserId();
+      const { row } = await start(telegramUserId, { languageCode });
+      expect(row.language, String(languageCode)).toBe(botLanguageOf(languageCode));
+      expect((await languageOf(telegramUserId))?.language).toBe(botLanguageOf(languageCode));
+    }
+  });
+
+  it('U-lang 2 a later /start with another tag keeps the language and still updates language_code', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId, { languageCode: 'en' });
+    const { row } = await start(telegramUserId, { languageCode: 'ru' });
+    expect(row.language).toBe('en');
+    expect(await languageOf(telegramUserId)).toEqual({ language: 'en', languageCode: 'ru' });
+  });
+
+  it('U-lang 3 setUserLanguage writes and answers the language, moves updated_at only; an unknown id is undefined', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId, { languageCode: 'ru' });
+    const before = await readUser(telegramUserId);
+    const [{ snapshot } = { snapshot: '' }] = await tmp.db
+      .select({ snapshot: sql<string>`(to_jsonb(users) - 'language' - 'updated_at')::text` })
+      .from(users)
+      .where(eq(users.telegramUserId, telegramUserId));
+
+    expect(await setUserLanguage(tmp.db, telegramUserId, 'en')).toBe('en');
+
+    expect((await languageOf(telegramUserId))?.language).toBe('en');
+    const [{ snapshot: after } = { snapshot: '' }] = await tmp.db
+      .select({ snapshot: sql<string>`(to_jsonb(users) - 'language' - 'updated_at')::text` })
+      .from(users)
+      .where(eq(users.telegramUserId, telegramUserId));
+    expect(after).toBe(snapshot);
+    expect((await readUser(telegramUserId)).updatedAt.getTime()).toBeGreaterThanOrEqual(
+      before.updatedAt.getTime(),
+    );
+    expect(await setUserLanguage(tmp.db, nextTelegramUserId(), 'en')).toBeUndefined();
+  });
+
+  it('U-lang 4 readUserLanguage answers the stored language, undefined without a row', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId, { languageCode: 'de' });
+    expect(await readUserLanguage(tmp.db, telegramUserId)).toBe('en');
+    await setUserLanguage(tmp.db, telegramUserId, 'ru');
+    expect(await readUserLanguage(tmp.db, telegramUserId)).toBe('ru');
+    expect(await readUserLanguage(tmp.db, nextTelegramUserId())).toBeUndefined();
   });
 });

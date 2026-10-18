@@ -9,6 +9,7 @@ import {
   type TradeIntentFailureReason,
   type TradeIntentView,
   telegramErrorFields,
+  type BotLanguage,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -17,6 +18,7 @@ import {
   type BackendClient,
 } from './backend-client';
 import type { Logger } from './logging';
+import { runWithLanguage } from './language';
 import { durationOf, sessionFits } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
 import { intentStatusText, TEXTS } from './texts';
@@ -65,6 +67,8 @@ export interface IntentTrackRequest {
   telegramUserId: string;
   // the pair's label as the catalog gave it at the press
   label: PairLabel;
+  // the language of the user's texts at the press (#508): the polls run outside any update
+  language: BotLanguage;
   // the pair's payout against the cycle floor as the catalog had it at the press (#379)
   payoutAccepted: boolean;
   // what the message shows now
@@ -135,7 +139,7 @@ export function createIntentTracker({
       entry.timer = undefined;
       // the row «anything thrown → error, stop» holds for the whole attempt, not only around the
       // read and the edit, so a run always resolves and stop() always drains
-      const run = attempt(entry)
+      const run = runWithLanguage(entry.language, () => attempt(entry))
         .catch((error: unknown) => {
           logger.error(
             { ...errorLogFields(error), intentId: entry.intentId },

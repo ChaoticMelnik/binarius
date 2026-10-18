@@ -678,6 +678,7 @@ describe('the recovery contract (#567)', () => {
     messageId: 7,
     assetId: null,
     startedAt: '2026-10-16T10:00:00.000Z',
+    language: 'en',
   };
   it('reads a tracked session list and refuses a row without a field', () => {
     expect(
@@ -686,6 +687,13 @@ describe('the recovery contract (#567)', () => {
     const short: Partial<typeof row> = { ...row };
     delete short.assetId;
     expect(safeParseTrackedSessionsResponse({ sessions: [short] }).success).toBe(false);
+    // #508: the owner's language is required and one of the two
+    const unspoken: Partial<typeof row> = { ...row };
+    delete unspoken.language;
+    expect(safeParseTrackedSessionsResponse({ sessions: [unspoken] }).success).toBe(false);
+    expect(
+      safeParseTrackedSessionsResponse({ sessions: [{ ...row, language: 'de' }] }).success,
+    ).toBe(false);
     expect(
       safeParseTrackedSessionsResponse({
         sessions: Array.from({ length: TRACKED_SESSIONS_MAX + 1 }, () => row),

@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BOT_TEXT_CATALOG, type BotProfileMethod } from '@binarius/shared';
+import { BOT_TEXT_CATALOG, BOT_TEXT_SOURCES_EN, type BotProfileMethod } from '@binarius/shared';
 import { auditLog, botTextOverrides, listBotTextOverrides } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import {
@@ -339,6 +339,20 @@ const DEFAULT_MENU = [
   { command: 'paysupport', description: 'Вопросы по оплате Stars и возврат' },
 ];
 const SCOPE = { scope: { type: 'all_private_chats' } };
+// #508: each method in both languages, Russian under language_code ru, English as the default
+const RU = { language_code: 'ru' };
+const EN_MENU = [
+  { command: 'start', description: 'Start' },
+  { command: 'menu', description: 'Main menu' },
+  { command: 'stop', description: 'Stop the session' },
+  { command: 'account', description: 'Binodex account' },
+  { command: 'buy', description: 'Buy tokens' },
+  { command: 'settings', description: 'Notification settings' },
+  { command: 'invite', description: 'Invite a friend' },
+  { command: 'help', description: 'Help' },
+  { command: 'support', description: 'Support' },
+  { command: 'paysupport', description: 'Stars payment questions and refunds' },
+];
 const TOKEN = '123456:AA-cli-publish-token';
 const HINT = 'Публикация не удалась: после восстановления выполните bot-text publish.';
 
@@ -364,8 +378,12 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
     expect(fake.calls).toEqual([
       {
         method: 'setMyCommands',
-        args: [[{ command: 'start', description: 'Поехали' }, ...DEFAULT_MENU.slice(1)], SCOPE],
+        args: [
+          [{ command: 'start', description: 'Поехали' }, ...DEFAULT_MENU.slice(1)],
+          { ...SCOPE, ...RU },
+        ],
       },
+      { method: 'setMyCommands', args: [EN_MENU, SCOPE] },
     ]);
   });
 
@@ -378,7 +396,7 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
       fake.deps,
     );
     expect(code).toBe(0);
-    expect(out.slice(1)).toEqual(['setMyCommands: ошибка — GrammyError, Telegram 400']);
+    expect(out.slice(1)).toEqual(['setMyCommands (ru): ошибка — GrammyError, Telegram 400']);
     expect(err).toEqual([HINT]);
     expect(JSON.stringify({ out, err })).not.toContain('secret');
     expect(await listBotTextOverrides(tmp.db)).toMatchObject([
@@ -401,7 +419,11 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
     expect(fake.calls).toEqual([
       {
         method: 'setMyShortDescription',
-        args: [BOT_TEXT_CATALOG.profileShortDescription.source],
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source, RU],
+      },
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
       },
     ]);
   });
@@ -419,9 +441,18 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
       err: [],
     });
     expect(ok.calls).toEqual([
-      { method: 'setMyCommands', args: [DEFAULT_MENU, SCOPE] },
-      { method: 'setMyDescription', args: ['Описание'] },
-      { method: 'setMyShortDescription', args: [BOT_TEXT_CATALOG.profileShortDescription.source] },
+      { method: 'setMyCommands', args: [DEFAULT_MENU, { ...SCOPE, ...RU }] },
+      { method: 'setMyCommands', args: [EN_MENU, SCOPE] },
+      { method: 'setMyDescription', args: ['Описание', RU] },
+      { method: 'setMyDescription', args: [BOT_TEXT_SOURCES_EN.profileDescription, {}] },
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source, RU],
+      },
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
+      },
     ]);
 
     const failing = fakeProfileApi({ setMyDescription: refusal('setMyDescription', 400) });
@@ -429,7 +460,7 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
       code: 1,
       out: [
         'setMyCommands: опубликовано',
-        'setMyDescription: ошибка — GrammyError, Telegram 400',
+        'setMyDescription (ru): ошибка — GrammyError, Telegram 400',
         'setMyShortDescription: опубликовано',
       ],
       err: [HINT],

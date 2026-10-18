@@ -79,16 +79,23 @@ import {
   type UserReferralView,
   type UserStartRequest,
   type UserStartView,
+  type BotLanguage,
+  safeParseUserLanguageResponse,
 } from '@binarius/shared';
-import { BACKEND_REQUEST_TIMEOUT_MS, STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS } from './timing';
+import {
+  BACKEND_REQUEST_TIMEOUT_MS,
+  LANGUAGE_READ_TIMEOUT_MS,
+  STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS,
+} from './timing';
 
 // bounds one internal-API response body (Architecture Rule 26)
 export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
 // GET /bot-texts - every override of the catalog; sized for every catalog key at Telegram's
 // message limit in 4-byte characters (#234)
 export const MAX_BOT_TEXTS_BODY_BYTES = 8 * 1024 * 1024;
-// GET /trading/sessions/tracked (#567) - TRACKED_SESSIONS_MAX rows of ~180 bytes at their longest
-// (backend-client.test.ts → the samples table), a quarter of it at most
+// GET /trading/sessions/tracked (#567) - TRACKED_SESSIONS_MAX rows of ~200 bytes at their longest,
+// the owner's language included (#508; backend-client.test.ts → the samples table), a quarter of
+// it at most
 export const MAX_TRACKED_SESSIONS_BODY_BYTES = 2 * 1024 * 1024;
 
 export const BackendErrorCode = {
@@ -143,6 +150,11 @@ export interface BackendClient {
     telegramUserId: string,
     level: NotificationLevel,
   ): Promise<NotificationLevelResponse>;
+  // the language of the bot's texts (#508): the middleware's read of a user it has not cached,
+  // bounded by LANGUAGE_READ_TIMEOUT_MS, and the language screen's write; 404 user_not_found
+  // before the first /start
+  readLanguage(telegramUserId: string): Promise<BotLanguage>;
+  setLanguage(telegramUserId: string, language: BotLanguage): Promise<BotLanguage>;
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
   readPairs(): Promise<PairsCatalogResponse>;
   // `analysis` only from the analysis card (#484): the backend records it for the reminder
@@ -380,6 +392,27 @@ export function createBackendClient({
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
+    },
+    async readLanguage(telegramUserId) {
+      const query = new URLSearchParams({ telegramUserId });
+      const parsed = safeParseUserLanguageResponse(
+        await request(
+          'GET',
+          `users/language?${query.toString()}`,
+          undefined,
+          undefined,
+          Math.min(timeoutMs, LANGUAGE_READ_TIMEOUT_MS),
+        ),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.language;
+    },
+    async setLanguage(telegramUserId, language) {
+      const parsed = safeParseUserLanguageResponse(
+        await post('users/language', { telegramUserId, language }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.language;
     },
     // no brokerAccountId: the card is about the user's only active account
     async readTradingAccess(telegramUserId) {

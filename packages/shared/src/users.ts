@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { botLanguageSchema } from './bot-language';
 import { decimalStringSchema } from './money';
 import { telegramUserIdSchema } from './trading';
 
@@ -65,6 +66,8 @@ export const userStartViewSchema = z.object({
   demoStake: decimalStringSchema.nullable(),
   // the saved real stake, the same way (#326)
   realStake: decimalStringSchema.nullable(),
+  // the language of the bot's texts (#508), set at the first /start and by the user's choice
+  language: botLanguageSchema,
 });
 export type UserStartView = z.infer<typeof userStartViewSchema>;
 
@@ -119,3 +122,24 @@ export const safeParseNotificationLevelRequest = (input: unknown) =>
   notificationLevelRequestSchema.safeParse(input);
 export const safeParseNotificationLevelResponse = (input: unknown) =>
   notificationLevelResponseSchema.safeParse(input);
+
+// POST /users/language — the user picked a language on the bot's language screen (#508)
+export const userLanguageRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  language: botLanguageSchema,
+});
+export type UserLanguageRequest = z.infer<typeof userLanguageRequestSchema>;
+
+// GET /users/language?telegramUserId= — the bot's read of a language it has not cached
+export const userLanguageQuerySchema = z.object({ telegramUserId: telegramUserIdSchema });
+export type UserLanguageQuery = z.infer<typeof userLanguageQuerySchema>;
+
+export const userLanguageResponseSchema = z.object({ language: botLanguageSchema });
+export type UserLanguageResponse = z.infer<typeof userLanguageResponseSchema>;
+
+export const safeParseUserLanguageRequest = (input: unknown) =>
+  userLanguageRequestSchema.safeParse(input);
+export const safeParseUserLanguageQuery = (input: unknown) =>
+  userLanguageQuerySchema.safeParse(input);
+export const safeParseUserLanguageResponse = (input: unknown) =>
+  userLanguageResponseSchema.safeParse(input);

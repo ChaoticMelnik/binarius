@@ -96,7 +96,12 @@ describe('formatAge', () => {
     [3599, '59 мин'],
     [7200, '120 мин'],
   ])('prints %i seconds as %s', (seconds, printed) => {
-    expect(formatAge(seconds)).toBe(printed);
+    expect(formatAge(seconds, { seconds: 'с', minutes: 'мин' })).toBe(printed);
+  });
+
+  it('prints the units it is given (#508)', () => {
+    expect(formatAge(5, { seconds: 's', minutes: 'min' })).toBe('5 s');
+    expect(formatAge(300, { seconds: 's', minutes: 'min' })).toBe('5 min');
   });
 });
 

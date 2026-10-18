@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   pairLabel,
   BOT_TEXT_CATALOG,
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   BotTextGroup,
   BotTextKind,
   defaultBotTextSource,
@@ -59,6 +61,7 @@ import {
   demoPageCallbackData,
 } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
+import { runWithLanguage } from './language';
 import {
   cycleStakeLabel,
   ACTION_LABELS,
@@ -1421,6 +1424,28 @@ describe('the promo card texts (#538)', () => {
 // TEXTS and LABELS are views of the catalog that keep the names they had before it (#240): a
 // key added to them is a text or a label the bot never had under that name.
 describe('the facades over the catalog', () => {
+  // #508: every facade reads the language of the update at hand
+  it('gives the English texts inside an English update and the Russian ones outside', () => {
+    runWithLanguage(BotLanguage.En, () => {
+      expect(String(TEXTS.unavailable)).toBe(BOT_TEXT_SOURCES_EN.unavailable);
+      expect(LABELS.menuButton).toBe(BOT_TEXT_SOURCES_EN.menuButton);
+      expect(levelLabel(NotificationLevel.Off)).toBe(BOT_TEXT_SOURCES_EN.levelOff);
+      expect(botCommands()[0]?.description).toBe(BOT_TEXT_SOURCES_EN.startCommand);
+      expect(PROFILE.shortDescription).toBe(BOT_TEXT_SOURCES_EN.profileShortDescription);
+    });
+    runWithLanguage(BotLanguage.Ru, () => {
+      expect(String(TEXTS.unavailable)).toBe(BOT_TEXT_CATALOG.unavailable.source);
+      expect(LABELS.menuButton).toBe(BOT_TEXT_CATALOG.menuButton.source);
+    });
+  });
+
+  it('prints the age of a balance with the units of the language', () => {
+    const line = (language: BotLanguage) =>
+      runWithLanguage(language, () => String(TEXTS.statusStale({ age: 300 })));
+    expect(line(BotLanguage.En)).toBe('🕒 The Binodex balance was updated 5 min ago.');
+    expect(line(BotLanguage.Ru)).toBe('🕒 Баланс Binodex обновлён 5 мин назад.');
+  });
+
   it('gives TEXTS every html key of the catalog but those it reaches through other entries or never sends, and the reminders', () => {
     const htmlKeys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
       (key) => BOT_TEXT_CATALOG[key].kind === BotTextKind.Html,
@@ -1478,6 +1503,7 @@ describe('the facades over the catalog', () => {
         'inviteButton',
         'inviteCommand',
         'inviteShareButton',
+        'languageButton',
         'helpCommand',
         'loginButton',
         'menuButton',

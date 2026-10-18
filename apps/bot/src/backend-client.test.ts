@@ -10,6 +10,7 @@ import {
   MAX_SESSION_CYCLES,
   MAX_SESSION_SUMMARY_TRADES,
   MomentumDirection,
+  BotLanguage,
   NotificationLevel,
   StarsCreditOutcome,
   StarsPreCheckoutRefusal,
@@ -32,6 +33,7 @@ import {
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
+  safeParseUserLanguageResponse,
   safeParsePairsCatalogResponse,
   safeParseSessionShareResponse,
   safeParseSessionSummaryResponse,
@@ -73,7 +75,11 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import { BACKEND_REQUEST_TIMEOUT_MS, STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS } from './timing';
+import {
+  BACKEND_REQUEST_TIMEOUT_MS,
+  LANGUAGE_READ_TIMEOUT_MS,
+  STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS,
+} from './timing';
 import {
   BackendError,
   BackendErrorCode,
@@ -618,6 +624,52 @@ describe('setNotificationLevel', () => {
       status: 404,
       reason: UserErrorCode.UserNotFound,
     });
+  });
+});
+
+describe('the language (#508)', () => {
+  it('readLanguage GETs the id in the query under the bearer, within LANGUAGE_READ_TIMEOUT_MS', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { language: 'en' });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readLanguage('4242')).toBe('en');
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe('/users/language?telegramUserId=4242');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(timeout).toHaveBeenLastCalledWith(LANGUAGE_READ_TIMEOUT_MS);
+    timeout.mockRestore();
+  });
+
+  it('setLanguage posts the id and the language and returns the saved one', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { language: 'ru' });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).setLanguage('4242', 'ru')).toBe(
+      'ru',
+    );
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe('/users/language');
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', language: 'ru' });
+  });
+
+  it('carries user_not_found of a 404, and an unknown language as a contract violation', async () => {
+    const missing = await serve((_request, reply) => {
+      json(reply, 404, { error: UserErrorCode.UserNotFound });
+    });
+    expect(
+      await rejectionOf(
+        createBackendClient({ baseUrl: missing.baseUrl, token: TOKEN }).readLanguage('4242'),
+      ),
+    ).toMatchObject({ status: 404, reason: UserErrorCode.UserNotFound });
+    const odd = await serve((_request, reply) => {
+      json(reply, 200, { language: 'de' });
+    });
+    expect(
+      await rejectionOf(
+        createBackendClient({ baseUrl: odd.baseUrl, token: TOKEN }).setLanguage('4242', 'en'),
+      ),
+    ).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
 
@@ -1530,6 +1582,7 @@ describe('listTrackedSessions (#567)', () => {
     messageId: 77,
     assetId: 101,
     startedAt: SESSION_VIEW.startedAt,
+    language: BotLanguage.En,
   };
   const list = (baseUrl: string) =>
     createBackendClient({ baseUrl, token: TOKEN }).listTrackedSessions();
@@ -1947,6 +2000,7 @@ describe('body size', () => {
             notificationLevel: longest(Object.values(NotificationLevel)),
             demoStake: DECIMAL,
             realStake: DECIMAL,
+            language: longest(Object.values(BotLanguage)),
           },
         },
       },
@@ -1987,6 +2041,14 @@ describe('body size', () => {
           demoStake: DECIMAL,
           realStake: DECIMAL,
         },
+      },
+      readLanguage: {
+        parse: safeParseUserLanguageResponse,
+        sample: { language: longest(Object.values(BotLanguage)) },
+      },
+      setLanguage: {
+        parse: safeParseUserLanguageResponse,
+        sample: { language: longest(Object.values(BotLanguage)) },
       },
       readTradingAccess: {
         parse: safeParseTradingAccessResponse,
@@ -2090,6 +2152,7 @@ describe('body size', () => {
             messageId: INT4_MAX,
             assetId: INT4_MAX,
             startedAt: DATETIME,
+            language: longest(Object.values(BotLanguage)),
           })),
         },
         limit: MAX_TRACKED_SESSIONS_BODY_BYTES / 4,

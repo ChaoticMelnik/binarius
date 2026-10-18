@@ -25,9 +25,9 @@ backend (#112): POST /deposit/credited {initData} → DEMO_ONLY → initData →
                → on a write: push «Реальный баланс: $X» with «🏠 В меню», once a minute per user
 ```
 
-The bot's button (#27, `apps/bot/src/keyboards.ts` → `depositButton`/`depositButtons`/`depositRows`,
-the only builders) stands at three entries, in both trading modes: the last row of the status card
-(under «👥 Пригласить друга | ⭐ Купить токены»); beside «⭐ Купить токены» in the two «не хватает
+The bot's button (#27, `apps/bot/src/keyboards.ts` → `depositButton`/`depositButtons`, the only
+builders) stands at three entries, in both trading modes: the last row of the status card (under
+«👥 Пригласить друга | ⭐ Купить токены», beside «🌐 Язык / Language», #508); beside «⭐ Купить токены» in the two «не хватает
 токенов» refusals (a trade, a session start), above the way back; at the end of a session, on the
 stopped status and on the summary card, beside «👥 Пригласить друга» right above the menu (the menu
 stays last; the rows: [bot-navigation.md](bot-navigation.md#the-width-506)). Its URL is

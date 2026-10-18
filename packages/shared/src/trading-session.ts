@@ -1,3 +1,4 @@
+import { botLanguageSchema } from './bot-language';
 import * as z from 'zod';
 import { pairViewSchema } from './catalog';
 import { REFERRAL_CODE_PATTERN } from './referral';
@@ -543,6 +544,8 @@ export const trackedSessionSchema = z.strictObject({
   messageId: telegramMessageIdSchema,
   assetId: z.int().min(1).max(INT4_MAX).nullable(),
   startedAt: z.iso.datetime({ offset: true }),
+  // the owner's language of the bot's texts (#508): the recovered tracker edits in it
+  language: botLanguageSchema,
 });
 export type TrackedSession = z.infer<typeof trackedSessionSchema>;
 

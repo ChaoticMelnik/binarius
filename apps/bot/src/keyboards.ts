@@ -5,6 +5,7 @@ import {
   buyPackageCallbackData,
   DEMO_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
+  LANGUAGE_CALLBACK_DATA,
   demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
   STAR_PACKAGES,
@@ -62,14 +63,20 @@ export const depositButton = (cashierUrl: string): InlineKeyboardButton.WebAppBu
 });
 export const depositButtons = (cashierUrl: string | undefined): InlineKeyboardButton[] =>
   cashierUrl === undefined ? [] : [depositButton(cashierUrl)];
-export const depositRows = (cashierUrl: string | undefined): InlineKeyboardButton[][] =>
-  cashierUrl === undefined ? [] : [depositButtons(cashierUrl)];
+
+// «🌐 Язык / Language» (#508, language-screen.ts): the language screen as a new message. The label
+// is in both languages at once: a user who cannot read the bot's language still finds it.
+export const languageButton = (): InlineKeyboardButton.CallbackButton => ({
+  text: LABELS.languageButton,
+  callback_data: LANGUAGE_CALLBACK_DATA,
+});
 
 // The mode screen (#474, trading-mode.ts), opened from the status card as a new message
 export const MODE_CALLBACK_DATA = 'mode';
 
 // The status card's: the entry and the mode screen, then the invite (#115) and the purchase (#117)
-// in one row, then the deposit (#27) (rows: docs/bot-navigation.md → The width). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA:
+// in one row, then the deposit (#27) and the language (#508) (rows: docs/bot-navigation.md → The
+// width). In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA:
 // the path is the same up to the stake button (#121); the mode button reads «🎮 Вернуться в демо»
 // there and opens the screen too, it never switches by itself (#474). The account card keeps
 // demoKeyboard.
@@ -88,7 +95,7 @@ export const statusCardKeyboard = (
           button(LABELS.modeButton, MODE_CALLBACK_DATA),
         ],
     [inviteButton(), buyButton()],
-    ...depositRows(cashierUrl),
+    [...depositButtons(cashierUrl), languageButton()],
   ]);
 
 // The purchase and the deposit (#27) in one row above `keyboard`'s rows: the `insufficient_tokens`

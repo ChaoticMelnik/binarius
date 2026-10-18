@@ -1058,6 +1058,10 @@ describe('the read pages (#107)', () => {
     );
     expect(response.body).toContain('broker-7');
     expect(response.body).toContain(`<dd>${SAMPLE_USER.user.tokens.available}</dd>`);
+    // #508: the language of the bot's texts beside Telegram's tag
+    expect(response.body).toContain(
+      `<dt>${TEXTS.fieldBotLanguage}</dt>\n        <dd>${TEXTS.botLanguage.ru}</dd>`,
+    );
     // the shared accounts table (#342): the account id first, no owner column on the card; the
     // section alone, since the deposits section prints the same account id
     const section = response.body.slice(
@@ -3066,6 +3070,8 @@ describe('the bot texts pages (#300)', () => {
     expect(body).toContain(TEXTS.botTextChanged(3, null));
     expect(body).toContain(TEXTS.botTextRejected('Пустой текст'));
     expect(body).not.toContain('Только чтение');
+    // #508: the overrides are Russian's; the page says so once
+    expect(body.split(TEXTS.botTextsLanguagesNote)).toHaveLength(2);
     // #361: one hint and one «Опубликовать заново», right above the command descriptions
     const republish = '<form method="post" action="/admin/bot-texts/publish">';
     expect(body.split(republish)).toHaveLength(2);
@@ -3096,7 +3102,7 @@ describe('the bot texts pages (#300)', () => {
       /<li>\s*Меню команд \(setMyCommands\):\s*опубликовано\s*<\/li>/,
     );
     expect(republished.body).toMatch(
-      /<li class="error">\s*Описание бота \(setMyDescription\):\s*ошибка — GrammyError, Telegram 400\s*<\/li>/,
+      /<li class="error">\s*Описание бота \(setMyDescription\):\s*ошибка \(en\) — GrammyError, Telegram 400\s*<\/li>/,
     );
     expect(republished.body).toContain(TEXTS.botProfilePublishFailedHint);
     expect(republished.body).not.toMatch(/<style|<script/);

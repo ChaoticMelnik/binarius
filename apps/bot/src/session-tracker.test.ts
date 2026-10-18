@@ -10,8 +10,10 @@ import {
   type DecimalString,
   type TelegramHtml,
   type TradingSessionView,
+  BotLanguage,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import { currentLanguage, missingLanguageReads } from './language';
 import {
   createSessionTracker,
   SESSION_NOT_FOUND,
@@ -104,6 +106,7 @@ function setup({
     telegramUserId: String(USER.id),
     messageId: MESSAGE_ID,
     label: LABEL,
+    language: BotLanguage.Ru,
     view: SESSION_VIEW,
     record: false,
     edit: target().edit,
@@ -156,6 +159,29 @@ afterEach(() => {
 });
 
 describe('the session tracker', () => {
+  // #508: the polls, their edits and the card run outside any update, in the entry's language
+  it('S-lang edits and sends the card in the language of the request, tracked outside any update', async () => {
+    const { tracker, request } = setup({ script: [stoppedClosed] });
+    const languages: string[] = [];
+    const before = missingLanguageReads();
+    tracker.track(
+      request({
+        language: BotLanguage.En,
+        edit: () => {
+          languages.push(`edit:${currentLanguage()}`);
+          return Promise.resolve(true);
+        },
+        card: () => {
+          languages.push(`card:${currentLanguage()}`);
+          return Promise.resolve();
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(languages).toEqual([`edit:${BotLanguage.En}`, `card:${BotLanguage.En}`]);
+    expect(missingLanguageReads()).toBe(before);
+  });
+
   it('ends only on a stopped session whose last trade can no longer move', () => {
     expect(sessionTrackingDone(SESSION_VIEW)).toBe(false);
     expect(sessionTrackingDone(stoppedWith(null))).toBe(true);

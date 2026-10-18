@@ -1,8 +1,16 @@
 import type { Api, PollingOptions } from 'grammy';
-import { BOT_COMMAND_SCOPE, closeAll, errorLogFields, telegramErrorFields } from '@binarius/shared';
+import {
+  BOT_COMMAND_SCOPE,
+  BotLanguage,
+  closeAll,
+  errorLogFields,
+  TELEGRAM_PROFILE_DEFAULT_LANGUAGE,
+  telegramErrorFields,
+} from '@binarius/shared';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionTracker } from './session-tracker';
 import type { Logger } from './logging';
+import { runWithLanguage } from './language';
 import { botCommands, PROFILE } from './texts';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 
@@ -18,6 +26,12 @@ export const ALLOWED_UPDATES = [
   'inline_query',
   'chosen_inline_result',
 ] as const satisfies NonNullable<PollingOptions['allowed_updates']>;
+
+// language_code of a profile call: none for the language Telegram shows every client without a
+// list of its own (#508)
+type ProfileLanguage = { language_code?: BotLanguage };
+const profileLanguageOf = (language: BotLanguage): ProfileLanguage =>
+  language === TELEGRAM_PROFILE_DEFAULT_LANGUAGE ? {} : { language_code: language };
 
 // the parts of a grammY Bot this module drives: start, stop and the profile calls; a fake with
 // the same shape is what the tests run, so the drain is provable without a Telegram server
@@ -64,36 +78,52 @@ export function runBot({
 }: RunBotOptions): void {
   let stopping = false;
 
-  // The profile, one call at a time and one attempt each. Every call is caught on its own: a
-  // failed one costs that part of the profile and nothing else — the next call is still made, no
-  // update is lost and Telegram keeps the last value that did register — while a throw out of
-  // onStart would reject start() and exit 1. The next start registers again. The number of
-  // calls is STARTUP_CALLS in timing.ts. The values are the texts in effect — the overrides of the
-  // first load, or the defaults when it failed (#301).
+  // The profile, one method at a time and one attempt each, in both languages (#508): Telegram
+  // shows a client the list published for its own language, the default one (no language_code,
+  // English) to every other. A method's two calls run side by side under one client timeout, so the
+  // three methods stay three slots of STARTUP_CALLS in timing.ts. Every call is caught on its own:
+  // a failed one costs that part of the profile in that language and nothing else — the other
+  // calls are still made, no update is lost and Telegram keeps the last value that did register —
+  // while a throw out of onStart would reject start() and exit 1. The next start registers again.
+  // The values are the texts in effect — the overrides of the first load, or the defaults when it
+  // failed (#301); the English ones are the catalog's.
   const registrations = [
     {
       method: 'setMyCommands',
       failure: 'bot commands not registered',
-      call: () => bot.api.setMyCommands(botCommands(), { scope: BOT_COMMAND_SCOPE }),
+      call: (other: ProfileLanguage) =>
+        bot.api.setMyCommands(botCommands(), { scope: BOT_COMMAND_SCOPE, ...other }),
     },
     {
       method: 'setMyDescription',
       failure: 'bot description not registered',
-      call: () => bot.api.setMyDescription(PROFILE.description),
+      call: (other: ProfileLanguage) => bot.api.setMyDescription(PROFILE.description, other),
     },
     {
       method: 'setMyShortDescription',
       failure: 'bot short description not registered',
-      call: () => bot.api.setMyShortDescription(PROFILE.shortDescription),
+      call: (other: ProfileLanguage) =>
+        bot.api.setMyShortDescription(PROFILE.shortDescription, other),
     },
   ] as const;
   const registerProfile = async (): Promise<void> => {
     for (const { method, failure, call } of registrations) {
-      try {
-        await call();
-      } catch (error: unknown) {
-        logger.warn({ ...errorLogFields(error), ...telegramErrorFields(error, method) }, failure);
-      }
+      await Promise.all(
+        Object.values(BotLanguage).map((language) =>
+          runWithLanguage(language, () => call(profileLanguageOf(language))).catch(
+            (error: unknown) => {
+              logger.warn(
+                {
+                  ...errorLogFields(error),
+                  ...telegramErrorFields(error, method),
+                  botLanguage: language,
+                },
+                failure,
+              );
+            },
+          ),
+        ),
+      );
     }
   };
 

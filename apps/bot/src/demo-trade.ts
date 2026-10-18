@@ -55,6 +55,7 @@ import {
   type IntentTracker,
 } from './intent-tracker';
 import type { Logger } from './logging';
+import { currentLanguage } from './language';
 import { settle, type Settled } from './settled';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
 import { intentStatusText, LABELS, sessionStartButtonLabel, TEXTS, textOf } from './texts';
@@ -431,6 +432,7 @@ export function createDemoTradeComposer<C extends Context>({
       intentId: intent.id,
       telegramUserId: intent.telegramUserId,
       label,
+      language: currentLanguage(),
       payoutAccepted,
       view: intent,
       edit: (text, view, end) =>

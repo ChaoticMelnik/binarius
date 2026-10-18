@@ -1197,6 +1197,7 @@ describe('body size', () => {
         displayName: controls(256),
         // languageCodeSchema: max(35) of ASCII
         languageCode: 'x'.repeat(35),
+        language: 'ru',
         status: longest(UserStatus),
         // startPayloadSchema: 64 base64url characters
         acquisitionSource: 'x'.repeat(64),

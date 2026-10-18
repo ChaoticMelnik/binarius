@@ -2,6 +2,7 @@ import {
   ADMIN_SEARCH_MAX_LENGTH,
   BOT_TEXTS_APPLIED_WITHIN_S,
   ServiceAccountNotWorkingReason,
+  type BotLanguage,
   type BotProfileMethod,
   type TradingSessionSettings,
 } from '@binarius/shared';
@@ -96,7 +97,10 @@ export const TEXTS = {
   userTokens: 'Токены',
   userBrokerAccounts: 'Брокерские аккаунты',
   fieldId: 'ID',
-  fieldLanguage: 'Язык',
+  fieldLanguage: 'Язык Telegram',
+  // users.language (#508): the bot's texts, set at the first /start and by the user's choice
+  fieldBotLanguage: 'Язык бота',
+  botLanguage: { ru: 'русский', en: 'английский' } satisfies Record<BotLanguage, string>,
   fieldAcquisitionSource: 'Источник',
   fieldAcquiredAt: 'Пришёл по источнику',
   fieldTelegramBlockedAt: 'Бот недоступен с',
@@ -330,6 +334,8 @@ export const TEXTS = {
 
   botTextsTitle: 'Тексты бота',
   botTextsHeading: 'Тексты клиентского бота',
+  botTextsLanguagesNote:
+    'Переопределения действуют для русских текстов; английские показываются из каталога (#634).',
   columnBotTextKey: 'Ключ',
   columnBotTextDescription: 'Где показывается',
   columnBotTextState: 'Состояние',
@@ -393,10 +399,15 @@ export const TEXTS = {
     setMyShortDescription: 'Короткое описание',
   } satisfies Record<BotProfileMethod, string>,
   botProfilePublished: 'опубликовано',
-  botProfileFailed: (name: string, code?: string, telegramErrorCode?: number) =>
-    `ошибка — ${name}${code === undefined ? '' : ` (${code})`}${
-      telegramErrorCode === undefined ? '' : `, Telegram ${telegramErrorCode}`
-    }`,
+  botProfileFailed: (
+    name: string,
+    code?: string,
+    telegramErrorCode?: number,
+    language?: BotLanguage,
+  ) =>
+    `ошибка${language === undefined ? '' : ` (${language})`} — ${name}${
+      code === undefined ? '' : ` (${code})`
+    }${telegramErrorCode === undefined ? '' : `, Telegram ${telegramErrorCode}`}`,
   botProfilePublishFailedHint:
     'Текст сохранён, но Telegram не принял публикацию. После восстановления нажмите «Опубликовать заново».',
   botProfileRepublish: 'Опубликовать заново',

@@ -23,6 +23,8 @@ import {
   TradingSessionStopReason,
   TRADING_SIGNAL_BUDGET_MS,
   UserErrorCode,
+  LANGUAGE_CALLBACK_DATA,
+  languageSetCallbackData,
   UserStatus,
   decimalStringSchema,
   type TradingAccessResponse,
@@ -43,6 +45,7 @@ import {
   TRACKED_SESSIONS_MAX,
   demoAnalysisCallbackData,
   sessionStopCallbackData,
+  BotLanguage,
 } from '@binarius/shared';
 import {
   composeDurationMs,
@@ -127,12 +130,15 @@ import {
   stubSessionResumer,
   stubSessionTracker,
   stubTracker,
+  userLanguagesWith,
 } from './testing';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   GRAMMY_POLLING_BACKOFF_MS,
+  HANDLER_BUDGET_MS,
   HANDLER_CALLS,
+  LANGUAGE_READ_TIMEOUT_MS,
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_DRAIN_MS,
   INTENT_TRACK_FIRST_POLL_MS,
@@ -182,6 +188,7 @@ interface Branch {
   emailLogin?: BackendClient['emailLogin'];
   recordChatMember?: BackendClient['recordChatMember'];
   setNotificationLevel?: BackendClient['setNotificationLevel'];
+  setLanguage?: BackendClient['setLanguage'];
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
   readSignals?: BackendClient['readSignals'];
@@ -349,6 +356,15 @@ async function observe(branch: Branch): Promise<Calls> {
         (() => Promise.resolve({ level, demoStake: null, realStake: null }))
       )(telegramUserId, level);
     },
+    // the cache below holds USER, so a cold read here is a call the budget would have to count
+    readLanguage: () => {
+      backend += 1;
+      return Promise.resolve(BotLanguage.Ru);
+    },
+    setLanguage: (telegramUserId, language) => {
+      backend += 1;
+      return (branch.setLanguage ?? (() => Promise.resolve(language)))(telegramUserId, language);
+    },
     readTradingAccess: (telegramUserId) => {
       backend += 1;
       return (branch.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)))(telegramUserId);
@@ -473,6 +489,9 @@ async function observe(branch: Branch): Promise<Calls> {
     logger: fakeLogger(),
     botInfo: BOT_INFO,
     loginDialog,
+    // the language read before the handler is bounded by its own constant (#508, timing.ts), not
+    // by HANDLER_CALLS: the user's language is already known here
+    languages: userLanguagesWith(),
     ...(branch.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: branch.welcomeVideoFileId }),
@@ -3148,6 +3167,66 @@ const LEVEL_CURRENT_WORST_CASE: Branch = {
   expected: { backend: 0, telegram: 1 },
 };
 
+// the language screen (#508): USER is cached as Russian, so `lang:en` is a change
+const LANGUAGE_SET_UPDATE = callbackUpdate(languageSetCallbackData(BotLanguage.En));
+const LANGUAGE_WORST_CASE: Branch = {
+  label: 'the language screen is sent',
+  update: callbackUpdate(LANGUAGE_CALLBACK_DATA),
+  expected: { backend: 0, telegram: 2 },
+};
+const LANGUAGE_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(LANGUAGE_CALLBACK_DATA, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  LANGUAGE_WORST_CASE,
+];
+const LANGUAGE_SET_WORST_CASE: Branch = {
+  label: 'the edit is refused and the screen is sent anew',
+  update: LANGUAGE_SET_UPDATE,
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+const LANGUAGE_SET_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the backend fails',
+    update: LANGUAGE_SET_UPDATE,
+    setLanguage: () =>
+      Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'no users row',
+    update: LANGUAGE_SET_UPDATE,
+    setLanguage: () =>
+      Promise.reject(
+        new BackendError(BackendErrorCode.HttpStatus, {
+          status: 404,
+          reason: UserErrorCode.UserNotFound,
+        }),
+      ),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the screen is redrawn',
+    update: LANGUAGE_SET_UPDATE,
+    expected: { backend: 1, telegram: 2 },
+  },
+  LANGUAGE_SET_WORST_CASE,
+  {
+    label: 'the edit is refused as not modified',
+    update: LANGUAGE_SET_UPDATE,
+    apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+const LANGUAGE_CURRENT_WORST_CASE: Branch = {
+  label: 'the current language is pressed',
+  update: callbackUpdate(languageSetCallbackData(BotLanguage.Ru)),
+  expected: { backend: 0, telegram: 1 },
+};
+
 const SUPPORT_WORST_CASE: Branch = {
   label: 'the support message is sent',
   update: textUpdate('/support'),
@@ -3255,6 +3334,22 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     ['settingsShow', SETTINGS_SHOW],
   ] as const)('the stake picker (#297): %s', async (handler, { branches, worst }) => {
     await checkHandler(handler, branches, worst, HANDLER_CALLS[handler]);
+  });
+
+  it('the language screen (#508)', async () => {
+    await checkHandler('language', LANGUAGE_BRANCHES, LANGUAGE_WORST_CASE, HANDLER_CALLS.language);
+    await checkHandler(
+      'languageSet',
+      LANGUAGE_SET_BRANCHES,
+      LANGUAGE_SET_WORST_CASE,
+      HANDLER_CALLS.languageSet,
+    );
+    await checkHandler(
+      'languageCurrent',
+      [LANGUAGE_CURRENT_WORST_CASE],
+      LANGUAGE_CURRENT_WORST_CASE,
+      HANDLER_CALLS.languageCurrent,
+    );
   });
 
   it('/support', async () => {
@@ -3686,9 +3781,18 @@ describe('the bounds shared with the backend', () => {
   it('answers a pre-checkout query inside Telegram’s deadline', () => {
     expect(STARS_PRECHECKOUT_BUDGET_MS).toBeLessThanOrEqual(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS);
     expect(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
-    expect(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS).toBeLessThan(
-      TELEGRAM_PRECHECKOUT_DEADLINE_MS,
-    );
+    // the user's language is read before the query's handler (#508)
+    expect(
+      LANGUAGE_READ_TIMEOUT_MS +
+        STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS +
+        PRECHECKOUT_ANSWER_RESERVE_MS,
+    ).toBeLessThan(TELEGRAM_PRECHECKOUT_DEADLINE_MS);
+  });
+
+  // #508: the language read is the first thing an update waits for, inside the shutdown budget
+  it('reads a language inside one backend call and an update inside the shutdown budget', () => {
+    expect(LANGUAGE_READ_TIMEOUT_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
+    expect(HANDLER_BUDGET_MS + LANGUAGE_READ_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 
   // the same for POST /trading/sessions (#283): a start inside its budget must not read as an

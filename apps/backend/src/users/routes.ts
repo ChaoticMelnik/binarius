@@ -5,6 +5,8 @@ import {
   userReferralRequestSchema,
   safeParseChatMemberRequest,
   safeParseNotificationLevelRequest,
+  safeParseUserLanguageQuery,
+  safeParseUserLanguageRequest,
   safeParseUserAccountRequest,
   safeParseUserStartRequest,
 } from '@binarius/shared';
@@ -12,9 +14,11 @@ import {
   markTelegramBlocked,
   markTelegramReachable,
   readUserAccounts,
+  readUserLanguage,
   readUserReferral,
   recordUserStart,
   setNotificationLevel,
+  setUserLanguage,
   toUserAccountView,
   toUserStartView,
   type Db,
@@ -100,6 +104,38 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
       'notification level set',
     );
     return reply.send({ level: set.level, demoStake: set.demoStake, realStake: set.realStake });
+  });
+
+  // The user picked a language on the bot's language screen (#508). Like the level, the log line
+  // carries no Telegram id.
+  app.post('/users/language', async (request, reply) => {
+    const parsed = safeParseUserLanguageRequest(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const language = await setUserLanguage(
+      db,
+      BigInt(parsed.data.telegramUserId),
+      parsed.data.language,
+    );
+    if (language === undefined) {
+      return reply.code(404).send({ error: UserErrorCode.UserNotFound });
+    }
+    request.log.info({ botLanguage: language }, 'language set');
+    return reply.send({ language });
+  });
+
+  // The bot's read of a user's language it has not cached (#508, docs/bot-texts.md → Languages).
+  app.get('/users/language', async (request, reply) => {
+    const parsed = safeParseUserLanguageQuery(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const language = await readUserLanguage(db, BigInt(parsed.data.telegramUserId));
+    if (language === undefined) {
+      return reply.code(404).send({ error: UserErrorCode.UserNotFound });
+    }
+    return reply.send({ language });
   });
 
   // What the bot's /account shows; reads only. An unknown user is a 404 of its own code, so the

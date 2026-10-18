@@ -8,6 +8,8 @@ import {
   BrokerRestErrorCode,
   botTextMessageKeys,
   defaultBotTextSource,
+  BotLanguage,
+  enBotTextSource,
   estimateBotTextMessage,
   botTextChangeProblems,
   resolveBotTextOverrides,
@@ -49,6 +51,7 @@ import {
   type TradingSignalResponse,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
+import { runWithLanguage } from './language';
 import { DEMO_DURATIONS_SEC, type DemoDurationSec } from './demo-catalog';
 import {
   brokerBalance,
@@ -674,6 +677,16 @@ describe('the assembled messages, against the real assembly', () => {
   it.each(ASSEMBLED)('M1 estimates $id exactly at its widest inputs', (message) => {
     const real = Math.max(...REAL[message.id]!().map(lengthOf));
     expect(real).toBe(estimateBotTextMessage(message, defaultBotTextSource));
+  });
+
+  // #508: the static English source bounds the English assembly. A bound, not the exact length:
+  // the estimate takes the longest option of each part, and in English the longest /account
+  // header (revoked) never stands above the longest line (pending)
+  it.each(ASSEMBLED)('M1 bounds $id in English', (message) => {
+    const real = runWithLanguage(BotLanguage.En, () =>
+      Math.max(...REAL[message.id]!().map(lengthOf)),
+    );
+    expect(real).toBeLessThanOrEqual(estimateBotTextMessage(message, enBotTextSource));
   });
 
   it.each(ASSEMBLED)('M2 reads exactly the keys of $id', (message) => {

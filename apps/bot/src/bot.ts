@@ -58,6 +58,7 @@ import { createSessionShareComposer } from './session-share';
 import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingModeComposer } from './trading-mode';
+import { createLanguageScreenComposer } from './language-screen';
 import { createSetupCardPhotos } from './setup-card';
 import { createTradingSessionComposer } from './trading-session';
 import { createCycleStakeComposer } from './cycle-stake';
@@ -89,6 +90,12 @@ import {
   type AccountCardInput,
 } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
+import {
+  createUserLanguages,
+  languageMiddleware,
+  rememberingLanguages,
+  type UserLanguages,
+} from './language';
 
 // Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is shared with the backend's
 // pushes (bot-navigation.ts). `oauth` was the site sign-in under the welcome and /account; #314 hid
@@ -135,11 +142,13 @@ export interface CreateBotOptions {
   sessionTracker: Pick<SessionTracker, 'track'>;
   // tracks the sessions again after a restart (#567): handed the session composer's resume
   sessionResumer: Pick<SessionResumer, 'attach'>;
+  // each user's language of the texts (#508, language.ts); a test hands one already holding its user
+  languages?: UserLanguages;
 }
 
 export function createBot({
   token,
-  backend,
+  backend: client,
   logger,
   welcomeVideoFileId,
   cashierUrl,
@@ -152,7 +161,9 @@ export function createBot({
   intentTracker,
   sessionTracker,
   sessionResumer,
+  languages = createUserLanguages(),
 }: CreateBotOptions): Bot {
+  const backend = rememberingLanguages(client, languages);
   const bot = new Bot(token, {
     ...(botInfo === undefined ? {} : { botInfo }),
     client: {
@@ -178,6 +189,10 @@ export function createBot({
       .text(LABELS.resendButton, RESEND_CALLBACK_DATA)
       .row()
       .text(LABELS.changeEmailButton, CONNECT_CALLBACK_DATA);
+
+  // First, before the private-chat filter and every composer: the handlers below and the
+  // composers read their texts in the user's language (#508, language.ts).
+  bot.use(languageMiddleware({ backend, languages, logger }));
 
   // Groups and channels are ignored entirely: this bot only ever talks to one person, and a
   // /start in a group would attribute a whole chat to one member's payload.
@@ -540,6 +555,8 @@ export function createBot({
   privateChats.use(tradingSession.composer);
 
   // the mode screen behind the status card's mode button (#474, docs/trading-mode.md)
+  // «🌐 Язык / Language» on the status card (#508)
+  privateChats.use(createLanguageScreenComposer({ backend, languages, logger }));
   privateChats.use(
     createTradingModeComposer({ backend, logger, connectKeyboard: welcomeKeyboard }),
   );

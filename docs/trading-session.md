@@ -414,8 +414,9 @@ with its broker trade: they never get a card); a row also leaves when its messag
 column cleared by the route above); oldest first (`started_at`, then `id`), at most
 `limit`. `limit` is an int from 1 to `TRACKED_SESSIONS_MAX` (2 000), the ceiling by default; any
 other value is 400 `validation`. 200 `{ sessions: [{ id, telegramUserId, messageId, assetId,
-startedAt }] }` (`trackedSessionsResponseSchema`): `telegramUserId` is the owner's (the chat of the
-message), `assetId` is `settings->>'assetId'` as an int4 or `null` for settings that do not read.
+startedAt, language }] }` (`trackedSessionsResponseSchema`): `telegramUserId` is the owner's (the
+chat of the message), `assetId` is `settings->>'assetId'` as an int4 or `null` for settings that do
+not read, `language` the owner's `users.language` (#508), which the recovered tracker writes in.
 **Not scoped by a user** (Rule 13): an internal list for the bot's recovery, behind the bearer;
 it carries session ids, owners' Telegram ids and message ids, no secrets. A static path, so
 find-my-way picks it before `/:id` whatever the registration order (`session-routes.db.test.ts`
