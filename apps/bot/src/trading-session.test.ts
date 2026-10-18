@@ -283,7 +283,7 @@ describe('the session button', () => {
     ]);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(SESSION_VIEW));
-    expect(sent?.text).toContain('🔹 Торговая пара: EUR/USD OTC');
+    expect(sent?.text).toContain('🔹 Торговая пара: EUR/USD');
     expect(sent?.parse_mode).toBe('HTML');
     // the «⏹» is under the backend's waiting message
     expect(sent).not.toHaveProperty('reply_markup');
@@ -291,7 +291,7 @@ describe('the session button', () => {
     expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
       sessionId: SESSION_ID,
       telegramUserId: String(USER.id),
-      label: 'EUR/USD OTC',
+      label: 'EUR/USD',
       view: SESSION_VIEW,
     });
   });

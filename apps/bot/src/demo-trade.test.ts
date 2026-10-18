@@ -243,7 +243,7 @@ describe('the stake button', () => {
     expect(intentTracker.track.mock.calls[0]?.[0]).toMatchObject({
       intentId: INTENT_ID,
       telegramUserId: String(USER.id),
-      label: 'EUR/USD OTC',
+      label: 'EUR/USD',
       view: INTENT_VIEW,
     });
   });

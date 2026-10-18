@@ -691,7 +691,7 @@ export const stakeButtonLabel = (
     ].join(' · '),
   });
 // a data label, like the confirm button's address: no emoji, the pair's label (pairLabel: the
-// broker's symbol, " OTC" by isOtc, #428), the payout printed as it arrives; no separators, so it
+// broker's symbol without « OTC», #631), the payout printed as it arrives; no separators, so it
 // fits a half-width button (#419)
 export const pairButtonLabel = (label: PairLabel, payout: number): string =>
   `${label} ${String(payout)}%`;

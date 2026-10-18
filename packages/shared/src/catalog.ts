@@ -26,21 +26,21 @@ export const pairViewSchema = z.object({
 });
 export type PairView = z.infer<typeof pairViewSchema>;
 
-// The pair's label on every screen and in the backend's summary (#428): the broker's symbol, then
-// " OTC" by isOtc. The live catalog keeps OTC out of the symbol and lists 22 symbols twice, a
-// regular pair and an OTC one, so the symbol alone cannot tell them apart. The symbol is an
-// unbounded wire string: it is cut before the suffix, so the suffix always survives.
-export const PAIR_SYMBOL_LIMIT = 64;
+// The pair's label on every screen and in the backend's summary (#428, #631): the broker's symbol
+// without « OTC» (owner, 2026-10-17). isOtc is not read: a regular pair and its OTC twin with the
+// same symbol share the label and differ by payout and order. A symbol that ends in the exact
+// suffix loses it once, as symbols did before #428; the symbol is an unbounded wire string, so the
+// label is then cut to PAIR_LABEL_MAX_LENGTH.
 export const PAIR_OTC_SUFFIX = ' OTC';
-export const PAIR_LABEL_MAX_LENGTH = PAIR_SYMBOL_LIMIT + PAIR_OTC_SUFFIX.length;
+export const PAIR_LABEL_MAX_LENGTH = 64;
 declare const pairLabelBrand: unique symbol;
 export type PairLabel = string & { readonly [pairLabelBrand]: true };
 
-export const pairLabel = (pair: { symbol: string; isOtc?: boolean }): PairLabel => {
-  const base = pair.symbol.slice(0, PAIR_SYMBOL_LIMIT);
-  return (
-    pair.isOtc === true && !pair.symbol.endsWith(PAIR_OTC_SUFFIX) ? base + PAIR_OTC_SUFFIX : base
-  ) as PairLabel;
+export const pairLabel = (pair: { symbol: string }): PairLabel => {
+  const base = pair.symbol.endsWith(PAIR_OTC_SUFFIX)
+    ? pair.symbol.slice(0, -PAIR_OTC_SUFFIX.length)
+    : pair.symbol;
+  return base.slice(0, PAIR_LABEL_MAX_LENGTH) as PairLabel;
 };
 
 // The broker's five types and a bucket for any other, in the order the bot lists them. The

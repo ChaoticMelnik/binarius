@@ -152,12 +152,12 @@ describe('sessionCycleText (#551)', () => {
 describe('sessionSummaryText (#464)', () => {
   const lines = (
     closing: SessionClosingView,
-    symbol: PairLabel | null = pairLabel({ symbol: 'EUR/USD', isOtc: true }),
+    symbol: PairLabel | null = pairLabel({ symbol: 'EUR/USD' }),
   ) => session.sessionSummaryText(symbol, 42, closing).value.split('\n');
 
   it('a completed session: the pair, the completion line, the result and the balance', () => {
     expect(lines(view())).toEqual([
-      '📈 EUR/USD OTC',
+      '📈 EUR/USD',
       '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
       '💰 Результат: +$2.50',
       '🧪 Демобаланс: $10\u00a0002.50',

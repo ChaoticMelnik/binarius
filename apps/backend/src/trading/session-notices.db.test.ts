@@ -360,7 +360,7 @@ describe('the session notices (#464)', () => {
       { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
     ]);
     expect(pushedText(summary.payload).split('\n')).toEqual([
-      '📈 EUR/USD OTC',
+      '📈 EUR/USD',
       '🏁 Сессия завершена: 5 циклов, 5 сделок — 2 в плюс, 2 в минус, 1 в ноль',
       '💰 Результат: -$1.15',
       '🧪 Демобаланс: $10 002.50',
@@ -484,7 +484,7 @@ describe('the session notices (#464)', () => {
     expect(texts[1]).toContain('⚡ Цикл 2 Шаг 1\n<pre>🔴');
     expect(texts[2]).toBe(
       [
-        '📈 EUR/USD OTC',
+        '📈 EUR/USD',
         CLIENT_TEXTS.sessionStopManualReview.value,
         '📊 Итог: 2 сделки — 1 в плюс, 1 в минус',
         '💰 Результат: -$0.40',
@@ -1107,7 +1107,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(1);
     expect(sends[0]!.payload.disable_notification).toBeUndefined();
-    expect(pushedText(sends[0]!.payload).split('\n')).toEqual(['📈 EUR/USD OTC', stopLine(15)]);
+    expect(pushedText(sends[0]!.payload).split('\n')).toEqual(['📈 EUR/USD', stopLine(15)]);
     expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig:15'), MENU]);
     expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
     await notices.tick();
@@ -1133,7 +1133,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     expect(sends).toHaveLength(2);
     const summary = sends[1]!;
     expect(pushedText(summary.payload).split('\n').slice(0, 3)).toEqual([
-      '📈 EUR/USD OTC',
+      '📈 EUR/USD',
       stopLine(60),
       '📊 Итог: 1 сделка — 1 в плюс, 0 в минус',
     ]);

@@ -181,10 +181,7 @@ it('runs /start → the email login → a demo session → its result', async ()
   const groups = lastOf(botCalls, 'editMessageText');
   expect(labelsOf(groups)).toEqual([groupButtonLabel('currency', 1)]);
   await bot.press(groupButtonLabel('currency', 1));
-  const pairButton = pairButtonLabel(
-    pairLabel({ symbol: E2E_PAIR.symbol, isOtc: E2E_PAIR.is_otc }),
-    E2E_PAIR.payout,
-  );
+  const pairButton = pairButtonLabel(pairLabel({ symbol: E2E_PAIR.symbol }), E2E_PAIR.payout);
   await bot.press(pairButton);
   await bot.press(DEMO_DURATION_LABELS[15]);
   const screen = botCalls.filter((call) => call.method === 'editMessageText').at(-1);
@@ -338,7 +335,7 @@ it('runs /start → the email login → a demo session → its result', async ()
 
   // S8 the bot: the status message finished, then the summary card
   const cardCaption = TEXTS.sessionCardCaption({
-    symbol: pairLabel({ symbol: E2E_PAIR.symbol, isOtc: E2E_PAIR.is_otc }),
+    symbol: pairLabel({ symbol: E2E_PAIR.symbol }),
     profit: '4.25' as DecimalString,
     botUsername: 'binarius_bot',
   }).value;

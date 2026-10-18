@@ -308,12 +308,7 @@ it('repeats the cycle events: /start, the login texts, the amount press, the pos
   await bot.press(LABELS.demoButton);
   await bot.press(LABELS.demoManualButton);
   await bot.press(groupButtonLabel('currency', 1));
-  await bot.press(
-    pairButtonLabel(
-      pairLabel({ symbol: E2E_PAIR.symbol, isOtc: E2E_PAIR.is_otc }),
-      E2E_PAIR.payout,
-    ),
-  );
+  await bot.press(pairButtonLabel(pairLabel({ symbol: E2E_PAIR.symbol }), E2E_PAIR.payout));
   await bot.press(DEMO_DURATION_LABELS[15]);
   await bot.press(LABELS.demoAnalysisButton);
   const stake = await bot.press(cycleStakeLabel(MIN_STAKE, true));

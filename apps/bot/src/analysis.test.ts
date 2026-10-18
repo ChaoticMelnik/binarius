@@ -163,10 +163,10 @@ describe('the analysis screen', () => {
   // AC 1 (#482)
   it('lays out a signal as a card: the header, the title, the block, the payout, the disclaimer', () => {
     expect(plainTextOf(screenOf(SIGNAL_CARD).text)).toBe(
-      `📊 Анализ: EUR/USD OTC · ⏱ 5 с
+      `📊 Анализ: EUR/USD · ⏱ 5 с
 🟢 Сильный сигнал на рост
 
-Пара          EUR/USD OTC
+Пара          EUR/USD
 RSI           нейтрально 62.3
 MACD          выше сигнальной 0.000023
 MA50          цена выше 1.08531
@@ -179,10 +179,10 @@ MA200         цена ниже 1.08612
 ⚠️ Сигнал — не прогноз результата и не гарантия. Это демо: деньги не нужны.`,
     );
     expect(screenOf(SIGNAL_CARD).text.value).toContain(
-      '<pre>Пара          EUR/USD OTC\nRSI           нейтрально 62.3\n',
+      '<pre>Пара          EUR/USD\nRSI           нейтрально 62.3\n',
     );
     expect(screenOf(SIGNAL_CARD).text.value).toContain('⬆️ ВВЕРХ 🟢</pre>\n💰');
-    // the regular twin of the same symbol (#428): no « OTC»
+    // the regular twin of the same symbol (#428) reads the same (#631)
     const regular = linesOf(SIGNAL_CARD, PAIR_EURUSD_REGULAR);
     expect(regular[0]).toBe('📊 Анализ: EUR/USD · ⏱ 5 с');
     expect(rowOf(regular, 'Пара')).toBe('EUR/USD');

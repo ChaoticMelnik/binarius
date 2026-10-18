@@ -28,7 +28,7 @@ import {
 } from './session-notice-messages';
 
 const d = (value: string) => value as DecimalString;
-const LABEL = pairLabel({ symbol: 'EUR/USD', isOtc: true });
+const LABEL = pairLabel({ symbol: 'EUR/USD' });
 const shared = createSessionTexts(createBotTexts(defaultBotTextSource));
 const { Won: W, Lost: L, Tied: T } = SessionTradeResult;
 
@@ -302,7 +302,7 @@ describe('pairOf', () => {
   const pair = { id: 101, symbol: 'EUR/USD', isOtc: true, digits: 5 } as BinaryPair;
   it('reads the label (#428) and digits of the asset, null for each without it', () => {
     const catalog = { pairs: [pair], fetchedAt: 0, ageMs: 0, fresh: false };
-    expect(pairOf(catalog, 101)).toEqual({ label: 'EUR/USD OTC', digits: 5 });
+    expect(pairOf(catalog, 101)).toEqual({ label: 'EUR/USD', digits: 5 });
     expect(pairOf(catalog, 7)).toEqual({ label: null, digits: null });
     expect(pairOf(undefined, 101)).toEqual({ label: null, digits: null });
   });

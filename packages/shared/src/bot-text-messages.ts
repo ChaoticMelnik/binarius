@@ -60,7 +60,7 @@ export const BOT_TEXT_WIDTHS = {
   ageNumber: 6,
   // MODE_LABELS: DEMO, REAL
   mode: 4,
-  // the pair's label (pairLabel): the symbol cut to PAIR_SYMBOL_LIMIT, then " OTC"
+  // the pair's label (pairLabel): the symbol without « OTC», cut to PAIR_LABEL_MAX_LENGTH
   symbol: PAIR_LABEL_MAX_LENGTH,
   payout: 6,
   // formatBreakEven: 0.0-100.0, or a dash

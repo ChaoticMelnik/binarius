@@ -301,8 +301,8 @@ describe('the signals screen', () => {
   );
   const ROWS = [
     [
-      button('EUR/USD OTC ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
-      button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15)),
+      button('EUR/USD ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+      button('BTC/USD ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15)),
     ],
     [button('US10Y ⬇️ 70%', demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 15))],
     ...listFooter(15),
@@ -553,12 +553,8 @@ describe('the signals screen', () => {
   });
 
   it('labels a pair by its symbol, the arrow of the direction and the payout', () => {
-    expect(signalButtonLabel(pairLabel(PAIR_EURUSD), TradeAction.Up, 85)).toBe(
-      'EUR/USD OTC ⬆️ 85%',
-    );
-    expect(signalButtonLabel(pairLabel(PAIR_EURUSD), TradeAction.Down, 85)).toBe(
-      'EUR/USD OTC ⬇️ 85%',
-    );
+    expect(signalButtonLabel(pairLabel(PAIR_EURUSD), TradeAction.Up, 85)).toBe('EUR/USD ⬆️ 85%');
+    expect(signalButtonLabel(pairLabel(PAIR_EURUSD), TradeAction.Down, 85)).toBe('EUR/USD ⬇️ 85%');
   });
 
   // a pair with a signal on one interval only appears on that duration's list; a pair that
@@ -587,7 +583,7 @@ describe('the signals screen', () => {
       const edited = payloadOf(calls, 'editMessageText');
       expect(edited?.text).toBe(TEXTS.demoSignalsHeader({ label: '⏱ 5 с' }).value);
       expect(rowsOf(edited)).toEqual([
-        [button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
+        [button('BTC/USD ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
         ...listFooter(5),
       ]);
     });
@@ -610,7 +606,7 @@ describe('the signals screen', () => {
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
         [
-          button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5)),
+          button('BTC/USD ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5)),
           button('US10Y ⬇️ 70%', demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 5)),
         ],
         ...listFooter(5),
@@ -626,8 +622,8 @@ describe('the signals screen', () => {
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
         [
-          button('EUR/USD OTC ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
-          button('NZD/USD OTC ⬇️ 83%', demoLaunchCallbackData(PAIR_15S_ONLY.id, 15)),
+          button('EUR/USD ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+          button('NZD/USD ⬇️ 83%', demoLaunchCallbackData(PAIR_15S_ONLY.id, 15)),
         ],
         ...listFooter(15),
       ]);
@@ -843,7 +839,7 @@ describe('the amount screen (#476)', () => {
         button(LABELS.backToListButton, 'demo:sig:5'),
       ],
     ]);
-    expect(edited?.text).toContain('EUR/USD OTC · ⏱ 5 с');
+    expect(edited?.text).toContain('EUR/USD · ⏱ 5 с');
   });
 
   it('marks the broker minimum when no demo stake is saved (D-null)', async () => {
@@ -1329,13 +1325,14 @@ describe('the types and their pages', () => {
     ]);
   });
 
-  // #428: the live catalog lists a symbol twice, a regular pair and an OTC one
-  it('labels the OTC twin by its flag and lists the regular pair right before it', async () => {
-    const { press, calls } = setup({ readPairs: catalogOf(PAIR_EURUSD, PAIR_EURUSD_REGULAR) });
+  // #428: the live catalog lists a symbol twice, a regular pair and an OTC one; #631: the twins
+  // share the label, so they go by id and differ by payout
+  it('labels the OTC twin as its regular pair and lists them by id', async () => {
+    const { press, calls } = setup({ readPairs: catalogOf(PAIR_EURUSD_REGULAR, PAIR_EURUSD) });
     await press(demoPageCallbackData('currency', 0));
     expect(rowsOf(payloadOf(calls, 'editMessageText'))[0]).toEqual([
+      button('EUR/USD 85%', demoAssetCallbackData(PAIR_EURUSD.id)),
       button('EUR/USD 54%', demoAssetCallbackData(PAIR_EURUSD_REGULAR.id)),
-      button('EUR/USD OTC 85%', demoAssetCallbackData(PAIR_EURUSD.id)),
     ]);
   });
 
@@ -1384,7 +1381,7 @@ describe('a pair and its durations', () => {
     const { press, calls } = setup({ readPairs: catalogOf(...MANY, narrow) });
     await press(demoAssetCallbackData(narrow.id));
 
-    // «ZAR/USD OTC» sorts after P00 … P24, so it is the second item of page 2
+    // «ZAR/USD» sorts after P00 … P24, so it is the second item of page 2
     expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
       [button('⏱ 15 с', demoDurationCallbackData(101, 15))],
       [button(LABELS.demoBackPairsButton, demoPageCallbackData('currency', 2)), BACK_GROUPS],
@@ -1559,7 +1556,7 @@ describe('the analysis', () => {
       'deleteMessage',
     ]);
     const [waiting] = edits(calls);
-    expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 5 с' }).value);
+    expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value);
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
     expect(waiting?.payload.reply_markup).toBeUndefined();
     const card = cardOf(calls);
@@ -2007,7 +2004,7 @@ describe('the analysis', () => {
     expect(
       calls.some(
         (call) =>
-          call.payload.text === TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 5 с' }).value &&
+          call.payload.text === TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value &&
           call.method === 'sendMessage',
       ),
     ).toBe(false);
@@ -2676,7 +2673,7 @@ describe('a press under the session card (a photo)', () => {
     ]);
     expect(evaluateSignal).toHaveBeenCalledTimes(1);
     const waiting = payloadOf(calls, 'sendMessage');
-    expect(waiting?.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 15 с' }).value);
+    expect(waiting?.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 15 с' }).value);
     expect(waiting?.reply_markup).toBeUndefined();
     const card = payloadOf(calls, 'sendPhoto');
     expect(card?.caption).toBe(

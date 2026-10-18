@@ -28,7 +28,7 @@ import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 // lines are the bot's status message's own. Built when sent, so an override reaches them.
 const notices = createSessionTexts({ html: CLIENT_TEXTS, plain: CLIENT_LABELS });
 
-// the pair's label (pairLabel, #428) and digits from the catalog the routes read; null each when
+// the pair's label (pairLabel, #428, #631) and digits from the catalog the routes read; null each when
 // it cannot say
 export function pairOf(
   catalog: PairsCatalogView | undefined,

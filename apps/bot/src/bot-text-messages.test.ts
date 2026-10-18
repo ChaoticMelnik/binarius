@@ -296,7 +296,7 @@ const sessionTexts = (
   status: TradingSessionStatus,
   stopReasons: (TradingSessionStopReason | null)[],
 ): TelegramHtml[] =>
-  [pairLabel({ symbol: x(W.symbol + 10), isOtc: true }), null].flatMap((symbol) =>
+  [pairLabel({ symbol: x(W.symbol + 10) }), null].flatMap((symbol) =>
     [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>
       stopReasons.flatMap((stopReason) =>
         [0, 1, 2, N].flatMap((settled) =>
@@ -400,7 +400,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       ),
     ),
   intentStatus: () =>
-    [pairLabel({ symbol: x(W.symbol + 10), isOtc: true }), null].flatMap((symbol) =>
+    [pairLabel({ symbol: x(W.symbol + 10) }), null].flatMap((symbol) =>
       [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>
         Object.values(TradeAction).flatMap((action) =>
           intentViews.flatMap((view) =>
@@ -483,7 +483,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   // the finished session's summary, sent by the backend through the same builder (#464)
   sessionSummary: () =>
-    [pairLabel({ symbol: x(W.symbol + 10), isOtc: true }), null].flatMap((symbol) =>
+    [pairLabel({ symbol: x(W.symbol + 10) }), null].flatMap((symbol) =>
       [TradingSessionStopReason.Completed, ...STOP_REASONS].flatMap((stopReason) =>
         Object.values(TradeMode).flatMap((mode) =>
           SESSION_BALANCES.flatMap((balance) =>
