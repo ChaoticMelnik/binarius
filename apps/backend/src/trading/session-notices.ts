@@ -29,7 +29,7 @@ import {
 import type { PairsCatalog } from '@binarius/broker-rest';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
-import { createSendPacer } from '../mailing/engine';
+import { createSendPacer, sendFailureOf } from '../mailing/engine';
 import {
   SESSION_NOTICE_MAX_ATTEMPTS,
   SESSION_NOTICE_SCAN,
@@ -59,8 +59,9 @@ import { readFinishedSessionView } from './session-view';
 // route then hands it to the bot, which draws its reply in place of it (#587), and the summary
 // follows with no delete. The sender re-reads the waiting message's id right before each delete,
 // so a message the stop route took over is not deleted (#587 round 1; the call in flight: docs
-// risk 82). The bot's restart and a backend restart send nothing twice: the cursor,
-// the cycle message and the waiting message are in trading_sessions.
+// risk 82). A restart of the bot or the backend repeats no send by a retry: the cursor, the cycle
+// message and the waiting message are in trading_sessions; a block can show twice only by the
+// endings docs risk 35 names (a new message whose outcome was unknown, a second sender).
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -101,21 +102,6 @@ export interface SessionNoticeSender {
   // Ends the loop and waits for the tick in flight: no claim and no summary's balance read starts
   // after it; the call in flight completes or times out (timing.ts).
   stop(): Promise<void>;
-}
-
-// What a send's failure means: Telegram refused it for good to this user (403), asked to wait
-// (429, not delivered), refused this message (another 4xx, not delivered), or left the outcome
-// unknown (5xx, a timeout, the transport): it may have been delivered.
-type Failure =
-  { kind: 'forbidden' } | { kind: 'wait'; ms: number } | { kind: 'refused' } | { kind: 'unknown' };
-
-function failureOf(error: unknown): Failure {
-  if (!(error instanceof GrammyError) || error.error_code >= 500) return { kind: 'unknown' };
-  if (error.error_code === 403) return { kind: 'forbidden' };
-  if (error.error_code === 429) {
-    return { kind: 'wait', ms: (error.parameters.retry_after ?? 1) * 1000 };
-  }
-  return { kind: 'refused' };
 }
 
 // how a trade's turn ended for the session: on to its next trade, skip the session this tick, or
@@ -179,6 +165,17 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, claimed };
     const key = `${session.sessionId}:${claimed}`;
+    const tradeFailure = {
+      session,
+      label: 'session trade notice',
+      key,
+      fields,
+      release: () => releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed }),
+      afterForbidden: () => {
+        session.telegramBlocked = true;
+        return Promise.resolve();
+      },
+    } as const;
     if (!session.telegramBlocked) await pace();
     // after the pace, so a stop during its sleep claims nothing more
     if (stopped) return 'skip';
@@ -226,7 +223,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       try {
         messageId = await push.sendSessionTrade(session.telegramUserId, text);
       } catch (error) {
-        return failed(session, claimed, error, 'sendMessage');
+        return sendFailed({ ...tradeFailure, method: 'sendMessage', error });
       }
       attempts.delete(key);
       if (!Number.isInteger(messageId) || messageId <= 0) {
@@ -267,55 +264,65 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       if (refusal === 'gone') {
         // deleted by the user or no longer editable: the same blocks in a new message, now
         logger.warn(
-          { ...fields, ...telegramErrorFields(error, 'editMessageText') },
+          { ...fields, ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageText') },
           'session trade notice edited anew: the cycle message is gone',
         );
         await pace();
         return sendNew(notice.text, notice.from);
       }
-      return failed(session, claimed, error, 'editMessageText');
+      return sendFailed({ ...tradeFailure, method: 'editMessageText', error });
     }
   }
 
-  // How a trade's send or edit that failed ends: Telegram refused it for good to this user (403),
-  // asked to wait (429) or refused this call (another 4xx), each certainly not shown; or the
-  // outcome is unknown, and the trade stays claimed.
-  async function failed(
-    session: PendingSessionNotice,
-    claimed: number,
-    error: unknown,
-    method: 'sendMessage' | 'editMessageText',
-  ): Promise<Step> {
-    const failure = failureOf(error);
-    const logged = {
-      sessionId: session.sessionId,
-      claimed,
-      ...errorLogFields(error),
-      ...telegramErrorFields(error, method),
-    };
+  // How a failed send ends, as docs → Every way a send ends has it for a trade's message or
+  // edit, the summary and the waiting message: 403 - the user marked unreachable, then the
+  // caller's own bookkeeping (a released slot, the blocked flag), the send counting as done;
+  // 429 - put back and the whole sender paused; another 4xx - put back and tried again on a
+  // later tick, left as sent at maxAttempts; unknown - left as the claim wrote it.
+  async function sendFailed({
+    session,
+    label,
+    key,
+    method,
+    fields,
+    error,
+    release,
+    afterForbidden,
+  }: {
+    session: PendingSessionNotice;
+    label: 'session trade notice' | 'session summary' | 'session waiting message';
+    key: string;
+    method: 'sendMessage' | 'editMessageText';
+    fields: Record<string, unknown>;
+    error: unknown;
+    release: () => Promise<unknown>;
+    afterForbidden?: () => Promise<void>;
+  }): Promise<Step> {
+    const failure = sendFailureOf(error);
+    const logged = { ...fields, ...errorLogFields(error), ...telegramErrorFields(error, method) };
     switch (failure.kind) {
       case 'forbidden':
-        logger.warn(logged, 'session trade notice refused: the user is unreachable');
+        logger.warn(logged, `${label} refused: the user is unreachable`);
         await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
-        session.telegramBlocked = true;
+        await afterForbidden?.();
         return 'next';
       case 'wait':
-        await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
+        await release();
         return pauseFor(failure.ms);
       case 'refused':
-        if (mayRetry(`${session.sessionId}:${claimed}`)) {
-          logger.warn(logged, 'session trade notice refused');
-          await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
+        if (mayRetry(key)) {
+          logger.warn(logged, `${label} refused`);
+          await release();
           return 'skip';
         }
-        logger.warn(logged, 'session trade notice dropped');
+        logger.warn(logged, `${label} dropped`);
         return 'next';
       case 'unknown':
         logger.warn(
           logged,
           method === 'editMessageText'
-            ? 'session trade notice edit outcome unknown'
-            : 'session trade notice outcome unknown',
+            ? `${label} edit outcome unknown`
+            : `${label} outcome unknown`,
         );
         return 'next';
     }
@@ -375,7 +382,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         logger.warn(logged, 'session waiting message not deleted');
         return clear();
       }
-      const failure = failureOf(error);
+      const failure = sendFailureOf(error);
       switch (failure.kind) {
         case 'forbidden':
           logger.warn(logged, 'session waiting message refused: the user is unreachable');
@@ -431,36 +438,23 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         sessionWaitingMessage(session.sessionId),
       );
     } catch (error) {
-      const failure = failureOf(error);
-      const logged = {
-        ...fields,
-        ...errorLogFields(error),
-        ...telegramErrorFields(error, 'sendMessage'),
-      };
-      switch (failure.kind) {
-        case 'forbidden':
-          // certainly not delivered: the slot is freed, due again once the user is reachable
-          logger.warn(logged, 'session waiting message refused: the user is unreachable');
-          await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
-          await releaseSessionWaiting(db, { sessionId: session.sessionId, slot: claim.slot });
+      // 403: certainly not delivered, the slot is freed, due again once the user is reachable;
+      // unknown: it may have been delivered, the slot stays claimed, never a second one on it
+      const release = () =>
+        releaseSessionWaiting(db, { sessionId: session.sessionId, slot: claim.slot });
+      return sendFailed({
+        session,
+        label: 'session waiting message',
+        key,
+        method: 'sendMessage',
+        fields,
+        error,
+        release,
+        afterForbidden: async () => {
+          await release();
           session.telegramBlocked = true;
-          return 'next';
-        case 'wait':
-          await releaseSessionWaiting(db, { sessionId: session.sessionId, slot: claim.slot });
-          return pauseFor(failure.ms);
-        case 'refused':
-          if (mayRetry(key)) {
-            logger.warn(logged, 'session waiting message refused');
-            await releaseSessionWaiting(db, { sessionId: session.sessionId, slot: claim.slot });
-            return 'skip';
-          }
-          logger.warn(logged, 'session waiting message dropped');
-          return 'next';
-        case 'unknown':
-          // it may have been delivered: the slot stays claimed, never a second one on it
-          logger.warn(logged, 'session waiting message outcome unknown');
-          return 'next';
-      }
+        },
+      });
     }
     attempts.delete(key);
     if (!Number.isInteger(messageId) || messageId <= 0) {
@@ -490,6 +484,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     // a summary does not start after stop(): its view reads the balance (up to
     // TRADING_ACCESS_REFRESH_BUDGET_MS), which would add to the step in flight (timing.ts)
     if (stopped) return 'skip';
+    // nothing can be delivered (Rule 19): the mark alone - no view read, no balance GET (#620)
+    if (session.telegramBlocked) {
+      await claimSessionFinalNotice(db, { sessionId: session.sessionId });
+      return 'next';
+    }
     const fields = { sessionId: session.sessionId };
     const telegramUserId = String(session.telegramUserId);
     const view = await readFinishedSessionView({ db, balance }, session.sessionId, telegramUserId);
@@ -509,41 +508,23 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       logger.error({ ...fields, ...errorLogFields(error) }, 'session summary not built');
       return 'skip';
     }
-    if (!session.telegramBlocked) await pace();
+    await pace();
     if (stopped) return 'skip';
     if (!(await claimSessionFinalNotice(db, { sessionId: session.sessionId }))) return 'skip';
-    if (session.telegramBlocked) return 'next';
     try {
       await push.sendSessionSummary(session.telegramUserId, message);
       attempts.delete(`${session.sessionId}:summary`);
       return 'next';
     } catch (error) {
-      const failure = failureOf(error);
-      const logged = {
-        ...fields,
-        ...errorLogFields(error),
-        ...telegramErrorFields(error, 'sendMessage'),
-      };
-      switch (failure.kind) {
-        case 'forbidden':
-          logger.warn(logged, 'session summary refused: the user is unreachable');
-          await recordTelegramSendFailure({ db, log: logger }, session.telegramUserId, error);
-          return 'next';
-        case 'wait':
-          await releaseSessionFinalNotice(db, { sessionId: session.sessionId });
-          return pauseFor(failure.ms);
-        case 'refused':
-          if (mayRetry(`${session.sessionId}:summary`)) {
-            logger.warn(logged, 'session summary refused');
-            await releaseSessionFinalNotice(db, { sessionId: session.sessionId });
-            return 'skip';
-          }
-          logger.warn(logged, 'session summary dropped');
-          return 'next';
-        case 'unknown':
-          logger.warn(logged, 'session summary outcome unknown');
-          return 'next';
-      }
+      return sendFailed({
+        session,
+        label: 'session summary',
+        key: `${session.sessionId}:summary`,
+        method: 'sendMessage',
+        fields,
+        error,
+        release: () => releaseSessionFinalNotice(db, { sessionId: session.sessionId }),
+      });
     }
   }
 

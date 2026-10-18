@@ -98,6 +98,22 @@ const lastErrorOf = (error: unknown): string => {
   return code === undefined ? name : `${name}:${code}`;
 };
 
+// What Telegram's answer to a failed send means, for the mailing engine and the session notices
+// (#620): refused for good to this user (403), asked to wait (429, not delivered), refused this
+// call (another 4xx, not delivered), or unknown (5xx, a timeout, the transport: it may have been
+// delivered).
+export type SendFailure =
+  { kind: 'forbidden' } | { kind: 'wait'; ms: number } | { kind: 'refused' } | { kind: 'unknown' };
+
+export function sendFailureOf(error: unknown): SendFailure {
+  if (!(error instanceof GrammyError) || error.error_code >= 500) return { kind: 'unknown' };
+  if (error.error_code === 403) return { kind: 'forbidden' };
+  if (error.error_code === 429) {
+    return { kind: 'wait', ms: (error.parameters.retry_after ?? 1) * 1000 };
+  }
+  return { kind: 'refused' };
+}
+
 export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   const { db, push, logger } = deps;
   const config = { ...DEFAULT_MAILING_CONFIG, ...deps.config };
@@ -132,14 +148,17 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   // left as the claim wrote it, `sent` with an unknown outcome: it may have been delivered. A 5xx
   // is the same: Telegram may have delivered the message before it failed to answer.
   function outcomeOf(error: unknown): MailingOutcome | undefined {
-    if (!(error instanceof GrammyError)) return undefined;
-    if (error.error_code >= 500) return undefined;
-    const lastError = lastErrorOf(error);
-    if (error.error_code === 403) return { kind: 'refused', lastError };
-    if (error.error_code === 429) {
-      return { kind: 'deferred', lastError, afterMs: (error.parameters.retry_after ?? 1) * 1000 };
+    const failure = sendFailureOf(error);
+    switch (failure.kind) {
+      case 'unknown':
+        return undefined;
+      case 'forbidden':
+        return { kind: 'refused', lastError: lastErrorOf(error) };
+      case 'wait':
+        return { kind: 'deferred', lastError: lastErrorOf(error), afterMs: failure.ms };
+      case 'refused':
+        return retryOutcome(error);
     }
-    return retryOutcome(error);
   }
 
   // A settle that fails leaves the job as the claim wrote it, `sent` with an unknown outcome, so
