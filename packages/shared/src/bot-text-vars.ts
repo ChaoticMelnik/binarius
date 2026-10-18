@@ -215,6 +215,11 @@ export const BOT_TEXT_VARS = {
     sample: '50',
     format: (count: string) => formatCount(count),
   }),
+  nudgeTokens: variable({
+    description: 'Порог баланса напоминания о токенах',
+    sample: '50',
+    format: (count: string) => formatCount(count),
+  }),
 } as const;
 
 export type BotTextVars = typeof BOT_TEXT_VARS;

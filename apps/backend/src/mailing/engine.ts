@@ -51,6 +51,9 @@ export interface MailingEngineDeps {
   push: Pick<ClientPush, 'sendMailing'>;
   logger: FastifyBaseLogger;
   config?: Partial<MailingConfig>;
+  // the cashier's Mini App URL for the low-token nudges' «💳 Пополнить» (#123): cashierUrlOf of
+  // WEB_PUBLIC_URL, undefined without https. Required, so no caller leaves it out by accident.
+  cashierUrl: string | undefined;
   // the tests' clock and sleep; the engine's own pacing and pause read only these. The clock is
   // monotonic (performance.now by default): a wall-clock step neither stretches nor cuts a gap or
   // Telegram's pause
@@ -157,7 +160,10 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   async function deliver(job: ClaimedMailingJob): Promise<MailingOutcome | undefined> {
     let message: ClientPushMessage;
     try {
-      message = mailingMessage(job.kind, job.payload);
+      message = mailingMessage(job.kind, job.payload, {
+        cashierUrl: deps.cashierUrl,
+        tradingMode: job.tradingMode,
+      });
     } catch (error) {
       logger.error(
         { jobId: job.id, kind: job.kind, ...errorLogFields(error) },

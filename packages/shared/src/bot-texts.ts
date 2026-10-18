@@ -1906,6 +1906,38 @@ export const BOT_TEXT_CATALOG = {
 👇 Нажми «{inviteMoreButton}», чтобы пригласить ещё.`,
     { vars: ['rewardTokens'], fragments: { inviteMoreButton: 'inviteMoreButton' } },
   ),
+  // The low-token nudge (#123, docs/mailing.md → The low-token nudge): the balance against the
+  // user's own starter pack, the threshold's balance in {nudgeTokens}. 50 %: the entry button
+  // («demoButton», «tradeButton» in real mode), so the text does not name it; 80 % and 100 %: the
+  // cashier («depositButton», or the entry without https) and «buyButton» under it. No promise of
+  // tokens for a deposit (#386).
+  tokensHalfUsed: html(
+    g.Mailing,
+    'Напоминание, когда на балансе осталось не больше половины стартового пакета токенов (для пакета 100 — 50 токенов); один раз, с кнопкой входа в торговлю.',
+    `🪙 <b>Баланс токенов уменьшился</b>
+
+Токенов на балансе: не больше {nudgeTokens}. Один токен — одна сделка автоторговли.
+👇 Нажми кнопку ниже, чтобы продолжить.`,
+    { vars: ['nudgeTokens'] },
+  ),
+  tokensLow: html(
+    g.Mailing,
+    'Напоминание, когда на балансе осталось не больше 20 % стартового пакета токенов (для пакета 100 — 20 токенов); один раз, с кнопками кассы и покупки токенов.',
+    `⏳ <b>Токенов на балансе мало</b>
+
+Токенов на балансе: не больше {nudgeTokens}. Один токен — одна сделка автоторговли.
+👇 «{buyButton}» — пакеты токенов.`,
+    { vars: ['nudgeTokens'], fragments: { buyButton: 'buyButton' } },
+  ),
+  tokensOut: html(
+    g.Mailing,
+    'Напоминание, когда токенов на балансе не осталось; один раз, с кнопками кассы и покупки токенов.',
+    `🔋 <b>На балансе нет токенов</b>
+
+Каждой сделке автоторговли нужен один токен.
+👇 «{buyButton}» — пакеты токенов.`,
+    { vars: ['nudgeTokens'], fragments: { buyButton: 'buyButton' } },
+  ),
   // a label of the backend's message only, so in this group and not in «Кнопки» (#576)
   inviteMoreButton: plain(
     g.Mailing,
@@ -2061,7 +2093,7 @@ export const BOT_TEXT_CATALOG = {
 
   tradeButton: plain(
     g.Buttons,
-    'Карточка статуса в реальном режиме: вход в торговлю, как «Демо-торговля».',
+    'Карточка статуса и напоминание о токенах (#123) в реальном режиме: вход в торговлю, как «Демо-торговля».',
     '🚀 Торговать',
   ),
   modeButton: plain(
@@ -2102,12 +2134,12 @@ export const BOT_TEXT_CATALOG = {
   ),
   buyButton: plain(
     g.Buttons,
-    'Карточка статуса и отказ «не хватает токенов»: экран покупки токенов.',
+    'Карточка статуса, отказ «не хватает токенов» и напоминания 80 % и 100 % о токенах (#123): экран покупки токенов.',
     '⭐ Купить токены',
   ),
   depositButton: plain(
     g.Buttons,
-    'Карточка статуса, отказ «не хватает токенов», конец сессии: касса пополнения (Mini App).',
+    'Карточка статуса, отказ «не хватает токенов», конец сессии и напоминания 80 % и 100 % о токенах (#123): касса пополнения (Mini App).',
     '💳 Пополнить',
   ),
   sessionShareButton: plain(

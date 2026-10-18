@@ -5,6 +5,7 @@ import {
   BOT_TEXTS_REFRESH_MS,
   BROKER_RATE_LIMIT_PER_MINUTE,
   brokerGetsPerMinute,
+  cashierUrlOf,
   closeAll,
   createBotTextRefresher,
   errorLogFields,
@@ -330,9 +331,14 @@ const app = buildApp({
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
-// docs/mailing.md: the first-session reminders (#202); started with the other loops after
+// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123); started with the other loops after
 // listen(), stopped in phase 1
-const mailing = createMailingEngine({ db, push: clientPush, logger: app.log });
+const mailing = createMailingEngine({
+  db,
+  push: clientPush,
+  logger: app.log,
+  cashierUrl: cashierUrlOf(env.webPublicUrl),
+});
 
 // docs/stars.md → Reconciliation (#117): credits a Stars payment whose successful_payment the bot
 // lost; the public bot's token, read-only on Telegram's side (getStarTransactions), and pushes

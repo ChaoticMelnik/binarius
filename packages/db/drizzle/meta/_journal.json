@@ -463,6 +463,20 @@
       "when": 1792275038031,
       "tag": "0065_referral_rewarded_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1792312529956,
+      "tag": "0066_tokens_nudge_kinds",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1792312540565,
+      "tag": "0067_tokens_nudge_kinds_seed",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@ import {
   ANALYSIS_UNUSED_UNTIL_MS,
   REFERRAL_REWARDED_AFTER_MS,
   MAILING_MIN_OFFSET_MS,
+  TOKEN_NUDGE_AFTER_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
@@ -403,6 +404,8 @@ describe('broker balance timing', () => {
     // #576: the reward notification is due at the reward and not counted in the earliest offset,
     // so its delay is the two ticks (≤ 65 s)
     expect(REFERRAL_REWARDED_AFTER_MS).toBe(0);
+    // #123: the low-token nudges likewise
+    expect(TOKEN_NUDGE_AFTER_MS).toBe(0);
     expect(MAILING_MIN_OFFSET_MS).toBeGreaterThan(0);
     expect(MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBe(65_000);
     // #464: the session notices share the bot's rate with the mailings; stop() waits for the gap,
