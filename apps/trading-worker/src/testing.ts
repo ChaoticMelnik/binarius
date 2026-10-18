@@ -2,7 +2,7 @@
 // runtime module. One copy, so a new WorkerTuning field reaches every composition a test builds.
 
 import type { MockBroker } from '@binarius/mock-broker';
-import { SESSION_MAX_DURATION_MS, SESSION_NO_SIGNAL_TIMEOUT_MS } from '@binarius/shared';
+import { SESSION_MAX_DURATION_MS, SESSION_NO_SIGNAL_CANDLES } from '@binarius/shared';
 import type { WorkerTuning } from './worker';
 
 // production's order and chains, with the waits a test can afford; the lease itself keeps
@@ -37,7 +37,7 @@ export const TEST_WORKER_TUNING: Partial<WorkerTuning> = {
     retryMs: 1_000,
     candleSlackMs: 0,
     maxDurationMs: SESSION_MAX_DURATION_MS,
-    noSignalTimeoutMs: SESSION_NO_SIGNAL_TIMEOUT_MS,
+    noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
   },
   // above the longest submit a test holds (handoff H3): the sweeper never overtakes a call still
   // in flight

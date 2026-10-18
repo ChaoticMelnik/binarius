@@ -5,6 +5,7 @@ import {
   createCachedSignalFeed,
   createSignalFeed,
   replaySignalJournalEntry,
+  type CandleWindow,
   type SignalEvaluation,
   type SignalJournalEntry,
 } from '@binarius/signal';
@@ -23,6 +24,7 @@ import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
+import { createScanPacer } from '../signal/pacer';
 import type { SignalRoutesDeps } from './signal-routes';
 import {
   fakeCatalog,
@@ -74,7 +76,7 @@ const decidedEvaluation: SignalEvaluation = {
   entry: {
     ...facts,
     digits: 5,
-    fetch: { startTime: facts.startTime, limit: 60, rows: 60, durationMs: 12 },
+    source: { kind: 'rest', startTime: facts.startTime, limit: 60, rows: 60, durationMs: 12 },
     version: SIGNAL_ALGORITHM_VERSION,
     params: DEFAULT_SIGNAL_PARAMS,
     series: [[B, 1.1, 1.2, 1.0, 1.15]],
@@ -292,6 +294,106 @@ describe('POST /trading/signal', () => {
     expect(parsedLines().filter((line) => line.msg === 'signal fetch failed')).toHaveLength(1);
     expect(broker.rest.journal.filter((entry) => entry.endpoint === 'chart')).toHaveLength(2);
   });
+
+  // #405: the scanner's decision from the source writes no line; the route's first answer of it does
+  it('R16 a scanned decision is journalled once, when POST /trading/signal answers it', async () => {
+    const I15 = SIGNAL_CHART_INTERVAL_MS['15s'];
+    const boundary = Math.floor(T / I15) * I15;
+    const startTime = boundary - 299 * I15;
+    const window: CandleWindow = {
+      candles: Array.from({ length: 299 }, (_, k) => {
+        const open = 1.1 + (k % 7) * 0.0001;
+        const close = open + 0.0002;
+        return {
+          timestamp: startTime + k * I15,
+          open,
+          high: close + 0.0001,
+          low: open - 0.0001,
+          close,
+        };
+      }),
+      closedUntil: boundary,
+      startTime,
+      gaps: [],
+    };
+    const now = () => T;
+    const logger = {
+      info: (fields: object, message: string) => app?.log.info(fields, message),
+      warn: (fields: object, message: string) => app?.log.warn(fields, message),
+    };
+    const feed = createCachedSignalFeed(
+      createSignalFeed({
+        rest: {
+          getChart: () => {
+            throw new Error('no GET while the source has a window');
+          },
+        },
+        source: { read: () => window, request: () => {} },
+        logger,
+        now,
+      }),
+      { fetchBudgetMs: 3_000, maxTtlMs: 30_000, now },
+    );
+    const target = appWith(feed);
+    const scanned = feed.fromSource({ assetId: 101, interval: '15s', digits: 5 });
+    expect(scanned?.outcome).toBe('decided');
+    expect(parsedLines().filter((line) => line.msg === 'signal decision')).toHaveLength(0);
+
+    const first = await post(target, { assetId: 101, interval: '15s' });
+    const second = await post(target, { assetId: 101, interval: '15s' });
+    expect(first.statusCode).toBe(200);
+    const body = first.json<{ outcome: string; decision: unknown }>();
+    expect(body.outcome).toBe('decided');
+    expect(second.json()).toStrictEqual(body);
+    const decisions = parsedLines().filter((line) => line.msg === 'signal decision');
+    expect(decisions).toHaveLength(1);
+    const { signal } = decisions[0] as { signal: SignalJournalEntry };
+    expect(signal.source).toStrictEqual({
+      kind: 'socket',
+      startTime,
+      closedUntil: boundary,
+      gaps: 0,
+    });
+    expect(replaySignalJournalEntry(signal)).toStrictEqual(body.decision);
+  });
+
+  it('R18 without a source an empty pacer answers rate_limited in 1 s and sends no GET', async () => {
+    broker = await startMockBroker();
+    const now = () => T;
+    const pacer = createScanPacer({
+      perMinute: 25,
+      capacity: 1,
+      backoffMinMs: 15_000,
+      backoffMaxMs: 120_000,
+      now,
+    });
+    expect(pacer.tryTake()).toBe(true);
+    const feed = createCachedSignalFeed(
+      createSignalFeed({
+        rest: createBrokerRestClient({ baseUrl: broker.url }),
+        pacer,
+        logger: {
+          info: (fields: object, message: string) => app?.log.info(fields, message),
+          warn: (fields: object, message: string) => app?.log.warn(fields, message),
+        },
+        now,
+      }),
+      { fetchBudgetMs: 3_000, maxTtlMs: 30_000, now },
+    );
+    const response = await post(appWith(feed), { assetId: 101, interval: '15s' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toStrictEqual({
+      outcome: 'fetch_failed',
+      code: 'rate_limited',
+      retryAfterSec: 1,
+    });
+    expect(broker.rest.journal.filter((entry) => entry.endpoint === 'chart')).toHaveLength(0);
+    expect(
+      parsedLines().filter((line) => line.msg === 'signal fetch refused: no token'),
+    ).toHaveLength(1);
+    expect(parsedLines().filter((line) => line.msg === 'signal decision')).toHaveLength(0);
+  });
+
   // #379: the pair's digits come from the pairs cache, looked up before any chart GET
   it.each([
     ['no snapshot', null],

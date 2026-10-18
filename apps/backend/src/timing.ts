@@ -5,7 +5,7 @@ import {
   BROKER_SOCKET_RECONNECT_DELAY_MS,
   BROKER_SOCKET_RECONNECT_JITTER,
 } from '@binarius/broker-socket';
-import { SIGNAL_FETCH_LIMIT, TICK_MAX_SKEW_MS } from '@binarius/signal';
+import { SIGNAL_FETCH_LIMIT, SIGNAL_PACER_RETRY_SEC, TICK_MAX_SKEW_MS } from '@binarius/signal';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import {
@@ -35,7 +35,6 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   TRADING_SIGNAL_BUDGET_MS,
-  type ScanInterval,
 } from '@binarius/shared/signal';
 import {
   TRADING_SESSION_START_BUDGET_MS,
@@ -175,8 +174,23 @@ export const MARKET_DATA_SKEW_MARGIN_MS = 2_000;
 export const MARKET_DATA_ACCOUNT_RETRY_MS = 300_000;
 // candles kept per (pair, interval): the feed's window, MA200 included (#482)
 export const MARKET_DATA_RING_CANDLES = SIGNAL_FETCH_LIMIT;
-// the most (pair, interval) refill requests waiting for #590: every pair on both intervals
+// the most (pair, interval) refill requests waiting for the backfill: every pair on both intervals
 export const MARKET_DATA_PENDING_MAX = 288;
+// docs/market-data.md -> Backfill (#590). One backfill GET, by the call's own signal: below the
+// REST client's timeout, so that this, not the client, ends a slow chart.
+export const MARKET_DATA_BACKFILL_BUDGET_MS = 3_000;
+// failed attempts in a row on one (pair, interval) before it gives up
+export const MARKET_DATA_BACKFILL_ATTEMPTS = 3;
+// the hold-back of a (pair, interval) after any finished attempt: one GET in a 15s candle (owner,
+// 2026-10-17)
+export const MARKET_DATA_BACKFILL_RETRY_MS = 15_000;
+// the queue is rebuilt this often: a new hole or a cold pair is seen within one 5s candle
+export const MARKET_DATA_BACKFILL_SCAN_MS = 5_000;
+// how often a non-empty queue asks for a spare token: under one overflow token's refill at the
+// highest ceiling, so that no overflow token is lost between two polls
+export const MARKET_DATA_BACKFILL_POLL_MS = 250;
+// backfill GETs in flight at once
+export const MARKET_DATA_BACKFILL_CONCURRENCY = 2;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -244,50 +258,32 @@ export const SIGNAL_FETCH_BUDGET_MS = 3_000;
 // the 5s and 15s candles (#313) the candle's end binds first.
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
-// --- The signal scanner (#343) ----------------------------------------------------------------
+// --- The signal scanner (#343) and the signal REST (#405) -----------------------------------
 // docs/signal.md -> The scanner. One scanner per interval of SIGNAL_SCAN_INTERVALS, one scan a
 // candle, this long after its boundary: the live broker returned the just-closed 15s candle 150 ms
 // after the boundary (2026-10-08), and the rest covers the host's clock against the broker's. The
-// 5s close was not observed (#382).
+// 5s close was not observed (#382). The scan decides from the data socket's window and takes no
+// token (#405).
 export const SIGNAL_SCAN_SLACK_MS = 500;
-// chart GETs of one scan in flight at once
-export const SIGNAL_SCAN_CONCURRENCY = 4;
-// the scanner's pause after a 429 without Retry-After: doubles from the first to the second; a
-// Retry-After is held to the same bounds
+// the signal pacer's pause after a 429 without Retry-After: doubles from the first to the second;
+// a Retry-After is held to the same bounds
 export const SIGNAL_SCAN_BACKOFF_MIN_MS = 15_000;
 export const SIGNAL_SCAN_BACKOFF_MAX_MS = 120_000;
 // the period of the scanner's `signal scanner` log line
 export const SIGNAL_SCAN_LOG_MS = 60_000;
-// Each interval's share of SIGNAL_SCAN_MAX_PER_MINUTE, in percent (integers, so the pair counts
-// are exact): 13 pairs on 15s and 4 on 5s at the default 100 (owner, 2026-10-09).
-export const SIGNAL_SCAN_SHARES_PERCENT = { '15s': 52, '5s': 48 } as const satisfies Record<
-  ScanInterval,
-  number
->;
-// decisions a minute for one scanned pair: one a candle
-export const scanDecisionsPerMinute = (interval: ScanInterval): number =>
-  60_000 / SIGNAL_CHART_INTERVAL_MS[interval];
-// one interval's chart GETs a minute under the ceiling
-export const signalScanPerMinute = (ceiling: number, interval: ScanInterval): number =>
-  (ceiling * SIGNAL_SCAN_SHARES_PERCENT[interval]) / 100;
-// the pairs one interval scans each candle under the ceiling
-export const signalScanPairs = (ceiling: number, interval: ScanInterval): number =>
-  Math.floor(
-    (ceiling * SIGNAL_SCAN_SHARES_PERCENT[interval]) / (100 * scanDecisionsPerMinute(interval)),
-  );
-// One interval's pacer bucket: a candle refills exactly one batch and the batch's takes are one
-// burst, so a fire a few ms earlier relative to its boundary than the one before finds the bucket
-// a fraction of a token short and skips a pair with no 429 behind it; the spare token absorbs it
-// (#382 review M1).
-export const signalScanCapacity = (ceiling: number, interval: ScanInterval): number =>
-  signalScanPairs(ceiling, interval) + 1;
-// SIGNAL_SCAN_MAX_PER_MINUTE's bounds: at least one pair on every interval, and below the whole
-// per-IP window
-export const MIN_SIGNAL_SCAN_PER_MINUTE = Math.max(
-  ...SIGNAL_SCAN_INTERVALS.map((interval) =>
-    Math.ceil((100 * scanDecisionsPerMinute(interval)) / SIGNAL_SCAN_SHARES_PERCENT[interval]),
-  ),
-);
+// docs/signal.md -> The budget. The one pacer of the signal chart GETs (SIGNAL_SCAN_MAX_PER_MINUTE a
+// minute): its bucket holds one 5 s candle's batch of on-demand GETs - the steps of every session
+// on 5s decide at one boundary - plus a spare token, so a fire a few ms earlier relative to its
+// boundary than the one before does not find it a fraction of a token short (#382 review M1).
+export const signalRestCapacity = (ceiling: number): number =>
+  Math.ceil((ceiling * SIGNAL_CHART_INTERVAL_MS['5s']) / 60_000) + 1;
+// the one pacer's worst 60 s window: the ceiling, its bucket and the overflow token the backfill
+// may take (pacer.test.ts P11)
+export const signalRestWorstWindow = (ceiling: number): number =>
+  ceiling + signalRestCapacity(ceiling) + 1;
+// SIGNAL_SCAN_MAX_PER_MINUTE's bounds: the lowest value .env files carry since #382, and below the
+// whole per-IP window
+export const MIN_SIGNAL_SCAN_PER_MINUTE = 25;
 export const MAX_SIGNAL_SCAN_PER_MINUTE = 200;
 
 // --- Bot text overrides (#299) ------------------------------------------------------------------
@@ -355,30 +351,22 @@ const TIMING_CHAIN_HOLDS =
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
-  // per scanned interval: a scan starts inside its candle and a call made at the scan moment,
-  // bounded by the cache, ends inside it too; the scanner takes no pair past the candle's end
-  // (scanner.ts)
+  // per scanned interval: a scan starts inside its candle, and an on-demand GET asked at the
+  // boundary by a session step, bounded by the cache, ends inside it too
   SIGNAL_SCAN_INTERVALS.every(
     (interval) =>
       SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
-      SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
-      Number.isInteger(scanDecisionsPerMinute(interval)),
+      SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval],
   ) &&
-  // the shares split the whole ceiling. That the pairs at the default fit inside it follows from
-  // signalScanPairs' floor, and that MIN scans one pair on every interval from MIN's definition,
-  // so neither is a link; timing.test.ts pins the counts.
-  SIGNAL_SCAN_INTERVALS.reduce((sum, interval) => sum + SIGNAL_SCAN_SHARES_PERCENT[interval], 0) ===
-    100 &&
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
   MIN_SIGNAL_SCAN_PER_MINUTE <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&
   DEFAULT_SIGNAL_SCAN_PER_MINUTE <= MAX_SIGNAL_SCAN_PER_MINUTE &&
-  // the worst 60 s window of both scanners at the highest ceiling: the ceiling plus both buckets
-  MAX_SIGNAL_SCAN_PER_MINUTE +
-    SIGNAL_SCAN_INTERVALS.reduce(
-      (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
-      0,
-    ) <
-    BROKER_RATE_LIMIT_PER_MINUTE &&
+  // the bucket keeps one token and the spare at the lowest ceiling
+  signalRestCapacity(MIN_SIGNAL_SCAN_PER_MINUTE) >= 2 &&
+  // the signal REST's worst 60 s window at the highest ceiling, below the broker's
+  signalRestWorstWindow(MAX_SIGNAL_SCAN_PER_MINUTE) < BROKER_RATE_LIMIT_PER_MINUTE &&
+  // the cache holds a pacer refusal as long as its retryAfterSec
+  SIGNAL_PACER_RETRY_SEC * 1000 <= SIGNAL_CACHE_MAX_TTL_MS &&
   // the worker's token route (#90): its longest path is one exchange under the account's row
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&
@@ -462,6 +450,12 @@ const TIMING_CHAIN_HOLDS =
   MARKET_DATA_SKEW_MARGIN_MS < SIGNAL_CHART_INTERVAL_MS['5s'] &&
   MARKET_DATA_SKEW_MARGIN_MS < TICK_MAX_SKEW_MS &&
   MARKET_DATA_TICK_MS <= MARKET_DATA_LOG_MS &&
+  // the backfill (#590): its GET ends by its own budget, inside phase 1 (stop() waits for at most
+  // one GET a worker, in parallel)
+  MARKET_DATA_BACKFILL_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
+  MARKET_DATA_BACKFILL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE <= 60_000 &&
+  MARKET_DATA_BACKFILL_SCAN_MS <= SIGNAL_CHART_INTERVAL_MS['5s'] &&
   SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');

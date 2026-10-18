@@ -1,26 +1,9 @@
-import type { Candle, ScanInterval } from '@binarius/shared';
+import { SIGNAL_SCAN_INTERVALS, type ScanInterval, type SignalInterval } from '@binarius/shared';
+import type { SignalCandleSource } from '@binarius/signal';
+import type { CandleRing } from './ring';
 
-// The candle source over the data socket (#404, docs/market-data.md). No consumer yet: the feed
-// moves onto it in #405, and the REST refill that reads pending() is #590.
-
-export interface CandleWindow {
-  // closed candles of the window, ascending: tick-built, or REST rows fill() put into empty buckets
-  candles: Candle[];
-  // the bucket still forming by the ring's rule, when the pair has one
-  forming?: Candle;
-  // buckets ending at or before this are closed (docs/market-data.md -> Closing a candle)
-  closedUntil: number;
-  // the first bucket of the window: chartWindow(nowMs, interval, capacity).startTime
-  startTime: number;
-  // the closed buckets of the window that have no candle, ascending
-  gaps: number[];
-}
-
-export interface CandleSource {
-  read(assetId: number, interval: ScanInterval, nowMs: number): CandleWindow;
-  // asks for a refill of the pair's window; remembered until #590's pending() takes it
-  request(assetId: number, interval: ScanInterval): { queued: boolean };
-}
+// The candle source over the data socket (#404, docs/market-data.md): the signal feed reads it
+// through createCandleSource (#405), and the REST backfill (#590, backfill.ts) reads pending().
 
 export interface PendingRequest {
   assetId: number;
@@ -59,12 +42,24 @@ export function createPendingRequests(max: number): PendingRequests {
   };
 }
 
+const ringInterval = (interval: SignalInterval): interval is ScanInterval =>
+  (SIGNAL_SCAN_INTERVALS as readonly SignalInterval[]).includes(interval);
+
+// The port of packages/signal over the ring and the refill set: a window only while the active
+// socket is ready and only for the intervals the ring builds; anything else reads REST.
 export function createCandleSource(deps: {
-  read: CandleSource['read'];
-  requests: PendingRequests;
-}): CandleSource {
+  ring: Pick<CandleRing, 'read'>;
+  requests: Pick<PendingRequests, 'add'>;
+  // the manager's streaming(): the active socket is ready
+  streaming: () => boolean;
+}): SignalCandleSource {
+  const { ring, requests, streaming } = deps;
   return {
-    read: deps.read,
-    request: (assetId, interval) => ({ queued: deps.requests.add(assetId, interval) }),
+    read: (assetId, interval, nowMs) =>
+      streaming() && ringInterval(interval) ? ring.read(assetId, interval, nowMs) : undefined,
+    // a full set refuses only a new key, and the keys are at most the catalog's pairs x 2
+    request: (assetId, interval) => {
+      if (ringInterval(interval)) requests.add(assetId, interval);
+    },
   };
 }

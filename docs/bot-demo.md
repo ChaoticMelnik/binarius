@@ -195,8 +195,9 @@ places filled from the rest of all groups together by the same order. The list i
 in `PAIR_TYPE_GROUPS` order (💱 currencies first), a fill pair sits in its own type's group, and
 inside a group the best payout comes first. Neither the route's order nor the catalog's matters
 (`demo.test.ts` → the choice of pairs, L1–L5). A pair that would be refused takes no place: its
-place goes to the next pair of its type. On `5s` the scanner covers at most 4 pairs a candle
-([signal.md → The scanner](signal.md#the-scanner-343)), so its list never fills. Each button is «EUR/USD OTC ⬆️ 85%» (`demo:l:<assetId>:<sec>`):
+place goes to the next pair of its type. The scanner decides every eligible pair on both
+intervals from the data socket's candles (#405, [signal.md → The scanner](signal.md#the-scanner-343)),
+so the list is bounded here, by `SIGNALS_LIST_SIZE`; while the source is down the lists are empty. Each button is «EUR/USD OTC ⬆️ 85%» (`demo:l:<assetId>:<sec>`):
 the symbol, the scanner's direction as an arrow (a data mark like the payout, not a catalog text)
 and the payout; two per row in the list's order, across the types, the last alone when their
 number is odd (#419); then «🔄 Обновить» (`demo:sig:<sec>`) and «↩️ Длительность» (`demo:sig`) in
@@ -391,8 +392,8 @@ not a fresh catalog.
   вручную».
 - **Signals (#320).** The pairs with a signal two a row, the last alone when odd (#419); then
   «🔄 Обновить» and «↩️ Длительность» in one row and «🧭 Выбрать пару вручную» in its own. At most
-  `SIGNALS_LIST_SIZE` = 12 pairs (#460) — 6 + 2 rows; at 5 s the scanner covers 4 pairs by
-  default — 2 + 2 (Telegram allows 100 buttons, 8 a row).
+  `SIGNALS_LIST_SIZE` = 12 pairs (#460) — 6 + 2 rows; the scanner covers every eligible pair
+  on both durations (#405), so the limit is the bot's (Telegram allows 100 buttons, 8 a row).
 - **Amounts (#476, demo).** The amounts three a row, the risky ones («· риск») two a row, then
   «✏️ Своя сумма» and the way back in one row; each carries the duration. The screen is deleted
   after an amount's start, once the session's status is sent (#418).
@@ -521,7 +522,7 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 `AnalysisScreen.session` is true on a signal only (#509, owner: no session on a pair without a
 signal now). Until #509 it was true on every `decided` answer, and the session waited for a signal
 itself; the no-signal limit ([trading-session.md](trading-session.md#the-no-signal-limit-509)) now
-stops such a wait after 2 min. Where the candles were not read, no session row is drawn either.
+stops such a wait after 20 candles of the session's interval (#637: 100 s on 5 s, 300 s on 15 s). Where the candles were not read, no session row is drawn either.
 
 The card's block (#482) is a `<pre>`, so Telegram draws it monospaced with a copy button: eight
 rows of a label (`cardRowPair` … `cardRowDirection`) padded to the longest label after the

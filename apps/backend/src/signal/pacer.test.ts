@@ -6,9 +6,7 @@ import {
   MIN_SIGNAL_SCAN_PER_MINUTE,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
-  signalScanCapacity,
-  signalScanPairs,
-  signalScanPerMinute,
+  signalRestCapacity,
 } from '../timing';
 import { createScanPacer } from './pacer';
 
@@ -53,33 +51,32 @@ describe('scan pacer', () => {
     expect(taken.length).toBeLessThanOrEqual(26 + 3 * 100);
   });
 
-  // #382 review M1: the takes of a batch are one burst at the timer's millisecond, and a candle
-  // refills exactly one batch, so a fire earlier relative to its boundary than the one before
-  // must still find the whole batch
-  it.each([
-    [DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s'],
-    [DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'],
-    [MIN_SIGNAL_SCAN_PER_MINUTE, '5s'],
-    [MAX_SIGNAL_SCAN_PER_MINUTE, '15s'],
-    [MAX_SIGNAL_SCAN_PER_MINUTE, '5s'],
-  ] as const)(
-    'P9 at the ceiling %i the %s pacer gives the whole batch every candle under a jittery timer',
-    (ceiling, interval) => {
+  // #382 review M1, #405: the one signal pacer's bucket is a 5 s candle of on-demand GETs at one
+  // boundary plus a spare token; afterwards every 5 s candle refills its share, also when a fire
+  // comes a few ms earlier relative to its boundary than the one before
+  it.each([DEFAULT_SIGNAL_SCAN_PER_MINUTE, MIN_SIGNAL_SCAN_PER_MINUTE, MAX_SIGNAL_SCAN_PER_MINUTE])(
+    'P9 at the ceiling %i a full bucket gives one 5 s burst and every candle after it its share',
+    (ceiling) => {
       const start = 1_000_000;
       const clock = { now: start };
       const p = createScanPacer({
-        perMinute: signalScanPerMinute(ceiling, interval),
-        capacity: signalScanCapacity(ceiling, interval),
+        perMinute: ceiling,
+        capacity: signalRestCapacity(ceiling),
         backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
         backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
         now: () => clock.now,
       });
-      const batch = signalScanPairs(ceiling, interval);
+      const candleMs = SIGNAL_CHART_INTERVAL_MS['5s'];
       const taken = [1, 0, 2, 2, 1, 3, 0].map((lag, candle) => {
-        clock.now = start + candle * SIGNAL_CHART_INTERVAL_MS[interval] + 500 + lag;
-        return Array.from({ length: batch }, () => p.tryTake()).filter(Boolean).length;
+        clock.now = start + candle * candleMs + 500 + lag;
+        let n = 0;
+        while (p.tryTake()) n += 1;
+        return n;
       });
-      expect(taken).toEqual(Array.from({ length: 7 }, () => batch));
+      expect(taken[0]).toBe(Math.ceil((ceiling * candleMs) / 60_000) + 1);
+      for (const n of taken.slice(1)) {
+        expect(n).toBeGreaterThanOrEqual(Math.floor((ceiling * candleMs) / 60_000));
+      }
     },
   );
 
@@ -155,5 +152,78 @@ describe('scan pacer', () => {
         now: () => 0,
       }),
     ).toThrow(RangeError);
+  });
+
+  it('P10 the overflow builds up to one token, and none while the bucket is short of full', () => {
+    const { clock, p, takeAll } = pacer({ perMinute: 60, capacity: 2 });
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 10_000;
+    expect(p.tryTakeSpare()).toBe(true);
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 5_000;
+    expect(takeAll()).toBe(2);
+    expect(p.tryTakeSpare()).toBe(true);
+    clock.now += 1_500;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 1_000;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 500;
+    expect(p.tryTakeSpare()).toBe(true);
+    clock.now += 600;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 400;
+    expect(p.tryTakeSpare()).toBe(true);
+  });
+
+  it('P11 tryTake and tryTakeSpare together carry at most perMinute + capacity + 1 per 60 s', () => {
+    const { clock, p } = pacer({ perMinute: 100, capacity: 26 });
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    const taken: number[] = [];
+    // an idle minute first: a bucket full for long is where an unbounded overflow would pile up
+    clock.now += 60_000;
+    for (let t = 0; t < 180_000; t += 100) {
+      const spareFirst = random() < 0.5;
+      if (spareFirst && p.tryTakeSpare()) taken.push(clock.now);
+      if (random() < 0.3) while (p.tryTake()) taken.push(clock.now);
+      if (!spareFirst && p.tryTakeSpare()) taken.push(clock.now);
+      clock.now += 100;
+    }
+    for (const start of taken) {
+      const inWindow = taken.filter((at) => at >= start && at < start + 60_000).length;
+      expect(inWindow).toBeLessThanOrEqual(100 + 26 + 1);
+    }
+  });
+
+  it('P12 no answer of tryTake depends on the tryTakeSpare calls around it', () => {
+    const trace = (withSpare: boolean) => {
+      const { clock, p } = pacer({ perMinute: 100, capacity: 5 });
+      const answers: boolean[] = [];
+      for (let t = 0; t < 120_000; t += 250) {
+        if (withSpare) p.tryTakeSpare();
+        const takes = t % 15_000 === 0 ? 6 : t % 1_000 === 0 ? 1 : 0;
+        for (let i = 0; i < takes; i += 1) answers.push(p.tryTake());
+        if (withSpare) p.tryTakeSpare();
+        clock.now += 250;
+      }
+      return answers;
+    };
+    const plain = trace(false);
+    expect(plain).toContain(false);
+    expect(trace(true)).toEqual(plain);
+  });
+
+  it('P13 a pause closes tryTakeSpare too', () => {
+    const { clock, p } = pacer({ perMinute: 60, capacity: 1 });
+    clock.now += 5_000;
+    p.onRateLimited(20);
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 19_999;
+    expect(p.tryTakeSpare()).toBe(false);
+    clock.now += 1;
+    expect(p.tryTakeSpare()).toBe(true);
   });
 });

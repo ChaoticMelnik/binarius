@@ -25,6 +25,7 @@ import {
   safeParseTradingSessionSettings,
   sessionProgress,
   sessionStakeParams,
+  sessionNoSignalTimeoutMs,
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
   SignalKind,
@@ -255,9 +256,13 @@ export function createSessionOrchestrator({
       };
     }
 
+    const noSignalTimeoutMs = sessionNoSignalTimeoutMs(
+      settings.durationSec,
+      config.noSignalCandles,
+    );
     const history = await readSessionHistory(db, session.id, {
       maxDurationMs: config.maxDurationMs,
-      noSignalTimeoutMs: config.noSignalTimeoutMs,
+      noSignalTimeoutMs,
     });
     if (history === undefined) {
       logger.warn(ids, 'trading session vanished');
@@ -325,13 +330,14 @@ export function createSessionOrchestrator({
         fields: { assetId: settings.assetId, listed: pair !== undefined },
       };
     }
-    // The three waits for a signal end at the no-signal limit (#509, owner): a closed pair, a
-    // no_signal, the pause after two losses. A failure to read the pairs or the signal is not a
-    // wait for a signal, so it neither stops the session nor moves the count.
+    // The three waits for a signal end at the no-signal limit (#509, owner), config.noSignalCandles
+    // candles of the session's signal interval (#637): a closed pair, a no_signal, the pause after
+    // two losses. A failure to read the pairs or the signal is not a wait for a signal, so it
+    // neither stops the session nor moves the count.
     const noSignalStop = (waited: 'pair_closed' | 'no_signal' | 'paused'): Ending => ({
       kind: 'stop',
       reason: TradingSessionStopReason.NoSignalTimeout,
-      fields: { waited },
+      fields: { waited, limitMs: noSignalTimeoutMs },
     });
     const nowMs = now();
     if (!isPairOpen(pair, nowMs)) {

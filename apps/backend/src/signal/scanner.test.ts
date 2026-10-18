@@ -1,34 +1,34 @@
 import { pino } from 'pino';
 import {
   logOptions,
-  PAIR_TYPE_GROUPS,
-  pairTypeGroupOf,
   SIGNAL_ALGORITHM_VERSION,
   SIGNAL_CHART_INTERVAL_MS,
   type BinaryPair,
-  type BrokerRestErrorCode,
   type PairsCatalogView,
   type ScanInterval,
+  SIGNAL_SCAN_INTERVALS,
   type SignalDecision,
 } from '@binarius/shared';
 import {
   createCachedSignalFeed,
   createSignalFeed,
   DEFAULT_SIGNAL_PARAMS,
-  type SignalEvaluation,
+  type CachedSignalFeed,
+  type CandleWindow,
+  type SignalDecidedEvaluation,
   type SignalFeedRequest,
+  type SignalJournalSource,
+  type Tick,
 } from '@binarius/signal';
-import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createCandleRing } from '../market-data/ring';
+import { createCandleSource, createPendingRequests } from '../market-data/source';
 import {
-  MAX_SIGNAL_SCAN_PER_MINUTE,
-  MIN_SIGNAL_SCAN_PER_MINUTE,
-  signalScanCapacity,
-  signalScanPairs,
-  signalScanPerMinute,
+  MARKET_DATA_PENDING_MAX,
+  MARKET_DATA_RING_CANDLES,
+  MARKET_DATA_SKEW_MARGIN_MS,
 } from '../timing';
-import { createScanPacer, type ScanPacer } from './pacer';
-import { createSignalScanner, eligiblePairs, freshSignals, scanPairs } from './scanner';
+import { createSignalScanner, eligiblePairs, freshSignals } from './scanner';
 
 // a 15 s boundary, so a 5 s one too
 const B = 1_760_000_010_000;
@@ -72,27 +72,63 @@ const features = (lastCandleTimestamp: number) => ({
   atrTicks: 100,
 });
 
+const boundaryOf = (nowMs: number, candleMs: number) => Math.floor(nowMs / candleMs) * candleMs;
+
 // the decision on the candle that closed at the last boundary before `nowMs`
 function signal(nowMs: number, candleMs = CANDLE_15S_MS): SignalDecision {
-  const closed = Math.floor(nowMs / candleMs) * candleMs - candleMs;
   return {
     kind: 'signal',
     version: SIGNAL_ALGORITHM_VERSION,
     action: 'up',
-    features: features(closed),
+    features: features(boundaryOf(nowMs, candleMs) - candleMs),
   };
 }
 
-function decided(request: SignalFeedRequest, decision: SignalDecision): SignalEvaluation {
+const noSignal = (
+  reason: 'insufficient_candles' | 'candle_gap' | 'stale' = 'insufficient_candles',
+): SignalDecision =>
+  reason === 'insufficient_candles'
+    ? {
+        kind: 'no_signal',
+        version: SIGNAL_ALGORITHM_VERSION,
+        reason,
+        detail: { closedCandles: 0, required: 50 },
+      }
+    : reason === 'candle_gap'
+      ? {
+          kind: 'no_signal',
+          version: SIGNAL_ALGORITHM_VERSION,
+          reason,
+          detail: { index: 3, expectedTimestamp: 0, actualTimestamp: 1 },
+        }
+      : {
+          kind: 'no_signal',
+          version: SIGNAL_ALGORITHM_VERSION,
+          reason,
+          detail: { lastCandleTimestamp: 0, ageMs: 1, maxAgeMs: 2 },
+        };
+
+// the window closed the boundary's candle unless closedUntil says otherwise
+function decided(
+  request: SignalFeedRequest,
+  decision: SignalDecision,
+  source?: SignalJournalSource,
+): SignalDecidedEvaluation {
+  const intervalMs = SIGNAL_CHART_INTERVAL_MS[request.interval];
   return {
     outcome: 'decided',
     entry: {
       assetId: request.assetId,
       interval: request.interval,
       digits: request.digits,
-      intervalMs: SIGNAL_CHART_INTERVAL_MS[request.interval],
+      intervalMs,
       nowMs: Date.now(),
-      fetch: { startTime: 0, limit: 60, rows: 0, durationMs: 1 },
+      source: source ?? {
+        kind: 'socket',
+        startTime: 0,
+        closedUntil: boundaryOf(Date.now(), intervalMs),
+        gaps: 0,
+      },
       version: SIGNAL_ALGORITHM_VERSION,
       params: DEFAULT_SIGNAL_PARAMS,
       series: [],
@@ -101,32 +137,15 @@ function decided(request: SignalFeedRequest, decision: SignalDecision): SignalEv
   };
 }
 
-const failed = (
-  request: SignalFeedRequest,
-  code: BrokerRestErrorCode,
-  retryAfterSec?: number,
-): SignalEvaluation => ({
-  outcome: 'fetch_failed',
-  request: {
-    ...request,
-    intervalMs: SIGNAL_CHART_INTERVAL_MS[request.interval],
-    nowMs: Date.now(),
-    startTime: 0,
-    limit: 60,
-  },
-  code,
-  ...(retryAfterSec === undefined ? {} : { retryAfterSec }),
-});
-
-type Answer = (request: SignalFeedRequest) => SignalEvaluation | Promise<SignalEvaluation>;
+type Answer = (request: SignalFeedRequest) => SignalDecidedEvaluation | undefined;
 
 function harness(
   options: {
     interval?: ScanInterval;
     pairs?: BinaryPair[];
     answer?: Answer;
-    maxPairs?: number;
-    pacer?: ScanPacer;
+    // a feed in place of the stub; its fromSource is what the scanner calls
+    feed?: Pick<CachedSignalFeed, 'fromSource'>;
     // the scanner logs through a real pino logger (logOptions) into this sink instead
     sink?: (line: string) => void;
   } = {},
@@ -135,6 +154,7 @@ function harness(
     view: view(options.pairs ?? [pair(1), pair(2)]) as PairsCatalogView | undefined,
     // how far the scanner's clock reads behind the timers' clock
     skewMs: 0,
+    streaming: true,
   };
   const interval = options.interval ?? '15s';
   const calls: number[] = [];
@@ -143,55 +163,67 @@ function harness(
     options.answer ??
     ((request) => decided(request, signal(Date.now(), SIGNAL_CHART_INTERVAL_MS[request.interval])));
   const logger = { info: vi.fn(), warn: vi.fn() };
+  const inner = options.feed;
   const scanner = createSignalScanner({
     interval,
     feed: {
-      evaluate: (request) => {
+      fromSource: (request) => {
         calls.push(request.assetId);
         requests.push(request);
-        return Promise.resolve(answer(request));
+        return inner === undefined ? answer(request) : inner.fromSource(request);
       },
     },
     catalog: { read: () => state.view },
-    pacer:
-      options.pacer ??
-      createScanPacer({
-        perMinute: 100,
-        capacity: 25,
-        backoffMinMs: 15_000,
-        backoffMaxMs: 120_000,
-        now: Date.now,
-      }),
+    streaming: () => state.streaming,
     logger: options.sink === undefined ? logger : pino(logOptions('info'), { write: options.sink }),
     now: () => Date.now() - state.skewMs,
-    maxPairs: options.maxPairs ?? 25,
     slackMs: SLACK_MS,
-    concurrency: 4,
     logEveryMs: LOG_EVERY_MS,
   });
   return { state, calls, requests, logger, scanner };
 }
 
-// The broker's types and one it does not list (other). Currencies pay the most, as they do live.
-const TYPES = ['currency', 'commodity', 'stock', 'cryptocurrency', 'index', 'bond'];
-const MIXED: BinaryPair[] = [
-  ...Array.from({ length: 20 }, (_, i) => pair(100 + i, { payout: 95 })),
-  ...TYPES.slice(1).flatMap((type, t) => [
-    pair(201 + t * 50, { type, payout: 85 }),
-    pair(202 + t * 50, { type, payout: 80 }),
-  ]),
-];
-const INDEX_BEST = MIXED.find((p) => p.type === 'index' && p.payout === 85)?.id;
-const byId = (id: number): BinaryPair => {
-  const found = MIXED.find((p) => p.id === id);
-  if (found === undefined) throw new Error(`no pair ${id}`);
-  return found;
-};
-const groupsOf = (pairs: readonly BinaryPair[]) => pairs.map((p) => pairTypeGroupOf(p.type));
-
 // to the scan moment of the candle that starts `candles` boundaries after B
 const toScan = async (candles: number, candleMs = CANDLE_15S_MS) => {
   await vi.advanceTimersByTimeAsync(B + candles * candleMs + SLACK_MS - Date.now());
+};
+
+const summary = (h: ReturnType<typeof harness>, index = 0) =>
+  h.logger.info.mock.calls[index]?.[0] as Record<string, unknown>;
+
+// The real cached feed over a source whose window is `windowFor(assetId)`: an empty window by
+// default, which decides insufficient_candles and asks for a refill. Its evaluate throws, so a
+// scan that reached REST would fail the test (S30).
+function realFeed(windowFor: (assetId: number, nowMs: number) => CandleWindow | undefined) {
+  const getChart = vi.fn(() => Promise.reject(new Error('no GET from the scanner')));
+  const refills: number[] = [];
+  const cache = createCachedSignalFeed(
+    createSignalFeed({
+      rest: { getChart },
+      source: {
+        read: (assetId, _interval, nowMs) => windowFor(assetId, nowMs),
+        request: (assetId) => void refills.push(assetId),
+      },
+      logger: { info: vi.fn(), warn: vi.fn() },
+    }),
+    { fetchBudgetMs: 3_000, maxTtlMs: 30_000 },
+  );
+  const evaluate = vi.fn<CachedSignalFeed['evaluate']>(() => {
+    throw new Error('the scanner never evaluates');
+  });
+  const feed: CachedSignalFeed = { ...cache, fromSource: cache.fromSource, evaluate };
+  return { feed, cache, getChart, evaluate, refills };
+}
+
+const emptyWindow = (nowMs: number, candleMs = CANDLE_15S_MS): CandleWindow => {
+  const boundary = boundaryOf(nowMs, candleMs);
+  const startTime = boundary - 299 * candleMs;
+  return {
+    candles: [],
+    closedUntil: boundary,
+    startTime,
+    gaps: Array.from({ length: 299 }, (_, k) => startTime + k * candleMs),
+  };
 };
 
 beforeEach(() => {
@@ -248,83 +280,6 @@ describe('signal scanner', () => {
     expect(eligiblePairs(view(pairs), B + 3_000, 15).map((p) => p.id)).toEqual([4, 5]);
   });
 
-  it('S3 inside one type the pairs go by payout, then by id, whatever the catalog order', () => {
-    const pairs = [
-      pair(7, { payout: 80 }),
-      pair(9, { payout: 90 }),
-      pair(8, { payout: 90 }),
-      pair(6, { payout: 70 }),
-    ];
-    const shuffled = [pairs[2]!, pairs[0]!, pairs[3]!, pairs[1]!];
-    for (const input of [pairs, [...pairs].reverse(), shuffled]) {
-      expect(scanPairs(input, 2, 0).map((p) => p.id)).toEqual([8, 9]);
-      expect(scanPairs(input, 3, 5).map((p) => p.id)).toEqual([8, 9, 7]);
-    }
-  });
-
-  it('S21 with places for every type, each type is scanned on every candle (#460)', async () => {
-    for (let k = 0; k < 6; k += 1) {
-      const chosen = scanPairs(MIXED, 13, k);
-      expect(chosen).toHaveLength(13);
-      for (const group of PAIR_TYPE_GROUPS) {
-        expect(groupsOf(chosen).filter((g) => g === group).length).toBeGreaterThanOrEqual(2);
-      }
-      expect(scanPairs([...MIXED].reverse(), 13, k)).toEqual(chosen);
-    }
-    const h = harness({ pairs: MIXED, maxPairs: 13 });
-    h.scanner.start();
-    await toScan(1);
-    expect(h.calls).toHaveLength(13);
-    expect(new Set(groupsOf(h.calls.map(byId)))).toEqual(new Set(PAIR_TYPE_GROUPS));
-    await h.scanner.stop();
-  });
-
-  it('S22 with fewer places than types, two consecutive candles scan every type (#460)', async () => {
-    for (let k = 0; k < 12; k += 1) {
-      const now = groupsOf(scanPairs(MIXED, 4, k));
-      expect(new Set(now).size).toBe(4);
-      const next = groupsOf(scanPairs(MIXED, 4, k + 1));
-      expect(new Set([...now, ...next])).toEqual(new Set(PAIR_TYPE_GROUPS));
-    }
-    const h = harness({ interval: '5s', pairs: MIXED, maxPairs: 4 });
-    h.scanner.start();
-    await toScan(1, CANDLE_5S_MS);
-    await toScan(2, CANDLE_5S_MS);
-    expect(h.calls).toHaveLength(8);
-    expect(new Set(groupsOf(h.calls.slice(0, 4).map(byId))).size).toBe(4);
-    expect(new Set(groupsOf(h.calls.map(byId)))).toEqual(new Set(PAIR_TYPE_GROUPS));
-    await h.scanner.stop();
-  });
-
-  it('S23 a type short of its share gives the rest of its places to the others (#460)', () => {
-    const pairs = MIXED.filter(
-      (p) => pairTypeGroupOf(p.type) !== 'other' && (p.type !== 'index' || p.id === INDEX_BEST),
-    );
-    const chosen = groupsOf(scanPairs(pairs, 13, 0));
-    expect(chosen).toHaveLength(13);
-    expect(chosen.filter((g) => g === 'index')).toHaveLength(1);
-    expect(chosen.filter((g) => g === 'other')).toHaveLength(0);
-    expect(chosen.filter((g) => g === 'currency')).toHaveLength(6);
-    const few = MIXED.filter((p) => p.type !== 'currency').slice(0, 5);
-    expect(new Set(scanPairs(few, 13, 3))).toEqual(new Set(few));
-  });
-
-  it('S24 the scan takes exactly signalScanPairs pairs, so the broker budget is unchanged (#460)', () => {
-    const many = Array.from({ length: 200 }, (_, i) =>
-      pair(1000 + i, { type: TYPES[i % TYPES.length]!, payout: 80 + (i % 15) }),
-    );
-    for (const interval of ['15s', '5s'] as const) {
-      for (const ceiling of [
-        DEFAULT_SIGNAL_SCAN_PER_MINUTE,
-        MIN_SIGNAL_SCAN_PER_MINUTE,
-        MAX_SIGNAL_SCAN_PER_MINUTE,
-      ]) {
-        const maxPairs = signalScanPairs(ceiling, interval);
-        expect(scanPairs(many, maxPairs, 7)).toHaveLength(maxPairs);
-      }
-    }
-  });
-
   it("S4 a catalog change between candles changes the next candle's set", async () => {
     const h = harness();
     h.scanner.start();
@@ -336,74 +291,17 @@ describe('signal scanner', () => {
   });
 
   it('S5 a scanned pair is a cache hit for POST /trading/signal in the same candle', async () => {
-    const getChart = vi.fn(() => Promise.resolve([]));
-    const cached = createCachedSignalFeed(
-      createSignalFeed({ rest: { getChart }, logger: { info: vi.fn(), warn: vi.fn() } }),
-      { fetchBudgetMs: 3_000, maxTtlMs: 30_000 },
-    );
-    const scanner = createSignalScanner({
-      interval: '15s',
-      feed: cached,
-      catalog: { read: () => view([pair(1)]) },
-      pacer: createScanPacer({
-        perMinute: 100,
-        capacity: 25,
-        backoffMinMs: 15_000,
-        backoffMaxMs: 120_000,
-        now: Date.now,
-      }),
-      logger: { info: vi.fn(), warn: vi.fn() },
-      now: Date.now,
-      maxPairs: 25,
-      slackMs: SLACK_MS,
-      concurrency: 4,
-      logEveryMs: LOG_EVERY_MS,
-    });
-    scanner.start();
+    const real = realFeed((_, nowMs) => emptyWindow(nowMs));
+    const h = harness({ pairs: [pair(1)], feed: real.cache });
+    h.scanner.start();
     await toScan(1);
-    expect(getChart).toHaveBeenCalledTimes(1);
+    const scanned = h.scanner.snapshot().entries.get(1);
+    expect(scanned).toMatchObject({ kind: 'no_signal', reason: 'insufficient_candles' });
     await vi.advanceTimersByTimeAsync(5_000);
-    await cached.evaluate({ assetId: 1, interval: '15s', digits: 5 });
-    expect(getChart).toHaveBeenCalledTimes(1);
-    await scanner.stop();
-  });
-
-  it('S5b a manual call still in flight across the boundary does not answer the scan', async () => {
-    // the broker answers each chart GET after 1 s
-    const getChart = vi.fn(
-      () => new Promise<[]>((resolve) => setTimeout(() => resolve([]), 1_000)),
-    );
-    const cached = createCachedSignalFeed(
-      createSignalFeed({ rest: { getChart }, logger: { info: vi.fn(), warn: vi.fn() } }),
-      { fetchBudgetMs: 3_000, maxTtlMs: 30_000 },
-    );
-    const scanner = createSignalScanner({
-      interval: '15s',
-      feed: cached,
-      catalog: { read: () => view([pair(1)]) },
-      pacer: createScanPacer({
-        perMinute: 100,
-        capacity: 25,
-        backoffMinMs: 15_000,
-        backoffMaxMs: 120_000,
-        now: Date.now,
-      }),
-      logger: { info: vi.fn(), warn: vi.fn() },
-      now: Date.now,
-      maxPairs: 25,
-      slackMs: SLACK_MS,
-      concurrency: 4,
-      logEveryMs: LOG_EVERY_MS,
-    });
-    scanner.start();
-    await vi.advanceTimersByTimeAsync(B + CANDLE_15S_MS - 200 - Date.now());
-    const manual = cached.evaluate({ assetId: 1, interval: '15s', digits: 5 });
-    await toScan(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await manual;
-    expect(getChart).toHaveBeenCalledTimes(2);
-    expect(scanner.snapshot().entries.get(1)?.decidedAtMs).toBe(B + CANDLE_15S_MS + SLACK_MS);
-    await scanner.stop();
+    const answered = await real.cache.evaluate({ assetId: 1, interval: '15s', digits: 5 });
+    expect(answered.outcome === 'decided' && answered.entry.nowMs).toBe(scanned?.decidedAtMs);
+    expect(real.getChart).not.toHaveBeenCalled();
+    await h.scanner.stop();
   });
 
   it('S6 a stale or missing catalog scans nothing and warns once per streak', async () => {
@@ -424,18 +322,17 @@ describe('signal scanner', () => {
     await h.scanner.stop();
   });
 
-  it('S7 one pair throwing or failing does not stop the others or the next candle', async () => {
+  it('S7 one pair throwing does not stop the others or the next candle', async () => {
     const h = harness({
-      pairs: [pair(1, { payout: 90 }), pair(2, { payout: 85 }), pair(3)],
+      pairs: [pair(1), pair(2), pair(3)],
       answer: (request) => {
         if (request.assetId === 1) throw new TypeError('boom');
-        if (request.assetId === 2) return failed(request, 'unavailable');
         return decided(request, signal(Date.now()));
       },
     });
     h.scanner.start();
     await toScan(1);
-    expect([...h.scanner.snapshot().entries.keys()]).toEqual([3]);
+    expect([...h.scanner.snapshot().entries.keys()]).toEqual([2, 3]);
     expect(h.scanner.snapshot().entries.get(3)).toMatchObject({ kind: 'signal', action: 'up' });
     expect(h.logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ assetId: 1, err: { name: 'TypeError' } }),
@@ -446,37 +343,20 @@ describe('signal scanner', () => {
     await h.scanner.stop();
   });
 
-  it('S8 stop() waits for the calls in flight and drops the queued ones', async () => {
-    const releases: (() => void)[] = [];
-    const h = harness({
-      // six pairs, four in flight at once: 5 and 6 wait in the queue
-      pairs: [1, 2, 3, 4, 5, 6].map((id) => pair(id, { payout: 90 - id })),
-      answer: (request) =>
-        new Promise((resolve) => {
-          releases.push(() => resolve(decided(request, signal(Date.now()))));
-        }),
-    });
+  it('S8 nothing is scanned after stop()', async () => {
+    const h = harness();
     h.scanner.start();
     await toScan(1);
-    expect(h.calls).toEqual([1, 2, 3, 4]);
-    let stopped = false;
-    const stopping = h.scanner.stop().then(() => {
-      stopped = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(stopped).toBe(false);
-    for (const release of releases) release();
-    await stopping;
-    expect(stopped).toBe(true);
+    await h.scanner.stop();
     await toScan(3);
-    expect(h.calls).toEqual([1, 2, 3, 4]);
+    expect(h.calls).toEqual([1, 2]);
   });
 
-  it('S9 a pair that left the scanned set is gone from the snapshot', async () => {
-    const h = harness({ pairs: [pair(1, { payout: 90 }), pair(2)], maxPairs: 1 });
+  it('S9 a pair that left the eligible set is gone from the snapshot', async () => {
+    const h = harness({ pairs: [pair(1), pair(2)] });
     h.scanner.start();
     await toScan(1);
-    expect([...h.scanner.snapshot().entries.keys()]).toEqual([1]);
+    expect([...h.scanner.snapshot().entries.keys()]).toEqual([1, 2]);
     h.state.view = view([pair(1, { payout: 70 }), pair(2)]);
     await toScan(2);
     expect([...h.scanner.snapshot().entries.keys()]).toEqual([2]);
@@ -485,21 +365,9 @@ describe('signal scanner', () => {
 
   it('S10 the log line every period', async () => {
     const h = harness({
-      pairs: [pair(1, { payout: 90 }), pair(2, { payout: 85 }), pair(3)],
+      pairs: [pair(1), pair(2), pair(3)],
       answer: (request) =>
-        request.assetId === 2
-          ? failed(request, 'unavailable')
-          : decided(
-              request,
-              request.assetId === 3
-                ? {
-                    kind: 'no_signal',
-                    version: SIGNAL_ALGORITHM_VERSION,
-                    reason: 'insufficient_candles',
-                    detail: { closedCandles: 0, required: 50 },
-                  }
-                : signal(Date.now()),
-            ),
+        decided(request, request.assetId === 3 ? noSignal() : signal(Date.now())),
     });
     h.scanner.start();
     await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
@@ -513,14 +381,16 @@ describe('signal scanner', () => {
     // four candles in the minute: B+15 s, +30 s, +45 s, +60 s
     expect(fields).toEqual({
       interval: '15s',
+      source: 'live',
       eligible: 3,
       scanned: 3,
-      signals: 1,
-      noSignal: 4,
+      signals: 2,
+      decided: 12,
+      noSignal: { insufficient_candles: 4 },
+      unclosed: 0,
+      sourceDown: 0,
       skipped: 0,
-      failed: { unavailable: 4 },
-      rateLimited: 0,
-      pausedMs: 0,
+      threw: 0,
       lagMsP95: SLACK_MS,
     });
     await h.scanner.stop();
@@ -530,35 +400,16 @@ describe('signal scanner', () => {
     const h = harness({
       interval: '5s',
       pairs: [pair(1)],
-      answer: (request) =>
-        decided(request, {
-          kind: 'no_signal',
-          version: SIGNAL_ALGORITHM_VERSION,
-          reason: 'insufficient_candles',
-          detail: { closedCandles: 0, required: 50 },
-        }),
+      answer: (request) => decided(request, noSignal()),
     });
     h.scanner.start();
     await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
-    const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
-    expect(fields).toMatchObject({ interval: '5s', scanned: 1, noSignal: 12 });
-    await h.scanner.stop();
-  });
-
-  it('S11 a 429 pauses the scanner: the next candle sends nothing until the pause ends', async () => {
-    let limited = true;
-    const h = harness({
-      pairs: [pair(1)],
-      answer: (request) =>
-        limited ? failed(request, 'rate_limited', 20) : decided(request, signal(Date.now())),
+    expect(summary(h)).toMatchObject({
+      interval: '5s',
+      scanned: 1,
+      decided: 12,
+      noSignal: { insufficient_candles: 12 },
     });
-    h.scanner.start();
-    await toScan(1);
-    limited = false;
-    await toScan(2);
-    expect(h.calls).toEqual([1]);
-    await toScan(3);
-    expect(h.calls).toEqual([1, 1]);
     await h.scanner.stop();
   });
 
@@ -576,22 +427,25 @@ describe('signal scanner', () => {
   });
 
   it('S13 a scan takes no pair after its candle ended', async () => {
+    let jumped = false;
     const h = harness({
-      pairs: [1, 2, 3, 4, 5, 6].map((id) => pair(id, { payout: 90 - id })),
-      // slower than a candle: the first wave answers after the next boundary
-      answer: (request) =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(decided(request, signal(Date.now()))), 16_000);
-        }),
+      pairs: [1, 2, 3, 4].map((id) => pair(id)),
+      answer: (request) => {
+        // the second decision of the first scan takes the scanner's clock past the candle's end
+        if (request.assetId === 2 && !jumped) {
+          jumped = true;
+          h.state.skewMs = -CANDLE_15S_MS;
+        }
+        return decided(request, signal(Date.now()));
+      },
     });
     h.scanner.start();
     await toScan(1);
-    await vi.advanceTimersByTimeAsync(16_500);
-    expect(h.calls).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
-    const stopping = h.scanner.stop();
-    await vi.advanceTimersByTimeAsync(16_000);
-    await stopping;
-    expect(h.calls).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+    expect(h.calls).toEqual([1, 2]);
+    h.state.skewMs = 0;
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    expect(summary(h)).toMatchObject({ skipped: 2 });
+    await h.scanner.stop();
   });
 
   it('S15 after a forward clock jump the candle in progress is scanned at once', async () => {
@@ -604,7 +458,7 @@ describe('signal scanner', () => {
     expect(h.calls).toEqual([1, 2]);
     // the ended candle's target was not scanned at all: nothing counted as skipped for it
     await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
-    expect(h.logger.info.mock.calls[0]?.[0]).toMatchObject({ skipped: 0 });
+    expect(summary(h)).toMatchObject({ skipped: 0 });
     await h.scanner.stop();
   });
 
@@ -636,8 +490,7 @@ describe('signal scanner', () => {
       expect(snapshot.scanned).toEqual([2]);
       expect(freshSignals(snapshot, Date.now()).map((s) => s.assetId)).toEqual([2]);
       await vi.advanceTimersByTimeAsync(B + LOG_EVERY_MS + candleMs - Date.now());
-      const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
-      expect(fields).toMatchObject({ interval, eligible: 1 });
+      expect(summary(h)).toMatchObject({ interval, eligible: 1 });
       await h.scanner.stop();
     },
   );
@@ -646,7 +499,7 @@ describe('signal scanner', () => {
     ['15s', CANDLE_15S_MS],
     ['5s', CANDLE_5S_MS],
   ] as const)(
-    "S20 on the %s scanner every evaluation carries the pair's digits from the catalog",
+    "S20 on the %s scanner every decision carries the pair's digits from the catalog",
     async (interval, candleMs) => {
       const h = harness({ interval, pairs: [pair(1, { digits: 3 }), pair(2, { digits: 7 })] });
       h.scanner.start();
@@ -659,43 +512,277 @@ describe('signal scanner', () => {
     },
   );
 
-  it('S18 the default 5s scanner scans its four pairs every candle under a jittery timer', async () => {
-    // the pacer reads the timers' clock this many ms late, per 5 s candle since B: a fire a few
-    // ms earlier relative to its boundary than the one before
-    const lags = [0, 1, 0, 2, 2, 1, 3, 0, 1, 0, 2, 2, 1];
-    const h = harness({
-      interval: '5s',
-      pairs: [1, 2, 3, 4].map((id) => pair(id)),
-      maxPairs: 4,
-      pacer: createScanPacer({
-        perMinute: signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
-        capacity: signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
-        backoffMinMs: 15_000,
-        backoffMaxMs: 120_000,
-        now: () => Date.now() + (lags[Math.floor((Date.now() - B) / CANDLE_5S_MS)] ?? 0),
-      }),
-    });
-    h.scanner.start();
-    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
-    expect(h.calls).toHaveLength(48);
-    expect(h.logger.info.mock.calls[0]?.[0]).toMatchObject({
-      interval: '5s',
-      scanned: 4,
-      skipped: 0,
-      rateLimited: 0,
-    });
-    await h.scanner.stop();
-  });
-
   it('S14 the log line counts no eligible pair while the catalog is stale', async () => {
     const h = harness();
     h.scanner.start();
     await toScan(1);
     h.state.view = view([pair(1), pair(2)], false);
     await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
-    const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
-    expect(fields).toMatchObject({ eligible: 0, scanned: 0 });
+    expect(summary(h)).toMatchObject({ eligible: 0, scanned: 0 });
     await h.scanner.stop();
+  });
+});
+
+// #405: the scan decides every eligible pair from the source, with no broker call
+describe('signal scanner on the candle source (#405)', () => {
+  it.each([
+    ['15s', CANDLE_15S_MS],
+    ['5s', CANDLE_5S_MS],
+  ] as const)(
+    'S26/S30 on %s every eligible pair is decided on each of seven candles, with no GET',
+    async (interval, candleMs) => {
+      const pairs = Array.from({ length: 20 }, (_, i) => pair(100 + i));
+      const real = realFeed((_, nowMs) => emptyWindow(nowMs, candleMs));
+      const h = harness({ interval, pairs, feed: real.feed });
+      h.scanner.start();
+      for (let candle = 1; candle <= 7; candle += 1) {
+        await toScan(candle, candleMs);
+        const snapshot = h.scanner.snapshot();
+        expect(snapshot.scanned).toEqual(pairs.map((p) => p.id));
+        expect(snapshot.entries.size).toBe(pairs.length);
+        for (const entry of snapshot.entries.values()) {
+          expect(entry.decidedAtMs).toBe(B + candle * candleMs + SLACK_MS);
+        }
+      }
+      expect(h.calls).toHaveLength(7 * pairs.length);
+      expect(real.getChart).not.toHaveBeenCalled();
+      expect(real.evaluate).not.toHaveBeenCalled();
+      // every empty window asked for its refill once a candle
+      expect(real.refills).toHaveLength(7 * pairs.length);
+      await h.scanner.stop();
+    },
+  );
+
+  it('S27 a source that is not streaming clears the snapshot, warns once per streak and logs down', async () => {
+    const h = harness();
+    h.scanner.start();
+    await toScan(1);
+    expect(h.scanner.snapshot().entries.size).toBe(2);
+    h.state.streaming = false;
+    await toScan(2);
+    await toScan(3);
+    expect(h.calls).toEqual([1, 2]);
+    expect(h.scanner.snapshot().scanned).toEqual([]);
+    expect(h.scanner.snapshot().entries.size).toBe(0);
+    expect(h.logger.warn.mock.calls).toEqual([
+      [{ interval: '15s' }, 'signal scan skipped: source not streaming'],
+    ]);
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    expect(summary(h)).toMatchObject({
+      source: 'down',
+      eligible: 0,
+      scanned: 0,
+      signals: 0,
+      sourceDown: 3,
+      decided: 2,
+    });
+    h.state.streaming = true;
+    await toScan(6);
+    h.state.streaming = false;
+    await toScan(7);
+    expect(h.logger.warn).toHaveBeenCalledTimes(2);
+    await h.scanner.stop();
+  });
+
+  it('S27b with the source down and no catalog the line says down with no eligible pair', async () => {
+    const h = harness();
+    h.state.streaming = false;
+    h.state.view = undefined;
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    expect(summary(h)).toMatchObject({ source: 'down', eligible: 0, scanned: 0, sourceDown: 4 });
+    expect(h.calls).toEqual([]);
+    await h.scanner.stop();
+  });
+
+  it('S28 a source gone from the third pair on skips the rest and keeps the first two', async () => {
+    let gone = false;
+    const h = harness({
+      pairs: [1, 2, 3, 4, 5].map((id) => pair(id)),
+      answer: (request) => {
+        if (request.assetId === 3) gone = true;
+        return gone ? undefined : decided(request, signal(Date.now()));
+      },
+    });
+    h.scanner.start();
+    await toScan(1);
+    expect(h.calls).toEqual([1, 2, 3]);
+    expect([...h.scanner.snapshot().entries.keys()]).toEqual([1, 2]);
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    // three on the first candle, all five on each of the three after it
+    expect(summary(h)).toMatchObject({ skipped: 3 + 3 * 5, decided: 2 });
+    await h.scanner.stop();
+  });
+
+  it('S29 the line counts no_signal by reason and the decisions whose window had not closed the candle', async () => {
+    const h = harness({
+      pairs: [1, 2, 3, 4, 5].map((id) => pair(id)),
+      answer: (request) => {
+        const boundary = boundaryOf(Date.now(), CANDLE_15S_MS);
+        switch (request.assetId) {
+          case 1:
+            return decided(request, noSignal('candle_gap'));
+          case 2:
+            return decided(request, noSignal('insufficient_candles'));
+          case 3:
+            return decided(request, noSignal('stale'));
+          case 4:
+            // the watermark has not crossed the boundary yet: the candle before is the last closed
+            return decided(request, signal(Date.now()), {
+              kind: 'socket',
+              startTime: 0,
+              closedUntil: boundary - 1,
+              gaps: 0,
+            });
+          default:
+            return decided(request, signal(Date.now()), {
+              kind: 'socket',
+              startTime: 0,
+              closedUntil: boundary,
+              gaps: 0,
+            });
+        }
+      },
+    });
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    expect(summary(h)).toMatchObject({
+      decided: 20,
+      noSignal: { candle_gap: 4, insufficient_candles: 4, stale: 4 },
+      unclosed: 4,
+      lagMsP95: SLACK_MS,
+    });
+    await h.scanner.stop();
+  });
+
+  it('S31 a pair the feed throws on (digits 11) is counted threw; the others are decided', async () => {
+    const real = realFeed((_, nowMs) => emptyWindow(nowMs));
+    const h = harness({ pairs: [pair(1), pair(2, { digits: 11 }), pair(3)], feed: real.feed });
+    h.scanner.start();
+    await toScan(1);
+    expect([...h.scanner.snapshot().entries.keys()]).toEqual([1, 3]);
+    expect(h.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ assetId: 2, err: { name: 'RangeError' } }),
+      'signal scan failed',
+    );
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    expect(summary(h)).toMatchObject({ threw: 4, decided: 8 });
+    await h.scanner.stop();
+  });
+
+  it('S32 after the source comes back the snapshot holds only the new scan', async () => {
+    const h = harness({ pairs: [pair(1), pair(2)] });
+    h.scanner.start();
+    await toScan(1);
+    h.state.streaming = false;
+    await toScan(2);
+    expect(freshSignals(h.scanner.snapshot(), Date.now())).toEqual([]);
+    h.state.streaming = true;
+    h.state.view = view([pair(2), pair(3)]);
+    // before the first scan after the return nothing is served
+    await vi.advanceTimersByTimeAsync(B + 3 * CANDLE_15S_MS + SLACK_MS - 1 - Date.now());
+    expect(h.scanner.snapshot().entries.size).toBe(0);
+    expect(freshSignals(h.scanner.snapshot(), Date.now())).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    const snapshot = h.scanner.snapshot();
+    expect([...snapshot.entries.keys()]).toEqual([2, 3]);
+    for (const entry of snapshot.entries.values()) {
+      expect(entry.decidedAtMs).toBe(B + 3 * CANDLE_15S_MS + SLACK_MS);
+    }
+    expect(freshSignals(snapshot, Date.now()).map((s) => s.assetId)).toEqual([2, 3]);
+    await h.scanner.stop();
+  });
+
+  it('S33 a snapshot of 122 pairs serves every signal on the candle closed last, and only those', async () => {
+    const pairs = Array.from({ length: 122 }, (_, i) => pair(1_000 + i));
+    const h = harness({
+      pairs,
+      answer: (request) =>
+        // every third pair's window lags a candle: its signal is on an older candle
+        request.assetId % 3 === 0
+          ? decided(request, signal(Date.now() - CANDLE_15S_MS))
+          : decided(request, signal(Date.now())),
+    });
+    h.scanner.start();
+    await toScan(1);
+    const served = freshSignals(h.scanner.snapshot(), Date.now()).map((s) => s.assetId);
+    expect(served).toEqual(pairs.map((p) => p.id).filter((id) => id % 3 !== 0));
+    expect(h.scanner.snapshot().scanned).toHaveLength(122);
+    await h.scanner.stop();
+  });
+
+  // #405 review, major 1: the ring, the source, the feed and the cache as the backend builds them.
+  // Four ticks per candle (open, high, low, close) of mildRise's shape (signal's testing.ts: 45
+  // sideways closes, then +0.06/-0.04 moves) up to bucket T - I, none stamped at or after the
+  // boundary T: at T + slack neither the watermark nor the clock margin has closed T - I, which the
+  // ring then reads as forming (ring.test.ts R3). The scanner's source is down until that scan, so
+  // the line counts it alone.
+  it('S34 on the real ring a candle the ring has not closed is left out: the decision is on the one before, unclosed, not served', async () => {
+    const T = B + 4 * CANDLE_15S_MS;
+    const lastBucket = T - CANDLE_15S_MS;
+    const closes = [100];
+    for (let i = 1; i < 45; i++) closes.push(closes[i - 1] + (i % 2 ? 0.03 : -0.03));
+    while (closes.length < 300) {
+      closes.push(closes[closes.length - 1] + (closes.length % 2 ? 0.06 : -0.04));
+    }
+    const price = (value: number) => Number(value.toFixed(5));
+    const ticks: Tick[] = closes.flatMap((rawClose, i) => {
+      const bucket = lastBucket - (closes.length - 1 - i) * CANDLE_15S_MS;
+      const open = Number((i === 0 ? rawClose : closes[i - 1]).toFixed(2));
+      const close = Number(rawClose.toFixed(2));
+      return [
+        { price: open, timestamp: bucket + 1_000 },
+        { price: price(Math.max(open, close) + 0.02), timestamp: bucket + 2_000 },
+        { price: price(Math.min(open, close) - 0.02), timestamp: bucket + 3_000 },
+        { price: close, timestamp: bucket + 4_000 },
+      ];
+    });
+
+    async function scanOnce(watermarkCrossed: boolean) {
+      vi.setSystemTime(B + 3_000);
+      const ring = createCandleRing({
+        capacity: MARKET_DATA_RING_CANDLES,
+        skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
+        intervals: SIGNAL_SCAN_INTERVALS,
+      });
+      for (const tick of ticks) ring.push(1, 5, tick, tick.timestamp + 50);
+      // another pair's tick at the boundary moves the watermark past T - I
+      if (watermarkCrossed) ring.push(2, 5, { price: 1.1, timestamp: T }, T + 50);
+      const source = createCandleSource({
+        ring,
+        requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
+        streaming: () => true,
+      });
+      const real = realFeed((assetId, nowMs) => source.read(assetId, '15s', nowMs));
+      const h = harness({ pairs: [pair(1)], feed: real.feed });
+      h.state.streaming = false;
+      h.scanner.start();
+      await vi.advanceTimersByTimeAsync(T + SLACK_MS - 1 - Date.now());
+      h.state.streaming = true;
+      await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+      const snapshot = h.scanner.snapshot();
+      await h.scanner.stop();
+      expect(real.getChart).not.toHaveBeenCalled();
+      return {
+        entry: snapshot.entries.get(1),
+        line: summary(h),
+        served: freshSignals(snapshot, Date.now()),
+      };
+    }
+
+    const unclosed = await scanOnce(false);
+    expect(unclosed.entry).toMatchObject({
+      kind: 'signal',
+      lastCandleTimestamp: T - 2 * CANDLE_15S_MS,
+    });
+    expect(unclosed.line).toMatchObject({ decided: 1, unclosed: 1, signals: 0 });
+    expect(unclosed.served).toStrictEqual([]);
+
+    // control: the same ticks with the watermark past the boundary - the side that is served
+    const closed = await scanOnce(true);
+    expect(closed.entry).toMatchObject({ kind: 'signal', lastCandleTimestamp: lastBucket });
+    expect(closed.line).toMatchObject({ decided: 1, unclosed: 0, signals: 1 });
+    expect(closed.served.map(({ assetId }) => assetId)).toStrictEqual([1]);
   });
 });
 
@@ -718,9 +805,7 @@ describe('signal scanner logs (Rule 8)', () => {
       assetId: 1,
       err: { name: 'TypeError' },
     });
-    expect(parsed.find((line) => line.msg === 'signal scanner')).toMatchObject({
-      failed: { threw: 4 },
-    });
+    expect(parsed.find((line) => line.msg === 'signal scanner')).toMatchObject({ threw: 4 });
     expect(lines.filter((line) => line.includes('SECRET-'))).toEqual([]);
   });
 });

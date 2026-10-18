@@ -6,7 +6,8 @@ import { SessionTradeResult } from './session-steps';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
 import { TradeMode } from './trading';
 import {
-  SESSION_NO_SIGNAL_TIMEOUT_MS,
+  SESSION_NO_SIGNAL_CANDLES,
+  sessionSignalCandleMs,
   TradingSessionStopReason,
   type TradingSessionView,
 } from './trading-session';
@@ -17,7 +18,8 @@ import {
 // each side's overrides apply (Rule 30).
 
 // A session's stop reasons but completed, by key (#284). kill_switch reads the single
-// trade's own refusal of the closed switch; no_signal_timeout's line carries the limit (#509).
+// trade's own refusal of the closed switch; no_signal_timeout's line carries the limit in candles
+// of the session's interval (#509, #637), so stopLine builds it from the view's settings.
 export const SESSION_STOP_LINES = {
   [TradingSessionStopReason.ManualReview]: 'sessionStopManualReview',
   [TradingSessionStopReason.RejectedTwice]: 'sessionStopRejectedTwice',
@@ -56,7 +58,7 @@ export type SessionScore = Pick<TradingSessionView['trades'], 'won' | 'lost' | '
 // what a stopped session's closing lines print of its view
 export type SessionClosingView = Pick<
   TradingSessionView,
-  'mode' | 'stopReason' | 'trades' | 'cycles' | 'balance'
+  'mode' | 'stopReason' | 'trades' | 'cycles' | 'balance' | 'settings'
 >;
 
 // a hole holding an array is joined without a separator, so the newlines are written here
@@ -112,6 +114,13 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     return form === PluralForm.Few ? plain.sessionCycleFew : plain.sessionCycleMany;
   };
   const cyclesCount = (count: number): string => `${String(count)} ${pluralCycles(count)}`;
+  // «свеча», «свечи» or «свечей» after the number (#637)
+  const pluralCandles = (count: number): string => {
+    const form = pluralFormOf(count);
+    if (form === PluralForm.One) return plain.sessionCandleOne;
+    return form === PluralForm.Few ? plain.sessionCandleFew : plain.sessionCandleMany;
+  };
+  const candlesCount = (count: number): string => `${String(count)} ${pluralCandles(count)}`;
 
   // «3 в плюс, 1 в минус», with «в ноль» only when a trade tied
   const scoreOf = ({ won, lost, tied }: SessionScore): string =>
@@ -146,7 +155,9 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     stopReason,
     trades,
     cycles,
-  }: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles'>): TelegramHtml | undefined => {
+    settings,
+  }: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles' | 'settings'>):
+    TelegramHtml | undefined => {
     if (stopReason === TradingSessionStopReason.Completed) {
       return html.sessionCompleted({
         cycles: cyclesCount(cycles.closed),
@@ -154,8 +165,11 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
       });
     }
     if (stopReason === TradingSessionStopReason.NoSignalTimeout) {
+      // settings that do not parse name no candle, so the line goes without the figure (#637)
+      if (settings === null) return html.sessionStopNoSignalTimeoutNoSettings;
       return html.sessionStopNoSignalTimeout({
-        noSignalMinutes: String(SESSION_NO_SIGNAL_TIMEOUT_MS / 60_000),
+        noSignalCandles: candlesCount(SESSION_NO_SIGNAL_CANDLES),
+        candleSec: String(sessionSignalCandleMs(settings.durationSec) / 1000),
       });
     }
     return stopReason === null ? undefined : html[SESSION_STOP_LINES[stopReason]];
@@ -176,7 +190,7 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   // What the session message ends on once its session stopped, and the first line of the reply to
   // the stop (#536): the summary's (#464) first line under its pair, the same text.
   const sessionEndLine = (
-    view: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles'>,
+    view: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles' | 'settings'>,
   ): TelegramHtml => stopLine(view) ?? html.sessionStatusUnavailable;
 
   // The summary message (#464): the pair, then the closing lines.
@@ -217,6 +231,7 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     tradesCount,
     pluralCycles,
     cyclesCount,
+    candlesCount,
     scoreOf,
     resultOf,
     sessionAssetLabel,

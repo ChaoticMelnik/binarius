@@ -278,6 +278,18 @@ const SESSION_BALANCES: TradingSessionView['balance'][] = [
 ];
 // the session picture's direction, or none (#568)
 const SIGNAL_ACTIONS = [null, ...Object.values(TradeAction)];
+// a session on the longest candle (INT4_MAX s -> 1h, «3600» in the no-signal line, #637), or one
+// whose settings do not parse (the line without the figure)
+const STOP_SETTINGS: TradingSessionView['settings'][] = [
+  {
+    version: 1,
+    assetId: INT4_MAX,
+    durationSec: INT4_MAX,
+    trades: 5,
+    stake: { baseStake: STAKE, stakeScale: 8 },
+  },
+  null,
+];
 const sessionTexts = (
   status: TradingSessionStatus,
   stopReasons: (TradingSessionStopReason | null)[],
@@ -422,19 +434,22 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionStopReply: () =>
     [...Object.values(TradingSessionStopReason), null].flatMap((stopReason) =>
       [1, 2, N].flatMap((settled) =>
-        [null, ...Object.values(TradeIntentStatus).map((s) => intentView({ status: s }))].map(
+        [null, ...Object.values(TradeIntentStatus).map((s) => intentView({ status: s }))].flatMap(
           (lastIntent) =>
-            sessionStopReplyText(
-              sessionView({
-                status: TradingSessionStatus.Stopped,
-                stopReason,
-                trades: { settled, rejected: 0, won: N, lost: N, tied: N, profit: USD },
-                cycles: {
-                  planned: MAX_SESSION_CYCLES,
-                  closed: Math.min(settled, MAX_SESSION_CYCLES),
-                },
-                lastIntent,
-              }),
+            STOP_SETTINGS.map((settings) =>
+              sessionStopReplyText(
+                sessionView({
+                  status: TradingSessionStatus.Stopped,
+                  stopReason,
+                  settings,
+                  trades: { settled, rejected: 0, won: N, lost: N, tied: N, profit: USD },
+                  cycles: {
+                    planned: MAX_SESSION_CYCLES,
+                    closed: Math.min(settled, MAX_SESSION_CYCLES),
+                  },
+                  lastIntent,
+                }),
+              ),
             ),
         ),
       ),
@@ -473,21 +488,24 @@ const REAL: Record<string, () => TelegramHtml[]> = {
             // each plural of the count
             [N, 992, 991].flatMap((settled) =>
               // each plural of the cycles (#552), at most MAX_SESSION_CYCLES
-              [MAX_SESSION_CYCLES, 4, 1].map((closed) =>
-                notices.sessionSummaryText(symbol, INT4_MAX, {
-                  mode,
-                  stopReason,
-                  cycles: { planned: MAX_SESSION_CYCLES, closed },
-                  trades: {
-                    settled,
-                    rejected: 0,
-                    won: N,
-                    lost: N,
-                    tied: N,
-                    profit: USD,
-                  },
-                  balance,
-                }),
+              [MAX_SESSION_CYCLES, 4, 1].flatMap((closed) =>
+                STOP_SETTINGS.map((settings) =>
+                  notices.sessionSummaryText(symbol, INT4_MAX, {
+                    mode,
+                    stopReason,
+                    cycles: { planned: MAX_SESSION_CYCLES, closed },
+                    trades: {
+                      settled,
+                      rejected: 0,
+                      won: N,
+                      lost: N,
+                      tied: N,
+                      profit: USD,
+                    },
+                    balance,
+                    settings,
+                  }),
+                ),
               ),
             ),
           ),
@@ -732,6 +750,21 @@ describe('the assembled messages, against the real assembly', () => {
       '✅ Подключён: <code>&lt;b&gt;адрес неизвестен&lt;/b&gt;</code>',
     );
   });
+
+  // #637: the no-signal line made the widest of its anyOf, so its two variables' estimates decide
+  // the message's
+  it.each(['sessionStopped', 'sessionStopReply', 'sessionSummary'])(
+    'M7 estimates %s exactly with the no-signal line widest',
+    (id) => {
+      const texts = {
+        sessionStopNoSignalTimeout: '⏳ ' + 'я'.repeat(90) + ' {noSignalCandles} по {candleSec} с',
+      };
+      const message = ASSEMBLED.find((m) => m.id === id)!;
+      setBotTextSource(recording(texts).source);
+      const real = Math.max(...REAL[id]!().map(lengthOf));
+      expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
+    },
+  );
 
   it.each(['intentStatus', 'analysisNoSignal'])(
     'M4 estimates %s exactly with a long label overridden',

@@ -6,8 +6,9 @@
 LLM. The decider is a pure function: it reads no clock, no environment and no network, and writes
 no log. The same candles, `intervalMs`, `nowMs`, `digits` and parameters always give the same
 decision. The
-signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) fetches the candles,
-calls the decider and writes one journal line per decision. Its callers are the backend's
+signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) reads the candles - the
+data socket's window or the REST chart (#405) - calls the decider and writes the decision's
+journal line. Its callers are the backend's
 `POST /trading/signal` (#258, [below](#post-tradingsignal-258)), the backend's background
 scanner behind `GET /trading/signals` (#343, [The scanner](#the-scanner-343)) and, since #509, the
 session start `POST /trading/sessions` (step 4c, [trading-session.md](trading-session.md#post-tradingsessions):
@@ -245,13 +246,28 @@ rule.
 
 ## Feed and journal (#133)
 
-`feed.ts` connects the decider to the broker's chart. It fetches through the REST client's
-`getChart` (docs/broker-rest.md), opens no socket and parses no raw payload of its own.
+`feed.ts` connects the decider to its candles. They come from one of two places, and one code
+(`decideRows`) decides both, so the decision, its journal series and the display indicators read
+the same rows (`feed.test.ts` F15):
+
+- **The candle source (#405)**: the data socket's ring ([market-data.md](market-data.md)) through
+  the port `SignalCandleSource` (`packages/signal/src/source.ts`): `read(assetId, interval, nowMs)`
+  returns the window or `undefined`, `request(assetId, interval)` asks for a refill. The backend's
+  adapter `createCandleSource` (`apps/backend/src/market-data/source.ts`) gives a window only while
+  the manager's `streaming()` is true and only for the ring's intervals (`SIGNAL_SCAN_INTERVALS`).
+- **The REST chart**: the client's `getChart` (docs/broker-rest.md), when the source gives no
+  window: no `BROKER_WS_URL`, no ready socket, or an interval the ring does not build (`1m` and
+  longer). Every GET first takes a token of the signal pacer ([The budget](#the-budget)).
 
 ```ts
-const feed = createSignalFeed({ rest, logger }); // decider defaults to createSignalDecider()
-const result = await feed.evaluate({ assetId, interval: '1m', digits: pair.digits }, { signal });
+const feed = createSignalFeed({ rest, source, pacer, logger }); // source and pacer are optional
+const result = await feed.evaluate({ assetId, interval: '15s', digits: pair.digits }, { signal });
+const scanned = feed.fromSource({ assetId, interval: '15s', digits: pair.digits }); // or undefined
 ```
+
+`fromSource` is synchronous: the source's window only, no REST, no journal line, `undefined`
+without a window. `evaluate` tries the window first and falls back to REST. Without `source` the
+feed is REST only (the CLI probe, the e2e harness); without `pacer` its GETs are not gated (F25).
 
 The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `packages/shared/src/signal.ts`:
 `5s`, `15s`, `1m`, `5m`, `15m`, `30m` and `1h`. The live broker accepted each of them (owner's
@@ -264,13 +280,29 @@ interval outside the table is a `RangeError` before any fetch.
 
 ### The window
 
-`evaluate` reads the clock once (`nowMs`, `Date.now` unless `now` is passed) and checks it with
+`evaluate` and `fromSource` read the clock once (`nowMs`, `Date.now` unless `now` is passed) and checks it with
 `assertSignalClock`, and `digits` with `assertDigits` (0 to `MAX_PAIR_DIGITS`), before any broker
 call (`feed.test.ts` F11). It then requests
 `chartWindow(nowMs, intervalMs, SIGNAL_FETCH_LIMIT)`:
 `startTime = floor(nowMs / intervalMs) × intervalMs − (limit − 1) × intervalMs`. That is `limit`
 candle starts ending on the current interval boundary. The last of them is the forming candle,
 which the decider drops. The decision uses the same `nowMs` the window was built from.
+
+The source's window is the ring's for the same `nowMs`: the closed candles of the 300 buckets
+ending on the boundary, from the same `startTime`, and the latest bucket the ring has not closed
+(`forming`) when the pair has a candle in it. The feed appends `forming` only when it is the
+current bucket of `nowMs`, as a REST answer carries its forming row, and the decider drops it
+(F21). Until the watermark or the clock margin closes the bucket before the boundary, `forming` is
+that bucket (`ring.test.ts` R3): the feed leaves it out, and the decision is on the candle before
+it - `unclosed`, not served by `GET /trading/signals` (F26, S34). Either way the rows are decided as
+a REST answer. A closed bucket without a candle is a gap of the window
+(`gaps`); any gap in the window, inside the decision's 60 or before it, calls `request()` once for
+the key, and the decision is what the decider makes of the rows as they are: a gap inside the
+decision window is `candle_gap`, too few closed candles `insufficient_candles` (an empty window:
+`closedCandles: 0`), a last closed candle too old `stale` (F16, F17). The feed never waits for the
+refill; the cache holds that refusal to the end of the candle, as any decision, and the backfill
+([market-data.md → Backfill](market-data.md#backfill-590)) closes the gap for a later candle. A window
+without gaps asks for nothing (F18).
 
 `SIGNAL_FETCH_LIMIT` is 300 (#482): MA200 needs 200 closed candles. The decision reads only the
 rows a fetch of 60 with the same right edge returns, cut by time, not by count:
@@ -284,8 +316,7 @@ decision. The display indicators read the unbroken tail of the whole answer. `as
 checks `SIGNAL_FETCH_LIMIT ≥ SIGNAL_CHART_LIMIT` and `SIGNAL_FETCH_LIMIT − 1 − maxStaleIntervals ≥
 200` at import for the defaults (300 − 1 − 2 = 297, `feed-config.test.ts` K4); a feed's own
 decider needs no check, since `assertFeedLimit` already bounds its `maxStaleIntervals` to at most
-58. The number of
-chart GETs does not change, for the scanner either; each answer is about 5 times longer.
+58. Each REST answer is about 5 times longer than a 60-row one.
 
 `SIGNAL_CHART_LIMIT` is 60 (owner's choice). The decision window has to leave `minClosedCandles` closed
 candles even after the forming candle and `maxStaleIntervals` late candles are taken out:
@@ -296,7 +327,7 @@ that needs more candles than the window can give is refused at construction with
 A gap anywhere in the window is a `candle_gap` refusal, whatever the count.
 
 The feed has no retries, no sleeps and no re-fetch on a data refusal. A refusal is a decision and
-is journaled as one. It holds no mutable state, so concurrent `evaluate` calls for different
+is journaled as one when its line is written (below). It holds no mutable state, so concurrent `evaluate` calls for different
 assets are independent. The one REST call is bounded by the client's `BROKER_REST_TIMEOUT_MS`
 (5 s). The caller may pass a shorter `signal`.
 
@@ -304,18 +335,26 @@ assets are independent. The one REST call is bounded by the client's `BROKER_RES
 
 `evaluate` resolves to one of `SignalFeedOutcome`:
 
-- `{ outcome: 'decided', entry }`, with one `info` line `signal decision` (below);
+- `{ outcome: 'decided', entry }`, with one `info` line `signal decision` (below) unless the
+  caller passed `journal: false` (the cache does);
 - `{ outcome: 'fetch_failed', request, code, status?, retryAfterSec? }`, with one `warn` line
   `signal fetch failed`: `err: { name: 'BrokerRestError', code }`, `status`, `retryAfterSec`, the
   broker's `detail` (already cut by the client) and the request facts under `signal`. It carries
   no URL and no token: the chart endpoint takes none.
+- `{ outcome: 'fetch_failed', request, code: 'rate_limited', retryAfterSec }` when the signal
+  pacer has no token for the GET (#405), with one `warn` line `signal fetch refused: no token`
+  (`retryAfterSec` and the request facts under `signal`) and no GET sent. `retryAfterSec` is what
+  is left of the pacer's pause after a 429, or `SIGNAL_PACER_RETRY_SEC` (1 s) when the bucket is
+  only empty (F24). The code is the broker's `rate_limited`, so the bot answers "try again in N s"
+  and a session step waits as on any `fetch_failed`; the wire schemas do not change. It is
+  expected only without the source, when the steps of many sessions read REST at one boundary.
 
 Any other error, such as a programmer error, is rethrown and logs nothing.
 
 | `code` | Source (docs/broker-rest.md → Errors) | What the caller (#287) does |
 |---|---|---|
 | `unauthorized` | 401. The chart sends no bearer, so this is drift | stops and reports |
-| `rate_limited` | 429, with `retryAfterSec` when `Retry-After` is an integer | waits `retryAfterSec` (or its own backoff), then evaluates again |
+| `rate_limited` | 429, with `retryAfterSec` when `Retry-After` is an integer; or the signal pacer's refusal (above). A 429 also pauses the pacer | waits `retryAfterSec` (or its own backoff), then evaluates again |
 | `rejected` | any other 4xx (an interval or asset the broker refuses) | fixes the request and stops |
 | `unavailable` | 5xx, a failed fetch, the client's 5 s timeout, a body cut mid-flight | may evaluate again later |
 | `contract_violation` | a 2xx that is not JSON, fails `candlesWireSchema` or exceeds 4 MiB; any 3xx | treats it as drift and stops |
@@ -323,17 +362,18 @@ Any other error, such as a programmer error, is rethrown and logs nothing.
 
 ### The journal line
 
-Each decision is one pino `info` line, `msg` `signal decision`, with the whole entry under the
-key `signal`:
+A decision is one pino `info` line, `msg` `signal decision`, with the whole entry under the
+key `signal`. In the backend the cache writes it lazily (#405, [The cache](#the-cache)): only for a
+decision a route answers, once per decision.
 
 | Field | Content |
 |---|---|
 | `assetId`, `interval`, `intervalMs`, `nowMs` | the request and the clock reading the decision used |
 | `digits` (v2) | the pair's quote precision the caller passed |
-| `fetch` | `{ startTime, limit, rows, durationMs }`: the actual request (`limit` 300) and the rows it returned |
+| `source` (v2, #405) | where the series came from: `{ kind: 'rest', startTime, limit, rows, durationMs }`, the actual request (`limit` 300) and the rows it returned; or `{ kind: 'socket', startTime, closedUntil, gaps }`, the ring's window, the end of its closed buckets and the number of its closed buckets without a candle. A v2 line written before #405, and every v1 line, carries `fetch: { startTime, limit, rows, durationMs }` instead; the stand parses both (`journal-line.test.ts` JL) |
 | `version` | `SIGNAL_ALGORITHM_VERSION` |
 | `params` | `decider.params`, the frozen parameters |
-| `series` | the rows of the response inside the 60-row window (`decisionRows`), the ones the decision read, as tuples `[timestamp, open, high, low, close]` (`volume` is never written) |
+| `series` | the rows inside the 60-row window (`decisionRows`) of the REST answer or of the source's window, the ones the decision read, as tuples `[timestamp, open, high, low, close]` (`volume` is never written) |
 | `decision` | the decision as `decide` returned it |
 
 No key of the entry is a redacted key or an error key of `logOptions`, so the line holds the entry
@@ -380,8 +420,8 @@ BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @bi
 
 ### The post-deploy check (#313)
 
-Each `POST /trading/signal` on a `5s`/`15s` key writes one `signal decision` line through the
-backend's logger; `signal.interval`, `signal.decision.kind` and `signal.decision.reason` give the
+Each decision `POST /trading/signal` answers on a `5s`/`15s` key writes one `signal decision` line
+through the backend's logger (once per decision, #405); `signal.interval`, `signal.decision.kind` and `signal.decision.reason` give the
 rate of each outcome. After the deploy, on the pilot (before it was written here, the filter after
 `docker compose logs` ran over the feed's lines on the mock broker, `5s`/`15s`/`1m` on pairs
 101/202/303: the six sub-minute lines counted, the three `1m` lines left out):
@@ -429,9 +469,10 @@ docker compose logs --no-log-prefix --since 1h backend | grep -F '"msg":"signal 
 ## POST /trading/signal (#258)
 
 The backend computes the signal for the bot's analysis screen (#126). The route sits behind the
-internal bearer (`internalBearerAuth`, as `GET /trading/pairs`): one public chart GET through the
-cached feed, on the process's one REST client, and, only for a request with `analysis` (#484), one
-write of the user's `users.last_analysis_*` after the decision.
+internal bearer (`internalBearerAuth`, as `GET /trading/pairs`): one `evaluate` of the cached feed
+with `journal: true` (#405) - the data socket's window while it streams, otherwise one public
+chart GET on the process's one REST client and the signal pacer - and, only for a request with
+`analysis` (#484), one write of the user's `users.last_analysis_*` after the decision.
 
 Request: `{ assetId, interval, analysis? }` (`tradingSignalRequestSchema`): `assetId` a positive
 int4, the same spelling as `POST /trading/intents`; `interval` a key of the table. The decision
@@ -474,10 +515,16 @@ table interval not above it, the shortest (`5s`) below it. A 5 s trade gets `5s`
 `15s`, never `1m` (#313; `signal.test.ts` S3 fails otherwise). `durationSec` must be a positive
 integer; anything else is a `RangeError`.
 
-The backend writes the feed's lines through its own logger: one `signal decision` line per fetch,
-one `signal fetch failed` line per failed fetch, nothing on a cache hit. The route adds no line of
-its own. `signal-routes.test.ts` (R6) reads the backend's log sink: two requests in one candle make
-one chart GET and one journal line, which replays to the answered decision.
+The backend writes the feed's lines through its own logger. The route and the session start
+(#509) call `evaluate(…, { journal: true })`; the cache writes one `signal decision` line for each
+decision they answer, the first time one of them answers it - a hit on a decision the scanner
+made, a join of a fetch in flight or its own fetch - and never again for that decision (#405,
+owner's answer 2 of #392). One `signal fetch failed` line per failed fetch; the route adds no line
+of its own. `signal-routes.test.ts` reads the backend's log sink: two requests in one candle make
+one chart GET and one journal line, which replays to the answered decision (R6); a decision the
+scanner made writes its line when the route answers it, once (R16); without the source and with an
+empty pacer the route answers `rate_limited` in 1 s and sends no GET (R18).
+`session-routes.db.test.ts` R30b: a session start writes one line for the decision it checked.
 
 ### The cache
 
@@ -493,6 +540,19 @@ the key: two requests for one key in one candle share one fetch and the first ca
 | `fetch_failed` `rate_limited` with `retryAfterSec` | yes | `now() + min(retryAfterSec s, maxTtlMs)`; a hit answers what is left, `ceil((until − now()) / 1000)` |
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | no | the next call fetches |
 | a throw | no | every waiter of that fetch rejects with it |
+
+`fromSource(request)` (#405, the scanner's) answers a held decision of the key, otherwise the inner
+feed's `fromSource` and holds its decision by the same rule; without a window it holds nothing
+(C15, C16). A decision of the source replaces a refusal held from REST on both entries: `fromSource` (C21) and
+`evaluate`, which asks the source before it answers a held refusal (C22), so a source that
+came back is not hidden behind a `rate_limited` hold. A decision it holds is the hit of an
+`evaluate` in the same candle, the same object (C20).
+
+The journal is the cache's (#405): the inner `evaluate` always runs with `journal: false`, and the
+cache calls the inner `journal(entry)` for a decided result the first time an `evaluate` with
+`journal: true` gets it - a hit, a join or its own fetch - remembered per decision object
+(`WeakSet`), so a later call writes nothing (C17, C18). `journal` defaults to `false`; `fromSource`
+and `fetch_failed` write no line (C18b, C19).
 
 - Concurrent calls for one key in one candle (by the cache's clock at the call) share one inner
   `evaluate`; the entry is set before the inner call can settle and removed once it does, whatever
@@ -513,13 +573,13 @@ the key: two requests for one key in one candle share one fetch and the first ca
   the jump, a forward one shortens it. No timer: nothing to stop at shutdown.
 
 `cache.test.ts` (C1–C11) pins the table's rows, the shared fetch, the deadline, the bound and a
-backward clock jump.
+backward clock jump; C15–C22 `fromSource` and the lazy journal.
 
 So the broker sees at most two chart GETs per `1m`-or-longer key per minute (one per hold of up to
 30 s) and one per 429 window. On `5s` and `15s` the candle's end binds first: up to 12 and 4 GETs
-a minute per key while users ask for it. The manual GETs are demand-driven and outside every
-budgeted share; the scanner's are inside its own ([The budget](#the-budget)). The first fetch in a
-candle is that candle's answer for every user, for at most 30 s.
+a minute per key while users ask for it, and only when the source has no window for the key; each
+takes a token of the signal pacer ([The budget](#the-budget)). The first decision in a candle is
+that candle's answer for every user, for at most 30 s.
 
 ### Budgets
 
@@ -528,36 +588,29 @@ candle is that candle's answer for every user, for at most 30 s.
 | `SIGNAL_FETCH_BUDGET_MS` | 3 000 | `apps/backend/src/timing.ts` | the one chart GET (the cache's `fetchBudgetMs`); below `BROKER_REST_TIMEOUT_MS` (5 000), so it is this budget that ends a slow chart |
 | `TRADING_SIGNAL_BUDGET_MS` | 4 000 | `packages/shared/src/signal.ts` | the whole answer; the bot waits at least this long (`TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` in `apps/bot/src/timing.ts`, #126) |
 | `SIGNAL_CACHE_MAX_TTL_MS` | 30 000 | `apps/backend/src/timing.ts` | the longest hold; below the 1m interval, or it would never bind there (on `5s`/`15s` the candle's end binds) |
+| `SIGNAL_PACER_RETRY_SEC` | 1 | `packages/signal/src/feed-config.ts` | `retryAfterSec` of a pacer refusal without a pause (#405): a token comes within `60 / perMinute` s, at most 2.4 s at the lowest ceiling; the cache holds the refusal as long, so `× 1000 ≤ SIGNAL_CACHE_MAX_TTL_MS` |
 
 The backend's `TIMING_CHAIN_HOLDS` checks at import that `SIGNAL_FETCH_BUDGET_MS <
 BROKER_REST_TIMEOUT_MS`, `SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS`,
 `TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS` (phase 1's `app.close()` waits for a
-request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asserts the same four.
+request in flight), `SIGNAL_CACHE_MAX_TTL_MS < 60 000` and `SIGNAL_PACER_RETRY_SEC × 1000 ≤
+SIGNAL_CACHE_MAX_TTL_MS`; `timing.test.ts` asserts the same five.
 
 ## The scanner (#343)
 
-The backend decides the signal of pairs chosen across the asset types in the background, so a later screen (#320) can
-offer only pairs that have one now. It lives in `apps/backend/src/signal/scanner.ts`, one instance
-per interval of `SIGNAL_SCAN_INTERVALS` (`['15s', '5s']`, #382), each with its own pacer, and goes
-through the same cached feed as `POST /trading/signal`. A manual analysis of a scanned pair in the
-same candle is a cache hit with no second GET (`scanner.test.ts` S5). Every decision is the feed's
-own `signal decision` line, so the journal replays it like any other. A cache hit writes no line.
+The backend decides the signal of every eligible pair in the background, so the signals screen
+(#320) can offer only pairs that have one now. It lives in `apps/backend/src/signal/scanner.ts`,
+one instance per interval of `SIGNAL_SCAN_INTERVALS` (`['15s', '5s']`, #382), and decides from the
+data socket's window through the cached feed's `fromSource` ([Feed and journal](#feed-and-journal-133)):
+synchronously, with no broker call and no pacer (#405). A manual analysis of a scanned pair in the
+same candle is a cache hit with no GET (`scanner.test.ts` S5). The scanner's decisions write no
+journal line (owner's answer 2 of #392: about 122 pairs × 16 decisions a minute × 5 KB would be
+14 GB a day); a decision a route answers writes its line then ([The cache](#the-cache)).
 
-**Which pairs.** The `15s` and `5s` intervals (`SIGNAL_SCAN_INTERVALS`), one per duration of the
-bot's main path (#382). Every pair on both would not fit the broker's per-IP budget: 122 pairs on
-every `5s` and `15s` candle would be about 1 950 GETs a minute against 600
-([The budget](#the-budget)), so each interval scans `signalScanPairs` pairs on its own share of
-`SIGNAL_SCAN_MAX_PER_MINUTE` (`SIGNAL_SCAN_SHARES_PERCENT` in `apps/backend/src/timing.ts`, owner
-2026-10-09):
-
-| Interval | Share | Decisions a pair a minute | Pairs at the default 100 | At the maximum 200 | At the minimum 25 |
-|---|---|---|---|---|---|
-| `15s` | 52 % | 4 | 13 (52 GETs) | 26 | 3 |
-| `5s` | 48 % | 12 | 4 (48 GETs) | 8 | 1 |
-
-`signalScanPairs(ceiling, interval)` is `floor(ceiling × share / decisions)`; the minimum ceiling,
-`MIN_SIGNAL_SCAN_PER_MINUTE` (25), is computed as the smallest that scans at least one pair on every
-interval (`timing.test.ts`).
+**Which pairs.** Every eligible pair of the fresh catalog, on each of the two intervals, every
+candle (S26). Before #405 the scanner read REST and the broker's per-IP budget allowed 13 pairs on
+`15s` and 4 on `5s` (#382, #460); a decision from the ring costs no request, so the shares, the
+pair counts and the choice by type are gone.
 - Each candle reads the pairs catalog. A missing or stale catalog (`fresh: false`) scans nothing,
   with one `warn` `signal scan skipped: no fresh catalog` per stale streak, carrying `interval`.
 - Eligible pairs are those open by `scheduled_until` (`isPairOpen`), accepting a trade of the
@@ -565,40 +618,25 @@ interval (`timing.test.ts`).
   and paying at least the cycle floor (`pairPayoutAccepted`, `MIN_CYCLE_PAYOUT_PCT` 80, #379: no
   cycle starts below it, [trading-session.md](trading-session.md#the-payout-floor-379)). A
   `min_timeframe` 60 pair is never scanned; a `min_timeframe` 15 pair is scanned on `15s` only; a
-  pair paying 79 % is never scanned nor served on either instance (S19). Each evaluation carries
-  the pair's `digits` from the catalog it was chosen from (S20). On the live catalog of
-  2026-10-09, 50 of the 122 pairs accepting 15 s paid ≥ 80, the top 25 ≥ 86.
-- The scan set is `signalScanPairs` eligible pairs chosen by type (`scanPairs`, #460), each decided
-  once a candle of that interval. Currencies usually pay the most, so a plain payout top would
-  scan almost only currencies. Instead the eligible pairs are split into the groups of
-  `PAIR_TYPE_GROUPS` (`packages/shared/src/catalog.ts`: `currency`, `commodity`, `stock`,
-  `cryptocurrency`, `index`, `other` for any other broker type). Each group is sorted by
-  `comparePairsByPayout` (`payout` desc, then `id` asc). The `G` groups with an eligible pair then
-  take one pair each in turn (round-robin) until `signalScanPairs` pairs are taken. A group that runs
-  out of eligible pairs gives its turns to the others (S23), and the count stays exactly
-  `signalScanPairs`, so the budget does not change (S24). The result depends only on the set of
-  eligible pairs, not on the catalog's order (S3, S21).
-- The turn starts at group `(candle × N) mod G`, with `candle = boundary / L` and `N` =
-  `signalScanPairs`. When `N ≥ G` (`15s` at the default: 13 places, at most 6 groups) every type is
-  scanned on every candle, and the start only moves which groups get the extra places (S21). When
-  `N < G` (`5s` at the default: 4 places), each candle scans `N` distinct groups and consecutive
-  candles take consecutive windows, so every type is scanned within `ceil(G / N)` candles: 2 candles,
-  10 s, at the default (S22). This holds over candles with the same set of groups; a catalog change
-  that adds or removes a group moves the windows.
-- The two sets overlap but neither contains the other: a `min_timeframe` 15 pair is eligible on
-  `15s` only, so the `5s` set can hold pairs outside the `15s` set. A pair in both has two cache
-  keys and two decisions, each counted in its own share.
+  pair paying 79 % is never scanned nor served on either instance (S19). Each decision carries
+  the pair's `digits` from the catalog it was read from (S20).
 - The set is recomputed every candle, so it follows the catalog's refresh. A pair that left the set
-  leaves the snapshot at that candle.
+  leaves the snapshot at that candle (S9). A pair in both sets has two cache keys and two
+  decisions.
+
+**The source.** The scanner gets the manager's `streaming()` as a dep. While it is false - no
+`BROKER_WS_URL`, or the active socket not `ready` ([market-data.md](market-data.md)) - a scan
+clears the snapshot (no entry, `scanned` empty), counts `sourceDown`, and writes one `warn`
+`signal scan skipped: source not streaming` per streak (S27): `GET /trading/signals` then serves
+empty lists, never decisions of the time before. It never falls back to REST for its pairs. When
+the source comes back, the first scan after it fills the snapshot afresh; until then nothing is
+served (S32). Right after a start or a gap the windows are short: those decisions are
+`insufficient_candles`, `candle_gap` or `stale`, each with a refill request, and signals appear as
+the backfill closes the windows.
 
 **When.** One scan a candle of the instance's interval, `SIGNAL_SCAN_SLACK_MS` (500 ms) after its
-boundary (S1 for each interval). The live broker returned the just-closed `15s` candle 150 ms after
-the boundary (2026-10-08); the rest of the slack covers clock skew. The `5s` close latency was not
-observed: if the broker publishes it later than the slack, every `5s` decision lands on the candle
-before and the 5 s list stays empty (the post-deploy check below falsifies it; the follow-up would
-be a slack per interval). After a start, nothing is served until the first scan, at most 15.5 s
-(`15s`) or 5.5 s (`5s`) later. Every 15 s boundary is also a 5 s one: both instances fire then,
-each on its own pacer.
+boundary (S1 for each interval). After a start, nothing is served until the first scan, at most
+15.5 s (`15s`) or 5.5 s (`5s`) later.
 - The timer aims at a remembered target, `nextAt`, the next boundary plus the slack. It is moved
   forward by one candle at each fire, never recomputed from the clock at that moment. So a timer
   that fires a few ms early cannot run a second scan for the same candle (S12).
@@ -609,39 +647,28 @@ each on its own pacer.
   moved back by a candle or more it aims at the upcoming moment, so the scanner is never silent
   for longer than one candle (S16).
 - A scan takes no new pair once its candle has ended: the rest counts as `skipped` (S13).
-  Otherwise, on a slow broker, it would spend the next candle's tokens on stale work and could call
-  inside the next slack, before that candle's close is published.
+- **`unclosed`.** The ring closes a bucket by its watermark (a tick stamped at or after the
+  bucket's end) or by the clock `MARKET_DATA_SKEW_MARGIN_MS` (2 s) after it
+  ([market-data.md → Closing a candle](market-data.md#closing-a-candle-and-holes)). At ~440 ticks a second
+  the watermark crosses the boundary within milliseconds; on a quiet pair it may not have by the
+  scan moment, and the decision is then on the candle before, which the route's freshness rule
+  does not serve. Such a decision (the window's `closedUntil` below the boundary of the decision's
+  own `nowMs`; the feed leaves the unclosed candle out, F26) is counted as `unclosed` (S29, S34); the slack is not raised (2 s would be 40 % of a `5s` candle).
 
-**Each call**, at most `SIGNAL_SCAN_CONCURRENCY` (4) at once:
+**Each pair.** The scan is one synchronous loop over the eligible pairs, `fromSource` for each:
 
-| Step or outcome | What the scanner does |
+| Outcome | What the scanner does |
 |---|---|
-| before the call | the candle has ended, or no pacer token (a pause, an empty bucket): this pair and the rest of the candle are dropped (`skipped`) |
-| `decided` | stores `{ kind, action or reason, lastCandleTimestamp, decidedAtMs }` for the pair; resets the 429 backoff |
-| `fetch_failed` `rate_limited` | pauses the pacer for `retryAfterSec` held to 15–120 s (`SIGNAL_SCAN_BACKOFF_MIN_MS`/`_MAX_MS`), or without it for 15 s doubling to 120 s; a 429 without Retry-After while a pause runs is the same burst and neither doubles nor extends it (`pacer.test.ts` P3b, P7, P8) |
-| any other `fetch_failed` | counted by code; the pair's previous entry stays and goes stale with the candle |
-| a throw | counted as `threw`, `warn` `signal scan failed` with the error's name and code and `assetId` (Rule 8) |
+| a decision (`signal` or a refusal) | stores `{ kind, action or reason, lastCandleTimestamp, decidedAtMs }` for the pair |
+| `undefined` (the source left during the scan) | this pair and the rest are `skipped`; their entries stay and go stale with the candle (S28) |
+| a throw (digits outside `assertDigits`) | counted as `threw`, `warn` `signal scan failed` with the error's name and code and `assetId` (Rule 8); the others are decided (S7, S31) |
 
-One pair's failure never stops the others or the next candle (S7). A cache hit also costs a token:
-at most one candle's batch is wasted when the bot already asked for every scanned pair (stated).
+A decision from memory costs microseconds; 122 pairs × 2 intervals block the event loop for an
+estimated 40 ms at most every 5 s (accepted; `lagMsP95` above 600 with `unclosed` at 0 falsifies
+it).
 
-**The pacer** (`pacer.ts`), one per instance, is a token bucket refilled at the interval's share,
-`signalScanPerMinute(SIGNAL_SCAN_MAX_PER_MINUTE, interval) / 60 s`, with room for one candle's
-batch plus one spare token (`signalScanCapacity` in `timing.ts`: 14 on `15s` and 5 on `5s` at the
-default). A candle refills exactly one batch, and the batch's takes are one burst at the timer's
-millisecond (4 pairs, 4 workers on `5s`), so without the spare a fire a few ms earlier relative to
-its boundary than the one before finds the bucket a fraction of a token short and skips a pair with
-no 429 behind it (#382 review M1; `pacer.test.ts` P9 over every exposed shape, `scanner.test.ts`
-S18 through the real scan loop). A batch goes out right after the boundary, and any 60 s window
-carries at most each share plus its bucket: 52 + 14 and 48 + 5 at the default (119 together),
-104 + 27 and 96 + 9 at the maximum (236; `pacer.test.ts` P2 measures the bound on its own
-fixture). A 429 pauses the pacer whose call got it; the other instance's next call meets the same
-per-IP window and pauses on its own 429. Only the scanner takes tokens: `POST /trading/signal`
-never waits for it, and a 429 the bot gets is the route's own answer.
-
-**Stop.** Each instance's `stop()` runs in shutdown phase 1. It clears the timers and waits for the calls in flight.
-Each call is bounded by the cache's `SIGNAL_FETCH_BUDGET_MS` (3 s), already in the phase-1 chain.
-The calls still queued are dropped (S8). `start()` runs after `listen()` with the other loops
+**Stop.** Each instance's `stop()` runs in shutdown phase 1 and clears the timers; a scan is
+synchronous, so nothing is in flight (S8). `start()` runs after `listen()` with the other loops
 (`index.ts`), so a SIGTERM during the warm-up never starts it.
 
 **The log line**, every `SIGNAL_SCAN_LOG_MS` (60 s), one per instance: `info` `signal scanner`
@@ -650,14 +677,16 @@ with:
 | Field | What it counts |
 |---|---|
 | `interval` | the instance's interval, `15s` or `5s` |
-| `eligible` | eligible pairs at the last scan (open, taking the interval's duration, at or above the payout floor); 0 while the catalog is stale |
-| `scanned` | the size of the scan set |
+| `source` | `live` or `down`: `streaming()` when the line is written |
+| `eligible` | eligible pairs at the last scan (open, taking the interval's duration, at or above the payout floor); 0 while the catalog is stale or the source is down |
+| `scanned` | the size of the scan set (= `eligible` while live) |
 | `signals` | fresh signals now (the route's rule) |
-| `noSignal` | `no_signal` decisions over the minute |
-| `skipped` | calls dropped: no pacer token, or the candle had ended |
-| `failed` | failed calls by code, with `threw` for a throw |
-| `rateLimited` | 429 answers |
-| `pausedMs` | time added to pauses |
+| `decided` | decisions over the minute |
+| `noSignal` | `no_signal` decisions over the minute by reason, `{ candle_gap, insufficient_candles, stale, volatility_too_low, … }` |
+| `unclosed` | decisions whose window had not closed the boundary's candle |
+| `sourceDown` | scans not made because the source was down |
+| `skipped` | pairs dropped: the source left during the scan, or the candle had ended |
+| `threw` | pairs whose decision threw |
 | `lagMsP95` | the 95th percentile of the time from the candle's boundary to a decision, slack included |
 
 ### GET /trading/signals
@@ -668,27 +697,28 @@ named fields (`tradingSignalsResponseSchema` in `packages/shared/src/signal.ts`)
 ```json
 { "asOf": 1760000012000,
   "lists": [
-    { "interval": "15s", "scanned": 13,
+    { "interval": "15s", "scanned": 122,
       "signals": [{ "assetId": 101, "action": "up", "lastCandleTimestamp": 1759999995000,
                     "decidedAt": 1760000010500, "ageMs": 2000 }] },
-    { "interval": "5s", "scanned": 4, "signals": [] } ] }
+    { "interval": "5s", "scanned": 120, "signals": [] } ] }
 ```
 
 One list per scanner, in `SIGNAL_SCAN_INTERVALS` order whatever order the scanners are wired in
 (#382). In each list a pair is served only when all three hold (`freshSignals` in `scanner.ts`;
-`signals-routes.test.ts` R2–R5 and the `freshSignals` cases in `scanner.test.ts`):
+`signals-routes.test.ts` R2–R5 and the `freshSignals` cases in `scanner.test.ts`, S33 on 122
+pairs):
 - its decision is a `signal`;
 - the decision is on that interval's candle that closed most recently (`lastCandleTimestamp ===
   floor(now / L) × L − L`, with `L` the list's candle, 15 000 or 5 000 ms);
 - the pair is in that interval's current scan set.
 
-A signal whose candle changed without a recompute is not served: a 429, a stale catalog, or a clock
-skew past the slack costs coverage, never a stale answer. This is stricter than the decider's own
-`maxStaleIntervals`. A `no_signal`, a failed call and a pair outside the set never appear.
-`ageMs` is the time since that candle closed; `scanned` is the size of that interval's scan set.
-The signals come in the scan's take order (by type, see the scanner's «Which pairs»); the bot
-chooses and orders its own list from them. Without the bearer the answer is 401
-`{ error: 'unauthorized' }`.
+A signal whose candle changed without a recompute is not served: the source gone during a scan, a
+stale catalog, or a clock skew past the slack costs coverage, never a stale answer. This is
+stricter than the decider's own `maxStaleIntervals`. A `no_signal` and a pair outside the set never
+appear. While the source is down the lists are empty. `ageMs` is the time since that candle
+closed; `scanned` is the size of that interval's scan set, every eligible pair. The signals come in
+the catalog's order; the bot chooses and orders its own list from them. Without the bearer the
+answer is 401 `{ error: 'unauthorized' }`.
 
 The one consumer is the bot's signals screen (#320, `readSignals` in
 `apps/bot/src/backend-client.ts`). It takes the list of the duration the user chose
@@ -700,28 +730,29 @@ signal at a press, since the session asks for one before every trade
 deploy mismatch, not «no signals»: the bot answers it as unavailable.
 
 The check after a deploy is the owner's step on the pilot: the agent has no SSH to production, and
-these commands were not run before the merge. Give it a minute after the start, so the first
-`signal scanner` line is out:
+the `docker compose` commands were not run before the merge; each pipeline below was run on the
+mock broker against a backend started with its `BROKER_WS_URL` (#405). Give it a minute after the
+start, so the first `signal scanner` line is out:
 
 ```bash
-docker compose exec -T backend sh -c \
-  'wget -qO- --header "Authorization: Bearer $INTERNAL_API_TOKEN" http://127.0.0.1:3000/trading/signals'
-# two lines a minute, one per interval, with signals/noSignal/lagMsP95
+# the two scanner lines: source live, scanned = eligible, signals > 0 over ten minutes, unclosed near 0
 docker compose logs --no-log-prefix --since 2m backend | grep -F '"msg":"signal scanner"' | tail -2
-# the 5s close latency: ms from the 5s boundary to a decision on the candle that just closed;
-# ~500-1000 means the close is published inside the slack; >= 5500 means the decision is on the
-# candle before (the close came after the slack) and the 5 s list can never be served
-docker compose logs --no-log-prefix --since 10m backend | grep -F '"msg":"signal decision"' \
-  | jq -c 'select(.signal.interval == "5s" and .signal.decision.features != null)
-           | (.signal.nowMs - .signal.decision.features.lastCandleTimestamp - 5000)' \
-  | sort -n | uniq -c
+# every eligible pair is in the lists
+docker compose exec -T backend sh -c 'wget -qO- --header "Authorization: Bearer $INTERNAL_API_TOKEN" http://127.0.0.1:3000/trading/signals' | jq '.lists[] | {interval, scanned, signals: (.signals | length)}'
+# chart GETs outside the warm-up: backfill only, besides a request for 1m or longer (never from the bot) (fetched ~ 0 once queued is 0), no "signal fetch" lines
+docker compose logs --no-log-prefix --since 10m backend | grep -F '"msg":"market data"' | tail -1 | jq .backfill
+docker compose logs --no-log-prefix --since 10m backend | grep -cF '"msg":"signal fetch'
+# the journal: lines only from POST /trading/signal and session starts, with source.kind socket
+docker compose logs --no-log-prefix --since 10m backend | grep -F '"msg":"signal decision"' | jq -c '[.signal.source.kind, .signal.interval, (.signal.decision.reason // "signal")]' | sort | uniq -c
 ```
 
-Expected: the body has `lists` for `15s` and `5s`; the `5s` line shows `scanned: 4` and, over ten
-minutes, `signals` above 0 at least once; `skipped: 0` on both lines while `rateLimited` is 0 — a
-`skipped` above 0 without a 429 is #382 review round 1's M1; the latency histogram sits under
-1 000. If it sits at ≥ 5 500 for every line, the `5s` close comes after the slack: the 5 s list
-stays empty until a slack per interval is added; the rest of the feature stands.
+Expected: both `signal scanner` lines show `source: "live"`, `scanned` equal to `eligible`,
+`signals` above 0 at least once over ten minutes and `unclosed` near 0; the lists' `scanned` are
+the eligible counts; `backfill.queued` falls to 0 within minutes of the start and `fetched` stays
+near 0 after it; no `signal fetch` line while the source is live; the journal's lines are
+`socket` ones. **Without the source**: unmark the service accounts in the admin pages; within
+`MARKET_DATA_TICK_MS` the scanner lines show `source: "down"`, `scanned: 0`, the lists are empty,
+and an analysis in the bot still answers (its journal line is `rest`).
 
 ### The budget
 
@@ -736,36 +767,57 @@ stand (#381) is not one of them: it runs from another IP under its own cap
 | `BROKER_RATE_LIMIT_PER_MINUTE` | 600 | the broker's per-IP window |
 | `WORKER_BROKER_GETS_PER_MINUTE` | 400 | the trading worker's passes, worst case (`apps/trading-worker/src/intents/config.ts`) |
 | `DEFAULT_BALANCE_POLL_PER_MINUTE` | 100 | the backend's balance refresh (`BALANCE_POLL_MAX_PER_MINUTE`, 1–500) |
-| `DEFAULT_SIGNAL_SCAN_PER_MINUTE` | 100 | the scanners, split 52 / 48 between `15s` and `5s` (`SIGNAL_SCAN_MAX_PER_MINUTE`, 25–200) |
+| `DEFAULT_SIGNAL_SCAN_PER_MINUTE` | 100 | the signal REST: the on-demand GETs without the source and the backfill's overflow, on one pacer (`SIGNAL_SCAN_MAX_PER_MINUTE`, 25–200; the name stays for compose) |
 
 - `BROKER_BUDGET_HOLDS` throws at import if the defaults sum over the limit (`broker-budget.test.ts`
   B1).
 - Ceilings set in env above their defaults may sum over it. That is an operator's choice: the
-  backend writes one `warn` `broker budget over the per-IP limit` at start, and the scanner's pause
-  on a 429 is the backstop.
-- Nothing counts the three processes together at run time (stated). The scanners' worst 60 s
-  window above their share is their two buckets (19 at the default, 36 at the maximum), bounded at
-  import at the maximum only.
+  backend writes one `warn` `broker budget over the per-IP limit` at start, and the signal pacer's
+  pause on a 429 is the backstop.
+- Nothing counts the three processes together at run time (stated). The signal pacer's worst 60 s
+  window above its share is its bucket plus one overflow token (11 at the default, 19 at the
+  maximum), bounded at import at the maximum only.
 - A worker deploy runs two workers for its overlap, the readiness wait (≤ `READY_TIMEOUT_S`, 120 s)
   plus the drain (≤ 40 s), longer after an interrupted run until an operator resolves it
   ([worker-deploy.md](worker-deploy.md), #95):
   for that window the worker's share can double (accepted there, risk 1).
-- Manual analysis, OAuth, token exchanges and the pairs catalog are outside every share.
+- OAuth, token exchanges and the pairs catalog are outside every share.
 
-The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import and in
+**The pacer** (`pacer.ts`, #405) is the one token bucket of every signal chart GET, refilled at
+`SIGNAL_SCAN_MAX_PER_MINUTE / 60 s`, with room for `signalRestCapacity(ceiling)` =
+`ceil(ceiling × 5 000 / 60 000) + 1` tokens (10 at the default 100, 18 at 200, 4 at 25): the
+on-demand GETs of one `5s` candle - the steps of every session on `5s` decide at one boundary -
+plus a spare token, so a burst a few ms earlier relative to its boundary than the one before does
+not find the bucket a fraction of a token short (#382 review M1; `pacer.test.ts` P9).
+- `tryTake` is the feed's GET by demand: `POST /trading/signal`, a session step and the session
+  start, whenever the source has no window. No token is the `rate_limited` refusal of
+  [Outcomes](#outcomes).
+- `tryTakeSpare` is the candle backfill's ([market-data.md → Backfill](market-data.md#backfill-590),
+  #590): only the overflow, what a refill discards above the capacity, held to one token, which
+  `tryTake` never sees on a clock that does not go back (`pacer.test.ts` P10, P12). While the
+  source is live only an interval the ring does not build calls `tryTake` (`1m` and longer - never
+  from the bot, #313), so the bucket stays nearly full and the backfill gets nearly the whole share
+  (P10; the scanner takes no token, S26). Without the source the GETs by demand take the bucket
+  first.
+- Together they carry at most `perMinute + capacity + 1` in any 60 s window (P11): 219 at the
+  maximum.
+- A 429 of either pauses both - one object, one per-IP window: for `Retry-After` held to 15–120 s
+  (`SIGNAL_SCAN_BACKOFF_MIN_MS`/`_MAX_MS`), or without it for 15 s doubling to 120 s; a 429
+  without Retry-After while a pause runs is the same burst and neither doubles nor extends it
+  (`pacer.test.ts` P3b, P7, P8, P13). During a pause a GET by demand answers `rate_limited` with
+  what is left of it.
+
+The backend's `TIMING_CHAIN_HOLDS` adds the signal links, checked at import and in
 `timing.test.ts`:
 - for every interval of `SIGNAL_SCAN_INTERVALS`: `SIGNAL_SCAN_SLACK_MS < L` and
   `SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < L` with `L` the candle (3 500 < 5 000 on `5s`):
-  a scan starts inside its candle, and a call made at the scan moment ends inside it. A whole scan
-  is bounded by the candle's end check, not by this chain; the decisions a pair a minute are an
-  integer;
-- the shares sum to 100 % (the pairs at the default, 13 × 4 + 4 × 12 = 100, follow from `floor`,
-  and one pair on every interval at the minimum from its definition; pinned by `timing.test.ts`,
-  not links);
+  a scan starts inside its candle, and a GET by demand asked at the boundary ends inside it;
 - `SIGNAL_SCAN_BACKOFF_MIN_MS ≤ SIGNAL_SCAN_BACKOFF_MAX_MS`;
-- the env bounds around the default;
-- the worst 60 s window of both scanners at the highest ceiling, the ceiling plus both buckets
-  (200 + 27 + 9 = 236), below the broker's window. It is checked at the maximum only.
+- the env bounds around the default; `MIN_SIGNAL_SCAN_PER_MINUTE` is the literal 25 (the lowest
+  value `.env` files carry since #382), and `signalRestCapacity(25) ≥ 2`;
+- the pacer's worst 60 s window at the highest ceiling, `signalRestWorstWindow(200)` = the ceiling,
+  the bucket and the overflow token (200 + 18 + 1 = 219), below the broker's window;
+- `SIGNAL_PACER_RETRY_SEC × 1000 ≤ SIGNAL_CACHE_MAX_TTL_MS`.
 
 ## MACD and MA on history (#483)
 
@@ -870,12 +922,14 @@ none». The decision stays Signal v2; MACD and MA stay on the card only.
   does the fetching and the logging). The Russian wording of a reason belongs to the bot (#126).
 - It does not read volume or price ticks; it works from the chart and the pair's `digits` only.
   #392's spike measures tick-built candles ([broker-socket.md → The candle spike](broker-socket.md#the-candle-spike-392));
-  the socket source is #404 and its consumers #405.
+  the socket source is #404 and its consumers, the feed and the scanner, #405.
 
 ## Boundaries
 
 - #287 (shipped): session orchestration, which asks `POST /trading/signal` inside a session
   (docs/trading-session.md). #90: the broker base URL in the worker's env and compose.
+- #404, #590, #405 (shipped): the data socket's ring, its REST backfill, and the feed and the
+  scanner reading it ([market-data.md](market-data.md)).
 - #320 (shipped): the bot's «Сигналы сейчас» screen reads `GET /trading/signals` and joins it
   with the pairs catalog for the symbol and payout ([bot-demo.md](bot-demo.md#the-signals-screen-320)).
   The scanner keeps no history in the database.

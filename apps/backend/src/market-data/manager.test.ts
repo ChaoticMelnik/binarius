@@ -4,6 +4,7 @@ import pino from 'pino';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
   BrokerSocketEvent,
+  SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   logOptions,
   toBinaryPair,
@@ -27,7 +28,10 @@ import {
   type BrokerSocketClient,
   type BrokerSocketStateChange,
 } from '@binarius/broker-socket';
+import { createBrokerRestClient } from '@binarius/broker-rest';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
+import { createScanPacer } from '../signal/pacer';
+import { createCandleBackfill, type CandleBackfill } from './backfill';
 import {
   createMarketDataManager,
   type MarketDataAccount,
@@ -201,6 +205,8 @@ interface TokenCall {
 interface Harness {
   manager: MarketDataManager;
   ring: CandleRing;
+  // the real backfill with the option, over the mock broker's REST
+  backfill: CandleBackfill | undefined;
   calls: TokenCall[];
   // per account: replaces the default answer (the account's token)
   answers: Map<string, (options: AccessTokenOptions) => Promise<AccessTokenResult>>;
@@ -216,6 +222,7 @@ interface Harness {
 
 let broker: MockBroker | undefined;
 const managers: MarketDataManager[] = [];
+const backfills: CandleBackfill[] = [];
 
 const freshView = (pairs: BinaryPair[] = PAIRS): PairsCatalogView => ({
   pairs,
@@ -242,6 +249,7 @@ function harness(
     view?: PairsCatalogView | undefined;
     timing?: Partial<typeof TIMING>;
     listAccounts?: () => Promise<readonly MarketDataAccount[]>;
+    backfill?: boolean;
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -277,6 +285,42 @@ function harness(
     clients.push({ client, subscribeCalls });
     return client;
   };
+  const requests = createPendingRequests(288);
+  const backfill =
+    options.backfill === true
+      ? createCandleBackfill({
+          ring,
+          requests,
+          catalog: { read: () => catalog.view },
+          rest: {
+            getChart: (request, callOptions) => {
+              if (broker === undefined) throw new Error('no mock broker in this test');
+              return createBrokerRestClient({ baseUrl: broker.url }).getChart(request, callOptions);
+            },
+          },
+          // the bucket fills in a millisecond: every poll finds an overflow token
+          pacer: createScanPacer({
+            perMinute: 6_000_000,
+            capacity: 1,
+            backoffMinMs: 15_000,
+            backoffMaxMs: 120_000,
+            now: Date.now,
+          }),
+          streaming: () => manager.streaming(),
+          logger,
+          config: {
+            scanMs: 3_600_000,
+            pollMs: 3_600_000,
+            retryMs: 15_000,
+            attempts: 3,
+            budgetMs: 3_000,
+            // fewer rounds of the 90 GETs inside the wait ceiling
+            concurrency: 8,
+            slackMs: 500,
+            candles: 300,
+          },
+        })
+      : undefined;
   const manager = createMarketDataManager({
     listAccounts: options.listAccounts ?? (() => Promise.resolve(accounts.list)),
     accessToken: (accountId, tokenOptions) => {
@@ -288,16 +332,21 @@ function harness(
     catalog: { read: () => catalog.view },
     openClient: options.openClient ?? openReal,
     ring,
-    requests: createPendingRequests(288),
+    requests,
+    backfill: backfill ?? {
+      counters: () => ({ queued: 0, fetched: 0, filled: 0, failed: 0, rateLimited: 0, spare: 0 }),
+    },
     logger,
     config: { ...CONFIG, ...options.config },
   });
   managers.push(manager);
+  if (backfill !== undefined) backfills.push(backfill);
   const parsed = (msg: string) =>
     lines.map((line) => JSON.parse(line) as LogEntry).filter((entry) => entry.msg === msg);
   return {
     manager,
     ring,
+    backfill,
     calls,
     answers,
     catalog,
@@ -371,6 +420,7 @@ const price = (assetId: number | undefined, timestamp: number): BrokerEvent => (
 });
 
 afterEach(async () => {
+  for (const backfill of backfills.splice(0)) await backfill.stop();
   for (const manager of managers.splice(0)) await manager.stop();
   await broker?.close();
   broker = undefined;
@@ -1127,6 +1177,76 @@ describe('the market data manager and a throwing client start (#404, L6)', () =>
   );
 });
 
+describe('the market data manager and the backfill (#590)', () => {
+  // acceptance 1: the candles the failover dropped come back by native 5s and 15s GETs
+  it('M26 refills the hole of a failover from the mock broker, and leaves the tick-built candles', async () => {
+    const mock = await withBroker();
+    const h = harness({ backfill: true });
+    await h.manager.tick();
+    await bothReady(h);
+    await until('subscribed', () => socketsOf(1)[0]?.subscriptions.length === 45);
+    // in the past, inside the ticks' skew bound: the buckets are closed by the clock already
+    const t1 = Math.floor(Date.now() / 15_000) * 15_000 - 30_000;
+    mock.socket.pushPrices(t1);
+    await until('every pair ticked', () => h.ring.counters().pairs === 45);
+    mock.socket.disconnect({ userId: 1 });
+    await until('the reserve subscribed', () => socketsOf(2)[0]?.subscriptions.length === 45);
+    mock.socket.pushPrices(t1 + 15_000);
+    await until('the holes', () => h.ring.counters().holes === 45);
+    // the hole's tail bucket is not built: a candle past it
+    const t4 = t1 + 20_000;
+    mock.socket.pushPrices(t4);
+    await until(
+      'the next candle',
+      () => h.ring.read(IDS[0] ?? 0, '5s', Date.now()).candles.length > 0,
+    );
+    const id = IDS[0] ?? 0;
+    const tickBuilt = h.ring.read(id, '5s', Date.now()).candles;
+    expect(tickBuilt.map((candle) => candle.timestamp)).toEqual([t4]);
+    for (const interval of SIGNAL_SCAN_INTERVALS) {
+      expect(h.ring.read(id, interval, Date.now()).gaps).toContain(t1);
+    }
+
+    // the buckets closed by the clock before the first GET; one closing later is the next GET's,
+    // after the element's hold-back
+    const cut = Date.now() - 2_000;
+    const pending = () =>
+      IDS.flatMap((assetId) =>
+        SIGNAL_SCAN_INTERVALS.map((interval) =>
+          h.ring
+            .read(assetId, interval, Date.now())
+            .gaps.filter((bucket) => bucket + SIGNAL_CHART_INTERVAL_MS[interval] <= cut),
+        ),
+      ).filter((gaps) => gaps.length > 0).length;
+    await until('every window refilled', async () => {
+      await h.backfill?.tick();
+      return pending() === 0;
+    });
+    const after = h.ring.read(id, '5s', Date.now()).candles;
+    expect(after.map((candle) => candle.timestamp)).toContain(t1);
+    expect(after.find((candle) => candle.timestamp === t4)).toEqual(tickBuilt[0]);
+    expect(h.backfill?.counters()).toMatchObject({ fetched: 90, failed: 0, rateLimited: 0 });
+    expect(h.line().backfill).toMatchObject({ fetched: 90, failed: 0, queued: 0 });
+  });
+
+  it('M27 streams only while the active is ready', async () => {
+    const fakes = fakeClients(() => Connecting);
+    const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
+    expect(h.manager.streaming()).toBe(false);
+    await h.manager.tick();
+    expect(h.line().active).toMatchObject({ socketState: Connecting });
+    expect(h.manager.streaming()).toBe(false);
+    fakes.made[0]?.fire(Ready);
+    expect(h.manager.streaming()).toBe(true);
+    fakes.made[0]?.fire(Reconnecting);
+    expect(h.manager.streaming()).toBe(false);
+    fakes.made[0]?.fire(Ready);
+    expect(h.manager.streaming()).toBe(true);
+    await h.manager.stop();
+    expect(h.manager.streaming()).toBe(false);
+  });
+});
+
 // docs/market-data.md -> The log: every message the manager writes is in the table, and every
 // row of the table but the backstop was written by some case above
 const DOCUMENTED = [
@@ -1136,8 +1256,11 @@ const DOCUMENTED = [
   ).matchAll(/^\| `(market data[^`]*)` \|/gm),
 ].map((match) => match[1]);
 
-// the backstop of track() and of the deadline timer: every work catches its own throws (S5)
-const UNREACHABLE = ['market data work failed'];
+// the backstop of track() and of the deadline timer: every work catches its own throws (S5); the
+// backfill's backstop likewise (backfill.test.ts B17)
+const UNREACHABLE = ['market data work failed', 'market data backfill tick failed'];
+// written by backfill.test.ts, which checks them against the same table (B17)
+const BACKFILL_WRITTEN = ['market data backfill gave up', 'market data backfill threw'];
 
 describe('the market data log (#404)', () => {
   afterAll(() => {
@@ -1153,8 +1276,8 @@ describe('the market data log (#404)', () => {
     );
     const documented = new Set(DOCUMENTED);
     expect([...written].filter((msg) => !documented.has(msg))).toEqual([]);
-    expect([...documented].filter((msg) => msg !== undefined && !written.has(msg))).toEqual(
-      UNREACHABLE,
+    expect([...documented].filter((msg) => msg !== undefined && !written.has(msg)).sort()).toEqual(
+      [...UNREACHABLE, ...BACKFILL_WRITTEN].sort(),
     );
     const line = entries.find((entry) => entry.msg === 'market data' && entry.active !== null);
     const own = Object.keys(line ?? {}).filter(
@@ -1181,7 +1304,11 @@ describe('the market data log (#404)', () => {
         'closed',
         'pairs',
         'pending',
+        'backfill',
       ].sort(),
+    );
+    expect(Object.keys((line?.backfill as object | undefined) ?? {}).sort()).toEqual(
+      ['queued', 'fetched', 'filled', 'failed', 'rateLimited', 'spare'].sort(),
     );
     const text = allLines.join('\n');
     expect(text).not.toContain('SECRET');

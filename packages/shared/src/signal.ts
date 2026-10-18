@@ -348,8 +348,9 @@ export const safeParseTradingSignalResponse = (input: unknown) =>
 
 export const TRADING_SIGNALS_PATH = '/trading/signals';
 
-// The intervals the backend's scanner decides, one scanner instance each, on its own share of the
-// budget (docs/signal.md -> The scanner); the order is the bot's main-path button order (#382).
+// The intervals the backend's scanner decides, one scanner instance each, from the data socket's
+// candles, which the ring builds for these intervals only (docs/signal.md -> The scanner, #405);
+// the order is the bot's main-path button order (#382).
 export const SIGNAL_SCAN_INTERVALS = ['15s', '5s'] as const satisfies readonly SignalInterval[];
 export type ScanInterval = (typeof SIGNAL_SCAN_INTERVALS)[number];
 

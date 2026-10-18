@@ -84,7 +84,7 @@ import {
   unusedSignalsDeps,
 } from './testing';
 import { unusedDepositDeps } from '../deposit/testing';
-import type { SignalEvaluation } from '@binarius/signal';
+import { createCachedSignalFeed, createSignalFeed, type SignalEvaluation } from '@binarius/signal';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -164,6 +164,8 @@ function appWith(
     stakeStrategy?: StakeStrategy;
     // the pair's signal at the start (#509); a signal by default
     signal?: SignalEvaluation | (() => Promise<SignalEvaluation>);
+    // a feed in place of the fake one
+    signalFeed?: TradingSessionRoutesDeps['signals'];
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
@@ -199,7 +201,7 @@ function appWith(
         },
       },
       balance: { refresh },
-      signals: signals.feed,
+      signals: options.signalFeed ?? signals.feed,
       internalApiToken: PAIRS_TEST_TOKEN,
       demoOnly: options.demoOnly ?? false,
       stakeStrategy: options.stakeStrategy ?? SessionStakeStrategy.Martingale,
@@ -535,6 +537,31 @@ describe('POST /trading/sessions', () => {
     );
     expect(response.statusCode).toBe(201);
     expect(signalCalls).toEqual([{ assetId: ASSET, interval: '5m', digits: pair.digits }]);
+  });
+
+  // #405: the start's decision, read through the real cache, writes its own journal line
+  it('R30b the start writes one signal decision line for the decision it checked', async () => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const now = () => NOW;
+    const feed = createCachedSignalFeed(
+      createSignalFeed({
+        rest: { getChart: () => Promise.resolve([]) },
+        logger: {
+          info: (fields: object, message: string) => app?.log.info(fields, message),
+          warn: (fields: object, message: string) => app?.log.warn(fields, message),
+        },
+        now,
+      }),
+      { fetchBudgetMs: 3_000, maxTtlMs: 30_000, now },
+    );
+    const response = await start(appWith({ signalFeed: feed }), bodyFor(seed));
+    await expectRefusal(response, 409, 'no_signal', before);
+    const decisions = lines
+      .map((line) => JSON.parse(line) as { msg?: string; signal?: { assetId: number } })
+      .filter((line) => line.msg === 'signal decision');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.signal?.assetId).toBe(ASSET);
   });
 
   // #568: the checked signal's direction is the session's first picture in the bot

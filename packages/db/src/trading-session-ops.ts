@@ -345,7 +345,8 @@ export interface SessionHistory {
   expired: boolean;
   // noSignalTimeoutMs passed since the later of started_at and the newest updated_at of the
   // session's own intents, on the database clock at this read (#509): a session without an intent
-  // counts from its start, and a bot trade on the account (NULL session) moves nothing
+  // counts from its start, and a bot trade on the account (NULL session) moves nothing. The
+  // milliseconds are the worker's candle count times the session's signal candle (#637)
   waitExpired: boolean;
   intents: SessionHistoryIntent[];
 }

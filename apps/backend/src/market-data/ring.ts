@@ -4,9 +4,9 @@ import {
   createCandleBuilder,
   tickProblem,
   type CandleBuilder,
+  type CandleWindow,
   type Tick,
 } from '@binarius/signal';
-import type { CandleWindow } from './source';
 
 // The candles of the data socket (#404, docs/market-data.md -> The ring): one #392 builder per
 // (pair, interval), created on the pair's first tick. Two rules sit on top of the builders.
@@ -42,7 +42,8 @@ export interface CandleRing {
   onDrop(): void;
   read(assetId: number, interval: ScanInterval, nowMs: number): CandleWindow;
   // REST rows into closed buckets of the window that neither the builder nor an earlier fill has;
-  // a tick-built candle is never replaced
+  // a tick-built candle is never replaced. The caller passes only rows of buckets that were closed
+  // when its request was built: fill judges closedness at nowMs by the watermark it has now
   fill(
     assetId: number,
     interval: ScanInterval,
@@ -66,7 +67,7 @@ interface PairState {
   dropWatermark: number | undefined;
 }
 
-const floorTo = (value: number, step: number) => Math.floor(value / step) * step;
+export const floorTo = (value: number, step: number) => Math.floor(value / step) * step;
 
 export function createCandleRing(options: CandleRingOptions): CandleRing {
   const { capacity, skewMarginMs, intervals } = options;

@@ -1,6 +1,11 @@
 import { BrokerRestErrorCode, SIGNAL_CHART_INTERVAL_MS, SignalFeedOutcome } from '@binarius/shared';
 import type { SignalDecider } from './decide';
-import type { SignalEvaluation, SignalFeed, SignalFeedRequest } from './feed';
+import type {
+  SignalDecidedEvaluation,
+  SignalEvaluation,
+  SignalFeed,
+  SignalFeedRequest,
+} from './feed';
 
 // The live catalog is 144 pairs x 5 intervals = 720 keys. Failures are never held, so an id the
 // broker does not know costs a GET and no entry.
@@ -19,7 +24,10 @@ export interface CachedSignalFeedOptions {
 // same bound.
 export interface CachedSignalFeed {
   readonly decider: SignalDecider;
-  evaluate(request: SignalFeedRequest): Promise<SignalEvaluation>;
+  // journal: true writes the decision's `signal decision` line, once per decision (#405)
+  evaluate(request: SignalFeedRequest, options?: { journal?: boolean }): Promise<SignalEvaluation>;
+  // the source's window only, held by the same rule; writes no line
+  fromSource(request: SignalFeedRequest): SignalDecidedEvaluation | undefined;
 }
 
 interface Held {
@@ -32,6 +40,10 @@ interface Held {
 // nothing else is held. Concurrent calls for one key in one candle share one inner evaluate: a
 // call in the next candle never waits for the previous candle's fetch (#343, the scanner at the
 // boundary). No timer is kept.
+// The journal is lazy (#405): the inner feed never writes a line; the first evaluate with
+// journal: true that gets a decision - a hit, a join or its own fetch - writes that decision's line,
+// and no later call writes it again. The scanner's fromSource writes none. A refusal held from REST
+// gives way to a decision of the source on either entry.
 export function createCachedSignalFeed(
   inner: SignalFeed,
   options: CachedSignalFeedOptions,
@@ -44,6 +56,19 @@ export function createCachedSignalFeed(
   } = options;
   const inFlight = new Map<string, Promise<SignalEvaluation>>();
   const held = new Map<string, Held>();
+  const journaled = new WeakSet<SignalEvaluation>();
+
+  function journalIfDue(result: SignalEvaluation, journal: boolean | undefined): SignalEvaluation {
+    if (
+      journal === true &&
+      result.outcome === SignalFeedOutcome.Decided &&
+      !journaled.has(result)
+    ) {
+      journaled.add(result);
+      inner.journal(result.entry);
+    }
+    return result;
+  }
 
   function holdUntil(result: SignalEvaluation): number | undefined {
     if (result.outcome === SignalFeedOutcome.Decided) {
@@ -87,7 +112,23 @@ export function createCachedSignalFeed(
   }
 
   async function fetchAndHold(key: string, request: SignalFeedRequest): Promise<SignalEvaluation> {
-    const result = await inner.evaluate(request, { signal: AbortSignal.timeout(fetchBudgetMs) });
+    const result = await inner.evaluate(request, {
+      signal: AbortSignal.timeout(fetchBudgetMs),
+      journal: false,
+    });
+    const until = holdUntil(result);
+    if (until !== undefined) hold(key, { until, result });
+    return result;
+  }
+
+  // the source's decision for the key, held by the same rule; it replaces whatever refusal was held
+  function sourceDecision(
+    key: string,
+    request: SignalFeedRequest,
+  ): SignalDecidedEvaluation | undefined {
+    const result = inner.fromSource(request);
+    if (result === undefined) return undefined;
+    held.delete(key);
     const until = holdUntil(result);
     if (until !== undefined) hold(key, { until, result });
     return result;
@@ -95,15 +136,30 @@ export function createCachedSignalFeed(
 
   return {
     decider: inner.decider,
-    evaluate(request) {
+    fromSource(request) {
       const key = `${request.assetId}:${request.interval}`;
       const hit = fromHold(key);
-      if (hit !== undefined) return Promise.resolve(hit);
+      if (hit?.outcome === SignalFeedOutcome.Decided) return hit;
+      return sourceDecision(key, request);
+    },
+    evaluate(request, options) {
+      const journal = options?.journal;
+      const key = `${request.assetId}:${request.interval}`;
+      let hit = fromHold(key);
+      if (hit?.outcome === SignalFeedOutcome.FetchFailed) {
+        // a refusal held from REST does not outlast a window of the source (#405 review, minor 2)
+        try {
+          hit = sourceDecision(key, request) ?? hit;
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      }
+      if (hit !== undefined) return Promise.resolve(journalIfDue(hit, journal));
       const intervalMs: number | undefined = SIGNAL_CHART_INTERVAL_MS[request.interval];
       // an unknown interval keeps the plain key; the inner feed refuses it
       const flightKey = intervalMs === undefined ? key : `${key}:${Math.floor(now() / intervalMs)}`;
       const pending = inFlight.get(flightKey);
-      if (pending !== undefined) return pending;
+      if (pending !== undefined) return pending.then((result) => journalIfDue(result, journal));
 
       const started = fetchAndHold(key, request);
       inFlight.set(flightKey, started);
@@ -112,7 +168,7 @@ export function createCachedSignalFeed(
         inFlight.delete(flightKey);
       };
       void started.then(clear, clear);
-      return started;
+      return started.then((result) => journalIfDue(result, journal));
     },
   };
 }

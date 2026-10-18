@@ -1,4 +1,8 @@
-import { createBrokerRestClient, type BrokerRestClient } from '@binarius/broker-rest';
+import {
+  BrokerRestError,
+  createBrokerRestClient,
+  type BrokerRestClient,
+} from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { logOptions, SIGNAL_CHART_INTERVAL_MS, type Candle } from '@binarius/shared';
 import { pino } from 'pino';
@@ -6,8 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
 import { chartWindow, createSignalFeed, type SignalEvaluation } from './feed';
-import { SIGNAL_CHART_LIMIT, SIGNAL_FETCH_LIMIT } from './feed-config';
+import { SIGNAL_CHART_LIMIT, SIGNAL_FETCH_LIMIT, SIGNAL_PACER_RETRY_SEC } from './feed-config';
 import { replaySignalJournalEntry, type SignalJournalEntry } from './journal';
+import type { CandleWindow, SignalCandleSource, SignalRestPacer } from './source';
 import { closedNow, INTERVAL_MS, mildRise, seriesFrom, tickSeries, trending } from './testing';
 
 // Docker's log copier reads 16 KiB per line; a longer line reaches some drivers split in two
@@ -68,9 +73,9 @@ describe('createSignalFeed', () => {
     const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 }));
 
     const { startTime } = chartWindow(T, I, SIGNAL_FETCH_LIMIT);
-    expect(entry.fetch).toMatchObject({ startTime, limit: SIGNAL_FETCH_LIMIT });
+    expect(entry.source).toMatchObject({ kind: 'rest', startTime, limit: SIGNAL_FETCH_LIMIT });
     // the fixture includes the forming candle, as the live chart does
-    expect(entry.fetch.rows).toBe(SIGNAL_FETCH_LIMIT);
+    expect(entry.source).toMatchObject({ rows: SIGNAL_FETCH_LIMIT });
     expect(entry.series).toHaveLength(SIGNAL_CHART_LIMIT);
     expect(entry.series.at(-1)?.[0]).toBe(B);
     expect(entry.series[0]?.[0]).toBe(B - (SIGNAL_CHART_LIMIT - 1) * I);
@@ -387,7 +392,7 @@ describe('createSignalFeed', () => {
 
     it('a: no forming candle leaves 59 rows from B - 59 I', async () => {
       const entry = await run(answer(B - I));
-      expect(entry.fetch.rows).toBe(299);
+      expect(entry.source).toMatchObject({ kind: 'rest', rows: 299 });
       expect(seriesStarts(entry)).toStrictEqual(starts(W0, B - I));
       expect(entry.series).toHaveLength(59);
     });
@@ -424,7 +429,11 @@ describe('createSignalFeed', () => {
         now: () => T,
       }).evaluate({ assetId: 101, interval: '1m', digits: 5 });
       const entry = decided(result);
-      expect(entry.fetch).toMatchObject({ limit: SIGNAL_FETCH_LIMIT, rows: SIGNAL_FETCH_LIMIT });
+      expect(entry.source).toMatchObject({
+        kind: 'rest',
+        limit: SIGNAL_FETCH_LIMIT,
+        rows: SIGNAL_FETCH_LIMIT,
+      });
       expect(seriesStarts(entry)).toStrictEqual(starts(W0, B));
       expect(result).toMatchObject({ indicators: { ma200: { ok: true } } });
     });
@@ -460,5 +469,342 @@ describe('createSignalFeed', () => {
       indicators: { macd: { ok: true }, ma50: { ok: true }, ma200: { ok: true } },
     });
     expect(decided(result).decision).toMatchObject({ kind: 'signal' });
+  });
+});
+
+// #405: the data socket's window through the SignalCandleSource port. The window is the ring's: the
+// closed candles of SIGNAL_FETCH_LIMIT buckets up to the boundary, the forming one apart, and the
+// closed buckets without a candle as gaps.
+describe('createSignalFeed with a candle source', () => {
+  const I15 = SIGNAL_CHART_INTERVAL_MS['15s'];
+  const B15 = Math.floor(1_760_000_000_000 / I15) * I15;
+  const T15 = B15 + 7_000;
+  const W15 = B15 - (SIGNAL_FETCH_LIMIT - 1) * I15;
+  const req = { assetId: 101, interval: '15s', digits: 5 } as const;
+
+  // 300 rows from W15 to B15, the last one forming at T15
+  const rows15 = (missing: readonly number[] = []) =>
+    mildRise(SIGNAL_FETCH_LIMIT - 45, { start: W15, intervalMs: I15 }).filter(
+      ({ timestamp }) => !missing.includes(timestamp),
+    );
+
+  function windowOf(rows: readonly Candle[], { forming = true } = {}): CandleWindow {
+    const closed = rows.filter(({ timestamp }) => timestamp < B15).map((row) => ({ ...row }));
+    const formingRow = rows.find(({ timestamp }) => timestamp === B15);
+    const have = new Set(closed.map(({ timestamp }) => timestamp));
+    const gaps: number[] = [];
+    for (let bucket = W15; bucket < B15; bucket += I15) if (!have.has(bucket)) gaps.push(bucket);
+    return {
+      candles: closed,
+      ...(forming && formingRow !== undefined ? { forming: { ...formingRow } } : {}),
+      closedUntil: B15,
+      startTime: W15,
+      gaps,
+    };
+  }
+
+  function fakeSource(windowFor: (interval: string) => CandleWindow | undefined) {
+    const reads: { assetId: number; interval: string; nowMs: number }[] = [];
+    const requests: { assetId: number; interval: string }[] = [];
+    const source: SignalCandleSource = {
+      read(assetId, interval, nowMs) {
+        reads.push({ assetId, interval, nowMs });
+        return windowFor(interval);
+      },
+      request(assetId, interval) {
+        requests.push({ assetId, interval });
+      },
+    };
+    return { source, reads, requests };
+  }
+
+  const noRest = () => ({ getChart: vi.fn<BrokerRestClient['getChart']>() });
+
+  function socketFeed(window: CandleWindow | undefined, extra: { pacer?: SignalRestPacer } = {}) {
+    const fake = fakeSource(() => window);
+    const rest = noRest();
+    const feed = createSignalFeed({
+      rest,
+      source: fake.source,
+      logger: sink(),
+      now: () => T15,
+      ...extra,
+    });
+    return { feed, rest, ...fake };
+  }
+
+  it('F15 the same 300 rows through REST and through the window: one decision, series, indicators', async () => {
+    const rows = rows15();
+    const viaRest = await createSignalFeed({
+      rest: stubRest(rows),
+      logger: sink(),
+      now: () => T15,
+    }).evaluate(req);
+    const { feed, rest, reads } = socketFeed(windowOf(rows));
+    const viaSocket = await feed.evaluate(req);
+
+    const restEntry = decided(viaRest);
+    const socketEntry = decided(viaSocket);
+    expect(socketEntry.decision).toStrictEqual(restEntry.decision);
+    expect(socketEntry.series).toStrictEqual(restEntry.series);
+    expect(viaSocket.outcome === 'decided' && viaSocket.indicators).toStrictEqual(
+      viaRest.outcome === 'decided' && viaRest.indicators,
+    );
+    expect(socketEntry.series).toHaveLength(SIGNAL_CHART_LIMIT);
+    expect(socketEntry.source).toStrictEqual({
+      kind: 'socket',
+      startTime: W15,
+      closedUntil: B15,
+      gaps: 0,
+    });
+    expect(replaySignalJournalEntry(socketEntry)).toStrictEqual(socketEntry.decision);
+    expect(reads).toStrictEqual([{ assetId: 101, interval: '15s', nowMs: T15 }]);
+    expect(rest.getChart).not.toHaveBeenCalled();
+  });
+
+  it('F16 a gap inside the decision window is candle_gap and one refill request, no GET', async () => {
+    const { feed, rest, requests } = socketFeed(windowOf(rows15([B15 - 30 * I15])));
+    const entry = decided(await feed.evaluate(req));
+    expect(entry.decision).toMatchObject({ kind: 'no_signal', reason: 'candle_gap' });
+    expect(requests).toStrictEqual([{ assetId: 101, interval: '15s' }]);
+    expect(entry.source).toStrictEqual({
+      kind: 'socket',
+      startTime: W15,
+      closedUntil: B15,
+      gaps: 1,
+    });
+    expect(rest.getChart).not.toHaveBeenCalled();
+  });
+
+  it('F17 an empty window is insufficient_candles with no closed candle, and a refill request', async () => {
+    const { feed, requests } = socketFeed(windowOf([]));
+    const entry = decided(await feed.evaluate(req));
+    expect(entry.decision).toMatchObject({
+      reason: 'insufficient_candles',
+      detail: { closedCandles: 0 },
+    });
+    expect(entry.series).toStrictEqual([]);
+    expect(requests).toStrictEqual([{ assetId: 101, interval: '15s' }]);
+  });
+
+  it('F18 a window without gaps asks for no refill', async () => {
+    const { feed, requests } = socketFeed(windowOf(rows15()));
+    decided(await feed.evaluate(req));
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('F19 no window reads REST: one GET, source rest with the facts of the GET', async () => {
+    const rows = rows15();
+    const fake = fakeSource(() => undefined);
+    const getChart = vi.fn(stubRest(rows).getChart);
+    const feed = createSignalFeed({
+      rest: { getChart },
+      source: fake.source,
+      logger: sink(),
+      now: () => T15,
+    });
+    const entry = decided(await feed.evaluate(req));
+    expect(getChart).toHaveBeenCalledTimes(1);
+    expect(entry.source).toMatchObject({
+      kind: 'rest',
+      startTime: W15,
+      limit: SIGNAL_FETCH_LIMIT,
+      rows: SIGNAL_FETCH_LIMIT,
+    });
+    expect(entry.source).toHaveProperty('durationMs');
+    expect(fake.requests).toStrictEqual([]);
+  });
+
+  it('F20 an interval the source does not build goes to REST', async () => {
+    const fake = fakeSource((interval) => (interval === '1m' ? undefined : windowOf(rows15())));
+    const getChart = vi.fn(stubRest(mildRise(15)).getChart);
+    const feed = createSignalFeed({ rest: { getChart }, source: fake.source, logger: sink() });
+    const result = await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 });
+    expect(decided(result).source.kind).toBe('rest');
+    expect(getChart).toHaveBeenCalledTimes(1);
+  });
+
+  it("F21 the forming candle ends the series as REST's would; without it the last closed one does", async () => {
+    const withForming = decided(await socketFeed(windowOf(rows15())).feed.evaluate(req));
+    expect(withForming.series.at(-1)?.[0]).toBe(B15);
+    expect(withForming.series).toHaveLength(SIGNAL_CHART_LIMIT);
+    const without = decided(
+      await socketFeed(windowOf(rows15(), { forming: false })).feed.evaluate(req),
+    );
+    expect(without.series.at(-1)?.[0]).toBe(B15 - I15);
+    expect(without.series).toHaveLength(SIGNAL_CHART_LIMIT - 1);
+    expect(without.decision).toStrictEqual(withForming.decision);
+  });
+
+  it("F26 the ring's forming candle of the bucket before nowMs's is left out: the decision is on the candle before it", async () => {
+    // ring.test.ts R3: at nowMs in the next bucket, before the watermark or the clock margin closes
+    // B15, the ring's forming is B15, whose end the decider would count as closed
+    const nowMs = B15 + I15 + 500;
+    const start = chartWindow(nowMs, I15, SIGNAL_FETCH_LIMIT).startTime;
+    const rows = rows15();
+    const closed = rows.filter(({ timestamp }) => timestamp >= start && timestamp < B15);
+    const formingRow = rows.find(({ timestamp }) => timestamp === B15);
+    if (formingRow === undefined) throw new Error('rows15 has no B15 row');
+    const withoutForming: CandleWindow = {
+      candles: closed.map((row) => ({ ...row })),
+      closedUntil: B15,
+      startTime: start,
+      gaps: [],
+    };
+    const ringShaped: CandleWindow = { ...withoutForming, forming: { ...formingRow } };
+    const feedAt = (window: CandleWindow, at: number) => {
+      const fake = fakeSource(() => window);
+      const feed = createSignalFeed({
+        rest: noRest(),
+        source: fake.source,
+        logger: sink(),
+        now: () => at,
+      });
+      return { feed, requests: fake.requests };
+    };
+
+    const stale = feedAt(ringShaped, nowMs);
+    const result = await stale.feed.evaluate(req);
+    const entry = decided(result);
+    expect(entry.series.at(-1)?.[0]).toBe(B15 - I15);
+    expect(entry.series.some(([timestamp]) => timestamp === B15)).toBe(false);
+    const plain = await feedAt(withoutForming, nowMs).feed.evaluate(req);
+    expect(entry.decision).toStrictEqual(decided(plain).decision);
+    expect(result.outcome === 'decided' && result.indicators).toStrictEqual(
+      plain.outcome === 'decided' && plain.indicators,
+    );
+    expect(entry.source).toStrictEqual({
+      kind: 'socket',
+      startTime: start,
+      closedUntil: B15,
+      gaps: 0,
+    });
+    expect(B15).toBeLessThan(Math.floor(nowMs / I15) * I15);
+    expect(stale.requests).toStrictEqual([]);
+
+    // control: the same window while B15 is the current bucket ends the series on it, as F21
+    const current = decided(await feedAt(ringShaped, T15).feed.evaluate(req));
+    expect(current.series.at(-1)?.[0]).toBe(B15);
+  });
+
+  it('F22 the indicators read the whole window: a gap early leaves MA200 short, the decision stands', async () => {
+    const full = await socketFeed(windowOf(rows15())).feed.evaluate(req);
+    expect(full).toMatchObject({ indicators: { ma200: { ok: true } } });
+    const gapped = socketFeed(windowOf(rows15([W15 + 99 * I15])));
+    const result = await gapped.feed.evaluate(req);
+    expect(result).toMatchObject({
+      indicators: {
+        macd: { ok: true },
+        ma50: { ok: true },
+        ma200: { ok: false, closedCandles: 199, required: 200 },
+      },
+    });
+    expect(decided(result).decision).toMatchObject({ kind: 'signal' });
+    expect(gapped.requests).toHaveLength(1);
+  });
+
+  it('F23 evaluate writes the line by default and not with journal: false; journal() writes; fromSource does not', async () => {
+    const { feed } = socketFeed(windowOf(rows15()));
+    const entry = decided(await feed.evaluate(req));
+    expect(parsedLines()).toMatchObject([{ level: 30, msg: 'signal decision' }]);
+    await feed.evaluate(req, { journal: false });
+    const fromSource = feed.fromSource(req);
+    expect(fromSource?.outcome).toBe('decided');
+    expect(lines).toHaveLength(1);
+    feed.journal(entry);
+    expect(parsedLines()).toHaveLength(2);
+    expect(parsedLines()[1]).toMatchObject({ msg: 'signal decision' });
+    expect((parsedLines()[1] as { signal: unknown }).signal).toStrictEqual(
+      JSON.parse(JSON.stringify(entry)),
+    );
+  });
+
+  it('F23b fromSource without a window is undefined and makes no GET', () => {
+    const { feed, rest } = socketFeed(undefined);
+    expect(feed.fromSource(req)).toBeUndefined();
+    expect(rest.getChart).not.toHaveBeenCalled();
+    expect(lines).toHaveLength(0);
+  });
+
+  describe('F24 the pacer gates every REST GET', () => {
+    function fakePacer(take: boolean, pausedUntil?: number) {
+      const pacer = {
+        tryTake: vi.fn(() => take),
+        onRateLimited: vi.fn<SignalRestPacer['onRateLimited']>(() => 0),
+        onDecided: vi.fn(),
+        pausedUntil: vi.fn(() => pausedUntil),
+      };
+      return pacer satisfies SignalRestPacer;
+    }
+    const restFeed = (rest: Pick<BrokerRestClient, 'getChart'>, pacer: SignalRestPacer) =>
+      createSignalFeed({ rest, pacer, logger: sink(), now: () => T15 });
+
+    it('an empty bucket without a pause refuses with rate_limited and the retry constant; no GET', async () => {
+      const getChart = vi.fn<BrokerRestClient['getChart']>();
+      const result = await restFeed({ getChart }, fakePacer(false)).evaluate(req);
+      expect(result).toStrictEqual({
+        outcome: 'fetch_failed',
+        request: {
+          assetId: 101,
+          interval: '15s',
+          intervalMs: I15,
+          nowMs: T15,
+          startTime: W15,
+          limit: SIGNAL_FETCH_LIMIT,
+        },
+        code: 'rate_limited',
+        retryAfterSec: SIGNAL_PACER_RETRY_SEC,
+      });
+      expect(SIGNAL_PACER_RETRY_SEC).toBe(1);
+      expect(getChart).not.toHaveBeenCalled();
+      expect(parsedLines()).toMatchObject([
+        { level: 40, msg: 'signal fetch refused: no token', retryAfterSec: 1 },
+      ]);
+    });
+
+    it('a pause answers what is left of it', async () => {
+      const getChart = vi.fn<BrokerRestClient['getChart']>();
+      const result = await restFeed({ getChart }, fakePacer(false, T15 + 37_000)).evaluate(req);
+      expect(result).toMatchObject({ code: 'rate_limited', retryAfterSec: 37 });
+      expect(getChart).not.toHaveBeenCalled();
+    });
+
+    it('a 2xx resets the backoff', async () => {
+      const pacer = fakePacer(true);
+      decided(await restFeed(stubRest(rows15()), pacer).evaluate(req));
+      expect(pacer.tryTake).toHaveBeenCalledTimes(1);
+      expect(pacer.onDecided).toHaveBeenCalledTimes(1);
+      expect(pacer.onRateLimited).not.toHaveBeenCalled();
+    });
+
+    it('a 429 pauses the pacer for its Retry-After; another failure does not', async () => {
+      const pacer = fakePacer(true);
+      const failing = (error: BrokerRestError) => ({ getChart: () => Promise.reject(error) });
+      await restFeed(
+        failing(new BrokerRestError('rate_limited', { status: 429, retryAfterSec: 20 })),
+        pacer,
+      ).evaluate(req);
+      expect(pacer.onRateLimited.mock.calls).toStrictEqual([[20]]);
+      await restFeed(failing(new BrokerRestError('unavailable', { status: 503 })), pacer).evaluate(
+        req,
+      );
+      expect(pacer.onRateLimited).toHaveBeenCalledTimes(1);
+      expect(pacer.onDecided).not.toHaveBeenCalled();
+    });
+
+    it('a window of the source takes no token', async () => {
+      const pacer = fakePacer(false);
+      const { feed } = socketFeed(windowOf(rows15()), { pacer });
+      decided(await feed.evaluate(req));
+      expect(pacer.tryTake).not.toHaveBeenCalled();
+    });
+  });
+
+  it('F25 a feed without a pacer sends its GET ungated', async () => {
+    const getChart = vi.fn(stubRest(rows15()).getChart);
+    decided(
+      await createSignalFeed({ rest: { getChart }, logger: sink(), now: () => T15 }).evaluate(req),
+    );
+    expect(getChart).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,14 +1,9 @@
 import {
-  BrokerRestErrorCode,
-  comparePairsByPayout,
   errorLogFields,
   isPairOpen,
   pairAcceptsDuration,
   pairPayoutAccepted,
-  PAIR_TYPE_GROUPS,
-  pairTypeGroupOf,
   SIGNAL_CHART_INTERVAL_MS,
-  SignalFeedOutcome,
   SignalKind,
   type BinaryPair,
   type NoSignalReason,
@@ -16,15 +11,15 @@ import {
   type ScanInterval,
   type TradeAction,
 } from '@binarius/shared';
-import type { CachedSignalFeed } from '@binarius/signal';
-import type { ScanPacer } from './pacer';
+import type { CachedSignalFeed, SignalDecidedEvaluation } from '@binarius/signal';
 
-// docs/signal.md -> The scanner (#343). One instance per interval of SIGNAL_SCAN_INTERVALS (#382):
-// on every candle of its interval, SIGNAL_SCAN_SLACK_MS after its boundary, it decides the pairs
-// of the fresh catalog chosen across the asset types (scanPairs, #460) through the same cached feed as POST /trading/signal, so a manual
-// analysis of a scanned pair in that candle is a cache hit. Every decision is journalled by the
-// feed itself (`signal decision`). The snapshot is in memory only; GET /trading/signals serves
-// from it (signals-routes.ts).
+// docs/signal.md -> The scanner (#343, #405). One instance per interval of SIGNAL_SCAN_INTERVALS
+// (#382): on every candle of its interval, SIGNAL_SCAN_SLACK_MS after its boundary, it decides
+// every eligible pair of the fresh catalog from the data socket's window (fromSource of the cached
+// feed: synchronous, no broker call, no pacer), so a manual analysis of a scanned pair in that
+// candle is a cache hit. Its decisions write no journal line; the cache writes one when a route
+// first answers the decision. While the source is not streaming it keeps no entry. The snapshot is
+// in memory only; GET /trading/signals serves from it (signals-routes.ts).
 
 export interface ScanEntry {
   kind: SignalKind;
@@ -37,7 +32,7 @@ export interface ScanEntry {
 
 export interface ScanSnapshot {
   interval: ScanInterval;
-  // the pairs this candle's scan chose, in order
+  // the eligible pairs of this candle's scan, in catalog order
   scanned: readonly number[];
   entries: ReadonlyMap<number, ScanEntry>;
 }
@@ -49,21 +44,19 @@ interface SignalScannerLogger {
 
 export interface SignalScannerDeps {
   interval: ScanInterval;
-  feed: Pick<CachedSignalFeed, 'evaluate'>;
+  feed: Pick<CachedSignalFeed, 'fromSource'>;
   catalog: { read(): PairsCatalogView | undefined };
-  pacer: ScanPacer;
+  // the manager's streaming(): the active data socket is ready
+  streaming: () => boolean;
   logger: SignalScannerLogger;
   now: () => number;
-  // the pairs scanned each candle (scanPairs)
-  maxPairs: number;
   slackMs: number;
-  concurrency: number;
   logEveryMs: number;
 }
 
 export interface SignalScanner {
   start(): void;
-  // clears the timers and waits for the evaluations in flight; nothing starts after it
+  // clears the timers; a scan is synchronous, so nothing is in flight, and nothing starts after it
   stop(): Promise<void>;
   snapshot(): ScanSnapshot;
 }
@@ -80,31 +73,6 @@ export const eligiblePairs = (
       isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, durationSec) && pairPayoutAccepted(pair),
   );
 
-// docs/signal.md -> The scanner -> Which pairs (#460). The groups of PAIR_TYPE_GROUPS that have an
-// eligible pair take one pair each in turn, the best by payout first, so currencies paying the most
-// do not crowd the other types out; a group that runs out gives its turns to the rest. The turn
-// starts at group (candleIndex x maxPairs) mod G: with fewer places than groups, consecutive
-// candles take consecutive windows, and every group is scanned within ceil(G / maxPairs) candles.
-export function scanPairs(
-  eligible: readonly BinaryPair[],
-  maxPairs: number,
-  candleIndex: number,
-): BinaryPair[] {
-  const groups = PAIR_TYPE_GROUPS.map((group) =>
-    eligible.filter((pair) => pairTypeGroupOf(pair.type) === group).sort(comparePairsByPayout),
-  ).filter((pairs) => pairs.length > 0);
-  if (groups.length === 0) return [];
-  const chosen: BinaryPair[] = [];
-  const total = Math.min(maxPairs, eligible.length);
-  const start = (candleIndex * maxPairs) % groups.length;
-  for (let turn = 0; chosen.length < total; turn += 1) {
-    const round = Math.floor(turn / groups.length);
-    const pair = groups[(start + turn) % groups.length]?.[round];
-    if (pair !== undefined) chosen.push(pair);
-  }
-  return chosen;
-}
-
 interface FreshSignal {
   assetId: number;
   action: TradeAction;
@@ -114,8 +82,9 @@ interface FreshSignal {
 }
 
 // docs/signal.md -> GET /trading/signals. A signal is served only on the candle that closed most
-// recently and only for a pair this candle's scan chose: a candle that changed without a
-// recompute (a 429, a stale catalog, a skew past the slack) serves nothing for that pair.
+// recently and only for a pair this candle's scan decided: a candle that changed without a
+// recompute (the source gone mid-scan, a stale catalog, a skew past the slack) serves nothing for
+// that pair.
 export function freshSignals(snapshot: ScanSnapshot, nowMs: number): FreshSignal[] {
   const candleMs = SIGNAL_CHART_INTERVAL_MS[snapshot.interval];
   const closedAt = Math.floor(nowMs / candleMs) * candleMs;
@@ -142,21 +111,26 @@ export function freshSignals(snapshot: ScanSnapshot, nowMs: number): FreshSignal
 
 interface Period {
   eligible: number;
-  noSignal: number;
+  decided: number;
+  // by reason, as the decider gave it
+  noSignal: Record<string, number>;
+  // decisions whose window had not closed the boundary's candle yet
+  unclosed: number;
+  // scans not made because the source was not streaming
+  sourceDown: number;
   skipped: number;
-  rateLimited: number;
-  failed: Record<string, number>;
-  pausedMs: number;
+  threw: number;
   lagsMs: number[];
 }
 
 const newPeriod = (): Period => ({
   eligible: 0,
-  noSignal: 0,
+  decided: 0,
+  noSignal: {},
+  unclosed: 0,
+  sourceDown: 0,
   skipped: 0,
-  rateLimited: 0,
-  failed: {},
-  pausedMs: 0,
+  threw: 0,
   lagsMs: [],
 });
 
@@ -168,27 +142,16 @@ function p95(values: number[]): number {
 }
 
 export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
-  const {
-    interval,
-    feed,
-    catalog,
-    pacer,
-    logger,
-    now,
-    maxPairs,
-    slackMs,
-    concurrency,
-    logEveryMs,
-  } = deps;
+  const { interval, feed, catalog, streaming, logger, now, slackMs, logEveryMs } = deps;
   const candleMs = SIGNAL_CHART_INTERVAL_MS[interval];
   const durationSec = candleMs / 1000;
   let stopped = false;
   let candleTimer: ReturnType<typeof setTimeout> | undefined;
   let logTimer: ReturnType<typeof setInterval> | undefined;
-  const inFlight = new Set<Promise<void>>();
   let scanned: number[] = [];
   const entries = new Map<number, ScanEntry>();
   let staleStreak = false;
+  let downStreak = false;
   let period = newPeriod();
   // the next scan moment, boundary + slack; kept, never recomputed from the clock at fire time,
   // so a timer that fires a few ms early cannot make a second scan of one candle
@@ -224,17 +187,14 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
         // a target whose candle already ended is not scanned: schedule() aims at the current one
         const live = now() < target - slackMs + candleMs;
         schedule();
-        if (!live) return;
-        const run = scan(target - slackMs);
-        inFlight.add(run);
-        void run.finally(() => inFlight.delete(run));
+        if (live) scan(target - slackMs);
       },
       Math.max(0, target - at),
     );
   }
 
-  // the chosen pairs in order, each with its digits for the decider's tick floor (#379)
-  function choose(nowMs: number, boundary: number): { id: number; digits: number }[] {
+  // every eligible pair, each with its digits for the decider's tick floor (#379)
+  function choose(nowMs: number): { id: number; digits: number }[] {
     const view = catalog.read();
     if (view === undefined || !view.fresh) {
       if (!staleStreak)
@@ -249,87 +209,89 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     staleStreak = false;
     const eligible = eligiblePairs(view, nowMs, durationSec);
     period.eligible = eligible.length;
-    return scanPairs(eligible, maxPairs, boundary / candleMs).map(({ id, digits }) => ({
-      id,
-      digits,
-    }));
+    return eligible.map(({ id, digits }) => ({ id, digits }));
   }
 
-  function rateLimited(retryAfterSec: number | undefined): void {
-    period.rateLimited += 1;
-    period.pausedMs += pacer.onRateLimited(retryAfterSec);
-  }
-
-  async function decide(assetId: number, digits: number, boundary: number): Promise<void> {
-    try {
-      const result = await feed.evaluate({ assetId, interval, digits });
-      if (result.outcome === SignalFeedOutcome.FetchFailed) {
-        period.failed[result.code] = (period.failed[result.code] ?? 0) + 1;
-        if (result.code === BrokerRestErrorCode.RateLimited) rateLimited(result.retryAfterSec);
-        return;
-      }
-      pacer.onDecided();
-      const { decision, nowMs } = result.entry;
-      // a pair that left the scanned set while its call was in flight is not put back
-      if (!scanned.includes(assetId)) return;
-      entries.set(assetId, {
-        kind: decision.kind,
-        ...(decision.kind === SignalKind.Signal
-          ? { action: decision.action }
-          : { reason: decision.reason }),
-        ...('features' in decision
-          ? { lastCandleTimestamp: decision.features.lastCandleTimestamp }
-          : {}),
-        decidedAtMs: nowMs,
-      });
-      if (decision.kind === SignalKind.NoSignal) period.noSignal += 1;
-      period.lagsMs.push(now() - boundary);
-    } catch (error) {
-      period.failed.threw = (period.failed.threw ?? 0) + 1;
-      logger.warn({ ...errorLogFields(error), interval, assetId }, 'signal scan failed');
+  function record(assetId: number, result: SignalDecidedEvaluation, boundary: number): void {
+    const { decision, nowMs, source } = result.entry;
+    entries.set(assetId, {
+      kind: decision.kind,
+      ...(decision.kind === SignalKind.Signal
+        ? { action: decision.action }
+        : { reason: decision.reason }),
+      ...('features' in decision
+        ? { lastCandleTimestamp: decision.features.lastCandleTimestamp }
+        : {}),
+      decidedAtMs: nowMs,
+    });
+    period.decided += 1;
+    if (decision.kind === SignalKind.NoSignal) {
+      period.noSignal[decision.reason] = (period.noSignal[decision.reason] ?? 0) + 1;
     }
+    // the ring had not closed the candle before the decision's own boundary, the reading the feed's
+    // forming guard uses: the decision is on the candle before (docs/signal.md -> The scanner)
+    const decisionBoundary = Math.floor(nowMs / candleMs) * candleMs;
+    if (source.kind === 'socket' && source.closedUntil < decisionBoundary) period.unclosed += 1;
+    period.lagsMs.push(now() - boundary);
   }
 
-  async function scan(boundary: number): Promise<void> {
+  function scan(boundary: number): void {
     if (boundary === lastBoundary) return;
     lastBoundary = boundary;
+    if (!streaming()) {
+      if (!downStreak) logger.warn({ interval }, 'signal scan skipped: source not streaming');
+      downStreak = true;
+      period.sourceDown += 1;
+      period.eligible = 0;
+      scanned = [];
+      entries.clear();
+      return;
+    }
+    downStreak = false;
     const candleEnd = boundary + candleMs;
-    const chosen = choose(now(), boundary);
+    const chosen = choose(now());
     scanned = chosen.map((pair) => pair.id);
     for (const assetId of entries.keys()) {
       if (!scanned.includes(assetId)) entries.delete(assetId);
     }
-    const queue = [...chosen];
-    const worker = async () => {
-      for (let pair = queue.shift(); pair !== undefined; pair = queue.shift()) {
-        if (stopped) return;
-        // past its candle a scan would spend the next candle's tokens on stale work, and a call
-        // inside the next slack could see that candle's close still unpublished
-        if (now() >= candleEnd || !pacer.tryTake()) {
-          // a pause, an empty bucket or the candle's end drops the rest; the next scan starts fresh
-          period.skipped += queue.length + 1;
-          queue.length = 0;
-          return;
-        }
-        await decide(pair.id, pair.digits, boundary);
+    for (const [index, { id: assetId, digits }] of chosen.entries()) {
+      // past its candle a decision would be the next candle's, which its own scan makes
+      if (now() >= candleEnd) {
+        period.skipped += chosen.length - index;
+        return;
       }
-    };
-    await Promise.all(Array.from({ length: concurrency }, worker));
+      let result: SignalDecidedEvaluation | undefined;
+      try {
+        result = feed.fromSource({ assetId, interval, digits });
+      } catch (error) {
+        period.threw += 1;
+        logger.warn({ ...errorLogFields(error), interval, assetId }, 'signal scan failed');
+        continue;
+      }
+      // the source left mid-scan: the rest keeps its entries, which age out with the candle
+      if (result === undefined) {
+        period.skipped += chosen.length - index;
+        return;
+      }
+      record(assetId, result, boundary);
+    }
   }
 
   function logPeriod(): void {
-    const { eligible, noSignal, skipped, rateLimited: limited, failed, pausedMs, lagsMs } = period;
+    const { eligible, decided, noSignal, unclosed, sourceDown, skipped, threw, lagsMs } = period;
     logger.info(
       {
         interval,
+        source: streaming() ? 'live' : 'down',
         eligible,
         scanned: scanned.length,
         signals: freshSignals({ interval, scanned, entries }, now()).length,
+        decided,
         noSignal,
+        unclosed,
+        sourceDown,
         skipped,
-        failed,
-        rateLimited: limited,
-        pausedMs,
+        threw,
         lagMsP95: p95(lagsMs),
       },
       'signal scanner',
@@ -343,13 +305,13 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
       schedule();
       logTimer = setInterval(logPeriod, logEveryMs);
     },
-    async stop() {
+    stop() {
       stopped = true;
       if (candleTimer !== undefined) clearTimeout(candleTimer);
       candleTimer = undefined;
       if (logTimer !== undefined) clearInterval(logTimer);
       logTimer = undefined;
-      await Promise.allSettled([...inFlight]);
+      return Promise.resolve();
     },
     snapshot() {
       return { interval, scanned: [...scanned], entries: new Map(entries) };

@@ -39,14 +39,21 @@ import { createServiceAccountKeeper } from './broker/service-accounts';
 import { parseEnv } from './env';
 import { createMarketDataManager } from './market-data/manager';
 import { createCandleRing } from './market-data/ring';
-import { createPendingRequests } from './market-data/source';
+import { createCandleSource, createPendingRequests } from './market-data/source';
+import { createCandleBackfill } from './market-data/backfill';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
-import { createScanPacer } from './signal/pacer';
+import { createScanPacer, type SpareTokenSource } from './signal/pacer';
 import { createSignalScanner } from './signal/scanner';
 import {
   BOT_TEXTS_LOAD_BUDGET_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
+  MARKET_DATA_BACKFILL_ATTEMPTS,
+  MARKET_DATA_BACKFILL_BUDGET_MS,
+  MARKET_DATA_BACKFILL_CONCURRENCY,
+  MARKET_DATA_BACKFILL_POLL_MS,
+  MARKET_DATA_BACKFILL_RETRY_MS,
+  MARKET_DATA_BACKFILL_SCAN_MS,
   MARKET_DATA_FAILOVER_GRACE_MS,
   MARKET_DATA_LOG_MS,
   MARKET_DATA_PENDING_MAX,
@@ -65,12 +72,9 @@ import {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
-  SIGNAL_SCAN_CONCURRENCY,
   SIGNAL_SCAN_LOG_MS,
   SIGNAL_SCAN_SLACK_MS,
-  signalScanCapacity,
-  signalScanPairs,
-  signalScanPerMinute,
+  signalRestCapacity,
   STARS_TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
 
@@ -137,11 +141,49 @@ const pairsCatalog = createPairsCatalog({
   },
 });
 
-// POST /trading/signal (docs/signal.md -> POST /trading/signal): one public chart GET per
-// (asset, interval) per candle at most, on the same REST client. No timer: nothing to stop.
+// docs/market-data.md: the candle ring and its refill requests (#404, #590), only with
+// BROKER_WS_URL; built before the signal feed, which reads them through createCandleSource (#405)
+const candleStore =
+  env.brokerWsUrl === undefined
+    ? undefined
+    : {
+        brokerWsUrl: env.brokerWsUrl,
+        ring: createCandleRing({
+          capacity: MARKET_DATA_RING_CANDLES,
+          skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
+          intervals: SIGNAL_SCAN_INTERVALS,
+        }),
+        requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
+      };
+
+// One pacer for every signal chart GET (docs/signal.md -> The budget, #405): tryTake for the
+// feed's on-demand GETs without the source, tryTakeSpare for the candle backfill.
+const signalPacer = createScanPacer({
+  perMinute: env.signalScanMaxPerMinute,
+  capacity: signalRestCapacity(env.signalScanMaxPerMinute),
+  backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
+  backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
+  now: Date.now,
+});
+// built only with BROKER_WS_URL; its streaming reads marketData, declared below: the feed reads the
+// source on requests and the scanners on scans, both only after listen()
+const marketDataSource =
+  candleStore === undefined
+    ? undefined
+    : createCandleSource({
+        ring: candleStore.ring,
+        requests: candleStore.requests,
+        streaming: () => marketData?.manager.streaming() ?? false,
+      });
+
+// POST /trading/signal (docs/signal.md -> POST /trading/signal): the data socket's window while it
+// streams, otherwise one public chart GET per (asset, interval) per candle at most, on the same
+// REST client and the signal pacer. No timer: nothing to stop.
 const signalFeed = createCachedSignalFeed(
   createSignalFeed({
     rest: brokerRest,
+    source: marketDataSource,
+    pacer: signalPacer,
     // the app's logger does not exist yet, and this one is first used by a request
     logger: {
       info: (object, message) => app.log.info(object, message),
@@ -151,35 +193,26 @@ const signalFeed = createCachedSignalFeed(
   { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
 );
 
-// The background scan of pairs chosen across the asset types (docs/signal.md -> The scanner, #460),
-// one scanner per interval, each on its own pacer and share of the ceiling (#382): through the same
-// cache, so a manual analysis of a scanned pair in that candle costs no second GET. Started with
+// The background scan of every eligible pair from the data socket's window (docs/signal.md ->
+// The scanner, #405), one scanner per interval, through the same cache, so a manual analysis of a
+// scanned pair in that candle is a hit. Without a streaming source it keeps no entry. Started with
 // the other loops after listen(), stopped in phase 1.
-const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
-  const pairs = signalScanPairs(env.signalScanMaxPerMinute, interval);
-  return createSignalScanner({
+const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) =>
+  createSignalScanner({
     interval,
     feed: signalFeed,
     catalog: pairsCatalog,
-    pacer: createScanPacer({
-      perMinute: signalScanPerMinute(env.signalScanMaxPerMinute, interval),
-      capacity: signalScanCapacity(env.signalScanMaxPerMinute, interval),
-      backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
-      backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
-      now: Date.now,
-    }),
+    streaming: () => marketData?.manager.streaming() ?? false,
     // the app's logger does not exist yet, and this one is first used by the first scan
     logger: {
       info: (object, message) => app.log.info(object, message),
       warn: (object, message) => app.log.warn(object, message),
     },
     now: Date.now,
-    maxPairs: pairs,
     slackMs: SIGNAL_SCAN_SLACK_MS,
-    concurrency: SIGNAL_SCAN_CONCURRENCY,
     logEveryMs: SIGNAL_SCAN_LOG_MS,
-  });
-});
+  }),
+);
 
 // created before the app so the routes can hold it; polling starts after listen()
 const adminBot = createAdminBot({
@@ -345,34 +378,55 @@ const serviceAccounts = createServiceAccountKeeper({
   },
 });
 
-// docs/market-data.md: the candle ring over a data socket on a service account (#404), only with
-// BROKER_WS_URL; no consumer yet (#405). Started with the other loops after listen(), stopped in
-// phase 1.
-const brokerWsUrl = env.brokerWsUrl;
+// docs/market-data.md: the data socket on a service account that builds the candle store's ring
+// (#404) and its REST backfill (#590), read by the signal feed and the scanners (#405). Started with
+// the other loops after listen(), stopped in phase 1.
+function createMarketData(
+  { brokerWsUrl, ring, requests }: NonNullable<typeof candleStore>,
+  pacer: SpareTokenSource,
+) {
+  const backfill = createCandleBackfill({
+    ring,
+    requests,
+    catalog: pairsCatalog,
+    rest: brokerRest,
+    pacer,
+    // called by the backfill's timers only, which start after the manager below exists
+    streaming: () => manager.streaming(),
+    logger: app.log,
+    config: {
+      scanMs: MARKET_DATA_BACKFILL_SCAN_MS,
+      pollMs: MARKET_DATA_BACKFILL_POLL_MS,
+      retryMs: MARKET_DATA_BACKFILL_RETRY_MS,
+      attempts: MARKET_DATA_BACKFILL_ATTEMPTS,
+      budgetMs: MARKET_DATA_BACKFILL_BUDGET_MS,
+      concurrency: MARKET_DATA_BACKFILL_CONCURRENCY,
+      slackMs: SIGNAL_SCAN_SLACK_MS,
+      candles: MARKET_DATA_RING_CANDLES,
+    },
+  });
+  const manager = createMarketDataManager({
+    listAccounts: () => listServiceBrokerAccounts(db),
+    accessToken,
+    catalog: pairsCatalog,
+    openClient: (label) =>
+      createBrokerSocketClient({ url: brokerWsUrl, logger: app.log.child({ socket: label }) }),
+    ring,
+    requests,
+    backfill,
+    logger: app.log,
+    config: {
+      tickMs: MARKET_DATA_TICK_MS,
+      logMs: MARKET_DATA_LOG_MS,
+      failoverGraceMs: MARKET_DATA_FAILOVER_GRACE_MS,
+      reserveReadyMs: MARKET_DATA_RESERVE_READY_MS,
+      accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
+    },
+  });
+  return { manager, backfill };
+}
 const marketData =
-  brokerWsUrl === undefined
-    ? undefined
-    : createMarketDataManager({
-        listAccounts: () => listServiceBrokerAccounts(db),
-        accessToken,
-        catalog: pairsCatalog,
-        openClient: (label) =>
-          createBrokerSocketClient({ url: brokerWsUrl, logger: app.log.child({ socket: label }) }),
-        ring: createCandleRing({
-          capacity: MARKET_DATA_RING_CANDLES,
-          skewMarginMs: MARKET_DATA_SKEW_MARGIN_MS,
-          intervals: SIGNAL_SCAN_INTERVALS,
-        }),
-        requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
-        logger: app.log,
-        config: {
-          tickMs: MARKET_DATA_TICK_MS,
-          logMs: MARKET_DATA_LOG_MS,
-          failoverGraceMs: MARKET_DATA_FAILOVER_GRACE_MS,
-          reserveReadyMs: MARKET_DATA_RESERVE_READY_MS,
-          accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
-        },
-      });
+  candleStore === undefined ? undefined : createMarketData(candleStore, signalPacer);
 
 // docs/bot-session.md → Trade messages (#464): every settled trade of a session as its own silent
 // message and the finished session's summary; started with the other loops after listen(),
@@ -437,7 +491,10 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => sessionNotices.stop(),
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
-      () => marketData?.stop() ?? Promise.resolve(),
+      async () => {
+        await marketData?.backfill.stop();
+        await marketData?.manager.stop();
+      },
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -485,7 +542,8 @@ if (!shuttingDown) {
   sessionNotices.start();
   starReconciler.start();
   serviceAccounts.start();
-  marketData?.start();
+  marketData?.manager.start();
+  marketData?.backfill.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

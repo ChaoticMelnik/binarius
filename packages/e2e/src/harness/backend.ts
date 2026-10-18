@@ -9,6 +9,7 @@ import {
   createBullmqPublisher,
   createClientPush,
   createInitDataVerifier,
+  createScanPacer,
   createSessionNoticeSender,
   DEPOSIT_INIT_DATA_MAX_AGE_MS,
   ensureFreshAccessToken,
@@ -16,6 +17,9 @@ import {
   OutboxPublisher,
   SIGNAL_CACHE_MAX_TTL_MS,
   SIGNAL_FETCH_BUDGET_MS,
+  SIGNAL_SCAN_BACKOFF_MAX_MS,
+  SIGNAL_SCAN_BACKOFF_MIN_MS,
+  signalRestCapacity,
   unusedAdminDeps,
   unusedDepositDeps,
   unusedPaymentsDeps,
@@ -25,6 +29,7 @@ import {
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import { createTokenCipher, setLastAnalysis, type Db } from '@binarius/db';
 import { SessionStakeStrategy } from '@binarius/shared';
+import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import {
   BOT_TOKEN,
@@ -87,10 +92,18 @@ export async function startE2eBackend(deps: {
     ttlMs: E2E_BACKEND_TUNING.pairsTtlMs,
     logger: log,
   });
-  const signalFeed = createCachedSignalFeed(createSignalFeed({ rest: brokerRest, logger: log }), {
-    fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS,
-    maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS,
+  // index.ts's signal pacer; the run has no BROKER_WS_URL, so every chart GET takes a token (#405)
+  const signalPacer = createScanPacer({
+    perMinute: DEFAULT_SIGNAL_SCAN_PER_MINUTE,
+    capacity: signalRestCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE),
+    backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
+    backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
+    now: Date.now,
   });
+  const signalFeed = createCachedSignalFeed(
+    createSignalFeed({ rest: brokerRest, pacer: signalPacer, logger: log }),
+    { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
+  );
   const clientPush = createClientPush({ token: BOT_TOKEN });
   const push = deps.telegram.push(clientPush);
 
