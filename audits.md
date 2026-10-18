@@ -3607,13 +3607,15 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Finding | Severity | Класс | Root cause | Missed at step |
 |---------|----------|-------|------------|-----------------|
 | R1 B1: red CI from a flaky test outside the PR | Blocker → flake | other | a timing-dependent assertion in the worker handoff stream | → #638 |
+| After the R1 Blocker the task went to round 2 on the same head without a Plan Update or a return to In Progress | — | other | manager checkpoint decision: no code to change, one CI rerun green; the day loop has no «rerun only» path for a Blocker that is a red check outside the PR | Manager (recorded deviation, decision 6241567693) |
 | Commit dd2f1be8 red on ESLint | Minor | other | the per-commit check ran typecheck and tests, not lint | Implementer Step 5 |
 | m1–m5 (language choice lost after a failed cold read; `upsertUser` without `botLanguageOf`; a text promising what /start does not do; id in the access log; the publish rule written twice) | Minor | other | left at the merge | → #649 |
 
 ### Process improvement proposals
 1. Same as #506 proposal 1 — **внедрено в #651** (one edit)
-2. Manager → task selection (5): an owner's board note releasing the task is not a taken signal — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task selection → Skip**
-3. Remaining findings — **вынесено в #649**; flaky test — **вынесено в #638**
+2. Manager → task selection (5): an owner's board note releasing the task is not a taken signal — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task selection → Skip; `.claude/CLAUDE.md` → Режим manager → «Пул задач»**
+3. Remaining findings — **вынесено в #649**
+4. The flaky handoff test — **вынесено в #638**
 
 ---
 
