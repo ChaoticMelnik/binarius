@@ -483,9 +483,11 @@ export function durationsScreen(): DemoScreen {
 
 // Up to SIGNALS_PER_GROUP pairs of every type with a signal, then the free places filled from the
 // rest by payout (#460), so a list on a candle where currencies pay best still shows the other
-// types. 12 places: two of each group.
+// types. 12 places: two of each group. The list holds at least SIGNALS_MIN_SIZE pairs when that
+// many have a signal (#631): the pairs paying less than MIN_CYCLE_PAYOUT_PCT fill it up to there.
 export const SIGNALS_PER_GROUP = 2;
 export const SIGNALS_LIST_SIZE = SIGNALS_PER_GROUP * PAIR_TYPE_GROUPS.length;
+export const SIGNALS_MIN_SIZE = 5;
 
 export interface ShownSignal {
   pair: PairView;
@@ -493,10 +495,14 @@ export interface ShownSignal {
 }
 
 // The list of the signals screen (docs/bot-demo.md -> The signals screen): a pair the catalog does
-// not list, that is closed now, that does not take the duration or that pays less than the cycle
-// floor (#379) takes no place, since the launch would refuse it. The groups follow
-// PAIR_TYPE_GROUPS, a fill sits in its own type's group, and inside a group the best payout comes
-// first (comparePairsByPayout), so the route's order and the catalog's do not matter.
+// not list, that is closed now or that does not take the duration takes no place, since the launch
+// would refuse it. The pairs paying at least MIN_CYCLE_PAYOUT_PCT come first, chosen by #460: the
+// groups follow PAIR_TYPE_GROUPS, a fill sits in its own type's group, and inside a group the best
+// payout comes first (comparePairsByPayout), so the route's order and the catalog's do not matter.
+// Fewer than SIGNALS_MIN_SIZE of them, the pairs paying less follow as a tail, best payout first
+// and with no quota by type, until the list reaches SIGNALS_MIN_SIZE (#631). #460 takes every pair
+// while there are no more than SIGNALS_LIST_SIZE, so a tail stands only under fewer than five
+// pairs at or above the key.
 export function signalsShown(
   signals: readonly { assetId: number; action: TradeAction }[],
   catalog: PairsCatalogResponse,
@@ -506,26 +512,30 @@ export function signalsShown(
   const checked: ShownSignal[] = [];
   for (const signal of signals) {
     const check = checkDemoTrade(catalog, signal.assetId, durationSec, nowMs);
-    if (check.ok && pairPayoutAccepted(check.pair)) {
-      checked.push({ pair: check.pair, action: signal.action });
-    }
+    if (check.ok) checked.push({ pair: check.pair, action: signal.action });
   }
   const byPayout = (a: ShownSignal, b: ShownSignal) => comparePairsByPayout(a.pair, b.pair);
   checked.sort(byPayout);
+  const primary = checked.filter((item) => pairPayoutAccepted(item.pair));
   const taken = new Set<ShownSignal>();
   for (const group of PAIR_TYPE_GROUPS) {
-    checked
+    primary
       .filter((item) => pairTypeGroupOf(item.pair.type) === group)
       .slice(0, SIGNALS_PER_GROUP)
       .forEach((item) => taken.add(item));
   }
-  for (const item of checked) {
+  for (const item of primary) {
     if (taken.size >= SIGNALS_LIST_SIZE) break;
     taken.add(item);
   }
-  return PAIR_TYPE_GROUPS.flatMap((group) =>
-    checked.filter((item) => taken.has(item) && pairTypeGroupOf(item.pair.type) === group),
+  const shown = PAIR_TYPE_GROUPS.flatMap((group) =>
+    primary.filter((item) => taken.has(item) && pairTypeGroupOf(item.pair.type) === group),
   );
+  for (const item of checked) {
+    if (shown.length >= SIGNALS_MIN_SIZE) break;
+    if (!pairPayoutAccepted(item.pair)) shown.push(item);
+  }
+  return shown;
 }
 
 // The pairs with a signal on the last closed candle of the chosen duration's scanner (#320,

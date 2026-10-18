@@ -43,6 +43,7 @@ import {
   sessionStartCallbackData,
   sessionStartDataOf,
   SIGNALS_LIST_SIZE,
+  SIGNALS_MIN_SIZE,
   signalsShown,
   STAKE_CALLBACK_PATTERN,
   stakeCallbackData,
@@ -288,8 +289,8 @@ describe('the duration screen (#382)', () => {
 
 describe('the signals screen', () => {
   // by type (#460): EUR/USD's currency before BTC/USD's cryptocurrency, though the route sends
-  // BTC/USD first and it pays more; a closed pair, one that refuses 15 s, one the catalog does not
-  // list and one paying below the cycle floor (US10Y at 70 %, #379) have no button
+  // BTC/USD first and it pays more; a closed pair, one that refuses 15 s and one the catalog does
+  // not list have no button; US10Y at 70 % follows as the tail of a list shorter than five (#631)
   const ROUTE = signalsOf(
     [PAIR_SHORT.id, TradeAction.Down],
     [PAIR_CLOSED.id, TradeAction.Up],
@@ -303,6 +304,7 @@ describe('the signals screen', () => {
       button('EUR/USD OTC ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
       button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15)),
     ],
+    [button('US10Y ⬇️ 70%', demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 15))],
     ...listFooter(15),
   ];
   const LIST_15 = demoSignalsCallbackData(15);
@@ -384,6 +386,7 @@ describe('the signals screen', () => {
       expect(shownIds(shuffle(ids), [...SIX].reverse())).toEqual(SIX_SHOWN);
     });
 
+    // #631: a pair paying 70 % is no longer one the launch would refuse; it follows as the tail
     it('L4 a pair the launch would refuse takes no place', () => {
       const pairs = [
         pairOf(1, 'currency', 99, { scheduledUntil: PAIR_CLOSED.scheduledUntil }),
@@ -392,7 +395,7 @@ describe('the signals screen', () => {
         pairOf(4, 'currency', 70),
         pairOf(5, 'stock', 81),
       ];
-      expect(shownIds([1, 2, 3, 4, 5], pairs)).toEqual([2, 3, 5]);
+      expect(shownIds([1, 2, 3, 4, 5], pairs)).toEqual([2, 3, 5, 4]);
       // on a full list too: the closed best currency leaves its place to the third one
       const closedBest = SIX.map((p) =>
         p.id === 100 ? { ...p, scheduledUntil: PAIR_CLOSED.scheduledUntil } : p,
@@ -412,6 +415,56 @@ describe('the signals screen', () => {
       ]);
       const two = [pairOf(9, 'stock', 85), pairOf(7, 'stock', 85), pairOf(8, 'stock', 85)];
       expect(shownIds([9, 8, 1, 7], [...two, pairOf(1, 'index', 80)])).toEqual([7, 8, 9, 1]);
+    });
+
+    // #631: at least SIGNALS_MIN_SIZE pairs when that many have a signal; the pairs paying less
+    // than MIN_CYCLE_PAYOUT_PCT fill the list after #460's choice, best payout first
+    it('pins the floor of the list at five, inside its ceiling', () => {
+      expect(SIGNALS_MIN_SIZE).toBe(5);
+      expect(SIGNALS_MIN_SIZE).toBeLessThanOrEqual(SIGNALS_LIST_SIZE);
+    });
+
+    it('L6 three pairs at or above 80 % keep their groups, two below follow them as the tail', () => {
+      const pairs = [
+        pairOf(1, 'currency', 90),
+        pairOf(2, 'currency', 85),
+        pairOf(3, 'stock', 82),
+        pairOf(4, 'cryptocurrency', 79),
+        pairOf(5, 'currency', 75),
+        pairOf(6, 'index', 70),
+        pairOf(7, 'stock', 60),
+      ];
+      expect(shownIds([7, 6, 5, 4, 3, 2, 1], pairs)).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it('L7 fills up to five and no further; five or more at or above 80 % take no tail', () => {
+      const low = Array.from({ length: 10 }, (_, i) => pairOf(101 + i, 'currency', 70 - i));
+      const above = (n: number) =>
+        Array.from({ length: n }, (_, i) => pairOf(1 + i, BROKER_TYPE[i % 6] ?? 'currency', 90));
+      const ids = (pairs: readonly PairView[]) => pairs.map((p) => p.id);
+      const three = [...above(3), ...low];
+      expect(shownIds(ids(three), three)).toEqual([1, 2, 3, 101, 102]);
+      const five = [...above(5), ...low];
+      expect(shownIds(ids(five), five)).toEqual([1, 2, 3, 4, 5]);
+      const seven = [...above(7), ...low];
+      expect(shownIds(ids(seven), seven)).toEqual([1, 7, 2, 3, 4, 5, 6]);
+    });
+
+    it('L8 the tail goes by payout, then id; a pair the launch would refuse takes no place in it', () => {
+      const pairs = [
+        pairOf(10, 'currency', 70),
+        pairOf(9, 'index', 75),
+        pairOf(8, 'stock', 75),
+        pairOf(11, 'currency', 78, { scheduledUntil: PAIR_CLOSED.scheduledUntil }),
+        pairOf(12, 'currency', 77, { minTimeframe: 60 }),
+      ];
+      expect(shownIds([10, 9, 8, 11, 12, 13], pairs)).toEqual([8, 9, 10]);
+    });
+
+    it('L9 fewer than five signals show as many as there are', () => {
+      expect(shownIds([1, 2], [pairOf(1, 'currency', 60), pairOf(2, 'stock', 79)])).toEqual([2, 1]);
+      const mixed = [pairOf(1, 'currency', 90), pairOf(2, 'stock', 85), pairOf(3, 'index', 50)];
+      expect(shownIds([3, 2, 1], mixed)).toEqual([1, 2, 3]);
     });
 
     it('draws the chosen pairs on the screen, in their order, above the footer', async () => {
@@ -471,6 +524,23 @@ describe('the signals screen', () => {
       ]);
     });
 
+    // #631: the tail goes on in the same two a row, after the groups
+    it('T2d the tail follows the groups two a row', async () => {
+      const pairs = [
+        pairOf(1, 'currency', 90),
+        pairOf(2, 'stock', 85),
+        pairOf(3, 'index', 81),
+        pairOf(4, 'currency', 79),
+        pairOf(5, 'stock', 70),
+      ];
+      expect(await screenRows(pairs, [5, 4, 3, 2, 1])).toEqual([
+        [pairButton(1, 90), pairButton(2, 85)],
+        [pairButton(3, 81), pairButton(4, 79)],
+        [pairButton(5, 70)],
+        ...listFooter(15),
+      ]);
+    });
+
     it('T2c a full list is six rows of two above the footer', async () => {
       const rows = await screenRows(
         SIX,
@@ -522,8 +592,8 @@ describe('the signals screen', () => {
       ]);
     });
 
-    // #379: the 5 s list joins through checkDemoCycle too
-    it('lists no pair paying below the cycle floor on the 5s list', async () => {
+    // #631: the 5 s list fills up to five with a pair paying below 80 % too (#379 left it out)
+    it('lists a pair paying below 80 % after the others on the 5s list', async () => {
       const { press, calls } = setup({
         readSignals: () =>
           Promise.resolve(
@@ -539,7 +609,10 @@ describe('the signals screen', () => {
       await press(demoSignalsCallbackData(5));
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-        [button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
+        [
+          button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5)),
+          button('US10Y ⬇️ 70%', demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 5)),
+        ],
         ...listFooter(5),
       ]);
     });
