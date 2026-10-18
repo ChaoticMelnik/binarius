@@ -432,7 +432,8 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionCompleted: () =>
     sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
-  // the reply to the stop (#536): every end line, with the open trade's line or without
+  // the reply to the stop (#536): every end line, with the last trade's line by its status or
+  // without
   sessionStopReply: () =>
     [...Object.values(TradingSessionStopReason), null].flatMap((stopReason) =>
       [1, 2, N].flatMap((settled) =>

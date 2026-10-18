@@ -25,7 +25,6 @@ import {
   StarPaymentStatus,
   telegramHtml,
   TradeAction,
-  TRADE_INTENT_TRANSITIONS,
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
@@ -494,14 +493,25 @@ export const launchCycleButtonLabel = (mode: TradeMode): string =>
 export const sessionAgainButtonLabel = (mode: TradeMode): string =>
   withModeLabel(LABELS.sessionAgainButton, mode);
 
-// A trade with an outgoing edge in the shared graph: it can still settle or be rejected, so the
-// session's counters can still move (manual_review included).
-const sessionIntentLive = (intent: TradeIntentView | null): intent is TradeIntentView =>
-  intent !== null && TRADE_INTENT_TRANSITIONS[intent.status].length > 0;
+type LastTradeLineKey =
+  'sessionOpenTradePlaysOut' | 'sessionLastTradeChecking' | 'sessionLastTradeOpening';
 
-// A trade the worker carries to its end without a person: live, and not on manual review.
-const intentPlaysOut = (intent: TradeIntentView | null): intent is TradeIntentView =>
-  sessionIntentLive(intent) && intent.status !== TradeIntentStatus.ManualReview;
+// The line under the end line for the stopped session's last trade, by what the worker still
+// does with it (the owner's decision 2026-10-08, #311/#619): open — plays out; sent, outcome
+// unknown — the reconciler asks the broker; not yet open — opens or is refused. None once a
+// person decides (manual_review) or it is terminal.
+const LAST_TRADE_LINE = {
+  [TradeIntentStatus.Planned]: 'sessionLastTradeOpening',
+  [TradeIntentStatus.Reserved]: 'sessionLastTradeOpening',
+  [TradeIntentStatus.Queued]: 'sessionLastTradeOpening',
+  [TradeIntentStatus.Submitting]: 'sessionLastTradeOpening',
+  [TradeIntentStatus.Accepted]: 'sessionOpenTradePlaysOut',
+  [TradeIntentStatus.Unknown]: 'sessionLastTradeChecking',
+  [TradeIntentStatus.Reconciling]: 'sessionLastTradeChecking',
+  [TradeIntentStatus.Settled]: null,
+  [TradeIntentStatus.Rejected]: null,
+  [TradeIntentStatus.ManualReview]: null,
+} as const satisfies Record<TradeIntentStatus, LastTradeLineKey | null>;
 
 // What the session message shows of a session; nothing else of the view.
 type SessionStatusView = Pick<
@@ -551,14 +561,13 @@ export const sessionShareCaption = (referralLink: string): TelegramHtml =>
   TEXTS.sessionShareCaption({ referralLink });
 
 // The reply to «⏹» under the waiting message and to /stop of one session (#536): the end line, and
-// the open trade's line while the worker still carries it to its end.
+// the last trade's line by its status (LAST_TRADE_LINE).
 export const sessionStopReplyText = (
   view: Pick<SessionStatusView, 'stopReason' | 'trades' | 'cycles' | 'lastIntent' | 'settings'>,
-): TelegramHtml =>
-  joinLines([
-    sessionEndLine(view),
-    ...(intentPlaysOut(view.lastIntent) ? [TEXTS.sessionOpenTradePlaysOut] : []),
-  ]);
+): TelegramHtml => {
+  const key = view.lastIntent === null ? null : LAST_TRADE_LINE[view.lastIntent.status];
+  return joinLines([sessionEndLine(view), ...(key === null ? [] : [textOf(key)])]);
+};
 
 // The session's message (#284, #536, #568, docs/bot-session.md → The session message): the caption
 // of the session's picture, or the text when it has none. The header by mode (#327), the pair, the

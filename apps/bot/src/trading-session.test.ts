@@ -731,6 +731,18 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     );
   });
 
+  it('SW5b a trade whose outcome is unknown: the reply says the broker is asked', async () => {
+    const reconciling = sessionView({
+      ...STOPPED,
+      lastIntent: intentView({ status: TradeIntentStatus.Reconciling }),
+    });
+    const { press, calls } = setup({ stopSession: () => Promise.resolve(reconciling) });
+    await press(WAITING_STOP);
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(
+      ['⏹ Сессия остановлена по твоей команде.', TEXTS.sessionLastTradeChecking.value].join('\n'),
+    );
+  });
+
   it('SW6 a real session: the same reply, its again button marked REAL', async () => {
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
     const { press, calls } = setup({ stopSession: () => Promise.resolve(realStopped) });
@@ -863,6 +875,18 @@ describe('/stop (#122)', () => {
     expect(stopSession).not.toHaveBeenCalled();
     expect(readSession).not.toHaveBeenCalled();
     expect(sessionTracker.track).not.toHaveBeenCalled();
+  });
+
+  it('B2b a trade not yet open: the reply says it is still opening', async () => {
+    const queued = sessionView({
+      ...STOPPED,
+      lastIntent: intentView({ status: TradeIntentStatus.Queued }),
+    });
+    const { send, calls } = setup({ stopSessions: () => Promise.resolve([queued]) });
+    await send('/stop');
+    expect(onlyMessage(calls)?.text).toBe(
+      ['⏹ Сессия остановлена по твоей команде.', TEXTS.sessionLastTradeOpening.value].join('\n'),
+    );
   });
 
   it('B3 no active session: the text and the menu, nothing tracked', async () => {

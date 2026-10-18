@@ -740,7 +740,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   },
   {
     // the reply to «⏹» and to /stop of one session (#536, texts.ts → sessionStopReplyText): the
-    // session's end line, and the open trade's line when it plays out
+    // session's end line, and the last trade's line by its status (texts.ts → LAST_TRADE_LINE)
     id: 'sessionStopReply',
     title: 'Ответ на остановку сессии',
     limit: BOT_TEXT_LIMIT,
@@ -752,7 +752,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
         'sessionStatusUnavailable',
       ),
       '\n',
-      k('sessionOpenTradePlaysOut'),
+      anyOf('sessionOpenTradePlaysOut', 'sessionLastTradeChecking', 'sessionLastTradeOpening'),
     ],
   },
   {

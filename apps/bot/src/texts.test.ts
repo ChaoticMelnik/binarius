@@ -1316,32 +1316,38 @@ describe('the stop reply', () => {
     ...patch,
   });
 
-  it('is the end line, and the open trade’s line while it plays out', () => {
-    expect(plainOfReply(stoppedWith(intentView({ status: TradeIntentStatus.Accepted })))).toBe(
-      ['⏹ Сессия остановлена по твоей команде.', '⏳ Открытая сделка доиграет до конца.'].join(
-        '\n',
-      ),
-    );
-    expect(plainOfReply(stoppedWith(null))).toBe('⏹ Сессия остановлена по твоей команде.');
-  });
+  const END = '⏹ Сессия остановлена по твоей команде.';
+  const PLAYS_OUT = '⏳ Открытая сделка доиграет до конца.';
+  const CHECKING = '🔎 Итог последней сделки уточняется у брокера.';
+  const OPENING = '⏳ Последняя сделка ещё открывается: если откроется — доиграет до конца.';
+  // The owner's decision 2026-10-08 (#311), wording of #619: every status has its row, so a new
+  // status fails here and not only in tsc.
+  const LINE_BY_STATUS: Record<TradeIntentStatus, string | null> = {
+    [TradeIntentStatus.Planned]: OPENING,
+    [TradeIntentStatus.Reserved]: OPENING,
+    [TradeIntentStatus.Queued]: OPENING,
+    [TradeIntentStatus.Submitting]: OPENING,
+    [TradeIntentStatus.Accepted]: PLAYS_OUT,
+    [TradeIntentStatus.Unknown]: CHECKING,
+    [TradeIntentStatus.Reconciling]: CHECKING,
+    [TradeIntentStatus.Settled]: null,
+    [TradeIntentStatus.Rejected]: null,
+    [TradeIntentStatus.ManualReview]: null,
+  };
 
-  it.each([TradeIntentStatus.Queued, TradeIntentStatus.Submitting, TradeIntentStatus.Unknown])(
-    'says a %s trade plays out',
+  it.each(Object.values(TradeIntentStatus))(
+    'is the end line and the line of a %s trade',
     (status) => {
-      expect(plainOfReply(stoppedWith(intentView({ status })))).toContain(
-        '⏳ Открытая сделка доиграет до конца.',
-      );
-    },
-  );
-
-  it.each([TradeIntentStatus.ManualReview, TradeIntentStatus.Settled, TradeIntentStatus.Rejected])(
-    'says nothing of a %s trade',
-    (status) => {
+      const line = LINE_BY_STATUS[status];
       expect(plainOfReply(stoppedWith(intentView({ status })))).toBe(
-        '⏹ Сессия остановлена по твоей команде.',
+        line === null ? END : [END, line].join('\n'),
       );
     },
   );
+
+  it('is the end line alone without a trade', () => {
+    expect(plainOfReply(stoppedWith(null))).toBe(END);
+  });
 
   it('names a completed session’s result, and the status unavailable without a reason', () => {
     expect(

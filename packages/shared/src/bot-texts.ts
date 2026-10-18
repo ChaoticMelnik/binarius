@@ -1573,8 +1573,18 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionOpenTradePlaysOut: html(
     g.Session,
-    'Сессия остановлена, а последняя сделка ещё идёт.',
+    'Сессия остановлена, а последняя сделка открыта у брокера (accepted).',
     `⏳ Открытая сделка доиграет до конца.`,
+  ),
+  sessionLastTradeChecking: html(
+    g.Session,
+    'Сессия остановлена, итог последней сделки неизвестен (unknown/reconciling): уточняется у брокера.',
+    `🔎 Итог последней сделки уточняется у брокера.`,
+  ),
+  sessionLastTradeOpening: html(
+    g.Session,
+    'Сессия остановлена, последняя заявка ещё не открыта (planned/reserved/queued/submitting).',
+    `⏳ Последняя сделка ещё открывается: если откроется — доиграет до конца.`,
   ),
   sessionSettingsUnavailable: html(
     g.Session,
