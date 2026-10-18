@@ -270,7 +270,8 @@ endedAt, trades: { settled, rejected, won, lost, tied, profit }, cycles: { plann
 lastIntent, signalAction, balance, noticesDone }` — `noticesDone` is `final_notice_sent_at is not null` (#464: the bot's card waits
 for it); `signalAction` (#568, the direction of the bot's session picture) is the last intent's
 `action` — the newest by `created_at desc, id desc`, any status, a rejected one included — else
-`start_signal_action`, else `null` (a row from before #568 without a trade); once set, it never
+`start_signal_action`, else `null` (a row without a trade from before #568, or from the CLI
+`session-start`, which writes no `start_signal_action`); once set, it never
 returns to `null`;
 `cycles` is `sessionProgress` (#552: `planned` the session's length, `closed` its closed cycles;
 a v1/v2 row counts its trades), `lastIntent` the same view `GET /trading/intents/:id` answers, or

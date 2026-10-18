@@ -63,8 +63,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   message, `session:stop:<id>:w` under the waiting message the backend sends (49 / 51 bytes).
 - `apps/bot/src/session-tracker.ts` — `createSessionTracker({ backend, logger, firstPollMs,
   pollMs, deadlineMs, resumeGapMs, maxEntries?, now? })` → `{ track, stop, size, has }`,
-  `sessionEditMethod(view)` (#568: the one choice of the message's kind, `editMessageMedia` for a
-  view with a direction, else `editMessageText`), and
+  `sessionEditMethod(drawing.picture)` (#568: the one choice of the message's kind,
+  `editMessageMedia` for a drawing with a picture, else `editMessageText`), and
   `sessionTrackingDone`
   (`isTradingSessionFinished` of `packages/shared/src/trading-session.ts`, #337).
   `index.ts` builds one and hands it to `createBot` and to `runBot`.
@@ -180,9 +180,9 @@ chosen_inline_result               (the user tapped the result, /setinlinefeedba
 session:stop:<id>:w                («⏹ Остановить сессию» under the waiting message, #536)
   bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop { telegramUserId, waitingMessageId }
         (#587: the pressed message handed over; 409 session_not_active → GET /trading/sessions/<id>)
-  bot → editMessageText of the pressed waiting message (#587): the end line, «⏳ Открытая сделка
-        доиграет до конца.» while its trade plays out, and the end of the path; refused as gone →
-        sendMessage with the same
+  bot → editMessageText of the pressed waiting message (#587): the end line, the last trade's line
+        by its status (The stop), and the end of the path; refused as gone → sendMessage with the
+        same
   backend's sender, its next tick: no delete, the summary under it
 session:stop:<id>                  (an old status message's «⏹», before #536)
   bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop ∥ GET /trading/pairs
@@ -289,7 +289,7 @@ place of the analysis or as a new message.
 - A second press before the first delete landed: 409 → the session message anew, tracking moves,
   and the second delete finds the message gone → `info`.
 - A launch screen drawn before #418 carries no token: pressed, it starts the session and stays.
-- A token on a duration the demo no longer offers (`demo:sess:101:120:l`) lands in the legacy
+- A token on a duration the demo no longer offers (`demo:sess:101:300:l`) lands in the legacy
   handler, as the plain datum does: the keyboard goes, nothing is sent.
 - A real launch screen pressed after the user went demo, or on a `DEMO_ONLY` backend, is refused
   (`mode_not_allowed`, `demo_only`): no session message, the screen stays.
@@ -334,9 +334,11 @@ the caption of the picture of `view.signalAction` — `setup-bull.png` («BULLIS
 [bot-demo.md](bot-demo.md#the-analysis)) through the same cache (`setup-card.ts`): each uploaded
 per process and direction until an answer brings its `file_id`, then sent by it. `signalAction` is the backend's
 ([trading-session.md](trading-session.md#routes)): the last intent's direction, else the
-signal the start route checked; null only on a session started before #568 that has no trade yet,
-whose message stays a text. The line «📡 Сигнал: …» is the fifth line of the head (under the
-header when the settings cannot be read) and is absent without a direction. No figure of the
+signal the start route checked; null on a session without a trade yet that was started before #568
+or by the CLI `session-start`, which checks no signal
+([trading-session.md](trading-session.md#the-table)); its message stays a text. The line
+«📡 Сигнал: …» is the fifth line of the head (under the header when the settings cannot be read)
+and is absent without a direction. No figure of the
 analysis is printed: the features of a session trade's signal are stored nowhere. The caption's
 budget is `TELEGRAM_CAPTION_LIMIT` (1024, `BOT_TEXT_MESSAGES` → `sessionRunning`,
 `sessionCompleted`, `sessionStopped`, `sessionNoSettings`).
@@ -436,12 +438,20 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   ([trading-session.md](trading-session.md#post-tradingsessionsidstop)); the backend's sender then
   neither deletes it nor waits for it, and the summary comes under it. 409 `session_not_active`
   reads the session and answers how it ended (decision В3). The reply is drawn **in place of the
-  pressed message** (`editMessageText`, #587): the end line, and «⏳ Открытая сделка доиграет до
-  конца.» while the last trade is live and not on manual review (`sessionStopReplyText`, decision
-  В1), under the end of the path. The result and the balance come with the backend's summary, then
-  the card. No catalog read (no pair in the reply), no `deleteMessage` and no `track()`: the
-  session message is tracked from its start in this bot process, or recovered by the pass of #567
-  once its id is recorded; a session whose id is not recorded (started from the CLI, a bot restart
+  pressed message** (`editMessageText`, #587): the end line, and the last trade's line by its
+  status (`sessionStopReplyText` → `LAST_TRADE_LINE`, the owner's decision of 2026-10-08 in #311
+  and the wording of #619): «⏳ Открытая сделка доиграет до конца.» for an open trade
+  (`accepted`); «🔎 Итог последней сделки уточняется у брокера.» for `unknown`/`reconciling` (the
+  worker's reconciliation asks the broker); «⏳ Последняя сделка ещё открывается: если откроется —
+  доиграет до конца.» for a trade not yet open (`planned`/`reserved`/`queued`/`submitting`: the
+  worker still submits it, the stop does not cancel it —
+  [trading-session.md](trading-session.md#post-tradingsessionsidstop)); nothing for `settled`,
+  `rejected`, `manual_review` and no trade; under the end of the path. The line is sent once: the
+  trade's outcome comes with the backend's cycle message and the summary, and the reply is not
+  edited after it. The result and the balance come with the backend's summary, then the card. No
+  catalog read (no pair in the reply), no `deleteMessage` and no `track()`: the session message
+  is tracked from its start in this bot process, or recovered by the pass of #567 once its id is
+  recorded; a session whose id is not recorded (started from the CLI, a bot restart
   in the 3 s before the first poll, a message reported lost) is not tracked after a bot restart, so
   it gets no card and no end line on its message ([risk 56](#accepted-risks)).
 
@@ -466,7 +476,8 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   5, decision В4) is answered as before: the catalog read beside the stop, 409 → the read, and the
   session message drawn in place of the pressed one (`editMessageText`), under the end of the path;
   gone → a new message, recorded by its newer id (#567, #587). The session is tracked on that
-  message, so its card comes as before.
+  message, so its card comes as before. A stale edit of the old entry can land after the
+  handler's — [risk 83](#accepted-risks).
 - **An old «🔄 Обновить»** (`session:<id>`, `LEGACY_SESSION_REFRESH_PATTERN`): its keyboard is
   stripped (`removeLegacyKeyboard` of `demo.ts`: `answerCallbackQuery`, then
   `editMessageReplyMarkup`), nothing read or sent (the owner's answer 5).
@@ -489,7 +500,7 @@ message below goes on. Then one message answers, always with a keyboard (Rule 31
 | The route answered | The message | Keyboard | Tracking |
 |---|---|---|---|
 | no session (`[]`) | «Активных сессий нет.» (`sessionNoneActive`) | «🏠 В меню» | — |
-| one session | the reply to «⏹» under the waiting message (#536, the owner's answer 4): the end line, «⏳ Открытая сделка доиграет до конца.» while its trade plays out | the end of the path (`sessionCardKeyboard`) | — : the session message is tracked from its start or recovered by #567 once its id is recorded, its card comes from there ([risk 56](#accepted-risks)) |
+| one session | the reply to «⏹» under the waiting message (#536, the owner's answer 4): the end line and the last trade's line by its status ([The stop](#the-stop-and-the-old-buttons-536)) | the end of the path (`sessionCardKeyboard`) | — : the session message is tracked from its start or recovered by #567 once its id is recorded, its card comes from there ([risk 56](#accepted-risks)) |
 | two or more | «⏹ Остановлено сессий: N. Открытые сделки доиграют до конца.» (`sessionsStopped`) | «🏠 В меню» | — |
 | any failure (`Unreachable`, non-2xx, `ContractViolation`) | `unavailable`, `warn` `trading sessions not stopped` | «🏠 В меню», no «🔄 Повторить» — `/stop` is a write | — |
 
@@ -504,9 +515,10 @@ way.
   started it, or the recovery of #567); `/stop` tracks nothing (#536).
 - **In the email dialog** `/stop` answers and leaves the step as it was, as `/help`; in groups it is
   ignored. `/stop@bot` and a trailing text are the command (grammY `command()`).
-- **Two or more** active sessions are not reachable from the bot (one account per start, and two
-  active accounts refuse the start as `ambiguous_broker_account`); the internal API and the CLI can
-  make them.
+- **Two or more** active sessions of one user are reachable from the bot only through the window of
+  [risk 17](#accepted-risks) (an account revoked while its session runs, a second account signed
+  in); otherwise one account per start, and two active accounts refuse the start as
+  `ambiguous_broker_account`; the internal API and the CLI can make them freely.
 
 ## The tracker
 
@@ -522,21 +534,31 @@ One entry per session id, in process memory, like the intent tracker
   (`TRADE_INTENT_TRANSITIONS[status]` is empty: settled or rejected, or no trade) —
   `isTradingSessionFinished`, the predicate the backend refreshes the balance by (#337). A stopped session
   with an open trade is followed until that trade settles, so its counts are final. A last trade
-  in `manual_review` still has edges, so that entry runs to the deadline.
+  in `manual_review` still has edges, so that entry runs to the deadline; so does one in `unknown`
+  or `reconciling` (`unknown → reconciling → accepted | rejected | manual_review`): a stopped
+  session with such a trade is followed until the trade settles or is rejected, or to the
+  deadline.
 - **The render key is the drawing** (#536; #570 Minor 1; #568): `sessionDrawing(label, view)` —
   the text `sessionStatusText(label, view)` and the picture `view.signalAction` — so the message
   is edited only when either changes: when the session stops and when the signal's direction turns
   (#568); the pair's label and the catalog's overrides are in the key as printed. The edit is
   handed only the drawing (`SessionTrackRequest['edit']`), so it cannot draw what the key leaves
-  out: equal overrides of `sessionSignalUp` and `sessionSignalDown` do not hide a turn (#568,
-  review round 1 MJ1; `session-tracker.test.ts` Q1). The trades' counters, the last trade and the balance move nothing: the message does not print them.
+  out: equal overrides of `sessionSignalUp` and `sessionSignalDown` do not hide a turn (#568;
+  `session-tracker.test.ts` Q1). The trades' counters, the last trade and the balance move nothing: the message does not print them.
   An entry that drew nothing on its message and remembers nothing of it (a recovered one) edits
   only a stopped session (`mayDraw`): the message may be one sent before #536, whose «🔄»/«⏹» stay
   while its session runs ([risk 55](#accepted-risks)).
 - Past `SESSION_TRACK_DEADLINE_MS` the entry ends on the last view's drawing, with no hint (#536:
   the hint pointed at «🔄 Обновить»): the deadline's own last edit, not retried, is made only when
   that drawing is not on screen yet (the poll's edit failed, or a read failed after the last good one). An
-  entry that never read a view ends with no edit (#567).
+  entry that never read a view ends with no edit (#567). A stopped session whose last trade is
+  still in `unknown`/`reconciling` (or `manual_review`) at the deadline: the deadline's edit, if
+  any, is the stopped session's drawing — the trade is not printed —, no card (`cardDue` needs a
+  done view), and the entry ends. The session stays in `GET /trading/sessions/tracked` (a recorded
+  message, no card), so the next pass of #567 (≤ `SESSION_RESUME_INTERVAL_MS`, 10 min)
+  tracks it again, one GET per pass and no edit while the drawing stands, until the trade is
+  terminal and the card is due ([Recovery](#recovery-after-a-restart-567) → A session past the
+  deadline). A session whose message is not recorded gets no card then either (risk 56).
 - **The kind of the edit** (#568): `sessionEditMethod(drawing.picture)` — `editMessageMedia` (the
   picture of `view.signalAction` with the text as its caption) for a drawing with a picture, else
   `editMessageText`; a 404's edit draws its text on the picture of the last view the entry read,
@@ -1237,9 +1259,18 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     to edit» has not been observed live here. Falsifiable by the owner's check in the PR: a press
     under the card that logs `update handler failed` means the description differs.
 17. **Two or more sessions stopped by `/stop`** (#122) get one count line, with no status, no
-    tracking and no summary card: the state is not reachable from the bot; each session's own
-    message, if tracked, still follows it. Falsifiable: two active sessions of one user, both
-    started from the bot.
+    tracking and no summary card; each session's own message, if tracked, still follows it.
+    Reachable from the bot through one window (#455 m1): the account of a running session is
+    revoked (a failed refresh, Rule 12), and no sweep stops its session; the orchestrator does at
+    its next attempt, when the intent's creation is refused as `account_revoked` → stop
+    `account_unavailable` ([trading-session.md](trading-session.md#the-orchestrator), the refusal
+    table), i.e. after the session's current hold-back (the next candle, the retry after a failed
+    attempt, or the open trade's end). If in that window the user signs in on another broker
+    account (the only active one now) and starts a session, `checkTradingSessionStart` →
+    `resolveTradingAccount` finds one active account with no active session, and the start
+    passes: two active sessions, both from the bot. Falsifiable: «⏹ Остановлено сессий: 2» in the
+    chat of a user who never used the CLI, or `stopUserSessions` returning two rows for such a
+    user.
 18. **No repeat on an unknown outcome of `/stop`** (#122): the stop may have committed; the truth is
     in the session's message (the tracker's edit at the stop), and a second `/stop` answers
     «Активных сессий нет.».
@@ -1518,6 +1549,17 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     line drawn in place, and then the delete erases it; no state can tell, because the message was
     never the row's. The summary and the card come all the same. Falsifiable: a stop of a session
     through `:w` within 1 s after its `session waiting message removed: not recorded` line.
+83. **A stale edit on an old status message whose «⏹» stopped a running session** (#311 п.1, the
+    owner's decision 2026-10-18 in #619: documented, not fixed). `showInPlace` draws the session
+    message in place of the pressed message and retargets the tracker to that same message. A read
+    the old entry started before the stop can answer the running view after the handler's edit,
+    and that edit lands (the one edit [The tracker](#the-tracker) → Retargeting allows): the new
+    entry was created with the stopped drawing as rendered, so nothing redraws it, and the message
+    shows the running session under its card. Reachable only on a session still running when a
+    pre-#536 button was pressed — the first `SESSION_MAX_DURATION_MS` (1 h) after #536's deploy —
+    and inside Telegram's 48-hour edit window of that message; after that every such session is
+    stopped, every read answers the stopped view, and no stale edit exists. Falsifiable: a message
+    sent before #536 showing «Торговая сессия запущена…» under a summary card.
 
 ## Running it locally
 
