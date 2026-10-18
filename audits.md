@@ -3612,7 +3612,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1–m5 (language choice lost after a failed cold read; `upsertUser` without `botLanguageOf`; a text promising what /start does not do; id in the access log; the publish rule written twice) | Minor | other | left at the merge | → #649 |
 
 ### Process improvement proposals
-1. Same as #506 proposal 1 — **внедрено в #651** (one edit)
+1. Same as #506 proposal 1 — **внедрено в #651: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»** (one edit)
 2. Manager → task selection (5): an owner's board note releasing the task is not a taken signal — **внедрено в #651: `.claude/skills/manager/SKILL.md` → Task selection → Skip; `.claude/CLAUDE.md` → Режим manager → «Пул задач»**
 3. Remaining findings — **вынесено в #649**
 4. The flaky handoff test — **вынесено в #638**
