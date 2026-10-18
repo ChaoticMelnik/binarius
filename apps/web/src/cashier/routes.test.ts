@@ -28,7 +28,7 @@ const ANSWER: DepositWidgetSessionResponse = {
 const CASHIER_CSP =
   "default-src 'none'; script-src 'self' https://telegram.org; connect-src 'self'; style-src 'self'; frame-src https://binodex.app https://pay.binodex.app; form-action 'none'; frame-ancestors https://web.telegram.org; base-uri 'none'";
 const ADMIN_CSP =
-  "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 let app: FastifyInstance;
 let forwarded: DepositWidgetSessionRequest[];

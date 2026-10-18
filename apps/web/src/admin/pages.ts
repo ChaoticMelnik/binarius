@@ -57,15 +57,77 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import { html, layout, type SafeHtml } from '../html';
+import { icon, iconSprite, type IconName } from './icons';
 import { encodePublishResults } from './publish-result';
+import { ADMIN_SCRIPT_PATH, ADMIN_STYLESHEET_PATH } from './static';
 import { telegramPreview } from './telegram-preview';
 import { sessionLengthLabel, TEXTS } from './texts';
 
 const error = (message: string | undefined): SafeHtml =>
   message === undefined ? html`` : html`<p class="error">${message}</p>`;
 
-export const loginPage = (message?: string): SafeHtml =>
+// Every admin page, the sign-in ones included (#459): the design system's stylesheet, the theme
+// script in <head> (synchronous, so a stored theme applies before the first paint) and `no-js`,
+// which that script removes. The page builds its own <main>.
+const adminLayout = ({
+  title,
+  body,
+  bodyClass,
+}: {
+  title: string;
+  body: SafeHtml;
+  bodyClass?: string;
+}): SafeHtml =>
   layout({
+    title,
+    body,
+    bodyClass,
+    stylesheet: ADMIN_STYLESHEET_PATH,
+    head: html`<script src="${ADMIN_SCRIPT_PATH}"></script>`,
+    rootClass: 'no-js',
+    wrapMain: false,
+  });
+
+// Hidden until the script runs (`no-js`); the script shows the icon of the current choice.
+const themeToggle = (): SafeHtml =>
+  html`<button
+    type="button"
+    class="icon-btn no-js-hidden"
+    data-theme-toggle
+    data-label-system="${TEXTS.themeSystem}"
+    data-label-dark="${TEXTS.themeDark}"
+    data-label-light="${TEXTS.themeLight}"
+    aria-label="${TEXTS.themeSystem}"
+  >
+    ${icon('monitor', html`data-theme-icon="system"`)}${icon('moon', html`data-theme-icon="dark" hidden`)}${icon('sun', html`data-theme-icon="light" hidden`)}
+  </button>`;
+
+// The pages without a staff session: sign-in, and the notices of the admin routes.
+const authShell = ({ title, body }: { title: string; body: SafeHtml }): SafeHtml =>
+  adminLayout({
+    title,
+    bodyClass: 'auth',
+    body: html`<a class="skip-link" href="#main">${TEXTS.skipToContent}</a>
+      ${iconSprite()}
+      <main id="main" class="auth-main">
+        <div class="card auth-card">
+          <span class="brand">${TEXTS.brand}</span>
+          ${body}
+        </div>
+        <div class="auth-tools">${themeToggle()}</div>
+      </main>`,
+  });
+
+/** An error or notice of an /admin route, in the design system; `noticePage` stays for the rest. */
+export const adminNoticePage = (title: string, body: string): SafeHtml =>
+  authShell({
+    title,
+    body: html`<h1>${title}</h1>
+      <p>${body}</p>`,
+  });
+
+export const loginPage = (message?: string): SafeHtml =>
+  authShell({
     title: TEXTS.loginTitle,
     body: html`<h1>${TEXTS.loginHeading}</h1>
       ${error(message)}
@@ -83,7 +145,7 @@ export const loginPage = (message?: string): SafeHtml =>
   });
 
 export const confirmPage = (message?: string): SafeHtml =>
-  layout({
+  authShell({
     title: TEXTS.confirmTitle,
     body: html`<h1>${TEXTS.confirmHeading}</h1>
       <p>${TEXTS.confirmHint}</p>
@@ -107,7 +169,7 @@ export const confirmPage = (message?: string): SafeHtml =>
 // to the link's own path, which is the only place the token is — it never sits in the page body.
 // GET renders this and spends nothing; the POST behind the button is what creates the session.
 export const linkPage = (message?: string): SafeHtml =>
-  layout({
+  authShell({
     title: TEXTS.linkTitle,
     body: html`<h1>${TEXTS.linkTitle}</h1>
       <p>${TEXTS.linkBody}</p>
@@ -160,18 +222,38 @@ export type AdminNavKey =
   | 'brokerAccounts'
   | 'serviceAccounts';
 
-const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
-  { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
-  { key: 'users', href: '/admin/users', label: TEXTS.navUsers },
-  { key: 'sessions', href: '/admin/sessions', label: TEXTS.navSessions },
-  { key: 'intents', href: '/admin/intents', label: TEXTS.navIntents },
-  { key: 'tradingSessions', href: '/admin/trading-sessions', label: TEXTS.navTradingSessions },
-  { key: 'tokens', href: '/admin/tokens', label: TEXTS.navTokens },
-  { key: 'audit', href: '/admin/audit', label: TEXTS.navAudit },
-  { key: 'botTexts', href: '/admin/bot-texts', label: TEXTS.navBotTexts },
-  { key: 'deposits', href: '/admin/deposits', label: TEXTS.navDeposits },
-  { key: 'brokerAccounts', href: '/admin/broker-accounts', label: TEXTS.navBrokerAccounts },
-  { key: 'serviceAccounts', href: SERVICE_ACCOUNTS_PATH, label: TEXTS.navServiceAccounts },
+const NAV: readonly { key: AdminNavKey; href: string; label: string; icon: IconName }[] = [
+  { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview, icon: 'layout-dashboard' },
+  { key: 'users', href: '/admin/users', label: TEXTS.navUsers, icon: 'users' },
+  { key: 'sessions', href: '/admin/sessions', label: TEXTS.navSessions, icon: 'key-round' },
+  { key: 'intents', href: '/admin/intents', label: TEXTS.navIntents, icon: 'activity' },
+  {
+    key: 'tradingSessions',
+    href: '/admin/trading-sessions',
+    label: TEXTS.navTradingSessions,
+    icon: 'repeat',
+  },
+  { key: 'tokens', href: '/admin/tokens', label: TEXTS.navTokens, icon: 'coins' },
+  { key: 'audit', href: '/admin/audit', label: TEXTS.navAudit, icon: 'scroll-text' },
+  {
+    key: 'botTexts',
+    href: '/admin/bot-texts',
+    label: TEXTS.navBotTexts,
+    icon: 'message-square-text',
+  },
+  { key: 'deposits', href: '/admin/deposits', label: TEXTS.navDeposits, icon: 'wallet' },
+  {
+    key: 'brokerAccounts',
+    href: '/admin/broker-accounts',
+    label: TEXTS.navBrokerAccounts,
+    icon: 'briefcase',
+  },
+  {
+    key: 'serviceAccounts',
+    href: SERVICE_ACCOUNTS_PATH,
+    label: TEXTS.navServiceAccounts,
+    icon: 'server',
+  },
 ];
 
 /**
@@ -190,29 +272,60 @@ export const adminShell = ({
   login?: string;
   body: SafeHtml;
 }): SafeHtml =>
-  layout({
+  adminLayout({
     title,
-    body: html`<div class="bar">
-        <nav aria-label="${TEXTS.navLabel}">
+    body: html`<a class="skip-link" href="#main">${TEXTS.skipToContent}</a>
+      ${iconSprite()}
+      <div class="shell">
+        <nav id="nav" class="sidebar" popover aria-label="${TEXTS.navLabel}">
+          <div class="sidebar-head">
+            <span class="brand">${TEXTS.brand}</span>
+            <button
+              type="button"
+              class="icon-btn sidebar-close"
+              popovertarget="nav"
+              popovertargetaction="hide"
+              aria-label="${TEXTS.menuClose}"
+            >
+              ${icon('x')}
+            </button>
+          </div>
           ${NAV.map(
             (item) =>
               html`<a href="${item.href}" ${item.key === active ? html` aria-current="page"` : ''}
-                >${item.label}</a
+                >${icon(item.icon)}${item.label}</a
               >`,
           )}
         </nav>
-        ${
-          login === undefined
-            ? ''
-            : html`<div class="account">
-                <a href="${PASSWORD_PATH}">${TEXTS.passwordLink}</a>
-                <form method="post" action="/admin/logout">
-                  <button type="submit">${login} — ${TEXTS.logoutSubmit}</button>
-                </form>
-              </div>`
-        }
-      </div>
-      ${body}`,
+        <div class="content">
+          <header class="topbar">
+            <button
+              type="button"
+              class="icon-btn burger"
+              popovertarget="nav"
+              aria-controls="nav"
+              aria-label="${TEXTS.menuOpen}"
+            >
+              ${icon('menu')}
+            </button>
+            <div class="topbar-actions">
+              ${themeToggle()}
+              ${
+                login === undefined
+                  ? ''
+                  : html`<span class="login">${login}</span>
+                      <a href="${PASSWORD_PATH}">${TEXTS.passwordLink}</a>
+                      <form method="post" action="/admin/logout">
+                        <button type="submit" class="btn btn-secondary">
+                          ${icon('log-out')}${TEXTS.logoutSubmit}
+                        </button>
+                      </form>`
+              }
+            </div>
+          </header>
+          <main id="main" class="page">${body}</main>
+        </div>
+      </div>`,
   });
 
 /**
@@ -308,47 +421,47 @@ export const sessionsPage = (sessions: readonly StaffSessionView[], login: strin
   });
 
 // The window in the caption is the one the answer carries, not a constant of this process.
+const metric = (label: SafeHtml | string, value: number): SafeHtml =>
+  html`<div class="metric">
+    <dt>${label}</dt>
+    <dd>${value}</dd>
+  </div>`;
+
 export const overviewPage = (overview: AdminOverview, login: string): SafeHtml =>
   adminShell({
     title: TEXTS.overviewTitle,
     active: 'overview',
     login,
     body: html`<h1>${TEXTS.overviewHeading}</h1>
-      <h2>${TEXTS.overviewUsers}</h2>
-      <dl>
-        <dt>${TEXTS.overviewUsersTotal}</dt>
-        <dd>${overview.users.total}</dd>
-        <dt>${TEXTS.overviewUsersToday}</dt>
-        <dd>${overview.users.today}</dd>
-        <dt>${TEXTS.overviewUsersBlocked}</dt>
-        <dd>${overview.users.blocked}</dd>
-        <dt>${TEXTS.overviewUsersWithActiveAccount}</dt>
-        <dd>${overview.users.withActiveBrokerAccount}</dd>
-        <dt>${TEXTS.overviewUsersActiveNow}</dt>
-        <dd>${overview.users.activeNow}</dd>
-      </dl>
-      <p class="hint">${TEXTS.overviewActiveNowHint(overview.activeWindowMinutes)}</p>
-      <h2>${TEXTS.overviewIntents}</h2>
-      <dl>
-        <dt>${TEXTS.overviewIntentsTotal}</dt>
-        <dd>${overview.intents.total}</dd>
-        <dt>${TEXTS.overviewIntentsToday}</dt>
-        <dd>${overview.intents.today}</dd>
-        <dt>${TEXTS.overviewIntentsActive}</dt>
-        <dd>${overview.intents.active}</dd>
-      </dl>
-      <h3>${TEXTS.overviewIntentsByStatus}</h3>
-      <dl>
-        ${Object.values(TradeIntentStatus).map(
-          (status) =>
-            html`<dt>${code(status)}</dt>
-              <dd>${overview.intents.byStatus[status]}</dd>`,
-        )}
-      </dl>
-      <p class="hint">
-        ${TEXTS.overviewDayStartsAt} ${when(overview.dayStartsAt)}. ${TEXTS.overviewAsOf}
-        ${when(overview.asOf)}.
-      </p>`,
+      <section class="section">
+        <h2>${TEXTS.overviewUsers}</h2>
+        <dl class="metrics">
+          ${metric(TEXTS.overviewUsersTotal, overview.users.total)}
+          ${metric(TEXTS.overviewUsersToday, overview.users.today)}
+          ${metric(TEXTS.overviewUsersBlocked, overview.users.blocked)}
+          ${metric(TEXTS.overviewUsersWithActiveAccount, overview.users.withActiveBrokerAccount)}
+          ${metric(TEXTS.overviewUsersActiveNow, overview.users.activeNow)}
+        </dl>
+        <p class="hint">${TEXTS.overviewActiveNowHint(overview.activeWindowMinutes)}</p>
+      </section>
+      <section class="section">
+        <h2>${TEXTS.overviewIntents}</h2>
+        <dl class="metrics">
+          ${metric(TEXTS.overviewIntentsTotal, overview.intents.total)}
+          ${metric(TEXTS.overviewIntentsToday, overview.intents.today)}
+          ${metric(TEXTS.overviewIntentsActive, overview.intents.active)}
+        </dl>
+        <h3>${TEXTS.overviewIntentsByStatus}</h3>
+        <dl class="metrics metrics-dense">
+          ${Object.values(TradeIntentStatus).map((status) =>
+            metric(code(status), overview.intents.byStatus[status]),
+          )}
+        </dl>
+        <p class="hint">
+          ${TEXTS.overviewDayStartsAt} ${when(overview.dayStartsAt)}. ${TEXTS.overviewAsOf}
+          ${when(overview.asOf)}.
+        </p>
+      </section>`,
   });
 
 const userRow = (user: AdminUserListItem): SafeHtml =>

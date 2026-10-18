@@ -1,47 +1,44 @@
-// One stylesheet, served as a file rather than inlined: the CSP below forbids inline styles,
-// and an inline <style> would be the first thing to erode that.
-export const APP_CSS = `:root { color-scheme: light dark; --gap: 1rem; }
+import { readFileSync } from 'node:fs';
+import { themeCss } from './theme';
+
+// Stylesheets are served as files rather than inlined: the CSP forbids inline styles, and an
+// inline <style> would be the first thing to erode that. Every path below is read by pages.ts,
+// routes.ts and export-pages.ts from here.
+export const MINI_APP_STYLESHEET_PATH = '/admin/static/app.css';
+export const ADMIN_STYLESHEET_PATH = '/admin/static/admin.css';
+export const ADMIN_SCRIPT_PATH = '/admin/static/app.js';
+export const ADMIN_FONTS_PATH = '/admin/static/fonts';
+
+// The Mini App pages (OAuth, cashier) and the notice page outside /admin: only the rules their
+// markup uses, the look unchanged since before the admin design system (#459).
+export const MINI_APP_CSS = `:root { color-scheme: light dark; }
 body { margin: 0; font: 16px/1.5 system-ui, sans-serif; }
-main { max-width: 60rem; margin: 0 auto; padding: var(--gap); }
+main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
 h1 { font-size: 1.4rem; }
-form.stack { display: grid; gap: var(--gap); max-width: 22rem; }
-label { display: grid; gap: 0.25rem; }
-label.choice { display: flex; gap: 0.5rem; align-items: center; }
-input, select { font: inherit; padding: 0.5rem; }
 button { font: inherit; padding: 0.5rem 1rem; cursor: pointer; }
-p.error { color: #b00020; font-weight: 600; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border-bottom: 1px solid #8884; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
-td.agent { max-width: 22rem; overflow-wrap: anywhere; }
-td.num { text-align: right; white-space: nowrap; }
-tr.current { font-weight: 600; }
-.bar { display: flex; gap: var(--gap); align-items: baseline; justify-content: space-between; }
-.account { display: flex; gap: var(--gap); align-items: baseline; }
-nav { display: flex; gap: var(--gap); flex-wrap: wrap; }
-nav a[aria-current="page"] { font-weight: 600; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem var(--gap); }
-dt { color: #888; }
-dd { margin: 0; overflow-wrap: anywhere; }
-p.hint { color: #888; font-size: 0.9rem; }
-form.search { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; }
-form.search input { min-width: 18rem; }
-.pager { display: flex; gap: var(--gap); }
-form.search input[type="date"] { min-width: 0; }
-td.payload { max-width: 28rem; }
-code.payload { overflow-wrap: anywhere; white-space: pre-wrap; }
-textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.5rem; }
-form.editor { display: grid; gap: 0.5rem; }
-form.editor .buttons { display: flex; gap: var(--gap); }
-p.notice { font-weight: 600; }
-ul.error { color: #b00020; }
-ul.publish li.error { color: #b00020; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* pre-wrap: the template's own line breaks and indentation would show, so pages.ts writes the bubble without any */
-.tg-bubble { white-space: pre-wrap; max-width: 32rem; padding: 0.75rem 1rem; border: 1px solid #8884; border-radius: 1rem; }
-.tg-spoiler { background: #8886; color: transparent; }
-.tg-spoiler:hover { color: inherit; }
-.tg-label { display: inline-block; padding: 0.25rem 0.75rem; border: 1px solid #8884; border-radius: 0.5rem; }
-blockquote { margin: 0.25rem 0; padding-left: 0.75rem; border-left: 3px solid #8888; }
-blockquote.expandable { max-height: 4.5em; overflow: hidden; }
 #widget:not([hidden]) { display: block; width: 100%; border: 0; }
 `;
+
+// The admin design system (#459): the tokens of theme.ts, then the components that read them.
+// The app runs from src (tsx), so the files are read next to this module.
+const COMPONENTS_CSS = readFileSync(new URL('./static/admin.css', import.meta.url), 'utf8');
+export const ADMIN_CSS = `${themeCss()}\n${COMPONENTS_CSS}`;
+
+export const ADMIN_FONT_FILES = [
+  'Inter-Regular.woff2',
+  'Inter-Medium.woff2',
+  'Inter-SemiBold.woff2',
+] as const;
+
+export type AdminFontFile = (typeof ADMIN_FONT_FILES)[number];
+
+export const ADMIN_FONTS: Readonly<Record<AdminFontFile, Buffer>> = Object.fromEntries(
+  ADMIN_FONT_FILES.map((file) => [
+    file,
+    readFileSync(new URL(`./static/fonts/${file}`, import.meta.url)),
+  ]),
+) as Record<AdminFontFile, Buffer>;
+
+/** The font a request path names, or undefined: the path segment is outside input (Rule 17). */
+export const adminFont = (file: string): Buffer | undefined =>
+  Object.hasOwn(ADMIN_FONTS, file) ? ADMIN_FONTS[file as AdminFontFile] : undefined;

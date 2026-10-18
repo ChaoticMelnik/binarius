@@ -72,6 +72,8 @@ import {
   SAMPLE_USER_ID,
   sampleAdjustmentRefusal,
 } from './admin/testing';
+import { ADMIN_CLIENT_JS } from './admin/client';
+import { ADMIN_CSS, ADMIN_FONTS } from './admin/static';
 import { TEXTS } from './admin/texts';
 
 const ORIGIN = 'http://127.0.0.1:3001';
@@ -93,6 +95,20 @@ const VIEW: StaffSessionView = {
   expiresAt: '2026-09-30T08:00:00.000Z',
   current: true,
 };
+
+// The account block of the shell (#459): the login, then «Выйти» in the logout form.
+const expectAccountBlock = (body: string, login: string): void => {
+  expect(body).toContain(`<span class="login">${login}</span>`);
+  expect(body).toContain('action="/admin/logout"');
+  expect(body).toMatch(
+    new RegExp(
+      `<form method="post" action="/admin/logout">\\s*<button type="submit"[^>]*>[\\s\\S]*?${TEXTS.logoutSubmit}\\s*</button>`,
+    ),
+  );
+};
+
+// a <style> or a <script> other than the admin pages' one file (#459), which has a src
+const NO_INLINE_STYLE_OR_SCRIPT = /<style|<script(?! src="\/admin\/static\/app\.js"><\/script>)/;
 
 const httpFailure = (status: number, code?: string) =>
   new BackendError(BackendErrorCode.HttpStatus, {
@@ -405,6 +421,122 @@ describe('the response headers', () => {
     expect((await get('/admin/static/app.css')).headers['cache-control']).toBe(
       'public, max-age=3600',
     );
+  });
+});
+
+describe('the admin design system (#459)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const mains = (body: string) => body.match(/<main[\s>]/g) ?? [];
+
+  it('H1 serves the admin stylesheet, cacheable', async () => {
+    const response = await get('/admin/static/admin.css');
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('text/css; charset=utf-8');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.body).toBe(ADMIN_CSS);
+  });
+
+  it('H2 serves the theme script, cacheable', async () => {
+    const response = await get('/admin/static/app.js');
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('text/javascript; charset=utf-8');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.body).toBe(ADMIN_CLIENT_JS);
+  });
+
+  it('H3 serves a font file, cacheable for a day', async () => {
+    const response = await get('/admin/static/fonts/Inter-Regular.woff2');
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('font/woff2');
+    expect(response.headers['cache-control']).toBe('public, max-age=86400');
+    expect(response.rawPayload.equals(ADMIN_FONTS['Inter-Regular.woff2'])).toBe(true);
+  });
+
+  it.each(['nope.woff2', 'constructor', '..%2Fstatic.ts'])(
+    'H4 answers 404 with the admin notice page for the font %s',
+    async (file) => {
+      const response = await get(`/admin/static/fonts/${file}`);
+      expect(response.statusCode).toBe(404);
+      expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
+      expect(response.body).toContain(TEXTS.notFoundTitle);
+    },
+  );
+
+  it('H5 sends exactly the admin policy: own scripts, styles and fonts, nothing inline or foreign', async () => {
+    const policy = String((await get('/admin/login')).headers['content-security-policy']);
+    expect(policy).toBe(
+      "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    );
+    expect(policy).not.toContain('unsafe-inline');
+    expect(policy).not.toContain('http');
+  });
+
+  it('H6 builds the sign-in page on the design system', async () => {
+    const { body } = await get('/admin/login');
+    expect(body).toContain('<html lang="ru" class="no-js">');
+    expect(body).toContain('<link rel="stylesheet" href="/admin/static/admin.css" />');
+    expect(body).toContain('<script src="/admin/static/app.js"></script>');
+    expect(body).toContain('data-theme-toggle');
+    expect(body).not.toContain('app.css');
+    expect(body).not.toMatch(NO_INLINE_STYLE_OR_SCRIPT);
+    expect(body).not.toContain('style=');
+  });
+
+  it('H7 puts the sections in a popover sidebar opened by the burger, each with its icon', async () => {
+    const { body } = await get('/admin/overview', withCookie);
+    expect(body).toContain('<nav id="nav" class="sidebar" popover');
+    expect(body).toMatch(/<button[^>]*class="icon-btn burger"[^>]*popovertarget="nav"/);
+    expect(body).toMatch(/popovertarget="nav"\s+popovertargetaction="hide"/);
+    const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(body)?.[1] ?? '';
+    expect(
+      nav.match(/<a href="[^"]*"[^>]*>\s*<svg class="icon"[^>]*><use href="#i-[a-z-]+"\/><\/svg>/g),
+    ).toHaveLength(11);
+    for (const name of nav.matchAll(/<use href="#i-([a-z-]+)"/g)) {
+      expect(body).toContain(`<symbol id="i-${name[1]}"`);
+    }
+    expect(body).toContain(`<a class="skip-link" href="#main">${TEXTS.skipToContent}</a>`);
+  });
+
+  it('H8 shows an /admin not-found in the admin notice page, the rest in the plain one', async () => {
+    const admin = await get('/admin/nope');
+    expect(admin.statusCode).toBe(404);
+    expect(admin.body).toContain('href="/admin/static/admin.css"');
+    expect(admin.body).toContain(`<h1>${TEXTS.notFoundTitle}</h1>`);
+    expect(mains(admin.body)).toEqual(['<main ']);
+
+    const other = await get('/nope');
+    expect(other.statusCode).toBe(404);
+    expect(other.body).toContain('href="/admin/static/app.css"');
+    expect(other.body).not.toContain('admin.css');
+  });
+
+  it('H8 refuses a cross-origin admin POST with the admin notice page', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/login',
+      headers: {
+        origin: 'https://evil.example',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'login=ada&password=x',
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.body).toContain('href="/admin/static/admin.css"');
+    expect(response.body).toContain(TEXTS.forbiddenTitle);
+  });
+
+  it('H9 gives a shell page exactly one <main>, inside the content column, after the skip link', async () => {
+    const { body } = await get('/admin/overview', withCookie);
+    expect(mains(body)).toHaveLength(1);
+    expect(body).toMatch(/<body>\s*<a class="skip-link"/);
+    expect(body).toMatch(/<div class="content">[\s\S]*<main id="main" class="page">/);
+  });
+
+  it('H10 gives the sign-in page exactly one <main>, after the skip link', async () => {
+    const { body } = await get('/admin/login');
+    expect(body).toMatch(/<body class="auth">\s*<a class="skip-link"/);
+    expect(mains(body)).toHaveLength(1);
+    expect(body).toContain('<main id="main" class="auth-main">');
   });
 });
 
@@ -935,7 +1067,7 @@ describe('the read pages (#107)', () => {
     }
     expect(response.body).toContain('<nav');
     expect(response.body).toContain('action="/admin/logout"');
-    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    expectAccountBlock(response.body, 'ada');
   });
 
   it.each(['/admin/overview', '/admin/users', `/admin/users/${SAMPLE_USER_ID}`])(
@@ -1142,7 +1274,7 @@ describe('the intents pages (#108)', () => {
       for (const href of ['/admin/overview', '/admin/users', '/admin/sessions']) {
         expect(response.body).toContain(`<a href="${href}"`);
       }
-      expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+      expectAccountBlock(response.body, 'ada');
     },
   );
 
@@ -1394,7 +1526,7 @@ describe('the trading sessions page, the card section and the overview breakdown
 
     expect(response.body).toMatch(/<a href="\/admin\/trading-sessions"\s+aria-current="page"/);
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    expectAccountBlock(response.body, 'ada');
   });
 
   it('lists a session: its intents, its user, settings v1, and none for every null', async () => {
@@ -1631,7 +1763,7 @@ describe('the token ledger page and the card section (#109)', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(/<a href="\/admin\/tokens"\s+aria-current="page"/);
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    expectAccountBlock(response.body, 'ada');
   });
 
   it('asks for the whole list when every field of the form was left empty', async () => {
@@ -1850,10 +1982,10 @@ describe('the audit log page (#110)', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/audit"\s+aria-current="page"\s*>\s*Аудит\s*<\/a\s*>/,
+      /<a href="\/admin\/audit"\s+aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Аудит\s*<\/a\s*>/,
     );
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    expectAccountBlock(response.body, 'ada');
   });
 
   it('asks for the whole log when every field of the form was left empty', async () => {
@@ -2067,10 +2199,10 @@ describe('the deposits page and the card section (#341)', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(/<a href="\/admin\/deposits"\s+aria-current="page"/);
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    expectAccountBlock(response.body, 'ada');
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
     expect(nav.trimEnd()).toMatch(
-      /aria-current="page"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*Служебные аккаунты\s*<\/a\s*>$/,
+      /aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>$/,
     );
   });
 
@@ -2288,10 +2420,10 @@ describe('the broker accounts page (#342)', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(/<a href="\/admin\/broker-accounts"\s+aria-current="page"/);
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    expectAccountBlock(response.body, 'ada');
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
     expect(nav.trimEnd()).toMatch(
-      /aria-current="page"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*Служебные аккаунты\s*<\/a\s*>$/,
+      /aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>$/,
     );
   });
 
@@ -2762,7 +2894,7 @@ describe('the password page (#79)', () => {
 
       expect(response.statusCode).toBe(200);
       expect(calls.sessions).toEqual([TOKEN]);
-      expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+      expectAccountBlock(response.body, 'ada');
       expect(response.body).toContain(`<a href="/admin/password">${TEXTS.passwordLink}</a>`);
       expect(response.body).toContain(TEXTS.passwordRevokesOthers(1));
       for (const [name, autocomplete] of [
@@ -3054,7 +3186,7 @@ describe('the bot texts pages (#300)', () => {
     const response = await get('/admin/bot-texts', withCookie);
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*Служебные аккаунты\s*<\/a\s*>\s*<\/nav>/,
+      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>\s*<\/nav>/,
     );
   });
 
@@ -3105,7 +3237,7 @@ describe('the bot texts pages (#300)', () => {
       /<li class="error">\s*Описание бота \(setMyDescription\):\s*ошибка \(en\) — GrammyError, Telegram 400\s*<\/li>/,
     );
     expect(republished.body).toContain(TEXTS.botProfilePublishFailedHint);
-    expect(republished.body).not.toMatch(/<style|<script/);
+    expect(republished.body).not.toMatch(NO_INLINE_STYLE_OR_SCRIPT);
     for (const query of ['publish=junk', 'publish=setMyCommands%3Aok&publish=setMyCommands%3Aok']) {
       const ignored = await get(`/admin/bot-texts?notice=republished&${query}`, withCookie);
       expect(ignored.body).not.toContain('class="publish"');
@@ -3224,7 +3356,7 @@ describe('the bot texts pages (#300)', () => {
     expect(response.body).toContain('<div class="tg-bubble"><b>Привет</b> тут</div>');
     expect(response.body).not.toContain('javascript:');
     expect(textareaOf(response.body)).toBe('\na\nb');
-    expect(response.body).not.toMatch(/<style|<script/);
+    expect(response.body).not.toMatch(NO_INLINE_STYLE_OR_SCRIPT);
 
     await rebuild({
       previewBotText: async () =>

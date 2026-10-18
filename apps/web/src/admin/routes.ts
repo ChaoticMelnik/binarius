@@ -34,8 +34,8 @@ import {
 } from '@binarius/shared';
 import { sendHtml } from '../html';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
-import { noticePage } from '../pages';
 import {
+  adminNoticePage,
   auditHref,
   BOT_TEXTS_PATH,
   botTextHref,
@@ -70,7 +70,16 @@ import {
   usersPage,
 } from './pages';
 import { decodePublishResults } from './publish-result';
-import { APP_CSS } from './static';
+import { ADMIN_CLIENT_JS } from './client';
+import {
+  ADMIN_CSS,
+  ADMIN_FONTS_PATH,
+  ADMIN_SCRIPT_PATH,
+  ADMIN_STYLESHEET_PATH,
+  MINI_APP_CSS,
+  MINI_APP_STYLESHEET_PATH,
+  adminFont,
+} from './static';
 import { TEXTS } from './texts';
 
 export const SESSION_COOKIE = 'admin_session';
@@ -78,6 +87,7 @@ export const CHALLENGE_COOKIE = 'admin_login';
 const SESSION_COOKIE_PATH = '/admin';
 const CHALLENGE_COOKIE_PATH = '/admin/login';
 const CSS_MAX_AGE_S = 3600;
+const FONT_MAX_AGE_S = 86_400;
 
 // a remaining lifetime of zero or less is either a challenge that just expired by the backend's
 // clock or two clocks that disagree; Max-Age=0 would delete the cookie and turn either into a
@@ -260,7 +270,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   // whose input is the challenge cookie itself (#152).
   const internalFailure = (request: FastifyRequest, reply: FastifyReply, error: unknown): FastifyReply => {
     request.log.error(errorLogFields(error), 'the admin backend call could not be used');
-    return sendHtml(reply, 500, noticePage(TEXTS.errorTitle, TEXTS.errorBody));
+    return sendHtml(reply, 500, adminNoticePage(TEXTS.errorTitle, TEXTS.errorBody));
   };
 
   /** The (status, code) pair, or undefined when the failure was not an answered request. */
@@ -324,7 +334,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       const { id } = request.params as { id: string };
       // a shape it cannot be is refused here, before the backend is asked (see revoke below)
       if (!UUID_PATTERN.test(id)) {
-        return sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
+        return sendHtml(
+          reply,
+          404,
+          adminNoticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody),
+        );
       }
       try {
         const { me, ...card } = await backend.user(token, id);
@@ -333,7 +347,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       } catch (error) {
         const answered = outcome(error);
         if (answered?.status === 404 && answered.code === AdminErrorCode.NotFound) {
-          return sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
+          return sendHtml(
+            reply,
+            404,
+            adminNoticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody),
+          );
         }
         throw error;
       }
@@ -503,7 +521,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         return sendHtml(
           reply,
           404,
-          noticePage(TEXTS.intentNotFoundTitle, TEXTS.intentNotFoundBody),
+          adminNoticePage(TEXTS.intentNotFoundTitle, TEXTS.intentNotFoundBody),
         );
       }
       try {
@@ -515,7 +533,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           return sendHtml(
             reply,
             404,
-            noticePage(TEXTS.intentNotFoundTitle, TEXTS.intentNotFoundBody),
+            adminNoticePage(TEXTS.intentNotFoundTitle, TEXTS.intentNotFoundBody),
           );
         }
         throw error;
@@ -631,7 +649,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     sendHtml(
       reply,
       status,
-      noticePage(
+      adminNoticePage(
         TEXTS.linkTitle,
         state === LinkState.Used
           ? TEXTS.linkUsed
@@ -652,7 +670,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       return linkRefusal(reply, 410, state);
     } catch (error) {
       if (outcome(error)?.status === 429) {
-        return sendHtml(reply, 429, noticePage(TEXTS.linkTitle, TEXTS.tooManyAttempts));
+        return sendHtml(reply, 429, adminNoticePage(TEXTS.linkTitle, TEXTS.tooManyAttempts));
       }
       return internalFailure(request, reply, error);
     }
@@ -743,7 +761,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           return sendHtml(
             reply,
             500,
-            noticePage(TEXTS.outcomeUnknownTitle, TEXTS.outcomeUnknownBody),
+            adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.outcomeUnknownBody),
           );
         }
         if (answered.status === 401 && answered.code === AdminErrorCode.InvalidCredentials) {
@@ -799,9 +817,9 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   // --- Bot texts (#300, docs/admin-pages.md → Bot texts) ----------------------------------------
 
   const textNotFound = (reply: FastifyReply) =>
-    sendHtml(reply, 404, noticePage(TEXTS.botTextNotFoundTitle, TEXTS.botTextNotFoundBody));
+    sendHtml(reply, 404, adminNoticePage(TEXTS.botTextNotFoundTitle, TEXTS.botTextNotFoundBody));
   const textBadRequest = (reply: FastifyReply) =>
-    sendHtml(reply, 400, noticePage(TEXTS.botTextsTitle, TEXTS.badRequest));
+    sendHtml(reply, 400, adminNoticePage(TEXTS.botTextsTitle, TEXTS.badRequest));
   const keyParamOf = (request: FastifyRequest): string => (request.params as { key: string }).key;
   const isNotFound = (error: unknown) => {
     const answered = outcome(error);
@@ -822,7 +840,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       key !== undefined && isBotTextKey(key) && botProfileMethodsOf(key).length > 0
         ? TEXTS.botProfileWriteOutcomeUnknown
         : TEXTS.botTextOutcomeUnknown;
-    return sendHtml(reply, 500, noticePage(TEXTS.outcomeUnknownTitle, body));
+    return sendHtml(reply, 500, adminNoticePage(TEXTS.outcomeUnknownTitle, body));
   };
   // «Опубликовать заново» (#361): not answered or a 5xx may have published; pressing it again is
   // harmless, it sends the texts in effect
@@ -842,7 +860,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       return sendHtml(
         reply,
         500,
-        noticePage(TEXTS.outcomeUnknownTitle, TEXTS.botProfileOutcomeUnknown),
+        adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.botProfileOutcomeUnknown),
       );
     }
     return reply.redirect(href(answer.published), 303);
@@ -1026,7 +1044,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   // --- Token adjustment (#246, docs/admin-pages.md → Корректировка токенов) ---------------------
 
   const userNotFound = (reply: FastifyReply) =>
-    sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
+    sendHtml(reply, 404, adminNoticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
 
   app.post('/admin/users/:id/tokens', async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
@@ -1045,7 +1063,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         return sendHtml(
           reply,
           400,
-          noticePage(
+          adminNoticePage(
             TEXTS.userTitle,
             TEXTS.tokenAdjustBadForm(TOKEN_ADJUSTMENT_MAX_TOKENS, TOKEN_LEDGER_NOTE_MAX),
           ),
@@ -1064,7 +1082,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           return sendHtml(
             reply,
             500,
-            noticePage(TEXTS.outcomeUnknownTitle, TEXTS.tokenAdjustOutcomeUnknown),
+            adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.tokenAdjustOutcomeUnknown),
           );
         }
         // session_invalid clears the cookie in withStaffSession; anything else is our failure
@@ -1104,7 +1122,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         return sendHtml(
           reply,
           400,
-          noticePage(TEXTS.serviceAccountsTitle, TEXTS.serviceMarkBadForm),
+          adminNoticePage(TEXTS.serviceAccountsTitle, TEXTS.serviceMarkBadForm),
         );
       }
       try {
@@ -1114,7 +1132,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           return sendHtml(
             reply,
             404,
-            noticePage(TEXTS.serviceAccountNotFoundTitle, TEXTS.serviceAccountNotFoundBody),
+            adminNoticePage(TEXTS.serviceAccountNotFoundTitle, TEXTS.serviceAccountNotFoundBody),
           );
         }
         const answered = outcome(error);
@@ -1125,7 +1143,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           return sendHtml(
             reply,
             500,
-            noticePage(TEXTS.outcomeUnknownTitle, TEXTS.serviceMarkOutcomeUnknown),
+            adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.serviceMarkOutcomeUnknown),
           );
         }
         // session_invalid clears the cookie in withStaffSession; anything else is our failure
@@ -1135,13 +1153,39 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     }),
   );
 
-  app.get('/admin/static/app.css', async (_request, reply) =>
+  app.get(MINI_APP_STYLESHEET_PATH, async (_request, reply) =>
     reply
       .code(200)
       .type('text/css; charset=utf-8')
       .header('cache-control', `public, max-age=${CSS_MAX_AGE_S}`)
-      .send(APP_CSS),
+      .send(MINI_APP_CSS),
   );
+
+  app.get(ADMIN_STYLESHEET_PATH, async (_request, reply) =>
+    reply
+      .code(200)
+      .type('text/css; charset=utf-8')
+      .header('cache-control', `public, max-age=${CSS_MAX_AGE_S}`)
+      .send(ADMIN_CSS),
+  );
+
+  app.get(ADMIN_SCRIPT_PATH, async (_request, reply) =>
+    reply
+      .code(200)
+      .type('text/javascript; charset=utf-8')
+      .header('cache-control', `public, max-age=${CSS_MAX_AGE_S}`)
+      .send(ADMIN_CLIENT_JS),
+  );
+
+  app.get<{ Params: { file: string } }>(`${ADMIN_FONTS_PATH}/:file`, async (request, reply) => {
+    const font = adminFont(request.params.file);
+    if (font === undefined) return reply.callNotFound();
+    return reply
+      .code(200)
+      .type('font/woff2')
+      .header('cache-control', `public, max-age=${FONT_MAX_AGE_S}`)
+      .send(font);
+  });
 
   function isSessionGone(error: unknown): boolean {
     const answered = outcome(error);

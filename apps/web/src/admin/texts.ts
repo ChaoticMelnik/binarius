@@ -59,6 +59,15 @@ export const TEXTS = {
   navServiceAccounts: 'Служебные аккаунты',
   navLabel: 'Разделы админки',
 
+  // the shell of the design system (#459)
+  brand: 'Binarius',
+  menuOpen: 'Меню',
+  menuClose: 'Закрыть меню',
+  themeSystem: 'Тема: системная',
+  themeDark: 'Тема: тёмная',
+  themeLight: 'Тема: светлая',
+  skipToContent: 'К содержимому',
+
   overviewTitle: 'Сводка',
   overviewHeading: 'Сводка',
   overviewUsers: 'Пользователи',
