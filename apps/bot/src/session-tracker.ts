@@ -44,8 +44,8 @@ export const sessionTrackingDone = isTradingSessionFinished;
 
 // What the session message shows of its view: the text and the picture (the signal's direction;
 // null - a text message). The edit draws exactly this and the render key is made of all of it, so
-// nothing the edit draws can change unseen by the key (#568, review round 1 MJ1: equal overrides
-// of the two signal lines left a turn of direction out of a text-only key).
+// nothing the edit draws can change unseen by the key (#568: equal overrides of the two signal
+// lines must not hide a turn of direction, which a text-only key did; session-tracker.test.ts Q1).
 export interface SessionDrawing {
   text: TelegramHtml;
   picture: TradeAction | null;

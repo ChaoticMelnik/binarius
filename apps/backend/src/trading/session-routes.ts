@@ -478,8 +478,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
   // Every active session of the user (#122, /stop in the bot): one UPDATE whose predicate is the
   // owner, so another user's id stops nothing and answers [] as "no sessions" (Rule 13). Nothing
   // goes to the broker but viewForReply's balance read of a finished session; a live trade plays
-  // out on its own path. The reads run in parallel, one account each, inside
-  // TRADING_SESSION_VIEW_BUDGET_MS. A thrown refresh is the opaque 500 after the stop committed.
+  // out on its own path. A thrown refresh is the opaque 500 after the stop committed.
   app.post(TRADING_SESSIONS_STOP_PATH, async (request, reply) => {
     const body = safeParseStopTradingSessionRequest(request.body);
     if (!body.success) {
