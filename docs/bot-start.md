@@ -885,7 +885,7 @@ written only when a step really did run out of time.
   bot no longer sends (#314); the `initData` check they rely on is the backend's (#113,
   binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.
-- **#123, #124** — scenarios of the mailing engine (#202, [mailing.md](mailing.md)), which claims
+- **#124** — scenarios of the mailing engine (#202, [mailing.md](mailing.md); #123's are done), which claims
   with `acceptsMailing()`, records each mailing as a `sent` job and calls
   `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
 - **#220** — a permanent support account in place of the temporary `SUPPORT.telegramUsername`.

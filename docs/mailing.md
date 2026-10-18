@@ -5,11 +5,12 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries three scenarios: the **first-session chain**, three reminders that lead a user who
+Today it carries four scenarios: the **first-session chain**, three reminders that lead a user who
 connected an account but has not started a trading session into the demo, the **analysis
-reminder** (#484), one reminder after an analysis card nobody acted on, and the **referral reward
-notification** (#576), one message to an inviter per reward. #123 (the low-token
-nudge) and #124 (retention) add their scenarios to the same engine.
+reminder** (#484), one reminder after an analysis card nobody acted on, the **referral reward
+notification** (#576), one message to an inviter per reward, and the **low-token nudge** (#123),
+one push when the balance falls to a share of the user's starter pack. #124 (retention) adds its
+scenarios to the same engine.
 
 ```bash
 pnpm test --project unit apps/backend/src/mailing apps/backend/src/auth/client-push.test.ts apps/backend/src/trading/signal-routes.test.ts   # no database or Redis
@@ -22,26 +23,30 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `notification_jobs.kind` and `notification_kinds.kind`), `FIRST_SESSION_CHAIN` (the steps and
   their offsets), `ANALYSIS_UNUSED_AFTER_MS`/`ANALYSIS_UNUSED_UNTIL_MS` and
   `analysisUnusedPayloadSchema` (#484), `REFERRAL_REWARDED_AFTER_MS` and
-  `referralRewardedPayloadSchema` (#576), and `MAILING_MIN_OFFSET_MS`, the earliest offset among
-  the kinds that wait.
+  `referralRewardedPayloadSchema` (#576), `TOKEN_NUDGES`, `TOKEN_NUDGE_AFTER_MS` and
+  `tokenNudgePayloadSchema` (#123), and `MAILING_MIN_OFFSET_MS`, the earliest offset among the
+  kinds that wait.
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
   from (`facts`, a lateral row source over the user's row with a column `at`), the offset
   (`afterMs`), the dedupe key and the job's payload (SQL over the user's row and the fact; the
   payload `'{}'` when absent), the predicate it holds while it applies (`stillApplies`) and the
-  claim's key predicate (`keyApplies`). A kind with one fact per user goes through `oneFact`: its
-  facts are one row, its key reads the user's row only and the claim compares it directly.
+  claim's key predicate (`keyApplies`), and whether the planner takes a canceled job back
+  (`replansCanceled`, #123). A kind with one fact per user goes through `oneFact`: its facts are
+  one row, its key reads the user's row only and the claim compares it directly.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
-  job's payload; the chain's keyboard is the demo button (`demoKeyboard`, `client-push.ts`), the
-  same as the link push's re-login, the analysis reminder's a new analysis.
-- `apps/backend/src/mailing/engine.ts` — the two loops, the pacer and the failure policy;
+  job's payload and the `MailingContext` (the cashier's URL, the user's mode at the claim); the
+  chain's keyboard is the demo button (`demoKeyboard`, `client-push.ts`), the same as the link
+  push's re-login, the analysis reminder's a new analysis.
+- `apps/backend/src/mailing/engine.ts` — the two loops, the pacer and the failure policy; its
+  `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, passed once by `apps/backend/src/index.ts`;
   `apps/backend/src/auth/client-push.ts` — `sendMailing`, beside the link push.
 - `apps/backend/src/timing.ts` — the `MAILING_*` numbers and their links in `TIMING_CHAIN_HOLDS`.
 
 `MAILING_SCENARIOS` and `MAILING_MESSAGES` are checked with `satisfies Record<NotificationKind, …>`:
 a kind without either does not compile. The tests named below by their ids are in
-`packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484; R1–R8 for #576), `apps/backend/src/mailing/engine.db.test.ts`
+`packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484; R1–R8 for #576; T1–T16 for #123), `apps/backend/src/mailing/engine.db.test.ts`
 (M7–M11, E1–E2, E-R1–E-R2; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
 the pacer alone) and `apps/backend/src/mailing/messages.test.ts`.
 
@@ -88,7 +93,9 @@ one a minute after gets the step; no row, nothing; a fresh database holds one ro
 one moment). The analysis reminder's row is seeded by `0058_analysis_unused_seed.sql` the same
 way; its fact is written only by a backend that has that migration, so its cutoff is formal.
 The referral reward notification's row is seeded by `0065_referral_rewarded_seed.sql`: rewards
-granted before its deploy get no notification and stay visible in /invite only.
+granted before its deploy get no notification and stay visible in /invite only. The low-token
+nudges' rows are seeded by `0067_tokens_nudge_kinds_seed.sql`; their fact is the planning moment,
+so the row only switches them on (The low-token nudge → At the deploy).
 
 ## The analysis reminder (#484)
 
@@ -183,17 +190,72 @@ What becomes of a job of this kind:
 Tests: `mailing-ops.db.test.ts` R1–R8 and its CUT, `engine.db.test.ts` E-R1–E-R2,
 `messages.test.ts`, the pin in `timing.test.ts`.
 
+## The low-token nudge (#123)
+
+| Kind          | Applies when the balance is at or under | Text (`mailing` group) | Buttons                                                                  |
+| ------------- | --------------------------------------- | ---------------------- | ------------------------------------------------------------------------ |
+| `tokens_half` | 50 % of the pack (pack 100: 50)         | `tokensHalfUsed`       | the entry: «🎮 Демо-торговля», in real mode «🚀 Торговать» (`demo`)      |
+| `tokens_low`  | 20 % of the pack (pack 100: 20)         | `tokensLow`            | «💳 Пополнить» (the cashier, `web_app`), then «⭐ Купить токены» (`buy`) |
+| `tokens_out`  | 0                                       | `tokensOut`            | the same as `tokens_low`                                                 |
+
+The owner's answers (2026-10-08, 2026-10-10, 2026-10-18): thresholds at 50, 80 and 100 % of the
+**user's own starter pack** used, each sent once per user, and at a jump across several only the
+highest. The texts talk about the balance, print the threshold (`{nudgeTokens}`, «не больше 37»
+needs no plural form) and imply no accuracy, learning or model (the issue's acceptance) and no
+tokens for a deposit (#386 is open).
+
+- **The measure** is the cached `users.token_balance` (rule 2: kept equal to the ledger by its
+  writers) against the pack: the `balance_delta` of the user's starter-pack `token_ledger` row
+  (`kind = bonus`, `broker_account_id` not null; `token_ledger_link_bonus_user_idx`, at most one;
+  positive and never changed, rule 3). The comparison is bigint arithmetic in SQL,
+  `balance * 100 <= pack * (100 − p)`, never a JS number. No pack (an account that is not a partner
+  client, a balance of rewards or purchases only): NULL, so nothing is planned and a job is
+  canceled at the claim. The payload is `{ tokens: (pack * (100 − p) / 100)::text }`, the floor of
+  the same boundary (pack 75: 37, 15, 0), parsed by `tokenNudgePayloadSchema`.
+- **Bands and the highest only.** A kind applies while the balance is in its band (at or under its
+  threshold, above the next one) and no higher kind has a job that is not canceled. So one push
+  per crossing: a user who passed 50 and 80 % between two ticks, or at the deploy, gets only the
+  80 % one, and no lower one later, even when a credit lifts the balance back into a lower band.
+  Two kinds planned before the send (balance falling while the first waits): the claim cancels the
+  lower.
+- **It applies** while the user is not blocked by the admin; checked when planning and at the
+  claim. The trading mode is not read: tokens are spent in both modes. The bot block, `off` and
+  `reduced` are the engine's own rules.
+- **A canceled job comes back** (`replansCanceled`): a nudge canceled because a credit lifted the
+  balance before the send is planned again, with the new payload and `scheduled_at`, once the
+  balance is back in its band. Only `canceled`: `sent` and `failed` are final, `pending` already
+  waits.
+- **At the deploy** every user already in a band gets one push, the highest band reached: the
+  fact is the planning moment, so `plans_from` only switches the kinds on.
+- **The buttons.** The entry button (50 %, and in the cashier's place when `cashierUrlOf` returns
+  undefined because `WEB_PUBLIC_URL` is not https) is labelled by the user's mode read at the claim,
+  as the status card labels it (#121): the path is the same `DEMO_CALLBACK_DATA` (#327). 80 % and
+  100 % carry the cashier of #27 in row 1 and the purchase of #117 in row 2. The 50 % text names no
+  button («нажми кнопку ниже»); the 80/100 % texts name only «⭐ Купить токены», the row that is
+  always there.
+- **Timing.** `TOKEN_NUDGE_AFTER_MS` is 0, like `REFERRAL_REWARDED_AFTER_MS`: due at the planning
+  moment, out of `MAILING_MIN_OFFSET_MS`.
+
+Out of scope: a repeat after a purchase or any later credit (each threshold is once per user,
+owner 2026-10-18); English texts (#633).
+
+Tests: `mailing-ops.db.test.ts` T1–T16 and its CUT, `engine.db.test.ts` (the 80/100 % sends with
+their keyboard, a jump 51 → 0, cancel → re-plan → one send), `messages.test.ts`, the pin in
+`timing.test.ts`.
+
 ## The planner
 
 Every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
-`INSERT … SELECT … ON CONFLICT (user_id, dedupe_key) DO NOTHING` per kind: a job for every user
+`INSERT … SELECT … ON CONFLICT (user_id, dedupe_key) DO NOTHING` per kind (`DO UPDATE … WHERE
+status = 'canceled'` for a kind with `replansCanceled`, The low-token nudge): a job for every user
 whose fact plus the offset has come, whose fact is at or after the kind's `plans_from`, whom the
 bot may reach (`deliverable()`: not blocked in Telegram, notifications not `off`), and for whom the
 scenario applies — one job per row of the kind's `facts` (`cross join lateral`). `scheduled_at` is
 the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
-`…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`) makes it idempotent: a second run, a second backend process or a restart
+`…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`;
+`tokens:50`, `tokens:80`, `tokens:100`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
-not planned again.
+not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
 
 The planner reads facts; no trading or linking path writes a mailing.
 
@@ -279,7 +341,8 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
    newest fact win; a constant key is always current. A kind with several facts per user (#576)
    gives `facts` as a lateral subquery, reads its key and payload from `fact.<column>`, and gives
    `keyApplies`, the claim's predicate over the user's row and the job that the key is still one
-   it would plan.
+   it would plan. `replansCanceled: true` when a job canceled because the condition stopped holding
+   should come back once it holds again (#123); without it a canceled key is never planned again.
 4. A link in `TIMING_CHAIN_HOLDS` only for a kind that waits: its offset counts in
    `MAILING_MIN_OFFSET_MS`, which the planner's tick must stay under; a kind due at its fact (0)
    is left out of it.
@@ -322,3 +385,10 @@ recorded`) and the analysis is answered; there is then no reminder. The write ru
 - There is no daily cap: a user who keeps opening analyses without trading gets at most one
   reminder per 10 minutes of inaction, each new analysis moving the deadline; `reduced` limits it
   to one a day.
+- The low-token nudge (#123): a rollback to an image before 0066/0067 cannot plan the kinds, and
+  its claim's `case` has no branch for them, so a pending `tokens_*` job is canceled by the old
+  sender; after the re-deploy the planner takes it back (`replansCanceled`).
+- A Stars refund (#118) or an admin adjustment (#246) can move a user into a band without a trade;
+  the text names the balance, so it stays true.
+- No repeat after a purchase or a reward: a user who refills and spends again gets no second push
+  for a threshold already sent (owner 2026-10-18).

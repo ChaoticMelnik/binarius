@@ -25,12 +25,15 @@ backend (#112): POST /deposit/credited {initData} → DEMO_ONLY → initData →
                → on a write: push «Реальный баланс: $X» with «🏠 В меню», once a minute per user
 ```
 
-The bot's button (#27, `apps/bot/src/keyboards.ts` → `depositButton`/`depositButtons`, the only
-builders) stands at three entries, in both trading modes: the last row of the status card (under
+The bot's button (#27, `apps/bot/src/keyboards.ts` → `depositButton`/`depositButtons`, the bot's
+only builders) stands at three entries, in both trading modes: the last row of the status card (under
 «👥 Пригласить друга | ⭐ Купить токены», beside «🌐 Язык / Language», #508); beside «⭐ Купить токены» in the two «не хватает
 токенов» refusals (a trade, a session start), above the way back; at the end of a session, on the
 stopped status and on the summary card, beside «👥 Пригласить друга» right above the menu (the menu
-stays last; the rows: [bot-navigation.md](bot-navigation.md#the-width-506)). Its URL is
+stays last; the rows: [bot-navigation.md](bot-navigation.md#the-width-506)). The backend's 80 % and
+100 % low-token nudges (#123) carry the same button in their first row, built from the same
+`cashierUrlOf` in `apps/backend/src/mailing/messages.ts`; without https the entry button takes its
+place ([mailing.md](mailing.md) → The low-token nudge). Its URL is
 `cashierUrlOf(WEB_PUBLIC_URL)` (`packages/shared/src/bot-navigation.ts`, with `CASHIER_PAGE_PATH`,
 the path `web` serves): Telegram opens a `web_app` URL over https only, so on any other origin
 (local dev's `http://127.0.0.1:3001`) the bot shows no such button and logs one warning at

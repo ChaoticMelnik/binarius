@@ -26,8 +26,8 @@ between the invoice and the payment is held, not credited (below).
    in both modes, and under both `insufficient_tokens` refusals (the single trade, the session). The
    screen reads `/users/account` as `/account` does: no users row, or no `active` account →
    `buyNeedsAccount` with the connect button; a blocked user → `blocked`; otherwise `buyScreen`
-   with a button per package (`buy:<code>`) and «🏠 В меню». #123's 80 % / 100 % nudges get the row
-   when #123 merges (its PR #435 was open when this one was written; the requirement is on #123).
+   with a button per package (`buy:<code>`) and «🏠 В меню». The 80 % / 100 % low-token nudges
+   (#123) carry it as their second row ([mailing.md](mailing.md) → The low-token nudge).
 2. **Invoice.** A package press → `POST /payments/stars/invoice` → `sendInvoice` through
    `replyWithInvoiceStars` (`apps/bot/src/send.ts`): currency `XTR`, no provider token, one price,
    title and description from the catalog (plain, ≤ 32 / ≤ 255 characters), the payload
@@ -295,7 +295,7 @@ request in `stars requests`.
 - **#510** — the refund button and the requests page in the admin, with the staff member's identity
   in the audit row.
 - **#246** — crediting a `held` payment, by the manual adjustment.
-- **#123** — the buy row under the 80 % / 100 % nudges, when it merges.
+- **#123** (done) — the buy row under the 80 % / 100 % nudges.
 - **#27** (done) — «💳 Пополнить» under the buy row of the status card and beside «⭐ Купить
   токены» in the two `insufficient_tokens` refusals (#506; `docs/deposit.md` → The chain).
 - **#13** — the bonus rule engine; its migration adds `token_ledger_bonus_rule_check` beside
