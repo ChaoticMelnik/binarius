@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
 import pino from 'pino';
-import { BotError, HttpError } from 'grammy';
+import { BotError, GrammyError, HttpError, type Api } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   pairLabel,
   BrokerRestErrorCode,
@@ -14,6 +14,8 @@ import {
   TradeMode,
   TradeIntentErrorCode,
   TradeIntentStatus,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
   demoAnalysisCallbackData,
@@ -28,12 +30,15 @@ import {
   demoAssetCallbackData,
   demoLaunchCallbackData,
   analysisMoreCallbackData,
+  sessionStartCallbackData,
   stakeCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
 import { createIntentTracker } from './intent-tracker';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
+import { createSessionResumer } from './session-resume';
+import { createSessionTracker, type SessionTrackRequest } from './session-tracker';
 import { stakeOpenCallbackData, stakePresetCallbackData } from './stake-picker';
 import {
   ACCESS_VIEW,
@@ -62,11 +67,21 @@ import {
   textUpdate,
   type ApiAnswer,
   type ApiCall,
+  SESSION_ID,
+  SESSION_VIEW,
+  sessionView,
   stubSessionResumer,
   stubSessionTracker,
   stubTracker,
 } from './testing';
 import { settingsText, TEXTS } from './texts';
+import {
+  SESSION_RESUME_GAP_MS,
+  SESSION_RESUME_INTERVAL_MS,
+  SESSION_TRACK_DEADLINE_MS,
+  SESSION_TRACK_FIRST_POLL_MS,
+  SESSION_TRACK_POLL_MS,
+} from './timing';
 
 // What reaches the log is only provable by reading the log, so this suite runs the real pino
 // configuration from index.ts into a sink and asserts on the lines themselves.
@@ -99,6 +114,7 @@ interface Scenario {
   evaluateSignal?: BackendClient['evaluateSignal'];
   createIntent?: BackendClient['createIntent'];
   readIntent?: BackendClient['readIntent'];
+  startSession?: BackendClient['startSession'];
   setStake?: BackendClient['setStake'];
   setTradingMode?: BackendClient['setTradingMode'];
   stopSessions?: BackendClient['stopSessions'];
@@ -130,7 +146,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
     createIntent: scenario.createIntent ?? (() => Promise.resolve(INTENT_VIEW)),
     readIntent: scenario.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),
-    startSession: () => Promise.reject(new Error('not used by these scenes')),
+    startSession:
+      scenario.startSession ?? (() => Promise.reject(new Error('not used by these scenes'))),
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
@@ -1712,5 +1729,246 @@ describe('what the bot writes about /stop back to demo (#473)', () => {
     expect(JSON.stringify(line)).not.toContain('DEMO');
     expect(JSON.stringify(line)).not.toContain('blocked');
     noUser(lines);
+  });
+});
+
+// #567's tracker and recovery and #418's launch screen log outside any update; their lines were
+// pinned on mock loggers (session-tracker.test.ts, session-resume.test.ts, trading-session.test.ts),
+// which cannot show what the serializer makes of the real error (#570 m5, #498).
+describe('what the session tracker and the recovery write (#567, #570 m5)', () => {
+  const TG_USER = '424242';
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const tracking = (backend: Partial<Parameters<typeof createSessionTracker>[0]['backend']>) => {
+    const { lines, logger } = sink();
+    const tracker = createSessionTracker({
+      backend: {
+        readSession: () => Promise.reject(new Error('not used by this scene')),
+        recordSessionMessage: () => Promise.reject(new Error('not used by this scene')),
+        forgetSessionMessage: () => Promise.resolve(true),
+        ...backend,
+      },
+      logger,
+      firstPollMs: SESSION_TRACK_FIRST_POLL_MS,
+      pollMs: SESSION_TRACK_POLL_MS,
+      deadlineMs: SESSION_TRACK_DEADLINE_MS,
+      resumeGapMs: SESSION_RESUME_GAP_MS,
+    });
+    const request = (patch: Partial<SessionTrackRequest> = {}): SessionTrackRequest => ({
+      sessionId: SESSION_ID,
+      telegramUserId: TG_USER,
+      messageId: 77,
+      label: pairLabel(PAIR_EURUSD),
+      language: BotLanguage.Ru,
+      view: SESSION_VIEW,
+      record: false,
+      edit: () => Promise.resolve(true),
+      card: () => Promise.resolve(),
+      ...patch,
+    });
+    return { lines, tracker, request };
+  };
+  const stopped = sessionView({
+    status: TradingSessionStatus.Stopped,
+    stopReason: TradingSessionStopReason.UserStopped,
+  });
+  const refused = (error_code: number, description: string) =>
+    new GrammyError(
+      "Call to 'editMessageText' failed!",
+      { ok: false, error_code, description },
+      'editMessageText',
+      {},
+    );
+
+  it('L1 a failed read: the backend’s fields and the session, nothing of the user or the pair', async () => {
+    const { lines, tracker, request } = tracking({
+      readSession: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 503,
+            reason: 'catalog_unavailable',
+          }),
+        ),
+    });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(SESSION_TRACK_FIRST_POLL_MS);
+    await tracker.stop();
+    expect(lineWith(lines, 'trading session status not read')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: 'http_status' },
+      backendStatus: 503,
+      backendReason: 'catalog_unavailable',
+      sessionId: SESSION_ID,
+    });
+    expect(lines.join('')).not.toContain(TG_USER);
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+  });
+
+  it('L2 a refused edit: Telegram’s method and code, never its description or the drawing', async () => {
+    const { lines, tracker, request } = tracking({
+      readSession: () => Promise.resolve(stopped),
+    });
+    tracker.track(
+      request({
+        edit: () => Promise.reject(refused(429, 'Too Many Requests: SECRET-DESC')),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(SESSION_TRACK_FIRST_POLL_MS);
+    await tracker.stop();
+    expect(lineWith(lines, 'trading session message not edited')).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'editMessageText',
+      telegramErrorCode: 429,
+      sessionId: SESSION_ID,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(lines.join('')).not.toContain(TG_USER);
+    expect(lines.join('')).not.toContain('Сессия остановлена');
+  });
+
+  it('L3 a failed forget: the backend error and its cause by name only', async () => {
+    const { lines, tracker, request } = tracking({
+      readSession: () => Promise.resolve(stopped),
+      forgetSessionMessage: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.Unreachable, {
+            cause: new Error('ECONNRESET SECRET-CAUSE'),
+          }),
+        ),
+    });
+    tracker.track(
+      request({
+        edit: () => Promise.reject(refused(400, 'Bad Request: message to edit not found')),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(SESSION_TRACK_FIRST_POLL_MS);
+    await tracker.stop();
+    expect(lineWith(lines, 'trading session message not forgotten')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: 'unreachable' },
+      cause: { name: 'Error' },
+      sessionId: SESSION_ID,
+    });
+    expect(lines.join('')).not.toContain('SECRET-CAUSE');
+  });
+
+  it('L4 a bug in the tracking: the error by name, not its message', async () => {
+    const { lines, tracker, request } = tracking({
+      readSession: () => Promise.reject(new TypeError('bug SECRET-MSG')),
+    });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(SESSION_TRACK_FIRST_POLL_MS);
+    await tracker.stop();
+    expect(lineWith(lines, 'trading session tracking failed')).toMatchObject({
+      level: 50,
+      err: { name: 'TypeError' },
+      sessionId: SESSION_ID,
+    });
+    expect(lines.join('')).not.toContain('SECRET-MSG');
+  });
+
+  const recovery = (
+    backend: Partial<Parameters<typeof createSessionResumer>[0]['backend']>,
+    resume: Parameters<ReturnType<typeof createSessionResumer>['attach']>[0] = vi.fn(),
+  ) => {
+    const { lines, logger } = sink();
+    const resumer = createSessionResumer({
+      backend: {
+        listTrackedSessions: () => Promise.resolve([]),
+        readPairs: () => Promise.resolve(PAIRS_RESPONSE),
+        ...backend,
+      },
+      tracker: { has: () => false },
+      logger,
+      intervalMs: SESSION_RESUME_INTERVAL_MS,
+    });
+    resumer.attach(resume);
+    const pass = async () => {
+      resumer.start({} as Api, 'binarius_bot');
+      await vi.advanceTimersByTimeAsync(0);
+      await resumer.stop();
+    };
+    return { lines, pass };
+  };
+  const row = (id: string) => ({
+    id,
+    telegramUserId: TG_USER,
+    messageId: 77,
+    assetId: PAIR_EURUSD.id,
+    startedAt: '2026-10-07T10:00:00.000Z',
+    language: BotLanguage.Ru,
+  });
+  const ROW_A = '00000000-0000-4000-8000-00000000000a';
+  const ROW_B = '00000000-0000-4000-8000-00000000000b';
+
+  it('L5 a failed list: the backend’s fields', async () => {
+    const { lines, pass } = recovery({
+      listTrackedSessions: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 500, reason: 'internal' }),
+        ),
+    });
+    await pass();
+    expect(lineWith(lines, 'trading sessions not resumed')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: 'http_status' },
+      backendStatus: 500,
+      backendReason: 'internal',
+    });
+  });
+
+  it('L6 a pass: the counts, no session or user', async () => {
+    const { lines, pass } = recovery({
+      listTrackedSessions: () => Promise.resolve([row(ROW_A), row(ROW_B)]),
+    });
+    await pass();
+    const logged = lineWith(lines, 'trading sessions resumed');
+    expect(logged).toMatchObject({ level: 30, listed: 2, resumed: 2 });
+    expect(logged).not.toHaveProperty('sessionId');
+    for (const text of [ROW_A, ROW_B, TG_USER]) expect(lines.join('')).not.toContain(text);
+  });
+
+  it('L7 a bug in the pass: the error by name, not its message', async () => {
+    const { lines, pass } = recovery(
+      { listTrackedSessions: () => Promise.resolve([row(ROW_A)]) },
+      () => {
+        throw new TypeError('bug SECRET-MSG');
+      },
+    );
+    await pass();
+    expect(lineWith(lines, 'trading sessions resume failed')).toMatchObject({
+      level: 50,
+      err: { name: 'TypeError' },
+    });
+    expect(lines.join('')).not.toContain('SECRET-MSG');
+  });
+
+  // #498: a 400 that is neither «not found» nor «can't be deleted» is warned about
+  it('L8 a refused delete of the launch screen: Telegram’s method and code, not its description', async () => {
+    const update = callbackUpdate(
+      sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5, true),
+    );
+    const { lines } = await linesFrom({
+      update,
+      startSession: () => Promise.resolve({ started: sessionView({ signalAction: null }) }),
+      answers: [['sendMessage', messageAnswer(CARD_MESSAGE_ID)]],
+      apiErrors: [
+        ['deleteMessage', { ok: false, error_code: 400, description: 'Bad Request: SECRET-DESC' }],
+      ],
+    });
+    expect(lineWith(lines, 'the launch screen was not deleted')).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'deleteMessage',
+      telegramErrorCode: 400,
+      updateId: update.update_id,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
   });
 });
