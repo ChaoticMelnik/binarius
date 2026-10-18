@@ -19,7 +19,6 @@ import {
   intervalForDuration,
   isPairOpen,
   pairAcceptsDuration,
-  pairPayoutAccepted,
   safeParseCreateTradingSessionRequest,
   safeParseForgetSessionStatusMessageRequest,
   safeParseReadTradingSessionQuery,
@@ -97,7 +96,6 @@ const STATUS_OF = {
   session_too_long: 409,
   balance_unavailable: 409,
   pair_unavailable: 409,
-  payout_too_low: 409,
   session_not_active: 409,
   stake_precision: 409,
   stake_below_minimum: 409,
@@ -192,10 +190,6 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     const pair = view.pairs.find((candidate) => candidate.id === assetId);
     if (pair === undefined || !isPairOpen(pair, now()) || !pairAcceptsDuration(pair, durationSec)) {
       return refuse(reply, TradingSessionErrorCode.PairUnavailable);
-    }
-    // no cycle on a pair paying less than the floor (#379); single trades are not restricted
-    if (!pairPayoutAccepted(pair)) {
-      return refuse(reply, TradingSessionErrorCode.PayoutTooLow);
     }
 
     // The pair's signal on the current candle (#509): no session starts on a pair without one. A

@@ -476,7 +476,6 @@ describe('contract coverage (issue #6)', () => {
       | 'session_too_long'
       | 'balance_unavailable'
       | 'pair_unavailable'
-      | 'payout_too_low'
       | 'catalog_unavailable'
       | 'no_signal'
       | 'signal_unavailable'

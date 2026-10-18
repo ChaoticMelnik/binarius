@@ -661,21 +661,23 @@ describe('the candle backfill (#590)', () => {
     expect(h.order()).toEqual(['1:5s', '2:5s', '1:5s']);
   });
 
-  it('B14 warms a closed pair or one below the payout floor only on request, and drops a request with bad digits', async () => {
+  it('B14 warms a closed pair only on request, and drops a request with bad digits', async () => {
     const h = harness({
-      pairs: [
-        pair(1, { scheduledUntil: START + 3_600_000 }),
-        pair(2, { payout: 70 }),
-        pair(3, { digits: -1 }),
-      ],
+      pairs: [pair(1, { scheduledUntil: START + 3_600_000 }), pair(3, { digits: -1 })],
     });
     await h.backfill.tick();
     expect(h.chart.calls).toEqual([]);
     h.requests.add(3, '5s');
     h.requests.add(1, '5s');
-    h.requests.add(2, '15s');
     await drain(h);
-    expect(h.order()).toEqual(['1:5s', '2:15s']);
+    expect(h.order()).toEqual(['1:5s']);
+  });
+
+  // #631: the payout is no filter of the proactive set (#379 left a pair below 80 % out)
+  it('B14b warms a pair paying below MIN_CYCLE_PAYOUT_PCT without a request', async () => {
+    const h = harness({ pairs: [pair(2, { payout: 70 })] });
+    await drain(h);
+    expect(h.order()).toEqual(['2:15s', '2:5s']);
   });
 
   it('B15 takes no token and calls nothing with an empty queue', async () => {

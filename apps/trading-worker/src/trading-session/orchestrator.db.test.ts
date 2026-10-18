@@ -1128,7 +1128,7 @@ describe('the pause after two losses (#379)', () => {
     await orchestrator.stop();
   });
 
-  // #509 (owner): the floor is the start's alone; a payout that fell after it keeps trading
+  // #509 (owner), #631: no payout floor holds a session; a payout that fell keeps trading
   it('P6 a pair whose payout fell below the floor after the start trades on its signal', async () => {
     const seed = await seedSession();
     const signals = signalsOf();

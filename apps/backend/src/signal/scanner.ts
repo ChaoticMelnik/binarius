@@ -2,7 +2,6 @@ import {
   errorLogFields,
   isPairOpen,
   pairAcceptsDuration,
-  pairPayoutAccepted,
   SIGNAL_CHART_INTERVAL_MS,
   SignalKind,
   type BinaryPair,
@@ -61,17 +60,14 @@ export interface SignalScanner {
   snapshot(): ScanSnapshot;
 }
 
-// the scanned candle fits a trade of the candle's own length (#313); a pair below the cycle payout
-// floor is neither scanned nor served: no cycle starts on it (#379)
+// the scanned candle fits a trade of the candle's own length (#313); the payout is no filter: a
+// pair below MIN_CYCLE_PAYOUT_PCT is scanned and served too, the bot fills its list with it (#631)
 export const eligiblePairs = (
   view: PairsCatalogView,
   nowMs: number,
   durationSec: number,
 ): BinaryPair[] =>
-  view.pairs.filter(
-    (pair) =>
-      isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, durationSec) && pairPayoutAccepted(pair),
-  );
+  view.pairs.filter((pair) => isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, durationSec));
 
 interface FreshSignal {
   assetId: number;
