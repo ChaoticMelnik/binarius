@@ -357,7 +357,7 @@ describe('signal scanner', () => {
     h.scanner.start();
     await toScan(1);
     expect([...h.scanner.snapshot().entries.keys()]).toEqual([1, 2]);
-    h.state.view = view([pair(1, { payout: 70 }), pair(2)]);
+    h.state.view = view([pair(1, { scheduledUntil: Date.now() + 3_600_000 }), pair(2)]);
     await toScan(2);
     expect([...h.scanner.snapshot().entries.keys()]).toEqual([2]);
     await h.scanner.stop();
@@ -473,24 +473,24 @@ describe('signal scanner', () => {
     await h.scanner.stop();
   });
 
-  // #379: no cycle starts on a pair paying less than the floor, so neither scanner instance
-  // decides nor serves it; the log line's `eligible` counts the pairs at or above it
+  // #631: the payout is no filter (#379 left a pair below the floor out): both scanner instances
+  // decide and serve it, the bot fills its list with it; `eligible` counts it
   it.each([
     ['15s', 15, CANDLE_15S_MS],
     ['5s', 5, CANDLE_5S_MS],
   ] as const)(
-    'S19 on the %s scanner a pair paying 79 percent is not eligible, not scanned and not served',
+    "S19' on the %s scanner a pair paying 79 percent is eligible, scanned and served",
     async (interval, durationSec, candleMs) => {
       const h = harness({ interval, pairs: [pair(1, { payout: 79 }), pair(2, { payout: 80 })] });
-      expect(eligiblePairs(h.state.view!, B + 3_000, durationSec).map((p) => p.id)).toEqual([2]);
+      expect(eligiblePairs(h.state.view!, B + 3_000, durationSec).map((p) => p.id)).toEqual([1, 2]);
       h.scanner.start();
       await toScan(1, candleMs);
-      expect(h.calls).toEqual([2]);
+      expect(h.calls).toEqual([1, 2]);
       const snapshot = h.scanner.snapshot();
-      expect(snapshot.scanned).toEqual([2]);
-      expect(freshSignals(snapshot, Date.now()).map((s) => s.assetId)).toEqual([2]);
+      expect(snapshot.scanned).toEqual([1, 2]);
+      expect(freshSignals(snapshot, Date.now()).map((s) => s.assetId)).toEqual([1, 2]);
       await vi.advanceTimersByTimeAsync(B + LOG_EVERY_MS + candleMs - Date.now());
-      expect(summary(h)).toMatchObject({ interval, eligible: 1 });
+      expect(summary(h)).toMatchObject({ interval, eligible: 2 });
       await h.scanner.stop();
     },
   );

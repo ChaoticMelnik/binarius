@@ -345,8 +345,8 @@ export function createSessionOrchestrator({
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
       return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
     }
-    // the payout floor is the start's alone (#509, owner): a pair whose payout fell below it after
-    // the start keeps trading on its signals
+    // since #631 no payout refuses a session, not even at the start (#509 kept the floor
+    // there): a pair whose payout fell keeps trading on its signals
 
     const interval = intervalForDuration(settings.durationSec);
     const answer = await signals.evaluate({ assetId: settings.assetId, interval }, { signal });

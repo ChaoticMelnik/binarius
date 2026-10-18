@@ -482,18 +482,17 @@ describe('POST /trading/sessions', () => {
     await expectRefusal(response, 409, 'pair_unavailable', before);
   });
 
-  // #379: no cycle on a pair paying less than MIN_CYCLE_PAYOUT_PCT; refused before the balance
-  it('R19 a pair paying 79 % is 409 payout_too_low, before any balance refresh', async () => {
-    const seed = await seedUserWithAccount(tmp.db);
+  // #631: MIN_CYCLE_PAYOUT_PCT orders the bot's signals list and refuses nothing (#379 refused)
+  it("R19' a pair paying 79 % starts like any other, its signal asked", async () => {
+    const seed = await seedReady();
     const before = await sessionCount();
     const response = await start(
       appWith({ catalog: freshCatalog([{ ...pair, payout: 79 }]) }),
       bodyFor(seed),
     );
-    await expectRefusal(response, 409, 'payout_too_low', before);
-    expect(refreshCalls).toEqual([]);
-    // R33 (#509): the floor answers before the signal is asked
-    expect(signalCalls).toEqual([]);
+    expect(response.statusCode).toBe(201);
+    expect(await sessionCount()).toBe(before + 1);
+    expect(signalCalls).toHaveLength(1);
   });
 
   // #509: no session on a pair without a signal now, whatever door the request came from

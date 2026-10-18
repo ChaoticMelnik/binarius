@@ -318,8 +318,6 @@ export const TradingSessionErrorCode = {
   SessionTooLong: 'session_too_long',
   BalanceUnavailable: 'balance_unavailable',
   PairUnavailable: 'pair_unavailable',
-  // the pair pays less than MIN_CYCLE_PAYOUT_PCT (#379)
-  PayoutTooLow: 'payout_too_low',
   // the string of PairsCatalogErrorCode.Unavailable: the same cache answers both routes
   CatalogUnavailable: 'catalog_unavailable',
   // the pair's signal on the current candle is no_signal (#509): no session starts on it

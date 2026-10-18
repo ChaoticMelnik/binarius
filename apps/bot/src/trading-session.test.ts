@@ -12,7 +12,6 @@ import {
   TradingSessionStopReason,
   decimalStringSchema,
   formatSignedUsd,
-  plainTextOf,
   telegramHtml,
   type PairLabel,
   type SessionSummary,
@@ -413,16 +412,6 @@ describe('the session button', () => {
       expect(START_REFUSALS[code], code).toMatchObject({ stakeMenu: true });
     }
     expect(STAKE_MENU_ROWS[0]?.[0]?.callback_data).toMatch(/^stk:o:d:a:\d+:\d+$/);
-  });
-
-  // #379: an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell below the floor
-  it('answers payout_too_low with its own text and the way back to the analysis', () => {
-    expect(START_REFUSALS[TradingSessionErrorCode.PayoutTooLow]).toEqual({
-      text: 'sessionPayoutTooLow',
-    });
-    expect(plainTextOf(TEXTS.sessionPayoutTooLow)).toBe(
-      '🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.',
-    );
   });
 
   it('answers the closed switch and the missing tokens with their own texts', () => {
@@ -1455,7 +1444,6 @@ describe('the launch screen after the start (#418)', () => {
   });
 
   it.each([
-    ['payout_too_low', LAUNCH, TradingSessionErrorCode.PayoutTooLow],
     ['mode_not_allowed', REAL_LAUNCH, TradingSessionErrorCode.ModeNotAllowed],
     ['demo_only', REAL_LAUNCH, TradingSessionErrorCode.DemoOnly],
   ])('keeps it on the refusal %s', async (_case, data, code) => {
