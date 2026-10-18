@@ -3560,3 +3560,82 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 2. Tech-lead merge after a rebase: own 6-pre run at the new head with the "Known" field filled from the Backlog issue — **внедрено в #644: `.claude/skills/tech-lead/SKILL.md` → Mergeability right before the merge**
 3. Both merge executors hold the merge on any head other than the approved one, not only on `CONFLICTING` (Codex on #644, iterations 3-5) — **вынесено в #648**
 4. Remaining findings — **вынесено в #643**
+
+---
+
+## #506 — Бот: одинаковая (максимальная) ширина сообщений и кнопки в 2-3 столбца (2026-10-18)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | night 2026-10-17 22:12 | Pool given by the owner (#506, #508, #440, #594, #576, #22); #594 (no logo file), #22 (closed), #440 (merged into #537 at 22:46) skipped. Phase 0 clean, shared test DB = main. |
+| Architect | first plan | Fable. 4 clarify questions, manager chose the recommended (6239612413: N = 26 spacer, photo cards unchanged, 2-column table, spacer on every text send). Plan 6239737317, ≈730 lines. |
+| Implementer | clarify | Opus. Plan defect (cycle tests compared with 4096) → Plan Update r0 on Opus 6239871239: class closed by grep (9 sites), the cycle case rewritten (9 losses = 4079 lies between 4069 and 4096), M11–M13. |
+| Implementer | PR #628 | 7 commits, +813/−240, `pnpm check` 0, mutations 13/13 (6240132644). Commits 184c5d1d–696c2127 red on `packages/e2e` (the gate handed the e2e harness a different payload object), fixed in 0c21a606; no force-push at night → squash. |
+| Reviewer | round 1 | No Blocker/Major, 2 Minor; send-path coverage checked across the whole domain. Codex not run (manager PR). |
+| Tech Lead | merge | `main` gained #590/#405/#637 after the review (texts and tests #628 measures): merge of `origin/main` into the branch, one test conflict (`STOP_LINE` → `stopLine(15)`), no adaptations, delta re-checked against the approved one, mutations re-taken (6246639738), CI green. #636 retargeted first. Squash 3f6d907 on the owner's yes; Minors → #645. |
+
+### Review iterations: 1
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan: text-length comparisons with 4096 in the cycle tests and the catalog | Minor | instance-vs-class | the plan listed the limit edits by name, not by a grep of the class | Architect (fixed by Plan Update r0) |
+| Commits 184c5d1d–696c2127 red on `packages/e2e` | Minor | other | the per-commit check ran the touched packages only; `packages/e2e` composes the apps and is never "touched" | Implementer Step 5 |
+| R1 m1–m2 (gate misses invoice/album; «4 096» in docs/bot-account.md) | Minor | other | left at the merge | → #645 |
+
+### Process improvement proposals
+1. Implementer Step 5: the per-commit check is `pnpm typecheck`, `pnpm lint` and `vitest run` of every project — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5 → «Every commit builds and passes its own tests»**
+2. Remaining findings — **вынесено в #645**
+
+---
+
+## #508 — Бот: английский язык текстов, язык фиксируется при первом входе, выбор языка в меню (часть 1 из 3) (2026-10-18)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Architect | first plan | Fable. 8 clarify questions, all recommended (6240530316). Step 4a: > 3000 → three parts, #632 and #633 plus per-language overrides #634 in Backlog; the body rewritten for part 1. Plan 6240683322, ≈2 750 lines. Stacked on #506. |
+| Implementer | PR #636 | Opus. 2 clarify (6240722093). 8 commits, +2 774 without the drizzle snapshot (+4 409), migration 0063 on its own DB; fallback split applied — the backend pushes' language moved to #633. `pnpm check` 0, mutations 22/22, English texts table for the owner. Commit dd2f1be8 red on ESLint (bare `'ru'`) — the per-commit check had no lint. |
+| Reviewer | round 1 | 1 Blocker (red `ci` from `worker.handoff.db.test.ts` H1/H2, a file the PR does not touch; 5/5 green locally), 5 Minor → Todo. Manager: one rerun of the failed job — green → round 2 on the same head without a Plan Update; the flaky test → #638. |
+| Reviewer | round 2 | No Blocker/Major, m1–m5 carried. Codex not run (manager PR). |
+| Tech Lead | merge | After #628's squash: rebase-only spawn `--onto origin/main 9e9e9053`, no conflicts, `range-diff` = except commit 8's context (Rule 20 of #637), commits 1–2 still red on lint (reported), `pnpm check` 0, mutations 22/22 (6246904384), CI green, `closingIssuesReferences` = #508. The merge question named the mixed languages until #632/#633; owner: yes. #642 retargeted first; squash 8f84842; `feat/506-bot-message-width` deleted; Minors → #649. |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 B1: red CI from a flaky test outside the PR | Blocker → flake | other | a timing-dependent assertion in the worker handoff stream | → #638 |
+| Commit dd2f1be8 red on ESLint | Minor | other | the per-commit check ran typecheck and tests, not lint | Implementer Step 5 |
+| m1–m5 (language choice lost after a failed cold read; `upsertUser` without `botLanguageOf`; a text promising what /start does not do; id in the access log; the publish rule written twice) | Minor | other | left at the merge | → #649 |
+
+### Process improvement proposals
+1. Same as #506 proposal 1 — **внедрено в #<PR>** (one edit)
+2. Manager → task selection (5): an owner's board note releasing the task is not a taken signal — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task selection → Skip**
+3. Remaining findings — **вынесено в #649**; flaky test — **вынесено в #638**
+
+---
+
+## #576 — Рефералка: уведомление пригласившему о награде (2026-10-18)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | claim | Signal (5) «recent comment» read: the owner's cleanup note «Задачу можно брать» — taken. Stacked at depth 3 on #636 (migration 0064 after 0063). At 01:01 a foreign process (#405 stand of a day session, worktree `impl-405`) appeared in the services snapshot — recorded, the task not stopped; it exited by 01:20. |
+| Architect | first plan | Fable. 5 clarify questions, all recommended (6241880693). Plan 6241961664, ≈600 lines, migrations 0064 + 0065, `facts`/`keyApplies` extension of the mailing engine. |
+| Implementer | PR #642 | Opus. 1 clarify (6241985072: neutral amount line). 3 commits, +619 without snapshot; **every commit passed typecheck, lint and the full `vitest run`** — no red commit. `pnpm check` 0, mutations 11/11. |
+| Reviewer | round 1 | No Blocker/Major, 2 Minor (docs). The four existing kinds keep their SQL; amount stays ledger text; the recipient is held by the composite FK. Codex not run (manager PR). |
+| Tech Lead | merge | After #636's squash: rebase-only spawn `--onto origin/main c05d304c`, one docs conflict (Rule 19 ours, Rule 20 main's), every rewritten commit green, mutations 11/11 (6247038031), CI green, `closingIssuesReferences` = #576. Rebase merge with branch deletion on the owner's yes; `feat/508-bot-english-texts` deleted; Minors → #650. Shared test DB migrated to 0065 from a temporary `main` worktree (the main checkout was another session's); implementer DBs dropped. |
+
+### Review iterations: 1
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 m1–m2 («at most 65 s» not guaranteed; R1–R8 list in docs) | Minor | other | left at the merge | → #650 |
+| A foreign session's stand in the night's services snapshot | — | other | the snapshot sees every host process; the manager rule had no way to tell a foreign one | Manager (caught) |
+
+### Process improvement proposals
+1. Manager → Services baseline: a process of another session (cwd/env outside this night's worktrees) is recorded, not a stop — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task cycle → Services baseline**
+2. Remaining findings — **вынесено в #650**
