@@ -1098,13 +1098,14 @@ async function settled(
   );
 }
 
-// a session whose snapshot was written before its one trade settled
+// a session whose snapshot was written before its one trade settled, or that has none
 async function finishedSession(
   reason: TradingSessionStopReason = TradingSessionStopReason.Completed,
+  { snapshot = true }: { snapshot?: boolean } = {},
 ): Promise<SeededAccount & { sessionId: string }> {
   const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
   const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
-  await snapshotFor(seed.brokerAccountId);
+  if (snapshot) await snapshotFor(seed.brokerAccountId);
   await settled(seed, session.id, 1, '0.85');
   await stopTradingSession(tmp.db, { id: session.id, reason });
   return { ...seed, sessionId: session.id };
@@ -1211,6 +1212,23 @@ describe('GET /trading/sessions/:id: the balance after a finished session (#337)
     );
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({ error: 'internal' });
+  });
+
+  it('G12 a finished session with a settled trade and no snapshot is refreshed once; the written snapshot answers current', async () => {
+    const seed = await finishedSession(TradingSessionStopReason.Completed, { snapshot: false });
+    const target = appWith({ refresh: writeAfterSession });
+    const response = await read(target, seed.sessionId, seed.telegramUserId);
+    expect(response.statusCode).toBe(200);
+    expect(sessionOf(response)).toMatchObject({
+      trades: { settled: 1 },
+      balance: { available: '10000.85000000', ageSec: 0, current: true },
+    });
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0]!.options).toMatchObject({ mayRefresh: false });
+    expect(refreshCalls[0]!.options!.signal).toBeInstanceOf(AbortSignal);
+
+    await read(target, seed.sessionId, seed.telegramUserId);
+    expect(refreshCalls).toHaveLength(1);
   });
 });
 
