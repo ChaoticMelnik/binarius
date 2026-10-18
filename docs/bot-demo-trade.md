@@ -42,7 +42,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:more:<assetId>:<sec>:<up|down>:<s|n>   («➕ Ещё» under the analysis, #360; the floor's token, #379)
+demo:more:<assetId>:<sec>:<up|down>:<d|r>   («➕ Ещё» under the analysis, #360; the mode's token, #121)
   bot → answerCallbackQuery ∥ POST /trading/access
   bot → editMessageReplyMarkup: the stake button (a new nonce, the amount's fingerprint) and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
@@ -192,11 +192,9 @@ amount is the real stake in force; a user in demo gets the amount screen (#476,
 [bot-demo.md](bot-demo.md#the-amount-screen-476)) with its amounts from the same access read, ✅
 on the demo stake (after the reset, on the minimum), and its refusals (a failed read: «⚠️ Сервис
 временно недоступен…» with «🔄 Повторить» `demo:l:<assetId>:<sec>` and «↩️ К списку»). One read
-gives the symbol and the payout: `readPairs`, any catalog, a stale one included, as the session
-start reads it. A pair in it paying below the cycle floor (`!pairPayoutAccepted`, #379) gets,
-under the saved line, the launch press's refusal `demoPayoutTooLow` with «↩️ К списку» and «🧭
-Выбрать пару вручную» instead of the screen (`stake-picker.test.ts`, at 79 and 80 % on 15 and
-5 s). Without a catalog the symbol line is dropped and `warn` `pairs not read for the launch screen`
+gives the symbol: `readPairs`, any catalog, a stale one included, as the session start reads it.
+The payout refuses nothing: at 79 % as at 80 % the screen is drawn (#631; #379 drew the launch
+press's refusal below 80 % instead, `stake-picker.test.ts` on 15 and 5 s). Without a catalog the symbol line is dropped and `warn` `pairs not read for the launch screen`
 is logged; without a catalog or without the pair in it the screen stays, since the start checks the
 pair itself. A preset or the reset edits in place, a typed amount sends the screen as a new
 message. A refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску» (`demo:l`, which
@@ -244,8 +242,8 @@ status line of an intent and a session's stake use it too; balances keep `format
 ## The status message
 
 `intentStatusText(symbol, view, { deadline?, sessionOffer? })` builds the message from four parts: a
-header, the trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the pair's label —
-[`pairLabel`](pairs-catalog.md#the-pairs-label-428), the symbol capped at 64 characters, then « OTC»), a blank line, and the status line; then, after a blank line, the deadline hint or the
+header, the trade line (`EUR/USD · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the pair's label —
+[`pairLabel`](pairs-catalog.md#the-pairs-label-428-631), the symbol without « OTC», capped at 64 characters), a blank line, and the status line; then, after a blank line, the deadline hint or the
 session offer (#360) when the caller asks for one. The callers never ask for both. The status line is chosen by `view.status`, or by
 `view.lastError` when the status is `rejected`:
 
@@ -277,12 +275,10 @@ four rows.
 of that trade (a real trade offers a real session, labelled « · REAL», #327) — the session button's own data, so its press is the start handler with its
 refusals and its `{ active }` answer: a press while a session runs shows the running one and starts
 none ([bot-session.md](bot-session.md#the-button)). One predicate decides the line and the row,
-`sessionOfferOf(view, payoutAccepted)`: the status is a stop status, the duration is one of
-`DEMO_DURATIONS_SEC`, a session of five fits it, and the pair paid at least the cycle floor (#379)
-as the catalog had it at the press (the tracker carries the fact, `IntentTrackRequest.payoutAccepted`)
-or at the refresh; unknown — the refresh's catalog read failed or the id is not listed — draws no
-offer. The payout can move during a 5–15 s trade: the message shows the press-time fact, and a
-press after the change meets the route's 409 `payout_too_low`. A trade from before #313 (60 s) gets neither, as it gets no
+`sessionOfferOf(view)`: the status is a stop status, the duration is one of
+`DEMO_DURATIONS_SEC` and a session of five fits it. The payout plays no part (#631; #379 withheld
+the offer below 80 % and when the refresh could not read the catalog): a refresh without the
+catalog draws the offer under «актив #<id>». A trade from before #313 (60 s) gets neither, as it gets no
 «📊 Новый анализ». The tracker's edits and «🔄 Обновить статус» draw it; the message right after
 the press (`planned`) never does; the deadline edit of a live status carries the hint and no
 offer, and the deadline edit of a stop status whose edit never landed carries the offer; the 404

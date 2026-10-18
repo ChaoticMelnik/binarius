@@ -99,27 +99,32 @@ omits it), `type`, `digits`, `payout`, `maxPayout`, `minTimeframe`, `maxTimefram
 `pairViewSchema` and `toPairView`. The catalog is global and unfiltered: no filter by
 `scheduledUntil` or by duration.
 
-### The pair's label (#428)
+### The pair's label (#428, #631)
 
 The bot's screens and the backend's session summary print a pair by `pairLabel(pair)`
 (`packages/shared/src/catalog.ts`), never by its raw `symbol`. The live catalog (2026-10-10, no
 token) listed 144 pairs, 122 of them `is_otc: true`; no symbol contains «OTC», the field is absent
 on a regular pair rather than `false`, and 22 symbols appear twice, a regular pair and an OTC one
-(`CAD/JPY`: 138334684 at 47 %, 1248197789 OTC at 82 %). The symbol alone cannot tell them apart.
+(`CAD/JPY`: 138334684 at 47 %, 1248197789 OTC at 82 %). The symbol alone cannot tell them apart,
+and since #631 the label does not either (owner, 2026-10-17: no « OTC» on any screen; #428 added it
+by `isOtc`).
 
-- The label is the symbol cut to `PAIR_SYMBOL_LIMIT` (64), then `PAIR_OTC_SUFFIX` (« OTC») when
-  `isOtc === true`; at most `PAIR_LABEL_MAX_LENGTH` (68) characters. The cut comes before the
-  suffix, so the suffix always survives.
-- A symbol already ending in « OTC» does not get it twice. Other spellings («(OTC)», a lowercase
-  «otc») are not recognised.
-- `isOtc` absent (the live REST) and `false` (the mock broker) read alike: no suffix.
+- The label is the symbol without « OTC», cut to `PAIR_LABEL_MAX_LENGTH` (64) characters.
+  `pairLabel` reads only `symbol`; `isOtc` stays on the wire (`PairView`, the session's pair) and
+  nobody prints by it.
+- A symbol ending in the exact suffix `PAIR_OTC_SUFFIX` (« OTC», as symbols read before #428) loses
+  it once, before the cut: «X OTC OTC» is «X OTC», « OTC» is an empty label. Other spellings
+  («(OTC)», a lowercase «otc») stay as the broker sends them.
+- A regular pair and its OTC twin of the same symbol share the label; their payouts and their
+  order tell them apart.
 - The label is a branded type, `PairLabel`: every bot and backend function that prints a pair
   takes it, so a raw `symbol` does not compile there. A template variable (`TEXTS.*({ symbol })`,
   `subject`) is a plain string the brand cannot hold; a raw read there is found by
   `grep -rnE '\.symbol\b' apps/bot/src apps/backend/src --include='*.ts' | grep -v '\.test\.ts' | grep -v 'apps/bot/src/testing.ts'`,
-  which prints nothing.
-- The manual path sorts a type's pairs by label, then by id: a regular pair's label is a prefix
-  of its OTC twin's, so «CAD/JPY» comes right before «CAD/JPY OTC».
+  which prints one line: the share route's wire `pair` (`session-routes.ts`), a raw symbol the
+  bot labels with `pairLabel` itself.
+- The manual path sorts a type's pairs by label, then by id: twins share the label, so they
+  stand side by side, by id («CAD/JPY 47%» before «CAD/JPY 82%» with the ids above).
 
 ## Start and shutdown
 

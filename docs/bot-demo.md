@@ -24,8 +24,7 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 - `apps/bot/src/demo-catalog.ts` — the check, with no Telegram and no texts:
   `DEMO_DURATIONS_SEC`, `SIGNALS_DURATIONS_SEC` (#382), `DEMO_PAGE_SIZE`, `isOpen`, `pairsOf`,
   `openPairsOf`, `pageOf`, `pageIndexOf`, `durationOptions`, `checkDemoPair`, `checkDemoTrade`,
-  `checkDemoCycle` (#379),
-  `readDemoCatalog`, `readDemoTrade`, `readDemoCycle` (#379).
+  `readDemoCatalog`, `readDemoTrade` (#631 removed #379's `checkDemoCycle` and `readDemoCycle`).
 - `apps/bot/src/demo.ts` — `createDemoComposer({ backend, logger, now, dialog, connectKeyboard })`:
   the nine handlers, the callback data builders (`DEMO_CALLBACK_DATA`, `DEMO_SIGNALS_CALLBACK_DATA`,
   `demoSignalsCallbackData`, `demoLaunchCallbackData` with its origin (#476),
@@ -89,7 +88,7 @@ demo:sig:<sec>            (a duration, «🔄 Обновить», «↩️ К с
   bot  → answerCallbackQuery ∥ GET /trading/signals ∥ GET /trading/pairs
   bot  → editMessageText: «Сигналы сейчас · ⏱ <sec> с», the pairs with a signal two a row, «🔄 Обновить» «↩️ Длительность» in one row, «🧭 Выбрать пару вручную»
 demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount)
-  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoCycle(<sec>) ∥ POST /trading/access
+  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade(<sec>) ∥ POST /trading/access
          ∥ POST /trading/signal { assetId, interval: intervalForDuration(sec) } (#509)
   bot  → editMessageText (sendMessage for :n): the amount screen in demo, the launch screen in
          real; «сигнала нет» → the refusal with «🔀 Выбрать другую пару», the signal unread →
@@ -106,7 +105,7 @@ demo:a:<assetId>          (a pair, «↩️ Длительность»)  → the
 demo:d:<assetId>:<sec>    (a duration)       → readDemoTrade, then the summary with «📊 Анализ»
 demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить анализ», the reminder's «📊 Новый анализ»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade ∥ POST /trading/access (the mode)
-  bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 15 с…», no keyboard (under a photo —
+  bot  → editMessageText: «⏳ Анализирую EUR/USD · ⏱ 15 с…», no keyboard (under a photo —
          the analysis card, the session's summary card — sendMessage at once, #482)
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec),
                                analysis: { telegramUserId, durationSec: sec } } (#484)
@@ -114,7 +113,7 @@ demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить ан
          block, in demo the amounts under it — then deleteMessage of «⏳»
   bot  → otherwise: editMessageText of «⏳» into the analysis screen with its keyboard: no
          session row on «сигнала нет» (#509)
-demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's token, #379)
+demo:more:<assetId>:<sec>:<up|down>:<d|r>     («➕ Ещё», #360; the mode's token, #121)
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
          (in demo under the card's amounts, which stay, #482)
@@ -136,7 +135,7 @@ The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789
 the Bot API 64.
 `demo:sig` is 8 bytes, `demo:sig:15` 11, `demo:l:2147483647:15` 20, `demo:l:2147483647:15:n` 22,
 `demo:sc:2147483647:15:a` 23, `demo:sa:2147483647:15:999999999999.99999999:a` 45 (#476) and
-`demo:more:2147483647:15:down:n:r` 32 (#360, #379, #121).
+`demo:more:2147483647:15:down:r` 30 (#360, #121, #631).
 `<group>` is one of `PAIR_TYPE_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
 (a positive int4, what #127 sends); `<sec>` is one of `DEMO_DURATIONS_SEC`, written into the
@@ -145,8 +144,9 @@ match nothing; `<up|down>` is a `TradeAction`; `<nonce>` is 12 lowercase hex cha
 matches a pattern but fails its check (`demo:a:0`, `demo:l:0:15`, `demo:t:bond:0`,
 `demo:more:0:5:up`) stops the spinner and sends nothing; data that matches no pattern
 (`demo:sig:60`, `demo:l:101:60`) is not answered at all.
-`demo:more` has no legacy pattern: no button drawn before #360 carries it. Its `:<s|n>` token is
-optional: a button drawn between #360 and #379 has none and reads as `s` (below).
+`demo:more` has no legacy pattern: no button drawn before #360 carries it. A button drawn between
+#379 and #631 carries the payout floor's token `:<s|n>` before the mode's; the pattern admits it
+and nobody reads it (below).
 
 **Old duration buttons (#313).** The set was 60/300/900/1800/3600 s before #313
 (`LEGACY_DEMO_DURATIONS_SEC`). Every shape that carries a duration — `demo:d`, `demo:an`,
@@ -185,19 +185,24 @@ its `intervalForDuration` is the scanner's interval, and its members are those o
 catalog together, and `signalsScreen` takes the list of the duration's interval
 (`intervalForDuration(sec)`: `15s` or `5s`, #382) and joins it with the catalog: the route carries
 no symbol or payout (#343), so the catalog gives both. A signal gets a button only if
-`checkDemoCycle(catalog, assetId, sec, now)` is `ok` — the pair is listed, open on the bot's clock,
-takes that duration and pays at least the cycle floor (`MIN_CYCLE_PAYOUT_PCT` 80, #379; the
-scanners skip such pairs already, this is the press's own read), so the launch would not refuse it
-(a `min_timeframe` 15 pair has no button at 5 s). Of those, `signalsShown` (#460) keeps at most
-`SIGNALS_LIST_SIZE` = 12 (2 × the six groups): first up to `SIGNALS_PER_GROUP` (2) of every group
-of `PAIR_TYPE_GROUPS`, the best by `comparePairsByPayout` (payout desc, then id), then the free
-places filled from the rest of all groups together by the same order. The list is grouped by type
-in `PAIR_TYPE_GROUPS` order (💱 currencies first), a fill pair sits in its own type's group, and
-inside a group the best payout comes first. Neither the route's order nor the catalog's matters
-(`demo.test.ts` → the choice of pairs, L1–L5). A pair that would be refused takes no place: its
-place goes to the next pair of its type. The scanner decides every eligible pair on both
-intervals from the data socket's candles (#405, [signal.md → The scanner](signal.md#the-scanner-343)),
-so the list is bounded here, by `SIGNALS_LIST_SIZE`; while the source is down the lists are empty. Each button is «EUR/USD OTC ⬆️ 85%» (`demo:l:<assetId>:<sec>`):
+`checkDemoTrade(catalog, assetId, sec, now)` is `ok` — the pair is listed, open on the bot's clock
+and takes that duration — so the launch would not refuse it (a `min_timeframe` 15 pair has no
+button at 5 s). The payout refuses nothing (#631; #379 left a pair below 80 % out): it orders the
+list. `signalsShown` takes the pairs paying at least `MIN_CYCLE_PAYOUT_PCT` (80) first (#460) and
+keeps at most `SIGNALS_LIST_SIZE` = 12 of them (2 × the six groups): first up to
+`SIGNALS_PER_GROUP` (2) of every group of `PAIR_TYPE_GROUPS`, the best by `comparePairsByPayout`
+(payout desc, then id), then the free places filled from the rest of all groups together by the
+same order. That part is grouped by type in `PAIR_TYPE_GROUPS` order (💱 currencies first), a fill
+pair sits in its own type's group, and inside a group the best payout comes first. With fewer than
+`SIGNALS_MIN_SIZE` (5) of them the pairs paying less follow as a tail after the groups, by
+`comparePairsByPayout` and with no quota by type, until the list holds five (#631, owner
+2026-10-17): the list holds at least `min(5, the pairs with a signal that pass checkDemoTrade)`.
+Five is a floor, not a ceiling: five to twelve pairs at or above 80 % take no tail. Neither the
+route's order nor the catalog's matters (`demo.test.ts` → the choice of pairs, L1–L9). A pair that
+would be refused takes no place: its place goes to the next pair of its type, or of the tail. The
+scanner decides every open pair that takes the candle's duration on both intervals, whatever it
+pays, from the data socket's candles (#405, #631, [signal.md → The scanner](signal.md#the-scanner-343)),
+so the list is bounded here, by `SIGNALS_LIST_SIZE`; while the source is down the lists are empty. Each button is «EUR/USD ⬆️ 85%» (`demo:l:<assetId>:<sec>`):
 the symbol, the scanner's direction as an arrow (a data mark like the payout, not a catalog text)
 and the payout; two per row in the list's order, across the types, the last alone when their
 number is odd (#419); then «🔄 Обновить» (`demo:sig:<sec>`) and «↩️ Длительность» (`demo:sig`) in
@@ -212,7 +217,7 @@ direction, since the session decides it per trade.
 
 | Outcome | What the bot shows |
 |---|---|
-| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 pairs two a row (`signalsShown`) + [refresh · durations] + manual |
+| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 pairs two a row (`signalsShown`; at least five when five have a signal, the tail below 80 % included) + [refresh · durations] + manual |
 | none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` («📡 Для ⏱ 5 с сигналов сейчас нет — …») + [refresh · durations] + manual |
 | the catalog's three failures ([The check](#the-check)) | that row's text + «🔄 Повторить» (the pressed data) + manual; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + «🔄 Повторить» + manual; `warn` `trading signals not read` |
@@ -224,8 +229,8 @@ missing or stale snapshot itself.
 
 ## The amount screen (#476)
 
-`demo:l:<assetId>:<sec>[:a|:n]` reads the catalog and access together: `readDemoCycle(backend,
-assetId, sec, now)` on the catalog read at this press, and the user's mode, the demo stake and the
+`demo:l:<assetId>:<sec>[:a|:n]` reads the catalog and access together: `readDemoTrade(backend,
+assetId, sec, now)` on the catalog read at this press (at any payout since #631), and the user's mode, the demo stake and the
 broker snapshot. In demo it draws the amount screen (`cycleStakeScreen`), in real the launch screen
 ([below](#the-launch-screen-in-real-mode-327)). Four doors open it in demo: a pair of the signals
 list (no token, edited in place), the analysis's session row (`:a`, edited in place, #360), the
@@ -239,7 +244,7 @@ buttons in messages sent before #476 still start a session at once.
 signal (`POST /trading/signal`, `intervalForDuration(sec)`; the backend's cached feed, so a press
 right after the analysis asks the broker nothing) in either mode, since three of the doors —
 «🔁 Ещё сессия», the row under a finished trade, an old message — were drawn without it. After the
-check's refusal (the table below, `payout_too_low` included), in order:
+check's refusal (the table below), in order:
 
 | The signal | What the press shows |
 |---|---|
@@ -272,11 +277,8 @@ snapshot, each with its keyboard and the way back. A failed access read says «�
 refusal in place) and the way back, and logs `warn` `trading access not read for the amount
 screen`. Any button press or command ends a typed amount's step left open
 ([bot-demo-trade.md → The stake](bot-demo-trade.md#the-stake-297-326), the custom input, #319). A pair refused by the check is
-the table below, as on the manual path; a pair whose payout fell below the floor since the list was
-drawn (`payout_too_low`, #379) says «🚫 {symbol}: выплата {payout}% — ниже 80%, цикл на этой паре
-не запускается. Безубыточность при такой выплате — {breakEven}% верных прогнозов.»
-(`demoPayoutTooLow`) with «↩️ К списку» (`demo:sig:<sec>`) and «🧭 Выбрать пару вручную»
-(`demo:g`), whose single trade the floor does not restrict, in either mode.
+the table below, as on the manual path. A pair paying less than 80 % opens its amount screen like
+any other (#631; #379 refused it with `demoPayoutTooLow`, removed).
 
 **An amount** (`demo:sa:<assetId>:<sec>:<amount>:<l|a>`, `cycle-stake.ts`) is a write
 (`WRITE_CALLBACK_PREFIXES`). The press saves the amount as the demo stake (`POST /trading/stake`,
@@ -323,9 +325,8 @@ screen writes nothing: the stake is read where it is shown and the start reads i
 clock taken after the read. #126 calls it before it shows the analysis (and so «➕ Ещё», whose
 expansion reads no catalog, #360), #127 before it creates the intent; neither re-implements a
 check. A cycle's entries — the signals list, the launch and the analysis's session button — check
-`checkDemoCycle`/`readDemoCycle` (#379): the same, then one more refusal when
-`!pairPayoutAccepted(pair)`. The manual path's analysis, stake and single trade keep
-`checkDemoTrade` (owner, #379: unrestricted; `demo-catalog.test.ts` pins it at 79 %).
+the same since #631, at any payout (#379 refused a pair paying less than `MIN_CYCLE_PAYOUT_PCT`
+there with `payout_too_low`; `demo-catalog.test.ts` pins `checkDemoTrade` at 79 %).
 
 | Outcome | Source | What the bot shows |
 |---|---|---|
@@ -335,7 +336,6 @@ check. A cycle's entries — the signals list, the launch and the analysis's ses
 | `pair_missing` | the id is not in the catalog (delisted, or forged data) | «❌ Этот актив больше не доступен…» + «↩️ Типы» |
 | `pair_closed` | `scheduledUntil > now` on the bot's clock | «🔒 {symbol} сейчас закрыт по расписанию…» + «↩️ Активы» + «↩️ Типы» |
 | `duration_unsupported` | the duration is not one of `DEMO_DURATIONS_SEC` (#125 review m5: it arrives from callback data), or is outside `[minTimeframe, maxTimeframe]` | «❌ Эта длительность не подходит для {symbol}…» + «↩️ Длительность» + «↩️ Типы» |
-| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the amount or launch screen, and the screen after a stake save (`pairPayoutAccepted` on the save's catalog, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)): `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
 
 «🔄 Повторить» carries the pressed data again, so a retry after `demo:d:…` lands on the summary
 once the catalog is back. A retry is always safe: nothing in the demo writes anything.
@@ -380,9 +380,10 @@ not a fresh catalog.
   type with such pairs but none open shows «· 0» and its press says «🔒 {type}: сейчас всё закрыто
   по расписанию».
 - **Pairs.** `DEMO_PAGE_SIZE` = 12 open pairs, two per row, sorted by label in code-unit order
-  (ties by id), each «EUR/USD OTC 85%» — the pair's label (the broker's symbol with « OTC» when
-  `is_otc`, [pairs-catalog.md → The pair's label](pairs-catalog.md#the-pairs-label-428)) and its
-  payout as it arrives. A regular pair comes right before its OTC twin of the same symbol. Then one row: «◀️» when a page before exists, «↩️ Типы», «▶️» when a page
+  (ties by id), each «EUR/USD 85%» — the pair's label (the broker's symbol without « OTC», #631,
+  [pairs-catalog.md → The pair's label](pairs-catalog.md#the-pairs-label-428-631)) and its
+  payout as it arrives. A regular pair and its OTC twin of the same symbol share the label and
+  stand side by side by id; their payouts tell them apart. Then one row: «◀️» when a page before exists, «↩️ Типы», «▶️» when a page
   after exists. A page beyond the end (the catalog shrank) is the last page. Closed pairs are not
   listed.
 - **Durations.** The admitted durations of `⏱ 5 с` and `⏱ 15 с`, in one row, then «↩️ Активы»
@@ -392,7 +393,8 @@ not a fresh catalog.
   вручную».
 - **Signals (#320).** The pairs with a signal two a row, the last alone when odd (#419); then
   «🔄 Обновить» and «↩️ Длительность» in one row and «🧭 Выбрать пару вручную» in its own. At most
-  `SIGNALS_LIST_SIZE` = 12 pairs (#460) — 6 + 2 rows; the scanner covers every eligible pair
+  `SIGNALS_LIST_SIZE` = 12 pairs (#460) — 6 + 2 rows; at least `SIGNALS_MIN_SIZE` = 5 when five
+  have a signal, the pairs below 80 % as the tail (#631); the scanner covers every eligible pair
   on both durations (#405), so the limit is the bot's (Telegram allows 100 buttons, 8 a row).
 - **Amounts (#476, demo).** The amounts three a row, the risky ones («· риск») two a row, then
   «✏️ Своя сумма» and the way back in one row; each carries the duration. The screen is deleted
@@ -404,9 +406,8 @@ not a fresh catalog.
 - **Analysis (#360).** On a signal — since #509 not on «сигнала нет» — «🚀 Сессия из 5
   циклов» alone in the first row where `sessionFitsDeadline(DEFAULT_SESSION_CYCLES, sec, martingale)`
   holds (`sessionFits`; #552: the worst case of four trades a cycle), at every duration of
-  the set (#284, [bot-session.md](bot-session.md#the-button)), and the pair pays at least the cycle
-  floor (`pairPayoutAccepted`, #379; the expansion carries the fact in `demo:more`'s token; below
-  it the screen says why); on a signal, «➕ Ещё» alone in
+  the set (#284, [bot-session.md](bot-session.md#the-button)), at any payout (#631; #379 withheld
+  it below 80 % and said why); on a signal, «➕ Ещё» alone in
   the next row; then «🔄 Повторить анализ» (the same `demo:an` data); then «↩️ Длительность» and
   «↩️ Типы». On `fetch_failed` and when the signal call threw: the last two rows only.
   «⏳ Анализирую…» has no keyboard, so «📊 Анализ» cannot be pressed twice while the signal is
@@ -416,13 +417,13 @@ not a fresh catalog.
   effect, the risky ones two a row), `demo:sa:<assetId>:<sec>:<amount>:a`, then «✏️ Своя сумма»
   in a row of its own — only when the access read gives demo mode, `stakeAccess` gives a broker
   snapshot (not for a blocked user), the amounts are not empty, and the session row's conditions
-  hold (the cycle floor, `sessionFits`). The caption's last line is then «Выбери сумму сделки 👇»
+  hold (`sessionFits`). The caption's last line is then «Выбери сумму сделки 👇»
   (`analysisChooseAmount`). Otherwise — no snapshot, a balance below the minimum, a failed read —
   the session row as before, whose press opens the amount screen and says why there. An amount's
   press is #476's: the save, the start, the card deleted after the status (`deleteMessage` takes a
   photo as it takes a text); «✏️ Своя сумма» and «💵 Сумма» edit the pressed message, refused as a
   caption, and their screen goes as a new message.
-- **Analysis expanded by «➕ Ещё» (#360).** The session row (not below the cycle floor) — in demo
+- **Analysis expanded by «➕ Ещё» (#360).** The session row (where `sessionFits`) — in demo
   the card's amounts in its place, by the same conditions read at this press (#482) — then «🚀
   Открыть сделку: ⬆️ Вверх · $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and
   the way back — the same message, only its keyboard edited. «🔄 Повторить анализ» draws the
@@ -431,8 +432,7 @@ not a fresh catalog.
   user's mode beside the catalog: in real mode the session row is «🚀 Сессия из 5 циклов · REAL»
   with `real:sess:<assetId>:<sec>` (#327; in demo `demo:l:<assetId>:<sec>:a`, the amount screen,
   #476), the disclaimer is `analysisDisclaimerReal` («…Реальный
-  режим: сделка идёт на реальные деньги.»), and the hint and the `analysisCycleUnavailable` line
-  are the demo ones (the floor is the session's, #327). A failed read draws the demo text and
+  режим: сделка идёт на реальные деньги.»), and the hint is the demo one (#327). A failed read draws the demo text and
   keyboard. «➕ Ещё» carries the mode the
   text was drawn in (`:d`/`:r`; a datum without it is from before #121 and reads as `d`); the
   expansion draws a stake button only when its own access read gives that mode, otherwise just
@@ -442,7 +442,7 @@ not a fresh catalog.
   picker (`stk:o:r:a:<assetId>:<sec>`), under the real session row (#327). A pair opens, in real
   mode, the launch screen (#327): the real stake in force, `launchCycleReal` («…Реальный режим:
   сделки идут на реальные деньги.»), «🚀 Запустить цикл · REAL» and the real picker, where demo
-  draws the amount screen (#476); a pair below the cycle floor gets the floor's refusal in both.
+  draws the amount screen (#476), at any payout (#631).
 - **The shared screens** — the signals, the types, a type's pairs and the summary — read no mode,
   so their default texts hold in both (#121): «📡 Сигналы сейчас … Выбери пару.», «🧭 Выбор
   пары», «Дальше — анализ свечей: бот покажет сигнал и что можно сделать по нему.». The demo note
@@ -512,9 +512,9 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 
 | Answer | Headline | Body | Buttons above the repeat (#360) |
 |---|---|---|---|
-| `decided`, `signal` — the card (#482), a photo of the bull or the bear | «🟢 Сильный сигнал на рост» / «🔴 Сильный сигнал на падение» | the block (below), the payout with the break-even share, on a pair below the cycle floor «🚫 Цикл на этой паре не запускается: выплата ниже 80%.» (`analysisCycleUnavailable`, #379), «⚠️ Сигнал — не прогноз результата и не гарантия…», in demo over the amounts «Выбери сумму сделки 👇» | in demo the amounts, else the session (not below the cycle floor); «➕ Ещё» by the decision's action |
-| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала бот не предлагает ни сделку, ни сессию. Повтори анализ позже или выбери другую пару.» (#509), below the cycle floor the note as the last line | none (#509) |
-| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…», below the cycle floor the note as the last line; no feature line, the decision carries none | none (#509) |
+| `decided`, `signal` — the card (#482), a photo of the bull or the bear | «🟢 Сильный сигнал на рост» / «🔴 Сильный сигнал на падение» | the block (below), the payout with the break-even share, «⚠️ Сигнал — не прогноз результата и не гарантия…», in demo over the amounts «Выбери сумму сделки 👇» | in demo the amounts, else the session, at any payout (#631); «➕ Ещё» by the decision's action |
+| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала бот не предлагает ни сделку, ни сессию. Повтори анализ позже или выбери другую пару.» (#509) | none (#509) |
+| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…»; no feature line, the decision carries none | none (#509) |
 | `fetch_failed` `rate_limited` with `retryAfterSec` | «⚠️ Брокер ограничил запросы. Попробуй через N с.» | — | none |
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | «⚠️ Не удалось получить свечи у брокера…»; `warn` `signal not evaluated` with `signalCode` (not for `rate_limited`) | — | none |
 | `evaluateSignal` threw (unreachable, a timeout, a non-2xx, a broken body) | the same; `warn` `signal not evaluated` with the error | — | none |
@@ -530,7 +530,7 @@ overrides — by `String#length`, UTF-16 units, as the caption limit counts them
 value. Every number is the answer's:
 
 ```
-Пара          EUR/USD OTC
+Пара          EUR/USD
 RSI           нейтрально 62.3
 MACD          выше сигнальной 0.000023
 MA50          цена выше 1.08531
@@ -581,18 +581,17 @@ A2 holds the card to the answer's numbers and the pair's payout, and nothing els
 
 «➕ Ещё» is drawn only on a signal, which is reached only after `readDemoTrade` was `ok` on this
 press: the pair open by its schedule and the duration inside its range on a fresh catalog. Its
-data `demo:more:<assetId>:<sec>:<up|down>:<s|n>` carries the signal's direction and the payout
-floor's verdict at the render (`s` the session row was drawn, `n` withheld by
-`pairPayoutAccepted`, #379; `analysisMoreDataOf` parses it with
-`createTradeIntentRequestSchema.shape.assetId`, the duration set and `TradeAction`), so the
-expansion asks for no signal and reads no catalog: the stake press reads the catalog and refuses a
-pair closed since (#127). A datum without the token was drawn before #379: its expansion keeps the
-session row, whose press meets the route's 409 `payout_too_low` and `sessionPayoutTooLow`, as
-every session button drawn before #379 does.
+data `demo:more:<assetId>:<sec>:<up|down>:<d|r>` carries the signal's direction and the mode at
+the render (`analysisMoreDataOf` parses it with `createTradeIntentRequestSchema.shape.assetId`,
+the duration set and `TradeAction`), so the expansion asks for no signal and reads no catalog: the
+stake press reads the catalog and refuses a pair closed since (#127). A datum drawn between #379
+and #631 also carries the payout floor's verdict (`:s`/`:n`) before the mode's token; the pattern
+admits all four forms — none, `:s|:n`, `:s|:n:d|r`, `:d|:r` — and nobody reads the verdict: every
+expansion draws the session row (#631; `demo.test.ts` → the old or new datum).
 
 **«➕ Ещё» (#360).** The press answers the query beside `POST /trading/access` and edits only the
 keyboard of the same message (`editMessageReplyMarkup`, no text — a photo's markup can be edited):
-the session row stays first where the datum's token is `s` — in demo the card's amounts in its
+the session row stays first — in demo the card's amounts in its
 place where this press's access read allows them (#482) —
 then «🚀 Открыть сделку: ⬆️ Вверх · $5.00» and «💵 Сумма» (`stk:o:d:a:<assetId>:<sec>`, the picker
 of the expansion's mode, `r` in real mode, #326) in one row, then the repeat and the way back. The

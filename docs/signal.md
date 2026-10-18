@@ -615,10 +615,10 @@ pair counts and the choice by type are gone.
   with one `warn` `signal scan skipped: no fresh catalog` per stale streak, carrying `interval`.
 - Eligible pairs are those open by `scheduled_until` (`isPairOpen`), accepting a trade of the
   candle's length, 15 or 5 s (`pairAcceptsDuration`; `eligiblePairs(view, nowMs, durationSec)`),
-  and paying at least the cycle floor (`pairPayoutAccepted`, `MIN_CYCLE_PAYOUT_PCT` 80, #379: no
-  cycle starts below it, [trading-session.md](trading-session.md#the-payout-floor-379)). A
-  `min_timeframe` 60 pair is never scanned; a `min_timeframe` 15 pair is scanned on `15s` only; a
-  pair paying 79 % is never scanned nor served on either instance (S19). Each decision carries
+  whatever they pay (#631; #379 left a pair below `MIN_CYCLE_PAYOUT_PCT` 80 out: the bot's list
+  now fills up with such pairs, [trading-session.md](trading-session.md#the-payout-order-key-379-631)).
+  A `min_timeframe` 60 pair is never scanned; a `min_timeframe` 15 pair is scanned on `15s` only; a
+  pair paying 79 % is scanned and served on both instances (S19'). Each decision carries
   the pair's `digits` from the catalog it was read from (S20).
 - The set is recomputed every candle, so it follows the catalog's refresh. A pair that left the set
   leaves the snapshot at that candle (S9). A pair in both sets has two cache keys and two
@@ -678,7 +678,7 @@ with:
 |---|---|
 | `interval` | the instance's interval, `15s` or `5s` |
 | `source` | `live` or `down`: `streaming()` when the line is written |
-| `eligible` | eligible pairs at the last scan (open, taking the interval's duration, at or above the payout floor); 0 while the catalog is stale or the source is down |
+| `eligible` | eligible pairs at the last scan (open, taking the interval's duration, at any payout since #631); 0 while the catalog is stale or the source is down |
 | `scanned` | the size of the scan set (= `eligible` while live) |
 | `signals` | fresh signals now (the route's rule) |
 | `decided` | decisions over the minute |
@@ -723,8 +723,9 @@ answer is 401 `{ error: 'unauthorized' }`.
 The one consumer is the bot's signals screen (#320, `readSignals` in
 `apps/bot/src/backend-client.ts`). It takes the list of the duration the user chose
 (`intervalForDuration`, #382), keeps a pair only if the catalog read at the same press lists it,
-open, accepting that duration and paying at least the cycle floor (`checkDemoCycle`, #379), keeps
-up to 12 of them by type (`signalsShown`, #460), and takes the symbol and payout from there; it never re-reads the
+open and accepting that duration (`checkDemoTrade`), keeps up to 12 of those paying at least 80 %
+by type (`signalsShown`, #460) and, with fewer than five of them, fills the list up to five with
+the pairs paying less (#631), and takes the symbol and payout from there; it never re-reads the
 signal at a press, since the session asks for one before every trade
 ([bot-demo.md](bot-demo.md#the-signals-screen-320)). A body without that duration's list is a
 deploy mismatch, not «no signals»: the bot answers it as unavailable.
