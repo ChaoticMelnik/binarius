@@ -5,7 +5,6 @@ import {
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
-  pairPayoutAccepted,
   TradeIntentErrorCode,
   TradeMode,
   UserStatus,
@@ -70,17 +69,16 @@ export const INTENT_CALLBACK_PATTERN =
   /^intent:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 // «🔄 Обновить статус» while the trade can still move (accepted until it settles); once the
-// tracker stops following it, the session offer (#360, not below the cycle floor, #379) and the
+// tracker stops following it, the session offer (#360, at any payout since #631) and the
 // end of the path (#350): a new analysis, the signals, the menu.
 export function intentKeyboard(
   view: Pick<TradeIntentView, 'id' | 'mode' | 'status' | 'assetId' | 'durationSec'>,
-  payoutAccepted: boolean,
 ): InlineKeyboard {
   const keyboard =
     TRADE_INTENT_TRANSITIONS[view.status].length > 0
       ? new InlineKeyboard().text(LABELS.refreshIntentButton, intentCallbackData(view.id))
       : new InlineKeyboard();
-  const offer = sessionOfferOf(view, payoutAccepted);
+  const offer = sessionOfferOf(view);
   if (offer !== undefined) {
     // a demo trade's offer opens the amount screen (#476) as a new message, so the trade's stays
     keyboard
@@ -246,8 +244,7 @@ export function createDemoTradeComposer<C extends Context>({
     const [, read, catalog] = await Promise.all([
       ctx.answerCallbackQuery().catch(logAnswerFailure),
       settle(backend.readIntent(intentId, String(ctx.from.id))),
-      // the symbol and the payout floor's verdict only, so any catalog will do, a stale one
-      // included
+      // the symbol only, so any catalog will do, a stale one included
       settle(backend.readPairs()),
     ]);
     if (!read.ok) {
@@ -271,16 +268,14 @@ export function createDemoTradeComposer<C extends Context>({
     const pair = catalog.ok
       ? catalog.value.pairs.find((listed) => listed.id === view.assetId)
       : undefined;
-    // an unknown payout (the read failed, the id not listed) draws no session offer
-    const payoutAccepted = pair !== undefined && pairPayoutAccepted(pair);
     // no tracker follows the message a refresh draws, so a live status gets the menu too (#350)
     const keyboard = TRACKER_STOP_STATUSES.has(view.status)
-      ? intentKeyboard(view, payoutAccepted)
-      : withMenu(intentKeyboard(view, payoutAccepted));
+      ? intentKeyboard(view)
+      : withMenu(intentKeyboard(view));
     await refreshInPlace(
       ctx,
       intentStatusText(pair === undefined ? null : pairLabel(pair), view, {
-        sessionOffer: sessionOfferOf(view, payoutAccepted) !== undefined,
+        sessionOffer: sessionOfferOf(view) !== undefined,
       }),
       keyboard,
     );
@@ -416,15 +411,14 @@ export function createDemoTradeComposer<C extends Context>({
   // (a replay of a finished trade). A replay of a live intent the tracker already follows sends
   // this message untracked: track() of a tracked id is a no-op.
   async function sendStatus(ctx: Context, pair: PairView, intent: TradeIntentView): Promise<void> {
-    const payoutAccepted = pairPayoutAccepted(pair);
     const label = pairLabel(pair);
     const sent = await replyHtml(
       ctx,
       intentStatusText(label, intent, {
-        sessionOffer: sessionOfferOf(intent, payoutAccepted) !== undefined,
+        sessionOffer: sessionOfferOf(intent) !== undefined,
       }),
       {
-        reply_markup: intentKeyboard(intent, payoutAccepted),
+        reply_markup: intentKeyboard(intent),
       },
     );
     if (TRACKER_STOP_STATUSES.has(intent.status)) return;
@@ -433,7 +427,6 @@ export function createDemoTradeComposer<C extends Context>({
       telegramUserId: intent.telegramUserId,
       label,
       language: currentLanguage(),
-      payoutAccepted,
       view: intent,
       edit: (text, view, end) =>
         editMessageTextByIdHtml(ctx.api, sent.chat.id, sent.message_id, text, {
@@ -441,8 +434,8 @@ export function createDemoTradeComposer<C extends Context>({
             end === 'not_found'
               ? menuKeyboard()
               : end === 'deadline'
-                ? withMenu(intentKeyboard(view, payoutAccepted))
-                : intentKeyboard(view, payoutAccepted),
+                ? withMenu(intentKeyboard(view))
+                : intentKeyboard(view),
         }),
     });
   }

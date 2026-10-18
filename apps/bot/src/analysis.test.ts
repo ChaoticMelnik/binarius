@@ -357,32 +357,28 @@ MA200         цена ниже 1.08612
     expect(linesOf(ruleRefusalOf(reason))[1]).toBe(`⏸ Сигнала нет: ${words}`);
   });
 
-  // #379: a pair below the cycle floor keeps its analysis and its single trade, and the screen
-  // says why it has no session button (demo.ts)
-  it('notes under a signal on a pair paying below 80 % that no cycle starts on it', () => {
-    const note = '🚫 Цикл на этой паре не запускается: выплата ниже 80%.';
-    const low = linesOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 79 });
-    const payoutAt = low.findIndex((line) => line.startsWith('💰'));
-    expect(low[payoutAt]).toContain('Безубыточность: 55.9%');
-    expect(low[payoutAt + 1]).toBe(note);
-    expect(screenOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 79 }).stake).toBe(TradeAction.Up);
-    expect(linesOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 80 })).not.toContain(note);
-  });
-
-  // #379: every decided answer below the floor withholds the session row, so the note follows the
-  // hint as the last line; candles not read draw no session row anywhere, so no note
-  it('notes under a refusal on a pair paying below 80 % that no cycle starts on it', () => {
-    const note = '🚫 Цикл на этой паре не запускается: выплата ниже 80%.';
-    const low = { ...PAIR_EURUSD, payout: 79 };
-    const rule = linesOf(SIGNAL_NO_SIGNAL, low);
-    expect(rule.at(-2)).toBe(plainTextOf(TEXTS.analysisNoSignalHint));
-    expect(rule.at(-1)).toBe(note);
-    const data = linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), low);
-    expect(data.at(-2)).toBe(plainTextOf(TEXTS.analysisDataHint));
-    expect(data.at(-1)).toBe(note);
-    expect(linesOf(SIGNAL_NO_SIGNAL, { ...PAIR_EURUSD, payout: 80 })).not.toContain(note);
-    expect(linesOf(SIGNAL_FETCH_FAILED, low)).not.toContain(note);
-  });
+  // #631: a pair paying below 80 % reads as one paying above it: no note under the payout or the
+  // hints in either mode (#379 noted that no cycle starts on it)
+  it.each([TradeMode.Demo, TradeMode.Real])(
+    'draws the screens of a pair paying 79 %% with no cycle note in %s',
+    (mode) => {
+      const low = { ...PAIR_EURUSD, payout: 79 };
+      const signal = linesOf(SIGNAL_DECIDED, low, mode);
+      const payoutAt = signal.findIndex((line) => line.startsWith('💰'));
+      expect(signal[payoutAt]).toContain('Безубыточность: 55.9%');
+      expect(signal[payoutAt + 1]).toBe('');
+      expect(screenOf(SIGNAL_DECIDED, low).stake).toBe(TradeAction.Up);
+      expect(linesOf(SIGNAL_NO_SIGNAL, low, mode).at(-1)).toBe(
+        plainTextOf(TEXTS.analysisNoSignalHint),
+      );
+      expect(linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), low, mode).at(-1)).toBe(
+        plainTextOf(TEXTS.analysisDataHint),
+      );
+      for (const response of [SIGNAL_DECIDED, SIGNAL_NO_SIGNAL]) {
+        expect(linesOf(response, low, mode).join('\n')).not.toContain('Цикл на этой паре');
+      }
+    },
+  );
 
   // Plan 5 (decision 26): in real mode the analysis names real money
   it('ends a real signal with the real disclaimer and no demo wording', () => {
@@ -399,23 +395,6 @@ MA200         цена ниже 1.08612
     expect(
       linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), PAIR_EURUSD, TradeMode.Real).at(-1),
     ).toBe(plainTextOf(TEXTS.analysisDataHint));
-  });
-
-  // #327: the cycle floor is the session's, and sessions run in real mode too
-  it('draws the cycle note in real mode on a pair below the cycle floor', () => {
-    const low = { ...PAIR_EURUSD, payout: 79 };
-    for (const response of [
-      SIGNAL_DECIDED,
-      SIGNAL_NO_SIGNAL,
-      dataRefusalOf(DATA_REFUSAL_REASONS[0]),
-    ]) {
-      expect(linesOf(response, low, TradeMode.Real)).toContain(
-        '🚫 Цикл на этой паре не запускается: выплата ниже 80%.',
-      );
-    }
-    expect(linesOf(SIGNAL_DECIDED, low, TradeMode.Real).at(-1)).toBe(
-      plainTextOf(TEXTS.analysisDisclaimerReal),
-    );
   });
 
   it('formats the break-even share to a tenth, a dash where the payout gives none', () => {

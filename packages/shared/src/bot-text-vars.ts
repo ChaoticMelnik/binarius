@@ -7,7 +7,6 @@ import {
   formatUsd,
 } from './bot-text-format';
 import type { BotTextVariable } from './bot-text-template';
-import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import type { DecimalString } from './money';
 import { TradeMode } from './trading';
 import { NotificationLevel } from './users';
@@ -166,7 +165,6 @@ export const BOT_TEXT_VARS = {
   page: shown('Страница списка', '2 из 4'),
   payout: shown('Выплата актива, %', '92'),
   breakEven: shown('Безубыточность при выплате актива: доля верных прогнозов, %', '55.6'),
-  payoutFloor: shown('Порог выплаты для цикла сделок, %', String(MIN_CYCLE_PAYOUT_PCT)),
   noSignalCandles: shown('Лимит ожидания сигнала сессией: число свечей со словом', '20 свечей'),
   candleSec: shown('Длина свечи сигнала сессии, с', '15'),
   label: shown('Длительность сделки, подпись', '⏱ 15 с'),

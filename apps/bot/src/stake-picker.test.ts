@@ -62,7 +62,6 @@ import {
   type ApiCall,
 } from './testing';
 import {
-  formatBreakEven,
   LABELS,
   setBotTextSource,
   settingsText,
@@ -528,47 +527,37 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(warnings(logger)).toEqual(['pairs not read for the launch screen']);
   });
 
-  // #379: the screen a save returns to offers no cycle the session start would refuse
-  // #327: in real mode too, the floor being the session's
-  it('returns a user in real mode to the cycle floor refusal on a pair below it', async () => {
+  // #631: a save returns to the cycle at any payout (#379 returned the floor's refusal below 80 %)
+  // #327: in real mode the real launch screen, its symbol from the catalog
+  it('returns a user in real mode to the real launch screen on a pair paying 79 percent', async () => {
     const { press, calls } = setup({
       readPairs: () => Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
     await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
-    const text = plainTextOf(lastPayload(calls)?.text as string);
-    expect(text).toContain('✅ Демо-ставка сохранена: $5.00');
-    expect(text).toContain('цикл на этой паре не запускается');
-    expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.backToListButton, 'demo:sig:15')],
-      [button(LABELS.demoManualButton, 'demo:g')],
-    ]);
+    const screen = launchScreen({
+      assetId: PAIR_EURUSD.id,
+      durationSec: 15,
+      firstName: USER.first_name,
+      symbol: pairLabel(PAIR_EURUSD),
+      amount: d('1'),
+      saved: { amount: d('5'), mode: TradeMode.Demo },
+      mode: TradeMode.Real,
+    });
+    expect(lastPayload(calls)?.text).toBe(screen.text.value);
+    expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
   });
 
-  it.each([15, 5] as const)(
-    'returns the cycle floor refusal under the saved line for a pair paying 79 percent at %i s',
-    async (durationSec) => {
+  it.each([
+    [79, 15],
+    [79, 5],
+    [80, 15],
+    [80, 5],
+  ] as const)(
+    'returns the amounts for a pair paying %i percent at %i s',
+    async (payout, durationSec) => {
       const { press, calls } = setup({
-        readPairs: () =>
-          Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
-      });
-      await press(stakePresetCallbackData('5', TradeMode.Demo, { ...PAIR, durationSec }));
-      expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
-        `✅ Демо-ставка сохранена: $5.00\n\n🚫 ${pairLabel(PAIR_EURUSD)}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
-      );
-      expect(rowsOf(lastPayload(calls))).toEqual([
-        [button(LABELS.backToListButton, `demo:sig:${String(durationSec)}`)],
-        [button(LABELS.demoManualButton, 'demo:g')],
-      ]);
-    },
-  );
-
-  it.each([15, 5] as const)(
-    'returns the amounts for a pair paying exactly 80 percent at %i s',
-    async (durationSec) => {
-      const { press, calls } = setup({
-        readPairs: () =>
-          Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 80 }] })),
+        readPairs: () => Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout }] })),
         readTradingAccess: savedAccess(d('5')),
       });
       await press(stakePresetCallbackData('5', TradeMode.Demo, { ...PAIR, durationSec }));

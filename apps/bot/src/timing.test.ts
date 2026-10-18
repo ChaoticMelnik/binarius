@@ -1187,7 +1187,7 @@ const DEMO_ANALYSIS = {
 // a refused edit sends nothing more
 const moreUpdate = (chatType?: string) =>
   callbackUpdate(
-    analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true, TradeMode.Demo),
+    analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, TradeMode.Demo),
     chatType,
   );
 const MARKUP_TRANSPORT = new HttpError(

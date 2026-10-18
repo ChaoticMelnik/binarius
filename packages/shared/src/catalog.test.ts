@@ -142,7 +142,7 @@ describe('pair predicates', () => {
   });
 });
 
-describe('the cycle payout floor (#379)', () => {
+describe('the payout order key (#379, #631)', () => {
   it.each([
     [79, false],
     [79.99, false],

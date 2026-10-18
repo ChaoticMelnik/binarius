@@ -4,11 +4,9 @@ import {
   formatPrice,
   MACD_REQUIRED_CANDLES,
   MacdCross,
-  MIN_CYCLE_PAYOUT_PCT,
   MomentumDirection,
   NoSignalReason,
   pairLabel,
-  pairPayoutAccepted,
   SignalFeedOutcome,
   SignalKind,
   telegramHtml,
@@ -184,13 +182,6 @@ export function analysisScreen({
   chooseAmount,
 }: AnalysisScreenInput): AnalysisScreen {
   const real = mode === TradeMode.Real;
-  // Every `decided` answer of a pair below the cycle floor gets no session row (demo.ts, #379), in
-  // either mode (#327): the note under the block that would precede it says why
-  const withCycleNote = (block: TelegramHtml): TelegramHtml =>
-    pairPayoutAccepted(pair)
-      ? block
-      : telegramHtml`${block}
-${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
   const header = TEXTS.analysisHeader({ subject: analysisSubject(pair, durationSec) });
   if (response.outcome === SignalFeedOutcome.FetchFailed) {
     const body =
@@ -221,7 +212,7 @@ ${TEXTS.analysisChooseAmount}`
 ${textOf(CARD_TITLES[action])}
 
 <pre>${block}</pre>
-${withCycleNote(payoutText(pair))}
+${payoutText(pair)}
 
 ${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}${choose}`,
       stake: action,
@@ -235,7 +226,7 @@ ${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}${choose}`,
       text: telegramHtml`${header}
 ${headline}
 
-${withCycleNote(TEXTS.analysisDataHint)}`,
+${TEXTS.analysisDataHint}`,
       stake: null,
       session: false,
       photo: null,
@@ -248,7 +239,7 @@ ${headline}
 
 ${featureLines(decision.features, params, pair, volatility)}
 
-${withCycleNote(TEXTS.analysisNoSignalHint)}`,
+${TEXTS.analysisNoSignalHint}`,
     stake: null,
     session: false,
     photo: null,

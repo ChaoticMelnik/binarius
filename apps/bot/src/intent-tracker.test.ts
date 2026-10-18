@@ -94,7 +94,6 @@ function setup({
     telegramUserId: String(USER.id),
     label: LABEL,
     language: BotLanguage.Ru,
-    payoutAccepted: true,
     view: intentView(),
     edit,
     ...patch,
@@ -184,71 +183,28 @@ describe('the intent tracker', () => {
   // #360: the line and the session row follow the status, never the moment
   it('offers the session on a stop status of a duration the demo still takes, and only then', () => {
     for (const status of TRACKER_STOP_STATUSES) {
-      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, true)).toBe(5);
-      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 15 }, true)).toBe(15);
+      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 })).toBe(5);
+      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 15 })).toBe(15);
       // a trade from before #313
-      expect(
-        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 60 }, true),
-      ).toBeUndefined();
+      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 60 })).toBeUndefined();
     }
     for (const status of Object.values(TradeIntentStatus).filter(
       (status) => !TRACKER_STOP_STATUSES.has(status),
     )) {
-      expect(
-        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, true),
-      ).toBeUndefined();
+      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 })).toBeUndefined();
     }
   });
 
   // #327: a real trade offers a real session, on the same stop statuses as a demo one
   it('offers a session under a real trade as under a demo one', () => {
     for (const status of Object.values(TradeIntentStatus)) {
-      expect(sessionOfferOf({ mode: TradeMode.Real, status, durationSec: 5 }, true)).toBe(
-        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, true),
+      expect(sessionOfferOf({ mode: TradeMode.Real, status, durationSec: 5 })).toBe(
+        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }),
       );
     }
     expect(
-      sessionOfferOf(
-        { mode: TradeMode.Real, status: TradeIntentStatus.Settled, durationSec: 5 },
-        true,
-      ),
+      sessionOfferOf({ mode: TradeMode.Real, status: TradeIntentStatus.Settled, durationSec: 5 }),
     ).toBe(5);
-  });
-
-  // #379: a pair paying below the cycle floor gets no offer on any stop status
-  it('offers no session on a pair below the cycle floor', () => {
-    for (const status of TRACKER_STOP_STATUSES) {
-      expect(
-        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, false),
-      ).toBeUndefined();
-      expect(
-        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 15 }, false),
-      ).toBeUndefined();
-    }
-  });
-
-  it('edits a stop status without the offer when the pair paid below the floor at the press', async () => {
-    const { tracker, edits, request } = setup({ script: [submitting, accepted] });
-    tracker.track(request({ payoutAccepted: false }));
-    await vi.advanceTimersByTimeAsync(FIRST + POLL);
-    expect(edits.map((text) => text.value)).toEqual([shown(submitting), shown(accepted)]);
-    expect(edits[1]?.value).not.toContain(OFFER);
-    expect(tracker.size()).toBe(0);
-  });
-
-  it('ends a stop status at the deadline without the offer below the floor', async () => {
-    const rejected = intentView({
-      status: TradeIntentStatus.Rejected,
-      lastError: TradeIntentFailureReason.ExecutorNotConfigured,
-    });
-    const { tracker, edit, request } = setup({ script: [rejected] });
-    edit.mockImplementation(() => Promise.reject(FORBIDDEN()));
-    tracker.track(request({ payoutAccepted: false }));
-    await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
-    expect(tracker.size()).toBe(0);
-    const texts = edit.mock.calls.map(([text]) => text.value);
-    expect(new Set(texts)).toEqual(new Set([shown(rejected)]));
-    expect(texts.at(-1)).not.toContain(OFFER);
   });
 
   it('edits nothing while the status stays the same, and keeps polling a live one', async () => {

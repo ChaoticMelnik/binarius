@@ -5,7 +5,6 @@ import {
   formatStake,
   normalizeDecimal,
   pairLabel,
-  pairPayoutAccepted,
   parseStakeInput,
   StakeErrorCode,
   StakeRefusal,
@@ -13,7 +12,6 @@ import {
   STAKE_AMOUNT_PATTERN,
   tradeAmountSchema,
   TradeMode,
-  telegramHtml,
   type DecimalString,
   type TelegramHtml,
   type TradingAccessResponse,
@@ -35,7 +33,6 @@ import {
   effectiveStake,
   launchScreen,
   MODE_TOKENS,
-  payoutTooLowScreen,
   removeLegacyKeyboard,
   STAKE_PICKER_PREFIX,
 } from './demo';
@@ -50,7 +47,7 @@ import { settle, type Settled } from './settled';
 import type { Logger } from './logging';
 import { stakeAccess } from './stake-access';
 import { editMessageTextHtml, replyHtml } from './send';
-import { LABELS, stakePickerText, stakeSavedLine, TEXTS, userContextOf } from './texts';
+import { LABELS, stakePickerText, TEXTS, userContextOf } from './texts';
 
 // The stake picker of one mode (#297 demo, #326 real; docs/bot-demo-trade.md -> The stake):
 // presets from the broker's minimum, a typed amount, a reset to the minimum, and the way back to
@@ -421,10 +418,9 @@ export function createStakePicker<C extends Context>({
     return { text: refusalText(mode, result.refused), keyboard: retryKeyboard(mode, origin) };
   }
 
-  // Any catalog will do, a stale one included: the symbol, and the payout, so a pair below the
-  // cycle floor gets the launch press's refusal under the saved line rather than a cycle button
-  // the session start would refuse (#379). Without a catalog, or without the pair in it, the
-  // screen drops its symbol line and the launch stays, since the session start checks the pair.
+  // Any catalog will do, a stale one included: only the symbol is read, at any payout (#631).
+  // Without a catalog, or without the pair in it, the screen drops its symbol line and the launch
+  // stays, since the session start checks the pair.
   // The access read gives the user's mode (#121): a save from a launch screen drawn before a switch
   // draws the screen of the mode now (#327) — in real the launch screen, in demo the amount screen
   // (#476), whose amounts come from that read; a failed read draws the amount screen's refusal.
@@ -454,16 +450,6 @@ export function createStakePicker<C extends Context>({
     const pair = catalog.ok
       ? catalog.value.pairs.find((listed) => listed.id === assetId)
       : undefined;
-    // the cycle floor holds in either mode (#379, #327)
-    if (pair !== undefined && !pairPayoutAccepted(pair)) {
-      const refusal = payoutTooLowScreen(pair, durationSec);
-      return {
-        text: telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
-
-${refusal.text}`,
-        keyboard: refusal.keyboard,
-      };
-    }
     if (real !== undefined) {
       return launchScreen({
         assetId,

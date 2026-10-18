@@ -103,8 +103,7 @@ const d = (value: string) => value as DecimalString;
 const lengthOf = (text: TelegramHtml) => plainTextOf(text).length;
 const NAME = x(W.firstName);
 
-// a payout of six characters whose break-even share is five («100.0»), below the cycle floor so the
-// analysis prints its note too (#379)
+// a payout of six characters whose break-even share is five («100.0»)
 const pair: PairView = { ...PAIR_EURUSD, symbol: x(W.symbol), payout: 0.0001 };
 const GROUPS: PairTypeGroup[] = [
   'currency',

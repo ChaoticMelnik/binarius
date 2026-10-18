@@ -81,7 +81,8 @@ const DEMO_WORDING = /деньги не нужны|это демо|демо-сд
 
 const NOW = 1_790_000_000_000;
 const REAL = accessView({ tradingMode: TradeMode.Real });
-const BELOW_FLOOR = PAIR_OTHER_TYPE;
+// a pair paying 70 %: no payout refuses it since #631
+const LOW_PAYOUT = PAIR_OTHER_TYPE;
 const ANALYSIS = { kind: 'analysis', assetId: PAIR_EURUSD.id, durationSec: 15 } as const;
 
 interface Scene {
@@ -113,7 +114,7 @@ const SCENES: Scene[] = [
   }),
   press('the signals, empty', demoSignalsCallbackData(15), { signals: signalsResponse(NOW) }),
   press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
-  press('the launch below the cycle floor', demoLaunchCallbackData(BELOW_FLOOR.id, 15)),
+  press('the launch at a 70 % payout', demoLaunchCallbackData(LOW_PAYOUT.id, 15)),
   // #509: the launch on a pair without a signal now, and a signal that could not be read
   press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 15), {
     evaluateSignal: SIGNAL_NO_SIGNAL,
@@ -135,10 +136,10 @@ const SCENES: Scene[] = [
     }),
   ),
   press(
-    'a save from the launch below the cycle floor',
+    'a save from the launch at a 70 % payout',
     stakePresetCallbackData('5', TradeMode.Demo, {
       kind: 'pair',
-      assetId: BELOW_FLOOR.id,
+      assetId: LOW_PAYOUT.id,
       durationSec: 15,
     }),
   ),
@@ -156,11 +157,8 @@ const SCENES: Scene[] = [
   press('the analysis, fetch_failed', demoAnalysisCallbackData(PAIR_EURUSD.id, 15), {
     evaluateSignal: SIGNAL_FETCH_FAILED,
   }),
-  press('the analysis below the cycle floor', demoAnalysisCallbackData(BELOW_FLOOR.id, 15)),
-  press(
-    '«➕ Ещё»',
-    analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true, TradeMode.Real),
-  ),
+  press('the analysis at a 70 % payout', demoAnalysisCallbackData(LOW_PAYOUT.id, 15)),
+  press('«➕ Ещё»', analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, TradeMode.Real)),
   press(
     'the REAL stake press',
     stakeCallbackData(
