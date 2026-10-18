@@ -737,7 +737,12 @@ describe('migration 0050 (the backfill)', () => {
     const ended = await seedSession();
     await settled(ended, '0');
     await stop(ended.session);
-    const ids = [running.session.id, ended.session.id];
+    // stopped before the deploy with a trade still on manual review (#534 m5)
+    const review = await seedSession();
+    await settled(review, '4.6');
+    const onReviewIntent = await onReview(review);
+    await stop(review.session, TradingSessionStopReason.ManualReview);
+    const ids = [running.session.id, ended.session.id, review.session.id];
     // the waiting slot claimed on the session's latest message: only the trade notices under test
     await tmp.db
       .update(tradingSessions)
@@ -763,5 +768,24 @@ describe('migration 0050 (the backfill)', () => {
       finalNoticeSentAt: expect.any(Date),
     });
     expect(await pendingOf(running.session)).toBeUndefined();
+    expect(await rowOf(review.session)).toMatchObject({
+      notifiedTrades: 1,
+      finalNoticeSentAt: expect.any(Date),
+    });
+
+    // settled by an operator after the deploy: the mark keeps the session out of the list and
+    // refuses the trade's claim, so neither its message nor a summary goes out
+    await tmp.db.transaction((tx) =>
+      settleIntent(tx, {
+        id: onReviewIntent.id,
+        from: TradeIntentStatus.ManualReview,
+        trade: closedTradeFor(openTradeFor(onReviewIntent, { openPrice: 7 }), {
+          profit: '-5' as DecimalString,
+          closePrice: 6,
+        }),
+      }),
+    );
+    expect(await pendingOf(review.session)).toBeUndefined();
+    expect(await claim(review.session, 1)).toBeUndefined();
   });
 });
