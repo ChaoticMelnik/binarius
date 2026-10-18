@@ -3558,4 +3558,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals (if any)
 1. Architect validation: every row of a check the plan adds is evaluated against every conjunct of a scratch copy of the planned predicate (accepted rows satisfy all, a refusal row fails exactly one) — **внедрено в #644: `.claude/skills/architect/SKILL.md` → Validation checklist**
 2. Tech-lead merge after a rebase: own 6-pre run at the new head with the "Known" field filled from the Backlog issue — **внедрено в #644: `.claude/skills/tech-lead/SKILL.md` → Mergeability right before the merge**
-3. Remaining findings — **вынесено в #643**
+3. Both merge executors hold the merge on any head other than the approved one, not only on `CONFLICTING` (Codex on #644, iterations 3-5) — **вынесено в #648**
+4. Remaining findings — **вынесено в #643**
