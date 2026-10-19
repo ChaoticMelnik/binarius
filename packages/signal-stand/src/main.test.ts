@@ -34,6 +34,11 @@ describe('the stand CLI', () => {
     [['run', '--intervals', 'constructor'], '--intervals: constructor is not a trade interval'],
     [['run', '--intervals', '15s,15s'], '--intervals: an interval is repeated'],
     [['fetch', '--variants', 'v2'], '--variants is not an option of fetch'],
+    [['h1', '--days', '3'], '--days is not an option of h1'],
+    [['h1', '--thresholds', '3'], '--thresholds: 3 is not in the grid 1, 2'],
+    [['h1', '--delays', '1,1'], '--delays: a value is repeated'],
+    [['h1', '--expiries', '10'], '--expiries: 10 is not in the grid 5, 15'],
+    [['run', '--thresholds', '2'], '--thresholds is not an option of run'],
   ])('refuses %j with exit 2 and the usage', async (argv, message) => {
     const { code, err } = await call(argv);
     expect(code).toBe(2);
@@ -80,6 +85,22 @@ describe('the stand CLI', () => {
     });
     expect(code).toBe(0);
     expect(out.at(-1)).toBe(`report: ${dir}/o/report.md`);
+  });
+
+  it('runs the H1 backtest end to end', async () => {
+    const dir = cacheWith(secondsPath(T0, 3_600));
+    const { code, out } = await call(
+      ['h1', '--assets', String(PAIR.id), '--out', `${dir}/o`, '--thresholds', '2'],
+      { STAND_DIR: dir },
+    );
+    expect(code).toBe(0);
+    expect(out.at(-1)).toBe(`report: ${dir}/o/report-h1.md`);
+  });
+
+  it('ends h1 on an empty STAND_DIR with exit 1 and its message', async () => {
+    const { code, err } = await call(['h1']);
+    expect(code).toBe(1);
+    expect(err).toBe('h1: asset 237831086 is not in pairs.json; fetch it');
   });
 
   it('runs only the variants and intervals asked for', async () => {

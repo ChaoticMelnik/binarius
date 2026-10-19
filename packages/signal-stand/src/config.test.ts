@@ -1,7 +1,10 @@
-import { BROKER_RATE_LIMIT_PER_MINUTE } from '@binarius/shared';
+import { BROKER_RATE_LIMIT_PER_MINUTE, H1_ENTRY_WINDOW_SEC, H1_EXPIRY_SEC } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import {
   FALLBACK_HEADLINE_DELAY_MS,
+  H1_ENTRY_DELAY_GRID_SEC,
+  H1_EXPIRY_GRID_SEC,
+  H1_THRESHOLD_GRID,
   OPEN_DELAY_GRID_MS,
   STAND_ASSET_IDS,
   STAND_CHAIN_HOLDS,
@@ -27,5 +30,11 @@ describe('stand config', () => {
     expect(new Set(STAND_ASSET_IDS).size).toBe(28);
     expect(STAND_ASSET_IDS).toHaveLength(28);
     expect(V2_MERGED_AT).toBeLessThan(V2_FIRST_CLEAN_AT);
+  });
+
+  it('K5 the H1 grids are the trade plan of shared', () => {
+    expect(H1_THRESHOLD_GRID.length).toBeGreaterThan(0);
+    expect(H1_ENTRY_DELAY_GRID_SEC).toEqual([H1_ENTRY_WINDOW_SEC.from, H1_ENTRY_WINDOW_SEC.to]);
+    expect(H1_EXPIRY_GRID_SEC).toContain(H1_EXPIRY_SEC);
   });
 });

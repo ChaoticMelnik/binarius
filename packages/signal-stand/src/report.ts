@@ -126,7 +126,10 @@ const pct = (value: number | undefined) => (value === undefined ? '-' : value.to
 const rate2 = (value: number | undefined) => (value === undefined ? '-' : value.toFixed(2));
 const HOUR_MS = 3_600_000;
 
-function table(head: readonly string[], rows: readonly (readonly (string | number)[])[]): string {
+export function table(
+  head: readonly string[],
+  rows: readonly (readonly (string | number)[])[],
+): string {
   const line = (cells: readonly (string | number)[]) => `| ${cells.join(' | ')} |`;
   return [line(head), line(head.map(() => '---')), ...rows.map(line)].join('\n');
 }
