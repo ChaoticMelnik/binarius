@@ -381,7 +381,12 @@ unchanged. The line carries everything the decision was computed from, so
 `replaySignalJournalEntry(JSON.parse(line).signal)` computes the same decision again.
 `feed.test.ts` does this on a line read back from a `logOptions` logger (F2, F10 with `digits`).
 `journal.test.ts` does it for a signal, each of the four data refusals and both volatility
-refusals, one of them from a decider with non-default parameters. A non-finite price (impossible on the live chart, which is
+refusals, one of them from a decider with non-default parameters. The entry's wire shape is
+`signalJournalEntrySchema` in `packages/shared/src/signal.ts` (with `storedSignalJournalEntrySchema`
+for the v1 and pre-#405 v2 lines); `journal.test.ts` J8 pins it to this module's types both ways.
+The same entry is stored for every decision a session acted on (#666,
+[trade-log.md](trade-log.md)): the log line is unchanged, and the trade log keeps it past a
+redeploy. A non-finite price (impossible on the live chart, which is
 JSON) is `null` on the line, and replays as `non_finite` at the same index.
 
 #### Replay per version (#379)
@@ -483,7 +488,12 @@ signal records none — and answers as without the field; `fetch_failed` and the
 record nothing. The record is best-effort: its failure is a `warn` `last analysis not recorded`
 (name and code) and the decision is answered; an unknown `telegramUserId` writes nothing and is
 no error (`signal-routes.test.ts` R10–R17). The cycle's doors and the session start read the feed
-without it. Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
+without it. `record: true` is sent only by a trading session's worker (#666,
+[trade-log.md](trade-log.md#the-record-of-post-tradingsignal)): a `decided` answer then carries
+`record: { entry, lastTick }` — the whole journal entry the decision was computed from and the
+pair's newest data-socket tick when the route answered (`null` without `BROKER_WS_URL` or before
+the pair's first tick); without the flag the body is exactly as before (`signal-routes.test.ts`
+R19–R21). Any other value of `record` is a 400. Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
 (R3). After the shape, the route looks the pair up in the
 backend's pairs cache (the one `GET /trading/pairs` serves) for its `digits` (#379), before any
 chart GET; neither refusal below is journalled, no decision was made. Whether the pair is open or
@@ -491,7 +501,7 @@ accepts a duration stays the caller's check: an analysis of a closed pair is all
 
 | Evaluation | Status | Body (`tradingSignalResponseSchema`) |
 |---|---|---|
-| `decided` | 200 | `{ outcome: 'decided', params, decision, indicators? }`: the decider's parameters, so the screen names `EMA9`/`EMA21` from them, the decision, and the [display indicators](#display-indicators-482), absent when the unbroken tail of the response did not pass the candle checks (`signal-routes.test.ts` R3b, R6) |
+| `decided` | 200 | `{ outcome: 'decided', params, decision, indicators?, record? }` (`record` only for `record: true`, #666): the decider's parameters, so the screen names `EMA9`/`EMA21` from them, the decision, and the [display indicators](#display-indicators-482), absent when the unbroken tail of the response did not pass the candle checks (`signal-routes.test.ts` R3b, R6) |
 | `fetch_failed` | 200 | `{ outcome: 'fetch_failed', code, retryAfterSec? }`; `status` and the request facts stay in the feed's `warn` line |
 | a body that fails the schema | 400 | `{ error: 'validation', issues }` |
 | no catalog snapshot, or not `fresh` | 503 | `{ error: 'catalog_unavailable' }` (`TradingSignalErrorCode.CatalogUnavailable`, the pairs route's string); the feed is not called (`signal-routes.test.ts` R7) |
@@ -501,7 +511,8 @@ accepts a duration stays the caller's check: an analysis of a closed pair is all
 
 A broker failure is a 200 with an outcome, not an HTTP error: the bot's client keeps only `error`
 from a non-2xx body, and `retryAfterSec` has to reach the user. The body is built from named
-fields; the journal series never leaves the backend's log.
+fields; the journal series leaves the backend only in a session's `record` (#666), which the
+worker stores in `signal_decisions`.
 
 | Outcome | What the caller (#126, [bot-demo.md](bot-demo.md#the-analysis)) does |
 |---|---|

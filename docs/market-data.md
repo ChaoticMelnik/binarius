@@ -18,6 +18,7 @@ pnpm test --project unit apps/backend/src/market-data   # mock broker and fake c
 | `createMarketDataManager` | `apps/backend/src/market-data/manager.ts` | the two socket clients on service accounts, failover, token refusals, hold-back, subscriptions, the log line |
 | `createCandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the adapter over the ring and the request set that implements the feed's port `SignalCandleSource` (`packages/signal/src/source.ts`, #405): a window only while the manager's `streaming()` is true and only for `SIGNAL_SCAN_INTERVALS`, `request` only for those; and the bounded request set the backfill drains (`pending()`) |
 | `createCandleBackfill` | `apps/backend/src/market-data/backfill.ts` | the REST backfill: due elements, the queue, one native GET per (pair, interval), `fill` (#590) |
+| `createTickStore` | `apps/backend/src/market-data/ticks.ts` | the newest tick per pair with its receipt time (#666): the manager pushes the active's ticks next to the ring (the ring's `tickProblem` rule, an older tick does not replace a newer one); `POST /trading/signal` answers it in a session's decision record ([trade-log.md](trade-log.md#the-last-tick)) |
 | `BrokerSocketClient` | `packages/broker-socket` | the worker's socket client, unchanged ([broker-socket.md](broker-socket.md)) |
 
 The source is created only when `BROKER_WS_URL` is set. It reads the same variable as the worker's
@@ -303,8 +304,10 @@ The links:
   - M7-M7e, M10b, M15, M16, M19-M25 and M27 on fake clients, because the mock has one token per user
     and cannot authorise an exchanged one, its clients never throw, and its states cannot be held;
   - M26 on the mock broker with the real backfill and REST client: a failover's hole refilled;
+  - M28 on fake clients: the tick store keeps the active's ticks only (#666);
   - M11 reads the log itself. It reads the lines of every case before it, so alone or shuffled it
     fails falsely; `vitest.config.ts` pins the order.
+- `ticks.test.ts` T1-T4: the tick store (#666).
 - The timing pins are in `timing.test.ts`.
 
 ## Accepted risks
@@ -383,3 +386,5 @@ The links:
   split of #382 shipped in #405 ([signal.md → The budget](signal.md#the-budget)).
 - No trade command is sent on a data socket: the manager never calls `openTrade`, and the backfill
   calls only `getChart`.
+- The ticks around a trade (a window of the tick store, `decision_ticks`) are #668; #666 keeps the
+  newest tick per pair only.
