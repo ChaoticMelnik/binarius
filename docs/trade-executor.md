@@ -34,8 +34,8 @@ A session trade's chain is stored for analysis without the logs ([trade-log.md](
 `signal_decisions.decided_at_ms` (the decider's `nowMs`, backend clock) → `taken_at_ms` (the
 orchestrator's clock when `evaluate` returned) → `trade_intents.created_at` (database clock) →
 `trade_intents.submitted_at` (the processor's `submitting` write, database clock) →
-`broker_trades.open_timestamp_ms` (the broker's), stored raw; the clocks are three processes' and
-the broker's, not aligned.
+`broker_trades.open_timestamp_ms` (the broker's). `trade-log export` prints them raw, in ms; the
+clocks are three processes' and the broker's, not aligned.
 
 ## The two-cases rule
 

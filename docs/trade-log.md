@@ -5,18 +5,20 @@ that acted, with its outcome: the journal entry the decision was computed from, 
 chain up to the broker, the pair's payout and last tick. A session's intent names the row it was
 created from. A redeploy loses nothing of it: the log's `signal decision` lines stay as they were
 ([signal.md → The journal line](signal.md#the-journal-line)), and the trade log keeps the same
-entry in the database. The export that reads it back, `trade-log export` (JSON lines and the
-stand's trades file), is the second PR of #666 ([The export](#the-export)).
+entry in the database. `trade-log export` reads it back as JSON lines or as the stand's trades
+file.
 
 This is part 1. Part 2 (#668) adds the ticks around each trade, their buffer and the retention
-sweep.
+sweep; the export's `ticks` is `null` until then.
 
 | Piece | Where |
 |---|---|
 | The table | `packages/db/src/schema/signal-decisions.ts`, migrations `0068_signal_decisions`, `0069_decision_session_check` |
 | The writer | `recordSignalDecision(exec, input)`, `signalDecisionInput(record, facts)` in `packages/db/src/signal-decision-ops.ts` |
+| The reads | `readTradeLogPage`, `readSessionTradeSteps`, `journalEntryOf`, `readTradeLogEnd` (same file) |
 | The constants and the line shapes | `packages/shared/src/trade-log.ts`; the entry and the record in `packages/shared/src/signal.ts` |
 | The last tick | `createTickStore` in `apps/backend/src/market-data/ticks.ts` |
+| The export | `apps/backend/src/cli/trade-log.ts` |
 
 ## The table
 
@@ -93,7 +95,8 @@ one (O5). E13: the first process's transaction recorded its own `intent` row (or
 old backend), this attempt records `replayed` with the same `step`: the lost ending is visible.
 
 A stop after the no-signal limit (E3, E5) records the wait's outcome; the stop itself is a session
-fact with one source, `trading_sessions.stop_reason`. When it is `no_signal_timeout`, the stopping decision is the session's last row by
+fact with one source, `trading_sessions.stop_reason`, which the export's `session.stopReason`
+carries. When it is `no_signal_timeout`, the stopping decision is the session's last row by
 `(recorded_at, id)` — unless that row's write failed (a `warn`), or a second worker's attempt in a
 deploy overlap landed after the stop.
 
@@ -151,10 +154,9 @@ fails either is dropped (`recordProblem` `invalid` or `mismatch`) and the answer
 rather than a wrong row (B7). A `record` beside a `fetch_failed` answer is ignored.
 
 The entry's wire shape is `signalJournalEntrySchema` (shared), pinned to `packages/signal`'s
-`SignalJournalEntry` both ways (`journal.test.ts` J8). The row stores the entry's fields as the
-backend answered them, so the entry is rebuilt from the row alone (`intervalMs` from the interval,
-`nowMs` = `decided_at_ms`; `trading-session-ops.db.test.ts` D7, `orchestrator.db.test.ts` O1
-compare the stored series, source and tick with the answered record).
+`SignalJournalEntry` both ways (`journal.test.ts` J8). `journalEntryOf(row)` rebuilds the entry
+from the row (`intervalMs` from the interval, `nowMs` = `decided_at_ms`), so the export's `signal`
+replays to the recorded decision (`trade-log.db.test.ts` X3).
 
 ## The last tick
 
@@ -191,26 +193,79 @@ through the same guard. Its write stays autocommit and best-effort (R39).
 
 ## The export
 
-`trade-log export` and the reads it is built on (a page of decisions by `(recorded_at, id)`, the
-cycle and step of each trade, the entry rebuilt from a row) come with the second PR of #666.
+```bash
+pnpm --silent --filter @binarius/backend trade-log export --from <ISO 8601> [--to <ISO 8601>] [--format jsonl|trades-json] [--session <uuid>]
+```
 
-Deploy order on the pilot: backend, then worker (the migration applies at the backend's start; a
-new worker against an old backend trades on without rows, a `warn` per attempt).
+`DATABASE_URL` as the backend's. `--from` and `--to` are instants with a zone
+(`2026-10-20T00:00:00Z`), compared with `recorded_at`, half-open `[from, to)`; without `--to` the
+end is the database's clock at the export's start, rounded up to the next millisecond (the clock
+`recorded_at` is written by: a decision recorded just before the export is in it). `--session`
+keeps one session's rows. Rows are read in pages of 200 by `(recorded_at, id)`, the cursor kept as
+the database's text so microseconds survive. The data goes to stdout, the count to stderr
+(`строк: N`); `--silent` keeps pnpm's own banner out of stdout.
+
+| Exit | When |
+|---|---|
+| 0 | done, no rows included (an export is not a gate) |
+| 1 | `DATABASE_URL` missing or invalid, or a database failure (name and code; a JSONL export cut there has printed whole lines only) |
+| 2 | not understood; the usage on stderr |
+
+**`jsonl`** (the default): one line per decision, `tradeLogLineSchema`:
+
+| Key | Content |
+|---|---|
+| `decision` | `id`, `context`, `outcome`, `detail`, `version`, `assetId`, `interval`, `step`, `kind`, `action`, `decidedAtMs`, `takenAtMs`, `recordedAtMs`, `payout`, `lastTick`, `result` |
+| `signal` | the journal entry (`journalEntryOf`); the stand's `parseJournalLine` reads it from this key, as from a log line |
+| `session` | `id`, `userId`, `brokerAccountId`, `mode`, `strategy`, `baseStake`, `durationSec` (from the row's settings; NULL when they do not parse), `stopReason`; `null` for a start without a session |
+| `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout`, `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent |
+| `ticks` | `null` (#668) |
+
+The chain of a trade is `decision.decidedAtMs → decision.takenAtMs → trade.createdAtMs →
+trade.submittedAtMs → trade.broker.openTimestampMs`, printed raw in ms: the backend's, the worker's,
+the database's twice and the broker's clocks ([trade-executor.md](trade-executor.md#timing-for-analysis-666)).
+
+**`trades-json`**: one JSON array of the closed session trades among those decisions, in the
+stand's `calibrate --trades` shape (`tradeLogTradeJsonSchema`): `trading_session_id`, `asset_id`,
+`action`, `duration_sec`, `created_at_ms`, `open_timestamp_ms`, `open_price`,
+`close_timestamp_ms`, `close_price`, `profit` (the #381 export's ten), plus `submitted_at_ms`,
+`payout`, `intent_id`, `decision_id`, `mode`, `amount`. A decision without an intent, an intent
+without a broker trade (a `rejected` one) and an open broker trade are left out; they are in the
+JSONL (`trade-log.db.test.ts` X4).
+
+**Identifiers.** Internal uuids only. The read names its columns (Rule 9): no
+`users.telegram_user_id`, no `broker_accounts.broker_user_id`, no token column, no
+`broker_trades.raw` (`signal-decision-ops.db.test.ts` SD11, `trade-log.db.test.ts` X5 with
+sentinels).
+
+### On the pilot
+
+Deploy order: backend, then worker (the migration applies at the backend's start; a new worker
+against an old backend trades on without rows, a `warn` per attempt). After a demo session:
+
+```bash
+docker compose exec -T backend pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z > trade-log.jsonl
+docker compose exec -T backend pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z --format trades-json > trades.json
+# on the Mac, with the stand's cache (docs/signal-stand.md → Calibration)
+STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand calibrate --journal trade-log.jsonl --trades trades.json --session-candles ~/binarius-stand/candles
+```
 
 ## Tests
 
 - `packages/shared`: `signal.test.ts` S-rec1–S-rec4 (the request flag, the record, the stored
-  union, the record narrowed to its columns), `trade-log.test.ts` (the patterns; every refusal code fits `detail`),
-  `contract-coverage.test.ts` (the answer's keys).
+  union, the record narrowed to its columns), `trade-log.test.ts` (the patterns; every refusal
+  code fits `detail`), `contract-coverage.test.ts` (the answer's keys).
 - `packages/signal`: `journal.test.ts` J8 (the shared schema is the module's type, both ways).
 - `packages/db`: `schema.db.test.ts` → signal_decisions (every CHECK, both FKs, the unique keys,
-  `trade_intents_decision_session_check`); `signal-decision-ops.db.test.ts` SD1–SD3, SD14 (the
+  `trade_intents_decision_session_check`); `signal-decision-ops.db.test.ts` SD1–SD14 (SD14: the
   payout guard); `trading-session-ops.db.test.ts` D7–D11 (the intent's transaction, the
   savepoint).
 - `apps/backend`: `ticks.test.ts` T1–T4, `manager.test.ts` M28, `signal-routes.test.ts` R19–R21,
-  `session-routes.db.test.ts` R36–R39, R42 and R43.
+  `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X8.
 - `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
   `orchestrator.db.test.ts` O1–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
+- `packages/signal-stand`: `journal-line.test.ts` JL and `calibrate.test.ts` unchanged; C12 (an
+  export reads as the log did).
 
 ## Accepted risks
 
@@ -231,18 +286,21 @@ new worker against an old backend trades on without rows, a `warn` per attempt).
    window), one decision per candle while a session waits: about 30 MB a day at ten session-hours
    on 5 s candles. No sweep in part 1.
 6. **The clocks are three processes' and the broker's**; on the pilot the three share one host.
-   Stored raw, never aligned.
+   Printed raw, never aligned.
 7. **`version` and `detail` are pattern-checked, not listed**; a wrong version shows at replay
    (`RangeError`), not at insert.
 8. **`recorded_at` of an `intent` row is its transaction's start**, at or before the intent's
    `created_at`; the export orders by it.
+9. **Export memory:** a page of 200 rows; `trades-json` holds its whole array (about 300 bytes a
+   trade).
+10. **No audit row for an export**: an operator's CLI on the server, like `kill-switch status`.
 
 ## Boundaries
 
 - #668: the ticks around each trade (`decision_ticks`, from `decision − 60 s` to `close + 5 s`), the
-  tick store's window, the retention sweep (rows without an intent after 30 days), the ticks of
-  the export.
+  tick store's window, the retention sweep (rows without an intent after 30 days), the export's
+  `ticks`.
 - #667: the shadow detector's rows (`context: shadow`, `version: h1`, `result`); its new creators of
   session intents must pass `decision` to `createSessionIntent` (the type requires it).
 - One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports and dashboards:
-  none, only the export (the second PR of #666).
+  none, only the export.

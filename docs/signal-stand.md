@@ -298,30 +298,30 @@ pairs left out of pooling.
 
 ## Calibration
 
-The owner exports two files from the pilot's compose directory. The plan's commands are below;
-the 2026-10-15 export used them through `~/binarius-stand/export_trades.sh` and a journal tailer.
+The owner exports two files from the pilot's compose directory with the trade log's export
+(#666, [trade-log.md](trade-log.md#the-export)): the decisions as journal lines and the closed
+session trades. `--from` is the start of the period; `--silent` keeps pnpm's own banner out of the
+files.
 
 ```bash
-docker compose logs --no-log-prefix --since 2026-10-06T00:00:00Z backend \
-  | grep -F '"msg":"signal decision"' > journal-381.jsonl
-docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -q' > trades-381.json <<'SQL'
-select coalesce(json_agg(t order by t.created_at_ms), '[]'::json) from (
-  select ti.trading_session_id, bt.asset_id, bt.action, ti.duration_sec,
-         (extract(epoch from ti.created_at) * 1000)::bigint as created_at_ms,
-         (extract(epoch from ti.submitted_at) * 1000)::bigint as submitted_at_ms,
-         bt.open_timestamp_ms, bt.open_price, bt.close_timestamp_ms, bt.close_price,
-         bt.profit::text as profit, bt.payout
-  from broker_trades bt
-  join trade_intents ti on ti.id = bt.intent_id
-  where ti.trading_session_id is not null
-) t;
-SQL
+docker compose exec -T backend pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z > trade-log.jsonl
+docker compose exec -T backend pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z --format trades-json > trades.json
+STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand calibrate --journal trade-log.jsonl --trades trades.json --session-candles ~/binarius-stand/candles
 ```
 
-**Journal lines.** A line is a pino line whose `signal` key holds a journal entry. A bare entry is
-accepted too. The entry is validated against the fields of `SignalJournalEntry`/`…V1`, with the
-decision checked by `signalDecisionSchema`/`signalDecisionV1Schema`. A line failing that is
-`malformed_line`, and a `version` that is neither v1 nor v2 is `unsupported_version`.
+The trade log holds decisions from its deploy on. The #381 files (`journal-381.jsonl` from
+`docker compose logs … | grep -F '"msg":"signal decision"'`, `trades-381.json` from the psql query
+of `~/binarius-stand/export_trades.sh`) read the same way: a log line and an export line both carry
+the entry under `signal`, and the trades of both files pass `tradeLogTradeJsonSchema`
+(`calibrate.test.ts` C1 the log, C12 the export).
+
+**Journal lines.** A line is a pino line or a `trade-log export` line whose `signal` key holds a
+journal entry. A bare entry is accepted too. The entry is validated by
+`storedSignalJournalEntrySchema` (`packages/shared/src/signal.ts`, the shared schema of
+`SignalJournalEntry`/`…V1`, #666), with the decision checked by
+`signalDecisionSchema`/`signalDecisionV1Schema`. A line failing that is `malformed_line`, and a
+`version` that is neither v1 nor v2 is `unsupported_version` (a tick-based detector's shadow row,
+#667). The trades file is validated by `tradeLogTradeJsonSchema` (`packages/shared/src/trade-log.ts`).
 
 **Session files** (`--session-candles`) are the owner's raw `1s` rows per session:
 `{session, asset_id, interval, start_time, limit, rows}`. A file failing `candlesWireSchema` is
@@ -383,7 +383,8 @@ the delay distributions, the price error in ticks per `k` (`× 10^digits`), and 
 **The headline delay.** For every priced, non-ambiguous trade and each `openDelay` in the grid,
 the stand prices `entry = created_at + openDelay` and `exit = entry + duration`. It then compares
 the simulated outcome with the sign of `profit`. `created_at` stands in for the decision moment:
-the intent is created right after the decision, and the gap between them is not in the export.
+the intent is created right after the decision. Since #666 the gap is in the trade log
+(`decision.decidedAtMs`/`takenAtMs` of the export line); calibrate does not read it yet.
 The delay with the highest match share wins, and a tie goes to the smaller delay. A trade
 unpriced at one delay leaves only that delay's denominator. `calibrate` writes the choice to
 `$STAND_DIR/calibration.json` on PASS, which `run` reads. Gate 3 compares the stand at this
