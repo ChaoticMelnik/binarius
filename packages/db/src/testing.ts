@@ -9,11 +9,13 @@ import {
   TradeAction,
   type AccountHaltReason,
   TradeIntentFailureReason,
+  TradeIntentStatus,
   TradeMode,
   UserStatus,
   type CreateTradeIntentRequest,
   type DecimalString,
   MomentumDirection,
+  TradeTransport,
   TrendDirection,
   type SignalRecord,
   type TradingSessionSettings,
@@ -32,11 +34,14 @@ import {
 import type { BrokerAccountRow } from './oauth-ops';
 import {
   createTradeIntent,
+  markIntentAccepted,
   markIntentUnknown,
+  settleIntent,
   takeIntent,
   type DbExecutor,
   type TradeIntentRow,
 } from './trade-intent-ops';
+import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { tradingSwitch } from './schema/trading-switch';
 import { upsertBalanceSnapshot } from './balance-snapshot-ops';
 import {
@@ -399,6 +404,49 @@ export const decisionFixture = (
     ...facts,
   });
 
+// A queued intent taken and accepted with its broker trade (open), then, with `profit`, settled
+// (closed): the export's and the steps' rows
+export async function seedBrokerTradeFor(
+  db: Db,
+  intent: TradeIntentRow,
+  trade: {
+    openPrice?: number;
+    openTimestamp?: number;
+    profit?: DecimalString;
+    closePrice?: number;
+  } = {},
+): Promise<void> {
+  const taken = await takeIntent(db, {
+    id: intent.id,
+    expectedVersion: intent.version,
+    maxAgeMs: 60_000,
+  });
+  if (taken === undefined) throw new Error('seedBrokerTradeFor: take failed');
+  const open = openTradeFor(intent, {
+    ...(trade.openPrice === undefined ? {} : { openPrice: trade.openPrice }),
+    ...(trade.openTimestamp === undefined ? {} : { openTimestamp: trade.openTimestamp }),
+  });
+  await db.transaction((tx) =>
+    markIntentAccepted(tx, {
+      id: taken.id,
+      expectedVersion: taken.version,
+      transport: TradeTransport.RestFallback,
+      trade: open,
+    }),
+  );
+  if (trade.profit === undefined) return;
+  const { profit } = trade;
+  await db.transaction((tx) =>
+    settleIntent(tx, {
+      id: intent.id,
+      from: TradeIntentStatus.Accepted,
+      trade: closedTradeFor(open, {
+        profit,
+        ...(trade.closePrice === undefined ? {} : { closePrice: trade.closePrice }),
+      }),
+    }),
+  );
+}
 // --- Staff fixtures ---------------------------------------------------------------------------
 
 // Cheap scrypt parameters for fixtures: seeding at production cost would add a quarter of a

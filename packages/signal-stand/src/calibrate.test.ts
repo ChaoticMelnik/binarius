@@ -144,6 +144,34 @@ describe('calibrate', () => {
     expect(saved.headlineDelayMs).toBe(0);
   });
 
+  // #666: the trade log's export reads as the logs and the #381 file did, line for line
+  it('C12 a trade-log export (the lines and trades-json) gives the same report as the log lines', () => {
+    const session = liveSession(6);
+    const asLog = run(session);
+    const exportLines = session.lines.map((line) => {
+      const { signal } = JSON.parse(line) as { signal: Record<string, unknown> };
+      return JSON.stringify({
+        decision: { id: 'd' },
+        signal,
+        session: null,
+        trade: null,
+        ticks: null,
+      });
+    });
+    const exportTrades = session.trades.map((trade, index) => ({
+      ...trade,
+      submitted_at_ms: trade.created_at_ms + 40,
+      payout: 90,
+      intent_id: `intent-${index}`,
+      decision_id: `decision-${index}`,
+      mode: 'demo',
+      amount: '1.00000000',
+    }));
+    const asExport = run({ trades: exportTrades, lines: exportLines });
+    expect(asExport.code).toBe(0);
+    expect(asExport.out).toEqual(asLog.out);
+  });
+
   it('C2 a revised closed candle fails the run, and revisions are the first line', () => {
     const dir = cacheWith(seconds);
     const file = seriesPath(dir, PAIR.id, '5s');

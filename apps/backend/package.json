@@ -9,6 +9,7 @@
     "kill-switch": "tsx src/cli/kill-switch.ts",
     "bonus-rule": "tsx src/cli/bonus-rule.ts",
     "stars": "tsx src/cli/stars.ts",
+    "trade-log": "tsx src/cli/trade-log.ts",
     "bot-text": "tsx src/cli/bot-text.ts",
     "rate-limit-probe": "tsx src/cli/rate-limit-probe.ts",
     "deposit-probe": "tsx src/cli/deposit-probe.ts"
