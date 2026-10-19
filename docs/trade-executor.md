@@ -28,6 +28,15 @@ The amount goes out in its shortest decimal form (`normalizeDecimal` from `@bina
 took `"1.5"` (2026-10-03); eight fraction digits were never sent live and the fixture refuses
 them.
 
+## Timing for analysis (#666)
+
+A session trade's chain is stored for analysis without the logs ([trade-log.md](trade-log.md)):
+`signal_decisions.decided_at_ms` (the decider's `nowMs`, backend clock) → `taken_at_ms` (the
+orchestrator's clock when `evaluate` returned) → `trade_intents.created_at` (database clock) →
+`trade_intents.submitted_at` (the processor's `submitting` write, database clock) →
+`broker_trades.open_timestamp_ms` (the broker's), stored raw; the clocks are three processes' and
+the broker's, not aligned.
+
 ## The two-cases rule
 
 1. **Socket**, when the account has a session: `openTrade(intent.mode, request, signal)`.

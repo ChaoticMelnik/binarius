@@ -67,6 +67,9 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 - A session intent ties to its session through the existing composite FK
   `trade_intents_session_account_fk (trading_session_id, broker_account_id, mode)`: a demo session
   cannot parent a real intent, nor an intent of another account.
+- `trading_sessions_id_account_key (id, broker_account_id)` (#666, migration 0068) is the target of
+  `signal_decisions_session_account_fk`: a session's decision row names the session's account
+  ([trade-log.md](trade-log.md#the-table)).
 
 ## Settings
 
@@ -480,29 +483,37 @@ keeps the first reason.
 | `touchBalanceRequested` | — | keeps the account "in work", so the balance refresh and the broker socket stay on it between trades |
 | `pairs.read` | `catalog_unavailable`, a backend failure, or `fresh: false` | hold back `TRADING_SESSION_RETRY_MS` (E9f) |
 | | the pair absent, or `!pairAcceptsDuration(pair, durationSec)` | stop `pair_unavailable` (E9c, E9d) |
-| | `!isPairOpen(pair, now)` and `waitExpired` | stop `no_signal_timeout`, `waited: pair_closed` (W5) |
+| | `!isPairOpen(pair, now)` and `waitExpired` | stop `no_signal_timeout`, `waited: pair_closed` (W5); no row: no decision was asked (O11) |
 | | `!isPairOpen(pair, now)` | hold back `min(scheduledUntil − now, TRADING_SESSION_RETRY_MS)` (E9e) |
 | | the payout below `MIN_CYCLE_PAYOUT_PCT` | nothing: no payout holds a session (#509), and since #631 none refuses its start either; the session trades on (P6) |
 | `signals.evaluate({ assetId, interval: intervalForDuration(durationSec) })` | a backend failure | hold back `TRADING_SESSION_RETRY_MS` (E5) |
 | | `fetch_failed` | hold back `retryAfterSec` when given (0 included), else `TRADING_SESSION_RETRY_MS` (E5) |
-| | `no_signal` and `waitExpired` | stop `no_signal_timeout`, `waited: no_signal` (W1) |
-| | `no_signal` | hold back until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (E4); `last_signal_action` = NULL |
-| | `signal` in the paused direction while `last_signal_action` holds it, and `waitExpired` | stop `no_signal_timeout`, `waited: paused` (W4) |
-| | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal`; `last_signal_action` stays the action (P1) |
+| | `no_signal` and `waitExpired` | stop `no_signal_timeout`, `waited: no_signal` (W1); records `no_signal` (O9) |
+| | `no_signal` | hold back until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (E4); `last_signal_action` = NULL; records `no_signal` (O2) |
+| | `signal` in the paused direction while `last_signal_action` holds it, and `waitExpired` | stop `no_signal_timeout`, `waited: paused` (W4); records `paused` (O10) |
+| | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal`; `last_signal_action` stays the action (P1); records `paused` (O3) |
 | | `signal` | the action |
-| the sizer (`nowMs = max(now, started_at)`, E11) | `stop` | a martingale limit: stop with its own reason (#450, G3–G6); any other code: stop `stake_stop` (E3, G8); the code in the line |
+| the sizer (`nowMs = max(now, started_at)`, E11) | `stop` | a martingale limit: stop with its own reason (#450, G3–G6); any other code: stop `stake_stop` (E3, G8); the code in the line; records `stake_stop` with the code (O4) |
 | | `stake` | the amount |
-| `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` was written by the intent's own transaction (D6) |
-| | `created: false` (a replay) | reschedule (E9g) |
+| `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` was written by the intent's own transaction (D6), and so was the decision's `intent` row (O1) |
+| | `created: false` (a replay) | reschedule (E9g); records `replayed` (O6) |
 | | `trading_paused` | stop `kill_switch` (K2) |
 | | `account_halted` | stop `manual_review` (E9b) |
 | | `user_not_found`, `user_blocked`, `broker_account_not_found`, `ambiguous_broker_account`, `account_revoked`, `account_not_confirmed`, `insufficient_tokens`; `demo_only` (a real session on a `DEMO_ONLY` worker, #396: the creation passes the flag and refuses before the reserve) | stop `account_unavailable` (E9c, F1) |
 | | `active_intent_exists`, `client_request_id_conflict` | reschedule (E9g) |
-| | `TradingSessionNotActiveError` | nothing: another writer stopped it (E9h) |
+| | `TradingSessionNotActiveError` | nothing: another writer stopped it (E9h); no row (O5) |
 | anywhere | the attempt's deadline, a throw, or `stop()` | no ending written; hold back `TRADING_SESSION_RETRY_MS` in memory |
 
 The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code added to
 `TradeIntentErrorCode` fails `tsc` until it has an ending.
+
+**The decision rows (#666).** Every ending reached after a decision writes one `signal_decisions`
+row, the trade log of [trade-log.md](trade-log.md#the-writers-and-their-outcomes): the
+`createSessionIntent` refusals record `refused` with the code (stop or reschedule, exactly one
+row per step, O5), the other rows are named in the table above. The `intent` row is written in the
+intent's transaction; every other one by `apply`, after the ending's own write, whether its CAS
+matched or not (O12), and a failed write is a `warn`, the ending stands (O8). The step is read once,
+right after the history.
 
 - **The progress rule.** Every ending that leaves the session `active` and was reached — done,
   reschedule, every hold-back — moves `last_decision_at` (`markSessionDecision`), and every
@@ -690,7 +701,7 @@ is an answer, never a throw. Neither client logs; the orchestrator logs the outc
 
 | Client | Request | Answers |
 |---|---|---|
-| `createBackendSignalSource` | `POST /trading/signal` `{ assetId, interval }`, `TRADING_SIGNAL_BUDGET_MS` | the parsed `tradingSignalResponseSchema` (`decided` or `fetch_failed`) |
+| `createBackendSignalSource` | `POST /trading/signal` `{ assetId, interval, record: true }`, `TRADING_SIGNAL_BUDGET_MS` | the parsed `tradingSignalResponseSchema` (`decided` or `fetch_failed`); a `decided` answer carries `record` — the journal entry and the pair's last tick — for the trade log (#666); an old backend answers none (`record_missing`) |
 | `createBackendPairsSource` | `GET /trading/pairs`, `TRADING_SESSION_PAIRS_TIMEOUT_MS` | the parsed `pairsCatalogResponseSchema`; a 503 `{ error: 'catalog_unavailable' }` → `catalog_unavailable` |
 
 Both: a fetch error, the timeout or the caller's abort → `backend_unreachable` (its cause dropped:
