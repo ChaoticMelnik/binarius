@@ -4,6 +4,8 @@ import {
   markSessionDecision,
   readBalanceSnapshot,
   readSessionHistory,
+  recordSignalDecision,
+  signalDecisionInput,
   stopExpiredSessions,
   stopHaltedSessions,
   stopPausedSessions,
@@ -15,6 +17,7 @@ import {
   type Db,
   type RunnableSession,
   type SessionHistoryIntent,
+  type SignalDecisionInput,
   type StoppedSession,
 } from '@binarius/db';
 import {
@@ -27,12 +30,15 @@ import {
   sessionStakeParams,
   sessionNoSignalTimeoutMs,
   SIGNAL_CHART_INTERVAL_MS,
+  SignalDecisionContext,
+  SignalDecisionOutcome,
   SignalFeedOutcome,
   SignalKind,
   TradeIntentErrorCode,
   TradeIntentStatus,
   TradeMode,
   TradingSessionStopReason,
+  type SignalRecord,
   type TradeAction,
   type TradingSessionSettings,
 } from '@binarius/shared';
@@ -85,12 +91,20 @@ const STAKE_STOP_REASONS = {
 
 // A hold must say whether the pause's memory (last_signal_action, #379) is cleared (null after a
 // no_signal) or kept (the paused action). The traded action travels with the intent row
-// (createTradeIntent), never through an ending: an ending can be lost after the INSERT.
+// (createTradeIntent), never through an ending: an ending can be lost after the INSERT. An ending
+// reached after a decision carries its trade log row (#666, docs/trade-log.md → The writers and
+// their outcomes), written by apply after the ending's own write; the intent's row is in the
+// intent's transaction instead.
 type Ending =
-  | { kind: 'stop'; reason: TradingSessionStopReason; fields?: Record<string, unknown> }
+  | {
+      kind: 'stop';
+      reason: TradingSessionStopReason;
+      fields?: Record<string, unknown>;
+      record?: SignalDecisionInput;
+    }
   | { kind: 'created' }
-  | { kind: 'reschedule' }
-  | { kind: 'hold'; ms: number; signalAction?: TradeAction | null }
+  | { kind: 'reschedule'; record?: SignalDecisionInput }
+  | { kind: 'hold'; ms: number; signalAction?: TradeAction | null; record?: SignalDecisionInput }
   // the session is no longer active: nothing to write
   | { kind: 'gone' }
   // no ending written: the deadline, a throw or the stop signal
@@ -268,6 +282,8 @@ export function createSessionOrchestrator({
       logger.warn(ids, 'trading session vanished');
       return { kind: 'hold', ms: config.retryMs };
     }
+    // the step this attempt tries: its intent key and every decision row it writes (#666)
+    const step = history.intents.length + 1;
     // the scan skips expired sessions; this catches one whose deadline passed since the scan
     if (history.expired) return { kind: 'stop', reason: TradingSessionStopReason.Timeout };
     if (history.intents.some((intent) => !TERMINAL.has(intent.status))) {
@@ -334,10 +350,14 @@ export function createSessionOrchestrator({
     // candles of the session's signal interval (#637): a closed pair, a no_signal, the pause after
     // two losses. A failure to read the pairs or the signal is not a wait for a signal, so it
     // neither stops the session nor moves the count.
-    const noSignalStop = (waited: 'pair_closed' | 'no_signal' | 'paused'): Ending => ({
+    const noSignalStop = (
+      waited: 'pair_closed' | 'no_signal' | 'paused',
+      record?: SignalDecisionInput,
+    ): Ending => ({
       kind: 'stop',
       reason: TradingSessionStopReason.NoSignalTimeout,
       fields: { waited, limitMs: noSignalTimeoutMs },
+      ...(record === undefined ? {} : { record }),
     });
     const nowMs = now();
     if (!isPairOpen(pair, nowMs)) {
@@ -369,24 +389,50 @@ export function createSessionOrchestrator({
         ms: response.retryAfterSec !== undefined ? response.retryAfterSec * 1000 : config.retryMs,
       };
     }
+    // the decision is taken: its row's clock and record (#666); an old backend answers none
+    const takenAtMs = now();
+    const record: SignalRecord | undefined = response.record;
+    if (record === undefined) {
+      logger.warn({ ...ids, reason: 'record_missing' }, 'trading session decision not recorded');
+    }
+    const decisionRow = (
+      outcome: SignalDecisionOutcome,
+      detail: string | null = null,
+    ): SignalDecisionInput | undefined =>
+      record === undefined
+        ? undefined
+        : signalDecisionInput(record, {
+            context: SignalDecisionContext.Session,
+            tradingSessionId: session.id,
+            brokerAccountId: session.brokerAccountId,
+            step,
+            payout: pair.payout,
+            takenAtMs,
+            outcome,
+            detail,
+          });
+    const withRow = <E extends Ending>(ending: E, row: SignalDecisionInput | undefined): E =>
+      row === undefined ? ending : { ...ending, record: row };
     const untilNextCandle = () => {
       const decidedAt = now();
       const intervalMs = SIGNAL_CHART_INTERVAL_MS[interval];
       return Math.ceil(decidedAt / intervalMs) * intervalMs + config.candleSlackMs - decidedAt;
     };
     if (response.decision.kind === SignalKind.NoSignal) {
-      if (history.waitExpired) return noSignalStop('no_signal');
+      const row = decisionRow(SignalDecisionOutcome.NoSignal);
+      if (history.waitExpired) return noSignalStop('no_signal', row);
       logger.info(
         { ...ids, reason: response.decision.reason },
         'trading session waits for the next candle',
       );
-      return { kind: 'hold', ms: untilNextCandle(), signalAction: null };
+      return withRow({ kind: 'hold', ms: untilNextCandle(), signalAction: null }, row);
     }
     const action: TradeAction = response.decision.action;
     if (pausedDirection(history.intents) === action && session.lastSignalAction === action) {
-      if (history.waitExpired) return noSignalStop('paused');
+      const row = decisionRow(SignalDecisionOutcome.Paused);
+      if (history.waitExpired) return noSignalStop('paused', row);
       logger.info({ ...ids, action }, 'trading session waits for the signal to change');
-      return { kind: 'hold', ms: untilNextCandle(), signalAction: action };
+      return withRow({ kind: 'hold', ms: untilNextCandle(), signalAction: action }, row);
     }
 
     const startedAtMs = session.startedAt.getTime();
@@ -400,14 +446,16 @@ export function createSessionOrchestrator({
       nowMs: Math.max(now(), startedAtMs),
     });
     if (decision.kind === StakeKind.Stop) {
-      return {
-        kind: 'stop',
-        reason: STAKE_STOP_REASONS[decision.reason],
-        fields: { stopReason: decision.reason, detail: decision.detail },
-      };
+      return withRow(
+        {
+          kind: 'stop',
+          reason: STAKE_STOP_REASONS[decision.reason],
+          fields: { stopReason: decision.reason, detail: decision.detail },
+        },
+        decisionRow(SignalDecisionOutcome.StakeStop, decision.reason),
+      );
     }
 
-    const step = history.intents.length + 1;
     checkpoint();
     let created;
     try {
@@ -423,7 +471,7 @@ export function createSessionOrchestrator({
           amount: decision.amount,
           action,
           durationSec: settings.durationSec,
-          decision: null,
+          decision: decisionRow(SignalDecisionOutcome.Intent) ?? null,
         },
         { demoOnly },
       );
@@ -434,15 +482,16 @@ export function createSessionOrchestrator({
       }
       if (!(error instanceof TradeIntentError)) throw error;
       const refusal: CreateRefusal = CREATE_REFUSALS[error.code];
+      const row = decisionRow(SignalDecisionOutcome.Refused, error.code);
       if (refusal.kind === 'reschedule') {
         logger.warn({ ...ids, step, code: error.code }, 'trading session intent refused');
-        return refusal;
+        return withRow<Ending>(refusal, row);
       }
-      return { ...refusal, fields: { code: error.code } };
+      return withRow<Ending>({ ...refusal, fields: { code: error.code } }, row);
     }
     if (!created.created) {
       logger.info({ ...ids, step, intentId: created.intent.id }, 'trading session step replayed');
-      return { kind: 'reschedule' };
+      return withRow<Ending>({ kind: 'reschedule' }, decisionRow(SignalDecisionOutcome.Replayed));
     }
     logger.info(
       { ...ids, step, intentId: created.intent.id, action },
@@ -488,20 +537,44 @@ export function createSessionOrchestrator({
   const hold = (sessionId: string, ms: number) =>
     heldUntil.set(sessionId, now() + Math.max(ms, config.tickMs));
 
+  // The decision's row follows its ending's own write, whether that write's CAS matched or not
+  // (docs/trade-log.md → The order of writes); a failure loses the row only, never the ending
+  async function recordDecision(session: RunnableSession, row: SignalDecisionInput | undefined) {
+    if (row === undefined) return;
+    try {
+      await recordSignalDecision(db, row);
+    } catch (error) {
+      logger.warn(
+        {
+          sessionId: session.id,
+          brokerAccountId: session.brokerAccountId,
+          step: row.step,
+          ...errorLogFields(error),
+        },
+        'trading session decision not recorded',
+      );
+    }
+  }
+
   async function apply(session: RunnableSession, ending: Ending): Promise<void> {
     switch (ending.kind) {
       case 'stop': {
         const row = await stopTradingSession(db, { id: session.id, reason: ending.reason });
         if (row !== undefined) logStop(session, ending.reason, ending.fields);
+        await recordDecision(session, ending.record);
         return;
       }
       case 'hold':
         hold(session.id, ending.ms);
         await markSessionDecision(db, { id: session.id, signalAction: ending.signalAction });
+        await recordDecision(session, ending.record);
         return;
       case 'created':
+        await markSessionDecision(db, { id: session.id });
+        return;
       case 'reschedule':
         await markSessionDecision(db, { id: session.id });
+        await recordDecision(session, ending.record);
         return;
       case 'failed':
         hold(session.id, config.retryMs);

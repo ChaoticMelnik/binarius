@@ -8,6 +8,8 @@ import {
   SignalKind,
   TrendDirection,
   type PairView,
+  type SignalDecision,
+  type SignalRecord,
   type TradeAction,
   type TradingSignalResponse,
 } from '@binarius/shared';
@@ -30,22 +32,74 @@ const features = {
   atrTicks: 200,
 };
 
-export const signalAnswer = (action: TradeAction): TradingSignalResponse => ({
-  outcome: SignalFeedOutcome.Decided,
-  params: DEFAULT_SIGNAL_PARAMS,
-  decision: { kind: SignalKind.Signal, version: SIGNAL_ALGORITHM_VERSION, action, features },
-});
+// The decision's record as the backend answers it to a session (#666): a 1m socket entry decided
+// at `nowMs` on `rows` candles, and the pair's last tick
+export const RECORD_NOW_MS = 1_760_000_030_000;
+export const signalRecordOf = (
+  decision: SignalDecision,
+  { nowMs = RECORD_NOW_MS, rows = 2 }: { nowMs?: number; rows?: number } = {},
+): SignalRecord => {
+  const boundary = Math.floor(nowMs / 60_000) * 60_000;
+  return {
+    entry: {
+      assetId: 101,
+      interval: '1m',
+      digits: 5,
+      intervalMs: 60_000,
+      nowMs,
+      source: {
+        kind: 'socket',
+        startTime: boundary - rows * 60_000,
+        closedUntil: boundary,
+        gaps: 0,
+      },
+      version: SIGNAL_ALGORITHM_VERSION,
+      params: DEFAULT_SIGNAL_PARAMS,
+      series: Array.from(
+        { length: rows },
+        (_, index) => [boundary - (rows - index) * 60_000, 1.1001, 1.1012, 1.0993, 1.1004] as const,
+      ),
+      decision,
+    },
+    lastTick: { price: 1.1004, timestamp: nowMs - 200, receivedAtMs: nowMs - 180 },
+  };
+};
 
-export const noSignalAnswer = (): TradingSignalResponse => ({
-  outcome: SignalFeedOutcome.Decided,
-  params: DEFAULT_SIGNAL_PARAMS,
-  decision: {
+// `record: false` is the answer of a backend before #666
+export const signalAnswer = (
+  action: TradeAction,
+  { record = true }: { record?: boolean } = {},
+): TradingSignalResponse => {
+  const decision: SignalDecision = {
+    kind: SignalKind.Signal,
+    version: SIGNAL_ALGORITHM_VERSION,
+    action,
+    features,
+  };
+  return {
+    outcome: SignalFeedOutcome.Decided,
+    params: DEFAULT_SIGNAL_PARAMS,
+    decision,
+    ...(record ? { record: signalRecordOf(decision) } : {}),
+  };
+};
+
+export const noSignalAnswer = ({
+  record = true,
+}: { record?: boolean } = {}): TradingSignalResponse => {
+  const decision: SignalDecision = {
     kind: SignalKind.NoSignal,
     version: SIGNAL_ALGORITHM_VERSION,
     reason: NoSignalReason.TrendFlat,
     features: { ...features, trend: TrendDirection.Flat },
-  },
-});
+  };
+  return {
+    outcome: SignalFeedOutcome.Decided,
+    params: DEFAULT_SIGNAL_PARAMS,
+    decision,
+    ...(record ? { record: signalRecordOf(decision) } : {}),
+  };
+};
 
 export const fetchFailedAnswer = (retryAfterSec?: number): TradingSignalResponse => ({
   outcome: SignalFeedOutcome.FetchFailed,

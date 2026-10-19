@@ -13,7 +13,7 @@ import {
   createBackendSignalSource,
   MAX_BACKEND_BODY_BYTES,
 } from './backend';
-import { eurUsd, fetchFailedAnswer, signalAnswer } from './testing';
+import { eurUsd, fetchFailedAnswer, signalAnswer, signalRecordOf } from './testing';
 
 const BEARER = 'internal-token-for-tests-0123456789';
 const MARKER = 'body-marker-that-must-not-leak';
@@ -116,7 +116,8 @@ describe('createBackendSignalSource (#287)', () => {
         method: 'POST',
         url: TRADING_SIGNAL_PATH,
         authorization: `Bearer ${BEARER}`,
-        body: { assetId: 101, interval: '1m' },
+        // S1': the session asks for the decision's record (#666)
+        body: { assetId: 101, interval: '1m', record: true },
       },
     ]);
   });
@@ -288,9 +289,18 @@ describe('body size (#234)', () => {
     ),
   };
 
+  // the record's series holds at most the ring's window, MARKET_DATA_RING_CANDLES = 300 rows (the
+  // decision's own window is shorter, SIGNAL_CHART_LIMIT); false once the feed records more
+  const ASSUMED_LONGEST_SERIES = 300;
+
   it('S4 leaves the longest signal answer far below MAX_BACKEND_BODY_BYTES', () => {
-    // numbers and enums only: the decided answer is the longer of the two
-    const sample = signalAnswer('up');
+    // numbers and enums only: the decided answer with its record (#666) is the longest
+    const decided = signalAnswer('up');
+    if (decided.outcome !== 'decided') throw new Error('not a decided answer');
+    const sample = {
+      ...decided,
+      record: signalRecordOf(decided.decision, { rows: ASSUMED_LONGEST_SERIES }),
+    };
     expect(safeParseTradingSignalResponse(sample).success).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(sample))).toBeLessThan(MAX_BACKEND_BODY_BYTES / 4);
   });

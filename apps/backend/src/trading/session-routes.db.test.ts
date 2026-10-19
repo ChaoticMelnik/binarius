@@ -52,8 +52,10 @@ import {
   markIntentAccepted,
   openTrading,
   readTradingSessionView,
+  recordSignalDecision,
   referralCodes,
   setStake,
+  signalDecisions,
   setTradingMode,
   settleIntent,
   stopTrading,
@@ -75,6 +77,7 @@ import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import type { TradingSessionRoutesDeps } from './session-routes';
+import { createTickStore } from '../market-data/ticks';
 import {
   PAIRS_TEST_TOKEN,
   fakeSignalFeed,
@@ -168,6 +171,9 @@ function appWith(
     signal?: SignalEvaluation | (() => Promise<SignalEvaluation>);
     // a feed in place of the fake one
     signalFeed?: TradingSessionRoutesDeps['signals'];
+    // the trade log's writer (#666); recordSignalDecision on the suite's database by default
+    decisions?: TradingSessionRoutesDeps['decisions'];
+    ticks?: TradingSessionRoutesDeps['ticks'];
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
@@ -207,6 +213,10 @@ function appWith(
       internalApiToken: PAIRS_TEST_TOKEN,
       demoOnly: options.demoOnly ?? false,
       stakeStrategy: options.stakeStrategy ?? SessionStakeStrategy.Martingale,
+      decisions: options.decisions ?? {
+        record: (input) => recordSignalDecision(tmp.db, input),
+      },
+      ticks: options.ticks,
       now: () => NOW,
     },
     signal: unusedSignalDeps(),
@@ -1000,6 +1010,173 @@ async function seedSession(): Promise<SeededAccount & { sessionId: string }> {
   return { ...seed, sessionId: session.id };
 }
 
+// #666: the start's signal check in the trade log (docs/trade-log.md → The writers and their
+// outcomes, S0–S8): one row per answer given after a decision was read
+describe('POST /trading/sessions: the start decision row (#666)', () => {
+  const startRows = (brokerAccountId: string) =>
+    tmp.db
+      .select()
+      .from(signalDecisions)
+      .where(eq(signalDecisions.brokerAccountId, brokerAccountId));
+
+  it('R36 a start records started, linked to the session and its account, with the entry and the tick', async () => {
+    const seed = await seedReady();
+    const ticks = createTickStore();
+    ticks.push(ASSET, { price: 1.2001, timestamp: NOW - 100 }, NOW - 80);
+    const evaluation = sessionSignalEvaluation('signal');
+    const response = await start(appWith({ signal: evaluation, ticks }), bodyFor(seed));
+    expect(response.statusCode).toBe(201);
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows).toHaveLength(1);
+    const entry = evaluation.outcome === 'decided' ? evaluation.entry : undefined;
+    expect(rows[0]).toMatchObject({
+      context: 'session_start',
+      tradingSessionId: sessionOf(response).id,
+      step: null,
+      outcome: 'started',
+      detail: null,
+      kind: 'signal',
+      action: 'up',
+      decidedAtMs: entry?.nowMs,
+      takenAtMs: NOW,
+      payout: pair.payout,
+      series: entry?.series,
+      lastTick: { price: 1.2001, timestamp: NOW - 100, receivedAtMs: NOW - 80 },
+    });
+  });
+
+  it('R37 no signal records no_signal without a session', async () => {
+    const seed = await seedReady();
+    const response = await start(
+      appWith({ signal: sessionSignalEvaluation('no_signal') }),
+      bodyFor(seed),
+    );
+    expect(response.statusCode).toBe(409);
+    expect(await startRows(seed.brokerAccountId)).toEqual([
+      expect.objectContaining({
+        context: 'session_start',
+        tradingSessionId: null,
+        outcome: 'no_signal',
+        kind: 'no_signal',
+        action: null,
+        detail: null,
+        lastTick: null,
+      }),
+    ]);
+  });
+
+  it.each<[string, () => Promise<SeededAccount>, string, { demoOnly?: boolean; mode?: TradeMode }]>(
+    [
+      ['no balance snapshot', () => seedUserWithAccount(tmp.db), 'balance_unavailable', {}],
+      [
+        'a zero minimum (no session stake)',
+        async () => {
+          const seed = await seedUserWithAccount(tmp.db);
+          await upsertBalanceSnapshot(tmp.db, {
+            brokerAccountId: seed.brokerAccountId,
+            user: { ...brokerUser, minTradeAmount: decimalStringSchema.parse('0.00000000') },
+            requested: false,
+          });
+          return seed;
+        },
+        'balance_unavailable',
+        {},
+      ],
+      [
+        'a saved stake below the minimum',
+        async () => {
+          const seed = await seedReady();
+          await setStake(
+            tmp.db,
+            BigInt(seed.telegramUserId),
+            TradeMode.Demo,
+            decimalStringSchema.parse('0.5'),
+          );
+          return seed;
+        },
+        'stake_below_minimum',
+        {},
+      ],
+      [
+        'a saved stake above the available balance',
+        async () => {
+          const seed = await seedReady();
+          await setStake(
+            tmp.db,
+            BigInt(seed.telegramUserId),
+            TradeMode.Demo,
+            decimalStringSchema.parse('10000.01'),
+          );
+          return seed;
+        },
+        'insufficient_balance',
+        {},
+      ],
+      [
+        'a real session under DEMO_ONLY (createTradingSession)',
+        async () => {
+          const seed = await seedReady();
+          await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+          return seed;
+        },
+        'demo_only',
+        { demoOnly: true, mode: TradeMode.Real },
+      ],
+    ],
+  )('R38 %s records refused with the answered code', async (_label, seedFor, code, options) => {
+    const seed = await seedFor();
+    const response = await start(
+      appWith({
+        refresh: () => Promise.resolve(),
+        ...(options.demoOnly === undefined ? {} : { demoOnly: options.demoOnly }),
+      }),
+      bodyFor(seed, options.mode === undefined ? {} : { mode: options.mode }),
+    );
+    expect(response.json()).toMatchObject({ error: code });
+    expect(await startRows(seed.brokerAccountId)).toEqual([
+      expect.objectContaining({ outcome: 'refused', detail: code, tradingSessionId: null }),
+    ]);
+  });
+
+  it('R39 a failed record is a warn by name and code, and the start answers as without', async () => {
+    const seed = await seedReady();
+    const response = await start(
+      appWith({
+        decisions: { record: () => Promise.reject(new TypeError('boom')) },
+      }),
+      bodyFor(seed),
+    );
+    expect(response.statusCode).toBe(201);
+    const warns = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.msg === 'session start decision not recorded');
+    expect(warns).toEqual([
+      expect.objectContaining({
+        level: 40,
+        err: { name: 'TypeError' },
+        accountId: seed.brokerAccountId,
+      }),
+    ]);
+    expect(JSON.stringify(warns)).not.toContain('boom');
+  });
+
+  it.each<[string, Parameters<typeof appWith>[0], object]>([
+    ['session_too_long', {}, { durationSec: 900 }],
+    ['pair_unavailable', { catalog: freshCatalog([{ ...pair, id: ASSET + 1 }]) }, {}],
+    ['catalog_unavailable', { catalog: undefined }, {}],
+    [
+      'signal_unavailable (fetch failed)',
+      { signal: { outcome: 'fetch_failed', code: 'unavailable' } as unknown as SignalEvaluation },
+      {},
+    ],
+    ['signal_unavailable (a throw)', { signal: () => Promise.reject(new TypeError('boom')) }, {}],
+  ])('R42 %s records nothing: no decision was read', async (_label, options, patch) => {
+    const seed = await seedReady();
+    const response = await start(appWith(options), bodyFor(seed, patch));
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(await startRows(seed.brokerAccountId)).toEqual([]);
+  });
+});
 describe('GET /trading/sessions/:id', () => {
   it('G1 the owner reads the view, with no balance refresh for an active session', async () => {
     const seed = await seedSession();

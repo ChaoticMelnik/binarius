@@ -27,11 +27,14 @@ import {
   safeParseStopTradingSessionRequest,
   safeParseTrackedSessionsQuery,
   sessionFitsDeadline,
+  SignalDecisionContext,
+  SignalDecisionOutcome,
   SignalFeedOutcome,
   SignalKind,
   checkStake,
   stakeSettingsFrom,
   type SessionStakeStrategy,
+  type SignalJournalEntryWire,
   type TradingSessionErrorCode as ErrorCode,
 } from '@binarius/shared';
 import {
@@ -49,10 +52,12 @@ import {
   readTradingSessionView,
   readUserReferral,
   recordSessionStatusMessage,
+  signalDecisionInput,
   stopTradingSession,
   stopUserSessions,
   touchBalanceRequested,
   type Db,
+  type SignalDecisionInput,
   type TradingSessionDbErrorCode,
 } from '@binarius/db';
 import type { PairsCatalog } from '@binarius/broker-rest';
@@ -60,6 +65,7 @@ import type { CachedSignalFeed } from '@binarius/signal';
 import { internalBearerAuth } from '../auth/internal';
 import { ACCESS_SKEW_MS } from '../auth/token-service';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
+import type { TickStore } from '../market-data/ticks';
 import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
 import { readFinishedSessionView } from './session-view';
 
@@ -75,6 +81,10 @@ export interface TradingSessionRoutesDeps {
   demoOnly: boolean;
   // SESSION_STAKE_STRATEGY (#450): frozen into the new session's settings, never read again
   stakeStrategy: SessionStakeStrategy;
+  // the start's signal check in the trade log (#666, docs/trade-log.md): recordSignalDecision, and
+  // the pair's newest tick (undefined without the data socket)
+  decisions: { record(input: SignalDecisionInput): Promise<unknown> };
+  ticks: Pick<TickStore, 'last'> | undefined;
   now?: () => number;
 }
 
@@ -130,7 +140,18 @@ const refuse = (reply: FastifyReply, code: Exclude<ErrorCode, 'active_session_ex
 // way may have written the account's snapshot.
 export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> = async (
   app,
-  { db, catalog, balance, signals, internalApiToken, demoOnly, stakeStrategy, now = Date.now },
+  {
+    db,
+    catalog,
+    balance,
+    signals,
+    internalApiToken,
+    demoOnly,
+    stakeStrategy,
+    decisions,
+    ticks,
+    now = Date.now,
+  },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -196,12 +217,9 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     // broker failure or a throw is a refusal too, never a start on a signal nobody read. Its
     // direction is the session's first picture in the bot (#568).
     const readSignal = async (): Promise<
-      | {
-          refusal:
-            | typeof TradingSessionErrorCode.NoSignal
-            | typeof TradingSessionErrorCode.SignalUnavailable;
-        }
-      | { action: TradeAction }
+      | { refusal: typeof TradingSessionErrorCode.SignalUnavailable }
+      | { refusal: typeof TradingSessionErrorCode.NoSignal; entry: SignalJournalEntryWire }
+      | { action: TradeAction; entry: SignalJournalEntryWire }
     > => {
       try {
         // the start's decision gets its own journal line (#509, #405)
@@ -212,10 +230,10 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
         if (evaluation.outcome === SignalFeedOutcome.FetchFailed) {
           return { refusal: TradingSessionErrorCode.SignalUnavailable };
         }
-        const { decision } = evaluation.entry;
-        return decision.kind === SignalKind.Signal
-          ? { action: decision.action }
-          : { refusal: TradingSessionErrorCode.NoSignal };
+        const { entry } = evaluation;
+        return entry.decision.kind === SignalKind.Signal
+          ? { action: entry.decision.action, entry }
+          : { refusal: TradingSessionErrorCode.NoSignal, entry };
       } catch (error) {
         request.log.error({ assetId, ...errorLogFields(error) }, 'session start signal threw');
         return { refusal: TradingSessionErrorCode.SignalUnavailable };
@@ -247,8 +265,51 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     // in parallel, so the start's budget holds the longer of the two, not their sum; the signal's
     // refusal answers first
     const [signal, snapshot] = await Promise.all([readSignal(), readSnapshot()]);
-    if ('refusal' in signal) return refuse(reply, signal.refusal);
-    if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
+    const takenAtMs = now();
+    // The start's decision in the trade log (#666, docs/trade-log.md → The writers and their
+    // outcomes): one row per answer after a decision was read, best-effort, the answer unchanged
+    const recordStart = async (
+      entry: SignalJournalEntryWire,
+      ending:
+        | { outcome: typeof SignalDecisionOutcome.NoSignal }
+        | { outcome: typeof SignalDecisionOutcome.Started; sessionId: string }
+        | { outcome: typeof SignalDecisionOutcome.Refused; detail: ErrorCode },
+    ) => {
+      try {
+        await decisions.record(
+          signalDecisionInput(
+            { entry, lastTick: ticks?.last(assetId) ?? null },
+            {
+              context: SignalDecisionContext.SessionStart,
+              tradingSessionId:
+                ending.outcome === SignalDecisionOutcome.Started ? ending.sessionId : null,
+              brokerAccountId,
+              step: null,
+              payout: pair.payout,
+              takenAtMs,
+              outcome: ending.outcome,
+              detail: ending.outcome === SignalDecisionOutcome.Refused ? ending.detail : null,
+            },
+          ),
+        );
+      } catch (error) {
+        request.log.warn(
+          { accountId: brokerAccountId, assetId, ...errorLogFields(error) },
+          'session start decision not recorded',
+        );
+      }
+    };
+    if ('refusal' in signal) {
+      if ('entry' in signal) {
+        await recordStart(signal.entry, { outcome: SignalDecisionOutcome.NoSignal });
+      }
+      return refuse(reply, signal.refusal);
+    }
+    const refuseDecided = async (code: Exclude<ErrorCode, 'active_session_exists'>) => {
+      await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
+      return refuse(reply, code);
+    };
+    if (snapshot === undefined) return refuseDecided(TradingSessionErrorCode.BalanceUnavailable);
 
     // the user's saved stake of the session's mode, or the broker's minimum without one (#297,
     // #327), checked against that mode's balance of the same snapshot before any row is written
@@ -259,7 +320,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       minTradeAmount: snapshot.minTradeAmount,
       available,
     });
-    if (stakeRefusal !== null) return refuse(reply, stakeRefusal);
+    if (stakeRefusal !== null) return refuseDecided(stakeRefusal);
 
     // a stored min_trade_amount of 0 is valid and gives baseStake '0', which the settings refuse:
     // the snapshot offers no stake to trade with, the same answer as no snapshot; so does a stake
@@ -273,7 +334,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');
-      return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
+      return refuseDecided(TradingSessionErrorCode.BalanceUnavailable);
     }
     const settings = stakeSettings.data;
 
@@ -287,11 +348,17 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     } catch (error) {
       if (!(error instanceof TradingSessionError)) throw error;
       const code = DB_CODE_TO_WIRE[error.code];
+      await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
       if (code === TradingSessionErrorCode.ActiveSessionExists) {
         return activeSessionExists(reply, brokerAccountId, telegramUserId);
       }
       return refuse(reply, code);
     }
+    // before the view's read, so a throw there does not lose it
+    await recordStart(signal.entry, {
+      outcome: SignalDecisionOutcome.Started,
+      sessionId: created.id,
+    });
     const session = await readTradingSessionView(db, created.id, telegramUserId);
     return reply.code(201).send({ session });
   });

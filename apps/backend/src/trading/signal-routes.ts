@@ -7,10 +7,12 @@ import {
   SignalKind,
   TRADING_SIGNAL_PATH,
   TradingSignalErrorCode,
+  type LastTick,
   type TradingSignalResponse,
 } from '@binarius/shared';
 import type { CachedSignalFeed, SignalEvaluation } from '@binarius/signal';
 import { internalBearerAuth } from '../auth/internal';
+import type { TickStore } from '../market-data/ticks';
 
 export interface SignalRoutesDeps {
   feed: Pick<CachedSignalFeed, 'evaluate'>;
@@ -24,17 +26,26 @@ export interface SignalRoutesDeps {
       analysis: { assetId: number; durationSec: number } | null,
     ): Promise<boolean>;
   };
+  // the newest tick per pair (#666); undefined without the data socket (no BROKER_WS_URL)
+  ticks: Pick<TickStore, 'last'> | undefined;
 }
 
 // Named fields only: the evaluation also carries the journal series and the request facts, which
-// stay in the feed's log lines.
-export function toTradingSignalResponse(evaluation: SignalEvaluation): TradingSignalResponse {
+// stay in the feed's log lines, unless the caller asked for the decision's record (a session, #666):
+// then the whole entry and the pair's last tick.
+export function toTradingSignalResponse(
+  evaluation: SignalEvaluation,
+  record?: { lastTick: LastTick | null },
+): TradingSignalResponse {
   if (evaluation.outcome === SignalFeedOutcome.Decided) {
     return {
       outcome: SignalFeedOutcome.Decided,
       params: evaluation.entry.params,
       decision: evaluation.entry.decision,
       ...(evaluation.indicators === undefined ? {} : { indicators: evaluation.indicators }),
+      ...(record === undefined
+        ? {}
+        : { record: { entry: evaluation.entry, lastTick: record.lastTick } }),
     };
   }
   return {
@@ -50,10 +61,12 @@ export function toTradingSignalResponse(evaluation: SignalEvaluation): TradingSi
 // accepts a duration is the caller's check (an analysis of a closed pair stays allowed). With
 // `analysis` (the bot's analysis card, #484) a decision is recorded as the user's last analysis: a
 // signal with its pair and duration, no signal as none; a fetch failure records nothing. The
-// record is best-effort: its failure is logged and the decision is answered all the same.
+// record is best-effort: its failure is logged and the decision is answered all the same. With
+// `record: true` (a session's worker, #666) a decision is answered with its record: the entry and
+// the pair's newest data-socket tick at the answer.
 export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
   app,
-  { feed, catalog, internalApiToken, lastAnalysis },
+  { feed, catalog, internalApiToken, lastAnalysis, ticks },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -88,6 +101,13 @@ export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
         request.log.warn(errorLogFields(error), 'last analysis not recorded');
       }
     }
-    return reply.send(toTradingSignalResponse(evaluation));
+    return reply.send(
+      toTradingSignalResponse(
+        evaluation,
+        parsed.data.record === true
+          ? { lastTick: ticks?.last(parsed.data.assetId) ?? null }
+          : undefined,
+      ),
+    );
   });
 };
