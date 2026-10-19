@@ -4,8 +4,9 @@ import {
   intervalForDuration,
   SignalKind,
   toCandle,
-  tradeActionSchema,
+  tradeLogTradeJsonSchema,
   type Candle,
+  type TradeLogTradeJson,
   type TradeAction,
 } from '@binarius/shared';
 import { replaySignalJournalEntry, type StoredSignalJournalEntry } from '@binarius/signal';
@@ -31,20 +32,9 @@ import { simulate, type Market } from './simulate';
 import { addTrade, emptyTally, intervalOf, winRatePct, type Tally } from './stats';
 import { V2_PRODUCTION_POINT, VARIANTS } from './variants';
 
-// the plan's export query (docs/signal-stand.md -> Calibration); money is compared by sign only
-const liveTradeSchema = z.object({
-  trading_session_id: z.string(),
-  asset_id: z.int(),
-  action: tradeActionSchema,
-  duration_sec: z.int().positive(),
-  created_at_ms: z.number(),
-  open_timestamp_ms: z.number(),
-  open_price: z.number(),
-  close_timestamp_ms: z.number(),
-  close_price: z.number(),
-  profit: z.string().regex(/^-?\d+(\.\d+)?$/),
-});
-export type LiveTrade = z.infer<typeof liveTradeSchema>;
+// trade-log export --format trades-json (#666, docs/trade-log.md), or the #381 export query's
+// file: the shared schema reads both; money is compared by sign only
+export type LiveTrade = TradeLogTradeJson;
 
 type Era = 'v1' | 'ambiguous' | 'v2';
 const eraOf = (createdAtMs: number): Era =>
@@ -214,7 +204,7 @@ export function runCalibrate(options: CalibrateOptions): number {
   } catch {
     throw new StandError(`calibrate: ${options.trades} is not a trades export`);
   }
-  const parsedTrades = z.array(liveTradeSchema).safeParse(value);
+  const parsedTrades = z.array(tradeLogTradeJsonSchema).safeParse(value);
   if (!parsedTrades.success)
     throw new StandError(`calibrate: ${options.trades} is not a trades export`);
   const trades = parsedTrades.data;

@@ -155,7 +155,8 @@ export interface ClaimedSessionTrade {
   cycleMessage: SessionCycleMessage | null;
 }
 
-const resultSql = sql<SessionTradeResult>`case when ${brokerTrades.profit} > 0 then ${literal(SessionTradeResult.Won)} when ${brokerTrades.profit} < 0 then ${literal(SessionTradeResult.Lost)} else ${literal(SessionTradeResult.Tied)} end`;
+// a settled trade's class by the sign of its profit; the trade log's steps read it too (#666)
+export const tradeResultSql = sql<SessionTradeResult>`case when ${brokerTrades.profit} > 0 then ${literal(SessionTradeResult.Won)} when ${brokerTrades.profit} < 0 then ${literal(SessionTradeResult.Lost)} else ${literal(SessionTradeResult.Tied)} end`;
 
 // Claims the session's (claimed + 1)-th settled trade: one CAS raises the cursor from `claimed`,
 // only while no summary was sent and that trade exists. Undefined when the CAS lost (another
@@ -188,7 +189,7 @@ export async function claimSessionTradeNotice(
       .select({
         amount: tradeIntents.amount,
         outcome: sql<DecimalString>`${brokerTrades.profit}`,
-        result: resultSql,
+        result: tradeResultSql,
         openPrice: brokerTrades.openPrice,
         closePrice: brokerTrades.closePrice,
         assetId: tradeIntents.assetId,

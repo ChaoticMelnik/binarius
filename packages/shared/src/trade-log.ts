@@ -1,5 +1,18 @@
+import * as z from 'zod';
+import { decimalStringSchema } from './money';
+import { SessionStakeStrategy } from './session-steps';
+import {
+  lastTickSchema,
+  SIGNAL_ALGORITHM_VERSIONS,
+  SignalKind,
+  signalIntervalSchema,
+  storedSignalJournalEntrySchema,
+} from './signal';
+import { TradingSessionStopReason } from './trading-session';
+import { TradeIntentStatus, tradeActionSchema, tradeModeSchema } from './trading';
+
 // The trade log (#666, docs/trade-log.md): one signal_decisions row per decision a session acted
-// on.
+// on, and the export that reads them.
 
 // signal_decisions.context: who decided. `shadow` has no writer in part 1 (#667's).
 export const SignalDecisionContext = {
@@ -29,3 +42,101 @@ export type SignalDecisionOutcome =
 // detail is a code of the writer's own closed list (a refusal's or a stake stop's code).
 export const SIGNAL_VERSION_PATTERN = /^[a-z0-9_-]{1,16}$/;
 export const SIGNAL_DECISION_DETAIL_PATTERN = /^[a-z0-9_]{1,64}$/;
+
+const unixMsSchema = z.int();
+
+// a version the stand's replay does not know (a shadow row of #667): emitted as stored
+const foreignSignalSchema = z.looseObject({
+  version: z
+    .string()
+    .refine((version) => !(SIGNAL_ALGORITHM_VERSIONS as readonly string[]).includes(version)),
+});
+
+export const tradeLogDecisionSchema = z.strictObject({
+  id: z.uuid(),
+  context: z.enum(SignalDecisionContext),
+  outcome: z.enum(SignalDecisionOutcome),
+  detail: z.string().regex(SIGNAL_DECISION_DETAIL_PATTERN).nullable(),
+  version: z.string().regex(SIGNAL_VERSION_PATTERN),
+  assetId: z.int().positive(),
+  interval: signalIntervalSchema.nullable(),
+  step: z.int().positive().nullable(),
+  kind: z.enum(SignalKind),
+  action: tradeActionSchema.nullable(),
+  decidedAtMs: unixMsSchema,
+  takenAtMs: unixMsSchema,
+  recordedAtMs: unixMsSchema,
+  payout: z.number().nullable(),
+  lastTick: lastTickSchema.nullable(),
+  result: z.record(z.string(), z.unknown()).nullable(),
+});
+
+export const tradeLogSessionSchema = z.strictObject({
+  id: z.uuid(),
+  userId: z.uuid(),
+  brokerAccountId: z.uuid(),
+  mode: tradeModeSchema,
+  // null when the row's settings do not parse
+  strategy: z.enum(SessionStakeStrategy).nullable(),
+  baseStake: decimalStringSchema.nullable(),
+  durationSec: z.int().positive().nullable(),
+  stopReason: z.enum(TradingSessionStopReason).nullable(),
+});
+
+export const tradeLogBrokerTradeSchema = z.strictObject({
+  status: z.enum({ Open: 'open', Closed: 'closed' }),
+  payout: z.number(),
+  openPrice: z.number(),
+  openTimestampMs: unixMsSchema,
+  closePrice: z.number().nullable(),
+  closeTimestampMs: unixMsSchema.nullable(),
+  profit: decimalStringSchema.nullable(),
+});
+
+export const tradeLogTradeSchema = z.strictObject({
+  intentId: z.uuid(),
+  status: z.enum(TradeIntentStatus),
+  mode: tradeModeSchema,
+  action: tradeActionSchema,
+  amount: decimalStringSchema,
+  durationSec: z.int().positive(),
+  createdAtMs: unixMsSchema,
+  submittedAtMs: unixMsSchema.nullable(),
+  // the trade's cycle and step in it (sessionTradeSteps); null until the trade is settled
+  cycle: z.int().positive().nullable(),
+  cycleStep: z.int().positive().nullable(),
+  broker: tradeLogBrokerTradeSchema.nullable(),
+});
+
+// One line of `trade-log export` (JSONL): one decision. `ticks` is #668's.
+export const tradeLogLineSchema = z.strictObject({
+  decision: tradeLogDecisionSchema,
+  signal: z.union([storedSignalJournalEntrySchema, foreignSignalSchema]),
+  session: tradeLogSessionSchema.nullable(),
+  trade: tradeLogTradeSchema.nullable(),
+  ticks: z.null(),
+});
+export type TradeLogLine = z.infer<typeof tradeLogLineSchema>;
+
+// One element of `trade-log export --format trades-json`: the stand's calibrate input (its first
+// ten fields are the #381 export's), only for a closed broker trade. z.object: an older file with
+// fewer or more keys still reads.
+export const tradeLogTradeJsonSchema = z.object({
+  trading_session_id: z.string(),
+  asset_id: z.int(),
+  action: tradeActionSchema,
+  duration_sec: z.int().positive(),
+  created_at_ms: z.number(),
+  open_timestamp_ms: z.number(),
+  open_price: z.number(),
+  close_timestamp_ms: z.number(),
+  close_price: z.number(),
+  profit: z.string().regex(/^-?\d+(\.\d+)?$/),
+  submitted_at_ms: z.number().nullable().optional(),
+  payout: z.number().optional(),
+  intent_id: z.string().optional(),
+  decision_id: z.string().optional(),
+  mode: tradeModeSchema.optional(),
+  amount: z.string().optional(),
+});
+export type TradeLogTradeJson = z.infer<typeof tradeLogTradeJsonSchema>;
