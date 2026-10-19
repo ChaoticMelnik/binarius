@@ -13,7 +13,12 @@ import {
   UserStatus,
   type CreateTradeIntentRequest,
   type DecimalString,
+  MomentumDirection,
+  TrendDirection,
+  type SignalRecord,
   type TradingSessionSettings,
+  SignalDecisionContext,
+  SignalDecisionOutcome,
   TradingSwitchSource,
 } from '@binarius/shared';
 import { bonusRules, brokerAccounts, staff, tradingSessions, users } from './schema/index';
@@ -34,6 +39,11 @@ import {
 } from './trade-intent-ops';
 import { tradingSwitch } from './schema/trading-switch';
 import { upsertBalanceSnapshot } from './balance-snapshot-ops';
+import {
+  signalDecisionInput,
+  type SignalDecisionFacts,
+  type SignalDecisionInput,
+} from './signal-decision-ops';
 
 export interface TempDatabase {
   url: string;
@@ -316,6 +326,78 @@ export async function seedTradingSession(
   if (row === undefined) throw new Error('seedTradingSession: insert returned no row');
   return row;
 }
+
+// --- Trade log fixtures (#666) -----------------------------------------------------------------
+
+// A v2 socket entry with an `up` signal on 15s candles, and its last tick: the shape the backend
+// answers; the decision is not the decider's own (a suite that replays builds its entry with it)
+export const signalRecordFixture = (nowMs = 1_760_000_007_000): SignalRecord => ({
+  entry: {
+    assetId: 101,
+    interval: '15s',
+    digits: 5,
+    intervalMs: 15_000,
+    nowMs,
+    source: { kind: 'socket', startTime: nowMs - 900_000, closedUntil: nowMs - 7_000, gaps: 0 },
+    version: 'v2',
+    params: {
+      emaFast: 9,
+      emaSlow: 21,
+      slopeLookback: 3,
+      rsiPeriod: 14,
+      rsiBand: 5,
+      atrPeriod: 14,
+      minAtrPct: 0.001,
+      maxAtrPct: 2,
+      minClosedCandles: 50,
+      maxStaleIntervals: 2,
+      rsiExtremeBand: 15,
+      minAtrTicks: 5,
+    },
+    series: [
+      [nowMs - 22_000, 1.1, 1.2, 1.0, 1.15],
+      [nowMs - 7_000, 1.15, 1.25, 1.1, 1.2],
+    ],
+    decision: {
+      kind: 'signal',
+      version: 'v2',
+      action: TradeAction.Up,
+      features: {
+        emaFast: 1.1052,
+        emaSlow: 1.1047,
+        emaSlowSlope: 0.0003,
+        rsi: 61.2,
+        atr: 0.0004,
+        atrPct: 0.036,
+        lastClose: 1.2,
+        lastCandleTimestamp: nowMs - 7_000,
+        closedCandles: 58,
+        trend: TrendDirection.Up,
+        momentum: MomentumDirection.Up,
+        atrTicks: 40,
+      },
+    },
+  },
+  lastTick: { price: 1.2001, timestamp: nowMs - 100, receivedAtMs: nowMs - 80 },
+});
+
+// a session decision of the fixture record, taken 50 ms after it, with its intent
+export const decisionFixture = (
+  session: { sessionId: string; brokerAccountId: string },
+  facts: Partial<SignalDecisionFacts> = {},
+  record: SignalRecord = signalRecordFixture(),
+): SignalDecisionInput =>
+  signalDecisionInput(record, {
+    context: SignalDecisionContext.Session,
+    tradingSessionId: session.sessionId,
+    brokerAccountId: session.brokerAccountId,
+    step: 1,
+    payout: 92,
+    takenAtMs: record.entry.nowMs + 50,
+    outcome: SignalDecisionOutcome.Intent,
+    detail: null,
+    ...facts,
+  });
 
 // --- Staff fixtures ---------------------------------------------------------------------------
 

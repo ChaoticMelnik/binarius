@@ -423,6 +423,7 @@ export function createSessionOrchestrator({
           amount: decision.amount,
           action,
           durationSec: settings.durationSec,
+          decision: null,
         },
         { demoOnly },
       );

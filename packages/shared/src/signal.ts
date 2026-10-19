@@ -238,6 +238,91 @@ export const signalDecisionSchema = decisionSchema(
 );
 export type SignalDecision = z.infer<typeof signalDecisionSchema>;
 
+// --- The journal entry (#666) ----------------------------------------------------------------
+
+// The wire and storage shape of packages/signal's journal entry (journal.ts → SignalJournalEntry):
+// a session's decision row stores it, the stand's journal parser reads it. z.object, not strict:
+// a pino line carries more keys beside it.
+export const journalCandleSchema = z
+  .tuple([z.number(), z.number(), z.number(), z.number(), z.number()])
+  .readonly();
+
+export const journalFetchSchema = z.object({
+  startTime: z.number(),
+  limit: z.int(),
+  rows: z.int(),
+  durationMs: z.number(),
+});
+
+export const signalJournalSourceSchema = z.discriminatedUnion('kind', [
+  journalFetchSchema.extend({ kind: z.literal('rest') }),
+  z.object({
+    kind: z.literal('socket'),
+    startTime: z.number(),
+    closedUntil: z.number(),
+    gaps: z.int().nonnegative(),
+  }),
+]);
+
+const journalEntryBase = {
+  assetId: z.int(),
+  interval: signalIntervalSchema,
+  intervalMs: z.int().positive(),
+  nowMs: z.number(),
+  series: z.array(journalCandleSchema).readonly(),
+};
+const journalEntryV2 = {
+  ...journalEntryBase,
+  version: z.literal('v2'),
+  digits: z.int().nonnegative(),
+  params: signalParamsSchema.readonly(),
+  decision: signalDecisionSchema,
+};
+
+export const signalJournalEntrySchema = z.object({
+  ...journalEntryV2,
+  source: signalJournalSourceSchema,
+});
+export type SignalJournalEntryWire = z.infer<typeof signalJournalEntrySchema>;
+
+// a v2 line written before #405: the REST facts under fetch
+export const signalJournalEntryV2FetchSchema = z.object({
+  ...journalEntryV2,
+  fetch: journalFetchSchema,
+});
+
+export const signalJournalEntryV1Schema = z.object({
+  ...journalEntryBase,
+  version: z.literal('v1'),
+  fetch: journalFetchSchema,
+  params: signalParamsV1Schema.readonly(),
+  decision: signalDecisionV1Schema,
+});
+
+export const storedSignalJournalEntrySchema = z.union([
+  signalJournalEntrySchema,
+  signalJournalEntryV2FetchSchema,
+  signalJournalEntryV1Schema,
+]);
+export type StoredSignalJournalEntryWire = z.infer<typeof storedSignalJournalEntrySchema>;
+
+// The newest data-socket tick of a pair the backend knew when it answered: price and timestamp are
+// the broker's, receivedAtMs the backend's clock at its arrival.
+export const lastTickSchema = z.strictObject({
+  price: z.number().positive(),
+  timestamp: z.number(),
+  receivedAtMs: z.number(),
+});
+export type LastTick = z.infer<typeof lastTickSchema>;
+
+// what a session records of a decision (#666, docs/trade-log.md): the journal entry the decision
+// was computed from and the last tick; null without the data socket or before the pair's first tick
+export const signalRecordSchema = z.strictObject({
+  entry: signalJournalEntrySchema,
+  lastTick: lastTickSchema.nullable(),
+});
+export type SignalRecord = z.infer<typeof signalRecordSchema>;
+
 // --- Display indicators (#482) ---------------------------------------------------------------
 
 // Shown on the analysis card, never read by the decision (#483's backtest found no MACD or MA gate
@@ -317,6 +402,8 @@ export const tradingSignalRequestSchema = z.object({
       durationSec: createTradeIntentRequestSchema.shape.durationSec,
     })
     .optional(),
+  // only a trading session's worker sends it (#666): the answer then carries the decision's record
+  record: z.literal(true).optional(),
 });
 export type TradingSignalRequest = z.infer<typeof tradingSignalRequestSchema>;
 export type TradingSignalAnalysis = NonNullable<TradingSignalRequest['analysis']>;
@@ -330,6 +417,8 @@ export const tradingSignalResponseSchema = z.discriminatedUnion('outcome', [
     decision: signalDecisionSchema,
     // absent when the unbroken tail of the response did not pass the candle checks (docs/signal.md)
     indicators: signalIndicatorsSchema.optional(),
+    // present only when the request asked for it (record: true)
+    record: signalRecordSchema.optional(),
   }),
   z.strictObject({
     outcome: z.literal(SignalFeedOutcome.FetchFailed),

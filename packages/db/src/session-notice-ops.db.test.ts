@@ -82,6 +82,7 @@ const intentOf = async (
       amount: decimalStringSchema.parse(amount),
       action: TradeAction.Up,
       durationSec: 60,
+      decision: null,
     })
   ).intent;
 

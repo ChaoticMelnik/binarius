@@ -17,6 +17,7 @@ import {
   signalDecisionV1Schema,
   signalParamsSchema,
   signalParamsV1Schema,
+  storedSignalJournalEntrySchema,
   type DataRefusalReason,
   type RuleRefusalReason,
   type SignalParams,
@@ -193,6 +194,82 @@ describe('POST /trading/signal contract', () => {
     { outcome: 'maybe', code: 'unavailable' },
   ])('S4 refuses the response %j', (response) => {
     expect(safeParseTradingSignalResponse(response).success).toBe(false);
+  });
+});
+
+describe('the decision record (#666)', () => {
+  const entry = {
+    assetId: 101,
+    interval: '15s',
+    digits: 5,
+    intervalMs: 15_000,
+    nowMs: 1_760_000_007_000,
+    source: {
+      kind: 'socket',
+      startTime: 1_760_000_000_000,
+      closedUntil: 1_760_000_000_000,
+      gaps: 0,
+    },
+    version: 'v2',
+    params,
+    series: [[1_760_000_000_000, 1.1, 1.2, 1.0, 1.15]],
+    decision: DECISIONS.signal,
+  };
+  const lastTick = { price: 1.15, timestamp: 1_760_000_006_900, receivedAtMs: 1_760_000_006_950 };
+  const decided = { outcome: 'decided', params, decision: DECISIONS.signal };
+
+  it('S-rec1 the request takes record: true and nothing else', () => {
+    expect(
+      safeParseTradingSignalRequest({ assetId: 101, interval: '15s', record: true }).data,
+    ).toEqual({ assetId: 101, interval: '15s', record: true });
+    expect(
+      safeParseTradingSignalRequest({ assetId: 101, interval: '15s', record: false }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    { entry, lastTick },
+    { entry, lastTick: null },
+    {
+      entry: {
+        ...entry,
+        source: { kind: 'rest', startTime: 1, limit: 60, rows: 60, durationMs: 120 },
+      },
+      lastTick,
+    },
+  ])('S-rec2 the decided answer carries the record %#', (record) => {
+    expect(safeParseTradingSignalResponse({ ...decided, record }).data).toEqual({
+      ...decided,
+      record,
+    });
+  });
+
+  it.each([
+    { entry, lastTick: { ...lastTick, price: 0 } },
+    { entry, lastTick: { ...lastTick, extra: 1 } },
+    { entry: { ...entry, source: undefined }, lastTick },
+    { entry: { ...entry, interval: '2m' }, lastTick },
+    { entry },
+  ])('S-rec2 refuses the record %#', (record) => {
+    expect(safeParseTradingSignalResponse({ ...decided, record }).success).toBe(false);
+  });
+
+  it('S-rec3 the stored union reads a v1 line and a v2 line written before #405', () => {
+    const fetch = { startTime: 1, limit: 60, rows: 60, durationMs: 120 };
+    const v2Base: Record<string, unknown> = { ...entry };
+    delete v2Base.source;
+    expect(storedSignalJournalEntrySchema.safeParse({ ...v2Base, fetch }).success).toBe(true);
+    const v1Base = { ...v2Base };
+    delete v1Base.digits;
+    const v1 = {
+      ...v1Base,
+      fetch,
+      version: 'v1',
+      params: paramsV1,
+      decision: { kind: 'signal', version: 'v1', action: 'up', features: featuresV1 },
+    };
+    expect(storedSignalJournalEntrySchema.safeParse(v1).success).toBe(true);
+    expect(storedSignalJournalEntrySchema.safeParse({ ...v1, params }).success).toBe(false);
   });
 });
 

@@ -14,11 +14,20 @@ import {
   BotLanguage,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
-import { brokerAccounts, tokenLedger, tradeIntents, tradingSessions, users } from './schema/index';
+import {
+  brokerAccounts,
+  signalDecisions,
+  tokenLedger,
+  tradeIntents,
+  tradingSessions,
+  users,
+} from './schema/index';
 import { setUserLanguage } from './user-ops';
 import {
   closeTradingSwitch,
   createTempDatabase,
+  decisionFixture,
+  intentRequest,
   seedBrokerAccount,
   seedTradingSession,
   seedUnknownIntent,
@@ -177,6 +186,7 @@ const intentInput = (
   amount: decimalStringSchema.parse('1'),
   action: TradeAction.Up,
   durationSec: 60,
+  decision: null,
   ...patch,
 });
 
@@ -1184,6 +1194,80 @@ describe('createSessionIntent', () => {
   });
 });
 
+// #666: the decision a session intent is created from is inserted in the intent's transaction
+describe('createSessionIntent: the decision row (#666)', () => {
+  const decisionsOf = (sessionId: string) =>
+    tmp.db.select().from(signalDecisions).where(eq(signalDecisions.tradingSessionId, sessionId));
+  const decisionOf = (seed: { brokerAccountId: string; session: { id: string } }, step = 1) =>
+    decisionFixture(
+      { sessionId: seed.session.id, brokerAccountId: seed.brokerAccountId },
+      { step },
+    );
+
+  it('D7 inserts the decision and links the intent to it', async () => {
+    const seed = await seedSessionAccount();
+    const decision = decisionOf(seed);
+    const created = await createSessionIntent(tmp.db, intentInput(seed, { decision }));
+    expect(created.created).toBe(true);
+    const rows = await decisionsOf(seed.session.id);
+    expect(rows).toHaveLength(1);
+    expect(created.intent.signalDecisionId).toBe(rows[0]!.id);
+    expect(rows[0]).toMatchObject({
+      context: 'session',
+      brokerAccountId: seed.brokerAccountId,
+      step: 1,
+      decidedAtMs: decision.decidedAtMs,
+      takenAtMs: decision.takenAtMs,
+      outcome: 'intent',
+      detail: null,
+      series: decision.series,
+      lastTick: decision.lastTick,
+    });
+  });
+
+  it('D8 a replay of the step inserts no second decision', async () => {
+    const seed = await seedSessionAccount();
+    const first = await createSessionIntent(
+      tmp.db,
+      intentInput(seed, { decision: decisionOf(seed) }),
+    );
+    const again = await createSessionIntent(
+      tmp.db,
+      intentInput(seed, { decision: decisionOf(seed) }),
+    );
+    expect(again.created).toBe(false);
+    expect(again.intent.id).toBe(first.intent.id);
+    expect(await decisionsOf(seed.session.id)).toHaveLength(1);
+  });
+
+  it('D9 a refusal after the decision INSERT rolls it back with the intent', async () => {
+    const seed = await seedSessionAccount();
+    await createTradeIntent(tmp.db, intentRequest(seed.telegramUserId));
+    const busy = await thrown(
+      createSessionIntent(tmp.db, intentInput(seed, { decision: decisionOf(seed) })),
+    );
+    expect((busy as TradeIntentError).code).toBe('active_intent_exists');
+    expect(await decisionsOf(seed.session.id)).toHaveLength(0);
+
+    const stopped = await seedSessionAccount();
+    await stopTradingSession(tmp.db, { id: stopped.session.id, reason: 'user_stopped' });
+    const gone = await thrown(
+      createSessionIntent(tmp.db, intentInput(stopped, { decision: decisionOf(stopped) })),
+    );
+    expect(gone).toBeInstanceOf(TradingSessionNotActiveError);
+    expect(await decisionsOf(stopped.session.id)).toHaveLength(0);
+  });
+
+  it('D10 without a decision the intent names none, as a one-off intent', async () => {
+    const seed = await seedSessionAccount();
+    const created = await createSessionIntent(tmp.db, intentInput(seed, { decision: null }));
+    expect(created.intent.signalDecisionId).toBeNull();
+    expect(await decisionsOf(seed.session.id)).toHaveLength(0);
+    const other = await seedUserWithAccount(tmp.db);
+    const oneOff = await createTradeIntent(tmp.db, intentRequest(other.telegramUserId));
+    expect(oneOff.intent.signalDecisionId).toBeNull();
+  });
+});
 describe('recordSessionStatusMessage (#567)', () => {
   // #587: the newest id wins (Telegram's message ids grow within a chat): a relaunch's message
   // replaces the first, a late record of an older one is refused

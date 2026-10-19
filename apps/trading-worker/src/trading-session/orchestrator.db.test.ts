@@ -593,6 +593,7 @@ describe('the attempt and the sequence (#287)', () => {
         amount: '1' as DecimalString,
         action: TradeAction.Up,
         durationSec: 60,
+        decision: null,
       });
       const orchestrator = orchestratorOf();
       await orchestrator.tick();
@@ -932,6 +933,7 @@ describe('the endings of an attempt (#287)', () => {
         amount: '1' as DecimalString,
         action,
         durationSec: 60,
+        decision: null,
       });
       return { ok: true, response: signalAnswer(TradeAction.Up) };
     });
@@ -1085,6 +1087,7 @@ describe('the pause after two losses (#379)', () => {
       amount: '1' as DecimalString,
       action: TradeAction.Down,
       durationSec: 60,
+      decision: null,
     });
     expect(await processIntent(intent.id)).toBe('accepted');
     await settle(seed, intent.id, MockTradeOutcome.Loss);

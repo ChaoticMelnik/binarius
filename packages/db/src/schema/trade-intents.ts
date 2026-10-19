@@ -30,6 +30,7 @@ import {
   updatedAt,
 } from './columns';
 import { brokerAccounts } from './broker-accounts';
+import { signalDecisions } from './signal-decisions';
 import { tradingSessions } from './trading-sessions';
 import { users } from './users';
 
@@ -69,6 +70,9 @@ export const tradeIntents = pgTable(
     // the reconciliation pass's lease and order key (#89): written only by claimReconciling, with
     // the database clock; NULL = never attempted; kept when the intent leaves reconciling
     reconcileClaimedAt: timestamp('reconcile_claimed_at', { withTimezone: true }),
+    // the decision a session's intent was created from (#666), inserted in the same transaction;
+    // NULL on one-off intents and on every row before 0068
+    signalDecisionId: uuid('signal_decision_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -99,6 +103,13 @@ export const tradeIntents = pgTable(
       name: 'trade_intents_session_account_fk',
       columns: [t.tradingSessionId, t.brokerAccountId, t.mode],
       foreignColumns: [tradingSessions.id, tradingSessions.brokerAccountId, tradingSessions.mode],
+    }),
+    // one intent per decision, and the decision is of the intent's own session (#666)
+    uniqueIndex('trade_intents_decision_key').on(t.signalDecisionId),
+    foreignKey({
+      name: 'trade_intents_decision_session_fk',
+      columns: [t.signalDecisionId, t.tradingSessionId],
+      foreignColumns: [signalDecisions.id, signalDecisions.tradingSessionId],
     }),
     inList('trade_intents_mode_check', t.mode, TradeMode),
     inList('trade_intents_action_check', t.action, TradeAction),
