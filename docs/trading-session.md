@@ -751,6 +751,7 @@ line is in it with its level.
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
 | `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
 | `trading session intent created` | info | `step`, `intentId`, `action` |
+| `trading session decision not recorded` | warn | the decision's trade log row (#666, [trade-log.md](trade-log.md)) was not written: `reason: 'record_missing'` (the backend answered no record, once per attempt), or the insert threw (`step`, `errorLogFields`); the ending stands |
 | `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 | `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
 | `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |

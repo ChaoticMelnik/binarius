@@ -1,7 +1,9 @@
 // Test-only fixtures for the trading routes. Compiled by `tsc -b` alongside the *.test.ts files
 // next to it and imported by no runtime module.
 
+import { signalRecordFixture } from '@binarius/db/testing';
 import {
+  NoSignalReason,
   SessionStakeStrategy,
   SignalKind,
   TradeAction,
@@ -51,15 +53,28 @@ export function fakeSignalFeed(answer: SignalEvaluation | (() => Promise<SignalE
 }
 
 // A decided evaluation of `kind` for the session start's signal step (#509), which reads the
-// decision's kind and a signal's direction (#568); the journal fields are left out.
+// decision's kind and a signal's direction (#568), and records the whole entry (#666)
 export const sessionSignalEvaluation = (
   kind: SignalKind,
   action: TradeAction = TradeAction.Up,
-): SignalEvaluation =>
-  ({
+): SignalEvaluation => {
+  const { entry } = signalRecordFixture();
+  return {
     outcome: 'decided',
-    entry: { decision: kind === SignalKind.Signal ? { kind, action } : { kind } },
-  }) as unknown as SignalEvaluation;
+    entry: {
+      ...entry,
+      decision:
+        kind === SignalKind.Signal
+          ? { ...entry.decision, kind, action }
+          : {
+              kind,
+              version: 'v2',
+              reason: NoSignalReason.InsufficientCandles,
+              detail: { closedCandles: 2, required: 50 },
+            },
+    },
+  } as SignalEvaluation;
+};
 
 // for suites that never call POST /trading/signal
 export const unusedSignalDeps = (): SignalRoutesDeps => ({
@@ -71,6 +86,7 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
   catalog: fakeCatalog(undefined),
   internalApiToken: PAIRS_TEST_TOKEN,
   lastAnalysis: recordingLastAnalysis().lastAnalysis,
+  ticks: undefined,
 });
 
 // a port of the last analysis (#484) that answers `answer` and records every call
@@ -112,4 +128,10 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
   internalApiToken: PAIRS_TEST_TOKEN,
   demoOnly: false,
   stakeStrategy: SessionStakeStrategy.Martingale,
+  decisions: {
+    record: () => {
+      throw new Error('the trade log is not wired in this test');
+    },
+  },
+  ticks: undefined,
 });

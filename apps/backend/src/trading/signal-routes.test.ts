@@ -25,6 +25,7 @@ import type { AuthRoutesDeps } from '../auth/routes';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
 import { createScanPacer } from '../signal/pacer';
+import { createTickStore } from '../market-data/ticks';
 import type { SignalRoutesDeps } from './signal-routes';
 import {
   fakeCatalog,
@@ -98,6 +99,7 @@ function appWith(
   // null: the cache holds no snapshot
   catalog: PairsCatalogView | null = catalogOf(),
   lastAnalysis: SignalRoutesDeps['lastAnalysis'] = recordingLastAnalysis().lastAnalysis,
+  ticks: SignalRoutesDeps['ticks'] = undefined,
 ): FastifyInstance {
   lines = [];
   app = buildApp({
@@ -121,6 +123,7 @@ function appWith(
       catalog: fakeCatalog(catalog ?? undefined),
       internalApiToken: PAIRS_TEST_TOKEN,
       lastAnalysis,
+      ticks,
     },
     signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
@@ -195,6 +198,56 @@ describe('POST /trading/signal', () => {
     });
     expect(safeParseTradingSignalResponse(body).success).toBe(true);
     expect(calls).toStrictEqual([{ assetId: 101, interval: '1m', digits: 5 }]);
+  });
+
+  // #666: a session's worker asks for the decision's record
+  it('R19 record: true answers the whole entry and the pair\'s newest tick', async () => {
+    const { feed } = fakeSignalFeed(decidedEvaluation);
+    const store = createTickStore();
+    store.push(101, { price: 1.15, timestamp: T - 300 }, T - 280);
+    store.push(202, { price: 9.5, timestamp: T - 100 }, T - 90);
+    const response = await post(appWith(feed, catalogOf(), undefined, store), {
+      assetId: 101,
+      interval: '1m',
+      record: true,
+    });
+    expect(response.statusCode).toBe(200);
+    const body: unknown = response.json();
+    expect(body).toStrictEqual({
+      outcome: 'decided',
+      params: DEFAULT_SIGNAL_PARAMS,
+      decision: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry.decision,
+      record: {
+        entry: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry,
+        lastTick: { price: 1.15, timestamp: T - 300, receivedAtMs: T - 280 },
+      },
+    });
+    expect(safeParseTradingSignalResponse(body).success).toBe(true);
+  });
+
+  it('R20 without the flag the answer carries no record, whatever the tick store holds', async () => {
+    const { feed } = fakeSignalFeed(decidedEvaluation);
+    const store = createTickStore();
+    store.push(101, { price: 1.15, timestamp: T - 300 }, T - 280);
+    const response = await post(appWith(feed, catalogOf(), undefined, store), {
+      assetId: 101,
+      interval: '1m',
+    });
+    expect(response.json()).not.toHaveProperty('record');
+  });
+
+  it('R21 without the data socket or a tick of the pair the record has no tick; a fetch failure none', async () => {
+    const { feed } = fakeSignalFeed(decidedEvaluation);
+    const request = { assetId: 101, interval: '1m', record: true };
+    const withoutSocket = await post(appWith(feed), request);
+    expect(withoutSocket.json<{ record: unknown }>().record).toMatchObject({ lastTick: null });
+    await app?.close();
+    const withoutTick = await post(appWith(feed, catalogOf(), undefined, createTickStore()), request);
+    expect(withoutTick.json<{ record: unknown }>().record).toMatchObject({ lastTick: null });
+    await app?.close();
+    const failed = fakeSignalFeed({ outcome: 'fetch_failed', code: 'unavailable' } as SignalEvaluation);
+    const response = await post(appWith(failed.feed), request);
+    expect(response.json()).toStrictEqual({ outcome: 'fetch_failed', code: 'unavailable' });
   });
 
   // #482: the card's indicators ride next to the decision; a response without them stays valid

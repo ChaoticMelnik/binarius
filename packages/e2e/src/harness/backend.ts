@@ -27,7 +27,7 @@ import {
   type TradingRoutesDeps,
 } from '@binarius/backend/e2e';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
-import { createTokenCipher, setLastAnalysis, type Db } from '@binarius/db';
+import { createTokenCipher, recordSignalDecision, setLastAnalysis, type Db } from '@binarius/db';
 import { SessionStakeStrategy } from '@binarius/shared';
 import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
@@ -136,6 +136,9 @@ export async function startE2eBackend(deps: {
       internalApiToken: INTERNAL_API_TOKEN,
       demoOnly: false,
       stakeStrategy: SessionStakeStrategy.Martingale,
+      // the trade log as in production (#666); no data socket in the run, so no tick
+      decisions: { record: (input) => recordSignalDecision(db, input) },
+      ticks: undefined,
     },
     signal: {
       feed: signalFeed,
@@ -144,6 +147,7 @@ export async function startE2eBackend(deps: {
       lastAnalysis: {
         set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
       },
+      ticks: undefined,
     },
     // the scanners are not built: the run takes the manual door, and a call here fails the test
     signals: unusedSignalsDeps(),

@@ -106,7 +106,8 @@ export function createBackendSignalSource({
             'content-type': 'application/json',
             accept: 'application/json',
           },
-          body: JSON.stringify({ assetId, interval }),
+          // the decision's record for the trade log (#666): the entry and the pair's last tick
+          body: JSON.stringify({ assetId, interval, record: true }),
         },
         timeoutMs,
         signal,

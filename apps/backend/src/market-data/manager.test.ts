@@ -39,6 +39,7 @@ import {
   type MarketDataManager,
 } from './manager';
 import { createCandleRing, type CandleRing } from './ring';
+import { createTickStore, type TickStore } from './ticks';
 import { createPendingRequests } from './source';
 
 const TOKEN_1 = 'SECRET-token-of-user-1';
@@ -205,6 +206,7 @@ interface TokenCall {
 interface Harness {
   manager: MarketDataManager;
   ring: CandleRing;
+  ticks: TickStore;
   // the real backfill with the option, over the mock broker's REST
   backfill: CandleBackfill | undefined;
   calls: TokenCall[];
@@ -264,6 +266,7 @@ function harness(
     skewMarginMs: 2_000,
     intervals: SIGNAL_SCAN_INTERVALS,
   });
+  const ticks = createTickStore();
   const calls: TokenCall[] = [];
   const answers = new Map<string, (options: AccessTokenOptions) => Promise<AccessTokenResult>>();
   const catalog = { view: 'view' in options ? options.view : freshView() };
@@ -332,6 +335,7 @@ function harness(
     catalog: { read: () => catalog.view },
     openClient: options.openClient ?? openReal,
     ring,
+    ticks,
     requests,
     backfill: backfill ?? {
       counters: () => ({ queued: 0, fetched: 0, filled: 0, failed: 0, rateLimited: 0, spare: 0 }),
@@ -346,6 +350,7 @@ function harness(
   return {
     manager,
     ring,
+    ticks,
     backfill,
     calls,
     answers,
@@ -960,6 +965,24 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     expect(h.ring.read(IDS[0] ?? 0, '5s', now).forming).toBeDefined();
     expect(h.ring.read(IDS[1] ?? 0, '5s', now).forming).toBeUndefined();
     expectSafe(h, fakes.made);
+  });
+
+  it('M28 keeps the newest tick of the active only, with its receipt time, for known pairs (#666)', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active, reserve] = fakes.made;
+    const now = Date.now();
+    active?.hear(price(IDS[0], now));
+    reserve?.hear(price(IDS[1], now));
+    active?.hear(price(undefined, now));
+    expect(h.ticks.last(IDS[0] ?? 0)).toEqual({
+      price: 1.1,
+      timestamp: now,
+      receivedAtMs: expect.any(Number),
+    });
+    expect(h.ticks.last(IDS[1] ?? 0)).toBeUndefined();
+    expect(h.ticks.counters()).toEqual({ pairs: 1 });
   });
 
   it('M16 hands the refused token to the token service only as its hash, never to a client or a log', async () => {

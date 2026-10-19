@@ -19,6 +19,7 @@ import {
   createTokenCipher,
   listBotTextOverrides,
   listServiceBrokerAccounts,
+  recordSignalDecision,
   setLastAnalysis,
 } from '@binarius/db';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
@@ -39,6 +40,7 @@ import { createBrokerOAuthClient } from './broker/oauth-client';
 import { createServiceAccountKeeper } from './broker/service-accounts';
 import { parseEnv } from './env';
 import { createMarketDataManager } from './market-data/manager';
+import { createTickStore } from './market-data/ticks';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
 import { createCandleBackfill } from './market-data/backfill';
@@ -155,6 +157,8 @@ const candleStore =
           intervals: SIGNAL_SCAN_INTERVALS,
         }),
         requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
+        // the newest tick per pair, answered with a session's decision record (#666)
+        ticks: createTickStore(),
       };
 
 // One pacer for every signal chart GET (docs/signal.md -> The budget, #405): tryTake for the
@@ -263,6 +267,8 @@ const app = buildApp({
     internalApiToken: env.internalApiToken,
     demoOnly: env.demoOnly,
     stakeStrategy: env.sessionStakeStrategy,
+    decisions: { record: (input) => recordSignalDecision(db, input) },
+    ticks: candleStore?.ticks,
   },
   signal: {
     feed: signalFeed,
@@ -271,6 +277,7 @@ const app = buildApp({
     lastAnalysis: {
       set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
     },
+    ticks: candleStore?.ticks,
   },
   signals: {
     scanners: signalScanners,
@@ -388,7 +395,7 @@ const serviceAccounts = createServiceAccountKeeper({
 // (#404) and its REST backfill (#590), read by the signal feed and the scanners (#405). Started with
 // the other loops after listen(), stopped in phase 1.
 function createMarketData(
-  { brokerWsUrl, ring, requests }: NonNullable<typeof candleStore>,
+  { brokerWsUrl, ring, requests, ticks }: NonNullable<typeof candleStore>,
   pacer: SpareTokenSource,
 ) {
   const backfill = createCandleBackfill({
@@ -418,6 +425,7 @@ function createMarketData(
     openClient: (label) =>
       createBrokerSocketClient({ url: brokerWsUrl, logger: app.log.child({ socket: label }) }),
     ring,
+    ticks,
     requests,
     backfill,
     logger: app.log,

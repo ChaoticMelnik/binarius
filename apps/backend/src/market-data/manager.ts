@@ -19,6 +19,7 @@ import { assertDigits } from '@binarius/signal';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import type { BackfillCounters, CandleBackfill } from './backfill';
 import type { CandleRing } from './ring';
+import type { TickStore } from './ticks';
 import type { PendingRequests } from './source';
 
 type BackfillTotal = Exclude<keyof BackfillCounters, 'queued'>;
@@ -58,6 +59,8 @@ export interface MarketDataManagerDeps {
   // a new, idle client; label: the account it is opened for
   openClient: (label: string) => BrokerSocketClient;
   ring: CandleRing;
+  // the newest tick per pair (#666): the active client's ticks, next to the ring
+  ticks: Pick<TickStore, 'push'>;
   requests: Pick<PendingRequests, 'size'>;
   backfill: Pick<CandleBackfill, 'counters'>;
   logger: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>;
@@ -115,6 +118,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     catalog,
     openClient,
     ring,
+    ticks: tickStore,
     requests,
     backfill,
     logger,
@@ -476,7 +480,9 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
           return;
         }
         ticks += 1;
-        ring.push(assetId, digits, { price, timestamp }, now());
+        const receivedAtMs = now();
+        ring.push(assetId, digits, { price, timestamp }, receivedAtMs);
+        tickStore.push(assetId, { price, timestamp }, receivedAtMs);
         return;
       }
       case BrokerEventType.UserData: {
