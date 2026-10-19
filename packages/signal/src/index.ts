@@ -9,3 +9,4 @@ export * from './journal';
 export * from './source';
 export * from './cache';
 export * from './ticks';
+export * from './h1';
