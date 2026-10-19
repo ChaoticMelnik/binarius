@@ -34,6 +34,7 @@ export * from './telegram-html';
 export * from './bot-message-width';
 export * from './catalog';
 export * from './signal';
+export * from './h1';
 export * from './trading-session';
 export * from './trading-switch';
 export * from './stake';
