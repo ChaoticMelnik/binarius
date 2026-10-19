@@ -97,6 +97,8 @@ export const tradingSessions = pgTable(
     // FK target for trade_intents: mode is part of the key so a demo session cannot
     // parent a real intent
     unique('trading_sessions_id_account_mode_key').on(t.id, t.brokerAccountId, t.mode),
+    // FK target for signal_decisions: a session's decision names the session's account (#666)
+    unique('trading_sessions_id_account_key').on(t.id, t.brokerAccountId),
     index('trading_sessions_account_status_idx').on(t.brokerAccountId, t.status),
     inList('trading_sessions_mode_check', t.mode, TradeMode),
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),

@@ -44,6 +44,7 @@ export * from './bot-texts';
 export * from './bot-texts-en';
 export * from './bot-text-messages';
 export * from './session-steps';
+export * from './trade-log';
 export * from './session-texts';
 export * from './bot-commands';
 export * from './bot-text-overrides';

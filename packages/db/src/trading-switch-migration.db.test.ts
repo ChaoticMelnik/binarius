@@ -62,23 +62,15 @@ describe('migration 0019', () => {
        returning id`,
       [userId],
     );
-    const seed = { userId, brokerAccountId: accounts[0]!.id };
-    const [intent] = await tmp.db
-      .insert(tradeIntents)
-      .values({
-        brokerAccountId: seed.brokerAccountId,
-        userId: seed.userId,
-        mode: 'real',
-        assetId: 91,
-        amount: '10.00' as never,
-        action: 'up',
-        durationSec: 60,
-        clientRequestId: 'before-0019',
-        status: 'rejected',
-        tokensReserved: 0n,
-        lastError: 'real_trading_disabled' as never,
-      })
-      .returning();
+    // and the intent: trade_intents.signal_decision_id (#666) came after 0018
+    const { rows: intents } = await tmp.pool.query<{ id: string }>(
+      `insert into trade_intents (broker_account_id, user_id, mode, asset_id, amount, action,
+         duration_sec, client_request_id, status, tokens_reserved, last_error)
+       values ($1, $2, 'real', 91, 10.00, 'up', 60, 'before-0019', 'rejected', 0, 'real_trading_disabled')
+       returning id`,
+      [accounts[0]!.id, userId],
+    );
+    const intent = intents[0];
     await tmp.db.insert(outboxEvents).values({
       intentId: intent!.id,
       payload: { intent_id: intent!.id },

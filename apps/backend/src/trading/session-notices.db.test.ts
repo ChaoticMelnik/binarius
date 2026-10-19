@@ -169,6 +169,7 @@ async function nextIntent(target: Target): Promise<TradeIntentRow> {
       amount: decimalStringSchema.parse('5'),
       action: TradeAction.Up,
       durationSec: 60,
+      decision: null,
     })
   ).intent;
 }

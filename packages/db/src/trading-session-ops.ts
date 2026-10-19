@@ -29,6 +29,7 @@ import { tokenLedger } from './schema/token-ledger';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
+import type { SignalDecisionInput } from './signal-decision-ops';
 import {
   TOKENS_PER_INTENT,
   createTradeIntent,
@@ -480,6 +481,9 @@ export interface CreateSessionIntentInput {
   amount: DecimalString;
   action: TradeAction;
   durationSec: number;
+  // the decision the intent is created from, inserted in its transaction (#666); null when the
+  // backend answered no record (an old backend, docs/trade-log.md)
+  decision: SignalDecisionInput | null;
 }
 
 // createTradeIntent's own path: the step key makes a repeat a replay, and the session row is
@@ -501,7 +505,7 @@ export async function createSessionIntent(
       durationSec: input.durationSec,
       clientRequestId: `session:${input.sessionId}:${input.step}`,
     },
-    { id: input.sessionId },
+    { id: input.sessionId, decision: input.decision },
     options,
   );
 }

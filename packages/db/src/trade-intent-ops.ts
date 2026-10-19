@@ -31,6 +31,7 @@ import { sqlLiteralList } from './schema/columns';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
+import { recordSignalDecision, type SignalDecisionInput } from './signal-decision-ops';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -74,9 +75,10 @@ export class TradingSessionNotActiveError extends Error {
 }
 
 // the session an intent belongs to (trade_intents.trading_session_id); only the orchestrator
-// passes one
+// passes one, with the decision the intent is created from (#666; null: none was recorded)
 export interface IntentSession {
   id: string;
+  decision: SignalDecisionInput | null;
 }
 
 export interface CreateTradeIntentOptions {
@@ -241,6 +243,13 @@ async function createInTransaction(
     if (active.length === 0) throw new TradingSessionNotActiveError(session.id);
   }
 
+  // after the session lock and before the intent (Rule 5): the decision row and the intent that
+  // names it commit or roll back together (#666)
+  const decisionId =
+    session === undefined || session.decision === null
+      ? null
+      : (await recordSignalDecision(tx, session.decision)).id;
+
   const [planned] = await tx
     .insert(tradeIntents)
     .values({
@@ -253,6 +262,7 @@ async function createInTransaction(
       durationSec: input.durationSec,
       clientRequestId: input.clientRequestId,
       tradingSessionId: session?.id ?? null,
+      signalDecisionId: decisionId,
       status: TradeIntentStatus.Planned,
       tokensReserved: tokens,
     })

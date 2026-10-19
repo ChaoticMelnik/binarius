@@ -384,8 +384,12 @@ describe('contract coverage (issue #6)', () => {
       Extract<TradingSignalResponse, { outcome: 'decided' }>['params']
     >().toEqualTypeOf<SignalParams>();
     expectTypeOf<keyof Extract<TradingSignalResponse, { outcome: 'decided' }>>().toEqualTypeOf<
-      'outcome' | 'params' | 'decision' | 'indicators'
+      'outcome' | 'params' | 'decision' | 'indicators' | 'record'
     >();
+    // the session's decision record (#666)
+    expectTypeOf<
+      keyof NonNullable<Extract<TradingSignalResponse, { outcome: 'decided' }>['record']>
+    >().toEqualTypeOf<'entry' | 'lastTick'>();
     expectTypeOf<
       keyof NonNullable<Extract<TradingSignalResponse, { outcome: 'decided' }>['indicators']>
     >().toEqualTypeOf<'macd' | 'ma50' | 'ma200'>();

@@ -1,6 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { SIGNAL_ALGORITHM_VERSIONS, type Candle } from '@binarius/shared';
-import { describe, expect, it } from 'vitest';
+import {
+  SIGNAL_ALGORITHM_VERSIONS,
+  signalJournalEntrySchema,
+  storedSignalJournalEntrySchema,
+  type Candle,
+  type SignalJournalEntryWire,
+  type StoredSignalJournalEntryWire,
+} from '@binarius/shared';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider, createSignalDeciderV1, type SignalDecider } from './decide';
 import { SIGNAL_CHART_LIMIT } from './feed-config';
@@ -189,5 +196,20 @@ describe('signal journal', () => {
     const line: Partial<SignalJournalEntry> = throughLine(entryFor(rising, closedNow(rising)));
     delete line.digits;
     expect(() => replaySignalJournalEntry(line as SignalJournalEntry)).toThrow(RangeError);
+  });
+
+  it('J8 the shared wire schema of the entry is this module type, both ways (#666)', () => {
+    expectTypeOf<SignalJournalEntry>().toExtend<SignalJournalEntryWire>();
+    expectTypeOf<SignalJournalEntryWire>().toExtend<SignalJournalEntry>();
+    expectTypeOf<StoredSignalJournalEntry>().toExtend<StoredSignalJournalEntryWire>();
+    expectTypeOf<StoredSignalJournalEntryWire>().toExtend<StoredSignalJournalEntry>();
+    const line = throughLine(entryFor(rising, closedNow(rising)));
+    const parsed = signalJournalEntrySchema.parse(line);
+    expect(parsed).toEqual(line);
+    expect(replaySignalJournalEntry(parsed)).toEqual(line.decision);
+    const v1: SignalJournalEntryV1 = JSON.parse(
+      readFileSync(new URL('./fixtures/v1-signal-line.json', import.meta.url), 'utf8'),
+    ) as SignalJournalEntryV1;
+    expect(storedSignalJournalEntrySchema.safeParse(v1).success).toBe(true);
   });
 });

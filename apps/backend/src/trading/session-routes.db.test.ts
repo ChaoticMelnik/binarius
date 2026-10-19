@@ -1061,6 +1061,7 @@ const sessionIntent = (
     amount: decimalStringSchema.parse('1'),
     action,
     durationSec: 60,
+    decision: null,
   });
 
 async function submitted(intent: TradeIntentRow): Promise<TradeIntentRow> {
@@ -1311,7 +1312,7 @@ describe('POST /trading/sessions/:id/stop', () => {
         durationSec: 60,
         clientRequestId: `session:${seed.sessionId}:1`,
       },
-      { id: seed.sessionId },
+      { id: seed.sessionId, decision: null },
     );
     const response = await stop(appWith(), seed.sessionId, {
       telegramUserId: seed.telegramUserId,

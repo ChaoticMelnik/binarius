@@ -321,6 +321,7 @@ const sessionIntent = (
     amount: decimalStringSchema.parse('1'),
     action,
     durationSec: 60,
+    decision: null,
   });
 
 describe('readTradingSessionView', () => {

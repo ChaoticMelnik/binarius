@@ -24,6 +24,7 @@ import {
   outboxEvents,
   referralCodes,
   referrals,
+  signalDecisions,
   starPayments,
   starRefundRequests,
   staff,
@@ -577,9 +578,13 @@ describe('enum and uniqueness constraints', () => {
       'broker_accounts_id_user_id_key',
       'deposit_events_id_user_key',
       'referrals_id_inviter_key',
+      // #666: an intent's decision is of its session
+      'signal_decisions_id_session_key',
       'star_payments_id_user_key',
       'trade_intents_id_account_mode_key',
       'trade_intents_id_user_key',
+      // #666: a session's decision names the session's account
+      'trading_sessions_id_account_key',
       'trading_sessions_id_account_mode_key',
     ];
     const { rows } = await pool.query<{ conname: string }>(
@@ -1933,6 +1938,256 @@ describe('postback_deliveries', () => {
   });
 });
 
+// The trade log's decision rows (#666, docs/trade-log.md): every CHECK on the rows its writers
+// build and on the boundary and NULL rows next to them (the architect's probe corpus).
+describe('signal_decisions (#666)', () => {
+  async function seedSession(tx: Tx) {
+    const seed = await seedAccount(tx);
+    const [session] = await tx
+      .insert(tradingSessions)
+      .values({ brokerAccountId: seed.accountId, mode: 'demo' })
+      .returning({ id: tradingSessions.id });
+    return { ...seed, sessionId: session!.id };
+  }
+  const decisionRow = (
+    seed: { accountId: string; sessionId: string },
+    patch: Record<string, unknown> = {},
+  ) =>
+    ({
+      context: 'session',
+      tradingSessionId: seed.sessionId,
+      brokerAccountId: seed.accountId,
+      step: 1,
+      assetId: 101,
+      interval: '15s',
+      version: 'v2',
+      decidedAtMs: 1_760_000_000_000,
+      takenAtMs: 1_760_000_000_050,
+      kind: 'signal',
+      action: 'up',
+      payout: 92,
+      digits: 5,
+      params: { emaFast: 9 },
+      decision: { kind: 'signal' },
+      source: { kind: 'socket' },
+      series: [[1_760_000_000_000, 1.1, 1.2, 1.0, 1.15]],
+      lastTick: { price: 1.15, timestamp: 1_760_000_000_010, receivedAtMs: 1_760_000_000_020 },
+      outcome: 'intent',
+      detail: null,
+      ...patch,
+    }) as typeof signalDecisions.$inferInsert;
+
+  it.each<[string, Record<string, unknown>]>([
+    ['a session decision with its intent', {}],
+    [
+      'a no_signal hold without a tick, a payout or digits',
+      {
+        kind: 'no_signal',
+        action: null,
+        outcome: 'no_signal',
+        lastTick: null,
+        payout: null,
+        digits: null,
+      },
+    ],
+    [
+      'a start without a session (no_signal)',
+      {
+        context: 'session_start',
+        tradingSessionId: null,
+        step: null,
+        kind: 'no_signal',
+        action: null,
+        outcome: 'no_signal',
+      },
+    ],
+    ['a start with its session', { context: 'session_start', step: null, outcome: 'started' }],
+    [
+      'a shadow row of a tick-based version without interval, account or session',
+      {
+        context: 'shadow',
+        tradingSessionId: null,
+        brokerAccountId: null,
+        step: null,
+        interval: null,
+        version: 'h1',
+        outcome: 'shadow',
+        result: { won: true },
+      },
+    ],
+    ['a refusal with its code', { outcome: 'refused', detail: 'client_request_id_conflict' }],
+    ['a stake stop with its code', { outcome: 'stake_stop', detail: 'max_session_loss' }],
+    ['a zero payout and the digits bounds', { payout: 0, digits: 10 }],
+  ])('accepts %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedSession(tx);
+      const [row] = await tx
+        .insert(signalDecisions)
+        .values(decisionRow(seed, patch))
+        .returning({ id: signalDecisions.id });
+      expect(row!.id).toBeDefined();
+    });
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['an unknown context', { context: 'bot' }, 'signal_decisions_context_check'],
+    [
+      'a session decision without its session',
+      { tradingSessionId: null },
+      'signal_decisions_session_pair_check',
+    ],
+    [
+      'a start without its session',
+      { context: 'session_start', tradingSessionId: null, step: null, outcome: 'started' },
+      'signal_decisions_session_pair_check',
+    ],
+    [
+      'a session decision without its account',
+      { brokerAccountId: null },
+      'signal_decisions_account_pair_check',
+    ],
+    [
+      'a start without its account',
+      { context: 'session_start', tradingSessionId: null, brokerAccountId: null, step: null },
+      'signal_decisions_account_pair_check',
+    ],
+    ['a zero step', { step: 0 }, 'signal_decisions_step_check'],
+    ['a session decision without a step', { step: null }, 'signal_decisions_step_pair_check'],
+    [
+      'a start with a step',
+      { context: 'session_start', outcome: 'started' },
+      'signal_decisions_step_pair_check',
+    ],
+    ['a zero asset id', { assetId: 0 }, 'signal_decisions_asset_id_check'],
+    ['an unknown interval', { interval: '2m' }, 'signal_decisions_interval_check'],
+    ['an upper-case version', { version: 'V2' }, 'signal_decisions_version_check'],
+    ['a 17-character version', { version: 'v'.repeat(17) }, 'signal_decisions_version_check'],
+    ['an empty version', { version: '' }, 'signal_decisions_version_check'],
+    ['a zero decision time', { decidedAtMs: 0 }, 'signal_decisions_decided_at_ms_check'],
+    ['a zero taking time', { takenAtMs: 0 }, 'signal_decisions_taken_at_ms_check'],
+    ['an unknown kind', { kind: 'maybe', action: null }, 'signal_decisions_kind_check'],
+    ['an unknown action', { action: 'sideways' }, 'signal_decisions_action_check'],
+    ['a signal without its action', { action: null }, 'signal_decisions_action_pair_check'],
+    [
+      'a no_signal with an action',
+      { kind: 'no_signal', outcome: 'no_signal' },
+      'signal_decisions_action_pair_check',
+    ],
+    ['a negative payout', { payout: -1 }, 'signal_decisions_payout_check'],
+    ['a NaN payout', { payout: Number.NaN }, 'signal_decisions_payout_check'],
+    ['digits above MAX_PAIR_DIGITS', { digits: 11 }, 'signal_decisions_digits_check'],
+    ['negative digits', { digits: -1 }, 'signal_decisions_digits_check'],
+    ['params as an array', { params: [] }, 'signal_decisions_params_check'],
+    ['a decision as a string', { decision: 'up' }, 'signal_decisions_decision_check'],
+    ['a source as a number', { source: 1 }, 'signal_decisions_source_check'],
+    ['a series as an object', { series: {} }, 'signal_decisions_series_check'],
+    ['a last tick as an array', { lastTick: [] }, 'signal_decisions_last_tick_check'],
+    ['a result as an array', { result: [] }, 'signal_decisions_result_check'],
+    ['an unknown outcome', { outcome: 'won' }, 'signal_decisions_outcome_check'],
+    [
+      'a signal recorded as no_signal',
+      { outcome: 'no_signal' },
+      'signal_decisions_outcome_kind_check',
+    ],
+    [
+      'a no_signal decision with an intent',
+      { kind: 'no_signal', action: null },
+      'signal_decisions_outcome_kind_check',
+    ],
+    [
+      'a detail outside the pattern',
+      { outcome: 'refused', detail: 'Bad-Code' },
+      'signal_decisions_detail_check',
+    ],
+    [
+      'a 65-character detail',
+      { outcome: 'refused', detail: 'x'.repeat(65) },
+      'signal_decisions_detail_check',
+    ],
+    ['a refusal without its code', { outcome: 'refused' }, 'signal_decisions_detail_pair_check'],
+    [
+      'a stake stop without its code',
+      { outcome: 'stake_stop' },
+      'signal_decisions_detail_pair_check',
+    ],
+    ['an intent with a detail', { detail: 'trading_paused' }, 'signal_decisions_detail_pair_check'],
+    [
+      'a pause with the stop reason as its detail',
+      { outcome: 'paused', detail: 'no_signal_timeout' },
+      'signal_decisions_detail_pair_check',
+    ],
+  ])('rejects %s', async (_label, patch, constraint) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedSession(tx);
+      await rejectsWith(
+        tx.insert(signalDecisions).values(decisionRow(seed, patch)),
+        '23514',
+        constraint,
+      );
+    });
+  });
+
+  it("rejects a session decision naming another account than its session's", async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedSession(tx);
+      const other = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(signalDecisions).values(decisionRow({ ...seed, accountId: other.accountId })),
+        '23503',
+        'signal_decisions_session_account_fk',
+      );
+    });
+  });
+
+  it("rejects an intent naming another session's decision, and a second intent of one decision", async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedSession(tx);
+      const [decision] = await tx
+        .insert(signalDecisions)
+        .values(decisionRow(seed))
+        .returning({ id: signalDecisions.id });
+      const [otherSession] = await tx
+        .insert(tradingSessions)
+        .values({
+          brokerAccountId: seed.accountId,
+          mode: 'demo',
+          status: 'stopped',
+          stopReason: 'completed',
+          endedAt: new Date(),
+        })
+        .returning({ id: tradingSessions.id });
+      await tx.execute(sql`savepoint other_session`);
+      await rejectsWith(
+        tx.insert(tradeIntents).values(
+          intent(seed, 'd1', {
+            tradingSessionId: otherSession!.id,
+            signalDecisionId: decision!.id,
+          }),
+        ),
+        '23503',
+        'trade_intents_decision_session_fk',
+      );
+      await tx.execute(sql`rollback to savepoint other_session`);
+      await tx.insert(tradeIntents).values(
+        intent(seed, 'd2', {
+          tradingSessionId: seed.sessionId,
+          signalDecisionId: decision!.id,
+          status: 'settled',
+        }),
+      );
+      await rejectsWith(
+        tx.insert(tradeIntents).values(
+          intent(seed, 'd3', {
+            tradingSessionId: seed.sessionId,
+            signalDecisionId: decision!.id,
+          }),
+        ),
+        '23505',
+        'trade_intents_decision_key',
+      );
+    });
+  });
+});
 // Every simple FK the migrations declare. The ones below can be violated on their own: the
 // composite FK sharing the table is either absent or skipped under MATCH SIMPLE because one of
 // its columns is NULL, so a dangling id reaches exactly the constraint named.
@@ -1984,6 +2239,22 @@ describe('foreign keys', () => {
         tx
           .insert(tokenLedger)
           .values({ userId: dangling, kind: 'adjustment', balanceDelta: 1n, note: 'n' }),
+    ],
+    [
+      // no account: the session composite is skipped (#666)
+      'signal_decisions_trading_session_id_trading_sessions_id_fk',
+      (tx) =>
+        tx.execute(
+          sql`insert into signal_decisions (context, trading_session_id, asset_id, version, decided_at_ms, taken_at_ms, kind, action, params, decision, source, series, outcome) values ('shadow', ${dangling}, 101, 'h1', 1, 1, 'signal', 'up', '{}', '{}', '{}', '[]', 'shadow')`,
+        ),
+    ],
+    [
+      // no session: the session composite is skipped (#666)
+      'signal_decisions_broker_account_id_broker_accounts_id_fk',
+      (tx) =>
+        tx.execute(
+          sql`insert into signal_decisions (context, broker_account_id, asset_id, interval, version, decided_at_ms, taken_at_ms, kind, params, decision, source, series, outcome) values ('session_start', ${dangling}, 101, '15s', 'v2', 1, 1, 'no_signal', '{}', '{}', '{}', '[]', 'no_signal')`,
+        ),
     ],
     [
       'trading_sessions_broker_account_id_broker_accounts_id_fk',
