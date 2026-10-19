@@ -1,6 +1,12 @@
-import { BROKER_RATE_LIMIT_PER_MINUTE } from '@binarius/shared';
+import {
+  BROKER_RATE_LIMIT_PER_MINUTE,
+  H1_ENTRY_WINDOW_SEC,
+  H1_EXPIRY_SEC,
+  H1_MIN_PAYOUT_PCT,
+} from '@binarius/shared';
 
-// docs/signal-stand.md is the method; every number below is quoted there by name.
+// docs/signal-stand.md is the method; every number below is quoted there by name. The fourth
+// command, h1 (#667), replays the H1 detector on the 1s series over the grid at the end.
 
 export const STAND_PAGE_LIMIT = 5_000;
 export const STAND_DEFAULT_GETS_PER_MINUTE = 120;
@@ -59,6 +65,13 @@ export const STAND_ASSET_IDS: readonly number[] = [
   202036987, 901627288, 905901932, 1080246146, 1786057035, 1988152589, 37439809, 539345642,
   727957842, 1202345528, 1798757939, 2126847458,
 ];
+
+// H1 (#667): the backtest's two thresholds, the ends of the entry window and the expiry with a
+// longer one kept as a sensitivity point
+export const H1_THRESHOLD_GRID = [1, 2] as const;
+export const H1_ENTRY_DELAY_GRID_SEC = [H1_ENTRY_WINDOW_SEC.from, H1_ENTRY_WINDOW_SEC.to] as const;
+export const H1_EXPIRY_GRID_SEC = [H1_EXPIRY_SEC, 15] as const;
+export const H1_POOLED_PAYOUTS = { h1: H1_MIN_PAYOUT_PCT, all: POOLED_BREAK_EVEN_PAYOUT } as const;
 
 // The stand runs from its own IP outside the three budgeted loops, but a dev stack polling the
 // broker from the same machine shares that IP's window: the default leaves it four fifths.

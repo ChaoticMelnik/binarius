@@ -12,6 +12,9 @@ import { StandError } from './cache';
 import { runCalibrate } from './calibrate';
 import {
   FETCH_INTERVALS,
+  H1_ENTRY_DELAY_GRID_SEC,
+  H1_EXPIRY_GRID_SEC,
+  H1_THRESHOLD_GRID,
   OPEN_DELAY_GRID_MS,
   STAND_ASSET_IDS,
   STAND_DEFAULT_DAYS,
@@ -21,15 +24,18 @@ import {
   type TradeInterval,
 } from './config';
 import { fetchCandles, FETCH_STEP_MS } from './fetch';
+import { runH1 } from './h1-run';
 import { createPacer, systemClock, type Clock } from './pacer';
 import { runBacktest } from './run';
 import { comparesWithV2, VARIANTS } from './variants';
 
-export const USAGE = `usage: stand <fetch|run|calibrate> [options]
+export const USAGE = `usage: stand <fetch|run|calibrate|h1> [options]
   fetch      [--assets <id,...>] [--days <1-${STAND_MAX_DAYS}>] [--intervals <1s,5s,15s,1m>]
   run        [--assets <id,...>] [--out <dir>] [--headline-delay <${OPEN_DELAY_GRID_MS.join('|')}>]
              [--variants <${VARIANTS.map((variant) => variant.name).join(',')}>] [--intervals <${Object.keys(TRADE_INTERVALS).join(',')}>]
   calibrate  [--journal <file>] [--trades <file>] [--session-candles <dir>]
+  h1         [--assets <id,...>] [--out <dir>] [--thresholds <${H1_THRESHOLD_GRID.join(',')}>] [--delays <${H1_ENTRY_DELAY_GRID_SEC.join(',')}>]
+             [--expiries <${H1_EXPIRY_GRID_SEC.join(',')}>]
 env: STAND_DIR (required); BROKER_API_BASE_URL (fetch); STAND_MAX_GETS_PER_MINUTE (fetch, optional)`;
 
 export interface MainIo {
@@ -79,6 +85,25 @@ function runIntervals(raw: string | undefined): TradeInterval[] | undefined {
   return intervals;
 }
 
+function gridSubset(
+  raw: string | undefined,
+  name: string,
+  grid: readonly number[],
+): number[] | undefined {
+  if (raw === undefined) return undefined;
+  const values = raw.split(',').map((item) => {
+    const value = grid.find((candidate) => String(candidate) === item);
+    if (value === undefined) {
+      throw new UsageError(`--${name}: ${item} is not in the grid ${grid.join(', ')}`);
+    }
+    return value;
+  });
+  if (new Set(values).size !== values.length) {
+    throw new UsageError(`--${name}: a value is repeated`);
+  }
+  return values;
+}
+
 function integer(
   raw: string | undefined,
   name: string,
@@ -104,12 +129,16 @@ const OPTIONS = {
   journal: { type: 'string' },
   trades: { type: 'string' },
   'session-candles': { type: 'string' },
+  thresholds: { type: 'string' },
+  delays: { type: 'string' },
+  expiries: { type: 'string' },
 } as const;
 
 const ALLOWED: Record<string, readonly (keyof typeof OPTIONS)[]> = {
   fetch: ['assets', 'days', 'intervals'],
   run: ['assets', 'out', 'headline-delay', 'variants', 'intervals'],
   calibrate: ['journal', 'trades', 'session-candles'],
+  h1: ['assets', 'out', 'thresholds', 'delays', 'expiries'],
 };
 
 export async function main(argv: readonly string[], env: EnvSource, io: MainIo): Promise<number> {
@@ -165,6 +194,20 @@ export async function main(argv: readonly string[], env: EnvSource, io: MainIo):
       });
       return 0;
     }
+    const out = () =>
+      values.out ??
+      path.join(dir, 'out', new Date(clock.now()).toISOString().replace(/[:.]/g, '-'));
+    if (command === 'h1') {
+      return runH1({
+        dir,
+        assets: list(values.assets, STAND_ASSET_IDS),
+        out: out(),
+        thresholds: gridSubset(values.thresholds, 'thresholds', H1_THRESHOLD_GRID),
+        delays: gridSubset(values.delays, 'delays', H1_ENTRY_DELAY_GRID_SEC),
+        expiries: gridSubset(values.expiries, 'expiries', H1_EXPIRY_GRID_SEC),
+        io,
+      });
+    }
     if (command === 'run') {
       const delay = values['headline-delay'];
       if (delay !== undefined && !OPEN_DELAY_GRID_MS.some((ms) => String(ms) === delay)) {
@@ -173,9 +216,7 @@ export async function main(argv: readonly string[], env: EnvSource, io: MainIo):
       return runBacktest({
         dir,
         assets: list(values.assets, STAND_ASSET_IDS),
-        out:
-          values.out ??
-          path.join(dir, 'out', new Date(clock.now()).toISOString().replace(/[:.]/g, '-')),
+        out: out(),
         headlineDelayMs: delay === undefined ? undefined : Number(delay),
         variants: runVariants(values.variants),
         intervals: runIntervals(values.intervals),
