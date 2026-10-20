@@ -1,4 +1,5 @@
 import {
+  H1_PRICE_RANGE,
   H1_VERSION,
   H1MissingPrice,
   H1NoSignalReason,
@@ -58,9 +59,13 @@ export function createH1Detector(params: H1Params = DEFAULT_H1_PARAMS): H1Detect
     if (!Number.isInteger(at) || at < 0 || at >= closes.length) {
       throw new RangeError(`h1: at must be an index of closes [0, ${closes.length}), got ${at}`);
     }
-    const close = (i: number) => (i >= 0 ? closes[i] : NaN);
-    const last = closes[at];
-    const before = close(at - p.moveSec);
+    // outside H1_PRICE_RANGE (a close <= 0 included) a close reads as missing, as NaN does
+    const price = (i: number) => {
+      const c = i >= 0 ? closes[i] : NaN;
+      return c >= H1_PRICE_RANGE.min && c <= H1_PRICE_RANGE.max ? c : NaN;
+    };
+    const last = price(at);
+    const before = price(at - p.moveSec);
     if (!Number.isFinite(last)) {
       return {
         ...head,
@@ -75,18 +80,19 @@ export function createH1Detector(params: H1Params = DEFAULT_H1_PARAMS): H1Detect
         detail: { missing: H1MissingPrice.Before },
       };
     }
-    // the current move (j = at) is one of them, so moves >= 1 here and z <= sqrt(moves)
+    // the current move (j = at) is one of them, so moves >= 1 here and z <= sqrt(moves) up to rounding
     let ss = 0;
     let moves = 0;
     for (let j = at - p.sdWindowSec + p.sdStepSec; j <= at; j += p.sdStepSec) {
-      const r = close(j) - close(j - p.moveSec);
+      const r = price(j) - price(j - p.moveSec);
       if (!Number.isFinite(r)) continue;
       ss += r * r;
       moves += 1;
     }
     const move = last - before;
     const sd = Math.sqrt(ss / moves);
-    // the backtest script computes 0 / 0 = NaN here and does not trade either
+    // in range, sd = 0 only on a flat window; the backtest script computes 0 / 0 = NaN there and
+    // does not trade either
     if (sd === 0) return { ...head, reason: H1NoSignalReason.NoVolatility, detail: { moves } };
     const z = Math.abs(move) / sd;
     const features = { move, sd, z, moves, lastClose: last };

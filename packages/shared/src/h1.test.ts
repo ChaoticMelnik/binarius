@@ -4,6 +4,7 @@ import {
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
   H1_MIN_PAYOUT_PCT,
+  H1_PRICE_RANGE,
   H1_VERSION,
   h1DecisionSchema,
 } from './h1';
@@ -21,6 +22,8 @@ describe('the H1 decision wire (#667)', () => {
       { kind: 'no_signal', version: 'h1', reason: 'no_price', detail: { missing: 'last' } },
       { kind: 'no_signal', version: 'h1', reason: 'no_price', detail: { missing: 'before' } },
       { kind: 'no_signal', version: 'h1', reason: 'no_volatility', detail: { moves: 60 } },
+      { ...signal, features: { ...features, lastClose: H1_PRICE_RANGE.min } },
+      { ...signal, features: { ...features, lastClose: H1_PRICE_RANGE.max } },
     ]) {
       expect(h1DecisionSchema.safeParse(decision).success, JSON.stringify(decision)).toBe(true);
     }
@@ -34,6 +37,10 @@ describe('the H1 decision wire (#667)', () => {
       { kind: 'no_signal', version: 'h1', reason: 'no_history', detail: { moves: 0 } },
       { kind: 'no_signal', version: 'h1', reason: 'no_volatility', detail: { moves: 0 } },
       { kind: 'no_signal', version: 'h1', reason: 'no_price', detail: { missing: 'next' } },
+      { ...signal, features: { ...features, lastClose: 0 } },
+      { ...signal, features: { ...features, lastClose: -1 } },
+      { ...signal, features: { ...features, lastClose: 5e-101 } },
+      { ...signal, features: { ...features, lastClose: 2e100 } },
     ]) {
       expect(h1DecisionSchema.safeParse(decision).success, JSON.stringify(decision)).toBe(false);
     }
@@ -49,5 +56,12 @@ describe('the H1 decision wire (#667)', () => {
     expect(H1_EXPIRY_SEC).toBeGreaterThan(0);
     expect(H1_MIN_PAYOUT_PCT).toBeGreaterThan(MIN_CYCLE_PAYOUT_PCT);
     expect(breakEvenPct(H1_MIN_PAYOUT_PCT)).toBeLessThan(52);
+  });
+
+  // The smallest non-zero move between two closes >= min is ulp(min) >= min x 2^-53; its square over
+  // 2^53 moves (more than any array holds) is still normal, and 2^53 squares of max stay finite.
+  it("H-S4: inside the price range a move's square and the mean of up to 2^53 squares stay normal", () => {
+    expect((H1_PRICE_RANGE.min * 2 ** -53) ** 2 / 2 ** 53).toBeGreaterThanOrEqual(2 ** -1022);
+    expect(2 ** 53 * H1_PRICE_RANGE.max ** 2).toBeLessThan(Number.MAX_VALUE);
   });
 });
