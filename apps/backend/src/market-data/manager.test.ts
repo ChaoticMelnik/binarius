@@ -40,6 +40,7 @@ import {
 } from './manager';
 import { createCandleRing, type CandleRing } from './ring';
 import { createTickStore, type TickStore } from './ticks';
+import { createSecondSeries, secondOf, type SecondSeries } from './seconds';
 import { createPendingRequests } from './source';
 
 const TOKEN_1 = 'SECRET-token-of-user-1';
@@ -207,6 +208,7 @@ interface Harness {
   manager: MarketDataManager;
   ring: CandleRing;
   ticks: TickStore;
+  seconds: SecondSeries;
   // the real backfill with the option, over the mock broker's REST
   backfill: CandleBackfill | undefined;
   calls: TokenCall[];
@@ -267,6 +269,7 @@ function harness(
     intervals: SIGNAL_SCAN_INTERVALS,
   });
   const ticks = createTickStore();
+  const seconds = createSecondSeries({ capacitySec: 320, closeMarginMs: 500 });
   const calls: TokenCall[] = [];
   const answers = new Map<string, (options: AccessTokenOptions) => Promise<AccessTokenResult>>();
   const catalog = { view: 'view' in options ? options.view : freshView() };
@@ -336,6 +339,7 @@ function harness(
     openClient: options.openClient ?? openReal,
     ring,
     ticks,
+    seconds,
     requests,
     backfill: backfill ?? {
       counters: () => ({ queued: 0, fetched: 0, filled: 0, failed: 0, rateLimited: 0, spare: 0 }),
@@ -351,6 +355,7 @@ function harness(
     manager,
     ring,
     ticks,
+    seconds,
     backfill,
     calls,
     answers,
@@ -986,6 +991,61 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     expect(h.ticks.last(0)).toBeUndefined();
   });
 
+  it('M29 feeds the second series with the active ticks of known pairs only, at the catalog digits (#669)', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active, reserve] = fakes.made;
+    const t0 = Date.now();
+    active?.hear(price(IDS[0], t0));
+    reserve?.hear(price(IDS[1], t0));
+    active?.hear(price(undefined, t0));
+    active?.hear(price(IDS[0], t0 + 1_000));
+    expect(h.seconds.close(IDS[0] ?? 0, secondOf(t0))).toBe(1.1);
+    expect(h.seconds.digitsOf(IDS[0] ?? 0)).toBe(PAIRS.find((pair) => pair.id === IDS[0])?.digits);
+    expect(h.seconds.digitsOf(IDS[1] ?? 0)).toBeUndefined();
+    expect(h.seconds.digitsOf(0)).toBeUndefined();
+    expect(h.seconds.counters()).toMatchObject({ pairs: 1, closedByTick: 1 });
+  });
+
+  it('M30 marks a hole in the second series when the active leaves ready (#669)', async () => {
+    const fakes = fakeClients();
+    const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active] = fakes.made;
+    const t0 = Date.now();
+    active?.hear(price(IDS[0], t0));
+    active?.fire(Reconnecting);
+    active?.fire(Ready);
+    active?.hear(price(IDS[0], t0 + 3_000));
+    const s0 = secondOf(t0);
+    for (const second of [s0, s0 + 1_000, s0 + 2_000]) {
+      expect(h.seconds.close(IDS[0] ?? 0, second)).toBeNaN();
+    }
+    expect(h.seconds.counters().holeSeconds).toBe(3);
+  });
+
+  it('M31 the market data line carries the series counters of its period (#669)', async () => {
+    const fakes = fakeClients();
+    const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active] = fakes.made;
+    const t0 = Date.now();
+    active?.hear(price(IDS[0], t0));
+    active?.hear(price(IDS[0], t0 + 2_000));
+    active?.hear(price(IDS[0], t0 - 5_000));
+    expect(h.line().seconds).toEqual({
+      pairs: 1,
+      late: 1,
+      closedByTick: 2,
+      closedByClock: 0,
+      holeSeconds: 0,
+      resets: 0,
+    });
+    active?.hear(price(IDS[0], t0 + 3_000));
+    expect(h.line().seconds).toMatchObject({ pairs: 1, late: 0, closedByTick: 1 });
+  });
+
   it('M16 hands the refused token to the token service only as its hash, never to a client or a log', async () => {
     const fakes = fakeClients();
     const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
@@ -1329,7 +1389,11 @@ describe('the market data log (#404)', () => {
         'pairs',
         'pending',
         'backfill',
+        'seconds',
       ].sort(),
+    );
+    expect(Object.keys((line?.seconds as object | undefined) ?? {}).sort()).toEqual(
+      ['pairs', 'late', 'closedByTick', 'closedByClock', 'holeSeconds', 'resets'].sort(),
     );
     expect(Object.keys((line?.backfill as object | undefined) ?? {}).sort()).toEqual(
       ['queued', 'fetched', 'filled', 'failed', 'rateLimited', 'spare'].sort(),

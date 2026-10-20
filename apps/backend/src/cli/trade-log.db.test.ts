@@ -16,6 +16,7 @@ import {
   decimalStringSchema,
   tradeLogLineSchema,
   tradeLogTradeJsonSchema,
+  h1ShadowEntrySchema,
   type Candle,
   type DecimalString,
   type SignalRecord,
@@ -35,6 +36,7 @@ import {
 import {
   createTempDatabase,
   decisionFixture,
+  shadowDecisionFixture,
   seedBrokerTradeFor,
   seedTradingSession,
   seedUserWithAccount,
@@ -43,6 +45,8 @@ import {
 import {
   DEFAULT_SIGNAL_PARAMS,
   createSignalDecider,
+  H1_SHADOW_SETS,
+  replayH1Entry,
   replaySignalJournalEntry,
   toJournalCandle,
   type SignalJournalEntry,
@@ -424,6 +428,7 @@ describe('trade-log export (#666)', () => {
           decidedAtMs: record.entry.nowMs,
           takenAtMs: record.entry.nowMs + 50,
           recordedAtMs: Date.parse(TRADED_FROM) + trade.step * 1_000,
+          ticksUntilMs: null,
           payout: 92,
           lastTick: record.lastTick,
           result: null,
@@ -691,6 +696,7 @@ describe('trade-log export (#666)', () => {
       decidedAtMs: record.entry.nowMs,
       takenAtMs: record.entry.nowMs + 50,
       payout: 92,
+      ticksUntilMs: null,
     };
     expect(lines).toEqual([
       {
@@ -744,5 +750,55 @@ describe('trade-log export (#666)', () => {
     expect(replaySignalJournalEntry(lines[0]!.signal as SignalJournalEntry)).toEqual(
       quiet.entry.decision,
     );
+  });
+
+  it('X11 a shadow row of each set (#669): context shadow, no trade, its result and tick window end, an entry replayH1Entry decides again', async () => {
+    const rows = [];
+    for (const set of H1_SHADOW_SETS) {
+      const params = {
+        set: set.name,
+        ...set.params,
+        entryDelaySec: set.entryDelaySec,
+        expirySec: 5,
+      };
+      rows.push(await recordSignalDecision(tmp.db, shadowDecisionFixture({}, params)));
+    }
+    await tmp.db.execute(
+      sql`update ${signalDecisions} set recorded_at = '2006-01-01T00:00:01Z'::timestamptz where id in (${rows[0]!.id}::uuid, ${rows[1]!.id}::uuid)`,
+    );
+    const { code, out, err } = await run(
+      'export',
+      '--from',
+      '2006-01-01T00:00:00Z',
+      '--to',
+      '2006-01-02T00:00:00Z',
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual(['строк: 2']);
+    const lines = linesOf(out);
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      const fixture = shadowDecisionFixture();
+      expect(line.decision).toMatchObject({
+        context: 'shadow',
+        outcome: 'shadow',
+        version: 'h1',
+        interval: null,
+        step: null,
+        decidedAtMs: fixture.decidedAtMs,
+        ticksUntilMs: fixture.ticksUntilMs,
+        result: fixture.result,
+        lastTick: fixture.lastTick,
+      });
+      expect(line.session).toBeNull();
+      expect(line.trade).toBeNull();
+      const entry = h1ShadowEntrySchema.parse(line.signal);
+      expect(replayH1Entry(entry)).toEqual(entry.decision);
+    }
+    expect(lines.map((line) => h1ShadowEntrySchema.parse(line.signal).params.set).sort()).toEqual([
+      'h1',
+      'r1',
+    ]);
+    expect(out).toContain('"context":"shadow"');
   });
 });

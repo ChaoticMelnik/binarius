@@ -22,6 +22,13 @@ import {
   SignalDecisionContext,
   SignalDecisionOutcome,
   TradingSwitchSource,
+  H1_R1_PARAMS,
+  H1_VERSION,
+  H1ShadowEntryOutcome,
+  H1ShadowSet,
+  H1SecondClosedBy,
+  SignalKind,
+  type H1ShadowParams,
 } from '@binarius/shared';
 import { bonusRules, brokerAccounts, staff, tradingSessions, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
@@ -403,6 +410,79 @@ export const decisionFixture = (
     detail: null,
     ...facts,
   });
+
+export const SHADOW_FIXTURE_DECIDED_AT_MS = 1_760_000_000_000;
+export const R1_SHADOW_PARAMS_FIXTURE: H1ShadowParams = {
+  set: H1ShadowSet.R1,
+  ...H1_R1_PARAMS,
+  entryDelaySec: 1,
+  expirySec: 5,
+};
+
+// A shadow row of the H1 detector (#669, docs/h1.md): a flat window at 1.1 and the last close at
+// 1.1002, so the current move is the window's only non-zero one and the signal is up. The decision
+// is computed the detector's way (same operations, same doubles), so replayH1Entry reproduces it.
+export const shadowDecisionFixture = (
+  overrides: Partial<SignalDecisionInput> = {},
+  params: H1ShadowParams = R1_SHADOW_PARAMS_FIXTURE,
+): SignalDecisionInput => {
+  const f = SHADOW_FIXTURE_DECIDED_AT_MS;
+  const last = 1.1002;
+  const series = [...Array<number>(params.sdWindowSec).fill(1.1), last];
+  const move = last - 1.1;
+  const moves = params.sdWindowSec / params.sdStepSec;
+  const sd = Math.sqrt((move * move) / moves);
+  return {
+    context: SignalDecisionContext.Shadow,
+    tradingSessionId: null,
+    brokerAccountId: null,
+    step: null,
+    assetId: 1605169136,
+    interval: null,
+    version: H1_VERSION,
+    decidedAtMs: f,
+    takenAtMs: f + 520,
+    kind: SignalKind.Signal,
+    action: TradeAction.Up,
+    payout: 96,
+    digits: 5,
+    params,
+    decision: {
+      kind: SignalKind.Signal,
+      version: H1_VERSION,
+      action: TradeAction.Up,
+      features: { move, sd, z: Math.abs(move) / sd, moves, lastClose: last },
+    },
+    source: {
+      kind: 'ticks',
+      symbol: 'EUR/USD',
+      closedBy: H1SecondClosedBy.Tick,
+      closedAtMs: f + 510,
+    },
+    series,
+    lastTick: { price: last, timestamp: f - 300, receivedAtMs: f - 120 },
+    outcome: SignalDecisionOutcome.Shadow,
+    detail: null,
+    result: {
+      entries: [
+        {
+          entryDelaySec: 1,
+          entryPrice: 1.1003,
+          exitPrice: 1.1005,
+          outcome: H1ShadowEntryOutcome.Win,
+        },
+        {
+          entryDelaySec: 2,
+          entryPrice: 1.1004,
+          exitPrice: 1.1001,
+          outcome: H1ShadowEntryOutcome.Loss,
+        },
+      ],
+    },
+    ticksUntilMs: f + 7_000,
+    ...overrides,
+  };
+};
 
 // A queued intent taken and accepted with its broker trade (open), then, with `profit`, settled
 // (closed): the export's and the steps' rows

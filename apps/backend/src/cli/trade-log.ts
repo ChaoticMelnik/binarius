@@ -145,6 +145,7 @@ export function toTradeLogLine(
       decidedAtMs: decision.decidedAtMs,
       takenAtMs: decision.takenAtMs,
       recordedAtMs: decision.recordedAt.getTime(),
+      ticksUntilMs: decision.ticksUntilMs,
       payout: decision.payout,
       lastTick: decision.lastTick,
       result: decision.result,

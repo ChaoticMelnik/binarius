@@ -76,8 +76,11 @@ export const signalDecisions = pgTable(
     lastTick: jsonb('last_tick').$type<LastTick>(),
     outcome: text('outcome').$type<SignalDecisionOutcome>().notNull(),
     detail: text('detail'),
-    // reserved for #667's shadow outcome
+    // a shadow row's outcome by the broker's prices (#669, docs/h1.md)
     result: jsonb('result').$type<Record<string, unknown>>(),
+    // the last broker second the row's prices rest on (#669): a shadow row's f + 7 s, the end of
+    // #668's tick window; NULL for the rows of sessions
+    ticksUntilMs: bigint('ticks_until_ms', { mode: 'number' }).$type<UnixMs>(),
   },
   (t) => [
     // FK target for trade_intents: an intent's decision is of its own session
@@ -142,6 +145,11 @@ export const signalDecisions = pgTable(
     check(
       'signal_decisions_detail_pair_check',
       sql`(${t.outcome} in (${sqlLiteralList([SignalDecisionOutcome.Refused, SignalDecisionOutcome.StakeStop])})) = (${t.detail} is not null)`,
+    ),
+    check('signal_decisions_ticks_until_check', sql`${t.ticksUntilMs} > ${t.decidedAtMs}`),
+    check(
+      'signal_decisions_ticks_until_pair_check',
+      sql`${t.context} <> ${literal(SignalDecisionContext.Shadow)} or ${t.ticksUntilMs} is not null`,
     ),
     // the export's range scan and order
     index('signal_decisions_recorded_idx').on(t.recordedAt, t.id),

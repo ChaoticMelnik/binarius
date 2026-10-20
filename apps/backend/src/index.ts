@@ -41,6 +41,8 @@ import { createServiceAccountKeeper } from './broker/service-accounts';
 import { parseEnv } from './env';
 import { createMarketDataManager } from './market-data/manager';
 import { createTickStore } from './market-data/ticks';
+import { createSecondSeries } from './market-data/seconds';
+import { createH1Shadow } from './h1/shadow';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
 import { createCandleBackfill } from './market-data/backfill';
@@ -54,6 +56,10 @@ import {
   MARKET_DATA_BACKFILL_ATTEMPTS,
   MARKET_DATA_BACKFILL_BUDGET_MS,
   MARKET_DATA_BACKFILL_CONCURRENCY,
+  H1_SECOND_CLOSE_MARGIN_MS,
+  H1_SERIES_CAPACITY_SEC,
+  H1_SHADOW_LOG_MS,
+  H1_SHADOW_TICK_MS,
   MARKET_DATA_BACKFILL_POLL_MS,
   MARKET_DATA_BACKFILL_RETRY_MS,
   MARKET_DATA_BACKFILL_SCAN_MS,
@@ -159,6 +165,11 @@ const candleStore =
         requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
         // the newest tick per pair, answered with a session's decision record (#666)
         ticks: createTickStore(),
+        // the 1s closes the H1 shadow decides on (#669, docs/h1.md)
+        seconds: createSecondSeries({
+          capacitySec: H1_SERIES_CAPACITY_SEC,
+          closeMarginMs: H1_SECOND_CLOSE_MARGIN_MS,
+        }),
       };
 
 // One pacer for every signal chart GET (docs/signal.md -> The budget, #405): tryTake for the
@@ -395,7 +406,7 @@ const serviceAccounts = createServiceAccountKeeper({
 // (#404) and its REST backfill (#590), read by the signal feed and the scanners (#405). Started with
 // the other loops after listen(), stopped in phase 1.
 function createMarketData(
-  { brokerWsUrl, ring, requests, ticks }: NonNullable<typeof candleStore>,
+  { brokerWsUrl, ring, requests, ticks, seconds }: NonNullable<typeof candleStore>,
   pacer: SpareTokenSource,
 ) {
   const backfill = createCandleBackfill({
@@ -426,6 +437,7 @@ function createMarketData(
       createBrokerSocketClient({ url: brokerWsUrl, logger: app.log.child({ socket: label }) }),
     ring,
     ticks,
+    seconds,
     requests,
     backfill,
     logger: app.log,
@@ -437,7 +449,22 @@ function createMarketData(
       accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
     },
   });
-  return { manager, backfill };
+  // docs/h1.md: the H1 shadow on the same series, unless H1_SHADOW=off (#669)
+  const h1Shadow = env.h1Shadow
+    ? createH1Shadow({
+        series: seconds,
+        catalog: pairsCatalog,
+        streaming: () => manager.streaming(),
+        record: (input) => recordSignalDecision(db, input),
+        logger: app.log,
+        config: {
+          tickMs: H1_SHADOW_TICK_MS,
+          logMs: H1_SHADOW_LOG_MS,
+          capacitySec: H1_SERIES_CAPACITY_SEC,
+        },
+      })
+    : undefined;
+  return { manager, backfill, h1Shadow };
 }
 const marketData =
   candleStore === undefined ? undefined : createMarketData(candleStore, signalPacer);
@@ -506,6 +533,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
       async () => {
+        await marketData?.h1Shadow?.stop();
         await marketData?.backfill.stop();
         await marketData?.manager.stop();
       },
@@ -546,6 +574,7 @@ if (!shuttingDown) {
   app.log.info({ demoOnly: env.demoOnly }, 'backend started');
   app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
   app.log.info({ enabled: marketData !== undefined }, 'market data source');
+  app.log.info({ enabled: marketData?.h1Shadow !== undefined }, 'h1 shadow');
 }
 if (!shuttingDown) {
   publisher.start();
@@ -558,6 +587,7 @@ if (!shuttingDown) {
   serviceAccounts.start();
   marketData?.manager.start();
   marketData?.backfill.start();
+  marketData?.h1Shadow?.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

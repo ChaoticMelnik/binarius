@@ -90,7 +90,7 @@ export function composeServiceEnvValue(
       continue;
     }
     if (!inEnvironment) continue;
-    const match = /^ {6}([A-Z_]+):\s*(.*?)\s*$/.exec(line);
+    const match = /^ {6}([A-Z0-9_]+):\s*(.*?)\s*$/.exec(line);
     if (match !== null && match[1] === name) return match[2];
   }
   return undefined;

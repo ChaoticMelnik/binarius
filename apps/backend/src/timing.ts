@@ -5,7 +5,12 @@ import {
   BROKER_SOCKET_RECONNECT_DELAY_MS,
   BROKER_SOCKET_RECONNECT_JITTER,
 } from '@binarius/broker-socket';
-import { SIGNAL_FETCH_LIMIT, SIGNAL_PACER_RETRY_SEC, TICK_MAX_SKEW_MS } from '@binarius/signal';
+import {
+  H1_SHADOW_MAX_WINDOW_SEC,
+  SIGNAL_FETCH_LIMIT,
+  SIGNAL_PACER_RETRY_SEC,
+  TICK_MAX_SKEW_MS,
+} from '@binarius/signal';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import {
@@ -18,6 +23,8 @@ import {
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
+  H1_ENTRY_WINDOW_SEC,
+  H1_EXPIRY_SEC,
   MAILING_MIN_OFFSET_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
@@ -193,6 +200,16 @@ export const MARKET_DATA_BACKFILL_SCAN_MS = 5_000;
 export const MARKET_DATA_BACKFILL_POLL_MS = 250;
 // backfill GETs in flight at once
 export const MARKET_DATA_BACKFILL_CONCURRENCY = 2;
+
+// --- The H1 shadow (#669, docs/h1.md) -------------------------------------------------------------
+// a quiet pair's second closes by the process clock this long after its end
+export const H1_SECOND_CLOSE_MARGIN_MS = 500;
+// the period of the series' clock rule and of the shadow's sweep: a clock close lags at most this
+export const H1_SHADOW_TICK_MS = 100;
+// the `h1 shadow` line
+export const H1_SHADOW_LOG_MS = 60_000;
+// seconds of closes kept per pair: the longest window, the latest exit and a margin
+export const H1_SERIES_CAPACITY_SEC = 320;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -459,7 +476,16 @@ const TIMING_CHAIN_HOLDS =
   MARKET_DATA_BACKFILL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE <= 60_000 &&
   MARKET_DATA_BACKFILL_SCAN_MS <= SIGNAL_CHART_INTERVAL_MS['5s'] &&
-  SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS;
+  SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS &&
+  // the H1 shadow (#669): the clock rule runs inside its own margin; a second closes before the
+  // ring's clock rule would close its 5s bucket and far inside the tick skew bound; a pair holds the
+  // longest window plus the latest exit; the line spans ticks. stop() waits for the INSERTs in
+  // flight, ordinary database latency (above)
+  H1_SHADOW_TICK_MS <= H1_SECOND_CLOSE_MARGIN_MS &&
+  H1_SECOND_CLOSE_MARGIN_MS < MARKET_DATA_SKEW_MARGIN_MS &&
+  H1_SECOND_CLOSE_MARGIN_MS < TICK_MAX_SKEW_MS &&
+  H1_SERIES_CAPACITY_SEC >= H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1 &&
+  H1_SHADOW_TICK_MS <= H1_SHADOW_LOG_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }
