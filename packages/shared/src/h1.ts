@@ -11,7 +11,7 @@ export const H1_VERSION = 'h1';
 
 export const H1NoSignalReason = {
   NoPrice: 'no_price',
-  // a window without movement: sd = 0, hence the current move is 0 too
+  // a window without movement: sd = 0, hence the current move is 0 too (inside H1_PRICE_RANGE)
   NoVolatility: 'no_volatility',
   BelowThreshold: 'below_threshold',
 } as const;
@@ -29,13 +29,19 @@ export const h1ParamsSchema = z.strictObject({
 });
 export type H1Params = z.infer<typeof h1ParamsSchema>;
 
-// z.number() refuses NaN and ±Infinity; sd > 0 because a flat window is no_volatility
+// The closes the H1 detector reads as prices (#667, Rule 43). Inside the range a move's square and
+// the mean of up to 2^53 squares stay normal doubles (H-S4), so sd is finite, sd = 0 only on a flat
+// window, and every decision passes h1DecisionSchema.
+export const H1_PRICE_RANGE = { min: 1e-100, max: 1e100 } as const;
+
+// z.number() refuses NaN and ±Infinity; sd > 0 because a flat window is no_volatility, and lastClose
+// is in H1_PRICE_RANGE, where neither overflows (Rule 43)
 export const h1FeaturesSchema = z.strictObject({
   move: z.number(),
   sd: z.number().positive(),
   z: z.number().nonnegative(),
   moves: z.int().positive(),
-  lastClose: z.number().positive(),
+  lastClose: z.number().min(H1_PRICE_RANGE.min).max(H1_PRICE_RANGE.max),
 });
 export type H1Features = z.infer<typeof h1FeaturesSchema>;
 

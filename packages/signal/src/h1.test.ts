@@ -1,4 +1,4 @@
-import { h1DecisionSchema, type H1Params } from '@binarius/shared';
+import { H1_PRICE_RANGE, h1DecisionSchema, type H1Decision, type H1Params } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { assertH1Params, createH1Detector, DEFAULT_H1_PARAMS } from './h1';
 
@@ -182,5 +182,150 @@ describe('the H1 detector (#667)', () => {
       action: 'up',
       features: { move: 3, sd: 1, z: 3, moves: 60, lastClose: 1004 },
     });
+  });
+
+  it('H-D12: a close outside the price range at f or f - 5 is no_price', () => {
+    const rows: [number[], 'last' | 'before'][] = [];
+    for (const value of [0, -0, -1, 5e-101, 2e100]) {
+      const closes = stepSeries(H_D1_MOVES);
+      closes[300] = value;
+      rows.push([closes, 'last']);
+    }
+    for (const value of [0, -1]) {
+      const closes = stepSeries(H_D1_MOVES);
+      closes[295] = value;
+      rows.push([closes, 'before']);
+    }
+    // review round 1's magnitudes: before the range, no_volatility with a non-zero move and sd = ∞
+    for (const scale of [1e-203, 1e154]) {
+      rows.push([stepSeries(H_D1_MOVES).map((close) => close * scale), 'last']);
+    }
+    for (const [closes, missing] of rows) {
+      const decision = decide(closes);
+      const label = `${missing} ${closes[300]} ${closes[295]}`;
+      expect(decision, label).toEqual({
+        kind: 'no_signal',
+        version: 'h1',
+        reason: 'no_price',
+        detail: { missing },
+      });
+      expect(h1DecisionSchema.safeParse(decision).success, label).toBe(true);
+    }
+  });
+
+  it('H-D13: a close outside the price range inside the window is skipped like a gap', () => {
+    // closes[150] ends move 30 (-1) and starts move 31 (+1); both go
+    for (const value of [1e154, -1, 0, 1e-200]) {
+      const closes = stepSeries(H_D1_MOVES);
+      closes[150] = value;
+      const decision = decide(closes);
+      expect(decision, String(value)).toEqual({
+        kind: 'signal',
+        version: 'h1',
+        action: 'up',
+        features: { move: 3, sd: 1, z: 3, moves: 58, lastClose: 1004 },
+      });
+      expect(h1DecisionSchema.safeParse(decision).success, String(value)).toBe(true);
+    }
+  });
+
+  it("H-D14: the price range's ends are prices", () => {
+    const low = Array<number>(301).fill(2 * H1_PRICE_RANGE.min);
+    low[300] = H1_PRICE_RANGE.min;
+    const high = Array<number>(301).fill(H1_PRICE_RANGE.max / 2);
+    high[300] = H1_PRICE_RANGE.max;
+    const down = decide(low);
+    const up = decide(high);
+    expect(down).toMatchObject({
+      kind: 'signal',
+      action: 'down',
+      features: { lastClose: H1_PRICE_RANGE.min, moves: 60 },
+    });
+    expect(up).toMatchObject({
+      kind: 'signal',
+      action: 'up',
+      features: { lastClose: H1_PRICE_RANGE.max, moves: 60 },
+    });
+    expect(h1DecisionSchema.safeParse(down).success).toBe(true);
+    expect(h1DecisionSchema.safeParse(up).success).toBe(true);
+  });
+
+  it('H-D15: on generated series of any magnitude, sign or gap every decision parses', () => {
+    let state = 667;
+    const next = () => {
+      state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return state / 2_147_483_648;
+    };
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(next() * xs.length)];
+    const int = (lo: number, hi: number) => lo + Math.floor(next() * (hi - lo + 1));
+    // the range's exact ends are left out, so they stay H-D14's alone
+    const scales = [
+      1e-300, 1e-200, 1e-150, 3e-101, 2e-100, 1e-5, 1, 1000, 1e5, 5e99, 3e100, 1e154, 1e300,
+    ];
+    const odd = [
+      NaN,
+      Infinity,
+      -Infinity,
+      0,
+      -0,
+      -1,
+      -1000,
+      5e-324,
+      Number.MAX_VALUE,
+      -Number.MAX_VALUE,
+    ];
+    const outcome = (d: H1Decision) =>
+      d.kind === 'signal'
+        ? `signal ${d.action}`
+        : d.reason === 'no_price'
+          ? `no_price ${d.detail.missing}`
+          : d.reason;
+    const seen = new Set<string>();
+    for (let n = 0; n < 3000; n++) {
+      let params: H1Params = DEFAULT_H1_PARAMS;
+      if (next() >= 0.5) {
+        const step = int(1, 6);
+        params = {
+          moveSec: int(1, 6),
+          sdStepSec: step,
+          sdWindowSec: step * int(1, 20),
+          threshold: pick([0.5, 1, 2, 3]),
+        };
+      }
+      const length = int(1, params.sdWindowSec + params.moveSec + 20);
+      let scale = pick(scales);
+      const flat = next() < 0.25;
+      const closes: number[] = [];
+      let close = scale;
+      for (let k = 0; k < length; k++) {
+        if (next() < 0.02) {
+          scale = pick(scales);
+          close = scale;
+        }
+        if (!flat) close += scale * 1e-3 * (next() * 2 - 1);
+        closes.push(next() < 0.04 ? pick(odd) : close);
+      }
+      const at = next() < 0.7 ? length - 1 : int(0, length - 1);
+      if (next() < 0.3 && Number.isFinite(closes[at])) {
+        closes[at] += (next() < 0.5 ? 1 : -1) * scale * 0.05;
+      }
+      const decision = createH1Detector(params).decide({ closes, at });
+      const label = `input ${n}`;
+      expect(h1DecisionSchema.safeParse(decision).success, label).toBe(true);
+      if ('features' in decision) {
+        const { z, moves, lastClose } = decision.features;
+        expect(z, label).toBeLessThanOrEqual(Math.sqrt(moves) * (1 + 2 ** -40));
+        expect(lastClose, label).toBe(closes[at]);
+      }
+      seen.add(outcome(decision));
+    }
+    expect([...seen].sort()).toEqual([
+      'below_threshold',
+      'no_price before',
+      'no_price last',
+      'no_volatility',
+      'signal down',
+      'signal up',
+    ]);
   });
 });
