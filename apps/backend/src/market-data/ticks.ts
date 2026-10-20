@@ -8,8 +8,9 @@ export interface TickStore {
   // receivedAtMs: the local clock when the tick arrived; a tick the ring would refuse is dropped,
   // and one older than the pair's newest does not replace it
   push(assetId: number, tick: Tick, receivedAtMs: number): void;
+  // kept until a newer tick, never cleared (a socket drop, a failover, a quiet pair): a reader
+  // bounds its age itself
   last(assetId: number): LastTick | undefined;
-  counters(): { pairs: number };
 }
 
 export function createTickStore(): TickStore {
@@ -22,6 +23,5 @@ export function createTickStore(): TickStore {
       newest.set(assetId, { price: tick.price, timestamp: tick.timestamp, receivedAtMs });
     },
     last: (assetId) => newest.get(assetId),
-    counters: () => ({ pairs: newest.size }),
   };
 }

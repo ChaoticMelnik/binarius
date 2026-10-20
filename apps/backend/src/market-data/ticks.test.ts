@@ -11,7 +11,6 @@ describe('createTickStore (#666)', () => {
     store.push(101, { price: 1.2, timestamp: AT + 500 }, AT + 530);
     expect(store.last(101)).toEqual({ price: 1.2, timestamp: AT + 500, receivedAtMs: AT + 530 });
     expect(store.last(102)).toBeUndefined();
-    expect(store.counters()).toEqual({ pairs: 1 });
   });
 
   it('T2 an older tick arriving late does not replace the newest', () => {

@@ -982,7 +982,8 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
       receivedAtMs: expect.any(Number),
     });
     expect(h.ticks.last(IDS[1] ?? 0)).toBeUndefined();
-    expect(h.ticks.counters()).toEqual({ pairs: 1 });
+    // the tick of an unknown pair (asset 0) is not kept
+    expect(h.ticks.last(0)).toBeUndefined();
   });
 
   it('M16 hands the refused token to the token service only as its hash, never to a client or a log', async () => {
