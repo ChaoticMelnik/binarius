@@ -3734,3 +3734,33 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 1. Remaining findings — **вынесено в #679**
+
+---
+
+## #669 — H1, часть 2a: 1s-серия из тиков в backend и теневой режим детектора (2026-10-20)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Clean: Codex ready, no usage limit, gh ok, Node 22.23, Postgres/Redis up, no Fable limit in 7 days, no open PRs. Owner: #670 deferred until the shadow verdict; #669 first, #668 after it from `main`. |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended. Step 4a split at ~3 300: report CLI → #681. Plan 6290335094 took `ticks_until_ms` (0070) and Rule 44, named in «What #668 reuses». |
+| Implementer | first pass | Opus. 3 clarify questions, all recommended. Step 0: R1 = moveSec 3 / sdStep 5 / threshold 1 (58.77 %, 311.2 trades/pair-h, within the 1.5 pp rule). PR #682, 3 commits, +2 986 without the snapshot, `pnpm check` 0 locally, mutations 20/20. |
+| Reviewer | round 1 | Blocker B1: CI red — H-T8 timed out on the runner (5 042 ms > 5 000) after a green local full check; 4 Minor. → Todo. Owner chose m1–m3 for the fix round, m4 to the Backlog. |
+| Architect / Implementer | round-1 fix | Opus Plan Update 6291697548 (B1 `it.each`, H-U5 narrowed, m1 assert, m2 drop ahead-of-receipt ticks, m3 own counter); found the same future-tick shape in `ring.ts` on `main` → #683 (owner). Fresh implementer: CI green at f0a044f7, mutations 26/26, +3 164 — one PR on the owner's decision. |
+| Reviewer | round 2 | Clean, 6 Minor (n1 downgraded from Codex's Major: needs a ≥ 21 s event-loop stall). Codex task-mvgqhzgw-wfpaqu, re-hash by tech-lead matched base 2f3b5d1a / head f0a044f7. Owner: no Minor fixed before the merge. Merged `--rebase --delete-branch` 2026-10-20T14:01:49Z on the owner's yes; #669 Done; shared test DB migrated to 0070 (71/71); Minors → #687. |
+| Tech Lead | models | Every spawn on its policy model (Fable first plans, Opus Plan Updates/implementers/reviewers, Sonnet `/simplify`). |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| B1: H-T8 over the 5 s unit timeout on the CI runner | Blocker | env-parity | one `it` looped the whole grid; the local full check passed under the timeout, the runner is several times slower | Implementer (Step 5) |
+| m1: shadow window assumes `moveSec ≤ sdStepSec` | Minor | unverified-claim | the plan's window length held only for today's sets; fixed by an assert | Architect |
+| m2: a future-stamped tick closes ~60 s of the series | Minor | instance-vs-class | same shape exists in `ring.ts` on `main` | Architect → #683 |
+| m3: h1 shadow lines counted as `unsupported_version` | Minor | other | fixed in round 1 | — |
+| m4, n1–n6 | Minor | other | left at the merge | → #687 |
+
+### Process improvement proposals
+1. Implementer Step 5: per-test durations of added/changed test files read before the push; a test above a quarter of its timeout is split or narrowed, never given a bigger timeout — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5**
+2. Remaining findings — **вынесено в #683, #687**
