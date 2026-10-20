@@ -48,6 +48,7 @@ describe('parseEnv', () => {
       webPublicUrl: valid.WEB_PUBLIC_URL,
       demoOnly: false,
       sessionStakeStrategy: 'martingale',
+      h1Shadow: true,
       depositWidgetOrigins: ['https://binodex.app'],
     });
   });
@@ -63,7 +64,9 @@ describe('parseEnv', () => {
       BALANCE_POLL_MAX_PER_MINUTE: '150',
       DEMO_ONLY: 'true',
       SESSION_STAKE_STRATEGY: 'fixed',
+      H1_SHADOW: 'off',
     });
+    expect(env.h1Shadow).toBe(false);
     expect(env.demoOnly).toBe(true);
     expect(env.sessionStakeStrategy).toBe('fixed');
     expect(env.balanceReconcileIntervalMs).toBe(30_000);
@@ -72,6 +75,10 @@ describe('parseEnv', () => {
     expect(env.brokerPairsTtlMs).toBe(45_000);
     expect(env.logLevel).toBe('debug');
     expect(env.healthTimeoutMs).toBe(2500);
+  });
+
+  it('refuses an empty H1_SHADOW (#669)', () => {
+    expect(() => parseEnv({ ...valid, H1_SHADOW: '' })).toThrow('Env H1_SHADOW must not be empty');
   });
 
   it('refuses DEMO_ONLY=1 (#396)', () => {

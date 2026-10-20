@@ -8,7 +8,12 @@ import {
   BROKER_SOCKET_RECONNECT_DELAY_MS,
   BROKER_SOCKET_RECONNECT_JITTER,
 } from '@binarius/broker-socket';
-import { SIGNAL_FETCH_LIMIT, SIGNAL_PACER_RETRY_SEC, TICK_MAX_SKEW_MS } from '@binarius/signal';
+import {
+  H1_SHADOW_MAX_WINDOW_SEC,
+  SIGNAL_FETCH_LIMIT,
+  SIGNAL_PACER_RETRY_SEC,
+  TICK_MAX_SKEW_MS,
+} from '@binarius/signal';
 import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
@@ -18,6 +23,8 @@ import {
   MAILING_MIN_OFFSET_MS,
   TOKEN_NUDGE_AFTER_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
+  H1_ENTRY_WINDOW_SEC,
+  H1_EXPIRY_SEC,
 } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
@@ -52,6 +59,10 @@ import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 import {
   ADMIN_TELEGRAM_API_TIMEOUT_MS,
+  H1_SECOND_CLOSE_MARGIN_MS,
+  H1_SERIES_CAPACITY_SEC,
+  H1_SHADOW_LOG_MS,
+  H1_SHADOW_TICK_MS,
   BALANCE_STALLED_RETRY_MS,
   BOT_PROFILE_PUBLISH_CALLS,
   BOT_PROFILE_PUBLISH_TIMEOUT_MS,
@@ -157,6 +168,12 @@ describe('backend shutdown timing', () => {
 
   // #141: forwarded only when set, so the route is off unless the host sets it; the worker never
   // receives it (not in the shared broker anchor)
+  // #669: on unless set; the worker never reads it
+  it('forwards H1_SHADOW to the backend only, without a default', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'H1_SHADOW')).toBe('');
+    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SHADOW')).toBeUndefined();
+  });
+
   it('forwards POSTBACK_URL_SECRET to the backend only, without a default', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'POSTBACK_URL_SECRET')).toBe('');
     expect(
@@ -378,6 +395,27 @@ describe('broker balance timing', () => {
     expect(MARKET_DATA_BACKFILL_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE).toBeLessThanOrEqual(60_000);
     expect(MARKET_DATA_BACKFILL_SCAN_MS).toBeLessThanOrEqual(SIGNAL_CHART_INTERVAL_MS['5s']);
+  });
+
+  it('closes a second inside its margin, before the ring would, and holds the longest window (#669)', () => {
+    expect({
+      H1_SECOND_CLOSE_MARGIN_MS,
+      H1_SHADOW_TICK_MS,
+      H1_SHADOW_LOG_MS,
+      H1_SERIES_CAPACITY_SEC,
+    }).toEqual({
+      H1_SECOND_CLOSE_MARGIN_MS: 500,
+      H1_SHADOW_TICK_MS: 100,
+      H1_SHADOW_LOG_MS: 60_000,
+      H1_SERIES_CAPACITY_SEC: 320,
+    });
+    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SECOND_CLOSE_MARGIN_MS);
+    expect(H1_SECOND_CLOSE_MARGIN_MS).toBeLessThan(MARKET_DATA_SKEW_MARGIN_MS);
+    expect(H1_SECOND_CLOSE_MARGIN_MS).toBeLessThan(TICK_MAX_SKEW_MS);
+    expect(H1_SERIES_CAPACITY_SEC).toBeGreaterThanOrEqual(
+      H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1,
+    );
+    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SHADOW_LOG_MS);
   });
 
   // the anchor forwards it valueless (intents/config.test.ts): unset leaves the source off

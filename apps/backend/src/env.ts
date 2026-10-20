@@ -7,6 +7,7 @@ import {
   parseBoundedIntegerEnv,
   parseDemoOnlyEnv,
   parseSessionStakeStrategyEnv,
+  parseH1ShadowEnv,
   parseDepositWidgetOriginsEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -84,6 +85,8 @@ export interface Env {
   demoOnly: boolean;
   // the stake strategy frozen into every new session's settings (#450); martingale by default
   sessionStakeStrategy: SessionStakeStrategy;
+  // the H1 shadow (#669, docs/h1.md): on unless H1_SHADOW=off; nothing without BROKER_WS_URL
+  h1Shadow: boolean;
   // the origins the cashier widget may be served from (#11); default: the broker platform's origin
   depositWidgetOrigins: string[];
   // the postback route's path secret (#141); absent = the route is not registered
@@ -148,6 +151,7 @@ export function parseEnv(source: EnvSource): Env {
     webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
     demoOnly: parseDemoOnlyEnv(source),
     sessionStakeStrategy: parseSessionStakeStrategyEnv(source),
+    h1Shadow: parseH1ShadowEnv(source),
     depositWidgetOrigins: parseDepositWidgetOriginsEnv(
       source,
       new URL(readEnv(source, 'BROKER_OAUTH_AUTHORIZE_URL')).origin,

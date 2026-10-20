@@ -19,6 +19,7 @@ import { assertDigits } from '@binarius/signal';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import type { BackfillCounters, CandleBackfill } from './backfill';
 import type { CandleRing } from './ring';
+import type { SecondSeries, SecondSeriesCounters } from './seconds';
 import type { TickStore } from './ticks';
 import type { PendingRequests } from './source';
 
@@ -61,6 +62,8 @@ export interface MarketDataManagerDeps {
   ring: CandleRing;
   // the newest tick per pair (#666): the active client's ticks, next to the ring
   ticks: Pick<TickStore, 'push'>;
+  // the 1s closes of the H1 shadow (#669): the active client's ticks too, with the ring's holes
+  seconds: Pick<SecondSeries, 'push' | 'onDrop' | 'counters'>;
   requests: Pick<PendingRequests, 'size'>;
   backfill: Pick<CandleBackfill, 'counters'>;
   logger: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>;
@@ -119,6 +122,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     openClient,
     ring,
     ticks: tickStore,
+    seconds,
     requests,
     backfill,
     logger,
@@ -152,6 +156,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   let reportedAt = now();
   let reportedCounters = ring.counters();
   let reportedBackfill = backfill.counters();
+  let reportedSeconds = seconds.counters();
   const reportedClosedUntil = new Map<ScanInterval, number>();
 
   const isHeld = (accountId: string) => (held.get(accountId) ?? 0) > now();
@@ -258,7 +263,10 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     const slot = slots[role];
     const account = accountOf(slot);
     if (account === undefined) return;
-    if (role === 'active' && isReady(slot)) ring.onDrop();
+    if (role === 'active' && isReady(slot)) {
+      ring.onDrop();
+      seconds.onDrop();
+    }
     drop(role);
     if (hold) holdBack(account.id);
     if (role === 'active') {
@@ -445,7 +453,10 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     if (change.to === BrokerSocketState.Ready) live.since = undefined;
     else if (change.from === BrokerSocketState.Ready) {
       live.since = now();
-      if (role === 'active') ring.onDrop();
+      if (role === 'active') {
+        ring.onDrop();
+        seconds.onDrop();
+      }
     }
     if (change.to === BrokerSocketState.DisconnectedByServer) {
       logger.warn(
@@ -483,6 +494,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         const receivedAtMs = now();
         ring.push(assetId, digits, { price, timestamp }, receivedAtMs);
         tickStore.push(assetId, { price, timestamp }, receivedAtMs);
+        seconds.push(assetId, digits, { price, timestamp }, receivedAtMs);
         return;
       }
       case BrokerEventType.UserData: {
@@ -557,6 +569,9 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     }
     const filling = backfill.counters();
     const backfillSince = (key: BackfillTotal) => filling[key] - reportedBackfill[key];
+    const secondCounts = seconds.counters();
+    const secondsSince = (key: Exclude<keyof SecondSeriesCounters, 'pairs'>) =>
+      secondCounts[key] - reportedSeconds[key];
     const periodMs = Math.max(at - reportedAt, 1);
     logger.info(
       {
@@ -590,10 +605,19 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
           rateLimited: backfillSince('rateLimited'),
           spare: backfillSince('spare'),
         },
+        seconds: {
+          pairs: secondCounts.pairs,
+          late: secondsSince('late'),
+          closedByTick: secondsSince('closedByTick'),
+          closedByClock: secondsSince('closedByClock'),
+          holeSeconds: secondsSince('holeSeconds'),
+          resets: secondsSince('resets'),
+        },
       },
       'market data',
     );
     reportedAt = at;
+    reportedSeconds = secondCounts;
     reportedCounters = counters;
     reportedBackfill = filling;
     ticks = 0;

@@ -2013,8 +2013,23 @@ describe('signal_decisions (#666)', () => {
         version: 'h1',
         outcome: 'shadow',
         result: { won: true },
+        ticksUntilMs: 1_760_000_007_000,
       },
     ],
+    [
+      'a shadow row whose tick window ends a millisecond after its decision (#669)',
+      {
+        context: 'shadow',
+        tradingSessionId: null,
+        brokerAccountId: null,
+        step: null,
+        interval: null,
+        version: 'h1',
+        outcome: 'shadow',
+        ticksUntilMs: 1_760_000_000_001,
+      },
+    ],
+    ['a session decision with a tick window end (#669)', { ticksUntilMs: 1_760_000_007_000 }],
     ['a refusal with its code', { outcome: 'refused', detail: 'client_request_id_conflict' }],
     ['a stake stop with its code', { outcome: 'stake_stop', detail: 'max_session_loss' }],
     ['a zero payout and the digits bounds', { payout: 0, digits: 10 }],
@@ -2115,6 +2130,38 @@ describe('signal_decisions (#666)', () => {
       'a pause with the stop reason as its detail',
       { outcome: 'paused', detail: 'no_signal_timeout' },
       'signal_decisions_detail_pair_check',
+    ],
+    [
+      'a shadow row without its tick window end (#669)',
+      {
+        context: 'shadow',
+        tradingSessionId: null,
+        brokerAccountId: null,
+        step: null,
+        interval: null,
+        version: 'h1',
+        outcome: 'shadow',
+      },
+      'signal_decisions_ticks_until_pair_check',
+    ],
+    [
+      'a shadow row whose tick window ends at its decision (#669)',
+      {
+        context: 'shadow',
+        tradingSessionId: null,
+        brokerAccountId: null,
+        step: null,
+        interval: null,
+        version: 'h1',
+        outcome: 'shadow',
+        ticksUntilMs: 1_760_000_000_000,
+      },
+      'signal_decisions_ticks_until_check',
+    ],
+    [
+      'a session decision whose tick window ends before it (#669)',
+      { ticksUntilMs: 1_759_999_999_999 },
+      'signal_decisions_ticks_until_check',
     ],
   ])('rejects %s', async (_label, patch, constraint) => {
     await rolledBack(async (tx) => {
@@ -2263,7 +2310,7 @@ describe('foreign keys', () => {
       'signal_decisions_trading_session_id_trading_sessions_id_fk',
       (tx) =>
         tx.execute(
-          sql`insert into signal_decisions (context, trading_session_id, asset_id, version, decided_at_ms, taken_at_ms, kind, action, params, decision, source, series, outcome) values ('shadow', ${dangling}, 101, 'h1', 1, 1, 'signal', 'up', '{}', '{}', '{}', '[]', 'shadow')`,
+          sql`insert into signal_decisions (context, trading_session_id, asset_id, version, decided_at_ms, taken_at_ms, kind, action, params, decision, source, series, outcome, ticks_until_ms) values ('shadow', ${dangling}, 101, 'h1', 1, 1, 'signal', 'up', '{}', '{}', '{}', '[]', 'shadow', 2)`,
         ),
     ],
     [

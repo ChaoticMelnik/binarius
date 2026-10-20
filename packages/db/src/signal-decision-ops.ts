@@ -53,6 +53,8 @@ export interface SignalDecisionInput {
   outcome: SignalDecisionOutcome;
   detail: string | null;
   result?: Record<string, unknown> | null;
+  // required, so every writer names it: a shadow row's f + 7 s (#669), null for a session's rows
+  ticksUntilMs: number | null;
 }
 
 // the writer's facts beside the record's entry
@@ -88,6 +90,7 @@ export function signalDecisionInput(
     source: entry.source,
     series: entry.series,
     lastTick,
+    ticksUntilMs: null,
   };
 }
 
@@ -130,6 +133,7 @@ export async function recordSignalDecision(
       outcome: input.outcome,
       detail: input.detail,
       result: input.result ?? null,
+      ticksUntilMs: input.ticksUntilMs,
     })
     .returning({ id: signalDecisions.id });
   if (row === undefined) throw new Error('signal_decisions insert returned no row');
@@ -160,6 +164,7 @@ export interface TradeLogDecisionRow {
   series: unknown[];
   lastTick: LastTick | null;
   result: Record<string, unknown> | null;
+  ticksUntilMs: number | null;
 }
 
 export interface TradeLogSessionRow {
@@ -248,6 +253,7 @@ export async function readTradeLogPage(
       series: d.series,
       lastTick: d.lastTick,
       result: d.result,
+      ticksUntilMs: d.ticksUntilMs,
       sessionId: tradingSessions.id,
       sessionUserId: brokerAccounts.userId,
       sessionAccountId: tradingSessions.brokerAccountId,
@@ -314,6 +320,7 @@ export async function readTradeLogPage(
         series: row.series,
         lastTick: row.lastTick,
         result: row.result,
+        ticksUntilMs: row.ticksUntilMs,
       },
       session:
         row.sessionId === null ||

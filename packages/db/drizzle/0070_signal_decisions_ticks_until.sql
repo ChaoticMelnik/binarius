@@ -1,0 +1,3 @@
+ALTER TABLE "signal_decisions" ADD COLUMN "ticks_until_ms" bigint;--> statement-breakpoint
+ALTER TABLE "signal_decisions" ADD CONSTRAINT "signal_decisions_ticks_until_check" CHECK ("signal_decisions"."ticks_until_ms" > "signal_decisions"."decided_at_ms");--> statement-breakpoint
+ALTER TABLE "signal_decisions" ADD CONSTRAINT "signal_decisions_ticks_until_pair_check" CHECK ("signal_decisions"."context" <> 'shadow' or "signal_decisions"."ticks_until_ms" is not null);

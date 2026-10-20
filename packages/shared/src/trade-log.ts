@@ -45,7 +45,7 @@ export const SIGNAL_DECISION_DETAIL_PATTERN = /^[a-z0-9_]{1,64}$/;
 
 const unixMsSchema = z.int();
 
-// a version the stand's replay does not know (a shadow row of #667): emitted as stored
+// a version the candle replay does not know (an H1 shadow row, #669): emitted as stored
 const foreignSignalSchema = z.looseObject({
   version: z
     .string()
@@ -66,6 +66,8 @@ export const tradeLogDecisionSchema = z.strictObject({
   decidedAtMs: unixMsSchema,
   takenAtMs: unixMsSchema,
   recordedAtMs: unixMsSchema,
+  // the last broker second the row's prices rest on (a shadow row's f + 7 s, #669); null otherwise
+  ticksUntilMs: unixMsSchema.nullable(),
   payout: z.number().nullable(),
   lastTick: lastTickSchema.nullable(),
   result: z.record(z.string(), z.unknown()).nullable(),

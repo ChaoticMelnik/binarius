@@ -182,7 +182,7 @@ function brokerAnchorValue(yaml: string, name: string): string | undefined {
   for (let index = start + 1; start !== -1 && index < lines.length; index += 1) {
     const line = lines[index] ?? '';
     if (/^\S/.test(line)) break;
-    const match = /^ {2}([A-Z_]+):\s*(.*?)\s*$/.exec(line);
+    const match = /^ {2}([A-Z0-9_]+):\s*(.*?)\s*$/.exec(line);
     if (match !== null && match[1] === name) return match[2];
   }
   return undefined;
@@ -242,6 +242,12 @@ describe('the worker environment for the token route and the trade lists', () =>
     for (const service of ['backend', 'trading-worker']) {
       expect(composeServiceEnvValue(composeYaml, service, 'BROKER_WS_URL')).toBeUndefined();
     }
+  });
+
+  // #669: the backend's switch, outside the anchor, so the worker never receives it
+  it('keeps H1_SHADOW out of the broker anchor and the worker', () => {
+    expect(brokerAnchorValue(composeYaml, 'H1_SHADOW')).toBeUndefined();
+    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SHADOW')).toBeUndefined();
   });
 
   it('points the worker at the backend the bot reaches', () => {

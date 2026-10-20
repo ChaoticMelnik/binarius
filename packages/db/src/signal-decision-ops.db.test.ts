@@ -8,6 +8,7 @@ import {
   TradeMode,
   TradingSessionStopReason,
   decimalStringSchema,
+  h1ShadowEntrySchema,
   type DecimalString,
   type TradingSessionSettings,
 } from '@binarius/shared';
@@ -27,6 +28,7 @@ import {
   seedTradingSession,
   seedUserWithAccount,
   sessionSettings,
+  shadowDecisionFixture,
   signalRecordFixture,
   type TempDatabase,
 } from './testing';
@@ -197,6 +199,51 @@ describe('recordSignalDecision (#666)', () => {
     const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
     expect(row!.payout).toBe(stored);
   });
+
+  const constraintOf = (promise: Promise<unknown>) =>
+    promise.then(
+      () => undefined,
+      (error: unknown) => (error as { cause?: { constraint?: string } }).cause?.constraint,
+    );
+
+  it('SD15 a shadow row (#669) comes back column for column, and its entry is an h1 shadow entry', async () => {
+    const input = shadowDecisionFixture();
+    const { id } = await recordSignalDecision(tmp.db, input);
+    const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
+    expect(row).toMatchObject({ ...input, series: [...input.series] });
+    const page = await readTradeLogPage(tmp.db, {
+      from: new Date(0),
+      to: new Date(Date.now() + 60_000),
+      limit: 1_000,
+    });
+    const exported = page.rows.find((r) => r.decision.id === id)!;
+    expect(exported.decision.ticksUntilMs).toBe(input.ticksUntilMs);
+    expect(exported.session).toBeNull();
+    expect(exported.intent).toBeNull();
+    const entry = h1ShadowEntrySchema.parse(journalEntryOf(exported.decision));
+    expect(entry).toMatchObject({ nowMs: input.decidedAtMs, series: input.series });
+  });
+
+  it('SD16 a shadow row without its tick window end is refused; a session row without one is not', async () => {
+    expect(
+      await constraintOf(
+        recordSignalDecision(tmp.db, shadowDecisionFixture({ ticksUntilMs: null })),
+      ),
+    ).toBe('signal_decisions_ticks_until_pair_check');
+    const session = await seedSession();
+    const { id } = await recordSignalDecision(tmp.db, decisionFixture(session));
+    const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
+    expect(row!.ticksUntilMs).toBeNull();
+  });
+
+  it('SD17 a tick window end at or before the decision is refused', async () => {
+    const input = shadowDecisionFixture();
+    for (const ticksUntilMs of [input.decidedAtMs, input.decidedAtMs - 1]) {
+      expect(
+        await constraintOf(recordSignalDecision(tmp.db, shadowDecisionFixture({ ticksUntilMs }))),
+      ).toBe('signal_decisions_ticks_until_check');
+    }
+  });
 });
 
 describe('readTradeLogPage (#666)', () => {
@@ -315,6 +362,7 @@ describe('readTradeLogPage (#666)', () => {
       series: [1, 2],
       lastTick: null,
       result: null,
+      ticksUntilMs: 7,
     });
     expect(entry).not.toHaveProperty('intervalMs');
     expect(entry).toMatchObject({ version: 'h1', interval: null, nowMs: 5, series: [1, 2] });
