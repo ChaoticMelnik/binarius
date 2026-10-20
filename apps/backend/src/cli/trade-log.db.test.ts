@@ -37,7 +37,7 @@ import {
   toJournalCandle,
   type SignalJournalEntry,
 } from '@binarius/signal';
-import { runTradeLogCli, TRADE_LOG_PAGE_ROWS } from './trade-log';
+import { parseTradeLogArgs, runTradeLogCli, TRADE_LOG_PAGE_ROWS } from './trade-log';
 
 // The trade log's export (#666, docs/trade-log.md → The export) through runTradeLogCli on a
 // temporary migrated database. Every case exports its own session or its own time window.
@@ -143,6 +143,36 @@ describe('trade-log export (#666)', () => {
     expect(code).toBe(2);
     expect(out).toBe('');
     expect(err.at(-1)).toContain('trade-log export --from');
+  });
+
+  it.each<[string, string, string[]]>([
+    ['--from', 'four fraction digits', ['export', '--from', '2026-10-20T00:00:00.0001Z']],
+    [
+      '--to',
+      'six fraction digits',
+      ['export', '--from', '2026-10-20T00:00:00Z', '--to', '2026-10-20T00:00:00.000001Z'],
+    ],
+  ])(
+    'X1 %s with %s (finer than Date holds) is a usage error, exit 2, the option named',
+    async (option, _label, argv) => {
+      const { code, out, err } = await run(...argv);
+      expect(code).toBe(2);
+      expect(out).toBe('');
+      expect(err[0]).toContain(option);
+      expect(err[0]).toContain('миллисекундах');
+    },
+  );
+
+  it.each<[string, string]>([
+    ['2026-10-20T00:00:00Z', '2026-10-20T00:00:00.000Z'],
+    ['2026-10-20T00:00:00.1Z', '2026-10-20T00:00:00.100Z'],
+    ['2026-10-20T00:00:00.12Z', '2026-10-20T00:00:00.120Z'],
+    ['2026-10-20T00:00:00.123Z', '2026-10-20T00:00:00.123Z'],
+    ['2026-10-20T00:00:00.123+05:30', '2026-10-19T18:30:00.123Z'],
+  ])('X10 --from %s (up to milliseconds) is taken exactly', (raw, iso) => {
+    const args = parseTradeLogArgs(['export', '--from', raw, '--to', raw.replace('2026', '2027')]);
+    expect(args.from.toISOString()).toBe(iso);
+    expect(args.to?.toISOString()).toBe(iso.replace('2026', '2027'));
   });
 
   it('X2 without DATABASE_URL: exit 1, the variable named', async () => {

@@ -43,7 +43,7 @@ const USAGE = `Выгрузка журнала решений сессий (docs
   trade-log export --from <ISO 8601> [--to <ISO 8601>] [--format jsonl|trades-json] [--session <uuid>]
 
 --from — начало периода (включительно), --to — конец (не включительно, по умолчанию — сейчас
-по часам базы), по времени записи решения. jsonl — строка на решение; trades-json — массив закрытых сделок
+по часам базы), по времени записи решения; время — с зоной, до миллисекунд. jsonl — строка на решение; trades-json — массив закрытых сделок
 для stand calibrate. Данные — в stdout, итог — в stderr.`;
 
 export interface TradeLogArgs {
@@ -67,6 +67,13 @@ const uuidSchema = z.uuid();
 function parseInstant(raw: string, name: string): Date {
   if (!isoSchema.safeParse(raw).success) {
     throw new UsageError(`${name}: нужна дата ISO 8601 с зоной, например 2026-10-20T00:00:00Z`);
+  }
+  // Date holds milliseconds and recorded_at microseconds: a finer bound would move the window.
+  // In an accepted ISO instant the only '.' is the seconds' fraction.
+  if (/\.\d{4}/.test(raw)) {
+    throw new UsageError(
+      `${name}: не больше трёх знаков после точки - выгрузка считает время в миллисекундах`,
+    );
   }
   return new Date(raw);
 }
