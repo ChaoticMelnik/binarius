@@ -252,13 +252,13 @@ warms cold again.
 | `market data backfill tick failed` | error | `{ err }`: the backstop of the backfill's timers and of a GET's promise; no case reaches it |
 
 The `market data` line, with counters for the period since the previous line:
-`{ accounts, held, active: { accountId, socketState, connection, subscriptions } | null, reserve: { accountId, socketState } | null, ticks, ticksPerSec, late, invalid, skewed, holed, unknownAsset, skippedDigits, holes, lateClose: { watermark, clock }, failovers, watermarkLagMs, closed: { '15s', '5s' }, pairs, pending, backfill: { queued, fetched, filled, failed, rateLimited, spare }, seconds: { pairs, late, closedByTick, closedByClock, holeSeconds, resets } }`.
+`{ accounts, held, active: { accountId, socketState, connection, subscriptions } | null, reserve: { accountId, socketState } | null, ticks, ticksPerSec, late, invalid, skewed, holed, unknownAsset, skippedDigits, holes, lateClose: { watermark, clock }, failovers, watermarkLagMs, closed: { '15s', '5s' }, pairs, pending, backfill: { queued, fetched, filled, failed, rateLimited, spare }, seconds: { pairs, ahead, late, closedByTick, closedByClock, holeSeconds, resets } }`.
 `lateClose` counts ticks that changed a candle the ring already called closed, split by the rule
 that closed it. `closed` counts tick candles whose bucket closed in the period. In `backfill`,
 `queued` is the queue's length now and the rest count the period: answered GETs, rows put into the
 ring, failed attempts, 429s, and spare tokens taken (one per GET started). In `seconds`, `pairs` is
-the series' pairs now and the rest count the period: ticks at or before their pair's last closed
-second, seconds closed by a tick and by the clock, seconds closed as NaN after a drop, and pairs
+the series' pairs now and the rest count the period: ticks more than the series' close margin past
+their receipt (dropped for the series only), ticks at or before their pair's last closed second, seconds closed by a tick and by the clock, seconds closed as NaN after a drop, and pairs
 emptied by a jump past the series' capacity ([h1.md](h1.md#the-second-series)). The client's state is
 `socketState`, because the logger redacts every key named `state` (the OAuth state). No line carries a
 token, the socket URL or a payload (`manager.test.ts` M11).

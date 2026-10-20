@@ -413,7 +413,7 @@ STAND_DIR=~/binarius-stand/stand-30d NODE_OPTIONS=--max-old-space-size=4096 \
 at 58.77 % (0.27 pp from the analysis). The whole table (a) is on #669's PR. A shadow row of the
 trade log (`version: h1`) is read by `parseJournalLine` as `{ kind: 'h1', entry }` and decided
 again by `replayH1Entry` ([h1.md](h1.md#replay-and-reading)); `calibrate` counts such a line as
-`unsupported_version`, as before.
+`h1_shadow`, apart from lines of an unknown version.
 
 ## Calibration
 
@@ -442,7 +442,7 @@ journal entry. A bare entry is accepted too. The entry is validated by
 `version` that is neither v1 nor v2 is `unsupported_version`. A shadow row of the H1 shadow
 (`version: h1`, #669) is parsed by `h1ShadowEntrySchema` into `{ kind: 'h1', entry }` (a broken one
 is `malformed_line`); `calibrate` compares candle decisions with session trades and counts it as
-`unsupported_version`. The trades file is validated by `tradeLogTradeJsonSchema` (`packages/shared/src/trade-log.ts`).
+`h1_shadow`. The trades file is validated by `tradeLogTradeJsonSchema` (`packages/shared/src/trade-log.ts`).
 
 **Session files** (`--session-candles`) are the owner's raw `1s` rows per session:
 `{session, asset_id, interval, start_time, limit, rows}`. A file failing `candlesWireSchema` is
