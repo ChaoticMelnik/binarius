@@ -7,12 +7,10 @@ import {
   H1_VERSION,
   h1DecisionSchema,
 } from './h1';
+import { SIGNAL_VERSION_PATTERN } from './trade-log';
 
 const features = { move: 3, sd: 1, z: 3, moves: 60, lastClose: 1004 };
 const signal = { kind: 'signal', version: 'h1', action: 'up', features };
-
-// #666's SIGNAL_VERSION_PATTERN (trade-log.ts); the import replaces this literal once #666 is on main
-const SIGNAL_VERSION_PATTERN = /^[a-z0-9_-]{1,16}$/;
 
 describe('the H1 decision wire (#667)', () => {
   it('H-S1: every shape the detector returns parses, a malformed one is refused', () => {
