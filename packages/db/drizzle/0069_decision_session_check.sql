@@ -1,0 +1,1 @@
+ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_decision_session_check" CHECK ("trade_intents"."signal_decision_id" is null or "trade_intents"."trading_session_id" is not null);

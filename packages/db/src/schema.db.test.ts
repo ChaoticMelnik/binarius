@@ -2187,6 +2187,24 @@ describe('signal_decisions (#666)', () => {
       );
     });
   });
+
+  // the composite FK is MATCH SIMPLE and skips a row whose session is NULL: the CHECK alone refuses it
+  it('rejects an intent naming a decision without a session', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedSession(tx);
+      const [decision] = await tx
+        .insert(signalDecisions)
+        .values(decisionRow(seed))
+        .returning({ id: signalDecisions.id });
+      await rejectsWith(
+        tx
+          .insert(tradeIntents)
+          .values(intent(seed, 'd4', { tradingSessionId: null, signalDecisionId: decision!.id })),
+        '23514',
+        'trade_intents_decision_session_check',
+      );
+    });
+  });
 });
 // Every simple FK the migrations declare. The ones below can be violated on their own: the
 // composite FK sharing the table is either absent or skipped under MATCH SIMPLE because one of

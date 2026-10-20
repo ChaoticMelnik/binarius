@@ -111,6 +111,11 @@ export const tradeIntents = pgTable(
       columns: [t.signalDecisionId, t.tradingSessionId],
       foreignColumns: [signalDecisions.id, signalDecisions.tradingSessionId],
     }),
+    // the FK is MATCH SIMPLE: with trading_session_id NULL it checks nothing
+    check(
+      'trade_intents_decision_session_check',
+      sql`${t.signalDecisionId} is null or ${t.tradingSessionId} is not null`,
+    ),
     inList('trade_intents_mode_check', t.mode, TradeMode),
     inList('trade_intents_action_check', t.action, TradeAction),
     inList('trade_intents_status_check', t.status, TradeIntentStatus),
