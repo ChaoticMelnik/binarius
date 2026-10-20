@@ -8,6 +8,7 @@ import {
   parseDemoOnlyEnv,
   parseDepositWidgetOriginsEnv,
   parseEnumEnv,
+  parseH1ShadowEnv,
   parseIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -137,6 +138,27 @@ describe('parseSessionStakeStrategyEnv (#450)', () => {
   it.each(['Martingale', 'x'])('refuses %s', (value) => {
     expect(() => parseSessionStakeStrategyEnv({ SESSION_STAKE_STRATEGY: value })).toThrow(
       'Env SESSION_STAKE_STRATEGY must be one of: fixed martingale',
+    );
+  });
+});
+
+describe('parseH1ShadowEnv (#669)', () => {
+  it('is on when the variable is absent', () => {
+    expect(parseH1ShadowEnv({})).toBe(true);
+  });
+
+  it('takes on and off', () => {
+    expect(parseH1ShadowEnv({ H1_SHADOW: 'on' })).toBe(true);
+    expect(parseH1ShadowEnv({ H1_SHADOW: 'off' })).toBe(false);
+  });
+
+  it('refuses an empty value', () => {
+    expect(() => parseH1ShadowEnv({ H1_SHADOW: '' })).toThrow('Env H1_SHADOW must not be empty');
+  });
+
+  it.each(['On', 'true', '0'])('refuses %s', (value) => {
+    expect(() => parseH1ShadowEnv({ H1_SHADOW: value })).toThrow(
+      'Env H1_SHADOW must be one of: on off',
     );
   });
 });

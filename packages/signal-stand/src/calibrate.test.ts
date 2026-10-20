@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { SignalKind, TradeAction, type Candle } from '@binarius/shared';
+import { SignalKind, TradeAction, tradeOutcomeOf, type Candle } from '@binarius/shared';
 import { DEFAULT_SIGNAL_PARAMS, toJournalCandle } from '@binarius/signal';
 import { describe, expect, it, vi } from 'vitest';
 import { appendRows, readSeries, seriesPath } from './cache';
@@ -12,7 +12,7 @@ import {
   runCalibrate,
   type LiveTrade,
 } from './calibrate';
-import { priceIndex, outcomeOf } from './price';
+import { priceIndex } from './price';
 import { calibrationPath } from './run';
 import { decisionContext, type Market } from './simulate';
 import { emptyTally, type Tally } from './stats';
@@ -34,7 +34,9 @@ const market: Market = {
 };
 
 const profitOf = (action: TradeAction, entry: number, exit: number) =>
-  ({ win: '0.90000000', loss: '-1.00000000', tie: '0.00000000' })[outcomeOf(action, entry, exit)];
+  ({ win: '0.90000000', loss: '-1.00000000', tie: '0.00000000' })[
+    tradeOutcomeOf(action, entry, exit)
+  ];
 
 // live trades on the moments v2 signalled, each with the journal line the feed would have logged
 function liveSession(count: number, onlyWins = false) {

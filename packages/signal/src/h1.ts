@@ -1,12 +1,16 @@
 import {
+  H1_ENTRY_WINDOW_SEC,
   H1_PRICE_RANGE,
+  H1_R1_PARAMS,
   H1_VERSION,
+  H1ShadowSet,
   H1MissingPrice,
   H1NoSignalReason,
   SignalKind,
   TradeAction,
   type H1Decision,
   type H1Params,
+  type H1ShadowEntry,
 } from '@binarius/shared';
 
 // The backtest's rule (#667, docs/signal-stand.md -> H1), fixed before the data: a 5-second move
@@ -112,3 +116,32 @@ export function createH1Detector(params: H1Params = DEFAULT_H1_PARAMS): H1Detect
 
 // a default edited out of its rules fails at import, not on the first decision
 assertH1Params(DEFAULT_H1_PARAMS);
+assertH1Params(H1_R1_PARAMS);
+
+// The H1 shadow's two sets (#669, docs/h1.md): R1, the live rule, enters at +1 s; the backtest's
+// rule, kept as the reference, at +2 s. Each keeps its own one-trade-at-a-time cadence per pair.
+export interface H1ShadowSetSpec {
+  name: H1ShadowSet;
+  params: Readonly<H1Params>;
+  entryDelaySec: number;
+}
+
+export const H1_SHADOW_SETS: readonly H1ShadowSetSpec[] = Object.freeze([
+  { name: H1ShadowSet.R1, params: H1_R1_PARAMS, entryDelaySec: H1_ENTRY_WINDOW_SEC.from },
+  { name: H1ShadowSet.H1, params: DEFAULT_H1_PARAMS, entryDelaySec: H1_ENTRY_WINDOW_SEC.to },
+]);
+
+// the longest window a set reads: a decision at f needs the closes of f - sdWindowSec .. f
+export const H1_SHADOW_MAX_WINDOW_SEC = Math.max(
+  ...H1_SHADOW_SETS.map((set) => set.params.sdWindowSec),
+);
+
+// A shadow row decided again from what it stored (Rule 44): the series holds exactly the doubles
+// the detector read, with null where it read NaN, and the decision is at its last index.
+export function replayH1Entry(entry: H1ShadowEntry): H1Decision {
+  const { moveSec, sdWindowSec, sdStepSec, threshold } = entry.params;
+  return createH1Detector({ moveSec, sdWindowSec, sdStepSec, threshold }).decide({
+    closes: entry.series.map((close) => close ?? NaN),
+    at: entry.series.length - 1,
+  });
+}

@@ -1,8 +1,7 @@
-import { SignalKind, type Candle } from '@binarius/shared';
+import { SignalKind, tradeOutcomeOf, type Candle } from '@binarius/shared';
 import type { H1Detector } from '@binarius/signal';
 import { StandError } from './cache';
 import { PRICE_STEP_MS } from './config';
-import { outcomeOf } from './price';
 import type { SimTrade } from './simulate';
 
 export interface SecondCloses {
@@ -69,7 +68,7 @@ export function simulateH1(
       outcome:
         Number.isNaN(entry) || Number.isNaN(exit)
           ? 'unpriced'
-          : outcomeOf(decision.action, entry, exit),
+          : tradeOutcomeOf(decision.action, entry, exit),
     });
     f = f + g + H + 1;
   }

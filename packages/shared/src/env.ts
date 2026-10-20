@@ -165,6 +165,14 @@ export function parseSessionStakeStrategyEnv(source: EnvSource): SessionStakeStr
   );
 }
 
+// The H1 shadow switch (#669, docs/h1.md): on unless set, so the owner turns it off after the
+// verdict without a code change; an empty or other value fails the start
+export function parseH1ShadowEnv(source: EnvSource): boolean {
+  return (
+    parseEnumEnv(readEnv(source, 'H1_SHADOW', 'on'), 'H1_SHADOW', ['on', 'off'] as const) === 'on'
+  );
+}
+
 // These values are pasted from .env straight into a URL, a header or a payload, where a stray
 // space or newline fails far from here and names nothing: a Bot API 404, a refused file id, a
 // bearer that never matches.

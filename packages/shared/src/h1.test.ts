@@ -5,9 +5,16 @@ import {
   H1_EXPIRY_SEC,
   H1_MIN_PAYOUT_PCT,
   H1_PRICE_RANGE,
+  H1_R1_PARAMS,
   H1_VERSION,
   h1DecisionSchema,
+  h1ShadowEntrySchema,
+  h1ShadowParamsSchema,
+  h1ShadowResultSchema,
+  h1ShadowSourceSchema,
+  tradeOutcomeOf,
 } from './h1';
+import { TradeAction } from './trading';
 import { SIGNAL_VERSION_PATTERN } from './trade-log';
 
 const features = { move: 3, sd: 1, z: 3, moves: 60, lastClose: 1004 };
@@ -63,5 +70,76 @@ describe('the H1 decision wire (#667)', () => {
   it("H-S4: inside the price range a move's square and the mean of up to 2^53 squares stay normal", () => {
     expect((H1_PRICE_RANGE.min * 2 ** -53) ** 2 / 2 ** 53).toBeGreaterThanOrEqual(2 ** -1022);
     expect(2 ** 53 * H1_PRICE_RANGE.max ** 2).toBeLessThan(Number.MAX_VALUE);
+  });
+});
+
+describe('the H1 shadow row (#669)', () => {
+  const params = { set: 'r1', ...H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 };
+  const series = [...Array<number | null>(H1_R1_PARAMS.sdWindowSec).fill(1.1), 1.1002];
+  const entry = {
+    assetId: 1605169136,
+    interval: null,
+    digits: 5,
+    nowMs: 1_760_000_000_000,
+    source: { kind: 'ticks', symbol: 'EUR/USD', closedBy: 'clock', closedAtMs: 1_760_000_000_500 },
+    version: H1_VERSION,
+    params,
+    series,
+    decision: {
+      kind: 'no_signal',
+      version: H1_VERSION,
+      reason: 'no_price',
+      detail: { missing: 'before' },
+    },
+  };
+
+  it('H-S5: R1 is a 3-second move over a 300 s window, and the params carry the set and the plan', () => {
+    expect(H1_R1_PARAMS.moveSec).toBe(3);
+    expect(H1_R1_PARAMS.sdWindowSec).toBe(300);
+    expect(Object.isFrozen(H1_R1_PARAMS)).toBe(true);
+    expect(h1ShadowParamsSchema.parse(params)).toEqual(params);
+    expect(h1ShadowParamsSchema.safeParse({ ...params, set: 'r2' }).success).toBe(false);
+    expect(h1ShadowParamsSchema.safeParse({ ...params, entryDelaySec: 0 }).success).toBe(false);
+    expect(h1ShadowParamsSchema.safeParse({ ...params, extra: 1 }).success).toBe(false);
+  });
+
+  it('H-S6: the entry a shadow row rebuilds parses; its series holds sdWindowSec + 1 closes', () => {
+    expect(h1ShadowEntrySchema.parse(entry)).toEqual(entry);
+    expect(h1ShadowEntrySchema.safeParse({ ...entry, series: series.slice(1) }).success).toBe(
+      false,
+    );
+    expect(
+      h1ShadowEntrySchema.safeParse({ ...entry, series: [...series.slice(1), 0] }).success,
+    ).toBe(false);
+    expect(h1ShadowEntrySchema.safeParse({ ...entry, interval: '1s' }).success).toBe(false);
+    expect(h1ShadowEntrySchema.safeParse({ ...entry, version: 'v2' }).success).toBe(false);
+    expect(h1ShadowSourceSchema.safeParse({ ...entry.source, closedBy: 'rest' }).success).toBe(
+      false,
+    );
+  });
+
+  it('H-S7: an up wins on a rise, a tie is neither, a down mirrors', () => {
+    expect(tradeOutcomeOf(TradeAction.Up, 1, 2)).toBe('win');
+    expect(tradeOutcomeOf(TradeAction.Up, 2, 1)).toBe('loss');
+    expect(tradeOutcomeOf(TradeAction.Up, 1, 1)).toBe('tie');
+    expect(tradeOutcomeOf(TradeAction.Down, 2, 1)).toBe('win');
+    expect(tradeOutcomeOf(TradeAction.Down, 1, 2)).toBe('loss');
+    expect(tradeOutcomeOf(TradeAction.Down, 1, 1)).toBe('tie');
+  });
+
+  it('H-S8: the result holds at least one entry, unpriced without prices', () => {
+    const result = {
+      entries: [
+        { entryDelaySec: 1, entryPrice: 1.1, exitPrice: 1.2, outcome: 'win' },
+        { entryDelaySec: 2, entryPrice: null, exitPrice: null, outcome: 'unpriced' },
+      ],
+    };
+    expect(h1ShadowResultSchema.parse(result)).toEqual(result);
+    expect(h1ShadowResultSchema.safeParse({ entries: [] }).success).toBe(false);
+    expect(
+      h1ShadowResultSchema.safeParse({
+        entries: [{ entryDelaySec: 1, entryPrice: 1, exitPrice: 1, outcome: 'refund' }],
+      }).success,
+    ).toBe(false);
   });
 });

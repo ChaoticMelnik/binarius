@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { MIN_CYCLE_PAYOUT_PCT } from '@binarius/shared';
-import { createH1Detector, DEFAULT_H1_PARAMS } from '@binarius/signal';
+import { createH1Detector, DEFAULT_H1_PARAMS, type H1Detector } from '@binarius/signal';
 import {
   firstTimestamp,
   lastTimestamp,
@@ -11,8 +11,11 @@ import {
   StandError,
 } from './cache';
 import {
+  H1_DEFAULT_SHAPES,
   H1_ENTRY_DELAY_GRID_SEC,
   H1_EXPIRY_GRID_SEC,
+  H1_MOVE_SEC_GRID,
+  H1_SD_STEP_GRID,
   H1_THRESHOLD_GRID,
   IN_SAMPLE_SHARE,
   PRICE_INTERVAL,
@@ -28,7 +31,10 @@ export interface H1RunOptions {
   dir: string;
   assets: readonly number[];
   out: string;
-  // subsets of the grids; the whole grid when absent
+  // subsets of the grids; the whole grid when absent, but for the shapes: without both moveSecs
+  // and sdSteps the run takes H1_DEFAULT_SHAPES, with either one the product of the two subsets
+  moveSecs?: readonly number[];
+  sdSteps?: readonly number[];
   thresholds?: readonly number[];
   delays?: readonly number[];
   expiries?: readonly number[];
@@ -67,19 +73,31 @@ export function runH1(options: H1RunOptions): number {
   const thresholds = options.thresholds ?? H1_THRESHOLD_GRID;
   const delays = options.delays ?? H1_ENTRY_DELAY_GRID_SEC;
   const expiries = options.expiries ?? H1_EXPIRY_GRID_SEC;
-  const detectors = thresholds.map((threshold) =>
-    createH1Detector({ ...DEFAULT_H1_PARAMS, threshold }),
+  const shapes =
+    options.moveSecs === undefined && options.sdSteps === undefined
+      ? H1_DEFAULT_SHAPES
+      : (options.moveSecs ?? H1_MOVE_SEC_GRID).flatMap((moveSec) =>
+          (options.sdSteps ?? H1_SD_STEP_GRID).map((sdStepSec) => ({ moveSec, sdStepSec })),
+        );
+  const detectors = shapes.flatMap((shape) =>
+    thresholds.map((threshold) => createH1Detector({ ...DEFAULT_H1_PARAMS, ...shape, threshold })),
   );
-  const cells: H1Cell[] = detectors.flatMap((detector) =>
+  const runs: { detector: H1Detector; cell: H1Cell }[] = detectors.flatMap((detector) =>
     delays.flatMap((entryDelaySec) =>
       expiries.map((expirySec) => ({
-        threshold: detector.params.threshold,
-        entryDelaySec,
-        expirySec,
-        perAsset: {},
+        detector,
+        cell: {
+          moveSec: detector.params.moveSec,
+          sdStepSec: detector.params.sdStepSec,
+          threshold: detector.params.threshold,
+          entryDelaySec,
+          expirySec,
+          perAsset: {},
+        },
       })),
     ),
   );
+  const cells = runs.map(({ cell }) => cell);
 
   const series: SeriesInfo[] = [];
   for (const pair of pairs) {
@@ -93,8 +111,7 @@ export function runH1(options: H1RunOptions): number {
     });
     const seconds = closesBySecond(rows);
     if (seconds === undefined) continue;
-    for (const cell of cells) {
-      const detector = detectors[thresholds.indexOf(cell.threshold)];
+    for (const { detector, cell } of runs) {
       const result = simulateH1(seconds, detector, cell);
       cell.perAsset[pair.id] = {
         ...splitTrades(result.trades, split, pair.payout),
@@ -109,6 +126,7 @@ export function runH1(options: H1RunOptions): number {
     since,
     split,
     until,
+    shapes,
     thresholds,
     delays,
     expiries,

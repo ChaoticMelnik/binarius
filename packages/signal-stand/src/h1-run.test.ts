@@ -1,11 +1,32 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { H1_R1_PARAMS } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { appendRows, seriesPath, writePairs } from './cache';
 import { runH1, type H1RunOptions } from './h1-run';
 import { cacheWith, PAIR, quiet, secondsPath, T0, tempDir } from './testing';
 
 const HOUR_S = 3_600;
+
+// the out-of-sample rows' points: move, sd step, threshold, delay, expiry
+function points(outDir: string): number[][] {
+  const json = JSON.parse(readFileSync(path.join(outDir, 'report-h1.json'), 'utf8')) as {
+    outOfSample: {
+      moveSec: number;
+      sdStepSec: number;
+      threshold: number;
+      entryDelaySec: number;
+      expirySec: number;
+    }[];
+  };
+  return json.outOfSample.map((r) => [
+    r.moveSec,
+    r.sdStepSec,
+    r.threshold,
+    r.entryDelaySec,
+    r.expirySec,
+  ]);
+}
 
 function run(dir: string, extra: Partial<H1RunOptions> = {}) {
   const out: string[] = [];
@@ -28,7 +49,9 @@ describe('stand h1 (#667)', () => {
     expect(code).toBe(0);
     expect(existsSync(path.join(outDir, 'report-h1.md'))).toBe(true);
     expect(existsSync(path.join(outDir, 'report-h1.json'))).toBe(true);
-    expect(out[0]).toMatch(/^\| threshold \| delay s \| expiry s \| scope \|/);
+    expect(out[0]).toMatch(
+      /^\| rule \| move s \| sd step s \| threshold \| delay s \| expiry s \|/,
+    );
     expect(out.at(-1)).toBe(`report: ${path.join(outDir, 'report-h1.md')}`);
   });
 
@@ -47,12 +70,11 @@ describe('stand h1 (#667)', () => {
   it('H-U4: a grid subset runs only its points', () => {
     const dir = cacheWith(secondsPath(T0, 2 * HOUR_S));
     const { outDir } = run(dir, { thresholds: [2], delays: [2], expiries: [5] });
-    const json = JSON.parse(readFileSync(path.join(outDir, 'report-h1.json'), 'utf8')) as {
-      outOfSample: { threshold: number; entryDelaySec: number; expirySec: number }[];
-    };
-    expect(json.outOfSample.map((r) => [r.threshold, r.entryDelaySec, r.expirySec])).toEqual([
-      [2, 2, 5],
-      [2, 2, 5],
+    expect(points(outDir)).toEqual([
+      [5, 5, 2, 2, 5],
+      [5, 5, 2, 2, 5],
+      [3, H1_R1_PARAMS.sdStepSec, 2, 2, 5],
+      [3, H1_R1_PARAMS.sdStepSec, 2, 2, 5],
     ]);
   });
 
@@ -65,5 +87,26 @@ describe('stand h1 (#667)', () => {
     const { code, err } = run(dir, { assets: [PAIR.id, other.id] });
     expect(code).toBe(0);
     expect(err.join('\n')).toContain('ranges differ by more than a day: EUR/USD (1605169136)');
+  });
+
+  it('H-U6: --move-sec and --sd-step run the product of their subsets, the missing one the whole grid (#669)', () => {
+    const dir = cacheWith(secondsPath(T0, 2 * HOUR_S));
+    const grid = { thresholds: [1], delays: [1], expiries: [5] };
+    const shapesOf = (outDir: string) =>
+      points(outDir)
+        .filter((_, i) => i % 2 === 0)
+        .map(([moveSec, sdStepSec]) => [moveSec, sdStepSec]);
+    expect(shapesOf(run(dir, { ...grid, moveSecs: [3], sdSteps: [3, 5] }).outDir)).toEqual([
+      [3, 3],
+      [3, 5],
+    ]);
+    expect(shapesOf(run(dir, { ...grid, moveSecs: [5] }).outDir)).toEqual([
+      [5, 3],
+      [5, 5],
+    ]);
+    expect(shapesOf(run(dir, grid).outDir)).toEqual([
+      [5, 5],
+      [3, H1_R1_PARAMS.sdStepSec],
+    ]);
   });
 });

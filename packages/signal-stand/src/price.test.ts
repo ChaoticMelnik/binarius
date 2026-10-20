@@ -1,7 +1,7 @@
 import { TradeAction } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { DECISION_SLACK_MS } from './config';
-import { firstPrice, outcomeOf, priceIndex } from './price';
+import { firstPrice, priceIndex } from './price';
 import { simulate } from './simulate';
 import { aggregate, secondsPath, T0 } from './testing';
 import type { Variant } from './variants';
@@ -17,15 +17,6 @@ describe('price', () => {
     expect(price(T0 + 10_000)).toBeUndefined();
     expect(firstPrice(price, () => 7)(T0 + 4_500)).toBe(7);
     expect(firstPrice(price, () => 7)(T0 + 3_000)).toBe(seconds[3].close);
-  });
-
-  it('P2 up wins on a rise, a tie is neither, down mirrors', () => {
-    expect(outcomeOf(TradeAction.Up, 1, 2)).toBe('win');
-    expect(outcomeOf(TradeAction.Up, 2, 1)).toBe('loss');
-    expect(outcomeOf(TradeAction.Up, 1, 1)).toBe('tie');
-    expect(outcomeOf(TradeAction.Down, 2, 1)).toBe('win');
-    expect(outcomeOf(TradeAction.Down, 1, 2)).toBe('loss');
-    expect(outcomeOf(TradeAction.Down, 1, 1)).toBe('tie');
   });
 
   it('P3 at openDelay 0 the entry is the 1s close at D, not the last closed candle; the exit is the 1s close at D + duration', () => {

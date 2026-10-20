@@ -1,13 +1,15 @@
-import type {
-  Candle,
-  SignalDecision,
-  SignalDecisionV1,
-  SignalIndicators,
-  TradeAction,
+import {
+  tradeOutcomeOf,
+  type Candle,
+  type SignalDecision,
+  type SignalDecisionV1,
+  type SignalIndicators,
+  type TradeAction,
+  type TradeOutcome,
 } from '@binarius/shared';
 import { DEFAULT_SIGNAL_PARAMS, displayIndicators, SIGNAL_FETCH_LIMIT } from '@binarius/signal';
 import { DECISION_SLACK_MS, SETTLE_TICK_MS, TRADE_INTERVALS, type TradeInterval } from './config';
-import { outcomeOf, type Outcome, type PriceAt } from './price';
+import type { PriceAt } from './price';
 import {
   v1Decider,
   v2Decider,
@@ -50,7 +52,7 @@ export interface SimTrade {
   action: TradeAction;
   entryAt: number;
   exitAt: number;
-  outcome: Outcome | 'unpriced';
+  outcome: TradeOutcome | 'unpriced';
 }
 
 export interface SimResult {
@@ -161,7 +163,9 @@ export function simulate(market: Market, config: SimConfig): SimResult {
       entryAt,
       exitAt,
       outcome:
-        entry === undefined || exit === undefined ? 'unpriced' : outcomeOf(action, entry, exit),
+        entry === undefined || exit === undefined
+          ? 'unpriced'
+          : tradeOutcomeOf(action, entry, exit),
     };
     result.trades.push(trade);
     if (trade.outcome !== 'unpriced') priced.push(trade);

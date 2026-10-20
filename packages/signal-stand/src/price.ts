@@ -1,4 +1,4 @@
-import { TradeAction, type Candle } from '@binarius/shared';
+import type { Candle } from '@binarius/shared';
 import { PRICE_STEP_MS } from './config';
 
 export type PriceAt = (ms: number) => number | undefined;
@@ -32,11 +32,3 @@ export const firstPrice =
     }
     return undefined;
   };
-
-export type Outcome = 'win' | 'loss' | 'tie';
-
-// a tie returns the stake: neither a win nor a loss
-export function outcomeOf(action: TradeAction, entry: number, exit: number): Outcome {
-  if (exit === entry) return 'tie';
-  return exit > entry === (action === TradeAction.Up) ? 'win' : 'loss';
-}

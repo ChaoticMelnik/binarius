@@ -14,6 +14,8 @@ import {
   FETCH_INTERVALS,
   H1_ENTRY_DELAY_GRID_SEC,
   H1_EXPIRY_GRID_SEC,
+  H1_MOVE_SEC_GRID,
+  H1_SD_STEP_GRID,
   H1_THRESHOLD_GRID,
   OPEN_DELAY_GRID_MS,
   STAND_ASSET_IDS,
@@ -34,8 +36,9 @@ export const USAGE = `usage: stand <fetch|run|calibrate|h1> [options]
   run        [--assets <id,...>] [--out <dir>] [--headline-delay <${OPEN_DELAY_GRID_MS.join('|')}>]
              [--variants <${VARIANTS.map((variant) => variant.name).join(',')}>] [--intervals <${Object.keys(TRADE_INTERVALS).join(',')}>]
   calibrate  [--journal <file>] [--trades <file>] [--session-candles <dir>]
-  h1         [--assets <id,...>] [--out <dir>] [--thresholds <${H1_THRESHOLD_GRID.join(',')}>] [--delays <${H1_ENTRY_DELAY_GRID_SEC.join(',')}>]
-             [--expiries <${H1_EXPIRY_GRID_SEC.join(',')}>]
+  h1         [--assets <id,...>] [--out <dir>] [--move-sec <${H1_MOVE_SEC_GRID.join(',')}>] [--sd-step <${H1_SD_STEP_GRID.join(',')}>]
+             [--thresholds <${H1_THRESHOLD_GRID.join(',')}>] [--delays <${H1_ENTRY_DELAY_GRID_SEC.join(',')}>] [--expiries <${H1_EXPIRY_GRID_SEC.join(',')}>]
+             (without --move-sec and --sd-step: the reference H1 and R1 shapes only)
 env: STAND_DIR (required); BROKER_API_BASE_URL (fetch); STAND_MAX_GETS_PER_MINUTE (fetch, optional)`;
 
 export interface MainIo {
@@ -129,6 +132,8 @@ const OPTIONS = {
   journal: { type: 'string' },
   trades: { type: 'string' },
   'session-candles': { type: 'string' },
+  'move-sec': { type: 'string' },
+  'sd-step': { type: 'string' },
   thresholds: { type: 'string' },
   delays: { type: 'string' },
   expiries: { type: 'string' },
@@ -138,7 +143,7 @@ const ALLOWED: Record<string, readonly (keyof typeof OPTIONS)[]> = {
   fetch: ['assets', 'days', 'intervals'],
   run: ['assets', 'out', 'headline-delay', 'variants', 'intervals'],
   calibrate: ['journal', 'trades', 'session-candles'],
-  h1: ['assets', 'out', 'thresholds', 'delays', 'expiries'],
+  h1: ['assets', 'out', 'move-sec', 'sd-step', 'thresholds', 'delays', 'expiries'],
 };
 
 export async function main(argv: readonly string[], env: EnvSource, io: MainIo): Promise<number> {
@@ -202,6 +207,8 @@ export async function main(argv: readonly string[], env: EnvSource, io: MainIo):
         dir,
         assets: list(values.assets, STAND_ASSET_IDS),
         out: out(),
+        moveSecs: gridSubset(values['move-sec'], 'move-sec', H1_MOVE_SEC_GRID),
+        sdSteps: gridSubset(values['sd-step'], 'sd-step', H1_SD_STEP_GRID),
         thresholds: gridSubset(values.thresholds, 'thresholds', H1_THRESHOLD_GRID),
         delays: gridSubset(values.delays, 'delays', H1_ENTRY_DELAY_GRID_SEC),
         expiries: gridSubset(values.expiries, 'expiries', H1_EXPIRY_GRID_SEC),

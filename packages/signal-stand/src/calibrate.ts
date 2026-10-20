@@ -5,9 +5,11 @@ import {
   SignalKind,
   toCandle,
   tradeLogTradeJsonSchema,
+  tradeOutcomeOf,
   type Candle,
   type TradeLogTradeJson,
   type TradeAction,
+  type TradeOutcome,
 } from '@binarius/shared';
 import { replaySignalJournalEntry, type StoredSignalJournalEntry } from '@binarius/signal';
 import { z } from 'zod';
@@ -25,7 +27,7 @@ import {
   type TradeInterval,
 } from './config';
 import { parseJournalLine } from './journal-line';
-import { firstPrice, outcomeOf, priceIndex, type Outcome, type PriceAt } from './price';
+import { firstPrice, priceIndex, type PriceAt } from './price';
 import { calibrationPath } from './run';
 import { compareRows, mergedRows, readSessionFiles } from './session-candles';
 import { simulate, type Market } from './simulate';
@@ -40,7 +42,7 @@ type Era = 'v1' | 'ambiguous' | 'v2';
 const eraOf = (createdAtMs: number): Era =>
   createdAtMs < V2_MERGED_AT ? 'v1' : createdAtMs < V2_FIRST_CLEAN_AT ? 'ambiguous' : 'v2';
 
-function liveOutcome(profit: string): Outcome {
+function liveOutcome(profit: string): TradeOutcome {
   if (/^-?0+(\.0+)?$/.test(profit)) return 'tie';
   return profit.startsWith('-') ? 'loss' : 'win';
 }
@@ -66,7 +68,7 @@ function matches(trade: LiveTrade, price: PriceAt, entryAt: number, exitAt: numb
   const entry = price(entryAt);
   const exit = price(exitAt);
   if (entry === undefined || exit === undefined) return undefined;
-  return outcomeOf(trade.action as TradeAction, entry, exit) === liveOutcome(trade.profit);
+  return tradeOutcomeOf(trade.action as TradeAction, entry, exit) === liveOutcome(trade.profit);
 }
 
 // gate 2: at the trade's own open and close, both shifted by k
@@ -125,7 +127,8 @@ function readJournal(file: string, counters: Record<string, number>) {
     if (line.trim() === '') continue;
     const parsed = parseJournalLine(line);
     if (parsed.kind !== 'entry') {
-      counters[parsed.kind]++;
+      // calibrate compares candle decisions with session trades: a shadow row is not one
+      counters[parsed.kind === 'h1' ? 'unsupported_version' : parsed.kind]++;
       continue;
     }
     const key = `${parsed.entry.assetId}|${parsed.entry.interval}`;
