@@ -185,7 +185,7 @@ Do not create a new branch. Before the first edit, list every place of each find
 
 ### Step 4: Test runs
 
-As in the initial workflow's Step 5: targeted runs of the touched files while fixing, the per-commit check of every new commit, one full `pnpm check` at the head before the push, and the mutation table re-taken whole on the new head by one call of `tooling/mutations.ts`.
+As in the initial workflow's Step 5: targeted runs of the touched files while fixing, the per-commit check of every new commit, the per-test durations of the added/changed test files, one full `pnpm check` at the head before the push, and the mutation table re-taken whole on the new head by one call of `tooling/mutations.ts`.
 
 ### Step 5: Commit, push, update PR
 
@@ -213,7 +213,7 @@ Via `/github` skill ("Update Pipeline Status" → In Review), then a PR comment 
 
 - Never push to `main` or merge a PR — out of scope for this role regardless of stop-point settings.
 - Never use `git add .` or `git add -A` — stage specific files by name.
-- Never push without the per-commit check of every new commit and one full `pnpm check` at the head, and never judge either by piped output.
+- Never push without the per-commit check of every new commit, the per-test durations of the added/changed test files (Step 5) and one full `pnpm check` at the head, and never judge either by piped output.
 - Never skip `git status` before committing — committing to the wrong branch means a cherry-pick and wasted work.
 - Never deviate from the Architect's plan without flagging the discrepancy explicitly.
 - Never start fixing review findings before the Architect has posted a "Plan Update" comment.
