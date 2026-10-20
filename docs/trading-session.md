@@ -701,7 +701,7 @@ is an answer, never a throw. Neither client logs; the orchestrator logs the outc
 
 | Client | Request | Answers |
 |---|---|---|
-| `createBackendSignalSource` | `POST /trading/signal` `{ assetId, interval, record: true }`, `TRADING_SIGNAL_BUDGET_MS` | the parsed `tradingSignalResponseSchema` (`decided` or `fetch_failed`); a `decided` answer carries `record` — the journal entry and the pair's last tick — for the trade log (#666); an old backend answers none (`record_missing`) |
+| `createBackendSignalSource` | `POST /trading/signal` `{ assetId, interval, record: true }`, `TRADING_SIGNAL_BUDGET_MS` | the parsed `tradingSignalResponseSchema` (`decided` or `fetch_failed`); a `decided` answer carries `record` — the journal entry and the pair's last tick — for the trade log (#666), read apart from the answer: an old backend answers none (`record_missing`), and a record that fails `signalRecordSchema` or is not the answer's decision, asset and interval is dropped (`recordProblem` `invalid` / `mismatch`) while the answer stands |
 | `createBackendPairsSource` | `GET /trading/pairs`, `TRADING_SESSION_PAIRS_TIMEOUT_MS` | the parsed `pairsCatalogResponseSchema`; a 503 `{ error: 'catalog_unavailable' }` → `catalog_unavailable` |
 
 Both: a fetch error, the timeout or the caller's abort → `backend_unreachable` (its cause dropped:
@@ -762,7 +762,7 @@ line is in it with its level.
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
 | `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
 | `trading session intent created` | info | `step`, `intentId`, `action` |
-| `trading session decision not recorded` | warn | the decision's trade log row (#666, [trade-log.md](trade-log.md)) was not written: `reason: 'record_missing'` (the backend answered no record, once per attempt), or the insert threw (`step`, `errorLogFields`); the ending stands |
+| `trading session decision not recorded` | warn | the decision's trade log row (#666, [trade-log.md](trade-log.md)) was not written: `reason: 'record_missing'` (the backend answered no record), `'record_invalid'` or `'record_mismatch'` (the source dropped the record), each once per attempt; `'insert_refused'` (the row refused inside the intent's transaction, rolled back to its savepoint; the intent is created unlinked; `step`, `errorLogFields`); or, without a reason, the autocommit insert threw (`step`, `errorLogFields`); the ending stands |
 | `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 | `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
 | `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |
