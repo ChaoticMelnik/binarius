@@ -3702,7 +3702,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Reviewer ran Codex on a round with a Major | Minor | codex-ops | reviewer Step 6-pre not followed | Reviewer |
 
 ### Process improvement proposals
-1. Implementer Step 5: every per-commit and full run under a wall-clock limit — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5**
-2. Round limit for an issue split by size: 3 rounds per PR (owner's decision 2026-10-20) — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Phase 4; `.claude/CLAUDE.md` → GitHub — статусы задач**
+1. Implementer Step 5: every per-commit and full run under a wall-clock limit — **внедрено в #678: `.claude/skills/implementer/SKILL.md` → Step 5**
+2. Round limit for an issue split by size: 3 rounds per PR (owner's decision 2026-10-20) — **внедрено в #678: `.claude/skills/tech-lead/SKILL.md` → Phase 4; `.claude/CLAUDE.md` → GitHub — статусы задач**
 3. A mutation of a migration file must redden in the one mutations call — **вынесено в #676**
 4. Remaining findings — **вынесено в #675, #676, #677**
