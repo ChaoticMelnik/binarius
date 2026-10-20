@@ -23,7 +23,12 @@ import {
 } from '@binarius/shared';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import type { SignalDecisionInput } from '@binarius/db';
-import { createH1Detector, H1_SHADOW_SETS, type H1ShadowSetSpec } from '@binarius/signal';
+import {
+  assertH1ShadowSet,
+  createH1Detector,
+  H1_SHADOW_SETS,
+  type H1ShadowSetSpec,
+} from '@binarius/signal';
 import type { ClosedSecond, SecondSeries } from '../market-data/seconds';
 
 // The H1 shadow (#669, docs/h1.md -> The shadow, Rule 44): on every closed second of every pair
@@ -171,10 +176,10 @@ const percentile = (sorted: readonly number[], p: number) =>
 export function createH1Shadow(deps: H1ShadowDeps): H1Shadow {
   const { series, catalog, streaming, record, logger, config } = deps;
   const now = deps.now ?? Date.now;
-  const sets = (deps.sets ?? H1_SHADOW_SETS).map((set) => ({
-    set,
-    detector: createH1Detector(set.params),
-  }));
+  const sets = (deps.sets ?? H1_SHADOW_SETS).map((set) => {
+    assertH1ShadowSet(set);
+    return { set, detector: createH1Detector(set.params) };
+  });
   // assetId -> the pending outcomes of its sets (at most one per set: the cadence)
   const pending = new Map<number, H1PendingOutcome[]>();
   // `${assetId}|${set}` -> the first second the set may decide again

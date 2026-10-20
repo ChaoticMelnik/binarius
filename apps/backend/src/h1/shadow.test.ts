@@ -2,6 +2,7 @@ import pino from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   H1_R1_PARAMS,
+  H1ShadowSet,
   h1ShadowEntrySchema,
   logOptions,
   toBinaryPair,
@@ -522,5 +523,32 @@ describe('the H1 shadow (#669)', () => {
     h.feed(A, F + 3_000, AFTER.slice(2));
     await h.shadow.stop();
     expect(h.records).toEqual([]);
+  });
+
+  it('H-X19: a set given in deps with moveSec > sdStepSec is refused before the first second', () => {
+    const record = vi.fn(() => Promise.resolve());
+    expect(() =>
+      createH1Shadow({
+        series: createSecondSeries({ capacitySec: CAPACITY_SEC, closeMarginMs: 500 }),
+        catalog: { read: () => undefined },
+        streaming: () => true,
+        record,
+        logger: pino({ level: 'silent' }),
+        now: () => clock.now,
+        config: { tickMs: 100, logMs: 60_000, capacitySec: CAPACITY_SEC },
+        sets: [
+          {
+            name: H1ShadowSet.R1,
+            params: { moveSec: 5, sdWindowSec: 300, sdStepSec: 3, threshold: 1 },
+            entryDelaySec: 1,
+          },
+        ],
+      }),
+    ).toThrow(
+      new RangeError(
+        'h1 shadow set r1: moveSec (5) must be <= sdStepSec (3): the window of sdWindowSec + 1 closes holds every close a decision reads only then',
+      ),
+    );
+    expect(record).not.toHaveBeenCalled();
   });
 });

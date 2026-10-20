@@ -1,6 +1,5 @@
-import { H1_R1_PARAMS, H1ShadowSet, SIGNAL_CHART_INTERVAL_MS } from '@binarius/shared';
+import { SIGNAL_CHART_INTERVAL_MS } from '@binarius/shared';
 import {
-  createH1Detector,
   replayH1Entry,
   createSignalDecider,
   createSignalDeciderV1,
@@ -10,7 +9,7 @@ import {
 } from '@binarius/signal';
 import { describe, expect, it } from 'vitest';
 import { parseJournalLine } from './journal-line';
-import { aggregate, PAIR, secondsPath, T0 } from './testing';
+import { aggregate, PAIR, secondsPath, shadowLine, T0 } from './testing';
 import { seriesAt } from './window';
 
 const STEP = SIGNAL_CHART_INTERVAL_MS['5s'];
@@ -122,30 +121,6 @@ describe('parseJournalLine', () => {
   });
 
   // the trade log's export line of a shadow row (#669): its entry under `signal`
-  function shadowLine(patch: Record<string, unknown> = {}) {
-    const series = [...Array<number>(H1_R1_PARAMS.sdWindowSec).fill(1.1), 1.1002];
-    const decision = createH1Detector(H1_R1_PARAMS).decide({
-      closes: series,
-      at: series.length - 1,
-    });
-    const signal = {
-      assetId: PAIR.id,
-      interval: null,
-      digits: 5,
-      nowMs,
-      source: { kind: 'ticks', symbol: 'EUR/USD', closedBy: 'tick', closedAtMs: nowMs + 400 },
-      version: 'h1',
-      params: { set: H1ShadowSet.R1, ...H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
-      series,
-      decision,
-      ...patch,
-    };
-    return {
-      line: JSON.stringify({ decision: { context: 'shadow' }, signal, trade: null }),
-      signal,
-    };
-  }
-
   it('JL-h1 a shadow row of the export parses as h1 and replays to its decision', () => {
     const { line, signal } = shadowLine();
     const parsed = parseJournalLine(line);

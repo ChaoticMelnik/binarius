@@ -16,7 +16,17 @@ import { priceIndex } from './price';
 import { calibrationPath } from './run';
 import { decisionContext, type Market } from './simulate';
 import { emptyTally, type Tally } from './stats';
-import { aggregate, cacheWith, PAIR, quiet, secondsPath, T0, tempDir, writeJson } from './testing';
+import {
+  aggregate,
+  cacheWith,
+  PAIR,
+  quiet,
+  secondsPath,
+  shadowLine,
+  T0,
+  tempDir,
+  writeJson,
+} from './testing';
 import { seriesAt } from './window';
 
 const STEP = 5_000;
@@ -475,5 +485,13 @@ describe('calibrate', () => {
     const { counter, out } = run({ ...session, trades: [...session.trades, odd] });
     expect(counter('unsupported_duration')).toBe(1);
     expect(out.some((l) => l.includes('v2 30 s:'))).toBe(false);
+  });
+
+  it('E9 a shadow row of the H1 shadow counts h1_shadow, not unsupported_version (#669)', () => {
+    const session = liveSession(6);
+    const { counter } = run({ ...session, lines: [...session.lines, shadowLine().line] });
+    expect(counter('h1_shadow')).toBe(1);
+    expect(counter('unsupported_version')).toBe(0);
+    expect(counter('replayed')).toBe(6);
   });
 });

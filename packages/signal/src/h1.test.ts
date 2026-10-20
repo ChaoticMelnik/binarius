@@ -5,11 +5,13 @@ import {
   h1DecisionSchema,
   h1ShadowEntrySchema,
   type H1Decision,
+  H1ShadowSet,
   type H1Params,
 } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import {
   assertH1Params,
+  assertH1ShadowSet,
   createH1Detector,
   DEFAULT_H1_PARAMS,
   H1_SHADOW_MAX_WINDOW_SEC,
@@ -394,5 +396,41 @@ describe('the H1 shadow sets and replay (#669)', () => {
     expect(H1_SHADOW_MAX_WINDOW_SEC).toBe(
       Math.max(H1_R1_PARAMS.sdWindowSec, DEFAULT_H1_PARAMS.sdWindowSec),
     );
+  });
+
+  it('H-D18: a set has moveSec <= sdStepSec, so its window of sdWindowSec + 1 closes decides as the whole history', () => {
+    const wide = { moveSec: 5, sdWindowSec: 300, sdStepSec: 3, threshold: 1 };
+    expect(() =>
+      assertH1ShadowSet({ name: H1ShadowSet.R1, params: wide, entryDelaySec: 1 }),
+    ).toThrow(
+      new RangeError(
+        'h1 shadow set r1: moveSec (5) must be <= sdStepSec (3): the window of sdWindowSec + 1 closes holds every close a decision reads only then',
+      ),
+    );
+    for (const set of H1_SHADOW_SETS) expect(() => assertH1ShadowSet(set)).not.toThrow();
+
+    let state = 7;
+    let price = 100_000;
+    const closes = Float64Array.from({ length: 2_000 }, () => {
+      state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+      price += Math.round((state / 2_147_483_648 - 0.5) * 8);
+      return price;
+    });
+    const mismatches = (params: H1Params) => {
+      const custom = createH1Detector(params);
+      let count = 0;
+      for (let f = 400; f < closes.length; f += 7) {
+        const full = custom.decide({ closes, at: f });
+        const window = custom.decide({
+          closes: closes.subarray(f - params.sdWindowSec, f + 1),
+          at: params.sdWindowSec,
+        });
+        if (JSON.stringify(full) !== JSON.stringify(window)) count++;
+      }
+      return count;
+    };
+    for (const set of H1_SHADOW_SETS) expect(mismatches(set.params), set.name).toBe(0);
+    // the check can see a window that misses a close: the wide shape's earliest read falls out
+    expect(mismatches(wide)).toBeGreaterThan(0);
   });
 });

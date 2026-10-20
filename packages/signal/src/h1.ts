@@ -116,7 +116,6 @@ export function createH1Detector(params: H1Params = DEFAULT_H1_PARAMS): H1Detect
 
 // a default edited out of its rules fails at import, not on the first decision
 assertH1Params(DEFAULT_H1_PARAMS);
-assertH1Params(H1_R1_PARAMS);
 
 // The H1 shadow's two sets (#669, docs/h1.md): R1, the live rule, enters at +1 s; the backtest's
 // rule, kept as the reference, at +2 s. Each keeps its own one-trade-at-a-time cadence per pair.
@@ -131,7 +130,23 @@ export const H1_SHADOW_SETS: readonly H1ShadowSetSpec[] = Object.freeze([
   { name: H1ShadowSet.H1, params: DEFAULT_H1_PARAMS, entryDelaySec: H1_ENTRY_WINDOW_SEC.to },
 ]);
 
-// the longest window a set reads: a decision at f needs the closes of f - sdWindowSec .. f
+// The earliest close a decision at f reads is f - sdWindowSec + sdStepSec - moveSec, so the window
+// of sdWindowSec + 1 closes the shadow keeps and stores (Rule 44) holds all of them only while
+// moveSec <= sdStepSec.
+export function assertH1ShadowSet(set: H1ShadowSetSpec): void {
+  assertH1Params(set.params);
+  const { moveSec, sdStepSec } = set.params;
+  if (moveSec > sdStepSec) {
+    throw new RangeError(
+      `h1 shadow set ${set.name}: moveSec (${moveSec}) must be <= sdStepSec (${sdStepSec}): the window of sdWindowSec + 1 closes holds every close a decision reads only then`,
+    );
+  }
+}
+
+for (const set of H1_SHADOW_SETS) assertH1ShadowSet(set);
+
+// the longest window a set reads: a decision at f needs the closes of f - sdWindowSec .. f, exact
+// because every set passes assertH1ShadowSet
 export const H1_SHADOW_MAX_WINDOW_SEC = Math.max(
   ...H1_SHADOW_SETS.map((set) => set.params.sdWindowSec),
 );

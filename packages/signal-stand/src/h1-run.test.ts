@@ -84,7 +84,12 @@ describe('stand h1 (#667)', () => {
     writePairs(dir, [PAIR, other]);
     appendRows(seriesPath(dir, other.id, '1s'), secondsPath(T0 - 2 * 86_400_000, 600), quiet);
     appendRows(seriesPath(dir, other.id, '1s'), secondsPath(T0, 600), quiet);
-    const { code, err } = run(dir, { assets: [PAIR.id, other.id] });
+    const { code, err } = run(dir, {
+      assets: [PAIR.id, other.id],
+      thresholds: [2],
+      delays: [2],
+      expiries: [5],
+    });
     expect(code).toBe(0);
     expect(err.join('\n')).toContain('ranges differ by more than a day: EUR/USD (1605169136)');
   });

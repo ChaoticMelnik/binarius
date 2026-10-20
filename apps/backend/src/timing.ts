@@ -478,8 +478,9 @@ const TIMING_CHAIN_HOLDS =
   MARKET_DATA_BACKFILL_SCAN_MS <= SIGNAL_CHART_INTERVAL_MS['5s'] &&
   SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS &&
   // the H1 shadow (#669): the clock rule runs inside its own margin; a second closes before the
-  // ring's clock rule would close its 5s bucket and far inside the tick skew bound; a pair holds the
-  // longest window plus the latest exit; the line spans ticks. stop() waits for the INSERTs in
+  // ring's clock rule would close its 5s bucket; the series' bound on a tick ahead of its receipt
+  // (the same margin) is tighter than the tick filter's skew bound; a pair holds the longest window
+  // (every set has moveSec <= sdStepSec) plus the latest exit; the line spans ticks. stop() waits for the INSERTs in
   // flight, ordinary database latency (above)
   H1_SHADOW_TICK_MS <= H1_SECOND_CLOSE_MARGIN_MS &&
   H1_SECOND_CLOSE_MARGIN_MS < MARKET_DATA_SKEW_MARGIN_MS &&
