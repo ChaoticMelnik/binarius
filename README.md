@@ -5,7 +5,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 ## Structure
 
 - `apps/bot` — Telegram bot (grammY)
-- `apps/backend` — API (Fastify): OAuth, postbacks, auth; the trade log's export (`trade-log export`, docs/trade-log.md)
+- `apps/backend` — API (Fastify): OAuth, postbacks, auth; the trade log's export (`trade-log export`, docs/trade-log.md); the H1 shadow on the data socket's ticks, on unless `H1_SHADOW=off` (docs/h1.md)
 - `apps/web` — web pages (Fastify, server-rendered HTML): staff login and admin (#34), checkout later
 - `apps/trading-worker` — trading loop worker
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
@@ -33,7 +33,8 @@ or, when nothing was sent, over REST, and which answer means what, is in
 [docs/trade-executor.md](docs/trade-executor.md); how the backend caches the broker's pairs and serves
 them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); how the
 backend builds candles from the price stream of a service account's socket is in
-[docs/market-data.md](docs/market-data.md); what
+[docs/market-data.md](docs/market-data.md); how the backend decides H1 on a 1s series of those
+ticks without trading and records each signal with its outcome is in [docs/h1.md](docs/h1.md); what
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the signals, the
@@ -83,7 +84,8 @@ pnpm test apps/backend   # one package's tests (path filter)
 pnpm test --project unit # the tests that need no Postgres or Redis
 pnpm test packages/e2e   # the demo cycle end to end, docs/e2e-demo-cycle.md
 STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand run   # the Signal backtest, docs/signal-stand.md
-STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand h1    # the H1 backtest, docs/signal-stand.md
+STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand h1    # the H1 backtest (the reference and R1), docs/signal-stand.md
+STAND_DIR=~/binarius-stand/stand-30d NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @binarius/signal-stand stand h1 --assets 237831086,364060136,759228819,1430524430,1605169136,1775154181,2025372713 --move-sec 3 --sd-step 3,5 --delays 1,2 --expiries 5   # R1's grid (#669), docs/signal-stand.md
 pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z > trade-log.jsonl   # the sessions' decisions (DATABASE_URL), docs/trade-log.md
 pnpm --filter @binarius/web admin:export <dir> [--serve <port>]   # the admin pages as static files, docs/admin-design-system.md
 ```

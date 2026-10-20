@@ -940,8 +940,9 @@ none». The decision stays Signal v2; MACD and MA stay on the card only.
 - **A second detector, H1 (#667).** `packages/signal/src/h1.ts` decides on end-labelled 1s closes
   at the closed second: a 5-second move against the RMS of the 5-second moves of the last 300 s
   ([signal-stand.md → H1](signal-stand.md#h1-on-the-1s-series-667)). It is not a candle decider
-  and not a version of this one: `SIGNAL_ALGORITHM_VERSIONS` stays `v1`, `v2`. In part 1 only the
-  stand consumes it; #669 feeds it ticks.
+  and not a version of this one: `SIGNAL_ALGORITHM_VERSIONS` stays `v1`, `v2`. The stand runs it on
+  history, and since #669 the backend's shadow runs it on a 1s series of live ticks with two sets,
+  R1 and the reference, without trading ([h1.md](h1.md)).
 
 ## Boundaries
 

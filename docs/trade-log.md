@@ -25,14 +25,14 @@ sweep; the export's `ticks` is `null` until then.
 | Column | Meaning | Clock / source |
 |---|---|---|
 | `id` | uuid | |
-| `context` | who decided: `session` (the orchestrator), `session_start` (`POST /trading/sessions`), `shadow` (no writer yet, #667) — `SignalDecisionContext`, CHECK `signal_decisions_context_check` | |
+| `context` | who decided: `session` (the orchestrator), `session_start` (`POST /trading/sessions`), `shadow` (the H1 shadow, #669, [h1.md](h1.md#the-row)) — `SignalDecisionContext`, CHECK `signal_decisions_context_check` | |
 | `trading_session_id` | the session; NULL for a start that created none and for `shadow` (`signal_decisions_session_pair_check`: required for `session` and for `started`) | |
 | `broker_account_id` | the account; required for `session` and `session_start` (`signal_decisions_account_pair_check`); with a session, the session's own account (`signal_decisions_session_account_fk → trading_sessions (id, broker_account_id)`, Rule 4) | |
 | `step` | the session's intents + 1 when the decision was taken — the step the intent key `session:<id>:<step>` names; only for `session` (`signal_decisions_step_pair_check`), `> 0` | |
 | `asset_id`, `interval` | the pair and the candle interval; `interval` in `SIGNAL_INTERVALS`, NULL allowed for a version that decides on ticks | |
 | `version` | the signal version (`v2`); an identifier, CHECK by `SIGNAL_VERSION_PATTERN` (`^[a-z0-9_-]{1,16}$`), not a list: a later detector adds one without a migration | |
-| `decided_at_ms` | the decider's `nowMs` (the entry's) | backend clock, read by the cache before its fetch |
-| `taken_at_ms` | when the writer took the decision | the orchestrator's clock right after `evaluate` returned; the start route's after its signal and balance reads |
+| `decided_at_ms` | the decider's `nowMs` (the entry's); a shadow row's: the end label `f` of the closed second it decided on | backend clock, read by the cache before its fetch; a shadow row's: the broker's (a second's label) |
+| `taken_at_ms` | when the writer took the decision | the orchestrator's clock right after `evaluate` returned; the start route's after its signal and balance reads; the shadow's right after its detector |
 | `recorded_at` | the row's insert | database clock, the transaction's start |
 | `kind`, `action` | the decision's kind (`SignalKind`) and, for a signal only, its direction (`signal_decisions_action_pair_check`) | |
 | `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed, and NULL also when the catalog's value is outside the column (`signalDecisionPayout`) | the catalog the writer read |
@@ -40,7 +40,8 @@ sweep; the export's `ticks` is `null` until then.
 | `params`, `decision`, `source`, `series` | the journal entry's fields as the backend answered them (jsonb, objects and an array) | |
 | `last_tick` | `{ price, timestamp, receivedAtMs }`, the pair's newest data-socket tick when `POST /trading/signal` answered; NULL without the socket or before the pair's first tick | `timestamp` the broker's, `receivedAtMs` the backend's |
 | `outcome`, `detail` | what the writer did with the decision (below); `detail` the code of a refusal or of the sizer's stop, CHECK by `SIGNAL_DECISION_DETAIL_PATTERN`, present exactly for `refused` and `stake_stop` (`signal_decisions_detail_pair_check`) | |
-| `result` | reserved for #667's shadow outcome (jsonb object) | |
+| `result` | a shadow row's outcome by the broker's prices, `{ entries: [{ entryDelaySec, entryPrice, exitPrice, outcome }] }` (#669, [h1.md](h1.md#the-row)); NULL on the rows of sessions (jsonb object) | |
+| `ticks_until_ms` | the last broker second a row's prices rest on: a shadow row's `decided_at_ms + 7 000` (#669), the end of #668's tick window; NULL on the rows of sessions. `signal_decisions_ticks_until_check` (`> decided_at_ms`), `signal_decisions_ticks_until_pair_check` (required for `shadow`), migration 0070 | broker |
 
 `signal_decisions_outcome_kind_check`: a `no_signal` decision has outcome `no_signal`, and only it.
 Indexes: `signal_decisions_recorded_idx (recorded_at, id)` (the export's range and order),
@@ -218,8 +219,8 @@ the database's text so microseconds survive. The data goes to stdout, the count 
 
 | Key | Content |
 |---|---|
-| `decision` | `id`, `context`, `outcome`, `detail`, `version`, `assetId`, `interval`, `step`, `kind`, `action`, `decidedAtMs`, `takenAtMs`, `recordedAtMs`, `payout`, `lastTick`, `result` |
-| `signal` | the journal entry (`journalEntryOf`); the stand's `parseJournalLine` reads it from this key, as from a log line |
+| `decision` | `id`, `context`, `outcome`, `detail`, `version`, `assetId`, `interval`, `step`, `kind`, `action`, `decidedAtMs`, `takenAtMs`, `recordedAtMs`, `ticksUntilMs`, `payout`, `lastTick`, `result` |
+| `signal` | the journal entry (`journalEntryOf`); the stand's `parseJournalLine` reads it from this key, as from a log line. A shadow row's entry is `h1ShadowEntrySchema`'s, which `replayH1Entry` decides again ([h1.md](h1.md#replay-and-reading)) |
 | `session` | `id`, `userId`, `brokerAccountId`, `mode`, `strategy`, `baseStake`, `durationSec` (from the row's settings; NULL when they do not parse), `stopReason`; `null` for a start without a session |
 | `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout`, `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent. A trade on a later page keeps its session's numbering (X8) |
 | `ticks` | `null` (#668) |
@@ -303,7 +304,8 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
 - #668: the ticks around each trade (`decision_ticks`, from `decision − 60 s` to `close + 5 s`), the
   tick store's window, the retention sweep (rows without an intent after 30 days), the export's
   `ticks`.
-- #667: the shadow detector's rows (`context: shadow`, `version: h1`, `result`); its new creators of
-  session intents must pass `decision` to `createSessionIntent` (the type requires it).
+- #669: the H1 shadow's rows (`context: shadow`, `version: h1`, `result`, `ticks_until_ms`),
+  [h1.md](h1.md). #670's creators of session intents must pass `decision` to
+  `createSessionIntent` (the type requires it).
 - One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports and dashboards:
   none, only the export.
