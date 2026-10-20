@@ -607,6 +607,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         },
         seconds: {
           pairs: secondCounts.pairs,
+          ahead: secondsSince('ahead'),
           late: secondsSince('late'),
           closedByTick: secondsSince('closedByTick'),
           closedByClock: secondsSince('closedByClock'),

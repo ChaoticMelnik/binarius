@@ -254,11 +254,30 @@ describe('the second series (#669)', () => {
     expect(other).toEqual([T + 1_000]);
     expect(s.counters()).toEqual({
       pairs: 2,
+      ahead: 0,
       late: 0,
       closedByTick: 2,
       closedByClock: 2,
       holeSeconds: 0,
       resets: 0,
     });
+  });
+
+  it('H-W15: a tick more than the margin past its receipt is dropped and counted, and opens no pair', () => {
+    const { s, events, tick } = series();
+    tick(A, T + 100, 1.1);
+    tick(A, T + 59_000, 1.9, T + 200);
+    expect(events).toEqual([]);
+    expect(s.counters().ahead).toBe(1);
+    tick(A, T + 1_400, 1.2);
+    expect(seconds(events)).toEqual([T + 1_000]);
+    expect(s.close(A, T + 1_000)).toBe(1.1);
+    tick(A, T + 2_500, 1.3, T + 2_500 - MARGIN);
+    expect(seconds(events)).toEqual([T + 1_000, T + 2_000]);
+    tick(A, T + 3_500, 1.4, T + 3_500 - MARGIN - 1);
+    expect(seconds(events)).toEqual([T + 1_000, T + 2_000]);
+    tick(B, T + 59_000, 2.1, T + 200);
+    expect(s.counters()).toMatchObject({ pairs: 1, ahead: 3, late: 0 });
+    expect(s.close(B, T + 1_000)).toBeNaN();
   });
 });

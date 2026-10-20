@@ -128,7 +128,7 @@ function readJournal(file: string, counters: Record<string, number>) {
     const parsed = parseJournalLine(line);
     if (parsed.kind !== 'entry') {
       // calibrate compares candle decisions with session trades: a shadow row is not one
-      counters[parsed.kind === 'h1' ? 'unsupported_version' : parsed.kind]++;
+      counters[parsed.kind === 'h1' ? 'h1_shadow' : parsed.kind]++;
       continue;
     }
     const key = `${parsed.entry.assetId}|${parsed.entry.interval}`;
@@ -225,6 +225,7 @@ export function runCalibrate(options: CalibrateOptions): number {
     unpriced: 0,
     priced_from_session_file: 0,
     unsupported_version: 0,
+    h1_shadow: 0,
     malformed_session_file: 0,
     replayed: 0,
     replay_mismatch: 0,

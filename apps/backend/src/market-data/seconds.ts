@@ -32,6 +32,8 @@ export interface SecondWindow {
 
 export interface SecondSeriesCounters {
   pairs: number;
+  // ticks more than closeMarginMs past their receipt: counted, not applied
+  ahead: number;
   // ticks at or before their pair's last closed second: counted, not applied
   late: number;
   closedByTick: number;
@@ -93,7 +95,7 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
   }
   const pairs = new Map<number, PairState>();
   const listeners = new Set<ClosedSecondListener>();
-  const counts = { late: 0, closedByTick: 0, closedByClock: 0, holeSeconds: 0, resets: 0 };
+  const counts = { ahead: 0, late: 0, closedByTick: 0, closedByClock: 0, holeSeconds: 0, resets: 0 };
 
   const slotOf = (second: number) => (second / SECOND_MS) % capacitySec;
   const floorOf = (pair: PairState) =>
@@ -145,6 +147,12 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
   return {
     push(assetId, digits, tick, receivedAtMs) {
       if (tickProblem(tick, receivedAtMs) !== undefined) return;
+      // a tick from the future would close the seconds up to it at once, and a closed second never
+      // changes; checked before the pair lookup, so it does not open a pair either
+      if (tick.timestamp > receivedAtMs + closeMarginMs) {
+        counts.ahead += 1;
+        return;
+      }
       const second = secondOf(tick.timestamp);
       const pair = pairs.get(assetId);
       if (pair === undefined) {

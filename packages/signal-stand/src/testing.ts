@@ -3,7 +3,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Candle } from '@binarius/shared';
+import { H1_R1_PARAMS, H1ShadowSet, type Candle } from '@binarius/shared';
+import { createH1Detector } from '@binarius/signal';
 import { appendRows, seriesPath, writePairs, type PairSnapshot } from './cache';
 
 export const T0 = Date.UTC(2026, 9, 12, 12, 0, 0);
@@ -82,4 +83,29 @@ export function cacheWith(
 export function writeJson(file: string, value: unknown): string {
   writeFileSync(file, JSON.stringify(value));
   return file;
+}
+
+// A trade-log line of the H1 shadow (#669): an R1 decision on a flat window and one last move.
+export function shadowLine(patch: Record<string, unknown> = {}, nowMs = T0 + 1_802_500) {
+  const series = [...Array<number>(H1_R1_PARAMS.sdWindowSec).fill(1.1), 1.1002];
+  const decision = createH1Detector(H1_R1_PARAMS).decide({
+    closes: series,
+    at: series.length - 1,
+  });
+  const signal = {
+    assetId: PAIR.id,
+    interval: null,
+    digits: 5,
+    nowMs,
+    source: { kind: 'ticks', symbol: 'EUR/USD', closedBy: 'tick', closedAtMs: nowMs + 400 },
+    version: 'h1',
+    params: { set: H1ShadowSet.R1, ...H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
+    series,
+    decision,
+    ...patch,
+  };
+  return {
+    line: JSON.stringify({ decision: { context: 'shadow' }, signal, trade: null }),
+    signal,
+  };
 }

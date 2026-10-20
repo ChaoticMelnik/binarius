@@ -151,32 +151,39 @@ describe('the H1 stand cadence (#667)', () => {
     expect(result.trades).toEqual([]);
   });
 
-  it('H-T8: the same trades as the backtest script loop, at every grid point', () => {
-    const closes = randomWalk(6_000, 42);
-    for (const m of H1_MOVE_SEC_GRID) {
-      for (const k of H1_SD_STEP_GRID) {
-        for (const threshold of H1_THRESHOLD_GRID) {
-          const params = { ...DEFAULT_H1_PARAMS, moveSec: m, sdStepSec: k, threshold };
-          const custom = createH1Detector(params);
-          for (const g of H1_ENTRY_DELAY_GRID_SEC) {
-            for (const H of H1_EXPIRY_GRID_SEC) {
-              const expected = scriptLoop(closes, threshold, g, H, m, k);
-              const actual = simulateH1(series(closes), custom, { entryDelaySec: g, expirySec: H });
-              expect(expected.length).toBeGreaterThan(10);
-              expect(
-                actual.trades.map((trade) => [
-                  (trade.decidedAt - T0) / 1_000,
-                  trade.action === 'up' ? 1 : -1,
-                  trade.outcome,
-                ]),
-                `move ${m} s, step ${k} s, threshold ${threshold}, +${g} s, ${H} s`,
-              ).toEqual(expected);
-            }
-          }
-        }
-      }
-    }
-  });
+  const walk = randomWalk(6_000, 42);
+  const walkSeries = series(walk);
+  const gridPoints = H1_MOVE_SEC_GRID.flatMap((m) =>
+    H1_SD_STEP_GRID.flatMap((k) =>
+      H1_THRESHOLD_GRID.flatMap((threshold) =>
+        H1_ENTRY_DELAY_GRID_SEC.flatMap((g) =>
+          H1_EXPIRY_GRID_SEC.map((H) => [m, k, threshold, g, H] as const),
+        ),
+      ),
+    ),
+  );
+
+  it.each(gridPoints)(
+    'H-T8: the same trades as the backtest script loop: move %i s, step %i s, threshold %s, +%i s, %i s',
+    (m, k, threshold, g, H) => {
+      const custom = createH1Detector({
+        ...DEFAULT_H1_PARAMS,
+        moveSec: m,
+        sdStepSec: k,
+        threshold,
+      });
+      const expected = scriptLoop(walk, threshold, g, H, m, k);
+      const actual = simulateH1(walkSeries, custom, { entryDelaySec: g, expirySec: H });
+      expect(expected.length).toBeGreaterThan(10);
+      expect(
+        actual.trades.map((trade) => [
+          (trade.decidedAt - T0) / 1_000,
+          trade.action === 'up' ? 1 : -1,
+          trade.outcome,
+        ]),
+      ).toEqual(expected);
+    },
+  );
 });
 
 // A seeded walk in integer steps with 1 % of the seconds missing, a flat first 400 s, so the

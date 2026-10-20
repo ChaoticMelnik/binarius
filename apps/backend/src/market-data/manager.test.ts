@@ -996,7 +996,8 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     const h = harness({ openClient: fakes.openClient });
     await h.manager.tick();
     const [active, reserve] = fakes.made;
-    const t0 = Date.now();
+    // in the past: the series drops a tick ahead of its receipt
+    const t0 = Date.now() - 30_000;
     active?.hear(price(IDS[0], t0));
     reserve?.hear(price(IDS[1], t0));
     active?.hear(price(undefined, t0));
@@ -1013,7 +1014,8 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
     await h.manager.tick();
     const [active] = fakes.made;
-    const t0 = Date.now();
+    // in the past: the series drops a tick ahead of its receipt
+    const t0 = Date.now() - 30_000;
     active?.hear(price(IDS[0], t0));
     active?.fire(Reconnecting);
     active?.fire(Ready);
@@ -1030,12 +1032,14 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
     await h.manager.tick();
     const [active] = fakes.made;
-    const t0 = Date.now();
+    // in the past: the series drops a tick ahead of its receipt
+    const t0 = Date.now() - 30_000;
     active?.hear(price(IDS[0], t0));
     active?.hear(price(IDS[0], t0 + 2_000));
     active?.hear(price(IDS[0], t0 - 5_000));
     expect(h.line().seconds).toEqual({
       pairs: 1,
+      ahead: 0,
       late: 1,
       closedByTick: 2,
       closedByClock: 0,
@@ -1393,7 +1397,7 @@ describe('the market data log (#404)', () => {
       ].sort(),
     );
     expect(Object.keys((line?.seconds as object | undefined) ?? {}).sort()).toEqual(
-      ['pairs', 'late', 'closedByTick', 'closedByClock', 'holeSeconds', 'resets'].sort(),
+      ['pairs', 'ahead', 'late', 'closedByTick', 'closedByClock', 'holeSeconds', 'resets'].sort(),
     );
     expect(Object.keys((line?.backfill as object | undefined) ?? {}).sort()).toEqual(
       ['queued', 'fetched', 'filled', 'failed', 'rateLimited', 'spare'].sort(),
