@@ -1,6 +1,8 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  H1ShadowEntryOutcome,
+  H1ShadowSet,
   SessionStakeStrategy,
   SignalDecisionContext,
   SignalDecisionOutcome,
@@ -15,6 +17,7 @@ import {
 import { brokerAccounts, brokerTrades, signalDecisions } from './schema/index';
 import {
   journalEntryOf,
+  readH1ShadowStats,
   readSessionTradeSteps,
   readTradeLogPage,
   recordSignalDecision,
@@ -24,6 +27,8 @@ import {
 import {
   createTempDatabase,
   decisionFixture,
+  R1_SHADOW_PARAMS_FIXTURE,
+  SHADOW_FIXTURE_DECIDED_AT_MS,
   seedBrokerTradeFor,
   seedTradingSession,
   seedUserWithAccount,
@@ -32,6 +37,7 @@ import {
   signalRecordFixture,
   type TempDatabase,
 } from './testing';
+import type { SignalDecisionInput } from './signal-decision-ops';
 import { createSessionIntent, stopTradingSession } from './trading-session-ops';
 
 // The trade log's writer and the export's reads (#666, docs/trade-log.md), on a temporary
@@ -413,5 +419,253 @@ describe('readSessionTradeSteps (#666)', () => {
     const steps = await readSessionTradeSteps(tmp.db, [broken.sessionId, open.sessionId]);
     expect(steps.has(intent.id)).toBe(false);
     expect(steps.has(pending.id)).toBe(false);
+  });
+});
+
+// --- The H1 shadow report's read (#681) ---------------------------------------------------------
+
+const H1_SET_PARAMS = { ...R1_SHADOW_PARAMS_FIXTURE, set: H1ShadowSet.H1, entryDelaySec: 2 };
+const F = SHADOW_FIXTURE_DECIDED_AT_MS;
+
+const shadowEntries = (...entries: [number, string][]) => ({
+  entries: entries.map(([entryDelaySec, outcome]) => ({
+    entryDelaySec,
+    entryPrice: 1.1,
+    exitPrice: 1.1,
+    outcome,
+  })),
+});
+
+const shadowRow = (
+  {
+    assetId = 1,
+    symbol = 'EUR/USD',
+    payout = 92,
+    lagMs = 500,
+    result = shadowEntries([1, H1ShadowEntryOutcome.Win], [2, H1ShadowEntryOutcome.Loss]),
+  }: {
+    assetId?: number;
+    symbol?: string;
+    payout?: number | null;
+    lagMs?: number;
+    result?: Record<string, unknown> | null;
+  },
+  params: Readonly<Record<string, unknown>> = R1_SHADOW_PARAMS_FIXTURE,
+): SignalDecisionInput => {
+  const base = shadowDecisionFixture();
+  return {
+    ...base,
+    assetId,
+    source: { ...base.source, symbol },
+    payout,
+    takenAtMs: F + lagMs,
+    result,
+    params,
+  };
+};
+
+// each row's recorded_at set to its own instant, far from the rows other tests record now()
+async function seedAt(rows: readonly [string, SignalDecisionInput][]): Promise<void> {
+  for (const [at, input] of rows) {
+    const { id } = await recordSignalDecision(tmp.db, input);
+    await tmp.db
+      .update(signalDecisions)
+      .set({ recordedAt: new Date(at) })
+      .where(eq(signalDecisions.id, id));
+  }
+}
+
+const statsOf = (from: string, to: string) =>
+  readH1ShadowStats(tmp.db, { from: new Date(from), to: new Date(to) });
+
+const byKey = <T extends { set: string | null; assetId?: number; entryDelaySec?: number | null }>(
+  rows: readonly T[],
+) =>
+  Object.fromEntries(
+    rows.map((row) => [`${row.set}/${row.assetId ?? ''}/${row.entryDelaySec ?? ''}`, row]),
+  );
+
+describe('readH1ShadowStats (#681)', () => {
+  it('SH1 counts the entries by set, pair and entry delay, with pnl at stake 1', async () => {
+    const at = '2001-01-01T00:00:00.000Z';
+    await seedAt([
+      [at, shadowRow({ payout: 90 })],
+      [
+        at,
+        shadowRow({
+          payout: 80,
+          result: shadowEntries([1, H1ShadowEntryOutcome.Win], [2, H1ShadowEntryOutcome.Tie]),
+        }),
+      ],
+      [
+        at,
+        shadowRow({
+          payout: 90,
+          result: shadowEntries([1, H1ShadowEntryOutcome.Loss], [2, H1ShadowEntryOutcome.Unpriced]),
+        }),
+      ],
+      [
+        at,
+        shadowRow({
+          assetId: 2,
+          symbol: 'GBP/USD',
+          result: shadowEntries([1, 'bogus'], [2, H1ShadowEntryOutcome.Win]),
+        }),
+      ],
+      [at, shadowRow({ assetId: 2, symbol: 'GBP/USD', payout: null })],
+      [
+        at,
+        shadowRow(
+          {
+            payout: 96,
+            result: shadowEntries([1, H1ShadowEntryOutcome.Tie], [2, H1ShadowEntryOutcome.Win]),
+          },
+          H1_SET_PARAMS,
+        ),
+      ],
+    ]);
+    const stats = await statsOf(at, '2001-01-01T00:00:01.000Z');
+    expect(stats.decisions).toBe(6);
+    const cells = byKey(
+      stats.entries.map((cell) => ({ ...cell, pnl: Number(cell.pnl.toFixed(6)) })),
+    );
+    const cell = (records: number, w: number, l: number, t: number, u: number, o: number) => ({
+      records,
+      wins: w,
+      losses: l,
+      ties: t,
+      unpriced: u,
+      other: o,
+    });
+    expect(Object.keys(cells).sort()).toEqual(
+      ['h1/1/1', 'h1/1/2', 'r1/1/1', 'r1/1/2', 'r1/2/1', 'r1/2/2'].sort(),
+    );
+    expect(cells['r1/1/1']).toMatchObject({
+      ...cell(3, 2, 1, 0, 0, 0),
+      pnl: 0.7,
+      winsWithoutPayout: 0,
+    });
+    expect(cells['r1/1/2']).toMatchObject({
+      ...cell(3, 0, 1, 1, 1, 0),
+      pnl: -1,
+      winsWithoutPayout: 0,
+    });
+    expect(cells['r1/2/1']).toMatchObject({
+      ...cell(2, 1, 0, 0, 0, 1),
+      pnl: 0,
+      winsWithoutPayout: 1,
+    });
+    expect(cells['r1/2/2']).toMatchObject({
+      ...cell(2, 1, 1, 0, 0, 0),
+      pnl: -0.08,
+      winsWithoutPayout: 0,
+    });
+    expect(cells['h1/1/1']).toMatchObject({ ...cell(1, 0, 0, 1, 0, 0), pnl: 0 });
+    expect(cells['h1/1/2']).toMatchObject({ ...cell(1, 1, 0, 0, 0, 0), pnl: 0.96 });
+  });
+
+  it('SH2 the payout mean, min and max are over the rows with a payout; NULL is not 0', async () => {
+    const at = '2001-02-01T00:00:00.000Z';
+    await seedAt([
+      [at, shadowRow({ payout: 90 })],
+      [at, shadowRow({ payout: 94 })],
+      [at, shadowRow({ payout: null })],
+      [at, shadowRow({ assetId: 3, symbol: 'ZZZ', payout: null })],
+      [at, shadowRow({ assetId: 3, symbol: 'AAA', payout: null })],
+    ]);
+    const pairs = byKey((await statsOf(at, '2001-02-01T00:00:01.000Z')).pairs);
+    expect(pairs['r1/1/']).toEqual({
+      set: 'r1',
+      assetId: 1,
+      symbol: 'EUR/USD',
+      decisions: 3,
+      pricedRows: 2,
+      payoutMean: 92,
+      payoutMin: 90,
+      payoutMax: 94,
+      rowsWithoutEntries: 0,
+    });
+    expect(pairs['r1/3/']).toMatchObject({
+      symbol: 'AAA',
+      decisions: 2,
+      pricedRows: 0,
+      payoutMean: null,
+      payoutMin: null,
+      payoutMax: null,
+    });
+  });
+
+  it("SH3 the lag percentiles per set, and the set's own entry delay", async () => {
+    const at = '2001-03-01T00:00:00.000Z';
+    await seedAt([
+      ...[100, 200, 300, 400].map((lagMs): [string, SignalDecisionInput] => [
+        at,
+        shadowRow({ lagMs }),
+      ]),
+      [at, shadowRow({ lagMs: 50 }, H1_SET_PARAMS)],
+      [at, shadowRow({ lagMs: 70 }, { set: 'x' })],
+    ]);
+    const sets = byKey((await statsOf(at, '2001-03-01T00:00:01.000Z')).sets);
+    expect(sets['r1//']).toEqual({
+      set: 'r1',
+      decisions: 4,
+      lagMsP50: 250,
+      lagMsP95: 385,
+      ownEntryDelaySecs: ['1'],
+    });
+    expect(sets['h1//']).toMatchObject({ lagMsP50: 50, lagMsP95: 50, ownEntryDelaySecs: ['2'] });
+    expect(sets['x//']).toMatchObject({ decisions: 1, ownEntryDelaySecs: null });
+  });
+
+  it('SH4 the window is half-open on recorded_at: from in, to out', async () => {
+    await seedAt([
+      ['2001-04-01T00:00:00.000Z', shadowRow({})],
+      ['2001-04-01T00:00:01.000Z', shadowRow({})],
+      ['2001-03-31T23:59:59.999Z', shadowRow({})],
+    ]);
+    const stats = await statsOf('2001-04-01T00:00:00.000Z', '2001-04-01T00:00:01.000Z');
+    expect(stats.decisions).toBe(1);
+  });
+
+  it('SH5 only the shadow rows of version h1 count', async () => {
+    const at = '2001-05-01T00:00:00.000Z';
+    const session = await seedSession();
+    await seedAt([
+      [at, shadowRow({})],
+      [at, { ...shadowRow({}), version: 'h0' }],
+      [at, decisionFixture(session)],
+      [at, decisionFixture(session, { context: SignalDecisionContext.SessionStart, step: null })],
+    ]);
+    const stats = await statsOf(at, '2001-05-01T00:00:01.000Z');
+    expect(stats.decisions).toBe(1);
+    expect(stats.pairs.map((pair) => pair.decisions)).toEqual([1]);
+  });
+
+  it('SH6 a row without an entries array is a decision without entries; an entry without a delay is outside the shape', async () => {
+    const at = '2001-06-01T00:00:00.000Z';
+    await seedAt([
+      [at, shadowRow({ result: null })],
+      [at, shadowRow({ result: { entries: 5 } })],
+      [
+        at,
+        shadowRow({
+          result: {
+            entries: [
+              { outcome: H1ShadowEntryOutcome.Win },
+              { entryDelaySec: 1, outcome: H1ShadowEntryOutcome.Win },
+            ],
+          },
+        }),
+      ],
+      [at, shadowRow({}, { entryDelaySec: 1 })],
+    ]);
+    const stats = await statsOf(at, '2001-06-01T00:00:01.000Z');
+    expect(stats.decisions).toBe(4);
+    expect(byKey(stats.pairs)['r1/1/']).toMatchObject({ decisions: 3, rowsWithoutEntries: 2 });
+    const cells = byKey(stats.entries);
+    expect(cells['r1/1/']).toMatchObject({ records: 1, wins: 1 });
+    expect(cells['r1/1/1']).toMatchObject({ records: 1, wins: 1 });
+    expect(cells['null/1/1']).toMatchObject({ records: 1, wins: 1 });
+    expect(byKey(stats.sets)['null//']).toMatchObject({ decisions: 1 });
   });
 });
