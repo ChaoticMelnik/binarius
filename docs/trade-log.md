@@ -156,7 +156,7 @@ rather than a wrong row (B7). A `record` beside a `fetch_failed` answer is ignor
 The entry's wire shape is `signalJournalEntrySchema` (shared), pinned to `packages/signal`'s
 `SignalJournalEntry` both ways (`journal.test.ts` J8). `journalEntryOf(row)` rebuilds the entry
 from the row (`intervalMs` from the interval, `nowMs` = `decided_at_ms`), so the export's `signal`
-replays to the recorded decision (`trade-log.db.test.ts` X3).
+replays to the recorded decision (`trade-log.db.test.ts` X3 for a signal, X9 for a `no_signal`).
 
 ## The last tick
 
@@ -197,8 +197,11 @@ through the same guard. Its write stays autocommit and best-effort (R39).
 pnpm --silent --filter @binarius/backend trade-log export --from <ISO 8601> [--to <ISO 8601>] [--format jsonl|trades-json] [--session <uuid>]
 ```
 
-`DATABASE_URL` as the backend's. `--from` and `--to` are instants with a zone
-(`2026-10-20T00:00:00Z`), compared with `recorded_at`, half-open `[from, to)`; without `--to` the
+`DATABASE_URL` as the backend's. `--from` and `--to` are instants with a zone, up to milliseconds
+(`2026-10-20T00:00:00Z`, `2026-10-20T00:00:00.123Z`); a finer fraction is refused (exit 2): the
+export holds instants as milliseconds while `recorded_at` has microseconds, so a bound is always a
+whole millisecond and `[from, to)` is exact (X1, X10). They are compared with `recorded_at`,
+half-open `[from, to)`; without `--to` the
 end is the database's clock at the export's start, rounded up to the next millisecond (the clock
 `recorded_at` is written by: a decision recorded just before the export is in it). `--session`
 keeps one session's rows. Rows are read in pages of 200 by `(recorded_at, id)`, the cursor kept as
@@ -218,7 +221,7 @@ the database's text so microseconds survive. The data goes to stdout, the count 
 | `decision` | `id`, `context`, `outcome`, `detail`, `version`, `assetId`, `interval`, `step`, `kind`, `action`, `decidedAtMs`, `takenAtMs`, `recordedAtMs`, `payout`, `lastTick`, `result` |
 | `signal` | the journal entry (`journalEntryOf`); the stand's `parseJournalLine` reads it from this key, as from a log line |
 | `session` | `id`, `userId`, `brokerAccountId`, `mode`, `strategy`, `baseStake`, `durationSec` (from the row's settings; NULL when they do not parse), `stopReason`; `null` for a start without a session |
-| `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout`, `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent |
+| `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout`, `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent. A trade on a later page keeps its session's numbering (X8) |
 | `ticks` | `null` (#668) |
 
 The chain of a trade is `decision.decidedAtMs → decision.takenAtMs → trade.createdAtMs →
@@ -231,7 +234,7 @@ stand's `calibrate --trades` shape (`tradeLogTradeJsonSchema`): `trading_session
 `close_timestamp_ms`, `close_price`, `profit` (the #381 export's ten), plus `submitted_at_ms`,
 `payout`, `intent_id`, `decision_id`, `mode`, `amount`. A decision without an intent, an intent
 without a broker trade (a `rejected` one) and an open broker trade are left out; they are in the
-JSONL (`trade-log.db.test.ts` X4).
+JSONL (`trade-log.db.test.ts` X3 for every field of the line, X4 for every field of the row).
 
 **Identifiers.** Internal uuids only. The read names its columns (Rule 9): no
 `users.telegram_user_id`, no `broker_accounts.broker_user_id`, no token column, no
@@ -261,7 +264,7 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
   payout guard); `trading-session-ops.db.test.ts` D7–D11 (the intent's transaction, the
   savepoint).
 - `apps/backend`: `ticks.test.ts` T1–T4, `manager.test.ts` M28, `signal-routes.test.ts` R19–R21,
-  `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X8.
+  `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X10.
 - `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
   `orchestrator.db.test.ts` O1–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
 - `packages/signal-stand`: `journal-line.test.ts` JL and `calibrate.test.ts` unchanged; C12 (an
