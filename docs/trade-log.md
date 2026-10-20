@@ -13,7 +13,7 @@ sweep.
 
 | Piece | Where |
 |---|---|
-| The table | `packages/db/src/schema/signal-decisions.ts`, migration `0068_signal_decisions` |
+| The table | `packages/db/src/schema/signal-decisions.ts`, migrations `0068_signal_decisions`, `0069_decision_session_check` |
 | The writer | `recordSignalDecision(exec, input)`, `signalDecisionInput(record, facts)` in `packages/db/src/signal-decision-ops.ts` |
 | The constants and the line shapes | `packages/shared/src/trade-log.ts`; the entry and the record in `packages/shared/src/signal.ts` |
 | The last tick | `createTickStore` in `apps/backend/src/market-data/ticks.ts` |
@@ -33,7 +33,7 @@ sweep.
 | `taken_at_ms` | when the writer took the decision | the orchestrator's clock right after `evaluate` returned; the start route's after its signal and balance reads |
 | `recorded_at` | the row's insert | database clock, the transaction's start |
 | `kind`, `action` | the decision's kind (`SignalKind`) and, for a signal only, its direction (`signal_decisions_action_pair_check`) | |
-| `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed | the catalog the writer read |
+| `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed, and NULL also when the catalog's value is outside the column (`signalDecisionPayout`) | the catalog the writer read |
 | `digits` | the pair's quote precision the decider used, 0..`MAX_PAIR_DIGITS` | |
 | `params`, `decision`, `source`, `series` | the journal entry's fields as the backend answered them (jsonb, objects and an array) | |
 | `last_tick` | `{ price, timestamp, receivedAtMs }`, the pair's newest data-socket tick when `POST /trading/signal` answered; NULL without the socket or before the pair's first tick | `timestamp` the broker's, `receivedAtMs` the backend's |
@@ -49,9 +49,12 @@ signal_decisions).
 `trade_intents.signal_decision_id` names the decision a session's intent was created from:
 `trade_intents_decision_session_fk (signal_decision_id, trading_session_id) → signal_decisions (id,
 trading_session_id)` — a decision of the intent's own session — and `trade_intents_decision_key`
-— one intent per decision. NULL on one-off bot intents (`POST /trading/intents`, not recorded),
-on every intent before 0068 (no backfill), and on a session intent created while the backend
-answered no record. The column is not in the intent's wire view.
+— one intent per decision. The FK is MATCH SIMPLE and checks nothing while `trading_session_id` is
+NULL, so `trade_intents_decision_session_check` (0069) names a decision only with the intent's
+session: together they hold that a named decision is always of the intent's own session. NULL on
+one-off bot intents (`POST /trading/intents`, not recorded), on every intent before 0068 (no
+backfill), on a session intent created while the backend answered no usable record, and on one
+whose decision row the database refused (E14′). The column is not in the intent's wire view.
 
 No row is ever updated. The table is not a ledger and has no TRUNCATE guard.
 
@@ -78,9 +81,11 @@ was read, with the outcome it reached. A path that ends before a decision exists
 | E9 | `TradingSessionNotActiveError` | gone | none: thrown before the decision's INSERT, rolled back | O5 |
 | E10 | `active_intent_exists`, `client_request_id_conflict` | reschedule | `refused` / the code | O5 |
 | E11 | every other `createSessionIntent` refusal | stop | `refused` / the code | O5 |
-| E12 | any other throw of `createSessionIntent`, a CHECK of the decision's INSERT included | failed | none: rolled back with the intent (risk 1) | — |
+| E12 | any other throw of `createSessionIntent` | failed | none: rolled back with the intent | — |
 | E13 | `created: false` (a replay) | reschedule | `replayed` / NULL | O6 |
-| E14 | `created: true` | created | `intent` / NULL, in the intent's transaction | O1 |
+| E14 | `created: true` | created | `intent` / NULL, in the intent's transaction | O1, O14 |
+| E14′ | `created: true` with the decision's INSERT refused (`decisionError`) | created | none: the savepoint rolled the row back, the intent names no decision; `warn` `insert_refused` (risk 1) | O13, D11 |
+| E15 | a `decided` answer without a usable record (`record_missing`, `record_invalid`, `record_mismatch`) | as without | none this attempt; its intent names no decision | O7 |
 
 E10/E11: a refusal thrown after the decision's INSERT (`active_intent_exists` comes from the
 intent's INSERT) rolls that row back with the transaction, so the `refused` row is the step's only
@@ -94,15 +99,19 @@ deploy overlap landed after the stop.
 
 **The order of writes.** The intent's row is inserted inside `createInTransaction`, after the
 session's lock and before the intent (Rule 5: it locks no existing row; its FKs take `KEY SHARE` on
-rows the transaction already holds). Every other row follows the ending the attempt reached, after
+rows the transaction already holds), in a savepoint (drizzle's nested transaction): a refusal rolls
+back the row alone, the intent is created without its link and `createSessionIntent` returns the
+error as `decisionError`, which the orchestrator logs as the `warn` below with
+`reason: 'insert_refused'`. Every other row follows the ending the attempt reached, after
 that ending's own write in `apply` (`markSessionDecision` or `stopTradingSession`), whether that
 write's CAS matched or not: a session the user stopped while its signal was read still records the
 decision, and its `stop_reason` stays the user's (O12). If the ending's write throws, no row is
 written and the tick fails as before. The row's own write is best-effort: a throw is `warn`
 `trading session decision not recorded` with `step` and the error's name and code (Rule 8), and the
-ending stands (O8). A `decided` answer without `record` (a backend before #666) is the same `warn`
-with `reason: 'record_missing'`, once per attempt; the attempt goes on and its intent names no
-decision (O7).
+ending stands (O8). A `decided` answer without a usable record is the same `warn`, once per
+attempt, with `reason: 'record_missing'` (a backend before #666), `'record_invalid'` (the record
+failed its schema) or `'record_mismatch'` (it is not the answer's decision, pair or interval); the
+attempt goes on and its intent names no decision (O7).
 
 ### The start route (`context = session_start`, no `step`)
 
@@ -133,6 +142,14 @@ by one entry, about 5 KB, far below the worker's `MAX_BACKEND_BODY_BYTES` (`back
 sizes a 300-row series). The start route reads the feed in-process and stores the evaluation's own
 entry.
 
+The worker reads `record` apart from the answer (`backend.ts`): it takes the key out before the
+answer's own parse, so a bad record never refuses the answer. Beside a `decided` answer it parses
+the record by `signalRecordSchema`, whose entry is narrowed to its row's columns (`nowMs` a positive
+safe integer, `digits` 0..`MAX_PAIR_DIGITS`); then it checks that `entry.decision` equals the
+answer's `decision` and that `entry.assetId` and `entry.interval` are the request's. A record that
+fails either is dropped (`recordProblem` `invalid` or `mismatch`) and the answer trades: no row
+rather than a wrong row (B7). A `record` beside a `fetch_failed` answer is ignored.
+
 The entry's wire shape is `signalJournalEntrySchema` (shared), pinned to `packages/signal`'s
 `SignalJournalEntry` both ways (`journal.test.ts` J8). The row stores the entry's fields as the
 backend answered them, so the entry is rebuilt from the row alone (`intervalMs` from the interval,
@@ -148,6 +165,30 @@ pair's newest does not replace it (`ticks.test.ts` T1–T4, `manager.test.ts` M2
 with `BROKER_WS_URL`. The tick is read when the route answers, not at the cache's `nowMs`: for a
 cached decision the two can be up to one candle apart, and both clocks are stored (risk 4).
 
+The tick is kept until a newer one; it is not cleared on a socket drop, a failover or a quiet pair.
+`last_tick`'s age at the decision is `taken_at_ms - last_tick.receivedAtMs` (the backend's and the
+worker's clocks, one host on the pilot, risk 6). A reader of `TickStore.last` bounds the age itself.
+
+## The record's columns
+
+Every value of the row that comes from outside the writer's own code, and what keeps it inside its
+column, so that recording never stops trading.
+
+| Column | Source | Guard | Test |
+|---|---|---|---|
+| `payout` | the writer's catalog read (the worker's and the start route's `pair.payout`), the broker's `z.number()`, unbounded by design (#631) | `signalDecisionPayout` in `recordSignalDecision`, the only INSERT: NULL unless finite and in `[0, SIGNAL_DECISION_PAYOUT_MAX]` (9999.9999, from the column's precision and scale) | SD14, O14, R43 |
+| `digits` | `entry.digits`, the backend's catalog | the record's entry schema: 0..`MAX_PAIR_DIGITS`, the CHECK's constant; out of range drops the record | B7, S-rec4 |
+| `decided_at_ms` | `entry.nowMs`, the backend's clock | the record's entry schema: a positive safe integer | B7, S-rec4 |
+| `asset_id`, `interval` | the entry | pinned to the request (`assetId` is the request's positive int4) | B7 |
+| `version`, `kind`, `action`, `params`, `decision`, `source`, `series` | the entry | the schemas' own lists and shapes, the CHECKs' constants; numbers finite (zod, the broker's candle schema, the ring's `tickProblem`) | S-rec2 |
+| `last_tick` | the tick store | `tickProblem` at push, `lastTickSchema` on the wire | T1–T4, B7 |
+| `taken_at_ms`, `step`, `context`, `outcome`, `detail`, the session and account ids | the writer's own clock, facts and closed code lists | internal | — |
+| any column this table missed | — | the savepoint inside `createInTransaction` (the intent is created unlinked); the record read apart from the answer | D11, O13, B7 |
+
+The start route parses no record: its entry is the feed's own object (`digits` from `assertDigits`,
+`nowMs` from the cache's `Date.now()`, `assetId` its validated request's), and its `payout` goes
+through the same guard. Its write stays autocommit and best-effort (R39).
+
 ## The export
 
 `trade-log export` and the reads it is built on (a page of decisions by `(recorded_at, id)`, the
@@ -158,24 +199,27 @@ new worker against an old backend trades on without rows, a `warn` per attempt).
 
 ## Tests
 
-- `packages/shared`: `signal.test.ts` S-rec1–S-rec3 (the request flag, the record, the stored
-  union), `trade-log.test.ts` (the patterns; every refusal code fits `detail`),
+- `packages/shared`: `signal.test.ts` S-rec1–S-rec4 (the request flag, the record, the stored
+  union, the record narrowed to its columns), `trade-log.test.ts` (the patterns; every refusal code fits `detail`),
   `contract-coverage.test.ts` (the answer's keys).
 - `packages/signal`: `journal.test.ts` J8 (the shared schema is the module's type, both ways).
-- `packages/db`: `schema.db.test.ts` → signal_decisions (every CHECK, both FKs, the unique keys);
-  `signal-decision-ops.db.test.ts` SD1–SD3; `trading-session-ops.db.test.ts` D7–D10 (the
-  intent's transaction).
+- `packages/db`: `schema.db.test.ts` → signal_decisions (every CHECK, both FKs, the unique keys,
+  `trade_intents_decision_session_check`); `signal-decision-ops.db.test.ts` SD1–SD3, SD14 (the
+  payout guard); `trading-session-ops.db.test.ts` D7–D11 (the intent's transaction, the
+  savepoint).
 - `apps/backend`: `ticks.test.ts` T1–T4, `manager.test.ts` M28, `signal-routes.test.ts` R19–R21,
-  `session-routes.db.test.ts` R36–R39 and R42.
-- `apps/trading-worker`: `backend.test.ts` B1 (the flag) and S4, `orchestrator.db.test.ts`
-  O1–O12, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
+  `session-routes.db.test.ts` R36–R39, R42 and R43.
+- `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
+  `orchestrator.db.test.ts` O1–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
 
 ## Accepted risks
 
-1. **The intent's row is in the intent's transaction.** A failing insert fails that attempt's
-   creation; a CHECK broken by a programming error would block session trading until fixed. The
-   input comes from a wire-validated entry and typed constants, and every CHECK has an accepted-row
-   test. Two transactions would lose the atomic link.
+1. **The intent's row is in the intent's transaction, in a savepoint.** A row the database
+   refuses rolls back alone: the intent is created without its link and the attempt logs
+   `insert_refused`. The columns' guards ([The record's columns](#the-records-columns)) keep
+   outside values inside the columns, so the savepoint is a backstop: an unlinked intent is a
+   defect to look for, never a stopped session. Falsifiable: no `signal_decisions` insert ever
+   fails an intent's creation (D11, O13).
 2. **A decision without an ending writes nothing** (the deadline, a throw, `stop()` between
    `evaluate` and the ending): it made no trade, and the next attempt decides again. Visible as a
    gap in the steps.

@@ -493,7 +493,9 @@ without it. `record: true` is sent only by a trading session's worker (#666,
 `record: { entry, lastTick }` — the whole journal entry the decision was computed from and the
 pair's newest data-socket tick when the route answered (`null` without `BROKER_WS_URL` or before
 the pair's first tick); without the flag the body is exactly as before (`signal-routes.test.ts`
-R19–R21). Any other value of `record` is a 400. Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
+R19–R21). The worker reads `record` apart from the answer: a record that fails its schema or is not
+the answer's decision, pair and interval is dropped with a `warn` and the answer still trades
+(`backend.test.ts` B7). Any other value of `record` is a 400. Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
 (R3). After the shape, the route looks the pair up in the
 backend's pairs cache (the one `GET /trading/pairs` serves) for its `digits` (#379), before any
 chart GET; neither refusal below is journalled, no decision was made. Whether the pair is open or
