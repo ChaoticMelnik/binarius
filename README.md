@@ -83,6 +83,7 @@ pnpm test apps/backend   # one package's tests (path filter)
 pnpm test --project unit # the tests that need no Postgres or Redis
 pnpm test packages/e2e   # the demo cycle end to end, docs/e2e-demo-cycle.md
 STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand run   # the Signal backtest, docs/signal-stand.md
+STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand h1    # the H1 backtest, docs/signal-stand.md
 pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z > trade-log.jsonl   # the sessions' decisions (DATABASE_URL), docs/trade-log.md
 pnpm --filter @binarius/web admin:export <dir> [--serve <port>]   # the admin pages as static files, docs/admin-design-system.md
 ```

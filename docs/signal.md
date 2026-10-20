@@ -937,6 +937,11 @@ none». The decision stays Signal v2; MACD and MA stay on the card only.
 - It does not read volume or price ticks; it works from the chart and the pair's `digits` only.
   #392's spike measures tick-built candles ([broker-socket.md → The candle spike](broker-socket.md#the-candle-spike-392));
   the socket source is #404 and its consumers, the feed and the scanner, #405.
+- **A second detector, H1 (#667).** `packages/signal/src/h1.ts` decides on end-labelled 1s closes
+  at the closed second: a 5-second move against the RMS of the 5-second moves of the last 300 s
+  ([signal-stand.md → H1](signal-stand.md#h1-on-the-1s-series-667)). It is not a candle decider
+  and not a version of this one: `SIGNAL_ALGORITHM_VERSIONS` stays `v1`, `v2`. In part 1 only the
+  stand consumes it; #669 feeds it ticks.
 
 ## Boundaries
 
@@ -953,3 +958,5 @@ none». The decision stays Signal v2; MACD and MA stay on the card only.
   `packages/db` is not changed.
 - #483: MACD and MA as decision gates, backtested on the stand and not added
   ([MACD and MA on history](#macd-and-ma-on-history-483)); no Signal v3 task follows from it.
+- #667 (H1 detector and its stand run), #669 (the live 1s series and shadow mode), #670 (H1
+  sessions on a marked account).
