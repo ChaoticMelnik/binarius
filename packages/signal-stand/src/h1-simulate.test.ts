@@ -1,7 +1,13 @@
 import { createH1Detector, DEFAULT_H1_PARAMS, type H1Detector } from '@binarius/signal';
 import { describe, expect, it } from 'vitest';
 import { StandError } from './cache';
-import { H1_ENTRY_DELAY_GRID_SEC, H1_EXPIRY_GRID_SEC, H1_THRESHOLD_GRID } from './config';
+import {
+  H1_ENTRY_DELAY_GRID_SEC,
+  H1_EXPIRY_GRID_SEC,
+  H1_MOVE_SEC_GRID,
+  H1_SD_STEP_GRID,
+  H1_THRESHOLD_GRID,
+} from './config';
 import { closesBySecond, simulateH1, type SecondCloses } from './h1-simulate';
 import { secondsPath, T0 } from './testing';
 
@@ -147,21 +153,26 @@ describe('the H1 stand cadence (#667)', () => {
 
   it('H-T8: the same trades as the backtest script loop, at every grid point', () => {
     const closes = randomWalk(6_000, 42);
-    for (const threshold of H1_THRESHOLD_GRID) {
-      const custom = createH1Detector({ ...DEFAULT_H1_PARAMS, threshold });
-      for (const g of H1_ENTRY_DELAY_GRID_SEC) {
-        for (const H of H1_EXPIRY_GRID_SEC) {
-          const expected = scriptLoop(closes, threshold, g, H);
-          const actual = simulateH1(series(closes), custom, { entryDelaySec: g, expirySec: H });
-          expect(expected.length).toBeGreaterThan(10);
-          expect(
-            actual.trades.map((trade) => [
-              (trade.decidedAt - T0) / 1_000,
-              trade.action === 'up' ? 1 : -1,
-              trade.outcome,
-            ]),
-            `threshold ${threshold}, +${g} s, ${H} s`,
-          ).toEqual(expected);
+    for (const m of H1_MOVE_SEC_GRID) {
+      for (const k of H1_SD_STEP_GRID) {
+        for (const threshold of H1_THRESHOLD_GRID) {
+          const params = { ...DEFAULT_H1_PARAMS, moveSec: m, sdStepSec: k, threshold };
+          const custom = createH1Detector(params);
+          for (const g of H1_ENTRY_DELAY_GRID_SEC) {
+            for (const H of H1_EXPIRY_GRID_SEC) {
+              const expected = scriptLoop(closes, threshold, g, H, m, k);
+              const actual = simulateH1(series(closes), custom, { entryDelaySec: g, expirySec: H });
+              expect(expected.length).toBeGreaterThan(10);
+              expect(
+                actual.trades.map((trade) => [
+                  (trade.decidedAt - T0) / 1_000,
+                  trade.action === 'up' ? 1 : -1,
+                  trade.outcome,
+                ]),
+                `move ${m} s, step ${k} s, threshold ${threshold}, +${g} s, ${H} s`,
+              ).toEqual(expected);
+            }
+          }
         }
       }
     }
@@ -186,23 +197,24 @@ function randomWalk(length: number, seed: number): number[] {
   return closes;
 }
 
-// strat.mjs's loop (#667's analysis session), verbatim but for the per-trade record
-function scriptLoop(c: readonly number[], t: number, g: number, H: number) {
+// strat.mjs's loop (#667's analysis session), verbatim but for the per-trade record and the move
+// m and sd step k, 5 and 5 there (#669)
+function scriptLoop(c: readonly number[], t: number, g: number, H: number, m: number, k: number) {
   const N = c.length;
   const trades: [number, number, string][] = [];
   let f = 300;
   while (f + g + H < N) {
     let ss = 0;
-    let m = 0;
-    for (let j = f - 295; j <= f; j += 5) {
-      const x = c[j] - c[j - 5];
+    let n = 0;
+    for (let j = f - 300 + k; j <= f; j += k) {
+      const x = c[j] - c[j - m];
       if (!Number.isNaN(x)) {
         ss += x * x;
-        m++;
+        n++;
       }
     }
-    const z = Math.abs(c[f] - c[f - 5]) / Math.sqrt(ss / m);
-    const d = z > t ? Math.sign(c[f] - c[f - 5]) : 0;
+    const z = Math.abs(c[f] - c[f - m]) / Math.sqrt(ss / n);
+    const d = z > t ? Math.sign(c[f] - c[f - m]) : 0;
     if (!d || Number.isNaN(d)) {
       f++;
       continue;

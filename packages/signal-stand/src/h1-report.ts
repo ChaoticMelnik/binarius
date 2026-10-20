@@ -3,6 +3,7 @@ import {
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
   H1_MIN_PAYOUT_PCT,
+  H1_R1_PARAMS,
   H1NoSignalReason,
   MIN_CYCLE_PAYOUT_PCT,
   PAIR_TYPE_GROUPS,
@@ -22,7 +23,12 @@ import {
   type Tally,
 } from './stats';
 
-export interface H1Point {
+export interface H1Shape {
+  moveSec: number;
+  sdStepSec: number;
+}
+
+export interface H1Point extends H1Shape {
   threshold: number;
   entryDelaySec: number;
   expirySec: number;
@@ -44,6 +50,7 @@ export interface H1RunData {
   split: number;
   until: number;
   // the run's grid: the tables cover exactly these
+  shapes: readonly H1Shape[];
   thresholds: readonly number[];
   delays: readonly number[];
   expiries: readonly number[];
@@ -75,11 +82,54 @@ const HOUR_MS = 3_600_000;
 const iso = (ms: number | undefined) => (ms === undefined ? '-' : new Date(ms).toISOString());
 const fixed2 = (value: number | undefined) => (value === undefined ? '-' : value.toFixed(2));
 
-// the backtest's point when the run has it, else the run's first value
-const prefer = (values: readonly number[], value: number) =>
-  values.includes(value) ? value : values[0];
+// the live rules (#669): R1 heads the report, the reference H1 is its second line
+const H1_HEADLINE_POINTS: readonly { name: string; point: H1Point }[] = [
+  {
+    name: 'R1',
+    point: {
+      moveSec: H1_R1_PARAMS.moveSec,
+      sdStepSec: H1_R1_PARAMS.sdStepSec,
+      threshold: H1_R1_PARAMS.threshold,
+      entryDelaySec: H1_ENTRY_WINDOW_SEC.from,
+      expirySec: H1_EXPIRY_SEC,
+    },
+  },
+  {
+    name: 'H1',
+    point: {
+      moveSec: DEFAULT_H1_PARAMS.moveSec,
+      sdStepSec: DEFAULT_H1_PARAMS.sdStepSec,
+      threshold: DEFAULT_H1_PARAMS.threshold,
+      entryDelaySec: H1_ENTRY_WINDOW_SEC.to,
+      expirySec: H1_EXPIRY_SEC,
+    },
+  },
+];
+
+const samePoint = (a: H1Point, b: H1Point) =>
+  a.moveSec === b.moveSec &&
+  a.sdStepSec === b.sdStepSec &&
+  a.threshold === b.threshold &&
+  a.entryDelaySec === b.entryDelaySec &&
+  a.expirySec === b.expirySec;
+
+const pointOf = ({
+  moveSec,
+  sdStepSec,
+  threshold,
+  entryDelaySec,
+  expirySec,
+}: H1Point): H1Point => ({
+  moveSec,
+  sdStepSec,
+  threshold,
+  entryDelaySec,
+  expirySec,
+});
 
 const rowHead = [
+  'move s',
+  'sd step s',
   'threshold',
   'delay s',
   'expiry s',
@@ -99,6 +149,8 @@ const rowHead = [
 ];
 
 const rowCells = (r: H1Row) => [
+  r.moveSec,
+  r.sdStepSec,
   r.threshold,
   r.entryDelaySec,
   r.expirySec,
@@ -167,9 +219,7 @@ export function buildH1Report(data: H1RunData): {
     const ci = intervalOf(tally);
     const breakEven = breakEvenPct(breakEvenPayout);
     return {
-      threshold: cell.threshold,
-      entryDelaySec: cell.entryDelaySec,
-      expirySec: cell.expirySec,
+      ...pointOf(cell),
       scope,
       pairs,
       trades: tally.trades,
@@ -197,34 +247,32 @@ export function buildH1Report(data: H1RunData): {
   const outOfSample = pooledRows('outOfSample');
   const inSample = pooledRows('inSample');
 
-  const headlinePoint: H1Point = {
-    threshold: prefer(data.thresholds, DEFAULT_H1_PARAMS.threshold),
-    entryDelaySec: prefer(data.delays, H1_ENTRY_WINDOW_SEC.to),
-    expirySec: prefer(data.expiries, H1_EXPIRY_SEC),
-  };
-
-  const perType = data.cells
-    .filter((cell) => cell.threshold === headlinePoint.threshold)
-    .flatMap((cell) =>
-      PAIR_TYPE_GROUPS.flatMap((group) => {
-        const ids = new Set(
-          data.pairs
-            .filter((pair) => allPool.ids.has(pair.id) && pairTypeGroupOf(pair.type) === group)
-            .map((pair) => pair.id),
-        );
-        const pooled = tallyOf(cell, ids, 'outOfSample');
-        return pooled.pairs === 0
-          ? []
-          : [row(cell, group, pooled, H1_POOLED_PAYOUTS.all, 'outOfSample')];
-      }),
-    );
-
-  const headlineCell = data.cells.find(
-    (cell) =>
-      cell.threshold === headlinePoint.threshold &&
-      cell.entryDelaySec === headlinePoint.entryDelaySec &&
-      cell.expirySec === headlinePoint.expirySec,
+  // the live points the run has, R1 first; (c) and (d) follow the first of them, or the run's first
+  // cell when it has neither
+  const headlines = H1_HEADLINE_POINTS.filter(({ point }) =>
+    data.cells.some((cell) => samePoint(cell, point)),
   );
+  const headlinePoint: H1Point = headlines[0]?.point ?? pointOf(data.cells[0]);
+  const sameShape = (cell: H1Point) =>
+    cell.moveSec === headlinePoint.moveSec &&
+    cell.sdStepSec === headlinePoint.sdStepSec &&
+    cell.threshold === headlinePoint.threshold;
+
+  const perType = data.cells.filter(sameShape).flatMap((cell) =>
+    PAIR_TYPE_GROUPS.flatMap((group) => {
+      const ids = new Set(
+        data.pairs
+          .filter((pair) => allPool.ids.has(pair.id) && pairTypeGroupOf(pair.type) === group)
+          .map((pair) => pair.id),
+      );
+      const pooled = tallyOf(cell, ids, 'outOfSample');
+      return pooled.pairs === 0
+        ? []
+        : [row(cell, group, pooled, H1_POOLED_PAYOUTS.all, 'outOfSample')];
+    }),
+  );
+
+  const headlineCell = data.cells.find((cell) => samePoint(cell, headlinePoint));
   const perPair =
     headlineCell === undefined
       ? []
@@ -268,9 +316,7 @@ export function buildH1Report(data: H1RunData): {
     }
     const share = (count: number) => (decisions === 0 ? undefined : (100 * count) / decisions);
     return {
-      threshold: cell.threshold,
-      entryDelaySec: cell.entryDelaySec,
-      expirySec: cell.expirySec,
+      ...pointOf(cell),
       decisions,
       shares: Object.fromEntries(
         refusalReasons.map((reason) => [reason, share(counts[reason] ?? 0)]),
@@ -281,19 +327,29 @@ export function buildH1Report(data: H1RunData): {
   });
 
   const outTable = table(rowHead, outOfSample.map(rowCells));
+  const headlineRows = headlines.flatMap(({ name, point }) =>
+    outOfSample.filter((r) => samePoint(r, point)).map((r) => [name, ...rowCells(r)]),
+  );
+  const headline = headlineRows.length === 0 ? outTable : table(['rule', ...rowHead], headlineRows);
+  const pointLabel = (point: H1Point) =>
+    `move ${point.moveSec} s, sd step ${point.sdStepSec} s, threshold ${point.threshold}`;
   const excluded = data.pairs.filter((pair) => !allPool.ids.has(pair.id));
   const symbols = (ids: ReadonlySet<number>) =>
     data.pairs
       .filter((pair) => ids.has(pair.id))
       .map((pair) => `${pair.symbol} ${pair.payout}`)
       .join(', ') || 'none';
-  const p = DEFAULT_H1_PARAMS;
 
   const markdown = [
     '# H1 stand report (#667)',
     '',
     `Range ${iso(data.since)} .. ${iso(data.until)}, split at ${iso(data.split)} (in-sample before it).`,
-    `Detector: move over ${p.moveSec} s, sd = RMS of the ${p.moveSec}-s moves every ${p.sdStepSec} s over ${p.sdWindowSec} s; grid: thresholds ${data.thresholds.join(', ')}; entry delays ${data.delays.join(', ')} s; expiries ${data.expiries.join(', ')} s.`,
+    `Detector: move over m s, sd = RMS of the m-s moves every k s over ${DEFAULT_H1_PARAMS.sdWindowSec} s; shapes (m, k): ${data.shapes.map((shape) => `(${shape.moveSec}, ${shape.sdStepSec})`).join(', ')}; grid: thresholds ${data.thresholds.join(', ')}; entry delays ${data.delays.join(', ')} s; expiries ${data.expiries.join(', ')} s.`,
+    `Headline: ${H1_HEADLINE_POINTS.map(({ name, point }) => `${name} = ${pointLabel(point)}, +${point.entryDelaySec} s, expiry ${point.expirySec} s`).join('; ')}${headlines.length === H1_HEADLINE_POINTS.length ? '' : ` (in this run: ${headlines.map(({ name }) => name).join(', ') || 'neither'})`}.`,
+    '',
+    '## Headline, out-of-sample',
+    '',
+    headline,
     `trades/pair-h: trades / (pairs x hours of the row's sample: in-sample ${hours.inSample.toFixed(1)} h, out-of-sample ${hours.outOfSample.toFixed(1)} h, whole range ${hours.both.toFixed(1)} h). EV/trade %: 100 x PnL at stake 1 and each pair's own payout / (W + L + T).`,
     `${h1Pool.scope} (break-even at ${H1_POOLED_PAYOUTS.h1} %): ${symbols(h1Pool.ids)}.`,
     `${allPool.scope} (break-even at ${H1_POOLED_PAYOUTS.all} %): ${allPool.ids.size} pairs. Excluded from pooling: ${excluded.map((pair) => `${pair.symbol} ${pair.payout}`).join(', ') || 'none'}.`,
@@ -306,11 +362,11 @@ export function buildH1Report(data: H1RunData): {
     '',
     table(rowHead, inSample.map(rowCells)),
     '',
-    `## (c) Per pair type, out-of-sample, threshold ${headlinePoint.threshold} (payout >= ${MIN_CYCLE_PAYOUT_PCT}, break-even ${H1_POOLED_PAYOUTS.all})`,
+    `## (c) Per pair type, out-of-sample, ${pointLabel(headlinePoint)} (payout >= ${MIN_CYCLE_PAYOUT_PCT}, break-even ${H1_POOLED_PAYOUTS.all})`,
     '',
     table(rowHead, perType.map(rowCells)),
     '',
-    `## (d) Per pair, out-of-sample, threshold ${headlinePoint.threshold}, +${headlinePoint.entryDelaySec} s, expiry ${headlinePoint.expirySec} s (own payout, own break-even)`,
+    `## (d) Per pair, out-of-sample, ${pointLabel(headlinePoint)}, +${headlinePoint.entryDelaySec} s, expiry ${headlinePoint.expirySec} s (own payout, own break-even)`,
     '',
     table(
       [...rowHead, 'whole-range trades'],
@@ -320,8 +376,20 @@ export function buildH1Report(data: H1RunData): {
     '## (e) Decisions, whole range, % of decisions',
     '',
     table(
-      ['threshold', 'delay s', 'expiry s', 'decisions', ...refusalReasons, 'signal', 'unpriced'],
+      [
+        'move s',
+        'sd step s',
+        'threshold',
+        'delay s',
+        'expiry s',
+        'decisions',
+        ...refusalReasons,
+        'signal',
+        'unpriced',
+      ],
       refusals.map((r) => [
+        r.moveSec,
+        r.sdStepSec,
         r.threshold,
         r.entryDelaySec,
         r.expirySec,
@@ -351,11 +419,13 @@ export function buildH1Report(data: H1RunData): {
     split: data.split,
     until: data.until,
     hours,
-    params: DEFAULT_H1_PARAMS,
+    sdWindowSec: DEFAULT_H1_PARAMS.sdWindowSec,
+    shapes: data.shapes,
     thresholds: data.thresholds,
     delays: data.delays,
     expiries: data.expiries,
     headlinePoint,
+    headlines: headlines.map(({ name, point }) => ({ name, ...point })),
     pools: pools.map((pool) => ({
       scope: pool.scope,
       breakEvenPayout: pool.breakEvenPayout,
@@ -369,5 +439,5 @@ export function buildH1Report(data: H1RunData): {
     pairs: data.pairs,
     series: data.series,
   };
-  return { markdown, json, headline: outTable };
+  return { markdown, json, headline };
 }

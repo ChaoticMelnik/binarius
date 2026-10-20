@@ -1,5 +1,7 @@
-import { SIGNAL_CHART_INTERVAL_MS } from '@binarius/shared';
+import { H1_R1_PARAMS, H1ShadowSet, SIGNAL_CHART_INTERVAL_MS } from '@binarius/shared';
 import {
+  createH1Detector,
+  replayH1Entry,
   createSignalDecider,
   createSignalDeciderV1,
   replaySignalJournalEntry,
@@ -117,5 +119,48 @@ describe('parseJournalLine', () => {
     expect(
       parseJournalLine(pino({ ...entry('v2'), source: { kind: 'socket', startTime: 0 } })),
     ).toEqual({ kind: 'malformed_line' });
+  });
+
+  // the trade log's export line of a shadow row (#669): its entry under `signal`
+  function shadowLine(patch: Record<string, unknown> = {}) {
+    const series = [...Array<number>(H1_R1_PARAMS.sdWindowSec).fill(1.1), 1.1002];
+    const decision = createH1Detector(H1_R1_PARAMS).decide({
+      closes: series,
+      at: series.length - 1,
+    });
+    const signal = {
+      assetId: PAIR.id,
+      interval: null,
+      digits: 5,
+      nowMs,
+      source: { kind: 'ticks', symbol: 'EUR/USD', closedBy: 'tick', closedAtMs: nowMs + 400 },
+      version: 'h1',
+      params: { set: H1ShadowSet.R1, ...H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
+      series,
+      decision,
+      ...patch,
+    };
+    return {
+      line: JSON.stringify({ decision: { context: 'shadow' }, signal, trade: null }),
+      signal,
+    };
+  }
+
+  it('JL-h1 a shadow row of the export parses as h1 and replays to its decision', () => {
+    const { line, signal } = shadowLine();
+    const parsed = parseJournalLine(line);
+    expect(parsed).toStrictEqual({ kind: 'h1', entry: signal });
+    if (parsed.kind !== 'h1') throw new Error(`expected h1, got ${parsed.kind}`);
+    expect(parsed.entry.decision.kind).toBe('signal');
+    expect(replayH1Entry(parsed.entry)).toEqual(parsed.entry.decision);
+  });
+
+  it('JL-h1 a broken shadow row is malformed_line, not another version', () => {
+    expect(parseJournalLine(shadowLine({ series: [1.1] }).line)).toEqual({
+      kind: 'malformed_line',
+    });
+    expect(parseJournalLine(shadowLine({ source: { kind: 'socket' } }).line)).toEqual({
+      kind: 'malformed_line',
+    });
   });
 });

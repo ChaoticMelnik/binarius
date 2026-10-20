@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { MAX_PAIR_DIGITS } from './broker';
 import { SignalKind } from './signal';
-import { tradeActionSchema } from './trading';
+import { TradeAction, tradeActionSchema } from './trading';
 
 // The wire shape of an H1 decision (#667, docs/signal-stand.md -> H1): a 5-second move against the
 // RMS of the 5-second moves of the last 300 s, on end-labelled 1s closes. The detector lives in
@@ -28,6 +29,18 @@ export const h1ParamsSchema = z.strictObject({
   threshold: z.number().positive(),
 });
 export type H1Params = z.infer<typeof h1ParamsSchema>;
+
+// R1, the live rule (#667's optimisation, issuecomment-6288355378 on #667): a 3-second move, entry
+// +1 s, expiry 5 s. The analysis scaled the RMS of the 5-second moves by sqrt(3/5); the detector
+// takes the RMS of the 3-second moves, so the step and the threshold are #669's Step 0 point: on
+// stand-30d's 7 pairs >= 94 out-of-sample, 311.2 trades/pair-h (the closest to the analysis' 321)
+// at 58.77 % (58.5 % there). The table: docs/h1.md -> R1.
+export const H1_R1_PARAMS: Readonly<H1Params> = Object.freeze({
+  moveSec: 3,
+  sdWindowSec: 300,
+  sdStepSec: 5,
+  threshold: 1,
+});
 
 // The closes the H1 detector reads as prices (#667, Rule 43). Inside the range a move's square and
 // the mean of up to 2^53 squares stay normal doubles (H-S4), so sd is finite, sd = 0 only on a flat
@@ -82,3 +95,84 @@ export const H1_ENTRY_WINDOW_SEC = { from: 1, to: 2 } as const;
 export const H1_EXPIRY_SEC = 5;
 // break-even 51.5 %: the forex pairs the backtest found the effect on (#667)
 export const H1_MIN_PAYOUT_PCT = 94;
+
+// A tie returns the stake: neither a win nor a loss. A type, not an `as const` object: the bot's
+// session card has a tone of the same three values that is not a trade's outcome, and
+// local/no-status-literal would tie the two.
+export type TradeOutcome = 'win' | 'loss' | 'tie';
+
+export function tradeOutcomeOf(action: TradeAction, entry: number, exit: number): TradeOutcome {
+  if (exit === entry) return 'tie';
+  return exit > entry === (action === TradeAction.Up) ? 'win' : 'loss';
+}
+
+// --- The H1 shadow (#669, docs/h1.md) -------------------------------------------------------------
+
+// the two parameter sets the shadow decides with; a jsonb key of the row (params.set), not a status
+export const H1ShadowSet = { R1: 'r1', H1: 'h1' } as const;
+export type H1ShadowSet = (typeof H1ShadowSet)[keyof typeof H1ShadowSet];
+
+// what closed the decision's second: the pair's first tick past it or the process clock
+export const H1SecondClosedBy = { Tick: 'tick', Clock: 'clock' } as const;
+export type H1SecondClosedBy = (typeof H1SecondClosedBy)[keyof typeof H1SecondClosedBy];
+
+// an entry without a price at f + g or f + g + expiry (a socket hole) is unpriced
+export const H1ShadowEntryOutcome = {
+  Win: 'win',
+  Loss: 'loss',
+  Tie: 'tie',
+  Unpriced: 'unpriced',
+} as const satisfies Record<string, TradeOutcome | 'unpriced'>;
+export type H1ShadowEntryOutcome = (typeof H1ShadowEntryOutcome)[keyof typeof H1ShadowEntryOutcome];
+
+export const h1ShadowParamsSchema = h1ParamsSchema.extend({
+  set: z.enum(H1ShadowSet),
+  entryDelaySec: z.int().min(1),
+  expirySec: z.int().min(1),
+});
+export type H1ShadowParams = z.infer<typeof h1ShadowParamsSchema>;
+
+export const h1ShadowSourceSchema = z.strictObject({
+  kind: z.literal('ticks'),
+  symbol: z.string().min(1),
+  closedBy: z.enum(H1SecondClosedBy),
+  closedAtMs: z.int(),
+});
+export type H1ShadowSource = z.infer<typeof h1ShadowSourceSchema>;
+
+const shadowPrice = z.number().positive().nullable();
+export const h1ShadowResultSchema = z.strictObject({
+  entries: z
+    .array(
+      z.strictObject({
+        entryDelaySec: z.int().min(1),
+        entryPrice: shadowPrice,
+        exitPrice: shadowPrice,
+        outcome: z.enum(H1ShadowEntryOutcome),
+      }),
+    )
+    .min(1),
+});
+export type H1ShadowResult = z.infer<typeof h1ShadowResultSchema>;
+
+// the closes c[f - sdWindowSec .. f] the detector read, null where the second had no price
+export const h1ShadowSeriesSchema = z.array(z.number().positive().nullable()).min(1);
+
+// the row as journalEntryOf rebuilds it (the export's `signal`), the input of replayH1Entry
+export const h1ShadowEntrySchema = z
+  .object({
+    assetId: z.int().positive(),
+    interval: z.null(),
+    digits: z.int().min(0).max(MAX_PAIR_DIGITS),
+    nowMs: z.int().positive(),
+    source: h1ShadowSourceSchema,
+    version: z.literal(H1_VERSION),
+    params: h1ShadowParamsSchema,
+    series: h1ShadowSeriesSchema,
+    decision: h1DecisionSchema,
+  })
+  .refine((entry) => entry.series.length === entry.params.sdWindowSec + 1, {
+    message: 'series must hold sdWindowSec + 1 closes',
+    path: ['series'],
+  });
+export type H1ShadowEntry = z.infer<typeof h1ShadowEntrySchema>;

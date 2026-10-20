@@ -1,6 +1,21 @@
-import { H1_PRICE_RANGE, h1DecisionSchema, type H1Decision, type H1Params } from '@binarius/shared';
+import {
+  H1_ENTRY_WINDOW_SEC,
+  H1_PRICE_RANGE,
+  H1_R1_PARAMS,
+  h1DecisionSchema,
+  h1ShadowEntrySchema,
+  type H1Decision,
+  type H1Params,
+} from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { assertH1Params, createH1Detector, DEFAULT_H1_PARAMS } from './h1';
+import {
+  assertH1Params,
+  createH1Detector,
+  DEFAULT_H1_PARAMS,
+  H1_SHADOW_MAX_WINDOW_SEC,
+  H1_SHADOW_SETS,
+  replayH1Entry,
+} from './h1';
 
 // A step series: c[0] = 1000, c[5m] = c[5(m-1)] + moves[m-1], the seconds in between held at
 // c[5(m-1)] unless `between` says otherwise. Integer prices keep every expected number exact.
@@ -327,5 +342,57 @@ describe('the H1 detector (#667)', () => {
       'signal down',
       'signal up',
     ]);
+  });
+});
+
+describe('the H1 shadow sets and replay (#669)', () => {
+  it('H-D16: a stored entry decides again to its own decision, NaN read from null', () => {
+    for (const set of H1_SHADOW_SETS) {
+      const n = set.params.sdWindowSec + 1;
+      // a walk with a gap inside the window: the stored null must read as the NaN the detector saw
+      const closes = Array.from({ length: n }, (_, i) =>
+        i === 40
+          ? NaN
+          : Number((1.1 + 0.0001 * Math.sin(i) + (i === n - 1 ? 0.001 : 0)).toFixed(5)),
+      );
+      const decision = createH1Detector(set.params).decide({ closes, at: n - 1 });
+      expect(decision.kind).toBe('signal');
+      const entry = h1ShadowEntrySchema.parse(
+        JSON.parse(
+          JSON.stringify({
+            assetId: 1,
+            interval: null,
+            digits: 5,
+            nowMs: 1_760_000_000_000,
+            source: { kind: 'ticks', symbol: 'EUR/USD', closedBy: 'tick', closedAtMs: 1 },
+            version: 'h1',
+            params: {
+              set: set.name,
+              ...set.params,
+              entryDelaySec: set.entryDelaySec,
+              expirySec: 5,
+            },
+            series: closes.map((close) => (Number.isNaN(close) ? null : close)),
+            decision,
+          }),
+        ),
+      );
+      expect(replayH1Entry(entry)).toEqual(decision);
+    }
+  });
+
+  it('H-D17: the sets are R1 and the reference, with unique names, entries inside the window and valid params', () => {
+    expect(H1_SHADOW_SETS.map((set) => [set.name, set.params, set.entryDelaySec])).toEqual([
+      ['r1', H1_R1_PARAMS, H1_ENTRY_WINDOW_SEC.from],
+      ['h1', DEFAULT_H1_PARAMS, H1_ENTRY_WINDOW_SEC.to],
+    ]);
+    for (const set of H1_SHADOW_SETS) {
+      expect(() => assertH1Params(set.params)).not.toThrow();
+      expect(set.entryDelaySec).toBeGreaterThanOrEqual(H1_ENTRY_WINDOW_SEC.from);
+      expect(set.entryDelaySec).toBeLessThanOrEqual(H1_ENTRY_WINDOW_SEC.to);
+    }
+    expect(H1_SHADOW_MAX_WINDOW_SEC).toBe(
+      Math.max(H1_R1_PARAMS.sdWindowSec, DEFAULT_H1_PARAMS.sdWindowSec),
+    );
   });
 });

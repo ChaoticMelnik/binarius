@@ -3,7 +3,9 @@ import {
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
   H1_MIN_PAYOUT_PCT,
+  H1_R1_PARAMS,
 } from '@binarius/shared';
+import { DEFAULT_H1_PARAMS } from '@binarius/signal';
 
 // docs/signal-stand.md is the method; every number below is quoted there by name. The fourth
 // command, h1 (#667), replays the H1 detector on the 1s series over the grid at the end.
@@ -66,9 +68,17 @@ export const STAND_ASSET_IDS: readonly number[] = [
   727957842, 1202345528, 1798757939, 2126847458,
 ];
 
-// H1 (#667): the backtest's two thresholds, the ends of the entry window and the expiry with a
-// longer one kept as a sensitivity point
-export const H1_THRESHOLD_GRID = [1, 2] as const;
+// H1 (#667, #669): the move and sd-step lengths of the reference H1 (5 s) and of R1 (3 s), the
+// thresholds around both rules, the ends of the entry window and the expiry with a longer one kept
+// as a sensitivity point
+export const H1_MOVE_SEC_GRID = [3, 5] as const;
+export const H1_SD_STEP_GRID = [3, 5] as const;
+// the shapes a run takes without --move-sec/--sd-step: the reference H1 and R1, the live points
+export const H1_DEFAULT_SHAPES: readonly { moveSec: number; sdStepSec: number }[] = [
+  { moveSec: DEFAULT_H1_PARAMS.moveSec, sdStepSec: DEFAULT_H1_PARAMS.sdStepSec },
+  { moveSec: H1_R1_PARAMS.moveSec, sdStepSec: H1_R1_PARAMS.sdStepSec },
+];
+export const H1_THRESHOLD_GRID = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 export const H1_ENTRY_DELAY_GRID_SEC = [H1_ENTRY_WINDOW_SEC.from, H1_ENTRY_WINDOW_SEC.to] as const;
 export const H1_EXPIRY_GRID_SEC = [H1_EXPIRY_SEC, 15] as const;
 export const H1_POOLED_PAYOUTS = { h1: H1_MIN_PAYOUT_PCT, all: POOLED_BREAK_EVEN_PAYOUT } as const;

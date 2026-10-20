@@ -1,9 +1,18 @@
-import { BROKER_RATE_LIMIT_PER_MINUTE, H1_ENTRY_WINDOW_SEC, H1_EXPIRY_SEC } from '@binarius/shared';
+import {
+  BROKER_RATE_LIMIT_PER_MINUTE,
+  H1_ENTRY_WINDOW_SEC,
+  H1_EXPIRY_SEC,
+  H1_R1_PARAMS,
+} from '@binarius/shared';
+import { DEFAULT_H1_PARAMS } from '@binarius/signal';
 import { describe, expect, it } from 'vitest';
 import {
   FALLBACK_HEADLINE_DELAY_MS,
+  H1_DEFAULT_SHAPES,
   H1_ENTRY_DELAY_GRID_SEC,
   H1_EXPIRY_GRID_SEC,
+  H1_MOVE_SEC_GRID,
+  H1_SD_STEP_GRID,
   H1_THRESHOLD_GRID,
   OPEN_DELAY_GRID_MS,
   STAND_ASSET_IDS,
@@ -36,5 +45,17 @@ describe('stand config', () => {
     expect(H1_THRESHOLD_GRID.length).toBeGreaterThan(0);
     expect(H1_ENTRY_DELAY_GRID_SEC).toEqual([H1_ENTRY_WINDOW_SEC.from, H1_ENTRY_WINDOW_SEC.to]);
     expect(H1_EXPIRY_GRID_SEC).toContain(H1_EXPIRY_SEC);
+  });
+
+  it('K6 the grids hold R1 and the reference H1, the default shapes are those two (#669)', () => {
+    for (const params of [H1_R1_PARAMS, DEFAULT_H1_PARAMS]) {
+      expect(H1_MOVE_SEC_GRID).toContain(params.moveSec);
+      expect(H1_SD_STEP_GRID).toContain(params.sdStepSec);
+      expect(H1_THRESHOLD_GRID).toContain(params.threshold);
+    }
+    expect(H1_DEFAULT_SHAPES).toEqual([
+      { moveSec: DEFAULT_H1_PARAMS.moveSec, sdStepSec: DEFAULT_H1_PARAMS.sdStepSec },
+      { moveSec: H1_R1_PARAMS.moveSec, sdStepSec: H1_R1_PARAMS.sdStepSec },
+    ]);
   });
 });
