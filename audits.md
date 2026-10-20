@@ -3762,5 +3762,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m4, n1–n6 | Minor | other | left at the merge | → #687 |
 
 ### Process improvement proposals
-1. Implementer Step 5: per-test durations of added/changed test files read before the push; a test above a quarter of its timeout is split or narrowed, never given a bigger timeout — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5**
+1. Implementer Step 5: per-test durations of added/changed test files read before the push; a test above a quarter of its timeout is split or narrowed, never given a bigger timeout — **внедрено в #688: `.claude/skills/implementer/SKILL.md` → Step 5**
 2. Remaining findings — **вынесено в #683, #687**
