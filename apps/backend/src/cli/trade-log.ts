@@ -64,7 +64,7 @@ export class UsageError extends Error {
 const isoSchema = z.iso.datetime({ offset: true });
 const uuidSchema = z.uuid();
 
-function parseInstant(raw: string, name: string): Date {
+export function parseInstant(raw: string, name: string): Date {
   if (!isoSchema.safeParse(raw).success) {
     throw new UsageError(`${name}: нужна дата ISO 8601 с зоной, например 2026-10-20T00:00:00Z`);
   }
@@ -72,7 +72,7 @@ function parseInstant(raw: string, name: string): Date {
   // In an accepted ISO instant the only '.' is the seconds' fraction.
   if (/\.\d{4}/.test(raw)) {
     throw new UsageError(
-      `${name}: не больше трёх знаков после точки - выгрузка считает время в миллисекундах`,
+      `${name}: не больше трёх знаков после точки - время считается в миллисекундах`,
     );
   }
   return new Date(raw);

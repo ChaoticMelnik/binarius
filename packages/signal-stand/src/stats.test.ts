@@ -7,16 +7,9 @@ import {
   emptyTally,
   selectPoint,
   tradesPerPairHour,
-  verdictOf,
-  wilson,
   winRatePct,
   type Tally,
 } from './stats';
-
-const round = ({ low, high }: { low: number; high: number }) => [
-  Number(low.toFixed(1)),
-  Number(high.toFixed(1)),
-];
 
 const tally = (wins: number, losses: number, ties = 0): Tally => ({
   ...emptyTally(),
@@ -27,13 +20,6 @@ const tally = (wins: number, losses: number, ties = 0): Tally => ({
 });
 
 describe('stats', () => {
-  it('T1 the Wilson interval matches the reference values', () => {
-    expect(round(wilson(8, 30))).toEqual([14.2, 44.4]);
-    expect(round(wilson(0, 10))).toEqual([0, 27.8]);
-    expect(round(wilson(180, 300))).toEqual([54.4, 65.4]);
-    expect(wilson(0, 0)).toEqual({ low: 0, high: 100 });
-  });
-
   it('T2 the rate excludes ties, which pay nothing', () => {
     const t = emptyTally();
     addTrade(t, { outcome: 'win' }, 90);
@@ -60,13 +46,6 @@ describe('stats', () => {
     expect(selectPoint(candidates, 100)).toBe('c');
     expect(selectPoint(candidates, 99)).toBe('b');
     expect(selectPoint(candidates, 101)).toBeUndefined();
-  });
-
-  it('T5 the verdict at the boundaries', () => {
-    expect(verdictOf({ low: 55.6, high: 60 }, 55.6)).toBe('inconclusive');
-    expect(verdictOf({ low: 55.7, high: 60 }, 55.6)).toBe('beats break-even');
-    expect(verdictOf({ low: 40, high: 55.5 }, 55.6)).toBe('below');
-    expect(verdictOf({ low: 40, high: 55.6 }, 55.6)).toBe('inconclusive');
   });
 
   // v2 at 55 % out of sample on 1 000 trades, 55 % in sample

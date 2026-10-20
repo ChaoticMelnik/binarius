@@ -5,20 +5,21 @@ import {
   H1_MIN_PAYOUT_PCT,
   H1_R1_PARAMS,
   H1NoSignalReason,
+  markdownTable,
   MIN_CYCLE_PAYOUT_PCT,
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
+  verdictOf,
 } from '@binarius/shared';
 import { DEFAULT_H1_PARAMS } from '@binarius/signal';
 import { H1_POOLED_PAYOUTS } from './config';
-import { table, type PairInfo, type SeriesInfo } from './report';
+import type { PairInfo, SeriesInfo } from './report';
 import {
   decided,
   emptyTally,
   intervalOf,
   mergeTally,
   tradesPerPairHour,
-  verdictOf,
   winRatePct,
   type Tally,
 } from './stats';
@@ -326,11 +327,12 @@ export function buildH1Report(data: H1RunData): {
     };
   });
 
-  const outTable = table(rowHead, outOfSample.map(rowCells));
+  const outTable = markdownTable(rowHead, outOfSample.map(rowCells));
   const headlineRows = headlines.flatMap(({ name, point }) =>
     outOfSample.filter((r) => samePoint(r, point)).map((r) => [name, ...rowCells(r)]),
   );
-  const headline = headlineRows.length === 0 ? outTable : table(['rule', ...rowHead], headlineRows);
+  const headline =
+    headlineRows.length === 0 ? outTable : markdownTable(['rule', ...rowHead], headlineRows);
   const pointLabel = (point: H1Point) =>
     `move ${point.moveSec} s, sd step ${point.sdStepSec} s, threshold ${point.threshold}`;
   const excluded = data.pairs.filter((pair) => !allPool.ids.has(pair.id));
@@ -360,22 +362,22 @@ export function buildH1Report(data: H1RunData): {
     '',
     '## (b) Pooled, in-sample',
     '',
-    table(rowHead, inSample.map(rowCells)),
+    markdownTable(rowHead, inSample.map(rowCells)),
     '',
     `## (c) Per pair type, out-of-sample, ${pointLabel(headlinePoint)} (payout >= ${MIN_CYCLE_PAYOUT_PCT}, break-even ${H1_POOLED_PAYOUTS.all})`,
     '',
-    table(rowHead, perType.map(rowCells)),
+    markdownTable(rowHead, perType.map(rowCells)),
     '',
     `## (d) Per pair, out-of-sample, ${pointLabel(headlinePoint)}, +${headlinePoint.entryDelaySec} s, expiry ${headlinePoint.expirySec} s (own payout, own break-even)`,
     '',
-    table(
+    markdownTable(
       [...rowHead, 'whole-range trades'],
       perPair.map((r) => [...rowCells(r), r.wholeRangeTrades]),
     ),
     '',
     '## (e) Decisions, whole range, % of decisions',
     '',
-    table(
+    markdownTable(
       [
         'move s',
         'sd step s',
@@ -402,12 +404,12 @@ export function buildH1Report(data: H1RunData): {
     '',
     '## (f) Data',
     '',
-    table(
+    markdownTable(
       ['pair', 'symbol', 'type', 'payout', 'fetchedAt'],
       data.pairs.map((pair) => [pair.id, pair.symbol, pair.type, pair.payout, iso(pair.fetchedAt)]),
     ),
     '',
-    table(
+    markdownTable(
       ['pair', 'interval', 'rows', 'first', 'last'],
       data.series.map((s) => [s.assetId, s.interval, s.rows, iso(s.first), iso(s.last)]),
     ),

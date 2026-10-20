@@ -1,8 +1,10 @@
 import {
   breakEvenPct,
+  markdownTable,
   MIN_CYCLE_PAYOUT_PCT,
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
+  verdictOf,
 } from '@binarius/shared';
 import {
   MIN_IN_SAMPLE_TRADES,
@@ -21,7 +23,6 @@ import {
   mergeTally,
   selectPoint,
   tradesPerPairHour,
-  verdictOf,
   winRatePct,
   type AgainstV2,
   type Tally,
@@ -125,14 +126,6 @@ const iso = (ms: number | undefined) => (ms === undefined ? '-' : new Date(ms).t
 const pct = (value: number | undefined) => (value === undefined ? '-' : value.toFixed(1));
 const rate2 = (value: number | undefined) => (value === undefined ? '-' : value.toFixed(2));
 const HOUR_MS = 3_600_000;
-
-export function table(
-  head: readonly string[],
-  rows: readonly (readonly (string | number)[])[],
-): string {
-  const line = (cells: readonly (string | number)[]) => `| ${cells.join(' | ')} |`;
-  return [line(head), line(head.map(() => '---')), ...rows.map(line)].join('\n');
-}
 
 const rowHead = [
   'interval',
@@ -443,7 +436,7 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
       : [
           `Points better on every interval of this run (${better.intervals.join(', ')}): ${better.points.join(', ') || 'none'}. An indicator is added only if one point is better on 5s and on 15s.`,
           '',
-          table(
+          markdownTable(
             [
               'interval',
               'variant',
@@ -512,7 +505,7 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
     r.pnl.toFixed(2),
     rate2(r.tradesPerPairHour),
   ];
-  const headlineTable = table(
+  const headlineTable = markdownTable(
     rowHead,
     headlineLines.map((line) => ('variant' in line ? cells(line) : line)),
   );
@@ -533,19 +526,19 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
     '',
     '## (b) Per pair, out-of-sample, by pair type (own payout, own break-even)',
     '',
-    table(rowHead, perPair.map(cells)),
+    markdownTable(rowHead, perPair.map(cells)),
     '',
     '## (c) openDelay sensitivity',
     '',
-    table(rowHead, delays.map(cells)),
+    markdownTable(rowHead, delays.map(cells)),
     '',
     '## (d) The pause after two losses: off against on',
     '',
-    table(rowHead, pauses.map(cells)),
+    markdownTable(rowHead, pauses.map(cells)),
     '',
     '## (e) Refusal shares, whole range, % of decisions',
     '',
-    table(
+    markdownTable(
       ['interval', 'variant', 'params', 'decisions', 'shares'],
       refusals.map((r) => [
         r.interval,
@@ -561,16 +554,16 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
     '',
     '## (f) In-sample grid, pooled',
     '',
-    table(rowHead, grid.map(cells)),
+    markdownTable(rowHead, grid.map(cells)),
     '',
     '## (g) Data',
     '',
-    table(
+    markdownTable(
       ['pair', 'symbol', 'type', 'payout', 'fetchedAt'],
       data.pairs.map((pair) => [pair.id, pair.symbol, pair.type, pair.payout, iso(pair.fetchedAt)]),
     ),
     '',
-    table(
+    markdownTable(
       ['pair', 'interval', 'rows', 'first', 'last'],
       data.series.map((s) => [s.assetId, s.interval, s.rows, iso(s.first), iso(s.last)]),
     ),
@@ -581,7 +574,7 @@ export function buildReport(data: RunData): { markdown: string; json: unknown; h
     '',
     `## (i) Per pair type, out-of-sample, pooled within the type (payout >= ${MIN_CYCLE_PAYOUT_PCT}, break-even ${POOLED_BREAK_EVEN_PAYOUT})`,
     '',
-    table(rowHead, perType.map(cells)),
+    markdownTable(rowHead, perType.map(cells)),
     '',
   ].join('\n');
 
