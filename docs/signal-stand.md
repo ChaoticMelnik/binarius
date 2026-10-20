@@ -1,13 +1,14 @@
 # Signal stand (#381)
 
 `packages/signal-stand` backtests the Signal decider on the broker's candle history. It is a CLI
-with three commands. `fetch` caches candles from the public chart API. `run` replays the variants
+with four commands. `fetch` caches candles from the public chart API. `run` replays the variants
 below on that cache and writes a report. `calibrate` checks the stand against the live sessions'
-trades and journal. No process imports the package: no `apps/*` manifest names it, and
+trades and journal. `h1` replays the H1 detector on the cached `1s` series
+([H1 on the 1s series](#h1-on-the-1s-series-667)). No process imports the package: no `apps/*` manifest names it, and
 `grep -rn signal-stand apps/` is empty. It reuses production code unchanged:
 - `createBrokerRestClient().getChart`/`listPairs`, with the wire parser;
 - `chartWindow`, `SIGNAL_CHART_LIMIT` and `SIGNAL_FETCH_LIMIT`;
-- `createSignalDecider`/`createSignalDeciderV1`;
+- `createSignalDecider`/`createSignalDeciderV1`, and `createH1Detector` (#667);
 - `displayIndicators` (#482), the MACD and MA50/MA200 the analysis card shows;
 - `replaySignalJournalEntry`;
 - `breakEvenPct`, `MIN_CYCLE_PAYOUT_PCT` and `PAIR_TYPE_GROUPS`.
@@ -29,6 +30,7 @@ pnpm --filter @binarius/signal-stand stand calibrate \
   --trades ~/binarius-stand/live/trades-381.json \
   --session-candles ~/binarius-stand/candles
 pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timestamp>/report.md
+pnpm --filter @binarius/signal-stand stand h1       # -> $STAND_DIR/out/<timestamp>/report-h1.md
 ```
 
 | Command | Options (defaults) | Env |
@@ -36,6 +38,7 @@ pnpm --filter @binarius/signal-stand stand run      # -> $STAND_DIR/out/<timesta
 | `fetch` | `--assets <id,…>` (`STAND_ASSET_IDS`, the 28 below), `--days <1-30>` (`STAND_DEFAULT_DAYS` 14), `--intervals` (`1s,5s,15s,1m`) | `BROKER_API_BASE_URL` (https, or http to localhost); `STAND_MAX_GETS_PER_MINUTE` (1..600, default 120) |
 | `run` | `--assets` (the 28), `--out <dir>` (`$STAND_DIR/out/<ISO time>`), `--headline-delay <0\|1000\|3000>`, `--variants <name,…>` (every variant), `--intervals <5s,15s,1m>` (all three) | — |
 | `calibrate` | `--journal` (`$STAND_DIR/live/journal-381.jsonl`), `--trades` (`$STAND_DIR/live/trades-381.json`), `--session-candles` (`$STAND_DIR/candles-sessions`) | — |
+| `h1` | `--assets` (the 28), `--out <dir>` (`$STAND_DIR/out/<ISO time>`), `--thresholds <1,2>`, `--delays <1,2>`, `--expiries <5,15>` (each the whole grid; a value outside it or repeated is a usage error) | — |
 
 `run --variants` and `--intervals` narrow a run; the report covers exactly what ran and names it
 in its header. An unknown or repeated name is a usage error, and so is a variant that compares
@@ -52,7 +55,9 @@ warns on stderr, naming the pairs, when the pooled pairs' `1s` ranges differ by 
 The exit codes are:
 - 0: done; for `calibrate`, every gate passed.
 - 1: a refusal. This covers a failed fetch, a damaged cache, an asset missing from `pairs.json`
-  and a failed `calibrate` gate.
+  (on an empty `$STAND_DIR`, `h1` prints `h1: asset 237831086 is not in pairs.json; fetch it`), a
+  cache without a `1s` series for any asked pair (`h1: no 1s series in <dir>`) and a failed
+  `calibrate` gate.
 - 2: a usage error. This covers an unknown command or option, a value out of range and a missing
   env.
 
@@ -296,6 +301,71 @@ The header names the range, the split, the headline delay and where that delay c
 run. It also names the run's variants and intervals, the hours behind `trades/pair-h`, and the
 pairs left out of pooling.
 
+`stand h1` writes `report-h1.md` and `report-h1.json` instead; its tables are in
+[H1 on the 1s series](#h1-on-the-1s-series-667).
+
+## H1 on the 1s series (#667)
+
+The hypothesis of #667: on the broker's synthetic quotes a strong 5-second move continues over
+the next 5 seconds. `stand h1` replays the production detector (`packages/signal/src/h1.ts`,
+Architecture Rule 43) on every pair's cached `1s` series and reproduces the backtest of the
+analysis session that found it.
+
+**The rule.** `closes[i]` is the close of the end-labelled second `first + i·1000`, `NaN` where the
+chart has no row. At the last closed second `f`, `move = c[f] − c[f − 5]` and `sd` is the root mean
+square, without centring, of the 60 moves `c[j] − c[j − 5]` for `j = f − 295 … f` in steps of 5.
+The current move is one of them, so `z = |move| / sd ≤ √60 ≈ 7.75`. A missing move is skipped,
+not counted as 0. `z > 2` (strict) is a signal in the direction of `move`. Otherwise the decision
+is `no_signal` with `no_price` (no close at `f` or `f − 5`), `no_volatility` or
+`below_threshold`. `no_volatility` is a window without movement: `sd = 0`, hence `move = 0`. The
+script computes 0/0 there and does not trade either, so the detector and the script agree on
+every second.
+
+**The cadence** is the script's. Per pair, the first decision is at index 300, so a partial
+window never decides at the series' start. A `no_signal` moves to the next second. A signal at `f`
+opens at `c[f + g]` and closes at `c[f + g + H]`, and the next decision is at `f + g + H + 1`: one
+trade at a time per pair. A missing open or close is `unpriced`, counted and left out of the rate,
+and the cadence still jumps. The loop ends at the last `f` whose close `f + g + H` is in the series.
+The entry delay `g` and the expiry `H` are the trade plan's, not the detector's:
+`H1_ENTRY_WINDOW_SEC` (1 to 2 s) and `H1_EXPIRY_SEC` (5) in `packages/shared/src/h1.ts`.
+
+**The grid and the pools.** Threshold {1, 2} × entry delay {1, 2 s} × expiry {5, 15 s}
+(`H1_THRESHOLD_GRID`, `H1_ENTRY_DELAY_GRID_SEC`, `H1_EXPIRY_GRID_SEC`). Each point is pooled twice:
+`pay>=94`, the pairs paying at least `H1_MIN_PAYOUT_PCT` (94, break-even 51.5 %), and `pooled>=80`,
+the pairs paying at least 80 (break-even 55.6 %, as `run`). A trade belongs to the sample its
+decision fell in, split at 5/7 of the run's range. The rate excludes ties and its interval is
+Wilson's (Statistics). `EV/trade %` is `100 × PnL / (W + L + T)` at stake 1 and each pair's own
+payout. `trades/pair-h` is `run`'s.
+
+**The report.** (a) Every grid point × both pools, out-of-sample; `stand h1` prints it to stdout.
+(b) The same, in-sample. (c) Per pair type over its pairs paying at least 80, out-of-sample, at
+the headline threshold, every delay and expiry. (d) Per pair at the headline point, with its own
+payout and break-even and its whole-range trade count. The headline point is threshold 2, +2 s,
+expiry 5 s; a run whose grid subset lacks one of these values takes its first value instead. (e) Per grid point, the shares of
+`no_price`, `no_volatility`, `below_threshold` and signals among the decisions, and the unpriced
+count. (f) The pairs snapshot and each series' rows, first and last timestamp. A row with no
+decided trade says `no trades`. A grid subset (`--thresholds 2 --delays 2 --expiries 5`) runs
+only its points, and every table covers exactly them.
+
+**The reproduction** (`~/binarius-stand/stand`, 2026-10-01 08:30 to 10-15 09:50 UTC, 28 pairs,
+7 of them in `pay>=94`), table (a) against #667's table:
+
+| Row of #667 | #667 | `stand h1` |
+|---|---|---|
+| `pay>=94`, threshold 2, +1 s, 5 s | 59.7 ± 0.4; +16.1 %; ~92/h | 59.74 (59.35-60.14); +16.10 %; 90.97/h |
+| `pay>=94`, threshold 2, +2 s, 5 s | 60.5 ± 0.4; +17.5 %; ~87/h | 60.51 (60.11-60.91); +17.56 %; 86.88/h |
+| `pooled>=80`, threshold 2, +2 s, 5 s | 60.0 ± 0.2; +13.3 %; ~88/h | 60.03 (59.81-60.24); +13.31 %; 87.82/h |
+| `pay>=94`, threshold 1, +1 s, 5 s | 57.0 ± 0.2; +10.9 %; ~306/h | 57.02 (56.80-57.23); +10.90 %; 303.75/h |
+| `pay>=94`, threshold 2, +2 s, 15 s | 56.2 ± 0.5; +9.4 %; ~69/h | 56.19 (55.73-56.64); +9.49 %; 68.20/h |
+
+Every win rate is within 0.05 pp of #667's; the acceptance band is ±0.5 pp. The script split
+each pair at 5/7 of its own index range and divided by each pair's own hours; the stand uses the
+run-wide split and hours, which moves `trades/pair-h` by up to 1 %. The 30-day cache
+(`~/binarius-stand/stand-30d`) is the owner's step after its re-fetch of all 28 pairs.
+The run reads one pair at a time and its time grows with the pairs: EUR/USD alone took 5 s for
+the eight grid points (2026-10-20, `NODE_OPTIONS=--max-old-space-size=4096`). The detector and the
+cadence keep no memo across the grid.
+
 ## Calibration
 
 The owner exports two files from the pilot's compose directory with the trade log's export
@@ -512,5 +582,7 @@ out of pooling.
   numbers and the decision are in [signal.md](signal.md#macd-and-ma-on-history-483). The run of
   2026-10-17 found every point `inconclusive` on 5s and 15s: no indicator is added and no
   Signal v3 task is created.
+- #667: the H1 detector and `stand h1`. #669 feeds the detector a live 1s series from ticks and
+  records shadow decisions; #670 runs H1 sessions on a marked account.
 - #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`. `v2+1m` adds the
   `1m` trend as a confirmation, not as the analysis interval.
