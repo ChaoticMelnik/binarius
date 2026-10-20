@@ -314,12 +314,18 @@ analysis session that found it.
 **The rule.** `closes[i]` is the close of the end-labelled second `first + i·1000`, `NaN` where the
 chart has no row. At the last closed second `f`, `move = c[f] − c[f − 5]` and `sd` is the root mean
 square, without centring, of the 60 moves `c[j] − c[j − 5]` for `j = f − 295 … f` in steps of 5.
-The current move is one of them, so `z = |move| / sd ≤ √60 ≈ 7.75`. A missing move is skipped,
-not counted as 0. `z > 2` (strict) is a signal in the direction of `move`. Otherwise the decision
-is `no_signal` with `no_price` (no close at `f` or `f − 5`), `no_volatility` or
-`below_threshold`. `no_volatility` is a window without movement: `sd = 0`, hence `move = 0`. The
-script computes 0/0 there and does not trade either, so the detector and the script agree on
-every second.
+The current move is one of them, so `z = |move| / sd ≤ √60 ≈ 7.75`, to the last bit of rounding.
+A close outside `H1_PRICE_RANGE` (10^-100 to 10^100, a close ≤ 0 included) reads as a missing row.
+A missing move is skipped, not counted as 0. `z > 2` (strict) is a signal in the direction of
+`move`. Otherwise the decision is `no_signal` with `no_price` (no close in the range at `f` or
+`f − 5`), `no_volatility` or `below_threshold`. `no_volatility` is a window without movement:
+`sd = 0`, hence `move = 0`. Inside the range a move's square neither overflows nor underflows a
+double, so `sd` is finite and every decision passes `h1DecisionSchema`. The detector and the
+script agree on every second whose closes lie in the range; the script computes 0/0 on a flat
+window and does not trade either. Every close of both caches lies in the range: 0.0014835 to
+97 335.01 in `~/binarius-stand/stand`, 0.0014835 to 110 548.15 in `stand-30d`, scanned
+2026-10-20. Outside the range the script could lose a square to 0 and trade on `|move| / 0`, or
+overflow `sd`; the detector refuses there.
 
 **The cadence** is the script's. Per pair, the first decision is at index 300, so a partial
 window never decides at the series' start. A `no_signal` moves to the next second. A signal at `f`
