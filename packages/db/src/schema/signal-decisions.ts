@@ -30,6 +30,12 @@ import { id, inList, literal, sqlLiteralList, sqlTextLiteral } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { tradingSessions } from './trading-sessions';
 
+const PAYOUT_PRECISION = 8;
+const PAYOUT_SCALE = 4;
+// the largest payout the column holds (9999.9999); the writer stores NULL past it
+export const SIGNAL_DECISION_PAYOUT_MAX =
+  10 ** (PAYOUT_PRECISION - PAYOUT_SCALE) - 10 ** -PAYOUT_SCALE;
+
 // The trade log (#666, docs/trade-log.md): one row per decision a session acted on, inserted once
 // by the process that acted, with its outcome. The entry's columns rebuild the journal entry
 // replaySignalJournalEntry needs (journalEntryOf). No UPDATE writer.
@@ -57,7 +63,11 @@ export const signalDecisions = pgTable(
     recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
     kind: text('kind').$type<SignalKind>().notNull(),
     action: text('action').$type<TradeAction>(),
-    payout: numeric('payout', { precision: 8, scale: 4, mode: 'number' }),
+    payout: numeric('payout', {
+      precision: PAYOUT_PRECISION,
+      scale: PAYOUT_SCALE,
+      mode: 'number',
+    }),
     digits: integer('digits'),
     params: jsonb('params').$type<Record<string, unknown>>().notNull(),
     decision: jsonb('decision').$type<Record<string, unknown>>().notNull(),

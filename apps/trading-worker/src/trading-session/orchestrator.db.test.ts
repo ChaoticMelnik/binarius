@@ -1443,6 +1443,32 @@ describe('the no-signal limit (#509)', () => {
   });
 });
 
+// The database refuses this session's decision rows while `run` runs, whatever their values: the
+// writers' guards cannot be bypassed from a test that goes through the orchestrator.
+async function refusingDecisionsOf<T>(sessionId: string, run: () => Promise<T>): Promise<T> {
+  if (!/^[0-9a-f-]{36}$/.test(sessionId)) throw new Error('not a session id');
+  await tmp.db.execute(
+    sql.raw(`create function refuse_decisions() returns trigger language plpgsql as $$
+      begin
+        if new.trading_session_id = '${sessionId}' then
+          raise exception 'refused by the test' using errcode = 'check_violation';
+        end if;
+        return new;
+      end $$`),
+  );
+  await tmp.db.execute(
+    sql.raw(
+      'create trigger refuse_decisions before insert on signal_decisions for each row execute function refuse_decisions()',
+    ),
+  );
+  try {
+    return await run();
+  } finally {
+    await tmp.db.execute(sql.raw('drop trigger refuse_decisions on signal_decisions'));
+    await tmp.db.execute(sql.raw('drop function refuse_decisions()'));
+  }
+}
+
 // #666: every ending reached after a decision writes its trade log row (docs/trade-log.md → The
 // writers and their outcomes, E1–E14); O9–O12 sit with the no-signal limit
 describe('the decision rows of an attempt (#666)', () => {
@@ -1625,19 +1651,26 @@ describe('the decision rows of an attempt (#666)', () => {
     await orchestrator.stop();
   });
 
-  it.each<[string, SignalOutcome, boolean]>([
+  const recordLess = signalAnswer(TradeAction.Up, { record: false });
+  it.each<[string, SignalOutcome, string | undefined]>([
+    ['an old backend without the record', { ok: true, response: recordLess }, 'record_missing'],
     [
-      'an old backend without the record',
-      { ok: true, response: signalAnswer(TradeAction.Up, { record: false }) },
-      true,
+      'a record the source found invalid',
+      { ok: true, response: recordLess, recordProblem: 'invalid' },
+      'record_invalid',
+    ],
+    [
+      "a record that is not the answer's",
+      { ok: true, response: recordLess, recordProblem: 'mismatch' },
+      'record_mismatch',
     ],
     [
       'the backend unavailable',
       { ok: false, reason: BackendUnavailable.BackendUnreachable },
-      false,
+      undefined,
     ],
-    ['a fetch failure', { ok: true, response: fetchFailedAnswer() }, false],
-  ])('O7 %s: no row', async (_label, answer, missing) => {
+    ['a fetch failure', { ok: true, response: fetchFailedAnswer() }, undefined],
+  ])('O7 %s: no row', async (_label, answer, reason) => {
     const seed = await seedSession();
     const orchestrator = orchestratorOf({ signals: signalsOf(answer) });
     await orchestrator.tick();
@@ -1646,9 +1679,9 @@ describe('the decision rows of an attempt (#666)', () => {
       (line) => line.msg === 'trading session decision not recorded',
     );
     expect(warns).toEqual(
-      missing ? [expect.objectContaining({ level: 40, reason: 'record_missing' })] : [],
+      reason === undefined ? [] : [expect.objectContaining({ level: 40, reason })],
     );
-    if (missing) {
+    if (reason !== undefined) {
       const [intent] = await intentsOf(seed.session.id);
       expect(intent!.signalDecisionId).toBeNull();
     }
@@ -1659,10 +1692,8 @@ describe('the decision rows of an attempt (#666)', () => {
     const seed = await seedSession();
     const orchestrator = orchestratorOf({
       signals: signalsOf({ ok: true, response: noSignalAnswer() }),
-      // a payout the trade log refuses (signal_decisions_payout_check)
-      pairs: pairsOf(fresh([eurUsd({ payout: -1 })])),
     });
-    await orchestrator.tick();
+    await refusingDecisionsOf(seed.session.id, () => orchestrator.tick());
     expect((await sessionRow(seed.session.id)).lastDecisionAt).not.toBeNull();
     expect(await decisionsOf(seed.session.id)).toEqual([]);
     expect(
@@ -1676,6 +1707,52 @@ describe('the decision rows of an attempt (#666)', () => {
         cause: { name: 'error', code: '23514' },
       }),
     ]);
+    await orchestrator.stop();
+  });
+
+  it("O13 a decision the database refuses in the intent's transaction leaves the intent created, unlinked", async () => {
+    const seed = await seedSession();
+    const orchestrator = orchestratorOf();
+    await refusingDecisionsOf(seed.session.id, () => orchestrator.tick());
+    const [intent] = await intentsOf(seed.session.id);
+    expect(intent).toMatchObject({ signalDecisionId: null, status: 'queued' });
+    expect(await decisionsOf(seed.session.id)).toEqual([]);
+    expect(
+      linesOf(seed.session.id).filter(
+        (line) => line.msg === 'trading session decision not recorded',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        level: 40,
+        step: 1,
+        reason: 'insert_refused',
+        cause: { name: 'error', code: '23514' },
+      }),
+    ]);
+    expect(msgsOf(seed.session.id)).toContain('trading session intent created');
+    await orchestrator.stop();
+  });
+
+  it('O14 a catalog payout the column cannot hold is recorded as NULL; the intent is linked', async () => {
+    const seed = await seedSession();
+    clock = Date.now();
+    const orchestrator = orchestratorOf({ pairs: pairsOf(fresh([eurUsd({ payout: -1 })])) });
+    await orchestrator.tick();
+    const [intent] = await intentsOf(seed.session.id);
+    const rows = await decisionsOf(seed.session.id);
+    expect(rows).toHaveLength(1);
+    expect(intent!.signalDecisionId).toBe(rows[0]!.id);
+    expect(rows[0]).toMatchObject({
+      context: 'session',
+      step: 1,
+      kind: 'signal',
+      action: 'up',
+      payout: null,
+      digits: 5,
+      outcome: 'intent',
+      takenAtMs: clock,
+    });
+    expect(msgsOf(seed.session.id)).not.toContain('trading session decision not recorded');
     await orchestrator.stop();
   });
 });

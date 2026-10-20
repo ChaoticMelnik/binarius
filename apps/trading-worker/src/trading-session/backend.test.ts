@@ -6,12 +6,14 @@ import {
   TRADING_SIGNAL_PATH,
   safeParsePairsCatalogResponse,
   safeParseTradingSignalResponse,
+  type SignalRecord,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import {
   createBackendPairsSource,
   createBackendSignalSource,
   MAX_BACKEND_BODY_BYTES,
+  type RecordProblem,
 } from './backend';
 import { eurUsd, fetchFailedAnswer, signalAnswer, signalRecordOf } from './testing';
 
@@ -193,6 +195,50 @@ describe('createBackendSignalSource (#287)', () => {
       expect(serialized).not.toContain(BEARER);
       expect(serialized).not.toContain('127.0.0.1');
     }
+  });
+
+  // the record is read apart from the answer (#666): a bad one is dropped and the answer trades
+  type RecordPatch = (record: SignalRecord) => unknown;
+  const patchEntry =
+    (patch: Record<string, unknown>): RecordPatch =>
+    (record) => ({ ...record, entry: { ...record.entry, ...patch } });
+  const decided = (action: Parameters<typeof signalAnswer>[0]) => {
+    const answer = signalAnswer(action);
+    if (answer.outcome !== 'decided') throw new Error('signalAnswer is decided');
+    return answer;
+  };
+  const flipped = decided('down').decision;
+  it.each<[string, RecordPatch, RecordProblem | undefined]>([
+    ['a consistent record', (record) => record, undefined],
+    [
+      'a last tick at price 0',
+      (record) => ({ ...record, lastTick: { ...record.lastTick, price: 0 } }),
+      'invalid',
+    ],
+    ['nowMs 1.5', patchEntry({ nowMs: 1.5 }), 'invalid'],
+    ['digits 11', patchEntry({ digits: 11 }), 'invalid'],
+    ['the action flipped', patchEntry({ decision: flipped }), 'mismatch'],
+    ['another asset', patchEntry({ assetId: 102 }), 'mismatch'],
+    ['another interval', patchEntry({ interval: '15s' }), 'mismatch'],
+  ])('B7 %s', async (_label, patch, problem) => {
+    const answer = decided('up');
+    reply = (res) => json(res, 200, { ...answer, record: patch(signalRecordOf(answer.decision)) });
+    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual(
+      problem === undefined
+        ? { ok: true, response: answer }
+        : { ok: true, response: signalAnswer('up', { record: false }), recordProblem: problem },
+    );
+  });
+
+  it("B7 a broken answer's own decision is still a contract violation", async () => {
+    const answer = decided('up');
+    reply = (res) =>
+      json(res, 200, { ...answer, decision: { ...answer.decision, action: 'left' } });
+    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual({
+      ok: false,
+      reason: 'contract_violation',
+      status: 200,
+    });
   });
 });
 

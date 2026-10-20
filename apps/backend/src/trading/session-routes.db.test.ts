@@ -1160,6 +1160,27 @@ describe('POST /trading/sessions: the start decision row (#666)', () => {
     expect(JSON.stringify(warns)).not.toContain('boom');
   });
 
+  // the second writer of signalDecisionPayout: the catalog's payout is unbounded (#631)
+  it('R43 a catalog payout the column cannot hold still starts; the row records it as NULL', async () => {
+    const seed = await seedReady();
+    const response = await start(
+      appWith({ catalog: freshCatalog([{ ...pair, payout: -1 }]) }),
+      bodyFor(seed),
+    );
+    expect(response.statusCode).toBe(201);
+    expect(await startRows(seed.brokerAccountId)).toEqual([
+      expect.objectContaining({
+        outcome: 'started',
+        tradingSessionId: sessionOf(response).id,
+        payout: null,
+      }),
+    ]);
+    const warns = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.msg === 'session start decision not recorded');
+    expect(warns).toEqual([]);
+  });
+
   it.each<[string, Parameters<typeof appWith>[0], object]>([
     ['session_too_long', {}, { durationSec: 900 }],
     ['pair_unavailable', { catalog: freshCatalog([{ ...pair, id: ASSET + 1 }]) }, {}],

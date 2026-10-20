@@ -91,4 +91,23 @@ describe('recordSignalDecision (#666)', () => {
     const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
     expect(row).toMatchObject({ lastTick: null, payout: null, step: null });
   });
+
+  // the catalog's payout is unbounded (#631): one numeric(8,4) >= 0 cannot hold is stored as NULL
+  it.each([
+    [-1, null],
+    [-0.00001, null],
+    [10_000, null],
+    [1e21, null],
+    [Number.NaN, null],
+    [Number.POSITIVE_INFINITY, null],
+    [null, null],
+    [0, 0],
+    [1e-7, 0],
+    [9999.9999, 9999.9999],
+  ])('SD14 a payout of %s is recorded as %s', async (payout, stored) => {
+    const session = await seedSession();
+    const { id } = await recordSignalDecision(tmp.db, decisionFixture(session, { payout }));
+    const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
+    expect(row!.payout).toBe(stored);
+  });
 });

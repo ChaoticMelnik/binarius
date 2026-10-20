@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { BrokerRestErrorCode } from './broker';
+import { BrokerRestErrorCode, MAX_PAIR_DIGITS } from './broker';
 import { PairsCatalogErrorCode } from './catalog';
 import { createTradeIntentRequestSchema, telegramUserIdSchema, tradeActionSchema } from './trading';
 
@@ -316,9 +316,14 @@ export const lastTickSchema = z.strictObject({
 export type LastTick = z.infer<typeof lastTickSchema>;
 
 // what a session records of a decision (#666, docs/trade-log.md): the journal entry the decision
-// was computed from and the last tick; null without the data socket or before the pair's first tick
+// was computed from and the last tick; null without the data socket or before the pair's first tick.
+// The entry is narrowed to its signal_decisions columns (bigint > 0, the digits CHECK), so a record
+// that parses is one the row accepts; the stored-line schemas the stand reads stay as they are.
 export const signalRecordSchema = z.strictObject({
-  entry: signalJournalEntrySchema,
+  entry: signalJournalEntrySchema.extend({
+    nowMs: z.int().positive(),
+    digits: z.int().min(0).max(MAX_PAIR_DIGITS),
+  }),
   lastTick: lastTickSchema.nullable(),
 });
 export type SignalRecord = z.infer<typeof signalRecordSchema>;
