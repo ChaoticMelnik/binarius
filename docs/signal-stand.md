@@ -232,7 +232,10 @@ production; only the indicators read the longer `SIGNAL_FETCH_LIMIT` window (V12
 ## Statistics
 
 - The win rate's 95 % interval is Wilson's (`z = 1.959964`). Its reference values are
-  `8/30 → [14.2, 44.4]`, `0/10 → [0, 27.8]` and `180/300 → [54.4, 65.4]` (T1).
+  `8/30 → [14.2, 44.4]`, `0/10 → [0, 27.8]` and `180/300 → [54.4, 65.4]`
+  (`packages/shared/src/wilson.test.ts` W1). Wilson, the verdict and the markdown table live in
+  `packages/shared/src/wilson.ts`, one source with the H1 shadow report
+  ([h1.md → The report](h1.md#the-report)).
 - Break-even at a payout is `100 × 100 / (100 + payout)`, so 80 % gives 55.6 %.
 - **Split.** The range runs from the first to the last cached `1s` row of the run's pairs. It
   splits at `since + 5/7 × (until − since)`. A trade is in-sample when its decision falls before
