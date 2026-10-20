@@ -17,6 +17,7 @@ import {
   signalDecisionV1Schema,
   signalParamsSchema,
   signalParamsV1Schema,
+  signalRecordSchema,
   storedSignalJournalEntrySchema,
   type DataRefusalReason,
   type RuleRefusalReason,
@@ -252,6 +253,21 @@ describe('the decision record (#666)', () => {
     { entry },
   ])('S-rec2 refuses the record %#', (record) => {
     expect(safeParseTradingSignalResponse({ ...decided, record }).success).toBe(false);
+  });
+
+  // the record is narrowed to its row's columns; the stored lines the stand reads are not
+  it.each([
+    ['nowMs 1.5', { nowMs: 1.5 }, false, true],
+    ['nowMs 0', { nowMs: 0 }, false, true],
+    ['nowMs 2^53', { nowMs: 2 ** 53 }, false, true],
+    ['digits 11', { digits: 11 }, false, true],
+    ['digits -1', { digits: -1 }, false, false],
+    ['digits 0', { digits: 0 }, true, true],
+    ['digits 10', { digits: 10 }, true, true],
+  ])('S-rec4 the record with %s parses: %s', (_label, patch, parses, stored) => {
+    const record = { entry: { ...entry, ...patch }, lastTick };
+    expect(signalRecordSchema.safeParse(record).success).toBe(parses);
+    expect(storedSignalJournalEntrySchema.safeParse(record.entry).success).toBe(stored);
   });
 
   it('S-rec3 the stored union reads a v1 line and a v2 line written before #405', () => {

@@ -1267,6 +1267,28 @@ describe('createSessionIntent: the decision row (#666)', () => {
     const oneOff = await createTradeIntent(tmp.db, intentRequest(other.telegramUserId));
     expect(oneOff.intent.signalDecisionId).toBeNull();
   });
+
+  // the guards bypassed on purpose: a row the database refuses rolls back to its savepoint alone
+  it('D11 a decision the database refuses leaves the intent created, unlinked', async () => {
+    const seed = await seedSessionAccount();
+    const decision = { ...decisionOf(seed), digits: 11 };
+    const created = await createSessionIntent(tmp.db, intentInput(seed, { decision }));
+    expect(created.created).toBe(true);
+    expect(created.decisionError).toMatchObject({
+      cause: { code: '23514', constraint: 'signal_decisions_digits_check' },
+    });
+    expect(created.intent).toMatchObject({
+      status: 'queued',
+      tokensReserved: 1n,
+      signalDecisionId: null,
+    });
+    const [intent] = await tmp.db
+      .select()
+      .from(tradeIntents)
+      .where(eq(tradeIntents.id, created.intent.id));
+    expect(intent).toMatchObject({ status: 'queued', signalDecisionId: null });
+    expect(await decisionsOf(seed.session.id)).toHaveLength(0);
+  });
 });
 describe('recordSessionStatusMessage (#567)', () => {
   // #587: the newest id wins (Telegram's message ids grow within a chat): a relaunch's message

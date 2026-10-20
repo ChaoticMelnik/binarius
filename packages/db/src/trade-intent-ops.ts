@@ -95,6 +95,8 @@ export interface CreateTradeIntentOptions {
 export interface CreateTradeIntentResult {
   intent: TradeIntentRow;
   created: boolean;
+  // created only: the decision row's INSERT was refused and the intent names no decision (#666)
+  decisionError?: unknown;
 }
 
 export async function createTradeIntent(
@@ -244,11 +246,20 @@ async function createInTransaction(
   }
 
   // after the session lock and before the intent (Rule 5): the decision row and the intent that
-  // names it commit or roll back together (#666)
-  const decisionId =
-    session === undefined || session.decision === null
-      ? null
-      : (await recordSignalDecision(tx, session.decision)).id;
+  // names it commit or roll back together (#666). In a savepoint: a row the database refuses rolls
+  // back alone and the intent is created unlinked, so the log never stops trading. Catch-all on
+  // purpose: the INSERT waits on no lock (its FKs take KEY SHARE on rows this transaction holds),
+  // so it fails only on its data, and a dead connection fails the intent's INSERT next anyway.
+  let decisionId: string | null = null;
+  let decisionError: unknown;
+  if (session?.decision != null) {
+    const decision = session.decision;
+    try {
+      decisionId = (await tx.transaction((sp) => recordSignalDecision(sp, decision))).id;
+    } catch (error) {
+      decisionError = error;
+    }
+  }
 
   const [planned] = await tx
     .insert(tradeIntents)
@@ -310,7 +321,9 @@ async function createInTransaction(
     expectedVersion: reservedIntent.version,
   });
   if (queued === undefined) throw new Error('reserved intent vanished inside its own tx');
-  return { intent: queued, created: true };
+  return decisionError === undefined
+    ? { intent: queued, created: true }
+    : { intent: queued, created: true, decisionError };
 }
 
 async function findUser(

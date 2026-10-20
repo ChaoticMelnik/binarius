@@ -7,7 +7,7 @@ import {
   type SignalRecord,
   type TradeAction,
 } from '@binarius/shared';
-import { signalDecisions } from './schema/signal-decisions';
+import { SIGNAL_DECISION_PAYOUT_MAX, signalDecisions } from './schema/signal-decisions';
 import type { DbExecutor } from './trade-intent-ops';
 
 // The trade log (#666, docs/trade-log.md): the decision rows a session's processes write. One
@@ -73,6 +73,17 @@ export function signalDecisionInput(
   };
 }
 
+// The payout is the broker catalog's, unbounded by design (#631): one the column cannot hold is
+// stored as NULL, so a writer's INSERT is never refused over it.
+export function signalDecisionPayout(payout: number | null): number | null {
+  return payout !== null &&
+    Number.isFinite(payout) &&
+    payout >= 0 &&
+    payout <= SIGNAL_DECISION_PAYOUT_MAX
+    ? payout
+    : null;
+}
+
 export async function recordSignalDecision(
   exec: DbExecutor,
   input: SignalDecisionInput,
@@ -91,7 +102,7 @@ export async function recordSignalDecision(
       takenAtMs: input.takenAtMs,
       kind: input.kind,
       action: input.action,
-      payout: input.payout,
+      payout: signalDecisionPayout(input.payout),
       digits: input.digits,
       params: input.params,
       decision: input.decision,

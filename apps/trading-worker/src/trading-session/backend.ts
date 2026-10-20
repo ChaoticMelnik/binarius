@@ -1,11 +1,14 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
   PairsCatalogErrorCode,
+  SignalFeedOutcome,
   TRADING_PAIRS_PATH,
   TRADING_SIGNAL_BUDGET_MS,
   TRADING_SIGNAL_PATH,
   readBody,
   safeParsePairsCatalogResponse,
   safeParseTradingSignalResponse,
+  signalRecordSchema,
   type PairsCatalogResponse,
   type SignalInterval,
   type TradingSignalResponse,
@@ -28,8 +31,12 @@ export const BackendUnavailable = {
 } as const;
 export type BackendUnavailable = (typeof BackendUnavailable)[keyof typeof BackendUnavailable];
 
+// why a decided answer carries no record: it failed its schema, or it is not the answer's
+// decision on the requested pair and interval
+export type RecordProblem = 'invalid' | 'mismatch';
+
 export type SignalOutcome =
-  | { ok: true; response: TradingSignalResponse }
+  | { ok: true; response: TradingSignalResponse; recordProblem?: RecordProblem }
   | { ok: false; reason: BackendUnavailable; status?: number };
 
 export type PairsOutcome =
@@ -117,13 +124,34 @@ export function createBackendSignalSource({
         return unavailable(BackendUnavailable.BackendStatus, answer.status);
       if (answer.text === undefined)
         return unavailable(BackendUnavailable.ContractViolation, answer.status);
-      const parsed = safeParseTradingSignalResponse(parseJson(answer.text));
-      return parsed.success
-        ? { ok: true, response: parsed.data }
-        : unavailable(BackendUnavailable.ContractViolation, answer.status);
+      // the record is read apart from the answer (#666): a bad one is dropped, never refuses it
+      const body = parseJson(answer.text);
+      let record: unknown;
+      if (isPlainObject(body) && 'record' in body) {
+        ({ record } = body);
+        delete body.record;
+      }
+      const parsed = safeParseTradingSignalResponse(body);
+      if (!parsed.success) return unavailable(BackendUnavailable.ContractViolation, answer.status);
+      const response = parsed.data;
+      if (response.outcome !== SignalFeedOutcome.Decided || record === undefined)
+        return { ok: true, response };
+      const read = signalRecordSchema.safeParse(record);
+      if (!read.success) return { ok: true, response, recordProblem: 'invalid' };
+      const { entry } = read.data;
+      if (
+        !isDeepStrictEqual(entry.decision, response.decision) ||
+        entry.assetId !== assetId ||
+        entry.interval !== interval
+      )
+        return { ok: true, response, recordProblem: 'mismatch' };
+      return { ok: true, response: { ...response, record: read.data } };
     },
   };
 }
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export function createBackendPairsSource({
   baseUrl,

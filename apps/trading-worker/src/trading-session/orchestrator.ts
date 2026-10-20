@@ -389,11 +389,14 @@ export function createSessionOrchestrator({
         ms: response.retryAfterSec !== undefined ? response.retryAfterSec * 1000 : config.retryMs,
       };
     }
-    // the decision is taken: its row's clock and record (#666); an old backend answers none
+    // the decision is taken: its row's clock and record (#666); an old backend answers none, and
+    // the source drops one that is invalid or does not match the answer
     const takenAtMs = now();
     const record: SignalRecord | undefined = response.record;
     if (record === undefined) {
-      logger.warn({ ...ids, reason: 'record_missing' }, 'trading session decision not recorded');
+      const reason =
+        answer.recordProblem === undefined ? 'record_missing' : `record_${answer.recordProblem}`;
+      logger.warn({ ...ids, reason }, 'trading session decision not recorded');
     }
     const decisionRow = (
       outcome: SignalDecisionOutcome,
@@ -492,6 +495,12 @@ export function createSessionOrchestrator({
     if (!created.created) {
       logger.info({ ...ids, step, intentId: created.intent.id }, 'trading session step replayed');
       return withRow<Ending>({ kind: 'reschedule' }, decisionRow(SignalDecisionOutcome.Replayed));
+    }
+    if (created.decisionError !== undefined) {
+      logger.warn(
+        { ...ids, step, reason: 'insert_refused', ...errorLogFields(created.decisionError) },
+        'trading session decision not recorded',
+      );
     }
     logger.info(
       { ...ids, step, intentId: created.intent.id, action },
