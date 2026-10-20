@@ -298,7 +298,7 @@ Once the PR exists and the issue is In Review:
 
 #### Phase 4 — Review findings loop
 
-Track the iteration count (starts at 1 for the first review). **Hard limit: 3 review rounds per issue** (owner's rule, 2026-09-30) — there is no round 4.
+Track the iteration count (starts at 1 for the first review). **Hard limit: 3 review rounds per issue** (owner's rule, 2026-09-30) — there is no round 4. An issue split by size into several PRs (architect Step 4a, or the implementer at the fallback line) counts its rounds per PR: each PR has its own limit of 3 (owner's decision 2026-10-20, #666: #673 and #674 took two rounds each).
 
 Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (reviewer → Severity Guide). A Minor-only verdict goes to the merge relay below as a clean PR; the merge question names the open Minors, and the owner decides whether they are fixed in another round first. Minors still open at the merge go, without a question, into one new Backlog issue (`/github`: "Create an issue" + "Add issue to Project #2", body with `Refs #<N>`, the PR link and each finding with severity and comment link); its number goes into the report (`.claude/CLAUDE.md` → Постоянные ответы владельца).
 
