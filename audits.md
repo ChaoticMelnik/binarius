@@ -3706,3 +3706,31 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 2. Round limit for an issue split by size: 3 rounds per PR (owner's decision 2026-10-20) — **внедрено в #678: `.claude/skills/tech-lead/SKILL.md` → Phase 4; `.claude/CLAUDE.md` → GitHub — статусы задач**
 3. A mutation of a migration file must redden in the one mutations call — **вынесено в #676**
 4. Remaining findings — **вынесено в #675, #676, #677**
+
+---
+
+## #667 — Гипотеза H1, часть 1: детектор микро-импульса и stand h1 (2026-10-20)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Shared with #666 (same session, same preflight). #667 planned in parallel with #666, merged after it. |
+| Architect | first plan | Fable 5.1. 9 clarify questions; 8 recommended, answer 6 (c) not recommended (payout checked only at the start) — recorded in #670. Step 4a split ≈6k lines: #667 = P1 (detector + stand), #669 (shadow mode, after #666), #670 (real-account sessions, after the shadow verdict). Plan 6267773342; a read-only probe reproduced the issue's five rows within 0.03 pp. |
+| Architect | round-0 Plan Update | Opus. Implementer's defect: the sd window includes the current move, so `no_history` was unreachable, H-D1/H-D3 expectations were wrong and M1 could not fail. Formula kept (= script), fixtures exact, mutation sets corrected (6267955048). |
+| Implementer | first pass | Opus. Died once on an API network error (ENOTFOUND), continued from its own state. Waited on the shared guard held by #666's hung run, without bypassing it. PR #672, 3 commits, +1636, `pnpm check` 0, mutations 12/12, all five rows within 0.05 pp on the 14-day cache. |
+| Reviewer | round 1 | Clean, 6 Minor; Codex task-mvgdddov-u36nfj. Owner fixed Minor 1 (detector output could fail its own schema on degenerate closes) together with the rebase onto #666. |
+| Architect / Implementer | round-1 fix | Opus Plan Update 6286212128: `H1_PRICE_RANGE`, one `price(i)` reader, property test H-D15. Rebase after #673/#674 (range-diff `=`, `=`, context-only), +1811, mutations 19/19. |
+| Reviewer | round 2 | Clean, 1 new Minor (Rule 43 «неперекрывающихся» holds only at defaults). Codex skipped: limit until 20.10 15:36 (job task-mvgkkf0d-l200uq). Merged `--rebase --delete-branch` 2026-10-20T11:11:52Z on the owner's yes; #667 Done; Minors → #679. |
+| Tech Lead | models | Every spawn on its policy model; one architect Plan Update reported «Fable» in its own hand-off while its transcript shows Opus 5.5 — the transcript governs. |
+
+### Review iterations: 2 (no Blocker/Major in either)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan: sd window composition — unreachable reason code, wrong fixture expectations, a mutation that could not fail | — (caught before code) | unverified-claim | the plan's fixtures were not computed by the planned formula | Architect (caught by implementer clarify) |
+| R1 Minor 1: detector output could fail its own schema (close ≤ 0, extreme magnitudes) | Minor | instance-vs-class | `isFinite` checked, the schema's `> 0` not | Architect / Implementer — fixed in round 1 |
+| R1 Minors 2–6, R2 Minor 1 | Minor | other / single-source | left at the merge | → #679 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #679**
