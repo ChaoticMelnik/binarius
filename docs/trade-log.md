@@ -307,5 +307,6 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
 - #669: the H1 shadow's rows (`context: shadow`, `version: h1`, `result`, `ticks_until_ms`),
   [h1.md](h1.md). #670's creators of session intents must pass `decision` to
   `createSessionIntent` (the type requires it).
-- One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports and dashboards:
-  none, only the export.
+- One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports:
+  `h1 shadow report` over the shadow rows (#681, [h1.md → The report](h1.md#the-report)); otherwise
+  only the export.
