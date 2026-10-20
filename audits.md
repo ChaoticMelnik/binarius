@@ -3667,3 +3667,42 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. Tech-lead Phase 2: a spawn prompt for an issue with an open PR states its review rounds counted by `## Review round` headings — **внедрено в #655: `.claude/skills/tech-lead/SKILL.md` → Mode 2 → Phase 2**
 2. Remaining findings — **вынесено в #654**
+
+---
+
+## #666 — Логирование сделок для анализа: решение сигнала, тайминг входа, выгрузка (2026-10-20)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Main cd0f7a9c clean, Codex ready, no usage limit, no Fable limit in 7 days, Node 22.23.2, Postgres 5434 + Redis up; previous audit closed. Planned together with #667 (depends on #666's storage). |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended. Step 4a split before the plan: part 2 (ticks around the trade + retention) → #668. Plan 6267511559, ≈2 800 lines, fallback line = the export CLI. |
+| Architect | round-0 Plan Update | Opus. Implementer's plan defect (the no-signal-limit stops had no outcome row) — whole-class tables of endings E1–E14 / S0–S8, probed against the CHECKs (6267678763). |
+| Implementer | first pass | Opus. Actual ≈3 950 lines → split at the fallback line plus the export's reads: PR #673 (storage + writers, `Refs`) and PR #674 (export, `Closes`, stacked). Every commit checked alone, `pnpm check` 0 per head, mutations 13/13 and 5/5. A per-commit vitest run hung ~18 h and held the shared guard. |
+| Reviewer | #673 round 1 | Major M1 (broker payout outside the CHECK range rolls back every intent of the pair) + 4 Minor → Todo. Codex ran on a round with a Major (deviation, reviewer Step 6-pre). |
+| Architect / Implementer | #673 round 1 fix | Opus Plan Update 6286801668: M1 as a class (payout guard, savepoint, record read apart), CHECK in 0069; fresh implementer, 2 720 lines, 24/25 red in one call + m30 red in a second call (deviation). #674 rebased onto the fix. |
+| Reviewer | #673 round 2 | Clean, 2 Minor, Codex task-mvggaxec-y3tkfl no findings. Merged `--rebase` without `--delete-branch` (stack base) after #674 was retargeted; shared test DB migrated to 0069. |
+| Implementer | #674 rebase | Rebase-only spawn onto main: range-diff `=` for both commits, checks green, mutations 5/5; base branch deleted after no PR targeted it. |
+| Reviewer | #674 rounds 1–2 | R1 clean, 5 Minor; owner fixed m1 (trade block untested) and m2 (sub-ms instants). R2 clean, no findings, Codex task-mvgk2zlq-9tezcu no findings. Merged `--rebase --delete-branch` 2026-10-20T10:51:27Z; #666 Done. |
+| Tech Lead | models | Every spawn on its policy model (architect first plans Fable, Plan Updates Opus, implementers/reviewers Opus, simplify Sonnet). |
+
+### Review iterations: 2 per PR (#673: 2, #674: 2)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #673 R1 M1: unvalidated broker payout into a CHECKed column inside the intent's transaction | Major | instance-vs-class | the plan's accepted risk 1 assumed every decision field was wire-validated; payout is catalog data | Architect (plan) |
+| #673 R1 m1–m4 (MATCH SIMPLE FK, stale tick, unpinned record decision, dead `counters()`) | Minor | other | fixed in round 1 | — |
+| #673 R2 m1 (Rule 42 contradicts itself), m2 (m30 needed a second call) | Minor | single-source / other | left at the merge | → #676 |
+| #674 R1 m1 (trade block untested — X3's fixture never decided `signal`) | Minor | unverified-claim | the test's branch on the decision kind hid that the trade path never ran | Implementer (Step 5.5) |
+| #674 R1 m2 (sub-ms `--from`/`--to` truncated) | Minor | other | fixed in round 2 | — |
+| #674 R1 m3–m5 | Minor | other | left at the merge | → #677 |
+| `broker_trades.payout` — same class as M1 in pre-#666 code | — | instance-vs-class | found by the round-1 Plan Update | → #675 |
+| Per-commit vitest run hung ~18 h, held the shared guard | Minor | env-parity | no wall-clock limit on runs | Implementer (Step 5) |
+| Reviewer ran Codex on a round with a Major | Minor | codex-ops | reviewer Step 6-pre not followed | Reviewer |
+
+### Process improvement proposals
+1. Implementer Step 5: every per-commit and full run under a wall-clock limit — **внедрено в #<PR>: `.claude/skills/implementer/SKILL.md` → Step 5**
+2. Round limit for an issue split by size: 3 rounds per PR (owner's decision 2026-10-20) — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Phase 4; `.claude/CLAUDE.md` → GitHub — статусы задач**
+3. A mutation of a migration file must redden in the one mutations call — **вынесено в #676**
+4. Remaining findings — **вынесено в #675, #676, #677**
