@@ -25,7 +25,8 @@ import { readTradePages, TradePagesError } from './trade-pages';
 // closed list for the ones it missed and applies it through settleClosedTrades. It runs on a timer, so it never asks the backend to exchange a token
 // (mayRefresh: false). Every attempt that does not take its intent out of `accepted` holds the
 // account back for stalledRetryMs, so the head of the queue cannot starve the rest
-// (docs/trade-intent-transport.md -> Reconciliation matching -> Settlement catch-up).
+// (docs/trade-intent-transport.md -> Reconciliation matching -> Settlement catch-up). A settle here
+// wakes the trading session orchestrator (#696).
 
 export interface SettlementCatchupConfig {
   tickMs: number;
@@ -44,6 +45,8 @@ export interface SettlementCatchupDeps {
   tokens: AccessTokenSource;
   logger: Logger;
   config: SettlementCatchupConfig;
+  // called after the commit of a write that ended an intent; never throws (#696)
+  onIntentEnded?: () => void;
 }
 
 export interface SettlementCatchup {
@@ -73,6 +76,7 @@ export function createSettlementCatchup({
   tokens,
   logger,
   config,
+  onIntentEnded,
 }: SettlementCatchupDeps): SettlementCatchup {
   const stopping = new AbortController();
   // account id -> when it may be attempted again; in memory, one worker container (Rule 21)
@@ -159,6 +163,8 @@ export function createSettlementCatchup({
       brokerAccountId: overdue.brokerAccountId,
       trades: read.trades,
     });
+    // the page settles the account's other trades too, not only the target
+    if (outcomes.some((outcome) => outcome.result === 'settled')) onIntentEnded?.();
     const target = outcomes.find((outcome) => outcome.brokerTradeId === overdue.brokerTradeId);
     if (target?.result === 'settled') return 'settled';
     if (target?.result === 'already_settled' || target?.result === 'intent_not_accepted') {

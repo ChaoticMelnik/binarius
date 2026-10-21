@@ -83,6 +83,8 @@ export interface ReconciliationPassDeps {
   balanceCheck: BalanceCheck;
   logger: Logger;
   config: ReconciliationPassConfig;
+  // called after the commit of a write that ended an intent; never throws (#696)
+  onIntentEnded?: () => void;
 }
 
 export interface ReconciliationPass {
@@ -119,12 +121,16 @@ type Ending = Exclude<keyof TickSummary, 'candidates' | 'balanceCompared' | 'bal
 // out of any compare
 const CHECKED_ENDINGS: ReadonlySet<Ending> = new Set(['accepted', 'settled', 'rejected']);
 
+// the endings that leave the intent terminal: they wake the trading session orchestrator (#696)
+const ENDED_INTENT: ReadonlySet<Ending> = new Set(['settled', 'rejected', 'manualReview']);
+
 export function createReconciliationPass({
   db,
   reconciler,
   balanceCheck,
   logger,
   config,
+  onIntentEnded,
 }: ReconciliationPassDeps): ReconciliationPass {
   const stopping = new AbortController();
   let stopped = false;
@@ -254,6 +260,7 @@ export function createReconciliationPass({
       { intentId: claimed.id, outcome: result.outcome, status: row.status },
       'reconciliation outcome recorded',
     );
+    if (ENDED_INTENT.has(ending)) onIntentEnded?.();
     return ending;
   }
 
