@@ -12,6 +12,7 @@ import {
   markIntentUnknown,
   rejectExpiredIntent,
   rejectIntent,
+  rejectLateIntent,
   rejectPausedIntent,
   takeIntent,
   TradeIntentMismatchError,
@@ -105,8 +106,9 @@ async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promis
     maxAgeMs: config.intentMaxAgeMs,
   });
   if (taken === undefined) {
-    // the same CAS refused: the intent is too old (the expiry succeeds), the trading switch is
-    // closed (the paused rejection succeeds), or someone else moved it (both are no-ops)
+    // the same CAS refused: the intent is too old (the expiry succeeds), its entry window closed
+    // (#670, the late rejection succeeds), the trading switch is closed (the paused rejection
+    // succeeds), or someone else moved it (all three are no-ops)
     const expired = await db.transaction((tx) =>
       rejectExpiredIntent(tx, {
         id: intent.id,
@@ -121,8 +123,19 @@ async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promis
       );
       return 'expired';
     }
-    // after the expiry, so an old intent keeps its own reason; at this version the take refused
-    // for the switch alone (docs/kill-switch.md)
+    // after the expiry, so an old intent keeps its own reason; nothing was sent (Rule 15)
+    const late = await db.transaction((tx) =>
+      rejectLateIntent(tx, { id: intent.id, expectedVersion: intent.version }),
+    );
+    if (late !== undefined) {
+      logger.warn(
+        { intentId: intent.id, submitDeadlineAt: intent.submitDeadlineAt },
+        'intent rejected: entry window missed',
+      );
+      return 'rejected';
+    }
+    // after the expiry and the deadline, so each keeps its own reason; at this version the take
+    // refused for the switch alone (docs/kill-switch.md)
     const paused = await db.transaction((tx) =>
       rejectPausedIntent(tx, { id: intent.id, expectedVersion: intent.version }),
     );
