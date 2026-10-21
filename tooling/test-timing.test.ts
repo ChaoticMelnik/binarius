@@ -248,6 +248,12 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     match: 'await new Promise((resolve) => setTimeout(resolve, 200));',
     reason: `${NEGATIVE} (no tick may follow stop())`,
   },
+  {
+    file: 'apps/trading-worker/src/worker.handoff.db.test.ts',
+    form: 'F3',
+    match: 'expect(Date.now() - settledAt).toBeLessThan(',
+    reason: WAKE_BOUND,
+  },
 ];
 
 // Files that in-flight issues still own; their conversion is the follow-up to #205. Each has to
