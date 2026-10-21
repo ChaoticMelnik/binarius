@@ -6,7 +6,6 @@ import {
   DEMO_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   LANGUAGE_CALLBACK_DATA,
-  demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
   STAR_PACKAGES,
   sessionStopCallbackData,
@@ -14,8 +13,7 @@ import {
   TradeMode,
   demoAnalysisCallbackData,
 } from '@binarius/shared';
-import { durationOf } from './demo';
-import type { DemoDurationSec } from './demo-catalog';
+import { DEMO_DURATION_SEC, type DemoDurationSec } from './demo-catalog';
 import { buyPackageLabel, inviteShareText, LABELS } from './texts';
 
 // The next steps the bot's screens share (#350, docs/bot-navigation.md). Each builds a new
@@ -156,30 +154,26 @@ export const backToAnalysisKeyboard = (assetId: number, durationSec: DemoDuratio
   );
 
 // The end of a path: a trade the tracker no longer follows, a stopped session (#350). The
-// analysis of the same pair and duration while the demo still offers it and the signals of that
-// duration (the duration screen when the demo no longer offers it, #382) in one row, the menu in
-// its own, under the rows a caller already put in `keyboard` (or none). `beforeMenu`
-// rows go right above the menu (the session result's invite, #115). `otherPair`, a session that
-// stopped for want of a signal (#509): no analysis of that pair, «🔀 Выбрать другую пару» in
-// place of «📡 К сигналам» on the same data.
+// analysis of the same pair at the demo's one duration and the signals list in one row (#685: the
+// duration is one, so a trade or a session of an older one ends the same way), the menu in its own,
+// under the rows a caller already put in `keyboard` (or none). `beforeMenu` rows go right above the
+// menu (the session result's invite, #115). `otherPair`, a session that stopped for want of a
+// signal (#509): no analysis of that pair, «🔀 Выбрать другую пару» in place of «📡 К сигналам» on
+// the same data.
 export function appendEndOfPath(
   keyboard: InlineKeyboard,
   assetId: number,
-  durationSec: number,
   beforeMenu: readonly InlineKeyboardButton[][] = [],
   { otherPair = false }: { otherPair?: boolean } = {},
 ): InlineKeyboard {
-  const demoDuration = durationOf(String(durationSec));
   const rows = [
     [
-      ...(demoDuration === undefined || otherPair
+      ...(otherPair
         ? []
-        : [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(assetId, demoDuration))]),
+        : [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(assetId, DEMO_DURATION_SEC))]),
       button(
         otherPair ? LABELS.otherPairButton : LABELS.toSignalsButton,
-        demoDuration === undefined
-          ? DEMO_SIGNALS_CALLBACK_DATA
-          : demoSignalsCallbackData(demoDuration),
+        DEMO_SIGNALS_CALLBACK_DATA,
       ),
     ],
     ...beforeMenu,

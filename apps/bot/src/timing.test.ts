@@ -41,7 +41,6 @@ import {
   StarsRefundErrorCode,
   StarsPreCheckoutRefusal,
   DEMO_SIGNALS_CALLBACK_DATA,
-  demoSignalsCallbackData,
   TRACKED_SESSIONS_MAX,
   demoAnalysisCallbackData,
   sessionStopCallbackData,
@@ -68,7 +67,6 @@ import {
   demoLaunchCallbackData,
   analysisMoreCallbackData,
   demoAssetCallbackData,
-  demoDurationCallbackData,
   demoPageCallbackData,
   sessionStartCallbackData,
   stakeCallbackData,
@@ -748,9 +746,9 @@ const catalogBranches = (update: () => Update, telegram: number, backend = 1): B
   },
 ];
 
-// one listed pair on the 15s list, so the 15 s screen draws a row
+// one listed pair on the 5s list, so the screen draws a row
 const SIGNALS = signalsResponse(1_790_000_000_000, {
-  '15s': [[PAIR_EURUSD.id, TradeAction.Up]],
+  '5s': [[PAIR_EURUSD.id, TradeAction.Up]],
 });
 // the signals screen's own outcomes, besides the catalog's (#320, #382)
 const signalsBranches = (update: () => Update, telegram: number): Branch[] => [
@@ -774,10 +772,12 @@ const signalsBranches = (update: () => Update, telegram: number): Branch[] => [
   },
 ];
 
+// the status card's button (#685): the list as a new message, after the two reads
 const DEMO_WORST_CASE: Branch = {
-  label: 'the query is answered and the duration screen is sent',
+  label: 'the query is answered and the list is sent',
   update: callbackUpdate(DEMO_CALLBACK_DATA),
-  expected: { backend: 0, telegram: 2 },
+  readSignals: () => Promise.resolve(SIGNALS),
+  expected: { backend: 2, telegram: 2 },
 };
 
 const DEMO_BRANCHES: readonly Branch[] = [
@@ -788,11 +788,13 @@ const DEMO_BRANCHES: readonly Branch[] = [
   },
   DEMO_WORST_CASE,
   {
-    label: 'answering the query is refused and the duration screen still goes',
+    label: 'answering the query is refused and the list still goes',
     update: callbackUpdate(DEMO_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 0, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
+  ...catalogBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2, 2),
+  ...signalsBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2),
   // rethrown into bot.catch
   {
     label: 'the message fails in transport',
@@ -806,7 +808,7 @@ const DEMO_BRANCHES: readonly Branch[] = [
         ),
       ],
     ],
-    expected: { backend: 0, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
 ];
 
@@ -924,41 +926,39 @@ const pairBranches = (
   },
   ...extra,
 ];
+const unsupported = {
+  label: 'the pair does not take 5 s',
+  readPairs: onlyPairs({ ...PAIR_EURUSD, minTimeframe: 15, maxTimeframe: 3600 }),
+  expected: { backend: 1, telegram: 2 },
+};
+// a pair's summary at 5 s (#685), also by the summary's data of an old button
 const DEMO_ASSET = demoScreenBranches(
   demoAssetCallbackData(PAIR_EURUSD.id),
   'demo:a:0',
-  pairBranches([
-    {
-      label: 'the pair admits no duration',
-      readPairs: onlyPairs({ ...PAIR_EURUSD, minTimeframe: 30, maxTimeframe: 3600 }),
-      expected: { backend: 1, telegram: 2 },
-    },
-  ]),
-);
-const unsupported = {
-  label: 'the duration no longer fits the pair',
-  readPairs: onlyPairs({ ...PAIR_EURUSD, maxTimeframe: 10 }),
-  expected: { backend: 1, telegram: 2 },
-};
-const DEMO_DURATION = demoScreenBranches(
-  demoDurationCallbackData(PAIR_EURUSD.id, 15),
-  'demo:d:2147483648:15',
   pairBranches([unsupported]),
 );
-// the main path's duration screen in place (#382): no read
-const DEMO_DURATIONS = demoScreenBranches(DEMO_SIGNALS_CALLBACK_DATA, undefined, [], 0);
-// a duration's signals screen in place (#320, #382)
+DEMO_ASSET.branches.push({
+  label: 'an old summary button, `demo:d:<id>:5`',
+  update: callbackUpdate(`demo:d:${String(PAIR_EURUSD.id)}:5`),
+  expected: { backend: 1, telegram: 2 },
+});
+// the signals list in place (#320, #685)
 const DEMO_SIGNALS = demoScreenBranches(
-  demoSignalsCallbackData(15),
+  DEMO_SIGNALS_CALLBACK_DATA,
   undefined,
-  signalsBranches(() => callbackUpdate(demoSignalsCallbackData(15)), 2),
+  signalsBranches(() => callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA), 2),
   2,
 );
+DEMO_SIGNALS.branches.push({
+  label: 'an old `demo:sig:15` button',
+  update: callbackUpdate('demo:sig:15'),
+  expected: { backend: 2, telegram: 2 },
+});
 // the launch screen (#320): the pair checked at the data's duration, the amount from access; since
 // #509 the pair's signal read beside them, three reads in parallel counted as sequential
 const DEMO_LAUNCH = demoScreenBranches(
-  demoLaunchCallbackData(PAIR_EURUSD.id, 15),
-  'demo:l:0:15',
+  demoLaunchCallbackData(PAIR_EURUSD.id, 5),
+  'demo:l:0:5',
   pairBranches(
     [
       { ...unsupported, expected: { backend: 3, telegram: 2 } },
@@ -995,7 +995,7 @@ const DEMO_LAUNCH = demoScreenBranches(
 // #476: a door under a trade or a session sends the screen at once, shorter than the edit
 DEMO_LAUNCH.branches.push({
   label: 'a door under a trade or a session sends the screen as a new message',
-  update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
+  update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
   expected: { backend: 3, telegram: 2 },
 });
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary — or sent at once under a
@@ -1011,8 +1011,8 @@ const DELETE_FORBIDDEN: ApiError = {
   error_code: 400,
   description: "Bad Request: message can't be deleted",
 };
-const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
-const analysisOnPhoto = () => photoCallbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+const analysisOnPhoto = () => photoCallbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
 const noSignal = () => Promise.resolve(SIGNAL_NO_SIGNAL);
 const DEMO_ANALYSIS_WORST_CASE: Branch = {
   label: 'under a photo «⏳» is sent, then the card, then «⏳» is deleted',
@@ -1024,12 +1024,12 @@ const DEMO_ANALYSIS = {
   branches: [
     {
       label: 'the chat is not private',
-      update: callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15), 'group'),
+      update: callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 5), 'group'),
       expected: { backend: 0, telegram: 0 },
     },
     {
       label: 'the data is forged',
-      update: callbackUpdate('demo:an:0:15'),
+      update: callbackUpdate('demo:an:0:5'),
       expected: { backend: 0, telegram: 1 },
     },
     ...catalogBranches(analysisUpdate, 2, 2),
@@ -1187,7 +1187,7 @@ const DEMO_ANALYSIS = {
 // a refused edit sends nothing more
 const moreUpdate = (chatType?: string) =>
   callbackUpdate(
-    analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, TradeMode.Demo),
+    analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Demo),
     chatType,
   );
 const MARKUP_TRANSPORT = new HttpError(
@@ -1209,7 +1209,7 @@ const ANALYSIS_MORE = {
     },
     {
       label: 'the data is forged',
-      update: callbackUpdate('demo:more:0:15:up'),
+      update: callbackUpdate('demo:more:0:5:up'),
       expected: { backend: 0, telegram: 1 },
     },
     ANALYSIS_MORE_WORST_CASE,
@@ -1261,7 +1261,7 @@ const ANALYSIS_MORE = {
 // the stake button (#127)
 const stakeUpdate = (chatType?: string) =>
   callbackUpdate(
-    stakeCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+    stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
     chatType,
   );
 const createFails = (error: BackendError) => () => Promise.reject(error);
@@ -1286,7 +1286,7 @@ const STAKE_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the data is forged',
-    update: callbackUpdate('demo:stake:0:15:up:0123456789ab'),
+    update: callbackUpdate('demo:stake:0:5:up:0123456789ab'),
     expected: { backend: 0, telegram: 1 },
   },
   {
@@ -1304,7 +1304,7 @@ const STAKE_BRANCHES: readonly Branch[] = [
   {
     label: 'the pair is closed',
     update: callbackUpdate(
-      stakeCallbackData(PAIR_CLOSED.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+      stakeCallbackData(PAIR_CLOSED.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
     ),
     expected: { backend: 2, telegram: 2 },
   },
@@ -2994,11 +2994,11 @@ const LAUNCH_SAVE_EXTRA = (elsewhere: string): [string, Partial<Branch>][] => [
     { update: callbackUpdate(elsewhere), expected: { backend: 1, telegram: 2 } },
   ],
 ];
-const STAKE_PRESET = pickerBranches(`stk:s:5:d:p:${PAIR_EURUSD.id}:15`, 3, {
+const STAKE_PRESET = pickerBranches(`stk:s:5:d:p:${PAIR_EURUSD.id}:5`, 3, {
   forged: 'stk:s:0:d:s',
   extra: LAUNCH_SAVE_EXTRA('stk:s:5:r:s'),
 });
-const STAKE_RESET = pickerBranches(`stk:z:r:p:${PAIR_EURUSD.id}:15`, 3, {
+const STAKE_RESET = pickerBranches(`stk:z:r:p:${PAIR_EURUSD.id}:5`, 3, {
   forged: 'stk:z:r:a:0:15',
   extra: LAUNCH_SAVE_EXTRA('stk:z:d:s'),
 });
@@ -3028,7 +3028,7 @@ const stakeText = (label: string, text: string, expected: Calls, patch: Partial<
 const ON_LAUNCH_STAKE_STEP: LoginDialogState = {
   step: 'stake',
   mode: TradeMode.Demo,
-  origin: { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 },
+  origin: { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 },
 };
 const STAKE_TEXT_WORST_CASE: Branch = stakeText(
   'the typed stake is saved from a launch screen',
@@ -3257,24 +3257,49 @@ const HELP_BRANCHES: readonly Branch[] = [
   HELP_WORST_CASE,
 ];
 
-// #313: a button drawn with a duration from before the short set
-const LEGACY_DURATION_REMOVED: Branch = {
-  label: 'the keyboard is removed',
-  update: callbackUpdate('demo:an:101:300'),
-  expected: { backend: 0, telegram: 2 },
+// #313, #685: a button drawn with a duration the demo no longer offers: the list as a new message
+const legacyUpdate = () => callbackUpdate('demo:an:101:15');
+const LEGACY_DURATION_SENT: Branch = {
+  label: 'the list is sent',
+  update: legacyUpdate(),
+  readSignals: () => Promise.resolve(SIGNALS),
+  expected: { backend: 2, telegram: 2 },
 };
 const LEGACY_DURATION_BRANCHES: Branch[] = [
-  LEGACY_DURATION_REMOVED,
   {
-    label: 'a stake picker datum of the old set',
-    update: callbackUpdate('stk:o:a:101:60'),
-    expected: { backend: 0, telegram: 2 },
+    label: 'the chat is not private',
+    update: callbackUpdate('demo:an:101:15', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  LEGACY_DURATION_SENT,
+  {
+    label: 'a duration of the set before #313',
+    update: callbackUpdate('demo:sess:101:900'),
+    expected: { backend: 2, telegram: 2 },
   },
   {
     label: 'a launch screen datum from before #382',
     update: callbackUpdate('demo:l:101'),
-    expected: { backend: 0, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
+  {
+    label: 'answering the query is refused and the list still goes',
+    update: legacyUpdate(),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 2, telegram: 2 },
+  },
+  ...catalogBranches(legacyUpdate, 2, 2),
+  ...signalsBranches(legacyUpdate, 2),
+];
+
+// #326, #382: a picker datum without a mode, or a launch screen's from before #382
+const LEGACY_KEYBOARD_REMOVED: Branch = {
+  label: 'the keyboard is removed',
+  update: callbackUpdate('stk:o:a:101:60'),
+  expected: { backend: 0, telegram: 2 },
+};
+const LEGACY_KEYBOARD_BRANCHES: Branch[] = [
+  LEGACY_KEYBOARD_REMOVED,
   {
     label: 'a launch picker datum from before #382',
     update: callbackUpdate('stk:o:p:101'),
@@ -3287,7 +3312,7 @@ const LEGACY_DURATION_BRANCHES: Branch[] = [
   },
   {
     label: 'the removal is refused',
-    update: callbackUpdate('demo:sess:101:900'),
+    update: callbackUpdate('stk:o:a:101:15'),
     apiErrors: [
       [
         'editMessageReplyMarkup',
@@ -3303,8 +3328,17 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     await checkHandler(
       'legacyDuration',
       LEGACY_DURATION_BRANCHES,
-      LEGACY_DURATION_REMOVED,
+      LEGACY_DURATION_SENT,
       HANDLER_CALLS.legacyDuration,
+    );
+  });
+
+  it('an old picker button without a mode', async () => {
+    await checkHandler(
+      'legacyKeyboard',
+      LEGACY_KEYBOARD_BRANCHES,
+      LEGACY_KEYBOARD_REMOVED,
+      HANDLER_CALLS.legacyKeyboard,
     );
   });
 
@@ -3390,15 +3424,6 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     await checkHandler('demo', DEMO_BRANCHES, DEMO_WORST_CASE, HANDLER_CALLS.demo);
   });
 
-  it('the duration screen in place', async () => {
-    await checkHandler(
-      'demoDurations',
-      DEMO_DURATIONS.branches,
-      DEMO_DURATIONS.worst,
-      HANDLER_CALLS.demoDurations,
-    );
-  });
-
   it('the signals screen in place', async () => {
     await checkHandler(
       'demoSignals',
@@ -3459,15 +3484,6 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('a demo asset', async () => {
     await checkHandler('demoAsset', DEMO_ASSET.branches, DEMO_ASSET.worst, HANDLER_CALLS.demoAsset);
-  });
-
-  it('a demo duration', async () => {
-    await checkHandler(
-      'demoDuration',
-      DEMO_DURATION.branches,
-      DEMO_DURATION.worst,
-      HANDLER_CALLS.demoDuration,
-    );
   });
 
   it('the demo analysis', async () => {

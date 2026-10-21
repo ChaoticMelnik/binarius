@@ -519,7 +519,7 @@ MA200         цена ниже 1.08612
       const { text, photo } = analysisScreen({
         mode: TradeMode.Demo,
         pair,
-        durationSec: 15,
+        durationSec: 5,
         response,
         chooseAmount: true,
       });
@@ -530,7 +530,7 @@ MA200         цена ниже 1.08612
       expect(text.value).not.toContain('&amp;amp;');
     }
     expect(
-      telegramTextProblems(analysisUnavailableScreen(pair, 15).text, BOT_TEXT_LIMIT),
+      telegramTextProblems(analysisUnavailableScreen(pair, 5).text, BOT_TEXT_LIMIT),
     ).toEqual([]);
   });
 });

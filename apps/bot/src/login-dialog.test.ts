@@ -81,7 +81,7 @@ describe('endInputStep', () => {
   it('ends a typed stake and a typed cycle amount', () => {
     const dialog = createLoginDialog();
     dialog.set(1, { step: 'stake', mode: TradeMode.Demo, origin: { kind: 'settings' } });
-    dialog.set(2, { step: 'cycleStake', assetId: 7, durationSec: 15, back: 'l' });
+    dialog.set(2, { step: 'cycleStake', assetId: 7, durationSec: 5, back: 'l' });
 
     endInputStep(dialog, 1);
     endInputStep(dialog, 2);

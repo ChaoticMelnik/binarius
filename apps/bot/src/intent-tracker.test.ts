@@ -181,29 +181,36 @@ describe('the intent tracker', () => {
   );
 
   // #360: the line and the session row follow the status, never the moment
-  it('offers the session on a stop status of a duration the demo still takes, and only then', () => {
+  it('offers the session on a stop status, and only then', () => {
     for (const status of TRACKER_STOP_STATUSES) {
-      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 })).toBe(5);
-      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 15 })).toBe(15);
-      // a trade from before #313
-      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 60 })).toBeUndefined();
+      expect(sessionOfferOf(intentView({ status }))).toBe(5);
     }
     for (const status of Object.values(TradeIntentStatus).filter(
       (status) => !TRACKER_STOP_STATUSES.has(status),
     )) {
-      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 })).toBeUndefined();
+      expect(sessionOfferOf(intentView({ status }))).toBeUndefined();
     }
   });
+
+  // #685: the offer is about the pair, the duration is one
+  it.each([5, 15, 60])(
+    'offers a 5-s session under a finished trade of any duration (%i s)',
+    (durationSec) => {
+      expect(sessionOfferOf(intentView({ status: TradeIntentStatus.Settled, durationSec }))).toBe(
+        5,
+      );
+    },
+  );
 
   // #327: a real trade offers a real session, on the same stop statuses as a demo one
   it('offers a session under a real trade as under a demo one', () => {
     for (const status of Object.values(TradeIntentStatus)) {
-      expect(sessionOfferOf({ mode: TradeMode.Real, status, durationSec: 5 })).toBe(
-        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }),
+      expect(sessionOfferOf(intentView({ mode: TradeMode.Real, status }))).toBe(
+        sessionOfferOf(intentView({ mode: TradeMode.Demo, status })),
       );
     }
     expect(
-      sessionOfferOf({ mode: TradeMode.Real, status: TradeIntentStatus.Settled, durationSec: 5 }),
+      sessionOfferOf(intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled })),
     ).toBe(5);
   });
 

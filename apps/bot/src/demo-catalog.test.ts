@@ -19,11 +19,11 @@ import {
   pageOf,
   readDemoCatalog,
   readDemoTrade,
-  SIGNALS_DURATIONS_SEC,
 } from './demo-catalog';
 import {
   PAIR_CLOSED,
   PAIR_EURUSD,
+  PAIR_15S_ONLY,
   PAIR_MINUTE_ONLY,
   PAIR_OTHER_TYPE,
   PAIR_SHORT,
@@ -40,11 +40,10 @@ const pairs = (count: number): PairView[] =>
     symbol: `P${String(index).padStart(2, '0')}`,
   }));
 
-describe('SIGNALS_DURATIONS_SEC (#382)', () => {
-  it('holds the demo durations, 15 s first, each on its scanner interval', () => {
-    expect(SIGNALS_DURATIONS_SEC).toEqual([15, 5]);
-    expect([...SIGNALS_DURATIONS_SEC].sort((a, b) => a - b)).toEqual([...DEMO_DURATIONS_SEC]);
-    expect(SIGNALS_DURATIONS_SEC.map(intervalForDuration)).toEqual([...SIGNAL_SCAN_INTERVALS]);
+describe('DEMO_DURATIONS_SEC (#685)', () => {
+  it("mirrors the scanner's intervals", () => {
+    expect(DEMO_DURATIONS_SEC).toEqual([5]);
+    expect(DEMO_DURATIONS_SEC.map(intervalForDuration)).toEqual([...SIGNAL_SCAN_INTERVALS]);
   });
 });
 
@@ -81,22 +80,24 @@ describe('openPairsOf', () => {
     expect(openPairsOf(PAIRS_RESPONSE, 'other', NOW)).toEqual([PAIR_OTHER_TYPE]);
   });
 
-  // #313: a pair that accepts neither 5 nor 15 s is never listed, open or not
+  // #313, #685: a pair that does not accept 5 s is never listed, open or not
   it('leaves out a pair that accepts no demo duration', () => {
     expect(PAIRS_RESPONSE.pairs).toContain(PAIR_MINUTE_ONLY);
     expect(openPairsOf(PAIRS_RESPONSE, 'currency', NOW)).toEqual([PAIR_EURUSD]);
     expect(pairsOf(PAIRS_RESPONSE, 'currency')).toEqual([PAIR_EURUSD, PAIR_CLOSED]);
-    const narrow = { ...PAIR_EURUSD, id: 8, minTimeframe: 10, maxTimeframe: 15 };
+    expect(pairsOf(pairsResponse({ pairs: [PAIR_15S_ONLY] }), 'currency')).toEqual([]);
+    const narrow = { ...PAIR_EURUSD, id: 8, minTimeframe: 5, maxTimeframe: 5 };
     expect(pairsOf(pairsResponse({ pairs: [narrow] }), 'currency')).toEqual([narrow]);
   });
 });
 
 describe('the duration sets', () => {
-  // the legacy patterns are registered before the current ones (demo.ts, stake-picker.ts): a
-  // duration in both sets would lose its keyboard instead of reaching its screen
+  // the legacy patterns are registered before the current ones (demo.ts): a duration in both sets
+  // would lead to the signals list instead of its screen
   it('keeps the current and the legacy durations apart', () => {
     const legacy: readonly number[] = LEGACY_DEMO_DURATIONS_SEC;
     expect(DEMO_DURATIONS_SEC.filter((sec) => legacy.includes(sec))).toEqual([]);
+    expect(LEGACY_DEMO_DURATIONS_SEC).toContain(15);
   });
 });
 
@@ -135,11 +136,11 @@ describe('pageIndexOf', () => {
 
 describe('durationOptions', () => {
   it.each([
-    [5, 3600, [...DEMO_DURATIONS_SEC]],
-    [1, 15, [5, 15]],
-    [5, 10, [5]],
-    [10, 3600, [15]],
-    [6, 14, []],
+    [5, 3600, [5]],
+    [1, 15, [5]],
+    [5, 5, [5]],
+    [10, 3600, []],
+    [15, 3600, []],
     [60, 3600, []],
   ])('admits for min %i and max %i exactly %j', (minTimeframe, maxTimeframe, expected) => {
     expect(durationOptions({ ...PAIR_EURUSD, minTimeframe, maxTimeframe })).toEqual(expected);
@@ -147,27 +148,29 @@ describe('durationOptions', () => {
 });
 
 describe('checkDemoTrade', () => {
-  const pair = { ...PAIR_EURUSD, minTimeframe: 10, maxTimeframe: 15 };
+  const pair = { ...PAIR_EURUSD, minTimeframe: 5, maxTimeframe: 15 };
   const catalog = pairsResponse({ pairs: [pair] });
 
-  // the durations around the range are the table's, so the range is what refuses them
-  it('admits a duration on either end of the range, and nothing outside it', () => {
-    expect(checkDemoTrade(catalog, pair.id, 15, NOW)).toEqual({
+  // the pair's range is what refuses a pair that does not take 5 s
+  it('admits 5 s within the range, and refuses a pair whose range starts above it', () => {
+    expect(checkDemoTrade(catalog, pair.id, 5, NOW)).toEqual({
       ok: true,
       pair,
-      durationSec: 15,
+      durationSec: 5,
     });
-    expect(checkDemoTrade(catalog, pair.id, 5, NOW)).toEqual({
+    expect(
+      checkDemoTrade(pairsResponse({ pairs: [PAIR_15S_ONLY] }), PAIR_15S_ONLY.id, 5, NOW),
+    ).toEqual({
       ok: false,
       reason: 'duration_unsupported',
-      pair,
+      pair: PAIR_15S_ONLY,
     });
   });
 
-  // #125 review m5: the duration comes from callback data
+  // #125 review m5: the duration comes from callback data; 15 s left the table in #685
   it("refuses a duration outside the demo's table even where the pair's range admits it", () => {
     const wide = { ...PAIR_EURUSD, minTimeframe: 5, maxTimeframe: 3600 };
-    for (const durationSec of [10, 60, 300]) {
+    for (const durationSec of [10, 15, 60, 300]) {
       expect(checkDemoTrade(pairsResponse({ pairs: [wide] }), wide.id, durationSec, NOW)).toEqual({
         ok: false,
         reason: 'duration_unsupported',
@@ -177,7 +180,7 @@ describe('checkDemoTrade', () => {
   });
 
   it('refuses an id the catalog does not hold', () => {
-    expect(checkDemoTrade(catalog, 999, 15, NOW)).toEqual({ ok: false, reason: 'pair_missing' });
+    expect(checkDemoTrade(catalog, 999, 5, NOW)).toEqual({ ok: false, reason: 'pair_missing' });
   });
 
   it('refuses a closed pair before looking at the duration', () => {
@@ -244,15 +247,15 @@ describe('readDemoTrade', () => {
   it('checks the pair on the clock taken after the read, against that catalog', async () => {
     const now = vi.fn(() => NOW);
     expect(
-      await readDemoTrade({ readPairs: () => Promise.resolve(PAIRS_RESPONSE) }, 101, 15, now),
-    ).toEqual({ ok: true, pair: PAIR_EURUSD, durationSec: 15, catalog: PAIRS_RESPONSE });
+      await readDemoTrade({ readPairs: () => Promise.resolve(PAIRS_RESPONSE) }, 101, 5, now),
+    ).toEqual({ ok: true, pair: PAIR_EURUSD, durationSec: 5, catalog: PAIRS_RESPONSE });
     expect(now).toHaveBeenCalledTimes(1);
   });
 
   it('never reaches the pair check with a stale catalog', async () => {
     const stale = pairsResponse({ fresh: false, pairs: [] });
     const now = vi.fn(() => NOW);
-    expect(await readDemoTrade({ readPairs: () => Promise.resolve(stale) }, 101, 15, now)).toEqual({
+    expect(await readDemoTrade({ readPairs: () => Promise.resolve(stale) }, 101, 5, now)).toEqual({
       ok: false,
       reason: 'catalog_stale',
     });
@@ -263,7 +266,7 @@ describe('readDemoTrade', () => {
     const read = await readDemoTrade(
       { readPairs: () => Promise.resolve(PAIRS_RESPONSE) },
       PAIR_CLOSED.id,
-      15,
+      5,
       () => NOW,
     );
     expect(read).toEqual({
@@ -279,10 +282,10 @@ describe('readDemoTrade', () => {
 describe('checkDemoTrade at a low payout', () => {
   it('admits a pair paying 79 %', () => {
     const at79 = { ...PAIR_EURUSD, payout: 79 };
-    expect(checkDemoTrade(pairsResponse({ pairs: [at79] }), 101, 15, NOW)).toEqual({
+    expect(checkDemoTrade(pairsResponse({ pairs: [at79] }), 101, 5, NOW)).toEqual({
       ok: true,
       pair: at79,
-      durationSec: 15,
+      durationSec: 5,
     });
   });
 });

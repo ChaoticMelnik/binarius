@@ -4,25 +4,16 @@
 // is 1-64 bytes.
 
 import { BotLanguage } from './bot-language';
-import { SIGNAL_CHART_INTERVAL_MS, SIGNAL_SCAN_INTERVALS } from './signal';
 
-// «Сигналы сейчас» (#320): `demo:sig` is the duration screen (#382), every old «🔄 Обновить»,
-// «↩️ К списку» and «📡 К сигналам» lands there; `demo:sig:<sec>` the list of one duration. Here
-// since #509, when the backend's session summary started to carry «🔀 Выбрать другую пару».
+// «Сигналы сейчас» (#320): the list of the demo's one duration, 5 s (#685); every «🔄 Обновить»,
+// «↩️ К списку», «📡 К сигналам» and «🔀 Выбрать другую пару» carries it. `demo:sig:<sec>` is the
+// data of old buttons (#382 to #685), which lead to the same list. Here since #509, when the
+// backend's session summary started to carry «🔀 Выбрать другую пару».
 export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
-export const demoSignalsCallbackData = (durationSec: number): string =>
-  `${DEMO_SIGNALS_CALLBACK_DATA}:${String(durationSec)}`;
-// the list of a duration the scanner lists, the duration screen for any other
-export const signalsCallbackDataFor = (durationSec: number): string =>
-  SIGNAL_SCAN_INTERVALS.some(
-    (interval) => SIGNAL_CHART_INTERVAL_MS[interval] === durationSec * 1000,
-  )
-    ? demoSignalsCallbackData(durationSec)
-    : DEMO_SIGNALS_CALLBACK_DATA;
 
 // «📊 Анализ» of a pair and duration (#482): the bot's analysis card, and since #484 the backend's
 // analysis reminder, «📊 Новый анализ» of the same pair and duration. The bot's pattern takes the
-// durations it offers. The longest, `demo:an:2147483647:15`, is 21 bytes.
+// durations it offers. The longest, `demo:an:2147483647:5`, is 20 bytes.
 export const demoAnalysisCallbackData = (assetId: number, durationSec: number): string =>
   `demo:an:${String(assetId)}:${String(durationSec)}`;
 

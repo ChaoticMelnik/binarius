@@ -54,12 +54,7 @@ import {
   stubTextSource,
 } from './testing';
 import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
-import {
-  DEMO_GROUPS_CALLBACK_DATA,
-  demoAssetCallbackData,
-  demoDurationCallbackData,
-  demoPageCallbackData,
-} from './demo';
+import { DEMO_GROUPS_CALLBACK_DATA, demoAssetCallbackData, demoPageCallbackData } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import { runWithLanguage } from './language';
 import {
@@ -70,7 +65,6 @@ import {
   currentLevelLabel,
   DEMO_DURATION_LABELS,
   DEMO_GROUP_LABELS,
-  demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
   groupButtonLabel,
@@ -804,8 +798,7 @@ describe('the demo screens', () => {
   const PAYOUT_SENTENCE = 'при верном прогнозе, не вероятность';
   const screens = {
     pairs: demoPairsScreen('cryptocurrency', 9998, 9999),
-    durations: demoDurationsScreen(HOSTILE_PAIR),
-    summary: demoSummary(HOSTILE_PAIR, 15),
+    summary: demoSummary(HOSTILE_PAIR, 5),
   };
 
   it.each(Object.entries(screens))(
@@ -823,15 +816,15 @@ describe('the demo screens', () => {
   );
 
   // #379: a pair screen that names the payout names the break-even share at it
-  it.each([
-    ['durations', screens.durations],
-    ['summary', screens.summary],
-  ])('names the break-even share once on the %s screen', (_name, text) => {
-    expect(plainTextOf(text).split('Безубыточность: 50.0% верных прогнозов.')).toHaveLength(2);
-  });
+  it.each([['summary', screens.summary]])(
+    'names the break-even share once on the %s screen',
+    (_name, text) => {
+      expect(plainTextOf(text).split('Безубыточность: 50.0% верных прогнозов.')).toHaveLength(2);
+    },
+  );
 
   it("shows the pair's label, escaped once in the markup", () => {
-    for (const text of [screens.durations, screens.summary]) {
+    for (const text of [screens.summary]) {
       expect(plainTextOf(text)).toContain(SYMBOL);
       expect(plainTextOf(text)).not.toContain(`${SYMBOL} OTC`);
       expect(text.value).not.toContain('&amp;amp;');
@@ -847,9 +840,9 @@ describe('the demo screens', () => {
   });
 
   it('lays out the summary: the asset, the duration, the payout, then what comes next', () => {
-    expect(plainTextOf(demoSummary(PAIR_EURUSD, 15))).toBe(
+    expect(plainTextOf(demoSummary(PAIR_EURUSD, 5))).toBe(
       `🎯 Актив: EUR/USD
-⏱ Длительность: ⏱ 15 с
+⏱ Длительность: ⏱ 5 с
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
 
 Дальше — анализ свечей: бот покажет сигнал и что можно сделать по нему.`,
@@ -865,7 +858,7 @@ describe('the demo screens', () => {
       '📊 Индексы',
       '📁 Другие',
     ]);
-    expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual(['⏱ 5 с', '⏱ 15 с']);
+    expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual(['⏱ 5 с']);
     expect(groupButtonLabel('currency', 46)).toBe('💱 Валюты · 46');
     expect(pairButtonLabel(pairLabel(PAIR_EURUSD), 85)).toBe('EUR/USD 85%');
   });
@@ -893,8 +886,7 @@ describe('the demo screens', () => {
       DEMO_GROUPS_CALLBACK_DATA,
       demoPageCallbackData('cryptocurrency', 9999),
       demoAssetCallbackData(MAX_ID),
-      demoDurationCallbackData(MAX_ID, 15),
-      demoAnalysisCallbackData(MAX_ID, 15),
+      demoAnalysisCallbackData(MAX_ID, 5),
     ]) {
       expect(Buffer.byteLength(data, 'utf8'), data).toBeLessThanOrEqual(64);
     }
@@ -989,7 +981,7 @@ describe('the demo trade status', () => {
     expect(plainTextOf(text)).toBe(
       [
         '🎮 Демо-сделка',
-        '📈 EUR/<USD> · ⬆️ Вверх · ⏱ 15 с · ставка $1.00',
+        '📈 EUR/<USD> · ⬆️ Вверх · ⏱ 5 с · ставка $1.00',
         '',
         '⏳ Заявка создана и ждёт отправки брокеру…',
       ].join('\n'),
@@ -1036,7 +1028,7 @@ describe('the demo trade status', () => {
     expect(plainTextOf(intentStatusText(lbl('X'), view, { sessionOffer: true }))).toBe(
       [
         '🎮 Демо-сделка',
-        '📈 X · ⬆️ Вверх · ⏱ 15 с · ставка $1.00',
+        '📈 X · ⬆️ Вверх · ⏱ 5 с · ставка $1.00',
         '',
         plainTextOf(TEXTS.intentAccepted),
         '',
@@ -1129,7 +1121,7 @@ describe('the demo session status', () => {
       '🎮 Демо-сессия',
       '🔹 Торговая пара: EUR/USD',
       '🔹 Сумма сделки: $1.00',
-      '🔹 Время экспирации: 15 с',
+      '🔹 Время экспирации: 5 с',
       '',
       'Торговая сессия запущена…',
     ].join('\n');
@@ -1501,8 +1493,8 @@ describe('the facades over the catalog', () => {
         'confirmButton',
         'connectButton',
         'demoAnalysisButton',
-        'demoBackDurationsButton',
         'demoBackGroupsButton',
+        'demoBackPairButton',
         'demoBackPairsButton',
         'demoButton',
         'demoNextButton',
@@ -1630,8 +1622,8 @@ describe('the text source', () => {
   });
 
   it('labels a duration from the source in place', () => {
-    setBotTextSource(stubTextSource('demoDuration15'));
-    expect(DEMO_DURATION_LABELS[15]).toBe(stubText('demoDuration15'));
+    setBotTextSource(stubTextSource('demoDuration5'));
+    expect(DEMO_DURATION_LABELS[5]).toBe(stubText('demoDuration5'));
   });
 
   it('reads the profile from the source in place', () => {

@@ -160,20 +160,19 @@ const BUY_ROWS = [
   ],
   ...BACK_ROWS,
 ];
-// the end of the path (#350): the analysis of the same pair and duration and the signals in one
-// row (#506), the menu
+// the end of the path (#350): the analysis of the same pair at 5 s and the signals list in one
+// row (#506, #685), the menu
 const END_ROWS = [
   [
-    button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),
-    // the list of the trade's duration (#382)
-    button(LABELS.toSignalsButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`),
+    button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
+    button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA),
   ],
   MENU_ROW,
 ];
 // #360: under a finished trade, the session on the same pair and duration before the end of the
 // path; in demo it opens the amount screen as a new message (#476)
 const SESSION_ROW = [
-  button('🚀 Сессия из 5 циклов', demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n')),
+  button('🚀 Сессия из 5 циклов', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
 ];
 const OFFER_END_ROWS = [SESSION_ROW, ...END_ROWS];
 const OFFER = '🤖 Дальше бот может торговать сам';
@@ -181,10 +180,7 @@ const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DAT
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
-const BACK_DURATIONS = button(
-  LABELS.demoBackDurationsButton,
-  demoAssetCallbackData(PAIR_EURUSD.id),
-);
+const BACK_PAIR = button(LABELS.demoBackPairButton, demoAssetCallbackData(PAIR_EURUSD.id));
 
 const httpError = (status: number, reason?: string) =>
   new BackendError(BackendErrorCode.HttpStatus, {
@@ -498,7 +494,7 @@ describe('the stake button', () => {
         [
           button(
             '🚀 Сессия из 5 циклов · REAL',
-            sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+            sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
           ),
         ],
         ...END_ROWS,
@@ -683,14 +679,14 @@ describe('the stake button', () => {
         >,
       STAKE,
       TEXTS.demoCatalogUnavailable,
-      [[BACK_DURATIONS, BACK_GROUPS]],
+      [[BACK_PAIR, BACK_GROUPS]],
     ],
     [
       'the catalog is stale',
       catalogOf({ fresh: false }),
       STAKE,
       TEXTS.demoCatalogStale,
-      [[BACK_DURATIONS, BACK_GROUPS]],
+      [[BACK_PAIR, BACK_GROUPS]],
     ],
     [
       'the pair is gone',
@@ -707,11 +703,11 @@ describe('the stake button', () => {
       [[BACK_GROUPS]],
     ],
     [
-      "the duration is outside the pair's bounds",
-      catalogOf({ pairs: [{ ...PAIR_EURUSD, maxTimeframe: 10 }] }),
-      stakeCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
-      TEXTS.demoDurationUnsupported({ symbol: pairLabel(PAIR_EURUSD) }),
-      [[BACK_DURATIONS, BACK_GROUPS]],
+      'the pair does not take 5 s',
+      catalogOf({ pairs: [{ ...PAIR_EURUSD, minTimeframe: 15 }] }),
+      stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+      TEXTS.demoDurationUnsupported({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }),
+      [[BACK_GROUPS]],
     ],
   ])('creates nothing and says why when %s', async (_case, readPairs, data, text, rows) => {
     const { press, calls, createIntent, logger } = setup({ readPairs });
@@ -884,13 +880,14 @@ describe('the refresh button', () => {
   );
 
   // #313: a trade from before the deploy has no session of its duration to offer
-  it('offers no session under a finished trade whose duration the demo no longer takes', async () => {
-    const view = intentView({ status: TradeIntentStatus.Settled, durationSec: 60 });
+  // #685: the offer is about the pair; a trade of an older duration is offered 5 s
+  it.each([15, 60])('offers a 5-s session under a finished %i-s trade', async (durationSec) => {
+    const view = intentView({ status: TradeIntentStatus.Settled, durationSec });
     const { press, calls } = setup({ readIntent: () => Promise.resolve(view) });
     await press(REFRESH);
     const edit = payloadOf(calls, 'editMessageText');
-    expect(edit?.text).not.toContain(OFFER);
-    expect(JSON.stringify(rowsOf(edit))).not.toContain('demo:sess:');
+    expect(edit?.text).toContain(OFFER);
+    expect(rowsOf(edit)).toEqual(OFFER_END_ROWS);
   });
 
   // #631: the payout draws no part of the offer (#379 withheld it below 80 %)

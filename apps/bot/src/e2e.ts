@@ -8,7 +8,6 @@ export { createSessionResumer } from './session-resume';
 export { createSessionTracker } from './session-tracker';
 export {
   cycleStakeLabel,
-  DEMO_DURATION_LABELS,
   groupButtonLabel,
   LABELS,
   pairButtonLabel,

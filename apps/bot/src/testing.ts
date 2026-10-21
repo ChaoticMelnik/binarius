@@ -192,7 +192,7 @@ export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingA
 
 // The demo's catalog (#125). PAIR_CLOSED is closed on any clock a test runs at (2100-01-01), so
 // a suite on the real clock sees it closed too; the others have no schedule. PAIR_MINUTE_ONLY
-// accepts no demo duration (#313: 5 and 15 s) and is never listed.
+// accepts no demo duration (#313, #685: 5 s) and is never listed.
 export const PAIR_EURUSD: PairView = {
   id: 101,
   symbol: 'EUR/USD',
@@ -267,7 +267,7 @@ export const PAIR_MINUTE_ONLY: PairView = {
   maxTimeframe: 3600,
   scheduledUntil: 0,
 };
-// accepts 15 s and not 5 s: a signal on the 5 s list has no button for it (#382)
+// accepts 15 s and not 5 s: never listed since #685, a signal for it has no button (#382)
 export const PAIR_15S_ONLY: PairView = {
   id: 606,
   symbol: 'NZD/USD',
@@ -400,7 +400,7 @@ export const INTENT_VIEW: TradeIntentView = {
   assetId: PAIR_EURUSD.id,
   amount: BROKER_BALANCE.minTradeAmount,
   action: TradeAction.Up,
-  durationSec: 15,
+  durationSec: 5,
   clientRequestId: `demo:${USER.id}:${STAKE_NONCE}`,
   createdAt: '2026-10-06T10:00:00.000Z',
   status: TradeIntentStatus.Queued,
@@ -427,7 +427,7 @@ export const SESSION_VIEW: TradingSessionView = tradingSessionViewSchema.parse({
   settings: {
     version: 1,
     assetId: PAIR_EURUSD.id,
-    durationSec: 15,
+    durationSec: 5,
     trades: 5,
     stake: { baseStake: '1', stakeScale: 0 },
   },

@@ -35,8 +35,8 @@ export const E2E_BROKER_USER_ID = 7001;
 export const E2E_USER_B: User = { id: 4343, is_bot: false, first_name: 'Bob' };
 export const E2E_USER_C: User = { id: 4444, is_bot: false, first_name: 'Cy' };
 
-// The only pair of the run: 15 s is within its timeframes, unlike the mock's EUR/USD (60 s), so the
-// bot offers it for the 15-second demo; a payout of 85 is above the session's floor of 80.
+// The only pair of the run: 5 s is within its timeframes, unlike the mock's EUR/USD (60 s), so the
+// bot offers it for the 5-second demo (#685); a payout of 85 is above the session's floor of 80.
 export const E2E_PAIR: BinaryPairWire = {
   id: 101,
   symbol: 'EUR/USD',

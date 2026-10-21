@@ -11,18 +11,25 @@ const buttonsOf = (message: ReturnType<typeof mailingMessage>) =>
 
 // #484
 describe('the analysis reminder message', () => {
-  it('sends the catalog text with one button: a new analysis of the same pair and duration', () => {
-    const message = mailingMessage(
-      NotificationKind.AnalysisUnused,
-      { assetId: 101, durationSec: 15 },
-      DEMO,
-    );
-    expect(message.text).toBe(CLIENT_TEXTS.analysisUnusedReminder);
-    expect(message.text.value).toContain(`«${CLIENT_LABELS.newAnalysisButton}»`);
-    expect(buttonsOf(message)).toStrictEqual([
-      { text: CLIENT_LABELS.newAnalysisButton, callback_data: 'demo:an:101:15' },
-    ]);
-  });
+  // a reminder queued before #685 with 15 s keeps its data: the bot's legacy handler reads it
+  it.each([
+    [5, 'demo:an:101:5'],
+    [15, 'demo:an:101:15'],
+  ])(
+    'sends the catalog text with one button: a new analysis of the same pair (%i s)',
+    (durationSec, data) => {
+      const message = mailingMessage(
+        NotificationKind.AnalysisUnused,
+        { assetId: 101, durationSec },
+        DEMO,
+      );
+      expect(message.text).toBe(CLIENT_TEXTS.analysisUnusedReminder);
+      expect(message.text.value).toContain(`«${CLIENT_LABELS.newAnalysisButton}»`);
+      expect(buttonsOf(message)).toStrictEqual([
+        { text: CLIENT_LABELS.newAnalysisButton, callback_data: data },
+      ]);
+    },
+  );
 
   // the analysis screens' rule (#126): the signal is neither a probability nor an accuracy
   it('promises no result', () => {

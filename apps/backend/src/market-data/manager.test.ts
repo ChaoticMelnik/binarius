@@ -1303,7 +1303,8 @@ describe('the market data manager and a throwing client start (#404, L6)', () =>
 });
 
 describe('the market data manager and the backfill (#590)', () => {
-  // acceptance 1: the candles the failover dropped come back by native 5s and 15s GETs
+  // acceptance 1: the candles the failover dropped come back by native GETs of the scanned
+  // interval (5s and 15s until #685, 5s since)
   it('M26 refills the hole of a failover from the mock broker, and leaves the tick-built candles', async () => {
     const mock = await withBroker();
     const h = harness({ backfill: true });
@@ -1350,8 +1351,8 @@ describe('the market data manager and the backfill (#590)', () => {
     const after = h.ring.read(id, '5s', Date.now()).candles;
     expect(after.map((candle) => candle.timestamp)).toContain(t1);
     expect(after.find((candle) => candle.timestamp === t4)).toEqual(tickBuilt[0]);
-    expect(h.backfill?.counters()).toMatchObject({ fetched: 90, failed: 0, rateLimited: 0 });
-    expect(h.line().backfill).toMatchObject({ fetched: 90, failed: 0, queued: 0 });
+    expect(h.backfill?.counters()).toMatchObject({ fetched: 45, failed: 0, rateLimited: 0 });
+    expect(h.line().backfill).toMatchObject({ fetched: 45, failed: 0, queued: 0 });
   });
 
   it('M27 streams only while the active is ready', async () => {

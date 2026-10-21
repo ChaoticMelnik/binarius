@@ -46,7 +46,7 @@ import {
   withBuy,
   withMenu,
 } from './keyboards';
-import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
+import { DEMO_DURATION_SEC, readDemoTrade, type DemoTradeRead } from './demo-catalog';
 import {
   INTENT_NOT_FOUND,
   sessionOfferOf,
@@ -57,7 +57,14 @@ import type { Logger } from './logging';
 import { currentLanguage } from './language';
 import { settle, type Settled } from './settled';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
-import { intentStatusText, LABELS, sessionStartButtonLabel, TEXTS, textOf } from './texts';
+import {
+  DEMO_DURATION_LABELS,
+  intentStatusText,
+  LABELS,
+  sessionStartButtonLabel,
+  TEXTS,
+  textOf,
+} from './texts';
 
 // The demo trade (#127, docs/bot-demo-trade.md): the stake button «➕ Ещё» draws under the analysis
 // screen (#360) creates an intent through POST /trading/intents, one status message follows it (the tracker),
@@ -91,7 +98,7 @@ export function intentKeyboard(
       );
   }
   return TRACKER_STOP_STATUSES.has(view.status)
-    ? appendEndOfPath(keyboard, view.assetId, view.durationSec)
+    ? appendEndOfPath(keyboard, view.assetId)
     : keyboard;
 }
 
@@ -374,22 +381,23 @@ export function createDemoTradeComposer<C extends Context>({
       LABELS.demoBackGroupsButton,
       DEMO_GROUPS_CALLBACK_DATA,
     );
-    const backToDurations = new InlineKeyboard()
-      .text(LABELS.demoBackDurationsButton, demoAssetCallbackData(assetId))
+    // the pair's summary reads the catalog anew (#685: no duration screen to go back to)
+    const backToPair = new InlineKeyboard()
+      .text(LABELS.demoBackPairButton, demoAssetCallbackData(assetId))
       .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
     switch (read.reason) {
       case 'catalog_unavailable':
-        await replyHtml(ctx, TEXTS.demoCatalogUnavailable, { reply_markup: backToDurations });
+        await replyHtml(ctx, TEXTS.demoCatalogUnavailable, { reply_markup: backToPair });
         return;
       case 'catalog_stale':
-        await replyHtml(ctx, TEXTS.demoCatalogStale, { reply_markup: backToDurations });
+        await replyHtml(ctx, TEXTS.demoCatalogStale, { reply_markup: backToPair });
         return;
       case 'backend_failed':
         logger.warn(
           { ...errorLogFields(read.error), ...backendErrorFields(read.error) },
           'demo catalog not read',
         );
-        await replyHtml(ctx, TEXTS.unavailable, { reply_markup: backToDurations });
+        await replyHtml(ctx, TEXTS.unavailable, { reply_markup: backToPair });
         return;
       case 'pair_missing':
         await replyHtml(ctx, TEXTS.demoPairMissing, { reply_markup: backToGroups });
@@ -400,9 +408,15 @@ export function createDemoTradeComposer<C extends Context>({
         });
         return;
       case 'duration_unsupported':
-        await replyHtml(ctx, TEXTS.demoDurationUnsupported({ symbol: pairLabel(read.pair) }), {
-          reply_markup: backToDurations,
-        });
+        // the pair's summary would refuse the same: only the types (#685)
+        await replyHtml(
+          ctx,
+          TEXTS.demoDurationUnsupported({
+            symbol: pairLabel(read.pair),
+            label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC],
+          }),
+          { reply_markup: backToGroups },
+        );
         return;
     }
   }

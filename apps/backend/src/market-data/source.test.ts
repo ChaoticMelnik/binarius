@@ -14,15 +14,15 @@ describe('the candle source requests (#404)', () => {
       requests,
       streaming: () => true,
     });
-    source.request(5, '15s');
-    source.request(3, '5s');
-    source.request(5, '15s');
     source.request(5, '5s');
-    expect(requests.size).toBe(3);
+    source.request(3, '5s');
+    source.request(5, '5s');
+    // #685: an interval the ring does not build is no request
+    source.request(5, '15s');
+    expect(requests.size).toBe(2);
     expect(requests.pending()).toEqual([
-      { assetId: 5, interval: '15s' },
-      { assetId: 3, interval: '5s' },
       { assetId: 5, interval: '5s' },
+      { assetId: 3, interval: '5s' },
     ]);
   });
 
@@ -40,11 +40,11 @@ describe('the candle source requests (#404)', () => {
 
   it('S3 hands the requests over once and empties the set', () => {
     const requests = createPendingRequests(288);
-    requests.add(1, '15s');
+    requests.add(1, '5s');
     expect(requests.pending()).toHaveLength(1);
     expect(requests.pending()).toEqual([]);
     expect(requests.size).toBe(0);
-    expect(requests.add(1, '15s')).toBe(true);
+    expect(requests.add(1, '5s')).toBe(true);
   });
 });
 
@@ -73,6 +73,8 @@ describe('createCandleSource (#405)', () => {
     expect(down.reads).toEqual([]);
     const live = adapter(true);
     expect(live.source.read(7, '1m', 1_000)).toBeUndefined();
+    // #685: a 15 s session of before the deploy reads its candles over REST
+    expect(live.source.read(7, '15s', 1_000)).toBeUndefined();
     expect(live.reads).toEqual([]);
   });
 
@@ -86,7 +88,7 @@ describe('createCandleSource (#405)', () => {
 
   it("S6 a read while streaming is the ring's window for the same nowMs", () => {
     const { source, reads } = adapter(true);
-    expect(source.read(7, '15s', 12_345)).toBe(window);
-    expect(reads).toEqual([{ assetId: 7, interval: '15s', nowMs: 12_345 }]);
+    expect(source.read(7, '5s', 12_345)).toBe(window);
+    expect(reads).toEqual([{ assetId: 7, interval: '5s', nowMs: 12_345 }]);
   });
 });

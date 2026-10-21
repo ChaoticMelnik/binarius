@@ -8,7 +8,7 @@ import {
   TradeMode,
   TradingSessionErrorCode,
   type DecimalString,
-  demoSignalsCallbackData,
+  DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   MENU_CALLBACK_DATA,
   StakeRefusal,
@@ -54,23 +54,23 @@ interface Button {
 }
 
 const d = (value: string): DecimalString => decimalStringSchema.parse(value);
-const PRESS = cycleStakeCallbackData(PAIR_EURUSD.id, 15, '5', 'l');
+const PRESS = cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'l');
 const ON_STEP: LoginDialogState = {
   step: 'cycleStake',
   assetId: PAIR_EURUSD.id,
-  durationSec: 15,
+  durationSec: 5,
   back: 'l',
 };
-const BACK_LIST = { text: LABELS.backToListButton, callback_data: demoSignalsCallbackData(15) };
+const BACK_LIST = { text: LABELS.backToListButton, callback_data: DEMO_SIGNALS_CALLBACK_DATA };
 const AMOUNTS_AGAIN = {
   text: LABELS.stakeMenuButton,
-  callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 15, 'n'),
+  callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'),
 };
 const STARTED = {
   telegramUserId: String(USER.id),
   mode: TradeMode.Demo,
   assetId: PAIR_EURUSD.id,
-  durationSec: 15,
+  durationSec: 5,
   cycles: 5,
 };
 const httpError = (status: number, reason: string) =>
@@ -237,7 +237,7 @@ describe('an amount of the amount screen', () => {
     const { press, calls, setStake } = setup({
       startSession: () => Promise.resolve({ active: SESSION_VIEW }),
     });
-    await press(cycleStakeCallbackData(PAIR_EURUSD.id, 15, '10', 'l'));
+    await press(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '10', 'l'));
     // the amount is saved even so (accepted risk 2 of the plan): the session keeps its own
     expect(setStake).toHaveBeenCalledTimes(1);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(STATUS);
@@ -249,7 +249,7 @@ describe('an amount of the amount screen', () => {
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionJustEnded.value);
     expect(rowsOf(payloadOf(calls, 'sendMessage')).flat()).toContainEqual({
       text: LABELS.stakeBackAnalysisButton,
-      callback_data: demoAnalysisCallbackData(PAIR_EURUSD.id, 15),
+      callback_data: demoAnalysisCallbackData(PAIR_EURUSD.id, 5),
     });
   });
 
@@ -268,8 +268,8 @@ describe('an amount of the amount screen', () => {
   });
 
   it.each([
-    ['an asset id the backend would refuse', 'demo:sa:0:15:5:l'],
-    ['an amount the schema refuses', 'demo:sa:101:15:0:l'],
+    ['an asset id the backend would refuse', 'demo:sa:0:5:5:l'],
+    ['an amount the schema refuses', 'demo:sa:101:5:0:l'],
   ])('only stops the spinner on %s (C-forged)', async (_label, data) => {
     const { press, calls, setStake } = setup();
     await press(data);
@@ -278,10 +278,10 @@ describe('an amount of the amount screen', () => {
   });
 
   it.each([
-    ['13 digits', 'demo:sa:101:15:1234567890123:l'],
-    ['9 fraction digits', 'demo:sa:101:15:1.123456789:l'],
+    ['13 digits', 'demo:sa:101:5:1234567890123:l'],
+    ['9 fraction digits', 'demo:sa:101:5:1.123456789:l'],
     ['a duration the demo does not offer', 'demo:sa:101:30:5:l'],
-    ['the token n, which only opens a screen', 'demo:sa:101:15:5:n'],
+    ['the token n, which only opens a screen', 'demo:sa:101:5:5:n'],
   ])('matches no handler with %s (C-forged)', async (_label, data) => {
     expect(CYCLE_STAKE_PATTERN.exec(data)).toBeNull();
     const { press, calls, setStake } = setup();
@@ -307,7 +307,7 @@ describe('«✏️ Своя сумма» of the amount screen', () => {
     'asks for the amount in place, the way back to the screen (%s)',
     async (back) => {
       const { press, calls, loginDialog } = setup();
-      await press(cycleCustomCallbackData(PAIR_EURUSD.id, 15, back));
+      await press(cycleCustomCallbackData(PAIR_EURUSD.id, 5, back));
       expect(loginDialog.get(USER.id)).toEqual({ ...ON_STEP, back });
       expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
       const edited = payloadOf(calls, 'editMessageText');
@@ -316,7 +316,7 @@ describe('«✏️ Своя сумма» of the amount screen', () => {
         [
           {
             text: LABELS.stakeBackButton,
-            callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 15, back),
+            callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 5, back),
           },
         ],
       ]);
@@ -325,7 +325,7 @@ describe('«✏️ Своя сумма» of the amount screen', () => {
 
   it('replaces a login the user had open, and a login replaces it (T-replace)', async () => {
     const { press, loginDialog } = setup({ dialog: { step: 'email' } });
-    await press(cycleCustomCallbackData(PAIR_EURUSD.id, 15, 'l'));
+    await press(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'l'));
     expect(loginDialog.get(USER.id)?.step).toBe('cycleStake');
     await press(CONNECT_CALLBACK_DATA);
     expect(loginDialog.get(USER.id)).toEqual({ step: 'email' });
@@ -333,7 +333,7 @@ describe('«✏️ Своя сумма» of the amount screen', () => {
 
   it('only stops the spinner on an id the backend would refuse', async () => {
     const { press, calls, loginDialog } = setup();
-    await press('demo:sc:0:15:l');
+    await press('demo:sc:0:5:l');
     expect(methods(calls)).toEqual(['answerCallbackQuery']);
     expect(loginDialog.get(USER.id)).toBeUndefined();
   });
@@ -356,7 +356,7 @@ describe('a typed amount of the cycle', () => {
     expect(setStake).not.toHaveBeenCalled();
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeInputInvalid.value);
     expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
-      [{ text: LABELS.stakeBackButton, callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 15) }],
+      [{ text: LABELS.stakeBackButton, callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 5) }],
     ]);
     expect(loginDialog.get(USER.id)).toEqual(ON_STEP);
     await type('7,5');
@@ -424,7 +424,7 @@ describe('a typed amount of the cycle left by a button or a command (#319)', () 
     await type('0.5');
     expect(loginDialog.get(USER.id)).toEqual(ON_STEP);
 
-    await press(demoSignalsCallbackData(15));
+    await press(DEMO_SIGNALS_CALLBACK_DATA);
     expect(loginDialog.get(USER.id)).toBeUndefined();
 
     await type('7');
@@ -434,7 +434,7 @@ describe('a typed amount of the cycle left by a button or a command (#319)', () 
 
   it('ends the step on «↩️ К анализу»', async () => {
     const { press, loginDialog } = setup({ dialog: { ...ON_STEP, back: 'a' } });
-    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
+    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
     expect(loginDialog.get(USER.id)).toBeUndefined();
   });
 

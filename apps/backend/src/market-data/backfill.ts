@@ -21,7 +21,8 @@ import type { PendingRequests } from './source';
 // (pair, interval). It is due once its hold-back is over and its window has a closed empty bucket
 // the last GET did not leave unfilled (or a request() and any empty bucket at all). The queue,
 // rebuilt every scanMs: the requests in pending() order, then the elements never attempted by
-// the pair's payout, then the rest by the age of their last attempt; 15s before 5s on an equal key. The proactive
+// the pair's payout, then the rest by the age of their last attempt; on an equal key the order of
+// SIGNAL_SCAN_INTERVALS (one interval since #685, `15s` before `5s` until then). The proactive
 // set is the scanner's eligible pairs of the last fresh catalog with valid digits, and only while
 // the active socket is ready; a request is served for any such pair with valid digits, whatever
 // the socket. Every GET takes a spare token (the signal pacer's overflow, never a token of its

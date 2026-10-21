@@ -40,14 +40,15 @@ import {
 } from './backend-client';
 import {
   demoLaunchCallbackData,
-  durationOf,
   otherPairKeyboard,
   removeLegacyKeyboard,
   SESSION_START_PATTERN,
   sessionStartCallbackData,
+  sessionFits,
   sessionStartDataOf,
   stakeMenuCallbackData,
 } from './demo';
+import { DEMO_DURATION_SEC } from './demo-catalog';
 import {
   appendEndOfPath,
   backToAnalysisKeyboard,
@@ -106,9 +107,10 @@ const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 // The old status message's «🔄 Обновить» (before #536): its press only strips that keyboard.
 const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 
-// A stopped session's next steps under `keyboard`'s rows: «🔁 Ещё сессия» on its own pair,
-// duration and mode (#320, #327) - in real the session button's data, so the start handler checks
-// it as any other; in demo the amount screen (#476) - while the demo offers its duration, then the
+// A stopped session's next steps under `keyboard`'s rows: «🔁 Ещё сессия» on its own pair and mode
+// (#320, #327) at the demo's one duration (#685: a 15 s session gets a 5 s one) - in real the
+// session button's data, so the start handler checks it as any other; in demo the amount screen
+// (#476) - while a session at that duration fits, then the
 // end of the path with «💳 Пополнить» (#27) and «👥 Пригласить друга»
 // (#115) in one row right above the menu; the deposit, the invite and the menu alone when its settings could
 // not be read. A no_signal_timeout stop (#509) offers another pair instead of the same one again.
@@ -119,22 +121,20 @@ function appendSessionEnd(
 ): InlineKeyboard {
   if (settings === null) return withInvite(keyboard, cashierUrl);
   const otherPair = stopReason === TradingSessionStopReason.NoSignalTimeout;
-  const durationSec = durationOf(String(settings.durationSec));
-  if (durationSec !== undefined && !otherPair) {
+  if (sessionFits(DEMO_DURATION_SEC) && !otherPair) {
     // a demo session's again opens the amount screen (#476) as a new message, so this one stays
     keyboard
       .row()
       .text(
         sessionAgainButtonLabel(mode),
         mode === TradeMode.Demo
-          ? demoLaunchCallbackData(settings.assetId, durationSec, 'n')
-          : sessionStartCallbackData(mode, settings.assetId, durationSec),
+          ? demoLaunchCallbackData(settings.assetId, DEMO_DURATION_SEC, 'n')
+          : sessionStartCallbackData(mode, settings.assetId, DEMO_DURATION_SEC),
       );
   }
   return appendEndOfPath(
     keyboard,
     settings.assetId,
-    settings.durationSec,
     [[...depositButtons(cashierUrl), inviteButton()]],
     { otherPair },
   );
@@ -604,7 +604,7 @@ export function createTradingSessionComposer<C extends Context>({
             : refusal.buy === true
               ? withBuy(backToAnalysisKeyboard(assetId, durationSec), cashierUrl)
               : refusal.otherPair === true
-                ? otherPairKeyboard(durationSec)
+                ? otherPairKeyboard()
                 : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;

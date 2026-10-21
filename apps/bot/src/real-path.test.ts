@@ -12,7 +12,6 @@ import {
   TradingSessionStopReason,
   type TradingAccessResponse,
   type TradingSessionView,
-  demoSignalsCallbackData,
   demoAnalysisCallbackData,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
@@ -20,7 +19,6 @@ import { createBot } from './bot';
 import {
   analysisMoreCallbackData,
   demoAssetCallbackData,
-  demoDurationCallbackData,
   demoLaunchCallbackData,
   demoPageCallbackData,
   sessionStartCallbackData,
@@ -83,7 +81,7 @@ const NOW = 1_790_000_000_000;
 const REAL = accessView({ tradingMode: TradeMode.Real });
 // a pair paying 70 %: no payout refuses it since #631
 const LOW_PAYOUT = PAIR_OTHER_TYPE;
-const ANALYSIS = { kind: 'analysis', assetId: PAIR_EURUSD.id, durationSec: 15 } as const;
+const ANALYSIS = { kind: 'analysis', assetId: PAIR_EURUSD.id, durationSec: 5 } as const;
 
 interface Scene {
   name: string;
@@ -108,23 +106,23 @@ const press = (name: string, data: string, patch: Partial<Scene> = {}): Scene =>
 
 const SCENES: Scene[] = [
   { name: '/menu', update: textUpdate('/menu') },
-  press('the durations', 'demo'),
-  press('the signals', demoSignalsCallbackData(15), {
-    signals: signalsResponse(NOW, { '15s': [[PAIR_EURUSD.id, TradeAction.Up]] }),
+  press('the signals from the card', 'demo'),
+  press('the signals', 'demo:sig', {
+    signals: signalsResponse(NOW, { '5s': [[PAIR_EURUSD.id, TradeAction.Up]] }),
   }),
-  press('the signals, empty', demoSignalsCallbackData(15), { signals: signalsResponse(NOW) }),
-  press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
-  press('the launch at a 70 % payout', demoLaunchCallbackData(LOW_PAYOUT.id, 15)),
+  press('the signals, empty', 'demo:sig', { signals: signalsResponse(NOW) }),
+  press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
+  press('the launch at a 70 % payout', demoLaunchCallbackData(LOW_PAYOUT.id, 5)),
   // #509: the launch on a pair without a signal now, and a signal that could not be read
-  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 15), {
+  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 5), {
     evaluateSignal: SIGNAL_NO_SIGNAL,
   }),
-  press('the launch, fetch_failed', demoLaunchCallbackData(PAIR_EURUSD.id, 15), {
+  press('the launch, fetch_failed', demoLaunchCallbackData(PAIR_EURUSD.id, 5), {
     evaluateSignal: SIGNAL_FETCH_FAILED,
   }),
   press(
     'a real session refused for no signal',
-    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
     { startSession: sessionRefusal(TradingSessionErrorCode.NoSignal) },
   ),
   press(
@@ -132,7 +130,7 @@ const SCENES: Scene[] = [
     stakePresetCallbackData('5', TradeMode.Demo, {
       kind: 'pair',
       assetId: PAIR_EURUSD.id,
-      durationSec: 15,
+      durationSec: 5,
     }),
   ),
   press(
@@ -140,30 +138,30 @@ const SCENES: Scene[] = [
     stakePresetCallbackData('5', TradeMode.Demo, {
       kind: 'pair',
       assetId: LOW_PAYOUT.id,
-      durationSec: 15,
+      durationSec: 5,
     }),
   ),
   press('the types', 'demo:g'),
   press('a type', demoPageCallbackData('currency', 0)),
   press('a pair', demoAssetCallbackData(PAIR_EURUSD.id)),
-  press('the summary', demoDurationCallbackData(PAIR_EURUSD.id, 15)),
-  press('the analysis, a signal', demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),
-  press('the analysis, a rule refusal', demoAnalysisCallbackData(PAIR_EURUSD.id, 15), {
+  press('the summary of an old button', `demo:d:${String(PAIR_EURUSD.id)}:5`),
+  press('the analysis, a signal', demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
+  press('the analysis, a rule refusal', demoAnalysisCallbackData(PAIR_EURUSD.id, 5), {
     evaluateSignal: SIGNAL_NO_SIGNAL,
   }),
-  press('the analysis, a data refusal', demoAnalysisCallbackData(PAIR_EURUSD.id, 15), {
+  press('the analysis, a data refusal', demoAnalysisCallbackData(PAIR_EURUSD.id, 5), {
     evaluateSignal: SIGNAL_DATA_REFUSAL,
   }),
-  press('the analysis, fetch_failed', demoAnalysisCallbackData(PAIR_EURUSD.id, 15), {
+  press('the analysis, fetch_failed', demoAnalysisCallbackData(PAIR_EURUSD.id, 5), {
     evaluateSignal: SIGNAL_FETCH_FAILED,
   }),
-  press('the analysis at a 70 % payout', demoAnalysisCallbackData(LOW_PAYOUT.id, 15)),
-  press('«➕ Ещё»', analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, TradeMode.Real)),
+  press('the analysis at a 70 % payout', demoAnalysisCallbackData(LOW_PAYOUT.id, 5)),
+  press('«➕ Ещё»', analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Real)),
   press(
     'the REAL stake press',
     stakeCallbackData(
       PAIR_EURUSD.id,
-      15,
+      5,
       TradeAction.Up,
       STAKE_NONCE,
       stakeFingerprint(BROKER_BALANCE.minTradeAmount, TradeMode.Real),
@@ -172,15 +170,15 @@ const SCENES: Scene[] = [
   press('the refresh of a settled real trade', intentCallbackData(INTENT_ID)),
   press(
     'a demo session button of an earlier render',
-    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
+    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
   ),
   // #327: a real session's start, its refusal for the balance and its end
-  press('a real session start', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15), {
+  press('a real session start', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5), {
     startSession: () => Promise.resolve({ started: REAL_SESSION }),
   }),
   press(
     'a real session refused for the balance',
-    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
     { startSession: sessionRefusal(TradingSessionErrorCode.InsufficientBalance) },
   ),
   // the stop under the waiting message (#536): the reply's «🔁 Ещё сессия» in real
@@ -203,7 +201,7 @@ const SCENES: Scene[] = [
     return [
       press(
         `«💵 Сумма» of a real expansion${at}`,
-        stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+        stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
         { access },
       ),
       press(`a real preset${at}`, stakePresetCallbackData('5', TradeMode.Real, ANALYSIS), {
@@ -303,7 +301,7 @@ describe('the real path (#121)', () => {
   // the control: the same oracle on a demo launch does match, so the pattern cannot go dead
   it('matches the demo launch of a demo user', async () => {
     const words = await shown(
-      press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+      press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
       accessView({ tradingMode: TradeMode.Demo }),
     );
     expect(words.some((word) => DEMO_WORDING.test(word))).toBe(true);

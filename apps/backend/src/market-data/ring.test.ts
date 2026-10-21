@@ -3,7 +3,7 @@ import { chartWindow } from '@binarius/signal';
 import { describe, expect, it } from 'vitest';
 import { createCandleRing, type CandleRing } from './ring';
 
-// a 15 s boundary, so every 5 s and 15 s bucket below starts at T0 + a multiple of its interval
+// a 15 s boundary, so every 5 s bucket below starts at T0 + a multiple of its interval
 const T0 = 1_800_000_000_000;
 const MARGIN = 2_000;
 const EURUSD = 7;
@@ -21,7 +21,7 @@ function push(ring: CandleRing, assetId: number, at: number, price = 1.1, receiv
 const times = (candles: readonly Candle[]) => candles.map((candle) => candle.timestamp - T0);
 
 describe('the candle ring (#404)', () => {
-  it('R1 builds the candles of both intervals of a pair from its ticks', () => {
+  it('R1 builds the candles of the scanned interval of a pair from its ticks (5s since #685)', () => {
     const ring = makeRing();
     push(ring, EURUSD, T0 + 1_000, 1.1);
     push(ring, EURUSD, T0 + 6_000, 1.2);
@@ -41,12 +41,6 @@ describe('the candle ring (#404)', () => {
       low: 1.2,
       close: 1.3,
     });
-
-    const fifteen = ring.read(EURUSD, '15s', now);
-    expect(fifteen.candles).toEqual([
-      { timestamp: T0, open: 1.1, high: 1.2, low: 1.1, close: 1.2 },
-    ]);
-    expect(fifteen.forming?.timestamp).toBe(T0 + 15_000);
     expect(ring.counters().pairs).toBe(1);
   });
 
@@ -100,7 +94,6 @@ describe('the candle ring (#404)', () => {
     expect(ring.closedUntil('5s', T0 + 12_000)).toBe(T0 + 10_000);
     push(ring, EURUSD, T0 + 21_000, 1.1, T0 + 12_000);
     expect(ring.closedUntil('5s', T0 + 12_000)).toBe(T0 + 20_000);
-    expect(ring.closedUntil('15s', T0 + 12_000)).toBe(T0 + 15_000);
     expect(ring.closedUntil('5s', T0 + 40_000)).toBe(T0 + 35_000);
   });
 
@@ -131,7 +124,7 @@ describe('the candle ring (#404)', () => {
     expect(ring.read(EURUSD, '5s', now).gaps).toHaveLength(empty.gaps.length - 1);
   });
 
-  it('R7 marks a hole from the pair watermark at the drop to its first tick after, on both intervals', () => {
+  it('R7 marks a hole from the pair watermark at the drop to its first tick after', () => {
     const ring = makeRing();
     push(ring, EURUSD, T0 + 1_000, 1.1);
     push(ring, EURUSD, T0 + 6_000, 1.2);
@@ -143,10 +136,8 @@ describe('the candle ring (#404)', () => {
 
     const now = T0 + 31_000;
     expect(times(ring.read(EURUSD, '5s', now).candles)).toEqual([0, 5_000]);
-    // the 15 s candle at T0 reaches T0 + 11 000: dropped too
-    expect(ring.read(EURUSD, '15s', now).candles).toEqual([]);
     // the bucket of the first tick after the drop is reached as well
-    expect(ring.counters().holed).toBe(2);
+    expect(ring.counters().holed).toBe(1);
 
     push(ring, EURUSD, T0 + 26_000, 1.5);
     expect(ring.read(EURUSD, '5s', T0 + 33_000).candles.at(-1)).toEqual({
@@ -215,16 +206,15 @@ describe('the candle ring (#404)', () => {
       row(5_000, 2),
     ]);
     expect(window.forming?.close).toBe(1.2);
-    expect(ring.read(EURUSD, '15s', now).candles.map((candle) => candle.close)).toEqual([1.1]);
   });
 
   it('R9 counts the missing buckets before and after a fill', () => {
     const ring = makeRing();
     const now = T0 + 20_000;
-    const before = ring.missing(EURUSD, '15s', now);
-    expect(before).toBe(ring.read(EURUSD, '15s', now).gaps.length);
-    ring.fill(EURUSD, '15s', [{ timestamp: T0, open: 1, high: 1, low: 1, close: 1 }], now);
-    expect(ring.missing(EURUSD, '15s', now)).toBe(before - 1);
+    const before = ring.missing(EURUSD, '5s', now);
+    expect(before).toBe(ring.read(EURUSD, '5s', now).gaps.length);
+    ring.fill(EURUSD, '5s', [{ timestamp: T0, open: 1, high: 1, low: 1, close: 1 }], now);
+    expect(ring.missing(EURUSD, '5s', now)).toBe(before - 1);
   });
 
   it('R12 keeps the capacity of candles per builder, the oldest going first', () => {

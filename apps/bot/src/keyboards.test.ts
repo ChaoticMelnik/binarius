@@ -8,7 +8,6 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   LANGUAGE_CALLBACK_DATA,
   demoAnalysisCallbackData,
-  demoSignalsCallbackData,
   MENU_CALLBACK_DATA,
   TradeMode,
 } from '@binarius/shared';
@@ -64,8 +63,8 @@ describe('the rows (#506)', () => {
   const BUY = button(LABELS.buyButton, BUY_CALLBACK_DATA);
   const MENU = button(LABELS.menuButton, MENU_CALLBACK_DATA);
   const LANGUAGE = button(LABELS.languageButton, LANGUAGE_CALLBACK_DATA);
-  const ANALYSIS = button(LABELS.newAnalysisButton, demoAnalysisCallbackData(101, 15));
-  const SIGNALS = button(LABELS.toSignalsButton, demoSignalsCallbackData(15));
+  const ANALYSIS = button(LABELS.newAnalysisButton, demoAnalysisCallbackData(101, 5));
+  const SIGNALS = button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA);
   const BACK = button('↩️', 'back');
   const back = () => new InlineKeyboard([[BACK]]);
 
@@ -109,23 +108,19 @@ describe('the rows (#506)', () => {
     expect(withInvite(back(), undefined).inline_keyboard).toEqual([[BACK], [INVITE], [MENU]]);
   });
 
-  it('appendEndOfPath: the analysis and the signals in one row, beforeMenu, the menu last', () => {
-    expect(appendEndOfPath(back(), 101, 15).inline_keyboard).toEqual([
+  // #685: one duration, so the end of any path is the analysis at 5 s and `demo:sig`
+  it('appendEndOfPath: the analysis at 5 s and `demo:sig` in one row, beforeMenu, the menu last', () => {
+    expect(appendEndOfPath(back(), 101).inline_keyboard).toEqual([
       [BACK],
       [ANALYSIS, SIGNALS],
       [MENU],
     ]);
-    expect(
-      appendEndOfPath(new InlineKeyboard(), 101, 15, [[DEPOSIT, INVITE]]).inline_keyboard,
-    ).toEqual([[ANALYSIS, SIGNALS], [DEPOSIT, INVITE], [MENU]]);
-    // a duration the demo does not offer: the duration screen alone
-    expect(appendEndOfPath(new InlineKeyboard(), 101, 60).inline_keyboard).toEqual([
-      [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)],
-      [MENU],
-    ]);
+    expect(appendEndOfPath(new InlineKeyboard(), 101, [[DEPOSIT, INVITE]]).inline_keyboard).toEqual(
+      [[ANALYSIS, SIGNALS], [DEPOSIT, INVITE], [MENU]],
+    );
     // a session stopped for want of a signal (#509): another pair alone
     expect(
-      appendEndOfPath(new InlineKeyboard(), 101, 15, [], { otherPair: true }).inline_keyboard,
-    ).toEqual([[button(LABELS.otherPairButton, demoSignalsCallbackData(15))], [MENU]]);
+      appendEndOfPath(new InlineKeyboard(), 101, [], { otherPair: true }).inline_keyboard,
+    ).toEqual([[button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)], [MENU]]);
   });
 });

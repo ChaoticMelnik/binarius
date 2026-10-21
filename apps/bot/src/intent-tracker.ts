@@ -19,8 +19,8 @@ import {
 } from './backend-client';
 import type { Logger } from './logging';
 import { runWithLanguage } from './language';
-import { durationOf, sessionFits } from './demo';
-import type { DemoDurationSec } from './demo-catalog';
+import { sessionFits } from './demo';
+import { DEMO_DURATION_SEC, type DemoDurationSec } from './demo-catalog';
 import { intentStatusText, TEXTS } from './texts';
 
 // The demo trade's status message follows its intent (#127, docs/bot-demo-trade.md): after the
@@ -42,15 +42,16 @@ export const TRACKER_STOP_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
 ]);
 
 // The session offer under a finished single trade (#360): the line and the row are drawn on a stop
-// status of a trade of either mode (#327: the row starts a session of the trade's mode) whose
-// duration a session of today's set takes, at any payout (#631), and only then. The duration is the row's datum; a trade from before #313 (60 s) gets neither.
+// status of a trade of either mode (#327: the row starts a session of the trade's mode) while a
+// session at the demo's one duration fits, at any payout (#631). The offer is about the pair: since
+// #685 the duration is one, so a trade of an older duration (15 s, 60 s) is offered 5 s too. The
+// duration is the row's datum.
 export const sessionOfferOf = (
-  view: Pick<TradeIntentView, 'mode' | 'status' | 'durationSec'>,
-): DemoDurationSec | undefined => {
-  if (!TRACKER_STOP_STATUSES.has(view.status)) return undefined;
-  const durationSec = durationOf(String(view.durationSec));
-  return durationSec !== undefined && sessionFits(durationSec) ? durationSec : undefined;
-};
+  view: Pick<TradeIntentView, 'mode' | 'status'>,
+): DemoDurationSec | undefined =>
+  TRACKER_STOP_STATUSES.has(view.status) && sessionFits(DEMO_DURATION_SEC)
+    ? DEMO_DURATION_SEC
+    : undefined;
 
 // the login dialog's bound: the oldest entry goes first, its message keeping the refresh button
 export const INTENT_TRACKER_MAX_ENTRIES = 10_000;

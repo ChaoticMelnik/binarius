@@ -79,30 +79,30 @@ export const HANDLER_CALLS = {
   // «🔄 Повторить» of /account, /settings or /invite (#350, #115): answerCallbackQuery, then the
   // command
   commandRetry: { backend: 1, telegram: 2 },
-  // the status card's button, the main path's duration screen (#382): answerCallbackQuery, then
-  // sendMessage; no read
-  demo: { backend: 0, telegram: 2 },
-  // «↩️ Длительность» and every old «🔄 Обновить», «↩️ К списку» and «📡 К сигналам» (`demo:sig`):
-  // the same screen in place, answerCallbackQuery, then editMessageText refused as gone →
-  // sendMessage
-  demoDurations: { backend: 0, telegram: 3 },
-  // a duration's list (#320, #382): answerCallbackQuery ∥ readSignals ∥ readPairs — the reads
-  // counted as sequential, as in confirm — then editMessageText refused as gone → sendMessage
+  // the status card's button (#685): the signals list as a new message, answerCallbackQuery ∥
+  // readSignals ∥ readPairs — the reads counted as sequential, as in confirm — then sendMessage
+  demo: { backend: 2, telegram: 2 },
+  // the list in place (#320, #685: `demo:sig`, and `demo:sig:<sec>` of an old button): the same
+  // reads, then editMessageText refused as gone → sendMessage
   demoSignals: { backend: 2, telegram: 3 },
   // a pair of the list (#320) and every demo door of a cycle (#476): answerCallbackQuery ∥
   // readPairs ∥ readTradingAccess ∥ evaluateSignal (#509) — counted the same way — then
   // editMessageText refused as gone → sendMessage; a door under a trade or a session sends at
   // once, shorter
   demoLaunch: { backend: 3, telegram: 3 },
-  // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration):
-  // answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
+  // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair's summary, also by
+  // `demo:d:<id>:5` of an old button): answerCallbackQuery ∥ readPairs, then editMessageText
+  // refused as gone → sendMessage
   demoGroups: { backend: 1, telegram: 3 },
   demoPage: { backend: 1, telegram: 3 },
   demoAsset: { backend: 1, telegram: 3 },
-  demoDuration: { backend: 1, telegram: 3 },
-  // a button with a duration from before #313, or a launch screen's or its picker's from before
-  // #382 (no duration): answerCallbackQuery, then editMessageReplyMarkup
-  legacyDuration: { backend: 0, telegram: 2 },
+  // a button with a duration the demo no longer offers (15 s until #685, the set before #313) or
+  // a launch screen's from before #382 (no duration): the signals list as a new message,
+  // answerCallbackQuery ∥ readSignals ∥ readPairs — counted as sequential — then sendMessage
+  legacyDuration: { backend: 2, telegram: 2 },
+  // a mode-less picker button from before #326, a launch screen's picker from before #382:
+  // answerCallbackQuery, then editMessageReplyMarkup
+  legacyKeyboard: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads counted
   // as sequential, as in confirm; the access read gives the mode the session row and the card's
   // amounts depend on (#121, #482) — then «⏳», evaluateSignal and the result. The longest paths
@@ -159,7 +159,7 @@ export const HANDLER_CALLS = {
   // (#568); nothing is deleted. 36 s
   cycleStakeText: { backend: 4, telegram: 2 },
   // an old status message's «🔄 Обновить» (#536): answerCallbackQuery, then
-  // editMessageReplyMarkup, as legacyDuration
+  // editMessageReplyMarkup, as legacyKeyboard
   sessionRefresh: { backend: 0, telegram: 2 },
   // «⏹ Остановить сессию» under an old status message (no `:w`, the worse path): answerCallbackQuery
   // ∥ stopSession ∥ readPairs, readSession after a 409 session_not_active, then editMessageText
@@ -176,7 +176,7 @@ export const HANDLER_CALLS = {
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // an old site sign-in button (#314 hid it): answerCallbackQuery, then editMessageReplyMarkup,
-  // as legacyDuration
+  // as legacyKeyboard
   oauth: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ confirmLogin — the parallel pair is counted as sequential, so this bound
   // is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted) — then the account card:

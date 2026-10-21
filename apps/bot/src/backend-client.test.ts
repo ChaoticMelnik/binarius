@@ -945,7 +945,7 @@ describe('readSignals', () => {
 
   it('reports an answer that fails the schema as a contract violation', async () => {
     const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 200, { ...SIGNALS, lists: [{ ...SIGNALS.lists[1], interval: '1m' }] });
+      json(reply, 200, { ...SIGNALS, lists: [{ ...SIGNALS.lists[1], interval: '10s' }] });
     });
     const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readSignals());
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });

@@ -4,7 +4,6 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, expect, it, onTestFinished } from 'vitest';
 import {
   cycleStakeLabel,
-  DEMO_DURATION_LABELS,
   groupButtonLabel,
   inlineButtons,
   LABELS,
@@ -175,7 +174,7 @@ it('runs /start → the email login → a demo session → its result', async ()
   });
   if (account === undefined) throw new Error('no broker account');
 
-  // S4 the manual door: type, pair, duration, analysis
+  // S4 the manual door: type, pair, its summary at 5 s (#685), analysis
   await bot.press(LABELS.demoButton);
   await bot.press(LABELS.demoManualButton);
   const groups = lastOf(botCalls, 'editMessageText');
@@ -183,7 +182,6 @@ it('runs /start → the email login → a demo session → its result', async ()
   await bot.press(groupButtonLabel('currency', 1));
   const pairButton = pairButtonLabel(pairLabel({ symbol: E2E_PAIR.symbol }), E2E_PAIR.payout);
   await bot.press(pairButton);
-  await bot.press(DEMO_DURATION_LABELS[15]);
   const screen = botCalls.filter((call) => call.method === 'editMessageText').at(-1);
   if (screen === undefined) throw new Error('no summary screen');
   await bot.press(LABELS.demoAnalysisButton);
@@ -194,17 +192,17 @@ it('runs /start → the email login → a demo session → its result', async ()
   expect(lastOf(botCalls, 'deleteMessage')?.message_id).toBe(bot.telegram.messageIdOf(screen));
   expect(
     broker.rest.journal.filter((record) => record.endpoint === 'chart').map((r) => r.query),
-  ).toContainEqual(expect.objectContaining({ asset_id: String(E2E_PAIR.id), interval: '15s' }));
+  ).toContainEqual(expect.objectContaining({ asset_id: String(E2E_PAIR.id), interval: '5s' }));
   expect(await reads.userRow(telegramUserId)).toMatchObject({
     lastAnalysisAssetId: E2E_PAIR.id,
-    lastAnalysisDurationSec: 15,
+    lastAnalysisDurationSec: 5,
   });
 
   // S5 the amount starts the session
   await bot.press(cycleStakeLabel(MIN_STAKE, true));
   const status = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
   if (status === undefined || status === analysis) throw new Error('no status message');
-  expect(String(status.payload.caption)).toContain('15 с');
+  expect(String(status.payload.caption)).toMatch(/(?<!\d)5 с/);
   expect(lastOf(botCalls, 'deleteMessage')?.message_id).toBe(bot.telegram.messageIdOf(analysis));
   const started = await reads.sessionOf(account.id);
   if (started === undefined) throw new Error('no session');
@@ -215,7 +213,7 @@ it('runs /start → the email login → a demo session → its result', async ()
     settings: {
       version: 3,
       assetId: E2E_PAIR.id,
-      durationSec: 15,
+      durationSec: 5,
       cycles: 5,
       stake: {
         strategy: SessionStakeStrategy.Martingale,

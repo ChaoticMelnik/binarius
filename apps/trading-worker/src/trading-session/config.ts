@@ -33,8 +33,9 @@ import { isTimerMs } from '@binarius/broker-socket';
 // session skips at least one tick (TICK < RETRY); the candle wait never skips a candle
 // (SLACK < the shortest interval, 5s since #313); the no-signal count is an integer >= 2, so a
 // session gets several decisions before the limit; a hold-back never outlives the shortest limit
-// (RETRY < NO_SIGNAL x the shortest candle); on the scanner's candles (15 s, the longest the bot
-// offers) the limit comes before the deadline (NO_SIGNAL x 15 s < MAX_DURATION); on 5m and longer
+// (RETRY < NO_SIGNAL x the shortest candle); on the scanner's candles (5 s since #685, the one
+// duration the bot offers) the limit comes before the deadline (NO_SIGNAL x 5 s < MAX_DURATION); a
+// 15 s session of the CLI or from before #685 waits 20 x 15 s, still before it; on 5m and longer
 // it does not, and the deadline ends the session (accepted risk, docs/trading-session.md -> The
 // no-signal limit); NO_SIGNAL x the longest candle (1h) stays a timer value, the bound of the
 // SQL ::int cast; every *_MS is an integer in [1, MAX_TIMER_MS].

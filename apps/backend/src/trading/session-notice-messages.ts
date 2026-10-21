@@ -10,7 +10,6 @@ import {
   SessionStakeStrategy,
   sessionStakeParams,
   sessionTradeSteps,
-  signalsCallbackDataFor,
   TradingSessionStopReason,
   type PairLabel,
   type PairsCatalogView,
@@ -109,8 +108,8 @@ export function sessionCycleMessage(
 }
 
 // The finished session's summary, with sound and the menu as its next step; a session the
-// no-signal limit stopped gets «🔀 Выбрать другую пару» above it, the signals of its duration
-// (#509). A summary is sent with a settled trade or for that stop, whose attempt had read the
+// no-signal limit stopped gets «🔀 Выбрать другую пару» above it, the signals list (`demo:sig`,
+// #509, #685). A summary is sent with a settled trade or for that stop, whose attempt had read the
 // settings, so the last intent names the asset when the settings could not be read.
 export function sessionSummaryMessage(
   view: TradingSessionView,
@@ -120,14 +119,7 @@ export function sessionSummaryMessage(
   if (assetId === undefined) throw new Error('a summarized session names no asset');
   const keyboard = new InlineKeyboard();
   if (view.stopReason === TradingSessionStopReason.NoSignalTimeout) {
-    keyboard
-      .text(
-        CLIENT_LABELS.otherPairButton,
-        view.settings === null
-          ? DEMO_SIGNALS_CALLBACK_DATA
-          : signalsCallbackDataFor(view.settings.durationSec),
-      )
-      .row();
+    keyboard.text(CLIENT_LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA).row();
   }
   return {
     text: notices.sessionSummaryText(label, assetId, view),

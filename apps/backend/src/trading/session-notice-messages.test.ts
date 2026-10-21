@@ -244,13 +244,11 @@ describe('sessionSummaryMessage (#464)', () => {
     ]);
   });
 
-  it.each([
-    [15, 'demo:sig:15'],
-    [5, 'demo:sig:5'],
-    [60, 'demo:sig'],
-  ] as const)(
-    'a no_signal_timeout stop (#509) at %i s offers another pair (%s) above the menu',
-    (durationSec, data) => {
+  // #685: the signals list is one, so its data is `demo:sig` at every duration
+  it.each([5, 15, 60] as const)(
+    'a no_signal_timeout stop at %i s offers another pair with demo:sig above the menu',
+    (durationSec) => {
+      const data = 'demo:sig';
       const message = sessionSummaryMessage(
         {
           ...view,
@@ -266,7 +264,7 @@ describe('sessionSummaryMessage (#464)', () => {
     },
   );
 
-  it('a no_signal_timeout stop without settings offers the duration screen', () => {
+  it('a no_signal_timeout stop without settings offers the signals list too', () => {
     const lastIntent = { assetId: 77 } as TradingSessionView['lastIntent'];
     const message = sessionSummaryMessage(
       { ...view, stopReason: TradingSessionStopReason.NoSignalTimeout, settings: null, lastIntent },

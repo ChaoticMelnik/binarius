@@ -1123,7 +1123,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     return { seed, session, step: 0 };
   }
 
-  it('D10 without a trade: one summary with sound, the reason and «🔀 Выбрать другую пару» of its duration', async () => {
+  it('D10 without a trade: one summary with sound, the reason and «🔀 Выбрать другую пару»', async () => {
     const target = await seedOf(15);
     await stop(target, TradingSessionStopReason.NoSignalTimeout);
     const { notices, captured } = sender();
@@ -1132,7 +1132,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     expect(sends).toHaveLength(1);
     expect(sends[0]!.payload.disable_notification).toBeUndefined();
     expect(pushedText(sends[0]!.payload).split('\n')).toEqual(['📈 EUR/USD', stopLine(15)]);
-    expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig:15'), MENU]);
+    expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig'), MENU]);
     expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
@@ -1161,7 +1161,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
       stopLine(60),
       '📊 Итог: 1 сделка — 1 в плюс, 0 в минус',
     ]);
-    // 60 s is no duration the scanner lists: the duration screen
+    // the signals list at every duration (#685)
     expect(inlineButtons(summary.payload)).toEqual([OTHER_PAIR('demo:sig'), MENU]);
   });
 });
