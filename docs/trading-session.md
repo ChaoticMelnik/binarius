@@ -468,8 +468,8 @@ T3). One indexed read, no broker call.
 `worker.ts` (`start()`) after the settlement catch-up. It runs whether or not a session exists: an idle tick is
 three UPDATEs that match nothing and one indexed scan. There is no env variable.
 
-**The tick** (every `TRADING_SESSION_TICK_MS`, one at a time, the first at `start()`), in this
-order:
+**The tick** (every `TRADING_SESSION_TICK_MS`, one at a time, the first at `start()`, and at once
+on a wake, #696), in this order:
 
 1. `stopPausedSessions` → `stopped`/`kill_switch` while the trading switch is closed (at most
    `TRADING_SESSION_BATCH_SIZE` per tick). It runs first, so a switch closed before the tick stops
@@ -486,7 +486,8 @@ order:
    `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (a race, as in the settlement catch-up: the race bounds the
    tick's wait, not a statement; a statement that outlives it still lands, and the next attempt
    reads its result).
-7. One `debug` line `trading session tick`.
+7. One `debug` line `trading session tick`, `{ runnable, attempted, created, held, stopped, woken }`;
+   `woken` is the number of `wake()` calls this tick served (0 on a timer tick).
 
 A throw out of steps 1–5, or out of an ending's write after an attempt (`stopTradingSession`,
 `markSessionDecision`), is one `error` line, `trading session tick failed`; the rest of that tick's
@@ -582,6 +583,32 @@ right after the history.
   several processes; #93's lease covers the broker sockets only);
   a restart drops them, and the next attempt is idempotent
   ([Recovery after a restart](#recovery-after-a-restart-131)).
+
+**The wake (#696).** `wake()` takes no argument: it runs a tick now, or, while a tick runs (its scan
+may predate the caller's write), one more right after it. Calls merge: several during one tick make
+one more tick, whose `woken` is their count. After `stop()` it does nothing, and `stop()` starts no
+deferred tick; it never throws, so its callers make it after their commit without a guard. The
+worker calls it after the commit of every write of its own that leaves an intent terminal:
+
+- the writer `closedTrades` of the broker sessions (`close_trade.success`), when an outcome is
+  `settled` — one wake per call, not per trade;
+- the wrapper of the intent consumer's processor (`worker.ts`), on a job outcome `rejected` or
+  `expired` (`JOB_OUTCOME_ENDS_INTENT`, one entry per `ProcessOutcome`); a throw passes through
+  without a wake;
+- the settlement catch-up's `onIntentEnded`, when its settle of a page settled any trade;
+- the reconciliation pass's `onIntentEnded`, on `settled`, `rejected` (`not_found`) and
+  `manual_review` (a halt), before the balance check (#92). An open trade found (`accepted`) does not
+  wake.
+
+A wake changes no decision: the tick by a wake is the same tick (the sweeps, the scan, one attempt
+per session in the SQL order), the hold-backs keep the sessions they hold, and the candle rule after
+`no_signal` or a pause is unchanged. It only takes away the wait between a settlement and the next
+decision. A wake for an intent of no session (a bot's one-off trade) is an idle tick. The backend's
+own terminal writes (the publisher's rejection of a `queued` intent, an operator's settle out of
+`manual_review`) are another process: the timer's tick finds them. `TRADING_SESSION_TICK_MS` is the
+safety net for those and for a wake lost to a restart. Tests: `orchestrator.db.test.ts` WK1–WK5,
+`worker.handoff.db.test.ts` H10–H13, `reconciliation.db.test.ts` RW1,
+`settlement-catchup.db.test.ts` CW1.
 
 ## Recovery after a restart (#131)
 
@@ -757,7 +784,7 @@ refuses → `contract_violation`. The body is read up to `MAX_BACKEND_BODY_BYTES
 | Constant | Value | Bounds |
 |---|---|---|
 | `TRADING_SESSION_H1_CHECK_MS` | 5 000 | the hold of an H1 session (v4, #670) after an attempt that found nothing to stop: its N trades, its loss ceiling and its pair are checked again no later than this plus a tick |
-| `TRADING_SESSION_TICK_MS` | 5 000 | the scan interval |
+| `TRADING_SESSION_TICK_MS` | 5 000 | the scan interval; since #696 the safety net — a terminal write of an intent in the worker runs a tick at once ([The wake](#the-orchestrator)) |
 | `TRADING_SESSION_BATCH_SIZE` | 200 | runnable sessions attempted per tick |
 | `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` | 10 000 | one attempt: both backend calls and the statements |
 | `TRADING_SESSION_PAIRS_TIMEOUT_MS` | 4 000 | the pairs GET |
@@ -811,7 +838,7 @@ line is in it with its level.
 | `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 | `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
 | `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |
-| `trading session tick` | debug | `{ runnable, attempted, created, held, stopped }` |
+| `trading session tick` | debug | `{ runnable, attempted, created, held, stopped, woken }`; `woken` — the `wake()` calls this tick served, 0 on a timer tick (#696) |
 
 ## The CLI
 
@@ -1048,6 +1075,34 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
 7. **A real session row trades.** `createTradingSession` refuses anything but demo, but the
    orchestrator runs any active row, sized against the mode's balance (E9a). Only a hand-written row
    can be real.
+8. **The backend's terminal writes do not wake (#696).** The publisher's rejection of a `queued`
+   intent whose attempts ran out and an operator's settle out of `manual_review` are another
+   process; the session waits for the timer's tick (≤ `TRADING_SESSION_TICK_MS`), as before.
+   Falsifiable: in `trade-log export`, for an intent the publisher rejected, the session's next
+   `createdAtMs` 0–5 s after its `updated_at`, not under 1 s.
+9. **A `failed` hold-back keeps a woken session waiting (#696).** An attempt whose
+   `createSessionIntent` committed after the attempt's deadline (a lock wait) holds the session for
+   `TRADING_SESSION_RETRY_MS`; the settle of that intent wakes the orchestrator, but the scan still
+   excludes the session until the hold ends. Falsifiable: a line `trading session attempt timed
+   out` of a session followed by an intent with a later `created_at`, and its next step about 60 s
+   after that intent's `close_timestamp_ms`.
+10. **A woken signal request can race the close of the feed's candle (#696).** A 5 s trade closes on
+    a candle boundary; the woken tick asks for the signal 0.1–0.5 s later, while the ring's bucket
+    may still be open (its close lags by a median 189 ms, p95 507 ms, #697). The feed then decides on
+    the candles before the boundary — the data that opened the trade just closed — and its cache keeps
+    that decision for the rest of the next candle. The timer's tick hit this window about 4 % of the
+    time; a wake hits it whenever `close_trade.success` arrives ahead of the watermark. Aligning the
+    request with the bucket's close is #697. Falsifiable: in `trade-log export`, among decisions less
+    than 1 000 ms after the previous trade's close, a share with `record.entry.source.closedUntil` at
+    or before that close clearly above the timer's.
+11. **The order inside a woken tick is the SQL's (#696).** A woken tick attempts every runnable
+    session in `last_decision_at asc nulls first` order, so the woken session waits for those ahead
+    (each attempt is usually ~0.2 s, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS`). Falsifiable: in
+    `trade-log export`, the close-to-next-intent time grows with the number of sessions active in
+    the same minute.
+12. **Idle ticks from one-off trades (#696).** A bot's one-off settle or rejection wakes the
+    orchestrator too: three UPDATEs that match nothing and one scan. Falsifiable: `trading session
+    tick` lines with `woken ≥ 1` and `runnable: 0` around one-off trades.
 
 ## Boundaries
 
