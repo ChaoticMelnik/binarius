@@ -90,8 +90,8 @@ object to `bot.handleUpdate` again: Telegram's re-delivery, with the same `updat
 | S1 | `/start` | a «🔗 Подключить аккаунт Binodex» button; `users` row `active`, 0 tokens, no demo stake |
 | S2 | the press, then the address | the mock sent a code (`oauth.codeFor`); the bot's answer names the address; the journal has one `emailSendCode` with the keys `client_id`, `client_secret`, `email` |
 | S3 | the code | the account card (`sendPhoto`, pinned) with the starter pack of 100 and «🎮 Демо-торговля»; `broker_accounts` `active`, broker user `7001`, `is_partner_client`; `readTokenBalance` 100; one `emailLogin` |
-| S4 | «🎮 Демо-торговля» → «🧭 Выбрать пару вручную» → the type (exactly one: «💱 Валюты · 1») → the pair → «⏱ 15 с» → «📊 Анализ» | the analysis card offers `$1.00 ✅` (the broker's minimum), the screen is deleted, the journal has a `chart` request for asset 101 at `15s`, `users.last_analysis_*` = 101 / 15 |
-| S5 | the amount | the status message (`sendPhoto`, «15 с»), the card is deleted; `trading_sessions` `active`, `demo`, start signal `up`, settings v3 `{ cycles: 5, martingale, baseStake '1', stakeScale 2, limits { maxSteps 4, maxStake '12', maxSessionLoss '20' } }`; `users.demo_stake` 1; `status_message_id` is the status message's id; then the first «🔎 Ждём сигнал…» in the push |
+| S4 | «🎮 Демо-торговля» → «🧭 Выбрать пару вручную» → the type (exactly one: «💱 Валюты · 1») → the pair (its summary at 5 s, #685) → «📊 Анализ» | the analysis card offers `$1.00 ✅` (the broker's minimum), the screen is deleted, the journal has a `chart` request for asset 101 at `5s`, `users.last_analysis_*` = 101 / 5 |
+| S5 | the amount | the status message (`sendPhoto`, «5 с»), the card is deleted; `trading_sessions` `active`, `demo`, start signal `up`, settings v3 `{ durationSec: 5, cycles: 5, martingale, baseStake '1', stakeScale 2, limits { maxSteps 4, maxStake '12', maxSessionLoss '20' } }`; `users.demo_stake` 1; `status_message_id` is the status message's id; then the first «🔎 Ждём сигнал…» in the push |
 | S6 | for each of 6 trades: wait for it at the mock and for its intent to be `accepted`, then settle it (a loss, then 5 wins) and wait for `settled` | stakes `1, 2.18, 1, 1, 1, 1`, all `up`, demo, asset 101; the session `stopped` / `completed`; 6 intents `settled` over `socket`, `client_request_id` `session:<id>:1..6`; `broker_trades` profits `-1, 1.85, 0.85 ×4` and the same at the mock; the mock's demo balance `10004.25`; never more than one socket per broker user |
 | S7 | wait for the summary in the push (a `sendMessage` with «🏠 В меню»), then `final_notice_sent_at` set | the push: 5 cycle messages, silent and without a keyboard, one edit of the first (step 2 of cycle 1); every «🔎 Ждём сигнал…» (at least one) is deleted after it went out and before the next message the backend sends; the summary is last, with sound, «🏠 В меню» alone and `+$4.25` |
 | S8 | wait for the summary card's `sendPhoto` (its caption), then `summary_sent_at` set | the status message edited to its finished form; the summary card: silent, the caption `sessionCardCaption` with `+$4.25` and `@binarius_bot`, «🏠 В меню» among its buttons |
@@ -100,7 +100,7 @@ object to `bot.handleUpdate` again: Telegram's re-delivery, with the same `updat
 
 The trade is settled only after its intent is `accepted`. A trade settled before the worker
 recorded the broker's answer would close through the settlement catch-up seconds later, not
-through the socket. A real 15-second trade never closes that early.
+through the socket. A real 5-second trade never closes that early.
 
 The «📤 Поделиться» button of the summary card is not asserted: PR #597 sets it only with
 `SHARE_STORAGE_CHAT_ID`, and `session-share.test.ts` covers it.
@@ -135,8 +135,8 @@ from an empty start. The users are `USER` (A), `E2E_USER_B` and `E2E_USER_C`.
 | R3b | the code update again | no Telegram call at all; still two `emailLogin`, one account, one `bonus` row, 100 tokens |
 | R2 | B: `/start`, `/invite`; A: `/start ref_<B's code>`; C: the same, then that update again | the code is read from B's screen; A, who exists, gets the status card and no `referrals` row, and keeps `promo-a`; C gets one row (`invitee` C) and `acquisition_source` = the payload; C's repeat leaves the same row; 3 users |
 | R4 | postbacks for broker user `7001`: a deposit, the same query again, `ftd` of the same payment, a third id with amount 60 | `recorded`, `duplicate`, `repeated`, `repeated`; one `deposit_events` row (`received`, A's user and account, 50 USD, the same `id` throughout); `postback_deliveries` 1, 2, 3; the backend's `postback received` lines in that order and one `postback repeated with different fields` with `mismatch: ['amount']` and no `amount` key; 100 tokens, one ledger row |
-| S4–S5 | the manual door, the amount | the status message («15 с»); one session, `active`, `demo`; `demo_stake` 1 |
-| R5 | the amount press again | one more `sendPhoto` with «15 с» in A's chat; one session, the same `id`, `settings` and start signal; `demo_stake` 1 |
+| S4–S5 | the manual door, the amount | the status message («5 с»); one session, `active`, `demo`; `demo_stake` 1 |
+| R5 | the amount press again | one more `sendPhoto` with «5 с» in A's chat; one session, the same `id`, `settings` and start signal; `demo_stake` 1 |
 | trade 1 | wait for the trade and its intent `accepted`, settle a win | exactly one intent of the session before the settle |
 | R6 | `/start` mid-session | the account card, pinned; the session still the one `active` row; 3 users |
 | trades 2–5 | the same cycle, all wins | the session `stopped` / `completed` |
@@ -156,9 +156,11 @@ the text is ignored.
 ## The price path
 
 `harness/broker.ts` → `rampPricePath`: `base × (1 + slope × k + zigzag × (k mod 2))`, where `k` is
-the index of the 15-second candle since the broker started. It uses `base` 1.08765, `slope`
-0.0001 per candle and `zigzag` 0.0005. The architect's probe (decider v2, `DEFAULT_SIGNAL_PARAMS`,
-60 clock positions within and across candles) gave `signal:up` at every position (RSI ≈ 58, ATR
+the index of the 5-second candle since the broker started (`candleMs` 5 000 since #685, the demo's
+one duration; 15 000 before). It uses `base` 1.08765, `slope`
+0.0001 per candle and `zigzag` 0.0005: the same series on every candle length. The architect's probe
+(decider v2, `DEFAULT_SIGNAL_PARAMS`, 60 clock positions within and across 15 s candles, #105) gave
+`signal:up` at every position (RSI ≈ 58, ATR
 ≈ 0.096 %). Without the zigzag RSI is 100 and the decider refuses with `rsi_overbought`. The mock's
 own waves give `volatility_too_low`. The decision is the same anywhere in the candle, so the test
 does not depend on when the press falls.

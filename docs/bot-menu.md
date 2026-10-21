@@ -138,13 +138,12 @@ history but loses its pin; a lost or unpinned account card is replaced by `/star
 ## The demo button
 
 `DEMO_CALLBACK_DATA = 'demo'`, label «🎮 Демо-торговля» (#320; «🎮 Запустить демо» before). The
-button opens the choice of the duration (#382) as a new message (the card is a photo whose caption
-cannot be edited into another screen), and the duration opens «Сигналы сейчас»: the pairs with a
-signal now for it, each leading to the launch of a cycle; both screens have
-«🧭 Выбрать пару вручную» for the asset type, the pair, the duration and the summary, each checked
+button opens «Сигналы сейчас» (#685) as a new message (the card is a photo whose caption cannot be
+edited into another screen): the pairs with a 5 s signal now, each leading to the launch of a
+cycle; the list has «🧭 Выбрать пару вручную» for the asset type, the pair and its summary, each checked
 on a catalog read at the press ([bot-demo.md](bot-demo.md#the-signals-screen-320)). The bot keeps
-no state for it, so a button on an old card leads to the same place: since #382 that is the
-duration screen, and the manual path is one press further.
+no state for it, so a button on an old card leads to the same place: since #685 that is the
+signals list (the duration screen from #382 to #685), and the manual path is one press further.
 
 ## /menu
 

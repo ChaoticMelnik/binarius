@@ -428,7 +428,7 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
     `timestamp` the broker's, `until` the broker's (a close), the database's (`updated_at`) or the
     backend's (the max wait); printed raw. Falsifiable: a trade's `open_timestamp_ms` lies inside its
     window's ticks (D1).
-12. **A trade longer than about 165 s is cut** (`truncated`/`max_wait`): sessions trade 5 and 15 s.
+12. **A trade longer than about 165 s is cut** (`truncated`/`max_wait`): sessions trade 5 s (5 and 15 s until #685).
 13. **A restart loses the ticks of windows in flight** (`uncovered`), and one longer than the
     horizon leaves those decisions without a row; visible in `status` and `ticks: null`.
 14. **No socket, no ticks**: without `BROKER_WS_URL` no decision gets a row.

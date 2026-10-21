@@ -1,6 +1,7 @@
 # The market data source (#404)
 
-The backend keeps a candle ring for every pair of the catalog on the `15s` and `5s` intervals, built
+The backend keeps a candle ring for every pair of the catalog on the `5s` interval
+(`SIGNAL_SCAN_INTERVALS`; `15s` too until #685), built
 from the broker's `price.update` ticks on a data socket of its own. That socket runs on a service
 account ([service-accounts.md](service-accounts.md), #391). A REST backfill (#590, [Backfill](#backfill-590))
 closes the gaps of a cold start and of a hole on the signal pacer's overflow. The signal feed and
@@ -171,7 +172,7 @@ ring by REST. An **element** is a (pair, interval).
 
 - **Proactive set:** the pairs of the last fresh catalog with valid `digits` that the scanner would
   take (`eligiblePairs`: open by the schedule, accepting the interval's duration, at any payout
-  since #631), on both intervals. It applies only while `MarketDataManager.streaming()` is true
+  since #631), on the scanned interval. It applies only while `MarketDataManager.streaming()` is true
   (the active socket is `ready`). A closed pair is warmed only on request (B14; a pair paying less
   than 80 % without one, B14b). The set grew with #631 by the pairs below 80 %: the warm-up after a
   start takes longer at the same budget, one spare token a refill.
@@ -192,7 +193,8 @@ leave the window.
 2. the elements never attempted, by the pair's payout (`comparePairsByPayout`);
 3. the rest, by the age of their last attempt.
 
-Within a level `15s` comes before `5s` on an equal key. A cold pair is warmed before any repeat, and
+On an equal key the order of `SIGNAL_SCAN_INTERVALS` decides (one interval since #685). A cold pair
+is warmed before any repeat, and
 the repeats rotate by age, so no element starves.
 
 **The GET.** Every `MARKET_DATA_BACKFILL_POLL_MS`, while a worker is free
@@ -283,7 +285,7 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 | `MARKET_DATA_PENDING_MAX` | 288 | `request()`s waiting for the backfill (144 pairs × 2) |
 | `MARKET_DATA_BACKFILL_BUDGET_MS` | 3 000 | one backfill GET, by the call's own signal |
 | `MARKET_DATA_BACKFILL_ATTEMPTS` | 3 | failed attempts in a row on one element before `gave up` |
-| `MARKET_DATA_BACKFILL_RETRY_MS` | 15 000 (`SIGNAL_CHART_INTERVAL_MS['15s']`) | an element's hold-back after any finished attempt |
+| `MARKET_DATA_BACKFILL_RETRY_MS` | 15 000 (`SIGNAL_CHART_INTERVAL_MS['15s']`: 15 s, the retry period, owner 2026-10-17) | an element's hold-back after any finished attempt |
 | `MARKET_DATA_BACKFILL_SCAN_MS` | 5 000 (`SIGNAL_CHART_INTERVAL_MS['5s']`) | the queue's rebuild |
 | `MARKET_DATA_BACKFILL_POLL_MS` | 250 | a spare token asked for while the queue is not empty |
 | `MARKET_DATA_BACKFILL_CONCURRENCY` | 2 | backfill GETs in flight |

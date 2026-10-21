@@ -28,7 +28,7 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   reply keyboard, and a reason outside the list each fail `tsc` (an `@ts-expect-error` that starts
   compiling fails `pnpm check`).
 - Not covered: `editMessageReplyMarkup` (it sets a keyboard, it cannot strip one by accident, and
-  removing an old duration's keyboard is deliberate, docs/bot-demo.md, as is stripping the launch
+  removing an old picker button's keyboard is deliberate, docs/bot-demo.md, as is stripping the launch
   screen's after a refused delete, #418, docs/bot-session.md), callback-query toasts
   (not messages), and the staff bot (`apps/backend/src/admin`, plain text by the owner's decision
   2026-10-02). A send method used outside the two seams is ESLint's to refuse (Rule 18).
@@ -114,8 +114,8 @@ chat with the bot:
   `SESSION_STOP_PATTERN`. The bot and the backend's push build their buttons from it, so a pushed
   button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
-  `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
-  path's duration, `demo:sig:<sec>`, since #382; «📊 Новый анализ» and it share a row, #506; its
+  `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries
+  `demo:sig`, the one list, since #685; «📊 Новый анализ» at 5 s and it share a row, #506; its
   `beforeMenu` rows go right above the menu);
   since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` (the deposit and the
   invite in one row, then the menu) and `inviteKeyboard`
@@ -190,10 +190,12 @@ no repeat.
 | the `insufficient_tokens` refusals of a trade and a session | ⭐ Купить токены \| 💳 Пополнить (#27, https only) · ↩️ Назад к анализу · 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
-| demo screens, the signals and launch screens (#320), the amount screen (#476), the picker | their own keyboards (unchanged); the launch screen and the amount screen are deleted once the session's status is sent (#418) |
-| the analysis (#360) | 🚀 Сессия из 5 циклов on a signal (#509: none on «сигнала нет») · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ Длительность ↩️ Типы; «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
+| demo screens, the launch screen (#320), the amount screen (#476), the picker | their own keyboards (unchanged); the launch screen and the amount screen are deleted once the session's status is sent (#418) |
+| the signals list (#320, #685), its empty and refusal screens | the pairs · 🔄 Обновить (or 🔄 Повторить) \| 🧭 Выбрать пару вручную · 🏠 В меню |
+| a pair's summary (#685) | 📊 Анализ · ↩️ Активы \| ↩️ Типы |
+| the analysis (#360) | 🚀 Сессия из 5 циклов on a signal (#509: none on «сигнала нет») · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ К паре ↩️ Типы (#685); «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
-| the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню; `no_signal` (#509) → 🔀 Выбрать другую пару (`demo:sig:<sec>`) · 🏠 В меню |
+| the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню; `no_signal` (#509) → 🔀 Выбрать другую пару (`demo:sig`) · 🏠 В меню |
 | a cycle door's press (`demo:l`, #509): «сигнала нет» / the signal unread | 🔀 Выбрать другую пару · 🏠 В меню / 🔄 Повторить (the pressed data) · 🏠 В меню |
 | the mode screen (`mode`, `mode:x`; #474, [trading-mode.md](trading-mode.md#the-bot)) | 💼 Включить реальный режим (`mode:r`) in demo or 🎮 Вернуться в демо (`mode:d`) in real · 🏠 В меню |
 | its confirm (`mode:r`) | ✅ Подтверждаю (`mode:r:ok`) · ↩️ Отмена (`mode:x`, the step back, so no menu of its own) |
@@ -204,25 +206,25 @@ no repeat.
 | the session's stop failed under an old status message (#536) | 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню; the pressed message stays, its «⏹» pressed again is safe |
 | the session's stop failed under the waiting message (#587), drawn in place of it | a stop whose outcome is unknown: ⏹ Остановить сессию again (`waitingStopKeyboard`, `session:stop:<id>:w`; its next step is the stop itself); `sessionStatusUnavailable` (404) and a failed read after a 409 → 🏠 В меню; as a new message when the edit is refused as gone: 🏠 В меню — never a second «⏹» |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
-| trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 циклов (#360, on a duration the demo still offers) · 📊 Новый анализ \| 📡 К сигналам (📡 К сигналам alone on a duration the demo no longer offers) · 🏠 В меню |
+| trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 циклов (#360; at 5 s for a trade of any duration, #685) · 📊 Новый анализ \| 📡 К сигналам · 🏠 В меню |
 | the session message (#536; the picture of its signal's direction with the text as its caption, #568, or the text) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
 | the waiting message (#536, sent by the backend) | ⏹ Остановить сессию (`session:stop:<id>:w`) |
-| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару · 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню |
+| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару · 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню |
 | an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
-| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ»; by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
+| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню; a session of an older duration gets them at 5 s (#685); by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 | the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Новый анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration) — one button, as the chain's reminders |
 | the inviter's reward notification `referralRewarded` (#576, the backend's mailing, [mailing.md](mailing.md)) | 👥 Пригласить ещё (`cmd:invite`, the /invite screen as a new message) — one button, as the reminders |
 
-«📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
-a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals of the same
-duration (`demo:sig:<sec>`, #382), or the main path's duration screen (`demo:sig`) on a duration the
-demo no longer offers. «🔀 Выбрать другую пару» (#509) carries the same data: a session stopped or
+«📊 Новый анализ» opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never
+a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals list
+(`demo:sig`, the list at 5 s since #685; `demo:sig:<sec>` of older buttons leads there too).
+«🔀 Выбрать другую пару» (#509) carries the same data: a session stopped or
 refused for want of a signal is not offered its own pair again; the backend's summary of such a
-stop draws it from `signalsCallbackDataFor` (`bot-navigation.ts`). The trackers' edits take what they draw and, for a last
+stop draws `DEMO_SIGNALS_CALLBACK_DATA` (`bot-navigation.ts`). The trackers' edits take what they draw and, for a last
 edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
 (`not_found`, `deadline`), `SessionTrackRequest.edit(drawing, end?)` with `not_found` only. So
 the last edit draws its next step too: the end of the path on a trade's stop status, the menu alone

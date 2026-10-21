@@ -261,8 +261,8 @@ the same rows (`feed.test.ts` F15):
 
 ```ts
 const feed = createSignalFeed({ rest, source, pacer, logger }); // source and pacer are optional
-const result = await feed.evaluate({ assetId, interval: '15s', digits: pair.digits }, { signal });
-const scanned = feed.fromSource({ assetId, interval: '15s', digits: pair.digits }); // or undefined
+const result = await feed.evaluate({ assetId, interval: '5s', digits: pair.digits }, { signal });
+const scanned = feed.fromSource({ assetId, interval: '5s', digits: pair.digits }); // or undefined
 ```
 
 `fromSource` is synchronous: the source's window only, no REST, no journal line, `undefined`
@@ -271,8 +271,9 @@ feed is REST only (the CLI probe, the e2e harness); without `pacer` its GETs are
 
 The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `packages/shared/src/signal.ts`:
 `5s`, `15s`, `1m`, `5m`, `15m`, `30m` and `1h`. The live broker accepted each of them (owner's
-probe 2026-10-03: every interval from `1s` to `1d`). `5s` and `15s` (#313) analyse the demo's 5
-and 15 s trades; no separate probe was made for them (owner, 2026-10-07): the first live analysis
+probe 2026-10-03: every interval from `1s` to `1d`). `5s` analyses the demo's 5 s trades (#313,
+#685; `15s` the 15 s trades from #313 to #685, and still a 15 s session started before the deploy or
+by the CLI); no separate probe was made for them (owner, 2026-10-07): the first live analysis
 after the deploy checks them, through [the post-deploy check](#the-post-deploy-check-313).
 The parameters are the same on them: every window counts candles, so 60 candles × 5 s is
 a 5-minute window and `maxStaleIntervals` 2 lets the last closed `5s` candle be 10 s old. An
@@ -613,29 +614,31 @@ SIGNAL_CACHE_MAX_TTL_MS`; `timing.test.ts` asserts the same five.
 
 The backend decides the signal of every eligible pair in the background, so the signals screen
 (#320) can offer only pairs that have one now. It lives in `apps/backend/src/signal/scanner.ts`,
-one instance per interval of `SIGNAL_SCAN_INTERVALS` (`['15s', '5s']`, #382), and decides from the
+one instance per interval of `SIGNAL_SCAN_INTERVALS` (`['5s']`, #685; `['15s', '5s']` from #382), and decides from the
 data socket's window through the cached feed's `fromSource` ([Feed and journal](#feed-and-journal-133)):
 synchronously, with no broker call and no pacer (#405). A manual analysis of a scanned pair in the
 same candle is a cache hit with no GET (`scanner.test.ts` S5). The scanner's decisions write no
 journal line (owner's answer 2 of #392: about 122 pairs × 16 decisions a minute × 5 KB would be
 14 GB a day); a decision a route answers writes its line then ([The cache](#the-cache)).
 
-**Which pairs.** Every eligible pair of the fresh catalog, on each of the two intervals, every
+**Which pairs.** Every eligible pair of the fresh catalog, on the scanned interval, every
 candle (S26). Before #405 the scanner read REST and the broker's per-IP budget allowed 13 pairs on
 `15s` and 4 on `5s` (#382, #460); a decision from the ring costs no request, so the shares, the
 pair counts and the choice by type are gone.
 - Each candle reads the pairs catalog. A missing or stale catalog (`fresh: false`) scans nothing,
   with one `warn` `signal scan skipped: no fresh catalog` per stale streak, carrying `interval`.
 - Eligible pairs are those open by `scheduled_until` (`isPairOpen`), accepting a trade of the
-  candle's length, 15 or 5 s (`pairAcceptsDuration`; `eligiblePairs(view, nowMs, durationSec)`),
+  candle's length, 5 s (`pairAcceptsDuration`; `eligiblePairs(view, nowMs, durationSec)`),
   whatever they pay (#631; #379 left a pair below `MIN_CYCLE_PAYOUT_PCT` 80 out: the bot's list
   now fills up with such pairs, [trading-session.md](trading-session.md#the-payout-order-key-379-631)).
-  A `min_timeframe` 60 pair is never scanned; a `min_timeframe` 15 pair is scanned on `15s` only; a
-  pair paying 79 % is scanned and served on both instances (S19'). Each decision carries
-  the pair's `digits` from the catalog it was read from (S20).
+  A `min_timeframe` 15 or 60 pair is never scanned since #685; a pair paying 79 % is scanned and
+  served (S19'). Each decision carries the pair's `digits` from the catalog it was read from (S20).
 - The set is recomputed every candle, so it follows the catalog's refresh. A pair that left the set
-  leaves the snapshot at that candle (S9). A pair in both sets has two cache keys and two
-  decisions.
+  leaves the snapshot at that candle (S9).
+
+A 15 s session started before #685 (or by the CLI) asks `POST /trading/signal` on `15s`: the ring
+builds no `15s` window, so its decision is a REST GET through the signal pacer, cached for the
+candle; such sessions end within `SESSION_MAX_DURATION_MS` (1 h) of the deploy.
 
 **The source.** The scanner gets the manager's `streaming()` as a dep. While it is false - no
 `BROKER_WS_URL`, or the active socket not `ready` ([market-data.md](market-data.md)) - a scan
@@ -648,8 +651,7 @@ served (S32). Right after a start or a gap the windows are short: those decision
 the backfill closes the windows.
 
 **When.** One scan a candle of the instance's interval, `SIGNAL_SCAN_SLACK_MS` (500 ms) after its
-boundary (S1 for each interval). After a start, nothing is served until the first scan, at most
-15.5 s (`15s`) or 5.5 s (`5s`) later.
+boundary (S1). After a start, nothing is served until the first scan, at most 5.5 s later.
 - The timer aims at a remembered target, `nextAt`, the next boundary plus the slack. It is moved
   forward by one candle at each fire, never recomputed from the clock at that moment. So a timer
   that fires a few ms early cannot run a second scan for the same candle (S12).
@@ -676,8 +678,8 @@ boundary (S1 for each interval). After a start, nothing is served until the firs
 | `undefined` (the source left during the scan) | this pair and the rest are `skipped`; their entries stay and go stale with the candle (S28) |
 | a throw (digits outside `assertDigits`) | counted as `threw`, `warn` `signal scan failed` with the error's name and code and `assetId` (Rule 8); the others are decided (S7, S31) |
 
-A decision from memory costs microseconds; 122 pairs × 2 intervals block the event loop for an
-estimated 40 ms at most every 5 s (accepted; `lagMsP95` above 600 with `unclosed` at 0 falsifies
+A decision from memory costs microseconds; 122 pairs on one interval block the event loop for an
+estimated 20 ms at most every 5 s (40 ms on two intervals until #685) (accepted; `lagMsP95` above 600 with `unclosed` at 0 falsifies
 it).
 
 **Stop.** Each instance's `stop()` runs in shutdown phase 1 and clears the timers; a scan is
@@ -689,7 +691,7 @@ with:
 
 | Field | What it counts |
 |---|---|
-| `interval` | the instance's interval, `15s` or `5s` |
+| `interval` | the instance's interval, `5s` |
 | `source` | `live` or `down`: `streaming()` when the line is written |
 | `eligible` | eligible pairs at the last scan (open, taking the interval's duration, at any payout since #631); 0 while the catalog is stale or the source is down |
 | `scanned` | the size of the scan set (= `eligible` while live) |
@@ -710,19 +712,20 @@ named fields (`tradingSignalsResponseSchema` in `packages/shared/src/signal.ts`)
 ```json
 { "asOf": 1760000012000,
   "lists": [
-    { "interval": "15s", "scanned": 122,
-      "signals": [{ "assetId": 101, "action": "up", "lastCandleTimestamp": 1759999995000,
-                    "decidedAt": 1760000010500, "ageMs": 2000 }] },
-    { "interval": "5s", "scanned": 120, "signals": [] } ] }
+    { "interval": "5s", "scanned": 122,
+      "signals": [{ "assetId": 101, "action": "up", "lastCandleTimestamp": 1760000005000,
+                    "decidedAt": 1760000010500, "ageMs": 2000 }] } ] }
 ```
 
 One list per scanner, in `SIGNAL_SCAN_INTERVALS` order whatever order the scanners are wired in
-(#382). In each list a pair is served only when all three hold (`freshSignals` in `scanner.ts`;
+(#382); one list, `5s`, since #685. A list's `interval` is any `SignalInterval` in the schema,
+wider than the scanner (#685): a backend and a bot of different versions parse each other's
+answer, and the bot reads only the list of its own duration. In each list a pair is served only when all three hold (`freshSignals` in `scanner.ts`;
 `signals-routes.test.ts` R2–R5 and the `freshSignals` cases in `scanner.test.ts`, S33 on 122
 pairs):
 - its decision is a `signal`;
 - the decision is on that interval's candle that closed most recently (`lastCandleTimestamp ===
-  floor(now / L) × L − L`, with `L` the list's candle, 15 000 or 5 000 ms);
+  floor(now / L) × L − L`, with `L` the list's candle, 5 000 ms);
 - the pair is in that interval's current scan set.
 
 A signal whose candle changed without a recompute is not served: the source gone during a scan, a
@@ -734,8 +737,8 @@ the catalog's order; the bot chooses and orders its own list from them. Without 
 answer is 401 `{ error: 'unauthorized' }`.
 
 The one consumer is the bot's signals screen (#320, `readSignals` in
-`apps/bot/src/backend-client.ts`). It takes the list of the duration the user chose
-(`intervalForDuration`, #382), keeps a pair only if the catalog read at the same press lists it,
+`apps/bot/src/backend-client.ts`). It takes the list of the demo's duration
+(`intervalForDuration(5)`, #685), keeps a pair only if the catalog read at the same press lists it,
 open and accepting that duration (`checkDemoTrade`), keeps up to 12 of those paying at least 80 %
 by type (`signalsShown`, #460) and, with fewer than five of them, fills the list up to five with
 the pairs paying less (#631), and takes the symbol and payout from there; it never re-reads the
@@ -749,8 +752,8 @@ mock broker against a backend started with its `BROKER_WS_URL` (#405). Give it a
 start, so the first `signal scanner` line is out:
 
 ```bash
-# the two scanner lines: source live, scanned = eligible, signals > 0 over ten minutes, unclosed near 0
-docker compose logs --no-log-prefix --since 2m backend | grep -F '"msg":"signal scanner"' | tail -2
+# the scanner line (one interval, 5s, since #685): source live, scanned = eligible, signals > 0 over ten minutes, unclosed near 0
+docker compose logs --no-log-prefix --since 2m backend | grep -F '"msg":"signal scanner"' | tail -1
 # every eligible pair is in the lists
 docker compose exec -T backend sh -c 'wget -qO- --header "Authorization: Bearer $INTERNAL_API_TOKEN" http://127.0.0.1:3000/trading/signals' | jq '.lists[] | {interval, scanned, signals: (.signals | length)}'
 # chart GETs outside the warm-up: backfill only, besides a request for 1m or longer (never from the bot) (fetched ~ 0 once queued is 0), no "signal fetch" lines
@@ -760,7 +763,7 @@ docker compose logs --no-log-prefix --since 10m backend | grep -cF '"msg":"signa
 docker compose logs --no-log-prefix --since 10m backend | grep -F '"msg":"signal decision"' | jq -c '[.signal.source.kind, .signal.interval, (.signal.decision.reason // "signal")]' | sort | uniq -c
 ```
 
-Expected: both `signal scanner` lines show `source: "live"`, `scanned` equal to `eligible`,
+Expected: the `signal scanner` line shows `interval: "5s"`, `source: "live"`, `scanned` equal to `eligible`,
 `signals` above 0 at least once over ten minutes and `unclosed` near 0; the lists' `scanned` are
 the eligible counts; `backfill.queued` falls to 0 within minutes of the start and `fetched` stays
 near 0 after it; no `signal fetch` line while the source is live; the journal's lines are

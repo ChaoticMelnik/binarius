@@ -214,10 +214,10 @@ session:<id>                       (an old status message's «🔄 Обнови�
 - The handler checks the duration again: a forged datum or one for a duration that does not fit
   (`demo:sess:101:900`) only stops the spinner, with no backend call.
 - **Two more doors (#320).** «🚀 Запустить цикл · REAL» on the real launch screen carries
-  `real:sess:<assetId>:<sec>` at the duration chosen on the main path (#382), and «🔁 Ещё сессия» on
-  a stopped real session the view's own `settings.assetId`, `settings.durationSec` and `mode`; a
-  stopped demo session's «🔁 Ещё сессия» carries `demo:l:<assetId>:<sec>:n`, the amount screen as a
-  new message (#476). Neither adds a handler; the launch
+  `real:sess:<assetId>:5`, and «🔁 Ещё сессия» on a stopped real session the view's own
+  `settings.assetId` and `mode` at the demo's one duration (`real:sess:<assetId>:5`; a 15 s session
+  from before #685 gets a 5 s one); a stopped demo session's «🔁 Ещё сессия» carries
+  `demo:l:<assetId>:5:n`, the amount screen as a new message (#476). Neither adds a handler; the launch
   screen's datum adds `:l` (#418): the start, its refusals and the active session's 409 are the
   same, and once the session message is sent the start deletes the launch screen. A refusal's «💵 Сумма» opens the
   picker of the press's mode with the analysis origin (`stk:o:<d|r>:a:<assetId>:<sec>`, #327),
@@ -247,7 +247,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
-| 409 `no_signal` | the same (#509): the pair's signal on the current candle is «сигнала нет» — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig:<sec>`) and «🏠 В меню» |
+| 409 `no_signal` | the same (#509): the pair's signal on the current candle is «сигнала нет» — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig`) and «🏠 В меню» |
 | 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
@@ -289,8 +289,9 @@ place of the analysis or as a new message.
 - A second press before the first delete landed: 409 → the session message anew, tracking moves,
   and the second delete finds the message gone → `info`.
 - A launch screen drawn before #418 carries no token: pressed, it starts the session and stays.
-- A token on a duration the demo no longer offers (`demo:sess:101:300:l`) lands in the legacy
-  handler, as the plain datum does: the keyboard goes, nothing is sent.
+- A token on a duration the demo no longer offers (`demo:sess:101:15:l`, `demo:sess:101:300:l`)
+  lands in the legacy handler, as the plain datum does: the signals list as a new message, no
+  session (#685).
 - A real launch screen pressed after the user went demo, or on a `DEMO_ONLY` backend, is refused
   (`mode_not_allowed`, `demo_only`): no session message, the screen stays.
 - The description of a refusal is never logged: the lines carry the method and the Telegram code.
@@ -322,7 +323,7 @@ reference bot); the header is «💼 Реальная сессия» (`sessionHe
 🎮 Демо-сессия
 🔹 Торговая пара: EUR/USD             (sessionPair)
 🔹 Сумма сделки: $10.00               (sessionStake: the base stake, formatStake)
-🔹 Время экспирации: 15 с             (sessionExpiry: settings.durationSec)
+🔹 Время экспирации: 5 с              (sessionExpiry: settings.durationSec)
 📡 Сигнал: ⬆️ Вверх                   (sessionSignalUp / sessionSignalDown: view.signalAction, #568)
 
 Торговая сессия запущена…             (sessionRunning, while the session is not stopped)
@@ -400,7 +401,7 @@ buttons](#the-stop-and-the-old-buttons-536)).
 | `invalid_settings` | ⚠️ Сессия остановлена из-за ошибки настроек — напиши в поддержку: /support |
 | `user_stopped` | ⏹ Сессия остановлена по твоей команде. |
 | `kill_switch` | the single trade's `tradingPaused`: ⏸ Торговля временно приостановлена, попробуйте позже. |
-| `no_signal_timeout` (#509) | ⏳ Сессия остановлена: по паре не было сигнала 20 свечей по 15 с. Выбери другую пару. (`sessionStopNoSignalTimeout`: `SESSION_NO_SIGNAL_CANDLES` with the candle word (`sessionCandleOne/Few/Many`) and the candle of `intervalForDuration(settings.durationSec)` in seconds, #637; without readable settings `sessionStopNoSignalTimeoutNoSettings`: ⏳ Сессия остановлена: по паре долго не было сигнала. Выбери другую пару.) |
+| `no_signal_timeout` (#509) | ⏳ Сессия остановлена: по паре не было сигнала 20 свечей по 5 с. Выбери другую пару. (`sessionStopNoSignalTimeout`: `SESSION_NO_SIGNAL_CANDLES` with the candle word (`sessionCandleOne/Few/Many`) and the candle of `intervalForDuration(settings.durationSec)` in seconds, #637; without readable settings `sessionStopNoSignalTimeoutNoSettings`: ⏳ Сессия остановлена: по паре долго не было сигнала. Выбери другую пару.) |
 
 The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed' | 'no_signal_timeout'>, …>`;
 `no_signal_timeout`'s line carries two variables and a fallback key, so `stopLine` builds it beside
@@ -425,7 +426,7 @@ duration (when the demo still offers it) and «📡 К сигналам» in one
 #506); without `settings` only «💳 Пополнить» and «👥 Пригласить друга» in one row and «🏠 В
 меню». A session stopped by the no-signal limit (`no_signal_timeout`, #509) offers
 another pair, not the same one again: no «🔁 Ещё сессия» and no «📊 Новый анализ», and «🔀 Выбрать
-другую пару» in place of «📡 К сигналам», on the same data (`demo:sig:<sec>`;
+другую пару» in place of «📡 К сигналам», on the same data (`demo:sig`, #685;
 `appendEndOfPath(…, { otherPair: true })`). A failed start, `sessionJustEnded`, leads back to the
 analysis and the menu; a failed stop offers the menu, never the stop again.
 
@@ -820,9 +821,8 @@ cycle, so every trade is a new message of one block, as before #551.
   balance is read as the route reads it (`readFinishedSessionView`): at most one successful broker
   GET per session — a refresh that did not answer `ok` is repeated by each later read of the
   finished view — `mayRefresh: false`. Under it «🏠 В меню»; under a `no_signal_timeout` stop (#509)
-  «🔀 Выбрать другую пару» above it — `demo:sig:<sec>` when the duration is one the scanner lists
-  (`signalsCallbackDataFor`, `packages/shared/src/bot-navigation.ts`), `demo:sig` otherwise (D10,
-  D12).
+  «🔀 Выбрать другую пару» above it — `demo:sig` at every duration (`DEMO_SIGNALS_CALLBACK_DATA`,
+  `packages/shared/src/bot-navigation.ts`, #685; `demo:sig:<sec>` from #509 to #685) (D10, D12).
 - **Without a trade** no summary is sent — the session's mark alone — except for a
   `no_signal_timeout` stop (#509, D10, D11): the user learns why the session stood, with sound,
   from the pair line and the stop line.
@@ -1139,7 +1139,7 @@ Telegram's own forwarding.
 - **The caption** is `sessionCardCaption`: «🏁 {symbol}: итог сессии {profit}» and «🤖 @{botUsername}»,
   the bot's `ctx.me.username` from the press that started tracking.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
-  сессия» while the demo offers the duration, «📊 Новый анализ» and
+  сессия» at 5 s (#685) while a session at it fits, «📊 Новый анализ» and
   «📡 К сигналам» in one row, «💳 Пополнить» (#27, https only) and «👥 Пригласить друга» (#115) in
   one row, «🏠 В меню»; «💳 Пополнить» and «👥 Пригласить друга» in one row and «🏠 В меню» alone
   without `settings`
@@ -1608,7 +1608,7 @@ The bot's presses are covered by `trading-session.test.ts`, `session-tracker.tes
 card is drawn and rendered by `session-card.test.ts` on the host's resvg build. The routes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
-The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, 15 s, «📊 Анализ»,
+The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, «📊 Анализ»,
 «🚀 Сессия из 5 циклов» first, with or without a signal, then an amount of the amount screen
 (#476; or a pair of «Сигналы сейчас» and an amount), the session message, the waiting message under
 the cycle messages, «⏹ Остановить сессию» under it (#536); on a
