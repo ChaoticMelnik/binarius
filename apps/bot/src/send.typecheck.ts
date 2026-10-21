@@ -107,9 +107,9 @@ export const viaTextByIdReplyKeyboard = sendHtmlById(api, 1, text, {
 });
 // @ts-expect-error nor a raw string (TS2345)
 export const viaTextByIdRaw = sendHtmlById(api, 1, 'raw', { reply_markup: keyboard });
-// @ts-expect-error nor entities in place of parse_mode (TS2353)
 export const viaTextByIdEntities = sendHtmlById(api, 1, text, {
   reply_markup: keyboard,
+  // @ts-expect-error nor entities in place of parse_mode (TS2353)
   entities: [],
 });
 
