@@ -2,12 +2,14 @@ import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BotLanguage,
+  InvalidTelegramTemplate,
   SignalFeedOutcome,
   SignalKind,
   telegramHtml,
   TradeAction,
   TradeMode,
   type BrokerRestErrorCode,
+  type PairsCatalogResponse,
   type TelegramHtml,
   type TradingSignalsResponse,
 } from '@binarius/shared';
@@ -61,6 +63,8 @@ const GONE = () => refusal(400, 'Bad Request: message to edit not found');
 const BLOCKED = () => refusal(403, 'Forbidden: bot was blocked by the user');
 const LIMITED = (seconds: number) => refusal(429, 'Too Many Requests: retry after', seconds);
 const OTHER = () => refusal(400, 'Bad Request: something else');
+const NOT_MODIFIED = () =>
+  refusal(400, 'Bad Request: message is not modified: specified new message content is the same');
 const TRANSPORT = () => new HttpError("Network request for 'editMessageText' failed!", new Error());
 
 function setup(options: { maxMs?: number; shutdownBudgetMs?: number; maxEntries?: number } = {}) {
@@ -338,6 +342,32 @@ describe('the wait for a signal', () => {
     expect(waiter.has(7)).toBe(true);
   });
 
+  it('W6d draws the other pairs under the analysis whose own read finds no signal, never the chosen pair', async () => {
+    const { waiter, pair, at, setListed, backend, texts, editMessageMedia } = setup();
+    backend.evaluateSignal.mockResolvedValue(SIGNAL_NO_SIGNAL);
+    waiter.waitPair(pair({ origin: 'analysis', alternatives: 'pending' }));
+    setListed([
+      [PAIR_EURUSD.id, TradeAction.Up],
+      [PAIR_SHORT.id, TradeAction.Down],
+    ]);
+    await at(FIRST_TICK);
+    expect(texts()).toEqual([`base|${PAIR_SHORT.id}`]);
+    expect(editMessageMedia).not.toHaveBeenCalled();
+    expect(waiter.has(7)).toBe(true);
+  });
+
+  it('W6e ends the analysis on «message is not modified» of its photo, nothing forgotten or sent again', async () => {
+    const { waiter, pair, at, setListed, editMessageMedia, editMessageText, screens } = setup();
+    editMessageMedia.mockRejectedValueOnce(NOT_MODIFIED());
+    waiter.waitPair(pair({ origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 1_000);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+    expect(screens.photos.forget).not.toHaveBeenCalled();
+    expect(editMessageText).not.toHaveBeenCalled();
+    expect(waiter.has(7)).toBe(false);
+  });
+
   it('W7 takes the alternatives away 30 s after the door drew them, and keeps waiting', async () => {
     const { waiter, pair, at, texts } = setup();
     waiter.waitPair(pair({ alternatives: 'shown' }));
@@ -501,6 +531,35 @@ describe('the wait for a signal', () => {
     expect(editMessageText).toHaveBeenCalledTimes(1);
   });
 
+  it('W12c starts the stop edits no sooner than a 429 of the last tick', async () => {
+    const { waiter, list, at, texts, editMessageText, setListed } = setup();
+    editMessageText.mockRejectedValueOnce(LIMITED(3));
+    waiter.waitList(list());
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK);
+    expect(texts()).toEqual([`list:${PAIR_EURUSD.id}`]);
+    await at(FIRST_TICK + 500);
+    const stopped = waiter.stop();
+    await at(FIRST_TICK + 2_900);
+    expect(texts()).toEqual([`list:${PAIR_EURUSD.id}`]);
+    await at(FIRST_TICK + 4_000);
+    await stopped;
+    expect(texts()).toEqual([`list:${PAIR_EURUSD.id}`, 'expired']);
+  });
+
+  it('W12d launches no stop edit while a 429 of the last tick outlasts the window', async () => {
+    const { waiter, list, at, texts, editMessageText, setListed } = setup();
+    editMessageText.mockRejectedValueOnce(LIMITED(30));
+    waiter.waitList(list());
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK);
+    await at(FIRST_TICK + 500);
+    const stopped = waiter.stop();
+    await at(FIRST_TICK + 25_000);
+    await stopped;
+    expect(texts()).toEqual([`list:${PAIR_EURUSD.id}`]);
+  });
+
   it('W13 ends the oldest entry without an edit past maxEntries', async () => {
     const { waiter, list, target } = setup({ maxEntries: 2 });
     for (const user of [1, 2, 3]) waiter.waitList(list(target(user)));
@@ -529,5 +588,66 @@ describe('the wait for a signal', () => {
     await at(46_000);
     expect(texts()).toEqual(['expired']);
     expect(waiter.has(2)).toBe(true);
+  });
+
+  it('W16 ends an entry whose screen throws, logs it, and goes on with the others', async () => {
+    const { waiter, list, target, at, editMessageText, setListed, screens, logger } = setup();
+    vi.mocked(screens.list).mockImplementationOnce(() => {
+      throw new InvalidTelegramTemplate('bad override');
+    });
+    waiter.waitList(list(target(1)));
+    waiter.waitList(list(target(2)));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 1_000);
+    expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([2]);
+    expect(waiter.has(1)).toBe(false);
+    expect(logger.error.mock.calls).toEqual([
+      [{ err: { name: 'InvalidTelegramTemplate' }, kind: 'list' }, 'signal wait entry failed'],
+    ]);
+    await at(FIRST_TICK + POLL + 1_000);
+    expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([2]);
+    const stopped = waiter.stop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopped;
+  });
+
+  it('W16b logs a tick that throws outside its entries, and the stop it is drained by resolves', async () => {
+    const { waiter, list, at, backend, logger } = setup();
+    let release!: (value: PairsCatalogResponse) => void;
+    backend.readPairs.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    waiter.waitList(list());
+    await at(FIRST_TICK);
+    const stopped = waiter.stop();
+    // a body the client's parser would never let through: readDemoCatalog throws on it
+    release(undefined as unknown as PairsCatalogResponse);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopped;
+    expect(logger.error.mock.calls.map((call) => call[1])).toEqual(['signal wait tick failed']);
+  });
+
+  it('W17 logs a stop edit whose screen throws and edits the other messages', async () => {
+    const { waiter, list, target, editMessageText, screens, logger } = setup();
+    let calls = 0;
+    screens.expired = () => {
+      calls += 1;
+      if (calls === 1) throw new InvalidTelegramTemplate('bad override');
+      return screen('expired');
+    };
+    waiter.waitList(list(target(1)));
+    waiter.waitList(list(target(2)));
+    const stopped = waiter.stop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopped;
+    expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([2]);
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        { err: { name: 'InvalidTelegramTemplate' }, method: 'editMessageText', kind: 'list' },
+        'signal wait message not edited at the stop',
+      ],
+    ]);
   });
 });

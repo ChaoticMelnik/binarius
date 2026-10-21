@@ -87,8 +87,7 @@ export interface SignalWaitScreens {
   expired(): DemoScreen;
   // the wait for a pair, with the other pairs' buttons when there are some
   waiting(base: TelegramHtml, alternatives: readonly ShownSignal[]): DemoScreen;
-  // the pairs with a signal now, in the list's order: the chosen pair is not among them, or the
-  // wait would have ended on its signal
+  // the pairs with a signal now, in the list's order; the wait leaves the chosen pair out
   alternatives(
     signals: TradingSignalsResponse['lists'][number]['signals'],
     catalog: PairsCatalogResponse,
@@ -194,7 +193,7 @@ export function createSignalWaiter({
   now = Date.now,
 }: SignalWaiterOptions): SignalWaiter {
   const entries = new Map<number, Entry>();
-  let screens: SignalWaitScreens | undefined;
+  let attachedScreens: SignalWaitScreens | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<void> | undefined;
   let stopped = false;
@@ -218,9 +217,13 @@ export function createSignalWaiter({
     // a tick that finds the previous one in flight is skipped: its entries are counted again on
     // the next snapshot
     if (inflight === undefined) {
-      inflight = tick().finally(() => {
-        inflight = undefined;
-      });
+      inflight = tick()
+        .catch((error: unknown) => {
+          logger.error(errorLogFields(error), 'signal wait tick failed');
+        })
+        .finally(() => {
+          inflight = undefined;
+        });
     }
     schedule();
   }
@@ -247,13 +250,21 @@ export function createSignalWaiter({
 
   const live = (entry: Entry) => !stopped && entries.get(entry.telegramUserId) === entry;
 
+  // the entry in a log line, without the user's id or the pair's symbol (Rule 8)
+  const entryFields = (entry: Entry) => ({
+    kind: entry.kind,
+    ...(entry.kind === 'pair' ? { origin: entry.pair.origin } : {}),
+  });
+
   function common(drawn: DemoScreen): Common {
     return { rendered: renderKey(drawn), editFailures: 0, warned: new Set() };
   }
 
   function attached(): SignalWaitScreens {
-    if (screens === undefined) throw new Error('the signal waiter has no screens attached');
-    return screens;
+    if (attachedScreens === undefined) {
+      throw new Error('the signal waiter has no screens attached');
+    }
+    return attachedScreens;
   }
 
   async function readSnapshot(): Promise<Snapshot> {
@@ -295,7 +306,19 @@ export function createSignalWaiter({
     const nowMs = now();
     for (const entry of [...entries.values()]) {
       if (!live(entry)) continue;
-      const outcome = await runWithLanguage(entry.language, () => advance(entry, snapshot, nowMs));
+      let outcome: EditOutcome;
+      // a screen that throws (an override, Rule 30) ends its own entry as drawn: a fallback screen
+      // from the same catalog could throw the same way, and a retry would throw on every tick
+      try {
+        outcome = await runWithLanguage(entry.language, () => advance(entry, snapshot, nowMs));
+      } catch (error) {
+        logger.error(
+          { ...errorLogFields(error), ...entryFields(entry) },
+          'signal wait entry failed',
+        );
+        end(entry);
+        continue;
+      }
       if (outcome === 'paused' || stopped) break;
     }
   }
@@ -323,8 +346,12 @@ export function createSignalWaiter({
       if (list.signals.some((signal) => signal.assetId === pair.assetId)) {
         const resolved = await resolve(entry, check.pair);
         if (resolved !== undefined) return resolved;
-      } else if (pair.alternatives === 'pending') {
-        const alternatives = screens.alternatives(list.signals, catalog, nowMs);
+        if (!live(entry)) return 'ended';
+      }
+      if (pair.alternatives === 'pending') {
+        // the pair is in the list when the analysis found no signal by its own read
+        const others = list.signals.filter((signal) => signal.assetId !== pair.assetId);
+        const alternatives = screens.alternatives(others, catalog, nowMs);
         if (alternatives.length === 0) {
           pair.alternatives = 'done';
           return 'kept';
@@ -423,7 +450,12 @@ export function createSignalWaiter({
       return 'drawn';
     } catch (error) {
       if (error instanceof GrammyError && error.error_code !== 429 && error.error_code !== 403) {
-        if (editRefusal(error) !== 'gone') {
+        const refusal = editRefusal(error);
+        if (refusal === 'shown') {
+          end(entry);
+          return 'drawn';
+        }
+        if (refusal !== 'gone') {
           photos.forget(card.action);
           logger.warn(
             { ...errorLogFields(error), ...telegramErrorFields(error), kind: entry.kind },
@@ -479,8 +511,7 @@ export function createSignalWaiter({
     const fields = {
       ...errorLogFields(error),
       ...telegramErrorFields(error, method),
-      kind: entry.kind,
-      ...(entry.kind === 'pair' ? { origin: entry.pair.origin } : {}),
+      ...entryFields(entry),
     };
     if (error instanceof GrammyError) {
       const refusal = editRefusal(error);
@@ -509,20 +540,24 @@ export function createSignalWaiter({
     logger.warn(fields, message);
   }
 
-  // The stop's edits: one launched every editGapMs, none after the window or after a 429; the
-  // launched ones are awaited.
+  // The stop's edits: one launched every editGapMs, none after the window or after a 429 of the
+  // stop itself; a 429 of the last tick is waited out inside the window. The launched ones are
+  // awaited.
   async function drainEdits(remaining: Entry[]): Promise<void> {
-    const screens = attached();
     const deadline = now() + shutdownBudgetMs;
+    if (pausedUntil > now()) {
+      if (pausedUntil >= deadline) return;
+      await sleep(pausedUntil - now());
+    }
     const launched: Promise<void>[] = [];
     let limited = false;
     for (const entry of remaining) {
       if (limited || now() >= deadline) break;
       launched.push(
         runWithLanguage(entry.language, async () => {
-          const screen = screens.expired();
-          if (renderKey(screen) === entry.rendered) return;
           try {
+            const screen = attached().expired();
+            if (renderKey(screen) === entry.rendered) return;
             await editMessageTextByIdHtml(entry.api, entry.chatId, entry.messageId, screen.text, {
               reply_markup: screen.keyboard,
             });
@@ -545,8 +580,8 @@ export function createSignalWaiter({
   }
 
   return {
-    attach(attachedScreens) {
-      screens = attachedScreens;
+    attach(next) {
+      attachedScreens = next;
     },
     waitList(request) {
       register({
