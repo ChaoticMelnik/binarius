@@ -1,16 +1,11 @@
-import {
-  Composer,
-  GrammyError,
-  HttpError,
-  InlineKeyboard,
-  InputFile,
-  type Api,
-  type Context,
-} from 'grammy';
+import { Composer, GrammyError, HttpError, InputFile, type Api, type Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import {
+  ButtonRole,
+  callbackButton,
   deleteRefusal,
   editRefusal,
+  keyboardOf,
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
@@ -20,6 +15,8 @@ import {
   TradingModeErrorCode,
   TradingSessionErrorCode,
   TradingSessionStopReason,
+  type BotButton,
+  type BotKeyboard,
   type BotStaticHtmlKey,
   type CreateTradingSessionRequest,
   type PairLabel,
@@ -59,10 +56,12 @@ import type { SignalWaiter } from './signal-wait';
 import { DEMO_DURATION_SEC } from './demo-catalog';
 import {
   appendEndOfPath,
+  backToAnalysisButton,
   backToAnalysisKeyboard,
   depositButtons,
   inviteButton,
   MODE_CALLBACK_DATA,
+  menuButton,
   menuKeyboard,
   supportKeyboard,
   waitingStopKeyboard,
@@ -117,47 +116,43 @@ const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 // The old status message's «🔄 Обновить» (before #536): its press only strips that keyboard.
 const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 
-// A stopped session's next steps under `keyboard`'s rows: «🔁 Ещё сессия» on its own pair and mode
-// (#320, #327) at the demo's one duration (#685: a 15 s session gets a 5 s one) - in real the
-// session button's data, so the start handler checks it as any other; in demo the amount screen
-// (#476) - while a session at that duration fits, then the
-// end of the path with «💳 Пополнить» (#27) and «👥 Пригласить друга»
-// (#115) in one row right above the menu; the deposit, the invite and the menu alone when its settings could
-// not be read. A no_signal_timeout stop (#509) offers another pair instead of the same one again.
-function appendSessionEnd(
-  keyboard: InlineKeyboard,
+// A stopped session's next steps: «🔁 Ещё сессия» on its own pair and mode (#320, #327) at the
+// demo's one duration (#685: a 15 s session gets a 5 s one) - in real the session button's data,
+// so the start handler checks it as any other; in demo the amount screen (#476) - while a session
+// at that duration fits, then the end of the path with «💳 Пополнить» (#27) on its own row and
+// «👥 Позвать друга» (#115) beside the menu; the deposit, the invite and the menu alone when its
+// settings could not be read. A no_signal_timeout stop (#509) offers another pair instead of the
+// same one again. Under its summary (#318, #537), under the reply to its stop and under an old
+// status message the stop drew in place (#536). «📊 Анализ» and «📡 Сигналы» edit the message they
+// are under: a photo's edit is refused as gone and their screen is answered anew
+// (telegram-refusals.ts in @binarius/shared).
+export function sessionCardKeyboard(
   { mode, settings, stopReason }: Pick<TradingSessionView, 'mode' | 'settings' | 'stopReason'>,
   cashierUrl: string | undefined,
-): InlineKeyboard {
-  if (settings === null) return withInvite(keyboard, cashierUrl);
+): BotKeyboard {
+  if (settings === null) return withInvite([], cashierUrl);
   const otherPair = stopReason === TradingSessionStopReason.NoSignalTimeout;
-  if (sessionFits(DEMO_DURATION_SEC) && !otherPair) {
-    // a demo session's again opens the amount screen (#476) as a new message, so this one stays
-    keyboard
-      .row()
-      .text(
-        sessionAgainButtonLabel(mode),
-        mode === TradeMode.Demo
-          ? demoLaunchCallbackData(settings.assetId, DEMO_DURATION_SEC, 'n')
-          : sessionStartCallbackData(mode, settings.assetId, DEMO_DURATION_SEC),
-      );
-  }
+  const again =
+    sessionFits(DEMO_DURATION_SEC) && !otherPair
+      ? [
+          // a demo session's again opens the amount screen (#476) as a new message, so this one
+          // stays
+          callbackButton(
+            ButtonRole.Forward,
+            sessionAgainButtonLabel(mode),
+            mode === TradeMode.Demo
+              ? demoLaunchCallbackData(settings.assetId, DEMO_DURATION_SEC, 'n')
+              : sessionStartCallbackData(mode, settings.assetId, DEMO_DURATION_SEC),
+          ),
+        ]
+      : [];
   return appendEndOfPath(
-    keyboard,
+    [again],
     settings.assetId,
-    [[...depositButtons(cashierUrl), inviteButton()]],
+    [...depositButtons(cashierUrl), inviteButton()],
     { otherPair },
   );
 }
-
-// A stopped session's next steps: under its summary (#318, #537), under the reply to its stop and
-// under an old status message the stop drew in place (#536). «📊 Новый анализ» and «📡 К
-// сигналам» edit the message they are under: a photo's edit is refused as gone and their screen
-// is answered anew (telegram-refusals.ts in @binarius/shared).
-export const sessionCardKeyboard = (
-  view: Pick<TradingSessionView, 'mode' | 'settings' | 'stopReason'>,
-  cashierUrl: string | undefined,
-): InlineKeyboard => appendSessionEnd(new InlineKeyboard(), view, cashierUrl);
 
 export interface TradingSessionDeps {
   backend: Pick<
@@ -173,7 +168,7 @@ export interface TradingSessionDeps {
   logger: Logger;
   sessionTracker: Pick<SessionTracker, 'track'>;
   // the welcome's connect button, for a press with no account to trade on
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
   // «💳 Пополнить»'s page (#27): cashierUrlOf's; none, no button
   cashierUrl?: string;
   // the pictures of a signal's direction, shared with the analysis card (#568)
@@ -193,7 +188,7 @@ interface Refusal {
   // the text for a real session's press, where the default names the demo account (#327)
   real?: BotStaticHtmlKey;
   connect?: true;
-  // «⭐ Купить токены» above the way back: a refusal for want of tokens (#117)
+  // «⭐ Купить» beside the way back, the deposit above: a refusal for want of tokens (#117)
   buy?: true;
   // «💵 Сумма» under the text: a refusal of the saved stake itself (#297)
   stakeMenu?: true;
@@ -322,7 +317,7 @@ export function createTradingSessionComposer<C extends Context>({
   backend,
   logger,
   sessionTracker,
-  connectKeyboard,
+  connectButtons,
   cashierUrl,
   setupCardPhotos,
   shareEnabled,
@@ -554,7 +549,7 @@ export function createTradingSessionComposer<C extends Context>({
   // when proven.
   async function replyModeReset(ctx: Context, reset: Settled<SetTradingModeResponse>) {
     let text: TelegramHtml;
-    let keyboard: InlineKeyboard;
+    let keyboard: BotKeyboard;
     if (reset.ok) {
       if (!reset.value.changed) return;
       text = TEXTS.modeStopReset;
@@ -574,7 +569,9 @@ export function createTradingSessionComposer<C extends Context>({
       } else {
         logger.warn(fields, 'trading mode outcome unknown');
         text = TEXTS.modeOutcomeUnknown;
-        keyboard = withMenu(new InlineKeyboard().text(LABELS.modeScreenButton, MODE_CALLBACK_DATA));
+        keyboard = withMenu([
+          callbackButton(ButtonRole.Nav, LABELS.modeScreenButton, MODE_CALLBACK_DATA),
+        ]);
       }
     }
     await replyHtml(ctx, text, { reply_markup: keyboard }).catch((error: unknown) => {
@@ -624,14 +621,17 @@ export function createTradingSessionComposer<C extends Context>({
       refusal.text === 'blocked'
         ? supportKeyboard()
         : refusal.connect === true
-          ? connectKeyboard()
+          ? keyboardOf(connectButtons())
           : refusal.stakeMenu === true
-            ? new InlineKeyboard().text(
-                LABELS.stakeMenuButton,
-                stakeMenuCallbackData(mode, assetId, durationSec),
-              )
+            ? keyboardOf([
+                callbackButton(
+                  ButtonRole.Secondary,
+                  LABELS.stakeMenuButton,
+                  stakeMenuCallbackData(mode, assetId, durationSec),
+                ),
+              ])
             : refusal.buy === true
-              ? withBuy(backToAnalysisKeyboard(assetId, durationSec), cashierUrl)
+              ? withBuy([backToAnalysisButton(assetId, durationSec), menuButton()], cashierUrl)
               : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
@@ -726,7 +726,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function drawStopReply(
     ctx: Context,
     text: TelegramHtml,
-    reply_markup: InlineKeyboard,
+    reply_markup: BotKeyboard,
     goneNote: string,
     goneMarkup = reply_markup,
   ): Promise<void> {
@@ -745,7 +745,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function drawInPlace(
     ctx: Context,
     text: TelegramHtml,
-    reply_markup: InlineKeyboard,
+    reply_markup: BotKeyboard,
     goneNote?: string,
     goneMarkup = reply_markup,
   ): Promise<

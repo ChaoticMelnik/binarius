@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
+  ButtonRole,
   CONNECT_CALLBACK_DATA,
   decimalStringSchema,
   MENU_CALLBACK_DATA,
@@ -33,6 +34,9 @@ import {
   stubTracker,
   WRITE_CALLBACK_PREFIXES,
   type ApiCall,
+  inlineRoles,
+  inlineRows,
+  inlineStyles,
 } from './testing';
 import {
   MODE_CONFIRM_CALLBACK_DATA,
@@ -97,7 +101,7 @@ const lastPayload = (calls: readonly ApiCall[]) =>
   calls.filter((call) => ['editMessageText', 'sendMessage'].includes(call.method)).at(-1)?.payload;
 const lastText = (calls: readonly ApiCall[]) => plainTextOf(lastPayload(calls)?.text as string);
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
-  (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
+  inlineRows(payload) as Button[][];
 const carries = (payload: Record<string, unknown> | undefined, data: string) =>
   rowsOf(payload).some((row) => row.some((b) => b.callback_data === data));
 const button = (text: string, callback_data: string): Button => ({ text, callback_data });
@@ -105,7 +109,8 @@ const lines = (logger: ReturnType<typeof fakeLogger>, level: 'warn' | 'error') =
   logger[level].mock.calls.map((call) => call[1] as string);
 
 const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
-const SCREEN_AND_MENU = [[button(LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA)], MENU];
+// #475: the way back and the menu in one row
+const SCREEN_AND_MENU = [[button(LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA), ...MENU]];
 const EDIT_GONE: ApiError = {
   ok: false,
   error_code: 400,
@@ -155,6 +160,9 @@ describe('the mode screen (#474)', () => {
       [button(LABELS.modeEnableButton, MODE_CONFIRM_CALLBACK_DATA)],
       MENU,
     ]);
+    // #475 Plan Update: the enable step is the screen's step forward, green on its own row
+    expect(inlineRoles(sent)).toEqual([[ButtonRole.Forward], [ButtonRole.Nav]]);
+    expect(inlineStyles(sent)).toEqual([['success'], [null]]);
   });
 
   it('MS1b names the broker minimum as the real stake when none is saved, and a stale balance as such', async () => {
@@ -187,9 +195,11 @@ describe('the mode screen (#474)', () => {
     expect(lastText(calls)).not.toContain('Реальный баланс');
     expect(lastText(calls)).not.toContain('Сумма реальной сделки');
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.modeBackDemoButton, MODE_DEMO_CALLBACK_DATA)],
-      MENU,
+      [button(LABELS.modeBackDemoButton, MODE_DEMO_CALLBACK_DATA), ...MENU],
     ]);
+    // #475 Plan Update: «🎮 В демо» secondary beside the menu
+    expect(inlineRoles(lastPayload(calls))).toEqual([[ButtonRole.Secondary, ButtonRole.Nav]]);
+    expect(inlineStyles(lastPayload(calls))).toEqual([['primary', null]]);
   });
 
   it('MS3 adds the paused line while the switch is closed, and still offers the enable step', async () => {
@@ -265,11 +275,10 @@ describe('the confirm step (#474)', () => {
       'Включить реальный режим? Сделки пойдут на реальные деньги на сумму $7.00.',
     );
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [
-        button(LABELS.modeConfirmButton, MODE_REAL_CALLBACK_DATA),
-        button(LABELS.modeCancelButton, MODE_SCREEN_CALLBACK_DATA),
-      ],
+      [button(LABELS.modeConfirmButton, MODE_REAL_CALLBACK_DATA)],
+      [button(LABELS.modeCancelButton, MODE_SCREEN_CALLBACK_DATA)],
     ]);
+    expect(inlineStyles(lastPayload(calls))).toEqual([['success'], [null]]);
   });
 
   it('MC2 names the broker minimum without a saved real stake', async () => {
@@ -337,6 +346,7 @@ describe('the confirm step (#474)', () => {
     expect(lastText(calls)).toContain('Сейчас: REAL');
     expect(rowsOf(lastPayload(calls))[0]).toEqual([
       button(LABELS.modeBackDemoButton, MODE_DEMO_CALLBACK_DATA),
+      ...MENU,
     ]);
   });
 
@@ -519,6 +529,7 @@ describe('the switches (#474)', () => {
       expect(lastText(calls)).not.toContain(SESSION_STOPPED);
       expect(rowsOf(lastPayload(calls))[0]).toEqual([
         button(LABELS.modeBackDemoButton, MODE_DEMO_CALLBACK_DATA),
+        ...MENU,
       ]);
       expect(lines(logger, 'warn')).toEqual(['trading mode outcome unknown']);
     },

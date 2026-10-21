@@ -1,8 +1,10 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
+  ButtonRole,
+  callbackButton,
   editRefusal,
   errorLogFields,
-  formatStake,
+  keyboardOf,
   normalizeDecimal,
   pairLabel,
   parseStakeInput,
@@ -12,6 +14,8 @@ import {
   STAKE_AMOUNT_PATTERN,
   tradeAmountSchema,
   TradeMode,
+  type BotButton,
+  type BotKeyboard,
   type DecimalString,
   type TelegramHtml,
   type TradingAccessResponse,
@@ -46,6 +50,7 @@ import { answerCallback } from './answer-callback';
 import { settle, type Settled } from './settled';
 import type { Logger } from './logging';
 import { stakeAccess } from './stake-access';
+import { stakeGroups } from './stake-rows';
 import { editMessageTextHtml, replyHtml } from './send';
 import { LABELS, stakePickerText, TEXTS, userContextOf } from './texts';
 
@@ -180,25 +185,27 @@ export interface StakePickerDeps {
   logger: Logger;
   dialog: LoginDialog;
   // the welcome's connect button, for a user with no account to trade on
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
 }
 
 interface Screen {
   text: TelegramHtml;
-  keyboard: InlineKeyboard;
+  keyboard: BotKeyboard;
 }
 
-function backTo(keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard {
+function backButton(origin: StakeOrigin): BotButton {
   switch (origin.kind) {
     case 'settings':
-      return keyboard.text(LABELS.stakeBackSettingsButton, SETTINGS_CALLBACK_DATA);
+      return callbackButton(ButtonRole.Nav, LABELS.stakeBackSettingsButton, SETTINGS_CALLBACK_DATA);
     case 'analysis':
-      return keyboard.text(
+      return callbackButton(
+        ButtonRole.Nav,
         LABELS.stakeBackAnalysisButton,
         demoAnalysisCallbackData(origin.assetId, origin.durationSec),
       );
     case 'pair':
-      return keyboard.text(
+      return callbackButton(
+        ButtonRole.Nav,
         LABELS.stakeBackLaunchButton,
         demoLaunchCallbackData(origin.assetId, origin.durationSec),
       );
@@ -206,11 +213,20 @@ function backTo(keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard {
       return origin satisfies never;
   }
 }
-const backKeyboard = (origin: StakeOrigin) => backTo(new InlineKeyboard(), origin);
+// `actions`, then the way back in their row
+const backTo = (actions: readonly BotButton[], origin: StakeOrigin) =>
+  keyboardOf([...actions, backButton(origin)]);
+const backKeyboard = (origin: StakeOrigin) => backTo([], origin);
 // «💵 Сумма» of the same mode to try again, then the way back
 const retryKeyboard = (mode: TradeMode, origin: StakeOrigin) =>
   backTo(
-    new InlineKeyboard().text(LABELS.stakeMenuButton, stakeOpenCallbackData(mode, origin)).row(),
+    [
+      callbackButton(
+        ButtonRole.Secondary,
+        LABELS.stakeMenuButton,
+        stakeOpenCallbackData(mode, origin),
+      ),
+    ],
     origin,
   );
 
@@ -218,7 +234,7 @@ export function createStakePicker<C extends Context>({
   backend,
   logger,
   dialog,
-  connectKeyboard,
+  connectButtons,
 }: StakePickerDeps): {
   composer: Composer<C>;
   onStakeText: (ctx: Context, step: StakeStep, text: string) => Promise<void>;
@@ -273,10 +289,13 @@ export function createStakePicker<C extends Context>({
     await editOrReply(
       ctx,
       step.mode === TradeMode.Real ? TEXTS.stakeInputPromptReal : TEXTS.stakeInputPrompt,
-      new InlineKeyboard().text(
-        LABELS.stakeBackButton,
-        stakeOpenCallbackData(step.mode, step.origin),
-      ),
+      keyboardOf([
+        callbackButton(
+          ButtonRole.Nav,
+          LABELS.stakeBackButton,
+          stakeOpenCallbackData(step.mode, step.origin),
+        ),
+      ]),
     );
   });
 
@@ -326,11 +345,7 @@ export function createStakePicker<C extends Context>({
       );
       return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
     }
-    const checked = stakeAccess(
-      access.value,
-      (keyboard) => backTo(keyboard, origin),
-      connectKeyboard,
-    );
+    const checked = stakeAccess(access.value, (actions) => backTo(actions, origin), connectButtons);
     if ('refusal' in checked) return checked.refusal;
     const { broker } = checked;
     const real = mode === TradeMode.Real;
@@ -340,16 +355,28 @@ export function createStakePicker<C extends Context>({
       available: real ? broker.real.available : broker.demo.available,
     });
     const current = normalizeDecimal(saved ?? broker.minTradeAmount);
-    const keyboard = new InlineKeyboard();
-    for (const preset of presets) {
-      const label = preset === current ? `${formatStake(preset)} ✅` : formatStake(preset);
-      keyboard.text(label, stakePresetCallbackData(preset, mode, origin));
-    }
-    if (presets.length > 0) keyboard.row();
-    keyboard.text(LABELS.stakeCustomButton, stakeCustomCallbackData(mode, origin)).row();
-    if (saved !== null) {
-      keyboard.text(LABELS.stakeResetButton, stakeResetCallbackData(mode, origin)).row();
-    }
+    // the presets as the amount screen draws them (#475): ✅ on the one in effect, «· риск» and red
+    // from STAKE_RISK_THRESHOLD
+    const lists = stakeGroups(presets, current, (preset) =>
+      stakePresetCallbackData(preset, mode, origin),
+    );
+    const actions = [
+      callbackButton(
+        ButtonRole.Secondary,
+        LABELS.stakeCustomButton,
+        stakeCustomCallbackData(mode, origin),
+      ),
+      ...(saved === null
+        ? []
+        : [
+            callbackButton(
+              ButtonRole.Secondary,
+              LABELS.stakeResetButton,
+              stakeResetCallbackData(mode, origin),
+            ),
+          ]),
+      backButton(origin),
+    ];
     return {
       text: stakePickerText({
         // the saved stake of the picker's mode, null without one: «Сейчас:» names the minimum
@@ -360,7 +387,7 @@ export function createStakePicker<C extends Context>({
         realAvailable: broker.real.available,
         presets: presets.length,
       }),
-      keyboard: backTo(keyboard, origin),
+      keyboard: keyboardOf(...lists, actions),
     };
   }
 
@@ -468,7 +495,7 @@ export function createStakePicker<C extends Context>({
       firstName,
       symbol: pair === undefined ? null : pairLabel(pair),
       access: access.ok ? access.value : null,
-      connectKeyboard,
+      connectButtons,
       saved,
     });
   }
@@ -485,7 +512,7 @@ export function createStakePicker<C extends Context>({
 
   // Every refusal of an edit is classified as in demo.ts: already shown is done, gone gets the
   // screen anew, a transport failure sends nothing more, anything else goes to bot.catch.
-  async function editOrReply(ctx: Context, text: TelegramHtml, reply_markup: InlineKeyboard) {
+  async function editOrReply(ctx: Context, text: TelegramHtml, reply_markup: BotKeyboard) {
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });
     } catch (error) {

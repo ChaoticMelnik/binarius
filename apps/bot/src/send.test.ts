@@ -1,6 +1,13 @@
-import { InlineKeyboard, type Api, type Context } from 'grammy';
+import type { Api, Context } from 'grammy';
 import { describe, expect, it, vi } from 'vitest';
-import { BOT_MESSAGE_SPACER, telegramHtml } from '@binarius/shared';
+import {
+  BOT_MESSAGE_SPACER,
+  ButtonRole,
+  callbackButton,
+  isBotKeyboard,
+  keyboardOf,
+  telegramHtml,
+} from '@binarius/shared';
 import {
   answerInlineQueryPhotoHtml,
   editMessagePhotoByIdHtml,
@@ -22,7 +29,7 @@ import {
 // a text already holding U+2800 inside and ending with a block: the spacer still goes after it
 const TEXT = telegramHtml`<b>Привет</b> \u2800 ${'x'}\n<pre>code</pre>`;
 const CAPTION = telegramHtml`<b>Карта</b>`;
-const keyboard = new InlineKeyboard().text('🏠 В меню', 'menu');
+const keyboard = keyboardOf([callbackButton(ButtonRole.Nav, '🏠 В меню', 'menu')]);
 const REASON = NO_NEXT_STEP_REASONS.InProgress;
 
 const fakeCtx = () => {
@@ -126,5 +133,22 @@ describe('captions, inline answers and the invoice go without it', () => {
     );
     const [title, description] = ctx.replyWithInvoice.mock.calls[0] ?? [];
     expect(`${title}${description}`).not.toContain('\u2800');
+  });
+
+  // #475: the pay button first and alone, green, over `then`'s rows, the whole a BotKeyboard
+  it('an invoice keyboard is the pay row stacked over its next step', () => {
+    const { ctx, context } = fakeCtx();
+    void replyWithInvoiceStars(
+      context,
+      { title: 'Токены', description: '100 токенов', payload: 'p', label: 'l', stars: 1 },
+      { pay: 'Оплатить', then: keyboard },
+    );
+    const markup = (ctx.replyWithInvoice.mock.calls[0]?.[5] as { reply_markup: unknown })
+      .reply_markup;
+    expect(isBotKeyboard(markup)).toBe(true);
+    expect((markup as typeof keyboard).inline_keyboard).toEqual([
+      [{ text: 'Оплатить', pay: true, style: 'success' }],
+      ...keyboard.inline_keyboard,
+    ]);
   });
 });

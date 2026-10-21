@@ -1,6 +1,9 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
+  ButtonRole,
+  callbackButton,
   editRefusal,
+  keyboardOf,
   BrokerBalanceUnavailableReason,
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
@@ -8,6 +11,8 @@ import {
   TradeIntentErrorCode,
   TradeMode,
   UserStatus,
+  type BotButton,
+  type BotKeyboard,
   type CreateTradeIntentRequest,
   type DecimalString,
   type PairView,
@@ -16,7 +21,6 @@ import {
   TRADE_INTENT_TRANSITIONS,
   type TradeIntentView,
   type TradingAccessResponse,
-  demoAnalysisCallbackData,
   telegramErrorFields,
 } from '@binarius/shared';
 import {
@@ -39,12 +43,13 @@ import {
 } from './demo';
 import {
   appendEndOfPath,
+  backToAnalysisButton,
   backToAnalysisKeyboard,
+  menuButton,
   menuKeyboard,
   retryKeyboard,
   supportKeyboard,
   withBuy,
-  withMenu,
 } from './keyboards';
 import { DEMO_DURATION_SEC, readDemoTrade, type DemoTradeRead } from './demo-catalog';
 import {
@@ -68,38 +73,47 @@ import {
 
 // The demo trade (#127, docs/bot-demo-trade.md): the stake button «➕ Ещё» draws under the analysis
 // screen (#360) creates an intent through POST /trading/intents, one status message follows it (the tracker),
-// and «🔄 Обновить статус» under that message reads the intent again.
+// and «🔄 Обновить» under that message reads the intent again.
 
 // `intent:<uuid>` is 43 bytes, inside the Bot API 64.
 export const intentCallbackData = (intentId: string): string => `intent:${intentId}`;
 export const INTENT_CALLBACK_PATTERN =
   /^intent:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
-// «🔄 Обновить статус» while the trade can still move (accepted until it settles); once the
-// tracker stops following it, the session offer (#360, at any payout since #631) and the
-// end of the path (#350): a new analysis, the signals, the menu.
+// «🔄 Обновить» while the trade can still move (accepted until it settles); once the tracker
+// stops following it, the session offer (#360, at any payout since #631) on its own row above
+// it, and the end of the path (#350) in its rows: a new analysis, the signals, the menu. `menu`
+// adds the menu to a live trade's row, which no tracker follows (#350).
 export function intentKeyboard(
   view: Pick<TradeIntentView, 'id' | 'mode' | 'status' | 'assetId' | 'durationSec'>,
-): InlineKeyboard {
-  const keyboard =
-    TRADE_INTENT_TRANSITIONS[view.status].length > 0
-      ? new InlineKeyboard().text(LABELS.refreshIntentButton, intentCallbackData(view.id))
-      : new InlineKeyboard();
+  { menu = false }: { menu?: boolean } = {},
+): BotKeyboard {
   const offer = sessionOfferOf(view);
-  if (offer !== undefined) {
+  const actions: BotButton[] = [
     // a demo trade's offer opens the amount screen (#476) as a new message, so the trade's stays
-    keyboard
-      .row()
-      .text(
-        sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, view.mode),
-        view.mode === TradeMode.Demo
-          ? demoLaunchCallbackData(view.assetId, offer, 'n')
-          : sessionStartCallbackData(view.mode, view.assetId, offer),
-      );
-  }
-  return TRACKER_STOP_STATUSES.has(view.status)
-    ? appendEndOfPath(keyboard, view.assetId)
-    : keyboard;
+    ...(offer === undefined
+      ? []
+      : [
+          callbackButton(
+            ButtonRole.Forward,
+            sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, view.mode),
+            view.mode === TradeMode.Demo
+              ? demoLaunchCallbackData(view.assetId, offer, 'n')
+              : sessionStartCallbackData(view.mode, view.assetId, offer),
+          ),
+        ]),
+    ...(TRADE_INTENT_TRANSITIONS[view.status].length > 0
+      ? [
+          callbackButton(
+            ButtonRole.Secondary,
+            LABELS.refreshIntentButton,
+            intentCallbackData(view.id),
+          ),
+        ]
+      : []),
+  ];
+  if (TRACKER_STOP_STATUSES.has(view.status)) return appendEndOfPath([actions], view.assetId);
+  return keyboardOf(menu ? [...actions, menuButton()] : actions);
 }
 
 export interface DemoTradeDeps {
@@ -108,7 +122,7 @@ export interface DemoTradeDeps {
   now: () => number;
   intentTracker: Pick<IntentTracker, 'track'>;
   // the welcome's connect button, for a press with no account to trade on
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
   // «💳 Пополнить»'s page (#27): cashierUrlOf's; none, no button
   cashierUrl?: string;
 }
@@ -118,7 +132,7 @@ interface Refusal {
   connect?: true;
   // the text of a real press, where it differs (#326)
   real?: BotStaticHtmlKey;
-  // «⭐ Купить токены» above the way back: a refusal for want of tokens (#117)
+  // «⭐ Купить» beside the way back, the deposit above: a refusal for want of tokens (#117)
   buy?: true;
   // «💵 Сумма» of the press's mode under the text: a refusal of the amount itself (#297)
   stakeMenu?: true;
@@ -182,7 +196,7 @@ export function createDemoTradeComposer<C extends Context>({
   logger,
   now,
   intentTracker,
-  connectKeyboard,
+  connectButtons,
   cashierUrl,
 }: DemoTradeDeps): Composer<C> {
   const composer = new Composer<C>();
@@ -218,10 +232,7 @@ export function createDemoTradeComposer<C extends Context>({
     // user would trade an amount or in a mode the label did not show
     if (stake.fingerprint !== stakeFingerprint(amount.amount, amount.mode)) {
       await replyHtml(ctx, TEXTS.stakeAmountChanged, {
-        reply_markup: new InlineKeyboard().text(
-          LABELS.stakeBackAnalysisButton,
-          demoAnalysisCallbackData(stake.assetId, stake.durationSec),
-        ),
+        reply_markup: keyboardOf([backToAnalysisButton(stake.assetId, stake.durationSec)]),
       });
       return;
     }
@@ -276,9 +287,7 @@ export function createDemoTradeComposer<C extends Context>({
       ? catalog.value.pairs.find((listed) => listed.id === view.assetId)
       : undefined;
     // no tracker follows the message a refresh draws, so a live status gets the menu too (#350)
-    const keyboard = TRACKER_STOP_STATUSES.has(view.status)
-      ? intentKeyboard(view)
-      : withMenu(intentKeyboard(view));
+    const keyboard = intentKeyboard(view, { menu: true });
     await refreshInPlace(
       ctx,
       intentStatusText(pair === undefined ? null : pairLabel(pair), view, {
@@ -324,7 +333,7 @@ export function createDemoTradeComposer<C extends Context>({
       return { amount, minTradeAmount: broker.minTradeAmount, mode: access.value.tradingMode };
     }
     if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
-      await replyHtml(ctx, TEXTS.accountNone, { reply_markup: connectKeyboard() });
+      await replyHtml(ctx, TEXTS.accountNone, { reply_markup: keyboardOf(connectButtons()) });
     } else if (brokerUnavailable === BrokerBalanceUnavailableReason.AmbiguousAccount) {
       await replyHtml(ctx, TEXTS.statusAmbiguous, { reply_markup: back() });
     } else {
@@ -358,14 +367,20 @@ export function createDemoTradeComposer<C extends Context>({
       refusal.text === 'blocked'
         ? supportKeyboard()
         : refusal.connect === true
-          ? connectKeyboard()
+          ? keyboardOf(connectButtons())
           : refusal.stakeMenu === true
-            ? new InlineKeyboard().text(
-                LABELS.stakeMenuButton,
-                stakeMenuCallbackData(mode, stake.assetId, stake.durationSec),
-              )
+            ? keyboardOf([
+                callbackButton(
+                  ButtonRole.Secondary,
+                  LABELS.stakeMenuButton,
+                  stakeMenuCallbackData(mode, stake.assetId, stake.durationSec),
+                ),
+              ])
             : refusal.buy === true
-              ? withBuy(backToAnalysisKeyboard(stake.assetId, stake.durationSec), cashierUrl)
+              ? withBuy(
+                  [backToAnalysisButton(stake.assetId, stake.durationSec), menuButton()],
+                  cashierUrl,
+                )
               : backToAnalysisKeyboard(stake.assetId, stake.durationSec);
     await replyHtml(ctx, text, { reply_markup });
   }
@@ -377,14 +392,17 @@ export function createDemoTradeComposer<C extends Context>({
     read: Exclude<DemoTradeRead, { ok: true }>,
     assetId: number,
   ): Promise<void> {
-    const backToGroups = new InlineKeyboard().text(
+    const toGroups = callbackButton(
+      ButtonRole.Nav,
       LABELS.demoBackGroupsButton,
       DEMO_GROUPS_CALLBACK_DATA,
     );
+    const backToGroups = keyboardOf([toGroups]);
     // the pair's summary reads the catalog anew (#685: no duration screen to go back to)
-    const backToPair = new InlineKeyboard()
-      .text(LABELS.demoBackPairButton, demoAssetCallbackData(assetId))
-      .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+    const backToPair = keyboardOf([
+      callbackButton(ButtonRole.Nav, LABELS.demoBackPairButton, demoAssetCallbackData(assetId)),
+      toGroups,
+    ]);
     switch (read.reason) {
       case 'catalog_unavailable':
         await replyHtml(ctx, TEXTS.demoCatalogUnavailable, { reply_markup: backToPair });
@@ -448,7 +466,7 @@ export function createDemoTradeComposer<C extends Context>({
             end === 'not_found'
               ? menuKeyboard()
               : end === 'deadline'
-                ? withMenu(intentKeyboard(view))
+                ? intentKeyboard(view, { menu: true })
                 : intentKeyboard(view),
         }),
     });
@@ -460,7 +478,7 @@ export function createDemoTradeComposer<C extends Context>({
   async function refreshInPlace(
     ctx: Context,
     text: TelegramHtml,
-    reply_markup: InlineKeyboard,
+    reply_markup: BotKeyboard,
   ): Promise<void> {
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });

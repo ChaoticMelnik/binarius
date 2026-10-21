@@ -1,21 +1,24 @@
-import { Composer, GrammyError, HttpError, type Context, type InlineKeyboard } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import type { User } from 'grammy/types';
 import {
   BrokerAccountStatus,
   BUY_CALLBACK_DATA,
   BUY_PACKAGE_PATTERN,
   errorLogFields,
+  keyboardOf,
   StarsCreditOutcome,
   StarsErrorCode,
   UserErrorCode,
   UserStatus,
   telegramErrorFields,
+  type BotButton,
 } from '@binarius/shared';
 import { BackendError, backendErrorFields, type BackendClient } from './backend-client';
 import {
   buyPackagesKeyboard,
   menuKeyboard,
   retryKeyboard,
+  supportButton,
   supportKeyboard,
   withMenu,
 } from './keyboards';
@@ -36,17 +39,17 @@ export interface StarsDeps {
   >;
   logger: Logger;
   // the welcome's connect button, for a user with no account to buy for
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
 }
 
-// Buying tokens for Telegram Stars (#117, docs/stars.md): /buy and «⭐ Купить токены» show the
+// Buying tokens for Telegram Stars (#117, docs/stars.md): /buy and «⭐ Купить» show the
 // packages, a package's button sends the invoice, and successful_payment is reported for the
 // credit. The bot mounts this on its private-chat composer, ahead of the text handler that swallows
 // unknown commands; the pre-checkout query, which has no chat, is createPreCheckoutComposer's.
 export function createStarsComposer({
   backend,
   logger,
-  connectKeyboard,
+  connectButtons,
 }: StarsDeps): Composer<Context> {
   const privateChats = new Composer<Context>();
 
@@ -70,7 +73,7 @@ export function createStarsComposer({
     } catch (error) {
       // no users row yet: nothing is connected, which is an answer, as in /account
       if (error instanceof BackendError && error.reason === UserErrorCode.UserNotFound) {
-        await replyHtml(ctx, TEXTS.buyNeedsAccount, { reply_markup: connectKeyboard() });
+        await replyHtml(ctx, TEXTS.buyNeedsAccount, { reply_markup: keyboardOf(connectButtons()) });
         return;
       }
       logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, '/buy not read');
@@ -82,7 +85,7 @@ export function createStarsComposer({
       return;
     }
     if (!user.accounts.some((account) => account.status === BrokerAccountStatus.Active)) {
-      await replyHtml(ctx, TEXTS.buyNeedsAccount, { reply_markup: connectKeyboard() });
+      await replyHtml(ctx, TEXTS.buyNeedsAccount, { reply_markup: keyboardOf(connectButtons()) });
       return;
     }
     await replyHtml(ctx, TEXTS.buyScreen, { reply_markup: buyPackagesKeyboard() });
@@ -119,7 +122,7 @@ export function createStarsComposer({
         return;
       case StarsErrorCode.UserNotFound:
       case StarsErrorCode.NoActiveAccount:
-        await replyHtml(ctx, TEXTS.buyNeedsAccount, { reply_markup: connectKeyboard() });
+        await replyHtml(ctx, TEXTS.buyNeedsAccount, { reply_markup: keyboardOf(connectButtons()) });
         return;
       case StarsErrorCode.PackageUnknown:
         await replyHtml(ctx, TEXTS.buyPackageGone, { reply_markup: buyPackagesKeyboard() });
@@ -156,14 +159,14 @@ export function createStarsComposer({
       );
       // the backend's definite word that no row can hold this payment: a person resolves it
       if (error instanceof BackendError && error.reason === StarsErrorCode.PayloadUnknown) {
-        await replyHtml(ctx, TEXTS.starsHeld, { reply_markup: withMenu(supportKeyboard()) });
+        await replyHtml(ctx, TEXTS.starsHeld, { reply_markup: withMenu([supportButton()]) });
         return;
       }
       await replyHtml(ctx, TEXTS.starsPending, { reply_markup: menuKeyboard() });
       return;
     }
     if (report.outcome === StarsCreditOutcome.Held) {
-      await replyHtml(ctx, TEXTS.starsHeld, { reply_markup: withMenu(supportKeyboard()) });
+      await replyHtml(ctx, TEXTS.starsHeld, { reply_markup: withMenu([supportButton()]) });
       return;
     }
     await replyHtml(

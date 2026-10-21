@@ -1,8 +1,13 @@
-import { Composer, InlineKeyboard, InputFile, type Api, type Context } from 'grammy';
+import { Composer, InputFile, type Api, type Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import {
+  ButtonRole,
   errorLogFields,
+  keyboardOf,
   referralLinkOf,
+  stackKeyboards,
+  switchInlineButton,
+  type BotKeyboard,
   type SessionShare,
   telegramErrorFields,
   type TelegramHtml,
@@ -42,9 +47,10 @@ export const SHARE_START_PAYLOAD = 'share';
 export const shareFallbackLink = (botUsername: string): string =>
   `https://t.me/${botUsername}?start=${SHARE_START_PAYLOAD}`;
 
-// the picker lists people, groups and channels; a chat with a bot would show the card to no one
+// the picker lists people, groups and channels; a chat with a bot would show the card to no one.
+// A step forward (#475): its own row, green.
 export const shareButton = (query: string) =>
-  InlineKeyboard.switchInlineChosen(LABELS.sessionShareButton, {
+  switchInlineButton(ButtonRole.Forward, LABELS.sessionShareButton, {
     query,
     allow_user_chats: true,
     allow_group_chats: true,
@@ -61,14 +67,11 @@ export async function attachShareButton(
   logger: Logger,
   sessionId: string,
   sent: SentCard,
-  cardKeyboard: InlineKeyboard,
+  cardKeyboard: BotKeyboard,
 ): Promise<void> {
   try {
     await api.editMessageReplyMarkup(sent.chat.id, sent.message_id, {
-      reply_markup: InlineKeyboard.from([
-        [shareButton(shareQuery(sessionId))],
-        ...cardKeyboard.inline_keyboard,
-      ]),
+      reply_markup: stackKeyboards(keyboardOf([shareButton(shareQuery(sessionId))]), cardKeyboard),
     });
   } catch (error) {
     logger.warn(

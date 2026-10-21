@@ -1,6 +1,8 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
   BotLanguage,
+  ButtonRole,
+  callbackButton,
   botLanguageSchema,
   editRefusal,
   errorLogFields,
@@ -9,6 +11,7 @@ import {
   languageSetCallbackData,
   telegramErrorFields,
   UserErrorCode,
+  type BotKeyboard,
   type BotLanguage as Language,
   type TelegramHtml,
 } from '@binarius/shared';
@@ -34,16 +37,22 @@ export interface LanguageScreenDeps {
 
 interface Screen {
   text: TelegramHtml;
-  keyboard: InlineKeyboard;
+  keyboard: BotKeyboard;
 }
 
-const languageScreen = (current: Language): Screen => {
-  const keyboard = new InlineKeyboard();
-  for (const language of Object.values(BotLanguage)) {
-    keyboard.text(languageLabel(language, language === current), languageSetCallbackData(language));
-  }
-  return { text: TEXTS.languageScreen, keyboard: withMenu(keyboard) };
-};
+// the languages and the menu in one row: a choice among options has no colour (#475)
+const languageScreen = (current: Language): Screen => ({
+  text: TEXTS.languageScreen,
+  keyboard: withMenu(
+    Object.values(BotLanguage).map((language) =>
+      callbackButton(
+        ButtonRole.Nav,
+        languageLabel(language, language === current),
+        languageSetCallbackData(language),
+      ),
+    ),
+  ),
+});
 
 export function createLanguageScreenComposer<C extends Context>({
   backend,

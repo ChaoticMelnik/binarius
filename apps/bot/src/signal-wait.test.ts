@@ -1,7 +1,10 @@
-import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
+import { GrammyError, HttpError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BotLanguage,
+  ButtonRole,
+  callbackButton,
+  keyboardOf,
   InvalidTelegramTemplate,
   SignalFeedOutcome,
   SignalKind,
@@ -18,6 +21,7 @@ import type { DemoScreen } from './demo';
 import { currentLanguage } from './language';
 import {
   createSignalWaiter,
+  renderKey,
   type ListWaitRequest,
   type PairWaitRequest,
   type SignalWaitScreens,
@@ -44,7 +48,7 @@ const GAP = 200;
 
 const screen = (text: string, button = 'k'): DemoScreen => ({
   text: telegramHtml`${text}`,
-  keyboard: new InlineKeyboard().text(button, button),
+  keyboard: keyboardOf([callbackButton(ButtonRole.Nav, button, button)]),
 });
 
 const refusal = (error_code: number, description: string, retry_after?: number) =>
@@ -103,7 +107,7 @@ function setup(options: { maxMs?: number; shutdownBudgetMs?: number; maxEntries?
       response.outcome === SignalFeedOutcome.Decided && response.decision.kind === SignalKind.Signal
         ? {
             text: telegramHtml`card`,
-            keyboard: new InlineKeyboard().text('c', 'c'),
+            keyboard: keyboardOf([callbackButton(ButtonRole.Nav, 'c', 'c')]),
             action: response.decision.action,
           }
         : undefined,
@@ -178,6 +182,21 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+
+// #475: the colour is part of what the user sees, so a pair whose signal turned is drawn again
+describe('renderKey (#475)', () => {
+  it('W-key: the same pair green and red are two drawings', () => {
+    const pair = (role: ButtonRole) => ({
+      text: telegramHtml`list`,
+      keyboard: keyboardOf({
+        buttons: [callbackButton(role, 'EUR/USD 85%', 'demo:l:1:5')],
+        perRow: 2,
+      }),
+    });
+    expect(renderKey(pair(ButtonRole.Up))).not.toBe(renderKey(pair(ButtonRole.Down)));
+    expect(renderKey(pair(ButtonRole.Up))).toBe(renderKey(pair(ButtonRole.Up)));
+  });
 });
 
 describe('the wait for a signal', () => {

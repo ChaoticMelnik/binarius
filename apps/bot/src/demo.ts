@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
   deleteRefusal,
   editRefusal,
@@ -21,14 +21,19 @@ import {
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
   SignalFeedOutcome,
-  stakeIsRisky,
   stakePresets,
   telegramHtml,
   TradeAction,
   TradeMode,
   tradeAmountSchema,
   tradeModeSchema,
+  ButtonRole,
+  callbackButton,
+  keyboardOf,
+  type BotButton,
+  type BotKeyboard,
   type BrokerBalanceView,
+  type ButtonGroup,
   type DecimalString,
   type PairLabel,
   type PairsCatalogResponse,
@@ -39,7 +44,6 @@ import {
   type TradingSignalsResponse,
   DEMO_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
-  MENU_CALLBACK_DATA,
   demoAnalysisCallbackData,
   telegramErrorFields,
 } from '@binarius/shared';
@@ -80,9 +84,10 @@ import type { SetupCardPhotos } from './setup-card';
 import type { SignalWaiter, SignalWaitScreens } from './signal-wait';
 import { currentLanguage } from './language';
 import { stakeAccess } from './stake-access';
+import { stakeGroups } from './stake-rows';
+import { menuButton, retryButton } from './keyboards';
 import {
   assetLabelOf,
-  cycleStakeLabel,
   cycleStakeText,
   DEMO_DURATION_LABELS,
   demoPairsScreen,
@@ -134,7 +139,7 @@ export const cycleStakeCallbackData = (
   amount: string,
   back: CycleBack,
 ): string => `demo:sa:${assetId}:${durationSec}:${amount}:${back}`;
-// «✏️ Своя сумма» of the amount screen: the prompt, then the typed amount starts the cycle
+// «✏️ Ввести» of the amount screen: the prompt, then the typed amount starts the cycle
 export const cycleCustomCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
@@ -209,7 +214,7 @@ export const stakeMenuCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
 ): string => `${STAKE_PICKER_PREFIX}o:${MODE_TOKENS[mode]}:a:${assetId}:${durationSec}`;
-// the launch screen's «💵 Изменить ставку»: the picker whose way back is that launch screen
+// the launch screen's «💵 Ставка»: the picker whose way back is that launch screen
 export const launchStakeCallbackData = (
   mode: TradeMode,
   assetId: number,
@@ -434,7 +439,7 @@ export interface CycleStakeStep {
 const cycleBackOfData = (raw: string | undefined): CycleBack | undefined =>
   raw === 'l' || raw === 'a' ? raw : undefined;
 
-// «✏️ Своя сумма»'s data from a CYCLE_CUSTOM_PATTERN match, undefined when forged
+// «✏️ Ввести»'s data from a CYCLE_CUSTOM_PATTERN match, undefined when forged
 export function cycleCustomDataOf(match: RegExpMatchArray | string): CycleStakeStep | undefined {
   if (typeof match === 'string') return undefined;
   const assetId = assetIdOf(match[1]);
@@ -538,14 +543,13 @@ export function signalsScreen(
   const list = signals.lists.find((candidate) => candidate.interval === interval);
   if (list === undefined) return undefined;
   const shown = signalsShown(list.signals, catalog, nowMs);
-  const keyboard = appendSignalButtons(new InlineKeyboard(), shown);
   const listed = shown.length;
   const label = DEMO_DURATION_LABELS[DEMO_DURATION_SEC];
   if (listed === 0) {
     return {
       screen: {
         text: TEXTS.signalsWaiting({ label }),
-        keyboard: appendSignalsFooter(new InlineKeyboard()),
+        keyboard: signalsFooter([]),
       },
       listed,
     };
@@ -553,30 +557,33 @@ export function signalsScreen(
   return {
     screen: {
       text: TEXTS.demoSignalsHeader({ label }),
-      keyboard: appendSignalsFooter(
-        keyboard.text(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA),
+      keyboard: signalsFooter(
+        [
+          callbackButton(
+            ButtonRole.Secondary,
+            LABELS.demoSignalsRefreshButton,
+            DEMO_SIGNALS_CALLBACK_DATA,
+          ),
+        ],
+        signalList(shown),
       ),
     },
     listed,
   };
 }
 
-// The other pairs' buttons, two a row in the list's order, as the list draws them
-function appendSignalButtons(
-  keyboard: InlineKeyboard,
-  shown: readonly ShownSignal[],
-): InlineKeyboard {
-  shown.forEach(({ pair, action }, index) => {
-    if (index > 0 && index % 2 === 0) keyboard.row();
-    keyboard.text(
+// The pairs' buttons, two a row in the list's order, green or red by the signal's direction
+// (#475), as the list draws them
+const signalList = (shown: readonly ShownSignal[]): ButtonGroup => ({
+  buttons: shown.map(({ pair, action }) =>
+    callbackButton(
+      action === TradeAction.Up ? ButtonRole.Up : ButtonRole.Down,
       signalButtonLabel(pairLabel(pair), action, pair.payout),
       demoLaunchCallbackData(pair.id, DEMO_DURATION_SEC),
-    );
-  });
-  // grammY's row() pushes an empty row: unguarded, a screen without them would lead with [].
-  if (shown.length > 0) keyboard.row();
-  return keyboard;
-}
+    ),
+  ),
+  perRow: 2,
+});
 
 // The wait for a pair's signal (#664): its text, and while there are some the line and the
 // buttons of the pairs with a signal now, then the manual path and the menu
@@ -586,7 +593,7 @@ export function pairWaitingScreen(
 ): DemoScreen {
   return {
     text: waitingText(base, alternatives.length > 0),
-    keyboard: appendSignalsFooter(appendSignalButtons(new InlineKeyboard(), alternatives)),
+    keyboard: signalsFooter([], signalList(alternatives)),
   };
 }
 
@@ -606,20 +613,19 @@ export const pairWaitingText = (symbol: PairLabel | null, assetId: number): Tele
 // The start of trading (#664): the list after its 30 s, the wait past its bound or at the stop
 export const expiredSignalsScreen = (): DemoScreen => ({
   text: TEXTS.signalsExpired({ label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC] }),
-  keyboard: new InlineKeyboard()
-    .text(LABELS.showSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)
-    .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA)
-    .row()
-    .text(LABELS.menuButton, MENU_CALLBACK_DATA),
+  keyboard: signalsFooter([
+    callbackButton(ButtonRole.Forward, LABELS.showSignalsButton, DEMO_SIGNALS_CALLBACK_DATA),
+  ]),
 });
 
-// The list's footer (#685), also under its refusals: «🧭 Выбрать пару вручную» beside the first
-// button of the row (refresh or retry), then «🏠 В меню» in a row of its own
-export const appendSignalsFooter = (keyboard: InlineKeyboard): InlineKeyboard =>
-  keyboard
-    .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA)
-    .row()
-    .text(LABELS.menuButton, MENU_CALLBACK_DATA);
+// The list's footer (#685), also under its refusals: `lead` (refresh, retry or «📡 Показать
+// сигналы»), «🧭 Вручную» and «🏠 В меню» in one row of actions, under the pairs of `above`
+export const signalsFooter = (lead: readonly BotButton[], ...above: ButtonGroup[]): BotKeyboard =>
+  keyboardOf(...above, [
+    ...lead,
+    callbackButton(ButtonRole.Nav, LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
+    menuButton(),
+  ]);
 
 // The launch of a session of DEFAULT_SESSION_CYCLES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
@@ -653,15 +659,19 @@ export function launchScreen({
   });
   return {
     text,
-    keyboard: new InlineKeyboard()
-      .text(
+    keyboard: keyboardOf([
+      callbackButton(
+        ButtonRole.Forward,
         launchCycleButtonLabel(mode),
         sessionStartCallbackData(mode, assetId, durationSec, true),
-      )
-      .row()
-      .text(LABELS.stakeChangeButton, launchStakeCallbackData(mode, assetId, durationSec))
-      .row()
-      .text(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA),
+      ),
+      callbackButton(
+        ButtonRole.Secondary,
+        LABELS.stakeChangeButton,
+        launchStakeCallbackData(mode, assetId, durationSec),
+      ),
+      callbackButton(ButtonRole.Nav, LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA),
+    ]),
   };
 }
 
@@ -684,10 +694,6 @@ export function cycleStakeAmounts({
   return [...presets, own].sort((a, b) => (decimalLessThan(a, b) ? -1 : 1));
 }
 
-// small amounts three a row, the risky ones two a row below them, as the owner's example (#476)
-const CALM_PER_ROW = 3;
-const RISKY_PER_ROW = 2;
-
 // The amounts of a demo cycle and the one in effect (the saved demo stake, or the broker's minimum
 // without one), drawn by the amount screen and under the analysis card (#482).
 export interface CycleAmounts {
@@ -707,47 +713,43 @@ export const cycleAmountsOf = (
   current: decimalStringSchema.parse(normalizeDecimal(access.demoStake ?? broker.minTradeAmount)),
 });
 
-// The amount rows, ✅ on the one in effect, then «✏️ Своя сумма» with no row closed after it: the
-// amount screen puts its way back beside it, the card closes the row itself. No amount, no button.
-export function appendCycleAmounts(
-  keyboard: InlineKeyboard,
+// The amount lists (stake-rows.ts), ✅ on the one in effect, and «✏️ Ввести», which joins the
+// screen's next row of actions (the amount screen's way back, the card's tail). No amount, no
+// button.
+export function cycleAmountGroups(
   { assetId, durationSec, back }: CycleStakeStep,
   { amounts, current }: CycleAmounts,
-): InlineKeyboard {
-  const appendRows = (group: DecimalString[], perRow: number) => {
-    group.forEach((amount, index) => {
-      if (index > 0 && index % perRow === 0) keyboard.row();
-      keyboard.text(
-        cycleStakeLabel(amount, amount === current),
-        cycleStakeCallbackData(assetId, durationSec, amount, back),
-      );
-    });
-    if (group.length > 0) keyboard.row();
+): { lists: ButtonGroup[]; custom: BotButton[] } {
+  return {
+    lists: stakeGroups(amounts, current, (amount) =>
+      cycleStakeCallbackData(assetId, durationSec, amount, back),
+    ),
+    custom:
+      amounts.length > 0
+        ? [
+            callbackButton(
+              ButtonRole.Secondary,
+              LABELS.stakeCustomButton,
+              cycleCustomCallbackData(assetId, durationSec, back),
+            ),
+          ]
+        : [],
   };
-  appendRows(
-    amounts.filter((amount) => !stakeIsRisky(amount)),
-    CALM_PER_ROW,
-  );
-  appendRows(amounts.filter(stakeIsRisky), RISKY_PER_ROW);
-  if (amounts.length > 0) {
-    keyboard.text(LABELS.stakeCustomButton, cycleCustomCallbackData(assetId, durationSec, back));
-  }
-  return keyboard;
 }
 
 // the amount screen's way back: to the signal list, or to the pair's analysis
-export function appendCycleBack(
-  keyboard: InlineKeyboard,
-  { assetId, durationSec, back }: CycleStakeStep,
-): InlineKeyboard {
-  return back === 'l'
-    ? keyboard.text(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA)
-    : keyboard.text(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(assetId, durationSec));
-}
+export const cycleBackButton = ({ assetId, durationSec, back }: CycleStakeStep): BotButton =>
+  back === 'l'
+    ? callbackButton(ButtonRole.Nav, LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA)
+    : callbackButton(
+        ButtonRole.Nav,
+        LABELS.stakeBackAnalysisButton,
+        demoAnalysisCallbackData(assetId, durationSec),
+      );
 
 // The amount screen of a demo session of DEFAULT_SESSION_CYCLES (#476, docs/bot-demo.md → The amount
 // screen), in place of the launch screen in demo: the amounts, ✅ on the one in effect (the saved
-// demo stake, or the broker's minimum without one), then «✏️ Своя сумма» and the way back. No
+// demo stake, or the broker's minimum without one), then «✏️ Ввести» and the way back. No
 // amount (the balance is below the minimum): the picker's line and the way back only.
 export function cycleStakeScreen({
   step,
@@ -765,6 +767,7 @@ export function cycleStakeScreen({
   saved?: { amount: DecimalString | null; mode: TradeMode };
 }): DemoScreen {
   const shown = cycleAmountsOf(access, broker);
+  const { lists, custom } = cycleAmountGroups(step, shown);
   return {
     text: cycleStakeText({
       firstName,
@@ -776,7 +779,7 @@ export function cycleStakeScreen({
       empty: shown.amounts.length === 0,
       ...(saved === undefined ? {} : { saved }),
     }),
-    keyboard: appendCycleBack(appendCycleAmounts(new InlineKeyboard(), step, shown), step),
+    keyboard: keyboardOf(...lists, [...custom, cycleBackButton(step)]),
   };
 }
 
@@ -790,17 +793,17 @@ export function demoCycleScreen({
   firstName,
   symbol,
   access,
-  connectKeyboard,
+  connectButtons,
   saved,
 }: {
   step: CycleStakeStep;
   firstName: string;
   symbol: PairLabel | null;
   access: TradingAccessResponse | null;
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
   saved?: { amount: DecimalString | null; mode: TradeMode };
 }): DemoScreen {
-  const back = (keyboard: InlineKeyboard) => appendCycleBack(keyboard, step);
+  const back = (actions: readonly BotButton[]) => keyboardOf([...actions, cycleBackButton(step)]);
   const underSaved = (screen: DemoScreen): DemoScreen =>
     saved === undefined
       ? screen
@@ -813,17 +816,12 @@ ${screen.text}`,
   if (access === null) {
     return underSaved({
       text: TEXTS.unavailable,
-      keyboard: back(
-        new InlineKeyboard()
-          .text(
-            LABELS.demoRetryButton,
-            demoLaunchCallbackData(step.assetId, step.durationSec, step.back),
-          )
-          .row(),
-      ),
+      keyboard: back([
+        retryButton(demoLaunchCallbackData(step.assetId, step.durationSec, step.back)),
+      ]),
     });
   }
-  const checked = stakeAccess(access, back, connectKeyboard);
+  const checked = stakeAccess(access, back, connectButtons);
   if ('refusal' in checked) return underSaved(checked.refusal);
   return cycleStakeScreen({
     step,
@@ -842,11 +840,11 @@ ${screen.text}`,
 export function cardAmountsOf(
   access: TradingAccessResponse | null,
   durationSec: DemoDurationSec,
-  connectKeyboard: () => InlineKeyboard,
+  connectButtons: () => BotButton[],
 ): CycleAmounts | null {
   if (access === null || access.tradingMode !== TradeMode.Demo) return null;
   if (!sessionFits(durationSec)) return null;
-  const checked = stakeAccess(access, (keyboard) => keyboard, connectKeyboard);
+  const checked = stakeAccess(access, (actions) => keyboardOf(actions), connectButtons);
   if (!('broker' in checked)) return null;
   const shown = cycleAmountsOf(access, checked.broker);
   return shown.amounts.length > 0 ? shown : null;
@@ -854,35 +852,41 @@ export function cardAmountsOf(
 
 // The session row first on a signal (#360; never without one, #509) at any payout (#631),
 // in the user's mode (#327) — under a signal's card in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then
-// «🔄 Повторить анализ» and the way back
+// «🔄 Заново» and the way back, the actions under the amounts in one group (#475)
 export function analysisKeyboard(
   assetId: number,
   durationSec: DemoDurationSec,
   screen: AnalysisScreen,
   mode: TradeMode,
   amounts: CycleAmounts | null,
-): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  if (screen.photo !== null && amounts !== null) {
-    appendCycleAmounts(keyboard, { assetId, durationSec, back: 'a' }, amounts).row();
-  } else if (screen.session) {
-    appendSessionRow(keyboard, assetId, durationSec, mode);
-  }
-  if (screen.stake !== null) {
-    keyboard
-      .text(
-        LABELS.analysisMoreButton,
-        analysisMoreCallbackData(assetId, durationSec, screen.stake, mode),
-      )
-      .row();
-  }
-  return appendAnalysisTail(keyboard, assetId, durationSec);
+): BotKeyboard {
+  const amountRows =
+    screen.photo !== null && amounts !== null
+      ? cycleAmountGroups({ assetId, durationSec, back: 'a' }, amounts)
+      : null;
+  const lead =
+    amountRows?.custom ?? (screen.session ? sessionButtons(assetId, durationSec, mode) : []);
+  const more =
+    screen.stake === null
+      ? []
+      : [
+          callbackButton(
+            ButtonRole.Secondary,
+            LABELS.analysisMoreButton,
+            analysisMoreCallbackData(assetId, durationSec, screen.stake, mode),
+          ),
+        ];
+  return keyboardOf(...(amountRows?.lists ?? []), [
+    ...lead,
+    ...more,
+    ...analysisTail(assetId, durationSec),
+  ]);
 }
 
-// What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it, with «💵 Сумма»
-// opening the picker of the same mode (#326). In real mode (#121) the stake button and the
-// session row (#327) are marked REAL; in demo the amounts stay above it where the card drew them
-// (#482), read at this press.
+// What «➕ Ещё» draws in place of the collapsed keyboard: the stake button joins it on its own row,
+// green on ⬆️ and red on ⬇️ (#475), with «💵 Сумма» opening the picker of the same mode (#326). In
+// real mode (#121) the stake button and the session row (#327) are marked REAL; in demo the
+// amounts stay above it where the card drew them (#482), read at this press.
 export function expandedKeyboard(
   assetId: number,
   durationSec: DemoDurationSec,
@@ -890,7 +894,7 @@ export function expandedKeyboard(
   amount: DecimalString | null,
   mode: TradeMode,
   amounts: CycleAmounts | null,
-): InlineKeyboard {
+): BotKeyboard {
   const stakeData = stakeCallbackData(
     assetId,
     durationSec,
@@ -898,49 +902,62 @@ export function expandedKeyboard(
     newStakeNonce(),
     stakeFingerprint(amount, mode),
   );
-  const label = stakeButtonLabel(action, amount, mode);
-  const keyboard = (
-    amounts === null
-      ? appendSessionRow(new InlineKeyboard(), assetId, durationSec, mode)
-      : appendCycleAmounts(new InlineKeyboard(), { assetId, durationSec, back: 'a' }, amounts).row()
-  )
-    .text(label, stakeData)
-    .text(LABELS.stakeMenuButton, stakeMenuCallbackData(mode, assetId, durationSec))
-    .row();
-  return appendAnalysisTail(keyboard, assetId, durationSec);
+  const trade = callbackButton(
+    action === TradeAction.Up ? ButtonRole.Forward : ButtonRole.ForwardDown,
+    stakeButtonLabel(action, amount, mode),
+    stakeData,
+  );
+  const stakeMenu = callbackButton(
+    ButtonRole.Secondary,
+    LABELS.stakeMenuButton,
+    stakeMenuCallbackData(mode, assetId, durationSec),
+  );
+  const amountRows =
+    amounts === null ? null : cycleAmountGroups({ assetId, durationSec, back: 'a' }, amounts);
+  // the trade before «✏️ Ввести»: a forward button splits its group's rows, and «✏️» above it
+  // would stand alone
+  return keyboardOf(...(amountRows?.lists ?? []), [
+    ...(amountRows === null ? sessionButtons(assetId, durationSec, mode) : []),
+    trade,
+    ...(amountRows?.custom ?? []),
+    stakeMenu,
+    ...analysisTail(assetId, durationSec),
+  ]);
 }
 
 // its own row: the session's trades follow the orchestrator's signal at each trade, not this
 // screen's direction
-function appendSessionRow(
-  keyboard: InlineKeyboard,
+function sessionButtons(
   assetId: number,
   durationSec: DemoDurationSec,
   mode: TradeMode,
-): InlineKeyboard {
-  if (!sessionFits(durationSec)) return keyboard;
+): BotButton[] {
+  if (!sessionFits(durationSec)) return [];
   // in demo the amount screen first (#476), edited in place of the analysis
-  return keyboard
-    .text(
+  return [
+    callbackButton(
+      ButtonRole.Forward,
       sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, mode),
       mode === TradeMode.Demo
         ? demoLaunchCallbackData(assetId, durationSec, 'a')
         : sessionStartCallbackData(mode, assetId, durationSec),
-    )
-    .row();
+    ),
+  ];
 }
 
-export function appendAnalysisTail(
-  keyboard: InlineKeyboard,
-  assetId: number,
-  durationSec: DemoDurationSec,
-): InlineKeyboard {
-  return keyboard
-    .text(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
-    .row()
-    .text(LABELS.demoBackPairButton, demoAssetCallbackData(assetId))
-    .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
-}
+// «🔄 Заново», «↩️ К паре», «↩️ Типы»: the actions every analysis keyboard ends with
+export const analysisTail = (assetId: number, durationSec: DemoDurationSec): BotButton[] => [
+  callbackButton(
+    ButtonRole.Secondary,
+    LABELS.repeatAnalysisButton,
+    demoAnalysisCallbackData(assetId, durationSec),
+  ),
+  callbackButton(ButtonRole.Nav, LABELS.demoBackPairButton, demoAssetCallbackData(assetId)),
+  callbackButton(ButtonRole.Nav, LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA),
+];
+
+export const analysisTailKeyboard = (assetId: number, durationSec: DemoDurationSec) =>
+  keyboardOf(analysisTail(assetId, durationSec));
 
 // A pair the catalog refuses: gone, closed by the schedule, or not taking the demo's duration
 // (#685) - there is no other duration to choose, so the way back is to the pair's page
@@ -955,7 +972,7 @@ export function pairRefusalScreen(
     case 'pair_closed':
       return {
         text: TEXTS.demoPairClosed({ symbol: pairLabel(check.pair) }),
-        keyboard: appendBackToPairs(new InlineKeyboard(), catalog, check.pair, nowMs),
+        keyboard: keyboardOf(backToPairs(catalog, check.pair, nowMs)),
       };
     case 'duration_unsupported':
       return {
@@ -963,27 +980,24 @@ export function pairRefusalScreen(
           symbol: pairLabel(check.pair),
           label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC],
         }),
-        keyboard: appendBackToPairs(new InlineKeyboard(), catalog, check.pair, nowMs),
+        keyboard: keyboardOf(backToPairs(catalog, check.pair, nowMs)),
       };
   }
 }
 
-const backToGroups = () =>
-  new InlineKeyboard().text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+const backToGroupsButton = () =>
+  callbackButton(ButtonRole.Nav, LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+const backToGroups = () => keyboardOf([backToGroupsButton()]);
 
 // «↩️ Активы» leads to the page the pair is listed on (the first page when it is not listed),
 // then «↩️ Типы»
-function appendBackToPairs(
-  keyboard: InlineKeyboard,
-  catalog: PairsCatalogResponse,
-  pair: PairView,
-  nowMs: number,
-): InlineKeyboard {
+function backToPairs(catalog: PairsCatalogResponse, pair: PairView, nowMs: number): BotButton[] {
   const group = pairTypeGroupOf(pair.type);
   const page = pageIndexOf(openPairsOf(catalog, group, nowMs), pair.id);
-  return keyboard
-    .text(LABELS.demoBackPairsButton, demoPageCallbackData(group, page))
-    .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+  return [
+    callbackButton(ButtonRole.Nav, LABELS.demoBackPairsButton, demoPageCallbackData(group, page)),
+    backToGroupsButton(),
+  ];
 }
 
 // The next step on a pair with a signal (#476, #327): the launch screen in real mode, the amount
@@ -992,7 +1006,7 @@ export function nextStepScreen(
   { assetId, back, firstName }: { assetId: number; back: CycleBack; firstName: string },
   pair: PairView,
   access: TradingAccessResponse | null,
-  connectKeyboard: () => InlineKeyboard,
+  connectButtons: () => BotButton[],
 ): DemoScreen {
   return access?.tradingMode === TradeMode.Real
     ? launchScreen({
@@ -1008,16 +1022,16 @@ export function nextStepScreen(
         firstName,
         symbol: pairLabel(pair),
         access,
-        connectKeyboard,
+        connectButtons,
       });
 }
 
 // What the wait for a signal draws (signal-wait.ts): the screens of this file
 export function createSignalWaitScreens({
-  connectKeyboard,
+  connectButtons,
   setupCardPhotos,
 }: {
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
   setupCardPhotos: SetupCardPhotos;
 }): SignalWaitScreens {
   return {
@@ -1025,12 +1039,12 @@ export function createSignalWaitScreens({
     expired: expiredSignalsScreen,
     waiting: pairWaitingScreen,
     alternatives: signalsShown,
-    nextStep: (step, pair, access) => nextStepScreen(step, pair, access, connectKeyboard),
+    nextStep: (step, pair, access) => nextStepScreen(step, pair, access, connectButtons),
     refusal: pairRefusalScreen,
     // the analysis's card as «📊 Анализ» draws it, in the mode access gives (demo when not read)
     card: (pair, response, access) => {
       const mode = access?.tradingMode ?? TradeMode.Demo;
-      const amounts = cardAmountsOf(access, DEMO_DURATION_SEC, connectKeyboard);
+      const amounts = cardAmountsOf(access, DEMO_DURATION_SEC, connectButtons);
       const screen = analysisScreen({
         pair,
         durationSec: DEMO_DURATION_SEC,
@@ -1057,7 +1071,7 @@ export interface DemoComposerDeps {
   logger: Logger;
   now: () => number;
   // the welcome's connect button, for a user with no account to trade on
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
   // the card's pictures, shared with the session message (#568)
   setupCardPhotos: SetupCardPhotos;
   // the wait for a signal (#664): the list without pairs, the list's 30 s, the pair without one
@@ -1068,7 +1082,7 @@ export function createDemoComposer<C extends Context>({
   backend,
   logger,
   now,
-  connectKeyboard,
+  connectButtons,
   setupCardPhotos,
   signalWaiter,
 }: DemoComposerDeps): Composer<C> {
@@ -1150,7 +1164,7 @@ export function createDemoComposer<C extends Context>({
     } else {
       const list = signals === null ? undefined : signalsListOf(signals);
       if (list?.signals.some((signal) => signal.assetId === assetId) === true) {
-        screen = nextStepScreen({ assetId, back, firstName }, read.pair, access, connectKeyboard);
+        screen = nextStepScreen({ assetId, back, firstName }, read.pair, access, connectButtons);
       } else {
         const alternatives =
           list === undefined ? [] : signalsShown(list.signals, read.catalog, now());
@@ -1218,14 +1232,14 @@ export function createDemoComposer<C extends Context>({
     const screen = read.ok
       ? {
           text: demoSummary(read.pair, DEMO_DURATION_SEC),
-          keyboard: appendBackToPairs(
-            new InlineKeyboard()
-              .text(LABELS.demoAnalysisButton, demoAnalysisCallbackData(assetId, DEMO_DURATION_SEC))
-              .row(),
-            read.catalog,
-            read.pair,
-            now(),
-          ),
+          keyboard: keyboardOf([
+            callbackButton(
+              ButtonRole.Forward,
+              LABELS.demoAnalysisButton,
+              demoAnalysisCallbackData(assetId, DEMO_DURATION_SEC),
+            ),
+            ...backToPairs(read.catalog, read.pair, now()),
+          ]),
         }
       : tradeFailure(read, ctx.callbackQuery?.data ?? demoAssetCallbackData(assetId));
     await editOrReply(ctx, screen.text, screen.keyboard);
@@ -1278,7 +1292,7 @@ export function createDemoComposer<C extends Context>({
       TEXTS.analyzing({ subject: analysisSubject(read.pair, durationSec) }),
     );
     if (waiting === 'unknown') return;
-    const amounts = cardAmountsOf(stake.access, durationSec, connectKeyboard);
+    const amounts = cardAmountsOf(stake.access, durationSec, connectButtons);
     const screen = await evaluate(
       ctx.from.id,
       read.pair,
@@ -1332,9 +1346,9 @@ export function createDemoComposer<C extends Context>({
             data.action,
             amount,
             mode,
-            cardAmountsOf(access, data.durationSec, connectKeyboard),
+            cardAmountsOf(access, data.durationSec, connectButtons),
           )
-        : appendAnalysisTail(new InlineKeyboard(), data.assetId, data.durationSec),
+        : analysisTailKeyboard(data.assetId, data.durationSec),
     );
   });
 
@@ -1433,7 +1447,7 @@ export function createDemoComposer<C extends Context>({
     ctx: Context,
     waiting: Waiting,
     text: TelegramHtml,
-    keyboard: InlineKeyboard,
+    keyboard: BotKeyboard,
   ): Promise<Place | undefined> {
     if (waiting === null) return placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
     if (waiting.pressed) return editOrReply(ctx, text, keyboard);
@@ -1444,7 +1458,7 @@ export function createDemoComposer<C extends Context>({
     ctx: Context,
     { chatId, messageId }: Exclude<Waiting, null>,
     text: TelegramHtml,
-    keyboard: InlineKeyboard,
+    keyboard: BotKeyboard,
   ): Promise<Place | undefined> {
     try {
       await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
@@ -1486,7 +1500,7 @@ export function createDemoComposer<C extends Context>({
     waiting: Waiting,
     action: TradeAction,
     text: TelegramHtml,
-    keyboard: InlineKeyboard,
+    keyboard: BotKeyboard,
     pair: PairView,
     durationSec: DemoDurationSec,
   ): Promise<void> {
@@ -1521,7 +1535,7 @@ export function createDemoComposer<C extends Context>({
             ctx,
             waiting,
             analysisUnavailableScreen(pair, durationSec).text,
-            appendAnalysisTail(new InlineKeyboard(), pair.id, durationSec),
+            analysisTailKeyboard(pair.id, durationSec),
           );
         }
       } else {
@@ -1538,7 +1552,7 @@ export function createDemoComposer<C extends Context>({
     ctx: Context,
     { chatId, messageId }: Exclude<Waiting, null>,
     text: TelegramHtml,
-    keyboard: InlineKeyboard,
+    keyboard: BotKeyboard,
   ): Promise<void> {
     try {
       await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
@@ -1591,16 +1605,12 @@ export function createDemoComposer<C extends Context>({
     retryData: string,
   ): Promise<{ screen: DemoScreen; listed: number | undefined }> {
     const [signals, read] = await Promise.all([readSignals(), readDemoCatalog(backend)]);
-    const refusal = (screen: DemoScreen) => ({
-      screen: { text: screen.text, keyboard: appendSignalsFooter(screen.keyboard) },
+    const refusal = (text: TelegramHtml) => ({
+      screen: { text, keyboard: signalsFooter([retryButton(retryData)]) },
       listed: undefined,
     });
-    if (!read.ok) return refusal(catalogFailure(read, retryData));
-    const retry = () =>
-      refusal({
-        text: TEXTS.unavailable,
-        keyboard: new InlineKeyboard().text(LABELS.demoRetryButton, retryData),
-      });
+    if (!read.ok) return refusal(catalogFailure(read, retryData).text);
+    const retry = () => refusal(TEXTS.unavailable);
     if (signals === null) return retry();
     const drawn = signalsScreen(signals, read.catalog, now());
     if (drawn !== undefined) return drawn;
@@ -1686,7 +1696,7 @@ export function createDemoComposer<C extends Context>({
   async function editOrReply(
     ctx: Context,
     text: TelegramHtml,
-    keyboard: InlineKeyboard,
+    keyboard: BotKeyboard,
   ): Promise<Place | undefined> {
     try {
       await editMessageTextHtml(ctx, text, { reply_markup: keyboard });
@@ -1720,7 +1730,7 @@ export function createDemoComposer<C extends Context>({
   // «➕ Ещё»'s edit: only the keyboard, so there is no text to send anew. Already shown is done; a
   // message gone or not editable gets nothing — the analysis the button sat under is not on
   // screen; a transport failure sends nothing more; any other refusal goes to bot.catch.
-  async function editKeyboard(ctx: Context, reply_markup: InlineKeyboard): Promise<void> {
+  async function editKeyboard(ctx: Context, reply_markup: BotKeyboard): Promise<void> {
     try {
       await ctx.editMessageReplyMarkup({ reply_markup });
     } catch (error) {
@@ -1758,7 +1768,7 @@ export function createDemoComposer<C extends Context>({
     read: Exclude<DemoCatalogRead, { ok: true }>,
     retryData: string,
   ): DemoScreen {
-    const keyboard = new InlineKeyboard().text(LABELS.demoRetryButton, retryData);
+    const keyboard = keyboardOf([retryButton(retryData)]);
     switch (read.reason) {
       case 'catalog_unavailable':
         return { text: TEXTS.demoCatalogUnavailable, keyboard };
@@ -1794,15 +1804,19 @@ export function createDemoComposer<C extends Context>({
     if (present.length === 0) {
       return {
         text: catalog.pairs.length === 0 ? TEXTS.demoCatalogUnavailable : TEXTS.demoNoShortPairs,
-        keyboard: new InlineKeyboard().text(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA),
+        keyboard: keyboardOf([retryButton(DEMO_GROUPS_CALLBACK_DATA)]),
       };
     }
     const nowMs = now();
-    const keyboard = new InlineKeyboard();
-    present.forEach((group, index) => {
-      if (index > 0 && index % 2 === 0) keyboard.row();
-      const open = openPairsOf(catalog, group, nowMs).length;
-      keyboard.text(groupButtonLabel(group, open), demoPageCallbackData(group, 0));
+    const keyboard = keyboardOf({
+      buttons: present.map((group) =>
+        callbackButton(
+          ButtonRole.Nav,
+          groupButtonLabel(group, openPairsOf(catalog, group, nowMs).length),
+          demoPageCallbackData(group, 0),
+        ),
+      ),
+      perRow: 2,
     });
     return { text: TEXTS.demoGroups, keyboard };
   }
@@ -1830,17 +1844,39 @@ export function createDemoComposer<C extends Context>({
       };
     }
     const { pairs, page, pageCount } = pageOf(open, requested);
-    const keyboard = new InlineKeyboard();
-    pairs.forEach((pair, index) => {
-      if (index > 0 && index % 2 === 0) keyboard.row();
-      keyboard.text(pairButtonLabel(pairLabel(pair), pair.payout), demoAssetCallbackData(pair.id));
-    });
-    keyboard.row();
-    if (page > 0) keyboard.text(LABELS.demoPrevButton, demoPageCallbackData(group, page - 1));
-    keyboard.text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
-    if (page < pageCount - 1) {
-      keyboard.text(LABELS.demoNextButton, demoPageCallbackData(group, page + 1));
-    }
+    const keyboard = keyboardOf(
+      {
+        buttons: pairs.map((pair) =>
+          callbackButton(
+            ButtonRole.Nav,
+            pairButtonLabel(pairLabel(pair), pair.payout),
+            demoAssetCallbackData(pair.id),
+          ),
+        ),
+        perRow: 2,
+      },
+      [
+        ...(page > 0
+          ? [
+              callbackButton(
+                ButtonRole.Nav,
+                LABELS.demoPrevButton,
+                demoPageCallbackData(group, page - 1),
+              ),
+            ]
+          : []),
+        backToGroupsButton(),
+        ...(page < pageCount - 1
+          ? [
+              callbackButton(
+                ButtonRole.Nav,
+                LABELS.demoNextButton,
+                demoPageCallbackData(group, page + 1),
+              ),
+            ]
+          : []),
+      ],
+    );
     return { text: demoPairsScreen(group, page, pageCount), keyboard };
   }
 
@@ -1868,5 +1904,5 @@ type Waiting = { pressed: boolean; chatId: number; messageId: number } | null;
 
 export interface DemoScreen {
   text: TelegramHtml;
-  keyboard: InlineKeyboard;
+  keyboard: BotKeyboard;
 }

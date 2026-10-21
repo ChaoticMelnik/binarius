@@ -6,13 +6,13 @@
 import { BotLanguage } from './bot-language';
 
 // «Сигналы сейчас» (#320): the list of the demo's one duration, 5 s (#685); every «🔄 Обновить»,
-// «↩️ К списку», «📡 К сигналам» and «🔀 Выбрать другую пару» carries it. `demo:sig:<sec>` is the
+// «↩️ К списку», «📡 Сигналы» and «🔀 Выбрать другую пару» carries it. `demo:sig:<sec>` is the
 // data of old buttons (#382 to #685), which lead to the same list. Here since #509, when the
 // backend's session summary started to carry «🔀 Выбрать другую пару».
 export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
 
 // «📊 Анализ» of a pair and duration (#482): the bot's analysis card, and since #484 the backend's
-// analysis reminder, «📊 Новый анализ» of the same pair and duration. The bot's pattern takes the
+// analysis reminder, «📊 Анализ» of the same pair and duration. The bot's pattern takes the
 // durations it offers. The longest, `demo:an:2147483647:5`, is 20 bytes.
 export const demoAnalysisCallbackData = (assetId: number, durationSec: number): string =>
   `demo:an:${String(assetId)}:${String(durationSec)}`;
@@ -25,7 +25,7 @@ export const DEMO_CALLBACK_DATA = 'demo';
 export const CONNECT_CALLBACK_DATA = 'connect';
 // «🏠 В меню» (#350): the status card, as /menu.
 export const MENU_CALLBACK_DATA = 'menu';
-// «🌐 Язык / Language» on the status card (#508): the language screen, a read; `lang:<language>`
+// «🌐 Язык/Language» on the status card (#508): the language screen, a read; `lang:<language>`
 // on that screen saves the choice, a write. Only the bot draws them, kept beside «🏠 В меню».
 export const LANGUAGE_CALLBACK_DATA = 'lang';
 export const languageSetCallbackData = (language: BotLanguage): string =>
@@ -41,7 +41,7 @@ export type RetryCommand = (typeof RETRY_COMMANDS)[number];
 export const commandRetryCallbackData = (command: RetryCommand): string => `cmd:${command}`;
 export const COMMAND_RETRY_PATTERN = new RegExp(`^cmd:(${RETRY_COMMANDS.join('|')})$`);
 
-// «⭐ Купить токены» (#117, docs/stars.md): the package screen. Under the status card, under the
+// «⭐ Купить» (#117, docs/stars.md): the package screen. Under the status card, under the
 // `insufficient_tokens` refusals and #123's nudges, which the backend sends; a package's button is
 // `buy:<code>`, a read that asks the backend for the invoice. The longest, `buy:p150`, is 8 bytes.
 export const BUY_CALLBACK_DATA = 'buy';

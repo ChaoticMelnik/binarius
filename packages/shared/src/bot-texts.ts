@@ -431,7 +431,7 @@ export const BOT_TEXT_CATALOG = {
   // ---- Экран выбора языка (#508, docs/bot-navigation.md → The language screen) ------------------
   languageScreen: html(
     g.Menu,
-    'Экран выбора языка: открывается кнопкой «🌐 Язык / Language» на карточке статуса.',
+    'Экран выбора языка: открывается кнопкой «🌐 Язык/Language» на карточке статуса.',
     `🌐 <b>Язык бота</b>
 Выбери, на каком языке бот будет писать тебе.`,
   ),
@@ -607,7 +607,7 @@ export const BOT_TEXT_CATALOG = {
   // ---- /invite (#115, docs/referrals.md) ----------------------------------------------------
   inviteScreen: html(
     g.Invite,
-    '/invite, кнопка «Пригласить друга»: персональная ссылка, число приглашённых, сколько из них подключили партнёрский аккаунт Binodex и сколько токенов получено за приглашения.',
+    '/invite, кнопка «👥 Позвать друга»: персональная ссылка, число приглашённых, сколько из них подключили партнёрский аккаунт Binodex и сколько токенов получено за приглашения.',
     `👥 <b>Пригласи друга</b>
 Твоя ссылка:
 {referralLink}
@@ -631,7 +631,7 @@ export const BOT_TEXT_CATALOG = {
   // ---- Покупка токенов (#117, docs/stars.md) ------------------------------------------------
   buyScreen: html(
     g.Stars,
-    '/buy и кнопка «Купить токены»: выбор пакета.',
+    '/buy и кнопка «⭐ Купить»: выбор пакета.',
     `⭐ <b>Купить токены</b>
 Токены оплачивают сделки автоторговли. Выбери пакет — оплата в Telegram Stars.`,
   ),
@@ -852,7 +852,7 @@ export const BOT_TEXT_CATALOG = {
   demoGroupCryptocurrency: plain(
     g.Demo,
     'Демо: тип актива «криптовалюты», на кнопке и в заголовке.',
-    '💠 Криптовалюты',
+    '💠 Крипта',
   ),
   demoGroupIndex: plain(
     g.Demo,
@@ -1349,7 +1349,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   stakeInputInvalid: html(
     g.Trade,
-    'Своя сумма: присланное не похоже на сумму.',
+    'Своя сумма («✏️ Ввести»): присланное не похоже на сумму.',
     `❌ Введи сумму числом, например 5 или 2,50.`,
   ),
   stakeSaved: html(g.Trade, 'Демо-ставка сохранена.', `✅ Демо-ставка: {stake}`, {
@@ -1891,11 +1891,7 @@ export const BOT_TEXT_CATALOG = {
     'Не показывается с #314 (вход через сайт скрыт). Кнопка, открывающая вход через сайт.',
     '🌐 Войти в Binodex',
   ),
-  resendButton: plain(
-    g.Buttons,
-    'Вход по почте: кнопка повторного запроса кода.',
-    '🔄 Запросить код ещё раз',
-  ),
+  resendButton: plain(g.Buttons, 'Вход по почте: кнопка повторного запроса кода.', '🔄 Новый код'),
   changeEmailButton: plain(g.Buttons, 'Вход по почте: кнопка смены адреса.', '✏️ Изменить адрес'),
   demoButton: plain(
     g.Buttons,
@@ -1910,7 +1906,7 @@ export const BOT_TEXT_CATALOG = {
   demoManualButton: plain(
     g.Buttons,
     'Сигналы сейчас: ручной путь — тип актива, пара, сводка, анализ.',
-    '🧭 Выбрать пару вручную',
+    '🧭 Вручную',
   ),
   launchCycleButton: plain(
     g.Buttons,
@@ -1920,7 +1916,7 @@ export const BOT_TEXT_CATALOG = {
   stakeChangeButton: plain(
     g.Buttons,
     'Экран ставки (реальный режим; в демо — экран суммы, #476): открыть выбор суммы.',
-    '💵 Изменить ставку',
+    '💵 Ставка',
   ),
   backToListButton: plain(
     g.Buttons,
@@ -1943,13 +1939,9 @@ export const BOT_TEXT_CATALOG = {
   newAnalysisButton: plain(
     g.Buttons,
     'Конец сделки и сессии, напоминание об анализе: анализ той же пары заново.',
-    '📊 Новый анализ',
+    '📊 Анализ',
   ),
-  toSignalsButton: plain(
-    g.Buttons,
-    'Конец сделки и сессии: экран «Сигналы сейчас».',
-    '📡 К сигналам',
-  ),
+  toSignalsButton: plain(g.Buttons, 'Конец сделки и сессии: экран «Сигналы сейчас».', '📡 Сигналы'),
   showSignalsButton: plain(
     g.Buttons,
     'Шаг «Начать торговлю» (#664): свежий экран «Сигналы сейчас».',
@@ -1965,14 +1957,14 @@ export const BOT_TEXT_CATALOG = {
   demoBackPairButton: plain(g.Buttons, 'Демо: кнопка назад к сводке пары (#685).', '↩️ К паре'),
   demoPrevButton: plain(g.Buttons, 'Демо: предыдущая страница активов.', '◀️'),
   demoNextButton: plain(g.Buttons, 'Демо: следующая страница активов.', '▶️'),
-  repeatAnalysisButton: plain(g.Buttons, 'Анализ: кнопка повтора анализа.', '🔄 Повторить анализ'),
+  repeatAnalysisButton: plain(g.Buttons, 'Анализ: кнопка повтора анализа.', '🔄 Заново'),
   analysisMoreButton: plain(g.Buttons, 'Анализ: кнопка, раскрывающая разовую сделку.', '➕ Ещё'),
   refreshIntentButton: plain(
     g.Buttons,
     'Сделка: кнопка обновления статуса; её название цитирует текст о долгой обработке.',
-    '🔄 Обновить статус',
+    '🔄 Обновить',
   ),
-  supportButton: plain(g.Buttons, '/support: кнопка чата с поддержкой.', '💬 Написать в поддержку'),
+  supportButton: plain(g.Buttons, '/support: кнопка чата с поддержкой.', '💬 Поддержка'),
   sessionStopButton: plain(
     g.Buttons,
     'Сессия: кнопка остановки под сообщением ожидания; шлёт backend.',
@@ -1983,23 +1975,19 @@ export const BOT_TEXT_CATALOG = {
     'Раскрытие «➕ Ещё» на анализе, /settings и отказы сделки: кнопка экрана суммы.',
     '💵 Сумма',
   ),
-  stakeCustomButton: plain(g.Buttons, 'Экран суммы: кнопка своей суммы.', '✏️ Своя сумма'),
+  stakeCustomButton: plain(g.Buttons, 'Экран суммы: кнопка своей суммы.', '✏️ Ввести'),
   stakeResetButton: plain(
     g.Buttons,
     'Экран суммы: сброс к минимальной ставке брокера.',
-    '🔁 Минимальная брокера',
+    '🔁 Минимум',
   ),
   stakeBackAnalysisButton: plain(
     g.Buttons,
     'Назад к анализу пары: с экрана суммы и после сбоя запуска сделки или сессии.',
-    '↩️ Назад к анализу',
+    '↩️ К анализу',
   ),
-  stakeBackSettingsButton: plain(
-    g.Buttons,
-    'Экран суммы: назад к /settings.',
-    '↩️ Назад к настройкам',
-  ),
-  stakeBackButton: plain(g.Buttons, 'Своя сумма: назад к экрану суммы.', '↩️ Назад'),
+  stakeBackSettingsButton: plain(g.Buttons, 'Экран суммы: назад к /settings.', '↩️ Настройки'),
+  stakeBackButton: plain(g.Buttons, 'Своя сумма («✏️ Ввести»): назад к экрану суммы.', '↩️ Назад'),
   settingsStakeDemoButton: plain(
     g.Buttons,
     '/settings: кнопка смены суммы демо-сделки.',
@@ -2024,7 +2012,7 @@ export const BOT_TEXT_CATALOG = {
   modeBackDemoButton: plain(
     g.Buttons,
     'Карточка статуса в реальном режиме — открывает экран режима; экран режима — возврат в демо.',
-    '🎮 Вернуться в демо',
+    '🎮 В демо',
   ),
   modeEnableButton: plain(
     g.Buttons,
@@ -2045,7 +2033,7 @@ export const BOT_TEXT_CATALOG = {
   inviteButton: plain(
     g.Buttons,
     'Карточка статуса и итог сессии: кнопка экрана приглашения.',
-    '👥 Пригласить друга',
+    '👥 Позвать друга',
   ),
   inviteShareButton: plain(
     g.Buttons,
@@ -2055,7 +2043,7 @@ export const BOT_TEXT_CATALOG = {
   buyButton: plain(
     g.Buttons,
     'Карточка статуса, отказ «не хватает токенов» и напоминания 80 % и 100 % о токенах (#123): экран покупки токенов.',
-    '⭐ Купить токены',
+    '⭐ Купить',
   ),
   depositButton: plain(
     g.Buttons,
@@ -2070,7 +2058,7 @@ export const BOT_TEXT_CATALOG = {
   languageButton: plain(
     g.Buttons,
     'Карточка статуса, последняя строка: экран выбора языка (#508). На двух языках сразу: её ищут, когда бот пишет на непонятном языке.',
-    '🌐 Язык / Language',
+    '🌐 Язык/Language',
   ),
 
   // ---- Команды: описания (без emoji) --------------------------------------------------------

@@ -1,24 +1,25 @@
-import { Composer, InlineKeyboard, type Context } from 'grammy';
+import { Composer, type Context } from 'grammy';
 import {
+  ButtonRole,
+  callbackButton,
   errorLogFields,
-  MENU_CALLBACK_DATA,
   PAYSUPPORT_LIST_CALLBACK,
   PAYSUPPORT_REFUND_PATTERN,
   paysupportRefundCallbackData,
   StarPaymentStatus,
   StarsRefundErrorCode,
   StarsRefundRequestOutcome,
-  supportUrl,
   UUID_PATTERN,
+  type BotKeyboard,
   type StarPaymentView,
   type TelegramHtml,
   telegramErrorFields,
 } from '@binarius/shared';
 import { BackendError, backendErrorFields, type BackendClient } from './backend-client';
-import { retryKeyboard, supportKeyboard, withMenu } from './keyboards';
+import { retryKeyboard, supportButton, withMenu } from './keyboards';
 import type { Logger } from './logging';
 import { replyHtml } from './send';
-import { LABELS, paysupportListLabel, paysupportRefundLabel, paysupportText, TEXTS } from './texts';
+import { paysupportListLabel, paysupportRefundLabel, paysupportText, TEXTS } from './texts';
 
 export interface PaysupportDeps {
   backend: Pick<BackendClient, 'listStarsPayments' | 'requestStarsRefund'>;
@@ -60,7 +61,7 @@ export function createPaysupportComposer({ backend, logger }: PaysupportDeps): C
       return;
     }
     if (payments.length === 0) {
-      await replyHtml(ctx, TEXTS.paysupportEmpty, { reply_markup: withMenu(supportKeyboard()) });
+      await replyHtml(ctx, TEXTS.paysupportEmpty, { reply_markup: withMenu([supportButton()]) });
       return;
     }
     await replyHtml(ctx, paysupportText(payments), { reply_markup: paymentsKeyboard(payments) });
@@ -114,24 +115,24 @@ const reply = (ctx: Context, text: TelegramHtml) =>
   replyHtml(ctx, text, { reply_markup: backToListKeyboard() });
 
 // «↩️ К списку оплат», then the menu
-export const backToListKeyboard = (): InlineKeyboard =>
-  withMenu(new InlineKeyboard().text(paysupportListLabel(), PAYSUPPORT_LIST_CALLBACK));
+export const backToListKeyboard = (): BotKeyboard =>
+  withMenu([callbackButton(ButtonRole.Nav, paysupportListLabel(), PAYSUPPORT_LIST_CALLBACK)]);
 
-// A refund button for each payment that can still be asked about, then the support chat and the
-// menu.
-export function paymentsKeyboard(payments: readonly StarPaymentView[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const payment of payments) {
-    if (payment.status === StarPaymentStatus.Refunded || payment.requested) continue;
-    keyboard
-      .text(paysupportRefundLabel(payment.paidAt), paysupportRefundCallbackData(payment.id))
-      .row();
-  }
-  return keyboard
-    .url(LABELS.supportButton, supportUrl())
-    .row()
-    .text(LABELS.menuButton, MENU_CALLBACK_DATA);
-}
+// A refund button for each payment that can still be asked about, each on its own row (#475: a
+// step forward), then the support chat and the menu in one row.
+export const paymentsKeyboard = (payments: readonly StarPaymentView[]): BotKeyboard =>
+  withMenu([
+    ...payments
+      .filter((payment) => payment.status !== StarPaymentStatus.Refunded && !payment.requested)
+      .map((payment) =>
+        callbackButton(
+          ButtonRole.Forward,
+          paysupportRefundLabel(payment.paidAt),
+          paysupportRefundCallbackData(payment.id),
+        ),
+      ),
+    supportButton(),
+  ]);
 
 function logAnswerFailure(logger: Logger, error: unknown): void {
   logger.warn(

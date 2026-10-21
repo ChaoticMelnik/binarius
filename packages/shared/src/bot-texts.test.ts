@@ -15,6 +15,8 @@ import {
   type BotTextKey,
 } from './bot-texts';
 import { plainTextOf } from './telegram-html';
+import { BUTTON_LABEL_WIDTHS, buttonLabelWidth } from './bot-keyboard';
+import { BOT_TEXT_SOURCES_EN } from './bot-texts-en';
 
 const ENTRIES = Object.entries(BOT_TEXT_CATALOG) as [
   BotTextKey,
@@ -229,4 +231,96 @@ describe('the bot texts catalog', () => {
       ].sort(),
     );
   });
+});
+
+// #475 (docs/bot-texts.md → Limits): the narrowest row each button label stands in on any screen
+// (docs/bot-navigation.md → Roles, colours and rows), 1 for a row of its own. A label in a row of
+// two fits 14, in a row of three 9, without emoji (owner's decision 4), in both languages. Every
+// label of the buttons group has its row: a new button without one fails here.
+const BUTTON_LABEL_ROWS = {
+  analysisMoreButton: 2,
+  backToListButton: 2,
+  buyButton: 3,
+  changeEmailButton: 2,
+  confirmButton: 1,
+  confirmButtonNoEmail: 1,
+  connectButton: 1,
+  demoAnalysisButton: 1,
+  demoBackGroupsButton: 3,
+  demoBackPairButton: 3,
+  demoBackPairsButton: 2,
+  demoButton: 1,
+  demoManualButton: 3,
+  demoNextButton: 3,
+  demoPrevButton: 3,
+  demoRetryButton: 3,
+  demoSignalsRefreshButton: 3,
+  depositButton: 1,
+  inviteButton: 2,
+  inviteShareButton: 1,
+  languageButton: 2,
+  launchCycleButton: 1,
+  loginButton: 1,
+  menuButton: 3,
+  modeBackDemoButton: 2,
+  modeButton: 2,
+  modeCancelButton: 1,
+  modeConfirmButton: 1,
+  modeEnableButton: 1,
+  modeScreenButton: 2,
+  newAnalysisButton: 3,
+  oauthButton: 1,
+  otherPairButton: 1,
+  refreshIntentButton: 2,
+  repeatAnalysisButton: 3,
+  resendButton: 2,
+  sessionAgainButton: 1,
+  sessionShareButton: 1,
+  sessionStopButton: 1,
+  settingsStakeDemoButton: 2,
+  settingsStakeRealButton: 2,
+  showSignalsButton: 1,
+  stakeBackAnalysisButton: 3,
+  stakeBackButton: 1,
+  stakeBackLaunchButton: 3,
+  stakeBackSettingsButton: 3,
+  stakeChangeButton: 2,
+  stakeCustomButton: 3,
+  stakeMenuButton: 2,
+  stakeResetButton: 3,
+  supportButton: 2,
+  toSignalsButton: 3,
+  tradeButton: 1,
+  // outside the buttons group: the /settings levels and the languages, each with its ✅ when chosen
+  levelAll: 3,
+  levelReduced: 3,
+  levelOff: 3,
+  languageRuButton: 3,
+  languageEnButton: 3,
+  paysupportListButton: 2,
+} as const satisfies Partial<Record<BotTextKey, 1 | 2 | 3>>;
+
+describe('button label widths (#475)', () => {
+  it('has a row for every label of the buttons group', () => {
+    const rows = Object.keys(BUTTON_LABEL_ROWS);
+    for (const key of botTextKeysOf(BotTextGroup.Buttons)) expect(rows, key).toContain(key);
+  });
+
+  const LABELS = Object.entries(BUTTON_LABEL_ROWS).flatMap(([key, row]) => {
+    const ru = BOT_TEXT_CATALOG[key as BotTextKey].source;
+    const en = BOT_TEXT_SOURCES_EN[key as BotTextKey];
+    return [
+      { key, language: 'ru', row, text: ru },
+      ...(en === undefined ? [] : [{ key, language: 'en', row, text: en }]),
+    ];
+  });
+
+  it.each(LABELS.filter(({ row }) => row !== 1))(
+    '$key ($language) fits a row of $row',
+    ({ row, text }) => {
+      // the chosen level and language carry « ✅» (texts.ts), which takes no width
+      const limit = BUTTON_LABEL_WIDTHS[row as 2 | 3];
+      expect(buttonLabelWidth(text)).toBeLessThanOrEqual(limit);
+    },
+  );
 });

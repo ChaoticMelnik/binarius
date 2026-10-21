@@ -16,6 +16,7 @@ import {
   fakeBackend,
   fakeLogger,
   inlineRows,
+  inlineStyles,
   sentPayload,
   stubSessionResumer,
   stubSignalWaiter,
@@ -29,9 +30,9 @@ import { LABELS, paysupportListLabel, paysupportRefundLabel, paysupportText, TEX
 // /paysupport in the bot (#118, docs/stars.md → /paysupport).
 const MENU_ROW = [{ text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA }];
 const SUPPORT_ROW = [{ text: LABELS.supportButton, url: supportUrl() }];
+// #475: the way back and the menu in one row
 const BACK_TO_LIST_ROWS = [
-  [{ text: paysupportListLabel(), callback_data: PAYSUPPORT_LIST_CALLBACK }],
-  MENU_ROW,
+  [{ text: paysupportListLabel(), callback_data: PAYSUPPORT_LIST_CALLBACK }, ...MENU_ROW],
 ];
 
 const payment = (n: number, patch: Partial<StarPaymentView> = {}): StarPaymentView => ({
@@ -99,9 +100,10 @@ describe('/paysupport', () => {
             callback_data: paysupportRefundCallbackData(PAYMENTS[1]!.id),
           },
         ],
-        SUPPORT_ROW,
-        MENU_ROW,
+        [...SUPPORT_ROW, ...MENU_ROW],
       ]);
+      // #475: a refund request is a step forward, green on its own row
+      expect(inlineStyles(message)).toEqual([['success'], ['success'], [null, null]]);
     },
   );
 
@@ -124,7 +126,7 @@ describe('/paysupport', () => {
     await bot.handleUpdate(textUpdate('/paysupport'));
     const message = sentPayload(api.calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.paysupportEmpty.value);
-    expect(inlineRows(message)).toEqual([SUPPORT_ROW, MENU_ROW]);
+    expect(inlineRows(message)).toEqual([[...SUPPORT_ROW, ...MENU_ROW]]);
   });
 
   it('B3 answers a failed read with a retry of the list, a read', async () => {
@@ -133,8 +135,7 @@ describe('/paysupport', () => {
     const message = sentPayload(api.calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.unavailable.value);
     expect(inlineRows(message)).toEqual([
-      [{ text: LABELS.demoRetryButton, callback_data: PAYSUPPORT_LIST_CALLBACK }],
-      MENU_ROW,
+      [{ text: LABELS.demoRetryButton, callback_data: PAYSUPPORT_LIST_CALLBACK }, ...MENU_ROW],
     ]);
   });
 });
@@ -208,7 +209,7 @@ describe('«Нужен возврат»', () => {
   ] as const)('B8 puts the menu under %s', async (_label, patch, update) => {
     const { bot, api } = setup(patch);
     await bot.handleUpdate(update);
-    expect(inlineRows(sentPayload(api.calls, 'sendMessage')).at(-1)).toEqual(MENU_ROW);
+    expect(inlineRows(sentPayload(api.calls, 'sendMessage')).at(-1)?.at(-1)).toEqual(MENU_ROW[0]);
   });
 
   it('ignores the press in a group', async () => {

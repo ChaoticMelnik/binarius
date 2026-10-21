@@ -26,7 +26,7 @@ import { intentStatusText, TEXTS } from './texts';
 // The demo trade's status message follows its intent (#127, docs/bot-demo-trade.md): after the
 // stake press the bot polls GET /trading/intents/:id and edits the message as the status moves.
 // In-process memory by the owner's decision, like the login dialog: a restart leaves each message
-// at its last state, and its «🔄 Обновить статус» button is the recovery.
+// at its last state, and its «🔄 Обновить» button is the recovery.
 
 // The answer GET /trading/intents/:id gives for an id that is missing or not this user's.
 export const INTENT_NOT_FOUND = 'not_found';

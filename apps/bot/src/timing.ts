@@ -128,7 +128,7 @@ export const HANDLER_CALLS = {
   stakePickerOpen: { backend: 1, telegram: 3 },
   stakePreset: { backend: 3, telegram: 3 },
   stakeReset: { backend: 3, telegram: 3 },
-  // «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
+  // «✏️ Ввести»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
   stakeCustom: { backend: 0, telegram: 3 },
   // a text on the stake step: setStake, readPairs ∥ readTradingAccess after a save opened
   // from a launch screen (#121), then sendMessage
@@ -136,7 +136,7 @@ export const HANDLER_CALLS = {
   // the picker's way back to /settings: answerCallbackQuery ∥ recordStart — counted as
   // sequential — then editMessageText refused as gone → sendMessage
   settingsShow: { backend: 1, telegram: 3 },
-  // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
+  // «🔄 Обновить» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
   // «🚀 Сессия из 5 циклов» (#284; in real the analysis, the row under a finished trade #360, «🔁 Ещё
@@ -154,7 +154,7 @@ export const HANDLER_CALLS = {
   // screen's deleteMessage refused as forbidden and editMessageReplyMarkup (#418); a refused photo
   // sends its text and keeps the screen, 3 / 3. 47 s, equal to sessionStart.
   cycleStakePreset: { backend: 3, telegram: 4 },
-  // its «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
+  // its «✏️ Ввести»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
   cycleStakeCustom: { backend: 0, telegram: 3 },
   // a text on that step: setStake ∥ readPairs — counted as sequential — then startSession and its
   // one retry on an unknown outcome, then sendMessage, or sendPhoto and, refused, sendMessage
@@ -200,7 +200,7 @@ export const HANDLER_CALLS = {
   settings: { backend: 1, telegram: 1 },
   // /invite (#115): readReferral, then sendMessage
   invite: { backend: 1, telegram: 1 },
-  // «👥 Пригласить друга» (#115): answerCallbackQuery, then /invite's path
+  // «👥 Позвать друга» (#115): answerCallbackQuery, then /invite's path
   inviteButton: { backend: 1, telegram: 2 },
   // a level pressed: answerCallbackQuery ∥ setNotificationLevel — counted the same way as confirm —
   // then editMessageText refused by Telegram (GrammyError) → sendMessage
@@ -223,7 +223,7 @@ export const HANDLER_CALLS = {
   modeSet: { backend: 2, telegram: 3 },
   // /buy (#117): readAccount, then sendMessage — the package screen, or the refusal
   buy: { backend: 1, telegram: 1 },
-  // «⭐ Купить токены»: answerCallbackQuery, then /buy's path
+  // «⭐ Купить»: answerCallbackQuery, then /buy's path
   buyButton: { backend: 1, telegram: 2 },
   // a package: answerCallbackQuery ∥ createStarsInvoice — counted as sequential, as in confirm —
   // then sendInvoice or the refusal's sendMessage

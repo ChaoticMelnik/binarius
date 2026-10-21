@@ -64,6 +64,9 @@ import {
   stubTracker,
   textUpdate,
   type ApiCall,
+  inlineRows,
+  inlineStyles,
+  keyboardRows,
 } from './testing';
 import {
   sessionStatusText,
@@ -224,7 +227,7 @@ const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
 const payloadOf = (calls: readonly ApiCall[], method: string) =>
   calls.find((call) => call.method === method)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
-  (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
+  inlineRows(payload) as Button[][];
 const button = (text: string, callback_data: string): Button => ({ text, callback_data });
 const warnings = (logger: ReturnType<typeof fakeLogger>) =>
   logger.warn.mock.calls.map((call) => call[1] as string);
@@ -248,24 +251,23 @@ const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
 const NEW_ANALYSIS = [
   button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
 ];
-// «👥 Пригласить друга» right above the menu at every end of a session (#115)
+// «👥 Позвать друга» beside the menu at every end of a session (#115)
 const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
-// «💳 Пополнить» (#27): the cashier Mini App, beside the invite at the end of a session (#506)
+// «💳 Пополнить» (#27): the cashier Mini App, a step forward on its own row above the invite
+// (#475)
 const DEPOSIT: Button[] = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
-const DEPOSIT_INVITE = [...DEPOSIT, ...INVITE];
+const INVITE_MENU = [...INVITE, ...MENU];
 // a stopped session's end of the path: under the stop reply, the card and an old status (#536)
-const STOPPED_ROWS = [[AGAIN], [...NEW_ANALYSIS, ...TO_SIGNALS], DEPOSIT_INVITE, MENU];
+const STOPPED_ROWS = [[AGAIN], [...NEW_ANALYSIS, ...TO_SIGNALS], DEPOSIT, INVITE_MENU];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 // #350: a refusal of the start leads back to the analysis and to the menu; a blocked user to support
 const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
-const BACK_ROWS = [
-  [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5))],
-  MENU_ROW,
-];
+const BACK = button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+const BACK_ROWS = [[BACK, ...MENU_ROW]];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
-// for want of tokens, the purchase and the deposit (#27) in one row, above the way back (#117)
-const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
-const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA), ...DEPOSIT], ...BACK_ROWS];
+// for want of tokens, the deposit (#27) on its own row, the purchase beside the way back (#117)
+const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA), BACK, ...MENU_ROW]];
+const BUY_ROWS = [DEPOSIT, ...BUY_ONLY_ROWS];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
@@ -405,7 +407,7 @@ describe('the session button', () => {
   describe('a start refused for want of a signal waits for it (#664)', () => {
     const noSignal = () => Promise.reject(httpError(409, TradingSessionErrorCode.NoSignal));
     const WAIT_TEXT = TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value;
-    const WAIT_ROWS = [[button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA)], MENU_ROW];
+    const WAIT_ROWS = [[button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA), ...MENU_ROW]];
 
     it('W-start1 draws the wait in place of the launch screen and registers origin start, back a', async () => {
       const { pressUpdate, calls, signalWaiter, sessionTracker } = setup({
@@ -1016,7 +1018,7 @@ describe('/stop (#122)', () => {
 
 describe('/stop resets the mode (#473)', () => {
   const RESET = { tradingMode: TradeMode.Demo, changed: true, stoppedSessions: 0 };
-  const MODE_ROWS = [[button(LABELS.modeScreenButton, MODE_CALLBACK_DATA)], MENU];
+  const MODE_ROWS = [[button(LABELS.modeScreenButton, MODE_CALLBACK_DATA), ...MENU]];
   const sends = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload);
   const sentText = (calls: readonly ApiCall[], text: string) =>
@@ -1173,8 +1175,7 @@ describe('/stop resets the mode (#473)', () => {
 
 describe('«🔁 Ещё сессия»', () => {
   it('leads the end of the path, with its pair and duration', () => {
-    const rows = (view: TradingSessionView) =>
-      sessionCardKeyboard(view, CASHIER_URL).inline_keyboard;
+    const rows = (view: TradingSessionView) => keyboardRows(sessionCardKeyboard(view, CASHIER_URL));
     expect(rows(STOPPED)).toEqual(STOPPED_ROWS);
     expect(rows(STOPPED)[0]).toEqual([
       button(LABELS.sessionAgainButton, `demo:l:${String(PAIR_EURUSD.id)}:5:n`),
@@ -1187,8 +1188,8 @@ describe('«🔁 Ещё сессия»', () => {
     });
     expect(rows(noSignal)).toEqual([
       [button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)],
-      DEPOSIT_INVITE,
-      MENU,
+      DEPOSIT,
+      INVITE_MENU,
     ]);
   });
 
@@ -1202,8 +1203,8 @@ describe('«🔁 Ещё сессия»', () => {
     const view = sessionView({ ...STOPPED, stopReason });
     expect(statusOf(view)).toContain(words);
     expect(statusOf(view)).not.toContain(TEXTS.sessionStopStakeStop.value);
-    expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard).toEqual(
-      sessionCardKeyboard(STOPPED, CASHIER_URL).inline_keyboard,
+    expect(keyboardRows(sessionCardKeyboard(view, CASHIER_URL))).toEqual(
+      keyboardRows(sessionCardKeyboard(STOPPED, CASHIER_URL)),
     );
   });
 
@@ -1211,35 +1212,39 @@ describe('«🔁 Ещё сессия»', () => {
   it('ends a stopped session of either mode with the deposit, the invite and the menu', () => {
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
     for (const view of [STOPPED, realStopped]) {
-      expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard.slice(-2), view.mode).toEqual([
-        DEPOSIT_INVITE,
-        MENU,
+      expect(keyboardRows(sessionCardKeyboard(view, CASHIER_URL)).slice(-2), view.mode).toEqual([
+        DEPOSIT,
+        INVITE_MENU,
       ]);
     }
-    const withoutDeposit = STOPPED_ROWS.map((row) => (row === DEPOSIT_INVITE ? INVITE : row));
-    expect(sessionCardKeyboard(STOPPED, undefined).inline_keyboard).toEqual(withoutDeposit);
-    expect(sessionCardKeyboard({ ...STOPPED, settings: null }, undefined).inline_keyboard).toEqual([
-      INVITE,
-      MENU,
+    const withoutDeposit = STOPPED_ROWS.filter((row) => row !== DEPOSIT);
+    expect(keyboardRows(sessionCardKeyboard(STOPPED, undefined))).toEqual(withoutDeposit);
+    expect(keyboardRows(sessionCardKeyboard({ ...STOPPED, settings: null }, undefined))).toEqual([
+      INVITE_MENU,
     ]);
   });
 
   it('is not drawn without settings', () => {
     // without settings only the deposit, the invite and the menu follow: no pair to analyse
-    expect(
-      sessionCardKeyboard({ ...STOPPED, settings: null }, CASHIER_URL).inline_keyboard,
-    ).toEqual([DEPOSIT_INVITE, MENU]);
+    expect(keyboardRows(sessionCardKeyboard({ ...STOPPED, settings: null }, CASHIER_URL))).toEqual([
+      DEPOSIT,
+      INVITE_MENU,
+    ]);
   });
 
   // #685: the duration is one, so a session of an older duration ends as a 5 s one does
   it.each([15, 60])('a stopped %i-s session offers «🔁 Ещё сессия» at 5 s', (durationSec) => {
     const settings = { ...STOPPED.settings!, durationSec };
-    expect(sessionCardKeyboard({ ...STOPPED, settings }, CASHIER_URL).inline_keyboard).toEqual(
+    expect(keyboardRows(sessionCardKeyboard({ ...STOPPED, settings }, CASHIER_URL))).toEqual(
       STOPPED_ROWS,
     );
     expect(
-      sessionCardKeyboard(sessionView({ ...STOPPED, mode: TradeMode.Real, settings }), CASHIER_URL)
-        .inline_keyboard[0],
+      keyboardRows(
+        sessionCardKeyboard(
+          sessionView({ ...STOPPED, mode: TradeMode.Real, settings }),
+          CASHIER_URL,
+        ),
+      )[0],
     ).toEqual([
       button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
     ]);
@@ -1252,7 +1257,7 @@ describe('«🔁 Ещё сессия»', () => {
         stopReason: TradingSessionStopReason.NoSignalTimeout,
         settings: { ...STOPPED.settings!, durationSec },
       });
-      expect(sessionCardKeyboard(view, CASHIER_URL).inline_keyboard[0]).toEqual([
+      expect(keyboardRows(sessionCardKeyboard(view, CASHIER_URL))[0]).toEqual([
         button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA),
       ]);
     }
@@ -1279,7 +1284,7 @@ describe('«🔁 Ещё сессия»', () => {
       '🔁 Ещё сессия · REAL',
       sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
     );
-    expect(sessionCardKeyboard(realStopped, CASHIER_URL).inline_keyboard[0]).toEqual([realAgain]);
+    expect(keyboardRows(sessionCardKeyboard(realStopped, CASHIER_URL))[0]).toEqual([realAgain]);
     const { press, startSession } = setup();
     await press(realAgain.callback_data ?? '');
     expect(startSession.mock.calls[0]?.[0]).toMatchObject({ mode: TradeMode.Real });
@@ -1297,7 +1302,7 @@ describe('the summary in one message (#318, #537)', () => {
     ...STOPPED,
     stopReason: TradingSessionStopReason.NoSignalTimeout,
   });
-  const CARD_ROWS = [[AGAIN], [...NEW_ANALYSIS, ...TO_SIGNALS], DEPOSIT_INVITE, MENU];
+  const CARD_ROWS = STOPPED_ROWS;
   const OWNER_LINK = referralLinkOf(BOT_INFO.username, SUMMARY.referralCode!);
   const captionOf = (view: TradingSessionView, link = OWNER_LINK, label = pairLabel(PAIR_EURUSD)) =>
     sessionSummaryCaption(label, PAIR_EURUSD.id, view, link).value;
@@ -1321,16 +1326,25 @@ describe('the summary in one message (#318, #537)', () => {
     scene.calls.filter((call) => call.method === 'sendMessage').at(-1)?.payload;
 
   it('K1 is the end of the path; the invite and the menu alone without settings', () => {
-    const rows = (view: TradingSessionView) =>
-      sessionCardKeyboard(view, CASHIER_URL).inline_keyboard;
+    const rows = (view: TradingSessionView) => keyboardRows(sessionCardKeyboard(view, CASHIER_URL));
     expect(rows(DONE)).toEqual(CARD_ROWS);
+    // #475: again and the deposit green on their own rows, the analysis blue, the rest no colour
+    expect(inlineStyles({ reply_markup: sessionCardKeyboard(DONE, CASHIER_URL) })).toEqual([
+      ['success'],
+      ['primary', null],
+      ['success'],
+      [null, null],
+    ]);
+    expect(inlineStyles({ reply_markup: sessionCardKeyboard(NO_SIGNAL, CASHIER_URL) })[0]).toEqual([
+      'success',
+    ]);
     // S4: no empty first row
-    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([DEPOSIT_INVITE, MENU]);
+    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([DEPOSIT, INVITE_MENU]);
     // #509: under a no_signal_timeout summary, another pair instead of the same one again
     expect(rows(NO_SIGNAL)).toEqual([
       [button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)],
-      DEPOSIT_INVITE,
-      MENU,
+      DEPOSIT,
+      INVITE_MENU,
     ]);
   });
 
@@ -1437,8 +1451,8 @@ describe('the summary in one message (#318, #537)', () => {
     expect(text).not.toHaveProperty('disable_notification');
     expect(rowsOf(text)).toEqual([
       [button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)],
-      DEPOSIT_INVITE,
-      MENU,
+      DEPOSIT,
+      INVITE_MENU,
     ]);
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
@@ -1584,8 +1598,8 @@ describe('the summary in one message (#318, #537)', () => {
       error_code: 400,
       description: 'Bad Request: there is no text in the message to edit',
     });
-    const again = sessionCardKeyboard(DONE, CASHIER_URL)
-      .inline_keyboard.flat()
+    const again = keyboardRows(sessionCardKeyboard(DONE, CASHIER_URL))
+      .flat()
       .find((key) => key.text === LABELS.sessionAgainButton);
     await scene.press((again as Button | undefined)?.callback_data ?? '');
     expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
@@ -1657,11 +1671,11 @@ describe('the summary in one message (#318, #537)', () => {
     expect(photo?.caption).toBe(
       sessionSummaryCaption(null, bare.lastIntent!.assetId, bare, OWNER_LINK).value,
     );
-    expect(rowsOf(photo)).toEqual([DEPOSIT_INVITE, MENU]);
+    expect(rowsOf(photo)).toEqual([DEPOSIT, INVITE_MENU]);
     expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
       SHARE_ROW,
-      DEPOSIT_INVITE,
-      MENU,
+      DEPOSIT,
+      INVITE_MENU,
     ]);
   });
 });

@@ -1,6 +1,9 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
+  ButtonRole,
+  callbackButton,
   editRefusal,
+  keyboardOf,
   BrokerBalanceUnavailableReason,
   checkStake,
   decimalLessThan,
@@ -8,6 +11,8 @@ import {
   TradeMode,
   TradingModeErrorCode,
   UserStatus,
+  type BotButton,
+  type BotKeyboard,
   type BrokerBalanceView,
   type SetTradingModeResponse,
   type TelegramHtml,
@@ -51,17 +56,17 @@ export interface TradingModeDeps {
   backend: Pick<BackendClient, 'readTradingAccess' | 'setTradingMode'>;
   logger: Logger;
   // the welcome's connect button, for a user with no account to trade on
-  connectKeyboard: () => InlineKeyboard;
+  connectButtons: () => BotButton[];
 }
 
 interface Screen {
   text: TelegramHtml;
-  keyboard: InlineKeyboard;
+  keyboard: BotKeyboard;
 }
 
 // the way back to the screen, then the menu: under every refusal and every unknown outcome
-const backToScreen = (): InlineKeyboard =>
-  withMenu(new InlineKeyboard().text(LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA));
+const backToScreen = (): BotKeyboard =>
+  withMenu([callbackButton(ButtonRole.Nav, LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA)]);
 
 // A switch the backend refused before its write, by code: the text, and «⚙️ Режим» under it.
 // Exhaustive, so a code added to the contract fails tsc here; user_not_found is logged (the access
@@ -84,7 +89,7 @@ const outcomeUnknown = (error: unknown): boolean =>
 export function createTradingModeComposer<C extends Context>({
   backend,
   logger,
-  connectKeyboard,
+  connectButtons,
 }: TradingModeDeps): Composer<C> {
   const composer = new Composer<C>();
 
@@ -180,7 +185,7 @@ export function createTradingModeComposer<C extends Context>({
     }
     if (broker === null && tradingMode === TradeMode.Demo) {
       if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
-        return { text: TEXTS.accountNone, keyboard: withMenu(connectKeyboard()) };
+        return { text: TEXTS.accountNone, keyboard: withMenu(connectButtons()) };
       }
       return {
         text:
@@ -199,13 +204,14 @@ export function createTradingModeComposer<C extends Context>({
     realStake,
     tradingOpen,
   }: TradingAccessResponse): Screen {
-    const keyboard =
+    // in demo the step forward on its own row (#475), in real the way back beside the menu
+    const button =
       tradingMode === TradeMode.Real
-        ? new InlineKeyboard().text(LABELS.modeBackDemoButton, MODE_DEMO_CALLBACK_DATA)
-        : new InlineKeyboard().text(LABELS.modeEnableButton, MODE_CONFIRM_CALLBACK_DATA);
+        ? callbackButton(ButtonRole.Secondary, LABELS.modeBackDemoButton, MODE_DEMO_CALLBACK_DATA)
+        : callbackButton(ButtonRole.Forward, LABELS.modeEnableButton, MODE_CONFIRM_CALLBACK_DATA);
     return {
       text: tradingModeScreen({ mode: tradingMode, broker, realStake, tradingOpen }),
-      keyboard: withMenu(keyboard),
+      keyboard: withMenu([button]),
     };
   }
 
@@ -228,9 +234,10 @@ export function createTradingModeComposer<C extends Context>({
         realAvailable: broker.real.available,
         outOfBounds: checkStake(stake, limits) !== null,
       }),
-      keyboard: new InlineKeyboard()
-        .text(LABELS.modeConfirmButton, MODE_REAL_CALLBACK_DATA)
-        .text(LABELS.modeCancelButton, MODE_SCREEN_CALLBACK_DATA),
+      keyboard: keyboardOf([
+        callbackButton(ButtonRole.Forward, LABELS.modeConfirmButton, MODE_REAL_CALLBACK_DATA),
+        callbackButton(ButtonRole.Nav, LABELS.modeCancelButton, MODE_SCREEN_CALLBACK_DATA),
+      ]),
     };
   }
 

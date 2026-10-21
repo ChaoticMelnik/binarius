@@ -221,7 +221,7 @@ const SCENES: Scene[] = [
     ];
   }),
   // the mode screen (#474): opened from the card and redrawn in place («↩️ Отмена», «⚙️ Режим»);
-  // a switch's result is no scene: after «🎮 Вернуться в демо» the user is in demo
+  // a switch's result is no scene: after «🎮 В демо» the user is in demo
   press('the mode screen of a real user', MODE_CALLBACK_DATA),
   press('the mode screen in place', MODE_SCREEN_CALLBACK_DATA),
   // the purchase (#117): the same screens in both modes
@@ -298,9 +298,9 @@ describe('the real path (#121)', () => {
     ['«➕ Ещё»', '🚀 Сессия из 5 циклов · REAL'],
     ['the refresh of a settled real trade', '🚀 Сессия из 5 циклов · REAL'],
     // #474: the card's way to the mode screen, and the screen's way back to demo
-    ['/menu', '🎮 Вернуться в демо'],
+    ['/menu', '🎮 В демо'],
     ['the mode screen of a real user', 'Сейчас: <b>REAL</b>'],
-    ['the mode screen in place', '🎮 Вернуться в демо'],
+    ['the mode screen in place', '🎮 В демо'],
   ])('%s shows «%s»', async (name, expected) => {
     const scene = SCENES.find((candidate) => candidate.name === name)!;
     const words = await shown(scene, scene.access ?? REAL);
