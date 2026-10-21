@@ -6,12 +6,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb } from './client';
 import { runMigrations } from './migrate';
-import {
-  createTempDatabase,
-  seedTradingSession,
-  seedUserWithAccount,
-  type TempDatabase,
-} from './testing';
+import { createTempDatabase, sessionSettings, type TempDatabase } from './testing';
 
 // #537: 0072 closes the summary step of every session whose text summary the backend sent before
 // the deploy (final_notice_sent_at set, summary_sent_at NULL), so the fallback sender does not send
@@ -60,12 +55,33 @@ const marksOf = async (id: string) => {
 
 describe('migration 0072', () => {
   it('B1 closes the summary step of a session whose text summary was sent; B2 leaves the rest; B3 adds the index', async () => {
-    // one active session per account
-    const session = async () =>
-      seedTradingSession(
-        db.db,
-        (await seedUserWithAccount(db.db, { balance: 10n })).brokerAccountId,
-      );
+    // one active session per account; raw SQL at 0071's columns, so a later migration's column
+    // (0073's broker_accounts.h1_since, #670) does not reach this database through the schema
+    let telegramUserId = 900_000;
+    const session = async () => {
+      const [user] = (
+        await db.pool.query<{ id: string }>(
+          'insert into users (telegram_user_id, token_balance) values ($1, 10) returning id',
+          [++telegramUserId],
+        )
+      ).rows;
+      const [account] = (
+        await db.pool.query<{ id: string }>(
+          `insert into broker_accounts (user_id, broker_user_id, access_token_enc, refresh_token_enc,
+             token_key_id, access_token_expires_at, status)
+           values ($1, $2, $3, $3, 'k1', now() + interval '1 hour', 'active') returning id`,
+          [user!.id, `broker-${String(telegramUserId)}`, Buffer.from('enc')],
+        )
+      ).rows;
+      const [row] = (
+        await db.pool.query<{ id: string }>(
+          `insert into trading_sessions (broker_account_id, mode, settings)
+           values ($1, 'demo', $2) returning id`,
+          [account!.id, JSON.stringify(sessionSettings())],
+        )
+      ).rows;
+      return row!;
+    };
     const sent = await session();
     const both = await session();
     const open = await session();

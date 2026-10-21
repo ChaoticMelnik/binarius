@@ -45,6 +45,7 @@ const intent = (patch: Partial<TradeIntentRow> = {}): TradeIntentRow => ({
   tokensReserved: 1n,
   transport: null,
   submittedAt: new Date(SUBMITTED),
+  submitDeadlineAt: null,
   lastError: 'executor_timeout',
   // the window closed by the database clock unless a case says otherwise
   reconcileClaimedAt: new Date(SUBMITTED + AFTER + 1_000),

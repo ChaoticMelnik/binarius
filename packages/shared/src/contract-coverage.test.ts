@@ -153,6 +153,7 @@ describe('contract coverage (issue #6)', () => {
         | 'reconciliation_ambiguous'
         | 'broker_unavailable'
         | 'demo_only'
+        | 'entry_window_missed'
         | null;
       updatedAt: string;
     }>();

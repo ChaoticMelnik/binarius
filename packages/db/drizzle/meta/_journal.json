@@ -512,6 +512,13 @@
       "when": 1792596308444,
       "tag": "0072_session_summary_fallback",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1792609240241,
+      "tag": "0073_h1_sessions",
+      "breakpoints": true
     }
   ]
 }
