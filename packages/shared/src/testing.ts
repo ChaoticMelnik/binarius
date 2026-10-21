@@ -6,6 +6,12 @@ import type { DecimalString } from './money';
 import { TradeMode, type TradeAction } from './trading';
 import { BOT_MESSAGE_SPACER, BOT_TEXT_LIMIT } from './bot-message-width';
 import { plainTextOf, telegramHtmlProblems, type TelegramHtml } from './telegram-html';
+import {
+  BUTTON_LABEL_WIDTHS,
+  buttonLabelWidth,
+  FULL_WIDTH_ROLES,
+  isBotKeyboard,
+} from './bot-keyboard';
 
 // --- Waiting in tests (#205) ------------------------------------------------------------------
 // One ceiling per vitest project, each below that project's test budget so a wait that never ends
@@ -210,4 +216,39 @@ export function closedTradeFor(open: OpenTrade, patch: Partial<ClosedTrade> = {}
     profit: '-10.00' as DecimalString,
     ...patch,
   };
+}
+
+// --- Keyboards by role (#475, docs/bot-navigation.md → Roles, colours and rows) ---------------
+// What is wrong with a keyboard a scene sends; the apps' captureApi throws on any. A keyboard not
+// built by keyboardOf has no roles. A non-forward action alone in its row is allowed only when it
+// is the one such button on the keyboard; a label wider than its row of two or three is cut on a
+// phone. Lists (pairs, signals, presets) are data, laid out by `perRow`: their remainder may stand
+// alone, and their labels are held by the formatters' tests.
+export function botKeyboardProblems(markup: unknown): string[] {
+  if (!isBotKeyboard(markup)) return ['a keyboard built outside keyboardOf'];
+  const problems: string[] = [];
+  const loose = markup.rows.flat().filter((b) => !b.list && !FULL_WIDTH_ROLES.has(b.role));
+  for (const row of markup.rows) {
+    const [only] = row;
+    if (
+      row.length === 1 &&
+      only !== undefined &&
+      !only.list &&
+      !FULL_WIDTH_ROLES.has(only.role) &&
+      loose.length > 1
+    ) {
+      problems.push(`lone_button: ${only.text}`);
+    }
+    if (row.length === 2 || row.length === 3) {
+      const limit = BUTTON_LABEL_WIDTHS[row.length];
+      for (const b of row) {
+        if (!b.list && buttonLabelWidth(b.text) > limit) {
+          problems.push(
+            `label_width: ${b.text} (${String(buttonLabelWidth(b.text))} > ${String(limit)})`,
+          );
+        }
+      }
+    }
+  }
+  return problems;
 }
