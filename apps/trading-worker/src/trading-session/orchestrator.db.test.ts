@@ -2805,6 +2805,16 @@ describe('the wake after a write that ends an intent or halts its account (#696)
 describe('the balance wait after a settlement (#696)', () => {
   const LIMIT = sessionNoSignalTimeoutMs(60);
   const WAITS = 'trading session waits for the balance';
+  // a case that fails before its own stop() must not leave its ticks running into the next one
+  const made: ReturnType<typeof orchestratorOf>[] = [];
+  const stoppable = () => {
+    const orchestrator = orchestratorOf();
+    made.push(orchestrator);
+    return orchestrator;
+  };
+  afterEach(async () => {
+    await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
+  });
   const demoBalance = (brokerAccountId: string, available: string) =>
     applyBalanceEvent(tmp.db, {
       brokerAccountId,
@@ -2827,7 +2837,7 @@ describe('the balance wait after a settlement (#696)', () => {
     (await decisionsOf(sessionId)).filter((row) => row.step === 2);
 
   it('BW1 a woken attempt on the balance before the payout waits; the payout makes step 2', async () => {
-    const orchestrator = orchestratorOf();
+    const orchestrator = stoppable();
     const seed = await wonBeforePayout(orchestrator);
     orchestrator.wake();
     await until('the wait', () => msgsOf(seed.session.id).includes(WAITS));
@@ -2851,7 +2861,7 @@ describe('the balance wait after a settlement (#696)', () => {
   });
 
   it('BW2 a balance written after the settlement that is short stops the session', async () => {
-    const orchestrator = orchestratorOf();
+    const orchestrator = stoppable();
     const seed = await wonBeforePayout(orchestrator);
     await demoBalance(seed.brokerAccountId, '0.50');
     await orchestrator.tick();
@@ -2870,7 +2880,7 @@ describe('the balance wait after a settlement (#696)', () => {
   });
 
   it('BW3 past the no-signal limit the balance behind the settlement stops the session', async () => {
-    const orchestrator = orchestratorOf();
+    const orchestrator = stoppable();
     const seed = await wonBeforePayout(orchestrator);
     // the settle row keeps its time, so the snapshot stays behind; an UPDATE without status
     // runs no transition trigger
