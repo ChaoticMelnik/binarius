@@ -54,6 +54,8 @@ import type { SessionOrchestratorConfig } from './config';
 // stops the sessions the kill switch, the deadline and a halt end, then makes one attempt per
 // runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
 // holds the session back in memory; the step comes from the database's history, never from memory.
+// A terminal write of an intent in the worker wakes it (#696): a tick at once, the interval is the
+// safety net.
 
 export interface SessionOrchestratorDeps {
   db: Db;
@@ -71,6 +73,9 @@ export interface SessionOrchestrator {
   start(): void;
   // never rejects
   tick(): Promise<void>;
+  // a tick now, or one more right after the running one (its scan may predate the caller's write);
+  // calls merge, a no-op after stop(); never throws, so a caller may call it after its commit (#696)
+  wake(): void;
   // aborts the attempt's backend call and waits for the running tick
   stop(): Promise<void>;
 }
@@ -219,6 +224,8 @@ export function createSessionOrchestrator({
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | undefined;
+  // wake() calls no tick has served yet
+  let pending = 0;
 
   function logStop(
     row: StoppedSession,
@@ -631,6 +638,9 @@ export function createSessionOrchestrator({
   }
 
   async function runTick(): Promise<void> {
+    // before the first await: a wake() after this line is served by the next tick
+    const woken = pending;
+    pending = 0;
     const paused = await stopPausedSessions(db, { limit: config.batchSize });
     logStops(paused, TradingSessionStopReason.KillSwitch);
     const expired = await stopExpiredSessions(db, {
@@ -648,7 +658,14 @@ export function createSessionOrchestrator({
       maxDurationMs: config.maxDurationMs,
       exclude: [...heldUntil.keys()],
     });
-    const summary = { runnable: runnable.length, attempted: 0, created: 0, held: 0, stopped: 0 };
+    const summary = {
+      runnable: runnable.length,
+      attempted: 0,
+      created: 0,
+      held: 0,
+      stopped: 0,
+      woken,
+    };
     for (const session of runnable) {
       if (stopped) break;
       summary.attempted += 1;
@@ -671,12 +688,17 @@ export function createSessionOrchestrator({
       })
       .finally(() => {
         running = undefined;
+        if (pending > 0) void tick();
       });
     return running;
   }
 
   return {
     tick,
+    wake() {
+      pending += 1;
+      if (running === undefined) void tick();
+    },
     start() {
       if (stopped || timer !== undefined) return;
       void tick();

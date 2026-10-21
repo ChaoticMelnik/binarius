@@ -88,6 +88,8 @@ const NEGATIVE =
 const DURATION =
   'a duration, not a synchronization: a scripted delay or hold-back has to run out, and load makes it longer, never shorter';
 const IN_FAKE = 'a wait inside a fake: the time the faked operation takes';
+const WAKE_BOUND =
+  "the issue's acceptance criterion is the property (#696: a settlement to the next step within a bound); the timer's tick cannot meet it, and the wake takes ~20-200 ms locally";
 const ALLOWED: readonly { file: string; form: Form; match: string; reason: string }[] = [
   {
     file: 'apps/backend/src/outbox/publisher.redis.test.ts',
@@ -233,6 +235,18 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     match: 'toBeLessThan(TRADING_ACCESS_BUDGET_MS)',
     reason:
       'the route budget is the property; 1 s of margin over the 3 s refresh budget inside it, a chain asserted at import',
+  },
+  {
+    file: 'apps/trading-worker/src/trading-session/orchestrator.db.test.ts',
+    form: 'F3',
+    match: 'expect(Date.now() - wokenAt).toBeLessThan(1_000);',
+    reason: WAKE_BOUND,
+  },
+  {
+    file: 'apps/trading-worker/src/trading-session/orchestrator.db.test.ts',
+    form: 'F4',
+    match: 'await new Promise((resolve) => setTimeout(resolve, 200));',
+    reason: `${NEGATIVE} (no tick may follow stop())`,
   },
 ];
 

@@ -166,6 +166,7 @@ function orchestratorOf({
   config = {},
   demoOnly = false,
   clockOf = now,
+  log = logger,
 }: {
   signals?: SignalSource;
   pairs?: PairsSource;
@@ -173,12 +174,13 @@ function orchestratorOf({
   config?: Partial<SessionOrchestratorConfig>;
   demoOnly?: boolean;
   clockOf?: () => number;
+  log?: pino.Logger;
 } = {}) {
   return createSessionOrchestrator({
     db,
     signals,
     pairs,
-    logger,
+    logger: log,
     config: { ...CONFIG, ...config },
     demoOnly,
     now: clockOf,
@@ -2655,6 +2657,129 @@ describe('an H1 session (#670)', () => {
       status: TradingSessionStatus.Stopped,
       stopReason: TradingSessionStopReason.RejectedTwice,
     });
+    await orchestrator.stop();
+  });
+});
+
+describe('the wake after a terminal write (#696)', () => {
+  // the tick line carries no session id: each case tags its orchestrator's lines
+  const tagged = (wake: string) => logger.child({ wake });
+  const ticksOf = (wake: string) =>
+    lines.filter((line) => line.wake === wake && line.msg === 'trading session tick');
+
+  // a signal held until release(); an abort answers at once, as the backend client does
+  function gatedSignals() {
+    let release = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const signals = signalsOf(
+      (signal) =>
+        new Promise<SignalOutcome>((resolve) => {
+          void released.then(() => resolve({ ok: true, response: signalAnswer(TradeAction.Up) }));
+          signal?.addEventListener('abort', () =>
+            resolve({ ok: false, reason: 'backend_unreachable' }),
+          );
+        }),
+    );
+    return { signals, release };
+  }
+
+  it('WK1 a wake after the settlement makes the next step within a second, with no tick called', async () => {
+    const seed = await seedSession();
+    const signals = signalsOf();
+    const orchestrator = orchestratorOf({ signals, log: tagged('WK1') });
+    await tradeOnce(orchestrator, seed);
+    const before = ticksOf('WK1').length;
+    const wokenAt = Date.now();
+    orchestrator.wake();
+    await until('step 2', async () => (await intentsOf(seed.session.id)).length === 2);
+    expect(Date.now() - wokenAt).toBeLessThan(1_000);
+    await until('the tick line', () => ticksOf('WK1').length === before + 1);
+    expect((await intentsOf(seed.session.id))[1]!.clientRequestId).toBe(
+      `session:${seed.session.id}:2`,
+    );
+    expect(signals.calls).toHaveLength(2);
+    expect(ticksOf('WK1').slice(before)).toEqual([
+      expect.objectContaining({ runnable: 1, created: 1, woken: 1 }),
+    ]);
+    await orchestrator.stop();
+  });
+
+  it('WK2 wakes during a tick merge into one more tick: one intent, one decision row', async () => {
+    const seed = await seedSession();
+    const { signals, release } = gatedSignals();
+    const orchestrator = orchestratorOf({ signals, log: tagged('WK2') });
+    const first = orchestrator.tick();
+    await until('the signal call', () => signals.calls.length === 1);
+    orchestrator.wake();
+    orchestrator.wake();
+    orchestrator.wake();
+    release();
+    await first;
+    await until('the follow-up tick', () => ticksOf('WK2').length >= 2);
+    await orchestrator.stop();
+    expect(ticksOf('WK2')).toEqual([
+      expect.objectContaining({ runnable: 1, created: 1, woken: 0 }),
+      // the live intent keeps the session out of the scan
+      expect.objectContaining({ runnable: 0, attempted: 0, woken: 3 }),
+    ]);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect(await decisionsOf(seed.session.id)).toHaveLength(1);
+    expect(signals.calls).toHaveLength(1);
+  });
+
+  it('WK3 a lost wake loses nothing: the next tick makes the step', async () => {
+    const seed = await seedSession();
+    const orchestrator = orchestratorOf({ log: tagged('WK3') });
+    await tradeOnce(orchestrator, seed);
+    await orchestrator.tick();
+    expect((await intentsOf(seed.session.id)).map((i) => i.clientRequestId)).toEqual([
+      `session:${seed.session.id}:1`,
+      `session:${seed.session.id}:2`,
+    ]);
+    expect(ticksOf('WK3').at(-1)).toMatchObject({ created: 1, woken: 0 });
+    await orchestrator.stop();
+  });
+
+  it('WK4a a wake after stop() is a no-op and does not throw', async () => {
+    const seed = await seedSession();
+    const orchestrator = orchestratorOf({ log: tagged('WK4a') });
+    await orchestrator.stop();
+    expect(() => orchestrator.wake()).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(ticksOf('WK4a')).toEqual([]);
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+  });
+
+  it('WK4b a wake during a tick that stop() ends runs no deferred tick', async () => {
+    const seed = await seedSession();
+    const { signals } = gatedSignals();
+    const orchestrator = orchestratorOf({
+      signals,
+      config: { attemptTimeoutMs: 5_000 },
+      log: tagged('WK4b'),
+    });
+    const first = orchestrator.tick();
+    await until('the signal call', () => signals.calls.length === 1);
+    orchestrator.wake();
+    await orchestrator.stop();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(ticksOf('WK4b')).toEqual([expect.objectContaining({ attempted: 1, woken: 0 })]);
+    expect(signals.calls).toHaveLength(1);
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Active,
+      lastDecisionAt: null,
+    });
+  });
+
+  it('WK5 a wake with no runnable session, before start(), is one idle tick', async () => {
+    const orchestrator = orchestratorOf({ log: tagged('WK5') });
+    orchestrator.wake();
+    await until('the tick line', () => ticksOf('WK5').length === 1);
+    expect(ticksOf('WK5')).toEqual([
+      expect.objectContaining({ runnable: 0, attempted: 0, woken: 1 }),
+    ]);
     await orchestrator.stop();
   });
 });
