@@ -176,6 +176,8 @@ export function toTradeLogLine(
             durationSec: intent.durationSec,
             createdAtMs: intent.createdAt.getTime(),
             submittedAtMs: intent.submittedAt?.getTime() ?? null,
+            lastError: intent.lastError,
+            submitDeadlineAtMs: intent.submitDeadlineAt?.getTime() ?? null,
             cycle: step?.cycle ?? null,
             cycleStep: step?.step ?? null,
             broker:

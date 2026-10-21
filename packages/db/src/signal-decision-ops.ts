@@ -20,6 +20,7 @@ import {
   type SignalInterval,
   type SignalRecord,
   type TradeAction,
+  type TradeIntentFailureReason,
   type TradeLogTickRow,
   type TradeMode,
   type TradingSessionStopReason,
@@ -203,6 +204,8 @@ export interface TradeLogIntentRow {
   durationSec: number;
   createdAt: Date;
   submittedAt: Date | null;
+  lastError: TradeIntentFailureReason | null;
+  submitDeadlineAt: Date | null;
   broker: TradeLogBrokerRow | null;
 }
 
@@ -287,6 +290,8 @@ export async function readTradeLogPage(
       intentDurationSec: tradeIntents.durationSec,
       intentCreatedAt: tradeIntents.createdAt,
       intentSubmittedAt: tradeIntents.submittedAt,
+      intentLastError: tradeIntents.lastError,
+      intentSubmitDeadlineAt: tradeIntents.submitDeadlineAt,
       brokerStatus: brokerTrades.status,
       brokerPayout: brokerTrades.payout,
       brokerOpenPrice: brokerTrades.openPrice,
@@ -381,6 +386,8 @@ export async function readTradeLogPage(
               durationSec: row.intentDurationSec,
               createdAt: row.intentCreatedAt,
               submittedAt: row.intentSubmittedAt,
+              lastError: row.intentLastError,
+              submitDeadlineAt: row.intentSubmitDeadlineAt,
               broker:
                 row.brokerStatus === null ||
                 row.brokerPayout === null ||
