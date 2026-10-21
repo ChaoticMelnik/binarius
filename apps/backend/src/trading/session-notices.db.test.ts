@@ -425,10 +425,19 @@ describe('the session notices (#464)', () => {
     const { notices, captured, refreshCalls } = sender();
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(0);
-    const row = await rowOf(target);
-    expect(row).toMatchObject({ notifiedTrades: 1, finalNoticeSentAt: expect.any(Date) });
-    // one statement: the summary step closed with the final mark
-    expect(row.summarySentAt).toEqual(row.finalNoticeSentAt);
+    expect(await rowOf(target)).toMatchObject({
+      notifiedTrades: 1,
+      finalNoticeSentAt: expect.any(Date),
+    });
+    // one statement: the summary step closed with the final mark, to the microsecond - the
+    // fallback's claim of a blocked user would write a later now()
+    const [marks] = await tmp.db
+      .select({
+        same: sql<boolean>`${tradingSessions.summarySentAt} = ${tradingSessions.finalNoticeSentAt}`,
+      })
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, target.session.id));
+    expect(marks?.same).toBe(true);
     expect(refreshCalls).toHaveLength(0);
   });
 
