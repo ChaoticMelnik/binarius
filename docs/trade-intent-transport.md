@@ -240,10 +240,12 @@ With `BROKER_WS_URL` set, `close_trade.success` on the account's session (#101) 
 and the catch-up (#90) resolves from the closed list what the session missed, once the intent is
 overdue. Without it there is no session: every intent reaches the broker over REST
 (`rest_fallback`, the trade command executor, [trade-executor.md](trade-executor.md)) and the
-catch-up settles every one. Every terminal write of the worker (a settle over the socket, by the
-catch-up or by the pass; a rejection by the processor or the pass; a halt) wakes the session
-orchestrator after its commit (#696, [trading-session.md](trading-session.md#the-orchestrator)); the
-backend's own terminal writes wait for its tick.
+catch-up settles every one. Every write of the worker that ends an intent or halts its account (a
+settle over the socket, by the catch-up or by the pass; a rejection by the processor or the pass; a
+halt) wakes the session orchestrator after its commit (#696,
+[trading-session.md](trading-session.md#the-orchestrator)), not after a partial settle that throws
+(the tick finds it, trading-session.md → The wake); the backend's own terminal writes wait for its
+tick.
 
 The intents of a demo session take the same rows; what the session does meanwhile is
 [trading-session.md](trading-session.md) → [Recovery after a restart](trading-session.md#recovery-after-a-restart-131).

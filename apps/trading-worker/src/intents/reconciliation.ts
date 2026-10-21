@@ -83,7 +83,8 @@ export interface ReconciliationPassDeps {
   balanceCheck: BalanceCheck;
   logger: Logger;
   config: ReconciliationPassConfig;
-  // called after the commit of a write that ended an intent; never throws (#696)
+  // called after the commit of a write that ended an intent or halted its account; never throws
+  // (#696)
   onIntentEnded?: () => void;
 }
 
@@ -121,7 +122,8 @@ type Ending = Exclude<keyof TickSummary, 'candidates' | 'balanceCompared' | 'bal
 // out of any compare
 const CHECKED_ENDINGS: ReadonlySet<Ending> = new Set(['accepted', 'settled', 'rejected']);
 
-// the endings that leave the intent terminal: they wake the trading session orchestrator (#696)
+// the endings that end the intent (settled, rejected) or halt its account (manual_review): they wake
+// the trading session orchestrator (#696)
 const ENDED_INTENT: ReadonlySet<Ending> = new Set(['settled', 'rejected', 'manualReview']);
 
 export function createReconciliationPass({

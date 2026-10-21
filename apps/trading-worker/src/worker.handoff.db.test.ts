@@ -673,7 +673,8 @@ describe('a demo session whose worker dies (#131)', () => {
   }, 60_000);
 });
 
-// #696: every terminal write of an intent in the worker wakes the orchestrator after its commit.
+// #696: every write in the worker that ends an intent or halts its account wakes the orchestrator
+// after its commit.
 // The orchestrator's interval is far past each case's bound, so only a wake makes the next step
 // in time; every bound is the host's clock.
 describe('the wake through the composition (#696)', () => {

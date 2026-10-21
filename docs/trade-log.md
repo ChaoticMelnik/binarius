@@ -71,7 +71,8 @@ retention sweep ([Retention](#retention)).
 ## The writers and their outcomes
 
 One rule for both writers: the acting process writes one row per answer it gave after a decision
-was read, with the outcome it reached. A path that ends before a decision exists writes nothing.
+was read, with the outcome it reached, except the balance wait (E7′), which acts on no decision:
+the step's decision is asked again. A path that ends before a decision exists writes nothing.
 
 ### The orchestrator (`context = session`)
 
@@ -86,6 +87,7 @@ was read, with the outcome it reached. A path that ends before a decision exists
 | E4 | `no_signal` | hold to the next candle | `no_signal` / NULL | O2 |
 | E5 | the paused direction past the limit | stop `no_signal_timeout` | `paused` / NULL (`action` the paused direction) | O10 |
 | E6 | the paused direction | hold to the next candle | `paused` / NULL | O3 |
+| E7′ | the sizer's `insufficient_balance` on a balance older than the session's last settlement, inside the no-signal limit (#696) | reschedule | none: the step's decision is asked again on a current balance; the retry's row is the step's | BW1 |
 | E7 | the sizer's stop | stop (`STAKE_STOP_REASONS`) | `stake_stop` / the sizer's `StopReason` code | O4 |
 | E8 | the deadline, a throw or `stop()` after `evaluate` | no ending | none (risk 2) | — |
 | E9 | `TradingSessionNotActiveError` | gone | none: thrown before the decision's INSERT, rolled back | O5 |

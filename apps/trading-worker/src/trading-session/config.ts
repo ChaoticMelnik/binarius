@@ -1,4 +1,5 @@
 import {
+  BROKER_BALANCE_SLA_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
@@ -6,6 +7,7 @@ import {
   SIGNAL_SHORTEST_INTERVAL_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
+import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { isTimerMs } from '@binarius/broker-socket';
 
 // The session orchestrator's constants (docs/trading-session.md -> Constants and the chain), each
@@ -42,7 +44,10 @@ import { isTimerMs } from '@binarius/broker-socket';
 // 15 s session of the CLI or from before #685 waits 20 x 15 s, still before it; on 5m and longer
 // it does not, and the deadline ends the session (accepted risk, docs/trading-session.md -> The
 // no-signal limit); NO_SIGNAL x the longest candle (1h) stays a timer value, the bound of the
-// SQL ::int cast; every *_MS is an integer in [1, MAX_TIMER_MS].
+// SQL ::int cast; the balance wait after a settlement (#696) ends at the no-signal limit, and the
+// backend's REST refresh (its interval at most the SLA) and one GET fit before it
+// (BROKER_BALANCE_SLA + BROKER_REST_TIMEOUT < NO_SIGNAL x the shortest candle); every *_MS is an
+// integer in [1, MAX_TIMER_MS].
 // The link to the shutdown budget is in intents/config.ts.
 export const TRADING_SESSION_TICK_MS = 5_000;
 const TRADING_SESSION_BATCH_SIZE = 200;
@@ -101,6 +106,8 @@ export function sessionOrchestratorConfigHolds(
     Number.isSafeInteger(config.noSignalCandles) &&
     config.noSignalCandles >= 2 &&
     config.retryMs < config.noSignalCandles * SIGNAL_SHORTEST_INTERVAL_MS &&
+    BROKER_BALANCE_SLA_MS + BROKER_REST_TIMEOUT_MS <
+      config.noSignalCandles * SIGNAL_SHORTEST_INTERVAL_MS &&
     config.noSignalCandles * LONGEST_SCAN_CANDLE_MS < config.maxDurationMs &&
     isTimerMs(config.noSignalCandles * LONGEST_CANDLE_MS)
   );
