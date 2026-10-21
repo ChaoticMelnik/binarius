@@ -19,7 +19,8 @@ export interface RampPricePath {
 // DEFAULT_SIGNAL_PARAMS on candles built the way the mock builds them, at 60 clock positions within
 // and across 15 s candles: `signal:up` at all 60 (RSI ≈ 58, ATR ≈ 0.096 %). Without the zigzag RSI
 // is 100 (rsi_overbought); the mock's own waves are volatility_too_low. The decision does not
-// depend on where in the candle the press falls, so the test does not either.
+// depend on where in the candle the press falls, so the test does not either. Since #685 the demo
+// trades 5 s: the same function on 5 s candles gives the decider the same series.
 export function rampPricePath(ramp: RampPricePath) {
   return (_assetId: number, atMs: number): number => {
     const k = Math.floor((atMs - ramp.originMs) / ramp.candleMs);
@@ -29,7 +30,7 @@ export function rampPricePath(ramp: RampPricePath) {
 }
 
 export const E2E_RAMP = {
-  candleMs: 15_000,
+  candleMs: 5_000,
   slopePerCandle: 0.0001,
   zigzag: 0.0005,
   basePrice: 1.08765,

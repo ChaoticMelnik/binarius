@@ -28,6 +28,7 @@ import type {
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
 import type {
+  SignalInterval,
   SignalParams,
   TradingSignalErrorCode,
   TradingSignalResponse,
@@ -418,9 +419,10 @@ describe('contract coverage (issue #6)', () => {
     expectTypeOf<keyof TradingSignalsResponse['lists'][number]['signals'][number]>().toEqualTypeOf<
       'assetId' | 'action' | 'lastCandleTimestamp' | 'decidedAt' | 'ageMs'
     >();
-    expectTypeOf<TradingSignalsResponse['lists'][number]['interval']>().toEqualTypeOf<
-      '15s' | '5s'
-    >();
+    // any interval, wider than the scanner's (#685)
+    expectTypeOf<
+      TradingSignalsResponse['lists'][number]['interval']
+    >().toEqualTypeOf<SignalInterval>();
   });
 
   it('Trading session view and refusal (issue #283)', () => {

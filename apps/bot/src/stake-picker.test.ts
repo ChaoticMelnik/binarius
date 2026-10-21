@@ -84,7 +84,7 @@ interface Button {
 
 const SETTINGS: StakeOrigin = { kind: 'settings' };
 const ANALYSIS: StakeOrigin = { kind: 'analysis', assetId: 101, durationSec: 5 };
-const PAIR: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 };
+const PAIR: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 };
 const ON_STAKE_STEP: LoginDialogState = { step: 'stake', mode: TradeMode.Demo, origin: SETTINGS };
 const d = (value: string): DecimalString => decimalStringSchema.parse(value);
 
@@ -308,14 +308,14 @@ describe('the stake picker', () => {
   });
 
   it('keeps every picker datum inside the Bot API 64 bytes and reads its origin back', () => {
-    const longest: StakeOrigin = { kind: 'analysis', assetId: 2_147_483_647, durationSec: 15 };
+    const longest: StakeOrigin = { kind: 'analysis', assetId: 2_147_483_647, durationSec: 5 };
     const data = stakePresetCallbackData('999999999999.99999999', TradeMode.Real, longest);
-    expect(Buffer.byteLength(data, 'utf8')).toBe(45);
-    expect(data).toBe('stk:s:999999999999.99999999:r:a:2147483647:15');
+    expect(Buffer.byteLength(data, 'utf8')).toBe(44);
+    expect(data).toBe('stk:s:999999999999.99999999:r:a:2147483647:5');
     expect(stakeMenuCallbackData(TradeMode.Demo, 101, 5)).toBe(
       stakeOpenCallbackData(TradeMode.Demo, ANALYSIS),
     );
-    expect(stakeOriginOf('a:2147483647:15')).toEqual(longest);
+    expect(stakeOriginOf('a:2147483647:5')).toEqual(longest);
     expect(stakeOriginOf('s')).toEqual(SETTINGS);
     expect(stakeOriginOf('a:0:5')).toBeUndefined();
     expect(stakeOriginOf('x')).toBeUndefined();
@@ -325,24 +325,31 @@ describe('the stake picker', () => {
     const longest = stakePresetCallbackData('999999999999.99999999', TradeMode.Real, {
       kind: 'pair',
       assetId: 2_147_483_647,
-      durationSec: 15,
+      durationSec: 5,
     });
-    expect(Buffer.byteLength(longest, 'utf8')).toBe(45);
-    expect(launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15)).toBe(
+    expect(Buffer.byteLength(longest, 'utf8')).toBe(44);
+    expect(launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5)).toBe(
       stakeOpenCallbackData(TradeMode.Demo, PAIR),
     );
-    expect(stakeOriginOf(`p:${PAIR_EURUSD.id}:15`)).toEqual(PAIR);
-    expect(stakeOriginOf('p:101:5')).toEqual({ kind: 'pair', assetId: 101, durationSec: 5 });
-    expect(stakeOriginOf('p:0:15')).toBeUndefined();
+    expect(stakeOriginOf(`p:${PAIR_EURUSD.id}:5`)).toEqual(PAIR);
+    expect(stakeOriginOf('p:0:5')).toBeUndefined();
     // a launch screen from before #382 carried no duration: the legacy handler takes it (#382)
     expect(stakeOriginOf('p:101')).toBeUndefined();
-    expect(stakeOriginOf('p:101:60')).toBeUndefined();
+    expect(stakeOriginOf('p:101:120')).toBeUndefined();
+  });
+
+  // #685: the duration is one, so an origin drawn with 15 s (or a duration before #313) names the
+  // same pair's screen at 5 s
+  it("an origin with 15 reads as the pair's screen at 5 s", () => {
+    expect(stakeOriginOf('a:101:15')).toEqual({ kind: 'analysis', assetId: 101, durationSec: 5 });
+    expect(stakeOriginOf('p:101:15')).toEqual({ kind: 'pair', assetId: 101, durationSec: 5 });
+    expect(stakeOriginOf('a:101:300')).toEqual({ kind: 'analysis', assetId: 101, durationSec: 5 });
   });
 });
 
 describe('the stake picker opened from a launch screen (#320)', () => {
   const BACK_LAUNCH = [
-    button(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+    button(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
   ];
   // #476: a demo save returns to the amount screen under the saved line; `demoStake` is what the
   // access read after the save says
@@ -350,8 +357,8 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     amount: DecimalString | null,
     {
       symbol = pairLabel(PAIR_EURUSD),
-      durationSec = 15,
-    }: { symbol?: PairLabel | null; durationSec?: 5 | 15 } = {},
+      durationSec = 5,
+    }: { symbol?: PairLabel | null; durationSec?: 5 } = {},
   ) =>
     cycleStakeScreen({
       step: { assetId: PAIR_EURUSD.id, durationSec, back: 'l' },
@@ -363,7 +370,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     });
   const savedAccess = (demoStake: DecimalString | null) => () =>
     Promise.resolve(accessView({ demoStake }));
-  const amount = (value: string, label: string, durationSec: 5 | 15 = 15) =>
+  const amount = (value: string, label: string, durationSec: 5 = 5) =>
     button(label, cycleStakeCallbackData(PAIR_EURUSD.id, durationSec, value, 'l'));
 
   it('leads back to the launch screen', async () => {
@@ -381,6 +388,24 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     ]);
   });
 
+  // #685: a picker opened from a 15 s screen saves as from the same pair's screen at 5 s
+  it('an origin with 15: a save draws the amount screen at 5 s, the open leads back to the 5 s analysis', async () => {
+    const saved = setup({ readTradingAccess: savedAccess(d('5')) });
+    await saved.press(`stk:s:5:d:p:${String(PAIR_EURUSD.id)}:15`);
+    expect(lastPayload(saved.calls)?.text).toBe(savedCycle(d('5')).text.value);
+    expect(rowsOf(lastPayload(saved.calls))[0]).toEqual([
+      amount('1', '$1.00'),
+      amount('2', '$2.00'),
+      amount('5', '$5.00 ✅'),
+    ]);
+
+    const opened = setup();
+    await opened.press(`stk:o:d:a:${String(PAIR_EURUSD.id)}:15`);
+    expect(rowsOf(lastPayload(opened.calls)).at(-1)).toEqual([
+      button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
+    ]);
+  });
+
   // P-return (#476): a save from a demo launch screen sent before #476 lands on the amount screen
   it('returns a demo save to the amount screen in place, under the saved line (P-return)', async () => {
     const { press, calls, setStake, readPairs } = setup({ readTradingAccess: savedAccess(d('5')) });
@@ -390,31 +415,16 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(lastPayload(calls)?.text).toBe(savedCycle(d('5')).text.value);
     expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
-      `✅ Демо-ставка сохранена: $5.00\n\n🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с\n🤖 Бот проведёт 5 циклов подряд и перед каждой сделкой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
+      `✅ Демо-ставка сохранена: $5.00\n\n🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 5 с\n🤖 Бот проведёт 5 циклов подряд и перед каждой сделкой проверит сигнал. Это демо: деньги не нужны.\n\nВыбери сумму сделки 👇`,
     );
     expect(rowsOf(lastPayload(calls))).toEqual([
       [amount('1', '$1.00'), amount('2', '$2.00'), amount('5', '$5.00 ✅')],
       [amount('10', '$10.00 · риск')],
       [
-        button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 15, 'l')),
-        button(LABELS.backToListButton, 'demo:sig:15'),
+        button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'l')),
+        button(LABELS.backToListButton, 'demo:sig'),
       ],
     ]);
-  });
-
-  it('keeps the duration of the amount screen it returns to (#382)', async () => {
-    const at5: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 };
-    const { press, calls } = setup({ readTradingAccess: savedAccess(d('5')) });
-    await press(stakePresetCallbackData('5', TradeMode.Demo, at5));
-    expect(lastPayload(calls)?.text).toContain('EUR/USD · ⏱ 5 с');
-    expect(rowsOf(lastPayload(calls))[0]).toEqual([
-      amount('1', '$1.00', 5),
-      amount('2', '$2.00', 5),
-      amount('5', '$5.00 ✅', 5),
-    ]);
-    expect(rowsOf(lastPayload(calls))[2]?.[1]).toEqual(
-      button(LABELS.backToListButton, 'demo:sig:5'),
-    );
   });
 
   it('marks the minimum after the reset', async () => {
@@ -446,7 +456,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(readTradingAccess.mock.calls).toEqual([[String(USER.id)]]);
     const screen = launchScreen({
       assetId: PAIR_EURUSD.id,
-      durationSec: 15,
+      durationSec: 5,
       firstName: USER.first_name,
       symbol: pairLabel(PAIR_EURUSD),
       // the real stake in force (none saved: the minimum); the saved demo stake only in its line
@@ -465,16 +475,16 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       [
         button(
           '🚀 Запустить цикл · REAL',
-          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15, true),
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true),
         ),
       ],
       [
         button(
           LABELS.stakeChangeButton,
-          launchStakeCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+          launchStakeCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
         ),
       ],
-      [button(LABELS.backToListButton, 'demo:sig:15')],
+      [button(LABELS.backToListButton, 'demo:sig')],
     ]);
   });
 
@@ -491,7 +501,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       });
       await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
       expect(plainTextOf(lastPayload(calls)?.text as string)).toContain(
-        `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 15 с $1.00`,
+        `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 5 с $1.00`,
       );
     } finally {
       setBotTextSource(defaultBotTextSource);
@@ -508,8 +518,8 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       `✅ Демо-ставка сохранена: $5.00\n\n${plainTextOf(TEXTS.unavailable)}`,
     );
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15))],
-      [button(LABELS.backToListButton, 'demo:sig:15')],
+      [button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5))],
+      [button(LABELS.backToListButton, 'demo:sig')],
     ]);
     expect(warnings(logger)).toEqual(['trading access not read for the launch screen']);
   });
@@ -537,7 +547,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     const screen = launchScreen({
       assetId: PAIR_EURUSD.id,
-      durationSec: 15,
+      durationSec: 5,
       firstName: USER.first_name,
       symbol: pairLabel(PAIR_EURUSD),
       amount: d('1'),
@@ -549,9 +559,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   });
 
   it.each([
-    [79, 15],
     [79, 5],
-    [80, 15],
     [80, 5],
   ] as const)(
     'returns the amounts for a pair paying %i percent at %i s',
@@ -792,7 +800,7 @@ describe('a typed stake left by a button or a command (#319)', () => {
     const { press, loginDialog } = setup({
       dialog: { step: 'stake', mode: TradeMode.Demo, origin: PAIR },
     });
-    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 15));
+    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
     expect(loginDialog.get(USER.id)).toBeUndefined();
   });
 
@@ -1065,7 +1073,7 @@ describe('the real stake picker', () => {
     await press(stakePresetCallbackData('5', R, PAIR));
     const screen = launchScreen({
       assetId: PAIR_EURUSD.id,
-      durationSec: 15,
+      durationSec: 5,
       firstName: USER.first_name,
       symbol: pairLabel(PAIR_EURUSD),
       amount: d('5'),

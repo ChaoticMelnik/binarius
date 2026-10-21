@@ -183,7 +183,8 @@ export const MARKET_DATA_SKEW_MARGIN_MS = 2_000;
 export const MARKET_DATA_ACCOUNT_RETRY_MS = 300_000;
 // candles kept per (pair, interval): the feed's window, MA200 included (#482)
 export const MARKET_DATA_RING_CANDLES = SIGNAL_FETCH_LIMIT;
-// the most (pair, interval) refill requests waiting for the backfill: every pair on both intervals
+// the most (pair, interval) refill requests waiting for the backfill: every pair on two intervals
+// (#590, when the scanner had `15s` and `5s`; one interval since #685 leaves it spare)
 export const MARKET_DATA_PENDING_MAX = 288;
 // docs/market-data.md -> Backfill (#590). One backfill GET, by the call's own signal: below the
 // REST client's timeout, so that this, not the client, ends a slow chart.
@@ -304,15 +305,15 @@ export const DEPOSIT_CREDITED_REFRESH_BUDGET_MS = 3_000;
 // every fetch, below the REST client's timeout so that this, not the client, ends a slow chart.
 export const SIGNAL_FETCH_BUDGET_MS = 3_000;
 // The longest the cache holds an answer. Below 1m, or it would never bind on a minute candle; on
-// the 5s and 15s candles (#313) the candle's end binds first.
+// the 5s and 15s candles (#313; the bot offers 5 s since #685) the candle's end binds first.
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
 // --- The signal scanner (#343) and the signal REST (#405) -----------------------------------
-// docs/signal.md -> The scanner. One scanner per interval of SIGNAL_SCAN_INTERVALS, one scan a
-// candle, this long after its boundary: the live broker returned the just-closed 15s candle 150 ms
-// after the boundary (2026-10-08), and the rest covers the host's clock against the broker's. The
-// 5s close was not observed (#382). The scan decides from the data socket's window and takes no
-// token (#405).
+// docs/signal.md -> The scanner. One scanner per interval of SIGNAL_SCAN_INTERVALS (`5s` only
+// since #685), one scan a candle, this long after its boundary: the live broker returned the
+// just-closed 15s candle 150 ms after the boundary (2026-10-08), and the rest covers the host's
+// clock against the broker's. The 5s close was not observed (#382). The scan decides from the data
+// socket's window and takes no token (#405).
 export const SIGNAL_SCAN_SLACK_MS = 500;
 // the signal pacer's pause after a 429 without Retry-After: doubles from the first to the second;
 // a Retry-After is held to the same bounds

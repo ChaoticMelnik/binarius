@@ -4,7 +4,6 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import {
   cycleStakeLabel,
-  DEMO_DURATION_LABELS,
   groupButtonLabel,
   inlineButtons,
   LABELS,
@@ -309,10 +308,9 @@ it('repeats the cycle events: /start, the login texts, the amount press, the pos
   await bot.press(LABELS.demoManualButton);
   await bot.press(groupButtonLabel('currency', 1));
   await bot.press(pairButtonLabel(pairLabel({ symbol: E2E_PAIR.symbol }), E2E_PAIR.payout));
-  await bot.press(DEMO_DURATION_LABELS[15]);
   await bot.press(LABELS.demoAnalysisButton);
   const stake = await bot.press(cycleStakeLabel(MIN_STAKE, true));
-  expect(String(lastIn(USER.id, 'sendPhoto')?.payload.caption)).toContain('15 с');
+  expect(String(lastIn(USER.id, 'sendPhoto')?.payload.caption)).toMatch(/(?<!\d)5 с/);
   const [started, ...others] = await reads.sessionsOf(account.id);
   if (started === undefined) throw new Error('no session');
   expect(others).toEqual([]);
@@ -324,7 +322,7 @@ it('repeats the cycle events: /start, the login texts, the amount press, the pos
   const photos = inChat(botCalls, USER.id, 'sendPhoto').length;
   await bot.replay(stake);
   expect(inChat(botCalls, USER.id, 'sendPhoto')).toHaveLength(photos + 1);
-  expect(String(lastIn(USER.id, 'sendPhoto')?.payload.caption)).toContain('15 с');
+  expect(String(lastIn(USER.id, 'sendPhoto')?.payload.caption)).toMatch(/(?<!\d)5 с/);
   expect(await reads.sessionsOf(account.id)).toEqual([
     expect.objectContaining({
       id: started.id,

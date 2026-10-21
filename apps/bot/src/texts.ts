@@ -678,7 +678,6 @@ export const DEMO_GROUP_LABELS = labelsOf({
 
 export const DEMO_DURATION_LABELS = labelsOf({
   5: 'demoDuration5',
-  15: 'demoDuration15',
 } as const satisfies Record<DemoDurationSec, BotStaticPlainKey>);
 
 // a type's button with the count of its open pairs
@@ -723,12 +722,6 @@ export const formatBreakEven = (payout: number): string =>
 export const payoutText = (pair: PairView): TelegramHtml =>
   TEXTS.demoPayout({ payout: String(pair.payout), breakEven: formatBreakEven(pair.payout) });
 
-export const demoDurationsScreen = (pair: PairView): TelegramHtml =>
-  telegramHtml`${TEXTS.demoAsset({ symbol: pairLabel(pair) })}
-${payoutText(pair)}
-
-${TEXTS.demoChooseDuration}`;
-
 export const demoSummary = (pair: PairView, durationSec: DemoDurationSec): TelegramHtml =>
   telegramHtml`${TEXTS.demoAsset({ symbol: pairLabel(pair) })}
 ${TEXTS.demoDurationLine({ label: DEMO_DURATION_LABELS[durationSec] })}
@@ -754,7 +747,7 @@ const SIGNAL_ARROWS = {
 export const signalButtonLabel = (label: PairLabel, action: TradeAction, payout: number): string =>
   `${label} ${SIGNAL_ARROWS[action]} ${String(payout)}%`;
 
-// The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
+// The launch screen (#320): the pair at the demo's duration (#685), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
 // give reads as the broker's minimum; `saved` is what the picker has just saved and in which mode,
 // null for the reset to the minimum. In real mode (#327) the cycle line says the trades use real

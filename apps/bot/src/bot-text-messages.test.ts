@@ -65,7 +65,6 @@ import {
   accountCard,
   accountStatus,
   paysupportText,
-  demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
   cycleStakeText,
@@ -417,7 +416,6 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       ),
     ),
   demoPairs: () => GROUPS.map((group) => demoPairsScreen(group, 998, 999)),
-  demoDurations: () => [demoDurationsScreen(pair)],
   // the header by the session's mode (#327)
   sessionNoSettings: () =>
     Object.values(TradeMode).flatMap((mode) =>
@@ -782,7 +780,7 @@ describe('the assembled messages, against the real assembly', () => {
   it.each(['intentStatus', 'analysisNoSignal'])(
     'M4 estimates %s exactly with a long label overridden',
     (id) => {
-      const texts = { actionUp: 'я'.repeat(64), demoDuration15: 'я'.repeat(64) };
+      const texts = { actionUp: 'я'.repeat(64), demoDuration5: 'я'.repeat(64) };
       const message = ASSEMBLED.find((m) => m.id === id)!;
       setBotTextSource(recording(texts).source);
       const real = Math.max(...REAL[id]!().map(lengthOf));

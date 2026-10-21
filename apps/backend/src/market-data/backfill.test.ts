@@ -233,7 +233,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 const unavailable = () => Promise.reject(new BrokerRestError(BrokerRestErrorCode.Unavailable));
 
 describe('the candle backfill (#590)', () => {
-  it('B1 warms a cold start pair by pair by payout, 15s before 5s, with one GET a window', async () => {
+  it('B1 warms a cold start pair by pair by payout, on the one scanned interval, with one GET a window', async () => {
     const pairs = Array.from({ length: 45 }, (_, k) =>
       pair(100 + ((k * 7) % 45), { payout: 80 + (k % 9) }),
     );
@@ -241,7 +241,7 @@ describe('the candle backfill (#590)', () => {
     await drain(h);
 
     const byPayout = [...pairs].sort((a, b) => b.payout - a.payout || a.id - b.id);
-    expect(h.order()).toEqual(byPayout.flatMap((p) => [`${p.id}:15s`, `${p.id}:5s`]));
+    expect(h.order()).toEqual(byPayout.map((p) => `${p.id}:5s`));
     for (const call of h.chart.calls) {
       const intervalMs = SIGNAL_CHART_INTERVAL_MS[call.interval as ScanInterval];
       const w = chartWindow(call.at, intervalMs, 300);
@@ -253,7 +253,7 @@ describe('the candle backfill (#590)', () => {
     for (const p of pairs) {
       for (const interval of SIGNAL_SCAN_INTERVALS) expect(gaps(h, p.id, interval)).toEqual([]);
     }
-    expect(h.backfill.counters()).toMatchObject({ fetched: 90, failed: 0, queued: 0, spare: 90 });
+    expect(h.backfill.counters()).toMatchObject({ fetched: 45, failed: 0, queued: 0, spare: 45 });
   });
 
   it('B1b drops the first row of a short answer: the oldest bucket stays empty', async () => {
@@ -271,11 +271,11 @@ describe('the candle backfill (#590)', () => {
       config: { concurrency: 1 },
     });
     h.requests.add(3, '5s');
-    h.requests.add(2, '15s');
+    h.requests.add(2, '5s');
     await h.backfill.tick();
     await h.backfill.tick();
     await h.backfill.tick();
-    expect(h.order()).toEqual(['3:5s', '2:15s', '1:15s']);
+    expect(h.order()).toEqual(['3:5s', '2:5s', '1:5s']);
   });
 
   it('B2b keeps a request that came while a proactive GET was in flight', async () => {
@@ -640,9 +640,9 @@ describe('the candle backfill (#590)', () => {
     const h = harness({ pairs: [pair(1), pair(2)], streaming: false });
     await h.backfill.tick();
     expect(h.chart.calls).toEqual([]);
-    h.requests.add(2, '15s');
+    h.requests.add(2, '5s');
     await h.backfill.tick();
-    expect(h.order()).toEqual(['2:15s']);
+    expect(h.order()).toEqual(['2:5s']);
   });
 
   it('B13 warms a new catalog id before any repeat', async () => {
@@ -677,7 +677,7 @@ describe('the candle backfill (#590)', () => {
   it('B14b warms a pair paying below MIN_CYCLE_PAYOUT_PCT without a request', async () => {
     const h = harness({ pairs: [pair(2, { payout: 70 })] });
     await drain(h);
-    expect(h.order()).toEqual(['2:15s', '2:5s']);
+    expect(h.order()).toEqual(['2:5s']);
   });
 
   it('B15 takes no token and calls nothing with an empty queue', async () => {
@@ -702,14 +702,14 @@ describe('the candle backfill (#590)', () => {
       new Promise<Candle[]>((resolve) => release.push(() => resolve(rowsFor(call, h.chart))));
     h.chart.next.push(held, held);
     const first = h.backfill.tick();
-    expect(h.order()).toEqual(['1:15s', '1:5s']);
+    expect(h.order()).toEqual(['1:5s', '2:5s']);
     expect(h.backfill.counters().spare).toBe(2);
     const second = h.backfill.tick();
     expect(h.chart.calls).toHaveLength(2);
     for (const done of release) done();
     await Promise.all([first, second]);
     await h.backfill.tick();
-    expect(h.order()).toEqual(['1:15s', '1:5s', '2:15s', '2:5s']);
+    expect(h.order()).toEqual(['1:5s', '2:5s']);
   });
 });
 

@@ -206,10 +206,10 @@ describe('refuseWriteRetried', () => {
 describe('WRITE_CALLBACK_PREFIXES', () => {
   const SETTINGS = { kind: 'settings' } as const;
   it.each([
-    ['the stake button', stakeCallbackData(101, 15, TradeAction.Up, '0123456789ab', 'abcdef')],
-    ['a demo session', sessionStartCallbackData(TradeMode.Demo, 101, 15)],
-    ['a real session', sessionStartCallbackData(TradeMode.Real, 101, 15, true)],
-    ['an amount of the amount screen', cycleStakeCallbackData(101, 15, '5', 'l')],
+    ['the stake button', stakeCallbackData(101, 5, TradeAction.Up, '0123456789ab', 'abcdef')],
+    ['a demo session', sessionStartCallbackData(TradeMode.Demo, 101, 5)],
+    ['a real session', sessionStartCallbackData(TradeMode.Real, 101, 5, true)],
+    ['an amount of the amount screen', cycleStakeCallbackData(101, 5, '5', 'l')],
     ['the session stop', sessionStopCallbackData('9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d')],
     [
       'the session stop under the waiting message',

@@ -16,24 +16,23 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 // (#125). No Telegram and no texts here: #126 checks before it shows the stake button and #127
 // before it creates the intent, through readDemoTrade, and neither re-implements a check.
 
-// 5 and 15 s only (owner, 2026-10-07, #313), filtered per pair by its own range; each is analysed
-// on its own sub-minute candle (intervalForDuration).
-export const DEMO_DURATIONS_SEC = [5, 15] as const;
+// 5 s only (owner, 2026-10-20, #685; 5 and 15 s from #313 to #685), filtered per pair by its own
+// range; analysed on its own sub-minute candle (intervalForDuration). The duration stays in the
+// buttons' data (`:5`), so a button's data does not depend on the bot's state.
+export const DEMO_DURATIONS_SEC = [5] as const;
 export type DemoDurationSec = (typeof DEMO_DURATIONS_SEC)[number];
-// The durations of the main path (#382), in its button order (owner: 15 s first). Each trades on
-// the candle one of the backend's scanners decides, element by element with SIGNAL_SCAN_INTERVALS,
-// so a listed signal is about the trade it starts; and together they are the demo's durations.
-export const SIGNALS_DURATIONS_SEC = [15, 5] as const satisfies readonly DemoDurationSec[];
+export const DEMO_DURATION_SEC: DemoDurationSec = DEMO_DURATIONS_SEC[0];
+// The demo trades on the candles the backend's scanners decide, element by element with
+// SIGNAL_SCAN_INTERVALS, so a listed signal is about the trade it starts.
 if (
-  SIGNALS_DURATIONS_SEC.length !== SIGNAL_SCAN_INTERVALS.length ||
-  SIGNALS_DURATIONS_SEC.some((sec, i) => intervalForDuration(sec) !== SIGNAL_SCAN_INTERVALS[i]) ||
-  DEMO_DURATIONS_SEC.length !== SIGNALS_DURATIONS_SEC.length ||
-  DEMO_DURATIONS_SEC.some((sec) => !(SIGNALS_DURATIONS_SEC as readonly number[]).includes(sec))
+  DEMO_DURATIONS_SEC.length !== SIGNAL_SCAN_INTERVALS.length ||
+  DEMO_DURATIONS_SEC.some((sec, i) => intervalForDuration(sec) !== SIGNAL_SCAN_INTERVALS[i])
 ) {
   throw new Error("the signals screens trade the scanners' candles (see demo-catalog.ts)");
 }
-// the set before #313: only to recognise a button drawn with one (demo.ts, the legacy handler)
-export const LEGACY_DEMO_DURATIONS_SEC = [60, 300, 900, 1800, 3600] as const;
+// The durations the demo offered before: 15 s from #313 to #685, the set before #313. Only to
+// recognise a button drawn with one (demo.ts, the legacy handler).
+export const LEGACY_DEMO_DURATIONS_SEC = [15, 60, 300, 900, 1800, 3600] as const;
 
 export const DEMO_PAGE_SIZE = 12;
 
@@ -43,7 +42,7 @@ export const isOpen: (pair: PairView, nowMs: number) => boolean = isPairOpen;
 export const durationOptions = (pair: PairView): DemoDurationSec[] =>
   DEMO_DURATIONS_SEC.filter((sec) => pairAcceptsDuration(pair, sec));
 
-// only the pairs that accept a demo duration (#313): a type, a page and a count never show a pair
+// only the pairs that accept the demo duration (#313, #685): a type, a page and a count never show a pair
 // the user could not trade
 export const pairsOf = (catalog: PairsCatalogResponse, group: PairTypeGroup): PairView[] =>
   catalog.pairs.filter(

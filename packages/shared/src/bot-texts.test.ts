@@ -174,7 +174,7 @@ describe('the bot texts catalog', () => {
         'confirmButtonNoEmail',
         'connectButton',
         'demoAnalysisButton',
-        'demoBackDurationsButton',
+        'demoBackPairButton',
         'demoBackGroupsButton',
         'demoBackPairsButton',
         'demoButton',

@@ -21,10 +21,9 @@ import {
 } from './testing';
 import { unusedDepositDeps } from '../deposit/testing';
 
-// a 15 s boundary, so a 5 s one too; the candle before it opened at CLOSED (15s) or CLOSED_5S (5s)
+// a 5 s boundary; the candle before it opened at CLOSED
 const B = 1_760_000_010_000;
-const CLOSED = B - SIGNAL_CHART_INTERVAL_MS['15s'];
-const CLOSED_5S = B - SIGNAL_CHART_INTERVAL_MS['5s'];
+const CLOSED = B - SIGNAL_CHART_INTERVAL_MS['5s'];
 const NOW = B + 2_000;
 
 const signal = (lastCandleTimestamp: number): ScanEntry => ({
@@ -36,8 +35,8 @@ const signal = (lastCandleTimestamp: number): ScanEntry => ({
 
 let app: FastifyInstance | undefined;
 
-const of15s = (scanned: number[], entries: [number, ScanEntry][]): ScanSnapshot => ({
-  interval: '15s',
+const of5s = (scanned: number[], entries: [number, ScanEntry][]): ScanSnapshot => ({
+  interval: '5s',
   scanned,
   entries: new Map(entries),
 });
@@ -97,7 +96,7 @@ describe('GET /trading/signals', () => {
   it.each([null, 'wrong-token'])(
     'R1 refuses bearer %s with 401 before the snapshot',
     async (token) => {
-      const target = appWith([of15s([1], [[1, signal(CLOSED)]])]);
+      const target = appWith([of5s([1], [[1, signal(CLOSED)]])]);
       const response = await get(target, token);
       expect(response.statusCode).toBe(401);
       expect(response.json()).toEqual({ error: 'unauthorized' });
@@ -105,24 +104,17 @@ describe('GET /trading/signals', () => {
     },
   );
 
-  it('R2 serves one list per interval in SIGNAL_SCAN_INTERVALS order, each fresh on its own candle, and the answer parses (R4)', async () => {
+  // one list per interval of SIGNAL_SCAN_INTERVALS, the one scanner of `5s` since #685
+  it('R2 serves one list per interval in SIGNAL_SCAN_INTERVALS, fresh on its own candle, and the answer parses (R4)', async () => {
     const response = await get(
-      // the scanners in the reverse order: the lists still come 15s first
       appWith([
-        {
-          interval: '5s',
-          scanned: [3, 4],
-          entries: new Map([
-            [3, signal(CLOSED_5S)],
-            // a 15 s-old candle is not the 5 s candle that closed last
-            [4, signal(CLOSED)],
-          ]),
-        },
-        of15s(
-          [1, 2],
+        of5s(
+          [1, 2, 3],
           [
             [1, signal(CLOSED)],
             [2, signal(CLOSED)],
+            // the candle before the last closed one is not served
+            [3, signal(CLOSED - SIGNAL_CHART_INTERVAL_MS['5s'])],
           ],
         ),
       ]),
@@ -139,16 +131,13 @@ describe('GET /trading/signals', () => {
     });
     expect(body).toEqual({
       asOf: NOW,
-      lists: [
-        { interval: '15s', scanned: 2, signals: [item(1, CLOSED), item(2, CLOSED)] },
-        { interval: '5s', scanned: 2, signals: [item(3, CLOSED_5S)] },
-      ],
+      lists: [{ interval: '5s', scanned: 3, signals: [item(1, CLOSED), item(2, CLOSED)] }],
     });
   });
 
   it('R3 a signal on the candle before the last closed one is not served', async () => {
     const response = await get(
-      appWith([of15s([1], [[1, signal(CLOSED)]])], B + SIGNAL_CHART_INTERVAL_MS['15s'] + 100),
+      appWith([of5s([1], [[1, signal(CLOSED)]])], B + SIGNAL_CHART_INTERVAL_MS['5s'] + 100),
     );
     expect(response.json()).toMatchObject({ lists: [{ scanned: 1, signals: [] }] });
   });
@@ -156,7 +145,7 @@ describe('GET /trading/signals', () => {
   it('R5 a no_signal and a pair without an entry (a failed fetch) never appear', async () => {
     const response = await get(
       appWith([
-        of15s(
+        of5s(
           [1, 2, 3],
           [
             [1, { kind: 'no_signal', lastCandleTimestamp: CLOSED, decidedAtMs: B + 500 }],

@@ -713,7 +713,7 @@ describe('what the bot writes about the demo', () => {
   // #320
   it('names a failed signals read by error, code, status and reason, without the user', async () => {
     const { lines } = await linesFrom({
-      update: callbackUpdate('demo:sig:15'),
+      update: callbackUpdate('demo:sig'),
       level: 'trace',
       readSignals: () =>
         Promise.reject(
@@ -729,13 +729,28 @@ describe('what the bot writes about the demo', () => {
     expect(fieldsOf(lines)).not.toContain(String(USER.id));
   });
 
+  // #685: an old button with a duration the demo no longer offers, named by its data alone
+  it('logs a legacy duration button at info with its data, without the user', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate('demo:stake:101:15:up:0123456789ab:a0b1c2'),
+      level: 'trace',
+    });
+    const line = lineWith(lines, 'legacy duration button');
+    expect(line).toMatchObject({
+      level: 30,
+      callbackData: 'demo:stake:101:15:up:0123456789ab:a0b1c2',
+    });
+    expect(line).not.toHaveProperty('err');
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+  });
+
   it('names a catalog the launch screen did not get by error and code, without the user or the amount', async () => {
     const { lines } = await linesFrom({
       update: callbackUpdate(
         stakePresetCallbackData('5', TradeMode.Demo, {
           kind: 'pair',
           assetId: PAIR_EURUSD.id,
-          durationSec: 15,
+          durationSec: 5,
         }),
       ),
       level: 'trace',
@@ -769,7 +784,7 @@ describe('what the bot writes about the demo', () => {
   // #476: the amount screen's access read and an amount's save
   it('names an access read the amount screen did not get by error, code, status and reason, without the user', async () => {
     const { lines } = await linesFrom({
-      update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+      update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
       level: 'trace',
       readTradingAccess: () =>
         Promise.reject(
@@ -787,7 +802,7 @@ describe('what the bot writes about the demo', () => {
 
   it('names an amount saved with an unknown outcome by error, code and mode, without the user or the amount', async () => {
     const { lines } = await linesFrom({
-      update: callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 15, '7', 'l')),
+      update: callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '7', 'l')),
       level: 'trace',
       setStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
@@ -849,7 +864,7 @@ describe('what the bot writes about the demo', () => {
         stakePresetCallbackData('5', TradeMode.Demo, {
           kind: 'pair',
           assetId: PAIR_EURUSD.id,
-          durationSec: 15,
+          durationSec: 5,
         }),
       ),
       level: 'trace',

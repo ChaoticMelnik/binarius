@@ -443,18 +443,20 @@ export const safeParseTradingSignalResponse = (input: unknown) =>
 export const TRADING_SIGNALS_PATH = '/trading/signals';
 
 // The intervals the backend's scanner decides, one scanner instance each, from the data socket's
-// candles, which the ring builds for these intervals only (docs/signal.md -> The scanner, #405);
-// the order is the bot's main-path button order (#382).
-export const SIGNAL_SCAN_INTERVALS = ['15s', '5s'] as const satisfies readonly SignalInterval[];
+// candles, which the ring builds for these intervals only (docs/signal.md -> The scanner, #405).
+// `5s` only since #685, when the bot's demo kept the one duration; `15s` too from #382 to #685.
+export const SIGNAL_SCAN_INTERVALS = ['5s'] as const satisfies readonly SignalInterval[];
 export type ScanInterval = (typeof SIGNAL_SCAN_INTERVALS)[number];
 
 // One list per scanned interval; each holds only the pairs with a signal on that interval's candle
-// that closed most recently. Times are unix ms.
+// that closed most recently. Times are unix ms. A list's interval is any SignalInterval, wider than
+// the scanner (#685): a backend and a bot of different versions parse each other's answer, and the
+// bot reads only the list of its own duration.
 export const tradingSignalsResponseSchema = z.strictObject({
   asOf: z.int().nonnegative(),
   lists: z.array(
     z.strictObject({
-      interval: z.enum(SIGNAL_SCAN_INTERVALS),
+      interval: signalIntervalSchema,
       scanned: z.int().nonnegative(),
       signals: z.array(
         z.strictObject({

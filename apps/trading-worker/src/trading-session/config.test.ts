@@ -3,6 +3,7 @@ import {
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SCAN_INTERVALS,
   SIGNAL_SHORTEST_INTERVAL_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
@@ -35,9 +36,11 @@ describe('the trading session constants', () => {
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(
       SESSION_NO_SIGNAL_CANDLES * SIGNAL_CHART_INTERVAL_MS['5s'],
     );
-    expect(SESSION_NO_SIGNAL_CANDLES * SIGNAL_CHART_INTERVAL_MS['15s']).toBeLessThan(
-      SESSION_MAX_DURATION_MS,
-    );
+    // on the scanner's longest candle (5 s since #685)
+    expect(
+      SESSION_NO_SIGNAL_CANDLES *
+        Math.max(...SIGNAL_SCAN_INTERVALS.map((interval) => SIGNAL_CHART_INTERVAL_MS[interval])),
+    ).toBeLessThan(SESSION_MAX_DURATION_MS);
   });
 
   it.each<[string, Partial<SessionOrchestratorConfig>]>([
@@ -60,7 +63,7 @@ describe('the trading session constants', () => {
     ],
     ['12.5 candles (#637)', { noSignalCandles: 12.5 }],
     ['12 candles of 5 s, the hold-back (#637)', { noSignalCandles: 12 }],
-    ['240 candles of 15 s, the deadline (#637)', { noSignalCandles: 240 }],
+    ['720 candles of 5 s, the deadline (#637, #685)', { noSignalCandles: 720 }],
     [
       '597 candles of 1h past the timer bound, under the largest timer-safe deadline (#637)',
       {

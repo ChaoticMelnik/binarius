@@ -32,7 +32,6 @@ import { createSignalScanner, eligiblePairs, freshSignals } from './scanner';
 
 // a 15 s boundary, so a 5 s one too
 const B = 1_760_000_010_000;
-const CANDLE_15S_MS: number = SIGNAL_CHART_INTERVAL_MS['15s'];
 const CANDLE_5S_MS: number = SIGNAL_CHART_INTERVAL_MS['5s'];
 const SLACK_MS = 500;
 const LOG_EVERY_MS = 60_000;
@@ -75,7 +74,7 @@ const features = (lastCandleTimestamp: number) => ({
 const boundaryOf = (nowMs: number, candleMs: number) => Math.floor(nowMs / candleMs) * candleMs;
 
 // the decision on the candle that closed at the last boundary before `nowMs`
-function signal(nowMs: number, candleMs = CANDLE_15S_MS): SignalDecision {
+function signal(nowMs: number, candleMs = CANDLE_5S_MS): SignalDecision {
   return {
     kind: 'signal',
     version: SIGNAL_ALGORITHM_VERSION,
@@ -156,7 +155,7 @@ function harness(
     skewMs: 0,
     streaming: true,
   };
-  const interval = options.interval ?? '15s';
+  const interval = options.interval ?? '5s';
   const calls: number[] = [];
   const requests: SignalFeedRequest[] = [];
   const answer: Answer =
@@ -184,7 +183,7 @@ function harness(
 }
 
 // to the scan moment of the candle that starts `candles` boundaries after B
-const toScan = async (candles: number, candleMs = CANDLE_15S_MS) => {
+const toScan = async (candles: number, candleMs = CANDLE_5S_MS) => {
   await vi.advanceTimersByTimeAsync(B + candles * candleMs + SLACK_MS - Date.now());
 };
 
@@ -215,7 +214,7 @@ function realFeed(windowFor: (assetId: number, nowMs: number) => CandleWindow | 
   return { feed, cache, getChart, evaluate, refills };
 }
 
-const emptyWindow = (nowMs: number, candleMs = CANDLE_15S_MS): CandleWindow => {
+const emptyWindow = (nowMs: number, candleMs = CANDLE_5S_MS): CandleWindow => {
   const boundary = boundaryOf(nowMs, candleMs);
   const startTime = boundary - 299 * candleMs;
   return {
@@ -240,7 +239,7 @@ describe('signal scanner', () => {
   it('S1 nothing runs before the boundary plus the slack, then every candle', async () => {
     const h = harness();
     h.scanner.start();
-    await vi.advanceTimersByTimeAsync(B + CANDLE_15S_MS + SLACK_MS - 1 - Date.now());
+    await vi.advanceTimersByTimeAsync(B + CANDLE_5S_MS + SLACK_MS - 1 - Date.now());
     expect(h.calls).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.calls).toEqual([1, 2]);
@@ -269,7 +268,7 @@ describe('signal scanner', () => {
     expect(eligiblePairs(view(pairs), B + 3_000, 15).map((p) => p.id)).toEqual([1, 2]);
   });
 
-  it('S2 only open pairs that accept a 15 s trade are scanned', () => {
+  it('S2 only open pairs that accept the trade duration are scanned, at 15 s too', () => {
     const pairs = [
       pair(1, { minTimeframe: 60 }),
       pair(2, { scheduledUntil: B + 60_000 }),
@@ -297,8 +296,8 @@ describe('signal scanner', () => {
     await toScan(1);
     const scanned = h.scanner.snapshot().entries.get(1);
     expect(scanned).toMatchObject({ kind: 'no_signal', reason: 'insufficient_candles' });
-    await vi.advanceTimersByTimeAsync(5_000);
-    const answered = await real.cache.evaluate({ assetId: 1, interval: '15s', digits: 5 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const answered = await real.cache.evaluate({ assetId: 1, interval: '5s', digits: 5 });
     expect(answered.outcome === 'decided' && answered.entry.nowMs).toBe(scanned?.decidedAtMs);
     expect(real.getChart).not.toHaveBeenCalled();
     await h.scanner.stop();
@@ -378,15 +377,15 @@ describe('signal scanner', () => {
     expect(h.logger.info).toHaveBeenCalledTimes(1);
     const [fields, message] = h.logger.info.mock.calls[0] as [Record<string, unknown>, string];
     expect(message).toBe('signal scanner');
-    // four candles in the minute: B+15 s, +30 s, +45 s, +60 s
+    // twelve candles in the minute: B+5 s … +60 s
     expect(fields).toEqual({
-      interval: '15s',
+      interval: '5s',
       source: 'live',
       eligible: 3,
       scanned: 3,
       signals: 2,
-      decided: 12,
-      noSignal: { insufficient_candles: 4 },
+      decided: 36,
+      noSignal: { insufficient_candles: 12 },
       unclosed: 0,
       sourceDown: 0,
       skipped: 0,
@@ -421,7 +420,7 @@ describe('signal scanner', () => {
     await toScan(1);
     await vi.advanceTimersByTimeAsync(10);
     expect(h.calls).toEqual([1, 2]);
-    await vi.advanceTimersByTimeAsync(B + 2 * CANDLE_15S_MS + SLACK_MS + 1 - Date.now());
+    await vi.advanceTimersByTimeAsync(B + 2 * CANDLE_5S_MS + SLACK_MS + 1 - Date.now());
     expect(h.calls).toEqual([1, 2, 1, 2]);
     await h.scanner.stop();
   });
@@ -434,7 +433,7 @@ describe('signal scanner', () => {
         // the second decision of the first scan takes the scanner's clock past the candle's end
         if (request.assetId === 2 && !jumped) {
           jumped = true;
-          h.state.skewMs = -CANDLE_15S_MS;
+          h.state.skewMs = -CANDLE_5S_MS;
         }
         return decided(request, signal(Date.now()));
       },
@@ -473,12 +472,9 @@ describe('signal scanner', () => {
     await h.scanner.stop();
   });
 
-  // #631: the payout is no filter (#379 left a pair below the floor out): both scanner instances
-  // decide and serve it, the bot fills its list with it; `eligible` counts it
-  it.each([
-    ['15s', 15, CANDLE_15S_MS],
-    ['5s', 5, CANDLE_5S_MS],
-  ] as const)(
+  // #631: the payout is no filter (#379 left a pair below the floor out): the scanner decides and
+  // serves it, the bot fills its list with it; `eligible` counts it
+  it.each([['5s', 5, CANDLE_5S_MS]] as const)(
     "S19' on the %s scanner a pair paying 79 percent is eligible, scanned and served",
     async (interval, durationSec, candleMs) => {
       const h = harness({ interval, pairs: [pair(1, { payout: 79 }), pair(2, { payout: 80 })] });
@@ -495,10 +491,7 @@ describe('signal scanner', () => {
     },
   );
 
-  it.each([
-    ['15s', CANDLE_15S_MS],
-    ['5s', CANDLE_5S_MS],
-  ] as const)(
+  it.each([['5s', CANDLE_5S_MS]] as const)(
     "S20 on the %s scanner every decision carries the pair's digits from the catalog",
     async (interval, candleMs) => {
       const h = harness({ interval, pairs: [pair(1, { digits: 3 }), pair(2, { digits: 7 })] });
@@ -525,10 +518,7 @@ describe('signal scanner', () => {
 
 // #405: the scan decides every eligible pair from the source, with no broker call
 describe('signal scanner on the candle source (#405)', () => {
-  it.each([
-    ['15s', CANDLE_15S_MS],
-    ['5s', CANDLE_5S_MS],
-  ] as const)(
+  it.each([['5s', CANDLE_5S_MS]] as const)(
     'S26/S30 on %s every eligible pair is decided on each of seven candles, with no GET',
     async (interval, candleMs) => {
       const pairs = Array.from({ length: 20 }, (_, i) => pair(100 + i));
@@ -565,7 +555,7 @@ describe('signal scanner on the candle source (#405)', () => {
     expect(h.scanner.snapshot().scanned).toEqual([]);
     expect(h.scanner.snapshot().entries.size).toBe(0);
     expect(h.logger.warn.mock.calls).toEqual([
-      [{ interval: '15s' }, 'signal scan skipped: source not streaming'],
+      [{ interval: '5s' }, 'signal scan skipped: source not streaming'],
     ]);
     await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
     expect(summary(h)).toMatchObject({
@@ -573,13 +563,13 @@ describe('signal scanner on the candle source (#405)', () => {
       eligible: 0,
       scanned: 0,
       signals: 0,
-      sourceDown: 3,
+      sourceDown: 11,
       decided: 2,
     });
     h.state.streaming = true;
-    await toScan(6);
+    await toScan(13);
     h.state.streaming = false;
-    await toScan(7);
+    await toScan(14);
     expect(h.logger.warn).toHaveBeenCalledTimes(2);
     await h.scanner.stop();
   });
@@ -590,7 +580,7 @@ describe('signal scanner on the candle source (#405)', () => {
     h.state.view = undefined;
     h.scanner.start();
     await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
-    expect(summary(h)).toMatchObject({ source: 'down', eligible: 0, scanned: 0, sourceDown: 4 });
+    expect(summary(h)).toMatchObject({ source: 'down', eligible: 0, scanned: 0, sourceDown: 12 });
     expect(h.calls).toEqual([]);
     await h.scanner.stop();
   });
@@ -609,8 +599,8 @@ describe('signal scanner on the candle source (#405)', () => {
     expect(h.calls).toEqual([1, 2, 3]);
     expect([...h.scanner.snapshot().entries.keys()]).toEqual([1, 2]);
     await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
-    // three on the first candle, all five on each of the three after it
-    expect(summary(h)).toMatchObject({ skipped: 3 + 3 * 5, decided: 2 });
+    // three on the first candle, all five on each of the eleven after it
+    expect(summary(h)).toMatchObject({ skipped: 3 + 11 * 5, decided: 2 });
     await h.scanner.stop();
   });
 
@@ -618,7 +608,7 @@ describe('signal scanner on the candle source (#405)', () => {
     const h = harness({
       pairs: [1, 2, 3, 4, 5].map((id) => pair(id)),
       answer: (request) => {
-        const boundary = boundaryOf(Date.now(), CANDLE_15S_MS);
+        const boundary = boundaryOf(Date.now(), CANDLE_5S_MS);
         switch (request.assetId) {
           case 1:
             return decided(request, noSignal('candle_gap'));
@@ -647,9 +637,9 @@ describe('signal scanner on the candle source (#405)', () => {
     h.scanner.start();
     await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
     expect(summary(h)).toMatchObject({
-      decided: 20,
-      noSignal: { candle_gap: 4, insufficient_candles: 4, stale: 4 },
-      unclosed: 4,
+      decided: 60,
+      noSignal: { candle_gap: 12, insufficient_candles: 12, stale: 12 },
+      unclosed: 12,
       lagMsP95: SLACK_MS,
     });
     await h.scanner.stop();
@@ -666,7 +656,7 @@ describe('signal scanner on the candle source (#405)', () => {
       'signal scan failed',
     );
     await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
-    expect(summary(h)).toMatchObject({ threw: 4, decided: 8 });
+    expect(summary(h)).toMatchObject({ threw: 12, decided: 24 });
     await h.scanner.stop();
   });
 
@@ -680,14 +670,14 @@ describe('signal scanner on the candle source (#405)', () => {
     h.state.streaming = true;
     h.state.view = view([pair(2), pair(3)]);
     // before the first scan after the return nothing is served
-    await vi.advanceTimersByTimeAsync(B + 3 * CANDLE_15S_MS + SLACK_MS - 1 - Date.now());
+    await vi.advanceTimersByTimeAsync(B + 3 * CANDLE_5S_MS + SLACK_MS - 1 - Date.now());
     expect(h.scanner.snapshot().entries.size).toBe(0);
     expect(freshSignals(h.scanner.snapshot(), Date.now())).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     const snapshot = h.scanner.snapshot();
     expect([...snapshot.entries.keys()]).toEqual([2, 3]);
     for (const entry of snapshot.entries.values()) {
-      expect(entry.decidedAtMs).toBe(B + 3 * CANDLE_15S_MS + SLACK_MS);
+      expect(entry.decidedAtMs).toBe(B + 3 * CANDLE_5S_MS + SLACK_MS);
     }
     expect(freshSignals(snapshot, Date.now()).map((s) => s.assetId)).toEqual([2, 3]);
     await h.scanner.stop();
@@ -700,7 +690,7 @@ describe('signal scanner on the candle source (#405)', () => {
       answer: (request) =>
         // every third pair's window lags a candle: its signal is on an older candle
         request.assetId % 3 === 0
-          ? decided(request, signal(Date.now() - CANDLE_15S_MS))
+          ? decided(request, signal(Date.now() - CANDLE_5S_MS))
           : decided(request, signal(Date.now())),
     });
     h.scanner.start();
@@ -718,8 +708,9 @@ describe('signal scanner on the candle source (#405)', () => {
   // ring then reads as forming (ring.test.ts R3). The scanner's source is down until that scan, so
   // the line counts it alone.
   it('S34 on the real ring a candle the ring has not closed is left out: the decision is on the one before, unclosed, not served', async () => {
-    const T = B + 4 * CANDLE_15S_MS;
-    const lastBucket = T - CANDLE_15S_MS;
+    // the last scan of the line's minute, so no later scan replaces the entry
+    const T = B + 12 * CANDLE_5S_MS;
+    const lastBucket = T - CANDLE_5S_MS;
     const closes = [100];
     for (let i = 1; i < 45; i++) closes.push(closes[i - 1] + (i % 2 ? 0.03 : -0.03));
     while (closes.length < 300) {
@@ -727,7 +718,7 @@ describe('signal scanner on the candle source (#405)', () => {
     }
     const price = (value: number) => Number(value.toFixed(5));
     const ticks: Tick[] = closes.flatMap((rawClose, i) => {
-      const bucket = lastBucket - (closes.length - 1 - i) * CANDLE_15S_MS;
+      const bucket = lastBucket - (closes.length - 1 - i) * CANDLE_5S_MS;
       const open = Number((i === 0 ? rawClose : closes[i - 1]).toFixed(2));
       const close = Number(rawClose.toFixed(2));
       return [
@@ -753,7 +744,7 @@ describe('signal scanner on the candle source (#405)', () => {
         requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
         streaming: () => true,
       });
-      const real = realFeed((assetId, nowMs) => source.read(assetId, '15s', nowMs));
+      const real = realFeed((assetId, nowMs) => source.read(assetId, '5s', nowMs));
       const h = harness({ pairs: [pair(1)], feed: real.feed });
       h.state.streaming = false;
       h.scanner.start();
@@ -773,7 +764,7 @@ describe('signal scanner on the candle source (#405)', () => {
     const unclosed = await scanOnce(false);
     expect(unclosed.entry).toMatchObject({
       kind: 'signal',
-      lastCandleTimestamp: T - 2 * CANDLE_15S_MS,
+      lastCandleTimestamp: T - 2 * CANDLE_5S_MS,
     });
     expect(unclosed.line).toMatchObject({ decided: 1, unclosed: 1, signals: 0 });
     expect(unclosed.served).toStrictEqual([]);
@@ -805,18 +796,18 @@ describe('signal scanner logs (Rule 8)', () => {
       assetId: 1,
       err: { name: 'TypeError' },
     });
-    expect(parsed.find((line) => line.msg === 'signal scanner')).toMatchObject({ threw: 4 });
+    expect(parsed.find((line) => line.msg === 'signal scanner')).toMatchObject({ threw: 12 });
     expect(lines.filter((line) => line.includes('SECRET-'))).toEqual([]);
   });
 });
 
 describe('freshSignals', () => {
-  const closed = B - CANDLE_15S_MS;
+  const closed = B - CANDLE_5S_MS;
   const entry = { kind: 'signal' as const, action: 'up' as const, decidedAtMs: B + 500 };
 
   it('serves a signal on the candle that closed most recently, with its age', () => {
     const snapshot = {
-      interval: '15s' as const,
+      interval: '5s' as const,
       scanned: [1],
       entries: new Map([[1, { ...entry, lastCandleTimestamp: closed }]]),
     };
@@ -827,11 +818,11 @@ describe('freshSignals', () => {
 
   it('serves nothing once the candle changed without a recompute', () => {
     const snapshot = {
-      interval: '15s' as const,
+      interval: '5s' as const,
       scanned: [1],
       entries: new Map([[1, { ...entry, lastCandleTimestamp: closed }]]),
     };
-    expect(freshSignals(snapshot, B + CANDLE_15S_MS)).toEqual([]);
+    expect(freshSignals(snapshot, B + CANDLE_5S_MS)).toEqual([]);
   });
 
   it('serves a 5s signal on the 5 s candle closed last, and not one candle later (#382)', () => {
@@ -854,7 +845,7 @@ describe('freshSignals', () => {
 
   it('serves nothing for a no_signal or a pair outside the scanned set', () => {
     const snapshot = {
-      interval: '15s' as const,
+      interval: '5s' as const,
       scanned: [1],
       entries: new Map([
         [1, { kind: 'no_signal' as const, lastCandleTimestamp: closed, decidedAtMs: B + 500 }],

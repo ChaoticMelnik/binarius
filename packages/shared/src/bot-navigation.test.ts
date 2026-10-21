@@ -23,10 +23,10 @@ describe('cashierUrlOf (#27)', () => {
 
 describe('demoAnalysisCallbackData (#484)', () => {
   it('draws the analysis of a pair and duration within the 64 bytes', () => {
-    expect(demoAnalysisCallbackData(101, 15)).toBe('demo:an:101:15');
-    const longest = demoAnalysisCallbackData(2147483647, 15);
-    expect(longest).toBe('demo:an:2147483647:15');
-    expect(new TextEncoder().encode(longest).length).toBe(21);
+    expect(demoAnalysisCallbackData(101, 5)).toBe('demo:an:101:5');
+    const longest = demoAnalysisCallbackData(2147483647, 5);
+    expect(longest).toBe('demo:an:2147483647:5');
+    expect(new TextEncoder().encode(longest).length).toBe(20);
   });
 });
 

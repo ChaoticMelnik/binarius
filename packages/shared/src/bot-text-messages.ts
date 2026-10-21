@@ -111,7 +111,7 @@ export interface BotTextMeasure {
 export type BotTextWidth = (m: BotTextMeasure) => number;
 
 const w = BOT_TEXT_WIDTHS;
-const durations = ['demoDuration5', 'demoDuration15'] as const satisfies readonly BotPlainKey[];
+const durations = ['demoDuration5'] as const satisfies readonly BotPlainKey[];
 const groups = [
   'demoGroupCurrency',
   'demoGroupCommodity',
@@ -849,12 +849,6 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     title: 'Демо: список активов',
     limit: BOT_TEXT_LIMIT,
     body: [k('demoPairsHeader'), '\n', k('demoPage')],
-  },
-  {
-    id: 'demoDurations',
-    title: 'Демо: выбор длительности',
-    limit: BOT_TEXT_LIMIT,
-    body: [k('demoAsset'), '\n', k('demoPayout'), '\n\n', k('demoChooseDuration')],
   },
   {
     id: 'demoSummary',

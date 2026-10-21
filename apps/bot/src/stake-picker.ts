@@ -29,7 +29,6 @@ import {
   assetIdOf,
   demoCycleScreen,
   demoLaunchCallbackData,
-  durationOf,
   effectiveStake,
   launchScreen,
   MODE_TOKENS,
@@ -37,6 +36,7 @@ import {
   STAKE_PICKER_PREFIX,
 } from './demo';
 import {
+  DEMO_DURATION_SEC,
   DEMO_DURATIONS_SEC,
   LEGACY_DEMO_DURATIONS_SEC,
   type DemoDurationSec,
@@ -58,7 +58,8 @@ import { LABELS, stakePickerText, TEXTS, userContextOf } from './texts';
 // typed one.
 
 // Where the picker was opened, carried in every callback as `s`, `a:<assetId>:<durationSec>` or
-// `p:<assetId>:<durationSec>` (the launch screen's duration since #382).
+// `p:<assetId>:<durationSec>` (the launch screen's duration since #382). An origin drawn with a
+// duration the demo no longer offers (15 s, #685) reads as the same pair's screen at 5 s.
 export type StakeOrigin =
   | { kind: 'settings' }
   | { kind: 'analysis'; assetId: number; durationSec: DemoDurationSec }
@@ -81,8 +82,8 @@ function originData(origin: StakeOrigin): string {
 }
 
 // The picker's mode after the action letter (#326): `<action>:<d|r>:<origin>`, the tokens of
-// demo.ts's MODE_TOKENS. Bot API allows 1-64 bytes; the longest,
-// `stk:s:999999999999.99999999:r:a:2147483647:15`, is 45.
+// demo.ts's MODE_TOKENS. Bot API allows 1-64 bytes; the longest drawn,
+// `stk:s:999999999999.99999999:r:a:2147483647:5`, is 44 (one with 15, still accepted, 45).
 const pickerData = (action: string, mode: TradeMode, origin: StakeOrigin): string =>
   `${STAKE_PICKER_PREFIX}${action}:${MODE_TOKENS[mode]}:${originData(origin)}`;
 export const stakeOpenCallbackData = (mode: TradeMode, origin: StakeOrigin): string =>
@@ -98,20 +99,20 @@ export const stakeCustomCallbackData = (mode: TradeMode, origin: StakeOrigin): s
   pickerData('c', mode, origin);
 
 // The four shapes over an optional mode group and an origin. The legacy shapes: every action
-// without a mode, from before #326 (a demo picker), over today's origins; an analysis of a
-// duration from before #313 (/settings carries none), and a launch screen from before #382, which
-// carried no duration.
+// without a mode, from before #326 (a demo picker), over every origin with a duration (today's,
+// 15 s until #685 and the set before #313; /settings carries none), and a launch screen from before
+// #382, which carried no duration.
 const pickerPatterns = (mode: string, origin: string) => ({
   open: new RegExp(`^${STAKE_PICKER_PREFIX}o:${mode}${origin}$`),
   preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(${STAKE_AMOUNT_PATTERN}):${mode}${origin}$`),
   reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${mode}${origin}$`),
   custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${mode}${origin}$`),
 });
-const ORIGIN_PATTERN = `(s|[ap]:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`;
+const ORIGIN_DURATIONS = [...DEMO_DURATIONS_SEC, ...LEGACY_DEMO_DURATIONS_SEC];
+const ORIGIN_PATTERN = `(s|[ap]:\\d{1,10}:(?:${ORIGIN_DURATIONS.join('|')}))`;
 const PICKER = pickerPatterns(`(${Object.values(MODE_TOKENS).join('|')}):`, ORIGIN_PATTERN);
 const LEGACY_PICKER_PATTERNS = [
   ...Object.values(pickerPatterns('', ORIGIN_PATTERN)),
-  ...Object.values(pickerPatterns('', `(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`)),
   ...Object.values(pickerPatterns('', '(p:\\d{1,10})')),
 ];
 
@@ -126,8 +127,9 @@ export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined 
   const [kind, asset, duration] = raw?.split(':') ?? [];
   const assetId = assetIdOf(asset);
   if (assetId === undefined) return undefined;
-  const durationSec = durationOf(duration);
-  if (durationSec === undefined) return undefined;
+  // the duration is one (#685): an accepted older token names the same pair's screen today
+  if (!ORIGIN_DURATIONS.some((sec) => String(sec) === duration)) return undefined;
+  const durationSec = DEMO_DURATION_SEC;
   if (kind === 'p') return { kind: 'pair', assetId, durationSec };
   if (kind === 'a') return { kind: 'analysis', assetId, durationSec };
   return undefined;
