@@ -32,6 +32,7 @@ export * from './link-confirmation';
 export * from './bot-navigation';
 export * from './telegram-html';
 export * from './bot-message-width';
+export * from './bot-keyboard';
 export * from './catalog';
 export * from './signal';
 export * from './h1';
