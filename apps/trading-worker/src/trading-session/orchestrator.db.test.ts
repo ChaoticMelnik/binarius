@@ -8,7 +8,9 @@ import { createBrokerRestClient, TradeListStatus } from '@binarius/broker-rest';
 import { MockTradeOutcome, startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import {
   AccountHaltReason,
+  buildH1SessionSettings,
   buildSessionSettings,
+  decimalStringSchema,
   isClosedTrade,
   SessionStakeStrategy,
   SESSION_MAX_DURATION_MS,
@@ -124,6 +126,7 @@ const CONFIG: SessionOrchestratorConfig = {
   attemptTimeoutMs: 2_000,
   retryMs: 60_000,
   candleSlackMs: 5_000,
+  h1CheckMs: 5_000,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
 };
@@ -2450,6 +2453,208 @@ describe('martingale (#450)', () => {
       stopReason: TradingSessionStopReason.Completed,
     });
     expect(await amountsOf(seed.session.id)).toHaveLength(3);
+    await orchestrator.stop();
+  });
+});
+
+// #670: an H1 session (settings v4) is held between checks; its trades come from the driver (#707),
+// here from createSessionIntent directly
+describe('an H1 session (#670)', () => {
+  // the mock's AAPL takes 5 s trades
+  const h1Pair = (patch: Parameters<typeof eurUsd>[0] = {}) =>
+    eurUsd({ id: 202, symbol: 'AAPL', minTimeframe: 5, payout: 94, ...patch });
+  const h1Settings = (trades = 10, k = 20) => {
+    const built = buildH1SessionSettings({
+      assetId: 202,
+      trades,
+      stake: { baseStake: decimalStringSchema.parse('1.00'), stakeScale: 2 },
+      maxLossMultiplier: k,
+    });
+    if (!built.success) throw new Error('H1 fixture settings do not parse');
+    return built.data;
+  };
+  // a signal source that must not be asked
+  const noSignals = () => {
+    const source = signalsOf(() => {
+      throw new Error('the H1 branch asked the signal');
+    });
+    return source;
+  };
+  const h1Orchestrator = (pairs: PairsSource = pairsOf(fresh([h1Pair()]))) => {
+    const signals = noSignals();
+    return { signals, orchestrator: orchestratorOf({ signals, pairs }) };
+  };
+  const driverTrade = async (
+    seed: Awaited<ReturnType<typeof seedSession>>,
+    step: number,
+    outcome: MockTradeOutcome,
+  ) => {
+    const { intent } = await createSessionIntent(tmp.db, {
+      sessionId: seed.session.id,
+      step,
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      assetId: 202,
+      amount: decimalStringSchema.parse('1.00'),
+      action: TradeAction.Up,
+      durationSec: 5,
+      decision: null,
+    });
+    expect(await processIntent(intent.id)).toBe('accepted');
+    await settle(seed, intent.id, outcome);
+    return intent;
+  };
+  const stopOf = async (id: string) => {
+    const row = await sessionRow(id);
+    return { status: row.status, stopReason: row.stopReason };
+  };
+  const ACTIVE = { status: TradingSessionStatus.Active, stopReason: null };
+
+  it('H1-O1 holds without asking the signal and moves last_decision_at', async () => {
+    const seed = await seedSession({ settings: h1Settings() });
+    const { signals, orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(signals.calls).toEqual([]);
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect((await sessionRow(seed.session.id)).lastDecisionAt).not.toBeNull();
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ level: 20, msg: 'trading session waits for the H1 driver' }),
+    );
+    await orchestrator.stop();
+  });
+
+  it('H1-O2 completes after N settled trades, a loss counted', async () => {
+    const seed = await seedSession({ settings: h1Settings(2) });
+    await driverTrade(seed, 1, MockTradeOutcome.Win);
+    const { orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    await driverTrade(seed, 2, MockTradeOutcome.Loss);
+    advance(CONFIG.h1CheckMs);
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+    });
+    await orchestrator.stop();
+  });
+
+  it('H1-O3 stops with max_session_loss_exceeded when the next stake would pass maxLoss', async () => {
+    // k = 2: after one loss of 1, -1 - 1 = -2 is not below -2, the session goes on
+    const within = await seedSession({ settings: h1Settings(10, 2) });
+    await driverTrade(within, 1, MockTradeOutcome.Loss);
+    // k = 1: -1 - 1 = -2 is below -1
+    const past = await seedSession({ settings: h1Settings(10, 1) });
+    await driverTrade(past, 1, MockTradeOutcome.Loss);
+    const { orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(within.session.id)).toEqual(ACTIVE);
+    expect(await stopOf(past.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.MaxSessionLossExceeded,
+    });
+    expect(linesOf(past.session.id)).toContainEqual(
+      expect.objectContaining({ reason: 'max_session_loss_exceeded', maxLoss: '1' }),
+    );
+    await orchestrator.stop();
+  });
+
+  it('H1-O4 the hour ends it with timeout', async () => {
+    const seed = await seedSession({
+      settings: h1Settings(),
+      startedAt: new Date(Date.now() - SESSION_MAX_DURATION_MS - 60_000),
+    });
+    const { orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Timeout,
+    });
+    await orchestrator.stop();
+  });
+
+  it.each([
+    ['a pair outside the catalog', [eurUsd({ minTimeframe: 5 })]],
+    ['a pair that refuses 5 s', [h1Pair({ minTimeframe: 15 })]],
+  ])('H1-O5 %s stops it with pair_unavailable', async (_label, listed) => {
+    const seed = await seedSession({ settings: h1Settings() });
+    const { orchestrator } = h1Orchestrator(pairsOf(fresh(listed)));
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.PairUnavailable,
+    });
+    await orchestrator.stop();
+  });
+
+  it('H1-O6 a pair closed past the no-signal limit holds it: no no_signal_timeout', async () => {
+    const seed = await seedSession({
+      settings: h1Settings(),
+      startedAt: new Date(Date.now() - sessionNoSignalTimeoutMs(5) * 3),
+    });
+    const { signals, orchestrator } = h1Orchestrator(
+      pairsOf(fresh([h1Pair({ scheduledUntil: clock + 30_000 })])),
+    );
+    await orchestrator.tick();
+    expect(signals.calls).toEqual([]);
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(seed.session.id)).toContain('trading session waits for the pair to open');
+    await orchestrator.stop();
+  });
+
+  it('H1-O7 an open pair past the no-signal limit with a payout below 94 still holds', async () => {
+    const seed = await seedSession({
+      settings: h1Settings(),
+      startedAt: new Date(Date.now() - sessionNoSignalTimeoutMs(5) * 3),
+    });
+    const { orchestrator } = h1Orchestrator(pairsOf(fresh([h1Pair({ payout: 50 })])));
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    await orchestrator.stop();
+  });
+
+  it('H1-O8 the sizer and the snapshot still stop it: below the minimum, no snapshot', async () => {
+    const poor = await seedSession({ settings: h1Settings(), demo: '0.50' });
+    const blind = await seedSession({ settings: h1Settings(), snapshot: false });
+    const { orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(poor.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.StakeStop,
+    });
+    expect(await stopOf(blind.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.BalanceUnavailable,
+    });
+    await orchestrator.stop();
+  });
+
+  it('H1-O9 two intents rejected past their entry window stop it with rejected_twice', async () => {
+    const seed = await seedSession({ settings: h1Settings() });
+    for (const step of [1, 2]) {
+      const { intent } = await createSessionIntent(tmp.db, {
+        sessionId: seed.session.id,
+        step,
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode: TradeMode.Demo,
+        assetId: 202,
+        amount: decimalStringSchema.parse('1.00'),
+        action: TradeAction.Up,
+        durationSec: 5,
+        decision: null,
+        submitDeadlineAt: new Date(Date.now() - 1_000),
+      });
+      expect(await processIntent(intent.id)).toBe('rejected');
+    }
+    const { orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.RejectedTwice,
+    });
     await orchestrator.stop();
   });
 });

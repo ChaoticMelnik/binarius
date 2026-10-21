@@ -23,6 +23,7 @@ import {
 import {
   errorLogFields,
   intervalForDuration,
+  isH1Settings,
   isPairOpen,
   pairAcceptsDuration,
   safeParseTradingSessionSettings,
@@ -270,6 +271,9 @@ export function createSessionOrchestrator({
       };
     }
 
+    // an H1 session (#670, settings v4): its driver opens the trades (#707); the attempt only
+    // stops it or holds it, never asks the signal and never stops it with no_signal_timeout
+    const h1 = isH1Settings(settings);
     const noSignalTimeoutMs = sessionNoSignalTimeoutMs(
       settings.durationSec,
       config.noSignalCandles,
@@ -277,6 +281,9 @@ export function createSessionOrchestrator({
     const history = await readSessionHistory(db, session.id, {
       maxDurationMs: config.maxDurationMs,
       noSignalTimeoutMs,
+      ...(h1
+        ? { lossLimit: { maxLoss: settings.maxLoss, nextStake: settings.stake.baseStake } }
+        : {}),
     });
     if (history === undefined) {
       logger.warn(ids, 'trading session vanished');
@@ -305,6 +312,13 @@ export function createSessionOrchestrator({
         kind: 'stop',
         reason: TradingSessionStopReason.Completed,
         fields: { settled, cycles: progress.done },
+      };
+    }
+    if (h1 && history.lossLimitReached) {
+      return {
+        kind: 'stop',
+        reason: TradingSessionStopReason.MaxSessionLossExceeded,
+        fields: { maxLoss: settings.maxLoss },
       };
     }
     const lastTwo = history.intents.slice(-2);
@@ -361,12 +375,34 @@ export function createSessionOrchestrator({
     });
     const nowMs = now();
     if (!isPairOpen(pair, nowMs)) {
-      if (history.waitExpired) return noSignalStop('pair_closed');
+      if (!h1 && history.waitExpired) return noSignalStop('pair_closed');
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
       return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
     }
     // since #631 no payout refuses a session, not even at the start (#509 kept the floor
-    // there): a pair whose payout fell keeps trading on its signals
+    // there): a pair whose payout fell keeps trading on its signals. An H1 session's floor is its
+    // start's only (H1_MIN_PAYOUT_PCT, owner 2026-10-19)
+
+    if (h1) {
+      const startedAtMs = session.startedAt.getTime();
+      const decision = sizer.next({
+        history: history.intents.map(toSessionTrade),
+        payout: pair.payout,
+        minTradeAmount: snapshot.minTradeAmount,
+        available,
+        sessionStartedAtMs: startedAtMs,
+        nowMs: Math.max(now(), startedAtMs),
+      });
+      if (decision.kind === StakeKind.Stop) {
+        return {
+          kind: 'stop',
+          reason: STAKE_STOP_REASONS[decision.reason],
+          fields: { stopReason: decision.reason, detail: decision.detail },
+        };
+      }
+      logger.debug(ids, 'trading session waits for the H1 driver');
+      return { kind: 'hold', ms: config.h1CheckMs };
+    }
 
     const interval = intervalForDuration(settings.durationSec);
     const answer = await signals.evaluate({ assetId: settings.assetId, interval }, { signal });

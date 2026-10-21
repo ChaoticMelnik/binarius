@@ -14,6 +14,7 @@ import {
   TRADING_SESSION_CANDLE_SLACK_MS,
   TRADING_SESSION_CHAIN_HOLDS,
   TRADING_SESSION_CONFIG,
+  TRADING_SESSION_H1_CHECK_MS,
   TRADING_SESSION_PAIRS_TIMEOUT_MS,
   TRADING_SESSION_RETRY_MS,
   TRADING_SESSION_TICK_MS,
@@ -27,6 +28,10 @@ describe('the trading session constants', () => {
       TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
     );
     expect(TRADING_SESSION_TICK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
+    // K-H1 (#670): an H1 session's hold, between a tick and a hold-back
+    expect(TRADING_SESSION_CONFIG.h1CheckMs).toBe(TRADING_SESSION_H1_CHECK_MS);
+    expect(TRADING_SESSION_TICK_MS).toBeLessThanOrEqual(TRADING_SESSION_H1_CHECK_MS);
+    expect(TRADING_SESSION_H1_CHECK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
     expect(TRADING_SESSION_CANDLE_SLACK_MS).toBeLessThan(SIGNAL_SHORTEST_INTERVAL_MS);
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(SESSION_MAX_DURATION_MS);
     // the deadline is the shared one the start route and the CLI check against
@@ -55,6 +60,9 @@ describe('the trading session constants', () => {
       { retryMs: SESSION_MAX_DURATION_MS },
     ],
     ['a fractional tick', { tickMs: 1.5 }],
+    ['K-H1 an H1 hold shorter than a tick (#670)', { h1CheckMs: TRADING_SESSION_TICK_MS - 1 }],
+    ['K-H1 an H1 hold as long as a hold-back (#670)', { h1CheckMs: TRADING_SESSION_RETRY_MS }],
+    ['K-H1 a fractional H1 hold (#670)', { h1CheckMs: 5_000.5 }],
     ['a wait past the timer limit', { maxDurationMs: MAX_TIMER_MS + 1 }],
     ['no session per tick', { batchSize: 0 }],
     [

@@ -25,12 +25,16 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         the start route and the CLI refuse a session that
 //                                         cannot fit it in its strategy's worst case
 //                                         (sessionFitsDeadline: cycles × steps per cycle, #552)
+//   TRADING_SESSION_H1_CHECK_MS         — the hold of an H1 session (#670) between the
+//                                         orchestrator's checks: its driver opens the trades, the
+//                                         orchestrator only stops it (N trades, maxLoss, the pair)
 //   SESSION_NO_SIGNAL_CANDLES (shared)  — how many candles of its signal interval a session waits
 //                                         for a signal before it stops with no_signal_timeout
 //                                         (#509, in candles since #637), from the later of
 //                                         started_at and its last intent's change (database clock)
 // The chain: both backend calls fit one attempt (PAIRS + SIGNAL_BUDGET < ATTEMPT); a held-back
-// session skips at least one tick (TICK < RETRY); the candle wait never skips a candle
+// session skips at least one tick (TICK < RETRY); an H1 session is checked again no sooner than
+// the next tick and before a hold-back would end (TICK <= H1_CHECK < RETRY); the candle wait never skips a candle
 // (SLACK < the shortest interval, 5s since #313); the no-signal count is an integer >= 2, so a
 // session gets several decisions before the limit; a hold-back never outlives the shortest limit
 // (RETRY < NO_SIGNAL x the shortest candle); on the scanner's candles (5 s since #685, the one
@@ -46,6 +50,7 @@ export const TRADING_SESSION_ATTEMPT_TIMEOUT_MS = 10_000;
 export const TRADING_SESSION_PAIRS_TIMEOUT_MS = 4_000;
 export const TRADING_SESSION_RETRY_MS = 60_000;
 export const TRADING_SESSION_CANDLE_SLACK_MS = 2_000;
+export const TRADING_SESSION_H1_CHECK_MS = 5_000;
 
 export interface SessionOrchestratorConfig {
   tickMs: number;
@@ -53,6 +58,7 @@ export interface SessionOrchestratorConfig {
   attemptTimeoutMs: number;
   retryMs: number;
   candleSlackMs: number;
+  h1CheckMs: number;
   maxDurationMs: number;
   noSignalCandles: number;
 }
@@ -63,6 +69,7 @@ export const TRADING_SESSION_CONFIG: Readonly<SessionOrchestratorConfig> = Objec
   attemptTimeoutMs: TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
   retryMs: TRADING_SESSION_RETRY_MS,
   candleSlackMs: TRADING_SESSION_CANDLE_SLACK_MS,
+  h1CheckMs: TRADING_SESSION_H1_CHECK_MS,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
 });
@@ -81,12 +88,15 @@ export function sessionOrchestratorConfigHolds(
     isTimerMs(config.attemptTimeoutMs) &&
     isTimerMs(config.retryMs) &&
     isTimerMs(config.candleSlackMs) &&
+    isTimerMs(config.h1CheckMs) &&
     isTimerMs(config.maxDurationMs) &&
     isTimerMs(pairsTimeoutMs) &&
     Number.isSafeInteger(config.batchSize) &&
     config.batchSize >= 1 &&
     pairsTimeoutMs + TRADING_SIGNAL_BUDGET_MS < config.attemptTimeoutMs &&
     config.tickMs < config.retryMs &&
+    config.tickMs <= config.h1CheckMs &&
+    config.h1CheckMs < config.retryMs &&
     config.candleSlackMs < SIGNAL_SHORTEST_INTERVAL_MS &&
     Number.isSafeInteger(config.noSignalCandles) &&
     config.noSignalCandles >= 2 &&
