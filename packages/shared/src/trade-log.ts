@@ -110,13 +110,57 @@ export const tradeLogTradeSchema = z.strictObject({
   broker: tradeLogBrokerTradeSchema.nullable(),
 });
 
-// One line of `trade-log export` (JSONL): one decision. `ticks` is #668's.
+// decision_ticks.status (#668, docs/trade-log.md → The ticks around a decision): how much of the
+// window the backend's tick buffer covered
+export const DecisionTicksStatus = {
+  Complete: 'complete',
+  Truncated: 'truncated',
+  Unavailable: 'unavailable',
+} as const;
+export type DecisionTicksStatus = (typeof DecisionTicksStatus)[keyof typeof DecisionTicksStatus];
+
+// decision_ticks.detail: why a window is not `complete`, the first that applies in this order
+export const DecisionTicksDetail = {
+  Uncovered: 'uncovered',
+  Hole: 'hole',
+  MaxWait: 'max_wait',
+  Quiet: 'quiet',
+} as const;
+export type DecisionTicksDetail = (typeof DecisionTicksDetail)[keyof typeof DecisionTicksDetail];
+
+// 1 in TRADE_TICKS_SHADOW_SAMPLE shadow rows gets its ticks (owner, #668 В1), chosen by the row's
+// uuid; the candidate query inlines the same expression (decision-ticks-ops.ts, K13 pins both)
+export const TRADE_TICKS_SHADOW_SAMPLE = 20;
+export const shadowTicksSampled = (id: string): boolean =>
+  Number.parseInt(id.slice(0, 4), 16) % TRADE_TICKS_SHADOW_SAMPLE === 0;
+
+// [broker timestamp, local receipt ms, price]
+export const tradeLogTickRowSchema = z.tuple([z.number(), z.number(), z.number().positive()]);
+export type TradeLogTickRow = z.infer<typeof tradeLogTickRowSchema>;
+
+export const tradeLogTicksSchema = z
+  .strictObject({
+    status: z.enum(DecisionTicksStatus),
+    detail: z.enum(DecisionTicksDetail).nullable(),
+    fromMs: unixMsSchema,
+    untilMs: unixMsSchema,
+    count: z.int().nonnegative(),
+    rows: z.array(tradeLogTickRowSchema),
+  })
+  .refine((t) => (t.status === DecisionTicksStatus.Complete) === (t.detail === null), {
+    message: 'detail is set exactly when the status is not complete',
+  })
+  .refine((t) => t.rows.length === t.count, { message: 'rows has count elements' });
+export type TradeLogTicks = z.infer<typeof tradeLogTicksSchema>;
+
+// One line of `trade-log export` (JSONL): one decision. `ticks` is null for a decision without a
+// decision_ticks row (not a candidate, not captured yet, or past the capture horizon).
 export const tradeLogLineSchema = z.strictObject({
   decision: tradeLogDecisionSchema,
   signal: z.union([storedSignalJournalEntrySchema, foreignSignalSchema]),
   session: tradeLogSessionSchema.nullable(),
   trade: tradeLogTradeSchema.nullable(),
-  ticks: z.null(),
+  ticks: tradeLogTicksSchema.nullable(),
 });
 export type TradeLogLine = z.infer<typeof tradeLogLineSchema>;
 
