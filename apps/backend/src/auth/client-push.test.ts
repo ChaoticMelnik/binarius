@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { GrammyError, HttpError } from 'grammy';
+import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOT_MESSAGE_SPACER,
@@ -431,6 +431,15 @@ describe('the roles of the pushes (#475)', () => {
     const message = sessionWaitingMessage('00000000-0000-4000-8000-000000000000');
     expect(roles(message)).toEqual([[ButtonRole.Danger]]);
     expect(styles(message)).toEqual([['danger']]);
+  });
+
+  it("C7 the suites refuse a keyboard built outside keyboardOf, as the bot's do", async () => {
+    const push = createClientPush({ token: TOKEN });
+    captureApi(push);
+    const error = await rejectionOf(
+      push.api.sendMessage('1', 'x', { reply_markup: new InlineKeyboard().text('x', 'menu') }),
+    );
+    expect(String(error)).toContain('sendMessage: a keyboard built outside keyboardOf');
   });
 
   // the backend's code, comment lines dropped, tests and their helpers out: every keyboard of a
