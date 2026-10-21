@@ -263,7 +263,7 @@ the check's refusal (the table below), in order:
 | The list | What the press shows |
 |---|---|
 | the pair in it | the amount screen in demo, the launch screen in real, as above (W-door3) |
-| the pair not in it | «⏳ Проверяю сигнал по {symbol} / Смотрю на каждой свече (⏱ 5 с)…» (`pairWaiting`) and, while other pairs have a signal, «Сигнал уже есть по другим парам — можно не ждать и выбрать одну из них 👇» (`pairWaitingAlternatives`) over their buttons two a row (`signalsShown` without the chosen pair) + «🧭 Выбрать пару вручную» + «🏠 В меню»; the wait registered (W-door1) |
+| the pair not in it | «⏳ Проверяю сигнал по {symbol} / Смотрю на каждой свече (⏱ 5 с)…» (`pairWaiting`) and, while other pairs have a signal, «Сигнал уже есть по другим парам — можно не ждать и выбрать одну из них 👇» (`pairWaitingAlternatives`) over their buttons two a row (`signalsShown`; the chosen pair is not in the list) + «🧭 Выбрать пару вручную» + «🏠 В меню»; the wait registered (W-door1) |
 | not read (`readSignals` threw, or no `5s` list) | the same wait without the alternatives; `warn` `trading signals not read` or `trading signals list missing` (W-door2) |
 
 `:n` answers with a new message, as for every screen of this node (W-door4); no screen of the door

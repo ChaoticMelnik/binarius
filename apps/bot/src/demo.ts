@@ -613,14 +613,6 @@ export const expiredSignalsScreen = (): DemoScreen => ({
     .text(LABELS.menuButton, MENU_CALLBACK_DATA),
 });
 
-// the pairs with a signal now but the chosen one, as the list shows them
-export const otherSignals = (
-  signals: readonly { assetId: number; action: TradeAction }[],
-  catalog: PairsCatalogResponse,
-  nowMs: number,
-  assetId: number,
-): ShownSignal[] => signalsShown(signals, catalog, nowMs).filter(({ pair }) => pair.id !== assetId);
-
 // The list's footer (#685), also under its refusals: «🧭 Выбрать пару вручную» beside the first
 // button of the row (refresh or retry), then «🏠 В меню» in a row of its own
 export const appendSignalsFooter = (keyboard: InlineKeyboard): InlineKeyboard =>
@@ -1032,7 +1024,7 @@ export function createSignalWaitScreens({
     list: signalsScreen,
     expired: expiredSignalsScreen,
     waiting: pairWaitingScreen,
-    alternatives: otherSignals,
+    alternatives: signalsShown,
     nextStep: (step, pair, access) => nextStepScreen(step, pair, access, connectKeyboard),
     refusal: pairRefusalScreen,
     // the analysis's card as «📊 Анализ» draws it, in the mode access gives (demo when not read)
@@ -1161,7 +1153,7 @@ export function createDemoComposer<C extends Context>({
         screen = nextStepScreen({ assetId, back, firstName }, read.pair, access, connectKeyboard);
       } else {
         const alternatives =
-          list === undefined ? [] : otherSignals(list.signals, read.catalog, now(), assetId);
+          list === undefined ? [] : signalsShown(list.signals, read.catalog, now());
         const base = pairWaitingText(pairLabel(read.pair), assetId);
         screen = pairWaitingScreen(base, alternatives);
         wait = { base, alternatives };
