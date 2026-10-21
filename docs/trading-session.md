@@ -754,7 +754,7 @@ line is in it with its level.
 
 | msg | level | When |
 |---|---|---|
-| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed`, `no_signal` or `paused`, #509; the session's limit in ms, #637) |
+| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `maxLoss` (`max_session_loss_exceeded` of an H1 session, #670), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed`, `no_signal` or `paused`, #509; the session's limit in ms, #637) |
 | `trading session stopped for manual review` | error | the halt sweep, or `account_halted` from the attempt (`code`) |
 | `trading session completed` | info | the session's last cycle closed (`sessionProgress`, #552): `settled` and `cycles` (the closed ones) |
 | `trading session vanished` | warn | a race: the row was gone between the scan and the history |
@@ -765,6 +765,7 @@ line is in it with its level.
 | `trading session signal fetch failed` | warn | the backend answered `fetch_failed` (`code`, `retryAfterSec`) |
 | `trading session waits for the next candle` | info | `no_signal` (`reason`) |
 | `trading session waits for the signal to change` | info | the pause after two losses in `action` (#379) |
+| `trading session waits for the H1 driver` | debug | an H1 session (settings v4, #670) passed the attempt's checks and is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
 | `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
 | `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
