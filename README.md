@@ -38,7 +38,7 @@ ticks without trading and records each signal with its outcome is in [docs/h1.md
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the signals, the
-launch of a cycle, and behind «🧭 Выбрать пару вручную» the asset, the duration, the check on a
+launch of a cycle, and behind «🧭 Вручную» the asset, the duration, the check on a
 fresh catalog and the analysis screen — is in
 [docs/bot-demo.md](docs/bot-demo.md); how the stake button opens a demo trade and its status
 message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md); how the session

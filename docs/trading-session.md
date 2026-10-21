@@ -691,7 +691,7 @@ should not stand waiting with no word to the user.
   5 s, so a 15 s session from before the deploy plays out. The chain keeps the limit on the
   scanner's candles (5 s since #685) below the hour and above the hold-back on the shortest (5 s).
 - **The user.** The status message and the summary (#318, #537) end with «🔀 Выбрать другую пару»
-  (the signals list, `demo:sig`) instead of «🔁 Ещё сессия» and «📊 Новый анализ», and the
+  (the signals list, `demo:sig`) instead of «🔁 Ещё сессия» and «📊 Анализ», and the
   summary is sent with sound even without a trade — by the bot, as a text (#537), the backend's
   fallback text above «🏠 В меню» when the bot cannot ([bot-session.md](bot-session.md)).
 

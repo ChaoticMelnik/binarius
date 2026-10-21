@@ -14,7 +14,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Components
 
 - `apps/bot/src/demo-trade.ts` — `createDemoTradeComposer({ backend, logger, now, intentTracker,
-  connectKeyboard })`, which holds the stake press and the refresh press. Also `intentCallbackData`,
+  connectButtons })`, which holds the stake press and the refresh press. Also `intentCallbackData`,
   `INTENT_CALLBACK_PATTERN` and `intentKeyboard`. `bot.ts` mounts it under its private-chat
   filter, right after the demo's composer.
 - `apps/bot/src/intent-tracker.ts` — `createIntentTracker({ backend, logger, firstPollMs, pollMs,
@@ -25,7 +25,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>`, `newStakeNonce`,
   `stakeFingerprint`, `effectiveStake`, `STAKE_CALLBACK_PATTERN` and `stakeDataOf`.
 - `apps/bot/src/stake-picker.ts` — `createStakePicker({ backend, logger, dialog,
-  connectKeyboard })` → `{ composer, onStakeText }`: the stake picker (#297).
+  connectButtons })` → `{ composer, onStakeText }`: the stake picker (#297).
 - `apps/bot/src/backend-client.ts` — `createIntent(request)` → the intent; a 201 and a 200 replay
   read the same, since the bot treats them the same. `readIntent(id, telegramUserId)` →
   `GET trading/intents/<id>?telegramUserId=<id>`. Both parse `intent` with
@@ -50,11 +50,11 @@ demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
   bot → POST /trading/intents { telegramUserId, mode: tradingMode, assetId,
                                 amount: (demoStake | realStake by mode) ?? broker.minTradeAmount,
                                 action, durationSec, clientRequestId: <mode>:<telegramUserId>:<nonce> }
-  bot → sendMessage: the status, with «🔄 Обновить статус» (intent:<id>)
+  bot → sendMessage: the status, with «🔄 Обновить» (intent:<id>)
   tracker: after 1 s, then every 3 s → GET /trading/intents/<id>?telegramUserId=<id>
            → editMessageText of that message when the status changes; on accepted, settled or
              rejected the session offer and «🚀 Сессия из 5 циклов» (<mode>:sess:<assetId>:<sec>, #360, #327)
-intent:<id>                («🔄 Обновить статус»)
+intent:<id>                («🔄 Обновить»)
   bot → answerCallbackQuery ∥ GET /trading/intents/<id>?telegramUserId=<presser> ∥ GET /trading/pairs
   bot → editMessageText: the status in place
 ```
@@ -80,7 +80,7 @@ The checks run in this order, and the first one that fails answers:
    mode. When the amount or the mode in effect now has another fingerprint — the stake was saved
    or reset since the expansion, the broker moved its minimum, the user switched the mode, the
    label had no amount, or the button is older than #297 and has none — the bot answers «⚠️
-   Режим или сумма сделки изменились — открой анализ заново.» with «↩️ Назад к анализу», and
+   Режим или сумма сделки изменились — открой анализ заново.» with «↩️ К анализу», and
    nothing is created.
 4. **The intent.** `POST /trading/intents` with that amount. The backend checks it against the
    account's stored snapshot (Rule 29). A session's stake comes from the same saved stake
@@ -94,7 +94,7 @@ per render of the analysis screen). It is the trade's key: `clientRequestId =
 real intent). Pressing the same button again replays the same intent (200) and
 never opens a second trade (`trade_intents_user_request_idx`, Rule 7). That covers a double tap, an
 old message and a press after a restart. A new expansion carries a new nonce, so its button can
-open a new trade; a double tap on «➕ Ещё» draws two, as two renders of «🔄 Повторить анализ» did.
+open a new trade; a double tap on «➕ Ещё» draws two, as two renders of «🔄 Заново» did.
 An analysis message from before #360 keeps its stake button and its nonce. A replay sends the intent's current state as a new message. It is tracked only when
 the status is live and the tracker is not already following that id: `track()` does nothing for
 an id it already has. So after a restart, pressing the stake button again restarts tracking.
@@ -112,7 +112,7 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `ambiguous_broker_account` | `statusAmbiguous` |
 | 409 `account_not_confirmed` | «⏳ Привязка Binodex ждёт подтверждения — открой /account.» |
 | 409 `account_halted` | «⛔ Торговля по аккаунту остановлена — напиши в поддержку: /support» |
-| 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) and «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) in one row above the way back |
+| 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.»; «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) on its own row, then «⭐ Купить» (#117, [stars.md](stars.md)) in one row with the way back and the menu (#475) |
 | 409 `active_intent_exists` | «⏳ Предыдущая сделка ещё не завершена…» |
 | 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed amount; the fingerprint normally refuses it first) |
 | 409 `trading_paused` | «⏸ Торговля временно приостановлена, попробуйте позже.» (the global switch, [kill-switch.md](kill-switch.md)) |
@@ -125,7 +125,7 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 5xx, no answer, a broken 2xx body | the outcome is unknown: one more `createIntent` with the same key; if that also fails this way, «⚠️ Не удалось узнать, принята ли заявка…» and `warn` `trade intent not created` |
 
 The refusals are an exhaustive `Record<TradeIntentErrorCode, …>`, so a code added to the contract
-fails `tsc` in `demo-trade.ts`. A row with no button of its own gets «↩️ Назад к анализу» and
+fails `tsc` in `demo-trade.ts`. A row with no button of its own gets «↩️ К анализу» and
 «🏠 В меню» (#350, [bot-navigation.md](bot-navigation.md)), `blocked` the support link: the press is
 a write, so it is never offered again; the same holds for the access read's refusals before it.
 
@@ -142,7 +142,7 @@ the broker's minimum without one.
 **The picker** (`stake-picker.ts`) is the picker of one mode, carried in its data, not of the
 user's trading mode. It opens from «💵 Сумма» beside the stake button (drawn by «➕ Ещё», #360,
 in the mode of the expansion: demo or REAL), from «💵 Демо» and «💼 Реал» in /settings
-([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the real launch screen (#320, #327,
+([bot-menu.md](bot-menu.md)), from «💵 Ставка» on the real launch screen (#320, #327,
 [bot-demo.md](bot-demo.md#the-launch-screen-in-real-mode-327)) and on demo launch screens sent
 before #476, and from the stake refusals, in the refused press's mode. In demo the amount screen of
 a cycle (#476, [bot-demo.md](bot-demo.md#the-amount-screen-476)) offers the same presets and saves
@@ -154,9 +154,9 @@ through the same route, without the picker. It edits the message it was opened f
 Минимум брокера: $1.00
 Доступно: $9 990.00                   real: Реальный баланс: $100.00
 [$1.00] [$2.00] [$5.00 ✅] [$10.00]    minTradeAmount × 1, 2, 5, 10, only those <= that balance
-[✏️ Своя сумма]
-[🔁 Минимальная брокера]               only while that mode's stake is saved
-[↩️ Назад к анализу | ↩️ Назад к настройкам | ↩️ К запуску]
+[✏️ Ввести]
+[🔁 Минимум]               only while that mode's stake is saved
+[↩️ К анализу | ↩️ Настройки | ↩️ К запуску]
 ```
 
 The presets and the input syntax come from `packages/shared/src/stake.ts`, bigint at scale 8; the
@@ -265,10 +265,10 @@ session offer (#360) when the caller asks for one. The callers never ask for bot
 Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that «открыта» appears
 (not as «не открыта») for `accepted` and for no other status.
 
-**The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить статус» while the
+**The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить» while the
 status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
 (`TRACKER_STOP_STATUSES`), the session offer (#360) and the end of the path under it —
-«🚀 Сессия из 5 циклов», then «📊 Новый анализ» (the same pair and duration) and «📡 К сигналам» in
+«🚀 Сессия из 5 циклов», then «📊 Анализ» (the same pair and duration) and «📡 Сигналы» in
 one row (#506), «🏠 В меню» ([bot-navigation.md](bot-navigation.md)). An accepted trade gets all
 four rows.
 
@@ -282,7 +282,7 @@ none ([bot-session.md](bot-session.md#the-button)). One predicate decides the li
 `DEMO_DURATIONS_SEC` and a session of five fits it. The payout plays no part (#631; #379 withheld
 the offer below 80 % and when the refresh could not read the catalog): a refresh without the
 catalog draws the offer under «актив #<id>». A trade from before #313 (60 s) gets neither, as it gets no
-«📊 Новый анализ». The tracker's edits and «🔄 Обновить статус» draw it; the message right after
+«📊 Анализ». The tracker's edits and «🔄 Обновить» draw it; the message right after
 the press (`planned`) never does; the deadline edit of a live status carries the hint and no
 offer, and the deadline edit of a stop status whose edit never landed carries the offer; the 404
 edit carries neither. The number of cycles is the catalog's `{cycles}`, from
@@ -306,7 +306,7 @@ no outgoing edge in `TRADE_INTENT_TRANSITIONS`, plus `accepted`.
 | --- | --- |
 | a changed status | edited; on a stop status the entry ends once the edit has landed, otherwise the edit is retried on every poll until the deadline |
 | the same status | not edited; polls again, or reaches the deadline |
-| past `INTENT_TRACK_DEADLINE_MS` | one last edit, then stops: «⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить статус» чуть позже.» under a live status, the status text itself for a stop status whose edit never landed. This edit is not retried, because the deadline is what ends every entry, even one whose every edit is refused (a 403 once the user blocked the bot) |
+| past `INTENT_TRACK_DEADLINE_MS` | one last edit, then stops: «⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить» чуть позже.» under a live status, the status text itself for a stop status whose edit never landed. This edit is not retried, because the deadline is what ends every entry, even one whose every edit is refused (a 403 once the user blocked the bot) |
 | 404 `not_found` | «⚠️ Статус сделки недоступен.»; `warn` `trade intent status not read` with `intentId`; stops. That edit is not retried: polling cannot fix a missing or foreign id, and the refresh button gives the same answer |
 | any other read failure | `warn` once per entry; polls again until the deadline |
 | the edit refused as «message is not modified» | treated as shown |
@@ -319,7 +319,7 @@ keeps its last state. `stop()` clears every timer, refuses new entries and waits
 attempt in flight.
 
 What a restart loses: the tracking. Every message stays at its last state with its
-«🔄 Обновить статус» button, which is the recovery.
+«🔄 Обновить» button, which is the recovery.
 
 ## The refresh button
 

@@ -99,10 +99,11 @@ The mode comes from `POST /trading/access` only (`tradingMode`, required: a back
 
 **The card.** The header prints `MODE_LABELS[tradingMode]`, the hint is `statusHint` in demo and
 `statusHintReal` in real: «⚠️ Реальный режим: сделки идут на реальные деньги на сумму $X.», X the
-real stake in force (#326). The first row is the entry and the mode button: «🎮 Демо-торговля» and
-«💼 Реальный режим» in demo, «🚀 Торговать» and «🎮 Вернуться в демо» in real (#474). The entry is
-`demo` in both; the mode button is `mode` in both and only opens the mode screen, it never switches
-by itself. Then «👥 Пригласить друга» beside «⭐ Купить токены» (#506), and «💳 Пополнить».
+real stake in force (#326). The first row is the entry alone, green: «🎮 Демо-торговля» in demo,
+«🚀 Торговать» in real; then the mode button beside «👥 Позвать друга»: «💼 Реальный режим» in demo
+(no colour), «🎮 В демо» in real (blue) (#474, #475). The entry is `demo` in both; the mode button
+is `mode` in both and only opens the mode screen, it never switches by itself. Then «⭐ Купить»
+beside «🌐 Язык/Language», and «💳 Пополнить» alone ([bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)).
 
 **The mode screen** (#474, `trading-mode.ts`). `mode` sends it as a new message (the card, a
 photo or text by the fallback, is never edited); `mode:x` (`MODE_SCREEN_CALLBACK_DATA`, «↩️ Отмена»
@@ -121,8 +122,9 @@ an `error` line and nothing more, anything else → `bot.catch`). The screen:
 ⏸ Торговля сейчас приостановлена — …   — only while the switch is closed
 ```
 
-then «💼 Включить реальный режим» (`mode:r`) in demo or «🎮 Вернуться в демо» (`mode:d`) in real,
-and «🏠 В меню». Y is the real stake whatever the mode now, never the demo one; the line has no
+then in demo «💼 Включить реальный режим» (`mode:r`), the screen's step forward, green on its own
+row, and «🏠 В меню» under it; in real «🎮 В демо» (`mode:d`, blue) and «🏠 В меню» in one row
+(#475). Y is the real stake whatever the mode now, never the demo one; the line has no
 button (the owner's decision 2 on #326): the stake is changed in `/settings` → «💼 Реал» or under the
 analysis. The session line is static (#474 clarify 3): it is shown with no session running too, the
 screen reads no sessions. The paused line does not take the enable step away: the route does not
@@ -142,7 +144,7 @@ and stake lines when there is no snapshot, so the way back to demo stays open.
 | failed, `blocked`, demo with no snapshot | the refusals above |
 | the user is in real already | the screen |
 | `real.available < minTradeAmount` (`decimalLessThan`, the snapshot of any age, as the route compares) | `modeBelowMinimum` with «⚙️ Режим» and «🏠 В меню», no confirm button; the route checks again |
-| otherwise | «Включить реальный режим? Сделки пойдут на реальные деньги на сумму <b>$Y</b>.», the out-of-bounds line when `checkStake(Y, { minTradeAmount, available: real.available })` refuses, the session line; «✅ Подтверждаю» (`mode:r:ok`) and «↩️ Отмена» (`mode:x`) in one row |
+| otherwise | «Включить реальный режим? Сделки пойдут на реальные деньги на сумму <b>$Y</b>.», the out-of-bounds line when `checkStake(Y, { minTradeAmount, available: real.available })` refuses, the session line; «✅ Подтверждаю» (`mode:r:ok`, green) on its own row, «↩️ Отмена» (`mode:x`) under it (#475) |
 
 The out-of-bounds line («⚠️ Сумма $Y сейчас не подходит к реальному счёту (доступно $A, минимум
 $M) — сделки будут отклоняться, пока не изменишь её в /settings → «💼 Реал».») stands for any
@@ -182,7 +184,7 @@ the launch, the analysis and its expansion, the trade's status) speak of it. `re
 walks every screen a real-mode user can reach on the catalog's defaults and fails on any demo
 wording, with a demo control case; a new screen on the path is added to its scenes. Staff
 overrides of the texts are not checked by it. The first-session reminders («🎮 Демо-торговля»)
-and the analysis reminder («📊 Новый анализ», #484) are planned and sent only to a user in demo
+and the analysis reminder («📊 Анализ», #484) are planned and sent only to a user in demo
 ([mailing.md](mailing.md)); the «🎮 Демо-торговля»
 button under `/account`, the account card and the re-login push stays for a real-mode user too
 (accepted: it leads to the neutral signals list, and every screen with a real-money button
@@ -207,7 +209,7 @@ session («🚀 Сессия из 5 циклов · REAL», #327).
 **The launch screen** in real mode (#327) is the one demo drew before #476, drawn by the mode
 (demo now draws the amount screen, [bot-demo.md](bot-demo.md#the-amount-screen-476)): «💵 Ставка:
 $X» with the real stake in force, «🤖 Бот проведёт 5 циклов подряд… Реальный режим: сделки идут на реальные
-деньги.» (`launchCycleReal`), «🚀 Запустить цикл · REAL» (`real:sess:…`), «💵 Изменить ставку» of
+деньги.» (`launchCycleReal`), «🚀 Запустить цикл · REAL» (`real:sess:…`), «💵 Ставка» of
 the real picker (`stk:o:r:p:…`) and «↩️ К списку», at any payout as in demo (#631). The single real trade stays on the manual path. A stake saved from a launch
 screen reads the mode the same way and draws the same screen under the saved line of the saved
 stake's mode. A failed access read draws the amount screen's refusal («⚠️ Сервис временно
@@ -269,7 +271,7 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
    helper of trading-access.md (the internal bearer) does the same:
    `access /trading/mode '{"telegramUserId":"<id>","mode":"real"}'` → 200
    `{"tradingMode":"real","changed":true,"stoppedSessions":0}`.
-2. `/menu` shows REAL, the real hint, «🚀 Торговать» and «🎮 Вернуться в демо»; «Сигналы сейчас»
+2. `/menu` shows REAL, the real hint, «🚀 Торговать» and «🎮 В демо»; «Сигналы сейчас»
    has no «запустит цикл».
 3. A pair opens the launch screen with «🚀 Запустить цикл · REAL» and the real stake; the press
    starts a real session («💼 Реальная сессия», the worker's `trading session intent created`
@@ -279,7 +281,7 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
    real picker («💼 Сумма реальной сделки», «Реальный баланс»); after `$5` is saved the hint reads
    «на сумму $5.00», «➕ Ещё» shows «… · $5.00 · REAL» and the press trades `$5`
    (`trade_intents.amount`).
-4. Switch back with «🎮 Вернуться в демо» on the mode screen while the real session runs → «✅
+4. Switch back with «🎮 В демо» on the mode screen while the real session runs → «✅
    Режим: DEMO.» and «⏹ Активная сессия остановлена.» (with the helper: `"mode":"demo"` →
    `"stoppedSessions":1`), the session `user_stopped`: the card is DEMO, and the old REAL buttons (stake and session) answer
    «Режим или сумма сделки изменились». With `DEMO_ONLY=true`, `"mode":"real"` → 409 `demo_only`,

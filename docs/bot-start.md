@@ -76,7 +76,7 @@ text on the address step
   bot  → not an address (emailAddressSchema) → "❌ Это не похоже на адрес…", no backend call
          POST /auth/binodex/email/send-code { telegramUserId, email }
   back → { codeSent: true }
-  bot  → dialog → code step, "📩 Код отправлен на <address>…" + "🔄 Запросить код ещё раз"
+  bot  → dialog → code step, "📩 Код отправлен на <address>…" + "🔄 Новый код"
          (resend) and "✏️ Изменить адрес" (connect)
          no answer, 5xx or a broken body → dialog → code step all the same,
          "⚠️ Не удалось подтвердить отправку кода на <address>…" + the same two buttons: the
@@ -93,7 +93,7 @@ text on the code step
   bot  → dialog ends, the account card with the pack, as after "✅ Подтвердить"
          a failure that is not a definite refusal → POST /users/start, the recheck below
 
-tap "🔄 Запросить код ещё раз" (callback data resend)
+tap "🔄 Новый код" (callback data resend)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/email/send-code with the dialog's address
          a 429 → "⚠️ Новый код сейчас запросить нельзя…", the code step stays: the code
          already sent is still good
@@ -191,7 +191,7 @@ refusing before the body; `too_many_attempts` rests on the route's order alone. 
 not in `SEND_CODE_REFUSALS` (`apps/bot/src/bot.ts`) — a 400 `validation`, a 401, a 404,
 Fastify's own 4xx without an error code, or one added later, which the bot takes on the same
 terms — is answered «⚠️ Сервис временно недоступен» and the step stays as it was, with the code
-step's buttons on «🔄 Запросить код ещё раз». It is logged at `warn` as `email code not sent`, like
+step's buttons on «🔄 Новый код». It is logged at `warn` as `email code not sent`, like
 the unknown outcome, with `backendStatus` and `backendReason` telling them apart.
 
 What ends the dialog, and what does not:
@@ -205,7 +205,7 @@ What ends the dialog, and what does not:
 | send-code `invalid_email` | back to the address step |
 | send-code `too_many_requests` on the address step | stays on the address step |
 | send-code `too_many_attempts` on the address step | ends |
-| send-code `too_many_requests` / `too_many_attempts` on «🔄 Запросить код ещё раз» | stays on the code step |
+| send-code `too_many_requests` / `too_many_attempts` on «🔄 Новый код» | stays on the code step |
 | send-code `user_blocked` | ends |
 | login succeeded | ends |
 | login `too_many_requests` | stays on the code step, no recheck |
@@ -217,7 +217,7 @@ What ends the dialog, and what does not:
 | text outside a dialog | ignored, nothing is sent |
 
 A step kept after a refusal ("stays" in the table) keeps the clock it had; every row that moves
-the dialog to a step, the unknown send-code included, restarts the 10 minutes. «🔄 Запросить код ещё раз» pressed when there is no dialog — it
+the dialog to a step, the unknown send-code included, restarts the 10 minutes. «🔄 Новый код» pressed when there is no dialog — it
 expired, a login already finished it, or the bot restarted — answers «⚠️ Этот запрос кода уже не
 действует…», which holds in each of those cases.
 
@@ -461,7 +461,7 @@ is pending and the engine sends nothing more, `reduced` holds a second mailing w
          then «💵 Сумма демо-сделки: $5.00» and «💼 Сумма реальной сделки: $5.00» (each «минимальная
          ставка брокера» while unset) and a row «💵 Демо» → stk:o:d:s, «💼 Реал» → stk:o:r:s, the
          stake picker of that mode in any trading mode (#297, #326, bot-demo-trade.md → The stake)
-settings (the picker's «↩️ Назад к настройкам»)
+settings (the picker's «↩️ Настройки»)
   bot  → answerCallbackQuery ∥ POST /users/start, then the /settings message edited in place
 a level pressed (level:all, level:reduced, level:off)
   bot  → answerCallbackQuery ∥ POST /users/notification-level { telegramUserId, level }
@@ -800,7 +800,7 @@ query answered, the edit refused, the screen sent anew — [bot-demo.md](bot-dem
 #297) and up to four Bot API calls (the query answered, «⏳», then the signal's card as a photo and
 «⏳» deleted, or a text result's edit refused and sent anew — #482, [bot-demo.md](bot-demo.md#timing)); the
 stake button is four backend calls (the catalog and the access read together but counted one after
-the other, the intent and its one retry) and two Bot API calls, and «🔄 Обновить статус» two backend
+the other, the intent and its one retry) and two Bot API calls, and «🔄 Обновить» two backend
 calls and up to three Bot API calls ([bot-demo-trade.md](bot-demo-trade.md)); the resend button is one
 backend call and two Bot API calls; an old oauth button (#314) is no backend call and two Bot API
 calls (the query answered, the keyboard removed); the confirm button is one backend call and up to five

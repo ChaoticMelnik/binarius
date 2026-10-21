@@ -101,7 +101,7 @@ so the row only switches them on (The low-token nudge → At the deploy).
 
 | Kind              | Sent                                   | Text (`mailing` group)   | Button                                        |
 | ----------------- | -------------------------------------- | ------------------------ | --------------------------------------------- |
-| `analysis_unused` | 10 min after an analysis with a signal | `analysisUnusedReminder` | «📊 Новый анализ» (`demo:an:<assetId>:<sec>`) |
+| `analysis_unused` | 10 min after an analysis with a signal | `analysisUnusedReminder` | «📊 Анализ» (`demo:an:<assetId>:<sec>`) |
 
 A user who opened the bot's analysis card with a signal ([bot-demo.md](bot-demo.md) → The
 reminder) and within `ANALYSIS_UNUSED_AFTER_MS` (10 min) neither created a trade nor started a
@@ -195,7 +195,7 @@ Tests: `mailing-ops.db.test.ts` R1–R8 and its CUT, `engine.db.test.ts` E-R1–
 | Kind          | Applies when the balance is at or under | Text (`mailing` group) | Buttons                                                                  |
 | ------------- | --------------------------------------- | ---------------------- | ------------------------------------------------------------------------ |
 | `tokens_half` | 50 % of the pack (pack 100: 50)         | `tokensHalfUsed`       | the entry: «🎮 Демо-торговля», in real mode «🚀 Торговать» (`demo`)      |
-| `tokens_low`  | 20 % of the pack (pack 100: 20)         | `tokensLow`            | «💳 Пополнить» (the cashier, `web_app`), then «⭐ Купить токены» (`buy`) |
+| `tokens_low`  | 20 % of the pack (pack 100: 20)         | `tokensLow`            | «💳 Пополнить» (the cashier, `web_app`), then «⭐ Купить» (`buy`) |
 | `tokens_out`  | 0                                       | `tokensOut`            | the same as `tokens_low`                                                 |
 
 The owner's answers (2026-10-08, 2026-10-10, 2026-10-18): thresholds at 50, 80 and 100 % of the
@@ -231,7 +231,7 @@ tokens for a deposit (#386 is open).
   undefined because `WEB_PUBLIC_URL` is not https) is labelled by the user's mode read at the claim,
   as the status card labels it (#121): the path is the same `DEMO_CALLBACK_DATA` (#327). 80 % and
   100 % carry the cashier of #27 in row 1 and the purchase of #117 in row 2. The 50 % text names no
-  button («нажми кнопку ниже»); the 80/100 % texts name only «⭐ Купить токены», the row that is
+  button («нажми кнопку ниже»); the 80/100 % texts name only «⭐ Купить», the row that is
   always there.
 - **Timing.** `TOKEN_NUDGE_AFTER_MS` is 0, like `REFERRAL_REWARDED_AFTER_MS`: due at the planning
   moment, out of `MAILING_MIN_OFFSET_MS`.
