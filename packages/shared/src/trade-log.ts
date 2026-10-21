@@ -9,7 +9,12 @@ import {
   storedSignalJournalEntrySchema,
 } from './signal';
 import { TradingSessionStopReason } from './trading-session';
-import { TradeIntentStatus, tradeActionSchema, tradeModeSchema } from './trading';
+import {
+  TradeIntentStatus,
+  tradeActionSchema,
+  tradeIntentFailureReasonSchema,
+  tradeModeSchema,
+} from './trading';
 
 // The trade log (#666, docs/trade-log.md): one signal_decisions row per decision a session acted
 // on, and the export that reads them.
@@ -104,6 +109,11 @@ export const tradeLogTradeSchema = z.strictObject({
   durationSec: z.int().positive(),
   createdAtMs: unixMsSchema,
   submittedAtMs: unixMsSchema.nullable(),
+  // trade_intents.last_error and submit_deadline_at (#670): why a rejected intent never reached the
+  // broker (entry_window_missed: its H1 entry window closed before the take); null deadline means
+  // no window
+  lastError: tradeIntentFailureReasonSchema.nullable(),
+  submitDeadlineAtMs: unixMsSchema.nullable(),
   // the trade's cycle and step in it (sessionTradeSteps); null until the trade is settled
   cycle: z.int().positive().nullable(),
   cycleStep: z.int().positive().nullable(),

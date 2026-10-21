@@ -29,6 +29,7 @@ import {
   decisionTicks,
   recordSignalDecision,
   rejectIntent,
+  rejectLateIntent,
   signalDecisions,
   tradeIntents,
   tradingSessions,
@@ -454,6 +455,8 @@ describe('trade-log export (#666)', () => {
           durationSec: 15,
           createdAtMs: trade.intent.createdAt.getTime(),
           submittedAtMs: trade.intent.submittedAt?.getTime() ?? null,
+          lastError: trade.step === 3 ? 'broker_rejected' : null,
+          submitDeadlineAtMs: null,
           cycle: trade.cycle,
           cycleStep: trade.cycleStep,
           broker: trade.broker,
@@ -643,6 +646,31 @@ describe('trade-log export (#666)', () => {
       '2003-01-02T00:00:00Z',
     );
     expect(linesOf(both.out)).toHaveLength(total + 1);
+  });
+
+  it('X15 an intent rejected past its entry window prints its reason and its deadline (#670)', async () => {
+    const session = await seedSession();
+    const { intent } = await sessionIntent(session, 1, { record: signalRecord() });
+    const deadline = new Date('2003-06-01T00:00:01.250Z');
+    await tmp.db
+      .update(tradeIntents)
+      .set({ submitDeadlineAt: deadline })
+      .where(eq(tradeIntents.id, intent.id));
+    const late = await tmp.db.transaction((tx) =>
+      rejectLateIntent(tx, { id: intent.id, expectedVersion: intent.version }),
+    );
+    expect(late).toBeDefined();
+    const { code, out } = await run('export', '--from', FROM, '--session', session.sessionId);
+    expect(code).toBe(0);
+    expect(linesOf(out).map((line) => line.trade)).toEqual([
+      expect.objectContaining({
+        intentId: intent.id,
+        status: 'rejected',
+        lastError: 'entry_window_missed',
+        submitDeadlineAtMs: deadline.getTime(),
+        submittedAtMs: null,
+      }),
+    ]);
   });
 
   it('X9 lines without a trade: a start decision without a session, a refusal with its detail and result', async () => {
