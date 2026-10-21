@@ -12,12 +12,15 @@ import {
   SignalKind,
   TradeIntentStatus,
   type DecimalString,
+  type DecisionTicksDetail,
+  type DecisionTicksStatus,
   type LastTick,
   type SessionStakeStrategy,
   type SessionTradeStep,
   type SignalInterval,
   type SignalRecord,
   type TradeAction,
+  type TradeLogTickRow,
   type TradeMode,
   type TradingSessionStopReason,
 } from '@binarius/shared';
@@ -25,6 +28,7 @@ import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { literal } from './schema/columns';
 import { brokerTrades, type BrokerTradeStatus } from './schema/broker-trades';
+import { decisionTicks } from './schema/decision-ticks';
 import { SIGNAL_DECISION_PAYOUT_MAX, signalDecisions } from './schema/signal-decisions';
 import { tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
@@ -202,10 +206,21 @@ export interface TradeLogIntentRow {
   broker: TradeLogBrokerRow | null;
 }
 
+// the decision's decision_ticks row (#668), null without one
+export interface TradeLogTicksRow {
+  status: DecisionTicksStatus;
+  detail: DecisionTicksDetail | null;
+  fromMs: number;
+  untilMs: number;
+  count: number;
+  ticks: TradeLogTickRow[];
+}
+
 export interface TradeLogRow {
   decision: TradeLogDecisionRow;
   session: TradeLogSessionRow | null;
   intent: TradeLogIntentRow | null;
+  ticks: TradeLogTicksRow | null;
 }
 
 // the page's last row: recorded_at as the database's text, since a Date drops its microseconds
@@ -279,12 +294,19 @@ export async function readTradeLogPage(
       brokerClosePrice: brokerTrades.closePrice,
       brokerCloseTimestampMs: brokerTrades.closeTimestampMs,
       brokerProfit: brokerTrades.profit,
+      ticksStatus: decisionTicks.status,
+      ticksDetail: decisionTicks.detail,
+      ticksWindowFromMs: decisionTicks.fromMs,
+      ticksWindowUntilMs: decisionTicks.untilMs,
+      ticksCount: decisionTicks.count,
+      ticksRows: decisionTicks.ticks,
     })
     .from(d)
     .leftJoin(tradingSessions, eq(tradingSessions.id, d.tradingSessionId))
     .leftJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
     .leftJoin(tradeIntents, eq(tradeIntents.signalDecisionId, d.id))
     .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+    .leftJoin(decisionTicks, eq(decisionTicks.decisionId, d.id))
     .where(
       and(
         gte(d.recordedAt, options.from),
@@ -374,6 +396,21 @@ export async function readTradeLogPage(
                       closeTimestampMs: row.brokerCloseTimestampMs,
                       profit: row.brokerProfit,
                     },
+            },
+      ticks:
+        row.ticksStatus === null ||
+        row.ticksWindowFromMs === null ||
+        row.ticksWindowUntilMs === null ||
+        row.ticksCount === null ||
+        row.ticksRows === null
+          ? null
+          : {
+              status: row.ticksStatus,
+              detail: row.ticksDetail,
+              fromMs: row.ticksWindowFromMs,
+              untilMs: row.ticksWindowUntilMs,
+              count: row.ticksCount,
+              ticks: row.ticksRows,
             },
     })),
     next:

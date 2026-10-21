@@ -6,6 +6,7 @@ export * from './trade-intent-ops';
 export * from './trading-session-ops';
 export * from './session-notice-ops';
 export * from './signal-decision-ops';
+export * from './decision-ticks-ops';
 export * from './trading-switch-ops';
 export * from './oauth-ops';
 export * from './link-bonus-ops';
