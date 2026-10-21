@@ -26,6 +26,7 @@ import {
   brokerAccounts,
   brokerTrades,
   createSessionIntent,
+  decisionTicks,
   recordSignalDecision,
   rejectIntent,
   signalDecisions,
@@ -800,5 +801,63 @@ describe('trade-log export (#666)', () => {
       'r1',
     ]);
     expect(out).toContain('"context":"shadow"');
+  });
+  describe('the ticks around a decision (#668)', () => {
+    const ticks: [number, number, number][] = [
+      [1_760_000_001_000, 1_760_000_001_180, 1.08761],
+      [1_760_000_002_000, 1_760_000_002_150, 1.08766],
+      [1_760_000_003_000, 1_760_000_003_210, 1.08759],
+    ];
+    async function sessionWithTicks() {
+      const session = await seedSession();
+      await recordSignalDecision(
+        tmp.db,
+        decisionFixture(session, { outcome: SignalDecisionOutcome.Paused, step: 1 }),
+      );
+      const { intent } = await sessionIntent(session, 2);
+      await seedBrokerTradeFor(tmp.db, intent, { profit: '0.85' as DecimalString });
+      return { session, decisionId: intent.signalDecisionId! };
+    }
+    const capture = (decisionId: string) =>
+      tmp.db.insert(decisionTicks).values({
+        decisionId,
+        fromMs: 1_759_999_947_000,
+        untilMs: 1_760_000_072_000,
+        status: 'truncated',
+        detail: 'uncovered',
+        count: ticks.length,
+        ticks,
+      });
+
+    it('X12 a captured decision prints its ticks with every field; X13 one without prints null', async () => {
+      const { session, decisionId } = await sessionWithTicks();
+      await capture(decisionId);
+      const { code, out } = await run('export', '--from', FROM, '--session', session.sessionId);
+      expect(code).toBe(0);
+      const lines = linesOf(out);
+      expect(lines.map((line) => line.decision.outcome)).toEqual(['paused', 'intent']);
+      expect(lines[0]!.ticks).toBeNull();
+      expect(lines[1]!.ticks).toEqual({
+        status: 'truncated',
+        detail: 'uncovered',
+        fromMs: 1_759_999_947_000,
+        untilMs: 1_760_000_072_000,
+        count: 3,
+        rows: ticks,
+      });
+    });
+
+    it('X14 trades-json is the same with a ticks row as without', async () => {
+      const { session, decisionId } = await sessionWithTicks();
+      const tradesJson = () =>
+        run('export', '--from', FROM, '--session', session.sessionId, '--format', 'trades-json');
+      const before = await tradesJson();
+      await capture(decisionId);
+      const after = await tradesJson();
+      expect(after.code).toBe(0);
+      expect(JSON.parse(after.out)).toHaveLength(1);
+      expect(after.out).toBe(before.out);
+      expect(after.out).not.toContain('1.08761');
+    });
   });
 });
