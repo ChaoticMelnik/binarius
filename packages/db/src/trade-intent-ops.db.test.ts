@@ -23,6 +23,7 @@ import {
   seedBalanceSnapshot,
   seedBrokerAccount,
   seedQueuedIntent,
+  seedTradingSession,
   seedUnknownIntent,
   seedUser,
   seedUserWithAccount,
@@ -49,6 +50,7 @@ import {
   readHeldExposure,
   rejectExpiredIntent,
   rejectIntent,
+  rejectLateIntent,
   settleClosedTrades,
   settleIntent,
   startReconciling,
@@ -2029,5 +2031,78 @@ describe('rejectIntent from reconciling (#89)', () => {
       { kind: 'release', reservedDelta: -TOKENS_PER_INTENT },
     ]);
     expect(await tokenReservedOf(userId)).toBe(0n);
+  });
+});
+
+describe('the submit deadline of an H1 session intent (#670)', () => {
+  const sessionIntent = async (submitDeadlineAt?: Date) => {
+    const s = await seedUserWithAccount(tmp.db);
+    const session = await seedTradingSession(tmp.db, s.brokerAccountId);
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), {
+      id: session.id,
+      decision: null,
+      submitDeadlineAt,
+    });
+    return { ...s, intent };
+  };
+  const late = (intent: { id: string; version: number }, exec: Tx) =>
+    rejectLateIntent(exec, { id: intent.id, expectedVersion: intent.version });
+
+  it('H1-T1 the session path writes the deadline; without one the column stays NULL', async () => {
+    const deadline = new Date(Date.now() + 60_000);
+    const { intent } = await sessionIntent(deadline);
+    expect(intent.submitDeadlineAt).toEqual(deadline);
+    const { intent: plain } = await sessionIntent();
+    expect(plain.submitDeadlineAt).toBeNull();
+    const route = await seedQueuedIntent(tmp.db);
+    expect(route.intent.submitDeadlineAt).toBeNull();
+  });
+
+  it('H1-T2 takes an intent whose deadline is ahead, and one without a deadline', async () => {
+    const { intent } = await sessionIntent(new Date(Date.now() + 60_000));
+    expect(await take(intent)).toMatchObject({ status: 'submitting' });
+    const { intent: plain } = await sessionIntent();
+    expect(await take(plain)).toMatchObject({ status: 'submitting' });
+  });
+
+  it('H1-T3 refuses an intent past its deadline; rejectLateIntent releases the reserve', async () => {
+    const s = await sessionIntent(new Date(Date.now() - 1_000));
+    expect(await take(s.intent)).toBeUndefined();
+    expect(await tmp.db.transaction((tx) => late(s.intent, tx))).toMatchObject({
+      status: 'rejected',
+      lastError: TradeIntentFailureReason.EntryWindowMissed,
+      tokensReserved: 0n,
+    });
+    expect(await tokenReservedOf(s.userId)).toBe(0n);
+    expect(await ledgerOf(s.intent.id)).toEqual([
+      { kind: 'reserve', reservedDelta: TOKENS_PER_INTENT },
+      { kind: 'release', reservedDelta: -TOKENS_PER_INTENT },
+    ]);
+    expect(await outboxOf(s.intent.id)).toHaveLength(1);
+  });
+
+  it('H1-T4 a deadline equal to now() is late; NULL and a deadline ahead are not', async () => {
+    // one transaction: now() is the same instant for the deadline, the take and the reject
+    const s = await sessionIntent(new Date(Date.now() + 60_000));
+    const result = await tmp.db.transaction(async (tx) => {
+      await tx
+        .update(tradeIntents)
+        .set({ submitDeadlineAt: sql`now()` })
+        .where(eq(tradeIntents.id, s.intent.id));
+      const taken = await takeIntent(tx, {
+        id: s.intent.id,
+        expectedVersion: s.intent.version,
+        maxAgeMs: MAX_AGE_MS,
+      });
+      return { taken, rejected: await late(s.intent, tx) };
+    });
+    expect(result.taken).toBeUndefined();
+    expect(result.rejected).toMatchObject({ lastError: 'entry_window_missed' });
+
+    const ahead = await sessionIntent(new Date(Date.now() + 60_000));
+    expect(await tmp.db.transaction((tx) => late(ahead.intent, tx))).toBeUndefined();
+    const plain = await sessionIntent();
+    expect(await tmp.db.transaction((tx) => late(plain.intent, tx))).toBeUndefined();
+    expect(await findTradeIntent(tmp.db, plain.intent.id)).toMatchObject({ status: 'queued' });
   });
 });

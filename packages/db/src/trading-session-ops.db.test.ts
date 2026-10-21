@@ -847,6 +847,7 @@ describe('readSessionHistory', () => {
       telegramUserId: seed.telegramUserId,
       expired: false,
       waitExpired: false,
+      lossLimitReached: false,
       intents: [
         {
           id: first.id,
@@ -878,6 +879,59 @@ describe('readSessionHistory', () => {
     const fresh = await seedSessionAccount();
     expect((await readSessionHistory(tmp.db, expired.id, LIMITS))!.expired).toBe(true);
     expect((await readSessionHistory(tmp.db, fresh.session.id, LIMITS))!.expired).toBe(false);
+  });
+});
+
+// #670: the loss ceiling of an H1 session, the sizer's rule in SQL
+describe('readSessionHistory: lossLimitReached (#670)', () => {
+  const limit = (maxLoss: string, nextStake: string) => ({
+    ...LIMITS,
+    lossLimit: {
+      maxLoss: decimalStringSchema.parse(maxLoss),
+      nextStake: decimalStringSchema.parse(nextStake),
+    },
+  });
+  const settledSession = async (profits: string[]) => {
+    const seed = await seedSessionAccount({ balance: 20n });
+    for (const [index, profit] of profits.entries()) {
+      const { intent } = await createSessionIntent(tmp.db, intentInput(seed, { step: index + 1 }));
+      await settle(intent, profit);
+    }
+    return seed;
+  };
+  const reached = async (id: string, options: Parameters<typeof readSessionHistory>[2]) =>
+    (await readSessionHistory(tmp.db, id, options))!.lossLimitReached;
+
+  it('H1-H1 is false without a lossLimit, and with nothing settled while maxLoss >= nextStake', async () => {
+    const lost = await settledSession(['-1', '-1', '-1']);
+    expect(await reached(lost.session.id, LIMITS)).toBe(false);
+    const fresh = await seedSessionAccount();
+    await createSessionIntent(tmp.db, intentInput(fresh));
+    expect(await reached(fresh.session.id, limit('1', '1'))).toBe(false);
+  });
+
+  it('H1-H2 sum(profit) - nextStake < -maxLoss: equality is not reached, one unit past it is', async () => {
+    const seed = await settledSession(['-1', '0', '-1', '0.5', '-0.5']);
+    // -2 - 1 = -3: not below -3
+    expect(await reached(seed.session.id, limit('3', '1'))).toBe(false);
+    expect(await reached(seed.session.id, limit('2.99999999', '1'))).toBe(true);
+    // an open intent's stake is not a loss
+    await createSessionIntent(tmp.db, intentInput(seed, { step: 6 }));
+    expect(await reached(seed.session.id, limit('3', '1'))).toBe(false);
+    expect(await reached(seed.session.id, limit('3', '1.00000001'))).toBe(true);
+  });
+
+  it('H1-H3 createSessionIntent writes the submit deadline; without one the column is NULL', async () => {
+    const seed = await seedSessionAccount();
+    const deadline = new Date(Date.now() + 1_500);
+    const { intent } = await createSessionIntent(
+      tmp.db,
+      intentInput(seed, { submitDeadlineAt: deadline }),
+    );
+    expect(intent.submitDeadlineAt).toEqual(deadline);
+    await reject(intent);
+    const { intent: plain } = await createSessionIntent(tmp.db, intentInput(seed, { step: 2 }));
+    expect(plain.submitDeadlineAt).toBeNull();
   });
 });
 
