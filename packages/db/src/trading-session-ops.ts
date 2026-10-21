@@ -350,7 +350,16 @@ export interface SessionHistory {
   // counts from its start, and a bot trade on the account (NULL session) moves nothing. The
   // milliseconds are the worker's candle count times the session's signal candle (#637)
   waitExpired: boolean;
+  // the next stake would take the session's loss past its ceiling (#670, an H1 session's maxLoss):
+  // sum(profit of settled trades) - nextStake < -maxLoss, in numeric (Rule 2) — the sizer's rule
+  // of the martingale ceiling. false without a lossLimit
+  lossLimitReached: boolean;
   intents: SessionHistoryIntent[];
+}
+
+export interface SessionLossLimit {
+  maxLoss: DecimalString;
+  nextStake: DecimalString;
 }
 
 // The session's own intents in creation order: a bot trade on the same account (NULL session) is
@@ -358,7 +367,11 @@ export interface SessionHistory {
 export async function readSessionHistory(
   db: Db,
   sessionId: string,
-  { maxDurationMs, noSignalTimeoutMs }: { maxDurationMs: number; noSignalTimeoutMs: number },
+  {
+    maxDurationMs,
+    noSignalTimeoutMs,
+    lossLimit,
+  }: { maxDurationMs: number; noSignalTimeoutMs: number; lossLimit?: SessionLossLimit },
 ): Promise<SessionHistory | undefined> {
   const [owner] = await db
     .select({
@@ -370,6 +383,14 @@ export async function readSessionHistory(
         (select max(${tradeIntents.updatedAt}) from ${tradeIntents}
           where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
       ) < ${millisecondsAgo(noSignalTimeoutMs)}`,
+      lossLimitReached:
+        lossLimit === undefined
+          ? sql<boolean>`false`
+          : sql<boolean>`(select coalesce(sum(${brokerTrades.profit}) filter (where ${tradeIntents.status} = ${SETTLED}), 0)
+              from ${tradeIntents}
+              left join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+              where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
+            - ${lossLimit.nextStake}::numeric < -(${lossLimit.maxLoss}::numeric)`,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -393,6 +414,7 @@ export async function readSessionHistory(
     telegramUserId: owner.telegramUserId.toString(),
     expired: owner.expired,
     waitExpired: owner.waitExpired,
+    lossLimitReached: owner.lossLimitReached,
     intents,
   };
 }
@@ -484,6 +506,8 @@ export interface CreateSessionIntentInput {
   // the decision the intent is created from, inserted in its transaction (#666); null when the
   // backend answered no record (an old backend, docs/trade-log.md)
   decision: SignalDecisionInput | null;
+  // an H1 session's entry window (#670): takeIntent refuses the intent after it
+  submitDeadlineAt?: Date;
 }
 
 // createTradeIntent's own path: the step key makes a repeat a replay, and the session row is
@@ -505,7 +529,7 @@ export async function createSessionIntent(
       durationSec: input.durationSec,
       clientRequestId: `session:${input.sessionId}:${input.step}`,
     },
-    { id: input.sessionId, decision: input.decision },
+    { id: input.sessionId, decision: input.decision, submitDeadlineAt: input.submitDeadlineAt },
     options,
   );
 }

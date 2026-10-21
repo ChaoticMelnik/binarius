@@ -79,6 +79,9 @@ export class TradingSessionNotActiveError extends Error {
 export interface IntentSession {
   id: string;
   decision: SignalDecisionInput | null;
+  // the last moment the intent may be taken (#670, an H1 session's entry window); absent: none.
+  // The route's request schema has no such field: only a session's path writes the column
+  submitDeadlineAt?: Date;
 }
 
 export interface CreateTradeIntentOptions {
@@ -273,6 +276,7 @@ async function createInTransaction(
       durationSec: input.durationSec,
       clientRequestId: input.clientRequestId,
       tradingSessionId: session?.id ?? null,
+      submitDeadlineAt: session?.submitDeadlineAt ?? null,
       signalDecisionId: decisionId,
       status: TradeIntentStatus.Planned,
       tokensReserved: tokens,
@@ -483,9 +487,10 @@ export interface TakeIntentOptions {
   maxAgeMs: number;
 }
 
-// queued → submitting, refused for an intent older than maxAgeMs (database clock) and while the
-// global trading switch is closed (#144): the fence sits before submitting, so a paused intent
-// is rejected plainly and never becomes unknown (Rule 15)
+// queued → submitting, refused for an intent older than maxAgeMs (database clock), for one past
+// its submit_deadline_at (#670, database clock) and while the global trading switch is closed
+// (#144): the fence sits before submitting, so a paused or late intent is rejected plainly and
+// never becomes unknown (Rule 15)
 export function takeIntent(
   exec: DbExecutor,
   { id, expectedVersion, maxAgeMs }: TakeIntentOptions,
@@ -496,7 +501,11 @@ export function takeIntent(
     to: TradeIntentStatus.Submitting,
     expectedVersion,
     patch: { submittedAt: sql`now()` },
-    where: and(sql`${tradeIntents.createdAt} >= ${millisecondsAgo(maxAgeMs)}`, tradingOpenSql),
+    where: and(
+      sql`${tradeIntents.createdAt} >= ${millisecondsAgo(maxAgeMs)}`,
+      sql`(${tradeIntents.submitDeadlineAt} is null or ${tradeIntents.submitDeadlineAt} > now())`,
+      tradingOpenSql,
+    ),
   });
 }
 
@@ -578,6 +587,27 @@ export function rejectExpiredIntent(
     expectedVersion,
     reason: TradeIntentFailureReason.Expired,
     where: sql`${tradeIntents.createdAt} < ${millisecondsAgo(maxAgeMs)}`,
+  });
+}
+
+export interface RejectLateOptions {
+  id: string;
+  expectedVersion: number;
+}
+
+// After takeIntent refused an unexpired intent (#670): its entry window closed on the database
+// clock. `<=` is the take's `>` turned over, so the two split the axis exactly; a NULL deadline
+// never matches, and the switch's refusal goes on to rejectPausedIntent.
+export function rejectLateIntent(
+  tx: Tx,
+  { id, expectedVersion }: RejectLateOptions,
+): Promise<TradeIntentRow | undefined> {
+  return rejectIntent(tx, {
+    id,
+    from: TradeIntentStatus.Queued,
+    expectedVersion,
+    reason: TradeIntentFailureReason.EntryWindowMissed,
+    where: sql`${tradeIntents.submitDeadlineAt} <= now()`,
   });
 }
 

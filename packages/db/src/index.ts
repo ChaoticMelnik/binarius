@@ -34,3 +34,4 @@ export * from './admin-ledger-ops';
 export * from './admin-audit-ops';
 export * from './admin-bot-text-ops';
 export * from './service-account-ops';
+export * from './h1-ops';
