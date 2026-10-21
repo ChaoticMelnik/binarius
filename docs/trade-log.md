@@ -1,4 +1,4 @@
-# Trade log (#666)
+# Trade log (#666, #668)
 
 Every decision a trading session acted on is a row of `signal_decisions`, written by the process
 that acted, with its outcome: the journal entry the decision was computed from, the clocks of the
@@ -8,8 +8,9 @@ created from. A redeploy loses nothing of it: the log's `signal decision` lines 
 entry in the database. `trade-log export` reads it back as JSON lines or as the stand's trades
 file.
 
-This is part 1. Part 2 (#668) adds the ticks around each trade, their buffer and the retention
-sweep; the export's `ticks` is `null` until then.
+Part 2 (#668) adds the ticks around each intent decision and around a 1-in-20 sample of the
+shadow rows ([The ticks around a decision](#the-ticks-around-a-decision)), and the retention of
+decisions without a trade ([Retention](#retention)).
 
 | Piece | Where |
 |---|---|
@@ -17,7 +18,10 @@ sweep; the export's `ticks` is `null` until then.
 | The writer | `recordSignalDecision(exec, input)`, `signalDecisionInput(record, facts)` in `packages/db/src/signal-decision-ops.ts` |
 | The reads | `readTradeLogPage`, `readSessionTradeSteps`, `journalEntryOf`, `readTradeLogEnd` (same file) |
 | The constants and the line shapes | `packages/shared/src/trade-log.ts`; the entry and the record in `packages/shared/src/signal.ts` |
-| The last tick | `createTickStore` in `apps/backend/src/market-data/ticks.ts` |
+| The last tick and the tick window | `createTickStore` in `apps/backend/src/market-data/ticks.ts` |
+| The ticks table | `packages/db/src/schema/decision-ticks.ts`, migration `0071_decision_ticks` |
+| The keeper's reads and writes | `listDecisionTicksCandidates`, `insertDecisionTicks`, `sweepSignalDecisions` in `packages/db/src/decision-ticks-ops.ts` |
+| The keeper | `createTradeLogKeeper` in `apps/backend/src/trade-log/keeper.ts` |
 | The export | `apps/backend/src/cli/trade-log.ts` |
 
 ## The table
@@ -41,11 +45,13 @@ sweep; the export's `ticks` is `null` until then.
 | `last_tick` | `{ price, timestamp, receivedAtMs }`, the pair's newest data-socket tick when `POST /trading/signal` answered; NULL without the socket or before the pair's first tick | `timestamp` the broker's, `receivedAtMs` the backend's |
 | `outcome`, `detail` | what the writer did with the decision (below); `detail` the code of a refusal or of the sizer's stop, CHECK by `SIGNAL_DECISION_DETAIL_PATTERN`, present exactly for `refused` and `stake_stop` (`signal_decisions_detail_pair_check`) | |
 | `result` | a shadow row's outcome by the broker's prices, `{ entries: [{ entryDelaySec, entryPrice, exitPrice, outcome }] }` (#669, [h1.md](h1.md#the-row)); NULL on the rows of sessions (jsonb object) | |
-| `ticks_until_ms` | the last broker second a row's prices rest on: a shadow row's `decided_at_ms + 7 000` (#669), the end of #668's tick window; NULL on the rows of sessions. `signal_decisions_ticks_until_check` (`> decided_at_ms`), `signal_decisions_ticks_until_pair_check` (required for `shadow`), migration 0070 | broker |
+| `ticks_until_ms` | the last broker second a row's prices rest on: a shadow row's `decided_at_ms + 7 000` (#669), the end of its tick window ([The ticks around a decision](#the-ticks-around-a-decision)); NULL on the rows of sessions. `signal_decisions_ticks_until_check` (`> decided_at_ms`), `signal_decisions_ticks_until_pair_check` (required for `shadow`), migration 0070 | broker |
 
 `signal_decisions_outcome_kind_check`: a `no_signal` decision has outcome `no_signal`, and only it.
 Indexes: `signal_decisions_recorded_idx (recorded_at, id)` (the export's range and order),
-`signal_decisions_session_idx (trading_session_id, recorded_at)`. Every CHECK is exercised on the
+`signal_decisions_session_idx (trading_session_id, recorded_at)`,
+`signal_decisions_shadow_recorded_idx (recorded_at) where context = 'shadow'` (the retention
+sweep's shadow band, #668). Every CHECK is exercised on the
 rows its writers build and on the NULL and boundary rows next to them (`schema.db.test.ts` →
 signal_decisions).
 
@@ -59,7 +65,8 @@ one-off bot intents (`POST /trading/intents`, not recorded), on every intent bef
 backfill), on a session intent created while the backend answered no usable record, and on one
 whose decision row the database refused (E14′). The column is not in the intent's wire view.
 
-No row is ever updated. The table is not a ledger and has no TRUNCATE guard.
+No row is ever updated. The table is not a ledger and has no TRUNCATE guard; its only DELETE is the
+retention sweep ([Retention](#retention)).
 
 ## The writers and their outcomes
 
@@ -164,13 +171,122 @@ replays to the recorded decision (`trade-log.db.test.ts` X3 for a signal, X9 for
 `createTickStore` keeps one tick per pair: the active data socket's `price.update`, pushed by the
 market data manager next to the ring, with the backend's receipt time. A tick the ring would refuse
 (`tickProblem`: invalid, or a minute and more from its receipt) is dropped, and one older than the
-pair's newest does not replace it (`ticks.test.ts` T1–T4, `manager.test.ts` M28). It exists only
+pair's newest does not replace it (`ticks.test.ts` T1–T4, `manager.test.ts` M28). The same store
+keeps a window of ticks per pair for the keeper ([The ticks around a decision](#the-ticks-around-a-decision)); `last` is unchanged by it. It exists only
 with `BROKER_WS_URL`. The tick is read when the route answers, not at the cache's `nowMs`: for a
 cached decision the two can be up to one candle apart, and both clocks are stored (risk 4).
 
 The tick is kept until a newer one; it is not cleared on a socket drop, a failover or a quiet pair.
 `last_tick`'s age at the decision is `taken_at_ms - last_tick.receivedAtMs` (the backend's and the
 worker's clocks, one host on the pilot, risk 6). A reader of `TickStore.last` bounds the age itself.
+
+## The ticks around a decision
+
+One `decision_ticks` row per captured decision: the pair's data-socket ticks over
+`[decided_at_ms − TRADE_TICKS_BEFORE_MS, until]` by the broker's tick time, written once by the
+backend's trade log keeper when the window has closed, never updated (Rule 45).
+
+| Column | Meaning |
+|---|---|
+| `decision_id` | PK and FK → `signal_decisions.id` (restrict): one row per decision |
+| `from_ms`, `until_ms` | the window, `from_ms > 0`, `until_ms >= from_ms` (`decision_ticks_from_ms_check`, `decision_ticks_window_check`) |
+| `status` | `complete`, `truncated`, `unavailable` (`DecisionTicksStatus`, `decision_ticks_status_check`) |
+| `detail` | why a window is not `complete`: `uncovered`, `hole`, `max_wait`, `quiet` (`DecisionTicksDetail`); present exactly when the status is not `complete` (`decision_ticks_detail_pair_check`) |
+| `count` | the ticks in the row, `>= 0`; `0` exactly for `unavailable` (`decision_ticks_count_pair_check`) |
+| `ticks` | a jsonb array of `count` tuples `[timestamp, receivedAtMs, price]`, ascending by broker time then receipt (`decision_ticks_ticks_check`) |
+| `captured_at` | the insert, database clock |
+
+**The candidates.** A keeper tick (every `TRADE_TICKS_SCAN_MS`) reads the decisions recorded within
+`TRADE_TICKS_HORIZON_MS` (the database clock) that have no row: every `outcome = 'intent'` row, and
+the `shadow` rows whose uuid is in the sample — the first four hex digits modulo
+`TRADE_TICKS_SHADOW_SAMPLE` (20) are 0, `shadowTicksSampled` in JS and the same expression in the
+SQL (`decision-ticks-ops.db.test.ts` K13). No other outcome gets ticks (owner, #668 В1).
+
+**The window's end**, one source per decision kind:
+
+| Decision | `until` | Clock |
+|---|---|---|
+| `shadow` | `ticks_until_ms` (`f + 7 000`, #669) | broker |
+| `intent`, the broker trade closed | `close_timestamp_ms + TRADE_TICKS_AFTER_CLOSE_MS` | broker |
+| `intent`, the intent `rejected` (or `settled` without a close) | its `updated_at + TRADE_TICKS_AFTER_CLOSE_MS` | database (Rule 28) |
+| `intent` not closed by `decided_at_ms + TRADE_TICKS_MAX_WAIT_MS`, or ending after it | `decided_at_ms + TRADE_TICKS_MAX_WAIT_MS`, detail `max_wait` | backend |
+
+A window is closed by the ring's rule: the pair's watermark ≥ `until`, or the keeper's clock ≥
+`until + MARKET_DATA_SKEW_MARGIN_MS`. The keeper then asks the store for the window and writes the
+row. Zero ticks make `unavailable`; otherwise `truncated` when the coverage is not whole or the
+window was cut by the max wait, else `complete`. The detail is the first that applies:
+`uncovered` > `hole` > `max_wait` > `quiet` (`quiet`: no ticks under whole coverage — a quiet
+pair, or a pair the manager never pushed).
+
+**The tick window** (`createTickStore`). Per pair, the ticks of the active data socket over the last
+`TRADE_TICKS_BUFFER_MS` behind the pair's watermark, at most `TRADE_TICKS_MAX_PER_PAIR`. What it
+knows of its own gaps decides the coverage:
+- **uncovered** — the window starts before the store's first tick (the process started inside it),
+  or below the pair's pruning floor (`watermark − buffer`, raised past a tick the cap pushed out);
+- **hole** — the manager's `onDrop` (next to `ring.onDrop()`, both sites) opens a hole per pair
+  from its watermark to its next tick past it, as in the ring; a window overlapping a hole, or
+  reaching a mark no tick has closed yet, reads `hole`. The hole ends at that tick's own broker
+  time, even when the tick is ahead of its receipt (conservative: `truncated`, never a false
+  `complete`).
+- **A tick stamped in the future** (up to `TICK_MAX_SKEW_MS` past its receipt) is kept with its own
+  time and returned in its own window, but moves the pair's watermark only to its receipt +
+  `TRADE_TICKS_AHEAD_MS` (500 ms), so it neither closes windows early nor prunes the buffer early;
+  counted `ahead`. The store's first-tick mark takes the same clamped value, so one such tick does
+  not make every window of the next minute `uncovered` (owner, #668 clarify).
+
+The `market data` line carries `buffer: { pairs, held, ahead, dropped, holes }` (the last three
+per period).
+
+**How an attempt ends** (a candidate is a row of the query above):
+
+| # | Candidate | Ending | What takes it out of the list |
+|---|---|---|---|
+| T1 | `shadow`, sampled | the row when `ticks_until_ms` closes | the row |
+| T2 | `shadow`, unsampled | never a candidate | the predicate |
+| T3 | `intent`, trade closed | the row when `close + 5 s` closes | the row |
+| T4 | `intent`, intent `rejected` (or `settled` without a close) | the row when `updated_at + 5 s` closes | the row |
+| T6 | `intent` in flight, trade open, or no intent row, before the max wait | nothing | bounded by T7 |
+| T7 | as T6 at `decided + max wait`, or a trade ending after it | the row, `truncated`/`max_wait` (or `unavailable`) | the row |
+| T8 | due but not closed yet | nothing | closes within `skew` of its end |
+| T9 | the INSERT throws | `warn` `trade log ticks insert failed` (`errorLogFields`, `rows`); the chunk's candidates stay | the next tick; the horizon at the latest |
+| T10 | the candidates query throws | `error` `trade log ticks tick failed` | the next tick |
+| T11 | `stop()` between INSERT chunks | the rest is not written | the next start re-scans the horizon |
+| T12 | recorded before the horizon (a restart longer than it, or no row in time) | never selected | the export prints `ticks: null` |
+| T13 | another backend (a deploy overlap) wrote the row first | `on conflict do nothing` | the row |
+| — | a window that fails its own bounds (`until <= from`, not finite — a writer's defect) | `warn` `trade log ticks invalid window` once per decision per process, counted `invalidWindow` | the horizon |
+
+The line `trade log ticks` (`info`, only when a row was written or a window refused):
+`{ scanned, captured: { complete, truncated, unavailable }, waiting, invalidWindow }`.
+
+**Restart.** Nothing written is touched. Windows in flight lose the ticks before the new process's
+first tick (`truncated`/`uncovered`, or `unavailable`/`uncovered`); a decision recorded more than
+the horizon before the start stays without a row. Without `BROKER_WS_URL` there is no store and no
+capture (`trade log keeper { capture: false }`); the sweep still runs.
+
+## Retention
+
+Decisions no intent names are deleted by age, with their `decision_ticks` row; a decision a
+`trade_intents.signal_decision_id` names is kept forever (owner, #668 В2, В3):
+
+| Rows | Kept |
+|---|---|
+| `context = 'shadow'` | `SIGNAL_DECISION_SHADOW_RETENTION_DAYS` (7) |
+| every other row without an intent (`no_signal`, `paused`, `refused`, `started`, `session_start`, …) | `SIGNAL_DECISION_RETENTION_DAYS` (30) |
+| a row an intent names | forever |
+
+The age is `recorded_at` against the database's `now()`, never the process clock. The keeper's
+sweep runs every `SIGNAL_DECISION_SWEEP_MS` (first one an hour after the start): one statement per
+batch of `SIGNAL_DECISION_SWEEP_BATCH` victims, oldest first, deleting their ticks rows and then
+the decisions, repeated while a batch is full, at most `SIGNAL_DECISION_SWEEP_MAX_BATCHES` a tick
+and never after `stop()`. `info` `trade log sweep { decisions, ticks, batches }` when it deleted
+anything; a throw is `error` `trade log sweep failed`, retried next hour. The shadow band is served
+by `signal_decisions_shadow_recorded_idx`, the 30-day band by `signal_decisions_recorded_idx`, the
+kept-forever test by `trade_intents_decision_key`. The sweep locks only `decision_ticks` and
+`signal_decisions` rows (outside Rule 5's chain). A first run on a long-lived database deletes at
+most the batch cap an hour and continues the next hour.
+
+A report over shadow rows (#681's `h1 shadow report`) sees only what the sweep kept: a period longer
+than 7 days holds only the last 7 days of shadow rows.
 
 ## The record's columns
 
@@ -223,7 +339,7 @@ the database's text so microseconds survive. The data goes to stdout, the count 
 | `signal` | the journal entry (`journalEntryOf`); the stand's `parseJournalLine` reads it from this key, as from a log line. A shadow row's entry is `h1ShadowEntrySchema`'s, which `replayH1Entry` decides again ([h1.md](h1.md#replay-and-reading)) |
 | `session` | `id`, `userId`, `brokerAccountId`, `mode`, `strategy`, `baseStake`, `durationSec` (from the row's settings; NULL when they do not parse), `stopReason`; `null` for a start without a session |
 | `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout`, `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent. A trade on a later page keeps its session's numbering (X8) |
-| `ticks` | `null` (#668) |
+| `ticks` | the decision's `decision_ticks` row (`tradeLogTicksSchema`): `status`, `detail`, `fromMs`, `untilMs`, `count`, `rows` (the stored `[timestamp, receivedAtMs, price]` tuples, `[]` for none); `null` without a row — not a candidate, not captured yet, or past the horizon |
 
 The chain of a trade is `decision.decidedAtMs → decision.takenAtMs → trade.createdAtMs →
 trade.submittedAtMs → trade.broker.openTimestampMs`, printed raw in ms: the backend's, the worker's,
@@ -235,7 +351,8 @@ stand's `calibrate --trades` shape (`tradeLogTradeJsonSchema`): `trading_session
 `close_timestamp_ms`, `close_price`, `profit` (the #381 export's ten), plus `submitted_at_ms`,
 `payout`, `intent_id`, `decision_id`, `mode`, `amount`. A decision without an intent, an intent
 without a broker trade (a `rejected` one) and an open broker trade are left out; they are in the
-JSONL (`trade-log.db.test.ts` X3 for every field of the line, X4 for every field of the row).
+JSONL (`trade-log.db.test.ts` X3 for every field of the line, X4 for every field of the row). The
+ticks are in the JSONL only; `trades-json` is the same with or without them (X14).
 
 **Identifiers.** Internal uuids only. The read names its columns (Rule 9): no
 `users.telegram_user_id`, no `broker_accounts.broker_user_id`, no token column, no
@@ -258,14 +375,21 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
 
 - `packages/shared`: `signal.test.ts` S-rec1–S-rec4 (the request flag, the record, the stored
   union, the record narrowed to its columns), `trade-log.test.ts` (the patterns; every refusal
-  code fits `detail`), `contract-coverage.test.ts` (the answer's keys).
+  code fits `detail`; TL1 the shadow sample, TL2 the export's `ticks` shape),
+  `contract-coverage.test.ts` (the answer's keys).
 - `packages/signal`: `journal.test.ts` J8 (the shared schema is the module's type, both ways).
 - `packages/db`: `schema.db.test.ts` → signal_decisions (every CHECK, both FKs, the unique keys,
   `trade_intents_decision_session_check`); `signal-decision-ops.db.test.ts` SD1–SD14 (SD14: the
   payout guard); `trading-session-ops.db.test.ts` D7–D11 (the intent's transaction, the
-  savepoint).
-- `apps/backend`: `ticks.test.ts` T1–T4, `manager.test.ts` M28, `signal-routes.test.ts` R19–R21,
-  `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X10.
+  savepoint); `schema.db.test.ts` → decision_ticks (#668: every CHECK, the PK, the restrict FK,
+  the partial index); `decision-ticks-ops.db.test.ts` K1–K13 (the candidates, the insert, the
+  sweep on the database clock, the sample in SQL); `signal-decision-ops.db.test.ts` SD18 (the
+  export's ticks).
+- `apps/backend`: `ticks.test.ts` T1–T4 and the window T5–T15, `manager.test.ts` M28, M32 and M32b (the
+  holes at both `onDrop` sites, the `buffer` line), `signal-routes.test.ts` R19–R21,
+  `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X14,
+  `trade-log/keeper.test.ts` C1–C15 (one case per ending, the sweep loop),
+  `trade-log/keeper.db.test.ts` D1–D4, `timing.test.ts` (the #668 chain).
 - `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
   `orchestrator.db.test.ts` O1–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
 - `packages/signal-stand`: `journal-line.test.ts` JL and `calibrate.test.ts` unchanged; C12 (an
@@ -284,11 +408,13 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
    gap in the steps.
 3. **A new worker against an old backend records nothing** (a `warn` per attempt); deploy the
    backend first.
-4. **`last_tick` is the newest tick at the route's answer**, not at the cache's `nowMs`; #668's
-   window gives the tick at any instant.
-5. **Volume until #668:** about 4 KB per decision (the series is at most the decision's 60-row
-   window), one decision per candle while a session waits: about 30 MB a day at ten session-hours
-   on 5 s candles. No sweep in part 1.
+4. **`last_tick` is the newest tick at the route's answer**, not at the cache's `nowMs`; the
+   decision's `decision_ticks` row (intent decisions) gives the tick at any instant of its window.
+5. **Volume:** about 4 KB per decision (the series is at most the decision's 60-row window), one
+   decision per candle while a session waits: about 30 MB a day at ten session-hours on 5 s
+   candles, kept 30 days without a trade, forever with one. An `intent` window is about 340 ticks,
+   about 11 KB of jsonb before TOAST compression, kept with its trade; the shadow sample is about
+   3 500 rows a day, kept 7 days.
 6. **The clocks are three processes' and the broker's**; on the pilot the three share one host.
    Printed raw, never aligned.
 7. **`version` and `detail` are pattern-checked, not listed**; a wrong version shows at replay
@@ -298,12 +424,31 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
 9. **Export memory:** a page of 200 rows; `trades-json` holds its whole array (about 300 bytes a
    trade).
 10. **No audit row for an export**: an operator's CLI on the server, like `kill-switch status`.
+11. **Three clocks in one ticks window**: `from` is the backend's `decided_at_ms − 60 s`, the ticks'
+    `timestamp` the broker's, `until` the broker's (a close), the database's (`updated_at`) or the
+    backend's (the max wait); printed raw. Falsifiable: a trade's `open_timestamp_ms` lies inside its
+    window's ticks (D1).
+12. **A trade longer than about 165 s is cut** (`truncated`/`max_wait`): sessions trade 5 and 15 s.
+13. **A restart loses the ticks of windows in flight** (`uncovered`), and one longer than the
+    horizon leaves those decisions without a row; visible in `status` and `ticks: null`.
+14. **No socket, no ticks**: without `BROKER_WS_URL` no decision gets a row.
+15. **The sample is uniform over the uuid**, not stratified by pair or hour (≈ 1 in 20 ± binomial
+    noise).
+16. **One capture per decision**: a tick arriving after the capture (the clock rule closed the
+    window first, or a watermark moved by a tick up to 500 ms ahead of its receipt) is not in the
+    row.
+17. **The statuses rest on the store's own knowledge of its gaps**: a drop the manager does not
+    report (`onDrop` not called) reads `complete`; the sites are the two `ring.onDrop()` calls
+    (M32 covers the failover's, M32b the active leaving `ready`). A pair whose first tick of the process
+    comes after a drop has no hole mark for that drop.
+18. **Memory**: about 5 MB at the measured stream (556 ticks/s on 144 pairs, 240 s), 35 MB at the
+    cap on every pair; not measured on the pilot.
 
 ## Boundaries
 
-- #668: the ticks around each trade (`decision_ticks`, from `decision − 60 s` to `close + 5 s`), the
-  tick store's window, the retention sweep (rows without an intent after 30 days), the export's
-  `ticks`.
+- Out of #668: a continuous table of every tick (rejected, #666); ticks for decisions other than
+  `intent` and the sampled `shadow` rows; a report or dashboard; the worker (it neither reads nor
+  writes `decision_ticks`).
 - #669: the H1 shadow's rows (`context: shadow`, `version: h1`, `result`, `ticks_until_ms`),
   [h1.md](h1.md). #670's creators of session intents must pass `decision` to
   `createSessionIntent` (the type requires it).
