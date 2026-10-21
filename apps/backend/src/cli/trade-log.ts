@@ -126,7 +126,7 @@ export function toTradeLogLine(
   row: TradeLogRow,
   steps: ReadonlyMap<string, SessionTradeStep>,
 ): TradeLogLine {
-  const { decision, session, intent } = row;
+  const { decision, session, intent, ticks } = row;
   const settings = session === null ? undefined : safeParseTradingSessionSettings(session.settings);
   const stake = settings?.success === true ? sessionStakeParams(settings.data) : undefined;
   const step = intent === null ? undefined : steps.get(intent.id);
@@ -191,7 +191,17 @@ export function toTradeLogLine(
                     profit: intent.broker.profit,
                   },
           },
-    ticks: null,
+    ticks:
+      ticks === null
+        ? null
+        : {
+            status: ticks.status,
+            detail: ticks.detail,
+            fromMs: ticks.fromMs,
+            untilMs: ticks.untilMs,
+            count: ticks.count,
+            rows: ticks.ticks,
+          },
   };
 }
 
