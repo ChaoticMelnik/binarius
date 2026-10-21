@@ -211,6 +211,36 @@ export const H1_SHADOW_LOG_MS = 60_000;
 // seconds of closes kept per pair: the longest window, the latest exit and a margin
 export const H1_SERIES_CAPACITY_SEC = 320;
 
+// --- The ticks around a decision and the trade log's retention (#668, docs/trade-log.md) ----------
+// the window's start before decided_at_ms (owner, #668 В4)
+export const TRADE_TICKS_BEFORE_MS = 60_000;
+// the window's end after the broker trade's close, or after a rejected intent's updated_at
+export const TRADE_TICKS_AFTER_CLOSE_MS = 5_000;
+// from decided_at_ms: a decision whose trade has not closed by then is captured `truncated`
+export const TRADE_TICKS_MAX_WAIT_MS = 170_000;
+// the capture tick
+export const TRADE_TICKS_SCAN_MS = 5_000;
+// the ticks kept per pair behind its watermark
+export const TRADE_TICKS_BUFFER_MS = 240_000;
+// candidates by recorded_at (the database clock)
+export const TRADE_TICKS_HORIZON_MS = TRADE_TICKS_BUFFER_MS;
+// ticks kept per pair at most: about 40 ticks/s for the whole buffer, ten times the mean;
+// 144 pairs x 10 000 ticks x 24 B is 35 MB at the worst
+export const TRADE_TICKS_MAX_PER_PAIR = 10_000;
+// how far past its receipt a tick may move its pair's watermark: it caps a watermark, while
+// H1_SECOND_CLOSE_MARGIN_MS (the same value) decides the series' drop and clock close
+export const TRADE_TICKS_AHEAD_MS = 500;
+// candidates read a tick; rows an INSERT
+export const TRADE_TICKS_SCAN_LIMIT = 500;
+export const TRADE_TICKS_INSERT_CHUNK = 50;
+// decisions without a trade (owner, #668 В2): shadow rows a week, the rest a month
+export const SIGNAL_DECISION_RETENTION_DAYS = 30;
+export const SIGNAL_DECISION_SHADOW_RETENTION_DAYS = 7;
+export const SIGNAL_DECISION_SWEEP_MS = 3_600_000;
+// rows a DELETE statement, statements a sweep tick
+export const SIGNAL_DECISION_SWEEP_BATCH = 500;
+export const SIGNAL_DECISION_SWEEP_MAX_BATCHES = 20;
+
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
 // logins would be a way to spend the process's memory, so the concurrency is capped and the
@@ -486,7 +516,26 @@ const TIMING_CHAIN_HOLDS =
   H1_SECOND_CLOSE_MARGIN_MS < MARKET_DATA_SKEW_MARGIN_MS &&
   H1_SECOND_CLOSE_MARGIN_MS < TICK_MAX_SKEW_MS &&
   H1_SERIES_CAPACITY_SEC >= H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1 &&
-  H1_SHADOW_TICK_MS <= H1_SHADOW_LOG_MS;
+  H1_SHADOW_TICK_MS <= H1_SHADOW_LOG_MS &&
+  // the ticks around a decision (#668): at the latest capture (decided + max wait, closed by the
+  // clock rule, seen a scan later) the pair's watermark, at most the receipt clock + the clamp, has
+  // not pruned the window's start; a watermark close precedes the clock close by at most the
+  // clamp; a capture tick ends inside phase 1 (stop() waits for one statement) and the horizon spans
+  // many of them; a row is never swept inside its capture horizon, and the sweep runs many times in
+  // the shortest retention
+  TRADE_TICKS_BEFORE_MS +
+    TRADE_TICKS_MAX_WAIT_MS +
+    MARKET_DATA_SKEW_MARGIN_MS +
+    TRADE_TICKS_SCAN_MS +
+    TRADE_TICKS_AHEAD_MS <=
+    TRADE_TICKS_BUFFER_MS &&
+  TRADE_TICKS_AHEAD_MS < MARKET_DATA_SKEW_MARGIN_MS &&
+  TRADE_TICKS_AFTER_CLOSE_MS < TRADE_TICKS_MAX_WAIT_MS &&
+  TRADE_TICKS_SCAN_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  TRADE_TICKS_SCAN_MS < TRADE_TICKS_HORIZON_MS &&
+  SIGNAL_DECISION_SHADOW_RETENTION_DAYS <= SIGNAL_DECISION_RETENTION_DAYS &&
+  TRADE_TICKS_HORIZON_MS < SIGNAL_DECISION_SWEEP_MS &&
+  SIGNAL_DECISION_SWEEP_MS < SIGNAL_DECISION_SHADOW_RETENTION_DAYS * 86_400_000;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }
