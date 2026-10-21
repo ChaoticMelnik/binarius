@@ -3815,3 +3815,80 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. The usage-limit match reads the job's summary or its `progressPreview` lines — **внедрено в #695: `.claude/skills/tech-lead/SKILL.md` → Whole-feature pass — check, Phase 0 item 1; `.claude/skills/reviewer/SKILL.md` → Step 6-pre item 4**
 2. Remaining findings — **вынесено в #694**
+
+---
+
+## #685 — Бот: убрать выбор длительности — везде 5 с, сразу выбор пары (2026-10-21)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Day `/manager` session 2026-10-21 12:45–19:52 MSK (report artifact FaR3hJ52wu1QzFmzYL2rXe); taken 12:47 MSK. No Codex in Phase 0 (manager rule 2026-10-15); no stand, no external content. #685 is the base of the stack #701 → #702 → #703. |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all answered by the manager with the recommended option (6313365044). Plan 6313522495, ≈1 300 lines with a fallback split line; domain coverage — every consumer of `SIGNAL_SCAN_INTERVALS` / `DEMO_DURATIONS_SEC` and every legacy callback-data shape. |
+| Implementer | first pass | Opus. 2 clarify questions, recommended (6313564670: `legacy duration button` info line; E2E S4 ramp tuned at `candleMs = 5 000`). PR #701, 2 commits (code e7bc8de6, docs 76ab9db9), +1 491 / −1 520, CI green, `pnpm check` 0 at the head, every commit checked, mutations 18/18 in one call (`head=76ab9db9`). |
+| Reviewer | round 1 | Clean, 3 Minor; 3b/3c/3d all run (wire schema of `GET /trading/signals` and write buttons changed). «Codex не запускался: PR сессии менеджера, решение владельца 2026-10-15». Merged `--rebase` 2026-10-21T16:53:15Z on the owner's yes, after #702 was retargeted to `main` (16:53:01Z); branch deleted after the merge (16:53:53Z); #685 Done; Minors → #704. No migration. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`, implementer/reviewer/3b/3c `claude-opus-5-5`, 3d `claude-sonnet-5-5`). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1–m3 (owner step misses `demoSignalsEmpty`/`demoDurationUnsupported` overrides, stale comments, leftovers of the narrowing) | Minor | other | left at the merge | → #704 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #704**
+
+---
+
+## #664 — Сигналы 5/15 с: вместо «сигналов нет» — анализ с обновлением сообщения; пропавший сигнал пары — ожидание и альтернативы (2026-10-21)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #685 (same session); taken 14:27 MSK, stacked on `feat/685-duration-5s-only` (PR #701). |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended (6315308875). Plan 6315547246 against #685's branch (`76ab9db9`), ≈2 500 lines with a fallback split line; domain «no signal» — `demo:l`, the start's 409, the analysis, the empty list. |
+| Implementer | first pass | Opus. 2 clarify questions, recommended (6315588949). PR #702 on `feat/685-duration-5s-only` («Merge after #701»), +2 719, `pnpm check` 0 at `ee37c24b`, every commit checked, mutations 18/18 (surviving M17 resolved by removing an unreachable filter). |
+| Reviewer | round 1 | Major M-1 (`tick()` without `.catch`: a throwing screen render is an unhandled rejection and kills the bot; one throwing entry also stalls every later one and rejects `stop()`), 4 Minor; 3c + 3d, 3b skipped with reason. Codex skip line. → Todo. |
+| Architect | round-1 Plan Update | Opus. Clarify «новых развилок нет» (6317506917); Plan Update 6317553768; addendum 6317687508 on the implementer's plan defect (docs promised «one `warn`» for a no-signal answer the code does not log). m-1b, m-1c — accepted risks. |
+| Implementer | round-1 fix | Opus, fresh spawn. M-1 fixed as a class (`.catch` on the tick, per-entry try/catch, stop screens inside the per-entry try; class grep of `setTimeout`/`setInterval` in `apps/bot`, `packages/shared`), m-1a, m-2–m-4 fixed. Head 17c57c2f, mutations 26/26, CI green. |
+| Reviewer | round 2 | Clean, 0 findings (whole-feature diff). Codex skip line. |
+| Tech Lead | merge | Rebase-only spawn onto `main` after #701 (range-diff all 5 `=`, per-commit check on all 5, `pnpm check` 0, mutations 26/26 at `6e518839`). #703 retargeted to `main` first (17:08:32Z); merged `--rebase` 2026-10-21T17:08:52Z on the owner's yes, branch deleted 17:09:10Z; #664 Done; no Minor left (2 accepted risks). No migration. |
+| Tech Lead | models | Every spawn on its policy model (Fable first plan, Opus Plan Update/implementers/reviewers/rebase, Sonnet `/simplify`). |
+
+### Review iterations: 2
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| M-1: new background tick loop without a rejection guard; the module's other background paths had one | Major | instance-vs-class | the plan specified the loop without the error contract the other bot loops follow | Architect / Implementer — fixed in round 1 |
+| Plan Update docs row promised «one `warn`» for a no-signal analysis answer; the code logs only on `fetch_failed`/throw | — (caught before code) | unverified-claim | the Plan Update's docs text was not read against `resolve` | Architect (caught by implementer) |
+| m-1a, m-2–m-4 | Minor | other | fixed in round 1 | — |
+| m-1b, m-1c | — | other | accepted risks of the Plan Update | — |
+
+---
+
+## #537 — Итог сессии одним сообщением: картинка-итог с полным текстом итога в подписи, без отдельного текстового сообщения (2026-10-21)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #685 (same session); taken 17:05 MSK, stacked on `feat/664-signal-wait-analysis` (PR #702). |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended (6318491626: the bot sends the summary, backend is the text fallback, migration with a partial index + backfill of `summary_sent_at`). Plan 6318696496 against #664's branch (`17c57c2f`), fallback split line, owner step on the deploy order. |
+| Implementer | first pass | Opus. 2 clarify questions, recommended (6318750564). Stopped on the Opus weekly limit (~18:33 MSK, `<synthetic>` in the transcript) with commit `7eb43c24` local and unchecked; the owner reported the reset and said continue (the manager skill's «an Opus limit ends the session» overridden by the owner) — the same agent resumed via `SendMessage`, whose text said «First push the branch now, then … the per-commit check of `7eb43c24`». `7eb43c24` was pushed red (fails `typecheck`), fixed by `f0fd2f88`. PR #703 on `feat/664-signal-wait-analysis`, +6 852 (+1 892 without the generated snapshot), migration 0072 on its own DB `binarius_impl_537`, `pnpm check` 0 at `62772501`, mutations 13/13 in one call at `head=62772501` (earlier calls at `bfbcb182` while the list was being edited, not published). |
+| Reviewer | round 1 | Clean, 4 Minor (m4 = the red commit); 3b/3c/3d all run (`/summary` route, migration, notice path). Migration 0072 checked forward-only. Codex skip line. Manager decision (6321484836): squash instead of the standing rebase, because of the red commit. |
+| Tech Lead | merge | Rebase-only spawn onto `main` after #702 (trees identical to `62772501`, mutations 13/13 at `160d8cdb`). Merged **squash** (85e775a9) 2026-10-21T17:23:20Z on the owner's yes, branch deleted; #537 Done; shared test DB migrated to 0072 (73/73, hashes match); worktrees impl-685/664/537 and DB `binarius_impl_537` removed; Minors → #705. |
+| Tech Lead | models | Every spawn on its policy model; implementer's `<synthetic>` row = the Opus limit stop, not a model. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Red commit `7eb43c24` pushed without the per-commit check; PR merged by squash instead of rebase | Minor | other | the manager's resume instruction after the Opus limit put «push» before «per-commit check»; no skill text on how to continue a phase after a model limit | Manager (resume `SendMessage`), Implementer (Step 5) |
+| Phase 3 audit deviation «mutation table header `head=bfbcb182`, PR head `62772501`» — the published table (6321251676, never edited) carries `head=62772501` | — | unverified-claim | the audit read the implementer's earlier local runs, not the PR comment | Manager (Phase 3 audit) |
+| m1–m3 (`/summary` reads unused referral aggregates, link preview on the text summary, «has something to send» rule in three copies) | Minor | other / single-source | left at the merge | → #705 |
+
+### Process improvement proposals
+1. A phase continued after a model limit gets its remaining steps in the skill's order — for an implementer, «check the commit, then push», never «push first» — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Failed or stalled phase**
+2. Remaining findings — **вынесено в #705**
