@@ -3890,5 +3890,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1–m3 (`/summary` reads unused referral aggregates, link preview on the text summary, «has something to send» rule in three copies) | Minor | other / single-source | left at the merge | → #705 |
 
 ### Process improvement proposals
-1. A phase continued after a model limit gets its remaining steps in the skill's order — for an implementer, «check the commit, then push», never «push first» — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Failed or stalled phase**
+1. A phase continued after a model limit gets its remaining steps in the skill's order — for an implementer, «check the commit, then push», never «push first» — **внедрено в #706: `.claude/skills/tech-lead/SKILL.md` → Failed or stalled phase**
 2. Remaining findings — **вынесено в #705**
