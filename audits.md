@@ -3813,5 +3813,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Usage-limit check reads only the Codex job's summary; here the limit text sat only in `progressPreview` | — | codex-ops | the companion's summary holds Codex's first message | Tech Lead (Mode 1, Phase 0), Reviewer (Step 6-pre item 4) |
 
 ### Process improvement proposals
-1. The usage-limit match reads the job's summary or its `progressPreview` lines — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Whole-feature pass — check, Phase 0 item 1; `.claude/skills/reviewer/SKILL.md` → Step 6-pre item 4**
+1. The usage-limit match reads the job's summary or its `progressPreview` lines — **внедрено в #695: `.claude/skills/tech-lead/SKILL.md` → Whole-feature pass — check, Phase 0 item 1; `.claude/skills/reviewer/SKILL.md` → Step 6-pre item 4**
 2. Remaining findings — **вынесено в #694**
