@@ -1,7 +1,10 @@
-import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
+import { Bot, GrammyError, HttpError, InputFile, type Context } from 'grammy';
 import type { Message, User, UserFromGetMe } from 'grammy/types';
 import {
+  ButtonRole,
+  callbackButton,
   editRefusal,
+  keyboardOf,
   BrokerAccountStatus,
   BrokerBalanceUnavailableReason,
   CONFIRM_CALLBACK_PATTERN,
@@ -21,6 +24,8 @@ import {
   userStartRequestSchema,
   UserErrorCode,
   UserStatus,
+  type BotButton,
+  type BotKeyboard,
   type BotStaticHtmlKey,
   type DecimalString,
   type EmailSendCodeResponse,
@@ -44,11 +49,14 @@ import {
 } from './backend-client';
 import { createDemoComposer, createSignalWaitScreens, removeLegacyKeyboard } from './demo';
 import {
+  demoButton,
   demoKeyboard,
   INVITE_CALLBACK_DATA,
   menuKeyboard,
+  retryButton,
   retryKeyboard,
   statusCardKeyboard,
+  supportButton,
   supportKeyboard,
   withMenu,
 } from './keyboards';
@@ -181,7 +189,7 @@ export function createBot({
     },
   });
 
-  const welcomeKeyboard = () => addConnectButtons(new InlineKeyboard());
+  const welcomeKeyboard = () => keyboardOf(connectButtons());
 
   // a login refusal: a blocked user to support, any other to the menu
   const refusalKeyboard = (text: BotStaticHtmlKey) =>
@@ -189,14 +197,13 @@ export function createBot({
   const commandRetryKeyboard = (command: RetryCommand) =>
     retryKeyboard(commandRetryCallbackData(command));
   // /start, /menu and «🏠 В меню»: the menu is the command, so it is the repeat
-  const homeRetryKeyboard = () =>
-    new InlineKeyboard().text(LABELS.demoRetryButton, MENU_CALLBACK_DATA);
+  const homeRetryKeyboard = () => keyboardOf([retryButton(MENU_CALLBACK_DATA)]);
 
   const codeKeyboard = () =>
-    new InlineKeyboard()
-      .text(LABELS.resendButton, RESEND_CALLBACK_DATA)
-      .row()
-      .text(LABELS.changeEmailButton, CONNECT_CALLBACK_DATA);
+    keyboardOf([
+      callbackButton(ButtonRole.Secondary, LABELS.resendButton, RESEND_CALLBACK_DATA),
+      callbackButton(ButtonRole.Secondary, LABELS.changeEmailButton, CONNECT_CALLBACK_DATA),
+    ]);
 
   // First, before the private-chat filter and every composer: the handlers below and the
   // composers read their texts in the user's language (#508, language.ts).
@@ -295,7 +302,7 @@ export function createBot({
     // make must be in front of them, not behind the status card
     if (user.pendingBrokerAccounts.length > 0) {
       await replyHtml(ctx, TEXTS.confirmPrompt, {
-        reply_markup: confirmKeyboard(user.pendingBrokerAccounts),
+        reply_markup: keyboardOf(confirmButtons(user.pendingBrokerAccounts)),
       });
       return;
     }
@@ -386,7 +393,7 @@ export function createBot({
     }
     const keyboard = accountKeyboard(user.accounts);
     await replyHtml(ctx, accountStatus(user.accounts), {
-      reply_markup: keyboard ?? withMenu(demoKeyboard()),
+      reply_markup: keyboard ?? withMenu([demoButton()]),
     });
   }
 
@@ -491,7 +498,7 @@ export function createBot({
     await showInvite(ctx, from, { backend, logger });
   });
 
-  // «👥 Пригласить друга» under the status card and the session's result (#115)
+  // «👥 Позвать друга» under the status card and the session's result (#115)
   privateChats.callbackQuery(INVITE_CALLBACK_DATA, async (ctx) => {
     await ctx.answerCallbackQuery().catch(logAnswerFailure);
     await showInvite(ctx, ctx.from, { backend, logger });
@@ -500,7 +507,7 @@ export function createBot({
   // No backend call: the way to a person works for a blocked user and during an outage too.
   privateChats.command('support', async (ctx) => {
     await replyHtml(ctx, TEXTS.support, {
-      reply_markup: withMenu(supportKeyboard()),
+      reply_markup: withMenu([supportButton()]),
     });
   });
 
@@ -511,9 +518,7 @@ export function createBot({
 
   // the pictures of a signal's direction: the analysis card's and the session message's (#568)
   const setupCardPhotos = createSetupCardPhotos(logger);
-  signalWaiter.attach(
-    createSignalWaitScreens({ connectKeyboard: welcomeKeyboard, setupCardPhotos }),
-  );
+  signalWaiter.attach(createSignalWaitScreens({ connectButtons, setupCardPhotos }));
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
@@ -522,7 +527,7 @@ export function createBot({
       backend,
       logger,
       now,
-      connectKeyboard: welcomeKeyboard,
+      connectButtons,
       setupCardPhotos,
       signalWaiter,
     }),
@@ -535,7 +540,7 @@ export function createBot({
       logger,
       now,
       intentTracker,
-      connectKeyboard: welcomeKeyboard,
+      connectButtons,
       cashierUrl,
     }),
   );
@@ -546,7 +551,7 @@ export function createBot({
     backend,
     logger,
     dialog: loginDialog,
-    connectKeyboard: welcomeKeyboard,
+    connectButtons,
   });
   privateChats.use(stakePicker.composer);
 
@@ -555,7 +560,7 @@ export function createBot({
     backend,
     logger,
     sessionTracker,
-    connectKeyboard: welcomeKeyboard,
+    connectButtons,
     cashierUrl,
     setupCardPhotos,
     shareEnabled: shareStorageChatId !== undefined,
@@ -575,19 +580,17 @@ export function createBot({
   privateChats.use(tradingSession.composer);
 
   // the mode screen behind the status card's mode button (#474, docs/trading-mode.md)
-  // «🌐 Язык / Language» on the status card (#508)
+  // «🌐 Язык/Language» on the status card (#508)
   privateChats.use(createLanguageScreenComposer({ backend, languages, logger }));
-  privateChats.use(
-    createTradingModeComposer({ backend, logger, connectKeyboard: welcomeKeyboard }),
-  );
+  privateChats.use(createTradingModeComposer({ backend, logger, connectButtons }));
 
   // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
   // query and its chosen result carry no chat, so the private-chat filter would drop them
   bot.use(createSessionShareComposer({ backend, logger, storageChatId: shareStorageChatId }));
 
-  // /buy, «⭐ Купить токены» and the payment (#117, docs/stars.md), ahead of the text handler below,
+  // /buy, «⭐ Купить» and the payment (#117, docs/stars.md), ahead of the text handler below,
   // which swallows commands; the pre-checkout query on the bot, for the same reason as the share
-  privateChats.use(createStarsComposer({ backend, logger, connectKeyboard: welcomeKeyboard }));
+  privateChats.use(createStarsComposer({ backend, logger, connectButtons }));
   bot.use(createPreCheckoutComposer({ backend, logger }));
   // /paysupport and its refund request (#118, docs/stars.md → /paysupport), for the same reason
   privateChats.use(createPaysupportComposer({ backend, logger }));
@@ -738,7 +741,7 @@ export function createBot({
     });
   });
 
-  // `step` is the step the code was asked from: the address, or «🔄 Запросить код ещё раз» on the
+  // `step` is the step the code was asked from: the address, or «🔄 Новый код» on the
   // code step. The same refusal means a different thing for the dialog on each (SEND_CODE_REFUSALS).
   async function replyToSendCode(
     ctx: Context,
@@ -1053,47 +1056,51 @@ function startRequestOf(from: User): UserStartRequest {
 }
 
 // the welcome's way in, also under /account while no link is active
-function addConnectButtons(keyboard: InlineKeyboard): InlineKeyboard {
-  return keyboard.text(LABELS.connectButton, CONNECT_CALLBACK_DATA);
+function connectButtons(): BotButton[] {
+  return [callbackButton(ButtonRole.Forward, LABELS.connectButton, CONNECT_CALLBACK_DATA)];
 }
 
 // A confirm button per waiting link, then the connect button while nothing is active; undefined
-// when there is no button at all (an InlineKeyboard starts as one empty row, so its length says
-// nothing).
-function accountKeyboard(accounts: readonly LinkedAccountView[]): InlineKeyboard | undefined {
+// when there is no button at all.
+function accountKeyboard(accounts: readonly LinkedAccountView[]): BotKeyboard | undefined {
   const pending = accounts.filter(isPendingLink);
   const connect = !accounts.some((account) => account.status === BrokerAccountStatus.Active);
   if (pending.length === 0 && !connect) return undefined;
-  const keyboard = confirmKeyboard(pending);
-  return connect ? addConnectButtons(keyboard) : keyboard;
+  return keyboardOf([...confirmButtons(pending), ...(connect ? connectButtons() : [])]);
 }
 
-// one row of the three levels, the selected one marked and doing nothing when pressed; then the
-// picker of each mode's stake (#297, #326)
-function levelKeyboard(current: NotificationLevel): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const level of Object.values(NotificationLevel)) {
-    if (level === current) keyboard.text(currentLevelLabel(level), LEVEL_CURRENT_CALLBACK_DATA);
-    else keyboard.text(levelLabel(level), levelCallbackData(level));
-  }
-  return keyboard
-    .row()
-    .text(
-      LABELS.settingsStakeDemoButton,
-      stakeOpenCallbackData(TradeMode.Demo, { kind: 'settings' }),
-    )
-    .text(
-      LABELS.settingsStakeRealButton,
-      stakeOpenCallbackData(TradeMode.Real, { kind: 'settings' }),
-    );
+// one row of the three levels, a choice with no colour, the selected one marked and doing nothing
+// when pressed; then the picker of each mode's stake (#297, #326) in a row of its own
+function levelKeyboard(current: NotificationLevel): BotKeyboard {
+  return keyboardOf(
+    Object.values(NotificationLevel).map((level) =>
+      level === current
+        ? callbackButton(ButtonRole.Nav, currentLevelLabel(level), LEVEL_CURRENT_CALLBACK_DATA)
+        : callbackButton(ButtonRole.Nav, levelLabel(level), levelCallbackData(level)),
+    ),
+    [
+      callbackButton(
+        ButtonRole.Secondary,
+        LABELS.settingsStakeDemoButton,
+        stakeOpenCallbackData(TradeMode.Demo, { kind: 'settings' }),
+      ),
+      callbackButton(
+        ButtonRole.Secondary,
+        LABELS.settingsStakeRealButton,
+        stakeOpenCallbackData(TradeMode.Real, { kind: 'settings' }),
+      ),
+    ],
+  );
 }
 
-function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const account of accounts) {
-    keyboard.text(LABELS.confirmButton(account.email), confirmCallbackData(account.id)).row();
-  }
-  return keyboard;
+function confirmButtons(accounts: readonly PendingBrokerAccountView[]): BotButton[] {
+  return accounts.map((account) =>
+    callbackButton(
+      ButtonRole.Forward,
+      LABELS.confirmButton(account.email),
+      confirmCallbackData(account.id),
+    ),
+  );
 }
 
 // the refusals the user can act on; anything else is an outage to them
@@ -1115,7 +1122,7 @@ interface Refusal {
 // route's ceiling across all users, checked before anything else: no letter, no slot of this
 // user's, no code spent, so the step stays. too_many_attempts is this user's or this address's
 // own allowance for the next minutes, so asking for an address again is pointless — but a code
-// already sent stays good, which is why a refused «🔄 Запросить код ещё раз» keeps the code step.
+// already sent stays good, which is why a refused «🔄 Новый код» keeps the code step.
 // Anything not listed is either a refusal before the letter (a sub-500 status) or an unknown
 // outcome (replyToSendCode).
 const SEND_CODE_REFUSALS: Record<LoginStep, Partial<Record<string, Refusal>>> = {

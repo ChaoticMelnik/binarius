@@ -1370,7 +1370,7 @@ const STAKE_BRANCHES: readonly Branch[] = [
   },
 ];
 
-// «🔄 Обновить статус» (#127)
+// «🔄 Обновить» (#127)
 const refreshUpdate = (chatType?: string) =>
   callbackUpdate(intentCallbackData(INTENT_VIEW.id), chatType);
 const EDIT_GONE: ApiError = {
@@ -2507,7 +2507,7 @@ const BUY_BRANCHES: readonly Branch[] = [
   },
 ];
 
-// «⭐ Купить токены»: /buy's branches after the answer
+// «⭐ Купить»: /buy's branches after the answer
 const BUY_BUTTON_BRANCHES: readonly Branch[] = [
   ...BUY_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
     ...branch,
@@ -2826,7 +2826,7 @@ const INVITE_BRANCHES: readonly Branch[] = [
   },
 ];
 
-// «👥 Пригласить друга» (#115): /invite's branches after the answer
+// «👥 Позвать друга» (#115): /invite's branches after the answer
 const INVITE_BUTTON_BRANCHES: readonly Branch[] = [
   ...INVITE_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
     ...branch,

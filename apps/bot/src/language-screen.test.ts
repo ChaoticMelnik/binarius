@@ -80,8 +80,9 @@ const screenRows = (language: BotLanguage) =>
         text: `${language === BotLanguage.En ? '🇬🇧 English ✅' : '🇬🇧 English'}`,
         callback_data: languageSetCallbackData(BotLanguage.En),
       },
+      // #475: the menu beside the two languages, a row of three
+      { text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA },
     ],
-    [{ text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA }],
   ]);
 
 describe('the language screen (#508)', () => {

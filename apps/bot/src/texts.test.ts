@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   pairLabel,
+  BUTTON_LABEL_WIDTHS,
+  buttonLabelWidth,
+  type PairLabel,
   BOT_TEXT_CATALOG,
   BOT_TEXT_SOURCES_EN,
   BotLanguage,
@@ -69,6 +72,7 @@ import {
   demoSummary,
   groupButtonLabel,
   pairButtonLabel,
+  signalButtonLabel,
   helpText,
   intentStatusText,
   LABELS,
@@ -853,7 +857,7 @@ describe('the demo screens', () => {
       '💱 Валюты',
       '🛢 Сырьё',
       '📈 Акции',
-      '💠 Криптовалюты',
+      '💠 Крипта',
       '📊 Индексы',
       '📁 Другие',
     ]);
@@ -1647,5 +1651,42 @@ describe('cycleStakeLabel', () => {
     ['15', true, '$15.00 ✅ · риск'],
   ])('labels %s (in effect: %s) as %s', (amount, current, label) => {
     expect(cycleStakeLabel(d(amount), current)).toBe(label);
+  });
+});
+
+// #475 (docs/bot-navigation.md → Roles, colours and rows): the labels of data stand in lists of
+// two or three, out of the keyboard gate's width check; their formatters hold the widths here, for
+// the bounds the pilot catalog stays within (a symbol of at most 8 characters, a stake below $1 000)
+describe('the widths of the labels of data (#475)', () => {
+  const symbol = 'ABCD/EFG' as PairLabel;
+
+  it('a pair and a signal of an 8-character symbol at 100 % fit a row of two', () => {
+    expect(buttonLabelWidth(pairButtonLabel(symbol, 100))).toBeLessThanOrEqual(
+      BUTTON_LABEL_WIDTHS[2],
+    );
+    for (const action of Object.values(TradeAction)) {
+      expect(buttonLabelWidth(signalButtonLabel(symbol, action, 100))).toBeLessThanOrEqual(
+        BUTTON_LABEL_WIDTHS[2],
+      );
+    }
+  });
+
+  it('a type with up to 999 open pairs fits a row of two', () => {
+    for (const group of PAIR_TYPE_GROUPS) {
+      expect(buttonLabelWidth(groupButtonLabel(group, 999)), group).toBeLessThanOrEqual(
+        BUTTON_LABEL_WIDTHS[2],
+      );
+    }
+  });
+
+  it('a calm preset fits a row of three, a risky one up to $999.99 a row of two, ✅ included', () => {
+    for (const current of [false, true]) {
+      expect(
+        buttonLabelWidth(cycleStakeLabel(decimalStringSchema.parse('9.99'), current)),
+      ).toBeLessThanOrEqual(BUTTON_LABEL_WIDTHS[3]);
+      expect(
+        buttonLabelWidth(cycleStakeLabel(decimalStringSchema.parse('999.99'), current)),
+      ).toBeLessThanOrEqual(BUTTON_LABEL_WIDTHS[2]);
+    }
   });
 });

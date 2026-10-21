@@ -1,6 +1,13 @@
-import { InlineKeyboard, type Api, type Context, type InputFile } from 'grammy';
-import type { InlineKeyboardMarkup } from 'grammy/types';
-import { BOT_MESSAGE_SPACER, STARS_CURRENCY, type TelegramHtml } from '@binarius/shared';
+import type { Api, Context, InputFile } from 'grammy';
+import {
+  BOT_MESSAGE_SPACER,
+  keyboardOf,
+  payButton,
+  stackKeyboards,
+  STARS_CURRENCY,
+  type BotKeyboard,
+  type TelegramHtml,
+} from '@binarius/shared';
 
 // The bot's one send seam for user texts (the backend's is auth/client-push.ts): the only place
 // that sets parse_mode HTML and unwraps TelegramHtml, so a raw string cannot reach the user as
@@ -9,8 +16,10 @@ import { BOT_MESSAGE_SPACER, STARS_CURRENCY, type TelegramHtml } from '@binarius
 // photo, nor pass entities, which the Bot API takes instead of parse_mode.
 //
 // Every message carries an inline keyboard, the user's next step (#350, docs/bot-navigation.md):
-// `reply_markup` is required and only an inline one counts. A message without one goes through a
-// `…WithoutNextStep` function, which names its reason from NO_NEXT_STEP_REASONS.
+// `reply_markup` is required and only a BotKeyboard counts, built by role (#475,
+// packages/shared/src/bot-keyboard.ts): never a grammY InlineKeyboard or a bare markup. A message
+// without one goes through a `…WithoutNextStep` function, which names its reason from
+// NO_NEXT_STEP_REASONS.
 //
 // Every text message ends with the width spacer (#506, docs/bot-navigation.md → The width): a line
 // of braille blanks that makes each bubble, and so its keyboard, as wide as the longest. Captions,
@@ -31,7 +40,7 @@ export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEX
 
 const sent = (text: TelegramHtml) => text.value + BOT_MESSAGE_SPACER;
 
-type NextStep = { reply_markup: InlineKeyboard | InlineKeyboardMarkup };
+type NextStep = { reply_markup: BotKeyboard };
 type WithNextStep<T> = Omit<T, 'reply_markup'> & NextStep;
 
 type ReplyExtra = Omit<NonNullable<Parameters<Context['reply']>[1]>, 'parse_mode' | 'entities'>;
@@ -210,7 +219,7 @@ export const sendPhotoToStorage = (api: Pick<Api, 'sendPhoto'>, chatId: number, 
 export const replyWithInvoiceStars = (
   ctx: Context,
   invoice: { title: string; description: string; payload: string; label: string; stars: number },
-  { pay, then }: { pay: string; then: InlineKeyboard },
+  { pay, then }: { pay: string; then: BotKeyboard },
 ) =>
   ctx.replyWithInvoice(
     invoice.title,
@@ -218,12 +227,7 @@ export const replyWithInvoiceStars = (
     invoice.payload,
     STARS_CURRENCY,
     [{ label: invoice.label, amount: invoice.stars }],
-    {
-      reply_markup: new InlineKeyboard([
-        [InlineKeyboard.pay(pay)],
-        ...then.inline_keyboard.filter((row) => row.length > 0),
-      ]),
-    },
+    { reply_markup: stackKeyboards(keyboardOf([payButton(pay)]), then) },
   );
 
 // The inline answers (#321, session-share.ts): the shared summary card, posted «via @bot» into a

@@ -2,6 +2,7 @@ import { BotError, GrammyError, HttpError, InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ButtonRole,
   pairLabel,
   BrokerBalanceUnavailableReason,
   BrokerRestErrorCode,
@@ -96,6 +97,9 @@ import {
   stubSessionTracker,
   stubTracker,
   textUpdate,
+  inlineRoles,
+  inlineRows,
+  inlineStyles,
 } from './testing';
 import {
   demoPairsScreen,
@@ -188,7 +192,7 @@ const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
 const payloadOf = (calls: readonly ApiCall[], method: string) =>
   calls.find((call) => call.method === method)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
-  (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
+  inlineRows(payload) as Button[][];
 const button = (text: string, callback_data: string): Button => ({ text, callback_data });
 
 const catalogOf = (...pairs: PairView[]): (() => Promise<PairsCatalogResponse>) => {
@@ -201,11 +205,10 @@ const signalsOf = (...signals: [number, TradeAction][]) => signalsResponse(NOW, 
 const MANUAL = button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA);
 const MENU = button(LABELS.menuButton, MENU_CALLBACK_DATA);
 const REFRESH = button(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA);
-// «🔄 Обновить» · «🧭 Выбрать пару вручную» in one row, «🏠 В меню» in its own, under the list
-// (#419, #685)
-const LIST_FOOTER = [[REFRESH, MANUAL], [MENU]];
-// the list's refusals: «🔄 Повторить» with `data` beside the manual choice, then the menu
-const retryFooter = (data: string) => [[button(LABELS.demoRetryButton, data), MANUAL], [MENU]];
+// «🔄 Обновить» · «🧭 Вручную» · «🏠 В меню» in one row under the list (#419, #685, #475)
+const LIST_FOOTER = [[REFRESH, MANUAL, MENU]];
+// the list's refusals: «🔄 Повторить» with `data` beside the manual choice and the menu
+const retryFooter = (data: string) => [[button(LABELS.demoRetryButton, data), MANUAL, MENU]];
 
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const BACK_EURUSD_PAGE = button(LABELS.demoBackPairsButton, demoPageCallbackData('currency', 0));
@@ -542,9 +545,9 @@ describe('the signals screen', () => {
         SIX,
         SIX.map((p) => p.id),
       );
-      expect(rows).toHaveLength(SIGNALS_LIST_SIZE / 2 + 2);
+      expect(rows).toHaveLength(SIGNALS_LIST_SIZE / 2 + 1);
       expect(rows.slice(0, 6).map((row) => row.length)).toEqual([2, 2, 2, 2, 2, 2]);
-      expect(rows.slice(-2)).toEqual(LIST_FOOTER);
+      expect(rows.slice(-1)).toEqual(LIST_FOOTER);
     });
   });
 
@@ -628,12 +631,21 @@ describe('the signals screen', () => {
     expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(ROWS);
   });
 
-  it('the footer: refresh · manual, then the menu, under a full list', async () => {
+  it('the footer: refresh · manual · menu in one row, under a full list', async () => {
     const full = setup({ readSignals: () => Promise.resolve(ROUTE) });
     await full.press(LIST);
-    expect(rowsOf(payloadOf(full.calls, 'editMessageText')).slice(-2)).toEqual([
-      [REFRESH, MANUAL],
-      [MENU],
+    const edited = payloadOf(full.calls, 'editMessageText');
+    expect(rowsOf(edited).slice(-1)).toEqual([[REFRESH, MANUAL, MENU]]);
+    // #475: each pair green or red by its signal, the refresh blue, manual and menu no colour
+    expect(inlineRoles(edited)).toEqual([
+      [ButtonRole.Up, ButtonRole.Down],
+      [ButtonRole.Down],
+      [ButtonRole.Secondary, ButtonRole.Nav, ButtonRole.Nav],
+    ]);
+    expect(inlineStyles(edited)).toEqual([
+      ['success', 'danger'],
+      ['danger'],
+      ['primary', null, null],
     ]);
   });
 
@@ -649,7 +661,7 @@ describe('the signals screen', () => {
       expect(plainTextOf(TEXTS.signalsWaiting({ label: '⏱ 5 с' }))).toBe(
         '🔎 Анализирую сигналы · ⏱ 5 с\nПроверяю пары на каждой свече. Как только появится сигнал, список откроется здесь.',
       );
-      expect(rowsOf(edited)).toEqual([[MANUAL], [MENU]]);
+      expect(rowsOf(edited)).toEqual([[MANUAL, MENU]]);
       expect(signalWaiter.waitList).toHaveBeenCalledTimes(1);
       expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({
         chatId: USER.id,
@@ -816,8 +828,7 @@ describe('the amount screen (#476)', () => {
           button('BTC/USD ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5)),
           button('US10Y ⬆️ 70%', demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 5)),
         ],
-        [MANUAL],
-        [MENU],
+        [MANUAL, MENU],
       ]);
       expect(evaluateSignal).not.toHaveBeenCalled();
       expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
@@ -847,7 +858,7 @@ describe('the amount screen (#476)', () => {
         await press(LAUNCH);
         const edited = payloadOf(calls, 'editMessageText');
         expect(edited?.text).toBe(WAIT_TEXT);
-        expect(rowsOf(edited)).toEqual([[MANUAL], [MENU]]);
+        expect(rowsOf(edited)).toEqual([[MANUAL, MENU]]);
         expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([line]);
         expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({ alternatives: 'done' });
       }
@@ -997,7 +1008,7 @@ describe('the amount screen (#476)', () => {
     await press(LAUNCH);
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(TEXTS.unavailable.value);
-    expect(rowsOf(edited)).toEqual([[button(LABELS.demoRetryButton, LAUNCH)], [BACK_LIST]]);
+    expect(rowsOf(edited)).toEqual([[button(LABELS.demoRetryButton, LAUNCH), BACK_LIST]]);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
       'trading access not read for the amount screen',
     ]);
@@ -1012,8 +1023,10 @@ describe('the amount screen (#476)', () => {
     await press(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'));
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
-      [button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'))],
-      [BACK_ANALYSIS],
+      [
+        button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a')),
+        BACK_ANALYSIS,
+      ],
     ]);
   });
 
@@ -1047,7 +1060,7 @@ describe('the amount screen (#476)', () => {
       await press(LAUNCH);
       const edited = payloadOf(calls, 'editMessageText');
       expect(edited?.text).toBe(text.value);
-      expect(rowsOf(edited).at(-1)).toEqual([BACK_LIST]);
+      expect(rowsOf(edited).at(-1)?.at(-1)).toEqual(BACK_LIST);
       expect(
         rowsOf(edited)
           .flat()
@@ -1138,9 +1151,13 @@ describe('the amount screen (#476)', () => {
           sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true),
         ),
       ],
-      [button(LABELS.stakeChangeButton, `stk:o:r:p:${String(PAIR_EURUSD.id)}:5`)],
-      [button(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA)],
+      [
+        button(LABELS.stakeChangeButton, `stk:o:r:p:${String(PAIR_EURUSD.id)}:5`),
+        button(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA),
+      ],
     ]);
+    // #475: the cycle green on its own row, the stake blue beside the way back
+    expect(inlineStyles(edited)).toEqual([['success'], ['primary', null]]);
     expect(plainTextOf(edited?.text as string)).toBe(
       `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 5 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 циклов подряд и перед каждой сделкой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
     );
@@ -1253,7 +1270,7 @@ describe('the types screen', () => {
     expect(rowsOf(sent)).toEqual([
       [
         button('💱 Валюты · 1', demoPageCallbackData('currency', 0)),
-        button('💠 Криптовалюты · 1', demoPageCallbackData('cryptocurrency', 0)),
+        button('💠 Крипта · 1', demoPageCallbackData('cryptocurrency', 0)),
       ],
       [button('📁 Другие · 1', demoPageCallbackData('other', 0))],
     ]);
@@ -1593,7 +1610,7 @@ describe('the analysis', () => {
     );
   });
   // the wait for a signal under the analysis (#664)
-  const WAIT_ROWS = [[MANUAL], [MENU]];
+  const WAIT_ROWS = [[MANUAL, MENU]];
   const resultOf = (response = SIGNAL_DECIDED, chooseAmount = false) =>
     analysisScreen({
       mode: TradeMode.Demo,
@@ -1605,14 +1622,17 @@ describe('the analysis', () => {
   const edits = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageText');
   const cardOf = (calls: readonly ApiCall[]) => payloadOf(calls, 'sendPhoto');
-  // the amounts of #476 under a demo card (#482), their way back the analysis, then «✏️ Своя сумма»
+  // the amounts of #476 under a demo card (#482), their way back the analysis, then «✏️ Ввести»
   const amountOf = (value: string, label: string, durationSec: 5 = 5) =>
     button(label, cycleStakeCallbackData(PAIR_EURUSD.id, durationSec, value, 'a'));
   const AMOUNTS = [
     [amountOf('1', '$1.00 ✅'), amountOf('2', '$2.00'), amountOf('5', '$5.00')],
     [amountOf('10', '$10.00 · риск')],
-    [button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'))],
   ];
+  // #475: «✏️ Ввести» joins the actions under the amounts; «🔄 Заново» and the way back a row of
+  // three
+  const CUSTOM = button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'));
+  const TAIL_ROW = [REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS];
   const pressed = (scene: ReturnType<typeof setup>, data = DATA) => {
     const update = callbackUpdate(data);
     return {
@@ -1644,7 +1664,7 @@ describe('the analysis', () => {
     expect(card?.parse_mode).toBe('HTML');
     expect(card?.photo).toBeInstanceOf(InputFile);
     expect((card?.photo as InputFile).filename).toBe('setup-bull.png');
-    expect(rowsOf(card)).toEqual([...AMOUNTS, [MORE], [REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]]);
+    expect(rowsOf(card)).toEqual([...AMOUNTS, [CUSTOM, MORE], TAIL_ROW]);
     expect(payloadOf(calls, 'deleteMessage')).toEqual({
       chat_id: USER.id,
       message_id: press.messageId,
@@ -1676,8 +1696,8 @@ describe('the analysis', () => {
           LABELS.analysisMoreButton,
           analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Real),
         ),
+        REPEAT,
       ],
-      [REPEAT],
       [BACK_EURUSD_PAIR, BACK_GROUPS],
     ]);
     expect(rowsOf(cardOf(calls))[0]?.[0]?.callback_data).toBe(
@@ -1724,6 +1744,7 @@ describe('the analysis', () => {
     });
     await press(DATA);
     expect(rowsOf(cardOf(calls))[AMOUNTS.length]).toEqual([
+      CUSTOM,
       button(
         LABELS.analysisMoreButton,
         analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down, TradeMode.Demo),
@@ -1877,12 +1898,7 @@ describe('the analysis', () => {
       expect(plainTextOf(result?.caption as string).endsWith('\n\nВыбери сумму сделки 👇')).toBe(
         true,
       );
-      expect(rowsOf(result)).toEqual([
-        ...AMOUNTS,
-        [MORE],
-        [REPEAT],
-        [BACK_EURUSD_PAIR, BACK_GROUPS],
-      ]);
+      expect(rowsOf(result)).toEqual([...AMOUNTS, [CUSTOM, MORE], TAIL_ROW]);
     },
   );
 
@@ -1915,8 +1931,7 @@ describe('the analysis', () => {
     await press(DATA);
     expect(rowsOf(cardOf(calls))).toEqual([
       [SESSION],
-      [MORE],
-      [REPEAT],
+      [MORE, REPEAT],
       [BACK_EURUSD_PAIR, BACK_GROUPS],
     ]);
     expect(cardOf(calls)?.caption).toBe(resultOf());
@@ -1998,7 +2013,7 @@ describe('the analysis', () => {
     await press(DATA);
     const result = edits(calls).at(-1)?.payload;
     expect(result?.text).toBe(resultOf(SIGNAL_FETCH_FAILED));
-    expect(rowsOf(result)).toEqual([[REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]]);
+    expect(rowsOf(result)).toEqual([[REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS]]);
     expect(logger.warn).not.toHaveBeenCalled();
     // W-an3: an unavailable analysis is no wait
     expect(signalWaiter.waitPair).not.toHaveBeenCalled();
@@ -2044,7 +2059,7 @@ describe('the analysis', () => {
 
     const result = edits(calls).at(-1)?.payload;
     expect(result?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 5).text.value);
-    expect(rowsOf(result)).toEqual([[REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]]);
+    expect(rowsOf(result)).toEqual([[REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS]]);
     expect(logger.warn.mock.calls).toEqual([
       [{ signalCode: BrokerRestErrorCode.Unavailable }, 'signal not evaluated'],
     ]);
@@ -2060,7 +2075,7 @@ describe('the analysis', () => {
 
     const result = edits(calls).at(-1)?.payload;
     expect(result?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 5).text.value);
-    expect(rowsOf(result)).toEqual([[REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]]);
+    expect(rowsOf(result)).toEqual([[REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS]]);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['signal not evaluated']);
   });
 
@@ -2164,14 +2179,22 @@ describe('«➕ Ещё» under the analysis', () => {
     rows.find((row) => row.some((key) => key.callback_data?.startsWith('demo:stake:')));
   const stakeRowOf = (calls: readonly ApiCall[]) =>
     stakeRowIn(rowsOf(expandedOf(calls).at(-1)?.payload));
+  // «💵 Сумма»: under the stake button since #475, which takes a row of its own
+  const menuOf = (calls: readonly ApiCall[]) =>
+    rowsOf(expandedOf(calls).at(-1)?.payload)
+      .flat()
+      .find((key) => key.text === LABELS.stakeMenuButton);
   // the card's amounts stay above the stake row in demo (#482)
   const amountOf = (value: string, label: string) =>
     button(label, cycleStakeCallbackData(PAIR_EURUSD.id, 5, value, 'a'));
   const AMOUNTS = [
     [amountOf('1', '$1.00 ✅'), amountOf('2', '$2.00'), amountOf('5', '$5.00')],
     [amountOf('10', '$10.00 · риск')],
-    [button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'))],
   ];
+  // #475: «✏️ Ввести» joins the actions under the amounts; «🔄 Заново» and the way back a row of
+  // three
+  const CUSTOM = button(LABELS.stakeCustomButton, cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'));
+  const TAIL_ROW = [REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS];
   const stakeOf = (data: string | undefined) =>
     stakeDataOf(STAKE_CALLBACK_PATTERN.exec(data ?? '') ?? '');
   const NOT_MODIFIED_MARKUP: ApiError = {
@@ -2189,9 +2212,11 @@ describe('«➕ Ещё» under the analysis', () => {
     const [edit] = expandedOf(calls);
     expect(edit?.payload.text).toBeUndefined();
     const rows = rowsOf(edit?.payload);
-    // [В2] the amounts stay, the stake row below them
+    // [В2] the amounts stay, the stake button below them on its own row (#475), then «✏️ Ввести»
+    // and «💵 Сумма»
     expect(rows.slice(0, AMOUNTS.length)).toEqual(AMOUNTS);
-    const [[stake, menu], ...rest] = rows.slice(AMOUNTS.length);
+    const [[stake], [custom, menu], ...rest] = rows.slice(AMOUNTS.length);
+    expect(custom).toEqual(CUSTOM);
     // the amount the press trades: no saved stake, so the broker's minimum (#297)
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '1.00000000'));
     expect(stake?.text).toContain('$1.00');
@@ -2204,7 +2229,10 @@ describe('«➕ Ещё» under the analysis', () => {
       nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
       fingerprint: STAKE_FINGERPRINT,
     });
-    expect(rest).toEqual([[REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]]);
+    expect(rest).toEqual([TAIL_ROW]);
+    // #475: the trade of a ⬆️ signal green, its own row
+    expect(inlineRoles(edit?.payload)[AMOUNTS.length]).toEqual([ButtonRole.Forward]);
+    expect(inlineStyles(edit?.payload)[AMOUNTS.length]).toEqual(['success']);
     expect(readTradingAccess.mock.calls).toEqual([[String(USER.id)]]);
     expect(readPairs).not.toHaveBeenCalled();
     expect(evaluateSignal).not.toHaveBeenCalled();
@@ -2230,14 +2258,15 @@ describe('«➕ Ещё» under the analysis', () => {
       });
       await press(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Real));
       const rows = rowsOf(expandedOf(calls).at(-1)?.payload);
-      const [session, [stake, menu], ...rest] = rows;
+      const [session, [stake], [menu, repeat], ...rest] = rows;
       expect(session).toEqual([
         button(
           '🚀 Сессия из 5 циклов · REAL',
           sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
         ),
       ]);
-      expect(rows[1]).toHaveLength(2);
+      expect(rows[1]).toHaveLength(1);
+      expect(repeat).toEqual(REPEAT);
       expect(stake?.text).toBe(
         stakeButtonLabel(TradeAction.Up, decimalStringSchema.parse(amount), TradeMode.Real),
       );
@@ -2249,7 +2278,7 @@ describe('«➕ Ещё» under the analysis', () => {
         button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
       );
       expect(menu?.callback_data).toBe(`stk:o:r:a:${PAIR_EURUSD.id}:5`);
-      expect(rest).toEqual([[REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]]);
+      expect(rest).toEqual([[BACK_EURUSD_PAIR, BACK_GROUPS]]);
     },
   );
 
@@ -2258,6 +2287,14 @@ describe('«➕ Ещё» under the analysis', () => {
     await press(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down, TradeMode.Demo));
     const stake = stakeRowOf(calls)?.[0];
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Down, '1.00000000'));
+    // #475: the trade of a ⬇️ signal red, still on its own row
+    expect(stakeRowOf(calls)).toHaveLength(1);
+    const edit = expandedOf(calls).at(-1)?.payload;
+    const row = rowsOf(edit).findIndex((keys) =>
+      keys.some((key) => key.callback_data === stake?.callback_data),
+    );
+    expect(inlineRoles(edit)[row]).toEqual([ButtonRole.ForwardDown]);
+    expect(inlineStyles(edit)[row]).toEqual(['danger']);
     expect(stakeOf(stake?.callback_data)).toMatchObject({
       durationSec: 5,
       action: TradeAction.Down,
@@ -2286,7 +2323,8 @@ describe('«➕ Ещё» under the analysis', () => {
         Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
     });
     await press(DATA);
-    const [stake, menu] = stakeRowOf(calls) ?? [];
+    const [stake] = stakeRowOf(calls) ?? [];
+    const menu = menuOf(calls);
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '2.5'));
     expect(stake?.text).toContain('$2.50');
     expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(
@@ -2301,7 +2339,8 @@ describe('«➕ Ещё» under the analysis', () => {
       readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
     await press(DATA);
-    const [stake, menu] = stakeRowOf(calls) ?? [];
+    const [stake] = stakeRowOf(calls) ?? [];
+    const menu = menuOf(calls);
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
     expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null, TradeMode.Demo));
     expect(menu).toEqual(STAKE_MENU);
@@ -2398,7 +2437,7 @@ describe('«➕ Ещё» under the analysis', () => {
       rowsOf(expandedOf(calls).at(-1)?.payload)
         .flat()
         .map((b) => b.callback_data ?? '');
-    const TAIL = [[REPEAT], [BACK_EURUSD_PAIR, BACK_GROUPS]];
+    const TAIL = [[REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS]];
 
     it('marks a real analysis :r and a demo one :d', async () => {
       const real = setup({ readTradingAccess: realAccess });
@@ -2731,7 +2770,7 @@ describe('the demo and the email dialog', () => {
 
 // #318: the summary card is a photo, so a button under it that edits the pressed message is
 // refused with «there is no text in the message to edit»; the screen then goes as a new message.
-// «📊 Новый анализ» tries no edit (#482): the press carries the photo, and «⏳» goes at once.
+// «📊 Анализ» tries no edit (#482): the press carries the photo, and «⏳» goes at once.
 describe('a press under the session card (a photo)', () => {
   // the card's buttons that edit the pressed message: «🔁 Ещё сессия» replies (K7 in
   // trading-session.test.ts; in demo its amount screen, `:n`, #476) and «🏠 В меню» replies too
@@ -2770,7 +2809,7 @@ describe('a press under the session card (a photo)', () => {
     }
   });
 
-  it('C1 «📡 К сигналам» sends the signals list as a new message', async () => {
+  it('C1 «📡 Сигналы» sends the signals list as a new message', async () => {
     const { calls, logger, signalWaiter } = await pressOnPhoto(DEMO_SIGNALS_CALLBACK_DATA);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
     // #664: the list's 30 s run on the new message
@@ -2780,7 +2819,7 @@ describe('a press under the session card (a photo)', () => {
     });
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(TEXTS.demoSignalsHeader({ label: '⏱ 5 с' }).value);
-    expect(rowsOf(sent).slice(-2)).toEqual(LIST_FOOTER);
+    expect(rowsOf(sent).slice(-1)).toEqual(LIST_FOOTER);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
       method: 'editMessageText',
@@ -2798,7 +2837,7 @@ describe('a press under the session card (a photo)', () => {
   });
 
   // #482: under a photo «⏳» goes as a new message at once, with no edit tried first
-  it('C3 «📊 Новый анализ» sends «⏳» as a new message, then the card under it, and deletes «⏳»', async () => {
+  it('C3 «📊 Анализ» sends «⏳» as a new message, then the card under it, and deletes «⏳»', async () => {
     const { pressOnPhoto: press, calls, evaluateSignal } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
     expect(methods(calls)).toEqual([
@@ -2880,7 +2919,7 @@ describe('a press under the session card (a photo)', () => {
     ]);
   });
 
-  it('C4 «📊 Новый анализ» with the catalog unreadable sends the failure screen anew', async () => {
+  it('C4 «📊 Анализ» with the catalog unreadable sends the failure screen anew', async () => {
     const { calls, evaluateSignal } = await pressOnPhoto(
       demoAnalysisCallbackData(PAIR_EURUSD.id, 5),
       { readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)) },
@@ -2920,8 +2959,7 @@ describe('the analysis card', () => {
       chooseAmount,
     }).text.value;
   const UNAVAILABLE_ROWS = [
-    [button(LABELS.repeatAnalysisButton, DATA)],
-    [BACK_EURUSD_PAIR, BACK_GROUPS],
+    [button(LABELS.repeatAnalysisButton, DATA), BACK_EURUSD_PAIR, BACK_GROUPS],
   ];
 
   it('uploads each picture once, then sends it by the file_id Telegram answered with', async () => {

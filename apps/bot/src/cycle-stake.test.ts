@@ -43,6 +43,7 @@ import {
   stubTracker,
   textUpdate,
   type ApiCall,
+  inlineRows,
 } from './testing';
 import { LABELS, sessionStatusText, TEXTS, textOf } from './texts';
 import { START_REFUSALS } from './trading-session';
@@ -131,7 +132,7 @@ const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
 const payloadOf = (calls: readonly ApiCall[], method: string) =>
   calls.find((call) => call.method === method)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
-  (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
+  inlineRows(payload) as Button[][];
 const warnings = (logger: ReturnType<typeof fakeLogger>) =>
   logger.warn.mock.calls.map((call) => call[1] as string);
 const STATUS = sessionStatusText(pairLabel(PAIR_EURUSD), SESSION_VIEW).value;
@@ -197,7 +198,7 @@ describe('an amount of the amount screen', () => {
     expect(sent?.text).toBe(
       TEXTS.stakeAboveAvailableAmount({ demoAvailable: d('3'), minStake: d('1') }).value,
     );
-    expect(rowsOf(sent)).toEqual([[AMOUNTS_AGAIN], [BACK_LIST]]);
+    expect(rowsOf(sent)).toEqual([[AMOUNTS_AGAIN, BACK_LIST]]);
   });
 
   it('starts nothing on a save of unknown outcome, and warns', async () => {
@@ -206,7 +207,7 @@ describe('an amount of the amount screen', () => {
     expect(startSession).not.toHaveBeenCalled();
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(TEXTS.stakeSaveUnknown.value);
-    expect(rowsOf(sent)).toEqual([[AMOUNTS_AGAIN], [BACK_LIST]]);
+    expect(rowsOf(sent)).toEqual([[AMOUNTS_AGAIN, BACK_LIST]]);
     expect(warnings(logger)).toEqual(['stake save outcome unknown']);
   });
 
@@ -344,7 +345,7 @@ describe('an amount of the amount screen', () => {
   });
 });
 
-describe('«✏️ Своя сумма» of the amount screen', () => {
+describe('«✏️ Ввести» of the amount screen', () => {
   it.each(['l', 'a'] as const)(
     'asks for the amount in place, the way back to the screen (%s)',
     async (back) => {

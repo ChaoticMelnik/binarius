@@ -123,8 +123,10 @@ describe('/invite', () => {
     const message = sentPayload(api.calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.unavailable.value);
     expect(inlineRows(message)).toEqual([
-      [{ text: LABELS.demoRetryButton, callback_data: commandRetryCallbackData('invite') }],
-      MENU_ROW,
+      [
+        { text: LABELS.demoRetryButton, callback_data: commandRetryCallbackData('invite') },
+        ...MENU_ROW,
+      ],
     ]);
     expect(logger.warn.mock.calls).toEqual([
       [

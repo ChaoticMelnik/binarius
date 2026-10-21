@@ -55,7 +55,7 @@ const PACKAGE_ROWS = [
   ]),
   MENU_ROW,
 ];
-const SUPPORT_MENU_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }], MENU_ROW];
+const SUPPORT_MENU_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }, ...MENU_ROW]];
 
 function setup(patch: Partial<BackendClient> = {}) {
   const logger = fakeLogger();
@@ -85,7 +85,7 @@ const refused = (status: number, reason: string) => () =>
   Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason }));
 const unreachable = () => Promise.reject(new BackendError(BackendErrorCode.Unreachable));
 
-describe('/buy and «⭐ Купить токены»', () => {
+describe('/buy and «⭐ Купить»', () => {
   it.each([
     ['/buy', textUpdate('/buy')],
     ['the button', callbackUpdate(BUY_CALLBACK_DATA)],
@@ -159,8 +159,7 @@ describe('/buy and «⭐ Купить токены»', () => {
     const message = sentPayload(api.calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.unavailable.value);
     expect(inlineRows(message)).toEqual([
-      [{ text: LABELS.demoRetryButton, callback_data: BUY_CALLBACK_DATA }],
-      MENU_ROW,
+      [{ text: LABELS.demoRetryButton, callback_data: BUY_CALLBACK_DATA }, ...MENU_ROW],
     ]);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
@@ -210,8 +209,10 @@ describe('a package', () => {
     const { bot, api } = setup({ createStarsInvoice: vi.fn(unreachable) });
     await bot.handleUpdate(callbackUpdate(buyPackageCallbackData('p150')));
     expect(inlineRows(sentPayload(api.calls, 'sendMessage'))).toEqual([
-      [{ text: LABELS.demoRetryButton, callback_data: buyPackageCallbackData('p150') }],
-      MENU_ROW,
+      [
+        { text: LABELS.demoRetryButton, callback_data: buyPackageCallbackData('p150') },
+        ...MENU_ROW,
+      ],
     ]);
   });
 });

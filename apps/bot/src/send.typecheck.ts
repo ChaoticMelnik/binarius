@@ -3,7 +3,7 @@
 // caller cannot hand the seam entities in place of parse_mode. If any of them starts compiling,
 // tsc reports TS2578 (unused directive) and `pnpm check` fails.
 import type { Api, Context, InlineKeyboard, InputFile } from 'grammy';
-import type { TelegramHtml } from '@binarius/shared';
+import type { BotKeyboard, TelegramHtml } from '@binarius/shared';
 import {
   answerInlineQueryEmpty,
   answerInlineQueryPhotoHtml,
@@ -26,7 +26,8 @@ import {
 declare const ctx: Context;
 declare const api: Api;
 declare const text: TelegramHtml;
-declare const keyboard: InlineKeyboard;
+declare const keyboard: BotKeyboard;
+declare const grammyKeyboard: InlineKeyboard;
 declare const png: InputFile;
 // @ts-expect-error the seam takes TelegramHtml, not a string (TS2345)
 export const viaSeam = replyHtml(ctx, 'raw');
@@ -190,3 +191,33 @@ export const viaInvoiceNoNextStep = replyWithInvoiceStars(ctx, invoice, { pay: '
 // #538: the storage post takes no caption and no keyboard, so a fourth argument does not compile
 // @ts-expect-error a caption or reply_markup cannot reach the storage post (TS2554)
 export const viaStorageExtra = sendPhotoToStorage(api, 1, png, { reply_markup: keyboard });
+
+// #475: only a keyboard built by role is a next step, never grammY's nor a bare markup
+// @ts-expect-error a grammY InlineKeyboard has no roles (TS2322)
+export const viaGrammyKeyboard = replyHtml(ctx, text, { reply_markup: grammyKeyboard });
+// @ts-expect-error nor a bare inline markup (TS2322)
+export const viaBareMarkup = replyHtml(ctx, text, { reply_markup: { inline_keyboard: [] } });
+// @ts-expect-error the edit takes neither (TS2322)
+export const viaEditGrammy = editMessageTextHtml(ctx, text, { reply_markup: grammyKeyboard });
+export const viaEditBare = editMessageTextHtml(ctx, text, {
+  // @ts-expect-error (TS2322)
+  reply_markup: { inline_keyboard: [] },
+});
+export const viaPhotoByIdGrammy = sendPhotoByIdHtml(api, 1, 'id', text, {
+  // @ts-expect-error the photo by id neither (TS2322)
+  reply_markup: grammyKeyboard,
+});
+export const viaPhotoByIdBare = sendPhotoByIdHtml(api, 1, 'id', text, {
+  // @ts-expect-error (TS2322)
+  reply_markup: { inline_keyboard: [] },
+});
+export const viaInvoiceGrammy = replyWithInvoiceStars(ctx, invoice, {
+  pay: 'p',
+  // @ts-expect-error the invoice's next step neither (TS2322)
+  then: grammyKeyboard,
+});
+export const viaInvoiceBare = replyWithInvoiceStars(ctx, invoice, {
+  pay: 'p',
+  // @ts-expect-error (TS2322)
+  then: { inline_keyboard: [] },
+});

@@ -16,6 +16,10 @@ import { createUserLanguages, type UserLanguages } from './language';
 import { LABELS } from './texts';
 import {
   BrokerAccountStatus,
+  isBotKeyboard,
+  type BotKeyboard,
+  type ButtonRole,
+  type ButtonStyle,
   brokerBalanceViewSchema,
   decimalStringSchema,
   BrokerRestErrorCode,
@@ -65,7 +69,7 @@ import {
   type BotTextSource,
   BotLanguage,
 } from '@binarius/shared';
-import { stripMessageSpacer } from '@binarius/shared/testing';
+import { botKeyboardProblems, stripMessageSpacer } from '@binarius/shared/testing';
 
 // A text source for the tests of the source swap (#240): the named keys read a marked text of
 // their own kind, with every variable the key has; every other key its default.
@@ -797,7 +801,7 @@ export const WRITE_CALLBACK_PREFIXES = [
   'level:',
   // a refund request from /paysupport (#118)
   'ps:r:',
-  // the mode switches (#474): «✅ Подтверждаю» and «🎮 Вернуться в демо» of the mode screen
+  // the mode switches (#474): «✅ Подтверждаю» and «🎮 В демо» of the mode screen
   'mode:r:ok',
   'mode:d',
   // a language of the language screen (#508); `lang` alone opens the screen, a read
@@ -850,6 +854,15 @@ export function refuseWidthSpacerMisuse(
   return payload;
 }
 
+// Every keyboard a scene sends is built by role and laid out by its rule (#475,
+// docs/bot-navigation.md → Roles, colours and rows): a grammY or a bare keyboard, a lone
+// non-forward button or a label wider than its row throws, and the scene fails.
+export function refuseKeyboardOutsideRoles(method: string, payload: Record<string, unknown>): void {
+  if (payload.reply_markup === undefined) return;
+  const problems = botKeyboardProblems(payload.reply_markup);
+  if (problems.length > 0) throw new Error(`${method}: ${problems.join('; ')}`);
+}
+
 export function captureApi(bot: Bot): CapturedApi {
   const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
   bot.api.config.use(((
@@ -861,6 +874,7 @@ export function captureApi(bot: Bot): CapturedApi {
     const recorded = refuseWidthSpacerMisuse(method, payload);
     captured.calls.push({ method, payload: recorded });
     refuseWriteRetried(method, payload);
+    refuseKeyboardOutsideRoles(method, payload);
     const failure = captured.apiErrors.get(method);
     if (failure !== undefined) {
       if (failure instanceof Error) throw failure;
@@ -923,22 +937,46 @@ export const sentPayload = (
   method: string,
 ): Record<string, unknown> | undefined => calls.find((call) => call.method === method)?.payload;
 
-export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
-  (
-    payload?.reply_markup as {
-      inline_keyboard?: {
-        text: string;
-        callback_data?: string;
-        url?: string;
-        web_app?: { url: string };
-        switch_inline_query_chosen_chat?: Record<string, unknown>;
-      }[][];
-    }
-  )?.inline_keyboard?.flat() ?? [];
+interface WireButton {
+  text: string;
+  callback_data?: string;
+  url?: string;
+  web_app?: { url: string };
+  pay?: boolean;
+  switch_inline_query_chosen_chat?: Record<string, unknown>;
+}
 
-// the keyboard row by row, where inlineButtons flattens it
-export const inlineRows = (payload: Record<string, unknown> | undefined) =>
-  (payload?.reply_markup as { inline_keyboard?: unknown[][] } | undefined)?.inline_keyboard ?? [];
+const markupRows = (payload: Record<string, unknown> | undefined) =>
+  (payload?.reply_markup as { inline_keyboard?: (WireButton & { style?: ButtonStyle })[][] })
+    ?.inline_keyboard ?? [];
+
+// the keyboard row by row without the colours (#475), which inlineStyles reads
+export const inlineRows = (payload: Record<string, unknown> | undefined): WireButton[][] =>
+  markupRows(payload).map((row) =>
+    row.map((button) => {
+      const { style, ...wire } = button;
+      void style;
+      return wire;
+    }),
+  );
+
+// a built keyboard's rows as inlineRows reads them from a payload
+export const keyboardRows = (keyboard: BotKeyboard): WireButton[][] =>
+  inlineRows({ reply_markup: keyboard });
+
+export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
+  inlineRows(payload).flat();
+
+// each button's `style` by row, null where it has none (#475)
+export const inlineStyles = (payload: Record<string, unknown> | undefined) =>
+  markupRows(payload).map((row) => row.map((button) => button.style ?? null));
+
+// each button's role by row (#475), read from the BotKeyboard the scene sent
+export const inlineRoles = (payload: Record<string, unknown> | undefined): ButtonRole[][] => {
+  const markup = payload?.reply_markup;
+  if (!isBotKeyboard(markup)) throw new Error('the payload carries no keyboard built by role');
+  return markup.rows.map((row) => row.map((button) => button.role));
+};
 
 // An ephemeral loopback server: `listen` returns the base URL the client should be pointed at.
 export async function listen(server: Server): Promise<string> {

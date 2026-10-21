@@ -1,4 +1,4 @@
-import { GrammyError, HttpError, type Api, type InlineKeyboard } from 'grammy';
+import { GrammyError, HttpError, type Api } from 'grammy';
 import {
   editRefusal,
   errorLogFields,
@@ -6,6 +6,7 @@ import {
   SignalFeedOutcome,
   SignalKind,
   telegramErrorFields,
+  type BotKeyboard,
   type BotLanguage,
   type PairsCatalogResponse,
   type PairView,
@@ -111,7 +112,7 @@ export interface SignalWaitScreens {
     pair: PairView,
     response: TradingSignalResponse,
     access: TradingAccessResponse | null,
-  ): { text: TelegramHtml; keyboard: InlineKeyboard; action: TradeAction } | undefined;
+  ): { text: TelegramHtml; keyboard: BotKeyboard; action: TradeAction } | undefined;
   photos: Pick<SetupCardPhotos, 'photo' | 'remember' | 'forget'>;
 }
 
@@ -431,7 +432,7 @@ export function createSignalWaiter({
   // forgets its file_id and the caption goes as the text, under the same keyboard.
   async function drawCard(
     entry: Entry,
-    card: { text: TelegramHtml; keyboard: InlineKeyboard; action: TradeAction },
+    card: { text: TelegramHtml; keyboard: BotKeyboard; action: TradeAction },
   ): Promise<EditOutcome> {
     const { photos } = attached();
     await pace();

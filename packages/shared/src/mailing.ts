@@ -31,7 +31,7 @@ export const FIRST_SESSION_CHAIN = [
 export const ANALYSIS_UNUSED_AFTER_MS = 600_000;
 export const ANALYSIS_UNUSED_UNTIL_MS = 3_600_000;
 
-// The job's payload: the pair and duration of the analysis, for the «📊 Новый анализ» button.
+// The job's payload: the pair and duration of the analysis, for the «📊 Анализ» button.
 export const analysisUnusedPayloadSchema = z.object({
   assetId: createTradeIntentRequestSchema.shape.assetId,
   durationSec: createTradeIntentRequestSchema.shape.durationSec,

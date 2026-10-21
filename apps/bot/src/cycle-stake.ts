@@ -1,10 +1,14 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
+  ButtonRole,
+  callbackButton,
   editRefusal,
+  keyboardOf,
   errorLogFields,
   parseStakeInput,
   StakeErrorCode,
   TradeMode,
+  type BotKeyboard,
   type PairsCatalogResponse,
   type TelegramHtml,
   telegramErrorFields,
@@ -17,8 +21,8 @@ import {
   type SetStakeResult,
 } from './backend-client';
 import {
-  appendCycleBack,
   CYCLE_CUSTOM_PATTERN,
+  cycleBackButton,
   CYCLE_STAKE_PATTERN,
   cycleCustomDataOf,
   cycleStakeDataOf,
@@ -38,7 +42,7 @@ import type { StartSession } from './trading-session';
 // the demo stake through POST /trading/stake, and only once it is saved the cycle starts through
 // POST /trading/sessions, which reads the saved stake itself. Two requests, not atomic (accepted
 // risk 1 of the plan): a refused start leaves the amount saved, a preference in any mode (Rule 29).
-// «✏️ Своя сумма» asks for the amount in place; the typed amount is saved and starts the cycle the
+// «✏️ Ввести» asks for the amount in place; the typed amount is saved and starts the cycle the
 // same way.
 
 export interface CycleStakeDeps {
@@ -51,20 +55,30 @@ export interface CycleStakeDeps {
 
 interface Screen {
   text: TelegramHtml;
-  keyboard: InlineKeyboard;
+  keyboard: BotKeyboard;
 }
 
 // «💵 Сумма» under a refusal: the amount screen again, as a new message under the refusal, then
 // the way back
-const retryKeyboard = (step: CycleStakeStep): InlineKeyboard =>
-  appendCycleBack(
-    new InlineKeyboard()
-      .text(LABELS.stakeMenuButton, demoLaunchCallbackData(step.assetId, step.durationSec, 'n'))
-      .row(),
-    step,
-  );
-const backKeyboard = (step: CycleStakeStep): InlineKeyboard =>
-  appendCycleBack(new InlineKeyboard(), step);
+const retryKeyboard = (step: CycleStakeStep): BotKeyboard =>
+  keyboardOf([
+    callbackButton(
+      ButtonRole.Secondary,
+      LABELS.stakeMenuButton,
+      demoLaunchCallbackData(step.assetId, step.durationSec, 'n'),
+    ),
+    cycleBackButton(step),
+  ]);
+const backKeyboard = (step: CycleStakeStep): BotKeyboard => keyboardOf([cycleBackButton(step)]);
+// the prompt's and its refusal's way back: the amount screen again
+const promptBackKeyboard = (step: CycleStakeStep): BotKeyboard =>
+  keyboardOf([
+    callbackButton(
+      ButtonRole.Nav,
+      LABELS.stakeBackButton,
+      demoLaunchCallbackData(step.assetId, step.durationSec, step.back),
+    ),
+  ]);
 
 // A save that did not answer `saved`, by where the answer came from, as the picker's savedScreen
 // (stake-picker.ts): `keep` leaves a typed amount's step open, so the user can type again, until
@@ -113,14 +127,7 @@ export function createCycleStakeComposer<C extends Context>({
     }
     dialog.set(ctx.from.id, { step: 'cycleStake', ...step });
     await answerCallback(ctx, logger);
-    await editOrReply(
-      ctx,
-      TEXTS.stakeInputPrompt,
-      new InlineKeyboard().text(
-        LABELS.stakeBackButton,
-        demoLaunchCallbackData(step.assetId, step.durationSec, step.back),
-      ),
-    );
+    await editOrReply(ctx, TEXTS.stakeInputPrompt, promptBackKeyboard(step));
   });
 
   // A typed amount: saved, then the cycle starts with the start's one retry on an unknown outcome;
@@ -132,10 +139,7 @@ export function createCycleStakeComposer<C extends Context>({
     if (amount === undefined) {
       keepStep(from.id);
       await replyHtml(ctx, TEXTS.stakeInputInvalid, {
-        reply_markup: new InlineKeyboard().text(
-          LABELS.stakeBackButton,
-          demoLaunchCallbackData(step.assetId, step.durationSec, step.back),
-        ),
+        reply_markup: promptBackKeyboard(step),
       });
       return;
     }
@@ -214,7 +218,7 @@ export function createCycleStakeComposer<C extends Context>({
 
   // Every refusal of an edit is classified as in demo.ts: already shown is done, gone gets the
   // screen anew, a transport failure sends nothing more, anything else goes to bot.catch.
-  async function editOrReply(ctx: Context, text: TelegramHtml, reply_markup: InlineKeyboard) {
+  async function editOrReply(ctx: Context, text: TelegramHtml, reply_markup: BotKeyboard) {
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });
     } catch (error) {

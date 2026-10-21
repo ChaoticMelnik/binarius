@@ -69,6 +69,7 @@ import {
   fakeLogger,
   inlineButtons,
   inlineRows,
+  inlineStyles,
   listen,
   messageAnswer,
   rejectionOf,
@@ -451,33 +452,24 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // the demo, then the invite (#115) and the purchase (#117) in one row (#506), and the deposit
-  // (#27), the cashier Mini App, beside the language (#508)
+  // #475: the entry alone, the mode screen beside the invite (#115), the purchase (#117) beside
+  // the language (#508), the deposit (#27), the cashier Mini App, alone
   const LANGUAGE = { text: LABELS.languageButton, callback_data: LANGUAGE_CALLBACK_DATA };
-  const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }, LANGUAGE];
-  // the entry and the mode screen share the first row (#474)
+  const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
+  const MIDDLE_ROWS = (mode: { text: string; callback_data: string }) => [
+    [mode, { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
+    [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }, LANGUAGE],
+  ];
   const CARD_ROWS = [
-    [
-      { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
-      { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
-    ],
-    [
-      { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
-      { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
-    ],
+    [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
+    ...MIDDLE_ROWS({ text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA }),
     DEPOSIT_ROW,
   ];
-  // in real mode the entry reads «🚀 Торговать» (#121) and the mode button «🎮 Вернуться в демо»,
-  // which opens the mode screen (#474); the purchase and the deposit in both modes
+  // in real mode the entry reads «🚀 Торговать» (#121) and the mode button «🎮 В демо», which
+  // opens the mode screen (#474); the purchase and the deposit in both modes
   const REAL_CARD_ROWS = [
-    [
-      { text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA },
-      { text: LABELS.modeBackDemoButton, callback_data: MODE_CALLBACK_DATA },
-    ],
-    [
-      { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
-      { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
-    ],
+    [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
+    ...MIDDLE_ROWS({ text: LABELS.modeBackDemoButton, callback_data: MODE_CALLBACK_DATA }),
     DEPOSIT_ROW,
   ];
   // the line's default holds none of its variables
@@ -517,6 +509,13 @@ describe('the status card', () => {
       expect(photo?.caption).toBe(cardFor());
       expect(photo?.photo).toBeInstanceOf(InputFile);
       expect(inlineRows(photo)).toEqual(CARD_ROWS);
+      // #475: the entry and the deposit green, the purchase blue, the rest without a colour
+      expect(inlineStyles(photo)).toEqual([
+        ['success'],
+        [null, null],
+        ['primary', null],
+        ['success'],
+      ]);
       expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
         message_id: CARD_MESSAGE_ID,
         disable_notification: true,
@@ -543,6 +542,13 @@ describe('the status card', () => {
       plainTextOf(TEXTS.statusHint(userContextOf(USER.first_name, TradeMode.Demo, real))),
     );
     expect(inlineRows(photo)).toEqual(REAL_CARD_ROWS);
+    // «🎮 В демо» is a secondary action (#475 Plan Update)
+    expect(inlineStyles(photo)).toEqual([
+      ['success'],
+      ['primary', null],
+      ['primary', null],
+      ['success'],
+    ]);
   });
 
   // #27: an origin that is not https gives the bot no cashier URL, and the card no deposit row
@@ -554,10 +560,7 @@ describe('the status card', () => {
         cashierUrl: null,
       });
       const rows = mode === TradeMode.Real ? REAL_CARD_ROWS : CARD_ROWS;
-      expect(inlineRows(sentPayload(calls, 'sendPhoto')), mode).toEqual([
-        ...rows.slice(0, -1),
-        [LANGUAGE],
-      ]);
+      expect(inlineRows(sentPayload(calls, 'sendPhoto')), mode).toEqual(rows.slice(0, -1));
     }
   });
 
@@ -790,8 +793,8 @@ describe('«🏠 В меню» (#350)', () => {
       { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
-      { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
       { text: LABELS.languageButton, callback_data: LANGUAGE_CALLBACK_DATA },
+      { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
     ]);
   });
 
@@ -2423,9 +2426,12 @@ describe('/settings', () => {
       expect(sends[0]?.payload.text).toBe(
         settingsText(notificationLevel, null, null, USER.first_name).value,
       );
-      expect(
-        (sends[0]?.payload.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard,
-      ).toEqual([levelButtons(notificationLevel), stakeRow]);
+      expect(inlineRows(sends[0]?.payload)).toEqual([levelButtons(notificationLevel), stakeRow]);
+      // #475: a level is a choice, no colour; the stakes' pickers secondary
+      expect(inlineStyles(sends[0]?.payload)).toEqual([
+        [null, null, null],
+        ['primary', 'primary'],
+      ]);
     },
   );
 
@@ -2505,10 +2511,7 @@ describe('/settings', () => {
         text: settingsText(NotificationLevel.Off, null, null, USER.first_name).value,
         parse_mode: 'HTML',
       });
-      expect((edit?.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard).toEqual([
-        levelButtons(NotificationLevel.Off),
-        stakeRow,
-      ]);
+      expect(inlineRows(edit)).toEqual([levelButtons(NotificationLevel.Off), stakeRow]);
     });
 
     it('keeps both stakes the level answer carries (#326)', async () => {

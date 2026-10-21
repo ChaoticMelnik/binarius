@@ -67,6 +67,9 @@ import {
   stubSessionTracker,
   stubTracker,
   type ApiCall,
+  inlineRows,
+  inlineStyles,
+  keyboardRows,
 } from './testing';
 import { intentStatusText, LABELS, setBotTextSource, TEXTS } from './texts';
 
@@ -139,7 +142,7 @@ const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
 const payloadOf = (calls: readonly ApiCall[], method: string) =>
   calls.find((call) => call.method === method)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
-  (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
+  inlineRows(payload) as Button[][];
 const button = (text: string, callback_data: string): Button => ({ text, callback_data });
 const warnings = (logger: ReturnType<typeof fakeLogger>) =>
   logger.warn.mock.calls.map((call) => call[1] as string);
@@ -148,35 +151,34 @@ const REFRESH_ROWS = [[button(LABELS.refreshIntentButton, REFRESH)]];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 // #350: a refusal of the press leads back to the analysis and to the menu; a blocked user to support
 const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
-const BACK_ROWS = [
-  [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5))],
-  MENU_ROW,
-];
+const BACK = button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+const BACK_ROWS = [[BACK, ...MENU_ROW]];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
-// for want of tokens, the purchase and the deposit (#27) in one row, above the way back (#117)
-const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
+// for want of tokens, the deposit (#27) on its own row, the purchase beside the way back (#117,
+// #475)
+const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA), BACK, ...MENU_ROW]];
 const BUY_ROWS = [
-  [
-    button(LABELS.buyButton, BUY_CALLBACK_DATA),
-    { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
-  ],
-  ...BACK_ROWS,
+  [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }],
+  ...BUY_ONLY_ROWS,
 ];
-// the end of the path (#350): the analysis of the same pair at 5 s and the signals list in one
-// row (#506, #685), the menu
-const END_ROWS = [
-  [
-    button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
-    button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA),
-  ],
-  MENU_ROW,
-];
+// the end of the path (#350): the analysis of the same pair at 5 s, the signals list (#685) and
+// the menu in one row (#475)
+const ANALYSIS = button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+const SIGNALS = button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA);
+const END_ROWS = [[ANALYSIS, SIGNALS, ...MENU_ROW]];
 // #360: under a finished trade, the session on the same pair and duration before the end of the
 // path; in demo it opens the amount screen as a new message (#476)
 const SESSION_ROW = [
   button('🚀 Сессия из 5 циклов', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
 ];
 const OFFER_END_ROWS = [SESSION_ROW, ...END_ROWS];
+// an accepted trade (#360): the session on its own row, then the refresh joins the end of the
+// path in rows of two (#475)
+const ACCEPTED_ROWS = [
+  SESSION_ROW,
+  [button(LABELS.refreshIntentButton, REFRESH), ANALYSIS],
+  [SIGNALS, ...MENU_ROW],
+];
 const OFFER = '🤖 Дальше бот может торговать сам';
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const STAKE_MENU_ROWS = [
@@ -294,7 +296,7 @@ describe('the stake button', () => {
     await entry.edit(telegramHtml`gone`, INTENT_VIEW, 'not_found');
     expect(lastEdit()).toEqual([MENU_ROW]);
     await entry.edit(telegramHtml`late`, INTENT_VIEW, 'deadline');
-    expect(lastEdit()).toEqual([...REFRESH_ROWS, MENU_ROW]);
+    expect(lastEdit()).toEqual([[...REFRESH_ROWS[0]!, ...MENU_ROW]]);
 
     // #350: the tracker's last edit draws the end of the path, after the session offer (#360)
     await entry.edit(telegramHtml`settled`, intentView({ status: TradeIntentStatus.Settled }));
@@ -342,7 +344,7 @@ describe('the stake button', () => {
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(intent, true));
     expect(sent?.text).toContain(OFFER);
-    expect(rowsOf(sent)).toEqual(intentKeyboard(intent).inline_keyboard);
+    expect(rowsOf(sent)).toEqual(keyboardRows(intentKeyboard(intent)));
     expect(rowsOf(sent)).toContainEqual(SESSION_ROW);
     expect(intentTracker.track).not.toHaveBeenCalled();
   });
@@ -846,7 +848,7 @@ describe('the refresh button', () => {
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit?.text).toBe(statusOf(submitting));
     // #350: nothing tracks this message, so a live status gets the menu under its refresh
-    expect(rowsOf(edit)).toEqual([...REFRESH_ROWS, MENU_ROW]);
+    expect(rowsOf(edit)).toEqual([[...REFRESH_ROWS[0]!, ...MENU_ROW]]);
     expect(intentTracker.track).not.toHaveBeenCalled();
   });
 
@@ -859,14 +861,16 @@ describe('the refresh button', () => {
     expect(rowsOf(edit)).toEqual(OFFER_END_ROWS);
   });
 
-  // #360: an accepted trade can still settle: the refresh, the session, then the end of the path
-  it('draws five rows on an accepted trade: the refresh, the session, the end of the path', async () => {
+  // #360: an accepted trade can still settle: the session, then the refresh and the end of the path
+  it('draws the session, then the refresh and the end of the path on an accepted trade', async () => {
     const accepted = intentView({ status: TradeIntentStatus.Accepted });
     const { press, calls } = setup({ readIntent: () => Promise.resolve(accepted) });
     await press(REFRESH);
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit?.text).toBe(statusOf(accepted, true));
-    expect(rowsOf(edit)).toEqual([...REFRESH_ROWS, ...OFFER_END_ROWS]);
+    expect(rowsOf(edit)).toEqual(ACCEPTED_ROWS);
+    // #475: the session green, the refresh and the analysis blue, the signals and menu no colour
+    expect(inlineStyles(edit)).toEqual([['success'], ['primary', 'primary'], [null, null]]);
   });
 
   it.each([TradeIntentStatus.Unknown, TradeIntentStatus.ManualReview])(
@@ -960,8 +964,7 @@ describe('the refresh button', () => {
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
     // a read: the same press again, then the menu
     expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
-      [button(LABELS.demoRetryButton, REFRESH)],
-      MENU_ROW,
+      [button(LABELS.demoRetryButton, REFRESH), ...MENU_ROW],
     ]);
     expect(warnings(logger)).toEqual(['trade intent status not read']);
   });
@@ -990,7 +993,7 @@ describe('the refresh button', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf());
-    expect(rowsOf(sent)).toEqual([...REFRESH_ROWS, MENU_ROW]);
+    expect(rowsOf(sent)).toEqual([[...REFRESH_ROWS[0]!, ...MENU_ROW]]);
   });
 
   it('sends nothing more and warns when the edit fails in transport', async () => {
@@ -1015,16 +1018,15 @@ describe('the refresh button', () => {
 // #350: the keyboard follows the status: the refresh while the trade can move, the end of the
 // path once the tracker stops
 describe('intentKeyboard', () => {
-  const rows = (status: TradeIntentStatus) =>
-    intentKeyboard(intentView({ status })).inline_keyboard;
+  const rows = (status: TradeIntentStatus) => keyboardRows(intentKeyboard(intentView({ status })));
 
   it('offers only the refresh while the tracker follows the trade', () => {
     expect(rows(TradeIntentStatus.Queued)).toEqual(REFRESH_ROWS);
     expect(rows(TradeIntentStatus.Submitting)).toEqual(REFRESH_ROWS);
   });
 
-  it('keeps the refresh above the session and the end of the path while an accepted trade can still settle', () => {
-    expect(rows(TradeIntentStatus.Accepted)).toEqual([...REFRESH_ROWS, ...OFFER_END_ROWS]);
+  it('keeps the refresh under the session, in the end of the path, while an accepted trade can still settle', () => {
+    expect(rows(TradeIntentStatus.Accepted)).toEqual(ACCEPTED_ROWS);
   });
 
   it('drops the refresh once the trade has no way left to move', () => {
@@ -1035,7 +1037,7 @@ describe('intentKeyboard', () => {
   // #476: the demo offer opens the amount screen under the trade, the real one starts at once
   it('offers the session of the trade pair and duration: the amount screen in demo (door «offer opens the amount screen»)', () => {
     const view = intentView({ status: TradeIntentStatus.Settled, assetId: 77, durationSec: 5 });
-    expect(intentKeyboard(view).inline_keyboard[0]).toEqual([
+    expect(keyboardRows(intentKeyboard(view))[0]).toEqual([
       button('🚀 Сессия из 5 циклов', 'demo:l:77:5:n'),
     ]);
     const real = intentView({
@@ -1044,7 +1046,7 @@ describe('intentKeyboard', () => {
       assetId: 77,
       durationSec: 5,
     });
-    expect(intentKeyboard(real).inline_keyboard[0]).toEqual([
+    expect(keyboardRows(intentKeyboard(real))[0]).toEqual([
       button('🚀 Сессия из 5 циклов · REAL', sessionStartCallbackData(TradeMode.Real, 77, 5)),
     ]);
   });

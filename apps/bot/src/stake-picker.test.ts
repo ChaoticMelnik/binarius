@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ButtonRole,
   pairLabel,
   BrokerBalanceUnavailableReason,
   decimalStringSchema,
@@ -61,6 +62,10 @@ import {
   textUpdate,
   userView,
   type ApiCall,
+  inlineRoles,
+  inlineRows,
+  inlineStyles,
+  keyboardRows,
 } from './testing';
 import {
   LABELS,
@@ -140,7 +145,7 @@ function setup(
 const lastPayload = (calls: readonly ApiCall[]) =>
   calls.filter((call) => ['editMessageText', 'sendMessage'].includes(call.method)).at(-1)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
-  (payload?.reply_markup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? [];
+  inlineRows(payload) as Button[][];
 const button = (text: string, callback_data: string): Button => ({ text, callback_data });
 const preset = (
   amount: string,
@@ -153,9 +158,12 @@ const BACK_ANALYSIS = [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallba
 const CUSTOM = (origin: StakeOrigin = SETTINGS, mode: TradeMode = TradeMode.Demo) => [
   button(LABELS.stakeCustomButton, stakeCustomCallbackData(mode, origin)),
 ];
+// #475: the retry and the way back in one row
 const RETRY_SETTINGS = [
-  [button(LABELS.stakeMenuButton, stakeOpenCallbackData(TradeMode.Demo, SETTINGS))],
-  BACK_SETTINGS,
+  [
+    button(LABELS.stakeMenuButton, stakeOpenCallbackData(TradeMode.Demo, SETTINGS)),
+    ...BACK_SETTINGS,
+  ],
 ];
 const httpError = (status: number, reason?: string) =>
   new BackendError(BackendErrorCode.HttpStatus, {
@@ -183,10 +191,21 @@ describe('the stake picker', () => {
         presets: 4,
       }).value,
     );
+    // #475: the presets as the amount screen draws them, «· риск» and red from $10
     expect(rowsOf(edit)).toEqual([
-      [preset('1', '$1.00 ✅'), preset('2', '$2.00'), preset('5', '$5.00'), preset('10', '$10.00')],
-      CUSTOM(),
-      BACK_SETTINGS,
+      [preset('1', '$1.00 ✅'), preset('2', '$2.00'), preset('5', '$5.00')],
+      [preset('10', '$10.00 · риск')],
+      [...CUSTOM(), ...BACK_SETTINGS],
+    ]);
+    expect(inlineRoles(edit)).toEqual([
+      [ButtonRole.Stake, ButtonRole.Stake, ButtonRole.Stake],
+      [ButtonRole.StakeRisk],
+      [ButtonRole.Secondary, ButtonRole.Nav],
+    ]);
+    expect(inlineStyles(edit)).toEqual([
+      ['success', 'success', 'success'],
+      ['danger'],
+      ['primary', null],
     ]);
   });
 
@@ -211,9 +230,11 @@ describe('the stake picker', () => {
         preset('2', '$2.00', ANALYSIS),
         preset('5', '$5.00 ✅', ANALYSIS),
       ],
-      CUSTOM(ANALYSIS),
-      [button(LABELS.stakeResetButton, stakeResetCallbackData(TradeMode.Demo, ANALYSIS))],
-      BACK_ANALYSIS,
+      [
+        ...CUSTOM(ANALYSIS),
+        button(LABELS.stakeResetButton, stakeResetCallbackData(TradeMode.Demo, ANALYSIS)),
+        ...BACK_ANALYSIS,
+      ],
     ]);
   });
 
@@ -229,7 +250,7 @@ describe('the stake picker', () => {
     await press(stakeOpenCallbackData(TradeMode.Demo, SETTINGS));
     const edit = lastPayload(calls);
     expect(edit?.text).toContain(plainTextOf(TEXTS.stakePickerNoPresets(pickerContext())));
-    expect(rowsOf(edit)).toEqual([CUSTOM(), BACK_SETTINGS]);
+    expect(rowsOf(edit)).toEqual([[...CUSTOM(), ...BACK_SETTINGS]]);
   });
 
   it.each([
@@ -238,7 +259,7 @@ describe('the stake picker', () => {
       'a blocked user',
       accessView({ status: UserStatus.Blocked }),
       TEXTS.blocked,
-      [[{ text: LABELS.supportButton, url: supportUrl() }], BACK_SETTINGS],
+      [[{ text: LABELS.supportButton, url: supportUrl() }, ...BACK_SETTINGS]],
     ],
     [
       'no account',
@@ -379,14 +400,9 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const { press, calls } = setup();
     await press(stakeOpenCallbackData(TradeMode.Demo, PAIR));
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [
-        preset('1', '$1.00 ✅', PAIR),
-        preset('2', '$2.00', PAIR),
-        preset('5', '$5.00', PAIR),
-        preset('10', '$10.00', PAIR),
-      ],
-      CUSTOM(PAIR),
-      BACK_LAUNCH,
+      [preset('1', '$1.00 ✅', PAIR), preset('2', '$2.00', PAIR), preset('5', '$5.00', PAIR)],
+      [preset('10', '$10.00 · риск', PAIR)],
+      [...CUSTOM(PAIR), ...BACK_LAUNCH],
     ]);
   });
 
@@ -403,9 +419,9 @@ describe('the stake picker opened from a launch screen (#320)', () => {
 
     const opened = setup();
     await opened.press(`stk:o:d:a:${String(PAIR_EURUSD.id)}:15`);
-    expect(rowsOf(lastPayload(opened.calls)).at(-1)).toEqual([
+    expect(rowsOf(lastPayload(opened.calls)).at(-1)?.at(-1)).toEqual(
       button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
-    ]);
+    );
   });
 
   // P-return (#476): a save from a demo launch screen sent before #476 lands on the amount screen
@@ -485,8 +501,8 @@ describe('the stake picker opened from a launch screen (#320)', () => {
           LABELS.stakeChangeButton,
           launchStakeCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
         ),
+        button(LABELS.backToListButton, 'demo:sig'),
       ],
-      [button(LABELS.backToListButton, 'demo:sig')],
     ]);
   });
 
@@ -520,8 +536,10 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       `✅ Демо-ставка сохранена: $5.00\n\n${plainTextOf(TEXTS.unavailable)}`,
     );
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5))],
-      [button(LABELS.backToListButton, 'demo:sig')],
+      [
+        button(LABELS.demoRetryButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
+        button(LABELS.backToListButton, 'demo:sig'),
+      ],
     ]);
     expect(warnings(logger)).toEqual(['trading access not read for the launch screen']);
   });
@@ -535,7 +553,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const screen = savedCycle(d('5'), { symbol: null });
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
     expect(lastPayload(calls)?.text).not.toContain(PAIR_EURUSD.symbol);
-    expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
+    expect(rowsOf(lastPayload(calls))).toEqual(keyboardRows(screen.keyboard));
     expect(warnings(logger)).toEqual(['pairs not read for the launch screen']);
   });
 
@@ -557,7 +575,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       mode: TradeMode.Real,
     });
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
-    expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
+    expect(rowsOf(lastPayload(calls))).toEqual(keyboardRows(screen.keyboard));
   });
 
   it.each([
@@ -596,8 +614,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     });
     await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(TradeMode.Demo, PAIR))],
-      BACK_LAUNCH,
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(TradeMode.Demo, PAIR)), ...BACK_LAUNCH],
     ]);
     expect(readPairs).not.toHaveBeenCalled();
   });
@@ -922,8 +939,7 @@ describe('the real stake picker', () => {
           preset('2', '$2.00', origin, R),
           preset('5', '$5.00', origin, R),
         ],
-        CUSTOM(origin, R),
-        back,
+        [...CUSTOM(origin, R), ...back],
       ]);
     },
   );
@@ -941,9 +957,11 @@ describe('the real stake picker', () => {
         preset('2', '$2.00', SETTINGS, R),
         preset('5', '$5.00 ✅', SETTINGS, R),
       ],
-      CUSTOM(SETTINGS, R),
-      [button(LABELS.stakeResetButton, stakeResetCallbackData(R, SETTINGS))],
-      BACK_SETTINGS,
+      [
+        ...CUSTOM(SETTINGS, R),
+        button(LABELS.stakeResetButton, stakeResetCallbackData(R, SETTINGS)),
+        ...BACK_SETTINGS,
+      ],
     ]);
   });
 
@@ -959,7 +977,7 @@ describe('the real stake picker', () => {
     await press(stakeOpenCallbackData(R, SETTINGS));
     const edit = lastPayload(calls);
     expect(edit?.text).toContain(plainTextOf(TEXTS.stakePickerNoPresetsReal(pickerContext(R))));
-    expect(rowsOf(edit)).toEqual([CUSTOM(SETTINGS, R), BACK_SETTINGS]);
+    expect(rowsOf(edit)).toEqual([[...CUSTOM(SETTINGS, R), ...BACK_SETTINGS]]);
   });
 
   it.each([
@@ -1014,8 +1032,7 @@ describe('the real stake picker', () => {
     await press(stakePresetCallbackData('10', R, SETTINGS));
     expect(lastPayload(calls)?.text).toBe(text.value);
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(R, SETTINGS))],
-      BACK_SETTINGS,
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(R, SETTINGS)), ...BACK_SETTINGS],
     ]);
   });
 
@@ -1033,8 +1050,7 @@ describe('the real stake picker', () => {
     await type('5');
     expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaveUnknown.value);
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(R, SETTINGS))],
-      BACK_SETTINGS,
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(R, SETTINGS)), ...BACK_SETTINGS],
     ]);
     expect(loginDialog.get(USER.id)).toEqual(ON_REAL_STEP);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ mode: R });
