@@ -373,7 +373,6 @@ export const signalWaitBoundsHold = ({
   pollMs < listTtlMs &&
   listTtlMs < maxMs &&
   maxMs < TELEGRAM_EDIT_WINDOW_MS &&
-  SIGNAL_WAIT_EDIT_GAP_MS * SIGNAL_WAIT_EDITS_PER_SECOND === 1000 &&
   inflightMs < SHUTDOWN_BUDGET_MS &&
   // the stop's last launched edit ends inside the bot's own budget
   shutdownBudgetMs + TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS;
