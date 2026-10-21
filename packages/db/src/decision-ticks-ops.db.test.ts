@@ -256,13 +256,6 @@ describe('sweepSignalDecisions (#668)', () => {
     expect(await exists([...old, young])).toEqual([young]);
   });
 
-  it('K10 a row an intent names is kept at any age', async () => {
-    const { decisionId } = await intentDecision({ profit: '-1' as DecimalString });
-    await age(decisionId, '400 days');
-    expect(await sweep()).toEqual({ decisions: 0, ticks: 0 });
-    expect(await exists([decisionId])).toEqual([decisionId]);
-  });
-
   it('K11 a ticks row goes with its decision, in the same batch as rows without one', async () => {
     const withTicks = await shadowDecision('0000');
     const without = await shadowDecision('0017');
@@ -291,5 +284,13 @@ describe('sweepSignalDecisions (#668)', () => {
     expect(await exists(ids)).toEqual([ids[2]]);
     expect(await sweep(2)).toEqual({ decisions: 1, ticks: 0 });
     expect(await sweep(2)).toEqual({ decisions: 0, ticks: 0 });
+  });
+
+  // last: a sweep that deleted it would fail on every later case through the intent's FK
+  it('K10 a row an intent names is kept at any age', async () => {
+    const { decisionId } = await intentDecision({ profit: '-1' as DecimalString });
+    await age(decisionId, '400 days');
+    expect(await sweep()).toEqual({ decisions: 0, ticks: 0 });
+    expect(await exists([decisionId])).toEqual([decisionId]);
   });
 });
