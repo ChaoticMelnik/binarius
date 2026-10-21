@@ -154,5 +154,9 @@ export const signalDecisions = pgTable(
     // the export's range scan and order
     index('signal_decisions_recorded_idx').on(t.recordedAt, t.id),
     index('signal_decisions_session_idx').on(t.tradingSessionId, t.recordedAt),
+    // the retention sweep's shadow band (#668): 7 days of shadow rows against 30 of the rest
+    index('signal_decisions_shadow_recorded_idx')
+      .on(t.recordedAt)
+      .where(sql`${t.context} = ${literal(SignalDecisionContext.Shadow)}`),
   ],
 );

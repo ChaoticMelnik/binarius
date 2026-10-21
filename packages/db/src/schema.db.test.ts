@@ -18,6 +18,7 @@ import {
   brokerBalanceSnapshots,
   brokerSessionLeases,
   brokerTrades,
+  decisionTicks,
   depositEvents,
   oauthStates,
   postbackDeliveries,
@@ -2250,6 +2251,129 @@ describe('signal_decisions (#666)', () => {
         '23514',
         'trade_intents_decision_session_check',
       );
+    });
+  });
+
+  describe('decision_ticks (#668)', () => {
+    const ticksRow = (decisionId: string, patch: Record<string, unknown> = {}) =>
+      ({
+        decisionId,
+        fromMs: 1_759_999_940_000,
+        untilMs: 1_760_000_020_000,
+        status: 'complete',
+        detail: null,
+        count: 2,
+        ticks: [
+          [1_759_999_950_000, 1_759_999_950_100, 1.1],
+          [1_760_000_010_000, 1_760_000_010_100, 1.2],
+        ],
+        ...patch,
+      }) as typeof decisionTicks.$inferInsert;
+    async function seedDecision(tx: Tx) {
+      const seed = await seedSession(tx);
+      const [decision] = await tx
+        .insert(signalDecisions)
+        .values(decisionRow(seed))
+        .returning({ id: signalDecisions.id });
+      return decision!.id;
+    }
+
+    it.each<[string, Record<string, unknown>]>([
+      ['a complete window with two ticks', {}],
+      [
+        'a truncated window with one tick',
+        { status: 'truncated', detail: 'hole', count: 1, ticks: [[1_759_999_950_000, 1, 1.1]] },
+      ],
+      [
+        'an unavailable empty window whose end is its start',
+        {
+          status: 'unavailable',
+          detail: 'quiet',
+          count: 0,
+          ticks: [],
+          untilMs: 1_759_999_940_000,
+        },
+      ],
+    ])('accepts %s', async (_label, patch) => {
+      await rolledBack(async (tx) => {
+        const decisionId = await seedDecision(tx);
+        await tx.insert(decisionTicks).values(ticksRow(decisionId, patch));
+        const [row] = await tx
+          .select({ capturedAt: decisionTicks.capturedAt })
+          .from(decisionTicks)
+          .where(eq(decisionTicks.decisionId, decisionId));
+        expect(row?.capturedAt).toBeInstanceOf(Date);
+      });
+    });
+
+    it.each<[string, Record<string, unknown>, string]>([
+      ['a window starting at 0', { fromMs: 0, untilMs: 1 }, 'decision_ticks_from_ms_check'],
+      ['a window ending before it starts', { untilMs: 1 }, 'decision_ticks_window_check'],
+      ['an unknown status', { status: 'partial', detail: 'hole' }, 'decision_ticks_status_check'],
+      [
+        'an unknown detail',
+        { status: 'truncated', detail: 'restart' },
+        'decision_ticks_detail_check',
+      ],
+      ['a complete window with a detail', { detail: 'hole' }, 'decision_ticks_detail_pair_check'],
+      ['a truncated window without one', { status: 'truncated' }, 'decision_ticks_detail_pair_check'],
+      [
+        'a negative count',
+        { status: 'truncated', detail: 'hole', count: -1 },
+        'decision_ticks_count_check',
+      ],
+      [
+        'an unavailable window with a tick',
+        { status: 'unavailable', detail: 'quiet', count: 1, ticks: [[1, 1, 1.1]] },
+        'decision_ticks_count_pair_check',
+      ],
+      [
+        'a complete window without ticks',
+        { count: 0, ticks: [] },
+        'decision_ticks_count_pair_check',
+      ],
+      ['ticks as an object', { ticks: { a: 1 } }, 'decision_ticks_ticks_check'],
+      ['ticks of another length than count', { count: 3 }, 'decision_ticks_ticks_check'],
+    ])('rejects %s', async (_label, patch, constraint) => {
+      await rolledBack(async (tx) => {
+        const decisionId = await seedDecision(tx);
+        await rejectsWith(
+          tx.insert(decisionTicks).values(ticksRow(decisionId, patch)),
+          '23514',
+          constraint,
+        );
+      });
+    });
+
+    it('rejects a second row for a decision', async () => {
+      await rolledBack(async (tx) => {
+        const decisionId = await seedDecision(tx);
+        await tx.insert(decisionTicks).values(ticksRow(decisionId));
+        await rejectsWith(
+          tx.insert(decisionTicks).values(ticksRow(decisionId)),
+          '23505',
+          'decision_ticks_pkey',
+        );
+      });
+    });
+
+    it('keeps the decision while its ticks row exists', async () => {
+      await rolledBack(async (tx) => {
+        const decisionId = await seedDecision(tx);
+        await tx.insert(decisionTicks).values(ticksRow(decisionId));
+        await rejectsWith(
+          tx.delete(signalDecisions).where(eq(signalDecisions.id, decisionId)),
+          '23001',
+          'decision_ticks_decision_id_signal_decisions_id_fk',
+        );
+      });
+    });
+
+    it('has the partial index of the shadow retention band', async () => {
+      const { rows } = await pool.query<{ indexdef: string }>(
+        `select indexdef from pg_indexes where indexname = 'signal_decisions_shadow_recorded_idx'`,
+      );
+      expect(rows[0]?.indexdef).toMatch(/\(recorded_at\) WHERE \(context = 'shadow'::text\)$/);
     });
   });
 });
