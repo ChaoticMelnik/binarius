@@ -27,7 +27,7 @@ import {
   seedUser,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { captureApi, callsTo, inlineButtons, pushedText } from '../admin/testing';
+import { captureApi, callsTo, inlineButtons, inlineRows, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 import { MAILING_SEND_PER_SECOND } from '../timing';
@@ -732,9 +732,7 @@ describe('the low-token nudge through the engine', () => {
     const payload = sends[0]!.payload;
     expect(pushedText(payload)).toBe(text.value);
     expect(payload.parse_mode).toBe('HTML');
-    expect((payload.reply_markup as { inline_keyboard: unknown }).inline_keyboard).toEqual(
-      cashierRows,
-    );
+    expect(inlineRows(payload)).toEqual(cashierRows);
     expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
       [kind, NotificationJobStatus.Sent],
     ]);

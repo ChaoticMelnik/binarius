@@ -1,9 +1,10 @@
-import { InlineKeyboard } from 'grammy';
 import {
   BOT_TEXT_LIMIT,
+  ButtonRole,
+  callbackButton,
   createSessionTexts,
   DEMO_SIGNALS_CALLBACK_DATA,
-  MENU_CALLBACK_DATA,
+  keyboardOf,
   pairLabel,
   plainTextOf,
   sessionStopCallbackData,
@@ -19,7 +20,7 @@ import {
   type TradingSessionView,
 } from '@binarius/shared';
 import type { ClaimedSessionTrade } from '@binarius/db';
-import type { ClientPushMessage } from '../auth/client-push';
+import { menuButton, type ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 
 // What the session notices say (#464, docs/bot-session.md → Trade messages), in the client bot's
@@ -118,13 +119,19 @@ export function sessionSummaryMessage(
 ): ClientPushMessage {
   const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
   if (assetId === undefined) throw new Error('a summarized session names no asset');
-  const keyboard = new InlineKeyboard();
-  if (view.stopReason === TradingSessionStopReason.NoSignalTimeout) {
-    keyboard.text(CLIENT_LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA).row();
-  }
+  const otherPair =
+    view.stopReason === TradingSessionStopReason.NoSignalTimeout
+      ? [
+          callbackButton(
+            ButtonRole.Forward,
+            CLIENT_LABELS.otherPairButton,
+            DEMO_SIGNALS_CALLBACK_DATA,
+          ),
+        ]
+      : [];
   return {
     text: notices.sessionSummaryText(label, assetId, view),
-    reply_markup: keyboard.text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
+    reply_markup: keyboardOf([...otherPair, menuButton()]),
   };
 }
 
@@ -132,8 +139,11 @@ export function sessionSummaryMessage(
 // signal, with the one button that stops the session; `:w` tells the bot to delete it on a press.
 export const sessionWaitingMessage = (sessionId: string): ClientPushMessage => ({
   text: CLIENT_TEXTS.sessionWaitingSignal,
-  reply_markup: new InlineKeyboard().text(
-    CLIENT_LABELS.sessionStopButton,
-    sessionStopCallbackData(sessionId, { waiting: true }),
-  ),
+  reply_markup: keyboardOf([
+    callbackButton(
+      ButtonRole.Danger,
+      CLIENT_LABELS.sessionStopButton,
+      sessionStopCallbackData(sessionId, { waiting: true }),
+    ),
+  ]),
 });

@@ -4,8 +4,8 @@
 import type { Api, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
-import type { BotProfileMethod } from '@binarius/shared';
-import { stripMessageSpacer } from '@binarius/shared/testing';
+import { isBotKeyboard, type BotProfileMethod, type ButtonRole } from '@binarius/shared';
+import { botKeyboardProblems, stripMessageSpacer } from '@binarius/shared/testing';
 import type { BotProfileApi } from '../bot-texts/publish';
 import type { PaymentsRoutesDeps } from '../payments/routes';
 import type { AdminRoutesDeps } from './routes';
@@ -105,6 +105,12 @@ export function captureApi({ api }: { api: Api }): CapturedApi {
   const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
   api.config.use(((_prev, method: string, payload: Record<string, unknown>) => {
     captured.calls.push({ method, payload });
+    // #475: every keyboard of a push and of the staff bot is built by role (docs/bot-navigation.md
+    // → Roles, colours and rows), as the bot's captureApi checks
+    if (payload.reply_markup !== undefined) {
+      const problems = botKeyboardProblems(payload.reply_markup);
+      if (problems.length > 0) throw new Error(`${method}: ${problems.join('; ')}`);
+    }
     const failure = captured.apiErrors.get(method);
     if (failure !== undefined) {
       if (failure instanceof Error) throw failure;
@@ -136,12 +142,40 @@ export const pushedText = (payload: Record<string, unknown> | undefined): string
   return text;
 };
 
+interface WireButton {
+  text: string;
+  callback_data?: string;
+  url?: string;
+  web_app?: { url: string };
+  style?: string;
+}
+const markupRows = (payload: Record<string, unknown> | undefined) =>
+  (payload?.reply_markup as { inline_keyboard?: WireButton[][] } | undefined)?.inline_keyboard ??
+  [];
+
+// the keyboard row by row without the colours (#475), which inlineStyles reads
+export const inlineRows = (payload: Record<string, unknown> | undefined) =>
+  markupRows(payload).map((row) =>
+    row.map((button) => {
+      const { style, ...wire } = button;
+      void style;
+      return wire;
+    }),
+  );
+
 export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
-  (
-    payload?.reply_markup as {
-      inline_keyboard?: { text: string; callback_data?: string }[][];
-    }
-  )?.inline_keyboard?.flat() ?? [];
+  inlineRows(payload).flat();
+
+// each button's `style` by row, null where it has none (#475)
+export const inlineStyles = (payload: Record<string, unknown> | undefined) =>
+  markupRows(payload).map((row) => row.map((button) => button.style ?? null));
+
+// each button's role by row (#475), read from the BotKeyboard sent
+export const inlineRoles = (payload: Record<string, unknown> | undefined): ButtonRole[][] => {
+  const markup = payload?.reply_markup;
+  if (!isBotKeyboard(markup)) throw new Error('the payload carries no keyboard built by role');
+  return markup.rows.map((row) => row.map((button) => button.role));
+};
 
 /** The six-digit code out of the message the bot sent, so a test never has to guess it. */
 export const codeFrom = (text: unknown): string => {
