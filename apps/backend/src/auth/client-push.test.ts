@@ -1,23 +1,37 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
+import { fileURLToPath } from 'node:url';
+import { GrammyError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOT_MESSAGE_SPACER,
+  ButtonRole,
+  callbackButton,
   defaultBotTextSource,
+  keyboardOf,
   formatUsd,
   telegramHtml,
   type DecimalString,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import { captureApi, inlineButtons, pushedText, sentPayload } from '../admin/testing';
+import {
+  captureApi,
+  inlineButtons,
+  inlineRoles,
+  inlineStyles,
+  pushedText,
+  sentPayload,
+} from '../admin/testing';
 import {
   createClientPush,
   type ClientPush,
+  depositCreditedMessage,
   LinkPushKind,
   linkPushMessage,
   type LinkPushOutcome,
 } from './client-push';
+import { sessionWaitingMessage } from '../trading/session-notice-messages';
 import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from './texts';
 
 const TOKEN = '123456:AA-link-push-token';
@@ -148,7 +162,9 @@ describe('the mailing push', () => {
   it('sends the message as Telegram HTML with its keyboard, to the chat as a string', async () => {
     const push = createClientPush({ token: TOKEN });
     const { calls } = captureApi(push);
-    const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.demoButton, 'demo');
+    const reply_markup = keyboardOf([
+      callbackButton(ButtonRole.Forward, CLIENT_LABELS.demoButton, 'demo'),
+    ]);
     await push.sendMailing(TELEGRAM_USER_ID, {
       text: telegramHtml`<b>a &amp; b</b>`,
       reply_markup,
@@ -199,7 +215,9 @@ describe('the session notices (#464)', () => {
   it('sends the summary with its keyboard and with sound', async () => {
     const push = createClientPush({ token: TOKEN });
     const { calls } = captureApi(push);
-    const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.menuButton, 'menu');
+    const reply_markup = keyboardOf([
+      callbackButton(ButtonRole.Nav, CLIENT_LABELS.menuButton, 'menu'),
+    ]);
     await push.sendSessionSummary(TELEGRAM_USER_ID, { text: telegramHtml`итог`, reply_markup });
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.disable_notification).toBeUndefined();
@@ -214,7 +232,9 @@ describe('the waiting message (#536)', () => {
     const push = createClientPush({ token: TOKEN });
     const { calls, answers } = captureApi(push);
     answers.set('sendMessage', () => ({ message_id: 4243 }));
-    const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.sessionStopButton, 'session:x');
+    const reply_markup = keyboardOf([
+      callbackButton(ButtonRole.Danger, CLIENT_LABELS.sessionStopButton, 'session:x'),
+    ]);
     expect(
       await push.sendSessionWaiting(TELEGRAM_USER_ID, {
         text: telegramHtml`<b>ждём</b>`,
@@ -285,7 +305,9 @@ describe('the deposit push', () => {
 // #506: every text of this seam ends with the width spacer, read here as sent
 describe('the width spacer (#506)', () => {
   const SPACED = '<b>x</b>' + BOT_MESSAGE_SPACER;
-  const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.menuButton, 'menu');
+  const reply_markup = keyboardOf([
+    callbackButton(ButtonRole.Nav, CLIENT_LABELS.menuButton, 'menu'),
+  ]);
   const pushed = () => {
     const push = createClientPush({ token: TOKEN });
     return { push, ...captureApi(push) };
@@ -364,5 +386,74 @@ describe('the link push transport', () => {
     expect(error).toBeInstanceOf(GrammyError);
     expect((error as GrammyError).error_code).toBe(403);
     expect((error as GrammyError).method).toBe('sendMessage');
+  });
+});
+
+// #475 (docs/bot-navigation.md → Roles, colours and rows): each push's buttons by role
+describe('the roles of the pushes (#475)', () => {
+  const ACCOUNT = { id: ACCOUNT_ID, email: 'ada@example.test' };
+  const roles = (message: { reply_markup: unknown }) => inlineRoles({ ...message });
+  const styles = (message: { reply_markup: unknown }) => inlineStyles({ ...message });
+
+  it('C1 pending: the confirm green, its own row', () => {
+    const message = linkPushMessage({ kind: LinkPushKind.Pending, account: ACCOUNT });
+    expect(roles(message)).toEqual([[ButtonRole.Forward]]);
+    expect(styles(message)).toEqual([['success']]);
+  });
+
+  it('C2 active: the demo green', () => {
+    const message = linkPushMessage({ kind: LinkPushKind.Active, email: null });
+    expect(roles(message)).toEqual([[ButtonRole.Forward]]);
+    expect(styles(message)).toEqual([['success']]);
+  });
+
+  it('C3 blocked: support, no colour', () => {
+    const message = linkPushMessage({ kind: LinkPushKind.Blocked });
+    expect(roles(message)).toEqual([[ButtonRole.Nav]]);
+    expect(styles(message)).toEqual([[null]]);
+  });
+
+  it.each([LinkPushKind.Taken, LinkPushKind.ExchangeFailed, LinkPushKind.Mismatch] as const)(
+    'C4 %s: connect again green on its own row, then the menu',
+    (kind) => {
+      const message = linkPushMessage({ kind });
+      expect(roles(message)).toEqual([[ButtonRole.Forward], [ButtonRole.Nav]]);
+      expect(styles(message)).toEqual([['success'], [null]]);
+    },
+  );
+
+  it('C5 a credited deposit: the menu, no colour', () => {
+    const message = depositCreditedMessage(null);
+    expect(roles(message)).toEqual([[ButtonRole.Nav]]);
+  });
+
+  it('C6 the waiting message: its «⏹» red', () => {
+    const message = sessionWaitingMessage('00000000-0000-4000-8000-000000000000');
+    expect(roles(message)).toEqual([[ButtonRole.Danger]]);
+    expect(styles(message)).toEqual([['danger']]);
+  });
+
+  // the backend's code, comment lines dropped, tests and their helpers out: every keyboard of a
+  // push and of the staff bot is a BotKeyboard
+  it('no grammY InlineKeyboard in the backend', () => {
+    const SRC = fileURLToPath(new URL('..', import.meta.url));
+    const sources = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+      .filter(
+        (file) =>
+          file.endsWith('.ts') &&
+          !file.endsWith('.test.ts') &&
+          !file.endsWith('.typecheck.ts') &&
+          !file.endsWith('testing.ts'),
+      )
+      .map((file) => ({
+        file,
+        code: readFileSync(`${SRC}/${file}`, 'utf8').replace(/^\s*\/\/.*$/gm, ''),
+      }));
+    expect(sources.length).toBeGreaterThan(50);
+    expect(
+      sources
+        .filter(({ code }) => /\bInlineKeyboard\b|inline_keyboard\s*:/.test(code))
+        .map(({ file }) => file),
+    ).toEqual([]);
   });
 });

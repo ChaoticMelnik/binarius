@@ -1,13 +1,17 @@
-import { Api, InlineKeyboard } from 'grammy';
-import type { InlineKeyboardMarkup } from 'grammy/types';
+import { Api } from 'grammy';
 import {
   BOT_MESSAGE_SPACER,
+  ButtonRole,
+  callbackButton,
   CONNECT_CALLBACK_DATA,
   confirmButtonLabel,
   confirmCallbackData,
   DEMO_CALLBACK_DATA,
+  keyboardOf,
   MENU_CALLBACK_DATA,
   supportUrl,
+  urlButton,
+  type BotKeyboard,
   type BotTextBalance,
   type TelegramHtml,
 } from '@binarius/shared';
@@ -36,26 +40,34 @@ export type LinkPushOutcome =
       kind: Exclude<LinkPushKind, typeof LinkPushKind.Pending | typeof LinkPushKind.Active>;
     };
 
-// the demo (#320's entry): the next step of a re-login and of every first-session reminder
-export const demoKeyboard = () =>
-  new InlineKeyboard().text(CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA);
+// The buttons by role, as the bot's (#475, docs/bot-navigation.md → Roles, colours and rows)
+export const menuButton = () =>
+  callbackButton(ButtonRole.Nav, CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA);
+export const demoButton = () =>
+  callbackButton(ButtonRole.Forward, CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA);
 
-// a failed login: connect again, or the menu
+// the demo (#320's entry): the next step of a re-login and of every first-session reminder
+export const demoKeyboard = () => keyboardOf([demoButton()]);
+
+// a failed login: connect again on its own row, then the menu
 const connectAgain = () =>
-  new InlineKeyboard()
-    .text(CLIENT_LABELS.connectButton, CONNECT_CALLBACK_DATA)
-    .row()
-    .text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA);
+  keyboardOf([
+    callbackButton(ButtonRole.Forward, CLIENT_LABELS.connectButton, CONNECT_CALLBACK_DATA),
+    menuButton(),
+  ]);
 
 export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
   switch (outcome.kind) {
     case LinkPushKind.Pending:
       return {
         text: CLIENT_TEXTS.confirmPrompt,
-        reply_markup: new InlineKeyboard().text(
-          confirmButtonLabel(CLIENT_LABELS, outcome.account.email),
-          confirmCallbackData(outcome.account.id),
-        ),
+        reply_markup: keyboardOf([
+          callbackButton(
+            ButtonRole.Forward,
+            confirmButtonLabel(CLIENT_LABELS, outcome.account.email),
+            confirmCallbackData(outcome.account.id),
+          ),
+        ]),
       };
     case LinkPushKind.Active:
       return {
@@ -65,7 +77,9 @@ export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
     case LinkPushKind.Blocked:
       return {
         text: CLIENT_TEXTS.blocked,
-        reply_markup: new InlineKeyboard().url(CLIENT_LABELS.supportButton, supportUrl()),
+        reply_markup: keyboardOf([
+          urlButton(ButtonRole.Nav, CLIENT_LABELS.supportButton, supportUrl()),
+        ]),
       };
     case LinkPushKind.Taken:
       return { text: CLIENT_TEXTS.accountTaken, reply_markup: connectAgain() };
@@ -79,16 +93,16 @@ export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
 // from the snapshot the route has just written, never an amount from the widget, and the menu.
 export const depositCreditedMessage = (balance: BotTextBalance): ClientPushMessage => ({
   text: CLIENT_TEXTS.depositCredited({ realBalance: balance }),
-  reply_markup: new InlineKeyboard().text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
+  reply_markup: keyboardOf([menuButton()]),
 });
 
 // A message the backend sends a Telegram user on its own: a link push, or a mailing
 // (apps/backend/src/mailing). It carries its next step, as every message of the bot does (#350,
 // docs/bot-navigation.md): the buttons are the bot's, built from bot-navigation.ts, so a press
-// lands on its handler.
+// lands on its handler. Only a keyboard built by role (#475): no grammY or bare markup.
 export interface ClientPushMessage {
   text: TelegramHtml;
-  reply_markup: InlineKeyboardMarkup;
+  reply_markup: BotKeyboard;
 }
 
 export interface ClientPush {

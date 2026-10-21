@@ -1,14 +1,17 @@
-import { InlineKeyboard } from 'grammy';
 import {
   analysisUnusedPayloadSchema,
   BUY_CALLBACK_DATA,
+  ButtonRole,
+  callbackButton,
   commandRetryCallbackData,
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  keyboardOf,
   NotificationKind,
   referralRewardedPayloadSchema,
   tokenNudgePayloadSchema,
   TradeMode,
+  webAppButton,
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
@@ -35,10 +38,14 @@ function analysisUnused(payload: Payload): ClientPushMessage {
   const { assetId, durationSec } = analysisUnusedPayloadSchema.parse(payload);
   return {
     text: CLIENT_TEXTS.analysisUnusedReminder,
-    reply_markup: new InlineKeyboard().text(
-      CLIENT_LABELS.newAnalysisButton,
-      demoAnalysisCallbackData(assetId, durationSec),
-    ),
+    // the reminder's one step forward (#475): green, its own row
+    reply_markup: keyboardOf([
+      callbackButton(
+        ButtonRole.Forward,
+        CLIENT_LABELS.newAnalysisButton,
+        demoAnalysisCallbackData(assetId, durationSec),
+      ),
+    ]),
   };
 }
 
@@ -48,38 +55,46 @@ function referralRewarded(payload: Payload): ClientPushMessage {
   const { tokens } = referralRewardedPayloadSchema.parse(payload);
   return {
     text: CLIENT_TEXTS.referralRewarded({ rewardTokens: tokens }),
-    reply_markup: new InlineKeyboard().text(
-      CLIENT_LABELS.inviteMoreButton,
-      commandRetryCallbackData('invite'),
-    ),
+    reply_markup: keyboardOf([
+      callbackButton(
+        ButtonRole.Secondary,
+        CLIENT_LABELS.inviteMoreButton,
+        commandRetryCallbackData('invite'),
+      ),
+    ]),
   };
 }
 
 // The entry into trading, labelled as the status card labels it in the user's mode (#121): the
 // path is the same, DEMO_CALLBACK_DATA.
 const entryButton = (tradingMode: TradeMode) =>
-  InlineKeyboard.text(
+  callbackButton(
+    ButtonRole.Forward,
     tradingMode === TradeMode.Real ? CLIENT_LABELS.tradeButton : CLIENT_LABELS.demoButton,
     DEMO_CALLBACK_DATA,
   );
 
 // The low-token nudge (#123, docs/mailing.md → The low-token nudge): the threshold's balance from
 // the payload. 50 %: the entry. 80 % and 100 %: the cashier (#27), or the entry without https, then
-// the token purchase (#117). A payload that does not parse throws (`mailing not built`).
+// the token purchase (#117), each on its own row: the purchase is the one secondary button there
+// (#475). A payload that does not parse throws (`mailing not built`).
 const tokenNudge =
   (text: (vars: { nudgeTokens: string }) => ClientPushMessage['text'], cashier: boolean) =>
   (payload: Payload, { cashierUrl, tradingMode }: MailingContext): ClientPushMessage => {
     const { tokens } = tokenNudgePayloadSchema.parse(payload);
     const first =
       cashier && cashierUrl !== undefined
-        ? InlineKeyboard.webApp(CLIENT_LABELS.depositButton, cashierUrl)
+        ? webAppButton(ButtonRole.Forward, CLIENT_LABELS.depositButton, cashierUrl)
         : entryButton(tradingMode);
     return {
       text: text({ nudgeTokens: tokens }),
-      reply_markup: new InlineKeyboard(
+      reply_markup: keyboardOf(
         cashier
-          ? [[first], [InlineKeyboard.text(CLIENT_LABELS.buyButton, BUY_CALLBACK_DATA)]]
-          : [[first]],
+          ? [
+              first,
+              callbackButton(ButtonRole.Secondary, CLIENT_LABELS.buyButton, BUY_CALLBACK_DATA),
+            ]
+          : [first],
       ),
     };
   };

@@ -36,6 +36,8 @@ import {
   commandUpdate,
   fakeLogger,
   inlineButtons,
+  inlineRows,
+  inlineStyles,
   sentPayload,
   staffUser,
   TEST_WEB_PUBLIC_URL,
@@ -132,6 +134,8 @@ describe('/start', () => {
     expect(inlineButtons(payload)).toEqual([
       { text: ADMIN_TEXTS.linkButton, callback_data: LOGIN_LINK_CALLBACK },
     ]);
+    // #475: the way in is the step forward, green
+    expect(inlineStyles(payload)).toEqual([['success']]);
     expect(api.calls).toHaveLength(ADMIN_HANDLER_CALLS.start);
   });
 
@@ -693,14 +697,12 @@ describe('sendLoginPrompt', () => {
     expect(payload?.chat_id).toBe('9007199254740991');
     expect(String(payload?.text)).toContain('ada');
     expect(String(payload?.text)).toContain('203.0.113.7');
-    expect(
-      (payload?.reply_markup as { inline_keyboard: { callback_data?: string }[][] }).inline_keyboard
-        .flat()
-        .map((button) => button.callback_data),
-    ).toEqual([
-      'sl:c:00000000-0000-4000-8000-0000000000bb',
-      'sl:d:00000000-0000-4000-8000-0000000000bb',
+    // #475: the confirm green on its own row, «Это не я» red under it
+    expect(inlineRows(payload).map((row) => row.map((button) => button.callback_data))).toEqual([
+      ['sl:c:00000000-0000-4000-8000-0000000000bb'],
+      ['sl:d:00000000-0000-4000-8000-0000000000bb'],
     ]);
+    expect(inlineStyles(payload)).toEqual([['success'], ['danger']]);
   });
 
   it('rejects when Telegram refuses, so the caller can close the challenge', async () => {

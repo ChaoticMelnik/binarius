@@ -1,6 +1,13 @@
-import { Bot, InlineKeyboard, type Bot as GrammyBot } from 'grammy';
+import { Bot, type Bot as GrammyBot } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
-import { errorIdentity, errorLogFields, telegramErrorFields } from '@binarius/shared';
+import {
+  ButtonRole,
+  callbackButton,
+  errorIdentity,
+  errorLogFields,
+  keyboardOf,
+  telegramErrorFields,
+} from '@binarius/shared';
 import {
   confirmChallengeFromTelegram,
   denyChallengeFromTelegram,
@@ -157,7 +164,9 @@ export function createAdminBot({
     const owner = await findStaffByTelegram(db, BigInt(ctx.from.id));
     if (owner?.status === StaffStatus.Active) {
       await ctx.reply(ADMIN_TEXTS.start, {
-        reply_markup: new InlineKeyboard().text(ADMIN_TEXTS.linkButton, LOGIN_LINK_CALLBACK),
+        reply_markup: keyboardOf([
+          callbackButton(ButtonRole.Forward, ADMIN_TEXTS.linkButton, LOGIN_LINK_CALLBACK),
+        ]),
       });
       return;
     }
@@ -382,9 +391,19 @@ export function createAdminBot({
         String(telegramUserId),
         ADMIN_TEXTS.prompt({ login, ip, userAgent, at: new Date().toISOString() }),
         {
-          reply_markup: new InlineKeyboard()
-            .text(ADMIN_TEXTS.confirmButton, confirmCallbackData(challengeId))
-            .text(ADMIN_TEXTS.denyButton, denyCallbackData(challengeId)),
+          // #475: the confirm green on its own row, «Это не я» red under it
+          reply_markup: keyboardOf([
+            callbackButton(
+              ButtonRole.Forward,
+              ADMIN_TEXTS.confirmButton,
+              confirmCallbackData(challengeId),
+            ),
+            callbackButton(
+              ButtonRole.Danger,
+              ADMIN_TEXTS.denyButton,
+              denyCallbackData(challengeId),
+            ),
+          ]),
         },
       );
     },

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { FIRST_SESSION_CHAIN, NotificationKind, TOKEN_NUDGES, TradeMode } from '@binarius/shared';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { inlineRows, inlineStyles } from '../admin/testing';
 import { mailingMessage, type MailingContext } from './messages';
 
 const CASHIER_URL = 'https://web.example/cashier';
 const DEMO: MailingContext = { cashierUrl: CASHIER_URL, tradingMode: TradeMode.Demo };
 
-const buttonsOf = (message: ReturnType<typeof mailingMessage>) =>
-  message.reply_markup.inline_keyboard.flat();
+const buttonsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message }).flat();
+const stylesOf = (message: ReturnType<typeof mailingMessage>) => inlineStyles({ ...message });
 
 // #484
 describe('the analysis reminder message', () => {
@@ -28,6 +29,8 @@ describe('the analysis reminder message', () => {
       expect(buttonsOf(message)).toStrictEqual([
         { text: CLIENT_LABELS.newAnalysisButton, callback_data: data },
       ]);
+      // #475: the reminder's step forward, green
+      expect(stylesOf(message)).toEqual([['success']]);
     },
   );
 
@@ -59,6 +62,7 @@ describe('the referral reward message', () => {
     expect(buttonsOf(message)).toStrictEqual([
       { text: CLIENT_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
     ]);
+    expect(stylesOf(message)).toEqual([['primary']]);
   });
 
   it('promises no result', () => {
@@ -99,8 +103,7 @@ describe('the low-token nudge messages', () => {
   const trade = { text: CLIENT_LABELS.tradeButton, callback_data: 'demo' };
   const deposit = { text: CLIENT_LABELS.depositButton, web_app: { url: CASHIER_URL } };
   const buy = { text: CLIENT_LABELS.buyButton, callback_data: 'buy' };
-  const rowsOf = (message: ReturnType<typeof mailingMessage>) =>
-    message.reply_markup.inline_keyboard;
+  const rowsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message });
   const texts = {
     [NotificationKind.TokensHalf]: CLIENT_TEXTS.tokensHalfUsed,
     [NotificationKind.TokensLow]: CLIENT_TEXTS.tokensLow,
@@ -143,6 +146,11 @@ describe('the low-token nudge messages', () => {
 
   it.each([LOW.kind, OUT.kind])('gives %s the cashier, then the purchase', (kind) => {
     expect(rowsOf(mailingMessage(kind, { tokens: '0' }, DEMO))).toStrictEqual([[deposit], [buy]]);
+    // #475: the cashier green on its own row, the purchase blue, the one secondary button
+    expect(stylesOf(mailingMessage(kind, { tokens: '0' }, DEMO))).toEqual([
+      ['success'],
+      ['primary'],
+    ]);
     expect(
       rowsOf(mailingMessage(kind, { tokens: '0' }, { ...DEMO, tradingMode: TradeMode.Real })),
     ).toStrictEqual([[deposit], [buy]]);

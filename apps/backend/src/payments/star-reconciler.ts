@@ -1,9 +1,8 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { InlineKeyboard } from 'grammy';
 import type { StarTransaction } from 'grammy/types';
 import {
   errorLogFields,
-  MENU_CALLBACK_DATA,
+  keyboardOf,
   parseStarsInvoicePayload,
   STARS_CURRENCY,
   telegramErrorFields,
@@ -18,8 +17,8 @@ import {
   StarsRefundSource,
   type Db,
 } from '@binarius/db';
-import type { ClientPush, ClientPushMessage } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { menuButton, type ClientPush, type ClientPushMessage } from '../auth/client-push';
+import { CLIENT_TEXTS } from '../auth/texts';
 import {
   STARS_RECONCILE_MAX_PAGES,
   STARS_RECONCILE_PAGE_SIZE,
@@ -122,7 +121,7 @@ export const starsCreditedPush = (tokens: bigint, balance: bigint): ClientPushMe
     purchasedTokens: tokens.toString(),
     tokenBalance: balance.toString(),
   }),
-  reply_markup: new InlineKeyboard().text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
+  reply_markup: keyboardOf([menuButton()]),
 });
 
 export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
