@@ -83,6 +83,17 @@ describe('the trading session constants', () => {
     expect(sessionOrchestratorConfigHolds({ ...TRADING_SESSION_CONFIG, ...patch })).toBe(false);
   });
 
+  // #696: 13 candles of 5 s is 65 s, the SLA plus one REST GET; the hold-back (60 s) and the
+  // deadline still fit, so only the balance wait's link refuses it
+  it('refuses a no-signal limit the balance refresh does not fit before (#696)', () => {
+    expect(sessionOrchestratorConfigHolds({ ...TRADING_SESSION_CONFIG, noSignalCandles: 13 })).toBe(
+      false,
+    );
+    expect(sessionOrchestratorConfigHolds({ ...TRADING_SESSION_CONFIG, noSignalCandles: 14 })).toBe(
+      true,
+    );
+  });
+
   it('refuses a pairs timeout that leaves no room for the signal call', () => {
     expect(
       sessionOrchestratorConfigHolds(

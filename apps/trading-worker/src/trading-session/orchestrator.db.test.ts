@@ -28,6 +28,7 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
+  applyBalanceEvent,
   brokerAccounts,
   brokerTrades,
   claimReconciling,
@@ -2373,6 +2374,13 @@ describe('martingale (#450)', () => {
     const orchestrator = at(80);
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    // the seed's snapshot is older than both settlements: without a real balance written after
+    // them the attempt would wait for one (#696) instead of stopping
+    await applyBalanceEvent(tmp.db, {
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Real,
+      balance: balance('4.00'),
+    });
     await orchestrator.tick();
     // the third stake, 5.07, is above the real snapshot's 4.00 though the demo one holds 10000
     expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000']);
@@ -2661,7 +2669,7 @@ describe('an H1 session (#670)', () => {
   });
 });
 
-describe('the wake after a terminal write (#696)', () => {
+describe('the wake after a write that ends an intent or halts its account (#696)', () => {
   // the tick line carries no session id: each case tags its orchestrator's lines
   const tagged = (wake: string) => logger.child({ wake });
   const ticksOf = (wake: string) =>
@@ -2790,6 +2798,101 @@ describe('the wake after a terminal write (#696)', () => {
     expect(ticksOf('WK5')).toEqual([
       expect.objectContaining({ runnable: 0, attempted: 0, woken: 1 }),
     ]);
+    await orchestrator.stop();
+  });
+});
+
+describe('the balance wait after a settlement (#696)', () => {
+  const LIMIT = sessionNoSignalTimeoutMs(60);
+  const WAITS = 'trading session waits for the balance';
+  const demoBalance = (brokerAccountId: string, available: string) =>
+    applyBalanceEvent(tmp.db, {
+      brokerAccountId,
+      mode: TradeMode.Demo,
+      balance: balance(available),
+    });
+  // step 1 opened (the stake held: 1.50 - 1.00 on the snapshot), then won: the settlement is newer
+  // than the snapshot, which still lacks the payout - the live order of close_trade.success and
+  // update_balance
+  const wonBeforePayout = async (orchestrator: ReturnType<typeof orchestratorOf>) => {
+    const seed = await seedSession({ demo: '1.50' });
+    await orchestrator.tick();
+    const [intent] = await intentsOf(seed.session.id);
+    expect(await processIntent(intent!.id)).toBe('accepted');
+    await demoBalance(seed.brokerAccountId, '0.50');
+    await settle(seed, intent!.id, MockTradeOutcome.Win);
+    return seed;
+  };
+  const stepTwoRows = async (sessionId: string) =>
+    (await decisionsOf(sessionId)).filter((row) => row.step === 2);
+
+  it('BW1 a woken attempt on the balance before the payout waits; the payout makes step 2', async () => {
+    const orchestrator = orchestratorOf();
+    const seed = await wonBeforePayout(orchestrator);
+    orchestrator.wake();
+    await until('the wait', () => msgsOf(seed.session.id).includes(WAITS));
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Active,
+      stopReason: null,
+    });
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect(await stepTwoRows(seed.session.id)).toEqual([]);
+    expect(linesOf(seed.session.id).find((line) => line.msg === WAITS)).toMatchObject({
+      level: 30,
+      step: 2,
+    });
+    await demoBalance(seed.brokerAccountId, '2.40');
+    await orchestrator.tick();
+    expect((await intentsOf(seed.session.id)).map((intent) => intent.amount)).toEqual([
+      '1.00000000',
+      '1.00000000',
+    ]);
+    await orchestrator.stop();
+  });
+
+  it('BW2 a balance written after the settlement that is short stops the session', async () => {
+    const orchestrator = orchestratorOf();
+    const seed = await wonBeforePayout(orchestrator);
+    await demoBalance(seed.brokerAccountId, '0.50');
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.StakeStop,
+    });
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({
+        msg: 'trading session stopped',
+        stopReason: 'insufficient_balance',
+      }),
+    );
+    expect(msgsOf(seed.session.id)).not.toContain(WAITS);
+    await orchestrator.stop();
+  });
+
+  it('BW3 past the no-signal limit the balance behind the settlement stops the session', async () => {
+    const orchestrator = orchestratorOf();
+    const seed = await wonBeforePayout(orchestrator);
+    // the settle row keeps its time, so the snapshot stays behind; an UPDATE without status
+    // runs no transition trigger
+    await tmp.db
+      .update(tradingSessions)
+      .set({ startedAt: sql`now() - (${LIMIT + 5_000}::int * interval '1 millisecond')` })
+      .where(eq(tradingSessions.id, seed.session.id));
+    await tmp.db.execute(
+      sql`update trade_intents set updated_at = now() - (${LIMIT + 5_000}::int * interval '1 millisecond') where trading_session_id = ${seed.session.id}`,
+    );
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.StakeStop,
+    });
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({
+        msg: 'trading session stopped',
+        stopReason: 'insufficient_balance',
+      }),
+    );
+    expect(msgsOf(seed.session.id)).not.toContain(WAITS);
     await orchestrator.stop();
   });
 });

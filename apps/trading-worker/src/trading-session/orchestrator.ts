@@ -2,7 +2,7 @@ import {
   createSessionIntent,
   listRunnableSessions,
   markSessionDecision,
-  readBalanceSnapshot,
+  readSessionBalance,
   readSessionHistory,
   recordSignalDecision,
   signalDecisionInput,
@@ -37,7 +37,6 @@ import {
   SignalKind,
   TradeIntentErrorCode,
   TradeIntentStatus,
-  TradeMode,
   TradingSessionStopReason,
   type SignalRecord,
   type TradeAction,
@@ -46,7 +45,12 @@ import {
 import type { Logger } from '../intents/processor';
 import { SessionTradeKind, StakeKind, StopReason } from '../stake/codes';
 import { parseAmount } from '../stake/money';
-import { createStakeSizer, type SessionTrade, type StakeSizer } from '../stake/size';
+import {
+  createStakeSizer,
+  type SessionTrade,
+  type StakeDecision,
+  type StakeSizer,
+} from '../stake/size';
 import type { PairsSource, SignalSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
 
@@ -54,8 +58,8 @@ import type { SessionOrchestratorConfig } from './config';
 // stops the sessions the kill switch, the deadline and a halt end, then makes one attempt per
 // runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
 // holds the session back in memory; the step comes from the database's history, never from memory.
-// A terminal write of an intent in the worker wakes it (#696): a tick at once, the interval is the
-// safety net.
+// A write in the worker that ends an intent or halts its account wakes it (#696): a tick at once,
+// the interval is the safety net.
 
 export interface SessionOrchestratorDeps {
   db: Db;
@@ -337,13 +341,20 @@ export function createSessionOrchestrator({
       };
     }
 
-    const snapshot = await readBalanceSnapshot(db, session.brokerAccountId);
+    const snapshot = await readSessionBalance(db, session.id);
     if (snapshot === undefined) {
       return { kind: 'stop', reason: TradingSessionStopReason.BalanceUnavailable };
     }
     // the executor sends the intent's mode, so the stake is sized against the same mode's balance
-    const available =
-      session.mode === TradeMode.Real ? snapshot.real.available : snapshot.demo.available;
+    const available = snapshot.available;
+    // #696: the payout of the session's last settlement is not in the snapshot yet (update_balance,
+    // the pass's balance check or the backend's refresh writes it); until the no-signal limit the
+    // step is asked again rather than stopped
+    const waitsForBalance = (decision: StakeDecision) =>
+      decision.kind === StakeKind.Stop &&
+      decision.reason === StopReason.InsufficientBalance &&
+      snapshot.behind &&
+      !history.waitExpired;
     checkpoint();
     // keeps the account "in work": the balance refresh and the broker session stay on it
     await touchBalanceRequested(db, session.brokerAccountId);
@@ -491,6 +502,10 @@ export function createSessionOrchestrator({
       // started_at is the database's clock: a worker clock behind it would make the sizer throw
       nowMs: Math.max(now(), startedAtMs),
     });
+    if (waitsForBalance(decision)) {
+      logger.info({ ...ids, step }, 'trading session waits for the balance');
+      return { kind: 'reschedule' };
+    }
     if (decision.kind === StakeKind.Stop) {
       return withRow(
         {

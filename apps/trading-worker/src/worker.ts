@@ -163,8 +163,8 @@ export function createWorker({
     });
 
   // the trading sessions (docs/trading-session.md): their signal and pairs come from the backend.
-  // Built ahead of the writers below: every terminal write of an intent here wakes it after its
-  // commit (#696)
+  // Built ahead of the writers below: every write here that ends an intent or halts its account
+  // wakes it after its commit (#696)
   const backend = { baseUrl: env.backendUrl, token: env.internalApiToken };
   const tradingSessions = createSessionOrchestrator({
     db,
