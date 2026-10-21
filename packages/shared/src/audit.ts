@@ -79,6 +79,9 @@ export const AuditAction = {
   ServiceAccountsViewed: 'service_accounts_viewed',
   BrokerAccountServiceSet: 'broker_account_service_set',
   BrokerAccountServiceCleared: 'broker_account_service_cleared',
+  // the H1 mark of a broker account (#670, setH1Mark; the h1 CLI of apps/backend)
+  BrokerAccountH1Set: 'broker_account_h1_set',
+  BrokerAccountH1Cleared: 'broker_account_h1_cleared',
   // the bonus-rule CLI (#13): a new inactive version, a version made the active one, a code left
   // with no active version
   BonusRuleVersionCreated: 'bonus_rule_version_created',

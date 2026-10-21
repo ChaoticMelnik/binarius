@@ -66,6 +66,10 @@ export const tradeIntents = pgTable(
     tokensReserved: tokenAmount('tokens_reserved'),
     transport: text('transport').$type<TradeTransport>(),
     submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    // the last moment an H1 session's intent may be taken (#670), on the backend's clock; NULL = no
+    // entry window. takeIntent and rejectLateIntent compare it with the database's now(); no CHECK
+    // against created_at, which is the database's clock
+    submitDeadlineAt: timestamp('submit_deadline_at', { withTimezone: true }),
     lastError: text('last_error').$type<TradeIntentFailureReason>(),
     // the reconciliation pass's lease and order key (#89): written only by claimReconciling, with
     // the database clock; NULL = never attempted; kept when the intent leaves reconciling

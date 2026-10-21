@@ -109,6 +109,9 @@ export const TradeIntentFailureReason = {
   // a queued real intent met a DEMO_ONLY worker (#396, before takeIntent); nothing was sent and
   // the reserve is released
   DemoOnly: 'demo_only',
+  // a queued intent of an H1 session past its submit_deadline_at at take time, on the database
+  // clock (#670, rejectLateIntent); nothing was sent to the broker and the reserve is released
+  EntryWindowMissed: 'entry_window_missed',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];

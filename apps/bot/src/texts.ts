@@ -403,7 +403,7 @@ const INTENT_STATUS_LINES = {
   BotStaticHtmlKey
 >;
 
-// rejectIntent writes its own reason, so a rejected row carries one of the first seven; the rest
+// rejectIntent writes its own reason, so a rejected row carries one of the first nine; the rest
 // lead to unknown or manual_review and read the generic line should one ever arrive here
 const REJECTED_LINES = {
   [TradeIntentFailureReason.ExecutorNotConfigured]: 'intentRejectedNotConfigured',
@@ -414,6 +414,8 @@ const REJECTED_LINES = {
   [TradeIntentFailureReason.ManualRejected]: 'intentRejectedManual',
   [TradeIntentFailureReason.TradingPaused]: 'intentRejectedPaused',
   [TradeIntentFailureReason.DemoOnly]: 'intentRejectedDemoOnly',
+  // only an H1 session's intent has an entry window (#670); the bot creates none of them
+  [TradeIntentFailureReason.EntryWindowMissed]: 'intentRejectedExpired',
   [TradeIntentFailureReason.ExecutorTimeout]: 'intentRejected',
   [TradeIntentFailureReason.ExecutorError]: 'intentRejected',
   [TradeIntentFailureReason.StaleSubmitting]: 'intentRejected',
