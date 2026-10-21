@@ -1,6 +1,13 @@
 import { botLanguageSchema } from './bot-language';
 import * as z from 'zod';
 import { pairViewSchema } from './catalog';
+import {
+  H1_ENTRY_WINDOW_SEC,
+  H1_EXPIRY_SEC,
+  H1_R1_PARAMS,
+  H1_SESSION_SIGNAL_KIND,
+  h1SessionSignalSchema,
+} from './h1';
 import { REFERRAL_CODE_PATTERN } from './referral';
 import { SessionStakeStrategy } from './session-steps';
 import {
@@ -22,9 +29,10 @@ import {
 } from './trading';
 
 // trading_sessions.settings (docs/trading-session.md -> Settings). The column is checked at read,
-// not at write: a row written by hand is a boundary too. Version 3 is the only one written
-// (#552): its length is in cycles. A version 1 or 2 row keeps its length in trades
-// (sessionProgress); a version 1 row reads as the fixed strategy (sessionStakeParams).
+// not at write: a row written by hand is a boundary too. Version 3 is the only one the start route
+// and the worker's CLI write (#552): its length is in cycles. A version 1 or 2 row keeps its length
+// in trades (sessionProgress); a version 1 row reads as the fixed strategy (sessionStakeParams).
+// Version 4 is an H1 session (#670), written only by buildH1SessionSettings.
 export const TRADING_SESSION_SETTINGS_VERSION = 3;
 export const MAX_SESSION_CYCLES = 20;
 // the CLI's and the start route's default; the schema itself requires the field
@@ -34,6 +42,19 @@ export const DEFAULT_SESSION_CYCLES = 5;
 // (MAX_SESSION_SUMMARY_TRADES).
 export const MIN_SESSION_DURATION_SEC = SIGNAL_SHORTEST_INTERVAL_MS / 1000;
 const MAX_STAKE_SCALE = 8;
+
+// The worker's deadline for a session (started_at + this, on the database clock) and the start
+// route's refusal of a session that cannot fit it (docs/trading-session.md -> Routes).
+export const SESSION_MAX_DURATION_MS = 3_600_000;
+
+// The most settled trades one session can hold (#552): its intents run one at a time, each settles
+// no earlier than its duration after it opened, and the hour ends the session. The summary's trades
+// and the card's columns are bounded by it.
+export const MAX_SESSION_SUMMARY_TRADES =
+  SESSION_MAX_DURATION_MS / (MIN_SESSION_DURATION_SEC * 1000);
+if (!Number.isInteger(MAX_SESSION_SUMMARY_TRADES)) {
+  throw new Error('MAX_SESSION_SUMMARY_TRADES must be an integer');
+}
 
 const sessionSettingsFields = {
   assetId: createTradeIntentRequestSchema.shape.assetId,
@@ -90,12 +111,33 @@ const settingsV3Schema = z.strictObject({
   stake: strategyStakeSchema,
 });
 
+// An H1 session (#670, docs/trading-session.md -> Settings v4): a fixed stake, its length in
+// trades, a loss ceiling, and the H1 signal its driver decides with. Written only by
+// buildH1SessionSettings (the h1 CLI of apps/backend); TRADING_SESSION_SETTINGS_VERSION stays 3.
+export const H1_SESSION_SETTINGS_VERSION = 4;
+const settingsV4Schema = z.strictObject({
+  version: z.literal(H1_SESSION_SETTINGS_VERSION),
+  assetId: createTradeIntentRequestSchema.shape.assetId,
+  // a number, not a literal type: every version's durationSec reads as one type
+  durationSec: z.int().min(H1_EXPIRY_SEC).max(H1_EXPIRY_SEC),
+  trades: z.int().min(1).max(MAX_SESSION_SUMMARY_TRADES),
+  stake: z.strictObject({ strategy: z.literal(SessionStakeStrategy.Fixed), ...stakeFields }),
+  signal: h1SessionSignalSchema,
+  maxLoss: tradeAmountSchema,
+});
+
 export const tradingSessionSettingsSchema = z.discriminatedUnion('version', [
   settingsV1Schema,
   settingsV2Schema,
   settingsV3Schema,
+  settingsV4Schema,
 ]);
 export type TradingSessionSettings = z.infer<typeof tradingSessionSettingsSchema>;
+export type H1SessionSettings = z.infer<typeof settingsV4Schema>;
+
+// the one guard of an H1 session's settings: the orchestrator, the summary and the driver (#707)
+export const isH1Settings = (settings: TradingSessionSettings): settings is H1SessionSettings =>
+  settings.version === H1_SESSION_SETTINGS_VERSION;
 
 // The session's stake strategy and its parameters, frozen in its row at the start: v1 is fixed.
 // The worker's sizer takes this shape (StakeParams); every reader of the strategy goes through it.
@@ -114,6 +156,7 @@ export function sessionProgress(
   settings: TradingSessionSettings,
   counts: { settled: number; won: number },
 ): { planned: number; done: number } {
+  // v1, v2 and v4 (#670): every settled trade counts, a tie and a loss included
   if (settings.version !== 3) return { planned: settings.trades, done: counts.settled };
   const done =
     settings.stake.strategy === SessionStakeStrategy.Martingale ? counts.won : counts.settled;
@@ -207,9 +250,6 @@ export function stakeSettingsFrom(
   };
 }
 
-// The worker's deadline for a session (started_at + this, on the database clock) and the start
-// route's refusal of a session that cannot fit it (docs/trading-session.md -> Routes).
-export const SESSION_MAX_DURATION_MS = 3_600_000;
 // per trade on top of its duration: with no close event a trade settles CATCHUP_GRACE_MS (10 s)
 // to + CATCHUP_TICK_MS (5 s) after its close, and a held-back attempt adds up to
 // CATCHUP_STALLED_RETRY_MS (30 s); 120 keeps room (stated: shared cannot import the worker)
@@ -245,6 +285,33 @@ export function buildSessionSettings(input: {
   });
 }
 
+// The settings of an H1 session (#670): R1's parameters, the entry window's first second, the
+// expiry, and maxLoss = k × baseStake in bigint (Rule 2). A stake the schema refuses (a zero
+// minimum, a ceiling outside numeric(20,8)) is the caller's refusal.
+export const MAX_H1_LOSS_MULTIPLIER = 1000;
+export function buildH1SessionSettings(input: {
+  assetId: number;
+  trades: number;
+  stake: { baseStake: DecimalString; stakeScale: number };
+  maxLossMultiplier: number;
+}) {
+  const { stake } = input;
+  return tradingSessionSettingsSchema.safeParse({
+    version: H1_SESSION_SETTINGS_VERSION,
+    assetId: input.assetId,
+    durationSec: H1_EXPIRY_SEC,
+    trades: input.trades,
+    stake: { strategy: SessionStakeStrategy.Fixed, ...stake },
+    signal: {
+      kind: H1_SESSION_SIGNAL_KIND,
+      params: { ...H1_R1_PARAMS },
+      entryDelaySec: H1_ENTRY_WINDOW_SEC.from,
+      expirySec: H1_EXPIRY_SEC,
+    },
+    maxLoss: multiplyDecimal(stake.baseStake, BigInt(input.maxLossMultiplier)),
+  });
+}
+
 // A session that waits this many candles of its signal interval for a signal stops with
 // no_signal_timeout (#509; in candles since #637, owner 2026-10-18): counted from the later of
 // started_at and its last intent's change, on the database clock
@@ -274,15 +341,6 @@ export function sessionFitsDeadline(
     cycles * stepsPerCycle * (durationSec + SESSION_SETTLE_SLACK_SEC) * 1000 <=
     SESSION_MAX_DURATION_MS
   );
-}
-
-// The most settled trades one session can hold (#552): its intents run one at a time, each settles
-// no earlier than its duration after it opened, and the hour ends the session. The summary's trades
-// and the card's columns are bounded by it.
-export const MAX_SESSION_SUMMARY_TRADES =
-  SESSION_MAX_DURATION_MS / (MIN_SESSION_DURATION_SEC * 1000);
-if (!Number.isInteger(MAX_SESSION_SUMMARY_TRADES)) {
-  throw new Error('MAX_SESSION_SUMMARY_TRADES must be an integer');
 }
 
 // upper estimate of POST /trading/sessions: one bounded broker balance request plus statements;

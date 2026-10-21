@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PairsCatalogErrorCode } from './catalog';
+import { H1_EXPIRY_SEC, H1_R1_PARAMS } from './h1';
 import { decimalStringSchema } from './money';
 import { SIGNAL_SHORTEST_INTERVAL_MS } from './signal';
 import { INT4_MAX, TradeIntentStatus, type TradeIntentView } from './trading';
@@ -42,6 +43,10 @@ import {
   TRADING_SESSIONS_STOP_PATH,
   tradingSessionStopReasonSchema,
   SESSION_SUMMARY_FALLBACK_MS,
+  buildH1SessionSettings,
+  H1_SESSION_SETTINGS_VERSION,
+  isH1Settings,
+  MAX_H1_LOSS_MULTIPLIER,
 } from './trading-session';
 
 const settings = {
@@ -748,5 +753,87 @@ describe('sessionShareResponseSchema (#538)', () => {
     expect(parse({ referralCode: 'AbC123x!' })).toBe(false);
     expect(parse({ trades: [{ profit: '1', openPrice: 1, closePrice: 1 }] })).toBe(false);
     expect(parse({ pair: { symbol: 'EURUSD', digits: 5, payout: 80 } })).toBe(false);
+  });
+});
+
+describe('settings v4, the H1 session (#670)', () => {
+  const h1Settings = {
+    version: 4,
+    assetId: 101,
+    durationSec: 5,
+    trades: 50,
+    stake: { strategy: 'fixed', baseStake: '1.5', stakeScale: 2 },
+    signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
+    maxLoss: '30',
+  };
+  const v4 = (patch: Record<string, unknown> = {}) => ({ ...h1Settings, ...patch });
+
+  it('H1-S1 reads v4 and refuses it outside its bounds', () => {
+    expect(safeParseTradingSessionSettings(v4()).success).toBe(true);
+    expect(
+      safeParseTradingSessionSettings(v4({ trades: MAX_SESSION_SUMMARY_TRADES })).success,
+    ).toBe(true);
+    expect(refused(v4({ trades: 0 }))).toBe(true);
+    expect(refused(v4({ trades: MAX_SESSION_SUMMARY_TRADES + 1 }))).toBe(true);
+    expect(refused(v4({ durationSec: 60 }))).toBe(true);
+    expect(refused(v4({ stake: martingaleStake }))).toBe(true);
+    expect(refused(v4({ maxLoss: '0' }))).toBe(true);
+    expect(refused(v4({ maxLoss: '1000000000000' }))).toBe(true);
+    expect(refused(v4({ signal: { ...h1Settings.signal, kind: 'momentum' } }))).toBe(true);
+    expect(refused(v4({ signal: { ...h1Settings.signal, expirySec: 15 } }))).toBe(true);
+    expect(refused(v4({ signal: { ...h1Settings.signal, entryDelaySec: 0 } }))).toBe(true);
+    expect(refused(v4({ cycles: 5 }))).toBe(true);
+    expect(refused(v4({ maxLoss: undefined }))).toBe(true);
+  });
+
+  it('H1-S2 counts every settled trade against settings.trades', () => {
+    expect(sessionProgress(safeParse(v4()), { settled: 3, won: 1 })).toEqual({
+      planned: 50,
+      done: 3,
+    });
+  });
+
+  it('H1-S3 reads the stake as fixed', () => {
+    expect(sessionStakeParams(safeParse(v4()))).toEqual(h1Settings.stake);
+  });
+
+  it('H1-S4 buildH1SessionSettings writes R1, entry +1 s, expiry 5 s and maxLoss = k × B', () => {
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      trades: 50,
+      stake: { baseStake: decimalStringSchema.parse('1.5'), stakeScale: 2 },
+      maxLossMultiplier: 20,
+    });
+    expect(built.success && built.data).toEqual(h1Settings);
+    const ceiling = buildH1SessionSettings({
+      assetId: 101,
+      trades: 1,
+      stake: { baseStake: decimalStringSchema.parse('0.00000001'), stakeScale: 8 },
+      maxLossMultiplier: MAX_H1_LOSS_MULTIPLIER,
+    });
+    expect(ceiling.success && ceiling.data.version === 4 && ceiling.data.maxLoss).toBe('0.00001');
+    const zero = buildH1SessionSettings({
+      assetId: 101,
+      trades: 50,
+      stake: { baseStake: decimalStringSchema.parse('0'), stakeScale: 0 },
+      maxLossMultiplier: 20,
+    });
+    expect(zero.success).toBe(false);
+    const overflow = buildH1SessionSettings({
+      assetId: 101,
+      trades: 50,
+      stake: { baseStake: decimalStringSchema.parse('999999999999'), stakeScale: 0 },
+      maxLossMultiplier: 2,
+    });
+    expect(overflow.success).toBe(false);
+  });
+
+  it('H1-S5 isH1Settings is true for v4 only; the shortest session trade is the H1 expiry', () => {
+    expect(H1_SESSION_SETTINGS_VERSION).toBe(4);
+    expect(isH1Settings(safeParse(v4()))).toBe(true);
+    expect(isH1Settings(safeParse(settings))).toBe(false);
+    expect(isH1Settings(safeParse(settingsV2))).toBe(false);
+    expect(isH1Settings(safeParse(settingsV3))).toBe(false);
+    expect(MIN_SESSION_DURATION_SEC).toBe(H1_EXPIRY_SEC);
   });
 });
