@@ -6,12 +6,16 @@ import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
   brokerBalanceSnapshots,
   brokerTrades,
   createDb,
+  createSessionIntent,
   createTradeIntent,
+  markIntentUnknown,
   setTradingMode,
+  takeIntent,
   OutboxStatus,
   OutboxTopic,
   outboxEvents,
@@ -667,4 +671,209 @@ describe('a demo session whose worker dies (#131)', () => {
     expect(await shutdown(b)).toBe('clean');
     await a.redis.quit();
   }, 60_000);
+});
+
+// #696: every terminal write of an intent in the worker wakes the orchestrator after its commit.
+// The orchestrator's interval is far past each case's bound, so only a wake makes the next step
+// in time; every bound is the host's clock.
+describe('the wake through the composition (#696)', () => {
+  const slow = (tickMs: number, retryMs: number): Partial<WorkerTuning> => ({
+    orchestrator: { ...TEST_WORKER_TUNING.orchestrator!, tickMs, retryMs },
+  });
+  const stepsOf = (sessionId: string) =>
+    tmp.db
+      .select()
+      .from(tradeIntents)
+      .where(eq(tradeIntents.tradingSessionId, sessionId))
+      .orderBy(asc(tradeIntents.createdAt));
+  const tradeOf = async (intentId: string) =>
+    (await tmp.db.select().from(brokerTrades).where(eq(brokerTrades.intentId, intentId)))[0]!;
+  // a case's own steps only: a step another case left queued would take this case's fault
+  const publishSteps = async (sessionId: string) =>
+    publishPending((await stepsOf(sessionId)).map((row) => row.id));
+  const sessionOf = async (id: string) =>
+    (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, id)))[0]!;
+  const wokenTicks = (w: Running) =>
+    logsOf(w, 'trading session tick').filter((line) => (line.woken as number) >= 1);
+  const settledAfter = async (intentId: string) => {
+    await until(
+      'the settle',
+      async () => (await statusOf(intentId)) === TradeIntentStatus.Settled,
+      { intervalMs: 2 },
+    );
+    return Date.now();
+  };
+  const ticked = (w: Running, count: number) =>
+    until('the woken tick lines', () => wokenTicks(w).length >= count);
+
+  // the next case's orchestrator scans every active session in this database
+  afterEach(async () => {
+    await tmp.db
+      .update(tradingSessions)
+      .set({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.UserStopped,
+        endedAt: sql`now()`,
+      })
+      .where(eq(tradingSessions.status, TradingSessionStatus.Active));
+  });
+
+  it('H10 a settle over the socket makes the next step within a second', async () => {
+    const account = await seedAccount({ snapshot: true });
+    const session = await seedTradingSession(tmp.db, account.brokerAccountId, {
+      settings: sessionSettings({ trades: 2 }),
+    });
+    const startedAt = Date.now();
+    const w = startWorker('H10', { sockets: true, tuning: slow(10_000, 20_000) });
+    await until('step 1 open over the socket', async () => {
+      await publishSteps(session.id);
+      const rows = await stepsOf(session.id);
+      return (
+        rows.length === 1 &&
+        rows[0]!.status === TradeIntentStatus.Accepted &&
+        socketsOf(account.brokerUserId).length === 1
+      );
+    });
+    const step1 = (await stepsOf(session.id))[0]!;
+    broker.trades.settle(Number((await tradeOf(step1.id)).brokerTradeId), {
+      outcome: MockTradeOutcome.Win,
+      closeTimestamp: Date.now(),
+    });
+    const settledAt = await settledAfter(step1.id);
+    await until('step 2', async () => (await stepsOf(session.id)).length === 2, {
+      intervalMs: 2,
+    });
+    // the timer could not have made it; the wake did, within a second of the settle
+    expect(Date.now()).toBeLessThan(startedAt + 10_000);
+    expect(Date.now() - settledAt).toBeLessThan(1_000);
+    // the acceptance metric: the broker's close of step 1 to the creation of step 2
+    const step2 = (await stepsOf(session.id))[1]!;
+    const closedAt = (await tradeOf(step1.id)).closeTimestampMs!;
+    expect(step2.createdAt.getTime() - closedAt).toBeLessThan(1_000);
+    await ticked(w, 1);
+    expect(wokenTicks(w)).toEqual([expect.objectContaining({ woken: 1, created: 1 })]);
+    expect(await shutdown(w)).toBe('clean');
+  });
+
+  it("H11 a broker's rejection wakes it: two rejections stop the session in time", async () => {
+    const account = await seedAccount({ snapshot: true });
+    const session = await seedTradingSession(tmp.db, account.brokerAccountId, {
+      settings: sessionSettings({ trades: 2 }),
+    });
+    broker.rest.failNext('openTrade', { status: 400 });
+    broker.rest.failNext('openTrade', { status: 400 });
+    const startedAt = Date.now();
+    const w = startWorker('H11', { sockets: false, tuning: slow(10_000, 20_000) });
+    await until('the session stopped', async () => {
+      await publishSteps(session.id);
+      return (await sessionOf(session.id)).status === TradingSessionStatus.Stopped;
+    });
+    expect(Date.now()).toBeLessThan(startedAt + 10_000);
+    expect(await sessionOf(session.id)).toMatchObject({
+      stopReason: TradingSessionStopReason.RejectedTwice,
+    });
+    expect((await stepsOf(session.id)).map((row) => row.status)).toEqual([
+      TradeIntentStatus.Rejected,
+      TradeIntentStatus.Rejected,
+    ]);
+    await ticked(w, 2);
+    expect(wokenTicks(w)).toEqual([
+      expect.objectContaining({ woken: 1, created: 1 }),
+      expect.objectContaining({ woken: 1, stopped: 1 }),
+    ]);
+    expect(await shutdown(w)).toBe('clean');
+  });
+
+  it('H12 a settle by the catch-up makes the next step', async () => {
+    const account = await seedAccount({ snapshot: true });
+    const session = await seedTradingSession(tmp.db, account.brokerAccountId, {
+      settings: sessionSettings({ trades: 2 }),
+    });
+    const startedAt = Date.now();
+    const w = startWorker('H12', { sockets: false, tuning: slow(10_000, 20_000) });
+    await until('step 1 accepted over REST', async () => {
+      await publishSteps(session.id);
+      const rows = await stepsOf(session.id);
+      return rows.length === 1 && rows[0]!.status === TradeIntentStatus.Accepted;
+    });
+    const step1 = (await stepsOf(session.id))[0]!;
+    broker.trades.settle(Number((await tradeOf(step1.id)).brokerTradeId), {
+      outcome: MockTradeOutcome.Win,
+    });
+    // overdue for the catch-up: the trade's expiry an hour behind the database clock
+    await tmp.db
+      .update(brokerTrades)
+      .set({ openTimestampMs: sql`(extract(epoch from now()) * 1000)::bigint - 3600000` })
+      .where(eq(brokerTrades.intentId, step1.id));
+    const settledAt = await settledAfter(step1.id);
+    await until('step 2', async () => (await stepsOf(session.id)).length === 2, {
+      intervalMs: 2,
+    });
+    expect(Date.now()).toBeLessThan(startedAt + 10_000);
+    expect(Date.now() - settledAt).toBeLessThan(3_000);
+    await ticked(w, 1);
+    expect(wokenTicks(w)).toEqual([expect.objectContaining({ woken: 1, created: 1 })]);
+    expect(await shutdown(w)).toBe('clean');
+  });
+
+  // narrowed from the plan's two workers (owner's answer): the dead worker's step is written here
+  it('H13 a settle by the reconciliation pass makes the next step', async () => {
+    const account = await seedAccount({ snapshot: true });
+    const session = await seedTradingSession(tmp.db, account.brokerAccountId, {
+      settings: sessionSettings({ trades: 2 }),
+    });
+    const terms = {
+      assetId: EURUSD,
+      amount: '1.00' as DecimalString,
+      action: TradeAction.Up,
+      durationSec: 60,
+    };
+    const { intent } = await createSessionIntent(tmp.db, {
+      sessionId: session.id,
+      step: 1,
+      telegramUserId: account.telegramUserId,
+      brokerAccountId: account.brokerAccountId,
+      mode: TradeMode.Demo,
+      ...terms,
+      decision: null,
+    });
+    // a dead worker's take and its order at the broker, closed since; the sweeper's mark
+    expect(
+      await takeIntent(tmp.db, {
+        id: intent.id,
+        expectedVersion: intent.version,
+        maxAgeMs: 60_000,
+      }),
+    ).toBeDefined();
+    const trade = await createBrokerRestClient({ baseUrl: broker.url }).openTrade(
+      { accessToken: accessTokens.get(account.brokerAccountId)! },
+      { ...terms, isDemo: true },
+    );
+    broker.trades.settle(Number(trade.id), { outcome: MockTradeOutcome.Win });
+    await tmp.db.transaction((tx) =>
+      markIntentUnknown(tx, {
+        id: intent.id,
+        reason: TradeIntentFailureReason.StaleSubmitting,
+        olderThanMs: 0,
+      }),
+    );
+    const startedAt = Date.now();
+    const w = startWorker('H13', { sockets: false, tuning: slow(20_000, 30_000) });
+    await until('step 1 settled through the pass', async () => {
+      await publishPending([intent.id]);
+      return (await statusOf(intent.id)) === TradeIntentStatus.Settled;
+    });
+    const settledAt = Date.now();
+    await until('step 2', async () => (await stepsOf(session.id)).length === 2, {
+      intervalMs: 2,
+    });
+    expect(Date.now()).toBeLessThan(startedAt + 20_000);
+    expect(Date.now() - settledAt).toBeLessThan(3_000);
+    expect(logsOf(w, 'reconciliation outcome recorded')).toEqual([
+      expect.objectContaining({ intentId: intent.id, status: TradeIntentStatus.Settled }),
+    ]);
+    await ticked(w, 1);
+    expect(wokenTicks(w)).toEqual([expect.objectContaining({ woken: 1, created: 1 })]);
+    expect(await shutdown(w)).toBe('clean');
+  });
 });

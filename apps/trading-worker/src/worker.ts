@@ -52,7 +52,7 @@ import {
 import { createBalanceCheck } from './intents/balance-check';
 import type { DeadLetter } from './dead-letter';
 import { startIntentConsumer } from './intents/consumer';
-import { processIntentJob } from './intents/processor';
+import { processIntentJob, type ProcessOutcome } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
 import { createRestReconciler } from './intents/rest-reconciler';
 import { createSettlementCatchup } from './intents/settlement-catchup';
@@ -69,6 +69,17 @@ import { createSessionOrchestrator } from './trading-session/orchestrator';
 
 // scripts/deploy-worker.sh waits for this line before it stops the old container (#95)
 const WORKER_READY_MSG = 'trading-worker started';
+
+// the job outcomes that leave the intent terminal: they wake the trading sessions (#696); an
+// outcome added later fails tsc here
+const JOB_OUTCOME_ENDS_INTENT = {
+  accepted: false,
+  rejected: true,
+  unknown: false,
+  expired: true,
+  stale_unknown: false,
+  noop: false,
+} as const satisfies Record<ProcessOutcome, boolean>;
 
 // 'dirty': phase 1 overran or failed and phase 2 did not run, so the process must exit 1 without
 // closing the connections under a write in flight
@@ -151,6 +162,19 @@ export function createWorker({
       logger,
     });
 
+  // the trading sessions (docs/trading-session.md): their signal and pairs come from the backend.
+  // Built ahead of the writers below: every terminal write of an intent here wakes it after its
+  // commit (#696)
+  const backend = { baseUrl: env.backendUrl, token: env.internalApiToken };
+  const tradingSessions = createSessionOrchestrator({
+    db,
+    signals: testing.signals ?? createBackendSignalSource(backend),
+    pairs: testing.pairs ?? createBackendPairsSource(backend),
+    logger,
+    config: tuning.orchestrator,
+    demoOnly: env.demoOnly,
+  });
+
   // The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order
   // goes over REST. A writer that throws leaves its event in the consumers' dead-letter queue (#92):
   // its own instance, because the manager is built before the consumers.
@@ -194,8 +218,11 @@ export function createWorker({
               }),
             balanceEvent: (brokerAccountId, mode, balance) =>
               applyBalanceEvent(db, { brokerAccountId, mode, balance }),
-            closedTrades: (brokerAccountId, trades) =>
-              settleClosedTrades(db, { brokerAccountId, trades }),
+            closedTrades: async (brokerAccountId, trades) => {
+              const outcomes = await settleClosedTrades(db, { brokerAccountId, trades });
+              if (outcomes.some((outcome) => outcome.result === 'settled')) tradingSessions.wake();
+              return outcomes;
+            },
           },
           lossObserver: {
             lost: (accountId) => breaker.socketLost(accountId),
@@ -223,8 +250,8 @@ export function createWorker({
     logger,
     concurrency: env.workerConcurrency,
     ...prefix,
-    processor: (payload) =>
-      processIntentJob(
+    processor: async (payload) => {
+      const outcome = await processIntentJob(
         {
           db,
           executor,
@@ -237,7 +264,10 @@ export function createWorker({
           },
         },
         payload,
-      ),
+      );
+      if (JOB_OUTCOME_ENDS_INTENT[outcome]) tradingSessions.wake();
+      return outcome;
+    },
   });
 
   const pass = createReconciliationPass({
@@ -257,6 +287,7 @@ export function createWorker({
     }),
     balanceCheck: createBalanceCheck({ db, rest: brokerRest, tokens, logger }),
     logger,
+    onIntentEnded: () => tradingSessions.wake(),
     config: {
       tickMs: tuning.reconcileTickMs,
       retryMs: tuning.reconcileRetryMs,
@@ -290,17 +321,7 @@ export function createWorker({
       attemptTimeoutMs: CATCHUP_ATTEMPT_TIMEOUT_MS,
       stalledRetryMs: CATCHUP_STALLED_RETRY_MS,
     },
-  });
-
-  // the trading sessions (docs/trading-session.md): their signal and pairs come from the backend
-  const backend = { baseUrl: env.backendUrl, token: env.internalApiToken };
-  const tradingSessions = createSessionOrchestrator({
-    db,
-    signals: testing.signals ?? createBackendSignalSource(backend),
-    pairs: testing.pairs ?? createBackendPairsSource(backend),
-    logger,
-    config: tuning.orchestrator,
-    demoOnly: env.demoOnly,
+    onIntentEnded: () => tradingSessions.wake(),
   });
 
   const sweeper = startSweeper({
