@@ -63,6 +63,7 @@ import {
   sessionView,
   signalsResponse,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -82,6 +83,13 @@ const REAL = accessView({ tradingMode: TradeMode.Real });
 // a pair paying 70 %: no payout refuses it since #631
 const LOW_PAYOUT = PAIR_OTHER_TYPE;
 const ANALYSIS = { kind: 'analysis', assetId: PAIR_EURUSD.id, durationSec: 5 } as const;
+// both pairs of the launch scenes have a signal now (#664: the door reads the list)
+const WITH_SIGNALS = signalsResponse(NOW, {
+  '5s': [
+    [PAIR_EURUSD.id, TradeAction.Up],
+    [PAIR_OTHER_TYPE.id, TradeAction.Down],
+  ],
+});
 
 interface Scene {
   name: string;
@@ -111,14 +119,13 @@ const SCENES: Scene[] = [
     signals: signalsResponse(NOW, { '5s': [[PAIR_EURUSD.id, TradeAction.Up]] }),
   }),
   press('the signals, empty', 'demo:sig', { signals: signalsResponse(NOW) }),
-  press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
-  press('the launch at a 70 % payout', demoLaunchCallbackData(LOW_PAYOUT.id, 5)),
-  // #509: the launch on a pair without a signal now, and a signal that could not be read
-  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 5), {
-    evaluateSignal: SIGNAL_NO_SIGNAL,
+  press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 5), { signals: WITH_SIGNALS }),
+  press('the launch at a 70 % payout', demoLaunchCallbackData(LOW_PAYOUT.id, 5), {
+    signals: WITH_SIGNALS,
   }),
-  press('the launch, fetch_failed', demoLaunchCallbackData(PAIR_EURUSD.id, 5), {
-    evaluateSignal: SIGNAL_FETCH_FAILED,
+  // #664: the launch on a pair without a signal now waits for it, with the other pairs
+  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 5), {
+    signals: signalsResponse(NOW, { '5s': [[LOW_PAYOUT.id, TradeAction.Up]] }),
   }),
   press(
     'a real session refused for no signal',
@@ -228,6 +235,7 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       recordStart: () => Promise.resolve(userView({ hasActiveBrokerAccount: true })),
@@ -282,9 +290,10 @@ describe('the real path (#121)', () => {
     ['a stopped real session', 'проверь баланс в /account'],
     ['a demo session button of an earlier render', 'Режим или сумма сделки изменились'],
     ['the launch', '🚀 Запустить цикл · REAL'],
-    ['the launch, no signal', 'По паре сейчас нет сигнала'],
-    ['the launch, fetch_failed', 'Не удалось проверить сигнал пары'],
-    ['a real session refused for no signal', '🔀 Выбрать другую пару'],
+    ['the launch, no signal', 'Проверяю сигнал по EUR/USD'],
+    ['the launch, no signal', 'Сигнал уже есть по другим парам'],
+    ['a real session refused for no signal', 'Проверяю сигнал по EUR/USD'],
+    ['the analysis, a rule refusal', 'Проверяю сигнал…'],
     ['the analysis, a signal', '🚀 Сессия из 5 циклов · REAL'],
     ['«➕ Ещё»', '🚀 Сессия из 5 циклов · REAL'],
     ['the refresh of a settled real trade', '🚀 Сессия из 5 циклов · REAL'],
@@ -301,7 +310,7 @@ describe('the real path (#121)', () => {
   // the control: the same oracle on a demo launch does match, so the pattern cannot go dead
   it('matches the demo launch of a demo user', async () => {
     const words = await shown(
-      press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 5)),
+      press('the launch', demoLaunchCallbackData(PAIR_EURUSD.id, 5), { signals: WITH_SIGNALS }),
       accessView({ tradingMode: TradeMode.Demo }),
     );
     expect(words.some((word) => DEMO_WORDING.test(word))).toBe(true);

@@ -26,6 +26,7 @@ import {
   inlineQueryUpdate,
   preCheckoutUpdate,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -52,6 +53,7 @@ const setup = (
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     languages,
   });
   const api = captureApi(bot);

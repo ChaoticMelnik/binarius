@@ -441,6 +441,10 @@ const statusLineOfIntent = ({ status, lastError }: IntentStatusView): TelegramHt
       : textOf(REJECTED_LINES[lastError])
     : textOf(INTENT_STATUS_LINES[status]);
 
+// A pair's label, or its id where the catalog could not say (#127, #664)
+export const assetLabelOf = (symbol: PairLabel | null, assetId: number): string =>
+  symbol ?? plain.intentAssetFallback({ assetId: String(assetId) });
+
 // The demo trade's one message (#127). `symbol` is the pair's label (pairLabel), or null when
 // the catalog could not say (the refresh button): the asset's id stands in for it. The callers
 // never ask for the deadline hint and the session offer (#360) together.
@@ -449,7 +453,7 @@ export function intentStatusText(
   view: IntentStatusView,
   { deadline = false, sessionOffer = false }: { deadline?: boolean; sessionOffer?: boolean } = {},
 ): TelegramHtml {
-  const asset = symbol ?? plain.intentAssetFallback({ assetId: String(view.assetId) });
+  const asset = assetLabelOf(symbol, view.assetId);
   const trade = [
     asset,
     ACTION_LABELS[view.action],

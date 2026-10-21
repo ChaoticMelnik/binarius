@@ -42,7 +42,7 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
-import { createDemoComposer, removeLegacyKeyboard } from './demo';
+import { createDemoComposer, createSignalWaitScreens, removeLegacyKeyboard } from './demo';
 import {
   demoKeyboard,
   INVITE_CALLBACK_DATA,
@@ -73,6 +73,7 @@ import {
 import type { Logger } from './logging';
 import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
+import type { SignalWaiter } from './signal-wait';
 import { createStakePicker, SETTINGS_CALLBACK_DATA, stakeOpenCallbackData } from './stake-picker';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
 import {
@@ -142,6 +143,9 @@ export interface CreateBotOptions {
   sessionTracker: Pick<SessionTracker, 'track'>;
   // tracks the sessions again after a restart (#567): handed the session composer's resume
   sessionResumer: Pick<SessionResumer, 'attach'>;
+  // the wait for a signal (#664): handed the demo's screens; required, so no test arms timers
+  // unasked
+  signalWaiter: Pick<SignalWaiter, 'attach' | 'waitList' | 'waitPair' | 'leave'>;
   // each user's language of the texts (#508, language.ts); a test hands one already holding its user
   languages?: UserLanguages;
 }
@@ -161,6 +165,7 @@ export function createBot({
   intentTracker,
   sessionTracker,
   sessionResumer,
+  signalWaiter,
   languages = createUserLanguages(),
 }: CreateBotOptions): Bot {
   const backend = rememberingLanguages(client, languages);
@@ -200,13 +205,19 @@ export function createBot({
 
   // Any button and any command leave the typed amount (#319): a number typed after them is text
   // outside a dialog. Registered before every handler, so `stk:c` and `demo:sc` set the step again.
-  // The login steps stay: resend and confirm read the code step.
+  // The login steps stay: resend and confirm read the code step. They leave the wait for a signal
+  // too (#664): the message waited on is no longer edited, and a handler that waits again — a pair
+  // pressed under the wait, «🔄 Обновить» — registers a new entry after this.
   privateChats.on('callback_query:data', async (ctx, next) => {
     endInputStep(loginDialog, ctx.from.id);
+    signalWaiter.leave(ctx.from.id);
     await next();
   });
   privateChats.on('message:text', async (ctx, next) => {
-    if (ctx.message.text.startsWith('/')) endInputStep(loginDialog, ctx.from.id);
+    if (ctx.message.text.startsWith('/')) {
+      endInputStep(loginDialog, ctx.from.id);
+      signalWaiter.leave(ctx.from.id);
+    }
     await next();
   });
 
@@ -497,6 +508,9 @@ export function createBot({
 
   // the pictures of a signal's direction: the analysis card's and the session message's (#568)
   const setupCardPhotos = createSetupCardPhotos(logger);
+  signalWaiter.attach(
+    createSignalWaitScreens({ connectKeyboard: welcomeKeyboard, setupCardPhotos }),
+  );
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
@@ -507,6 +521,7 @@ export function createBot({
       now,
       connectKeyboard: welcomeKeyboard,
       setupCardPhotos,
+      signalWaiter,
     }),
   );
 
@@ -541,6 +556,7 @@ export function createBot({
     cashierUrl,
     setupCardPhotos,
     shareEnabled: shareStorageChatId !== undefined,
+    signalWaiter,
   });
   sessionResumer.attach(tradingSession.resume);
   // the amounts of a demo cycle's amount screen (#476), which start through the session's path;

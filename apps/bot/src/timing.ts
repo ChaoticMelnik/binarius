@@ -1,6 +1,7 @@
 import {
   BOT_TEXTS_REFRESH_MS,
   SESSION_MAX_DURATION_MS,
+  SIGNAL_SHORTEST_INTERVAL_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
@@ -86,9 +87,9 @@ export const HANDLER_CALLS = {
   // reads, then editMessageText refused as gone → sendMessage
   demoSignals: { backend: 2, telegram: 3 },
   // a pair of the list (#320) and every demo door of a cycle (#476): answerCallbackQuery ∥
-  // readPairs ∥ readTradingAccess ∥ evaluateSignal (#509) — counted the same way — then
-  // editMessageText refused as gone → sendMessage; a door under a trade or a session sends at
-  // once, shorter
+  // readPairs ∥ readTradingAccess ∥ readSignals (the signals list, #664) — counted the same way —
+  // then editMessageText refused as gone → sendMessage; a door under a trade or a session sends
+  // at once, shorter
   demoLaunch: { backend: 3, telegram: 3 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair's summary, also by
   // `demo:d:<id>:5` of an old button): answerCallbackQuery ∥ readPairs, then editMessageText
@@ -318,6 +319,65 @@ export const SESSION_RESUME_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS;
 export const SESSION_RESUME_PER_SECOND = 4;
 export const SESSION_RESUME_GAP_MS = 1000 / SESSION_RESUME_PER_SECOND;
 
+// The wait for a signal (#664, signal-wait.ts, docs/bot-demo.md → The wait for a signal): one
+// poll of GET /trading/signals and GET /trading/pairs for every waiting user, once a candle of the
+// demo's one duration, between updates like the trackers, so not in HANDLER_CALLS. The poll comes
+// POLL_OFFSET after the candle's boundary: the backend's scanner decides at the boundary plus its
+// SIGNAL_SCAN_SLACK_MS (500 ms) — the backend's constant, not importable here, so the relation is
+// stated, not checked.
+export const SIGNAL_WAIT_POLL_MS = SIGNAL_SHORTEST_INTERVAL_MS;
+export const SIGNAL_WAIT_POLL_OFFSET_MS = 1_000;
+// how long the buttons of pairs with a signal stand, the list's and the alternatives' (owner's
+// decision 2026-10-21)
+export const SIGNALS_LIST_TTL_MS = 30_000;
+// A technical bound, not a product limit: an entry nobody left the screen of ends after an hour
+// (the order of SESSION_MAX_DURATION_MS), well below the 48 h after which Telegram no longer edits
+// a message.
+export const SIGNAL_WAIT_MAX_MS = 3_600_000;
+export const TELEGRAM_EDIT_WINDOW_MS = 48 * 3_600_000;
+// The pace of the wait's edits, in a tick and at the stop. With the session recovery's 4 a second
+// and the backend's 20 + 9 on the same token the worst coincidence is about 38 a second, above
+// Telegram's ~30 (docs/bot-session.md → Rate and timing): a 429 pauses the edits for its
+// retry_after.
+export const SIGNAL_WAIT_EDITS_PER_SECOND = 5;
+export const SIGNAL_WAIT_EDIT_GAP_MS = 1000 / SIGNAL_WAIT_EDITS_PER_SECOND;
+// a transport failure or another refusal of an entry's edit, retried on the next ticks
+export const SIGNAL_WAIT_EDIT_FAILURES_MAX = 3;
+// At the stop the waiting messages become the start of trading, one launched every
+// SIGNAL_WAIT_EDIT_GAP_MS inside this window (100 messages); each launched one is awaited, bounded
+// by TELEGRAM_API_TIMEOUT_MS.
+export const SIGNAL_WAIT_SHUTDOWN_BUDGET_MS = 20_000;
+// What stop() waits for of a tick in flight: an analysis's resolution — evaluateSignal,
+// readTradingAccess, the photo's edit and the text's after a refused photo. The tick's two shared
+// reads are shorter.
+export const SIGNAL_WAIT_INFLIGHT_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS;
+
+// The wait's links of the chain, a function so a test can show which value breaks them.
+export const signalWaitBoundsHold = ({
+  pollOffsetMs = SIGNAL_WAIT_POLL_OFFSET_MS,
+  pollMs = SIGNAL_WAIT_POLL_MS,
+  listTtlMs = SIGNALS_LIST_TTL_MS,
+  maxMs = SIGNAL_WAIT_MAX_MS,
+  inflightMs = SIGNAL_WAIT_INFLIGHT_MS,
+  shutdownBudgetMs = SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+}: {
+  pollOffsetMs?: number;
+  pollMs?: number;
+  listTtlMs?: number;
+  maxMs?: number;
+  inflightMs?: number;
+  shutdownBudgetMs?: number;
+} = {}): boolean =>
+  0 < pollOffsetMs &&
+  pollOffsetMs < pollMs &&
+  pollMs < listTtlMs &&
+  listTtlMs < maxMs &&
+  maxMs < TELEGRAM_EDIT_WINDOW_MS &&
+  SIGNAL_WAIT_EDIT_GAP_MS * SIGNAL_WAIT_EDITS_PER_SECOND === 1000 &&
+  inflightMs < SHUTDOWN_BUDGET_MS &&
+  // the stop's last launched edit ends inside the bot's own budget
+  shutdownBudgetMs + TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS;
+
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
 // /trading/signal (#126), POST /trading/sessions (#283) and a session's view and stop (#337):
@@ -344,6 +404,7 @@ const TIMING_CHAIN_HOLDS =
   SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  signalWaitBoundsHold() &&
   // the first polls of a full recovery list start within one interval of the bot's start (#567)
   STARTUP_BUDGET_MS +
     SESSION_RESUME_DRAIN_MS +

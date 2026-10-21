@@ -1,3 +1,4 @@
+import type { Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   pairLabel,
@@ -37,6 +38,7 @@ import {
   fakeLogger,
   messageAnswer,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -95,6 +97,7 @@ function setup(
   const loginDialog = createLoginDialog();
   if (options.dialog !== undefined) loginDialog.set(USER.id, options.dialog);
   const sessionTracker = stubSessionTracker();
+  const signalWaiter = stubSignalWaiter();
   const bot = createBot({
     token: '123456:AA-bot-token',
     backend: fakeBackend({ setStake, startSession, readPairs }),
@@ -104,11 +107,14 @@ function setup(
     intentTracker: stubTracker(),
     sessionTracker,
     sessionResumer: stubSessionResumer(),
+    signalWaiter,
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   return {
     press: (data: string) => bot.handleUpdate(callbackUpdate(data)),
+    pressUpdate: (update: Update) => bot.handleUpdate(update),
+    signalWaiter,
     bot,
     type: (text: string) => bot.handleUpdate(textUpdate(text)),
     setStake,
@@ -256,7 +262,9 @@ describe('an amount of the amount screen', () => {
   // C-mode, C-floor, C-refusals: every start refusal by the session path's own table
   it.each(
     Object.entries(START_REFUSALS).filter(
-      ([code]) => code !== TradingSessionErrorCode.ActiveSessionExists,
+      ([code]) =>
+        code !== TradingSessionErrorCode.ActiveSessionExists &&
+        code !== TradingSessionErrorCode.NoSignal,
     ),
   )('answers the start refusal %s with its text, the amount saved', async (code, refusal) => {
     const { press, calls, setStake } = setup({
@@ -265,6 +273,40 @@ describe('an amount of the amount screen', () => {
     await press(PRESS);
     expect(setStake).toHaveBeenCalledTimes(1);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(textOf(refusal.text).value);
+  });
+
+  // #664: no signal on the pair since the amount screen was drawn
+  it('turns the amount screen into the wait on a 409 no_signal, its way back kept', async () => {
+    const { pressUpdate, calls, setStake, signalWaiter } = setup({
+      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.NoSignal)),
+    });
+    const update = callbackUpdate(PRESS);
+    await pressUpdate(update);
+    expect(setStake).toHaveBeenCalledTimes(1);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(
+      TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value,
+    );
+    expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+      messageId: update.callback_query?.message?.message_id,
+      assetId: PAIR_EURUSD.id,
+      origin: 'start',
+      back: 'l',
+    });
+  });
+
+  it('answers a typed amount’s 409 no_signal with the wait as a new message', async () => {
+    const { type, calls, signalWaiter } = setup({
+      dialog: ON_STEP,
+      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.NoSignal)),
+    });
+    await type('5');
+    expect(methods(calls)).toEqual(['sendMessage']);
+    expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+      messageId: TEXT_CARD_MESSAGE_ID,
+      origin: 'start',
+      back: 'l',
+    });
   });
 
   it.each([

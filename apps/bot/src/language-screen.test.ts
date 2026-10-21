@@ -21,6 +21,7 @@ import {
   fakeLogger,
   messageAnswer,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -54,6 +55,7 @@ function setup({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     languages,
   });
   const api = captureApi(bot);

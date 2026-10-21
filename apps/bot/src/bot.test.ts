@@ -81,6 +81,7 @@ import {
   userView,
   userLanguagesWith,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   stubText,
@@ -184,6 +185,7 @@ function setup(
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     token: '123456:AA-bot-token',
     backend,
     logger,
@@ -1604,6 +1606,7 @@ describe('the account card', () => {
         intentTracker: stubTracker(),
         sessionTracker: stubSessionTracker(),
         sessionResumer: stubSessionResumer(),
+        signalWaiter: stubSignalWaiter(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1668,6 +1671,7 @@ describe('the account card', () => {
         intentTracker: stubTracker(),
         sessionTracker: stubSessionTracker(),
         sessionResumer: stubSessionResumer(),
+        signalWaiter: stubSignalWaiter(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
@@ -2816,6 +2820,7 @@ describe('the Bot API timeout', () => {
       intentTracker: stubTracker(),
       sessionTracker: stubSessionTracker(),
       sessionResumer: stubSessionResumer(),
+      signalWaiter: stubSignalWaiter(),
       token: '123456:AA-bot-token',
       // no handler runs in this test: the call under test is bot.api.sendMessage itself
       backend: {

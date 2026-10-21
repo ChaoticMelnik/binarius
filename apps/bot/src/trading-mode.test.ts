@@ -28,6 +28,7 @@ import {
   fakeLogger,
   messageAnswer,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   WRITE_CALLBACK_PREFIXES,
@@ -83,6 +84,7 @@ function setup(
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

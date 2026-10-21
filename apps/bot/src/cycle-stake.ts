@@ -155,12 +155,12 @@ export function createCycleStakeComposer<C extends Context>({
 
   async function start(
     ctx: Context,
-    { assetId, durationSec }: CycleStakeStep,
+    { assetId, durationSec, back }: CycleStakeStep,
     catalog: Settled<PairsCatalogResponse>,
     options: { retryUnknown: boolean; removeScreen: boolean },
   ): Promise<void> {
     if (ctx.from !== undefined) endStep(ctx.from.id);
-    await startSession(ctx, { mode: TradeMode.Demo, assetId, durationSec }, catalog, options);
+    await startSession(ctx, { mode: TradeMode.Demo, assetId, durationSec, back }, catalog, options);
   }
 
   // undefined on a save

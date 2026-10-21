@@ -37,24 +37,10 @@ import {
 // backend's answer. Every number on it is the answer's — a feature, a display indicator, or a
 // period from `params` — or the pair's payout and the break-even share computed from it; nothing
 // is the bot's own. A signal is a card (#482): the picture of its direction, sent by demo.ts, under
-// a caption with a monospaced block. Which buttons go under it is demo.ts's. The words are catalog
-// keys (bot-texts.ts), read when a screen is built.
-
-// `satisfies Record<NoSignalReason, …>`: a reason added to shared's constant fails tsc here.
-export const NO_SIGNAL_REASON_TEXT = labelsOf({
-  [NoSignalReason.VolatilityTooLow]: 'noSignalVolatilityTooLow',
-  [NoSignalReason.VolatilityTooHigh]: 'noSignalVolatilityTooHigh',
-  [NoSignalReason.VolatilityBelowTickFloor]: 'noSignalVolatilityBelowTickFloor',
-  [NoSignalReason.TrendFlat]: 'noSignalTrendFlat',
-  [NoSignalReason.RsiNeutral]: 'noSignalRsiNeutral',
-  [NoSignalReason.TrendMomentumDisagree]: 'noSignalTrendMomentumDisagree',
-  [NoSignalReason.RsiOverbought]: 'noSignalRsiOverbought',
-  [NoSignalReason.RsiOversold]: 'noSignalRsiOversold',
-  [NoSignalReason.InsufficientCandles]: 'noSignalInsufficientCandles',
-  [NoSignalReason.CandleGap]: 'noSignalCandleGap',
-  [NoSignalReason.Stale]: 'noSignalStale',
-  [NoSignalReason.InvalidCandle]: 'noSignalInvalidCandle',
-} as const satisfies Record<NoSignalReason, BotPlainKey>);
+// a caption with a monospaced block. Without a signal the screen waits for one (#664): it never
+// says «сигнала нет», and the wait (signal-wait.ts) turns it into the card when one comes. Which
+// buttons go under it is demo.ts's. The words are catalog keys (bot-texts.ts), read when a screen
+// is built.
 
 export const TREND_WORDS = labelsOf({
   [TrendDirection.Up]: 'trendUp',
@@ -162,6 +148,8 @@ export interface AnalysisScreen {
   session: boolean;
   // the card's picture (#482), by the direction of a signal; null on every other screen
   photo: TradeAction | null;
+  // no signal now: the screen is the wait for one (#664)
+  wait: boolean;
 }
 
 export interface AnalysisScreenInput {
@@ -194,6 +182,7 @@ ${body}`,
       stake: null,
       session: false,
       photo: null,
+      wait: false,
     };
   }
   const { decision, params } = response;
@@ -218,31 +207,24 @@ ${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}${choose}`,
       stake: action,
       session: true,
       photo: action,
+      wait: false,
     };
   }
-  const headline = TEXTS.analysisNoSignal({ reason: NO_SIGNAL_REASON_TEXT[decision.reason] });
+  // the features only on a refusal by a rule: one for want of data has none to show
+  const waiting = telegramHtml`${header}
+${TEXTS.analysisWaiting}`;
   if (!('features' in decision)) {
-    return {
-      text: telegramHtml`${header}
-${headline}
-
-${TEXTS.analysisDataHint}`,
-      stake: null,
-      session: false,
-      photo: null,
-    };
+    return { text: waiting, stake: null, session: false, photo: null, wait: true };
   }
   const volatility = VOLATILITY_WORDS[REFUSAL_VOLATILITY[decision.reason] ?? 'normal'];
   return {
-    text: telegramHtml`${header}
-${headline}
+    text: telegramHtml`${waiting}
 
-${featureLines(decision.features, params, pair, volatility)}
-
-${TEXTS.analysisNoSignalHint}`,
+${featureLines(decision.features, params, pair, volatility)}`,
     stake: null,
     session: false,
     photo: null,
+    wait: true,
   };
 }
 
@@ -256,6 +238,7 @@ ${TEXTS.analysisUnavailable}`,
   stake: null,
   session: false,
   photo: null,
+  wait: false,
 });
 
 // The card's block (#482): eight rows, a label and a value, the RSI's word by the bounds of the

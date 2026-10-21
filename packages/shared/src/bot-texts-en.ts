@@ -146,6 +146,16 @@ Tokens received: {earnedTokens}`,
   inviteNeedsStart: `Tap /start, and I will send you an invite link.`,
   inviteShareText: 'I trade in demo with signals in Binarius — join with my link',
 
+  // ---- the wait for a signal (#664): translated ahead of the Demo and Analysis groups ----------
+  signalsWaiting: `🔎 <b>Analysing the signals</b> · {label}
+I check the pairs on every candle. As soon as a signal appears, the list opens here.`,
+  signalsExpired: `🚀 <b>Start trading</b>
+A signal lasts one candle ({label}), so this list is out of date. Open the fresh signals or pick a pair by hand.`,
+  pairWaiting: `⏳ <b>Checking the signal on {symbol}</b>
+I look on every candle ({label}). As soon as the signal appears, we continue here.`,
+  pairWaitingAlternatives: `Other pairs have a signal already — pick one below instead of waiting 👇`,
+  analysisWaiting: `⏳ <b>Checking the signal…</b> As soon as it appears, the signal card opens here.`,
+
   // ---- buttons -------------------------------------------------------------------------------
   confirmButton: '✅ Confirm: {email}',
   confirmButtonNoEmail: '✅ Confirm the link',
@@ -167,6 +177,7 @@ Tokens received: {earnedTokens}`,
   menuButton: '🏠 To the menu',
   newAnalysisButton: '📊 New analysis',
   toSignalsButton: '📡 To the signals',
+  showSignalsButton: '📡 Show signals',
   otherPairButton: '🔀 Choose another pair',
   demoBackGroupsButton: '↩️ Types',
   demoBackPairsButton: '↩️ Assets',
@@ -229,6 +240,16 @@ Tokens received: {earnedTokens}`,
 export const enBotTextSource: BotTextSource<BotTextKey> = {
   sourceOf: (key) => BOT_TEXT_SOURCES_EN[key] ?? BOT_TEXT_CATALOG[key].source,
 };
+
+// The keys of the groups #632 and #633 translate that are translated already: the wait for a
+// signal (#664) was written in both languages from the start.
+export const TRANSLATED_BEFORE_633 = [
+  'signalsWaiting',
+  'signalsExpired',
+  'pairWaiting',
+  'pairWaitingAlternatives',
+  'analysisWaiting',
+] as const satisfies readonly BotTextKey[];
 
 export const UNTRANSLATED_BOT_TEXT_KEYS: readonly BotTextKey[] = (
   Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]

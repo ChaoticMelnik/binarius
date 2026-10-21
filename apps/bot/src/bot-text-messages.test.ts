@@ -51,6 +51,7 @@ import {
   type TradingSignalResponse,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
+import { pairWaitingText, waitingText } from './demo';
 import { runWithLanguage } from './language';
 import { DEMO_DURATIONS_SEC, type DemoDurationSec } from './demo-catalog';
 import {
@@ -196,6 +197,9 @@ const allFeatures = Object.values(TrendDirection).flatMap((trend) =>
 );
 // in both modes: the disclaimer and the hint follow the user's mode (#121); with the amounts'
 // line and without it (#482)
+// a wait's text alone and under the line over the other pairs' buttons (demo.ts)
+const withAlternatives = (texts: TelegramHtml[]) =>
+  texts.flatMap((text) => [waitingText(text, false), waitingText(text, true)]);
 const screens = (responses: TradingSignalResponse[]) =>
   responses.flatMap((response) =>
     DEMO_DURATIONS_SEC.flatMap((durationSec) =>
@@ -386,18 +390,24 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   ],
   analysisCard: cards,
-  analysisNoData: () =>
-    screens(
-      DATA_REFUSAL_REASONS.map((reason) =>
-        decided({ kind: SignalKind.NoSignal, reason, ...DATA_DETAILS[reason] }),
+  // the waits for a signal (#664): with and without the other pairs' line
+  analysisWaitingData: () =>
+    withAlternatives(
+      screens(
+        DATA_REFUSAL_REASONS.map((reason) =>
+          decided({ kind: SignalKind.NoSignal, reason, ...DATA_DETAILS[reason] }),
+        ),
       ),
     ),
-  analysisNoSignal: () =>
-    screens(
-      RULE_REFUSAL_REASONS.flatMap((reason) =>
-        allFeatures.map((features) => decided({ kind: SignalKind.NoSignal, reason, features })),
+  analysisWaiting: () =>
+    withAlternatives(
+      screens(
+        RULE_REFUSAL_REASONS.flatMap((reason) =>
+          allFeatures.map((features) => decided({ kind: SignalKind.NoSignal, reason, features })),
+        ),
       ),
     ),
+  pairWaiting: () => withAlternatives([pairWaitingText(pairLabel(pair), pair.id)]),
   intentStatus: () =>
     [pairLabel({ symbol: x(W.symbol + 10) }), null].flatMap((symbol) =>
       [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>
@@ -711,7 +721,7 @@ describe('the assembled messages, against the real assembly', () => {
     expect([...read].sort()).toEqual([...botTextMessageKeys(message)].sort());
   });
 
-  it.each(['intentStatus', 'analysisNoSignal'])(
+  it.each(['intentStatus', 'analysisWaiting'])(
     'M5 estimates %s exactly with markup and entities in the labels',
     (id) => {
       const texts = { actionUp: '<b></b>'.repeat(9), actionDown: '&amp;'.repeat(12) };
@@ -777,7 +787,7 @@ describe('the assembled messages, against the real assembly', () => {
     },
   );
 
-  it.each(['intentStatus', 'analysisNoSignal'])(
+  it.each(['intentStatus', 'analysisWaiting'])(
     'M4 estimates %s exactly with a long label overridden',
     (id) => {
       const texts = { actionUp: 'я'.repeat(64), demoDuration5: 'я'.repeat(64) };

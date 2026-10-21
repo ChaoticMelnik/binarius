@@ -20,6 +20,7 @@ import {
   startUpdate,
   type FakeLogger,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
 } from './testing';
@@ -150,6 +151,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -207,6 +209,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: held.texts,
       bot: fake.bot,
       logger: fakeLogger(),
@@ -251,6 +254,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: held.texts,
       bot: fake.bot,
       logger: log,
@@ -286,6 +290,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -331,6 +336,7 @@ describe('runBot', () => {
         tracker: idleTracker(),
         sessionTracker: idleTracker(),
         sessionResumer: idleResumer(),
+        signalWaiter: idleTracker(),
         botTexts: idleTexts(),
         bot: fake.bot,
         logger: log,
@@ -363,6 +369,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -384,6 +391,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -420,6 +428,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -447,6 +456,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -474,6 +484,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -503,6 +514,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -538,6 +550,7 @@ describe('runBot', () => {
       tracker,
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -566,6 +579,7 @@ describe('runBot', () => {
       tracker,
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -591,6 +605,7 @@ describe('runBot', () => {
       tracker,
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -625,6 +640,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker,
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -656,6 +672,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer,
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -675,6 +692,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: late,
+      signalWaiter: idleTracker(),
       botTexts: held.texts,
       bot: signalled.bot,
       logger: fakeLogger(),
@@ -703,6 +721,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer,
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -718,6 +737,60 @@ describe('runBot', () => {
     expect(errorMessages(log)).toEqual(['shutdown: session resume failed', STEP_LINE]);
   });
 
+  // #664
+  it('waits for the signal waiter’s stop with the bot: one that never ends overruns the budget', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    const signalWaiter = { stop: vi.fn(() => new Promise<void>(() => {})) };
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
+      signalWaiter,
+      botTexts: idleTexts(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      signalSource,
+      shutdownBudgetMs: 50,
+    });
+    signalSource.emit('SIGTERM');
+    expect(signalWaiter.stop).toHaveBeenCalledTimes(1);
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual([
+      'shutdown: polling did not stop within the budget, exiting anyway',
+    ]);
+  });
+
+  it('names the signal waiter when its stop fails', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
+      signalWaiter: { stop: vi.fn(() => Promise.reject(new Error('waiter died'))) },
+      botTexts: idleTexts(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      signalSource,
+    });
+    signalSource.emit('SIGTERM');
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual(['shutdown: signal waiter failed', STEP_LINE]);
+  });
+
   // #299
   it('S1 names the bot texts refresher when its stop fails', async () => {
     const fake = fakeBot();
@@ -728,6 +801,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: {
         stop: vi.fn(() => Promise.reject(new Error('refresher died'))),
         loaded: () => Promise.resolve(),
@@ -754,6 +828,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: { stop: vi.fn(() => Promise.reject(new Error('tracker died'))) },
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: failing.bot,
       logger: log,
@@ -775,6 +850,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: { stop: vi.fn(() => new Promise<void>(() => {})) },
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: stuck.bot,
       logger: stuckLog,
@@ -799,6 +875,7 @@ describe('runBot', () => {
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -910,6 +987,7 @@ function scene(options: SceneOptions = {}) {
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     token: TOKEN,
     backend,
     logger: log,
@@ -954,6 +1032,7 @@ function scene(options: SceneOptions = {}) {
     tracker: idleTracker(),
     sessionTracker: idleTracker(),
     sessionResumer: idleResumer(),
+    signalWaiter: idleTracker(),
     botTexts: idleTexts(),
     bot,
     logger: log,

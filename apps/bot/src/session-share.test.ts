@@ -19,6 +19,7 @@ import {
   sessionShare,
   sessionView,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   type ApiCall,
@@ -48,6 +49,7 @@ function setup(
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     ...(options.storageOff === true ? {} : { shareStorageChatId: STORAGE_CHAT_ID }),
   });
   const api = captureApi(bot);

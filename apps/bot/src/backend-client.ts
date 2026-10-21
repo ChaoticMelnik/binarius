@@ -163,8 +163,9 @@ export interface BackendClient {
     interval: SignalInterval,
     analysis?: TradingSignalAnalysis,
   ): Promise<TradingSignalResponse>;
-  // the scanner's pairs with a signal on the last closed 15s candle (#343); no symbol or payout:
-  // the bot joins them with readPairs (#320)
+  // the scanner's pairs with a signal on the last closed candle of each scanned interval (#343);
+  // no symbol or payout: the bot joins them with readPairs (#320). Also polled once a 5 s candle
+  // by the wait for a signal while a user waits (#664)
   readSignals(): Promise<TradingSignalsResponse>;
   // a new intent (201) and the replay of the same clientRequestId (200) read the same (#127)
   createIntent(request: CreateTradeIntentRequest): Promise<TradeIntentView>;
