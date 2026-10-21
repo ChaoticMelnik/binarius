@@ -12,7 +12,8 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 ## The rule, by type
 
 - `apps/bot/src/send.ts`: `replyHtml`, `editMessageTextHtml`, `editMessageTextByIdHtml`,
-  `replyWithVideoHtml`, `replyWithPhotoHtml`, `sendPhotoByIdHtml` (#318) and
+  `replyWithVideoHtml`, `replyWithPhotoHtml`, `sendPhotoByIdHtml` (#318), `sendHtmlById` (#537, the
+  session's summary as a text) and
   `editMessagePhotoByIdHtml` (#568) require `reply_markup`, and only an inline keyboard
   (`InlineKeyboard` or `InlineKeyboardMarkup`) is accepted. A reply keyboard, `ForceReply` or
   `ReplyKeyboardRemove` does not compile.
@@ -21,7 +22,8 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   `replyWithPhotoHtmlWithoutNextStep` or `editMessagePhotoByIdHtmlWithoutNextStep` (#568), which take a `NoNextStepReason` from `NO_NEXT_STEP_REASONS`
   (the exception list below). The reason is not sent; its type makes every such call name an entry.
 - `apps/backend/src/auth/client-push.ts`: `ClientPushMessage.reply_markup` is required, for the link
-  push, every mailing ([mailing.md](mailing.md)) and the session's summary (#464); its one message
+  push, every mailing ([mailing.md](mailing.md)) and the session's fallback text summary (#464,
+  #537: the summary is the bot's message, the backend's text only when the bot cannot); its one message
   without a keyboard is the session's cycle message, sent by `sendSessionTrade` and edited by
   `editSessionTrade` (#551), which take the text alone (exception `session_trade` below).
 - `send.typecheck.ts` holds the rule: a call without `reply_markup`, with it `undefined`, with a
@@ -47,9 +49,9 @@ with one empty-looking line between the text and the keyboard; on Telegram Deskt
 notification open with the text and the text's last word never wraps onto it.
 
 - Where: the two seams append it when they unwrap `TelegramHtml` — the bot's `replyHtml`,
-  `editMessageTextHtml`, `editMessageTextByIdHtml` and their `…WithoutNextStep` forms
-  (`send.ts`), the backend's `send` (the link push, mailings, the deposit and Stars pushes, the
-  summary), `sendSessionTrade`, `editSessionTrade` and `sendSessionWaiting` (`client-push.ts`).
+  `editMessageTextHtml`, `editMessageTextByIdHtml`, `sendHtmlById` (#537) and their
+  `…WithoutNextStep` forms (`send.ts`), the backend's `send` (the link push, mailings, the deposit
+  and Stars pushes, the fallback summary), `sendSessionTrade`, `editSessionTrade` and `sendSessionWaiting` (`client-push.ts`).
   Nothing before the seams sees it: the catalog, the overrides, the texts' builders and the
   trackers' dedupe keys hold the text alone.
 - Not on captions (a photo or a video, `editMessageMedia`, the inline share result), the Stars
@@ -83,14 +85,14 @@ rows were already two or three wide, and /buy (a package label is 39 characters)
 
 | `NoNextStepReason` | Where | Why |
 |---|---|---|
-| `session_status` (#536) | the session message (`trading-session.ts`: `replyWithPhotoHtmlWithoutNextStep` at the start — the picture of the signal's direction with the text as its caption (#568) — or `replyHtmlWithoutNextStep` without a direction or after a refused photo; `session-tracker.ts` through `editMessagePhotoByIdHtmlWithoutNextStep` (`editMessageMedia`) or `editMessageTextByIdHtmlWithoutNextStep` at its edits) | the session's head — its mode, pair, stake, expiry and signal's direction — above its trades: the next step of a running session is «⏹ Остановить сессию» under the backend's waiting message, always the last message of the session, and of a stopped one the reply drawn in place of the waiting message (#587), the summary's and the card's; an edit without a keyboard also strips an old status message's buttons. A 404 while tracking draws «⚠️ Статус сессии недоступен.» under «🏠 В меню» ([bot-session.md](bot-session.md#the-session-message)) |
+| `session_status` (#536) | the session message (`trading-session.ts`: `replyWithPhotoHtmlWithoutNextStep` at the start — the picture of the signal's direction with the text as its caption (#568) — or `replyHtmlWithoutNextStep` without a direction or after a refused photo; `session-tracker.ts` through `editMessagePhotoByIdHtmlWithoutNextStep` (`editMessageMedia`) or `editMessageTextByIdHtmlWithoutNextStep` at its edits) | the session's head — its mode, pair, stake, expiry and signal's direction — above its trades: the next step of a running session is «⏹ Остановить сессию» under the backend's waiting message, always the last message of the session, and of a stopped one the reply drawn in place of the waiting message (#587) and the summary's (#537); an edit without a keyboard also strips an old status message's buttons. A 404 while tracking draws «⚠️ Статус сессии недоступен.» under «🏠 В меню» ([bot-session.md](bot-session.md#the-session-message)) |
 | `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`: an edit of the pressed message, or a new message at once under a photo — the analysis card, the session's summary card, #482) | a text result replaces it with its keyboard within the signal's budget, and after a signal's card (#482) it is deleted; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, when the card's photo fails in transport and «⏳»'s edit is refused, or when its delete is refused, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the screen above it and /menu remain |
 
 The backend's push has one exception of its own, by its method's type rather than a reason:
 
 | Exception | Where | Why |
 |---|---|---|
-| `session_trade` (#464, #551) | `sendSessionTrade` and `editSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); their types take only the text | a cycle of a running session, its settled trades listed in one message edited at each step, one of up to 60 trades in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the waiting message right under the newest cycle (#536) carries «⏹ Остановить сессию», and the summary at the end «🏠 В меню»; a keyboard under every cycle would repeat them |
+| `session_trade` (#464, #551) | `sendSessionTrade` and `editSessionTrade` (`apps/backend/src/auth/client-push.ts`), from the session notices (`apps/backend/src/trading/session-notices.ts`); their types take only the text | a cycle of a running session, its settled trades listed in one message edited at each step, one of up to 60 trades in a row, without sound ([bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): the waiting message right under the newest cycle (#536) carries «⏹ Остановить сессию», and the bot's summary at the end the end of the path (#537; the backend's fallback text «🏠 В меню»); a keyboard under every cycle would repeat them |
 
 One more exception is not a `NoNextStepReason`, because it is not a message in the user's own
 chat with the bot:
@@ -215,7 +217,7 @@ no repeat.
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) · 🏠 В меню — never a switch |
-| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню; a session of an older duration gets them at 5 s (#685); by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
+| the session's summary (#318, #537: the card's photo with the whole summary as its caption, with sound; a text when there is no trade or the photo is refused) | 📤 Поделиться (not on a session without a trade) (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ \| 📡 К сигналам · 💳 Пополнить (#27, https only) \| 👥 Пригласить друга (#115) · 🏠 В меню — the end of the path; without `settings` only 💳 Пополнить \| 👥 Пригласить друга · 🏠 В меню; a session of an older duration gets them at 5 s (#685); by `no_signal_timeout` (#509) 🔀 Выбрать другую пару in place of «Ещё сессия», «Новый анализ» and «К сигналам». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 | the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Новый анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration) — one button, as the chain's reminders |
 | the inviter's reward notification `referralRewarded` (#576, the backend's mailing, [mailing.md](mailing.md)) | 👥 Пригласить ещё (`cmd:invite`, the /invite screen as a new message) — one button, as the reminders |
@@ -224,8 +226,8 @@ no repeat.
 a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals list
 (`demo:sig`, the list at 5 s since #685; `demo:sig:<sec>` of older buttons leads there too).
 «🔀 Выбрать другую пару» (#509) carries the same data: a session stopped for want of a signal
-is not offered its own pair again (a start refused for want of one waits for it since #664); the backend's summary of such a
-stop draws `DEMO_SIGNALS_CALLBACK_DATA` (`bot-navigation.ts`). The trackers' edits take what they draw and, for a last
+is not offered its own pair again (a start refused for want of one waits for it since #664); the summary of such a
+stop — the bot's (#537), and the backend's fallback text — draws `DEMO_SIGNALS_CALLBACK_DATA` (`bot-navigation.ts`). The trackers' edits take what they draw and, for a last
 edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
 (`not_found`, `deadline`), `SessionTrackRequest.edit(drawing, end?)` with `not_found` only. So
 the last edit draws its next step too: the end of the path on a trade's stop status, the menu alone

@@ -495,6 +495,22 @@ const sessionOutcome = [
   k('statusStale'),
 ];
 
+// The finished session's summary (#464, session-texts.ts → sessionSummaryText): the pair, then the
+// status message's closing lines; the total stands under a stop reason, with the counters at their
+// widest even for a session without a trade (#537: no_signal_timeout), which only drops lines.
+const sessionSummaryBody: BotTextMessage['body'] = [
+  // the pair, or the asset's id when the catalog could not say (sessionAssetLabel)
+  k('sessionSummarySymbol', {
+    symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')),
+  }),
+  '\n',
+  oneOf(
+    [k('sessionCompleted')],
+    [anyOf(...sessionStopLines, 'sessionStopNoSignalTimeoutNoSettings'), '\n', k('sessionTotal')],
+  ),
+  ...sessionOutcome,
+];
+
 const ASSEMBLED: readonly BotTextMessage[] = [
   {
     id: 'accountCard',
@@ -768,28 +784,20 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     ],
   },
   {
-    // the finished session's summary, sent by the backend (#464, session-texts.ts →
-    // sessionSummaryText): the pair, then the status message's closing lines; the backend sends it
-    // only with a settled trade, so the total always stands under a stop reason
+    // the finished session's summary as a text (#464, session-texts.ts → sessionSummaryText): the
+    // backend's fallback sender's message (#537), and the bot's text when no photo goes
     id: 'sessionSummary',
     title: 'Итог сессии',
     limit: BOT_TEXT_LIMIT,
-    body: [
-      // the pair, or the asset's id when the catalog could not say (sessionAssetLabel)
-      k('sessionSummarySymbol', {
-        symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')),
-      }),
-      '\n',
-      oneOf(
-        [k('sessionCompleted')],
-        [
-          anyOf(...sessionStopLines, 'sessionStopNoSignalTimeoutNoSettings'),
-          '\n',
-          k('sessionTotal'),
-        ],
-      ),
-      ...sessionOutcome,
-    ],
+    body: sessionSummaryBody,
+  },
+  {
+    // the bot's summary in one message (#537, texts.ts → sessionSummaryCaption): the same lines
+    // under the photo of the card, then the owner's referral link; a caption, so 1024
+    id: 'sessionSummaryCaption',
+    title: 'Итог сессии: подпись картинки',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [...sessionSummaryBody, '\n', k('sessionSummaryLink')],
   },
   {
     // the summary card's footer (#318, texts.ts → sessionCardFooter): plain text drawn on the

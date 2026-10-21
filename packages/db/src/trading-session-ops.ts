@@ -739,18 +739,20 @@ const sessionOwnedBy = (telegramUserId: string) => sql`exists (
      and ${users.telegramUserId} = ${BigInt(telegramUserId)}
 )`;
 
-// The finished session's summary card, claimed at most once (#318, docs/bot-session.md → The
-// summary card). One CAS UPDATE sets summary_sent_at only when every condition holds: the
-// owner's session (Rule 13, a foreign id reads as a missing one), stopped, not sent before, no
-// intent of it outside the terminal statuses, and at least one settled intent with its broker
-// trade, and the session's summary message already sent (#464: the card follows the summary,
-// docs/bot-session.md → The summary card). Any miss is undefined and writes nothing. The rows the
-// card draws are read after it in the same transaction; they cannot change any more: terminal
-// intents have no edges and a stopped session never runs again.
+// The finished session's summary, claimed at most once by the bot (#318, #537, docs/bot-session.md
+// → The summary in one message). One CAS UPDATE sets summary_sent_at only when every condition
+// holds: the owner's session (Rule 13, a foreign id reads as a missing one), stopped, not claimed
+// before (by the bot, the backend's fallback or the close of a session with nothing to send), no
+// intent of it outside the terminal statuses, a settled intent with its broker trade or the
+// no-signal stop (#537: its summary tells why, trades or not), and the session's notices closed
+// (final_notice_sent_at: every trade's message sent, the waiting message gone). Any miss is
+// undefined and writes nothing. The rows the card draws are read after it in the same
+// transaction; they cannot change any more: terminal intents have no edges and a stopped session
+// never runs again.
 export async function claimSessionSummary(
   db: Db,
   { id, telegramUserId }: { id: string; telegramUserId: string },
-): Promise<SessionSummary | undefined> {
+): Promise<Omit<SessionSummary, 'referralCode'> | undefined> {
   return db.transaction(async (tx) => {
     const settled = and(
       eq(tradeIntents.tradingSessionId, id),
@@ -771,12 +773,12 @@ export async function claimSessionSummary(
              where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
                and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
           )`,
-          sql`exists (
+          sql`(exists (
             select 1 from ${tradeIntents}
               join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
              where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
                and ${tradeIntents.status} = ${SETTLED}
-          )`,
+          ) or ${tradingSessions.stopReason} = ${literal(TradingSessionStopReason.NoSignalTimeout)})`,
         ),
       )
       .returning({ id: tradingSessions.id });
@@ -941,11 +943,11 @@ const settingsAssetIdSql = sql<number | null>`case
     then (${tradingSessions.settings}->>'assetId')::int end
 end`;
 
-// The sessions the bot tracks again after a restart (#567): a status message recorded, no summary
-// card sent, and not finished with no settled trade and its summary message sent - such a session
-// never gets a card, so there is nothing left to follow. A row leaves the list when its card is
-// claimed, when it finishes so, or when its message is lost (forgetSessionStatusMessage). Oldest
-// first, at most `limit`. Not scoped by a user: the bot's internal recovery list (Rule 13), each
+// The sessions the bot tracks again after a restart (#567): a status message recorded and the
+// summary step not closed. A row leaves the list when its summary is claimed - by the bot, the
+// backend's fallback, or the close of a finished session with nothing to send, in the same
+// statement as its final mark (#537) - or when its message is lost (forgetSessionStatusMessage).
+// Oldest first, at most `limit`. Not scoped by a user: the bot's internal recovery list (Rule 13), each
 // row naming its owner's chat.
 export async function listTrackedSessions(
   db: Db,
@@ -963,18 +965,7 @@ export async function listTrackedSessions(
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
-    .where(
-      and(
-        isNotNull(tradingSessions.statusMessageId),
-        isNull(tradingSessions.summarySentAt),
-        sql`not (${tradingSessions.finalNoticeSentAt} is not null and not exists (
-          select 1 from ${tradeIntents}
-            join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
-           where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
-             and ${tradeIntents.status} = ${SETTLED}
-        ))`,
-      ),
-    )
+    .where(and(isNotNull(tradingSessions.statusMessageId), isNull(tradingSessions.summarySentAt)))
     .orderBy(asc(tradingSessions.startedAt), asc(tradingSessions.id))
     .limit(limit);
   return rows.map((row) => ({ ...row, telegramUserId: row.telegramUserId.toString() }));

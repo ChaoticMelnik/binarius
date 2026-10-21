@@ -1,4 +1,4 @@
-# The session in the bot: the button, the session message, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587)
+# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never without one, and without one it waits for it, #664); a finished single trade's message
@@ -23,14 +23,16 @@ without buttons (#536). The message follows the session through `GET /trading/se
 edited when the session stops, to its end line, and when a trade of the session goes the other
 way, to that direction's picture (#568). The trades themselves are opened by the worker's orchestrator (#287): the bot only
 starts, reads and stops the session. Every settled trade then shows in a message without sound — a
-martingale cycle in one message, each step added to it by an edit (#551) — and the finished
-session's summary comes with sound — both sent by the backend ([Trade messages and the
-summary](#trade-messages-and-the-summary-464)). Under them, always the last of the session's
-messages while it runs, the backend keeps the waiting message «🔎 Ждём сигнал для следующей
-сделки…» with «⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)). When
-the session is over, one picture of its trades follows the summary
-([The summary card](#the-summary-card-318)), and
-«📤 Поделиться» under it sends a promo card of the session (#538) into a chat the user picks
+martingale cycle in one message, each step added to it by an edit (#551), sent by the backend
+([Trade messages and the summary](#trade-messages-and-the-summary-464)). Under them, always the
+last of the session's messages while it runs, the backend keeps the waiting message «🔎 Ждём сигнал
+для следующей сделки…» with «⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)).
+When the session is over, its summary comes in one message with sound, sent by the bot after every
+message of the backend (#537): the picture of its trades with the whole summary as the caption —
+the pair, the end line, the total, the result, the balance and its age, the owner's referral link
+([The summary message](#the-summary-message-537-the-card-of-318)); the backend sends a text summary
+only as the fallback, when the bot cannot ([The fallback](#the-fallback)). «📤 Поделиться» under
+it sends a promo card of the session (#538) into a chat the user picks
 ([Sharing the card](#sharing-the-card-321)).
 The command `/stop` (#122) stops every active session of the user at once ([/stop](#stop-122)).
 
@@ -56,7 +58,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   which the amount screen's presses use too (`cycle-stake.ts`, #476); `resume(api, botUsername,
   trackedSession, label)` tracks a session again on its recorded message after a restart (#567).
   Also `sessionCardKeyboard` (the end of the path under a stopped session), `START_REFUSALS` and
-  `sessionOutcomeUnknown`. `bot.ts` mounts it under its
+  `sessionOutcomeUnknown`. `sendSummary` (#537) is the tracker's last step of a done session: the
+  summary in one message ([The summary message](#the-summary-message-537-the-card-of-318)). `bot.ts` mounts it under its
   private-chat filter, right after the demo trade's composer.
 - `packages/shared/src/bot-navigation.ts` — `sessionStopCallbackData(id, { waiting? })` and
   `SESSION_STOP_PATTERN` (#536): the stop button's data, `session:stop:<id>` under an old status
@@ -77,7 +80,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId, waitingMessageId?)` (#587),
   `stopSessions(telegramUserId)`
   (#122, `POST /trading/sessions/stop`) ([The client](#the-client)),
-  `claimSessionSummary(id, telegramUserId)` → the summary or `null` (#318),
+  `claimSessionSummary(id, telegramUserId)` → the summary (its trades, possibly none, and the
+  owner's `referralCode`, #537) or `null` (#318),
   `recordSessionMessage(id, telegramUserId, messageId)` → the view,
   `forgetSessionMessage(id, telegramUserId, messageId)` → whether it was forgotten, and
   `listTrackedSessions()` (#567, `GET /trading/sessions/tracked?limit=2000`, its own body ceiling
@@ -94,11 +98,13 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 - `apps/bot/src/session-promo.ts` (#538) — `promoDirection`, `sessionPromoModel`,
   `sessionPromoSvg`: the promo card of «📤 Поделиться», rendered by the same `renderSessionCard`.
 - `apps/bot/src/send.ts` — `sendPhotoToStorage` (#538): the promo card's post to the storage
-  channel, without a caption or a keyboard by type.
+  channel, without a caption or a keyboard by type; `sendPhotoByIdHtml` and `sendHtmlById` (#537):
+  the summary's photo and its text, by chat id, each with its inline keyboard by type.
 - `apps/bot/src/backend-client.ts` — `readSessionShare(id, telegramUserId)` (#538,
   `POST /trading/sessions/:id/share`).
 - `apps/bot/src/texts.ts` — `sessionStatusText` (the session message), `sessionStopReplyText`
-  (the reply to the stop, #536), `sessionEndLine`, `sessionStartButtonLabel` and `sessionTexts`,
+  (the reply to the stop, #536), `sessionSummaryCaption` (the summary's caption and text, #537),
+  `sessionEndLine`, `sessionStartButtonLabel` and `sessionTexts`,
   the shared session words over the bot's catalog; the texts are the `session` group of the catalog
   ([bot-texts.md](bot-texts.md)). `sessionWaitingSignal` is the backend's (the waiting message):
   the bot's facades leave it out. The button `sessionStopButton` is the backend's too; the bot
@@ -117,7 +123,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   refused edit or delete means, for the bot's screens and the backend's cycle message alike.
 - `apps/backend/src/trading/session-notices.ts`, `session-notice-messages.ts`, `session-view.ts`
   and `packages/db/src/session-notice-ops.ts` (#464) — the sender of the trade messages, the
-  summary and the waiting message (#536: `sessionWaitingMessage`, and `sendSessionWaiting` /
+  final mark, the fallback text summary (#537) and the waiting message (#536: `sessionWaitingMessage`, and `sendSessionWaiting` /
   `deleteSessionWaiting` of `apps/backend/src/auth/client-push.ts`) ([Trade messages and the
   summary](#trade-messages-and-the-summary-464)).
 - `apps/bot/src/send.ts` — `NO_NEXT_STEP_REASONS.SessionStatus` (`session_status`, #536): the
@@ -132,7 +138,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   #482) and to the session's.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop`,
   `.sessionShare`, `.sessionShared` (#321, #538) and
-  the four `SESSION_TRACK_*` constants and the two `SESSION_RESUME_*` (#567) ([Timing](#timing)).
+  the four `SESSION_TRACK_*` constants, the two `SESSION_RESUME_*` (#567) and
+  `SESSION_SUMMARY_RETRY_WAIT_MS` (#537) ([Timing](#timing)).
 - `packages/shared/src/bot-text-format.ts` — `formatSignedUsd`, the session's result with its sign
   (#337), next to `formatUsd`; the catalog's `profit` and `outcome` (#539) variables print through
   it.
@@ -158,11 +165,19 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
         sendMessage: «🔎 Ждём сигнал для следующей сделки…», without sound, with
         «⏹ Остановить сессию» (session:stop:<id>:w); deleted before each new message of the session
         (a cycle message, a relaunch's status message, #587) and sent again under it, deleted once
-        the session stopped, before the summary - unless its «⏹» stopped it (below)
-  tracker, once the session is done and its final text is on screen:
-        POST /trading/sessions/<id>/summary { telegramUserId }   (#318, at most once)
-        → sendPhoto to the session message's chat: the card, its caption, «🔁 Ещё сессия» and the end of path
-        → editMessageReplyMarkup of the card: «📤 Поделиться» on top of those rows (#321)
+        the session stopped, before the final mark - unless its «⏹» stopped it (below)
+  backend's sender, once the session is finished, every trade's message sent and the waiting
+        message gone: the final mark (final_notice_sent_at), no message (#537)
+  tracker, once the session is done, its final text is on screen and the final mark is set:
+        POST /trading/sessions/<id>/summary { telegramUserId }   (#318, #537, at most once)
+        → sendPhoto to the session message's chat, with sound: the card, the whole summary and the
+          owner's link as its caption, «🔁 Ещё сессия» and the end of path; no trade (no_signal_timeout),
+          a drawing that threw or a photo refused for good → sendMessage of the same caption;
+          429 → the wait of retry_after (≤ 5 s) and sendPhoto once more
+        → editMessageReplyMarkup of it: «📤 Поделиться» on top of those rows (#321; not on a session
+          without a trade)
+  backend's sender, the fallback (#537): no status message - on the tick of the final mark; else
+        30 min after it and nobody claimed - sendMessage of the text summary with sound
 the bot's start (after the profile), then every 10 min                          (#567)
   bot → GET /trading/sessions/tracked?limit=2000 ∥ GET /trading/pairs
   bot → each listed session the tracker does not hold: tracked on its recorded message in the
@@ -183,7 +198,7 @@ session:stop:<id>:w                («⏹ Остановить сессию» un
   bot → editMessageText of the pressed waiting message (#587): the end line, the last trade's line
         by its status (The stop), and the end of the path; refused as gone → sendMessage with the
         same
-  backend's sender, its next tick: no delete, the summary under it
+  backend's sender, its next tick: no delete, the final mark; the bot's summary under the reply
 session:stop:<id>                  (an old status message's «⏹», before #536)
   bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop ∥ GET /trading/pairs
         (409 session_not_active → GET /trading/sessions/<id>)
@@ -370,7 +385,7 @@ otherwise the reason's line below, «⚠️ Статус сессии недос
 that, the view's schema allows it). Nothing else: no trade number, no
 score, no trade line, no «🔎 Ждём сигнал…» (the waiting message is the backend's, [The waiting
 message](#the-waiting-message-536)); the trades are the backend's cycle messages, the result and the
-balance its summary's (#464). The same end line opens the summary under its pair
+balance the summary's (#464, #537). The same end line opens the summary under its pair
 (`session-summary-parity.test.ts`), and the reply to the stop ([The stop and the old
 buttons](#the-stop-and-the-old-buttons-536)).
 
@@ -412,13 +427,13 @@ the map from the view's `settings`.
 `replyHtmlWithoutNextStep` and edited by `editMessagePhotoByIdHtmlWithoutNextStep` or
 `editMessageTextByIdHtmlWithoutNextStep` (#568) with the reason `session_status`
 ([bot-navigation.md](bot-navigation.md) → Exceptions): the next step of a running session is the
-waiting message's «⏹», of a stopped one the summary's and the card's. An edit without
+waiting message's «⏹», of a stopped one the summary's (#537). An edit without
 `reply_markup` removes the inline keyboard on screen, so an old status message sent before #536
 loses its «🔄 Обновить» and «⏹» on the tracker's edit at the stop. A 404 while tracking draws
 «⚠️ Статус сессии недоступен.» under «🏠 В меню», as the caption of the picture when the last view
 read had a direction (`editMessagePhotoByIdHtml`), else as a text. **The end of the path** (`sessionCardKeyboard`)
 is the stopped session's next step under the reply to its stop, an old status message the stop
-drew in place and the summary card: «🔁 Ещё сессия» (#320) on the same pair and duration — drawn
+drew in place and the summary (#537): «🔁 Ещё сессия» (#320) on the same pair and duration — drawn
 only when the view has `settings` and its duration is one the demo still offers (`durationOf`) —
 then (#350, [bot-navigation.md](bot-navigation.md)) «📊 Новый анализ» on the same pair and
 duration (when the demo still offers it) and «📡 К сигналам» in one row, «💳 Пополнить» (#27,
@@ -438,7 +453,7 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   pressed message over: when it is the recorded waiting message, the stop's own UPDATE drops its id
   and frees its slot, and on a 409 a CAS by that id does
   ([trading-session.md](trading-session.md#post-tradingsessionsidstop)); the backend's sender then
-  neither deletes it nor waits for it, and the summary comes under it. 409 `session_not_active`
+  neither deletes it nor waits for it, and the bot's summary comes under it (#537). 409 `session_not_active`
   reads the session and answers how it ended (decision В3). The reply is drawn **in place of the
   pressed message** (`editMessageText`, #587): the end line, and the last trade's line by its
   status (`sessionStopReplyText` → `LAST_TRADE_LINE`, the owner's decision of 2026-10-08 in #311
@@ -450,12 +465,12 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   [trading-session.md](trading-session.md#post-tradingsessionsidstop)); nothing for `settled`,
   `rejected`, `manual_review` and no trade; under the end of the path. The line is sent once: the
   trade's outcome comes with the backend's cycle message and the summary, and the reply is not
-  edited after it. The result and the balance come with the backend's summary, then the card. No
+  edited after it. The result and the balance come with the summary (#537). No
   catalog read (no pair in the reply), no `deleteMessage` and no `track()`: the session message
   is tracked from its start in this bot process, or recovered by the pass of #567 once its id is
   recorded; a session whose id is not recorded (started from the CLI, a bot restart
   in the 3 s before the first poll, a message reported lost) is not tracked after a bot restart, so
-  it gets no card and no end line on its message ([risk 56](#accepted-risks)).
+  it gets the backend's fallback text summary and no end line on its message ([risk 56](#accepted-risks)).
 
   | The press ended | Drawn in place of the pressed message | Keyboard | Log |
   | --- | --- | --- | --- |
@@ -468,7 +483,7 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   | --- | --- | --- |
   | done, or refused «not modified» | — | — |
   | refused as gone (the user deleted the message, the sender deleted it in the same second, or older than 48 h) | the same text as a new message, which may come under the summary ([risk 77](#accepted-risks)); after an unknown stop outcome under «🏠 В меню», not «⏹» (the sender's next waiting message carries the one «⏹», #587 round 1) | `info` `the pressed message was already gone` |
-  | another Telegram refusal, a transport failure | nothing more: the summary and the card follow | `warn` `trading session stop reply not drawn` |
+  | another Telegram refusal, a transport failure | nothing more: the summary follows | `warn` `trading session stop reply not drawn` |
   | anything else | a bug, rethrown to `bot.catch` | `error` |
 
   A stop whose outcome is unknown and did commit leaves `unavailable` and «⏹» above the summary
@@ -478,7 +493,7 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   5, decision В4) is answered as before: the catalog read beside the stop, 409 → the read, and the
   session message drawn in place of the pressed one (`editMessageText`), under the end of the path;
   gone → a new message, recorded by its newer id (#567, #587). The session is tracked on that
-  message, so its card comes as before. A stale edit of the old entry can land after the
+  message, so its summary comes as before. A stale edit of the old entry can land after the
   handler's — [risk 83](#accepted-risks).
 - **An old «🔄 Обновить»** (`session:<id>`, `LEGACY_SESSION_REFRESH_PATTERN`): its keyboard is
   stripped (`removeLegacyKeyboard` of `demo.ts`: `answerCallbackQuery`, then
@@ -513,7 +528,7 @@ way.
 - **Nothing is closed at the broker.** The route writes only `trading_sessions`; an open trade plays
   out on its own path and the reply says so. The one broker call the route can make is the balance
   GET of a finished session (#337), a read.
-- **The summary card of #318** comes through the session message's own entry (the press that
+- **The summary (#318, #537)** comes through the session message's own entry (the press that
   started it, or the recovery of #567); `/stop` tracks nothing (#536).
 - **In the email dialog** `/stop` answers and leaves the step as it was, as `/help`; in groups it is
   ignored. `/stop@bot` and a trailing text are the command (grammY `command()`).
@@ -555,12 +570,12 @@ One entry per session id, in process memory, like the intent tracker
   that drawing is not on screen yet (the poll's edit failed, or a read failed after the last good one). An
   entry that never read a view ends with no edit (#567). A stopped session whose last trade is
   still in `unknown`/`reconciling` (or `manual_review`) at the deadline: the deadline's edit, if
-  any, is the stopped session's drawing — the trade is not printed —, no card (`cardDue` needs a
-  done view), and the entry ends. The session stays in `GET /trading/sessions/tracked` (a recorded
-  message, no card), so the next pass of #567 (≤ `SESSION_RESUME_INTERVAL_MS`, 10 min)
-  tracks it again, one GET per pass and no edit while the drawing stands, until the trade is
-  terminal and the card is due ([Recovery](#recovery-after-a-restart-567) → A session past the
-  deadline). A session whose message is not recorded gets no card then either (risk 56).
+  any, is the stopped session's drawing — the trade is not printed —, no summary (`summaryDue`
+  needs a done view), and the entry ends. The session stays in `GET /trading/sessions/tracked` (a
+  recorded message, the summary step open), so the next pass of #567 (≤ `SESSION_RESUME_INTERVAL_MS`,
+  10 min) tracks it again, one GET per pass and no edit while the drawing stands, until the trade is
+  terminal and the summary is due ([Recovery](#recovery-after-a-restart-567) → A session past the
+  deadline). A session whose message is not recorded gets the backend's fallback text instead (risk 56).
 - **The kind of the edit** (#568): `sessionEditMethod(drawing.picture)` — `editMessageMedia` (the
   picture of `view.signalAction` with the text as its caption) for a drawing with a picture, else
   `editMessageText`; a 404's edit draws its text on the picture of the last view the entry read,
@@ -572,13 +587,14 @@ One entry per session id, in process memory, like the intent tracker
   lost: reported (`POST …/status-message/lost`, [A lost message](#recovery-after-a-restart-567)),
   stop. Any other edit refusal or a transport failure: `warn` once per entry, retried on the next
   poll. Anything else thrown → `error` `trading session tracking failed`, stop.
-- **The card** (#318): an entry calls it as it ends on a done view whose final edit landed and
-  whose `noticesDone` is set (the backend's summary message went out, #464) — on the poll that sees
-  it, or at the deadline — so once (one predicate, `cardDue`, at both places). A done view without
-  `noticesDone` is polled on with no edit (the flag is not printed), and at the deadline it gets
-  its final edit, if not on screen already, and no card. A
-  failed edit means no card yet; a card that failed is not tried again: the entry has ended
-  ([The summary card](#the-summary-card-318)).
+- **The summary** (#318, #537): an entry calls it (`SessionTrackRequest.summary`) as it ends on a
+  done view whose final edit landed and whose `noticesDone` is set (the backend closed the
+  session's notices: every trade's message sent, the waiting message gone, #464) — on the poll that
+  sees it, or at the deadline — so once (one predicate, `summaryDue`, at both places). A done view
+  without `noticesDone` is polled on with no edit (the flag is not printed), and at the deadline it
+  gets its final edit, if not on screen already, and no summary. A failed edit means no summary
+  yet; a summary that failed is not tried again: the entry has ended
+  ([The summary message](#the-summary-message-537-the-card-of-318)).
 - **Recovered entries are paced, and what was drawn is remembered** (#567). An entry tracked with
   no view (a recovered one) takes the next slot for its first poll instead of `firstPollMs`: slots
   are `resumeGapMs` apart (`SESSION_RESUME_GAP_MS`, 250 ms), none sooner than `firstPollMs` from
@@ -611,9 +627,9 @@ One entry per session id, in process memory, like the intent tracker
   the same body; 404 ends the entry as a read's would. The recorded id is also what the backend's
   waiting message waits for (#536): the first one goes under the session message only once it is
   recorded.
-- **The list.** `GET /trading/sessions/tracked` returns the sessions with a recorded message and no
-  card, except the finished ones with no settled trade whose summary was sent (no card ever comes
-  for them), oldest first, at most `TRACKED_SESSIONS_MAX` (2 000) —
+- **The list.** `GET /trading/sessions/tracked` returns the sessions with a recorded message and the
+  summary step open (`summary_sent_at` NULL; a finished session with nothing to send has it closed
+  with its final mark, #537), oldest first, at most `TRACKED_SESSIONS_MAX` (2 000) —
   [trading-session.md](trading-session.md#get-tradingsessionstrackedlimit-567).
 - **The pass** (`session-resume.ts`): at the bot's start, after the profile, and every
   `SESSION_RESUME_INTERVAL_MS` (10 min), the list beside the pairs catalog — the pass's only two
@@ -623,7 +639,7 @@ One entry per session id, in process memory, like the intent tracker
   runs); its first poll a GET in the next slot, 4 a second (`resumeGapMs`, [The
   tracker](#the-tracker)), its
   deadline counted from the session's `startedAt`. Edits and
-  the card are a pressed entry's ([The summary card](#the-summary-card-318)). A catalog that cannot
+  the summary are a pressed entry's ([The summary message](#the-summary-message-537-the-card-of-318)). A catalog that cannot
   be read gives no label (the asset by its id); a list that cannot be read is `warn` `trading
   sessions not resumed`, and the next pass reads it again. One pass at a time; `stop()` ends the
   timer and waits for the pass in flight, whose entries are memory.
@@ -632,10 +648,12 @@ One entry per session id, in process memory, like the intent tracker
   nothing (`mayDraw`) — so each pass costs it one GET, and an edit
   only when what it prints changed since this process last drew it, plus one retry when that edit
   failed (429, 5xx, transport); the first pass after a start edits it once, as nothing is
-  remembered. Its card comes on the first pass after it is due.
+  remembered. Its summary comes on the first pass after it is due; two passes (20 min) fit in the
+  backend fallback's grace (30 min), so a live bot claims it first (#537).
 - **A lost message.** An edit refused as gone (`editRefusal`: the message deleted, too old to edit,
   or no text) or with any 403 (the bot blocked, the account deleted — the backend's own rule,
-  `isTelegramForbidden`, Rule 19) can never land on that message, so it never gets its card. The
+  `isTelegramForbidden`, Rule 19) can never land on that message, so the bot sends it no summary;
+  the backend's fallback text goes on its next tick (#537). The
   tracker reports it with `forgetSessionMessage(id, telegramUserId, messageId)` — `POST
   /trading/sessions/:id/status-message/lost` with `{ telegramUserId, messageId }`
   ([trading-session.md](trading-session.md#post-tradingsessionsidstatus-messagelost-567)) — which
@@ -679,8 +697,11 @@ One entry per session id, in process memory, like the intent tracker
   [bot-demo-trade.md](bot-demo-trade.md#timing)), inside the shutdown budget. `timing.test.ts` runs every terminal branch of the nine.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
-  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 3 × 8 s = 34 s: an attempt's read and edit, then the card's
-  claim and `sendPhoto` (#318) and the `editMessageReplyMarkup` that adds «📤 Поделиться» (#321).
+  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 4 × 8 s + 5 s = 47 s (#537): an attempt's read and edit, then
+  the summary's claim and `sendPhoto`, on a 429 the wait (`SESSION_SUMMARY_RETRY_WAIT_MS`, 5 s) and
+  `sendPhoto` again, and the `editMessageReplyMarkup` that adds «📤 Поделиться» (#321); a photo
+  refused for good sends the text in place of the retry, 5 s shorter. The chain also checks
+  `2 × SESSION_RESUME_INTERVAL_MS < SESSION_SUMMARY_FALLBACK_MS` (20 min < 30 min).
 - `SESSION_RESUME_INTERVAL_MS` = 10 min (#567): one list and one catalog read per bot process per
   pass, and a link of the chain through the pace below.
 - `SESSION_RESUME_PER_SECOND` = 4, `SESSION_RESUME_GAP_MS` = 1000 / 4 = 250 ms (#567): the slots
@@ -733,9 +754,18 @@ id or the symbol.
   `backendReason`); nothing is tracked until the next pass
 - `trading sessions resumed` (#567, `info`): `listed`, `resumed`, only when a pass tracked any
 - `trading sessions resume failed` (#567, `error`): a pass threw outside the backend calls (a bug)
-- `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
-  photo failed (`method: sendPhoto`, `telegramErrorCode`), or the render threw; with `sessionId`.
-  A refused claim (409 `summary_unavailable`) logs nothing.
+- `trading session summary not sent` (#318, #537): the claim failed (`backendStatus`,
+  `backendReason`), the photo failed again after its 429's wait, or the text failed (`method`,
+  `telegramErrorCode`); with `sessionId`. A refused claim (409 `summary_unavailable`) logs nothing.
+- `trading session card refused: sent as text` (#537): the photo refused with a 4xx other than 403
+  and 429; the caption went as a text
+- `trading session card not drawn` (#537): the render threw; the caption went as a text
+- `trading session summary refused: the user is unreachable` (#537): a 403 on the photo; nothing
+  more
+- `trading session summary outcome unknown` (#537): a 5xx or a transport failure on the photo; no
+  retry, no text
+- `trading session summary names no asset` (#537, `error`): neither the settings nor a last intent
+  name the asset; nothing claimed, the backend's fallback closes the step
 - `trading session share button not attached` (#321): the card is sent but has no «📤 Поделиться»:
   the edit failed (`method: editMessageReplyMarkup`, `telegramErrorCode`); with `sessionId`.
 - `trading session not shared` (#321, #538): the inline handler's read failed other than 404
@@ -755,9 +785,12 @@ id or the symbol.
 
 Every settled trade of a session shows in a message **without sound**
 (`disable_notification: true`) and without buttons, in the trades' order; once the session is
-finished, one summary message comes **with sound**. Under them stands the waiting message with
-«⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)). The backend sends all
-three, not the bot: a restart of either repeats no send by a retry — a block can show twice only by
+finished and every trade's message went, the sender sets the session's **final mark** and the
+bot's summary follows in one message **with sound** (#537,
+[The summary message](#the-summary-message-537-the-card-of-318)); the backend sends a text summary
+only as [the fallback](#the-fallback). Under them stands the waiting message with «⏹ Остановить
+сессию» ([The waiting message](#the-waiting-message-536)). The backend sends the trades' messages
+and the waiting message, not the bot: a restart of either repeats no send by a retry — a block can show twice only by
 the endings [risk 35](#accepted-risks) names — and skips nothing but what the endings below lose.
 
 **One cycle, one message** (#551, the owner's decision 2026-10-16, after the reference bot). A
@@ -814,45 +847,73 @@ cycle, so every trade is a new message of one block, as before #551.
   (4) trades plus its ties, of about 100 characters each — so only an override can; the assembled-messages registry
   (`sessionTrade`, [bot-texts.md](bot-texts.md)) keeps one block with its adaptive line within the
   limit, so the unit the sender never splits always fits.
-- **The summary** is the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then the
-  stopped session's closing lines (`sessionClosingLines`), the first of them the session message's
-  end line (#536): «🏁 Сессия завершена: …» for a
-  completed session, otherwise the stop line and «📊 Итог: …», then «💰 Результат» (the SQL sum,
-  #337), the balance of the session's mode and its age line when it predates the last trade. Its
-  balance is read as the route reads it (`readFinishedSessionView`): at most one successful broker
-  GET per session — a refresh that did not answer `ok` is repeated by each later read of the
-  finished view — `mayRefresh: false`. Under it «🏠 В меню»; under a `no_signal_timeout` stop (#509)
-  «🔀 Выбрать другую пару» above it — `demo:sig` at every duration (`DEMO_SIGNALS_CALLBACK_DATA`,
-  `packages/shared/src/bot-navigation.ts`, #685; `demo:sig:<sec>` from #509 to #685) (D10, D12).
-- **Without a trade** no summary is sent — the session's mark alone — except for a
-  `no_signal_timeout` stop (#509, D10, D11): the user learns why the session stood, with sound,
-  from the pair line and the stop line.
+- **The summary's lines** are the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then
+  the stopped session's closing lines (`sessionClosingLines`), the first of them the session
+  message's end line (#536): «🏁 Сессия завершена: …» for a completed session, otherwise the stop
+  line and «📊 Итог: …» (with a trade), then «💰 Результат» (the SQL sum, #337), the balance of the
+  session's mode and its age line when it predates the last trade. Its balance is read as the route
+  reads it (`readFinishedSessionView`): at most one successful broker GET per session — a refresh
+  that did not answer `ok` is repeated by each later read of the finished view — `mayRefresh:
+  false`. The bot prints them as its caption with the owner's link under them; the fallback's text
+  prints them with «🏠 В меню» under it, and under a `no_signal_timeout` stop (#509) «🔀 Выбрать
+  другую пару» above it — `demo:sig` at every duration (`DEMO_SIGNALS_CALLBACK_DATA`,
+  `packages/shared/src/bot-navigation.ts`, #685) (D10, D12).
+- **The final mark** (#537, `closeNotices`): once the session is finished — stopped and no intent
+  of it outside the terminal statuses (`isTradingSessionFinished`) —, every settled trade was
+  claimed and the waiting message is gone, one CAS sets `final_notice_sent_at`: no view read, no
+  balance GET, no message. A session with nothing to send — no settled trade and not a
+  `no_signal_timeout` stop, or a user who blocked the bot — closes its summary step
+  (`summary_sent_at`) in the same UPDATE (D5′, D11′). A trade on manual review holds the mark: when
+  an operator settles it, it comes as the next trade, then the mark and the summary («без
+  результата, пока не закроется»).
+- **Without a trade** no summary is sent — except for a `no_signal_timeout` stop (#509): the user
+  learns why the session stood, with sound, from the pair line and the stop line, now from the bot,
+  as a text (#537).
 - **When.** The trades as they settle, within `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing; the
-  summary once the session is finished — stopped and no intent of it outside the terminal statuses
-  (`isTradingSessionFinished`) — and every settled trade was claimed first. A trade on manual
-  review holds the summary: when an operator settles it, it comes as the next trade, then the
-  summary («без результата, пока не закроется»). A finished session with no settled trade gets the
-  mark and no message.
+  final mark on the tick after the last of them; the bot's summary on its tracker's next poll
+  (≤ 10 s).
 - **Who.** The session's owner by join (`trading_sessions → broker_accounts →
   users.telegram_user_id`); no id comes from outside. A user with `telegram_blocked_at` set gets
-  nothing: the trades are claimed without a call, and the summary's mark is set without reading the
-  view — no balance GET for a user nothing can reach (#620, D5). The notification level does not
-  apply: trade results are outside it (Rule 19).
+  nothing: the trades are claimed without a call, and both marks are set by one CAS without reading
+  the view — no balance GET for a user nothing can reach (#620, #537, D5′). The notification level
+  does not apply: trade results are outside it (Rule 19).
+
+### The fallback
+
+The backend's text summary (`sessionSummaryMessage`, `serveFallback` in `session-notices.ts`, #537)
+goes only when the bot cannot send its own: the sender's second pass of each tick, after the pending
+sessions, reads `listSummaryFallback` — the final mark set, `summary_sent_at` NULL, a settled trade
+or the `no_signal_timeout` stop, and either no recorded status message (`status_message_id` NULL:
+the bot does not track it — the CLI's sessions, a lost message, a restart before the first poll) or
+a mark older than `SESSION_SUMMARY_FALLBACK_MS` (30 min, `packages/shared/src/trading-session.ts`)
+by the database's clock — oldest mark first, `SESSION_NOTICE_SCAN` rows, on
+`trading_sessions_summary_fallback_idx` (migration 0072). For each it reads the finished view, builds
+the text, takes its pace and claims by `claimSummaryFallback` — the same `summary_sent_at is null`
+CAS the bot's claim takes, so of the two one sends — and sends it with sound. A summary that cannot
+be built (no asset) closes the step with `error` `session summary not built`; a user who blocked
+the bot is claimed without a call. The grace is pinned in both processes: the bot's
+`2 × SESSION_RESUME_INTERVAL_MS < SESSION_SUMMARY_FALLBACK_MS` (a live bot claims a tracked session
+within two recovery passes) and the backend's `SESSION_NOTICE_TICK_MS < SESSION_SUMMARY_FALLBACK_MS`.
 
 ### The state
 
 `trading_sessions.notified_trades` is the cursor: how many of the session's settled trades (a
 settled intent with its broker trade), in creation order, were claimed for sending. A session's
 trades are strictly sequential (one non-terminal intent per account, Rule 7), so settlement order
-is creation order and a count is the whole state. `final_notice_sent_at` is the summary's mark.
-Every trade is claimed by a CAS UPDATE before the Telegram call (`claimSessionTradeNotice`,
-`claimSessionFinalNotice` in `packages/db/src/session-notice-ops.ts`): at most once, the mailing
-engine's rule. The migration's backfill (0050) set every existing session's cursor at its settled
+is creation order and a count is the whole state. Two marks (#537): `final_notice_sent_at` — «the
+notices are closed», set once by `claimSessionFinalNotice` and never cleared — and
+`summary_sent_at` — «the summary step is closed», won by one CAS of three writers: the bot's
+`claimSessionSummary`, `claimSessionFinalNotice({ closeSummary: true })` for a session with nothing
+to send, and the fallback's `claimSummaryFallback`; only `releaseSummaryFallback` clears it, on its
+own claim's mark to the microsecond, after a send Telegram certainly did not deliver. Migration
+0072 set `summary_sent_at = final_notice_sent_at` on every row with the first mark and without the
+second: their text summary went before the deploy. Every trade is claimed by a CAS UPDATE before
+the Telegram call (`claimSessionTradeNotice`, `claimSessionFinalNotice` in
+`packages/db/src/session-notice-ops.ts`): at most once, the mailing engine's rule. The migration's backfill (0050) set every existing session's cursor at its settled
 trades and marked every stopped session, so nothing settled before the deploy is sent. A session
 stopped before that deploy with a trade still on manual review was marked too: when an operator
 settles the trade later, neither its message nor a summary goes out — the mark keeps the session
-out of the list and refuses the claim (#534 m5; the 0050 test's third session); the bot's card
-(#318) is not held by it.
+out of the list and refuses the claim (#534 m5; the 0050 test's third session).
 
 **The cycle message** (#551, migration 0054): `cycle_message_id` is Telegram's `message_id` of
 the message the next step of the same cycle edits, `cycle_message_from` the index (from 0, in the
@@ -882,9 +943,9 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | an edit sent | stays claimed; unchanged | the next trade |
 | an edit answered «message is not modified» | as sent | the next trade |
 | an edit answered «message to edit not found», «message can't be edited» or «there is no text in the message to edit» (`editRefusal` → gone: the user deleted it, or it is too old to edit) | stays claimed; after one more pace a new message with the gone message's blocks (`from` to the claimed trade), recorded | the next trade; `warn` … `edited anew` |
-| the user blocked the bot (read flag) — a trade, or the summary | claimed, no call; unchanged; the summary's mark set without the view's read (no balance GET, #620) | the next trade; for the summary nothing |
+| the user blocked the bot (read flag) — a trade, or the final mark | claimed, no call; unchanged; both marks set by one CAS without the view's read (no balance GET, #620, #537) | the next trade; for the summary nothing |
 | 403 (send or edit) | stays claimed; the user is marked unreachable | later trades claimed without a call |
-| 429 (send or edit) | put back (`releaseSessionTradeNotice`; the summary's by `releaseSessionFinalNotice`); unchanged | the whole sender pauses for `retry_after`; the same trade first after it |
+| 429 (send or edit) | put back (`releaseSessionTradeNotice`; the fallback summary's by `releaseSummaryFallback` on its claim's mark); unchanged | the whole sender pauses for `retry_after`; the same trade (or fallback summary) first after it |
 | another 4xx (send or edit) | put back, an attempt counted in memory; unchanged | tried again on the next tick; at `SESSION_NOTICE_MAX_ATTEMPTS` (3) left claimed and `warn` … `dropped`; the block comes back only with the next step's edit of the same cycle message — a cycle's last step, and a step before a split (the next message starts from the claimed trade), stay lost, as the unknown edit's row |
 | a new message with a waiting message on screen (#536) | before the send, after its own pace, the waiting message deleted ([its endings](#the-waiting-message-536)); a 429 on that delete puts the trade back and pauses the sender; an unknown outcome puts the trade back and skips the session (the next tick deletes first); a 403 counts the trade as sent without a call | the new message after one more pace; the waiting message under it in the same `serve` |
 | 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
@@ -893,17 +954,17 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | the block does not fit (`BOT_TEXT_LIMIT`, 4069) | a new message from this trade; recorded from it | `info` … `split` |
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
 | the record refused (the cursor moved: another sender) | the other sender's record stands | a new message: at most repeated blocks, never a lost step; an edit: two senders' edits of one cycle message can land out of order and show the older step until the next step's edit ([risk 35](#accepted-risks); one sender in production) |
-| the message cannot be built (a bug) | a trade stays claimed; the summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the summary: the session stays in the list at its `created_at`, tried every tick ([risk 84](#accepted-risks)) |
-| a statement or the summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error`; the session is tried again next tick at its place in the list, every tick while it throws ([risk 84](#accepted-risks)) |
-| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a finished session's summary does not start (no balance read) and goes after the next start |
+| the message cannot be built (a bug) | a trade stays claimed; the fallback summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the fallback summary: the step is closed (`session summary not built`), the row leaves the list |
+| a statement or the fallback summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error`; the session is tried again next tick at its place in the list, every tick while it throws ([risk 84](#accepted-risks)) |
+| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a final mark or a fallback summary does not start (no balance read) and goes after the next start |
 
-Every ending after a claim moves the cursor, so no sent trade holds a session's place. Two endings
-before any claim do not: a summary that cannot be built, and a thrown statement or refresh (the two
-rows above) leave the session listed at its `created_at` and tried every tick; the list is
+Every ending after a claim moves the cursor, so no sent trade holds a session's place. One ending
+before any claim does not: a thrown statement or refresh (the row above) leaves the session listed
+at its `created_at` (or the fallback's at its mark) and tried every tick; the lists are
 oldest-first and `SESSION_NOTICE_SCAN` (200) rows, so 200 such sessions would starve every newer
-one ([risk 84](#accepted-risks); the hold-back is #660). The summary's 429 or refusal takes its
-mark back only while the card (#318) has not been claimed on it; the card waits for the mark, so
-in practice always.
+one ([risk 84](#accepted-risks); the hold-back is #660). A fallback summary that cannot be built
+closes its step instead (#537). The fallback's 429 or refusal takes back only the mark its own claim
+wrote: a mark the bot wrote after it stays.
 
 ### Rate and timing
 
@@ -911,15 +972,17 @@ in practice always.
 Telegram's 30 a second for one bot (`TIMING_CHAIN_HOLDS`). An edit takes a token of the same
 pacer as a send: Telegram counts it as a call. `SESSION_NOTICE_SCAN` = 200 pending sessions a
 tick, oldest first (`trading_sessions_notice_pending_idx`). `stop()` waits for the call in flight:
-the pace's gap, a summary's balance refresh and its send; or a step's edit, and when Telegram
+the pace's gap, a fallback summary's balance refresh and its send (#537); or a step's edit, and when Telegram
 answers the cycle message is gone, the waiting message's delete and the new message, each after a
 pace of its own, then the next trade's pace (#551, #536, `3 × (1000 / 9 +
-CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)` = 9 333 ms < 10 000). A summary and the waiting message's own
-steps start with their pace and a check of `stop()` (the summary's before its balance read), so
+CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)` = 9 333 ms < 10 000). A fallback summary and the waiting
+message's own steps start with their pace and a check of `stop()` (the summary's before its balance
+read), and the final mark is one statement without a pace, so
 these paths never add up; each is under phase 1's budget. The waiting message takes the same
 pacer's tokens (a send and a delete are calls); a new cycle is three calls instead of one. The bot's recovery after a restart adds up to 4 first polls a second on the same
 token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and only a stopped
-session's is an edit (#536, `mayDraw`) — 12 calls when each entry's card is due ([risk
+session's is an edit (#536, `mayDraw`) — up to 16 calls when each entry's summary is due (#537:
+a 429 adds one photo) ([risk
 47](#accepted-risks)). The wait for a signal (#664) adds up to 5 edits a second
 (`SIGNAL_WAIT_EDITS_PER_SECOND`): about 38 a second in the worst coincidence, above Telegram's ~30,
 so its edits pause on a 429 for its `retry_after`
@@ -945,7 +1008,7 @@ a session's sends read Σ ≤ 406 rows at ≤ 28 settled trades (Rule 28), ≤ 2
 message of a running session (the owner's decision 2026-10-15): deleted before each new message
 of the session — a cycle message, or a relaunch's status message (#587) — and sent again under it;
 an edit of a step leaves it where it is (#551); deleted once the session stopped — any reason — on
-the next tick, before the summary; never sent again after. A stop by its own «⏹» hands it to the
+the next tick, before the final mark; never sent again after. A stop by its own «⏹» hands it to the
 bot instead (#587): the bot draws its reply in place of it, and the sender does not delete it.
 
 **The state** (migration 0061): `trading_sessions.waiting_message_id`, Telegram's
@@ -1093,7 +1156,7 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
 
 - `session trade notice refused`, `… dropped`, `… outcome unknown`, `… edit outcome unknown`
   (#551), `… refused: the user is unreachable` (`warn`); `session summary refused`, `… dropped`,
-  `… outcome unknown`, `… refused: the user is unreachable` (`warn`)
+  `… outcome unknown`, `… refused: the user is unreachable` (`warn`) — the fallback's (#537)
 - `session trade notice edited anew: the cycle message is gone`, `session trade notice not
   recorded: no message id` (`warn`, #551); `session trade notice split: the cycle message is full`
   (`info`, with `from`, #551)
@@ -1103,28 +1166,44 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
   #587 round 1, [risk 82](#accepted-risks)); `session waiting message already gone`, `… removed:
   not recorded` (`info`, #536), `… taken over: not deleted` (`info`, #587 round 1)
 - `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
-- `session trade notice not built`, `session summary not built`, `session notices failed for a
-  session`, `session notice tick failed` (`error`)
+- `session trade notice not built`, `session summary not built` (the fallback's step closed,
+  #537), `session notices failed for a session`, `session notice tick failed` (`error`)
 
-## The summary card (#318)
+## The summary message (#537, the card of #318)
 
-One PNG per finished session, demo and real alike, sent to the session message's chat under the
-backend's summary message (#464), without sound (`disable_notification: true`): the summary
-carries the session's one sound. Sharing it is «📤 Поделиться» ([Sharing the card](#sharing-the-card-321)) or
-Telegram's own forwarding.
+The finished session's summary is **one message** (the owner's decision 2026-10-15, #537), demo
+and real alike, sent by the bot to the session message's chat after every message of the backend,
+**with sound**: the PNG card of its trades, the whole summary as its caption, the end of the path
+under it. Before #537 the backend sent a text summary with sound and the bot this card without
+sound under it. Sharing it is «📤 Поделиться» ([Sharing the card](#sharing-the-card-321)) or
+Telegram's own forwarding, which carries the caption with the balance (accepted by the owner).
 
 - **When.** The tracker's entry ends on a done view (stopped, the last trade settled or rejected),
-  the end line is on screen and the summary message went out (`noticesDone`, #464; the claim
-  below refuses the card before it). A last trade on `manual_review` is not done, so no card yet:
-  an operator settling it later gives one on the tracker's next poll while its entry lives (until
-  `SESSION_TRACK_DEADLINE_MS`), otherwise on the next recovery pass (#567). A session with no
-  settled trade gets none.
+  the end line is on screen and the notices are closed (`noticesDone`: the final mark, #464, #537;
+  the claim below refuses before it). A last trade on `manual_review` is not done, so no summary
+  yet: an operator settling it later gives one on the tracker's next poll while its entry lives
+  (until `SESSION_TRACK_DEADLINE_MS`), otherwise on the next recovery pass (#567). A session with no
+  settled trade gets none, except the `no_signal_timeout` stop, whose summary is a text.
 - **At most once.** `POST /trading/sessions/:id/summary` ([trading-session.md](trading-session.md#routes))
   sets `trading_sessions.summary_sent_at` by one CAS UPDATE — only once `final_notice_sent_at` is
-  set (#464) — and answers the card's rows; every
-  other answer is 409 `summary_unavailable`, and the bot then sends nothing. Two entries of one
-  session (a start's 409, an old status message's «⏹» while it is tracked) race the claim and one
-  wins.
+  set, with a settled trade or the `no_signal_timeout` stop — and answers the card's rows and the
+  owner's referral code; every other answer is 409 `summary_unavailable`, and the bot then sends
+  nothing. Two entries of one session, or the bot and [the fallback](#the-fallback), race the claim
+  and one wins. After the claim nothing takes the mark back: a lost send is a lost summary (risk 86).
+- **How it ends** (`sendSummary`, `apps/bot/src/trading-session.ts`):
+
+  | Ending | Sent | Log |
+  | --- | --- | --- |
+  | no asset (no settings and no last intent) | nothing, no claim | `error` `trading session summary names no asset`; the fallback closes the step |
+  | the claim refused (409) | nothing | — |
+  | the claim failed (5xx, transport, contract) | nothing; the mark not set | `warn` `trading session summary not sent` |
+  | no trade (`no_signal_timeout`) | the caption as a text (`sendHtmlById`) | — |
+  | the render threw | the text, «📤» on it | `warn` `trading session card not drawn` |
+  | the photo sent | the photo, «📤» on it | — |
+  | 403 on the photo | nothing more | `warn` `trading session summary refused: the user is unreachable` |
+  | 429 on the photo | the wait of `retry_after` (at most `SESSION_SUMMARY_RETRY_WAIT_MS`, 5 s), the photo once more | a second failure of any kind: `warn` `trading session summary not sent` |
+  | another 4xx on the photo | the text, «📤» on it | `warn` `trading session card refused: sent as text`; the text refused: `… summary not sent` |
+  | 5xx or the transport on the photo | nothing more (it may have arrived) | `warn` `trading session summary outcome unknown` |
 - **The numbers.** Each trade's result is its `broker_trades.profit`, the total the same SQL sum
   the summary prints (`sessionProfitSumSql`, #337); the bot formats them (`formatSignedUsd`) and
   adds nothing. Win, loss and tie go by the exact decimal's sign, as the view counts them, so
@@ -1132,16 +1211,22 @@ Telegram's own forwarding.
   `broker_trades.open_price`/`close_price`: the line runs through each trade's entry (a quarter
   into its column) and exit (three quarters), scaled between the lowest and the highest price, in
   the middle when all are equal. It is not the
-  market path between them. No balance: the card is made to be forwarded, the balance is the
-  summary's.
+  market path between them. No balance on the picture: the balance is the caption's, which «📤
+  Поделиться» does not carry.
 - **The layout.** 1200 × 675, dark. The pair (or «актив #N»), «СЕССИЯ ЗАВЕРШЕНА», «ИТОГ» and the
   signed total; a column per trade, «Сделка N» and its result (at most
   `MAX_SESSION_SUMMARY_TRADES`, 720, the summary's bound since #552: a five-cycle martingale
   session without ties has at most 20 trades, and only many ties make the columns crowd); blue entry markers, exits green,
   red or grey; the legend; the footer «5 сделок · 3 в плюс, 2 в минус», «в ноль» only when a trade
   tied. Every word is the catalog's (`sessionCard*`), XML-escaped, and shrinks to fit its slot.
-- **The caption** is `sessionCardCaption`: «🏁 {symbol}: итог сессии {profit}» and «🤖 @{botUsername}»,
-  the bot's `ctx.me.username` from the press that started tracking.
+- **The caption** is `sessionSummaryCaption` (`texts.ts`, #537): the summary's lines
+  ([Trade messages and the summary](#trade-messages-and-the-summary-464)) — «📈 {pair}», the end
+  line, «📊 Итог», «💰 Результат», the balance and its age — then `sessionSummaryLink`, «🤖
+  {referralLink}»: the owner's link `https://t.me/{bot}?start=ref_{code}` (#538's `referralLinkOf`,
+  the code from the claim's answer, created on first use), `?start=share` without a code (a blocked
+  owner), the bot's `ctx.me.username` from the press that started tracking. Its assembly
+  `sessionSummaryCaption` in the registry holds it under Telegram's 1024 for a caption (Rule 30);
+  the text path sends the same caption with the width spacer.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
   сессия» at 5 s (#685) while a session at it fits, «📊 Новый анализ» and
   «📡 К сигналам» in one row, «💳 Пополнить» (#27, https only) and «👥 Пригласить друга» (#115) in
@@ -1149,7 +1234,8 @@ Telegram's own forwarding.
   without `settings`
   (`sessionCardKeyboard`); under a `no_signal_timeout` stop «🔀 Выбрать другую пару» in place of the
   first three (#509). «📤 Поделиться» comes on top of these rows by
-  an edit right after the send (#321).
+  an edit right after the send (#321), on the photo and on the text after a refused photo, not on
+  a session without a trade (its share would answer nothing).
   «📡 К сигналам» edits the pressed message; under the card Telegram refuses that with «there is
   no text in the message to edit», `editRefusal` (`telegram-refusals.ts`) reads it as gone, and the screen
   comes as a new message under the card, with one `warn` `the demo screen was not edited, sending
@@ -1176,7 +1262,7 @@ posts a promo card of the session there with its own caption, «via @bot» (#538
 storage channel for its `file_id`; the owner proof is the backend's read of the session.
 
 - **The button.** Only with `SHARE_STORAGE_CHAT_ID` set (`apps/bot/src/env.ts`; unset, the bot
-  logs `share button off: SHARE_STORAGE_CHAT_ID is not set` at start and the card goes with its
+  logs `share button off: SHARE_STORAGE_CHAT_ID is not set` at start and the summary goes with its
   #318 keyboard alone). The card is sent with its #318 keyboard and then gets the row
   `switch_inline_query_chosen_chat` = `share:<sessionId>` on top, by one `editMessageReplyMarkup`
   that sets the whole keyboard again (the share row, then every row of `sessionCardKeyboard`). A
@@ -1266,7 +1352,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 9. **One deploy for the backend and the bot** (#337): the view's schema is strict on both sides, so a
    bot older than the backend answers `ContractViolation` on every session read until redeployed.
 10. **At most once, not exactly once** (#318, owner 2026-10-07): a crash or a lost answer between
-    the claim and `sendPhoto` loses the card, and nothing retries it.
+    the claim and `sendPhoto` loses the card, and nothing retries it. Since #537 it loses the whole
+    summary (risk 86).
 11. **Sessions that ended before #318** have no mark and get no card any more: «🔄 Обновить» is
     gone (#536), and no message of theirs is recorded (#567).
 12. **The musl build is not loaded by `pnpm check`** (#318): CI and the host install other builds.
@@ -1470,9 +1557,9 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 56. **A session whose message id is not recorded gets no card after a bot restart** (#536): one
     started before #567 and never pressed, one started from the CLI, a bot restart in the 3 s
     before the first poll, a session message reported lost. No button records it any more, and
-    neither «⏹» under the waiting message nor `/stop` starts tracking: no #318 card and no end line
-    on its message; the summary (#464, the result and the balance) and the reply to «⏹» come all
-    the same. None from before #567 is left at the deploy (#567 runs on the pilot since 2026-10-16,
+    neither «⏹» under the waiting message nor `/stop` starts tracking: no card and no end line on
+    its message; the backend's fallback text summary (#537, the result and the balance) and the
+    reply to «⏹» come all the same. None from before #567 is left at the deploy (#567 runs on the pilot since 2026-10-16,
     a session lasts at most an hour and its settlement). Falsifiable: a missing card of a session
     with a recorded `status_message_id`.
 57. **Three Telegram calls per new cycle** (#536) instead of one — the delete, the cycle message,
@@ -1593,17 +1680,45 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     and inside Telegram's 48-hour edit window of that message; after that every such session is
     stopped, every read answers the stopped view, and no stale edit exists. Falsifiable: a message
     sent before #536 showing «Торговая сессия запущена…» under a summary card.
-84. **A session whose turn ends before any claim stays listed** (#534 m4): a summary that cannot be
-    built (`session summary not built`) or a thrown statement or balance refresh (`session notices
-    failed for a session`) leaves the session in the list at its `created_at`, tried every tick —
-    for the thrown refresh one view read and one refresh attempt a tick. The list is oldest-first,
-    200 rows a tick, so 200 such sessions would starve every newer one; nothing in the sender frees
-    the slot (the hold-back is #660). Falsifiable: the same `sessionId` in one of those two `error`
+84. **A session whose turn ends before any claim stays listed** (#534 m4): a thrown statement or
+    balance refresh (`session notices failed for a session`) leaves the session in the list at its
+    `created_at` (the fallback's at its mark), tried every tick — one view read and one refresh
+    attempt a tick; a fallback summary that cannot be built closes its step since #537. The list is
+    oldest-first, 200 rows a tick, so 200 such sessions would starve every newer one; nothing in the
+    sender frees the slot (the hold-back is #660). Falsifiable: the same `sessionId` in that `error` line
     lines on consecutive ticks.
 85. **The list's duplicated subqueries and the claim's growing read** (#534 m7): the numbers of
     [Rate and timing](#rate-and-timing); a tick longer than `SESSION_NOTICE_TICK_MS` makes the next
     one a no-op, never two ticks at once. Falsifiable: `EXPLAIN ANALYZE` of the list's query on the
     pilot's database over 300 ms (an owner's step; #660 holds the `MATERIALIZED` form).
+
+86. **The summary at most once, not exactly once** (#537): a bot crash between the claim and
+    `sendPhoto`, a second failure after a 429, a photo of unknown outcome — the summary is lost and
+    nothing retries it; before #537 the backend's text summary stood in such a case. Falsifiable:
+    sessions with `summary_sent_at` set and no summary in the chat more than now and then.
+87. **The deploy window** (#537): the bot first (`docker compose up -d --no-deps bot`), then the
+    backend. In between the old backend sends its text summary and sets the final mark, and the new
+    bot's claim answers without `referralCode` (`ContractViolation`, `warn` `trading session summary
+    not sent`): such sessions get the text and no photo. The other order would lose summaries: the
+    new backend sends no text, and the old bot cannot read the claim's answer after it committed.
+88. **The fallback's text is poorer** (#537): «🏠 В меню» (and «🔀» for `no_signal_timeout`), no
+    card, no referral link; it is for sessions the bot does not track or did not claim in 30 min.
+89. **Up to 30 minutes without a summary** (#537) when the bot is alive, the status message is
+    recorded and the claim is not taken (an edit refused other than gone again and again, a tracker
+    bug). Falsifiable: fallback `session summary` sends of sessions with a status message while the
+    bot runs.
+90. **A referral code is created when a session ends** (#537, as #538's risk for the share): a
+    `referral_codes` row for a user who never invited anyone.
+91. **The backfill closes the old cards** (#537): sessions whose text summary went before the deploy
+    and whose card did not (the bot was down, the card's claim failed) get no card; otherwise the
+    fallback would send a second text.
+92. **A session with its status message deleted gets the text, not the card** (#537): the bot no
+    longer tracks it.
+93. **The fallback's list** (#537) is bounded by `SESSION_NOTICE_SCAN` (200); a row whose view does
+    not read or whose statement throws stays at its head (risk 84's class).
+94. **The tracked list without its third conjunct** (#537) relies on backfill 0072 and on the final
+    mark closing «nothing to send» in its own statement: a row with the final mark, no trade and no
+    `summary_sent_at` cannot arise after the deploy (N6′, B1).
 
 ## Running it locally
 

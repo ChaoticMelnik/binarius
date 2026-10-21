@@ -26,6 +26,7 @@ import {
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
   MAILING_MIN_OFFSET_MS,
+  SESSION_SUMMARY_FALLBACK_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
 import {
@@ -455,8 +456,11 @@ const TIMING_CHAIN_HOLDS =
   ANALYSIS_UNUSED_AFTER_MS + MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS <
     ANALYSIS_UNUSED_UNTIL_MS &&
   // the session notices (#464): with the mailings under Telegram's rate for one bot; stop() waits
-  // for the send in flight - the pace's gap, then a summary's balance refresh and its one send
+  // for the send in flight - the pace's gap, then a fallback summary's balance refresh and its
+  // one send (#537)
   MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
+  // the fallback's grace (#537) spans ticks: a session the bot tracks is listed only after it
+  SESSION_NOTICE_TICK_MS < SESSION_SUMMARY_FALLBACK_MS &&
   1000 / SESSION_NOTICE_SEND_PER_SECOND +
     TRADING_ACCESS_REFRESH_BUDGET_MS +
     CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <
@@ -464,7 +468,7 @@ const TIMING_CHAIN_HOLDS =
   // a trade's step of a cycle (#551) may make three calls (#536): the edit of the cycle message,
   // and when Telegram answers it is gone, the delete of the waiting message and the new message,
   // each after its own pace; then the next trade's pace. The waiting message's own steps and the
-  // summary start with their pace and a check of stop() (session-notices.ts), so this path and
+  // fallback summary start with their pace and a check of stop() (session-notices.ts), so this path and
   // theirs never add up
   3 * (1000 / SESSION_NOTICE_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS) <
     SHUTDOWN_PHASE1_BUDGET_MS &&

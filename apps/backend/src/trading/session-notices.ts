@@ -5,6 +5,7 @@ import {
   editRefusal,
   errorLogFields,
   safeParseTradingSessionSettings,
+  SESSION_SUMMARY_FALLBACK_MS,
   TradingSessionStatus,
   TradingSessionStopReason,
   type TelegramHtml,
@@ -15,16 +16,19 @@ import {
   claimSessionFinalNotice,
   claimSessionTradeNotice,
   claimSessionWaiting,
+  claimSummaryFallback,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
+  listSummaryFallback,
   readSessionWaitingMessage,
   recordSessionCycleMessage,
   recordSessionWaitingMessage,
-  releaseSessionFinalNotice,
   releaseSessionTradeNotice,
   releaseSessionWaiting,
+  releaseSummaryFallback,
   type Db,
   type PendingSessionNotice,
+  type SummaryFallbackSession,
 } from '@binarius/db';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
@@ -48,15 +52,17 @@ import { readFinishedSessionView } from './session-view';
 
 // docs/bot-session.md → Trade messages (#464). One loop in the backend process sends every
 // settled trade of every session to the session's owner, without sound and in the trades' order,
-// and once the session is finished one summary with sound. A martingale cycle is one message
+// and once the session is finished sets its final mark: the notices are closed, and the summary
+// is the bot's one message with sound (#537). The text summary goes from here only as the
+// fallback sender (serveFallback), when the bot cannot send it. A martingale cycle is one message
 // (#551): its first trade sends it, every later trade of the cycle edits it to show its block
 // too. Each trade is claimed by a CAS before the Telegram call (session-notice-ops.ts): a call
 // whose outcome is unknown is never repeated for that trade, so a trade's block can be lost but
 // a message never doubled by a retry; the next step's edit shows every block of its cycle again.
 // Under them stands the waiting message with its «⏹» (#536): deleted before a new message of the
 // session (a cycle message, or a relaunch's status message, #587) and sent again after it, deleted
-// once the session stopped, before the summary - unless its «⏹» stopped the session: the stop
-// route then hands it to the bot, which draws its reply in place of it (#587), and the summary
+// once the session stopped, before the final mark - unless its «⏹» stopped the session: the stop
+// route then hands it to the bot, which draws its reply in place of it (#587), and the mark
 // follows with no delete. The sender re-reads the waiting message's id right before each delete,
 // so a message the stop route took over is not deleted (#587 round 1; the call in flight: docs
 // risk 82). A restart of the bot or the backend repeats no send by a retry: the cursor, the cycle
@@ -68,6 +74,8 @@ export interface SessionNoticeConfig {
   scan: number;
   perSecond: number;
   maxAttempts: number;
+  // the fallback's grace for a session the bot tracks (#537)
+  summaryFallbackMs: number;
 }
 
 const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
@@ -75,6 +83,7 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
   scan: SESSION_NOTICE_SCAN,
   perSecond: SESSION_NOTICE_SEND_PER_SECOND,
   maxAttempts: SESSION_NOTICE_MAX_ATTEMPTS,
+  summaryFallbackMs: SESSION_SUMMARY_FALLBACK_MS,
 };
 
 export interface SessionNoticeSenderDeps {
@@ -99,8 +108,8 @@ export interface SessionNoticeSenderDeps {
 export interface SessionNoticeSender {
   tick(): Promise<void>;
   start(): void;
-  // Ends the loop and waits for the tick in flight: no claim and no summary's balance read starts
-  // after it; the call in flight completes or times out (timing.ts).
+  // Ends the loop and waits for the tick in flight: no claim and no fallback summary's balance read
+  // starts after it; the call in flight completes or times out (timing.ts).
   stop(): Promise<void>;
 }
 
@@ -275,7 +284,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   }
 
   // How a failed send ends, as docs → Every way a send ends has it for a trade's message or
-  // edit, the summary and the waiting message: 403 - the user marked unreachable, then the
+  // edit, the fallback summary and the waiting message: 403 - the user marked unreachable, then the
   // caller's own bookkeeping (a released slot, the blocked flag), the send counting as done;
   // 429 - put back and the whole sender paused; another 4xx - put back and tried again on a
   // later tick, left as sent at maxAttempts; unknown - left as the claim wrote it.
@@ -289,7 +298,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     release,
     afterForbidden,
   }: {
-    session: PendingSessionNotice;
+    session: Pick<PendingSessionNotice, 'telegramUserId'>;
     label: 'session trade notice' | 'session summary' | 'session waiting message';
     key: string;
     method: 'sendMessage' | 'editMessageText';
@@ -330,7 +339,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
   // Deletes the waiting message (#536), drops its id and frees its slot, so an active session is
   // due again. Nothing is called for a user who blocked the bot (Rule 19): a stopped session's id
-  // is dropped without a call, so the summary can be claimed; an active session's is kept (#587),
+  // is dropped without a call, so the notices can be closed; an active session's is kept (#587),
   // so once the user is reachable the message still in the chat is deleted before anything new is
   // sent, never a second «⏹» beside it. The caller has taken the pace. The row's id is re-read
   // right before the delete (#587 round 1): the caller's value comes from the tick's list, and in
@@ -480,56 +489,71 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     return 'next';
   }
 
-  async function sendSummary(session: PendingSessionNotice): Promise<Step> {
-    // a summary does not start after stop(): its view reads the balance (up to
-    // TRADING_ACCESS_REFRESH_BUDGET_MS), which would add to the step in flight (timing.ts)
+  // The finished session's final mark (#537): every trade's message went and the waiting message
+  // is gone, so the bot's summary may follow. One statement, no view read and no balance GET; a
+  // session with nothing to send - no settled trade and not the no-signal stop, or a user who
+  // blocked the bot (Rule 19) - closes its summary step in the same UPDATE.
+  async function closeNotices(session: PendingSessionNotice): Promise<Step> {
     if (stopped) return 'skip';
-    // nothing can be delivered (Rule 19): the mark alone - no view read, no balance GET (#620)
+    const closeSummary =
+      session.telegramBlocked ||
+      (session.settled === 0 && session.stopReason !== TradingSessionStopReason.NoSignalTimeout);
+    await claimSessionFinalNotice(db, { sessionId: session.sessionId, closeSummary });
+    return 'next';
+  }
+
+  // The fallback text summary (#537, docs/bot-session.md → The fallback): a session the bot does
+  // not track (no status message) or did not claim within the grace. The same claim the bot's
+  // takes, so one of the two sends; a send Telegram certainly did not deliver takes back only this
+  // claim's mark. A summary that cannot be built closes the step, so the row leaves the list.
+  async function serveFallback(session: SummaryFallbackSession): Promise<Step> {
+    // its view reads the balance (up to TRADING_ACCESS_REFRESH_BUDGET_MS), which would add to the
+    // step in flight (timing.ts)
+    if (stopped) return 'skip';
+    const { sessionId } = session;
+    const fields = { sessionId };
+    // nothing can be delivered (Rule 19): the claim alone - no view read, no balance GET
     if (session.telegramBlocked) {
-      await claimSessionFinalNotice(db, { sessionId: session.sessionId });
+      await claimSummaryFallback(db, { sessionId });
       return 'next';
     }
-    const fields = { sessionId: session.sessionId };
     const telegramUserId = String(session.telegramUserId);
-    const view = await readFinishedSessionView({ db, balance }, session.sessionId, telegramUserId);
+    const view = await readFinishedSessionView({ db, balance }, sessionId, telegramUserId);
     if (view === undefined) return 'skip';
-    // no settled trade: no result to report (#337, #318), the mark alone — but a session the
-    // no-signal limit stopped tells why with the way to another pair, trades or not (#509)
-    if (view.trades.settled === 0 && view.stopReason !== TradingSessionStopReason.NoSignalTimeout) {
-      await claimSessionFinalNotice(db, { sessionId: session.sessionId });
-      return 'next';
-    }
     let message: ClientPushMessage;
     try {
       const assetId = view.settings?.assetId ?? view.lastIntent?.assetId ?? 0;
       message = sessionSummaryMessage(view, pairOf(catalog.read(), assetId).label);
     } catch (error) {
-      // a bug, before the claim: the session stays pending, and its card waits for the summary
       logger.error({ ...fields, ...errorLogFields(error) }, 'session summary not built');
-      return 'skip';
+      await claimSummaryFallback(db, { sessionId });
+      return 'next';
     }
     await pace();
     if (stopped) return 'skip';
-    if (!(await claimSessionFinalNotice(db, { sessionId: session.sessionId }))) return 'skip';
+    const claim = await claimSummaryFallback(db, { sessionId });
+    // the bot claimed first, or the row is no longer claimable
+    if (claim === undefined) return 'skip';
+    const key = `${sessionId}:summary`;
     try {
       await push.sendSessionSummary(session.telegramUserId, message);
-      attempts.delete(`${session.sessionId}:summary`);
+      attempts.delete(key);
       return 'next';
     } catch (error) {
       return sendFailed({
         session,
         label: 'session summary',
-        key: `${session.sessionId}:summary`,
+        key,
         method: 'sendMessage',
         fields,
         error,
-        release: () => releaseSessionFinalNotice(db, { sessionId: session.sessionId }),
+        release: () => releaseSummaryFallback(db, { sessionId, claimedAt: claim.claimedAt }),
       });
     }
   }
 
   // every trade past the cursor in order, then the stale waiting message's delete, then the
-  // summary of a finished session or the waiting message due; the first step that does not go
+  // final mark of a finished session or the waiting message due; the first step that does not go
   // ends the session's turn, so its later trades never overtake it and the waiting message is
   // the last message of the turn
   async function serve(session: PendingSessionNotice): Promise<Step> {
@@ -544,7 +568,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       if (step !== 'next') return step;
     }
     // a finished session's trades are all settled or rejected: none appears after the list's read
-    if (session.finished) return sendSummary(session);
+    if (session.finished) return closeNotices(session);
     return session.waitingDue && waitingMayGo(session) ? sendWaiting(session) : 'next';
   }
 
@@ -558,6 +582,26 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         step = await serve(session);
       } catch (error) {
         // a statement or a refresh that threw: what was claimed stays claimed, the rest waits
+        logger.error(
+          { sessionId: session.sessionId, ...errorLogFields(error) },
+          'session notices failed for a session',
+        );
+        continue;
+      }
+      if (step === 'pause') return;
+    }
+    if (stopped) return;
+    // the fallback after the notices, so a mark this tick set is listed on the same tick
+    const fallback = await listSummaryFallback(db, {
+      limit: config.scan,
+      graceMs: config.summaryFallbackMs,
+    });
+    for (const session of fallback) {
+      if (stopped) return;
+      let step: Step;
+      try {
+        step = await serveFallback(session);
+      } catch (error) {
         logger.error(
           { sessionId: session.sessionId, ...errorLogFields(error) },
           'session notices failed for a session',

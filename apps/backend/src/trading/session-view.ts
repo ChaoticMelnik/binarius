@@ -9,15 +9,15 @@ export interface SessionViewDeps {
 }
 
 // The session as its owner sees it, with the balance after its last trade once it is finished
-// (#337): the status the bot prints as final and the backend's summary message (#464) both read
-// it here. Once nothing of the session can move and the stored snapshot predates its last
+// (#337): the status the bot prints as final, its summary (#537) and the backend's fallback text
+// summary all read it here. Once nothing of the session can move and the stored snapshot predates its last
 // settlement or there is none (`balance: null`), the broker is asked once more inside
 // TRADING_ACCESS_REFRESH_BUDGET_MS. mayRefresh: false - the bot's poll and the notice sender are
 // timers, and a timer exchanges no token (Rule 12); no `requested` - neither keeps the account in
 // work. After one 'ok' the snapshot is current for good, so a session costs at most one
 // successful broker GET (Rule 21); a refresh that does not answer 'ok' leaves the stored balance
 // and its age and is asked again by the next read of the finished view - the tracker's last poll,
-// the stop route's reply, the notices' summary - one GET each; a thrown one reaches the caller.
+// the stop route's reply, the fallback's summary - one GET each; a thrown one reaches the caller.
 export async function readFinishedSessionView(
   { db, balance }: SessionViewDeps,
   id: string,

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { eq, sql } from 'drizzle-orm';
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   TradeAction,
@@ -22,8 +23,10 @@ import {
   listPendingSessionNotices,
   readSessionWaitingMessage,
   recordSessionWaitingMessage,
-  releaseSessionFinalNotice,
+  claimSummaryFallback,
+  listSummaryFallback,
   recordSessionCycleMessage,
+  releaseSummaryFallback,
   releaseSessionTradeNotice,
   releaseSessionWaiting,
 } from './session-notice-ops';
@@ -164,8 +167,8 @@ const stop = (
 ) => stopTradingSession(tmp.db, { id: session.id, reason });
 const claim = (session: { id: string }, claimed: number) =>
   claimSessionTradeNotice(tmp.db, { sessionId: session.id, claimed });
-const finalClaim = (session: { id: string }) =>
-  claimSessionFinalNotice(tmp.db, { sessionId: session.id });
+const finalClaim = (session: { id: string }, closeSummary = false) =>
+  claimSessionFinalNotice(tmp.db, { sessionId: session.id, closeSummary });
 const rowOf = async (session: { id: string }) =>
   (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, session.id)))[0]!;
 const pendingOf = async (session: { id: string }) =>
@@ -370,21 +373,172 @@ describe('claimSessionFinalNotice', () => {
   });
 });
 
-describe('releaseSessionFinalNotice', () => {
-  it('N9 takes the summary mark back only while the card was not claimed on it', async () => {
+describe('the two marks (#537)', () => {
+  it("N6' closeSummary sets both marks in one statement; without it only the final mark", async () => {
+    const closed = await seedSession();
+    await rejected(closed);
+    await stop(closed.session, TradingSessionStopReason.UserStopped);
+    expect(await finalClaim(closed.session, true)).toBe(true);
+    const both = await rowOf(closed.session);
+    expect(both.finalNoticeSentAt).toBeInstanceOf(Date);
+    // one statement: one now()
+    expect(both.summarySentAt).toEqual(both.finalNoticeSentAt);
+
+    const open = await seedSession();
+    await settled(open, '4.6');
+    await stop(open.session);
+    await claim(open.session, 0);
+    expect(await finalClaim(open.session)).toBe(true);
+    const first = await rowOf(open.session);
+    expect(first.finalNoticeSentAt).toBeInstanceOf(Date);
+    expect(first.summarySentAt).toBeNull();
+  });
+
+  it("N6' a refused final claim closes no summary either", async () => {
     const target = await seedSession();
-    await stop(target.session, TradingSessionStopReason.UserStopped);
-    expect(await releaseSessionFinalNotice(tmp.db, { sessionId: target.session.id })).toBe(false);
-    await finalClaim(target.session);
-    expect(await releaseSessionFinalNotice(tmp.db, { sessionId: target.session.id })).toBe(true);
-    expect((await rowOf(target.session)).finalNoticeSentAt).toBeNull();
-    await finalClaim(target.session);
+    await settled(target, '4.6');
+    expect(await finalClaim(target.session, true)).toBe(false);
+    expect((await rowOf(target.session)).summarySentAt).toBeNull();
+  });
+});
+
+describe('the fallback summary (#537)', () => {
+  const GRACE_MS = 1_800_000;
+  const listed = async (session: { id: string }, graceMs = GRACE_MS) =>
+    (await listSummaryFallback(tmp.db, { limit: 10_000, graceMs })).find(
+      (row) => row.sessionId === session.id,
+    );
+  const setRow = (session: { id: string }, values: PgUpdateSetSource<typeof tradingSessions>) =>
+    tmp.db.update(tradingSessions).set(values).where(eq(tradingSessions.id, session.id));
+  // a finished session with one settled trade and its notices closed
+  async function closedWithTrade(
+    reason: TradingSessionStopReason = TradingSessionStopReason.Completed,
+  ) {
+    const target = await seedSession();
+    await settled(target, '4.6');
+    await stop(target.session, reason);
+    await claim(target.session, 0);
+    expect(await finalClaim(target.session)).toBe(true);
+    return target;
+  }
+  const markAgo = (session: { id: string }, minutes: number) =>
+    setRow(session, { finalNoticeSentAt: sql`now() - make_interval(mins => ${minutes})` });
+
+  it('N20 without a status message at once; with one only past the grace', async () => {
+    const untracked = await closedWithTrade();
+    expect(await listed(untracked.session)).toEqual({
+      sessionId: untracked.session.id,
+      telegramUserId: BigInt(untracked.seed.telegramUserId),
+      telegramBlocked: false,
+    });
+
+    const tracked = await closedWithTrade();
+    await setRow(tracked.session, { statusMessageId: 77 });
+    expect(await listed(tracked.session)).toBeUndefined();
+    await markAgo(tracked.session, 29);
+    expect(await listed(tracked.session)).toBeUndefined();
+    await markAgo(tracked.session, 31);
+    expect(await listed(tracked.session)).toBeDefined();
+  });
+
+  it('N20 lists only claimable rows: the no-signal stop without trades too, not a closed step, not open notices, not another stop without trades', async () => {
+    const noSignal = await seedSession();
+    await stop(noSignal.session, TradingSessionStopReason.NoSignalTimeout);
+    expect(await listed(noSignal.session)).toBeUndefined();
+    await finalClaim(noSignal.session);
+    expect(await listed(noSignal.session)).toBeDefined();
+
+    const empty = await seedSession();
+    await rejected(empty);
+    await stop(empty.session, TradingSessionStopReason.UserStopped);
+    await finalClaim(empty.session);
+    expect(await listed(empty.session)).toBeUndefined();
+
+    const claimed = await closedWithTrade();
+    await setRow(claimed.session, { summarySentAt: sql`now()` });
+    expect(await listed(claimed.session)).toBeUndefined();
+  });
+
+  it('N20 lists the oldest mark first and stops at its limit', async () => {
+    const older = await closedWithTrade();
+    const newer = await closedWithTrade();
+    await markAgo(newer.session, 1);
+    await markAgo(older.session, 2);
+    const all = await listSummaryFallback(tmp.db, { limit: 10_000, graceMs: GRACE_MS });
+    const ids = all.map((row) => row.sessionId);
+    expect(ids.indexOf(older.session.id)).toBeLessThan(ids.indexOf(newer.session.id));
+    expect(await listSummaryFallback(tmp.db, { limit: 2, graceMs: GRACE_MS })).toEqual(
+      all.slice(0, 2),
+    );
+  });
+
+  it('N20 flags a user who blocked the bot', async () => {
+    const target = await closedWithTrade();
     await tmp.db
-      .update(tradingSessions)
-      .set({ summarySentAt: sql`now()` })
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, target.seed.userId));
+    expect((await listed(target.session))?.telegramBlocked).toBe(true);
+  });
+
+  it('N21 claims once and returns its mark; a row not claimable is undefined', async () => {
+    const target = await closedWithTrade();
+    const won = await claimSummaryFallback(tmp.db, { sessionId: target.session.id });
+    const [mark] = await tmp.db
+      .select({ text: sql<string>`${tradingSessions.summarySentAt}::text` })
+      .from(tradingSessions)
       .where(eq(tradingSessions.id, target.session.id));
-    expect(await releaseSessionFinalNotice(tmp.db, { sessionId: target.session.id })).toBe(false);
-    expect((await rowOf(target.session)).finalNoticeSentAt).toBeInstanceOf(Date);
+    expect(won?.claimedAt).toBe(mark?.text);
+    expect(await claimSummaryFallback(tmp.db, { sessionId: target.session.id })).toBeUndefined();
+
+    const running = await seedSession();
+    expect(await claimSummaryFallback(tmp.db, { sessionId: running.session.id })).toBeUndefined();
+    expect((await rowOf(running.session)).summarySentAt).toBeNull();
+  });
+
+  it('N22 a release takes back only its own mark', async () => {
+    const target = await closedWithTrade();
+    const won = (await claimSummaryFallback(tmp.db, { sessionId: target.session.id }))!;
+    expect(
+      await releaseSummaryFallback(tmp.db, {
+        sessionId: target.session.id,
+        claimedAt: won.claimedAt,
+      }),
+    ).toBe(true);
+    expect((await rowOf(target.session)).summarySentAt).toBeNull();
+    // the bot claimed after the release: its mark is not this claim's
+    await setRow(target.session, { summarySentAt: sql`now()` });
+    expect(
+      await releaseSummaryFallback(tmp.db, {
+        sessionId: target.session.id,
+        claimedAt: won.claimedAt,
+      }),
+    ).toBe(false);
+    expect((await rowOf(target.session)).summarySentAt).toBeInstanceOf(Date);
+  });
+
+  it('N22 the release key holds the mark to the microsecond', async () => {
+    const target = await closedWithTrade();
+    const won = (await claimSummaryFallback(tmp.db, { sessionId: target.session.id }))!;
+    // the same millisecond, another microsecond: a Date would not tell them apart
+    await setRow(target.session, {
+      summarySentAt: sql`${won.claimedAt}::timestamptz + interval '1 microsecond'`,
+    });
+    expect(
+      await releaseSummaryFallback(tmp.db, {
+        sessionId: target.session.id,
+        claimedAt: won.claimedAt,
+      }),
+    ).toBe(false);
+  });
+
+  it('N23 two claims at once: exactly one wins', async () => {
+    const target = await closedWithTrade();
+    const results = await Promise.all([
+      claimSummaryFallback(tmp.db, { sessionId: target.session.id }),
+      claimSummaryFallback(tmp.db, { sessionId: target.session.id }),
+    ]);
+    expect(results.filter((result) => result !== undefined)).toHaveLength(1);
   });
 });
 
@@ -415,6 +569,7 @@ describe('listPendingSessionNotices', () => {
     expect(await pendingOf(ended.session)).toMatchObject({
       settled: 0,
       finished: true,
+      stopReason: TradingSessionStopReason.UserStopped,
       telegramUserId: BigInt(ended.seed.telegramUserId),
       telegramBlocked: false,
     });

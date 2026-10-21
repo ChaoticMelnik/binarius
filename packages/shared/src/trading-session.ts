@@ -405,7 +405,8 @@ export const tradingSessionViewSchema = z.strictObject({
   signalAction: tradeActionSchema.nullable(),
   // null while the account has no snapshot
   balance: tradingSessionBalanceSchema.nullable(),
-  // the backend's summary message of the session went out (#464): the bot's card waits for it
+  // the backend closed the session's notices (#464, #537: final_notice_sent_at): every trade's
+  // message sent, the waiting message gone; the bot's summary waits for it
   noticesDone: z.boolean(),
 });
 export type TradingSessionView = z.infer<typeof tradingSessionViewSchema>;
@@ -456,9 +457,17 @@ export const safeParseTradingSessionsStoppedResponse = (input: unknown) =>
 export const safeParseTradingSessionRefusal = (input: unknown) =>
   tradingSessionRefusalSchema.safeParse(input);
 
-// POST /trading/sessions/:id/summary (#318): the finished session's card, claimed at most once.
+// The grace of the backend's fallback text summary (#537, docs/bot-session.md → The fallback): a
+// finished session whose status message the bot tracks gets the bot's summary; the backend sends
+// its text only once final_notice_sent_at is this old and nobody claimed the summary. Both
+// processes pin it: the bot's two recovery passes (2 × SESSION_RESUME_INTERVAL_MS) and the
+// backend's notice tick come before it.
+export const SESSION_SUMMARY_FALLBACK_MS = 1_800_000;
+
+// POST /trading/sessions/:id/summary (#318, #537): the finished session's summary, claimed at most
+// once.
 // The request body is stopTradingSessionRequestSchema's. Its own code, not a TradingSessionErrorCode:
-// every refusal of the claim is one answer, and the bot's action on it is one (no card).
+// every refusal of the claim is one answer, and the bot's action on it is one (no summary).
 export const SESSION_SUMMARY_SUFFIX = '/summary';
 
 export const SessionSummaryErrorCode = { Unavailable: 'summary_unavailable' } as const;
@@ -474,10 +483,13 @@ export const sessionSummaryTradeSchema = z.strictObject({
   closePrice: z.number(),
 });
 
-// result is the sum of the trades' profit by SQL at scale 8, the view's own fragment
+// result is the sum of the trades' profit by SQL at scale 8, the view's own fragment. trades is
+// empty only for a session stopped by no_signal_timeout (#537): its summary is a text, nothing to
+// draw. referralCode is the owner's, for the caption's last line (#537), null as in the share.
 export const sessionSummarySchema = z.strictObject({
   result: decimalStringSchema,
-  trades: z.array(sessionSummaryTradeSchema).min(1).max(MAX_SESSION_SUMMARY_TRADES),
+  trades: z.array(sessionSummaryTradeSchema).max(MAX_SESSION_SUMMARY_TRADES),
+  referralCode: z.string().regex(REFERRAL_CODE_PATTERN).nullable(),
 });
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 

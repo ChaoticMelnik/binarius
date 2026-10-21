@@ -4,6 +4,7 @@ import {
   brokerTrades,
   depositEvents,
   postbackDeliveries,
+  referralCodes,
   referrals,
   tokenLedger,
   tradeIntents,
@@ -33,6 +34,13 @@ export function e2eReads(db: Db) {
         .orderBy(asc(tradingSessions.createdAt)),
     referralsOf: (inviterUserId: string) =>
       db.select().from(referrals).where(eq(referrals.inviterUserId, inviterUserId)),
+    async referralCodeOf(userId: string) {
+      const [row] = await db
+        .select({ code: referralCodes.code })
+        .from(referralCodes)
+        .where(eq(referralCodes.userId, userId));
+      return row?.code;
+    },
     depositsOf: (paymentId: string) =>
       db.select().from(depositEvents).where(eq(depositEvents.paymentId, paymentId)),
     deliveriesOf: (paymentId: string) =>

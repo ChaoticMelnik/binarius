@@ -69,6 +69,7 @@ import {
   type CreateSessionIntentInput,
   type CreateTradingSessionInput,
 } from './trading-session-ops';
+import { claimSessionFinalNotice } from './session-notice-ops';
 import { openTrading } from './trading-switch-ops';
 import { setTradingMode } from './user-ops';
 
@@ -1399,7 +1400,7 @@ describe('listTrackedSessions (#567)', () => {
     expect((await listed()).get(seed.session.id)?.language).toBe(BotLanguage.En);
   });
 
-  it('L2 leaves out a session with no message, one with its card sent and a finished one with no settled trade and its summary sent', async () => {
+  it("L2' leaves out a session with no message, one with its summary claimed and a finished one with no settled trade whose summary step its final mark closed (#537)", async () => {
     const untracked = await tracked({ messageId: null });
     const carded = await tracked();
     await mark(carded.session.id, { summarySentAt: new Date() });
@@ -1407,7 +1408,7 @@ describe('listTrackedSessions (#567)', () => {
     const { intent } = await createSessionIntent(tmp.db, intentInput(empty));
     await reject(intent);
     await stop(empty.session.id);
-    await mark(empty.session.id, { finalNoticeSentAt: new Date() });
+    await claimSessionFinalNotice(tmp.db, { sessionId: empty.session.id, closeSummary: true });
 
     const rows = await listed();
     expect(rows.has(untracked.session.id)).toBe(false);
@@ -1415,9 +1416,11 @@ describe('listTrackedSessions (#567)', () => {
     expect(rows.has(empty.session.id)).toBe(false);
   });
 
-  it('L3 a finished session with no settled trade whose summary is not sent yet is listed', async () => {
+  it("L3' a finished session with no settled trade and its summary step open is listed, before and after its final mark (#537: the no-signal stop's summary is the bot's)", async () => {
     const empty = await tracked();
     await stop(empty.session.id);
+    expect((await listed()).has(empty.session.id)).toBe(true);
+    await mark(empty.session.id, { finalNoticeSentAt: new Date() });
     expect((await listed()).has(empty.session.id)).toBe(true);
   });
 

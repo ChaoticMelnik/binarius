@@ -44,6 +44,7 @@ import {
   type LinkBonusGrantView,
   type LinkedAccountView,
   type PairLabel,
+  type SessionClosingView,
   type PairTypeGroup,
   type PairView,
   type StarPaymentView,
@@ -563,6 +564,20 @@ export const sessionPromoWhen = (unixSeconds: number): string =>
 // the invitation and the sender's link, printed as plain text for Telegram to make a link of.
 export const sessionShareCaption = (referralLink: string): TelegramHtml =>
   TEXTS.sessionShareCaption({ referralLink });
+
+// The finished session's summary in one message (#537, docs/bot-session.md → The summary in one
+// message): the summary's lines (session-texts.ts → sessionSummaryText), then the owner's link as
+// plain text. The caption of the card's photo, and the text when no photo goes.
+export const sessionSummaryCaption = (
+  symbol: PairLabel | null,
+  assetId: number,
+  view: SessionClosingView,
+  referralLink: string,
+): TelegramHtml =>
+  joinLines([
+    sessionTexts.sessionSummaryText(symbol, assetId, view),
+    TEXTS.sessionSummaryLink({ referralLink }),
+  ]);
 
 // The reply to «⏹» under the waiting message and to /stop of one session (#536): the end line, and
 // the last trade's line by its status (LAST_TRADE_LINE).

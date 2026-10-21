@@ -1,6 +1,7 @@
 import {
   BOT_TEXTS_REFRESH_MS,
   SESSION_MAX_DURATION_MS,
+  SESSION_SUMMARY_FALLBACK_MS,
   SIGNAL_SHORTEST_INTERVAL_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
   TRADING_ACCESS_BUDGET_MS,
@@ -298,11 +299,17 @@ export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_T
 export const SESSION_TRACK_FIRST_POLL_MS = 3_000;
 export const SESSION_TRACK_POLL_MS = 10_000;
 export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
+// The summary's photo answered 429 (#537, trading-session.ts → sendSummary): the one wait before
+// its one retry, Telegram's retry_after capped at this.
+export const SESSION_SUMMARY_RETRY_WAIT_MS = 5_000;
 // What sessionTracker.stop() can be waiting for: an attempt's readSession and edit, then for a
-// finished session its summary card's claim and sendPhoto (#318) and the editMessageReplyMarkup
-// that puts «📤 Поделиться» on it (#321). A lost message (#567) is shorter: the read, the poll's
-// failed edit, the deadline's last edit refused for good and the report of it, 2B + 2T.
-export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS;
+// finished session its summary's claim and sendPhoto (#318, #537), on a 429 the wait and the
+// photo again, and the editMessageReplyMarkup that puts «📤 Поделиться» on it (#321); a photo
+// refused for good goes as a text instead of the retry, the same count less the wait. A lost
+// message (#567) is shorter: the read, the poll's failed edit, the deadline's last edit refused
+// for good and the report of it, 2B + 2T.
+export const SESSION_TRACK_DRAIN_MS =
+  2 * BACKEND_REQUEST_TIMEOUT_MS + 4 * TELEGRAM_API_TIMEOUT_MS + SESSION_SUMMARY_RETRY_WAIT_MS;
 
 // The recovery of session tracking after a restart (#567, session-resume.ts): a pass at the
 // start and one every 10 minutes, each one list request and one catalog read per bot process.
@@ -403,6 +410,9 @@ const TIMING_CHAIN_HOLDS =
   SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  // a live bot claims a tracked session's summary before the backend's fallback may (#537): two
+  // recovery passes come within its grace
+  2 * SESSION_RESUME_INTERVAL_MS < SESSION_SUMMARY_FALLBACK_MS &&
   signalWaitBoundsHold() &&
   // the first polls of a full recovery list start within one interval of the bot's start (#567)
   STARTUP_BUDGET_MS +

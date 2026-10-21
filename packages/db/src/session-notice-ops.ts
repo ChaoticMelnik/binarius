@@ -1,8 +1,9 @@
-import { and, asc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import {
   SessionTradeResult,
   TradeIntentStatus,
   TradingSessionStatus,
+  TradingSessionStopReason,
   type DecimalString,
   type TradeMode,
 } from '@binarius/shared';
@@ -16,7 +17,13 @@ import { users } from './schema/users';
 
 // The session notices' state (#464, docs/bot-session.md → Trade messages): the backend's sender
 // sends every settled trade of a session - one message per martingale cycle, edited step by step
-// (#551, below) - and, once the session is finished, one summary. A session's trades are strictly sequential (one non-terminal intent per account,
+// (#551, below) - and, once the session is finished, closes its notices (final_notice_sent_at).
+// The summary is then the bot's, one message (#537); the backend sends its text only as the
+// fallback, below. Two marks: final_notice_sent_at «the notices are closed», set once and never
+// cleared; summary_sent_at «the summary step is closed», won by one CAS of three writers (the
+// bot's claimSessionSummary, claimSessionFinalNotice closing a session with nothing to send,
+// claimSummaryFallback) and cleared only by releaseSummaryFallback on its own claimedAt.
+// A session's trades are strictly sequential (one non-terminal intent per account,
 // Rule 7), so settlement order is creation order and a cursor «the first k settled trades are
 // claimed» is the whole state; trade_intents is only read (Rule 6). Every claim is a CAS before
 // the Telegram call: at most once, never twice (the mailing engine's rule). Each operation locks
@@ -76,6 +83,8 @@ export interface PendingSessionNotice {
   sessionId: string;
   mode: TradeMode;
   status: TradingSessionStatus;
+  // the final mark decides by it whether the bot has a summary to send (#537)
+  stopReason: TradingSessionStopReason | null;
   // raw: the sender parses it
   settings: unknown;
   // the cursor: settled trades claimed so far
@@ -92,8 +101,8 @@ export interface PendingSessionNotice {
   waitingStale: boolean;
 }
 
-// The sessions with something to send: no summary yet, and a settled trade past the cursor, a
-// finished session, or a waiting message to send or to delete. Oldest first, on
+// The sessions with something to send: notices not closed yet, and a settled trade past the
+// cursor, a finished session, or a waiting message to send or to delete. Oldest first, on
 // trading_sessions_notice_pending_idx.
 export async function listPendingSessionNotices(
   db: Db,
@@ -110,6 +119,7 @@ export async function listPendingSessionNotices(
       telegramUserId: users.telegramUserId,
       telegramBlocked: sql<boolean>`${users.telegramBlockedAt} is not null`,
       status: tradingSessions.status,
+      stopReason: tradingSessions.stopReason,
       waitingMessageId: tradingSessions.waitingMessageId,
       waitingDue: waitingDueSql,
       waitingStale: waitingStaleSql,
@@ -269,17 +279,22 @@ export async function releaseSessionTradeNotice(
   return rows.length > 0;
 }
 
-// The summary's at-most-once claim: one CAS sets final_notice_sent_at only on a finished session
-// whose every settled trade was claimed first and whose waiting message is gone (#536), so the
-// summary is the last message. A finished session with no settled trade is granted too: the
-// sender then sends nothing (no result to report, as #337 and #318).
+// Closes the session's notices (#537): one CAS sets final_notice_sent_at only on a finished
+// session whose every settled trade was claimed first and whose waiting message is gone (#536),
+// so the bot's summary comes after every message of the backend. `closeSummary` - the session has
+// nothing to send (no settled trade and not the no-signal stop, or a user who blocked the bot,
+// Rule 19) - closes the summary step in the same UPDATE: a process dying between two statements
+// would leave a row nobody can claim at the head of the fallback's list.
 export async function claimSessionFinalNotice(
   db: Db,
-  { sessionId }: { sessionId: string },
+  { sessionId, closeSummary }: { sessionId: string; closeSummary: boolean },
 ): Promise<boolean> {
   const rows = await db
     .update(tradingSessions)
-    .set({ finalNoticeSentAt: sql`now()` })
+    .set({
+      finalNoticeSentAt: sql`now()`,
+      ...(closeSummary ? { summarySentAt: sql`now()` } : {}),
+    })
     .where(
       and(
         eq(tradingSessions.id, sessionId),
@@ -293,21 +308,82 @@ export async function claimSessionFinalNotice(
   return rows.length > 0;
 }
 
-// Takes the summary mark back after a send Telegram certainly did not deliver (429, a definite
-// refusal), so the summary goes again: only while the card (#318), which waits for the mark, has
-// not been claimed on it. False otherwise, and the summary stays sent as far as the cursor goes.
-export async function releaseSessionFinalNotice(
+// The fallback's claimable rows (#537, docs/bot-session.md → The fallback): notices closed, the
+// summary step open, and a summary to send - a settled trade or the no-signal stop. One fragment
+// for the list and the claim.
+const summaryFallbackClaimableSql = sql`(${tradingSessions.finalNoticeSentAt} is not null and ${tradingSessions.summarySentAt} is null and (exists (
+  select 1 from ${tradeIntents}
+    join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+   where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+     and ${tradeIntents.status} = ${SETTLED}
+) or ${tradingSessions.stopReason} = ${literal(TradingSessionStopReason.NoSignalTimeout)}))`;
+
+export interface SummaryFallbackSession {
+  sessionId: string;
+  // the owner's, by the session's account: no id comes from outside (Rule 13)
+  telegramUserId: bigint;
+  // users.telegram_blocked_at is set: nothing can be delivered (Rule 19)
+  telegramBlocked: boolean;
+}
+
+// The sessions whose summary the backend sends as a text (#537): claimable, and either without a
+// status message the bot could track (status_message_id NULL: at once) or with the mark older
+// than `graceMs` by the database's clock, the bot not having claimed it. Oldest mark first, on
+// trading_sessions_summary_fallback_idx. Not scoped by a user: the sender's internal list.
+export async function listSummaryFallback(
+  db: Db,
+  { limit, graceMs }: { limit: number; graceMs: number },
+): Promise<SummaryFallbackSession[]> {
+  return db
+    .select({
+      sessionId: tradingSessions.id,
+      telegramUserId: users.telegramUserId,
+      telegramBlocked: sql<boolean>`${users.telegramBlockedAt} is not null`,
+    })
+    .from(tradingSessions)
+    .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(
+      and(
+        summaryFallbackClaimableSql,
+        sql`(${tradingSessions.statusMessageId} is null or ${tradingSessions.finalNoticeSentAt} < now() - make_interval(secs => ${graceMs / 1000}))`,
+      ),
+    )
+    .orderBy(asc(tradingSessions.finalNoticeSentAt), asc(tradingSessions.id))
+    .limit(limit);
+}
+
+// The fallback's at-most-once claim before the send: one CAS on a claimable row. Its claimedAt -
+// the release's key - or undefined when the CAS lost (the bot claimed first, or nothing to send).
+// claimedAt is the column's text, not a Date: a Date holds milliseconds, the column microseconds,
+// and the release compares them exactly.
+export async function claimSummaryFallback(
   db: Db,
   { sessionId }: { sessionId: string },
+): Promise<{ claimedAt: string } | undefined> {
+  const [won] = await db
+    .update(tradingSessions)
+    .set({ summarySentAt: sql`now()` })
+    .where(and(eq(tradingSessions.id, sessionId), summaryFallbackClaimableSql))
+    .returning({ claimedAt: sql<string | null>`${tradingSessions.summarySentAt}::text` });
+  if (won === undefined) return undefined;
+  if (won.claimedAt === null) throw new Error(`session ${sessionId} claimed no summary mark`);
+  return { claimedAt: won.claimedAt };
+}
+
+// Takes the fallback's claim back after a send Telegram certainly did not deliver (429, a definite
+// refusal), so the text goes again: only the mark its own claim wrote. False otherwise.
+export async function releaseSummaryFallback(
+  db: Db,
+  { sessionId, claimedAt }: { sessionId: string; claimedAt: string },
 ): Promise<boolean> {
   const rows = await db
     .update(tradingSessions)
-    .set({ finalNoticeSentAt: null })
+    .set({ summarySentAt: null })
     .where(
       and(
         eq(tradingSessions.id, sessionId),
-        isNotNull(tradingSessions.finalNoticeSentAt),
-        isNull(tradingSessions.summarySentAt),
+        sql`${tradingSessions.summarySentAt} = ${claimedAt}::timestamptz`,
       ),
     )
     .returning({ id: tradingSessions.id });

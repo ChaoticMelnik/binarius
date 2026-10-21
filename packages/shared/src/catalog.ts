@@ -26,7 +26,7 @@ export const pairViewSchema = z.object({
 });
 export type PairView = z.infer<typeof pairViewSchema>;
 
-// The pair's label on every screen and in the backend's summary (#428, #631): the broker's symbol
+// The pair's label on every screen and in the session's summary (#428, #631): the broker's symbol
 // without « OTC» (owner, 2026-10-17). isOtc is not read: a regular pair and its OTC twin with the
 // same symbol share the label and differ by payout and order. A symbol that ends in the exact
 // suffix loses it once, as symbols did before #428; the symbol is an unbounded wire string, so the

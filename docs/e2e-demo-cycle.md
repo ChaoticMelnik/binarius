@@ -93,8 +93,8 @@ object to `bot.handleUpdate` again: Telegram's re-delivery, with the same `updat
 | S4 | «🎮 Демо-торговля» → «🧭 Выбрать пару вручную» → the type (exactly one: «💱 Валюты · 1») → the pair (its summary at 5 s, #685) → «📊 Анализ» | the analysis card offers `$1.00 ✅` (the broker's minimum), the screen is deleted, the journal has a `chart` request for asset 101 at `5s`, `users.last_analysis_*` = 101 / 5 |
 | S5 | the amount | the status message (`sendPhoto`, «5 с»), the card is deleted; `trading_sessions` `active`, `demo`, start signal `up`, settings v3 `{ durationSec: 5, cycles: 5, martingale, baseStake '1', stakeScale 2, limits { maxSteps 4, maxStake '12', maxSessionLoss '20' } }`; `users.demo_stake` 1; `status_message_id` is the status message's id; then the first «🔎 Ждём сигнал…» in the push |
 | S6 | for each of 6 trades: wait for it at the mock and for its intent to be `accepted`, then settle it (a loss, then 5 wins) and wait for `settled` | stakes `1, 2.18, 1, 1, 1, 1`, all `up`, demo, asset 101; the session `stopped` / `completed`; 6 intents `settled` over `socket`, `client_request_id` `session:<id>:1..6`; `broker_trades` profits `-1, 1.85, 0.85 ×4` and the same at the mock; the mock's demo balance `10004.25`; never more than one socket per broker user |
-| S7 | wait for the summary in the push (a `sendMessage` with «🏠 В меню»), then `final_notice_sent_at` set | the push: 5 cycle messages, silent and without a keyboard, one edit of the first (step 2 of cycle 1); every «🔎 Ждём сигнал…» (at least one) is deleted after it went out and before the next message the backend sends; the summary is last, with sound, «🏠 В меню» alone and `+$4.25` |
-| S8 | wait for the summary card's `sendPhoto` (its caption), then `summary_sent_at` set | the status message edited to its finished form; the summary card: silent, the caption `sessionCardCaption` with `+$4.25` and `@binarius_bot`, «🏠 В меню» among its buttons |
+| S7 | wait for `final_notice_sent_at` (#537: the backend's last act for the session, no message) | the push: 5 cycle messages, silent and without a keyboard, one edit of the first (step 2 of cycle 1); every «🔎 Ждём сигнал…» (at least one) is deleted after it went out, and before the next message the backend sends when one follows |
+| S8 | wait for the bot's summary photo (`sendPhoto` whose caption starts with «📈»), then both marks set | no text summary in the push (the bot tracks the session, so the fallback sends nothing); the status message edited to its finished form; the summary: with sound (no `disable_notification`), the caption's first line «📈 EUR/USD», `+$4.25`, «🧪 Демобаланс: $10 004.25», the last line `🤖 https://t.me/binarius_bot?start=ref_<code>` with the user's code from `referral_codes`, «🏠 В меню» among its buttons |
 | S9 | | tokens 94, none reserved; the ledger: `bonus` ×1, `reserve` ×6, `settle` ×6, nothing else |
 | S10 | | no line at `error` in any of the three logs; the teardown: the worker's shutdown `clean`, `broker.close()` without listener errors |
 
@@ -110,10 +110,11 @@ has one. Whether later ones go out depends on whether the sender's tick falls be
 so the check holds for any number of them.
 
 A stage waits for the observable action it then asserts (a Telegram call, a trade at the mock),
-never for a database mark committed before that action. `final_notice_sent_at` and
-`summary_sent_at` are such marks: the backend's `claimSessionFinalNotice` commits before
-`push.sendSessionSummary`, and `claimSessionSummary` commits before the bot draws the card and
-sends it. S7 and S8 read them after their wait, as assertions.
+never for a database mark committed before that action. `summary_sent_at` is such a mark:
+`claimSessionSummary` commits before the bot draws the card and sends it, so S8 reads it after its
+wait, as an assertion. `final_notice_sent_at` is no longer one (#537): the backend sends nothing
+with it, and it commits only after every trade's message and waiting message of the session went
+in the same turn of the sender, so S7 waits for it and then reads the push.
 
 ## Repeated events (#106)
 

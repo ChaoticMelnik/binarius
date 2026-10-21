@@ -176,7 +176,7 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   };
 
   // A stopped session's closing lines: the completion line, or the stop reason and the total, then
-  // the result and the balance; the summary the backend sends is these lines under the pair (#464).
+  // the result and the balance; the session's summary is these lines under the pair (#464, #537).
   const sessionClosingLines = (view: SessionClosingView): TelegramHtml[] => {
     const first = stopLine(view);
     const lines: TelegramHtml[] = first === undefined ? [] : [first];
@@ -193,7 +193,8 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     view: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles' | 'settings'>,
   ): TelegramHtml => stopLine(view) ?? html.sessionStatusUnavailable;
 
-  // The summary message (#464): the pair, then the closing lines.
+  // The session's summary (#464, #537): the pair, then the closing lines - the bot's caption under
+  // its card, and the backend's fallback text.
   const sessionSummaryText = (
     label: PairLabel | null,
     assetId: number,

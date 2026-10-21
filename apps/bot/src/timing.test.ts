@@ -12,6 +12,7 @@ import {
   TradeMode,
   TradeIntentErrorCode,
   SESSION_MAX_DURATION_MS,
+  SESSION_SUMMARY_FALLBACK_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
   TRADING_SESSION_VIEW_BUDGET_MS,
@@ -147,6 +148,7 @@ import {
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_RESUME_PER_SECOND,
+  SESSION_SUMMARY_RETRY_WAIT_MS,
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_DRAIN_MS,
   SESSION_TRACK_FIRST_POLL_MS,
@@ -3773,12 +3775,18 @@ describe("the demo session tracker's bounds", () => {
     expect(SESSION_MAX_DURATION_MS).toBeLessThan(SESSION_TRACK_DEADLINE_MS);
   });
 
-  it("drains a read, an edit, the summary card's claim and photo and its share button inside the shutdown budget", () => {
-    // readSession + edit, then the card's claim + sendPhoto (#318) + editMessageReplyMarkup (#321)
+  it("drains a read, an edit, the summary's claim, its photo, a 429's wait and the photo again, and its share button inside the shutdown budget (#537)", () => {
+    // readSession + edit, then the claim + sendPhoto + wait + sendPhoto + editMessageReplyMarkup
+    expect(SESSION_SUMMARY_RETRY_WAIT_MS).toBe(5_000);
     expect(SESSION_TRACK_DRAIN_MS).toBe(
-      2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS,
+      2 * BACKEND_REQUEST_TIMEOUT_MS + 4 * TELEGRAM_API_TIMEOUT_MS + SESSION_SUMMARY_RETRY_WAIT_MS,
     );
+    expect(SESSION_TRACK_DRAIN_MS).toBe(47_000);
     expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+
+  it("claims a tracked session's summary within two recovery passes, before the backend's fallback (#537)", () => {
+    expect(2 * SESSION_RESUME_INTERVAL_MS).toBeLessThan(SESSION_SUMMARY_FALLBACK_MS);
   });
 
   it("drains a recovery pass's list and catalog inside the shutdown budget (#567)", () => {

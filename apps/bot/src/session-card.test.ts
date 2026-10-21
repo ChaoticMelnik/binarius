@@ -25,6 +25,7 @@ const trade = (profit: string, openPrice = 1.1, closePrice = 1.2) => ({
 });
 const MIXED: SessionSummary = {
   result: d('-0.15000000'),
+  referralCode: null,
   trades: [
     trade('0.85000000', 1.1, 1.3),
     trade('-1.00000000', 1.3, 1.2),
@@ -33,6 +34,7 @@ const MIXED: SessionSummary = {
 };
 const LOSSES: SessionSummary = {
   result: d('-3.00000000'),
+  referralCode: null,
   trades: [trade('-1'), trade('-1'), trade('-1')],
 };
 
@@ -83,7 +85,11 @@ describe('sessionCardModel', () => {
 
   // #450: every fraction digit is printed, so a sub-cent profit is shown as the win it is
   it('C3 a sub-cent profit is a win, printed with its digits, as the view counts it', () => {
-    const model = sessionCardModel({ result: d('0.001'), trades: [trade('0.001')] }, LABEL, 42);
+    const model = sessionCardModel(
+      { result: d('0.001'), trades: [trade('0.001')], referralCode: null },
+      LABEL,
+      42,
+    );
     expect(model.trades[0]).toMatchObject({ profit: '+$0.001', tone: 'win' });
     expect(model.result).toBe('+$0.001');
     expect(model.resultTone).toBe('win');
@@ -143,6 +149,7 @@ describe('sessionCardSvg', () => {
   it(`C7 ${String(MAX_SESSION_SUMMARY_TRADES)} trades: as many columns`, () => {
     const many: SessionSummary = {
       result: d('0'),
+      referralCode: null,
       trades: Array.from({ length: MAX_SESSION_SUMMARY_TRADES }, (_, i) => trade('0', i, i + 0.5)),
     };
     const svg = sessionCardSvg(sessionCardModel(many, LABEL, 42));
@@ -154,6 +161,7 @@ describe('sessionCardSvg', () => {
   it('C8 equal prices put the line in the middle, every coordinate finite', () => {
     const flat: SessionSummary = {
       result: d('0'),
+      referralCode: null,
       trades: [trade('0', 1.5, 1.5), trade('0', 1.5, 1.5)],
     };
     const svg = sessionCardSvg(sessionCardModel(flat, LABEL, 42));

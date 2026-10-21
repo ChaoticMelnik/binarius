@@ -14,6 +14,7 @@ import {
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
+  referralLinkOf,
   SESSION_STOP_PATTERN,
   TradeMode,
   TradingModeErrorCode,
@@ -23,6 +24,7 @@ import {
   type CreateTradingSessionRequest,
   type PairLabel,
   type PairsCatalogResponse,
+  type SessionSummary,
   type SetTradingModeResponse,
   type TelegramHtml,
   type TrackedSession,
@@ -80,10 +82,11 @@ import {
   replyHtml,
   replyHtmlWithoutNextStep,
   replyWithPhotoHtmlWithoutNextStep,
+  sendHtmlById,
   sendPhotoByIdHtml,
 } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
-import { attachShareButton } from './session-share';
+import { attachShareButton, shareFallbackLink } from './session-share';
 import {
   SESSION_NOT_FOUND,
   type SessionDrawing,
@@ -92,12 +95,13 @@ import {
   type SessionTracker,
 } from './session-tracker';
 import type { SetupCardPhotos } from './setup-card';
+import { SESSION_SUMMARY_RETRY_WAIT_MS } from './timing';
 import {
   LABELS,
   sessionAgainButtonLabel,
-  sessionAssetLabel,
   sessionStatusText,
   sessionStopReplyText,
+  sessionSummaryCaption,
   TEXTS,
   textOf,
 } from './texts';
@@ -146,7 +150,7 @@ function appendSessionEnd(
   );
 }
 
-// A stopped session's next steps: under the summary card (#318), under the reply to its stop and
+// A stopped session's next steps: under its summary (#318, #537), under the reply to its stop and
 // under an old status message the stop drew in place (#536). «📊 Новый анализ» and «📡 К
 // сигналам» edit the message they are under: a photo's edit is refused as gone and their screen
 // is answered anew (telegram-refusals.ts in @binarius/shared).
@@ -178,7 +182,11 @@ export interface TradingSessionDeps {
   shareEnabled: boolean;
   // the wait for a signal (#664): a start refused for want of one waits for it
   signalWaiter: Pick<SignalWaiter, 'waitPair'>;
+  // the wait before the summary's photo again after a 429 (#537); setTimeout's by default
+  sleep?: (ms: number) => Promise<void>;
 }
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface Refusal {
   text: BotStaticHtmlKey;
@@ -319,6 +327,7 @@ export function createTradingSessionComposer<C extends Context>({
   setupCardPhotos,
   shareEnabled,
   signalWaiter,
+  sleep = defaultSleep,
 }: TradingSessionDeps): {
   composer: Composer<C>;
   startSession: StartSession;
@@ -713,7 +722,7 @@ export function createTradingSessionComposer<C extends Context>({
   }
 
   // The reply under the waiting message (#587), in place of the pressed message. Logged and left
-  // when Telegram refused it otherwise: the summary and the card still follow.
+  // when Telegram refused it otherwise: the summary still follows.
   async function drawStopReply(
     ctx: Context,
     text: TelegramHtml,
@@ -764,7 +773,7 @@ export function createTradingSessionComposer<C extends Context>({
   // An old status message's «⏹» (before #536): the session message in its place, under the
   // stopped session's end of the path, then tracking on whichever message shows it: its first poll
   // records the message (#567), the newest id winning (#587); a done session's entry sends its
-  // summary card once and ends (#318). It is the view's drawing cut down to its text, with the
+  // summary once and ends (#318, #537). It is the view's drawing cut down to its text, with the
   // keyboard: the tracker redraws it at the next change of the drawing (#568, risk 68).
   async function showInPlace(
     ctx: Context,
@@ -920,14 +929,18 @@ export function createTradingSessionComposer<C extends Context>({
               editMessagePhotoByIdHtmlWithoutNextStep(api, chatId, messageId, photo, text, reason),
             );
       },
-      card: (current) => sendCard(api, chatId, telegramUserId, symbol, botUsername, current),
+      summary: (current) => sendSummary(api, chatId, telegramUserId, symbol, botUsername, current),
     });
   }
 
-  // The summary card (#318, docs/bot-session.md → The summary card): claimed once by the backend,
-  // drawn here, sent under the final status. A refused claim sends nothing and says nothing; any
-  // other failure is logged and not retried — a committed claim would answer 409 the second time.
-  async function sendCard(
+  // The finished session's summary in one message (#537, docs/bot-session.md → The summary in one
+  // message): claimed once - here, or by the backend's fallback when the bot cannot - then the
+  // card's photo with the whole summary as its caption, with sound, under the final status. No
+  // trade to draw (the no-signal stop), a drawing that threw or a photo refused for good: the same
+  // caption as a text. A 429 waits its retry_after, at most SESSION_SUMMARY_RETRY_WAIT_MS, and the
+  // photo goes once more. A refused claim sends nothing and says nothing; any other failure is
+  // logged and not retried: the claim is committed, so the summary is sent at most once.
+  async function sendSummary(
     api: Api,
     chatId: number,
     telegramUserId: string,
@@ -935,43 +948,103 @@ export function createTradingSessionComposer<C extends Context>({
     botUsername: string,
     view: TradingSessionView,
   ): Promise<void> {
+    const fields = { sessionId: view.id };
+    // a session with a settled trade names it by its last intent when the settings could not be
+    // read; a no-signal stop read the settings
+    const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
+    if (assetId === undefined) {
+      logger.error(fields, 'trading session summary names no asset');
+      return;
+    }
+    let summary: SessionSummary | null;
     try {
-      const summary = await backend.claimSessionSummary(view.id, telegramUserId);
-      if (summary === null) return;
-      // a claimed session has a settled trade, so its last intent names the asset when the
-      // settings could not be read
-      const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
-      if (assetId === undefined) throw new Error('a claimed session names no asset');
-      const png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
-      const keyboard = sessionCardKeyboard(view, cashierUrl);
-      const sent = await sendPhotoByIdHtml(
-        api,
-        chatId,
-        new InputFile(png, 'session.png'),
-        TEXTS.sessionCardCaption({
-          symbol: sessionAssetLabel(symbol, assetId),
-          profit: summary.result,
-          botUsername,
-        }),
-        // without sound: the backend's summary message just before it carries the session's
-        // one sound (#464)
-        { reply_markup: keyboard, disable_notification: true },
-      );
-      // «📤 Поделиться» (#321): catches its own failures, so the warning below is the send's only
-      if (shareEnabled) await attachShareButton(api, logger, view.id, sent, keyboard);
+      summary = await backend.claimSessionSummary(view.id, telegramUserId);
     } catch (error) {
       logger.warn(
         {
           ...errorLogFields(error),
-          ...(error instanceof BackendError
-            ? backendErrorFields(error)
-            : error instanceof GrammyError || error instanceof HttpError
-              ? telegramErrorFields(error, 'sendPhoto')
-              : {}),
-          sessionId: view.id,
+          ...(error instanceof BackendError ? backendErrorFields(error) : {}),
+          ...fields,
         },
-        'trading session card not sent',
+        'trading session summary not sent',
       );
+      return;
+    }
+    if (summary === null) return;
+    const caption = sessionSummaryCaption(
+      symbol,
+      assetId,
+      view,
+      summary.referralCode === null
+        ? shareFallbackLink(botUsername)
+        : referralLinkOf(botUsername, summary.referralCode),
+    );
+    const keyboard = sessionCardKeyboard(view, cashierUrl);
+    // «📤 Поделиться» (#321): catches its own failures; a session without a trade has no card to
+    // share (session-share.ts answers it with nothing), so no button
+    const shareOn = async (sent: Pick<Message, 'chat' | 'message_id'>) => {
+      if (shareEnabled && summary.trades.length > 0) {
+        await attachShareButton(api, logger, view.id, sent, keyboard);
+      }
+    };
+    const notSent = (error: unknown, method: 'sendMessage' | 'sendPhoto') =>
+      logger.warn(
+        { ...errorLogFields(error), ...telegramErrorFields(error, method), ...fields },
+        'trading session summary not sent',
+      );
+    const asText = async (): Promise<void> => {
+      try {
+        await shareOn(await sendHtmlById(api, chatId, caption, { reply_markup: keyboard }));
+      } catch (error) {
+        notSent(error, 'sendMessage');
+      }
+    };
+    if (summary.trades.length === 0) return asText();
+    let png: Buffer;
+    try {
+      png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
+    } catch (error) {
+      logger.warn({ ...errorLogFields(error), ...fields }, 'trading session card not drawn');
+      return asText();
+    }
+    const sendPhoto = async () =>
+      shareOn(
+        await sendPhotoByIdHtml(api, chatId, new InputFile(png, 'session.png'), caption, {
+          reply_markup: keyboard,
+        }),
+      );
+    try {
+      await sendPhoto();
+      return;
+    } catch (error) {
+      const logged = {
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, 'sendPhoto'),
+        ...fields,
+      };
+      if (!(error instanceof GrammyError) || error.error_code >= 500) {
+        // it may have been delivered: never a second summary
+        logger.warn(logged, 'trading session summary outcome unknown');
+        return;
+      }
+      if (error.error_code === 403) {
+        // a text would get the same 403
+        logger.warn(logged, 'trading session summary refused: the user is unreachable');
+        return;
+      }
+      if (error.error_code === 429) {
+        await sleep(
+          Math.min((error.parameters.retry_after ?? 1) * 1000, SESSION_SUMMARY_RETRY_WAIT_MS),
+        );
+        try {
+          await sendPhoto();
+        } catch (retried) {
+          notSent(retried, 'sendPhoto');
+        }
+        return;
+      }
+      logger.warn(logged, 'trading session card refused: sent as text');
+      return asText();
     }
   }
 

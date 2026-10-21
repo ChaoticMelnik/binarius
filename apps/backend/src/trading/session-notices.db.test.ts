@@ -1,4 +1,4 @@
-import { eq, inArray, isNull, sql } from 'drizzle-orm';
+import { eq, isNull, sql } from 'drizzle-orm';
 import { HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { pino } from 'pino';
@@ -66,7 +66,9 @@ import {
 import { readFinishedSessionView } from './session-view';
 
 // The session notices' sender (#464, docs/bot-session.md → Trade messages) against a temporary
-// migrated database and an intercepted Telegram API. Each case starts with every older session
+// migrated database and an intercepted Telegram API. A session the bot tracks no status message of
+// gets the backend's fallback text summary on the tick of its final mark (#537), so the cases
+// without a status message read that text as the session's summary. Each case starts with every older session
 // marked, so a tick serves only the case's own.
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -80,11 +82,15 @@ beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
 });
 afterAll(() => tmp.drop());
+// both marks (#537): an older session left to the fallback would send its text summary here
 beforeEach(async () => {
   await tmp.db
     .update(tradingSessions)
-    .set({ finalNoticeSentAt: sql`now()` })
-    .where(isNull(tradingSessions.finalNoticeSentAt));
+    .set({
+      finalNoticeSentAt: sql`coalesce(${tradingSessions.finalNoticeSentAt}, now())`,
+      summarySentAt: sql`now()`,
+    })
+    .where(isNull(tradingSessions.summarySentAt));
 });
 
 const PUSH_TOKEN = '123456:AA-session-notice-token';
@@ -332,7 +338,7 @@ const messagesOf = (logs: Record<string, unknown>[], level: number) =>
   logs.filter((entry) => entry.level === level).map((entry) => entry.msg);
 
 describe('the session notices (#464)', () => {
-  it('D1 a finished five-trade session: five silent messages in order, then the summary with sound', async () => {
+  it('D1 a finished five-trade session without a status message: five silent messages in order, then the fallback summary with sound (#537)', async () => {
     const target = await seedSession();
     for (const profit of ['4.6', '-5', '0', '4.25', '-5']) await settled(target, profit);
     await stop(target);
@@ -371,6 +377,7 @@ describe('the session notices (#464)', () => {
     expect(await rowOf(target)).toMatchObject({
       notifiedTrades: 5,
       finalNoticeSentAt: expect.any(Date),
+      summarySentAt: expect.any(Date),
     });
     // a second tick has nothing to send
     await notices.tick();
@@ -407,7 +414,7 @@ describe('the session notices (#464)', () => {
     expect(new Set(texts).size).toBe(4);
   });
 
-  it('D5 a user who blocked the bot: the trades and the summary are claimed, nothing is sent, no balance read', async () => {
+  it("D5' a user who blocked the bot: the trades claimed, both marks set, nothing is sent, no balance read (#537)", async () => {
     const target = await seedSession();
     await settled(target, '4.6');
     await stop(target);
@@ -422,6 +429,15 @@ describe('the session notices (#464)', () => {
       notifiedTrades: 1,
       finalNoticeSentAt: expect.any(Date),
     });
+    // one statement: the summary step closed with the final mark, to the microsecond - the
+    // fallback's claim of a blocked user would write a later now()
+    const [marks] = await tmp.db
+      .select({
+        same: sql<boolean>`${tradingSessions.summarySentAt} = ${tradingSessions.finalNoticeSentAt}`,
+      })
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, target.session.id));
+    expect(marks?.same).toBe(true);
     expect(refreshCalls).toHaveLength(0);
   });
 
@@ -676,32 +692,6 @@ describe('every way a send ends (#464)', () => {
     await Promise.all([ticking, stopping]);
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
     expect((await rowOf(target)).notifiedTrades).toBe(1);
-  });
-
-  it('D4 the summary refused with 429: its mark is taken back and it goes once after the pause', async () => {
-    const clock = { now: 1_000_000 };
-    const target = await seedSession();
-    await settled(target, '4.6');
-    await stop(target);
-    const { notices, captured } = sender({}, clock);
-    await notices.tick();
-    // the trade went; now the summary is refused
-    const trades = sendsTo(captured.calls, target).length;
-    expect(trades).toBe(2);
-    await tmp.db
-      .update(tradingSessions)
-      .set({ finalNoticeSentAt: null })
-      .where(inArray(tradingSessions.id, [target.session.id]));
-    captured.apiErrors.set('sendMessage', telegramError(429, 5));
-    await notices.tick();
-    expect((await rowOf(target)).finalNoticeSentAt).toBeNull();
-    captured.apiErrors.delete('sendMessage');
-    clock.now += 5_000;
-    await notices.tick();
-    expect(sendsTo(captured.calls, target)).toHaveLength(4);
-    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
-    await notices.tick();
-    expect(sendsTo(captured.calls, target)).toHaveLength(4);
   });
 });
 
@@ -1123,7 +1113,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     return { seed, session, step: 0 };
   }
 
-  it('D10 without a trade: one summary with sound, the reason and «🔀 Выбрать другую пару»', async () => {
+  it('D10 without a trade or a status message: one fallback summary with sound, the reason and «🔀 Выбрать другую пару»', async () => {
     const target = await seedOf(15);
     await stop(target, TradingSessionStopReason.NoSignalTimeout);
     const { notices, captured } = sender();
@@ -1133,18 +1123,23 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     expect(sends[0]!.payload.disable_notification).toBeUndefined();
     expect(pushedText(sends[0]!.payload).split('\n')).toEqual(['📈 EUR/USD', stopLine(15)]);
     expect(inlineButtons(sends[0]!.payload)).toEqual([OTHER_PAIR('demo:sig'), MENU]);
-    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+    expect(await rowOf(target)).toMatchObject({
+      finalNoticeSentAt: expect.any(Date),
+      summarySentAt: expect.any(Date),
+    });
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
   });
 
-  it('D11 without a trade, another reason sends nothing and marks the session', async () => {
+  it("D11' without a trade, another reason sends nothing and sets both marks in one statement (#537)", async () => {
     const target = await seedOf(15);
     await stop(target, TradingSessionStopReason.UserStopped);
     const { notices, captured } = sender();
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(0);
-    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+    const row = await rowOf(target);
+    expect(row.finalNoticeSentAt).toBeInstanceOf(Date);
+    expect(row.summarySentAt).toEqual(row.finalNoticeSentAt);
   });
 
   it('D12 with a trade: the summary carries the reason, the total and the same keyboard', async () => {
@@ -1163,6 +1158,236 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     ]);
     // the signals list at every duration (#685)
     expect(inlineButtons(summary.payload)).toEqual([OTHER_PAIR('demo:sig'), MENU]);
+  });
+});
+
+// #537 (docs/bot-session.md → The summary in one message, The fallback): the sender closes a
+// finished session's notices; the summary is the bot's, the backend's text only its fallback
+describe('the final mark and the fallback summary (#537)', () => {
+  const MENU = { text: CLIENT_LABELS.menuButton, callback_data: 'menu' };
+  const tracked = (target: Target) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: 1 })
+      .where(eq(tradingSessions.id, target.session.id));
+  const markAgo = (target: Target, minutes: number) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ finalNoticeSentAt: sql`now() - make_interval(mins => ${minutes})` })
+      .where(eq(tradingSessions.id, target.session.id));
+  // a no-signal stop without a trade: its one message is the summary
+  async function noSignal(): Promise<Target> {
+    const target = await seedSession();
+    await stop(target, TradingSessionStopReason.NoSignalTimeout);
+    return target;
+  }
+  const summaryLog = (logs: Record<string, unknown>[]) =>
+    logs.filter((entry) => String(entry.msg).startsWith('session summary'));
+
+  it("D1' a tracked session: its trades, the final mark, no text summary and no balance read - the bot's summary follows", async () => {
+    const target = await seedSession();
+    await tracked(target);
+    for (const profit of ['4.6', '-5']) await settled(target, profit);
+    await snapshot(target);
+    await settled(target, '0');
+    await stop(target);
+    const { notices, captured, refreshCalls } = sender();
+    await notices.tick();
+    await notices.tick();
+    const texts = textsTo(captured.calls, target);
+    expect(texts).toHaveLength(3);
+    expect(texts.every((text) => text.startsWith('⚡'))).toBe(true);
+    expect(refreshCalls).toEqual([]);
+    expect(await rowOf(target)).toMatchObject({
+      notifiedTrades: 3,
+      finalNoticeSentAt: expect.any(Date),
+      summarySentAt: null,
+    });
+  });
+
+  it("D10' a tracked no-signal stop without a trade: the final mark alone, the summary step left to the bot", async () => {
+    const target = await noSignal();
+    await tracked(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(0);
+    expect(await rowOf(target)).toMatchObject({
+      finalNoticeSentAt: expect.any(Date),
+      summarySentAt: null,
+    });
+  });
+
+  it('F2 a tracked session with a fresh mark gets nothing; F3 past the grace, the text summary once', async () => {
+    const target = await noSignal();
+    await tracked(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await markAgo(target, 29);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(0);
+    await markAgo(target, 31);
+    await notices.tick();
+    const sends = sendsTo(captured.calls, target);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.payload.disable_notification).toBeUndefined();
+    expect(pushedText(sends[0]!.payload).split('\n')[0]).toBe('📈 EUR/USD');
+    expect(inlineButtons(sends[0]!.payload).at(-1)).toEqual(MENU);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+  });
+
+  it('F2 the grace is the config’s', async () => {
+    const target = await noSignal();
+    await tracked(target);
+    const { notices, captured } = sender({ config: { summaryFallbackMs: 60_000 } });
+    await notices.tick();
+    await markAgo(target, 2);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+  });
+
+  it('F4 a user who blocked the bot after the mark: the step closed without a call or a balance read', async () => {
+    const target = await seedSession();
+    await settled(target, '4.6');
+    await snapshot(target);
+    await tracked(target);
+    await stop(target);
+    const { notices, captured, refreshCalls } = sender();
+    await notices.tick();
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, target.seed.userId));
+    await markAgo(target, 31);
+    await notices.tick();
+    expect(textsTo(captured.calls, target)).toHaveLength(1);
+    expect(refreshCalls).toEqual([]);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+  });
+
+  it('F5 429: the mark is taken back, nothing goes until the pause has passed, then the summary once', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await noSignal();
+    const { notices, captured, logs } = sender({}, clock);
+    failFirst(captured, 1, telegramError(429, 5));
+    await notices.tick();
+    expect(await rowOf(target)).toMatchObject({
+      finalNoticeSentAt: expect.any(Date),
+      summarySentAt: null,
+    });
+    expect(messagesOf(logs(), WARN)).toEqual(['session notices paused: Telegram asked to wait']);
+    clock.now += 4_000;
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    clock.now += 1_000;
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(2);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(2);
+  });
+
+  it('F6 another 4xx: tried again on later ticks, then dropped with its mark kept', async () => {
+    const target = await noSignal();
+    const { notices, captured, logs } = sender();
+    failFirst(captured, 10, refusal('Bad Request: chat not found'));
+    for (let tick = 0; tick < 4; tick += 1) await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(3);
+    expect(summaryLog(logs()).map((entry) => entry.msg)).toEqual([
+      'session summary refused',
+      'session summary refused',
+      'session summary dropped',
+    ]);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+  });
+
+  it('F7 an unknown outcome: the mark stays, no second call', async () => {
+    const target = await noSignal();
+    const { notices, captured, logs } = sender();
+    failFirst(captured, 10, new HttpError('network', new Error('socket hang up')));
+    await notices.tick();
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    expect(summaryLog(logs()).map((entry) => entry.msg)).toEqual([
+      'session summary outcome unknown',
+    ]);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+  });
+
+  it('F7 403: the user is marked unreachable, the mark stays', async () => {
+    const target = await noSignal();
+    const { notices, captured } = sender();
+    failFirst(captured, 10, telegramError(403));
+    await notices.tick();
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    const [user] = await tmp.db
+      .select({ at: users.telegramBlockedAt })
+      .from(users)
+      .where(eq(users.id, target.seed.userId));
+    expect(user?.at).toBeInstanceOf(Date);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+  });
+
+  it('F9 the bot claimed first: nothing', async () => {
+    const target = await noSignal();
+    await tracked(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await tmp.db
+      .update(tradingSessions)
+      .set({ summarySentAt: sql`now()` })
+      .where(eq(tradingSessions.id, target.session.id));
+    await markAgo(target, 31);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(0);
+  });
+
+  it('F10 a summary that cannot be built: the step closed, an error, no retry', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { settings: {} });
+    const target: Target = { seed, session, step: 0 };
+    await stop(target, TradingSessionStopReason.NoSignalTimeout);
+    const { notices, captured, logs } = sender();
+    await notices.tick();
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(0);
+    expect(
+      logs()
+        .filter((entry) => entry.msg === 'session summary not built')
+        .map((entry) => entry.sessionId),
+    ).toEqual([target.session.id]);
+    expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+  });
+
+  it('F12 stop() before the fallback: nothing claimed', async () => {
+    const target = await noSignal();
+    await tracked(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await markAgo(target, 31);
+    await notices.stop();
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(0);
+    expect((await rowOf(target)).summarySentAt).toBeNull();
+  });
+
+  it('F13 the list is bounded by scan and read oldest mark first', async () => {
+    const older = await noSignal();
+    const newer = await noSignal();
+    await tracked(older);
+    await tracked(newer);
+    const { notices, captured } = sender({ config: { scan: 1 } });
+    await notices.tick();
+    await notices.tick();
+    await markAgo(newer, 40);
+    await markAgo(older, 50);
+    await notices.tick();
+    expect(sendsTo(captured.calls, older)).toHaveLength(1);
+    expect(sendsTo(captured.calls, newer)).toHaveLength(0);
+    await notices.tick();
+    expect(sendsTo(captured.calls, newer)).toHaveLength(1);
   });
 });
 
@@ -1321,17 +1546,16 @@ describe('the waiting message (#536)', () => {
     expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
   });
 
-  it('W5 a finished session with a last trade: the delete, the trade, the summary - the summary last', async () => {
+  it("W5 a finished session with a last trade: the delete, the trade, then the final mark - the bot's summary after them (#537)", async () => {
     const { target, run } = await waiting();
     await settled(target, '4.6');
     await stop(target);
     await run.notices.tick();
-    expect(sequenceOf(run.captured.calls, target)).toEqual([
-      'waiting',
-      'deleteMessage',
-      'trade',
-      'summary',
-    ]);
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'trade']);
+    expect(await rowOf(target)).toMatchObject({
+      finalNoticeSentAt: expect.any(Date),
+      summarySentAt: null,
+    });
   });
 
   it('W6 a delete whose outcome is unknown holds the summary; the next tick deletes, then the summary', async () => {
@@ -1853,7 +2077,7 @@ describe('the waiting message (#536)', () => {
   });
 
   // #587 finding 6: the bot's «⏹» hands the waiting message over; the bot draws its reply there
-  it('W26 a stop that took the waiting message over: no delete; the summary next, or the mark alone', async () => {
+  it("W26 a stop that took the waiting message over: no delete; the final mark next, the bot's summary after it (#537)", async () => {
     const quiet = await waiting();
     await stopTradingSession(tmp.db, {
       id: quiet.target.session.id,
@@ -1880,8 +2104,8 @@ describe('the waiting message (#536)', () => {
       'deleteMessage',
       'trade',
       'waiting',
-      'summary',
     ]);
+    expect((await rowOf(traded.target)).finalNoticeSentAt).toBeInstanceOf(Date);
   });
 
   // #587 round 1, Major 1: the sender's row is from the tick's list; a session served before it
@@ -1908,7 +2132,7 @@ describe('the waiting message (#536)', () => {
     };
   }
 
-  it('W27 a hand-over between the list read and the session’s turn, before a new cycle message: no delete, the trade, then the summary', async () => {
+  it('W27 a hand-over between the list read and the session’s turn, before a new cycle message: no delete, the trade, then the final mark', async () => {
     const run = await handedOverMidTick(async (b, id) => {
       await stopTradingSession(tmp.db, {
         id: b.session.id,
@@ -1924,12 +2148,13 @@ describe('the waiting message (#536)', () => {
     expect(messagesOf(run.run.logs(), INFO)).toContain(
       'session waiting message taken over: not deleted',
     );
+    expect((await rowOf(run.target)).finalNoticeSentAt).toBeNull();
     await run.run.notices.tick();
-    expect(sequenceOf(run.run.captured.calls, run.target)).toEqual(['waiting', 'trade', 'summary']);
+    expect(sequenceOf(run.run.captured.calls, run.target)).toEqual(['waiting', 'trade']);
     expect((await rowOf(run.target)).finalNoticeSentAt).toBeInstanceOf(Date);
   });
 
-  it('W28 the 409 clear between the list read and a stale delete: no delete, the summary in the same tick', async () => {
+  it('W28 the 409 clear between the list read and a stale delete: no delete, the final mark in the same tick', async () => {
     let live = 0;
     const run = await handedOverMidTick(async (b) => {
       await clearSessionWaitingMessage(tmp.db, { sessionId: b.session.id, messageId: live });
@@ -1952,8 +2177,8 @@ describe('the waiting message (#536)', () => {
       'deleteMessage',
       'trade',
       'waiting',
-      'summary',
     ]);
+    expect((await rowOf(run.target)).finalNoticeSentAt).toBeInstanceOf(Date);
     expect(messagesOf(run.run.logs(), INFO)).toContain(
       'session waiting message taken over: not deleted',
     );

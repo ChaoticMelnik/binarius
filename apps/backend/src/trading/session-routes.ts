@@ -467,9 +467,12 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     return reply.send({ session: await viewForReply(id.data, telegramUserId) });
   });
 
-  // The finished session's card, at most once (#318). Every refusal is one 409: not the owner's
-  // or missing (Rule 13), not stopped, a trade still able to move, no settled trade, or sent
-  // already; the bot draws nothing for any of them. A non-uuid id is a missing one.
+  // The finished session's summary, at most once (#318, #537): the bot's one message. Every
+  // refusal is one 409: not the owner's or missing (Rule 13), not stopped, a trade still able to
+  // move, no settled trade and not the no-signal stop, notices not closed, or claimed already; the
+  // bot sends nothing for any of them. A non-uuid id is a missing one. The caller's referral code
+  // for the caption's link is read - and created on first use, as /share does - before the claim:
+  // a failure after a committed claim would lose the summary.
   app.post(`${TRADING_SESSIONS_PATH}/:id${SESSION_SUMMARY_SUFFIX}`, async (request, reply) => {
     const unavailable = () => reply.code(409).send({ error: SessionSummaryErrorCode.Unavailable });
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
@@ -478,10 +481,9 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     if (!body.success) {
       return reply.code(400).send({ error: 'validation', issues: body.error.issues });
     }
-    const summary = await claimSessionSummary(db, {
-      id: id.data,
-      telegramUserId: body.data.telegramUserId,
-    });
+    const { telegramUserId } = body.data;
+    const referral = await readUserReferral(db, BigInt(telegramUserId));
+    const summary = await claimSessionSummary(db, { id: id.data, telegramUserId });
     if (summary === undefined) return unavailable();
     return reply.send({
       summary: {
@@ -491,6 +493,8 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
           openPrice,
           closePrice,
         })),
+        referralCode:
+          referral?.status === UserStatus.Active && referral.code !== null ? referral.code : null,
       },
     });
   });

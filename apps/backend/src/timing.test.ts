@@ -21,6 +21,7 @@ import {
   ANALYSIS_UNUSED_UNTIL_MS,
   REFERRAL_REWARDED_AFTER_MS,
   MAILING_MIN_OFFSET_MS,
+  SESSION_SUMMARY_FALLBACK_MS,
   TOKEN_NUDGE_AFTER_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
   H1_ENTRY_WINDOW_SEC,
@@ -76,6 +77,7 @@ import {
   MAILING_SEND_PER_SECOND,
   MAILING_SEND_TICK_MS,
   SESSION_NOTICE_SEND_PER_SECOND,
+  SESSION_NOTICE_TICK_MS,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
@@ -526,6 +528,10 @@ describe('broker balance timing', () => {
         TRADING_ACCESS_REFRESH_BUDGET_MS +
         CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
     ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('lists a tracked session for the fallback summary only ticks after its final mark (#537)', () => {
+    expect(SESSION_NOTICE_TICK_MS).toBeLessThan(SESSION_SUMMARY_FALLBACK_MS);
   });
 
   // the step's worst path ends with the next trade's pace; a summary does not start after stop()

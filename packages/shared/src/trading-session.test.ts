@@ -41,6 +41,7 @@ import {
   TRADING_SESSIONS_PATH,
   TRADING_SESSIONS_STOP_PATH,
   tradingSessionStopReasonSchema,
+  SESSION_SUMMARY_FALLBACK_MS,
 } from './trading-session';
 
 const settings = {
@@ -414,9 +415,27 @@ describe('MAX_SESSION_SUMMARY_TRADES (#552)', () => {
     const trades = (n: number) =>
       Array.from({ length: n }, () => ({ profit: '0', openPrice: 1, closePrice: 1 }));
     const parse = (n: number) =>
-      safeParseSessionSummaryResponse({ summary: { result: '0', trades: trades(n) } }).success;
+      safeParseSessionSummaryResponse({
+        summary: { result: '0', trades: trades(n), referralCode: null },
+      }).success;
     expect(parse(MAX_SESSION_SUMMARY_TRADES)).toBe(true);
     expect(parse(MAX_SESSION_SUMMARY_TRADES + 1)).toBe(false);
+  });
+});
+
+describe('the summary in one message (#537)', () => {
+  const parse = (summary: unknown) => safeParseSessionSummaryResponse({ summary }).success;
+  it('pins the fallback grace at 30 minutes', () => {
+    expect(SESSION_SUMMARY_FALLBACK_MS).toBe(1_800_000);
+  });
+  it('takes a summary without trades and without a referral code', () => {
+    expect(parse({ result: '0.00000000', trades: [], referralCode: null })).toBe(true);
+  });
+  it('takes the owner referral code and refuses one off its pattern or a missing field', () => {
+    const trades = [{ profit: '1', openPrice: 1, closePrice: 2 }];
+    expect(parse({ result: '1', trades, referralCode: 'abcd2345' })).toBe(true);
+    expect(parse({ result: '1', trades, referralCode: 'a b' })).toBe(false);
+    expect(parse({ result: '1', trades })).toBe(false);
   });
 });
 

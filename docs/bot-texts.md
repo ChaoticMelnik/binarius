@@ -244,9 +244,9 @@ compile.
 | `outcome` | a session trade's figure after «→» (#464): the broker trade's profit (#539), positive for a win, negative for a loss, `$0.00` for a tie; the lines of a session add up to its result | `formatSignedUsd` | — |
 | `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
-| `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
+| `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318), printed on the picture | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
-| `referralLink` | the user's personal link, `referralLinkOf` (#115) | as is | — |
+| `referralLink` | the user's personal link, `referralLinkOf` (#115); in `sessionShareCaption` and `sessionSummaryLink` (#537) `?start=share` without a code | as is | — |
 | `connected` | invitees with a confirmed partner account, `/invite` (#116) | as is | — |
 | `earnedTokens` | the tokens the user's invitations paid, `/invite` (#116) | `formatCount` | — |
 | `rewardTokens` | one reward's tokens, the ledger row's `balance_delta`, `referralRewarded` (#576) | `formatCount` | — |
@@ -528,8 +528,10 @@ its picture since #568, a caption of 1024 — and the reply to its stop (#536), 
 result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; a block of the session's cycle message with its
 adaptive line — the unit the backend never splits; it splits a cycle's message by its real length
-between blocks, #551 — and the summary, which the backend sends through the shared builders of
-`packages/shared/src/session-texts.ts`, #464; the
+between blocks, #551 — the summary as a text, `sessionSummary`, the backend's fallback through the
+shared builders of `packages/shared/src/session-texts.ts` (#464, #537), and the same lines as the
+bot's caption under the card with the owner's link, `sessionSummaryCaption`, a caption of 1024
+(#537); the
 analysis card, `analysisCard`, a caption of 1024, #482), and
 each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:

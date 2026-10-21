@@ -51,15 +51,18 @@ export const tradingSessions = pgTable(
     // the session's first trade. Written only by createTradingSession from POST /trading/sessions,
     // never updated; NULL on rows before #568 and on the CLI's session-start, which checks no signal
     startSignalAction: text('start_signal_action').$type<TradeAction>(),
-    // the summary card's at-most-once mark (#318): set by claimSessionSummary's one CAS, never
-    // cleared; NULL on every session that has not sent its card
+    // «the summary step is closed» (#318, #537, docs/bot-session.md → The state): one CAS of three
+    // writers wins on NULL - the bot's claimSessionSummary, claimSessionFinalNotice closing a
+    // session with nothing to send, the backend's claimSummaryFallback; cleared only by
+    // releaseSummaryFallback on its own claimedAt, after a send Telegram certainly did not deliver
     summarySentAt: timestamp('summary_sent_at', { withTimezone: true }),
     // The session notices' cursor (#464, docs/bot-session.md → Trade messages): how many of the
     // session's settled trades, in creation order, the backend's sender has claimed for sending.
     // Raised one by one by claimSessionTradeNotice's CAS, lowered only by its release.
     notifiedTrades: integer('notified_trades').notNull().default(0),
-    // the summary message's at-most-once mark (#464): set by claimSessionFinalNotice's one CAS,
-    // never cleared; the card of #318 waits for it
+    // «the notices are closed» (#464, #537): every settled trade's message claimed, the waiting
+    // message gone, the session finished; set by claimSessionFinalNotice's one CAS, never cleared.
+    // The bot's summary and the backend's fallback wait for it
     finalNoticeSentAt: timestamp('final_notice_sent_at', { withTimezone: true }),
     // The session's live cycle message (#551, docs/bot-session.md → The state): Telegram's
     // message_id of the message the next step of the same cycle edits, and the index (from 0, in
@@ -142,10 +145,15 @@ export const tradingSessions = pgTable(
     index('trading_sessions_notice_pending_idx')
       .on(t.createdAt)
       .where(sql`${t.finalNoticeSentAt} is null`),
-    // the bot's recovery list (#567): the sessions with a status message and no card yet, oldest
-    // first
+    // the bot's recovery list (#567): the sessions with a status message and the summary step
+    // open, oldest first
     index('trading_sessions_tracked_idx')
       .on(t.startedAt)
       .where(sql`${t.statusMessageId} is not null and ${t.summarySentAt} is null`),
+    // the backend's fallback summary list (#537): closed notices, the summary step open, oldest
+    // mark first
+    index('trading_sessions_summary_fallback_idx')
+      .on(t.finalNoticeSentAt)
+      .where(sql`${t.finalNoticeSentAt} is not null and ${t.summarySentAt} is null`),
   ],
 );

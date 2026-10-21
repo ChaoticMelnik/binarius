@@ -8,7 +8,6 @@ import {
   inlineButtons,
   LABELS,
   pairButtonLabel,
-  TEXTS,
   USER,
   type ApiCall,
 } from '@binarius/bot/e2e';
@@ -290,10 +289,12 @@ it('runs /start → the email login → a demo session → its result', async ()
   });
   expect(sockets.stop().worst).toBe(1);
 
-  // S7 the backend's messages: the cycles silent and without a keyboard, the summary last
+  // S7 the backend's messages: the cycles silent and without a keyboard, every waiting message
+  // gone, then the final mark - and no text summary: the bot tracks the session (#537)
   const push = backend.push.calls;
-  await until('the summary message is sent', () => push.some(isSummary));
-  expect((await reads.sessionOf(account.id))?.finalNoticeSentAt).not.toBeNull();
+  await until('the notices are closed', async () =>
+    Boolean((await reads.sessionOf(account.id))?.finalNoticeSentAt),
+  );
   const cycles = push.filter(
     (call) => call.method === 'sendMessage' && textOf(call).startsWith('⚡'),
   );
@@ -306,7 +307,7 @@ it('runs /start → the email login → a demo session → its result', async ()
   expect(edits).toHaveLength(1);
   expect(edits[0]?.payload.message_id).toBe(backend.push.messageIdOf(cycles[0]!));
   // every waiting message is deleted after it went out and before the next message the backend
-  // sends: a cycle message or the summary
+  // sends, or at all when nothing follows it
   const waiting = push.filter(isWaiting);
   expect(waiting.length).toBeGreaterThanOrEqual(1);
   for (const call of waiting) {
@@ -320,33 +321,35 @@ it('runs /start → the email login → a demo session → its result', async ()
       (other, index) => index > sent && other.method === 'sendMessage',
     );
     expect(deleted).toBeGreaterThan(sent);
-    expect(nextSend).toBeGreaterThan(-1);
-    expect(deleted, 'the waiting message is deleted before the next message').toBeLessThan(
-      nextSend,
-    );
+    if (nextSend !== -1) {
+      expect(deleted, 'the waiting message is deleted before the next message').toBeLessThan(
+        nextSend,
+      );
+    }
   }
-  const summary = push.at(-1);
-  expect(summary?.method).toBe('sendMessage');
-  expect(summary?.payload.disable_notification).toBeUndefined();
-  expect(labelsOf(summary?.payload)).toEqual([LABELS.menuButton]);
-  expect(textOf(summary!)).toContain('+$4.25');
 
-  // S8 the bot: the status message finished, then the summary card
-  const cardCaption = TEXTS.sessionCardCaption({
-    symbol: pairLabel({ symbol: E2E_PAIR.symbol }),
-    profit: '4.25' as DecimalString,
-    botUsername: 'binarius_bot',
-  }).value;
-  await until('the summary card is sent', () =>
-    botCalls.some((call) => call.method === 'sendPhoto' && call.payload.caption === cardCaption),
+  // S8 the bot: the status message finished, then the summary in one message - the card's photo
+  // with the whole summary and the owner's link as its caption, with sound
+  await until('the summary is sent', () =>
+    botCalls.some((call) => call.method === 'sendPhoto' && textOf(call).startsWith('📈')),
   );
-  expect((await reads.sessionOf(account.id))?.summarySentAt).not.toBeNull();
+  const marks = await reads.sessionOf(account.id);
+  expect(marks?.finalNoticeSentAt).not.toBeNull();
+  expect(marks?.summarySentAt).not.toBeNull();
+  expect(push.filter(isSummary)).toEqual([]);
   const finished = lastOf(botCalls, 'editMessageMedia');
   expect(finished?.message_id).toBe(bot.telegram.messageIdOf(status));
   expect(JSON.stringify(finished)).toContain('🏁');
-  const summaryCard = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
-  expect(summaryCard?.payload).toMatchObject({ disable_notification: true, caption: cardCaption });
-  expect(labelsOf(summaryCard?.payload)).toContain(LABELS.menuButton);
+  const summary = botCalls.filter((call) => call.method === 'sendPhoto').at(-1)!;
+  expect(summary.payload).not.toHaveProperty('disable_notification');
+  const caption = textOf(summary).split('\n');
+  expect(caption[0]).toBe(`📈 ${pairLabel({ symbol: E2E_PAIR.symbol })}`);
+  expect(textOf(summary)).toContain('+$4.25');
+  expect(textOf(summary)).toMatch(/🧪 Демобаланс: \$10.004\.25/);
+  const referralCode = await reads.referralCodeOf(user.id);
+  expect(referralCode).toBeDefined();
+  expect(caption.at(-1)).toBe(`🤖 https://t.me/binarius_bot?start=ref_${referralCode!}`);
+  expect(labelsOf(summary.payload)).toContain(LABELS.menuButton);
 
   // S9 the tokens: the pack less one per trade, nothing left reserved
   expect(await readTokenBalance(tmp.db, telegramUserId)).toMatchObject({
