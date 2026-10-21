@@ -3789,3 +3789,29 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 1. Remaining findings — **вынесено в #690, #691**
+
+---
+
+## #668 — Логирование сделок, часть 2: тики вокруг сделки и срок хранения решений без сделки (2026-10-21)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Shared with #669 (same session). Owner: #668 implemented after #669, from `main`. |
+| Architect | first plan | Fable 5.1, planned in parallel with #669. 4 clarify questions, all recommended (1-in-20 shadow tick sample, shadow 7 d / others 30 d, forever only intent-linked rows, 60 s window). Plan 6290228041 with assumptions about #669 for round 0. |
+| Architect | round-0 Plan Update | Opus, after #669 merged: `ticks_until_ms` dropped as #669's, migration 0071, Rule 45, new future-tick clamp (6292819456, «новых развилок нет»; the clamp was then asked by the implementer). |
+| Implementer | first pass | Opus. 1 clarify question (clamp — owner chose the plan's option). Died once on an API 403, continued from its own state; rebased onto `main` after #681 merged; one pre-rebase per-commit run hung 22 min and was killed under the wall-clock rule. PR #693, 9 commits, +2 437, CI green, `pnpm check` 0, mutations 17/17, per-test durations read (slowest 372 ms). |
+| Reviewer | round 1 | Clean, 8 Minor (m1 downgraded from code-review's Major). Codex skipped: usage limit until 21.10 15:32 (job task-mvhvi7oq-7flfqh) — the limit text was only in the job's `progressPreview`, not its summary. Owner: no Minor fixed. Merged `--rebase --delete-branch` 2026-10-21T09:02:31Z on the owner's yes; #668 Done; shared test DB migrated to 0071 (72/72); Minors → #694. |
+| Tech Lead | models | Every spawn on its policy model. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1–m8 | Minor | other | left at the merge | → #694 |
+| Usage-limit check reads only the Codex job's summary; here the limit text sat only in `progressPreview` | — | codex-ops | the companion's summary holds Codex's first message | Tech Lead (Mode 1, Phase 0), Reviewer (Step 6-pre item 4) |
+
+### Process improvement proposals
+1. The usage-limit match reads the job's summary or its `progressPreview` lines — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Whole-feature pass — check, Phase 0 item 1; `.claude/skills/reviewer/SKILL.md` → Step 6-pre item 4**
+2. Remaining findings — **вынесено в #694**
