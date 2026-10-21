@@ -202,6 +202,7 @@ describe('the bot texts catalog', () => {
         'sessionStopButton',
         'settingsStakeDemoButton',
         'settingsStakeRealButton',
+        'showSignalsButton',
         'stakeBackAnalysisButton',
         'stakeBackButton',
         'stakeBackSettingsButton',

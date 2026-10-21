@@ -50,6 +50,8 @@ export interface RunBotOptions {
   // the recovery of session tracking (#567): started once the profile is published, its pass in
   // flight drained
   sessionResumer: { start(): void; stop(): Promise<void> };
+  // the wait for a signal (#664): its tick in flight drained, the waiting messages edited
+  signalWaiter: { stop(): Promise<void> };
   // the text overrides' refresher (#299): its load in flight waited for, and its first load
   // awaited before the menu and the profile are published (#301)
   botTexts: { stop(): Promise<void>; loaded(): Promise<void> };
@@ -69,6 +71,7 @@ export function runBot({
   tracker,
   sessionTracker,
   sessionResumer,
+  signalWaiter,
   botTexts,
   logger,
   exit,
@@ -184,6 +187,7 @@ export function runBot({
       step('intent tracker', () => tracker.stop()),
       step('session tracker', () => sessionTracker.stop()),
       step('session resume', () => sessionResumer.stop()),
+      step('signal waiter', () => signalWaiter.stop()),
       step('bot texts', () => botTexts.stop()),
     ];
 

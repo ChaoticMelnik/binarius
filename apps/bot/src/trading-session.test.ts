@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
   pairLabel,
+  TradeAction,
   TradeIntentStatus,
   TradeMode,
   TradingModeErrorCode,
@@ -29,6 +30,7 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { createBot } from './bot';
 import {
   cycleStakeCallbackData,
+  DEMO_GROUPS_CALLBACK_DATA,
   demoLaunchCallbackData,
   sessionStartCallbackData,
   stakeMenuCallbackData,
@@ -55,6 +57,8 @@ import {
   photoAnswer,
   sessionView,
   stubSessionResumer,
+  stubSignalWaiter,
+  signalsResponse,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -115,8 +119,9 @@ function setup(
     // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
     cashierUrl?: string | null;
     readTradingAccess?: BackendClient['readTradingAccess'];
-    // the pair's signal at a cycle door's press (#509): a signal by default
     evaluateSignal?: BackendClient['evaluateSignal'];
+    // the signals list a cycle door reads (#664): the pair has a signal by default
+    readSignals?: BackendClient['readSignals'];
     // no SHARE_STORAGE_CHAT_ID, so no «📤 Поделиться» (#538)
     shareOff?: true;
   } = {},
@@ -125,6 +130,11 @@ function setup(
     options.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
   );
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
+  const readSignals = vi.fn<BackendClient['readSignals']>(
+    options.readSignals ??
+      (() =>
+        Promise.resolve(signalsResponse(Date.now(), { '5s': [[PAIR_EURUSD.id, TradeAction.Up]] }))),
+  );
   // the amount screen behind a demo «🔁 Ещё сессия» (#476)
   const readTradingAccess = vi.fn<BackendClient['readTradingAccess']>(
     options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
@@ -152,6 +162,7 @@ function setup(
   const logger = fakeLogger();
   const sessionTracker = stubSessionTracker();
   const sessionResumer = stubSessionResumer();
+  const signalWaiter = stubSignalWaiter();
   const bot = createBot({
     token: '123456:AA-bot-token',
     backend: fakeBackend({
@@ -164,12 +175,14 @@ function setup(
       setTradingMode,
       readTradingAccess,
       evaluateSignal,
+      readSignals,
     }),
     logger,
     botInfo: BOT_INFO,
     intentTracker: stubTracker(),
     sessionTracker,
     sessionResumer,
+    signalWaiter,
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
   });
@@ -189,6 +202,7 @@ function setup(
     logger,
     sessionTracker,
     sessionResumer,
+    signalWaiter,
     readPairs,
     startSession,
     readSession,
@@ -247,8 +261,6 @@ const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
 // for want of tokens, the purchase and the deposit (#27) in one row, above the way back (#117)
 const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
 const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA), ...DEPOSIT], ...BACK_ROWS];
-// #509: no signal on the pair, the signals list and the menu
-const OTHER_PAIR_ROWS = [[button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)], MENU_ROW];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
@@ -340,7 +352,9 @@ describe('the session button', () => {
   });
 
   it.each(
-    (Object.keys(START_REFUSALS) as TradingSessionErrorCode[]).map((code) => [code] as const),
+    (Object.keys(START_REFUSALS) as TradingSessionErrorCode[])
+      .filter((code) => code !== TradingSessionErrorCode.NoSignal)
+      .map((code) => [code] as const),
   )('answers the refusal %s with its text, once, untracked', async (code) => {
     const status =
       code === TradingSessionErrorCode.CatalogUnavailable ||
@@ -356,7 +370,6 @@ describe('the session button', () => {
       connect?: true;
       stakeMenu?: true;
       buy?: true;
-      otherPair?: true;
       log?: true;
     } = START_REFUSALS[code];
     const sent = payloadOf(calls, 'sendMessage');
@@ -370,9 +383,7 @@ describe('the session button', () => {
             ? STAKE_MENU_ROWS
             : refusal.buy === true
               ? BUY_ROWS
-              : refusal.otherPair === true
-                ? OTHER_PAIR_ROWS
-                : BACK_ROWS,
+              : BACK_ROWS,
     );
     // only the refusal for want of tokens offers the purchase (#117)
     expect(
@@ -383,6 +394,66 @@ describe('the session button', () => {
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track).not.toHaveBeenCalled();
     expect(warnings(logger)).toEqual(refusal.log === true ? ['trading session not started'] : []);
+  });
+
+  // #664: a 409 no_signal waits for the signal instead of refusing
+  describe('a start refused for want of a signal waits for it (#664)', () => {
+    const noSignal = () => Promise.reject(httpError(409, TradingSessionErrorCode.NoSignal));
+    const WAIT_TEXT = TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value;
+    const WAIT_ROWS = [[button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA)], MENU_ROW];
+
+    it('W-start1 draws the wait in place of the launch screen and registers origin start, back a', async () => {
+      const { pressUpdate, calls, signalWaiter, sessionTracker } = setup({
+        startSession: noSignal,
+      });
+      const update = callbackUpdate(
+        sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true),
+      );
+      await pressUpdate(update);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+      const edited = payloadOf(calls, 'editMessageText');
+      expect(edited?.text).toBe(WAIT_TEXT);
+      expect(rowsOf(edited)).toEqual(WAIT_ROWS);
+      expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
+      expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+        chatId: USER.id,
+        messageId: update.callback_query?.message?.message_id,
+        telegramUserId: USER.id,
+        assetId: PAIR_EURUSD.id,
+        origin: 'start',
+        back: 'a',
+        alternatives: 'pending',
+      });
+      expect(sessionTracker.track).not.toHaveBeenCalled();
+    });
+
+    it('W-start2 answers a press away from a launch screen with the wait as a new message', async () => {
+      const { press, calls, signalWaiter } = setup({ startSession: noSignal });
+      await press(REAL_START);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(WAIT_TEXT);
+      expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+        messageId: TEXT_CARD_MESSAGE_ID,
+        origin: 'start',
+      });
+    });
+
+    it('W-start3 names the pair by its id when the catalog was not read', async () => {
+      const { press, calls } = setup({
+        startSession: noSignal,
+        readPairs: () => Promise.reject(new Error('down')),
+      });
+      await press(REAL_START);
+      expect(payloadOf(calls, 'sendMessage')?.text).not.toContain(pairLabel(PAIR_EURUSD));
+      expect(payloadOf(calls, 'sendMessage')?.text).toContain(String(PAIR_EURUSD.id));
+    });
+
+    it('says no «нет сигнала» on any start refusal', () => {
+      for (const refusal of Object.values(START_REFUSALS)) {
+        expect(textOf(refusal.text).value).not.toMatch(/нет сигнала|сигнала нет/i);
+      }
+      expect(START_REFUSALS[TradingSessionErrorCode.NoSignal]).toMatchObject({ wait: true });
+    });
   });
 
   // #27: «💳 Пополнить» under the purchase in both modes; none on an origin that is not https

@@ -12,6 +12,7 @@ import {
   fakeLogger,
   textUpdate,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
 } from './testing';
@@ -60,6 +61,7 @@ describe('the command menu', () => {
       intentTracker: stubTracker(),
       sessionTracker: stubSessionTracker(),
       sessionResumer: stubSessionResumer(),
+      signalWaiter: stubSignalWaiter(),
       token: '123456:AA-bot-token',
       backend,
       logger: fakeLogger(),

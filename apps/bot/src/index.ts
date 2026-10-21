@@ -12,6 +12,7 @@ import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
 import { createSessionResumer } from './session-resume';
 import { createSessionTracker } from './session-tracker';
+import { createSignalWaiter } from './signal-wait';
 import { setBotTextSource } from './texts';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
@@ -23,6 +24,13 @@ import {
   SESSION_TRACK_DEADLINE_MS,
   SESSION_TRACK_FIRST_POLL_MS,
   SESSION_TRACK_POLL_MS,
+  SIGNAL_WAIT_EDIT_FAILURES_MAX,
+  SIGNAL_WAIT_EDIT_GAP_MS,
+  SIGNAL_WAIT_MAX_MS,
+  SIGNAL_WAIT_POLL_MS,
+  SIGNAL_WAIT_POLL_OFFSET_MS,
+  SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+  SIGNALS_LIST_TTL_MS,
 } from './timing';
 import { setMissingLanguageHandler } from './language';
 
@@ -74,6 +82,19 @@ const sessionResumer = createSessionResumer({
   intervalMs: SESSION_RESUME_INTERVAL_MS,
 });
 
+// the wait for a signal (#664); createBot hands it the demo's screens
+const signalWaiter = createSignalWaiter({
+  backend,
+  logger,
+  pollMs: SIGNAL_WAIT_POLL_MS,
+  pollOffsetMs: SIGNAL_WAIT_POLL_OFFSET_MS,
+  listTtlMs: SIGNALS_LIST_TTL_MS,
+  maxMs: SIGNAL_WAIT_MAX_MS,
+  editGapMs: SIGNAL_WAIT_EDIT_GAP_MS,
+  editFailuresMax: SIGNAL_WAIT_EDIT_FAILURES_MAX,
+  shutdownBudgetMs: SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+});
+
 // the texts with their overrides, from the first load on (docs/bot-texts.md → Loading)
 const botTexts = createBotTextRefresher({
   load: () => backend.readBotTexts(),
@@ -95,6 +116,7 @@ const bot = createBot({
   intentTracker,
   sessionTracker,
   sessionResumer,
+  signalWaiter,
 });
 
 runBot({
@@ -106,6 +128,7 @@ runBot({
     start: () => sessionResumer.start(bot.api, bot.botInfo.username),
     stop: () => sessionResumer.stop(),
   },
+  signalWaiter,
   botTexts,
   logger,
   exit: (code) => process.exit(code),

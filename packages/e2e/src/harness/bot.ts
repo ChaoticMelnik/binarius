@@ -6,12 +6,20 @@ import {
   createIntentTracker,
   createSessionResumer,
   createSessionTracker,
+  createSignalWaiter,
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
+  SIGNAL_WAIT_EDIT_FAILURES_MAX,
+  SIGNAL_WAIT_EDIT_GAP_MS,
+  SIGNAL_WAIT_MAX_MS,
+  SIGNAL_WAIT_POLL_MS,
+  SIGNAL_WAIT_POLL_OFFSET_MS,
+  SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+  SIGNALS_LIST_TTL_MS,
   startUpdate,
   textUpdate,
   USER,
@@ -69,6 +77,18 @@ export function startE2eBot(deps: {
     logger,
     intervalMs: SESSION_RESUME_INTERVAL_MS,
   });
+  // the wait for a signal (#664) at production's bounds
+  const signalWaiter = createSignalWaiter({
+    backend,
+    logger,
+    pollMs: SIGNAL_WAIT_POLL_MS,
+    pollOffsetMs: SIGNAL_WAIT_POLL_OFFSET_MS,
+    listTtlMs: SIGNALS_LIST_TTL_MS,
+    maxMs: SIGNAL_WAIT_MAX_MS,
+    editGapMs: SIGNAL_WAIT_EDIT_GAP_MS,
+    editFailuresMax: SIGNAL_WAIT_EDIT_FAILURES_MAX,
+    shutdownBudgetMs: SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+  });
   const bot = createBot({
     token: BOT_TOKEN,
     backend,
@@ -77,6 +97,7 @@ export function startE2eBot(deps: {
     intentTracker,
     sessionTracker,
     sessionResumer,
+    signalWaiter,
   });
   const telegram = deps.telegram.bot(bot);
   const handle = async (update: Update) => {
@@ -104,6 +125,7 @@ export function startE2eBot(deps: {
       await sessionTracker.stop();
       await intentTracker.stop();
       await sessionResumer.stop();
+      await signalWaiter.stop();
     },
   };
 }

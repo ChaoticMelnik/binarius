@@ -120,23 +120,6 @@ const groups = [
   'demoGroupIndex',
   'demoGroupOther',
 ] as const satisfies readonly BotPlainKey[];
-// a refusal by a rule carries the features, one for want of data does not (analysis.ts)
-const ruleReasons = [
-  'noSignalVolatilityTooLow',
-  'noSignalVolatilityTooHigh',
-  'noSignalVolatilityBelowTickFloor',
-  'noSignalTrendFlat',
-  'noSignalRsiNeutral',
-  'noSignalTrendMomentumDisagree',
-  'noSignalRsiOverbought',
-  'noSignalRsiOversold',
-] as const satisfies readonly BotPlainKey[];
-const dataReasons = [
-  'noSignalInsufficientCandles',
-  'noSignalCandleGap',
-  'noSignalStale',
-  'noSignalInvalidCandle',
-] as const satisfies readonly BotPlainKey[];
 const SEPARATOR = ' · '.length;
 const DASH = ' — '.length;
 
@@ -219,7 +202,6 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   duration: () => String(INT4_MAX).length + ' с'.length,
   label: (m) => m.longest(...durations),
   subject,
-  reason: (m) => m.longest(...ruleReasons, ...dataReasons),
   value: (m) =>
     m.longest('trendUp', 'trendDown', 'trendFlat') +
     DASH +
@@ -604,31 +586,37 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ),
     ],
   },
+  // the analysis without a signal waits for one (#664): the features only on a refusal by a rule,
+  // the line over the other pairs' buttons while they stand
   {
-    id: 'analysisNoData',
-    title: 'Анализ: мало данных',
+    id: 'analysisWaitingData',
+    title: 'Анализ: ожидание сигнала, мало данных',
     limit: BOT_TEXT_LIMIT,
     body: [
       k('analysisHeader'),
       '\n',
-      k('analysisNoSignal', { reason: (m) => m.longest(...dataReasons) }),
-      '\n\n',
-      k('analysisDataHint'),
+      k('analysisWaiting'),
+      oneOf([], ['\n\n', k('pairWaitingAlternatives')]),
     ],
   },
   {
-    id: 'analysisNoSignal',
-    title: 'Анализ: сигнала нет',
+    id: 'analysisWaiting',
+    title: 'Анализ: ожидание сигнала',
     limit: BOT_TEXT_LIMIT,
     body: [
       k('analysisHeader'),
       '\n',
-      k('analysisNoSignal', { reason: (m) => m.longest(...ruleReasons) }),
+      k('analysisWaiting'),
       '\n\n',
       ...features,
-      '\n\n',
-      k('analysisNoSignalHint'),
+      oneOf([], ['\n\n', k('pairWaitingAlternatives')]),
     ],
+  },
+  {
+    id: 'pairWaiting',
+    title: 'Ожидание сигнала пары',
+    limit: BOT_TEXT_LIMIT,
+    body: [k('pairWaiting'), oneOf([], ['\n\n', k('pairWaitingAlternatives')])],
   },
   {
     id: 'intentStatus',

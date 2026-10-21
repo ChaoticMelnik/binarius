@@ -21,7 +21,6 @@ import {
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
   SignalFeedOutcome,
-  SignalKind,
   stakeIsRisky,
   stakePresets,
   telegramHtml,
@@ -64,6 +63,7 @@ import {
   readDemoTrade,
   type DemoCatalogRead,
   type DemoDurationSec,
+  type DemoTradeCheck,
   type DemoTradeRead,
 } from './demo-catalog';
 import type { Logger } from './logging';
@@ -77,8 +77,11 @@ import {
   replyWithPhotoHtml,
 } from './send';
 import type { SetupCardPhotos } from './setup-card';
+import type { SignalWaiter, SignalWaitScreens } from './signal-wait';
+import { currentLanguage } from './language';
 import { stakeAccess } from './stake-access';
 import {
+  assetLabelOf,
   cycleStakeLabel,
   cycleStakeText,
   DEMO_DURATION_LABELS,
@@ -100,26 +103,13 @@ import {
 // The demo's screens (#125, docs/bot-demo.md): the pairs with a signal now at the demo's one
 // duration, 5 s (#685), and the amount of a cycle on one (#476; the launch of #320 in real); the
 // asset types, one type's pairs by page, a pair's summary, the analysis behind «📊 Анализ» (#126)
-// and the single trade behind its «➕ Ещё» (#360). The bot keeps no state for them: what the user
-// chose travels in the callback data, so a restart, an old message and a second device all lead to
-// the same screen, and every screen reads the catalog anew.
+// and the single trade behind its «➕ Ещё» (#360). The bot keeps no state for them but the wait for
+// a signal (#664, signal-wait.ts): what the user chose travels in the callback data, so a restart,
+// an old message and a second device all lead to the same screen, and every screen reads the
+// catalog anew.
 
 // Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
 // `demo:l:2147483647:5:n` 21 and `demo:sig` 8 (DEMO_SIGNALS_CALLBACK_DATA, bot-navigation.ts).
-
-// A session refused or stopped for want of a signal on its pair (#509): the signals list, then the
-// menu (keyboards.ts → withMenu's row).
-export const otherPairKeyboard = (): InlineKeyboard =>
-  new InlineKeyboard()
-    .text(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)
-    .row()
-    .text(LABELS.menuButton, MENU_CALLBACK_DATA);
-// the same read pressed again (`demo:l:` is a read: it opens a screen, never a session), the menu
-const retryWithMenu = (data: string): InlineKeyboard =>
-  new InlineKeyboard()
-    .text(LABELS.demoRetryButton, data)
-    .row()
-    .text(LABELS.menuButton, MENU_CALLBACK_DATA);
 
 // Where the amount screen of a demo cycle (#476) was opened: `l` the signal list (no token in the
 // data, as before #476), `a` the analysis, `n` the offer under a finished trade or «🔁 Ещё сессия».
@@ -535,19 +525,47 @@ export function signalsShown(
 // The pairs with a signal on the last closed candle of the scanner of the demo's duration (#320,
 // #685), chosen and ordered by signalsShown, each joined with the catalog for its symbol and
 // payout. Two a row in signalsShown's order, across the types, the last alone when odd; the
-// footer under the list and the empty text alike (#419). The list is a snapshot; the cycle checks
-// the signal again before each trade. Undefined when the body has no list for the duration: a
-// backend scanning other intervals.
+// footer under the list (#419). No pair: the wait for the signals (#664), with the footer and no
+// refresh — the bot edits the list into it once a pair has a signal. The list is a snapshot; the
+// cycle checks the signal again before each trade. Undefined when the body has no list for the
+// duration: a backend scanning other intervals.
 export function signalsScreen(
   signals: TradingSignalsResponse,
   catalog: PairsCatalogResponse,
   nowMs: number,
-): DemoScreen | undefined {
+): { screen: DemoScreen; listed: number } | undefined {
   const interval = intervalForDuration(DEMO_DURATION_SEC);
   const list = signals.lists.find((candidate) => candidate.interval === interval);
   if (list === undefined) return undefined;
-  const keyboard = new InlineKeyboard();
   const shown = signalsShown(list.signals, catalog, nowMs);
+  const keyboard = appendSignalButtons(new InlineKeyboard(), shown);
+  const listed = shown.length;
+  const label = DEMO_DURATION_LABELS[DEMO_DURATION_SEC];
+  if (listed === 0) {
+    return {
+      screen: {
+        text: TEXTS.signalsWaiting({ label }),
+        keyboard: appendSignalsFooter(new InlineKeyboard()),
+      },
+      listed,
+    };
+  }
+  return {
+    screen: {
+      text: TEXTS.demoSignalsHeader({ label }),
+      keyboard: appendSignalsFooter(
+        keyboard.text(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA),
+      ),
+    },
+    listed,
+  };
+}
+
+// The other pairs' buttons, two a row in the list's order, as the list draws them
+function appendSignalButtons(
+  keyboard: InlineKeyboard,
+  shown: readonly ShownSignal[],
+): InlineKeyboard {
   shown.forEach(({ pair, action }, index) => {
     if (index > 0 && index % 2 === 0) keyboard.row();
     keyboard.text(
@@ -555,17 +573,53 @@ export function signalsScreen(
       demoLaunchCallbackData(pair.id, DEMO_DURATION_SEC),
     );
   });
-  const listed = shown.length;
-  // grammY's row() pushes an empty row: unguarded, the empty screen would lead with [].
-  if (listed > 0) keyboard.row();
-  const label = DEMO_DURATION_LABELS[DEMO_DURATION_SEC];
+  // grammY's row() pushes an empty row: unguarded, a screen without them would lead with [].
+  if (shown.length > 0) keyboard.row();
+  return keyboard;
+}
+
+// The wait for a pair's signal (#664): its text, and while there are some the line and the
+// buttons of the pairs with a signal now, then the manual path and the menu
+export function pairWaitingScreen(
+  base: TelegramHtml,
+  alternatives: readonly ShownSignal[],
+): DemoScreen {
   return {
-    text: listed === 0 ? TEXTS.demoSignalsEmpty({ label }) : TEXTS.demoSignalsHeader({ label }),
-    keyboard: appendSignalsFooter(
-      keyboard.text(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA),
-    ),
+    text: waitingText(base, alternatives.length > 0),
+    keyboard: appendSignalsFooter(appendSignalButtons(new InlineKeyboard(), alternatives)),
   };
 }
+
+export const waitingText = (base: TelegramHtml, alternatives: boolean): TelegramHtml =>
+  alternatives
+    ? telegramHtml`${base}
+
+${TEXTS.pairWaitingAlternatives}`
+    : base;
+
+export const pairWaitingText = (symbol: PairLabel | null, assetId: number): TelegramHtml =>
+  TEXTS.pairWaiting({
+    symbol: assetLabelOf(symbol, assetId),
+    label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC],
+  });
+
+// The start of trading (#664): the list after its 30 s, the wait past its bound or at the stop
+export const expiredSignalsScreen = (): DemoScreen => ({
+  text: TEXTS.signalsExpired({ label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC] }),
+  keyboard: new InlineKeyboard()
+    .text(LABELS.showSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)
+    .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA)
+    .row()
+    .text(LABELS.menuButton, MENU_CALLBACK_DATA),
+});
+
+// the pairs with a signal now but the chosen one, as the list shows them
+export const otherSignals = (
+  signals: readonly { assetId: number; action: TradeAction }[],
+  catalog: PairsCatalogResponse,
+  nowMs: number,
+  assetId: number,
+): ShownSignal[] => signalsShown(signals, catalog, nowMs).filter(({ pair }) => pair.id !== assetId);
 
 // The list's footer (#685), also under its refusals: «🧭 Выбрать пару вручную» beside the first
 // button of the row (refresh or retry), then «🏠 В меню» in a row of its own
@@ -789,6 +843,220 @@ ${screen.text}`,
   });
 }
 
+// The amounts under a signal's card and in its «➕ Ещё» (#482): in demo, with a broker snapshot
+// to draw them from (stakeAccess: a blocked user gets none), on a duration a cycle may start on —
+// the session row's condition. Otherwise null, and the session row stays: its press opens the
+// amount screen, which says why.
+export function cardAmountsOf(
+  access: TradingAccessResponse | null,
+  durationSec: DemoDurationSec,
+  connectKeyboard: () => InlineKeyboard,
+): CycleAmounts | null {
+  if (access === null || access.tradingMode !== TradeMode.Demo) return null;
+  if (!sessionFits(durationSec)) return null;
+  const checked = stakeAccess(access, (keyboard) => keyboard, connectKeyboard);
+  if (!('broker' in checked)) return null;
+  const shown = cycleAmountsOf(access, checked.broker);
+  return shown.amounts.length > 0 ? shown : null;
+}
+
+// The session row first on a signal (#360; never without one, #509) at any payout (#631),
+// in the user's mode (#327) — under a signal's card in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then
+// «🔄 Повторить анализ» and the way back
+export function analysisKeyboard(
+  assetId: number,
+  durationSec: DemoDurationSec,
+  screen: AnalysisScreen,
+  mode: TradeMode,
+  amounts: CycleAmounts | null,
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  if (screen.photo !== null && amounts !== null) {
+    appendCycleAmounts(keyboard, { assetId, durationSec, back: 'a' }, amounts).row();
+  } else if (screen.session) {
+    appendSessionRow(keyboard, assetId, durationSec, mode);
+  }
+  if (screen.stake !== null) {
+    keyboard
+      .text(
+        LABELS.analysisMoreButton,
+        analysisMoreCallbackData(assetId, durationSec, screen.stake, mode),
+      )
+      .row();
+  }
+  return appendAnalysisTail(keyboard, assetId, durationSec);
+}
+
+// What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it, with «💵 Сумма»
+// opening the picker of the same mode (#326). In real mode (#121) the stake button and the
+// session row (#327) are marked REAL; in demo the amounts stay above it where the card drew them
+// (#482), read at this press.
+export function expandedKeyboard(
+  assetId: number,
+  durationSec: DemoDurationSec,
+  action: TradeAction,
+  amount: DecimalString | null,
+  mode: TradeMode,
+  amounts: CycleAmounts | null,
+): InlineKeyboard {
+  const stakeData = stakeCallbackData(
+    assetId,
+    durationSec,
+    action,
+    newStakeNonce(),
+    stakeFingerprint(amount, mode),
+  );
+  const label = stakeButtonLabel(action, amount, mode);
+  const keyboard = (
+    amounts === null
+      ? appendSessionRow(new InlineKeyboard(), assetId, durationSec, mode)
+      : appendCycleAmounts(new InlineKeyboard(), { assetId, durationSec, back: 'a' }, amounts).row()
+  )
+    .text(label, stakeData)
+    .text(LABELS.stakeMenuButton, stakeMenuCallbackData(mode, assetId, durationSec))
+    .row();
+  return appendAnalysisTail(keyboard, assetId, durationSec);
+}
+
+// its own row: the session's trades follow the orchestrator's signal at each trade, not this
+// screen's direction
+function appendSessionRow(
+  keyboard: InlineKeyboard,
+  assetId: number,
+  durationSec: DemoDurationSec,
+  mode: TradeMode,
+): InlineKeyboard {
+  if (!sessionFits(durationSec)) return keyboard;
+  // in demo the amount screen first (#476), edited in place of the analysis
+  return keyboard
+    .text(
+      sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, mode),
+      mode === TradeMode.Demo
+        ? demoLaunchCallbackData(assetId, durationSec, 'a')
+        : sessionStartCallbackData(mode, assetId, durationSec),
+    )
+    .row();
+}
+
+export function appendAnalysisTail(
+  keyboard: InlineKeyboard,
+  assetId: number,
+  durationSec: DemoDurationSec,
+): InlineKeyboard {
+  return keyboard
+    .text(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
+    .row()
+    .text(LABELS.demoBackPairButton, demoAssetCallbackData(assetId))
+    .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+}
+
+// A pair the catalog refuses: gone, closed by the schedule, or not taking the demo's duration
+// (#685) - there is no other duration to choose, so the way back is to the pair's page
+export function pairRefusalScreen(
+  check: Exclude<DemoTradeCheck, { ok: true }>,
+  catalog: PairsCatalogResponse,
+  nowMs: number,
+): DemoScreen {
+  switch (check.reason) {
+    case 'pair_missing':
+      return { text: TEXTS.demoPairMissing, keyboard: backToGroups() };
+    case 'pair_closed':
+      return {
+        text: TEXTS.demoPairClosed({ symbol: pairLabel(check.pair) }),
+        keyboard: appendBackToPairs(new InlineKeyboard(), catalog, check.pair, nowMs),
+      };
+    case 'duration_unsupported':
+      return {
+        text: TEXTS.demoDurationUnsupported({
+          symbol: pairLabel(check.pair),
+          label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC],
+        }),
+        keyboard: appendBackToPairs(new InlineKeyboard(), catalog, check.pair, nowMs),
+      };
+  }
+}
+
+const backToGroups = () =>
+  new InlineKeyboard().text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+
+// «↩️ Активы» leads to the page the pair is listed on (the first page when it is not listed),
+// then «↩️ Типы»
+function appendBackToPairs(
+  keyboard: InlineKeyboard,
+  catalog: PairsCatalogResponse,
+  pair: PairView,
+  nowMs: number,
+): InlineKeyboard {
+  const group = pairTypeGroupOf(pair.type);
+  const page = pageIndexOf(openPairsOf(catalog, group, nowMs), pair.id);
+  return keyboard
+    .text(LABELS.demoBackPairsButton, demoPageCallbackData(group, page))
+    .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+}
+
+// The next step on a pair with a signal (#476, #327): the launch screen in real mode, the amount
+// screen otherwise, its «недоступно» when access was not read
+export function nextStepScreen(
+  { assetId, back, firstName }: { assetId: number; back: CycleBack; firstName: string },
+  pair: PairView,
+  access: TradingAccessResponse | null,
+  connectKeyboard: () => InlineKeyboard,
+): DemoScreen {
+  return access?.tradingMode === TradeMode.Real
+    ? launchScreen({
+        assetId,
+        durationSec: DEMO_DURATION_SEC,
+        firstName,
+        symbol: pairLabel(pair),
+        amount: effectiveStake(access),
+        mode: TradeMode.Real,
+      })
+    : demoCycleScreen({
+        step: { assetId, durationSec: DEMO_DURATION_SEC, back },
+        firstName,
+        symbol: pairLabel(pair),
+        access,
+        connectKeyboard,
+      });
+}
+
+// What the wait for a signal draws (signal-wait.ts): the screens of this file
+export function createSignalWaitScreens({
+  connectKeyboard,
+  setupCardPhotos,
+}: {
+  connectKeyboard: () => InlineKeyboard;
+  setupCardPhotos: SetupCardPhotos;
+}): SignalWaitScreens {
+  return {
+    list: signalsScreen,
+    expired: expiredSignalsScreen,
+    waiting: pairWaitingScreen,
+    alternatives: otherSignals,
+    nextStep: (step, pair, access) => nextStepScreen(step, pair, access, connectKeyboard),
+    refusal: pairRefusalScreen,
+    // the analysis's card as «📊 Анализ» draws it, in the mode access gives (demo when not read)
+    card: (pair, response, access) => {
+      const mode = access?.tradingMode ?? TradeMode.Demo;
+      const amounts = cardAmountsOf(access, DEMO_DURATION_SEC, connectKeyboard);
+      const screen = analysisScreen({
+        pair,
+        durationSec: DEMO_DURATION_SEC,
+        response,
+        mode,
+        chooseAmount: amounts !== null,
+      });
+      if (screen.photo === null) return undefined;
+      return {
+        text: screen.text,
+        keyboard: analysisKeyboard(pair.id, DEMO_DURATION_SEC, screen, mode, amounts),
+        action: screen.photo,
+      };
+    },
+    photos: setupCardPhotos,
+  };
+}
+
 export interface DemoComposerDeps {
   backend: Pick<
     BackendClient,
@@ -800,6 +1068,8 @@ export interface DemoComposerDeps {
   connectKeyboard: () => InlineKeyboard;
   // the card's pictures, shared with the session message (#568)
   setupCardPhotos: SetupCardPhotos;
+  // the wait for a signal (#664): the list without pairs, the list's 30 s, the pair without one
+  signalWaiter: Pick<SignalWaiter, 'waitList' | 'waitPair'>;
 }
 
 export function createDemoComposer<C extends Context>({
@@ -808,6 +1078,7 @@ export function createDemoComposer<C extends Context>({
   now,
   connectKeyboard,
   setupCardPhotos,
+  signalWaiter,
 }: DemoComposerDeps): Composer<C> {
   const composer = new Composer<C>();
 
@@ -816,26 +1087,52 @@ export function createDemoComposer<C extends Context>({
   // Its refusals retry with `demo:sig`: the pressed datum can be a write (a stake, a session).
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, async (ctx) => {
     logger.info({ callbackData: ctx.callbackQuery.data }, 'legacy duration button');
-    const screen = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_SIGNALS_CALLBACK_DATA));
-    await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
+    const { screen, listed } = await answerAnd(
+      ctx,
+      readSignalsScreen(ctx, DEMO_SIGNALS_CALLBACK_DATA),
+    );
+    const sent = await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
+    waitList(ctx, placeOf(sent), screen, listed);
   });
 
   // the card's button is under a photo: the list goes as a new message
   composer.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
-    const screen = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_CALLBACK_DATA));
-    await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
+    const { screen, listed } = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_CALLBACK_DATA));
+    const sent = await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
+    waitList(ctx, placeOf(sent), screen, listed);
   });
 
   composer.callbackQuery(DEMO_SIGNALS_PATTERN, async (ctx) => {
-    const screen = await answerAnd(ctx, readSignalsScreen(ctx, ctx.callbackQuery.data));
-    await editOrReply(ctx, screen.text, screen.keyboard);
+    const { screen, listed } = await answerAnd(ctx, readSignalsScreen(ctx, ctx.callbackQuery.data));
+    waitList(ctx, await editOrReply(ctx, screen.text, screen.keyboard), screen, listed);
   });
+
+  // A list drawn with its pairs expires after SIGNALS_LIST_TTL_MS, one without pairs waits for
+  // them (#664); a refusal of the reads, with its «🔄 Повторить», is not a wait.
+  function waitList(
+    ctx: Context,
+    place: Place | undefined,
+    drawn: DemoScreen,
+    listed: number | undefined,
+  ): void {
+    const from = ctx.from;
+    if (place === undefined || listed === undefined || from === undefined) return;
+    signalWaiter.waitList({
+      api: ctx.api,
+      ...place,
+      telegramUserId: from.id,
+      language: currentLanguage(),
+      drawn,
+      shown: listed > 0,
+    });
+  }
 
   // A pair of the list, and since #476 every demo door of a cycle: the amount screen in demo, the
   // launch screen in real (#327). The pair is checked against the catalog read at this press, never
-  // the one the list was drawn from, and so is its signal (#509): a door drawn without one — «🔁 Ещё
-  // сессия», the offer under a single trade, an old message — opens no session on a pair that has
-  // no signal now.
+  // the one the list was drawn from, and its signal is the scanner's fresh list (#664): a pair not
+  // in it — a door drawn without a signal («🔁 Ещё сессия», the offer under a single trade), an old
+  // message — waits for one, with the other pairs that have a signal now (Rule 46). No session
+  // opens on a pair without a signal (#509).
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -844,41 +1141,62 @@ export function createDemoComposer<C extends Context>({
       return;
     }
     const origin: CycleOrigin = ctx.match[3] === 'a' ? 'a' : ctx.match[3] === 'n' ? 'n' : 'l';
-    const [read, access, signal] = await answerAnd(
+    const [read, access, signals] = await answerAnd(
       ctx,
       Promise.all([
         readDemoTrade(backend, assetId, durationSec, now),
         readAccess(ctx.from.id),
-        readLaunchSignal(assetId, durationSec),
+        readSignals(),
       ]),
     );
     const firstName = ctx.from.first_name;
-    const step = { assetId, durationSec, back: cycleBackOf(origin) };
-    const screen = !read.ok
-      ? tradeFailure(read, ctx.callbackQuery.data)
-      : signal === 'unavailable'
-        ? { text: TEXTS.sessionSignalUnavailable, keyboard: retryWithMenu(ctx.callbackQuery.data) }
-        : signal === 'no_signal'
-          ? { text: TEXTS.sessionNoSignal, keyboard: otherPairKeyboard() }
-          : access?.tradingMode === TradeMode.Real
-            ? launchScreen({
-                assetId,
-                durationSec,
-                firstName,
-                symbol: pairLabel(read.pair),
-                amount: effectiveStake(access),
-                mode: TradeMode.Real,
-              })
-            : demoCycleScreen({
-                step,
-                firstName,
-                symbol: pairLabel(read.pair),
-                access,
-                connectKeyboard,
-              });
-    if (origin === 'n') await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
-    else await editOrReply(ctx, screen.text, screen.keyboard);
+    const back = cycleBackOf(origin);
+    let screen: DemoScreen;
+    let wait: { base: TelegramHtml; alternatives: ShownSignal[] } | undefined;
+    if (!read.ok) {
+      screen = tradeFailure(read, ctx.callbackQuery.data);
+    } else {
+      const list = signals === null ? undefined : signalsListOf(signals);
+      if (list?.signals.some((signal) => signal.assetId === assetId) === true) {
+        screen = nextStepScreen({ assetId, back, firstName }, read.pair, access, connectKeyboard);
+      } else {
+        const alternatives =
+          list === undefined ? [] : otherSignals(list.signals, read.catalog, now(), assetId);
+        const base = pairWaitingText(pairLabel(read.pair), assetId);
+        screen = pairWaitingScreen(base, alternatives);
+        wait = { base, alternatives };
+      }
+    }
+    const place =
+      origin === 'n'
+        ? placeOf(await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard }))
+        : await editOrReply(ctx, screen.text, screen.keyboard);
+    if (wait === undefined || place === undefined) return;
+    signalWaiter.waitPair({
+      api: ctx.api,
+      ...place,
+      telegramUserId: ctx.from.id,
+      language: currentLanguage(),
+      drawn: screen,
+      firstName,
+      assetId,
+      back,
+      origin: 'door',
+      base: wait.base,
+      alternatives: wait.alternatives.length > 0 ? 'shown' : 'done',
+    });
   });
+
+  // The demo's list of the signals body; a body without it is a deploy mismatch, not «no
+  // signals»: one warn, and the caller reads it as unread.
+  function signalsListOf(
+    signals: TradingSignalsResponse,
+  ): TradingSignalsResponse['lists'][number] | undefined {
+    const interval = intervalForDuration(DEMO_DURATION_SEC);
+    const list = signals.lists.find((candidate) => candidate.interval === interval);
+    if (list === undefined) logger.warn({ interval }, 'trading signals list missing');
+    return list;
+  }
 
   composer.callbackQuery(DEMO_GROUPS_CALLBACK_DATA, async (ctx) => {
     const read = await answerAnd(ctx, readDemoCatalog(backend));
@@ -914,6 +1232,7 @@ export function createDemoComposer<C extends Context>({
               .row(),
             read.catalog,
             read.pair,
+            now(),
           ),
         }
       : tradeFailure(read, ctx.callbackQuery?.data ?? demoAssetCallbackData(assetId));
@@ -967,7 +1286,7 @@ export function createDemoComposer<C extends Context>({
       TEXTS.analyzing({ subject: analysisSubject(read.pair, durationSec) }),
     );
     if (waiting === 'unknown') return;
-    const amounts = cardAmountsOf(stake.access, durationSec);
+    const amounts = cardAmountsOf(stake.access, durationSec, connectKeyboard);
     const screen = await evaluate(
       ctx.from.id,
       read.pair,
@@ -975,6 +1294,26 @@ export function createDemoComposer<C extends Context>({
       stake.mode,
       amounts !== null,
     );
+    if (screen.wait) {
+      // no signal now: the wait for one (#664), its card drawn in this message once it comes
+      const drawn = pairWaitingScreen(screen.text, []);
+      const place = await showResult(ctx, waiting, drawn.text, drawn.keyboard);
+      if (place === undefined) return;
+      signalWaiter.waitPair({
+        api: ctx.api,
+        ...place,
+        telegramUserId: ctx.from.id,
+        language: currentLanguage(),
+        drawn,
+        firstName: ctx.from.first_name,
+        assetId,
+        back: 'a',
+        origin: 'analysis',
+        base: screen.text,
+        alternatives: 'pending',
+      });
+      return;
+    }
     const keyboard = analysisKeyboard(assetId, durationSec, screen, stake.mode, amounts);
     if (screen.photo === null) await showResult(ctx, waiting, screen.text, keyboard);
     else await sendCard(ctx, waiting, screen.photo, screen.text, keyboard, read.pair, durationSec);
@@ -1001,7 +1340,7 @@ export function createDemoComposer<C extends Context>({
             data.action,
             amount,
             mode,
-            cardAmountsOf(access, data.durationSec),
+            cardAmountsOf(access, data.durationSec, connectKeyboard),
           )
         : appendAnalysisTail(new InlineKeyboard(), data.assetId, data.durationSec),
     );
@@ -1103,10 +1442,10 @@ export function createDemoComposer<C extends Context>({
     waiting: Waiting,
     text: TelegramHtml,
     keyboard: InlineKeyboard,
-  ): Promise<void> {
-    if (waiting === null) await replyHtml(ctx, text, { reply_markup: keyboard });
-    else if (waiting.pressed) await editOrReply(ctx, text, keyboard);
-    else await editByIdOrReply(ctx, waiting, text, keyboard);
+  ): Promise<Place | undefined> {
+    if (waiting === null) return placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
+    if (waiting.pressed) return editOrReply(ctx, text, keyboard);
+    return editByIdOrReply(ctx, waiting, text, keyboard);
   }
 
   async function editByIdOrReply(
@@ -1114,19 +1453,21 @@ export function createDemoComposer<C extends Context>({
     { chatId, messageId }: Exclude<Waiting, null>,
     text: TelegramHtml,
     keyboard: InlineKeyboard,
-  ): Promise<void> {
+  ): Promise<Place | undefined> {
     try {
       await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
+      return { chatId, messageId };
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'shown') {
         logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
+        return { chatId, messageId };
       } else if (refusal === 'gone') {
         logger.warn(
           { ...errorLogFields(error), ...telegramErrorFields(error) },
           'the demo screen was not edited, sending it anew',
         );
-        await replyHtml(ctx, text, { reply_markup: keyboard });
+        return placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
       } else if (error instanceof HttpError) {
         logger.error(
           {
@@ -1136,9 +1477,9 @@ export function createDemoComposer<C extends Context>({
           },
           'the demo screen edit failed in transport, sending nothing more',
         );
-      } else {
-        throw error;
+        return undefined;
       }
+      throw error;
     }
   }
 
@@ -1248,41 +1589,29 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The amounts under a signal's card and in its «➕ Ещё» (#482): in demo, with a broker snapshot
-  // to draw them from (stakeAccess: a blocked user gets none), on a duration a cycle may start on —
-  // the session row's condition. Otherwise null, and the session row stays: its press opens the
-  // amount screen, which says why.
-  function cardAmountsOf(
-    access: TradingAccessResponse | null,
-    durationSec: DemoDurationSec,
-  ): CycleAmounts | null {
-    if (access === null || access.tradingMode !== TradeMode.Demo) return null;
-    if (!sessionFits(durationSec)) return null;
-    const checked = stakeAccess(access, (keyboard) => keyboard, connectKeyboard);
-    if (!('broker' in checked)) return null;
-    const shown = cycleAmountsOf(access, checked.broker);
-    return shown.amounts.length > 0 ? shown : null;
-  }
-
   // The two reads together; a failed one is the screen's retry with `retryData` (a read: the
   // pressed data, or `demo:sig` under a legacy write datum) and the list's footer. A failed catalog
   // reads as the catalog's own failure. A body without the duration's list is a deploy mismatch,
   // not «no signals»: the same retry, and one warn.
-  async function readSignalsScreen(ctx: Context, retryData: string): Promise<DemoScreen> {
+  // `listed` is undefined on a refusal: it is not a list to wait on.
+  async function readSignalsScreen(
+    ctx: Context,
+    retryData: string,
+  ): Promise<{ screen: DemoScreen; listed: number | undefined }> {
     const [signals, read] = await Promise.all([readSignals(), readDemoCatalog(backend)]);
-    const withFooter = (screen: DemoScreen): DemoScreen => ({
-      text: screen.text,
-      keyboard: appendSignalsFooter(screen.keyboard),
+    const refusal = (screen: DemoScreen) => ({
+      screen: { text: screen.text, keyboard: appendSignalsFooter(screen.keyboard) },
+      listed: undefined,
     });
-    if (!read.ok) return withFooter(catalogFailure(read, retryData));
-    const retry = (): DemoScreen =>
-      withFooter({
+    if (!read.ok) return refusal(catalogFailure(read, retryData));
+    const retry = () =>
+      refusal({
         text: TEXTS.unavailable,
         keyboard: new InlineKeyboard().text(LABELS.demoRetryButton, retryData),
       });
     if (signals === null) return retry();
-    const screen = signalsScreen(signals, read.catalog, now());
-    if (screen !== undefined) return screen;
+    const drawn = signalsScreen(signals, read.catalog, now());
+    if (drawn !== undefined) return drawn;
     logger.warn(
       { interval: intervalForDuration(DEMO_DURATION_SEC) },
       'trading signals list missing',
@@ -1299,31 +1628,6 @@ export function createDemoComposer<C extends Context>({
         'trading signals not read',
       );
       return null;
-    }
-  }
-
-  // The pair's signal at a cycle door's press (#509), as the start route reads it: the same cached
-  // feed, so a press right after the analysis asks the broker nothing. A thrown call and every
-  // fetch_failed are `unavailable`: the door never opens on a signal it could not read.
-  async function readLaunchSignal(
-    assetId: number,
-    durationSec: DemoDurationSec,
-  ): Promise<'signal' | 'no_signal' | 'unavailable'> {
-    try {
-      const response = await backend.evaluateSignal(assetId, intervalForDuration(durationSec));
-      if (response.outcome === SignalFeedOutcome.FetchFailed) {
-        if (response.code !== BrokerRestErrorCode.RateLimited) {
-          logger.warn({ signalCode: response.code }, 'launch signal not evaluated');
-        }
-        return 'unavailable';
-      }
-      return response.decision.kind === SignalKind.Signal ? 'signal' : 'no_signal';
-    } catch (error) {
-      logger.warn(
-        { ...errorLogFields(error), ...backendErrorFields(error) },
-        'launch signal not evaluated',
-      );
-      return 'unavailable';
     }
   }
 
@@ -1361,100 +1665,6 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The session row first on a signal (#360; never on «сигнала нет», #509) at any payout (#631),
-  // in the user's mode (#327) — under a signal's card in demo the amounts of #476 in its place (#482) — «➕ Ещё» on a signal, then
-  // «🔄 Повторить анализ» and the way back
-  function analysisKeyboard(
-    assetId: number,
-    durationSec: DemoDurationSec,
-    screen: AnalysisScreen,
-    mode: TradeMode,
-    amounts: CycleAmounts | null,
-  ): InlineKeyboard {
-    const keyboard = new InlineKeyboard();
-    if (screen.photo !== null && amounts !== null) {
-      appendCycleAmounts(keyboard, { assetId, durationSec, back: 'a' }, amounts).row();
-    } else if (screen.session) {
-      appendSessionRow(keyboard, assetId, durationSec, mode);
-    }
-    if (screen.stake !== null) {
-      keyboard
-        .text(
-          LABELS.analysisMoreButton,
-          analysisMoreCallbackData(assetId, durationSec, screen.stake, mode),
-        )
-        .row();
-    }
-    return appendAnalysisTail(keyboard, assetId, durationSec);
-  }
-
-  // What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it, with «💵 Сумма»
-  // opening the picker of the same mode (#326). In real mode (#121) the stake button and the
-  // session row (#327) are marked REAL; in demo the amounts stay above it where the card drew them
-  // (#482), read at this press.
-  function expandedKeyboard(
-    assetId: number,
-    durationSec: DemoDurationSec,
-    action: TradeAction,
-    amount: DecimalString | null,
-    mode: TradeMode,
-    amounts: CycleAmounts | null,
-  ): InlineKeyboard {
-    const stakeData = stakeCallbackData(
-      assetId,
-      durationSec,
-      action,
-      newStakeNonce(),
-      stakeFingerprint(amount, mode),
-    );
-    const label = stakeButtonLabel(action, amount, mode);
-    const keyboard = (
-      amounts === null
-        ? appendSessionRow(new InlineKeyboard(), assetId, durationSec, mode)
-        : appendCycleAmounts(
-            new InlineKeyboard(),
-            { assetId, durationSec, back: 'a' },
-            amounts,
-          ).row()
-    )
-      .text(label, stakeData)
-      .text(LABELS.stakeMenuButton, stakeMenuCallbackData(mode, assetId, durationSec))
-      .row();
-    return appendAnalysisTail(keyboard, assetId, durationSec);
-  }
-
-  // its own row: the session's trades follow the orchestrator's signal at each trade, not this
-  // screen's direction
-  function appendSessionRow(
-    keyboard: InlineKeyboard,
-    assetId: number,
-    durationSec: DemoDurationSec,
-    mode: TradeMode,
-  ): InlineKeyboard {
-    if (!sessionFits(durationSec)) return keyboard;
-    // in demo the amount screen first (#476), edited in place of the analysis
-    return keyboard
-      .text(
-        sessionStartButtonLabel(DEFAULT_SESSION_CYCLES, mode),
-        mode === TradeMode.Demo
-          ? demoLaunchCallbackData(assetId, durationSec, 'a')
-          : sessionStartCallbackData(mode, assetId, durationSec),
-      )
-      .row();
-  }
-
-  function appendAnalysisTail(
-    keyboard: InlineKeyboard,
-    assetId: number,
-    durationSec: DemoDurationSec,
-  ): InlineKeyboard {
-    return keyboard
-      .text(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
-      .row()
-      .text(LABELS.demoBackPairButton, demoAssetCallbackData(assetId))
-      .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
-  }
-
   // The spinner is worth less than the screen: a refused answer ("query is too old") is logged
   // and the screen still goes. The two calls are independent, so they run together.
   async function answerAnd<T>(ctx: Context, work: Promise<T>): Promise<T> {
@@ -1479,23 +1689,27 @@ export function createDemoComposer<C extends Context>({
   // gets the screen anew; any other refusal goes to bot.catch with nothing sent, the keyboard on
   // screen being the retry. A transport failure leaves the edit unknown and sends nothing more;
   // anything else is a bug.
+  // Where the screen landed, for the wait (#664): the pressed message or the new one; undefined
+  // after a transport failure.
   async function editOrReply(
     ctx: Context,
     text: TelegramHtml,
     keyboard: InlineKeyboard,
-  ): Promise<void> {
+  ): Promise<Place | undefined> {
     try {
       await editMessageTextHtml(ctx, text, { reply_markup: keyboard });
+      return pressedPlace(ctx);
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'shown') {
         logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
+        return pressedPlace(ctx);
       } else if (refusal === 'gone') {
         logger.warn(
           { ...errorLogFields(error), ...telegramErrorFields(error) },
           'the demo screen was not edited, sending it anew',
         );
-        await replyHtml(ctx, text, { reply_markup: keyboard });
+        return placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
       } else if (error instanceof HttpError) {
         logger.error(
           {
@@ -1505,9 +1719,9 @@ export function createDemoComposer<C extends Context>({
           },
           'the demo screen edit failed in transport, sending nothing more',
         );
-      } else {
-        throw error;
+        return undefined;
       }
+      throw error;
     }
   }
 
@@ -1567,8 +1781,6 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // a pair that does not take the demo's duration (#685): there is no other duration to choose,
-  // so the way back is to the pair's page
   function tradeFailure(read: Exclude<DemoTradeRead, { ok: true }>, retryData: string): DemoScreen {
     switch (read.reason) {
       case 'catalog_unavailable':
@@ -1576,17 +1788,9 @@ export function createDemoComposer<C extends Context>({
       case 'backend_failed':
         return catalogFailure(read, retryData);
       case 'pair_missing':
-        return pairMissingScreen();
       case 'pair_closed':
-        return pairClosedScreen(read.catalog, read.pair);
       case 'duration_unsupported':
-        return {
-          text: TEXTS.demoDurationUnsupported({
-            symbol: pairLabel(read.pair),
-            label: DEMO_DURATION_LABELS[DEMO_DURATION_SEC],
-          }),
-          keyboard: backToPairs(read.catalog, read.pair),
-        };
+        return pairRefusalScreen(read, read.catalog, now());
     }
   }
 
@@ -1648,39 +1852,23 @@ export function createDemoComposer<C extends Context>({
     return { text: demoPairsScreen(group, page, pageCount), keyboard };
   }
 
-  function pairMissingScreen(): DemoScreen {
-    return { text: TEXTS.demoPairMissing, keyboard: backToGroups() };
-  }
-
-  function pairClosedScreen(catalog: PairsCatalogResponse, pair: PairView): DemoScreen {
-    return {
-      text: TEXTS.demoPairClosed({ symbol: pairLabel(pair) }),
-      keyboard: backToPairs(catalog, pair),
-    };
-  }
-
-  const backToGroups = () =>
-    new InlineKeyboard().text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
-
-  const backToPairs = (catalog: PairsCatalogResponse, pair: PairView) =>
-    appendBackToPairs(new InlineKeyboard(), catalog, pair);
-
-  // «↩️ Активы» leads to the page the pair is listed on (the first page when it is not listed),
-  // then «↩️ Типы»
-  function appendBackToPairs(
-    keyboard: InlineKeyboard,
-    catalog: PairsCatalogResponse,
-    pair: PairView,
-  ): InlineKeyboard {
-    const group = pairTypeGroupOf(pair.type);
-    const page = pageIndexOf(openPairsOf(catalog, group, now()), pair.id);
-    return keyboard
-      .text(LABELS.demoBackPairsButton, demoPageCallbackData(group, page))
-      .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
-  }
-
   return composer;
 }
+
+// A message a screen landed on, for the wait to edit (#664)
+export interface Place {
+  chatId: number;
+  messageId: number;
+}
+export const placeOf = (sent: { chat: { id: number }; message_id: number }): Place => ({
+  chatId: sent.chat.id,
+  messageId: sent.message_id,
+});
+export const pressedPlace = (ctx: Context): Place | undefined => {
+  const chatId = ctx.chat?.id;
+  const messageId = ctx.callbackQuery?.message?.message_id;
+  return chatId === undefined || messageId === undefined ? undefined : { chatId, messageId };
+};
 
 // Where the analysis's «⏳» is: the pressed message, or a new one under a photo; null when the
 // pressed message was gone and no «⏳» stands

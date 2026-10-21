@@ -11,7 +11,12 @@ import {
   type BotPlainKey,
   type BotTextKey,
 } from './bot-texts';
-import { BOT_TEXT_SOURCES_EN, enBotTextSource, UNTRANSLATED_BOT_TEXT_KEYS } from './bot-texts-en';
+import {
+  BOT_TEXT_SOURCES_EN,
+  enBotTextSource,
+  TRANSLATED_BEFORE_633,
+  UNTRANSLATED_BOT_TEXT_KEYS,
+} from './bot-texts-en';
 import { plainTextOf } from './telegram-html';
 
 const TRANSLATED = Object.entries(BOT_TEXT_SOURCES_EN) as [BotTextKey, string][];
@@ -50,8 +55,10 @@ describe('the English texts (#508)', () => {
     expect(names(source)).toEqual(names(BOT_TEXT_CATALOG[key].source));
   });
 
-  // the groups of #632 and #633 show their Russian defaults until those parts translate them
-  it('E4 leaves untranslated exactly the groups of the later parts', () => {
+  // the groups of #632 and #633 show their Russian defaults until those parts translate them, but
+  // the keys translated ahead of them (#664)
+  it('E4 leaves untranslated exactly the groups of the later parts, but the keys translated before #633', () => {
+    const translated: readonly BotTextKey[] = TRANSLATED_BEFORE_633;
     expect([...UNTRANSLATED_BOT_TEXT_KEYS].sort()).toEqual(
       botTextKeysOf(
         BotTextGroup.Demo,
@@ -61,7 +68,24 @@ describe('the English texts (#508)', () => {
         BotTextGroup.Stars,
         BotTextGroup.Mailing,
         BotTextGroup.Deposit,
-      ).sort(),
+      )
+        .filter((key) => !translated.includes(key))
+        .sort(),
+    );
+  });
+
+  it('E7 the keys translated before #633 are exactly those of the later groups with an English text', () => {
+    const later = botTextKeysOf(
+      BotTextGroup.Demo,
+      BotTextGroup.Analysis,
+      BotTextGroup.Trade,
+      BotTextGroup.Session,
+      BotTextGroup.Stars,
+      BotTextGroup.Mailing,
+      BotTextGroup.Deposit,
+    );
+    expect([...TRANSLATED_BEFORE_633].sort()).toEqual(
+      later.filter((key) => BOT_TEXT_SOURCES_EN[key] !== undefined).sort(),
     );
   });
 

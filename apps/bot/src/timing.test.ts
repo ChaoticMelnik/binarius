@@ -94,6 +94,7 @@ import {
   PAIR_CLOSED,
   PAIR_EURUSD,
   PAIR_MINUTE_ONLY,
+  PAIR_SHORT,
   PAIRS_RESPONSE,
   SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
@@ -126,6 +127,7 @@ import {
   sessionShare,
   sessionView,
   stubSessionResumer,
+  stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
   userLanguagesWith,
@@ -156,6 +158,16 @@ import {
   PRECHECKOUT_ANSWER_RESERVE_MS,
   STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS,
   TELEGRAM_PRECHECKOUT_DEADLINE_MS,
+  SIGNAL_WAIT_EDIT_FAILURES_MAX,
+  SIGNAL_WAIT_EDIT_GAP_MS,
+  SIGNAL_WAIT_EDITS_PER_SECOND,
+  SIGNAL_WAIT_INFLIGHT_MS,
+  SIGNAL_WAIT_MAX_MS,
+  SIGNAL_WAIT_POLL_MS,
+  SIGNAL_WAIT_POLL_OFFSET_MS,
+  SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+  SIGNALS_LIST_TTL_MS,
+  signalWaitBoundsHold,
 } from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
@@ -482,6 +494,7 @@ async function observe(branch: Branch): Promise<Calls> {
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
+    signalWaiter: stubSignalWaiter(),
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),
@@ -955,7 +968,8 @@ DEMO_SIGNALS.branches.push({
   expected: { backend: 2, telegram: 2 },
 });
 // the launch screen (#320): the pair checked at the data's duration, the amount from access; since
-// #509 the pair's signal read beside them, three reads in parallel counted as sequential
+// #664 the signals list read beside them (#509 read the pair's signal), three reads in parallel
+// counted as sequential; evaluateSignal is no call of it
 const DEMO_LAUNCH = demoScreenBranches(
   demoLaunchCallbackData(PAIR_EURUSD.id, 5),
   'demo:l:0:5',
@@ -973,18 +987,18 @@ const DEMO_LAUNCH = demoScreenBranches(
         expected: { backend: 3, telegram: 2 },
       },
       {
-        label: 'the pair has no signal now (#509)',
-        evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
+        label: 'the pair has no signal now: the wait (#664)',
+        readSignals: () =>
+          Promise.resolve(
+            signalsResponse(1_790_000_000_000, { '5s': [[PAIR_SHORT.id, TradeAction.Up]] }),
+          ),
+        evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
         expected: { backend: 3, telegram: 2 },
       },
       {
-        label: 'the signal is fetch_failed (#509)',
-        evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-        expected: { backend: 3, telegram: 2 },
-      },
-      {
-        label: 'the signal is not read (#509)',
-        evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+        label: 'the signals are not read: the wait (#664)',
+        readSignals: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+        evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
         expected: { backend: 3, telegram: 2 },
       },
     ],
@@ -1490,6 +1504,20 @@ const SESSION_START_BRANCHES: readonly Branch[] = [
     startSession: () =>
       Promise.reject(sessionHttpError(503, TradingSessionErrorCode.CatalogUnavailable)),
     expected: { backend: 2, telegram: 2 },
+  },
+  // #664: no signal at the start waits for it, in place of a launch screen
+  {
+    label: 'no signal at the start: the wait as a new message',
+    update: sessionStartUpdate(),
+    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'no signal at the start: the wait in place of the launch screen, refused as gone',
+    update: launchStartUpdate(),
+    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
+    apiErrors: [['editMessageText', EDIT_GONE]],
+    expected: { backend: 2, telegram: 3 },
   },
   SESSION_START_WORST_CASE,
   {
@@ -3769,6 +3797,51 @@ describe("the demo session tracker's bounds", () => {
       TRACKED_SESSIONS_MAX * SESSION_RESUME_GAP_MS;
     expect(lastFirstPoll).toBe(542_000);
     expect(lastFirstPoll).toBeLessThan(SESSION_RESUME_INTERVAL_MS);
+  });
+});
+
+// #664: the wait for a signal polls between updates, like the trackers
+describe("the wait for a signal's bounds (#664)", () => {
+  it('polls once a candle of the demo, a second after its boundary', () => {
+    expect(SIGNAL_WAIT_POLL_MS).toBe(5_000);
+    expect(SIGNAL_WAIT_POLL_OFFSET_MS).toBe(1_000);
+  });
+
+  it('keeps the buttons of pairs 30 s and an entry at most an hour, inside Telegram’s 48 h', () => {
+    expect(SIGNALS_LIST_TTL_MS).toBe(30_000);
+    expect(SIGNAL_WAIT_MAX_MS).toBe(3_600_000);
+    expect(SIGNAL_WAIT_MAX_MS).toBeLessThan(48 * 3_600_000);
+  });
+
+  it('paces the edits 5 a second and retries an edit three times', () => {
+    expect(SIGNAL_WAIT_EDITS_PER_SECOND).toBe(5);
+    expect(SIGNAL_WAIT_EDIT_GAP_MS).toBe(200);
+    expect(SIGNAL_WAIT_EDIT_FAILURES_MAX).toBe(3);
+  });
+
+  it('drains a resolution in flight and the stop’s edits inside the shutdown budget', () => {
+    expect(SIGNAL_WAIT_INFLIGHT_MS).toBe(
+      2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS,
+    );
+    expect(SIGNAL_WAIT_INFLIGHT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+    expect(SIGNAL_WAIT_SHUTDOWN_BUDGET_MS).toBe(20_000);
+    expect(SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS).toBeLessThan(
+      SHUTDOWN_BUDGET_MS,
+    );
+    expect(signalWaitBoundsHold()).toBe(true);
+  });
+
+  it('the chain fails on a stop window of SHUTDOWN_BUDGET_MS', () => {
+    expect(signalWaitBoundsHold({ shutdownBudgetMs: 50_000 })).toBe(false);
+    expect(signalWaitBoundsHold({ shutdownBudgetMs: 41_999 })).toBe(true);
+  });
+
+  it('the chain fails on a poll offset outside the candle, a TTL under a candle or a bound past 48 h', () => {
+    expect(signalWaitBoundsHold({ pollOffsetMs: 0 })).toBe(false);
+    expect(signalWaitBoundsHold({ pollOffsetMs: 5_000 })).toBe(false);
+    expect(signalWaitBoundsHold({ listTtlMs: 5_000 })).toBe(false);
+    expect(signalWaitBoundsHold({ maxMs: 48 * 3_600_000 })).toBe(false);
+    expect(signalWaitBoundsHold({ inflightMs: SHUTDOWN_BUDGET_MS })).toBe(false);
   });
 });
 

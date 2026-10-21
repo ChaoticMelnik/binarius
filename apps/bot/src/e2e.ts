@@ -6,6 +6,7 @@ export { createBot, type CreateBotOptions } from './bot';
 export { createIntentTracker } from './intent-tracker';
 export { createSessionResumer } from './session-resume';
 export { createSessionTracker } from './session-tracker';
+export { createSignalWaiter } from './signal-wait';
 export {
   cycleStakeLabel,
   groupButtonLabel,
@@ -21,5 +22,12 @@ export {
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
+  SIGNAL_WAIT_EDIT_FAILURES_MAX,
+  SIGNAL_WAIT_EDIT_GAP_MS,
+  SIGNAL_WAIT_MAX_MS,
+  SIGNAL_WAIT_POLL_MS,
+  SIGNAL_WAIT_POLL_OFFSET_MS,
+  SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+  SIGNALS_LIST_TTL_MS,
 } from './timing';
 export * from './testing';

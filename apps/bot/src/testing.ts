@@ -11,6 +11,7 @@ import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
+import type { SignalWaiter } from './signal-wait';
 import { createUserLanguages, type UserLanguages } from './language';
 import { LABELS } from './texts';
 import {
@@ -549,6 +550,14 @@ export const stubSessionTracker = (): { track: Mock<SessionTracker['track']> } =
 export const stubSessionResumer = (): { attach: Mock<SessionResumer['attach']> } => ({
   attach: vi.fn(),
 });
+
+// the wait for a signal (#664): records what the handlers register and leave, arms nothing
+export const stubSignalWaiter = (): {
+  attach: Mock<SignalWaiter['attach']>;
+  waitList: Mock<SignalWaiter['waitList']>;
+  waitPair: Mock<SignalWaiter['waitPair']>;
+  leave: Mock<SignalWaiter['leave']>;
+} => ({ attach: vi.fn(), waitList: vi.fn(), waitPair: vi.fn(), leave: vi.fn() });
 
 export const EMAIL = 'ada@example.test';
 export const CODE = '123456';

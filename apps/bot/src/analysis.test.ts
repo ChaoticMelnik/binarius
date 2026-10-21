@@ -36,7 +36,6 @@ import {
   formatAtrPct,
   formatAtrTicks,
   formatRsi,
-  NO_SIGNAL_REASON_TEXT,
 } from './analysis';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import {
@@ -320,14 +319,17 @@ MA200         цена ниже 1.08612
     expect(analysisUnavailableScreen(PAIR_EURUSD, 5).photo).toBeNull();
   });
 
-  // A3
+  // A3 (#664): a rule refusal waits for the signal, with the features and no reason
   it.each(RULE_REFUSAL_REASONS)(
-    'names the rule refusal %s in words and keeps the features',
+    'draws the waiting line and the feature lines on the rule refusal %s, no reason, wait',
     (reason) => {
+      const screen = screenOf(ruleRefusalOf(reason));
       const lines = linesOf(ruleRefusalOf(reason));
-      expect(lines[1]).toBe(`⏸ Сигнала нет: ${NO_SIGNAL_REASON_TEXT[reason]}`);
+      expect(lines[1]).toBe(plainTextOf(TEXTS.analysisWaiting));
       expect(hasFeatureLines(lines)).toBe(true);
-      expect(lines.at(-1)).toBe(plainTextOf(TEXTS.analysisNoSignalHint));
+      expect(lines.at(-1)).toMatch(/^💲 /);
+      expect(lines.join('\n')).not.toMatch(/сигнала нет|нет сигнала/i);
+      expect(screen.wait).toBe(true);
     },
   );
 
@@ -348,15 +350,6 @@ MA200         цена ниже 1.08612
     expect(rowOf(linesOf(SIGNAL_DECIDED), 'Волатильность')).toBe('в норме 0.041%');
   });
 
-  // #379: the three v2 refusals in words of their own
-  it.each([
-    [NoSignalReason.VolatilityBelowTickFloor, 'цена движется на считаные шаги котировки'],
-    [NoSignalReason.RsiOverbought, 'RSI слишком высокий для входа вверх'],
-    [NoSignalReason.RsiOversold, 'RSI слишком низкий для входа вниз'],
-  ])('names %s', (reason, words) => {
-    expect(linesOf(ruleRefusalOf(reason))[1]).toBe(`⏸ Сигнала нет: ${words}`);
-  });
-
   // #631: a pair paying below 80 % reads as one paying above it: no note under the payout or the
   // hints in either mode (#379 noted that no cycle starts on it)
   it.each([TradeMode.Demo, TradeMode.Real])(
@@ -368,12 +361,7 @@ MA200         цена ниже 1.08612
       expect(signal[payoutAt]).toContain('Безубыточность: 55.9%');
       expect(signal[payoutAt + 1]).toBe('');
       expect(screenOf(SIGNAL_DECIDED, low).stake).toBe(TradeAction.Up);
-      expect(linesOf(SIGNAL_NO_SIGNAL, low, mode).at(-1)).toBe(
-        plainTextOf(TEXTS.analysisNoSignalHint),
-      );
-      expect(linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), low, mode).at(-1)).toBe(
-        plainTextOf(TEXTS.analysisDataHint),
-      );
+      expect(screenOf(SIGNAL_NO_SIGNAL, low).wait).toBe(true);
       for (const response of [SIGNAL_DECIDED, SIGNAL_NO_SIGNAL]) {
         expect(linesOf(response, low, mode).join('\n')).not.toContain('Цикл на этой паре');
       }
@@ -387,14 +375,11 @@ MA200         цена ниже 1.08612
     expect(lines.join('\n')).not.toMatch(/это демо|деньги не нужны/i);
   });
 
-  // #327: the session waits for a signal in real mode too
-  it('ends a real rule refusal with the session hint and a real data refusal with the data hint', () => {
-    expect(linesOf(SIGNAL_NO_SIGNAL, PAIR_EURUSD, TradeMode.Real).at(-1)).toBe(
-      plainTextOf(TEXTS.analysisNoSignalHint),
-    );
-    expect(
-      linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), PAIR_EURUSD, TradeMode.Real).at(-1),
-    ).toBe(plainTextOf(TEXTS.analysisDataHint));
+  // #327, #664: the wait reads the same in real mode
+  it('draws the same wait in real mode as in demo', () => {
+    for (const response of [SIGNAL_NO_SIGNAL, dataRefusalOf(DATA_REFUSAL_REASONS[0])]) {
+      expect(linesOf(response, PAIR_EURUSD, TradeMode.Real)).toEqual(linesOf(response));
+    }
   });
 
   it('formats the break-even share to a tenth, a dash where the payout gives none', () => {
@@ -407,14 +392,20 @@ MA200         цена ниже 1.08612
     expect(formatAtrTicks(2.7879)).toBe('2.8');
   });
 
-  // A4
-  it.each(DATA_REFUSAL_REASONS)('names the data refusal %s with no feature line', (reason) => {
+  // A4 (#664)
+  it.each(DATA_REFUSAL_REASONS)('draws the waiting line alone on the data refusal %s', (reason) => {
     const lines = linesOf(dataRefusalOf(reason));
-    expect(lines[1]).toBe(`⏸ Сигнала нет: ${NO_SIGNAL_REASON_TEXT[reason]}`);
+    expect(lines).toEqual([lines[0], plainTextOf(TEXTS.analysisWaiting)]);
     expect(lines.some((line) => FEATURE_PREFIXES.some((prefix) => line.startsWith(prefix)))).toBe(
       false,
     );
-    expect(lines.at(-1)).toBe(plainTextOf(TEXTS.analysisDataHint));
+    expect(screenOf(dataRefusalOf(reason)).wait).toBe(true);
+  });
+
+  it('waits on no screen but a refusal', () => {
+    expect(screenOf(SIGNAL_DECIDED).wait).toBe(false);
+    expect(screenOf(SIGNAL_FETCH_FAILED).wait).toBe(false);
+    expect(analysisUnavailableScreen(PAIR_EURUSD, 5).wait).toBe(false);
   });
 
   // A5
@@ -449,7 +440,7 @@ MA200         цена ниже 1.08612
   });
 
   // #360: the session row on every decided answer, never where the candles were not read
-  it('offers the session on a signal only: never on «сигнала нет» (#509) nor without candles', () => {
+  it('offers neither the session nor the stake on a wait (#509, #664), nor without candles', () => {
     for (const response of [signalOf(TradeAction.Up), signalOf(TradeAction.Down)]) {
       expect(screenOf(response).session).toBe(true);
     }
@@ -560,7 +551,7 @@ describe('the text source', () => {
     ['the MA word', 'maPriceBelow', SIGNAL_CARD],
     ['the direction', 'cardDirectionUp', SIGNAL_CARD],
     ['the amounts line', 'analysisChooseAmount', SIGNAL_CARD],
-    ['the reason', 'noSignalRsiNeutral', SIGNAL_NO_SIGNAL],
+    ['the waiting line', 'analysisWaiting', SIGNAL_NO_SIGNAL],
     ['the trend word', 'trendUp', SIGNAL_CARD],
     ['the momentum word', 'momentumUp', disagree],
     ['the volatility word', 'volatilityNormal', SIGNAL_CARD],
