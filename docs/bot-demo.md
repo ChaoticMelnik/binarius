@@ -704,9 +704,14 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
   — the method, the Telegram error code, the entry's `kind` (`list`/`pair`) and the pair's
   `origin` (`door`/`analysis`/`start`); no Telegram id, no symbol, never the description
   (`signal-wait.test.ts` W10c). `signal wait message not edited at the stop` (`warn`) — the same
-  fields; `the signal wait card photo was refused, sending its text` (`warn`); `signal wait
+  fields, and `err` for a screen that throws (W17); `the signal wait card photo was refused, sending its text` (`warn`); `signal wait
   analysis not evaluated` (`warn`, once an entry) — the backend fields or `signalCode`;
   `trading access not read for the signal wait` (`warn`) — the backend fields.
+- `signal wait entry failed` (`error`, #664) — `err` with the error's name, `kind`, `origin`: a
+  screen threw while the tick advanced the entry, which ends without an edit; the tick goes on
+  with the others (`signal-wait.test.ts` W16). `signal wait tick failed` (`error`) — `err`: the
+  tick threw outside its entries; the entries are unchanged, the next tick comes on schedule
+  (W16b).
 - `signal not evaluated` (`warn`, #126) — for a thrown call, `err` with the error's name and code,
   `backendStatus`, `backendReason`; for a `fetch_failed` other than `rate_limited`, `signalCode`
   alone. No Telegram id, no symbol, nothing of the broker's text.
@@ -783,7 +788,7 @@ flight is skipped. Push from the backend would need an inbound server on the bot
 | the list with pairs | «📡 Сигналы сейчас…» + the pairs + [🔄 · 🧭] / [🏠] | after `SIGNALS_LIST_TTL_MS` (30 s): «🚀 Начать торговлю / Сигнал держится одну свечу (⏱ 5 с), и этот список устарел…» (`signalsExpired`) + [📡 Показать сигналы · 🧭] / [🏠], and the entry ends |
 | the pair (the door) | «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + the other pairs with a signal now, under `pairWaitingAlternatives`, read at the press | the alternatives taken away after 30 s, the wait goes on; the pair's signal: the amount screen (demo) or the launch (real) by a fresh access read, and the entry ends |
 | the pair (409 `no_signal` of a start) | the same, in place of the launch or the amount screen, as a new message for a press elsewhere and a typed amount; the alternatives from the first poll | the same; the amount screen keeps its way back (`l`/`a`) |
-| the analysis | the analysis header, «⏳ Проверяю сигнал…» (`analysisWaiting`), the feature lines of a rule refusal + [🧭] / [🏠]; the alternatives from the first poll | the pair's signal: `POST /trading/signal` with `analysis` (#484) and access, then the card in the same message by `editMessageMedia` (a refused photo: its caption as text); no signal by that read, `fetch_failed` or a throw: the entry stays, one `warn` |
+| the analysis | the analysis header, «⏳ Проверяю сигнал…» (`analysisWaiting`), the feature lines of a rule refusal + [🧭] / [🏠]; the alternatives from the first poll | the pair's signal: `POST /trading/signal` with `analysis` (#484) and access, then the card in the same message by `editMessageMedia` (a refused photo: its caption as text); no signal by that read: the entry stays, its pending alternatives drawn without the pair; `fetch_failed` or a throw adds one `warn` |
 | any | — | the pair closed, gone or not taking 5 s by the fresh catalog: its refusal (`demoPairClosed` …), the entry ends; past `SIGNAL_WAIT_MAX_MS` (1 h, a technical bound below Telegram's 48 h, not a product limit) or at the stop: `signalsExpired`, the entry ends |
 
 The alternatives are a snapshot: drawn once (by the door at its press, by the first poll for the
@@ -810,6 +815,7 @@ risk 3).
 | 429 | unchanged; the tick's edits stop, none before `retry_after` |
 | another refusal, a transport failure | retried by the next ticks; the third ends it |
 | anything else | `error`, ends |
+| a screen that throws (an override, Rule 30) | `error`, ends as drawn; the tick goes on with the others |
 
 | A tick's reads | The entries |
 |---|---|
@@ -823,12 +829,14 @@ on the REST fallback; the start keeps it).
 **The stop.** `stop()` arms no more polls, waits for the tick in flight (at most
 `SIGNAL_WAIT_INFLIGHT_MS`, 26 s: an analysis's resolution) and meanwhile turns every remaining
 waiting message into `signalsExpired`: one edit launched every 200 ms inside
-`SIGNAL_WAIT_SHUTDOWN_BUDGET_MS` (20 s, 100 messages), none after a 429, the launched ones awaited
+`SIGNAL_WAIT_SHUTDOWN_BUDGET_MS` (20 s, 100 messages), none after a 429 — neither of the stop nor
+of the last tick: the edits wait for its `retry_after` inside the window, and a pause past the
+window leaves every message «⏳…» — the launched ones awaited
 (each within `TELEGRAM_API_TIMEOUT_MS`). The step is `signal waiter` of `runBot`'s drain
 (`lifecycle.ts`); the chain holds `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
 SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
 
-Enforced by `signal-wait.test.ts` W1–W15, `demo.test.ts` → the wait for signals, W-door1–5 and
+Enforced by `signal-wait.test.ts` W1–W17, `demo.test.ts` → the wait for signals, W-door1–5 and
 W-an1, `trading-session.test.ts` W-start1–3, `cycle-stake.test.ts`, `timing.test.ts` → the wait's
 bounds, `lifecycle.test.ts`.
 
