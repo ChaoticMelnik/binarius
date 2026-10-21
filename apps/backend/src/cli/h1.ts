@@ -6,7 +6,10 @@ import {
   DATABASE_URL_RULES,
   H1_MIN_PAYOUT_PCT,
   H1ShadowSet,
+  INT4_MAX,
   markdownTable,
+  MAX_H1_LOSS_MULTIPLIER,
+  MAX_SESSION_SUMMARY_TRADES,
   parseUrlEnv,
   readEnv,
   verdictOf,
@@ -23,6 +26,7 @@ import {
 } from '@binarius/db';
 import * as z from 'zod';
 import { runH1MarkCommand, type H1MarkCommand } from './h1-mark';
+import { runH1SessionCommand, type H1SessionCommand, type H1SessionDeps } from './h1-session';
 import { formatFailure } from './kill-switch';
 import { parseInstant, UsageError } from './trade-log';
 
@@ -32,7 +36,8 @@ import { parseInstant, UsageError } from './trade-log';
 // 0 the report is printed, 1 no decisions in the window (an empty sample is not a pass) or a
 // failure, 2 not understood.
 // The entry point of the H1 sessions' commands too (#670, docs/h1.md → Sessions): the mark in
-// h1-mark.ts; this file parses every subcommand and owns the connection.
+// h1-mark.ts, the session in h1-session.ts; this file parses every subcommand and owns the
+// connection.
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
@@ -47,6 +52,9 @@ const USAGE = `H1: отчёт теневой торговли (docs/h1.md → Th
   h1 mark <accountId>
   h1 unmark <accountId>
   h1 list
+  h1 session start --account <accountId> --asset <id> --trades <N> --max-loss <k>
+  h1 session stop --account <accountId>
+  h1 session status --account <accountId>
 
 --since — начало периода (включительно): дата ISO 8601 с зоной или N часов (h) / дней (d) до
 --until, N от 1 до 9999; --until — конец (не включительно, по умолчанию — сейчас по часам базы);
@@ -54,7 +62,12 @@ const USAGE = `H1: отчёт теневой торговли (docs/h1.md → Th
 1 — нет решений за период или ошибка, 2 — не понято.
 mark / unmark — пометить аккаунт брокера (uuid) для сессий H1 или снять метку; снять нельзя, пока у
 аккаунта активная сессия H1. list — помеченные аккаунты (stdout, по строке на аккаунт). Код выхода:
-0 — сделано или уже так, 1 — аккаунт не найден, метку не снять или ошибка, 2 — не понято.`;
+0 — сделано или уже так, 1 — аккаунт не найден, метку не снять или ошибка, 2 — не понято.
+session start — сессия H1 помеченного аккаунта: пара --asset (открыта, берёт 5 с, выплата не ниже
+94 %), --trades сделок (1…720), потолок потерь --max-loss × ставка (k 1…1000); ставка — сохранённая
+ставка режима пользователя или минимум брокера. В stdout — id сессии. session stop — остановить
+активную сессию H1 аккаунта; session status — последняя сессия H1 аккаунта. Код выхода: 0 —
+сделано, 1 — отказ (строка в stderr), нет сессии или ошибка, 2 — не понято.`;
 
 export type H1Since = { at: Date } | { hours: number } | { days: number };
 
@@ -108,7 +121,7 @@ export function parseH1Args(argv: readonly string[]): H1Args {
 
 // Every subcommand of the h1 CLI (#670): the shadow report keeps parseH1Args, the others take
 // only their own positionals and no options.
-export type H1Command = { kind: 'shadow_report'; args: H1Args } | H1MarkCommand;
+export type H1Command = { kind: 'shadow_report'; args: H1Args } | H1MarkCommand | H1SessionCommand;
 
 const accountIdSchema = z.uuid();
 
@@ -129,8 +142,67 @@ function parsePositionalsOnly(argv: readonly string[]): string[] {
   }
 }
 
+const POSITIVE_INTEGER = /^[1-9]\d{0,9}$/;
+
+function parseBoundedInt(raw: string | undefined, flag: string, max: number): number {
+  if (raw === undefined) throw new UsageError(`нужен ${flag}`);
+  const value = POSITIVE_INTEGER.test(raw) ? Number(raw) : Number.NaN;
+  if (!(value <= max)) throw new UsageError(`${flag}: целое от 1 до ${max}`);
+  return value;
+}
+
+function parseSessionCommand(argv: readonly string[]): H1SessionCommand {
+  let values: { account?: string; asset?: string; trades?: string; 'max-loss'?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: [...argv],
+      allowPositionals: true,
+      strict: true,
+      options: {
+        account: { type: 'string' },
+        asset: { type: 'string' },
+        trades: { type: 'string' },
+        'max-loss': { type: 'string' },
+      },
+    }));
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
+  const [, subcommand, ...rest] = positionals;
+  if (rest.length > 0) throw new UsageError('лишние аргументы');
+  if (subcommand === 'start') {
+    return {
+      kind: 'session_start',
+      accountId: parseAccountId(values.account),
+      assetId: parseBoundedInt(values.asset, '--asset', INT4_MAX),
+      trades: parseBoundedInt(values.trades, '--trades', MAX_SESSION_SUMMARY_TRADES),
+      maxLossMultiplier: parseBoundedInt(values['max-loss'], '--max-loss', MAX_H1_LOSS_MULTIPLIER),
+    };
+  }
+  if (subcommand !== 'stop' && subcommand !== 'status') {
+    throw new UsageError(
+      subcommand === undefined
+        ? 'нужна команда session start, stop или status'
+        : `неизвестная команда: session ${subcommand}`,
+    );
+  }
+  if (
+    values.asset !== undefined ||
+    values.trades !== undefined ||
+    values['max-loss'] !== undefined
+  ) {
+    throw new UsageError(`session ${subcommand} принимает только --account`);
+  }
+  return {
+    kind: subcommand === 'stop' ? 'session_stop' : 'session_status',
+    accountId: parseAccountId(values.account),
+  };
+}
+
 export function parseH1Command(argv: readonly string[]): H1Command {
   const [command] = argv;
+  if (command === 'session') return parseSessionCommand(argv);
   if (command === 'mark' || command === 'unmark' || command === 'list') {
     const [, ...rest] = parsePositionalsOnly(argv);
     if (command === 'list') {
@@ -417,6 +489,7 @@ export async function runH1Cli(
   source: NodeJS.ProcessEnv,
   out: (text: string) => void,
   err: (line: string) => void,
+  deps: H1SessionDeps = {},
 ): Promise<number> {
   let command: H1Command;
   try {
@@ -440,6 +513,13 @@ export async function runH1Cli(
   const db = createDb(pool);
   if (command.kind !== 'shadow_report') {
     try {
+      if (
+        command.kind === 'session_start' ||
+        command.kind === 'session_stop' ||
+        command.kind === 'session_status'
+      ) {
+        return await runH1SessionCommand(db, command, source, out, err, deps);
+      }
       return await runH1MarkCommand(db, command, out, err);
     } catch (error) {
       // name and code only (Rule 8)
