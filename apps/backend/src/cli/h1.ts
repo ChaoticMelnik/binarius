@@ -21,6 +21,8 @@ import {
   type H1ShadowSetStats,
   type H1ShadowStats,
 } from '@binarius/db';
+import * as z from 'zod';
+import { runH1MarkCommand, type H1MarkCommand } from './h1-mark';
 import { formatFailure } from './kill-switch';
 import { parseInstant, UsageError } from './trade-log';
 
@@ -29,6 +31,8 @@ import { parseInstant, UsageError } from './trade-log';
 // verdict with the stand (packages/shared/src/wilson.ts).
 // 0 the report is printed, 1 no decisions in the window (an empty sample is not a pass) or a
 // failure, 2 not understood.
+// The entry point of the H1 sessions' commands too (#670, docs/h1.md → Sessions): the mark in
+// h1-mark.ts; this file parses every subcommand and owns the connection.
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
@@ -37,14 +41,20 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const RELATIVE_SINCE = /^([1-9]\d{0,3})([hd])$/;
 
-const USAGE = `Отчёт теневой торговли H1 (docs/h1.md → The report).
+const USAGE = `H1: отчёт теневой торговли (docs/h1.md → The report) и сессии H1 (docs/h1.md → Sessions).
 
   h1 shadow report --since <ISO 8601 | Nh | Nd> [--until <ISO 8601>]
+  h1 mark <accountId>
+  h1 unmark <accountId>
+  h1 list
 
 --since — начало периода (включительно): дата ISO 8601 с зоной или N часов (h) / дней (d) до
 --until, N от 1 до 9999; --until — конец (не включительно, по умолчанию — сейчас по часам базы);
 по времени записи решения. Отчёт — в stdout, итог — в stderr. Код выхода: 0 — отчёт напечатан,
-1 — нет решений за период или ошибка, 2 — не понято.`;
+1 — нет решений за период или ошибка, 2 — не понято.
+mark / unmark — пометить аккаунт брокера (uuid) для сессий H1 или снять метку; снять нельзя, пока у
+аккаунта активная сессия H1. list — помеченные аккаунты (stdout, по строке на аккаунт). Код выхода:
+0 — сделано или уже так, 1 — аккаунт не найден, метку не снять или ошибка, 2 — не понято.`;
 
 export type H1Since = { at: Date } | { hours: number } | { days: number };
 
@@ -94,6 +104,43 @@ export function parseH1Args(argv: readonly string[]): H1Args {
     throw new UsageError('--until должен быть позже --since');
   }
   return { since, until };
+}
+
+// Every subcommand of the h1 CLI (#670): the shadow report keeps parseH1Args, the others take
+// only their own positionals and no options.
+export type H1Command = { kind: 'shadow_report'; args: H1Args } | H1MarkCommand;
+
+const accountIdSchema = z.uuid();
+
+function parseAccountId(raw: string | undefined): string {
+  if (raw === undefined) throw new UsageError('нужен id аккаунта брокера (uuid)');
+  if (!accountIdSchema.safeParse(raw).success) {
+    throw new UsageError('id аккаунта брокера — uuid');
+  }
+  return raw;
+}
+
+function parsePositionalsOnly(argv: readonly string[]): string[] {
+  try {
+    return parseArgs({ args: [...argv], allowPositionals: true, strict: true, options: {} })
+      .positionals;
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export function parseH1Command(argv: readonly string[]): H1Command {
+  const [command] = argv;
+  if (command === 'mark' || command === 'unmark' || command === 'list') {
+    const [, ...rest] = parsePositionalsOnly(argv);
+    if (command === 'list') {
+      if (rest.length > 0) throw new UsageError('лишние аргументы');
+      return { kind: 'list' };
+    }
+    if (rest.length > 1) throw new UsageError('лишние аргументы');
+    return { kind: command, accountId: parseAccountId(rest[0]) };
+  }
+  return { kind: 'shadow_report', args: parseH1Args(argv) };
 }
 
 export interface H1Window {
@@ -371,9 +418,9 @@ export async function runH1Cli(
   out: (text: string) => void,
   err: (line: string) => void,
 ): Promise<number> {
-  let args: H1Args;
+  let command: H1Command;
   try {
-    args = parseH1Args(argv);
+    command = parseH1Command(argv);
   } catch (error) {
     err(error instanceof Error ? error.message : String(error));
     err(USAGE);
@@ -391,6 +438,18 @@ export async function runH1Cli(
 
   const pool = new Pool({ connectionString: databaseUrl });
   const db = createDb(pool);
+  if (command.kind !== 'shadow_report') {
+    try {
+      return await runH1MarkCommand(db, command, out, err);
+    } catch (error) {
+      // name and code only (Rule 8)
+      err(`Не удалось выполнить команду: ${formatFailure(error)}.`);
+      return EXIT_FAILED;
+    } finally {
+      await pool.end().catch(() => undefined);
+    }
+  }
+  const { args } = command;
   try {
     const window = resolveWindow(args, args.until ?? (await readTradeLogEnd(db)));
     if (window.since.getTime() >= window.until.getTime()) {
