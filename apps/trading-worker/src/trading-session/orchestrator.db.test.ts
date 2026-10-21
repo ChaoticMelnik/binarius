@@ -2666,6 +2666,16 @@ describe('the wake after a terminal write (#696)', () => {
   const tagged = (wake: string) => logger.child({ wake });
   const ticksOf = (wake: string) =>
     lines.filter((line) => line.wake === wake && line.msg === 'trading session tick');
+  // a case that fails before its own stop() must not leave its ticks running into the next one
+  const made: ReturnType<typeof orchestratorOf>[] = [];
+  const wakeful = (options: Parameters<typeof orchestratorOf>[0]) => {
+    const orchestrator = orchestratorOf(options);
+    made.push(orchestrator);
+    return orchestrator;
+  };
+  afterEach(async () => {
+    await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
+  });
 
   // a signal held until release(); an abort answers at once, as the backend client does
   function gatedSignals() {
@@ -2686,7 +2696,7 @@ describe('the wake after a terminal write (#696)', () => {
   it('WK1 a wake after the settlement makes the next step within a second, with no tick called', async () => {
     const seed = await seedSession();
     const signals = signalsOf();
-    const orchestrator = orchestratorOf({ signals, log: tagged('WK1') });
+    const orchestrator = wakeful({ signals, log: tagged('WK1') });
     await tradeOnce(orchestrator, seed);
     const before = ticksOf('WK1').length;
     const wokenAt = Date.now();
@@ -2707,7 +2717,7 @@ describe('the wake after a terminal write (#696)', () => {
   it('WK2 wakes during a tick merge into one more tick: one intent, one decision row', async () => {
     const seed = await seedSession();
     const { signals, release } = gatedSignals();
-    const orchestrator = orchestratorOf({ signals, log: tagged('WK2') });
+    const orchestrator = wakeful({ signals, log: tagged('WK2') });
     const first = orchestrator.tick();
     await until('the signal call', () => signals.calls.length === 1);
     orchestrator.wake();
@@ -2729,7 +2739,7 @@ describe('the wake after a terminal write (#696)', () => {
 
   it('WK3 a lost wake loses nothing: the next tick makes the step', async () => {
     const seed = await seedSession();
-    const orchestrator = orchestratorOf({ log: tagged('WK3') });
+    const orchestrator = wakeful({ log: tagged('WK3') });
     await tradeOnce(orchestrator, seed);
     await orchestrator.tick();
     expect((await intentsOf(seed.session.id)).map((i) => i.clientRequestId)).toEqual([
@@ -2742,7 +2752,7 @@ describe('the wake after a terminal write (#696)', () => {
 
   it('WK4a a wake after stop() is a no-op and does not throw', async () => {
     const seed = await seedSession();
-    const orchestrator = orchestratorOf({ log: tagged('WK4a') });
+    const orchestrator = wakeful({ log: tagged('WK4a') });
     await orchestrator.stop();
     expect(() => orchestrator.wake()).not.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -2753,7 +2763,7 @@ describe('the wake after a terminal write (#696)', () => {
   it('WK4b a wake during a tick that stop() ends runs no deferred tick', async () => {
     const seed = await seedSession();
     const { signals } = gatedSignals();
-    const orchestrator = orchestratorOf({
+    const orchestrator = wakeful({
       signals,
       config: { attemptTimeoutMs: 5_000 },
       log: tagged('WK4b'),
@@ -2774,7 +2784,7 @@ describe('the wake after a terminal write (#696)', () => {
   });
 
   it('WK5 a wake with no runnable session, before start(), is one idle tick', async () => {
-    const orchestrator = orchestratorOf({ log: tagged('WK5') });
+    const orchestrator = wakeful({ log: tagged('WK5') });
     orchestrator.wake();
     await until('the tick line', () => ticksOf('WK5').length === 1);
     expect(ticksOf('WK5')).toEqual([
