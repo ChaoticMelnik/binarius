@@ -193,10 +193,11 @@ no repeat.
 | demo screens, the launch screen (#320), the amount screen (#476), the picker | their own keyboards (unchanged); the launch screen and the amount screen are deleted once the session's status is sent (#418) |
 | the signals list (#320, #685), its empty and refusal screens | the pairs · 🔄 Обновить (or 🔄 Повторить) \| 🧭 Выбрать пару вручную · 🏠 В меню |
 | a pair's summary (#685) | 📊 Анализ · ↩️ Активы \| ↩️ Типы |
-| the analysis (#360) | 🚀 Сессия из 5 циклов on a signal (#509: none on «сигнала нет») · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ К паре ↩️ Типы (#685); «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
+| the analysis (#360) | 🚀 Сессия из 5 циклов on a signal (#509: none without one; the wait then, 🧭 · 🏠, #664) · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ К паре ↩️ Типы (#685); «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
-| the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню; `no_signal` (#509) → 🔀 Выбрать другую пару (`demo:sig`) · 🏠 В меню |
-| a cycle door's press (`demo:l`, #509): «сигнала нет» / the signal unread | 🔀 Выбрать другую пару · 🏠 В меню / 🔄 Повторить (the pressed data) · 🏠 В меню |
+| the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню; `no_signal` (#509) → the wait for the signal (#664): 🧭 Выбрать пару вручную · 🏠 В меню, in place of the pressed screen or as a new message |
+| a cycle door's press (`demo:l`, #664): the pair not in the signals list, or the list not read | the wait for the signal: the other pairs with a signal now (`demo:l:<id>:5`, two a row, for 30 s) · 🧭 Выбрать пару вручную · 🏠 В меню |
+| the signals list after 30 s, a wait past its bound or at the bot's stop (#664) | 📡 Показать сигналы (`demo:sig`) · 🧭 Выбрать пару вручную \| 🏠 В меню |
 | the mode screen (`mode`, `mode:x`; #474, [trading-mode.md](trading-mode.md#the-bot)) | 💼 Включить реальный режим (`mode:r`) in demo or 🎮 Вернуться в демо (`mode:d`) in real · 🏠 В меню |
 | its confirm (`mode:r`) | ✅ Подтверждаю (`mode:r:ok`) · ↩️ Отмена (`mode:x`, the step back, so no menu of its own) |
 | a switch's result (`modeEnabled`, `modeDisabled`) | 🏠 В меню |
@@ -222,8 +223,8 @@ no repeat.
 «📊 Новый анализ» opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never
 a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals list
 (`demo:sig`, the list at 5 s since #685; `demo:sig:<sec>` of older buttons leads there too).
-«🔀 Выбрать другую пару» (#509) carries the same data: a session stopped or
-refused for want of a signal is not offered its own pair again; the backend's summary of such a
+«🔀 Выбрать другую пару» (#509) carries the same data: a session stopped for want of a signal
+is not offered its own pair again (a start refused for want of one waits for it since #664); the backend's summary of such a
 stop draws `DEMO_SIGNALS_CALLBACK_DATA` (`bot-navigation.ts`). The trackers' edits take what they draw and, for a last
 edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
 (`not_found`, `deadline`), `SessionTrackRequest.edit(drawing, end?)` with `not_found` only. So

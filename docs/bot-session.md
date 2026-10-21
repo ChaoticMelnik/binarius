@@ -1,7 +1,7 @@
 # The session in the bot: the button, the session message, the stop, the trade messages and the summary card (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
-first row on a signal (#360; since #509 never on «сигнала нет»); a finished single trade's message
+first row on a signal (#360; since #509 never without one, and without one it waits for it, #664); a finished single trade's message
 draws the same button under its result (#360,
 [bot-demo-trade.md](bot-demo-trade.md#the-status-message)); the launch screen of the signals list
 in real mode (#320, #327, [bot-demo.md](bot-demo.md#the-launch-screen-in-real-mode-327)) draws
@@ -196,7 +196,8 @@ session:<id>                       (an old status message's «🔄 Обнови�
 
 - On the analysis it is drawn on a signal only (#360, #509: before #509 «сигнала нет» drew it too,
   and the session waited for a signal itself; the owner wants no session on a pair without one) —
-  as the first row, above «➕ Ещё»; not on «сигнала нет», `fetch_failed` or a failed signal call;
+  as the first row, above «➕ Ещё»; not without a signal (the analysis then waits for one, #664,
+  [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)), on `fetch_failed` or a failed signal call;
   at any payout (#631; #379 withheld it below 80 %). It is drawn only where `sessionFits(durationSec)` holds: 5 × 4 × (5 + 120) s and 5 × 4 × (15 + 120) s fit the worker's hour (#552: five cycles of up to four trades), so
   after #313 every duration of the set has the button; the guard stays, in the keyboard and in
   `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_CYCLES` with
@@ -247,7 +248,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
-| 409 `no_signal` | the same (#509): the pair's signal on the current candle is «сигнала нет» — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig`) and «🏠 В меню» |
+| 409 `no_signal` | the same (#509): the pair has no signal on the current candle — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | the wait for the signal (#664, [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)): «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + «🧭 Выбрать пару вручную» and «🏠 В меню», in place of the launch or the amount screen (`removeScreen`; gone → a new message), as a new message for any other press and a typed amount; the other pairs with a signal from the first poll; the signal there: the amount screen (demo, its way back kept) or the launch (real) in the same message (`trading-session.test.ts` W-start1–3) |
 | 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
@@ -919,7 +920,10 @@ these paths never add up; each is under phase 1's budget. The waiting message ta
 pacer's tokens (a send and a delete are calls); a new cycle is three calls instead of one. The bot's recovery after a restart adds up to 4 first polls a second on the same
 token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and only a stopped
 session's is an edit (#536, `mayDraw`) — 12 calls when each entry's card is due ([risk
-47](#accepted-risks)).
+47](#accepted-risks)). The wait for a signal (#664) adds up to 5 edits a second
+(`SIGNAL_WAIT_EDITS_PER_SECOND`): about 38 a second in the worst coincidence, above Telegram's ~30,
+so its edits pause on a 429 for its `retry_after`
+([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)).
 
 The list's query evaluates each correlated subquery twice per row — in the select list and in the
 filter, over the sessions with `final_notice_sent_at` null: Postgres plans one SubPlan per
@@ -1343,7 +1347,7 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     under a single trade and the real launch screen after a saved stake show their button on a
     pair whose signal may be gone by the press; the press refuses with the reason — the amount
     screen's node `demo:l` reads the signal at the press in either mode, the start route's step 4c
-    in real — and a session never starts on «сигнала нет».
+    in real — and a session never starts without a signal: the bot waits for it instead (#664).
 34. **A signal gone right after the start** (#509): the start saw a signal, the orchestrator's
     first attempt a few seconds later sees «сигнала нет»; the session waits up to the no-signal
     limit and stops with no trade. That is the limit, by the owner's decision.
