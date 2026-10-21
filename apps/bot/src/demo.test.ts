@@ -804,7 +804,7 @@ describe('the amount screen (#476)', () => {
       [PAIR_OTHER_TYPE.id, TradeAction.Up],
     );
 
-    it('W-door1 a pair absent from the fresh list waits: the alternatives two a row, manual and menu; no evaluateSignal', async () => {
+    it('W-door1 a pair absent from the fresh list waits: the other pairs two a row, manual and menu; no evaluateSignal', async () => {
       const { press, calls, evaluateSignal, signalWaiter } = setup({
         readSignals: () => Promise.resolve(ALTERNATIVES),
       });
@@ -826,27 +826,6 @@ describe('the amount screen (#476)', () => {
         back: 'l',
         alternatives: 'shown',
       });
-    });
-
-    it('W-door1b leaves the chosen pair out of the alternatives', async () => {
-      const { press, calls } = setup({
-        readSignals: () => Promise.resolve(signalsOf([PAIR_SHORT.id, TradeAction.Down])),
-        readPairs: catalogOf(PAIR_EURUSD, PAIR_SHORT),
-      });
-      await press(demoLaunchCallbackData(PAIR_SHORT.id, 5));
-      expect(payloadOf(calls, 'editMessageText')?.text).toContain('Выбери сумму сделки 👇');
-      const waiting = setup({
-        readSignals: () =>
-          Promise.resolve(
-            signalsOf([PAIR_SHORT.id, TradeAction.Down], [PAIR_OTHER_TYPE.id, TradeAction.Up]),
-          ),
-      });
-      await waiting.press(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
-      const data = rowsOf(payloadOf(waiting.calls, 'editMessageText'))
-        .flat()
-        .map((key) => key.callback_data);
-      expect(data).not.toContain(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
-      expect(data).toContain(demoLaunchCallbackData(PAIR_SHORT.id, 5));
     });
 
     it('W-door2 waits without alternatives when the signals are not read or the list is missing, one warn', async () => {

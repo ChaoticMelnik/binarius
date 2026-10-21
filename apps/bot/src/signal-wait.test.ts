@@ -87,13 +87,11 @@ function setup(options: { maxMs?: number; shutdownBudgetMs?: number; maxEntries?
     expired: () => screen('expired'),
     waiting: (base: TelegramHtml, alternatives) =>
       screen(`${base.value}|${alternatives.map(({ pair }) => pair.id).join(',')}`),
-    alternatives: (signals, catalog, _nowMs, assetId) =>
-      signals
-        .filter((signal) => signal.assetId !== assetId)
-        .flatMap((signal) => {
-          const pair = catalog.pairs.find((listedPair) => listedPair.id === signal.assetId);
-          return pair === undefined ? [] : [{ pair, action: signal.action }];
-        }),
+    alternatives: (signals, catalog) =>
+      signals.flatMap((signal) => {
+        const pair = catalog.pairs.find((listedPair) => listedPair.id === signal.assetId);
+        return pair === undefined ? [] : [{ pair, action: signal.action }];
+      }),
     nextStep: (step, pair, access) =>
       screen(`next:${pair.id}:${access?.tradingMode ?? 'none'}:${step.back}`),
     refusal: (check) => screen(`refusal:${check.reason}`),

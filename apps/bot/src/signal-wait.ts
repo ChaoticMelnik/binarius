@@ -87,12 +87,12 @@ export interface SignalWaitScreens {
   expired(): DemoScreen;
   // the wait for a pair, with the other pairs' buttons when there are some
   waiting(base: TelegramHtml, alternatives: readonly ShownSignal[]): DemoScreen;
-  // the pairs with a signal now but the chosen one, in the list's order
+  // the pairs with a signal now, in the list's order: the chosen pair is not among them, or the
+  // wait would have ended on its signal
   alternatives(
     signals: TradingSignalsResponse['lists'][number]['signals'],
     catalog: PairsCatalogResponse,
     nowMs: number,
-    assetId: number,
   ): ShownSignal[];
   // the next step on the chosen pair's signal: the amount screen in demo, the launch in real; a
   // failed access read (null) the amount screen's own «недоступно»
@@ -324,7 +324,7 @@ export function createSignalWaiter({
         const resolved = await resolve(entry, check.pair);
         if (resolved !== undefined) return resolved;
       } else if (pair.alternatives === 'pending') {
-        const alternatives = screens.alternatives(list.signals, catalog, nowMs, pair.assetId);
+        const alternatives = screens.alternatives(list.signals, catalog, nowMs);
         if (alternatives.length === 0) {
           pair.alternatives = 'done';
           return 'kept';
