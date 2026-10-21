@@ -3,13 +3,14 @@ import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient, type BrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
-import { type DecimalString } from '@binarius/shared';
+import { isClosedTrade, type DecimalString } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   brokerTrades,
   findTradeIntent,
   hashToken,
   markIntentAccepted,
+  settleClosedTrades,
   takeIntent,
   tokenLedger,
   type Db,
@@ -89,12 +90,14 @@ const catchupOf = (
   config: Partial<SettlementCatchupConfig> = {},
   db: Db = tmp.db,
   rest: Pick<BrokerRestClient, 'listTrades'> = createBrokerRestClient({ baseUrl: broker.url }),
+  onIntentEnded?: () => void,
 ) =>
   createSettlementCatchup({
     db,
     rest,
     tokens,
     logger,
+    onIntentEnded,
     config: {
       tickMs: 60_000,
       graceMs: GRACE_MS,
@@ -472,5 +475,66 @@ describe('createSettlementCatchup (#90)', () => {
     } finally {
       tokens.accessToken = original;
     }
+  });
+});
+
+describe('the wake of the session orchestrator (#696)', () => {
+  // the callback reads the intent's committed status over the pool at the moment it is called
+  async function wakesOf(
+    intentId: string,
+    rest: Pick<BrokerRestClient, 'listTrades'> = createBrokerRestClient({ baseUrl: broker.url }),
+  ) {
+    const seen: Promise<string>[] = [];
+    const catchup = catchupOf(capture().logger, {}, tmp.db, rest, () => {
+      seen.push(statusOf(intentId));
+    });
+    await catchup.tick();
+    await catchup.stop();
+    return Promise.all(seen);
+  }
+
+  it('CW1 an attempt that settles wakes once, after the commit', async () => {
+    const a = await acceptedAtBroker();
+    broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+    expect(await wakesOf(a.intent.id)).toEqual(['settled']);
+  });
+
+  it('CW1 an intent settled by someone else meanwhile (left) does not wake', async () => {
+    const a = await acceptedAtBroker();
+    broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+    const client = createBrokerRestClient({ baseUrl: broker.url });
+    // the socket's settle lands between the catch-up's list and its own settle
+    const racing: Pick<BrokerRestClient, 'listTrades'> = {
+      listTrades: async (...args) => {
+        const trades = await client.listTrades(...args);
+        await settleClosedTrades(tmp.db, {
+          brokerAccountId: a.brokerAccountId,
+          trades: trades.filter(isClosedTrade),
+        });
+        return trades;
+      },
+    };
+    expect(await wakesOf(a.intent.id, racing)).toEqual([]);
+    expect(await statusOf(a.intent.id)).toBe('settled');
+  });
+
+  it('CW1 a trade still open (stalled) does not wake', async () => {
+    const a = await acceptedAtBroker();
+    expect(await wakesOf(a.intent.id)).toEqual([]);
+  });
+
+  it('CW1 an unreachable backend (stalled) does not wake', async () => {
+    const a = await acceptedAtBroker();
+    broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+    tokenAnswers.set(a.brokerAccountId, { ok: false, reason: 'backend_unreachable' });
+    expect(await wakesOf(a.intent.id)).toEqual([]);
+  });
+
+  it('CW1 a 429 (rate_limited) does not wake', async () => {
+    const a = await acceptedAtBroker();
+    broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+    broker.rest.failNext('tradesList', { status: 429, retryAfterSec: 3 });
+    expect(await wakesOf(a.intent.id)).toEqual([]);
+    expect(await statusOf(a.intent.id)).toBe('accepted');
   });
 });

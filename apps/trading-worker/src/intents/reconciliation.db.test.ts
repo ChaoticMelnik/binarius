@@ -113,12 +113,14 @@ const passOf = (
   reconciler: IntentReconciler,
   logger: pino.Logger = silent,
   config: Partial<ReconciliationPassConfig> = {},
+  onIntentEnded?: () => void,
 ) =>
   createReconciliationPass({
     db: tmp.db,
     reconciler,
     balanceCheck,
     logger,
+    onIntentEnded,
     config: {
       tickMs: 60_000,
       retryMs: RETRY_MS,
@@ -720,6 +722,64 @@ describe('the reconciliation pass: the balance check (#92)', () => {
       balanceCompared: 1,
       balanceMismatch: 1,
     });
+  });
+});
+
+describe('the reconciliation pass: the wake of the session orchestrator (#696)', () => {
+  // one intent per tick; the callback reads the intent's committed status over the pool and the
+  // balance checks started so far
+  async function wakesOf(answer: Answer) {
+    const { intent } = await reconcilingIntent();
+    const seen: Promise<{ status: string; checks: number }>[] = [];
+    const pass = passOf(reconcilerOf({ [intent.id]: answer }), silent, {}, () => {
+      const checks = checkCalls.length;
+      seen.push(rowOf(intent.id).then((row) => ({ status: row.status, checks })));
+    });
+    await pass.tick();
+    await pass.stop();
+    return Promise.all(seen);
+  }
+
+  it.each<[string, Answer, string]>([
+    [
+      'a closed trade found',
+      (row) => ({ outcome: 'found', trade: closedTradeFor(openTradeFor(row)) }),
+      'settled',
+    ],
+    ['not_found', () => ({ outcome: 'not_found' }), 'rejected'],
+    ['ambiguous', () => ({ outcome: 'ambiguous' }), 'manual_review'],
+    ['unresolved', () => ({ outcome: 'unresolved' }), 'manual_review'],
+    [
+      'a mismatching trade',
+      (row) => ({ outcome: 'found', trade: openTradeFor(row, { assetId: 92 }) }),
+      'manual_review',
+    ],
+  ])(
+    'RW1 wakes once after the commit on %s, before the balance check',
+    async (_, answer, status) => {
+      expect(await wakesOf(answer)).toEqual([{ status, checks: 0 }]);
+    },
+  );
+
+  it.each<[string, Answer]>([
+    ['an open trade found (accepted)', (row) => ({ outcome: 'found', trade: openTradeFor(row) })],
+    ['unavailable', () => ({ outcome: 'unavailable', reason: 'not_configured' })],
+    [
+      'a throwing reconciler',
+      () => {
+        throw new Error('reconciler bug');
+      },
+    ],
+    [
+      'a lost CAS',
+      async (row) => {
+        await ageClaim(row.id, RETRY_MS + 1_000);
+        await claimReconciling(tmp.db, { id: row.id, retryMs: RETRY_MS });
+        return { outcome: 'not_found' };
+      },
+    ],
+  ])('RW1 does not wake on %s', async (_, answer) => {
+    expect(await wakesOf(answer)).toEqual([]);
   });
 });
 
