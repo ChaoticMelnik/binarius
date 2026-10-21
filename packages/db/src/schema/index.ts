@@ -6,6 +6,7 @@ export * from './token-ledger';
 export * from './trading-sessions';
 export * from './trade-intents';
 export * from './signal-decisions';
+export * from './decision-ticks';
 export * from './outbox-events';
 export * from './broker-trades';
 export * from './broker-balance-snapshots';
