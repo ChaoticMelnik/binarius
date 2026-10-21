@@ -43,6 +43,7 @@ import { createMarketDataManager } from './market-data/manager';
 import { createTickStore } from './market-data/ticks';
 import { createSecondSeries } from './market-data/seconds';
 import { createH1Shadow } from './h1/shadow';
+import { createTradeLogKeeper } from './trade-log/keeper';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
 import { createCandleBackfill } from './market-data/backfill';
@@ -57,6 +58,9 @@ import {
   MARKET_DATA_BACKFILL_BUDGET_MS,
   MARKET_DATA_BACKFILL_CONCURRENCY,
   H1_SECOND_CLOSE_MARGIN_MS,
+  TRADE_TICKS_AHEAD_MS,
+  TRADE_TICKS_BUFFER_MS,
+  TRADE_TICKS_MAX_PER_PAIR,
   H1_SERIES_CAPACITY_SEC,
   H1_SHADOW_LOG_MS,
   H1_SHADOW_TICK_MS,
@@ -163,8 +167,13 @@ const candleStore =
           intervals: SIGNAL_SCAN_INTERVALS,
         }),
         requests: createPendingRequests(MARKET_DATA_PENDING_MAX),
-        // the newest tick per pair, answered with a session's decision record (#666)
-        ticks: createTickStore(),
+        // the newest tick per pair, answered with a session's decision record (#666), and the
+        // window of ticks the trade log keeper captures around a decision (#668)
+        ticks: createTickStore({
+          bufferMs: TRADE_TICKS_BUFFER_MS,
+          maxPerPair: TRADE_TICKS_MAX_PER_PAIR,
+          aheadMs: TRADE_TICKS_AHEAD_MS,
+        }),
         // the 1s closes the H1 shadow decides on (#669, docs/h1.md)
         seconds: createSecondSeries({
           capacitySec: H1_SERIES_CAPACITY_SEC,
@@ -372,6 +381,11 @@ const starReconciler = createStarReconciler({
   logger: app.log,
 });
 
+// docs/trade-log.md → The ticks around a decision, → Retention (#668): captures the ticks around
+// each intent decision and a sample of the shadow ones (only with BROKER_WS_URL), and sweeps the
+// decisions without a trade past their retention. Started after listen(), stopped in phase 1.
+const tradeLogKeeper = createTradeLogKeeper({ db, ticks: candleStore?.ticks, logger: app.log });
+
 // docs/broker-balance.md: refreshed on demand by POST /trading/access and every
 // BALANCE_RECONCILE_INTERVAL_MS over the accounts in work, the latter never exchanging a token
 const balanceReconciler = createBalanceReconciler({
@@ -532,6 +546,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => sessionNotices.stop(),
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
+      () => tradeLogKeeper.stop(),
       async () => {
         await marketData?.h1Shadow?.stop();
         await marketData?.backfill.stop();
@@ -575,6 +590,7 @@ if (!shuttingDown) {
   app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
   app.log.info({ enabled: marketData !== undefined }, 'market data source');
   app.log.info({ enabled: marketData?.h1Shadow !== undefined }, 'h1 shadow');
+  app.log.info({ capture: candleStore !== undefined }, 'trade log keeper');
 }
 if (!shuttingDown) {
   publisher.start();
@@ -588,6 +604,7 @@ if (!shuttingDown) {
   marketData?.manager.start();
   marketData?.backfill.start();
   marketData?.h1Shadow?.start();
+  tradeLogKeeper.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();
