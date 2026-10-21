@@ -3,16 +3,16 @@
 A user with an active Binodex account gets the **status card** (#24) as the bot's home: on
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
-status or age line when the broker balance is missing or old, a hint, and these rows: «🎮
-Демо-торговля» (#320; «🚀 Торговать» in real mode, #121, [trading-mode.md](trading-mode.md)) beside
-the mode button — «💼 Реальный режим» in demo, «🎮 Вернуться в демо» in real, both opening the
-mode screen (#474, [trading-mode.md](trading-mode.md#the-bot)) — then «👥 Пригласить друга» (#115,
-[referrals.md](referrals.md)) beside «⭐ Купить токены» (#117, both modes, [stars.md](stars.md)) in
-one row (#506, [bot-navigation.md](bot-navigation.md#the-width-506)), and in the last row «💳
-Пополнить» (#27, both modes, the cashier Mini App, [deposit.md](deposit.md); only when
-`WEB_PUBLIC_URL` is https) beside «🌐 Язык / Language» (#508, the language screen,
-[bot-navigation.md](bot-navigation.md#the-language-screen-508)), which stands there alone without
-the cashier. It is pinned in place of whatever was pinned before. The card is in the user's
+status or age line when the broker balance is missing or old, a hint, and these rows (#475,
+[bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)): «🎮 Демо-торговля» (#320; «🚀
+Торговать» in real mode, #121, [trading-mode.md](trading-mode.md)) alone and green; the mode
+button — «💼 Реальный режим» in demo, «🎮 В демо» (blue) in real, both opening the mode screen
+(#474, [trading-mode.md](trading-mode.md#the-bot)) — beside «👥 Позвать друга» (#115,
+[referrals.md](referrals.md)); «⭐ Купить» (#117, both modes, [stars.md](stars.md), blue) beside
+«🌐 Язык/Language» (#508, the language screen,
+[bot-navigation.md](bot-navigation.md#the-language-screen-508)); and last «💳 Пополнить» (#27, both
+modes, the cashier Mini App, [deposit.md](deposit.md); only when `WEB_PUBLIC_URL` is https) alone
+and green. It is pinned in place of whatever was pinned before. The card is in the user's
 language ([bot-texts.md](bot-texts.md#languages)); `/start`, `/menu` and «🏠 В меню» put the
 language their `/users/start` answer carries into the bot's cache.
 
@@ -140,7 +140,7 @@ history but loses its pin; a lost or unpinned account card is replaced by `/star
 `DEMO_CALLBACK_DATA = 'demo'`, label «🎮 Демо-торговля» (#320; «🎮 Запустить демо» before). The
 button opens «Сигналы сейчас» (#685) as a new message (the card is a photo whose caption cannot be
 edited into another screen): the pairs with a 5 s signal now, each leading to the launch of a
-cycle; the list has «🧭 Выбрать пару вручную» for the asset type, the pair and its summary, each checked
+cycle; the list has «🧭 Вручную» for the asset type, the pair and its summary, each checked
 on a catalog read at the press ([bot-demo.md](bot-demo.md#the-signals-screen-320)). The bot keeps
 no state for it, so a button on an old card leads to the same place: since #685 that is the
 signals list (the duration screen from #382 to #685), and the manual path is one press further.

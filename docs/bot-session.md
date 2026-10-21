@@ -52,7 +52,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   button's row in the analysis keyboard (in demo `demo:l:<assetId>:<sec>:a`, #476), and
   `launchScreen`'s «🚀 Запустить цикл · REAL» (#320, #327).
 - `apps/bot/src/trading-session.ts` — `createTradingSessionComposer({ backend, logger,
-  sessionTracker, connectKeyboard, cashierUrl?, setupCardPhotos })` returns `{ composer, startSession, resume }`:
+  sessionTracker, connectButtons, cashierUrl?, setupCardPhotos })` returns `{ composer, startSession, resume }`:
   the start and stop presses, an old status message's «🔄 Обновить» (#536) and the command `/stop`
   (#122); `startSession(ctx, data, catalog, { retryUnknown, removeScreen })` is the one start path,
   which the amount screen's presses use too (`cycle-stake.ts`, #476); `resume(api, botUsername,
@@ -242,7 +242,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 - **A third door (#360).** A single trade's status message, once the trade is `accepted`, `settled`
   or `rejected`, draws «🚀 Сессия из 5 циклов» with `real:sess:<assetId>:<sec>` of a real trade
   (#327) or `demo:l:<assetId>:<sec>:n` of a demo one (the amount screen, #476), above
-  the end of the path, by the tracker's edits and by «🔄 Обновить статус» (`sessionOfferOf`,
+  the end of the path, by the tracker's edits and by «🔄 Обновить» (`sessionOfferOf`,
   [bot-demo-trade.md](bot-demo-trade.md#the-status-message)), at any payout (#631). A press while
   a session runs shows the running one and starts none, as from any door.
 
@@ -255,7 +255,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `active_session_exists` with `null` | that session ended between the backend's check and its read | «⏳ Предыдущая сессия только что завершилась. Нажми кнопку ещё раз.» |
 | 404 `broker_account_not_found`, 409 `account_revoked` | refusal before the side effect | `accountNone` / `accountRevoked` + the connect button |
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
-| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) and «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) in one row above the way back |
+| 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.»; «💳 Пополнить» (#27, [deposit.md](deposit.md), https only) on its own row, then «⭐ Купить» (#117, [stars.md](stars.md)) in one row with the way back and the menu (#475) |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
 | 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396): a real door pressed by a user left in real mode; the bot does not know the flag | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
@@ -263,7 +263,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
-| 409 `no_signal` | the same (#509): the pair has no signal on the current candle — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | the wait for the signal (#664, [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)): «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + «🧭 Выбрать пару вручную» and «🏠 В меню», in place of the launch or the amount screen (`removeScreen`; gone → a new message), as a new message for any other press and a typed amount; the other pairs with a signal from the first poll; the signal there: the amount screen (demo, its way back kept) or the launch (real) in the same message (`trading-session.test.ts` W-start1–3) |
+| 409 `no_signal` | the same (#509): the pair has no signal on the current candle — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | the wait for the signal (#664, [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)): «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + «🧭 Вручную» and «🏠 В меню», in place of the launch or the amount screen (`removeScreen`; gone → a new message), as a new message for any other press and a typed amount; the other pairs with a signal from the first poll; the signal there: the amount screen (demo, its way back kept) or the launch (real) in the same message (`trading-session.test.ts` W-start1–3) |
 | 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
@@ -287,7 +287,7 @@ and tracked, so a slow or refused delete never withholds it (`removeLaunchScreen
 `trading-session.ts`; since #587 the stop under the waiting message deletes nothing). A refusal,
 «⏳ Предыдущая сессия только что завершилась…» and an unknown outcome send no session message, and
 the screen stays with its buttons: on the launch screen «🚀 Запустить
-цикл» is the retry and «💵 Изменить ставку» the fix, on the amount screen the amounts and «✏️ Своя
+цикл» is the retry and «💵 Ставка» the fix, on the amount screen the amounts and «✏️ Своя
 сумма». A typed amount is a text: there is no screen to delete, the prompt stays. The analysis, the
 row under a finished trade and «🔁 Ещё сессия» keep their messages (owner's decision 2026-10-10):
 their session buttons in real carry the plain datum, their demo doors open the amount screen in
@@ -435,14 +435,14 @@ read had a direction (`editMessagePhotoByIdHtml`), else as a text. **The end of 
 is the stopped session's next step under the reply to its stop, an old status message the stop
 drew in place and the summary (#537): «🔁 Ещё сессия» (#320) on the same pair and duration — drawn
 only when the view has `settings` and its duration is one the demo still offers (`durationOf`) —
-then (#350, [bot-navigation.md](bot-navigation.md)) «📊 Новый анализ» on the same pair and
-duration (when the demo still offers it) and «📡 К сигналам» in one row, «💳 Пополнить» (#27,
-[deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https) and «👥 Пригласить друга» (#115,
-[referrals.md](referrals.md)) in one row, «🏠 В меню» (the rows: bot-navigation.md → The width,
-#506); without `settings` only «💳 Пополнить» and «👥 Пригласить друга» in one row and «🏠 В
-меню». A session stopped by the no-signal limit (`no_signal_timeout`, #509) offers
-another pair, not the same one again: no «🔁 Ещё сессия» and no «📊 Новый анализ», and «🔀 Выбрать
-другую пару» in place of «📡 К сигналам», on the same data (`demo:sig`, #685;
+then (#350, [bot-navigation.md](bot-navigation.md)) «📊 Анализ» on the same pair and
+duration (when the demo still offers it) and «📡 Сигналы» in one row, «💳 Пополнить» (#27,
+[deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https) on its own row, «👥 Позвать друга»
+(#115, [referrals.md](referrals.md)) and «🏠 В меню» in one row (the rows: bot-navigation.md →
+Roles, colours and rows, #475); without `settings` only «💳 Пополнить», then «👥 Позвать друга»
+and «🏠 В меню» in one row. A session stopped by the no-signal limit (`no_signal_timeout`, #509) offers
+another pair, not the same one again: no «🔁 Ещё сессия» and no «📊 Анализ», and «🔀 Выбрать
+другую пару» in place of «📡 Сигналы», on the same data (`demo:sig`, #685;
 `appendEndOfPath(…, { otherPair: true })`). A failed start, `sessionJustEnded`, leads back to the
 analysis and the menu; a failed stop offers the menu, never the stop again.
 
@@ -1228,18 +1228,18 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   `sessionSummaryCaption` in the registry holds it under Telegram's 1024 for a caption (Rule 30);
   the text path sends the same caption with the width spacer.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
-  сессия» at 5 s (#685) while a session at it fits, «📊 Новый анализ» and
-  «📡 К сигналам» in one row, «💳 Пополнить» (#27, https only) and «👥 Пригласить друга» (#115) in
-  one row, «🏠 В меню»; «💳 Пополнить» and «👥 Пригласить друга» in one row and «🏠 В меню» alone
+  сессия» at 5 s (#685) while a session at it fits, «📊 Анализ» and
+  «📡 Сигналы» in one row, «💳 Пополнить» (#27, https only) on its own row, «👥 Позвать друга»
+  (#115) and «🏠 В меню» in one row (#475); «💳 Пополнить», then «👥 Позвать друга» and «🏠 В меню»
   without `settings`
   (`sessionCardKeyboard`); under a `no_signal_timeout` stop «🔀 Выбрать другую пару» in place of the
   first three (#509). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321), on the photo and on the text after a refused photo, not on
   a session without a trade (its share would answer nothing).
-  «📡 К сигналам» edits the pressed message; under the card Telegram refuses that with «there is
+  «📡 Сигналы» edits the pressed message; under the card Telegram refuses that with «there is
   no text in the message to edit», `editRefusal` (`telegram-refusals.ts`) reads it as gone, and the screen
   comes as a new message under the card, with one `warn` `the demo screen was not edited, sending
-  it anew` per press. «📊 Новый анализ» tries no edit (#482): the press carries the photo, so
+  it anew` per press. «📊 Анализ» tries no edit (#482): the press carries the photo, so
   «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the
   card goes as a photo and «⏳» is deleted ([bot-demo.md → The analysis](bot-demo.md#the-analysis)).
 - **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about
@@ -1360,8 +1360,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     Falsifiable: the owner's container command above does not print `ok`.
 13. **Render cost** (#318): about 30 ms per finished session on the bot's event loop. Falsifiable:
     a render over 200 ms on the pilot.
-14. **Warn noise under the card** (#318): every press of «📡 К сигналам» under a card logs one
-    `warn` `the demo screen was not edited, sending it anew` («📊 Новый анализ» no longer edits
+14. **Warn noise under the card** (#318): every press of «📡 Сигналы» under a card logs one
+    `warn` `the demo screen was not edited, sending it anew` («📊 Анализ» no longer edits
     there, #482); a separate outcome for "no text" would be a third answer in every caller of
     `editRefusal`. Falsifiable: that line's rate after #482 is roughly the rate of that press.
 15. **A leftover «⏳»** (#318) — closed by #482: under the card «⏳» is sent at once and the
@@ -1727,7 +1727,7 @@ The bot's presses are covered by `trading-session.test.ts`, `session-tracker.tes
 card is drawn and rendered by `session-card.test.ts` on the host's resvg build. The routes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
-The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, «📊 Анализ»,
+The steps in Telegram — «🎮 Демо-торговля», «🧭 Вручную», a pair, «📊 Анализ»,
 «🚀 Сессия из 5 циклов» first, with or without a signal, then an amount of the amount screen
 (#476; or a pair of «Сигналы сейчас» and an amount), the session message, the waiting message under
 the cycle messages, «⏹ Остановить сессию» under it (#536); on a

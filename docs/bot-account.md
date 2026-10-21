@@ -18,7 +18,7 @@ recorded — `/start`, `/menu` and `/settings`, all through `POST /users/start`
 - `apps/bot/src/` — `backend-client.ts` (`readAccount`), `texts.ts` (the `account*` entries,
   `accountStatus`, `LABELS.accountCommand`; the texts are catalog entries,
   [bot-texts.md](bot-texts.md)), `bot.ts` (the handler, `accountKeyboard`,
-  `addConnectButtons`), `timing.ts` (`HANDLER_CALLS.account`); the menu entry is in
+  `connectButtons`), `timing.ts` (`HANDLER_CALLS.account`); the menu entry is in
   `packages/shared/src/bot-commands.ts`.
 
 ## Sequence
@@ -62,7 +62,7 @@ a plain text escaped as data, like the address it stands in for). The address is
 `accountKeyboard` puts one «✅ Подтвердить: ‹email›» button (or «✅ Подтвердить привязку» without an
 address) per `pending` link — the same `LABELS.confirmButton`, callback data and confirm handler
 as `/start` — and then, while no link is `active`, the welcome's «🔗 Подключить аккаунт Binodex»
-(`addConnectButtons`, shared with the welcome; the site sign-in row is gone since #314). A user
+(`connectButtons`, shared with the welcome; the site sign-in row is gone since #314). A user
 whose links are all `active`, or `active` and `revoked`, gets the text with no `reply_markup`.
 
 | Links                   | Confirm buttons | Connect button |

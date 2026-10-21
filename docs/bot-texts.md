@@ -163,6 +163,47 @@ block, and a dynamic `import()` is not caught; the check on every call holds eit
 - Every other plain entry: `BOT_LABEL_LIMIT` (64) and one line. This is the project's limit, not
   the Bot API's, which publishes none for an inline button's text: it keeps a button readable and
   is well above the longest default.
+- A button label in a row of two shows at most 14 characters, in a row of three 9, without emoji
+  (`BUTTON_LABEL_WIDTHS`, `buttonLabelWidth`, #475; [bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)).
+  `BUTTON_LABEL_ROWS` in `bot-texts.test.ts` names the narrowest row each label stands in and
+  checks the default in Russian and in English there; a label of the buttons group without a row
+  fails it. An override is still checked against 64 only: one wider than its row is accepted and
+  cut by Telegram with an ellipsis, its colour and row unchanged.
+- The «· риск» mark (`stakeRiskButton`) goes on a stake preset from `STAKE_RISK_THRESHOLD` ($10,
+  inclusive) on the amount screen and in the picker (#476, #475).
+
+### Abbreviations (#475)
+
+The labels that stand in a row of two or three were shortened to fit it (owner's decision 4,
+2026-10-14; the list is the manager's of 2026-10-21, the owner corrects it on review):
+
+| Key | Was (ru) | Now (ru) | en was → now | Narrowest row |
+|---|---|---|---|---|
+| `inviteButton` | 👥 Пригласить друга | 👥 Позвать друга | 👥 Invite a friend → 👥 Invite friends | 2 |
+| `buyButton` | ⭐ Купить токены | ⭐ Купить | ⭐ Buy tokens → ⭐ Buy | 3 |
+| `languageButton` | 🌐 Язык / Language | 🌐 Язык/Language | the same | 2 |
+| `demoManualButton` | 🧭 Выбрать пару вручную | 🧭 Вручную | 🧭 Choose a pair manually → 🧭 Manually | 3 |
+| `repeatAnalysisButton` | 🔄 Повторить анализ | 🔄 Заново | 🔄 Repeat the analysis → 🔄 Again | 3 |
+| `refreshIntentButton` | 🔄 Обновить статус | 🔄 Обновить | 🔄 Refresh the status → 🔄 Refresh | 2 |
+| `newAnalysisButton` | 📊 Новый анализ | 📊 Анализ | 📊 New analysis → 📊 Analysis | 3 |
+| `toSignalsButton` | 📡 К сигналам | 📡 Сигналы | 📡 To the signals → 📡 Signals | 3 |
+| `stakeChangeButton` | 💵 Изменить ставку | 💵 Ставка | 💵 Change the stake → 💵 Stake | 2 |
+| `stakeCustomButton` | ✏️ Своя сумма | ✏️ Ввести | ✏️ My own amount → ✏️ Enter | 3 |
+| `stakeResetButton` | 🔁 Минимальная брокера | 🔁 Минимум | 🔁 Broker's minimum → 🔁 Minimum | 3 |
+| `stakeBackAnalysisButton` | ↩️ Назад к анализу | ↩️ К анализу | ↩️ Back to the analysis → ↩️ Analysis | 3 |
+| `stakeBackSettingsButton` | ↩️ Назад к настройкам | ↩️ Настройки | ↩️ Back to the settings → ↩️ Settings | 3 |
+| `stakeBackLaunchButton` | ↩️ К запуску | the same | ↩️ To the launch → ↩️ Launch | 3 |
+| `supportButton` | 💬 Написать в поддержку | 💬 Поддержка | 💬 Write to support → 💬 Support | 2 |
+| `modeBackDemoButton` | 🎮 Вернуться в демо | 🎮 В демо | 🎮 Back to demo → 🎮 To demo | 2 |
+| `resendButton` | 🔄 Запросить код ещё раз | 🔄 Новый код | 🔄 Request the code again → 🔄 New code | 2 |
+| `changeEmailButton` | ✏️ Изменить адрес | the same | ✏️ Change the address → ✏️ Change email | 2 |
+| `demoGroupCryptocurrency` | 💠 Криптовалюты | 💠 Крипта (the page's header too) | — | list of 2 |
+| `menuButton` | 🏠 В меню | the same | 🏠 To the menu → 🏠 Menu | 3 |
+| `levelReduced` | 🔕 Реже | the same | 🔕 Less often → 🔕 Fewer (the /settings legend too) | 3 |
+| `demoBackPairButton` | ↩️ К паре | the same | ↩️ To the pair → ↩️ Pair | 3 |
+
+A text that names a button by its fragment (`{refreshIntentButton}`, `{buyButton}`, …) follows the
+new label by itself.
 
 An entry's limit bounds that entry, not a message assembled from several (the card, the status
 card, `/account`, `/help`, the analysis screen). Those are bounded by [Assembled

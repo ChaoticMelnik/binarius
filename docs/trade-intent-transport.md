@@ -104,7 +104,7 @@ contains the SQL text and its parameters.
 
 ### GET /trading/intents/:id (#127)
 
-The bot reads an intent by the id it carries in the «🔄 Обновить статус» button's callback data
+The bot reads an intent by the id it carries in the «🔄 Обновить» button's callback data
 ([bot-demo-trade.md](bot-demo-trade.md)), so the read is scoped by its owner: `:id` is the intent's
 uuid and the query carries `telegramUserId` (the same `telegramUserIdSchema` as every request
 body). `getTradeIntentView(db, id, telegramUserId)` adds the owner to the join's `where`.

@@ -22,7 +22,7 @@ between the invoice and the payment is held, not credited (below).
 
 ## The flow
 
-1. **Entries.** `/buy` (the command menu, after `/account`), «⭐ Купить токены» under the status card
+1. **Entries.** `/buy` (the command menu, after `/account`), «⭐ Купить» under the status card
    in both modes, and under both `insufficient_tokens` refusals (the single trade, the session). The
    screen reads `/users/account` as `/account` does: no users row, or no `active` account →
    `buyNeedsAccount` with the connect button; a blocked user → `blocked`; otherwise `buyScreen`
