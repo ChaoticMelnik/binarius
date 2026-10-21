@@ -259,7 +259,7 @@ session offer (#360) when the caller asks for one. The callers never ask for bot
 | unknown, reconciling | 🔎 Результат сделки уточняется у брокера. Токен пока зарезервирован. |
 | manual_review | 🛠 Сделка на ручной проверке — напиши в поддержку: /support |
 | rejected / executor_not_configured | ⚠️ Сделка не отправлена: исполнение сделок ещё не подключено. Токен возвращён. |
-| rejected / expired, broker_rejected, publish_failed, reconciliation_not_found, manual_rejected, trading_paused, demo_only | each has its own line, ending «Токен возвращён.» (`trading_paused`: «⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.»; `demo_only`, #396: «⚠️ Сделка отклонена: реальные сделки на этом сервере отключены. Токен возвращён.») |
+| rejected / expired, broker_rejected, publish_failed, reconciliation_not_found, manual_rejected, trading_paused, demo_only | each has its own line, ending «Токен возвращён.» (`entry_window_missed`, #670, reads the `expired` line; only an H1 session's intent, which the bot never creates, carries it) (`trading_paused`: «⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.»; `demo_only`, #396: «⚠️ Сделка отклонена: реальные сделки на этом сервере отключены. Токен возвращён.») |
 | rejected / any other reason, or none | ❌ Сделка не открыта. Токен возвращён. |
 
 Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that «открыта» appears
