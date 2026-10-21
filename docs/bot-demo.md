@@ -1,4 +1,4 @@
-# The demo: the signals, an asset and the analysis on a fresh catalog (issues #125, #126, #320, #382, #476, #685)
+# The demo: the signals, an asset and the analysis on a fresh catalog (issues #125, #126, #320, #382, #476, #664, #685)
 
 The status card's «🎮 Демо-торговля» button (#24, [bot-menu.md](bot-menu.md)) opens «Сигналы
 сейчас» at once (#320, #685, [The entry](#the-entry-685), [The signals screen](#the-signals-screen-320)):
@@ -11,8 +11,11 @@ of a pair with «📊 Анализ», and the analysis. Every screen reads the b
 `GET /trading/pairs` ([pairs-catalog.md](pairs-catalog.md)) and draws nothing from an earlier
 read. «📊 Анализ» shows the analysis of the pair's candles by Signal module v1 (#126,
 [The analysis](#the-analysis)). Its first row is the session of five cycles (`DEFAULT_SESSION_CYCLES`, #552) on a signal (#360;
-since #509 never on «сигнала нет», [bot-session.md](bot-session.md#the-button)); on a signal, «➕ Ещё» draws the single
+since #509 never without one, [bot-session.md](bot-session.md#the-button)); on a signal, «➕ Ещё» draws the single
 trade's stake button in place, whose press is #127 ([bot-demo-trade.md](bot-demo-trade.md)).
+After the user chose a pair the bot never says «сигнала нет» (#664, owner 2026-10-21): the pair
+without a signal, the analysis without one and the empty list wait for it, and the bot edits the
+same message once it comes ([The wait for a signal](#the-wait-for-a-signal-664)).
 
 ```bash
 pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/catalog.test.ts apps/backend/src/trading/pairs-routes.test.ts   # needs no database or Redis
@@ -24,7 +27,11 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `DEMO_DURATIONS_SEC`, `DEMO_DURATION_SEC`, `LEGACY_DEMO_DURATIONS_SEC` (#685), `DEMO_PAGE_SIZE`, `isOpen`, `pairsOf`,
   `openPairsOf`, `pageOf`, `pageIndexOf`, `durationOptions`, `checkDemoPair`, `checkDemoTrade`,
   `readDemoCatalog`, `readDemoTrade` (#631 removed #379's `checkDemoCycle` and `readDemoCycle`).
-- `apps/bot/src/demo.ts` — `createDemoComposer({ backend, logger, now, dialog, connectKeyboard })`:
+- `apps/bot/src/signal-wait.ts` — `createSignalWaiter` (#664): the wait for a signal, its one
+  poll for every waiting user and its edits outside any update
+  ([The wait for a signal](#the-wait-for-a-signal-664)); `demo.ts`'s `createSignalWaitScreens` draws
+  its screens.
+- `apps/bot/src/demo.ts` — `createDemoComposer({ backend, logger, now, connectKeyboard, setupCardPhotos, signalWaiter })`:
   the handlers, the callback data builders (`DEMO_CALLBACK_DATA`, `DEMO_SIGNALS_CALLBACK_DATA`,
   `demoLaunchCallbackData` with its origin (#476),
   `cycleStakeCallbackData`, `cycleCustomCallbackData` and their patterns (#476),
@@ -47,7 +54,7 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 - `apps/bot/src/stake-access.ts` — `stakeAccess` (#476): the access read's refusals before any
   amount, shared by the picker and the amount screen.
 - `apps/bot/src/analysis.ts` — the analysis screen as a pure function (#126): `analysisScreen`,
-  `analysisUnavailableScreen`, `analysisSubject`, `NO_SIGNAL_REASON_TEXT`, `TREND_WORDS`,
+  `analysisUnavailableScreen`, `analysisSubject`, `TREND_WORDS`,
   `MOMENTUM_WORDS`, `VOLATILITY_WORDS` (maps to catalog keys, [bot-texts.md](bot-texts.md)),
   `formatRsi`, `formatAtrPct`; prices print through `formatPrice` of
   `packages/shared/src/bot-text-format.ts` (moved there by #464 for the session's trade messages).
@@ -73,7 +80,8 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `.demoGroups`, `.demoPage`, `.demoAsset`, `.legacyDuration` (2/2, #685), `.legacyKeyboard`,
   `.demoAnalysis`, `.analysisMore` (#360), `.cycleStakePreset`, `.cycleStakeCustom`,
   `.cycleStakeText` (#476); the link
-  `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
+  `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`; the wait's bounds `SIGNAL_WAIT_*` and
+  `SIGNALS_LIST_TTL_MS` (#664).
 - `packages/broker-rest/src/pairs-catalog.ts` and `packages/shared/src/catalog.ts` — the `fresh`
   flag of the catalog ([Fresh](#fresh)).
 
@@ -82,15 +90,16 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 ```text
 demo                      (the card's button)
   bot  → answerCallbackQuery ∥ GET /trading/signals ∥ GET /trading/pairs
-  bot  → sendMessage: «Сигналы сейчас · ⏱ 5 с», the pairs with a signal two a row, «🔄 Обновить» «🧭 Выбрать пару вручную» in one row, «🏠 В меню»
-demo:sig[:<sec>]          («🔄 Обновить», «↩️ К списку», «📡 К сигналам», «🔀 Выбрать другую пару»; `demo:sig:<sec>` of buttons from #382 to #685)
-  bot  → the same reads → editMessageText: the same list, in place
-demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount)
+  bot  → sendMessage: «Сигналы сейчас · ⏱ 5 с», the pairs with a signal two a row, «🔄 Обновить» «🧭 Выбрать пару вручную» in one row, «🏠 В меню»; no pair: «🔎 Анализирую сигналы…» with «🧭» / «🏠» (#664)
+  bot  → the wait registered on that message (#664): the list after 30 s, or its first pair
+demo:sig[:<sec>]          («🔄 Обновить», «↩️ К списку», «📡 К сигналам», «📡 Показать сигналы», «🔀 Выбрать другую пару»; `demo:sig:<sec>` of buttons from #382 to #685)
+  bot  → the same reads → editMessageText: the same list, in place, and the wait
+demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount; an alternative under a wait, #664)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade(<sec>) ∥ POST /trading/access
-         ∥ POST /trading/signal { assetId, interval: intervalForDuration(sec) } (#509)
-  bot  → editMessageText (sendMessage for :n): the amount screen in demo, the launch screen in
-         real; «сигнала нет» → the refusal with «🔀 Выбрать другую пару», the signal unread →
-         «🔄 Повторить»
+         ∥ GET /trading/signals (#664; #509 to #664 read POST /trading/signal)
+  bot  → editMessageText (sendMessage for :n): the pair in the list → the amount screen in demo,
+         the launch screen in real; not in it → «⏳ Проверяю сигнал по {пара}…» with the other
+         pairs that have a signal now, «🧭» / «🏠», and the wait (#664)
 demo:sa:<assetId>:<sec>:<amount>:<l|a>  (an amount of the amount screen, #476)
   bot  → answerCallbackQuery ∥ POST /trading/stake (demo, <amount>) ∥ GET /trading/pairs
   bot  → on a save: POST /trading/sessions, one attempt → the session's status; the amount screen deleted
@@ -109,8 +118,8 @@ demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить ан
                                analysis: { telegramUserId, durationSec: sec } } (#484)
   bot  → on a signal: sendPhoto, the card (#482) — the bull or the bear, the caption with its
          block, in demo the amounts under it — then deleteMessage of «⏳»
-  bot  → otherwise: editMessageText of «⏳» into the analysis screen with its keyboard: no
-         session row on «сигнала нет» (#509)
+  bot  → a fetch_failed or a failed call: editMessageText of «⏳» into the analysis screen with its
+         keyboard; no signal: «⏳» into the wait for one, «🧭» / «🏠», and the wait (#664)
 demo:more:<assetId>:<sec>:<up|down>:<d|r>     («➕ Ещё», #360; the mode's token, #121)
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
@@ -127,8 +136,8 @@ Each press answers the query and reads the catalog at the same time, then edits 
 button is under. `demo` is the exception: the card is a photo, whose caption cannot be turned into
 another screen, so it sends a new message; so does an old duration button (below). The duration is
 one, 5 s, and it still rides in the data (`:5`), not in the bot's state (owner, #382). The bot keeps no state for the
-demo: what the user chose travels in the callback data, so a restart, an old message and a second
-device lead to the same screen.
+demo but the wait for a signal (#664, in memory): what the user chose travels in the callback data,
+so a restart, an old message and a second device lead to the same screen.
 
 The callback data is at most 48 bytes (`demo:stake:2147483647:5:down:0123456789ab:0a1b2c`), inside
 the Bot API 64.
@@ -209,16 +218,20 @@ number is odd (#419); then the footer (`appendSignalsFooter`, #685): «🔄 Об
 «🧭 Выбрать пару вручную» (`demo:g`) in one row, «🏠 В меню» (`menu`) in its own.
 
 The list is a snapshot of the 5 s candle that closed last: «Сигнал держится одну свечу
-(⏱ 5 с); перед каждой сделкой бот проверяет его заново». The press reads the pair's signal once
-more (#509, [The amount screen](#the-amount-screen-476)): a pick whose signal is gone gets the
-refusal, not a session; the session's orchestrator still asks for the signal before every trade
-(#287). The button's arrow is the scanner's at `asOf`; the amount screen shows no
-direction, since the session decides it per trade.
+(⏱ 5 с); перед каждой сделкой бот проверяет его заново». The press reads the list once more
+(#664, [The amount screen](#the-amount-screen-476)): a pick whose signal is gone waits for it,
+never a session without one; the session's orchestrator still asks for the signal before every
+trade (#287). The button's arrow is the scanner's at `asOf`; the amount screen shows no
+direction, since the session decides it per trade. A list with pairs lives `SIGNALS_LIST_TTL_MS`
+(30 s, owner 2026-10-21): then the same message becomes «🚀 Начать торговлю» (`signalsExpired`)
+with «📡 Показать сигналы» (`demo:sig`) · «🧭 Выбрать пару вручную» and «🏠 В меню»
+([The wait for a signal](#the-wait-for-a-signal-664)). The manual pages are not a list and do not
+expire.
 
 | Outcome | What the bot shows |
 |---|---|
 | one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 pairs two a row (`signalsShown`; at least five when five have a signal, the tail below 80 % included) + [refresh · manual] + [menu] |
-| none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` («📡 Для ⏱ 5 с сигналов сейчас нет — обнови через несколько секунд или выбери пару вручную.») + [refresh · manual] + [menu] |
+| none left (no signal, every one closed or delisted, the scanner's first candle after a start) | the wait (#664): `signalsWaiting` («🔎 Анализирую сигналы · ⏱ 5 с / Проверяю пары на каждой свече. Как только появится сигнал, список откроется здесь.») + [manual] + [menu], no refresh; the list comes into the same message |
 | the catalog's three failures ([The check](#the-check)) | that row's text + [«🔄 Повторить» (the pressed data; `demo:sig` under a legacy datum) · manual] + [menu]; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + [«🔄 Повторить» · manual] + [menu]; `warn` `trading signals not read` |
 | the body has no list for the duration (a backend scanning other intervals: a deploy mismatch) | the same unavailable screen, never an empty list; `warn` `trading signals list missing` with `interval` |
@@ -240,21 +253,25 @@ message, so the trade's or the session's message stays). The way back is «↩�
 a screen drawn by `:n` carries `a` in its own buttons, since its presses edit it. Old `demo:sess:…`
 buttons in messages sent before #476 still start a session at once.
 
-**The pair's signal at the press (#509).** Beside the catalog and access the press reads the pair's
-signal (`POST /trading/signal`, `5s`; the backend's cached feed, so a press
-right after the analysis asks the broker nothing) in either mode, since three of the doors —
-«🔁 Ещё сессия», the row under a finished trade, an old message — were drawn without it. After the
-check's refusal (the table below), in order:
+**The pair's signal at the press (#509, #664).** Beside the catalog and access the press reads
+`GET /trading/signals` in either mode, since three of the doors — «🔁 Ещё сессия», the row under a
+finished trade, an old message — were drawn without a signal. The pair has a signal now when it
+is in the fresh `5s` list (the check above passed: `checkDemoTrade` ok), the one definition of the
+list, the doors and the wait (#664; #509 to #664 asked `POST /trading/signal` for the pair). After
+the check's refusal (the table below), in order:
 
-| The signal | What the press shows |
+| The list | What the press shows |
 |---|---|
-| a throw, or `fetch_failed` (`rate_limited` included) | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + «🔄 Повторить» (the pressed data: `demo:l:` is a read) and «🏠 В меню»; `warn` `launch signal not evaluated` (not for `rate_limited`) (L-sig2, L-sig3) |
-| «сигнала нет» | «📭 По паре сейчас нет сигнала — сессию на ней не запускаю. Выбери пару из сигналов.» (`sessionNoSignal`) + «🔀 Выбрать другую пару» (`demo:sig`) and «🏠 В меню» (L-sig1) |
-| a signal | the amount screen in demo, the launch screen in real, as above (L-sig4) |
+| the pair in it | the amount screen in demo, the launch screen in real, as above (W-door3) |
+| the pair not in it | «⏳ Проверяю сигнал по {symbol} / Смотрю на каждой свече (⏱ 5 с)…» (`pairWaiting`) and, while other pairs have a signal, «Сигнал уже есть по другим парам — можно не ждать и выбрать одну из них 👇» (`pairWaitingAlternatives`) over their buttons two a row (`signalsShown` without the chosen pair) + «🧭 Выбрать пару вручную» + «🏠 В меню»; the wait registered (W-door1) |
+| not read (`readSignals` threw, or no `5s` list) | the same wait without the alternatives; `warn` `trading signals not read` or `trading signals list missing` (W-door2) |
 
-`:n` answers with a new message, as for every screen of this node (L-sig6). The start route checks
-the signal again (`no_signal`, [trading-session.md](trading-session.md#post-tradingsessions) step
-4c), so a signal gone between this press and an amount's press refuses there.
+`:n` answers with a new message, as for every screen of this node (W-door4); no screen of the door
+says «нет сигнала» (W-door5). The start route checks the signal again (`no_signal`,
+[trading-session.md](trading-session.md#post-tradingsessions) step 4c): a signal gone between this
+press and an amount's press waits there too ([bot-session.md](bot-session.md)). While the candle
+source is down the lists are empty and the door waits (accepted risk 2 of the plan): it no longer
+reads the pair's signal through the REST fallback, the start does.
 
 Text: «🎯 {symbol} · ⏱ 5 с», «🤖 Бот проведёт 5 циклов подряд…», then «Выбери сумму сделки 👇»
 (`cycleStakeChoose`). Keyboard:
@@ -399,7 +416,11 @@ not a fresh catalog.
   row; each carries the duration (5). The screen is deleted after the start, once the session's status
   is sent (#418).
 - **Summary (#685).** «📊 Анализ», then «↩️ Активы» (the pair's page) and «↩️ Типы».
-- **Analysis (#360).** On a signal — since #509 not on «сигнала нет» — «🚀 Сессия из 5
+- **The waits (#664).** The wait for the signals: «🧭 Выбрать пару вручную», then «🏠 В меню»;
+  the wait for a pair (the door, the analysis, the start's 409): the other pairs with a signal now
+  two a row for 30 s, then the same two rows. The start of trading (`signalsExpired`): «📡
+  Показать сигналы» and «🧭 Выбрать пару вручную» in one row, «🏠 В меню» in its own.
+- **Analysis (#360).** On a signal — since #509 not without one; without one the wait (#664) — «🚀 Сессия из 5
   циклов» alone in the first row where `sessionFitsDeadline(DEFAULT_SESSION_CYCLES, sec, martingale)`
   holds (`sessionFits`; #552: the worst case of four trades a cycle), at the demo's duration
   (#284, [bot-session.md](bot-session.md#the-button)), at any payout (#631; #379 withheld
@@ -509,14 +530,15 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 | Answer | Headline | Body | Buttons above the repeat (#360) |
 |---|---|---|---|
 | `decided`, `signal` — the card (#482), a photo of the bull or the bear | «🟢 Сильный сигнал на рост» / «🔴 Сильный сигнал на падение» | the block (below), the payout with the break-even share, «⚠️ Сигнал — не прогноз результата и не гарантия…», in demo over the amounts «Выбери сумму сделки 👇» | in demo the amounts, else the session, at any payout (#631); «➕ Ещё» by the decision's action |
-| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала бот не предлагает ни сделку, ни сессию. Повтори анализ позже или выбери другую пару.» (#509) | none (#509) |
-| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…»; no feature line, the decision carries none | none (#509) |
+| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) — the wait (#664) | «⏳ Проверяю сигнал… Как только он появится, здесь откроется карточка сигнала.» (`analysisWaiting`) | the feature lines; no reason, no hint | «🧭 Выбрать пару вручную» / «🏠 В меню» only, the alternatives from the first poll ([The wait for a signal](#the-wait-for-a-signal-664)) |
+| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) — the wait (#664) | the same | no feature line, the decision carries none | the same |
 | `fetch_failed` `rate_limited` with `retryAfterSec` | «⚠️ Брокер ограничил запросы. Попробуй через N с.» | — | none |
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | «⚠️ Не удалось получить свечи у брокера…»; `warn` `signal not evaluated` with `signalCode` (not for `rate_limited`) | — | none |
 | `evaluateSignal` threw (unreachable, a timeout, a non-2xx, a broken body) | the same; `warn` `signal not evaluated` with the error | — | none |
 
 `AnalysisScreen.session` is true on a signal only (#509, owner: no session on a pair without a
-signal now). Until #509 it was true on every `decided` answer, and the session waited for a signal
+signal now); `AnalysisScreen.wait` on a refusal only (#664): its screen is the wait, which turns
+into the card in the same message once the signal comes (`editMessageMedia`). Until #509 it was true on every `decided` answer, and the session waited for a signal
 itself; the no-signal limit ([trading-session.md](trading-session.md#the-no-signal-limit-509)) now
 stops such a wait after 20 candles of the session's interval (#637: 100 s on 5 s; 300 s for a 15 s session from before #685). Where the candles were not read, no session row is drawn either.
 
@@ -556,7 +578,7 @@ on — #483's backtest found no MACD or MA gate better than v2
 ([signal.md](signal.md#macd-and-ma-on-history-483)) — so «рост» beside «MA200: цена ниже» is
 possible.
 
-The feature lines of a rule refusal, every number from the answer:
+The feature lines of a rule refusal (under the wait since #664), every number from the answer:
 
 - «📐 Тренд по EMA: вверх — EMA{params.emaFast} {features.emaFast} выше EMA{params.emaSlow}
   {features.emaSlow}» — «выше»/«ниже»/«равна» by the order of the two EMAs; the trend words
@@ -565,9 +587,8 @@ The feature lines of a rule refusal, every number from the answer:
 - «🌊 Волатильность по ATR: в норме — ATR{params.atrPeriod} {features.atrPct}% · {features.atrTicks}
   шага котировки» (always a tenth, so «шага») — told by the refusal (слишком низкая / слишком
   высокая / меньше порога в шагах котировки, #379), since the decider checks volatility first; the
-  bot holds no bounds of its own.
-  The three v2 reasons in words: «цена движется на считаные шаги котировки», «RSI слишком высокий
-  для входа вверх», «RSI слишком низкий для входа вниз».
+  bot holds no bounds of its own. The refusal's reason itself is not shown since #664 (the
+  `noSignal*` words are gone with «Сигнала нет»).
 - «🕯 Закрытых свечей: {features.closedCandles}» and «💲 Последняя цена: {features.lastClose}».
 
 Prices are printed with the pair's `digits`, RSI to a tenth, ATR% to a thousandth (a live 1m ATR%
@@ -635,8 +656,10 @@ failed expansion changes nothing on screen.
 `HANDLER_CALLS.demo` is two backend calls (the signals and the catalog, beside the answer) and two
 Bot API calls (the answer, then the list as a new message, #685): 26 s; `.demoSignals` (`demo:sig`,
 the list in place) is two backend calls and up to three Bot API calls: 34 s (#320); `.demoLaunch`
-is three backend calls (the catalog, access and the pair's signal, #509) and up to three Bot API
-calls: 39 s. Each of `.demoGroups`, `.demoPage` and `.demoAsset` (the summary, also by
+is three backend calls (the catalog, access and the signals list, #664; the pair's signal from
+#509 to #664) and up to three Bot API calls: 39 s, the wait included. The wait's polls and edits
+run between updates, like the trackers, so they are no handler path
+([The wait for a signal](#the-wait-for-a-signal-664)). Each of `.demoGroups`, `.demoPage` and `.demoAsset` (the summary, also by
 `demo:d:<id>:5`) is one backend call and up to three Bot API calls (the edit refused as gone,
 then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
 (the catalog and the access read beside the answer, then the signal) and up to four Bot API calls:
@@ -672,6 +695,18 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
   the demo's duration (`5s`).
 - `legacy duration button` (`info`, #685) — `callbackData` alone: the press of a button with a
   duration the demo no longer offers, to see when the old buttons stop being pressed.
+- `signal wait reads failed` (`warn`, #664) — the wait's shared reads failed: the signals' `err`
+  with the backend fields, the catalog's (`backend_failed`) the same, `catalogReason` for a
+  missing or stale catalog, `interval` for a body without the `5s` list; once for a series of
+  failed ticks.
+- `signal wait message not edited` (`info` for a message gone or a user who blocked the bot,
+  `warn` for a 429 and the other refusals and transport failures, `error` for anything else, #664)
+  — the method, the Telegram error code, the entry's `kind` (`list`/`pair`) and the pair's
+  `origin` (`door`/`analysis`/`start`); no Telegram id, no symbol, never the description
+  (`signal-wait.test.ts` W10c). `signal wait message not edited at the stop` (`warn`) — the same
+  fields; `the signal wait card photo was refused, sending its text` (`warn`); `signal wait
+  analysis not evaluated` (`warn`, once an entry) — the backend fields or `signalCode`;
+  `trading access not read for the signal wait` (`warn`) — the backend fields.
 - `signal not evaluated` (`warn`, #126) — for a thrown call, `err` with the error's name and code,
   `backendStatus`, `backendReason`; for a `fetch_failed` other than `rate_limited`, `signalCode`
   alone. No Telegram id, no symbol, nothing of the broker's text.
@@ -704,8 +739,10 @@ and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the ha
 
 The analysis card names its user and duration in the signal request (`analysis`), and the backend
 records the decision as the user's last analysis ([signal.md](signal.md) → POST /trading/signal):
-a signal with its pair and duration, «сигнала нет» as none. The cycle's doors (`demo:l`, #509) send
-no `analysis`: they are not an analysis. Ten minutes after an analysis with a signal that led to no
+a signal with its pair and duration, a decision without one as none. The cycle's doors (`demo:l`)
+read the signals list since #664 and send no signal request at all. The wait of an analysis
+without a signal sends `analysis` when it reads the signal again (#664): its card is an analysis
+shown, so the reminder can follow it. Ten minutes after an analysis with a signal that led to no
 trade, no session and no other analysis, the backend's mailing engine sends a demo user one
 reminder, `analysisUnusedReminder`, with «📊 Новый анализ» — `demo:an:<assetId>:<sec>` of the same
 pair and duration (5 s; a reminder queued with 15 s before #685 leads to the signals list, the
@@ -713,6 +750,87 @@ legacy handler), so its press is this screen's handler, a fresh analysis: the si
 card is stale. The bot holds no state for it; the rules, the window (60 min) and the outcomes are
 [mailing.md](mailing.md) → The analysis reminder. The request still makes three backend calls
 (`HANDLER_CALLS.demoAnalysis`): the record rides on the signal request.
+
+## The wait for a signal (#664)
+
+After the user chose a pair the bot never answers «сигнала нет» (owner 2026-10-21). Every path
+that used to — the empty list, the door of a pair whose signal is gone, the analysis without a
+signal and a session start refused with 409 `no_signal` ([bot-session.md](bot-session.md)) — draws
+a wait instead and registers an entry with `apps/bot/src/signal-wait.ts`; the bot edits the same
+message once the signal comes. A session still never starts without a signal (#509): the bot
+waits, not the session.
+
+**Entries.** One per user, in the bot process's memory (accepted risk 1: a crash, an entry past
+the stop's window or one pushed out by `SIGNAL_WAIT_MAX_ENTRIES` (10 000) stays «⏳…» with its
+working «🧭» / «🏠»). A new entry replaces the user's previous one: the old message is not edited
+again, but for an edit already in flight. Any inline button and any command leave the wait (the
+two middleware in `bot.ts`, beside `endInputStep`, #319); a plain text does not. The middleware
+runs before the handlers, so a pair pressed under a wait ends it and the door registers a new one.
+
+**The poll.** One timer for every entry while there is one, on the 5 s candle's boundary plus
+`SIGNAL_WAIT_POLL_OFFSET_MS` (1 s) by the bot's clock: the scanner decides at the boundary plus
+`SIGNAL_SCAN_SLACK_MS` (500 ms, the backend's, stated). A tick reads `GET /trading/signals` and
+`GET /trading/pairs` once and decides every entry on that snapshot: two requests a candle whatever
+the number of waiting users. A pair has a signal now when it is in the fresh `5s` list and
+`checkDemoTrade` takes it — the list's own definition. A tick that finds the previous one in
+flight is skipped. Push from the backend would need an inbound server on the bot: not built.
+
+**The screens.**
+
+| Entry | Drawn | Then |
+|---|---|---|
+| the list, no pair yet | «🔎 Анализирую сигналы · ⏱ 5 с…» (`signalsWaiting`) + [🧭] / [🏠] | a poll with a pair: the list in the same message, its 30 s from that edit |
+| the list with pairs | «📡 Сигналы сейчас…» + the pairs + [🔄 · 🧭] / [🏠] | after `SIGNALS_LIST_TTL_MS` (30 s): «🚀 Начать торговлю / Сигнал держится одну свечу (⏱ 5 с), и этот список устарел…» (`signalsExpired`) + [📡 Показать сигналы · 🧭] / [🏠], and the entry ends |
+| the pair (the door) | «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + the other pairs with a signal now, under `pairWaitingAlternatives`, read at the press | the alternatives taken away after 30 s, the wait goes on; the pair's signal: the amount screen (demo) or the launch (real) by a fresh access read, and the entry ends |
+| the pair (409 `no_signal` of a start) | the same, in place of the launch or the amount screen, as a new message for a press elsewhere and a typed amount; the alternatives from the first poll | the same; the amount screen keeps its way back (`l`/`a`) |
+| the analysis | the analysis header, «⏳ Проверяю сигнал…» (`analysisWaiting`), the feature lines of a rule refusal + [🧭] / [🏠]; the alternatives from the first poll | the pair's signal: `POST /trading/signal` with `analysis` (#484) and access, then the card in the same message by `editMessageMedia` (a refused photo: its caption as text); no signal by that read, `fetch_failed` or a throw: the entry stays, one `warn` |
+| any | — | the pair closed, gone or not taking 5 s by the fresh catalog: its refusal (`demoPairClosed` …), the entry ends; past `SIGNAL_WAIT_MAX_MS` (1 h, a technical bound below Telegram's 48 h, not a product limit) or at the stop: `signalsExpired`, the entry ends |
+
+The alternatives are a snapshot: drawn once (by the door at its press, by the first poll for the
+analysis and the start, which have no call left in their budget for the read), taken away after
+30 s by one edit; a first poll with no other pair leaves the wait alone with the pair for good. A
+wait for a pair edits its message at most three times: the alternatives, their removal, the next
+step. The stop and the bound draw the list's text for every kind of entry, the pair's and the
+analysis's too («…этот список устарел»): the owner adjusts the text at review (manager's decision
+2026-10-21).
+
+**Edits.** By the message's id outside any update, in the entry's language, through `send.ts`
+(`editMessageTextByIdHtml`, `editMessagePhotoByIdHtml`), only when the whole screen differs — its
+text and its keyboard: the render key, as the session tracker's (#568). Paced one every
+`SIGNAL_WAIT_EDIT_GAP_MS` (200 ms, 5 a second): with the session recovery's 4 and the backend's
+20 + 9 a second on the same token the worst coincidence is about 38 a second, above Telegram's
+~30 ([bot-session.md](bot-session.md)), so a 429 stops the tick's edits and pauses every edit for
+its `retry_after`. More than 25 resolutions on one candle stretch over the next ones (accepted
+risk 3).
+
+| An edit's outcome | The entry |
+|---|---|
+| done, or «message is not modified» | drawn |
+| the message gone, the bot blocked (403) | ends, nothing sent |
+| 429 | unchanged; the tick's edits stop, none before `retry_after` |
+| another refusal, a transport failure | retried by the next ticks; the third ends it |
+| anything else | `error`, ends |
+
+| A tick's reads | The entries |
+|---|---|
+| failed (the signals, the catalog, a body without `5s`) | unchanged, but the list's 30 s, the alternatives' 30 s and the bound, counted on the clock; one `warn` `signal wait reads failed` for the series |
+| read | each entry by the screens table |
+
+While the candle source is down the lists are empty (`scanned: 0`): every entry waits, and a door
+pressed then waits too (accepted risk 2: before #664 its `POST /trading/signal` could still open
+on the REST fallback; the start keeps it).
+
+**The stop.** `stop()` arms no more polls, waits for the tick in flight (at most
+`SIGNAL_WAIT_INFLIGHT_MS`, 26 s: an analysis's resolution) and meanwhile turns every remaining
+waiting message into `signalsExpired`: one edit launched every 200 ms inside
+`SIGNAL_WAIT_SHUTDOWN_BUDGET_MS` (20 s, 100 messages), none after a 429, the launched ones awaited
+(each within `TELEGRAM_API_TIMEOUT_MS`). The step is `signal waiter` of `runBot`'s drain
+(`lifecycle.ts`); the chain holds `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
+SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
+
+Enforced by `signal-wait.test.ts` W1–W15, `demo.test.ts` → the wait for signals, W-door1–5 and
+W-an1, `trading-session.test.ts` W-start1–3, `cycle-stake.test.ts`, `timing.test.ts` → the wait's
+bounds, `lifecycle.test.ts`.
 
 ## Boundaries
 

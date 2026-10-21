@@ -428,7 +428,8 @@ translate the rest of the catalog (#632 `demo`, `analysis`, `trade`; #633 `sessi
   assembled messages' estimate (`bot-texts-en.test.ts`). `enBotTextSource` is static: an
   untranslated key shows the catalog's Russian default, never an override, so every English
   message is bounded by the test on the defaults. `UNTRANSLATED_BOT_TEXT_KEYS` is pinned by group:
-  exactly the groups of #632 and #633. Until those parts, a user in English sees the start, the
+  exactly the groups of #632 and #633, but the keys of `TRANSLATED_BEFORE_633` — the wait for a
+  signal (#664), written in both languages from the start (E4, E7). Until those parts, a user in English sees the start, the
   cards, the menu, `/settings`, `/help`, `/account`, `/invite`, `/support` and the buttons in
   English, and the demo, the analysis, the trades, the sessions, Stars and every push of the
   backend in Russian.

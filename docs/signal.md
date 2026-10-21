@@ -736,13 +736,15 @@ closed; `scanned` is the size of that interval's scan set, every eligible pair. 
 the catalog's order; the bot chooses and orders its own list from them. Without the bearer the
 answer is 401 `{ error: 'unauthorized' }`.
 
-The one consumer is the bot's signals screen (#320, `readSignals` in
-`apps/bot/src/backend-client.ts`). It takes the list of the demo's duration
+The consumers are the bot's signals screen (#320, `readSignals` in
+`apps/bot/src/backend-client.ts`), its cycle doors (#664: a pair in the list has a signal now) and
+its wait for a signal (#664, `apps/bot/src/signal-wait.ts`): one poll per 5 s candle while any
+user waits, whatever their number; `scanned: 0` and empty lists read as nothing to serve yet. It takes the list of the demo's duration
 (`intervalForDuration(5)`, #685), keeps a pair only if the catalog read at the same press lists it,
 open and accepting that duration (`checkDemoTrade`), keeps up to 12 of those paying at least 80 %
 by type (`signalsShown`, #460) and, with fewer than five of them, fills the list up to five with
-the pairs paying less (#631), and takes the symbol and payout from there; it never re-reads the
-signal at a press, since the session asks for one before every trade
+the pairs paying less (#631), and takes the symbol and payout from there; a door reads the list
+again at its press, and the session asks for a signal before every trade
 ([bot-demo.md](bot-demo.md#the-signals-screen-320)). A body without that duration's list is a
 deploy mismatch, not «no signals»: the bot answers it as unavailable.
 
