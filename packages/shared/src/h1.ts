@@ -96,6 +96,21 @@ export const H1_EXPIRY_SEC = 5;
 // break-even 51.5 %: the forex pairs the backtest found the effect on (#667)
 export const H1_MIN_PAYOUT_PCT = 94;
 
+// --- H1 sessions (#670, docs/h1.md -> Sessions) ---------------------------------------------------
+
+// settings.signal.kind of a version 4 trading session: a jsonb key of the row, not a status
+export const H1_SESSION_SIGNAL_KIND = 'h1';
+
+// the signal of an H1 session's settings (settingsV4Schema): the detector's parameters, the entry
+// delay after the decision's closed second and the trade's expiry
+export const h1SessionSignalSchema = z.strictObject({
+  kind: z.literal(H1_SESSION_SIGNAL_KIND),
+  params: h1ParamsSchema,
+  entryDelaySec: z.int().min(1),
+  expirySec: z.literal(H1_EXPIRY_SEC),
+});
+export type H1SessionSignal = z.infer<typeof h1SessionSignalSchema>;
+
 // A tie returns the stake: neither a win nor a loss. A type, not an `as const` object: the bot's
 // session card has a tone of the same three values that is not a trade's outcome, and
 // local/no-status-literal would tie the two.
