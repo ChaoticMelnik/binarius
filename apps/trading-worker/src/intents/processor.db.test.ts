@@ -3,10 +3,17 @@ import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { MockSocketPayload, startMockBroker } from '@binarius/mock-broker';
-import { TradeIntentFailureReason, TradeMode, type OpenTrade } from '@binarius/shared';
+import {
+  decimalStringSchema,
+  TradeAction,
+  TradeIntentFailureReason,
+  TradeMode,
+  type OpenTrade,
+} from '@binarius/shared';
 import { INTEGRATION_WAIT_CEILING_MS, openTradeFor } from '@binarius/shared/testing';
 import {
   brokerTrades,
+  createSessionIntent,
   findTradeIntent,
   markIntentUnknown,
   openTrading,
@@ -21,6 +28,8 @@ import {
   closeTradingSwitch,
   createTempDatabase,
   seedQueuedIntent,
+  seedTradingSession,
+  seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
 import { noTradeSessions } from '../broker/trade-session';
@@ -316,6 +325,87 @@ describe('processIntentJob: the global trading switch (#144)', () => {
     });
     expect(await processIntentJob(deps(executor), { intentId })).toBe('accepted');
     expect((await statusOf(intentId)).status).toBe('accepted');
+  });
+});
+
+describe('processIntentJob: the submit deadline of an H1 session (#670)', () => {
+  afterEach(() => openTrading(tmp.db));
+
+  // an intent of a session through the session's own writer, with or without an entry window
+  const sessionIntent = async (submitDeadlineAt?: Date) => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    const { intent } = await createSessionIntent(tmp.db, {
+      sessionId: session.id,
+      step: 1,
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      assetId: 101,
+      amount: decimalStringSchema.parse('1'),
+      action: TradeAction.Up,
+      durationSec: 5,
+      decision: null,
+      submitDeadlineAt,
+    });
+    return { intentId: intent.id, userId: seed.userId };
+  };
+  const capture = () => {
+    const lines: string[] = [];
+    const sink = pino({ level: 'info' }, { write: (line: string) => void lines.push(line) });
+    return {
+      sink,
+      entries: () => lines.map((line) => JSON.parse(line) as Record<string, unknown>),
+    };
+  };
+
+  it('H1-L1 rejects an intent past its deadline as entry_window_missed; the broker gets nothing', async () => {
+    const { intentId, userId } = await sessionIntent(new Date(Date.now() - 1_000));
+    const executor = acceptingExecutor();
+    const log = capture();
+    expect(await processIntentJob({ ...deps(executor), logger: log.sink }, { intentId })).toBe(
+      'rejected',
+    );
+    expect(executor.calls).toBe(0);
+    const row = await statusOf(intentId);
+    expect(row).toMatchObject({
+      status: 'rejected',
+      lastError: TradeIntentFailureReason.EntryWindowMissed,
+      tokensReserved: 0n,
+    });
+    expect(row.submittedAt).toBeNull();
+    expect(await reservedOf(userId)).toBe(0n);
+    expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
+    expect(log.entries()).toContainEqual(
+      expect.objectContaining({ level: 40, intentId, msg: 'intent rejected: entry window missed' }),
+    );
+  });
+
+  it('H1-L2 submits an intent whose deadline is ahead', async () => {
+    const { intentId } = await sessionIntent(new Date(Date.now() + 60_000));
+    expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('accepted');
+  });
+
+  it('H1-L3 submits a session intent without a deadline', async () => {
+    const { intentId } = await sessionIntent();
+    expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('accepted');
+  });
+
+  it('H1-L4 a closed switch without a deadline stays trading_paused', async () => {
+    const { intentId } = await sessionIntent();
+    await closeTradingSwitch(tmp.db);
+    expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('rejected');
+    expect((await statusOf(intentId)).lastError).toBe(TradeIntentFailureReason.TradingPaused);
+  });
+
+  it('H1-L5 an old intent past its deadline keeps expired', async () => {
+    const { intentId } = await sessionIntent(new Date(Date.now() - 1_000));
+    await tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: sql`now() - interval '2 minutes'` })
+      .where(eq(tradeIntents.id, intentId));
+    expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('expired');
+    expect((await statusOf(intentId)).lastError).toBe(TradeIntentFailureReason.Expired);
   });
 });
 
