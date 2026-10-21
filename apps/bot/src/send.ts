@@ -23,8 +23,8 @@ export const NO_NEXT_STEP_REASONS = {
   InProgress: 'in_progress',
   // the session message (#536, #568, docs/bot-session.md → The session message): its head, the
   // session's pair and settings above its trades, the caption of the signal's picture or a text;
-  // the next step stands under the backend's waiting message (its «⏹») and under the summary and
-  // its card once the session ended
+  // the next step stands under the backend's waiting message (its «⏹») and under the session's
+  // summary once the session ended (#537)
   SessionStatus: 'session_status',
 } as const;
 export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];
@@ -172,7 +172,21 @@ export const editMessagePhotoByIdHtmlWithoutNextStep = (
   });
 };
 
-// Outside an update (the session tracker's summary card, #318): a photo to the chat named by id.
+// Outside an update (the session tracker's summary, #318, #537): a text message to the chat
+// named by id - the summary when no photo of it goes.
+type SendByIdExtra = Omit<
+  NonNullable<Parameters<Api['sendMessage']>[2]>,
+  'parse_mode' | 'entities'
+>;
+export const sendHtmlById = (
+  api: Pick<Api, 'sendMessage'>,
+  chatId: number,
+  text: TelegramHtml,
+  extra: WithNextStep<SendByIdExtra>,
+) => api.sendMessage(chatId, sent(text), { ...extra, parse_mode: 'HTML' });
+
+// Outside an update (the session tracker's summary in one message, #318, #537): a photo to the
+// chat named by id.
 export const sendPhotoByIdHtml = (
   api: Pick<Api, 'sendPhoto'>,
   chatId: number,

@@ -18,6 +18,7 @@ import {
   replyWithPhotoHtml,
   replyWithPhotoHtmlWithoutNextStep,
   replyWithVideoHtml,
+  sendHtmlById,
   sendPhotoByIdHtml,
   sendPhotoToStorage,
 } from './send';
@@ -95,6 +96,21 @@ export const viaPhotoByIdUndefinedKeyboard = sendPhotoByIdHtml(api, 1, 'id', tex
 export const viaPhotoByIdReplyKeyboard = sendPhotoByIdHtml(api, 1, 'id', text, {
   // @ts-expect-error nor a reply keyboard (TS2353)
   reply_markup: { keyboard: [] },
+});
+
+// #537: the summary's text by id
+// @ts-expect-error the text by id needs a keyboard (TS2554)
+export const viaTextByIdNoKeyboard = sendHtmlById(api, 1, text);
+export const viaTextByIdReplyKeyboard = sendHtmlById(api, 1, text, {
+  // @ts-expect-error nor a reply keyboard (TS2353)
+  reply_markup: { keyboard: [] },
+});
+// @ts-expect-error nor a raw string (TS2345)
+export const viaTextByIdRaw = sendHtmlById(api, 1, 'raw', { reply_markup: keyboard });
+// @ts-expect-error nor entities in place of parse_mode (TS2353)
+export const viaTextByIdEntities = sendHtmlById(api, 1, text, {
+  reply_markup: keyboard,
+  entities: [],
 });
 
 // #568: the session message as a photo, sent and edited without a keyboard under its reason

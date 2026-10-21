@@ -505,6 +505,13 @@
       "when": 1792506475045,
       "tag": "0071_decision_ticks",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1792596308444,
+      "tag": "0072_session_summary_fallback",
+      "breakpoints": true
     }
   ]
 }

@@ -686,7 +686,7 @@ describe('readActiveTradingSessionView', () => {
   });
 });
 
-describe('claimSessionSummary (#318)', () => {
+describe('claimSessionSummary (#318, #537)', () => {
   type Seed = Awaited<ReturnType<typeof seedUserWithAccount>>;
   const claim = (session: { id: string }, seed: { telegramUserId: string }) =>
     claimSessionSummary(tmp.db, { id: session.id, telegramUserId: seed.telegramUserId });
@@ -736,7 +736,9 @@ describe('claimSessionSummary (#318)', () => {
         { profit: '0.00000000', openPrice: 3, closePrice: 3.5 },
       ],
     });
-    expect(safeParseSessionSummaryResponse({ summary }).success).toBe(true);
+    expect(
+      safeParseSessionSummaryResponse({ summary: { ...summary, referralCode: null } }).success,
+    ).toBe(true);
     expect(await sentAt(session)).toBeInstanceOf(Date);
     // S4: the second claim of the same session
     expect(await claim(session, seed)).toBeUndefined();
@@ -872,6 +874,29 @@ describe('claimSessionSummary (#318)', () => {
     const { seed, session } = await finished(['0.85']);
     const results = await Promise.all([claim(session, seed), claim(session, seed)]);
     expect(results.filter((result) => result !== undefined)).toHaveLength(1);
+  });
+
+  // #537: the no-signal stop tells why, trades or not, so the bot claims its summary without one
+  const stoppedWithout = async (reason: TradingSessionStopReason) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await reject((await sessionIntent(seed, session.id, 1)).intent);
+    await stopTradingSession(tmp.db, { id: session.id, reason });
+    await markNoticed(session);
+    return { seed, session };
+  };
+
+  it('S15 a no-signal stop without a settled trade is claimed once, with no trades and a zero result', async () => {
+    const { seed, session } = await stoppedWithout(TradingSessionStopReason.NoSignalTimeout);
+    expect(await claim(session, seed)).toEqual({ result: '0.00000000', trades: [] });
+    expect(await sentAt(session)).toBeInstanceOf(Date);
+    expect(await claim(session, seed)).toBeUndefined();
+  });
+
+  it('S16 another stop without a settled trade is still not claimed', async () => {
+    const { seed, session } = await stoppedWithout(TradingSessionStopReason.UserStopped);
+    expect(await claim(session, seed)).toBeUndefined();
+    expect(await sentAt(session)).toBeNull();
   });
 });
 

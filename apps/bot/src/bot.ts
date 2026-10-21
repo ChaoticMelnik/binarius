@@ -148,6 +148,8 @@ export interface CreateBotOptions {
   signalWaiter: Pick<SignalWaiter, 'attach' | 'waitList' | 'waitPair' | 'leave'>;
   // each user's language of the texts (#508, language.ts); a test hands one already holding its user
   languages?: UserLanguages;
+  // the wait before the summary's photo again after a 429 (#537); a test records it
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export function createBot({
@@ -167,6 +169,7 @@ export function createBot({
   sessionResumer,
   signalWaiter,
   languages = createUserLanguages(),
+  sleep,
 }: CreateBotOptions): Bot {
   const backend = rememberingLanguages(client, languages);
   const bot = new Bot(token, {
@@ -557,6 +560,7 @@ export function createBot({
     setupCardPhotos,
     shareEnabled: shareStorageChatId !== undefined,
     signalWaiter,
+    ...(sleep === undefined ? {} : { sleep }),
   });
   sessionResumer.attach(tradingSession.resume);
   // the amounts of a demo cycle's amount screen (#476), which start through the session's path;

@@ -106,7 +106,8 @@ export interface ClientPush {
   // The next step of a cycle (#551): the cycle message edited to `text`, still without a
   // keyboard. An edit makes no sound.
   editSessionTrade(telegramUserId: bigint, messageId: number, text: TelegramHtml): Promise<void>;
-  // the finished session's summary (#464): with sound and its next step
+  // the finished session's fallback text summary (#464, #537: the bot sends the summary, this only
+  // when it cannot): with sound and its next step
   sendSessionSummary(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
   // The waiting message under the session's messages (#536, docs/bot-session.md → The waiting
   // message): without sound, with its «⏹». Resolves to its message_id, which its delete takes.

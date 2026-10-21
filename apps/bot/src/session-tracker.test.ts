@@ -110,7 +110,7 @@ function setup({
     view: SESSION_VIEW,
     record: false,
     edit: target().edit,
-    card: vi.fn<SessionTrackRequest['card']>(() => Promise.resolve()),
+    summary: vi.fn<SessionTrackRequest['summary']>(() => Promise.resolve()),
     ...patch,
   });
   return {
@@ -132,7 +132,7 @@ const texts = (edits: readonly TelegramHtml[]) => edits.map((text) => text.value
 const live = (status: TradeIntentStatus) => intentView({ status });
 const money = (value: string) => value as DecimalString;
 const trading = sessionView({ lastIntent: live(TradeIntentStatus.Accepted) });
-// the backend has sent its summary message (#464) unless a case says otherwise
+// the backend has closed its notices (#464) unless a case says otherwise
 const stoppedWith = (lastIntent: TradingSessionView['lastIntent']) =>
   sessionView({
     status: TradingSessionStatus.Stopped,
@@ -159,8 +159,8 @@ afterEach(() => {
 });
 
 describe('the session tracker', () => {
-  // #508: the polls, their edits and the card run outside any update, in the entry's language
-  it('S-lang edits and sends the card in the language of the request, tracked outside any update', async () => {
+  // #508: the polls, their edits and the summary run outside any update, in the entry's language
+  it('S-lang edits and sends the summary in the language of the request, tracked outside any update', async () => {
     const { tracker, request } = setup({ script: [stoppedClosed] });
     const languages: string[] = [];
     const before = missingLanguageReads();
@@ -171,14 +171,14 @@ describe('the session tracker', () => {
           languages.push(`edit:${currentLanguage()}`);
           return Promise.resolve(true);
         },
-        card: () => {
-          languages.push(`card:${currentLanguage()}`);
+        summary: () => {
+          languages.push(`summary:${currentLanguage()}`);
           return Promise.resolve();
         },
       }),
     );
     await vi.advanceTimersByTimeAsync(FIRST);
-    expect(languages).toEqual([`edit:${BotLanguage.En}`, `card:${BotLanguage.En}`]);
+    expect(languages).toEqual([`edit:${BotLanguage.En}`, `summary:${BotLanguage.En}`]);
     expect(missingLanguageReads()).toBe(before);
   });
 
@@ -502,7 +502,7 @@ describe('the session tracker', () => {
     expect(readSession.mock.calls.map((call) => call[0])).toEqual(ids.slice(1));
   });
 
-  describe('the summary card (#318)', () => {
+  describe('the summary (#318, #537)', () => {
     const TRANSIENT = () =>
       new GrammyError(
         `Call to 'editMessageText' failed!`,
@@ -510,74 +510,74 @@ describe('the session tracker', () => {
         'editMessageText',
         {},
       );
-    const cardSpy = () => vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+    const summarySpy = () => vi.fn<SessionTrackRequest['summary']>(() => Promise.resolve());
 
-    it('C1 sends the card once, after the final edit, with the final view', async () => {
+    it('C1 sends the summary once, after the final edit, with the final view', async () => {
       const order: string[] = [];
       const { tracker, request } = setup({ script: [trading, stoppedOpen, stoppedClosed] });
-      const card = vi.fn<SessionTrackRequest['card']>(() => {
-        order.push('card');
+      const summary = vi.fn<SessionTrackRequest['summary']>(() => {
+        order.push('summary');
         return Promise.resolve();
       });
       const edit = vi.fn<SessionTrackRequest['edit']>(() => {
         order.push('edit');
         return Promise.resolve(true);
       });
-      tracker.track(request({ edit, card }));
+      tracker.track(request({ edit, summary }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL * 3);
-      expect(card).toHaveBeenCalledTimes(1);
-      expect(card).toHaveBeenCalledWith(stoppedClosed);
-      expect(order).toEqual(['edit', 'card']);
+      expect(summary).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledWith(stoppedClosed);
+      expect(order).toEqual(['edit', 'summary']);
       expect(tracker.size()).toBe(0);
     });
 
-    it('C2 a session already done when tracked (a refresh) gets its card on the first poll', async () => {
+    it('C2 a session already done when tracked (a refresh) gets its summary on the first poll', async () => {
       const { tracker, request, target } = setup({ script: [stoppedClosed] });
       const { edits, edit } = target();
-      const card = cardSpy();
-      tracker.track(request({ view: stoppedClosed, edit, card }));
+      const summary = summarySpy();
+      tracker.track(request({ view: stoppedClosed, edit, summary }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(edits).toEqual([]);
-      expect(card).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
     });
 
-    it('C3 waits for the final edit to land: no card while it fails, one once it lands', async () => {
+    it('C3 waits for the final edit to land: no summary while it fails, one once it lands', async () => {
       const { tracker, request, forgetSessionMessage } = setup({ script: [stoppedClosed] });
       let failures = 2;
       const edit = vi.fn<SessionTrackRequest['edit']>(() =>
         failures-- > 0 ? Promise.reject(TRANSIENT()) : Promise.resolve(true),
       );
-      const card = cardSpy();
-      tracker.track(request({ edit, card }));
+      const summary = summarySpy();
+      tracker.track(request({ edit, summary }));
       await vi.advanceTimersByTimeAsync(FIRST + POLL);
       expect(edit).toHaveBeenCalledTimes(2);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL * 3);
-      expect(card).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
       expect(forgetSessionMessage).not.toHaveBeenCalled();
     });
 
-    it('C4 a session not done sends no card, through the deadline', async () => {
+    it('C4 a session not done sends no summary, through the deadline', async () => {
       const reviewed = sessionView({
         ...stoppedWith(live(TradeIntentStatus.ManualReview)),
         stopReason: TradingSessionStopReason.ManualReview,
       });
       for (const view of [trading, stoppedOpen, reviewed]) {
         const { tracker, request } = setup({ script: [view] });
-        const card = cardSpy();
-        tracker.track(request({ card }));
+        const summary = summarySpy();
+        tracker.track(request({ summary }));
         await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
         expect(tracker.size()).toBe(0);
-        expect(card).not.toHaveBeenCalled();
+        expect(summary).not.toHaveBeenCalled();
       }
     });
 
     // the poll past the deadline fails its edit too; the deadline's own last edit then lands
-    it('C5 at the deadline, a done session whose last edit lands there gets its card', async () => {
+    it('C5 at the deadline, a done session whose last edit lands there gets its summary', async () => {
       const { tracker, request, forgetSessionMessage } = setup({ script: [stoppedClosed] });
       const started = Date.now();
       let late = 0;
@@ -586,74 +586,76 @@ describe('the session tracker', () => {
         late += 1;
         return late === 1 ? Promise.reject(TRANSIENT()) : Promise.resolve(true);
       });
-      const card = cardSpy();
-      tracker.track(request({ edit, card }));
+      const summary = summarySpy();
+      tracker.track(request({ edit, summary }));
       await vi.advanceTimersByTimeAsync(DEADLINE - POLL);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(late).toBe(2);
-      expect(card).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
       expect(forgetSessionMessage).not.toHaveBeenCalled();
     });
 
-    it('C6 a card that throws still ends the entry, logged as a tracking failure', async () => {
+    it('C6 a summary that throws still ends the entry, logged as a tracking failure', async () => {
       const { tracker, request, logger } = setup({ script: [stoppedClosed] });
-      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.reject(new TypeError('bug')));
-      tracker.track(request({ card }));
+      const summary = vi.fn<SessionTrackRequest['summary']>(() =>
+        Promise.reject(new TypeError('bug')),
+      );
+      tracker.track(request({ summary }));
       await vi.advanceTimersByTimeAsync(FIRST + POLL * 3);
-      expect(card).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
       expect(logger.error.mock.calls.map((call) => call[1])).toEqual([
         'trading session tracking failed',
       ]);
     });
 
-    // #464: the card comes after the backend's summary message, never before it
+    // #464: the summary comes after the backend closed its notices, never before it
     const unsent = sessionView({ ...stoppedClosed, noticesDone: false });
 
-    it('C8 a done session whose summary message is not sent yet keeps polling, with no card and no edit', async () => {
+    it('C8 a done session whose notices are not closed yet keeps polling, with no summary and no edit', async () => {
       const { tracker, request, readSession, target } = setup({
         script: [unsent, unsent, stoppedClosed],
       });
       const { edits, edit } = target();
-      const card = cardSpy();
-      tracker.track(request({ view: unsent, edit, card }));
+      const summary = summarySpy();
+      tracker.track(request({ view: unsent, edit, summary }));
       await vi.advanceTimersByTimeAsync(FIRST + POLL);
       expect(readSession).toHaveBeenCalledTimes(2);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(1);
       expect(edits).toEqual([]);
       await vi.advanceTimersByTimeAsync(POLL);
-      expect(card).toHaveBeenCalledTimes(1);
-      expect(card).toHaveBeenCalledWith(stoppedClosed);
+      expect(summary).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledWith(stoppedClosed);
       expect(tracker.size()).toBe(0);
     });
 
-    it('C9 at the deadline, a done session without its summary message gets its final edit and no card', async () => {
+    it('C9 at the deadline, a done session without its closed notices gets its final edit and no summary', async () => {
       const { tracker, request, target } = setup({ script: [unsent] });
       const { edits, edit } = target();
-      const card = cardSpy();
-      tracker.track(request({ edit, card }));
+      const summary = summarySpy();
+      tracker.track(request({ edit, summary }));
       await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
       // the poll's edit only: the deadline does not draw the same final status again
       expect(texts(edits)).toEqual([shown(unsent)]);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
     });
 
-    it('C7 stop() waits for the card in flight', async () => {
+    it('C7 stop() waits for the summary in flight', async () => {
       let release: () => void = () => {};
-      const card = vi.fn<SessionTrackRequest['card']>(
+      const summary = vi.fn<SessionTrackRequest['summary']>(
         () =>
           new Promise<void>((resolve) => {
             release = resolve;
           }),
       );
       const { tracker, request } = setup({ script: [stoppedClosed] });
-      tracker.track(request({ card }));
+      tracker.track(request({ summary }));
       await vi.advanceTimersByTimeAsync(FIRST);
-      expect(card).toHaveBeenCalledTimes(1);
+      expect(summary).toHaveBeenCalledTimes(1);
       let stopped = false;
       const stopping = tracker.stop().then(() => {
         stopped = true;
@@ -759,25 +761,25 @@ describe('the session tracker', () => {
       expect(tracker.size()).toBe(0);
     });
 
-    it('P7c past the deadline, a done session without its summary message is drawn once, no card', async () => {
+    it('P7c past the deadline, a done session without its closed notices is drawn once, no summary', async () => {
       const { tracker, request, target } = setup({ script: [unsent] });
       const { edits, edit } = target();
-      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
-      tracker.track(request({ view: null, startedAt: past(), edit, card }));
+      const summary = vi.fn<SessionTrackRequest['summary']>(() => Promise.resolve());
+      tracker.track(request({ view: null, startedAt: past(), edit, summary }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(edits)).toEqual([shown(unsent)]);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
     });
 
-    it('P7d past the deadline, a done session with its summary message gets one edit and its card', async () => {
+    it('P7d past the deadline, a done session with its closed notices gets one edit and its summary', async () => {
       const { tracker, request, target } = setup({ script: [stoppedClosed] });
       const { edits, edit } = target();
-      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
-      tracker.track(request({ view: null, startedAt: past(), edit, card }));
+      const summary = vi.fn<SessionTrackRequest['summary']>(() => Promise.resolve());
+      tracker.track(request({ view: null, startedAt: past(), edit, summary }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(edits)).toEqual([shown(stoppedClosed)]);
-      expect(card.mock.calls).toEqual([[stoppedClosed]]);
+      expect(summary.mock.calls).toEqual([[stoppedClosed]]);
       expect(tracker.size()).toBe(0);
     });
 
@@ -921,14 +923,14 @@ describe('the session tracker', () => {
       const { tracker, readSession, forgetSessionMessage, request } = setup({
         script: [stoppedClosed],
       });
-      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
-      tracker.track(request({ ...recovered, edit: () => Promise.reject(GONE()), card }));
+      const summary = vi.fn<SessionTrackRequest['summary']>(() => Promise.resolve());
+      tracker.track(request({ ...recovered, edit: () => Promise.reject(GONE()), summary }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(forgetSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
       expect(tracker.size()).toBe(0);
       await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(readSession).toHaveBeenCalledTimes(1);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
     });
 
     it('K-lost2 a 403 edit is lost the same way, not retried', async () => {
@@ -980,7 +982,7 @@ describe('the session tracker', () => {
       const { tracker, forgetSessionMessage, request } = setup({ script: [stoppedClosed] });
       const started = Date.now();
       let late = 0;
-      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+      const summary = vi.fn<SessionTrackRequest['summary']>(() => Promise.resolve());
       const edit = vi.fn<SessionTrackRequest['edit']>(() => {
         if (Date.now() - started < DEADLINE) {
           return Promise.reject(new HttpError('network', new Error('reset')));
@@ -990,13 +992,13 @@ describe('the session tracker', () => {
           late === 1 ? new HttpError('network', new Error('reset')) : FORBIDDEN(),
         );
       });
-      tracker.track(request({ record: true, edit, card }));
+      tracker.track(request({ record: true, edit, summary }));
       await vi.advanceTimersByTimeAsync(DEADLINE - POLL);
       expect(forgetSessionMessage).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(late).toBe(2);
       expect(forgetSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
-      expect(card).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
     });
   });

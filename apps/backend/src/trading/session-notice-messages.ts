@@ -107,10 +107,11 @@ export function sessionCycleMessage(
   return { kind: 'edit', messageId: cycleMessage.messageId, text, from: cycleMessage.from };
 }
 
-// The finished session's summary, with sound and the menu as its next step; a session the
-// no-signal limit stopped gets «🔀 Выбрать другую пару» above it, the signals list (`demo:sig`,
-// #509, #685). A summary is sent with a settled trade or for that stop, whose attempt had read the
-// settings, so the last intent names the asset when the settings could not be read.
+// The finished session's fallback text summary (#537: the bot sends the summary; this text only
+// when it cannot, docs/bot-session.md → The fallback), with sound and the menu as its next step; a
+// session the no-signal limit stopped gets «🔀 Выбрать другую пару» above it, the signals list
+// (`demo:sig`, #509, #685). A summary is sent with a settled trade or for that stop, whose attempt
+// had read the settings, so the last intent names the asset when the settings could not be read.
 export function sessionSummaryMessage(
   view: TradingSessionView,
   label: PairLabel | null,

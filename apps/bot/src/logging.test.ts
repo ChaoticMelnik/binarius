@@ -1787,7 +1787,7 @@ describe('what the session tracker and the recovery write (#567, #570 m5)', () =
       view: SESSION_VIEW,
       record: false,
       edit: () => Promise.resolve(true),
-      card: () => Promise.resolve(),
+      summary: () => Promise.resolve(),
       ...patch,
     });
     return { lines, tracker, request };

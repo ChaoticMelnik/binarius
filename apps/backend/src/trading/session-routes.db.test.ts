@@ -1623,7 +1623,7 @@ describe('POST /trading/sessions/:id/stop: the waiting message handed over (#587
   });
 });
 
-describe('POST /trading/sessions/:id/summary (#318)', () => {
+describe('POST /trading/sessions/:id/summary (#318, #537)', () => {
   const summary = (
     target: FastifyInstance,
     id: string,
@@ -1664,13 +1664,20 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
       id: session.id,
       reason: TradingSessionStopReason.Completed,
     });
-    // the summary message is out: the card waits for it (#464)
+    // the notices are closed: the summary waits for them (#464, #537)
     await tmp.db
       .update(tradingSessions)
       .set({ finalNoticeSentAt: sql`now()` })
       .where(eq(tradingSessions.id, session.id));
     return { ...seed, sessionId: session.id };
   };
+  const codesOf = async (userId: string) =>
+    (
+      await tmp.db
+        .select({ code: referralCodes.code })
+        .from(referralCodes)
+        .where(eq(referralCodes.userId, userId))
+    ).map((row) => row.code);
 
   it.each([TradeMode.Demo, TradeMode.Real])(
     'U1 the owner claims a finished %s session once, with no broker call',
@@ -1682,6 +1689,7 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
       });
       expect(response.statusCode).toBe(200);
       expect(safeParseSessionSummaryResponse(response.json()).success).toBe(true);
+      const [code] = await codesOf(seed.userId);
       expect(response.json()).toEqual({
         summary: {
           result: '-0.15000000',
@@ -1689,6 +1697,7 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
             { profit: '0.85000000', openPrice: 1.08765, closePrice: 1.08712 },
             { profit: '-1.00000000', openPrice: 1.08765, closePrice: 1.08712 },
           ],
+          referralCode: code,
         },
       });
       expect(refreshCalls).toHaveLength(0);
@@ -1738,6 +1747,46 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
         .statusCode,
     ).toBe(401);
     expect(await sentAt(seed.sessionId)).toBeNull();
+  });
+
+  it("U6 the answer carries the owner's referral code, created on first use and the same after; a blocked owner's is null", async () => {
+    const seed = await finishedIn(TradeMode.Demo);
+    expect(await codesOf(seed.userId)).toEqual([]);
+    const response = await summary(appWith(), seed.sessionId, {
+      telegramUserId: seed.telegramUserId,
+    });
+    const codes = await codesOf(seed.userId);
+    expect(codes).toHaveLength(1);
+    expect((response.json() as { summary: { referralCode: unknown } }).summary.referralCode).toBe(
+      codes[0],
+    );
+
+    const blocked = await finishedIn(TradeMode.Demo);
+    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, blocked.userId));
+    const refused = await summary(appWith(), blocked.sessionId, {
+      telegramUserId: blocked.telegramUserId,
+    });
+    expect(refused.statusCode).toBe(200);
+    expect(
+      (refused.json() as { summary: { referralCode: unknown } }).summary.referralCode,
+    ).toBeNull();
+  });
+
+  it('U7 a no-signal stop without a trade is claimed: 200 with no trades', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.NoSignalTimeout,
+    });
+    await tmp.db
+      .update(tradingSessions)
+      .set({ finalNoticeSentAt: sql`now()` })
+      .where(eq(tradingSessions.id, session.id));
+    const response = await summary(appWith(), session.id, { telegramUserId: seed.telegramUserId });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ summary: { result: '0.00000000', trades: [] } });
+    expect(await sentAt(session.id)).toBeInstanceOf(Date);
   });
 });
 

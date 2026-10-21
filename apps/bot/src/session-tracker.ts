@@ -24,7 +24,7 @@ import { sessionStatusText, TEXTS } from './texts';
 // The session's message follows its session (#284, docs/bot-session.md): the bot polls GET
 // /trading/sessions/:id and edits the message when its drawing changes: its text (the session's
 // stop, #536) or its picture (the signal's direction turns, #568, by editMessageMedia) - then sends
-// the summary card (#318). In-process memory,
+// the session's summary in one message (#318, #537). In-process memory,
 // like the intent tracker; the first poll of a message records its id with the backend (#567), so
 // after a restart the bot's resumer (session-resume.ts) tracks the session again on it, the
 // recovered entries' first polls paced in slots and a message drawn in this process remembered.
@@ -76,7 +76,7 @@ export interface SessionTrackRequest {
   messageId: number;
   // the pair's label as the catalog gave it at the press, or null
   label: PairLabel | null;
-  // the language of the user's texts (#508): the polls, their edits and the summary card run
+  // the language of the user's texts (#508): the polls, their edits and the summary run
   // outside any update; a recovered session's comes from the backend's list
   language: BotLanguage;
   // what the message shows now, or null when nothing of it was read yet (a recovered session)
@@ -90,10 +90,10 @@ export interface SessionTrackRequest {
   // draws the drawing on the session message, without a keyboard (#536), or under the menu alone
   // once the session is gone (#350)
   edit: (drawing: SessionDrawing, end?: 'not_found') => Promise<unknown>;
-  // sends the summary card under the final status (#318): called once, as the entry ends on a
-  // done view whose final edit landed and whose summary message the backend sent (#464); it
+  // sends the session's summary under the final status (#318, #537): called once, as the entry
+  // ends on a done view whose final edit landed and whose notices the backend closed (#464); it
   // handles its own failures
-  card: (view: TradingSessionView) => Promise<void>;
+  summary: (view: TradingSessionView) => Promise<void>;
 }
 
 export interface SessionTracker {
@@ -144,8 +144,9 @@ const finalOf = (
   return { key: `${drawing.picture ?? ''}\n${drawing.text.value}`, drawing };
 };
 
-// The card waits for the done view's drawing on screen and the backend's summary message (#464)
-const cardDue = (entry: Entry, view: TradingSessionView, key: string): boolean =>
+// The summary waits for the done view's drawing on screen and the backend's closed notices (#464,
+// #537: every trade's message sent, the waiting message gone)
+const summaryDue = (entry: Entry, view: TradingSessionView, key: string): boolean =>
   sessionTrackingDone(view) && entry.rendered === key && view.noticesDone;
 
 // A message this process did not draw (a recovered entry, nothing remembered) may be one sent
@@ -336,12 +337,12 @@ export function createSessionTracker({
       const goOn = await editTo(entry, drawing, key);
       if (!goOn) return;
     }
-    // The card goes once, then the entry ends, whatever the card did: a claim the backend
-    // committed answers 409 the second time, so a retry could only lose it (docs/bot-session.md).
-    // It waits for the backend's summary message (#464), so it never comes before it: a done
-    // session without it is polled on, with no edit while its drawing stays the same.
-    if (cardDue(entry, view, key)) {
-      await entry.card(view);
+    // The summary goes once, then the entry ends, whatever it did: a claim the backend committed
+    // answers 409 the second time, so a retry could only lose it (docs/bot-session.md). It waits
+    // for the backend's closed notices (#464), so it never comes before a trade's message: a done
+    // session without them is polled on, with no edit while its drawing stays the same.
+    if (summaryDue(entry, view, key)) {
+      await entry.summary(view);
       finish(entry);
       return;
     }
@@ -350,8 +351,9 @@ export function createSessionTracker({
 
   // Re-arm, or past the deadline stop, with one last edit, not retried, only when the last view's
   // drawing is not on screen yet (the poll's own edit failed, or a read failed after the last good
-  // one); then the card of a done session once that drawing is shown and the summary message went
-  // out (no card otherwise: it would come before the summary or without it). An entry that never
+  // one); then the summary of a done session once that drawing is shown and the notices are closed
+  // (no summary otherwise: it would come before a trade's message; the backend's fallback sends it
+  // then, #537). An entry that never
   // read a view ends with no edit: it has nothing to draw.
   async function next(entry: Entry): Promise<void> {
     if (!live(entry)) return;
@@ -366,8 +368,8 @@ export function createSessionTracker({
     }
     const { key, drawing } = finalOf(entry.label, view);
     if (entry.rendered !== key && mayDraw(entry, view)) await editTo(entry, drawing, key);
-    if (cardDue(entry, view, key)) {
-      await entry.card(view);
+    if (summaryDue(entry, view, key)) {
+      await entry.summary(view);
     }
     finish(entry);
   }

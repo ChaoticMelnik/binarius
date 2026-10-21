@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
   pairLabel,
+  referralLinkOf,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -65,9 +66,9 @@ import {
   type ApiCall,
 } from './testing';
 import {
-  sessionAssetLabel,
   sessionStatusText,
   sessionStopReplyText,
+  sessionSummaryCaption,
   TEXTS,
   textOf,
   LABELS,
@@ -75,7 +76,7 @@ import {
 import { sessionCardKeyboard, sessionOutcomeUnknown, START_REFUSALS } from './trading-session';
 import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
-import { shareQuery } from './session-share';
+import { shareFallbackLink, shareQuery } from './session-share';
 
 const START = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
 const REAL_START = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5);
@@ -105,6 +106,7 @@ const SUMMARY: SessionSummary = {
     { profit: d('0.85000000'), openPrice: 1.1, closePrice: 1.2 },
     { profit: d('-1.00000000'), openPrice: 1.2, closePrice: 1.1 },
   ],
+  referralCode: 'AbC123xY',
 };
 
 function setup(
@@ -124,6 +126,8 @@ function setup(
     readSignals?: BackendClient['readSignals'];
     // no SHARE_STORAGE_CHAT_ID, so no «📤 Поделиться» (#538)
     shareOff?: true;
+    // the summary's wait after a 429 (#537)
+    sleep?: (ms: number) => Promise<void>;
   } = {},
 ) {
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
@@ -185,6 +189,7 @@ function setup(
     signalWaiter,
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
+    ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -1281,19 +1286,39 @@ describe('«🔁 Ещё сессия»', () => {
   });
 });
 
-describe('the summary card (#318)', () => {
+describe('the summary in one message (#318, #537)', () => {
   const DONE = sessionView({
     ...STOPPED,
     trades: { ...STOPPED.trades, settled: 2, won: 1, lost: 1, profit: SUMMARY.result },
     lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+    balance: { available: d('9104.12000000'), ageSec: 120, current: false },
+  });
+  const NO_SIGNAL = sessionView({
+    ...STOPPED,
+    stopReason: TradingSessionStopReason.NoSignalTimeout,
   });
   const CARD_ROWS = [[AGAIN], [...NEW_ANALYSIS, ...TO_SIGNALS], DEPOSIT_INVITE, MENU];
-  // the tracker's entry of a refresh on a done session: its card is what the tracker calls
-  // the tracker's entry of a started session: its card is what the tracker calls
+  const OWNER_LINK = referralLinkOf(BOT_INFO.username, SUMMARY.referralCode!);
+  const captionOf = (view: TradingSessionView, link = OWNER_LINK, label = pairLabel(PAIR_EURUSD)) =>
+    sessionSummaryCaption(label, PAIR_EURUSD.id, view, link).value;
+  // the tracker's entry of a started session: its summary is what the tracker calls
   const entryOf = async (setupResult: ReturnType<typeof setup>) => {
     await setupResult.press(START);
     return setupResult.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
   };
+  const sendsOf = (scene: ReturnType<typeof setup>) =>
+    methods(scene.calls).filter((method) =>
+      ['sendPhoto', 'sendMessage', 'editMessageReplyMarkup'].includes(method),
+    );
+  const photoRefusal = (error_code: number, description: string, retry_after?: number) => ({
+    ok: false as const,
+    error_code,
+    description,
+    ...(retry_after === undefined ? {} : { parameters: { retry_after } }),
+  });
+  // the start's own sendMessage (the session message) comes before the summary
+  const summaryText = (scene: ReturnType<typeof setup>) =>
+    scene.calls.filter((call) => call.method === 'sendMessage').at(-1)?.payload;
 
   it('K1 is the end of the path; the invite and the menu alone without settings', () => {
     const rows = (view: TradingSessionView) =>
@@ -1301,36 +1326,35 @@ describe('the summary card (#318)', () => {
     expect(rows(DONE)).toEqual(CARD_ROWS);
     // S4: no empty first row
     expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([DEPOSIT_INVITE, MENU]);
-    // #509: under a no_signal_timeout card, another pair instead of the same one again
-    expect(
-      rows(sessionView({ ...DONE, stopReason: TradingSessionStopReason.NoSignalTimeout })),
-    ).toEqual([[button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)], DEPOSIT_INVITE, MENU]);
+    // #509: under a no_signal_timeout summary, another pair instead of the same one again
+    expect(rows(NO_SIGNAL)).toEqual([
+      [button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)],
+      DEPOSIT_INVITE,
+      MENU,
+    ]);
   });
 
-  it('K2 claims, then sends one PNG to the status chat with its caption and keyboard', async () => {
+  it("K2' claims, then sends one photo to the status chat: the whole summary as its caption, with sound, the end of the path", async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE) });
     const entry = await entryOf(scene);
-    await entry.card(DONE);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
     expect(scene.claimSessionSummary.mock.calls).toEqual([[SESSION_ID, String(USER.id)]]);
+    const sent = scene.calls.slice(before).map((call) => call.method);
+    expect(sent).toEqual(['sendPhoto', 'editMessageReplyMarkup']);
     const photo = payloadOf(scene.calls, 'sendPhoto');
     expect(photo?.chat_id).toBe(USER.id);
     expect(photo?.photo).toBeInstanceOf(InputFile);
     expect(photo?.parse_mode).toBe('HTML');
-    expect(photo?.caption).toBe(
-      TEXTS.sessionCardCaption({
-        symbol: pairLabel(PAIR_EURUSD),
-        profit: SUMMARY.result,
-        botUsername: BOT_INFO.username,
-      }).value,
-    );
-    expect(photo?.caption).toContain(`@${BOT_INFO.username}`);
-    expect(photo?.caption).toContain(formatSignedUsd(SUMMARY.result));
+    expect(photo).not.toHaveProperty('disable_notification');
+    expect(photo?.caption).toBe(captionOf(DONE));
+    const lines = String(photo?.caption).split('\n');
+    expect(lines[0]).toBe(`📈 ${pairLabel(PAIR_EURUSD)}`);
+    expect(photo?.caption).toContain(`💰 Результат: ${formatSignedUsd(SUMMARY.result)}`);
+    expect(photo?.caption).toMatch(/🧪 Демобаланс: \$9.104\.12/);
+    expect(photo?.caption).toContain('🕒 Баланс Binodex обновлён');
+    expect(lines.at(-1)).toBe(`🤖 ${OWNER_LINK}`);
     expect(rowsOf(photo)).toEqual(CARD_ROWS);
-    expect(
-      rowsOf(photo)
-        .flat()
-        .some((key) => key.callback_data === REFRESH),
-    ).toBe(false);
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
 
@@ -1339,8 +1363,10 @@ describe('the summary card (#318)', () => {
       readSession: () => Promise.resolve(DONE),
       claimSessionSummary: () => Promise.resolve(null),
     });
-    await (await entryOf(scene)).card(DONE);
-    expect(methods(scene.calls)).not.toContain('sendPhoto');
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before)).toEqual([]);
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
 
@@ -1349,30 +1375,205 @@ describe('the summary card (#318)', () => {
       readSession: () => Promise.resolve(DONE),
       claimSessionSummary: () => Promise.reject(httpError(500)),
     });
-    await (await entryOf(scene)).card(DONE);
-    expect(methods(scene.calls)).not.toContain('sendPhoto');
-    expect(warnings(scene.logger)).toEqual(['trading session card not sent']);
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before)).toEqual([]);
+    expect(warnings(scene.logger)).toEqual(['trading session summary not sent']);
     expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
       backendStatus: 500,
       sessionId: SESSION_ID,
     });
   });
 
-  it('K5 a refused photo is logged with its Telegram fields, once, with no retry', async () => {
+  it("K5' a photo refused for good goes as the same caption in a text, with the keyboard and «📤 Поделиться»", async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE) });
-    scene.apiErrors.set('sendPhoto', {
-      ok: false,
-      error_code: 400,
-      description: 'Bad Request: chat not found',
-    });
-    await (await entryOf(scene)).card(DONE);
-    expect(methods(scene.calls).filter((method) => method === 'sendPhoto')).toHaveLength(1);
-    expect(warnings(scene.logger)).toEqual(['trading session card not sent']);
+    scene.apiErrors.set('sendPhoto', photoRefusal(400, 'Bad Request: PHOTO_INVALID_DIMENSIONS'));
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'sendMessage',
+      'editMessageReplyMarkup',
+    ]);
+    const text = summaryText(scene);
+    expect(text?.text).toBe(captionOf(DONE));
+    expect(text?.parse_mode).toBe('HTML');
+    expect(text).not.toHaveProperty('disable_notification');
+    expect(rowsOf(text)).toEqual(CARD_ROWS);
+    expect(payloadOf(scene.calls, 'editMessageReplyMarkup')?.message_id).toBe(TEXT_CARD_MESSAGE_ID);
+    expect(warnings(scene.logger)).toEqual(['trading session card refused: sent as text']);
     expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
       method: 'sendPhoto',
       telegramErrorCode: 400,
       sessionId: SESSION_ID,
     });
+  });
+
+  it("K11 without the owner's code, the last line is the bot's plain share link", async () => {
+    const scene = setup({
+      readSession: () => Promise.resolve(DONE),
+      claimSessionSummary: () => Promise.resolve({ ...SUMMARY, referralCode: null }),
+    });
+    await (await entryOf(scene)).summary(DONE);
+    const caption = String(payloadOf(scene.calls, 'sendPhoto')?.caption);
+    expect(caption).toBe(captionOf(DONE, shareFallbackLink(BOT_INFO.username)));
+    expect(caption.split('\n').at(-1)).toBe(`🤖 https://t.me/${BOT_INFO.username}?start=share`);
+  });
+
+  it('K12 a no-signal stop without trades: one text with sound, «🔀 Выбрать другую пару» and the menu, no photo', async () => {
+    const scene = setup({
+      readSession: () => Promise.resolve(NO_SIGNAL),
+      claimSessionSummary: () =>
+        Promise.resolve({ result: d('0.00000000'), trades: [], referralCode: 'AbC123xY' }),
+    });
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(NO_SIGNAL);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual(['sendMessage']);
+    const text = summaryText(scene);
+    expect(text?.text).toBe(captionOf(NO_SIGNAL));
+    expect(text).not.toHaveProperty('disable_notification');
+    expect(rowsOf(text)).toEqual([
+      [button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)],
+      DEPOSIT_INVITE,
+      MENU,
+    ]);
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('K13 a drawing that throws sends the text, warned', async () => {
+    const scene = setup({
+      readSession: () => Promise.resolve(DONE),
+      // NaN prices do not parse in the contract, but nothing checks the card's model: the
+      // renderer's input is the bot's own; a broken trade list throws in the model
+      claimSessionSummary: () =>
+        Promise.resolve({ ...SUMMARY, trades: [null as unknown as SessionSummary['trades'][0]] }),
+    });
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
+      'sendMessage',
+      'editMessageReplyMarkup',
+    ]);
+    expect(summaryText(scene)?.text).toBe(captionOf(DONE));
+    expect(warnings(scene.logger)).toEqual(['trading session card not drawn']);
+  });
+
+  it('K14 a 403 on the photo sends nothing more', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    scene.apiErrors.set('sendPhoto', photoRefusal(403, 'Forbidden: bot was blocked by the user'));
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual(['sendPhoto']);
+    expect(warnings(scene.logger)).toEqual([
+      'trading session summary refused: the user is unreachable',
+    ]);
+  });
+
+  it.each([
+    [2, 2_000],
+    [30, 5_000],
+  ])(
+    'K15 a 429 with retry_after %i waits %i ms, then the photo once more and «📤 Поделиться»',
+    async (retryAfter, waited) => {
+      const slept: number[] = [];
+      const scene = setup({
+        readSession: () => Promise.resolve(DONE),
+        sleep: (ms) => {
+          slept.push(ms);
+          scene.apiErrors.delete('sendPhoto');
+          return Promise.resolve();
+        },
+      });
+      scene.apiErrors.set(
+        'sendPhoto',
+        photoRefusal(429, 'Too Many Requests: retry later', retryAfter),
+      );
+      const entry = await entryOf(scene);
+      const before = scene.calls.length;
+      await entry.summary(DONE);
+      expect(slept).toEqual([waited]);
+      expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
+        'sendPhoto',
+        'sendPhoto',
+        'editMessageReplyMarkup',
+      ]);
+      expect(
+        scene.calls.filter((call) => call.method === 'sendPhoto').at(-1)?.payload.caption,
+      ).toBe(captionOf(DONE));
+      expect(scene.logger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('K16 a second 429 ends it: two photos, no text, warned', async () => {
+    const slept: number[] = [];
+    const scene = setup({
+      readSession: () => Promise.resolve(DONE),
+      sleep: (ms) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+    });
+    scene.apiErrors.set('sendPhoto', photoRefusal(429, 'Too Many Requests: retry later', 1));
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(slept).toEqual([1_000]);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'sendPhoto',
+    ]);
+    expect(warnings(scene.logger)).toEqual(['trading session summary not sent']);
+  });
+
+  it('K17 a photo of unknown outcome is neither retried nor sent as a text', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    scene.apiErrors.set('sendPhoto', new HttpError('network', new Error('socket hang up')));
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual(['sendPhoto']);
+    expect(warnings(scene.logger)).toEqual(['trading session summary outcome unknown']);
+  });
+
+  it('K17b a 5xx on the photo is an unknown outcome too', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    scene.apiErrors.set('sendPhoto', photoRefusal(502, 'Bad Gateway'));
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(DONE);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual(['sendPhoto']);
+    expect(warnings(scene.logger)).toEqual(['trading session summary outcome unknown']);
+  });
+
+  it('K18 a text after a refused photo that is refused too ends it, warned', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    const entry = await entryOf(scene);
+    scene.apiErrors.set('sendPhoto', photoRefusal(400, 'Bad Request: PHOTO_INVALID_DIMENSIONS'));
+    scene.apiErrors.set('sendMessage', photoRefusal(400, 'Bad Request: chat not found'));
+    await entry.summary(DONE);
+    expect(warnings(scene.logger)).toEqual([
+      'trading session card refused: sent as text',
+      'trading session summary not sent',
+    ]);
+    expect(methods(scene.calls)).not.toContain('editMessageReplyMarkup');
+  });
+
+  it('K19 a session that names no asset claims nothing and is an error', async () => {
+    const bare = sessionView({ ...NO_SIGNAL, settings: null, lastIntent: null });
+    const scene = setup({ readSession: () => Promise.resolve(bare) });
+    const entry = await entryOf(scene);
+    const before = scene.calls.length;
+    await entry.summary(bare);
+    expect(scene.claimSessionSummary).not.toHaveBeenCalled();
+    expect(scene.calls.slice(before)).toEqual([]);
+    expect(scene.logger.error.mock.calls.map((call) => call[1])).toEqual([
+      'trading session summary names no asset',
+    ]);
   });
 
   // the card is a photo: an edit of it is refused (demo.test.ts → a press under the session card)
@@ -1406,13 +1607,10 @@ describe('the summary card (#318)', () => {
     },
   ];
 
-  it("K8 puts «📤 Поделиться» over the card's own rows, its query the session's id", async () => {
+  it("K8 puts «📤 Поделиться» over the summary's own rows, its query the session's id", async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE) });
-    await (await entryOf(scene)).card(DONE);
-    const sends = methods(scene.calls).filter((method) =>
-      ['sendPhoto', 'editMessageReplyMarkup'].includes(method),
-    );
-    expect(sends).toEqual(['sendPhoto', 'editMessageReplyMarkup']);
+    await (await entryOf(scene)).summary(DONE);
+    expect(sendsOf(scene).slice(-2)).toEqual(['sendPhoto', 'editMessageReplyMarkup']);
     const edit = payloadOf(scene.calls, 'editMessageReplyMarkup');
     expect(edit?.chat_id).toBe(USER.id);
     expect(edit?.message_id).toBe(CARD_MESSAGE_ID);
@@ -1422,14 +1620,14 @@ describe('the summary card (#318)', () => {
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
 
-  it('K9 a refused edit is a warning only: the card keeps its keyboard, no retry, no «not sent»', async () => {
+  it('K9 a refused edit is a warning only: the summary keeps its keyboard, no retry, no «not sent»', async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE) });
     scene.apiErrors.set('editMessageReplyMarkup', {
       ok: false,
       error_code: 400,
       description: 'Bad Request: message to edit not found',
     });
-    await (await entryOf(scene)).card(DONE);
+    await (await entryOf(scene)).summary(DONE);
     expect(
       methods(scene.calls).filter((method) => method === 'editMessageReplyMarkup'),
     ).toHaveLength(1);
@@ -1442,9 +1640,9 @@ describe('the summary card (#318)', () => {
     });
   });
 
-  it('K10 without the storage channel the card goes without «📤 Поделиться», and no warning', async () => {
+  it('K10 without the storage channel the summary goes without «📤 Поделиться», and no warning', async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE), shareOff: true });
-    await (await entryOf(scene)).card(DONE);
+    await (await entryOf(scene)).summary(DONE);
     expect(methods(scene.calls)).toContain('sendPhoto');
     expect(methods(scene.calls)).not.toContain('editMessageReplyMarkup');
     expect(rowsOf(payloadOf(scene.calls, 'sendPhoto'))).toEqual(CARD_ROWS);
@@ -1454,14 +1652,10 @@ describe('the summary card (#318)', () => {
   it("K6 without settings, the asset is the last trade's and the keyboard the invite and the menu", async () => {
     const bare = sessionView({ ...DONE, settings: null });
     const scene = setup({ startSession: () => Promise.resolve({ started: bare }) });
-    await (await entryOf(scene)).card(bare);
+    await (await entryOf(scene)).summary(bare);
     const photo = payloadOf(scene.calls, 'sendPhoto');
     expect(photo?.caption).toBe(
-      TEXTS.sessionCardCaption({
-        symbol: sessionAssetLabel(null, bare.lastIntent!.assetId),
-        profit: SUMMARY.result,
-        botUsername: BOT_INFO.username,
-      }).value,
+      sessionSummaryCaption(null, bare.lastIntent!.assetId, bare, OWNER_LINK).value,
     );
     expect(rowsOf(photo)).toEqual([DEPOSIT_INVITE, MENU]);
     expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
@@ -1671,25 +1865,28 @@ describe('the resume of a tracked session after a restart (#567)', () => {
     expect(edit).not.toHaveProperty('reply_markup');
   });
 
-  it("RS2 the card goes to the owner's chat with the resume's bot username", async () => {
+  it("RS2' the summary goes to the owner's chat, its link with the resume's bot username", async () => {
     const scene = setup();
-    await resumed(scene, pairLabel(PAIR_EURUSD)).card(DONE);
+    await resumed(scene, pairLabel(PAIR_EURUSD)).summary(DONE);
     const photo = payloadOf(scene.calls, 'sendPhoto');
     expect(photo?.chat_id).toBe(USER.id);
-    expect(photo?.caption).toContain('@resumed_bot');
+    expect(String(photo?.caption).split('\n').at(-1)).toBe(
+      `🤖 ${referralLinkOf('resumed_bot', SUMMARY.referralCode!)}`,
+    );
   });
 
-  it('RS3 the label is what the resume was handed; null names the asset by its id', async () => {
+  it("RS3' the label is what the resume was handed; null names the asset by its id", async () => {
     const scene = setup();
     const entry = resumed(scene, null);
     expect(entry.label).toBeNull();
-    await entry.card(DONE);
+    await entry.summary(DONE);
     expect(payloadOf(scene.calls, 'sendPhoto')?.caption).toBe(
-      TEXTS.sessionCardCaption({
-        symbol: sessionAssetLabel(null, PAIR_EURUSD.id),
-        profit: SUMMARY.result,
-        botUsername: 'resumed_bot',
-      }).value,
+      sessionSummaryCaption(
+        null,
+        PAIR_EURUSD.id,
+        DONE,
+        referralLinkOf('resumed_bot', SUMMARY.referralCode!),
+      ).value,
     );
   });
 });

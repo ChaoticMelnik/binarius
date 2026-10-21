@@ -1640,8 +1640,9 @@ export const BOT_TEXT_CATALOG = {
     'Сессия остановлена пользователем: кнопкой или /stop.',
     `⏹ Сессия остановлена по твоей команде.`,
   ),
-  // The summary card (#318, docs/bot-session.md → The summary card): labels drawn on the image,
-  // each limit the width of its slot there; the caption goes under the photo.
+  // The summary card (#318, docs/bot-session.md → The summary message): labels drawn on the image,
+  // each limit the width of its slot there; the caption under the photo is the whole summary
+  // (#537, sessionSummaryCaption in bot-text-messages.ts).
   sessionCardTitle: plain(g.Session, 'Картинка-итог: подпись под активом.', 'СЕССИЯ ЗАВЕРШЕНА', {
     limit: 24,
   }),
@@ -1670,12 +1671,11 @@ export const BOT_TEXT_CATALOG = {
     '{trades} · {score}',
     { vars: ['trades', 'score'], limit: 64 },
   ),
-  sessionCardCaption: html(
+  sessionSummaryLink: html(
     g.Session,
-    'Картинка-итог: подпись под картинкой; её видят и те, кому картинку переслали.',
-    `🏁 {symbol}: итог сессии {profit}
-🤖 @{botUsername}`,
-    { ...caption, vars: ['symbol', 'profit', 'botUsername'] },
+    'Итог сессии (картинка-итог): последняя строка подписи — реферальная ссылка владельца сессии (без кода — общая ссылка бота), простым текстом; её видят и те, кому итог переслали.',
+    `🤖 {referralLink}`,
+    { ...caption, vars: ['referralLink'] },
   ),
   // The promo card shared by «📤 Поделиться» (#538, docs/bot-session.md → Sharing the card): a
   // card of its own, drawn when the share is pressed; each limit the width of its slot there.
@@ -1757,7 +1757,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionSummarySymbol: html(
     g.Session,
-    'Итоговое сообщение сессии (со звуком): первая строка — актив; под ней строки итога из сообщения сессии.',
+    "Итог сессии (со звуком): первая строка подписи картинки-итога, которую шлёт бот; под ней строки итога из сообщения сессии. Текстовый итог backend'а (запасной путь) — те же строки.",
     `📈 {symbol}`,
     { vars: ['symbol'] },
   ),
