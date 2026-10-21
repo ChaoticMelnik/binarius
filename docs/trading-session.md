@@ -28,7 +28,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | Settings v1/v2/v3, statuses, stop reasons | `packages/shared/src/trading-session.ts` (`@binarius/shared/trading-session`) | `tradingSessionSettingsSchema`, `buildSessionSettings`, `sessionStakeParams`, `martingaleLimitsFor` (#450), `sessionProgress` (#552), `TradingSessionStatus`, `TradingSessionStopReason`, `stakeSettingsFor`, `MAX_SESSION_CYCLES` 20, `DEFAULT_SESSION_CYCLES` 5, `MIN_SESSION_DURATION_SEC` 5, `MAX_SESSION_SUMMARY_TRADES` 720 |
 | Wire contracts (#283) | the same file | the routes' request, view and refusal schemas, `TradingSessionErrorCode`, `sessionFitsDeadline`, `SESSION_MAX_DURATION_MS`, `TRADING_SESSION_START_BUDGET_MS` |
 | Pair predicates (#283) | `packages/shared/src/catalog.ts` | `isPairOpen`, `pairAcceptsDuration`; the bot's demo checks and the start route both call them |
-| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318), `POST /trading/sessions/:id/share` (#538), `POST /trading/sessions/stop` (#122), `POST /trading/sessions/:id/status-message`, `POST /trading/sessions/:id/status-message/lost` and `GET /trading/sessions/tracked` (#567) behind the internal bearer |
+| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318, #537), `POST /trading/sessions/:id/share` (#538), `POST /trading/sessions/stop` (#122), `POST /trading/sessions/:id/status-message`, `POST /trading/sessions/:id/status-message/lost` and `GET /trading/sessions/tracked` (#567) behind the internal bearer |
 | Table | `packages/db/src/schema/trading-sessions.ts`, migration `0018_trading_session_orchestration` | the columns and constraints below |
 | Operations | `packages/db/src/trading-session-ops.ts` | create, the runnable scan, the two stop sweeps, the history, the CAS stop, the decision mark, the session intent; the start check and the owner-scoped view (#283) |
 | Session lock | `packages/db/src/trade-intent-ops.ts` → `createInTransaction` | the session row locked inside the intent's creation transaction |
@@ -46,9 +46,9 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | `stop_reason` | one of `TradingSessionStopReason` (CHECK `trading_sessions_stop_reason_check`) |
 | `started_at`, `ended_at` | the insert's `now()`; the stop's `now()` |
 | `last_decision_at` | the runnable scan's order key; NULL until the orchestrator first reached an ending |
-| `summary_sent_at` | NULL until the session's summary card is claimed (#318): set once by `claimSessionSummary`'s CAS, never cleared; no CHECK and no index (the claim updates by primary key) |
+| `summary_sent_at` | «the summary step is closed» (#318, #537, [bot-session.md](bot-session.md#the-state)): NULL until one CAS of three writers wins on NULL — the bot's `claimSessionSummary`, `claimSessionFinalNotice({ closeSummary: true })` for a finished session with nothing to send (in the same UPDATE as `final_notice_sent_at`), and the backend fallback's `claimSummaryFallback`; cleared only by `releaseSummaryFallback` on its own claim's mark (compared as text, to the microsecond) after a send Telegram certainly did not deliver; migration 0072 set it to `final_notice_sent_at` on every row with the first mark and without it. No CHECK; `trading_sessions_summary_fallback_idx (final_notice_sent_at) where final_notice_sent_at is not null and summary_sent_at is null` (0072) is the fallback's scan |
 | `notified_trades` | the session notices' cursor (#464, [bot-session.md](bot-session.md#trade-messages-and-the-summary-464)): how many of the session's settled trades, in creation order, the backend's sender claimed for sending; NOT NULL default 0, CHECK `trading_sessions_notified_trades_check` (`>= 0`); raised by one by `claimSessionTradeNotice`'s CAS, lowered by one only by `releaseSessionTradeNotice` |
-| `final_notice_sent_at` | NULL until the session's summary message is claimed (#464): set by `claimSessionFinalNotice`'s CAS — since #536 only with `waiting_message_id is null`, so the summary comes after the waiting message is gone — taken back only by `releaseSessionFinalNotice` while `summary_sent_at` is NULL; `trading_sessions_notice_pending_idx (created_at) where final_notice_sent_at is null` is the sender's scan |
+| `final_notice_sent_at` | «the notices are closed» (#464, #537): NULL until `claimSessionFinalNotice`'s CAS on a finished session whose every settled trade was claimed — since #536 only with `waiting_message_id is null`, so the bot's summary comes after the waiting message is gone; never cleared (#537: `releaseSessionFinalNotice` removed); `trading_sessions_notice_pending_idx (created_at) where final_notice_sent_at is null` is the sender's scan |
 | `cycle_message_id`, `cycle_message_from` | the session's cycle message (#551, migration 0054, [bot-session.md](bot-session.md#the-state)): Telegram's `message_id` of the message the next step of the same martingale cycle edits, and the index (from 0, in the cursor's order) of the first settled trade it shows; both NULL until a new message of the session was sent, never cleared. CHECKs `trading_sessions_cycle_message_pair_check` (both or neither), `…_id_check` (`> 0`), `…_from_check` (`>= 0`). One writer: `recordSessionCycleMessage`, a CAS on `notified_trades = claimed + 1` and `final_notice_sent_at is null`, after Telegram answered the send |
 | `waiting_message_id`, `waiting_after_message` | the waiting message under the session's messages (#536, migration 0061, [bot-session.md](bot-session.md#the-waiting-message-536)): Telegram's `message_id` of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there is none; and its slot, the session's latest message when it was claimed — `greatest(coalesce(cycle_message_id, 0), coalesce(status_message_id, 0))` (#587) — NULL while none is claimed. CHECKs `trading_sessions_waiting_message_id_check` (`> 0`), `…_waiting_after_message_check` (`>= 0`), `…_waiting_pair_check` (an id only on a claimed slot). Written by the backend's sender, each a CAS on the row: `claimSessionWaiting` (the slot, before the send), `recordSessionWaitingMessage` (the id on its own slot, while active), `releaseSessionWaiting` (the slot freed after a certain refusal), `clearSessionWaitingMessage` (the id dropped and the slot freed after the delete); and by `POST /trading/sessions/:id/stop` (#587): `stopTradingSession` with the pressed `waitingMessageId` drops the id and frees the slot in its own UPDATE when it is the recorded one, `clearSessionWaitingMessage` by that id on a 409. Both writers clear only by `(id, waiting_message_id)`; the sender re-reads the id right before its Telegram delete and leaves a message the route took over ([bot-session.md](bot-session.md#accepted-risks) risk 82 for the call in flight). No backfill: NULL at the deploy, so a running session is due at the backend's start |
 | `status_message_id` | the bot's status message of the session (#567, migration 0055, [bot-session.md](bot-session.md#recovery-after-a-restart-567)): Telegram's `message_id` of the newest status message the bot tracked the session on (#587), NULL until its first poll recorded one, and again once the bot reports it lost; CHECK `trading_sessions_status_message_id_check` (`> 0`). Two writers, both CAS with the owner in the predicate: `recordSessionStatusMessage` on `status_message_id is null or status_message_id < $messageId` (the newest id wins: message ids grow within a chat) and `forgetSessionStatusMessage` on `status_message_id = $messageId` (sets NULL); `trading_sessions_tracked_idx (started_at) where status_message_id is not null and summary_sent_at is null` is the recovery list's scan |
@@ -324,23 +324,29 @@ finished session, so its answer carries the balance after the last trade (#337).
 change, so no interleaving lets it stop another user's session. A live intent of the session
 finishes on its own path.
 
-### POST /trading/sessions/:id/summary (#318)
+### POST /trading/sessions/:id/summary (#318, #537)
 
 Body `{ telegramUserId }` (`stopTradingSessionRequestSchema`). `claimSessionSummary` runs one
 `UPDATE trading_sessions SET summary_sent_at = now() … RETURNING` whose WHERE holds: the owner
 (`broker_accounts` → `users.telegram_user_id`, Rule 13), `status = 'stopped'`,
-`summary_sent_at is null`, `final_notice_sent_at is not null` (the card follows the backend's
-summary message, #464), no intent of the session outside `TERMINAL_TRADE_INTENT_STATUSES`, and at
-least one `settled` intent with its broker trade. In the same transaction it reads the settled
-intents' trades in creation order (`profit`, `open_price`, `close_price`) and their sum by
-`sessionProfitSumSql` — the fragment the view's `trades.profit` is — over the same rows. 200
-`{ summary: { result, trades: [{ profit, openPrice, closePrice }] } }`, built field by field. Every
-miss — not the owner's or missing, not stopped, the summary message not sent yet, a trade still
-able to move, no settled trade, sent already — and a non-uuid id are one 409 `{ error: 'summary_unavailable' }` that writes nothing. A
+`summary_sent_at is null`, `final_notice_sent_at is not null` (the summary follows every message
+of the backend, #464, #537), no intent of the session outside `TERMINAL_TRADE_INTENT_STATUSES`, and
+at least one `settled` intent with its broker trade or `stop_reason = 'no_signal_timeout'` (#537:
+its summary tells why, trades or not). In the same transaction it reads the settled intents' trades
+in creation order (`profit`, `open_price`, `close_price`) and their sum by `sessionProfitSumSql` —
+the fragment the view's `trades.profit` is — over the same rows. Before the claim the route reads
+the caller's referral code by `readUserReferral`, which creates it on first use as `/share` does
+(null for a blocked user or one without a `users` row): read first, so a failure after a committed
+claim cannot lose the summary. 200 `{ summary: { result, trades: [{ profit, openPrice, closePrice
+}], referralCode } }` (`trades` may be empty, `referralCode` a string or null), built field by
+field. Every miss — not the owner's or missing, not stopped, the notices not closed yet, a trade
+still able to move, no settled trade and not the no-signal stop, claimed already (by the bot, the
+fallback or the final mark) — and a non-uuid id are one 409 `{ error: 'summary_unavailable' }`
+that writes nothing. A
 bad body is 400. No broker call. Terminal intents and a stopped session cannot change, so the rows
 read after the claim are the ones it checked. Two claims at once: the row lock serialises them and
 the second re-checks `summary_sent_at is null`, so one wins. A lost answer after the commit loses
-the card (accepted, [bot-session.md](bot-session.md#the-summary-card-318)).
+the summary (accepted, [bot-session.md](bot-session.md#the-summary-message-537-the-card-of-318)).
 
 ### POST /trading/sessions/:id/share (#538)
 
@@ -414,9 +420,8 @@ statement, no external call, under the bot's `BACKEND_REQUEST_TIMEOUT_MS`.
 ### GET /trading/sessions/tracked?limit= (#567)
 
 The bot's recovery list: `listTrackedSessions` returns the sessions with a recorded status
-message and no summary card (`summary_sent_at is null`), except the finished ones with no settled
-trade whose summary message was sent (`final_notice_sent_at is not null` and no settled intent
-with its broker trade: they never get a card); a row also leaves when its message is lost (the
+message and the summary step open (`summary_sent_at is null`; a finished session with nothing to
+send has it closed by its final mark, #537); a row also leaves when its message is lost (the
 column cleared by the route above); oldest first (`started_at`, then `id`), at most
 `limit`. `limit` is an int from 1 to `TRACKED_SESSIONS_MAX` (2 000), the ceiling by default; any
 other value is 400 `validation`. 200 `{ sessions: [{ id, telegramUserId, messageId, assetId,
@@ -650,9 +655,10 @@ should not stand waiting with no word to the user.
   the signals list, `LEGACY_DURATION_PATTERNS`); the route and the CLI still take any duration from
   5 s, so a 15 s session from before the deploy plays out. The chain keeps the limit on the
   scanner's candles (5 s since #685) below the hour and above the hold-back on the shortest (5 s).
-- **The user.** The status message and the summary card (#318) end with «🔀 Выбрать другую пару»
+- **The user.** The status message and the summary (#318, #537) end with «🔀 Выбрать другую пару»
   (the signals list, `demo:sig`) instead of «🔁 Ещё сессия» and «📊 Новый анализ», and the
-  backend's summary (#464) is sent with sound even without a trade ([bot-session.md](bot-session.md)).
+  summary is sent with sound even without a trade — by the bot, as a text (#537), the backend's
+  fallback text above «🏠 В меню» when the bot cannot ([bot-session.md](bot-session.md)).
 
 ## The pause after two losses (#379)
 
