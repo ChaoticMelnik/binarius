@@ -14,7 +14,7 @@ import {
   type DecimalString,
   type TradingSessionSettings,
 } from '@binarius/shared';
-import { brokerAccounts, brokerTrades, signalDecisions } from './schema/index';
+import { brokerAccounts, brokerTrades, decisionTicks, signalDecisions } from './schema/index';
 import {
   journalEntryOf,
   readH1ShadowStats,
@@ -391,6 +391,38 @@ describe('readTradeLogPage (#666)', () => {
     expect(text).not.toContain(session.telegramUserId);
     expect(text).not.toContain('accessToken');
     expect(text).not.toContain('raw');
+  });
+  it('SD18 a decision carries its decision_ticks row (#668), null without one', async () => {
+    const session = await seedSession();
+    const bare = await recordSignalDecision(
+      tmp.db,
+      decisionFixture(session, { outcome: SignalDecisionOutcome.Paused, step: 1 }),
+    );
+    const { intent } = await sessionIntent(session, 2);
+    const ticks: [number, number, number][] = [
+      [1_760_000_001_000, 1_760_000_001_200, 1.1001],
+      [1_760_000_002_000, 1_760_000_002_150, 1.1002],
+    ];
+    await tmp.db.insert(decisionTicks).values({
+      decisionId: intent.signalDecisionId!,
+      fromMs: 1_759_999_947_000,
+      untilMs: 1_760_000_072_000,
+      status: 'truncated',
+      detail: 'hole',
+      count: 2,
+      ticks,
+    });
+    const rows = await exportOf(session.sessionId);
+    expect(rows.map((row) => row.decision.id)).toEqual([bare.id, intent.signalDecisionId]);
+    expect(rows[0]!.ticks).toBeNull();
+    expect(rows[1]!.ticks).toEqual({
+      status: 'truncated',
+      detail: 'hole',
+      fromMs: 1_759_999_947_000,
+      untilMs: 1_760_000_072_000,
+      count: 2,
+      ticks,
+    });
   });
 });
 
