@@ -661,6 +661,34 @@ const sessionBalanceCurrent = sql<boolean>`not exists (
      and ${tokenLedger.createdAt} > ${sessionObservedAt}
 )`;
 
+export interface SessionBalanceRead {
+  available: DecimalString;
+  minTradeAmount: DecimalString;
+  // the view's balance.current false: a settlement of this session is newer than the balance
+  behind: boolean;
+}
+
+// The orchestrator's balance (#696): the amounts and behind come from one statement, because an
+// update_balance committed between two reads would pair the new amounts with the old verdict.
+export async function readSessionBalance(
+  db: Db,
+  sessionId: string,
+): Promise<SessionBalanceRead | undefined> {
+  const [row] = await db
+    .select({
+      available: sql<DecimalString>`${sessionAvailable}`,
+      minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
+      behind: sql<boolean>`not ${sessionBalanceCurrent}`,
+    })
+    .from(tradingSessions)
+    .innerJoin(
+      brokerBalanceSnapshots,
+      eq(brokerBalanceSnapshots.brokerAccountId, tradingSessions.brokerAccountId),
+    )
+    .where(eq(tradingSessions.id, sessionId));
+  return row;
+}
+
 // The session as the owner's bot sees it (#283). Scoped by the owner: another user's session and
 // a missing id are both undefined (Rule 13). The row, the counters and the last intent come from
 // one REPEATABLE READ snapshot, so the counters never disagree with lastIntent.

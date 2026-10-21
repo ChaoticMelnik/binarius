@@ -44,6 +44,7 @@ import {
   createSessionIntent,
   readActiveTradingSessionView,
   readSessionShareTrades,
+  readSessionBalance,
   readTradingSessionAccount,
   readTradingSessionView,
   stopTradingSession,
@@ -645,6 +646,109 @@ describe('readTradingSessionView: the profit sum and the balance (#337)', () => 
     const realBalance = (await viewOf(real, seed)).balance!;
     expect(realBalance).toMatchObject({ available: '250.00000000', current: false });
     expect(realBalance.ageSec).toBeGreaterThanOrEqual(3600);
+  });
+});
+
+// the orchestrator's balance (#696): the same fragments as the view's balance, in one statement
+describe('readSessionBalance (#696)', () => {
+  const balanceEvent = (
+    brokerAccountId: string,
+    available: string,
+    mode: TradeMode = TradeMode.Demo,
+  ) =>
+    applyBalanceEvent(tmp.db, {
+      brokerAccountId,
+      mode,
+      balance: { available: money(available), held: money('0'), total: money(available) },
+    });
+
+  it('SB1 an account without a snapshot has none', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    expect(await readSessionBalance(tmp.db, session.id)).toBeUndefined();
+  });
+
+  it("SB2 with no settlement of the session it is not behind; the amount is the session's mode", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: TradeMode.Real });
+    const demo = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await stopTradingSession(tmp.db, { id: demo.id, reason: TradingSessionStopReason.Completed });
+    const real = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode: TradeMode.Real });
+    await snapshot(seed.brokerAccountId, '10002.5', '250.75');
+    expect(await readSessionBalance(tmp.db, demo.id)).toEqual({
+      available: '10002.50000000',
+      minTradeAmount: '1.00000000',
+      behind: false,
+    });
+    expect(await readSessionBalance(tmp.db, real.id)).toEqual({
+      available: '250.75000000',
+      minTradeAmount: '1.00000000',
+      behind: false,
+    });
+  });
+
+  // a snapshot, then a settlement of the session: the live order of a trade's close
+  const settledAfterSnapshot = async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    const { intent } = await sessionIntent(seed, session.id, 1);
+    await snapshot(seed.brokerAccountId, '0.5');
+    await settle(intent, '0.9');
+    return { seed, session };
+  };
+
+  it('SB3 a settlement of the session newer than the snapshot puts it behind', async () => {
+    const { session } = await settledAfterSnapshot();
+    expect(await readSessionBalance(tmp.db, session.id)).toEqual({
+      available: '0.50000000',
+      minTradeAmount: '1.00000000',
+      behind: true,
+    });
+  });
+
+  it("SB4 the session mode's socket event after the settlement catches it up", async () => {
+    const { seed, session } = await settledAfterSnapshot();
+    await balanceEvent(seed.brokerAccountId, '2.4');
+    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({
+      available: '2.40000000',
+      behind: false,
+    });
+  });
+
+  it("SB5 the other mode's socket event leaves it behind", async () => {
+    const { seed, session } = await settledAfterSnapshot();
+    await balanceEvent(seed.brokerAccountId, '300', TradeMode.Real);
+    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({
+      available: '0.50000000',
+      behind: true,
+    });
+  });
+
+  it('SB6 a REST snapshot after the settlement catches it up', async () => {
+    const { seed, session } = await settledAfterSnapshot();
+    await snapshot(seed.brokerAccountId, '2.4');
+    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({
+      available: '2.40000000',
+      behind: false,
+    });
+  });
+
+  it("SB7 another session's settlement and a one-off trade's do not put it behind", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const other = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    const { intent: otherIntent } = await sessionIntent(seed, other.id, 1);
+    await stopTradingSession(tmp.db, {
+      id: other.id,
+      reason: TradingSessionStopReason.UserStopped,
+    });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshot(seed.brokerAccountId);
+    await settle(otherIntent, '0.9');
+    const { intent: botIntent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(seed.telegramUserId),
+    );
+    await settle(botIntent, '0.9');
+    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({ behind: false });
   });
 });
 
