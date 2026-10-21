@@ -1,9 +1,12 @@
-import { Bot, GrammyError, HttpError } from 'grammy';
+import { Bot, GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
 import {
   BOT_MESSAGE_SPACER,
+  ButtonRole,
+  callbackButton,
   confirmCallbackData,
+  keyboardOf,
   NotificationLevel,
   BotLanguage,
   languageSetCallbackData,
@@ -20,6 +23,7 @@ import {
   USER,
   WRITE_CALLBACK_PREFIXES,
   captureApi,
+  refuseKeyboardOutsideRoles,
   refuseWidthSpacerMisuse,
   refuseWriteRetried,
   rejectionOf,
@@ -166,6 +170,59 @@ describe('refuseWidthSpacerMisuse (#506)', () => {
     expect(refuseWidthSpacerMisuse('answerCallbackQuery', toast)).toBe(toast);
     const getMe = {};
     expect(refuseWidthSpacerMisuse('getMe', getMe)).toBe(getMe);
+  });
+});
+
+// #475: every keyboard a scene sends is built by role and laid out by the rule
+describe('refuseKeyboardOutsideRoles (#475)', () => {
+  const nav = (text: string) => callbackButton(ButtonRole.Nav, text, `n:${text}`);
+
+  it('a grammY keyboard or a bare markup throws', () => {
+    expect(() =>
+      refuseKeyboardOutsideRoles('sendMessage', {
+        reply_markup: new InlineKeyboard().text('x', 'menu'),
+      }),
+    ).toThrow('sendMessage: a keyboard built outside keyboardOf');
+    expect(() =>
+      refuseKeyboardOutsideRoles('editMessageReplyMarkup', {
+        reply_markup: { inline_keyboard: [[{ text: 'x', callback_data: 'menu' }]] },
+      }),
+    ).toThrow('editMessageReplyMarkup: a keyboard built outside keyboardOf');
+  });
+
+  it('a lone non-forward button beside another such throws; the only one passes', () => {
+    expect(() =>
+      refuseKeyboardOutsideRoles('sendMessage', {
+        reply_markup: keyboardOf([nav('a'), nav('b')], [nav('c')]),
+      }),
+    ).toThrow('sendMessage: lone_button: c');
+    expect(() =>
+      refuseKeyboardOutsideRoles('sendMessage', { reply_markup: keyboardOf([nav('c')]) }),
+    ).not.toThrow();
+  });
+
+  it('a long label in a row of three throws; a list remainder and no keyboard pass', () => {
+    expect(() =>
+      refuseKeyboardOutsideRoles('sendMessage', {
+        reply_markup: keyboardOf([nav('↩️ Назад к анализу'), nav('b'), nav('c')]),
+      }),
+    ).toThrow('sendMessage: label_width: ↩️ Назад к анализу (15 > 9)');
+    expect(() =>
+      refuseKeyboardOutsideRoles('sendMessage', {
+        reply_markup: keyboardOf({ buttons: [nav('a'), nav('b'), nav('c')], perRow: 2 }, [
+          nav('d'),
+        ]),
+      }),
+    ).not.toThrow();
+    expect(() => refuseKeyboardOutsideRoles('sendMessage', { text: 'x' })).not.toThrow();
+  });
+
+  it('captureApi refuses the call, so the scene fails', async () => {
+    const { bot } = captured();
+    const error = await rejectionOf(
+      bot.api.sendMessage(USER.id, HI, { reply_markup: new InlineKeyboard().text('x', 'menu') }),
+    );
+    expect(String(error)).toContain('sendMessage: a keyboard built outside keyboardOf');
   });
 });
 
