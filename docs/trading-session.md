@@ -617,7 +617,7 @@ interval: `sessionNoSignalTimeoutMs(durationSec)` = 20 × `SIGNAL_CHART_INTERVAL
 a fixed 120 s, and 21-26 % of the `15s` sessions of 16-17.10 stopped at it, 16 of 17 waiting on
 `no_signal`; in the signal journal of 14-18.10 a wait over 120 s was 3 % of the `15s` decisions, an
 exit from the pause over 300 s 1 %). The worker passes the milliseconds to `readSessionHistory`; the
-bot's stop line prints the candles and the candle («20 свечей по 15 с»). Owner, #509: the session
+bot's stop line prints the candles and the candle («20 свечей по 5 с»). Owner, #509: the session
 should not stand waiting with no word to the user.
 
 - **The count** — `readSessionHistory`'s `waitExpired`, in the attempt's first statement:
@@ -646,11 +646,12 @@ should not stand waiting with no word to the user.
 - **Long candles (accepted risk, owner 2026-10-18).** On `1m` the limit is 20 min; from `5m` up
   it is longer than `SESSION_MAX_DURATION_MS`, so such a session is never stopped by it — the
   hour's `timeout` ends it. Only a direct `POST /trading/sessions` or the CLI creates one; the bot
-  offers 5 and 15 s (`DEMO_DURATIONS_SEC`, and `LEGACY_DURATION_PATTERNS` take every older button).
-  The chain keeps the limit on the scanner's candles (15 s) below the hour and above the hold-back
-  on the shortest (5 s).
+  creates 5 s sessions only since #685 (`DEMO_DURATIONS_SEC`; every older duration button leads to
+  the signals list, `LEGACY_DURATION_PATTERNS`); the route and the CLI still take any duration from
+  5 s, so a 15 s session from before the deploy plays out. The chain keeps the limit on the
+  scanner's candles (5 s since #685) below the hour and above the hold-back on the shortest (5 s).
 - **The user.** The status message and the summary card (#318) end with «🔀 Выбрать другую пару»
-  (the signals of the session's duration) instead of «🔁 Ещё сессия» and «📊 Новый анализ», and the
+  (the signals list, `demo:sig`) instead of «🔁 Ещё сессия» and «📊 Новый анализ», and the
   backend's summary (#464) is sent with sound even without a trade ([bot-session.md](bot-session.md)).
 
 ## The pause after two losses (#379)
@@ -786,7 +787,7 @@ with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR
 | `TELEGRAM_USER_ID` | required, a positive integer |
 | `ACCOUNT_ID` | optional, a uuid; needed only when the user has more than one active account. It must be one of the user's accounts as `readUserAccounts` lists them (the 10 newest), compared without case; the listed (lower-case) spelling is what `createTradingSession` gets; another user's id and an unknown one are both `account_not_found`, before anything of that account is read. An own account older than the 10 newest is not found either (accepted) |
 | `ASSET_ID` | required, 1 – int4 max |
-| `DURATION_SEC` | default 15 (#313: the demo's set is 5 and 15 s), `MIN_SESSION_DURATION_SEC` (5, #552) – int4 max |
+| `DURATION_SEC` | default 15 (#313; the bot offers 5 s only since #685, the CLI keeps its default), `MIN_SESSION_DURATION_SEC` (5, #552) – int4 max |
 | `CYCLES` | default `DEFAULT_SESSION_CYCLES` (5), 1 – 20 (#552; `TRADES` before it) |
 | `DEMO_ONLY` | optional, `true` or `false` (default `false`), as the worker reads it (#396); passed to `createTradingSession`. The CLI creates demo sessions only, so the flag refuses nothing; a user in real mode is refused `mode_not_allowed` (#327) |
 | `SESSION_STAKE_STRATEGY` | optional, `martingale` or `fixed` (default `martingale`), the start route's variable (#450); written into the session's settings |

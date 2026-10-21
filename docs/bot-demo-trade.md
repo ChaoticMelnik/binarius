@@ -191,10 +191,13 @@ line in the saved stake's mode — «✅ Демо-ставка сохранен�
 amount is the real stake in force; a user in demo gets the amount screen (#476,
 [bot-demo.md](bot-demo.md#the-amount-screen-476)) with its amounts from the same access read, ✅
 on the demo stake (after the reset, on the minimum), and its refusals (a failed read: «⚠️ Сервис
-временно недоступен…» with «🔄 Повторить» `demo:l:<assetId>:<sec>` and «↩️ К списку»). One read
+временно недоступен…» with «🔄 Повторить» `demo:l:<assetId>:5` and «↩️ К списку»). One read
 gives the symbol: `readPairs`, any catalog, a stale one included, as the session start reads it.
 The payout refuses nothing: at 79 % as at 80 % the screen is drawn (#631; #379 drew the launch
-press's refusal below 80 % instead, `stake-picker.test.ts` on 15 and 5 s). Without a catalog the symbol line is dropped and `warn` `pairs not read for the launch screen`
+press's refusal below 80 % instead, `stake-picker.test.ts` on 5 s). An origin drawn with 15 s
+(`a|p:<assetId>:15`, before #685) or a duration of the set before #313 reads as the same pair's
+screen at 5 s (`stakeOriginOf`): its save draws the amount screen at 5 s, its way back is
+`demo:an:<assetId>:5`. Without a catalog the symbol line is dropped and `warn` `pairs not read for the launch screen`
 is logged; without a catalog or without the pair in it the screen stays, since the start checks the
 pair itself. A preset or the reset edits in place, a typed amount sends the screen as a new
 message. A refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску» (`demo:l`, which
@@ -242,7 +245,7 @@ status line of an intent and a session's stake use it too; balances keep `format
 ## The status message
 
 `intentStatusText(symbol, view, { deadline?, sessionOffer? })` builds the message from four parts: a
-header, the trade line (`EUR/USD · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the pair's label —
+header, the trade line (`EUR/USD · ⬆️ Вверх · ⏱ 5 с · ставка $1.00`, the pair's label —
 [`pairLabel`](pairs-catalog.md#the-pairs-label-428-631), the symbol without « OTC», capped at 64 characters), a blank line, and the status line; then, after a blank line, the deadline hint or the
 session offer (#360) when the caller asks for one. The callers never ask for both. The status line is chosen by `view.status`, or by
 `view.lastError` when the status is `rejected`:

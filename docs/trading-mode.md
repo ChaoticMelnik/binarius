@@ -185,7 +185,7 @@ overrides of the texts are not checked by it. The first-session reminders («�
 and the analysis reminder («📊 Новый анализ», #484) are planned and sent only to a user in demo
 ([mailing.md](mailing.md)); the «🎮 Демо-торговля»
 button under `/account`, the account card and the re-login push stays for a real-mode user too
-(accepted: it leads to the neutral duration screen, and every screen with a real-money button
+(accepted: it leads to the neutral signals list, and every screen with a real-money button
 after it says REAL).
 
 **The single trade.** `effectiveStake` is the saved real stake in real mode, or
