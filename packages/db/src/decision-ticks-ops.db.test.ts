@@ -262,13 +262,19 @@ describe('sweepSignalDecisions (#668)', () => {
     await insertDecisionTicks(tmp.db, [ticksRow(withTicks)]);
     await age(withTicks, '8 days');
     await age(without, '8 days');
-    expect(await sweep()).toEqual({ decisions: 2, ticks: 1 });
-    expect(await exists([withTicks, without])).toEqual([]);
-    const left = await tmp.db
-      .select()
-      .from(decisionTicks)
-      .where(eq(decisionTicks.decisionId, withTicks));
-    expect(left).toEqual([]);
+    try {
+      expect(await sweep()).toEqual({ decisions: 2, ticks: 1 });
+      expect(await exists([withTicks, without])).toEqual([]);
+      const left = await tmp.db
+        .select()
+        .from(decisionTicks)
+        .where(eq(decisionTicks.decisionId, withTicks));
+      expect(left).toEqual([]);
+    } finally {
+      // a sweep that failed here leaves old rows every later sweep would trip over or count
+      await tmp.db.delete(decisionTicks).where(eq(decisionTicks.decisionId, withTicks));
+      await tmp.db.delete(signalDecisions).where(inArray(signalDecisions.id, [withTicks, without]));
+    }
   });
 
   it('K12 batch bounds one statement, oldest first', async () => {
