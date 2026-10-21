@@ -136,7 +136,7 @@ of the same account queues behind what an earlier one left.
 |---|---|---|
 | `user.data` | `upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false, eventAt: [demo, real] })` | `{ written: false }` → `warn` `balance snapshot not written` (`source: user_data`, `reason: out_of_domain`, `field`), once per connection |
 | `user.<mode>.update_balance` | `applyBalanceEvent(db, { brokerAccountId, mode, balance })` | `no_snapshot` or `out_of_domain` → the same warn with `source: update_balance`, once per connection |
-| `user.<mode>.close_trade.success` | `settleClosedTrades(db, { brokerAccountId, trades })` | `settled` → `info` `intent settled from close_trade.success` (`intentId`, `brokerTradeId`); `not_ours`, `already_settled`, `intent_not_accepted` → `debug` `closed trade not applied` (`brokerTradeId`, `result`) |
+| `user.<mode>.close_trade.success` | `settleClosedTrades(db, { brokerAccountId, trades })` | `settled` → `info` `intent settled from close_trade.success` (`intentId`, `brokerTradeId`); `not_ours`, `already_settled`, `intent_not_accepted` → `debug` `closed trade not applied` (`brokerTradeId`, `result`); a `settled` outcome wakes the session orchestrator after the commit (#696) |
 
 A writer's throw → `error` `broker session write failed` (`source`, `brokerTradeIds` for a
 `close_trade_success`, `errorLogFields`), then a
