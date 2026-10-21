@@ -20,7 +20,7 @@ import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-servic
 import type { BackfillCounters, CandleBackfill } from './backfill';
 import type { CandleRing } from './ring';
 import type { SecondSeries, SecondSeriesCounters } from './seconds';
-import type { TickStore } from './ticks';
+import type { TickStore, TickStoreCounters } from './ticks';
 import type { PendingRequests } from './source';
 
 type BackfillTotal = Exclude<keyof BackfillCounters, 'queued'>;
@@ -60,8 +60,9 @@ export interface MarketDataManagerDeps {
   // a new, idle client; label: the account it is opened for
   openClient: (label: string) => BrokerSocketClient;
   ring: CandleRing;
-  // the newest tick per pair (#666): the active client's ticks, next to the ring
-  ticks: Pick<TickStore, 'push'>;
+  // the newest tick and the window of ticks per pair (#666, #668): the active client's ticks, with
+  // the ring's holes
+  ticks: Pick<TickStore, 'push' | 'onDrop' | 'counters'>;
   // the 1s closes of the H1 shadow (#669): the active client's ticks too, with the ring's holes
   seconds: Pick<SecondSeries, 'push' | 'onDrop' | 'counters'>;
   requests: Pick<PendingRequests, 'size'>;
@@ -157,6 +158,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
   let reportedCounters = ring.counters();
   let reportedBackfill = backfill.counters();
   let reportedSeconds = seconds.counters();
+  let reportedBuffer = tickStore.counters();
   const reportedClosedUntil = new Map<ScanInterval, number>();
 
   const isHeld = (accountId: string) => (held.get(accountId) ?? 0) > now();
@@ -266,6 +268,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     if (role === 'active' && isReady(slot)) {
       ring.onDrop();
       seconds.onDrop();
+      tickStore.onDrop();
     }
     drop(role);
     if (hold) holdBack(account.id);
@@ -456,6 +459,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
       if (role === 'active') {
         ring.onDrop();
         seconds.onDrop();
+        tickStore.onDrop();
       }
     }
     if (change.to === BrokerSocketState.DisconnectedByServer) {
@@ -572,6 +576,9 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     const secondCounts = seconds.counters();
     const secondsSince = (key: Exclude<keyof SecondSeriesCounters, 'pairs'>) =>
       secondCounts[key] - reportedSeconds[key];
+    const bufferCounts = tickStore.counters();
+    const bufferSince = (key: Exclude<keyof TickStoreCounters, 'pairs' | 'held'>) =>
+      bufferCounts[key] - reportedBuffer[key];
     const periodMs = Math.max(at - reportedAt, 1);
     logger.info(
       {
@@ -614,11 +621,19 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
           holeSeconds: secondsSince('holeSeconds'),
           resets: secondsSince('resets'),
         },
+        buffer: {
+          pairs: bufferCounts.pairs,
+          held: bufferCounts.held,
+          ahead: bufferSince('ahead'),
+          dropped: bufferSince('dropped'),
+          holes: bufferSince('holes'),
+        },
       },
       'market data',
     );
     reportedAt = at;
     reportedSeconds = secondCounts;
+    reportedBuffer = bufferCounts;
     reportedCounters = counters;
     reportedBackfill = filling;
     ticks = 0;

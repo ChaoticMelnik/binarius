@@ -1065,6 +1065,43 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
   });
 });
 
+describe('the tick window in the manager (#668)', () => {
+  it('M32 a ready active evicted by the failover marks a hole in the tick window; a reserve leaving ready does not; the line carries the buffer', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active, reserve] = fakes.made;
+    const before = Date.now() - 10_000;
+    active?.hear(price(IDS[0], before));
+    reserve?.fire(Reconnecting);
+    reserve?.fire(Ready);
+    active?.hear(price(IDS[0], before + 1));
+    expect(h.ticks.counters().holes).toBe(0);
+    h.accounts.list = [ACC2];
+    await h.manager.tick();
+    once(h, 'failover', { from: ACC1.id, reason: 'not_working', heldBack: false });
+    reserve?.hear(price(IDS[0], before + 5_000));
+    expect(h.ticks.counters().holes).toBe(1);
+    expect(h.ticks.between(IDS[0] ?? 0, before + 1, before + 5_000).coverage).toBe('hole');
+    expect(h.line().buffer).toEqual({ pairs: 1, held: 3, ahead: 0, dropped: 0, holes: 1 });
+    expect(h.line().buffer).toEqual({ pairs: 1, held: 3, ahead: 0, dropped: 0, holes: 0 });
+  });
+
+  it('M32b the active leaving ready marks a hole in the tick window', async () => {
+    const fakes = fakeClients();
+    const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
+    await h.manager.tick();
+    const [active] = fakes.made;
+    const t0 = Date.now() - 10_000;
+    active?.hear(price(IDS[0], t0));
+    active?.fire(Reconnecting);
+    active?.fire(Ready);
+    active?.hear(price(IDS[0], t0 + 3_000));
+    expect(h.ticks.counters().holes).toBe(1);
+    expect(h.ticks.between(IDS[0] ?? 0, t0 + 1_000, t0 + 2_000).coverage).toBe('hole');
+  });
+});
+
 describe('the market data manager against the account list (#404, R1)', () => {
   it('M19a evicts a ready active whose account left the list, without a hold-back, and marks the holes', async () => {
     const fakes = fakeClients();
@@ -1394,7 +1431,11 @@ describe('the market data log (#404)', () => {
         'pending',
         'backfill',
         'seconds',
+        'buffer',
       ].sort(),
+    );
+    expect(Object.keys((line?.buffer as object | undefined) ?? {}).sort()).toEqual(
+      ['pairs', 'held', 'ahead', 'dropped', 'holes'].sort(),
     );
     expect(Object.keys((line?.seconds as object | undefined) ?? {}).sort()).toEqual(
       ['pairs', 'ahead', 'late', 'closedByTick', 'closedByClock', 'holeSeconds', 'resets'].sort(),
