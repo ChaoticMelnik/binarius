@@ -3764,3 +3764,28 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. Implementer Step 5: per-test durations of added/changed test files read before the push; a test above a quarter of its timeout is split or narrowed, never given a bigger timeout — **внедрено в #688: `.claude/skills/implementer/SKILL.md` → Step 5**
 2. Remaining findings — **вынесено в #683, #687**
+
+---
+
+## #681 — H1, часть 2b: отчёт h1 shadow report (2026-10-21)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Shared with #669 (same session). #681 split off #669 by its architect (Step 4a, 2026-10-20). |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended. Plan 6290616769 against #669's plan as the row contract; assumptions listed for round 0. |
+| Architect | round-0 Plan Update | Opus, after #669 merged: «новых развилок нет»; Δ1–Δ6 (outcome constant name, own-entry mark `*`, docs in English) — 6292807088. |
+| Implementer | first pass | Opus. 1 clarify question (neutral `parseInstant` message), recommended. Died once on an API 403 mid per-commit check; continued from its own state. PR #689, 3 commits, +1 574, CI green, `pnpm check` 0, mutations 14/14, per-test durations read (slowest new test 52 ms). |
+| Reviewer | round 1 | Clean, 7 Minor; `/security-review` skipped (read-only CLI, parameterised SQL — checked by hand). Codex task-mvhsqb8r-yl4gg1 (1 Minor), re-hash by tech-lead matched base 000e76e8 / head aaf0ba38. Owner: no Minor fixed. Merged `--rebase --delete-branch` 2026-10-21T07:44:36Z on the owner's yes; #681 Done; Minors → #690. |
+| Tech Lead | models | Every spawn on its policy model. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1–m7 | Minor | other | left at the merge | → #690 |
+| Unchanged stand test R5b at 1.56 s (> ¼ of the 5 s timeout) | — | env-parity | predates the #688 duration rule | → #691 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #690, #691**
