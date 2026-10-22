@@ -495,14 +495,15 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   // a unit of a session's cycle message, sent by the backend through the same builder (#551):
   // one trade's block, at step 2 with the adaptive line above it and at another step without it,
-  // each class, the prices with the most digits a pair has and as String() prints the widest double
+  // each class and the open block in either direction (#700), the prices with the most digits a
+  // pair has and as String() prints the widest double
   sessionTrade: () =>
-    Object.values(SessionTradeResult).flatMap((result) =>
-      [2, N].flatMap((step) =>
-        [
-          { digits: MAX_PAIR_DIGITS, price: -999_999_999.123 },
-          { digits: null, price: -1.2345678901234567e-308 },
-        ].map(({ digits, price }) =>
+    [2, N].flatMap((step) =>
+      [
+        { digits: MAX_PAIR_DIGITS, price: -999_999_999.123 },
+        { digits: null, price: -1.2345678901234567e-308 },
+      ].flatMap(({ digits, price }) => [
+        ...Object.values(SessionTradeResult).map((result) =>
           notices.sessionCycleText([
             {
               amount: STAKE,
@@ -516,7 +517,17 @@ const REAL: Record<string, () => TelegramHtml[]> = {
             },
           ]),
         ),
-      ),
+        ...Object.values(TradeAction).map((action) =>
+          notices.sessionCycleText([], {
+            amount: STAKE,
+            action,
+            openPrice: price,
+            digits,
+            cycle: N,
+            step,
+          }),
+        ),
+      ]),
     ),
   // the finished session's summary as a text, the backend's fallback and the bot's text (#464, #537)
   sessionSummary: () =>

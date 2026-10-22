@@ -7,9 +7,10 @@ import {
   createSessionTexts,
   SESSION_STOP_LINES,
   type SessionClosingView,
+  type SessionOpenNotice,
   type SessionTradeNotice,
 } from './session-texts';
-import { TradeMode } from './trading';
+import { TradeAction, TradeMode } from './trading';
 import { TradingSessionStopReason } from './trading-session';
 
 const texts = createBotTexts(defaultBotTextSource);
@@ -152,6 +153,60 @@ describe('sessionCycleText (#551)', () => {
       const printed = text([trade({ step: 1 }), trade({ result, step: 2 })]);
       expect(printed.toLowerCase()).not.toMatch(/мартингейл|martingale/);
     }
+  });
+});
+
+describe('sessionCycleText with the open trade (#700)', () => {
+  const ADAPTIVE = '🔄 Адаптивная ставка включена';
+  const open = (patch: Partial<SessionOpenNotice> = {}): SessionOpenNotice => ({
+    amount: d('11.50000000'),
+    action: TradeAction.Up,
+    openPrice: 0.4979,
+    digits: 5,
+    cycle: 2,
+    step: 1,
+    ...patch,
+  });
+  const text = (trades: SessionTradeNotice[], block?: SessionOpenNotice) =>
+    session.sessionCycleText(trades, block).value;
+
+  it('the open block alone: the cycle and step, the stake, the direction, the open price, no result', () => {
+    expect(text([], open({ step: 3 }))).toBe(
+      '⚡ Цикл 2 Шаг 3\n<pre>⏳ Ставка: $11.50 · ⬆️ Вверх · сделка открыта\n📊 Цена: 0.49790 → …</pre>',
+    );
+  });
+
+  it('names the direction from the catalog, down too', () => {
+    expect(text([], open({ action: TradeAction.Down }))).toContain(
+      `· ${texts.plain.actionDown} · сделка открыта`,
+    );
+  });
+
+  it('prints the open price with the pair’s digits, and as the broker sent it without a catalog', () => {
+    expect(text([], open({ digits: 2 }))).toContain('📊 Цена: 0.50 → …');
+    expect(text([], open({ digits: null }))).toContain('📊 Цена: 0.4979 → …');
+  });
+
+  it('stands last, after the settled blocks, a blank line apart', () => {
+    const blocks = text([trade({ cycle: 2, step: 1 })], open({ step: 3 })).split('\n\n');
+    expect(blocks.map((block) => block.split('\n')[0])).toEqual([
+      '⚡ Цикл 2 Шаг 1',
+      '⚡ Цикл 2 Шаг 3',
+    ]);
+    expect(blocks[1]).toContain('сделка открыта');
+  });
+
+  it('the adaptive line stands above an open step 2 as above a settled one, once', () => {
+    const printed = text([trade({ result: SessionTradeResult.Lost, step: 1 })], open({ step: 2 }));
+    expect(printed).toContain(`</pre>\n\n${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n<pre>⏳`);
+    expect(printed.split(ADAPTIVE)).toHaveLength(2);
+    expect(text([], open({ step: 2 })).startsWith(`${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n`)).toBe(true);
+    expect(text([], open({ step: 3 }))).not.toContain(ADAPTIVE);
+    expect(text([], open({ step: 1 }))).not.toContain(ADAPTIVE);
+  });
+
+  it('without the open trade, the settled blocks alone', () => {
+    expect(text([trade()])).not.toContain('сделка открыта');
   });
 });
 

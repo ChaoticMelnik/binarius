@@ -4,7 +4,7 @@ import type { BotHtmlTexts, BotPlainTexts, BotStaticHtmlKey } from './bot-texts'
 import type { DecimalString } from './money';
 import { SessionTradeResult } from './session-steps';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
-import { TradeMode } from './trading';
+import { TradeAction, TradeMode } from './trading';
 import {
   SESSION_NO_SIGNAL_CANDLES,
   sessionSignalCandleMs,
@@ -80,6 +80,17 @@ export interface SessionTradeNotice {
   result: SessionTradeResult;
   openPrice: number;
   closePrice: number;
+  digits: number | null;
+  cycle: number;
+  step: number;
+}
+
+// The session's open trade as its block prints it (#700): the cycle and step it settles at, its
+// stake, direction and the broker trade's open price; no result yet.
+export interface SessionOpenNotice {
+  amount: DecimalString;
+  action: TradeAction;
+  openPrice: number;
   digits: number | null;
   cycle: number;
   step: number;
@@ -207,10 +218,14 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     ]);
 
   // A cycle's message (#551): the blocks of its trades in their order, a blank line apart, each
-  // the cycle and step and the trade in a code block; the adaptive line stands once, alone, above
-  // the block of step 2, wherever that block is printed. The sender splits a cycle into more
-  // messages by length only between blocks, never inside one.
-  const sessionCycleText = (trades: readonly SessionTradeNotice[]): TelegramHtml => {
+  // the cycle and step and the trade in a code block; the open trade's block, when given, last
+  // (#700); the adaptive line stands once, alone, above the block of step 2, wherever that block is
+  // printed, settled or open. The sender splits a cycle into more messages by length only between
+  // blocks, never inside one.
+  const sessionCycleText = (
+    trades: readonly SessionTradeNotice[],
+    open?: SessionOpenNotice,
+  ): TelegramHtml => {
     const parts: TelegramHtml[] = [];
     for (const trade of trades) {
       if (trade.step === 2) parts.push(html.sessionAdaptiveStake);
@@ -222,6 +237,18 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
           outcome: trade.outcome,
           openPrice: priceOf(trade.openPrice, trade.digits),
           closePrice: priceOf(trade.closePrice, trade.digits),
+        }),
+      );
+    }
+    if (open !== undefined) {
+      if (open.step === 2) parts.push(html.sessionAdaptiveStake);
+      parts.push(
+        html.sessionTradeOpen({
+          cycle: String(open.cycle),
+          step: String(open.step),
+          stake: open.amount,
+          action: open.action === TradeAction.Up ? plain.actionUp : plain.actionDown,
+          openPrice: priceOf(open.openPrice, open.digits),
         }),
       );
     }
