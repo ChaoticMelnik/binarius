@@ -47,9 +47,12 @@ import type { createTelegram, TelegramSide } from './telegram';
 export const E2E_BACKEND_TUNING = {
   // the publisher's poll, woken by every queued intent anyway (onIntentQueued)
   publisherPollMs: 50,
-  // the session messages' tick and pace (production: 1 s and 25 per second)
+  // the session messages' tick, pace and gap per chat (production: SESSION_NOTICE_TICK_MS,
+  // SESSION_NOTICE_SEND_PER_SECOND, SESSION_NOTICE_CHAT_GAP_MS); the gap no longer than the tick,
+  // as in production (#660)
   noticeTickMs: 200,
   noticePerSecond: 50,
+  noticeChatGapMs: 100,
   // one warm-up before listen(), as index.ts does; nothing in the run waits for a second refresh
   pairsTtlMs: 60_000,
   // the reconciler is not started: the routes call refresh() themselves
@@ -206,6 +209,7 @@ export async function startE2eBackend(deps: {
     config: {
       tickMs: E2E_BACKEND_TUNING.noticeTickMs,
       perSecond: E2E_BACKEND_TUNING.noticePerSecond,
+      chatGapMs: E2E_BACKEND_TUNING.noticeChatGapMs,
     },
   });
 

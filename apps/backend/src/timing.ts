@@ -146,6 +146,14 @@ export const SESSION_NOTICE_SEND_PER_SECOND = 9;
 // a send Telegram refused (not 403 or 429) is tried again on later ticks, up to the attempts, then
 // left claimed, so a deterministic refusal cannot hold the session's later trades forever
 export const SESSION_NOTICE_MAX_ATTEMPTS = 3;
+// one step of a session's turn per chat within this gap (#660): Telegram asks for no more than about
+// one message a second in one chat (Bot API FAQ; stated, not measured). It counts the sends and the
+// edits, not the deletes; a step whose chat is cooling is skipped to a later tick, never slept on,
+// so stop() waits for no more than before (checked below)
+export const SESSION_NOTICE_CHAT_GAP_MS = 1_000;
+// a session whose turn threw is left out of the sender's lists this long (#660), in memory, so a
+// row that throws every tick cannot hold the head of the list
+export const SESSION_NOTICE_HOLD_MS = 60_000;
 
 // --- The Stars reconciler (#117) --------------------------------------------------------------
 // docs/stars.md → Reconciliation. Long polling confirms an update's offset even when its handler
@@ -487,6 +495,11 @@ const TIMING_CHAIN_HOLDS =
   DEPOSIT_MODE_SWITCH_SCAN_MS <= MAILING_SEND_TICK_MS &&
   // the fallback's grace (#537) spans ticks: a session the bot tracks is listed only after it
   SESSION_NOTICE_TICK_MS < SESSION_SUMMARY_FALLBACK_MS &&
+  // the gap per chat (#660) is coarser than the sender's pace, or it would change nothing, and no
+  // longer than the tick, so a deferred step goes on the next tick; a hold spans whole ticks
+  1000 / SESSION_NOTICE_SEND_PER_SECOND < SESSION_NOTICE_CHAT_GAP_MS &&
+  SESSION_NOTICE_CHAT_GAP_MS <= SESSION_NOTICE_TICK_MS &&
+  SESSION_NOTICE_TICK_MS < SESSION_NOTICE_HOLD_MS &&
   1000 / SESSION_NOTICE_SEND_PER_SECOND +
     TRADING_ACCESS_REFRESH_BUDGET_MS +
     CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <

@@ -87,6 +87,8 @@ import {
   MAILING_SEND_BATCH,
   MAILING_SEND_PER_SECOND,
   MAILING_SEND_TICK_MS,
+  SESSION_NOTICE_CHAT_GAP_MS,
+  SESSION_NOTICE_HOLD_MS,
   SESSION_NOTICE_SEND_PER_SECOND,
   SESSION_NOTICE_TICK_MS,
   MAX_BALANCE_POLL_PER_MINUTE,
@@ -590,6 +592,14 @@ describe('broker balance timing', () => {
 
   it('lists a tracked session for the fallback summary only ticks after its final mark (#537)', () => {
     expect(SESSION_NOTICE_TICK_MS).toBeLessThan(SESSION_SUMMARY_FALLBACK_MS);
+  });
+
+  it('sends one step per chat within the gap, defers the rest to the next tick, and holds a thrown turn for whole ticks (#660)', () => {
+    expect(SESSION_NOTICE_CHAT_GAP_MS).toBe(1_000);
+    expect(SESSION_NOTICE_HOLD_MS).toBe(60_000);
+    expect(1000 / SESSION_NOTICE_SEND_PER_SECOND).toBeLessThan(SESSION_NOTICE_CHAT_GAP_MS);
+    expect(SESSION_NOTICE_CHAT_GAP_MS).toBeLessThanOrEqual(SESSION_NOTICE_TICK_MS);
+    expect(SESSION_NOTICE_TICK_MS).toBeLessThan(SESSION_NOTICE_HOLD_MS);
   });
 
   // the step's worst path ends with the next trade's pace; a summary does not start after stop()

@@ -59,7 +59,11 @@ import {
 import { createClientPush } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
-import { SESSION_NOTICE_SEND_PER_SECOND } from '../timing';
+import {
+  SESSION_NOTICE_CHAT_GAP_MS,
+  SESSION_NOTICE_HOLD_MS,
+  SESSION_NOTICE_SEND_PER_SECOND,
+} from '../timing';
 import {
   createSessionNoticeSender,
   type SessionNoticeConfig,
@@ -267,6 +271,9 @@ function sender(
     now: () => clock.now,
     sleep: async () => {},
     ...patch,
+    // the gap per chat (#660) off, as the pace is with a sleep that does nothing; the G-tests
+    // turn it on
+    config: { chatGapMs: 0, ...patch.config },
   });
   const logs = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   return { notices, captured, push, logs, refreshCalls };
@@ -348,6 +355,25 @@ const INFO = 30;
 const WARN = 40;
 const messagesOf = (logs: Record<string, unknown>[], level: number) =>
   logs.filter((entry) => entry.level === level).map((entry) => entry.msg);
+// the calls to the user in order, a send as its kind: what the chat goes through
+const sequenceOf = (calls: readonly ApiCall[], target: Target) =>
+  calls
+    .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
+    .map((call) =>
+      call.method === 'sendMessage'
+        ? isWaiting(call)
+          ? 'waiting'
+          : /Цикл/.test(pushedText(call.payload))
+            ? 'trade'
+            : 'summary'
+        : call.method,
+    );
+// each method's next calls answer these failures, in order; the rest go through
+function failNext(captured: CapturedApi, plan: Partial<Record<string, (ApiError | HttpError)[]>>) {
+  const errors = new Map<string, ApiError | HttpError>();
+  errors.get = (method: string) => plan[method]?.shift();
+  captured.apiErrors = errors;
+}
 
 describe('the session notices (#464)', () => {
   it('D1 a finished five-trade session without a status message: five silent messages in order, then the fallback summary with sound (#537)', async () => {
@@ -1441,28 +1467,6 @@ describe('the waiting message (#536)', () => {
     const row = await rowOf(target);
     return { messageId: row.waitingMessageId, slot: row.waitingAfterMessage };
   };
-  // the calls to the user in order, a send as its kind: what the chat goes through
-  const sequenceOf = (calls: readonly ApiCall[], target: Target) =>
-    calls
-      .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
-      .map((call) =>
-        call.method === 'sendMessage'
-          ? isWaiting(call)
-            ? 'waiting'
-            : /Цикл/.test(pushedText(call.payload))
-              ? 'trade'
-              : 'summary'
-          : call.method,
-      );
-  // each method's next calls answer these failures, in order; the rest go through
-  function failNext(
-    captured: CapturedApi,
-    plan: Partial<Record<string, (ApiError | HttpError)[]>>,
-  ) {
-    const errors = new Map<string, ApiError | HttpError>();
-    errors.get = (method: string) => plan[method]?.shift();
-    captured.apiErrors = errors;
-  }
   const transport = () =>
     new HttpError("Network request for 'deleteMessage' failed!", new Error('timed out'));
   const blockedAt = async (target: Target) => {
@@ -2908,5 +2912,354 @@ describe("the open trade's block (#700)", () => {
     await settle(trade, '-5');
     await notices.tick();
     expect(chatOf(captured.calls, target)).toEqual([[loss(1), ADAPTIVE].join('\n\n')]);
+  });
+});
+
+describe('the gap per chat (#660)', () => {
+  const GAP = SESSION_NOTICE_CHAT_GAP_MS;
+  const gapOn = { config: { chatGapMs: GAP } };
+  const markStatus = (target: Target) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: 1 })
+      .where(eq(tradingSessions.id, target.session.id));
+
+  it('G1 one step per chat within the gap: a backlog of three trades goes one a tick', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    for (const profit of ['4.6', '-5', '0']) await settled(target, profit);
+    const { notices, captured } = sender(gapOn, clock);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade']);
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+    clock.now += GAP - 1;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade']);
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+    clock.now += 1;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'trade']);
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'trade', 'trade']);
+    expect((await rowOf(target)).notifiedTrades).toBe(3);
+    // the waiting message is a step of its own: the next gap
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'trade', 'trade', 'waiting']);
+  });
+
+  it('G2 the gap is per chat: one tick sends a step to each of two chats, oldest first', async () => {
+    const clock = { now: 1_000_000 };
+    const older = await seedSession();
+    const newer = await seedSession();
+    for (const profit of ['4.6', '-5', '0']) {
+      await settled(older, profit);
+      await settled(newer, profit);
+    }
+    const { notices, captured } = sender(gapOn, clock);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, older)).toEqual(['trade']);
+    expect(sequenceOf(captured.calls, newer)).toEqual(['trade']);
+    expect(callsTo(captured.calls, 'sendMessage').map((call) => call.payload.chat_id)).toEqual([
+      older.seed.telegramUserId,
+      newer.seed.telegramUserId,
+    ]);
+  });
+
+  it('G3 a new cycle message under a live waiting message: the delete and the message in one step, the waiting message on a later tick', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    await markStatus(target);
+    const { notices, captured } = sender(gapOn, clock);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
+    await settled(target, '4.6');
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'trade']);
+    clock.now += GAP - 1;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'trade']);
+    clock.now += 1;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+    ]);
+  });
+
+  it('G4 an edit refused as gone: the edit, the delete and the new message in one step, the waiting message on a later tick', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender(gapOn, clock);
+    await settled(target, '-5');
+    await notices.tick();
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'waiting']);
+    await settled(target, '-5');
+    failNext(captured, { editMessageText: [refusal('Bad Request: message to edit not found')] });
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'trade',
+      'waiting',
+      'editMessageText',
+      'deleteMessage',
+      'trade',
+    ]);
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target).at(-1)).toBe('waiting');
+  });
+
+  it('G5 the gap runs from the step’s last message, and a refused send marks the chat too', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    await markStatus(target);
+    const run = sender(
+      {
+        ...gapOn,
+        sleep: async (ms) => {
+          clock.now += ms;
+        },
+      },
+      clock,
+    );
+    const sentAt: number[] = [];
+    const answer = run.captured.answers.get('sendMessage')!;
+    run.captured.answers.set('sendMessage', (payload) => {
+      sentAt.push(clock.now);
+      return answer(payload);
+    });
+    await run.notices.tick();
+    await settled(target, '4.6');
+    clock.now += GAP;
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'trade']);
+    const tradeAt = sentAt.at(-1)!;
+    // the pace before the delete and the one before the send
+    expect(tradeAt).toBeGreaterThan(clock.now - 1 - 2 * (1000 / SESSION_NOTICE_SEND_PER_SECOND));
+    clock.now = tradeAt + GAP - 1;
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target)).toHaveLength(3);
+    clock.now = tradeAt + GAP;
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target).at(-1)).toBe('waiting');
+
+    // a refused send: put back, and tried again not before the gap
+    await settled(target, '-5');
+    clock.now += GAP;
+    failNext(run.captured, { sendMessage: [telegramError(400)] });
+    const before = sequenceOf(run.captured.calls, target).length;
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target).slice(before)).toEqual([
+      'deleteMessage',
+      'trade',
+    ]);
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+    const refusedAt = clock.now;
+    clock.now = refusedAt + GAP - 1;
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target).slice(before)).toEqual([
+      'deleteMessage',
+      'trade',
+    ]);
+    clock.now = refusedAt + GAP;
+    await run.notices.tick();
+    expect(sequenceOf(run.captured.calls, target).slice(before)).toEqual([
+      'deleteMessage',
+      'trade',
+      'trade',
+    ]);
+    expect((await rowOf(target)).notifiedTrades).toBe(2);
+  });
+
+  it('G6 a user who blocked the bot: every trade claimed in one tick, the gap does not hold them', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    for (const profit of ['4.6', '-5', '0']) await settled(target, profit);
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, target.seed.userId));
+    const { notices, captured } = sender(gapOn, clock);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([]);
+    expect((await rowOf(target)).notifiedTrades).toBe(3);
+  });
+
+  it('G7 a finished session’s last trade and the final mark in one tick; the fallback summary in the same chat waits for the gap', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    await settled(target, '4.6');
+    await stop(target);
+    await snapshot(target);
+    const { notices, captured } = sender(gapOn, clock);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade']);
+    expect(await rowOf(target)).toMatchObject({
+      finalNoticeSentAt: expect.any(Date),
+      summarySentAt: null,
+    });
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'summary']);
+  });
+
+  it('G7b a stale waiting message’s delete does not start the gap: the new waiting message in the same turn', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    await markStatus(target);
+    const { notices, captured } = sender(gapOn, clock);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
+    messageIds += 1;
+    expect(
+      await recordSessionStatusMessage(tmp.db, {
+        id: target.session.id,
+        telegramUserId: target.seed.telegramUserId,
+        messageId: messageIds,
+      }),
+    ).toBe(true);
+    clock.now += GAP;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'waiting']);
+  });
+
+  it('G8 a 429 pauses the whole sender as before: no chat goes until the pause has passed, then the same trade first', async () => {
+    const clock = { now: 1_000_000 };
+    const first = await seedSession();
+    await settled(first, '4.6');
+    const second = await seedSession();
+    await settled(second, '-5');
+    const { notices, captured } = sender(gapOn, clock);
+    failNext(captured, { sendMessage: [telegramError(429, 5)] });
+    await notices.tick();
+    expect(sequenceOf(captured.calls, first)).toEqual(['trade']);
+    expect(sequenceOf(captured.calls, second)).toEqual([]);
+    clock.now += 4_999;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, first)).toEqual(['trade']);
+    expect(sequenceOf(captured.calls, second)).toEqual([]);
+    clock.now += 1;
+    await notices.tick();
+    expect(callsTo(captured.calls, 'sendMessage').map((call) => call.payload.chat_id)).toEqual([
+      first.seed.telegramUserId,
+      first.seed.telegramUserId,
+      second.seed.telegramUserId,
+    ]);
+    expect((await rowOf(first)).notifiedTrades).toBe(1);
+    expect((await rowOf(second)).notifiedTrades).toBe(1);
+  });
+});
+
+describe('the hold-back of a thrown turn (#660)', () => {
+  const GAP = SESSION_NOTICE_CHAT_GAP_MS;
+  const ERROR = 50;
+  const failed = (logs: Record<string, unknown>[]) =>
+    logs.filter(
+      (entry) => entry.level === ERROR && entry.msg === 'session notices failed for a session',
+    );
+  // a finished session without a status message whose balance is older than its trade: the
+  // fallback summary reads the balance, and this refresh throws
+  async function throwingSummary() {
+    const held = await seedSession();
+    await settled(held, '4.6');
+    await stop(held);
+    const other = await seedSession();
+    await settled(other, '-5');
+    await stop(other);
+    await snapshot(other);
+    const calls = { refresh: 0 };
+    const balance: SessionNoticeSenderDeps['balance'] = {
+      refresh: () => {
+        calls.refresh += 1;
+        return Promise.reject(new Error('refresh refused by the test'));
+      },
+    };
+    return { held, other, calls, balance };
+  }
+
+  it('HB1 a fallback summary that throws holds its session out of the lists; a newer session goes on; tried again after the hold', async () => {
+    const clock = { now: 1_000_000 };
+    const { held, other, calls, balance } = await throwingSummary();
+    const { notices, captured, logs } = sender({ config: { chatGapMs: GAP }, balance }, clock);
+    await notices.tick();
+    expect(calls.refresh).toBe(0);
+    clock.now += GAP;
+    await notices.tick();
+    expect(calls.refresh).toBe(1);
+    expect(failed(logs())).toEqual([
+      expect.objectContaining({ sessionId: held.session.id, holdMs: SESSION_NOTICE_HOLD_MS }),
+    ]);
+    expect(sequenceOf(captured.calls, other)).toEqual(['trade', 'summary']);
+    clock.now += GAP;
+    await notices.tick();
+    clock.now += SESSION_NOTICE_HOLD_MS - 2 * GAP - 1;
+    await notices.tick();
+    expect(calls.refresh).toBe(1);
+    clock.now += 1 + GAP;
+    await notices.tick();
+    expect(calls.refresh).toBe(2);
+  });
+
+  it('HB2 a statement that throws in the first pass holds its session; a newer session’s trade goes in the same tick; after the hold the trade goes', async () => {
+    const clock = { now: 1_000_000 };
+    const held = await seedSession();
+    await settled(held, '4.6');
+    const other = await seedSession();
+    await settled(other, '-5');
+    const { notices, captured, logs } = sender({ config: { chatGapMs: GAP } }, clock);
+    await tmp.db.execute(sql`
+      create function test_fail_notice() returns trigger language plpgsql as $$
+      begin raise exception 'notice claim refused by the test'; end $$`);
+    await tmp.db.execute(
+      sql.raw(`create trigger test_fail_notice before update on trading_sessions
+      for each row when (old.id = '${held.session.id}') execute function test_fail_notice()`),
+    );
+    try {
+      await notices.tick();
+      expect(failed(logs())).toEqual([
+        expect.objectContaining({ sessionId: held.session.id, holdMs: SESSION_NOTICE_HOLD_MS }),
+      ]);
+      expect(sequenceOf(captured.calls, other)).toEqual(['trade']);
+      clock.now += GAP;
+      await notices.tick();
+      expect(failed(logs())).toHaveLength(1);
+    } finally {
+      await tmp.db.execute(sql`drop trigger test_fail_notice on trading_sessions`);
+      await tmp.db.execute(sql`drop function test_fail_notice()`);
+    }
+    await notices.tick();
+    expect(sequenceOf(captured.calls, held)).toEqual([]);
+    clock.now += SESSION_NOTICE_HOLD_MS;
+    await notices.tick();
+    expect(sequenceOf(captured.calls, held)).toEqual(['trade']);
+    expect((await rowOf(held)).notifiedTrades).toBe(1);
+  });
+
+  it('HB3 the hold is in memory: a new sender tries at once; a throw after the hold holds the session again for the whole hold', async () => {
+    const clock = { now: 1_000_000 };
+    const { calls, balance } = await throwingSummary();
+    const first = sender({ config: { chatGapMs: GAP }, balance }, clock);
+    await first.notices.tick();
+    clock.now += GAP;
+    await first.notices.tick();
+    expect(calls.refresh).toBe(1);
+    const restarted = sender({ config: { chatGapMs: GAP }, balance }, clock);
+    await restarted.notices.tick();
+    expect(calls.refresh).toBe(2);
+
+    clock.now += SESSION_NOTICE_HOLD_MS;
+    await first.notices.tick();
+    expect(calls.refresh).toBe(3);
+    expect(failed(first.logs())).toHaveLength(2);
+    clock.now += SESSION_NOTICE_HOLD_MS - 1;
+    await first.notices.tick();
+    expect(calls.refresh).toBe(3);
   });
 });
