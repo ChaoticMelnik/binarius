@@ -672,9 +672,9 @@ the worker's candle hold and the stand since #697) after its boundary (S1). Afte
   Measured on the pilot 2026-10-22 (2 h, #697): 1.07 % of the decisions `unclosed`, in 17 events,
   15 of them a whole scan at once (all 122 pairs: the watermark of the whole stream had not passed
   the boundary at `+ 500`); the watermark lag p50 212 / p95 364 / max 602 ms. Since #697 a
-  session's next ask after `no_signal` or the pause comes at the same moment and reads the same
-  cache, so it trades such a decision as the scanner made it (docs/trading-session.md → The candle
-  wake); the bot's list does not serve it, as before.
+  session's next ask after `no_signal` comes at the same moment and reads the same cache, so it
+  trades such a decision as the scanner made it (docs/trading-session.md → The candle wake); the
+  bot's list does not serve it, as before.
 
 **Each pair.** The scan is one synchronous loop over the eligible pairs, `fromSource` for each:
 

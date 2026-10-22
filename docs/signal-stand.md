@@ -142,11 +142,12 @@ The simulation runs as follows (`simulate.ts`):
 
 The trade intervals and their durations are `5s` with 5 s, `15s` with 15 s, and `1m` with 60 s.
 
-**The pause overlay** is Rule 28's rule, `pausedDirection` in the orchestrator. Suppose the last
-two priced trades lost in one direction, and the last decision was that same direction. A new
-decision in that direction is then skipped and counted as `pause_after_two_losses`. Any no-signal
-or opposite decision clears the pause. A tie breaks the streak, and an unpriced trade is skipped
-by it. Every variant runs with and without the pause.
+**The pause overlay** is the orchestrator's rule from #379 to #698 (`pausedDirection` then).
+Suppose the last two priced trades lost in one direction, and the last decision was that same
+direction. A new decision in that direction is then skipped and counted as
+`pause_after_two_losses`. Any no-signal or opposite decision clears the pause. A tie breaks the
+streak, and an unpriced trade is skipped by it. Every variant runs with and without it; the
+headline rows run without (#698: production has no pause since).
 
 **The memo.** `v2` at the production point and the display indicators depend only on the interval
 and `D`, so each pair keeps them per interval and `D` while it runs (`createDecisionMemo`), and the
@@ -189,12 +190,12 @@ bucket in most trades.
 | Variant | Intervals | Grid | Headline pause |
 |---|---|---|---|
 | `v1` | 5s, 15s, 1m | — | off (v1 had none) |
-| `v2` | 5s, 15s, 1m | `rsiExtremeBand` {10, 15, 20} × `minAtrTicks` {3, 5, 8} | on (production) |
-| `revert` | 5s, 15s | `band` {10, 15, 20} | on |
-| `v2+1m` | 5s, 15s | — | on |
-| `v2+macd` | 5s, 15s | `macd` {cross, hist} | on |
-| `v2+ma` | 5s, 15s | `ma` {200, 50, 50+200} | on |
-| `v2+macd+ma` | 5s, 15s | `macd` {cross, hist} × `ma` {200, 50, 50+200} | on |
+| `v2` | 5s, 15s, 1m | `rsiExtremeBand` {10, 15, 20} × `minAtrTicks` {3, 5, 8} | off (production since #698) |
+| `revert` | 5s, 15s | `band` {10, 15, 20} | off |
+| `v2+1m` | 5s, 15s | — | off |
+| `v2+macd` | 5s, 15s | `macd` {cross, hist} | off |
+| `v2+ma` | 5s, 15s | `ma` {200, 50, 50+200} | off |
+| `v2+macd+ma` | 5s, 15s | `macd` {cross, hist} × `ma` {200, 50, 50+200} | off |
 
 - **`v1`** is `createSignalDeciderV1(DEFAULT_SIGNAL_PARAMS_V1)`. It is the reference and the v1
   era's comparison.
@@ -255,7 +256,7 @@ production; only the indicators read the longer `SIGNAL_FETCH_LIMIT` window (V12
   `below` means the upper bound is under it. Anything else is `inconclusive`, including a bound
   that equals the break-even.
 - **Against v2** (#483, fixed before the run). Every point of a `v2+…` variant is compared with
-  `v2` at the production point, out-of-sample, pooled, at the headline delay with the pause on
+  `v2` at the production point, out-of-sample, pooled, at the headline delay with the pause off
   (`againstV2`, T6–T9):
   - `no evidence`: the variant or `v2` has no decided trade in the in-sample or the
     out-of-sample part;
@@ -287,8 +288,8 @@ W/L/T, win %, its interval, break-even, verdict, PnL and `trades/pair-h`.
   payout and break-even. The scope column also gives the pair's trade count over the whole range.
   Acceptance criterion 1 reads this column: at least 300 trades per pair and interval.
 - **(c)** The selected points at each `openDelay`.
-- **(d)** The selected points with the pause off and on. This table answers whether the pause
-  helps.
+- **(d)** The selected points with the pause off (production since #698) and on. This table
+  answers whether the pause helps; on the cache of 2026-10-01…15 it did not (#698).
 - **(e)** The refusal shares by reason, over the whole range, for each selected point.
 - **(f)** The full in-sample grid, pooled. Selection reads it.
 - **(g)** The pairs snapshot (`fetchedAt`), and each series' rows, first and last timestamp.
@@ -500,8 +501,9 @@ entry counts `unsupported_duration`; it stays in gate 2 and the delay choice, an
    best `k` counts.
 3. For each era × duration with at least `CALIBRATE_MIN_ERA_TRADES` (30) live trades, the live
    win rate lies inside the Wilson interval of the stand's own rate. The stand's rate comes from
-   v1, or v2 at 15/5 with the pause, simulated inside each session's window: from its first
-   `created_at` to its last `close_timestamp`, at the headline delay. A gated row whose stand
+   v1, or v2 at 15/5 with the pause (the rule of those trades; the era after #698 is #719),
+   simulated inside each session's window: from its first `created_at` to its last
+   `close_timestamp`, at the headline delay. A gated row whose stand
    has no win or loss is "FAIL no stand evidence": an empty sample's interval would hold any
    rate. Smaller rows are reported, not gated.
 
@@ -598,8 +600,8 @@ out of pooling.
    in ticks per `k`.
 3. **The broker may revise history.** Revisions are the first total, and any revision fails
    `calibrate`.
-4. **Sessions of five are not modelled.** The pause streak runs across what would be session
-   boundaries, and the stake is a fixed 1. PnL is illustrative.
+4. **Sessions of five are not modelled.** With the overlay on, the pause streak runs across what
+   would be session boundaries, and the stake is a fixed 1. PnL is illustrative.
 5. **Payout at fetch time.** Pooling and the per-pair break-even use `pairs.json`'s payout, not
    the payout at each trade.
 6. **Lucky in-sample points.** In-sample selection over 9 points may pick a lucky one. The
