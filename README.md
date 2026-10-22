@@ -5,7 +5,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 ## Structure
 
 - `apps/bot` — Telegram bot (grammY)
-- `apps/backend` — API (Fastify): OAuth, postbacks, auth; the trade log's export (`trade-log export`, docs/trade-log.md); the H1 shadow on the data socket's ticks, on unless `H1_SHADOW=off` (docs/h1.md); the H1 shadow report (`h1 shadow report`); the H1 mark and sessions (`h1 mark|unmark|list`, `h1 session start|stop|status`, #670)
+- `apps/backend` — API (Fastify): OAuth, postbacks, auth; the trade log's export (`trade-log export`, docs/trade-log.md); the H1 shadow on the data socket's ticks, on unless `H1_SHADOW=off` (docs/h1.md); the H1 shadow report (`h1 shadow report`); the H1 mark and sessions (`h1 mark|unmark|list`, `h1 session start|stop|status`, #670); the H1 driver that opens an H1 session's trades, with `H1_SUBMIT_BUDGET_MS` (#707)
 - `apps/web` — web pages (Fastify, server-rendered HTML): staff login and admin (#34), checkout later
 - `apps/trading-worker` — trading loop worker
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`

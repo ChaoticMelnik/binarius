@@ -37,6 +37,14 @@ orchestrator's clock when `evaluate` returned) → `trade_intents.created_at` (d
 `broker_trades.open_timestamp_ms` (the broker's). `trade-log export` prints them raw, in ms; the
 clocks are three processes' and the broker's, not aligned.
 
+An H1 session's trade (#707, [h1.md → The driver](h1.md#the-driver-707)): `decided_at_ms` is the
+closed second `f` of the backend's second series (the broker's clock) → `taken_at_ms` (the
+driver's, the backend's clock) → `trade_intents.created_at` (database) → `submit_deadline_at` (=
+`taken_at_ms + H1_SUBMIT_BUDGET_MS`, the backend's clock) → `submitted_at` (database) →
+`open_timestamp_ms` (the broker's). A take whose database clock is past the deadline rejects the
+intent `entry_window_missed` without a broker call, so `last_error` shows the share the budget
+cut.
+
 ## The two-cases rule
 
 1. **Socket**, when the account has a session: `openTrade(intent.mode, request, signal)`.
