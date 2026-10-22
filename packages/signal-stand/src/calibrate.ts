@@ -364,6 +364,7 @@ export function runCalibrate(options: CalibrateOptions): number {
           variant,
           point,
           interval,
+          // the rule production ran for those trades (#379…#698); the era after #698's merge — #719
           pause: era === 'v2',
           openDelayMs: delay,
           from: Math.min(...list.map((t) => t.created_at_ms)),

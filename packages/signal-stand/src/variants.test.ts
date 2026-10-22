@@ -231,8 +231,9 @@ describe('variants', () => {
     expect(names.filter(comparesWithV2)).toEqual(['v2+1m', 'v2+macd', 'v2+ma', 'v2+macd+ma']);
     for (const name of ['v2+macd', 'v2+ma', 'v2+macd+ma']) {
       expect(variant(name).intervals).toEqual(['5s', '15s']);
-      expect(variant(name).headlinePause).toBe(true);
     }
+    // #698: production runs without the pause, so no headline row has it
+    for (const spec of VARIANTS) expect(spec.headlinePause).toBe(false);
     expect(V2_GRID).toContainEqual(V2_PRODUCTION_POINT);
     for (const point of V2_GRID) {
       expect(() => assertSignalParams({ ...DEFAULT_SIGNAL_PARAMS, ...point })).not.toThrow();

@@ -113,7 +113,8 @@ export function decisionContext(
   };
 }
 
-// production's pausedDirection over the priced trades: the last two lost in one direction
+// the orchestrator's rule from #379 to #698, kept as the comparison overlay (table (d)): the last
+// two priced trades lost in one direction
 function pausedDirection(priced: readonly SimTrade[]): TradeAction | undefined {
   const [first, second] = priced.slice(-2);
   if (second === undefined) return undefined;

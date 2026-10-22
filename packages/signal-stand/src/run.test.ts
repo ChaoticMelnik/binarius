@@ -147,7 +147,7 @@ describe('run', () => {
           `| ${interval} | ${variant} | - | ${pause} | ${delay} | ${row?.scope} | ${row?.trades} |`,
         );
       } else {
-        expect(tableA).toContain(`| ${interval} | ${variant} | - | on | ${delay} | ${none} | - |`);
+        expect(tableA).toContain(`| ${interval} | ${variant} | - | off | ${delay} | ${none} | - |`);
       }
     }
   });
