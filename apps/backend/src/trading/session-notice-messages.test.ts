@@ -9,6 +9,7 @@ import {
   plainTextOf,
   TELEGRAM_MESSAGE_LIMIT,
   SessionTradeResult,
+  TradeAction,
   TradingSessionStatus,
   TradingSessionStopReason,
   type BinaryPair,
@@ -218,6 +219,116 @@ describe('sessionCycleMessage (#551)', () => {
       expect(
         sessionCycleMessage(claimed([...losses, L], { messageId: 10, from: 8 }), martingale, 5),
       ).toMatchObject({ kind: 'edit', messageId: 10, from: 8 });
+    });
+  });
+});
+
+describe('sessionCycleMessage with the open trade (#700)', () => {
+  const OPEN = { amount: d('11.5'), action: TradeAction.Down, openPrice: 7, assetId: 101 };
+  const withOpen = (
+    results: SessionTradeResult[],
+    cycleMessage: ClaimedSessionTrade['cycleMessage'] = null,
+  ) => ({ ...claimed(results, cycleMessage), open: OPEN });
+
+  it('step 1: a new message with the open block alone, from the index the trade settles at', () => {
+    const notice = sessionCycleMessage(withOpen([L, W], { messageId: 42, from: 0 }), martingale, 5);
+    expect(notice).toEqual({
+      kind: 'send',
+      text: shared.sessionCycleText([], {
+        amount: d('11.5'),
+        action: TradeAction.Down,
+        openPrice: 7,
+        digits: 5,
+        cycle: 2,
+        step: 1,
+      }),
+      from: 2,
+      split: false,
+    });
+    expect(textOf(notice)).toBe(
+      '⚡ Цикл 2 Шаг 1\n<pre>⏳ Ставка: $11.50 · ⬇️ Вниз · сделка открыта\n📊 Цена: 7.00000 → …</pre>',
+    );
+    // the first trade of the session
+    expect(sessionCycleMessage(withOpen([]), martingale, 5)).toMatchObject({
+      kind: 'send',
+      from: 0,
+    });
+  });
+
+  it('a later step edits the cycle message: its settled blocks, then the open block last', () => {
+    const notice = sessionCycleMessage(
+      withOpen([W, L, T], { messageId: 42, from: 1 }),
+      martingale,
+      5,
+    );
+    expect(notice).toMatchObject({ kind: 'edit', messageId: 42, from: 1 });
+    expect(heads(notice)).toEqual([
+      '⚡ Цикл 2 Шаг 1',
+      '🔄 Адаптивная ставка включена',
+      '⚡ Цикл 2 Шаг 2',
+      '⚡ Цикл 2 Шаг 3',
+    ]);
+    expect(textOf(notice).split('\n\n').at(-1)).toContain('сделка открыта');
+    // step 2 open: the adaptive line above it
+    expect(
+      heads(sessionCycleMessage(withOpen([L], { messageId: 42, from: 0 }), martingale, 5)),
+    ).toEqual(['⚡ Цикл 1 Шаг 1', '🔄 Адаптивная ставка включена', '⚡ Цикл 1 Шаг 2']);
+  });
+
+  it('then its result edits the same message from the same from', () => {
+    // the open block went as a new message from 2; the trade settled as a loss
+    const result = sessionCycleMessage(
+      claimed([L, W, L], { messageId: 50, from: 2 }),
+      martingale,
+      5,
+    );
+    expect(result).toMatchObject({ kind: 'edit', messageId: 50, from: 2 });
+    expect(heads(result)).toEqual(['⚡ Цикл 2 Шаг 1']);
+    expect(textOf(result)).not.toContain('сделка открыта');
+  });
+
+  it('a cycle message of another cycle, or none: a new message with the cycle so far', () => {
+    const other = sessionCycleMessage(
+      withOpen([L, W, L], { messageId: 42, from: 0 }),
+      martingale,
+      5,
+    );
+    expect(other).toMatchObject({ kind: 'send', from: 2, split: false });
+    expect(heads(other)).toEqual([
+      '⚡ Цикл 2 Шаг 1',
+      '🔄 Адаптивная ставка включена',
+      '⚡ Цикл 2 Шаг 2',
+    ]);
+    expect(sessionCycleMessage(withOpen([L, W, L]), martingale, 5)).toMatchObject({
+      kind: 'send',
+      from: 2,
+    });
+  });
+
+  it('fixed: every open block a new message of its own cycle', () => {
+    const notice = sessionCycleMessage(withOpen([L, L], { messageId: 7, from: 1 }), settings, 5);
+    expect(notice).toMatchObject({ kind: 'send', from: 2 });
+    expect(heads(notice)).toEqual(['⚡ Цикл 3 Шаг 1']);
+    expect(heads(sessionCycleMessage(withOpen([L]), null, 5))).toEqual(['⚡ Цикл 2 Шаг 1']);
+  });
+
+  describe('the length limit', () => {
+    const PAD = 'ж'.repeat(380);
+    const source = {
+      sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
+        key === 'sessionTradeLost' || key === 'sessionTradeOpen'
+          ? `${PAD}\n${defaultBotTextSource.sourceOf(key)}`
+          : defaultBotTextSource.sourceOf(key),
+    };
+    afterEach(() => setBotTextSource(defaultBotTextSource));
+
+    it('an open block that does not fit opens a new message of its own', () => {
+      setBotTextSource(source);
+      const losses = Array.from({ length: 8 }, () => L);
+      const split = sessionCycleMessage(withOpen(losses, { messageId: 9, from: 0 }), martingale, 5);
+      expect(split).toMatchObject({ kind: 'send', from: 8, split: true });
+      expect(heads(split)).toEqual(['⚡ Цикл 1 Шаг 9']);
+      expect(textOf(split)).toContain('сделка открыта');
     });
   });
 });
