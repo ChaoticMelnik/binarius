@@ -504,8 +504,8 @@ keeps the first reason.
 | | an intent of the session is live (a race with the scan) | reschedule |
 | | `sessionProgress(settings, { settled, won })`: done ≥ planned (#552; `won` — a settled intent whose profit reads positive) | stop `completed` (E1; a loss never completes a martingale session, G9′–G12) |
 | | the last two intents are `rejected` | stop `rejected_twice` (E2) |
-| `readSessionBalance` (#696: the amount of the session's mode, `minTradeAmount` and `behind` in one statement) | no row | stop `balance_unavailable` |
-| | a row | `available` = the balance of the session's mode (`real.available` for a real session, E9a); `behind` — a settle row of the session's intents is newer than that mode's newest observation (the view's `balance.current` false, the same fragment) |
+| `readSessionBalance` (#696: the amount of the session's mode, `minTradeAmount` and `awaitsBalance` in one statement) | no row | stop `balance_unavailable` |
+| | a row | `available` = the balance of the session's mode (`real.available` for a real session, E9a); `awaitsBalance` — a settle of any intent on the session's account in its mode (this session's, an earlier session's, a bot's one-off trade) is newer than that mode's newest observation and less than the no-signal limit old (`trade_intents.updated_at` of the `settled` row, the database clock); wider than the view's `balance.current`, which counts this session's trades only (SB1–SB9) |
 | `touchBalanceRequested` | — | keeps the account "in work", so the balance refresh and the broker socket stay on it between trades |
 | `pairs.read` | `catalog_unavailable`, a backend failure, or `fresh: false` | hold back `TRADING_SESSION_RETRY_MS` (E9f) |
 | | the pair absent, or `!pairAcceptsDuration(pair, durationSec)` | stop `pair_unavailable` (E9c, E9d) |
@@ -519,7 +519,7 @@ keeps the first reason.
 | | `signal` in the paused direction while `last_signal_action` holds it, and `waitExpired` | stop `no_signal_timeout`, `waited: paused` (W4); records `paused` (O10) |
 | | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal`; `last_signal_action` stays the action (P1); records `paused` (O3) |
 | | `signal` | the action |
-| the sizer (`nowMs = max(now, started_at)`, E11) | `stop` `insufficient_balance` while `behind` (the balance is older than the session's last settlement) and not `waitExpired` | reschedule, `info` `trading session waits for the balance`; no row: the step's decision is asked again on a current balance (BW1, #696); past the limit — the row below (BW3) |
+| the sizer (`nowMs = max(now, started_at)`, E11) | `stop` `insufficient_balance` while `awaitsBalance` | hold `TRADING_SESSION_TICK_MS`, `info` `trading session waits for the balance`; no row: the step's decision is asked again on a current balance, and a wake inside the hold does not ask the signal again (BW1, BW4, BW5, #696); past the limit counted from that settlement — the row below (BW3) |
 | | `stop` | a martingale limit: stop with its own reason (#450, G3–G6); any other code: stop `stake_stop` (E3, G8); the code in the line; records `stake_stop` with the code (O4) |
 | | `stake` | the amount |
 | `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` was written by the intent's own transaction (D6), and so was the decision's `intent` row (O1) |
@@ -610,7 +610,10 @@ outcomes; the timer's tick finds the session, and the replay from the dead lette
 A wake changes no decision: the tick by a wake is the same tick (the sweeps, the scan, one attempt
 per session in the SQL order), the hold-backs keep the sessions they hold, and the candle rule after
 `no_signal` or a pause is unchanged. It only takes away the wait between a settlement and the next
-decision. A wake for an intent of no session (a bot's one-off trade) is an idle tick. The backend's
+decision. A wake for an intent of no session or of another session (a bot's one-off trade, the
+intent an earlier session left live at its stop) is idle only when no session is active on that
+account; otherwise that intent held the session out of the scan, and the wake gives it its next step
+at once, on the balance wait of The attempt. The backend's
 own terminal writes (the publisher's rejection of a `queued` intent, an operator's settle out of
 `manual_review`) are another process: the timer's tick finds them. `TRADING_SESSION_TICK_MS` is the
 safety net for those and for a wake lost to a restart. Tests: `orchestrator.db.test.ts` WK1–WK5,
@@ -813,8 +816,8 @@ SESSION_MAX_DURATION_MS` (300 000 < 3 600 000), `SESSION_NO_SIGNAL_CANDLES ×` t
 `SIGNAL_CHART_INTERVAL_MS` (1h) a timer-safe integer (the bound of the SQL `::int` cast), every
 value a timer-safe integer, and `BROKER_BALANCE_SLA_MS + BROKER_REST_TIMEOUT_MS <
 SESSION_NO_SIGNAL_CANDLES × SIGNAL_SHORTEST_INTERVAL_MS` (65 000 < 100 000, #696): the balance wait
-after a settlement ends at the no-signal limit, and the backend's REST refresh (its interval at most
-the SLA) and one GET fit before it (K-BW). The worker chain
+after a settlement ends at the no-signal limit counted from that settlement, and the backend's REST
+refresh (its interval at most the SLA) and one GET fit before it (K-BW). The worker chain
 (`intents/config.ts`) adds `TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`: phase 1
 runs its steps at once, so the orchestrator's stop has to fit it on its own.
 
@@ -840,7 +843,7 @@ line is in it with its level.
 | `trading session waits for the next candle` | info | `no_signal` (`reason`) |
 | `trading session waits for the signal to change` | info | the pause after two losses in `action` (#379) |
 | `trading session waits for the H1 driver` | debug | an H1 session (settings v4, #670) passed the attempt's checks and is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
-| `trading session waits for the balance` | info | the sizer's `insufficient_balance` on a balance older than the session's last settlement, inside the no-signal limit (`step`, #696) |
+| `trading session waits for the balance` | info | the sizer's `insufficient_balance` while a settlement on the account in the session's mode is newer than the balance, inside the no-signal limit from that settlement; the session is held for one tick (`step`, #696) |
 | `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
 | `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
@@ -1111,19 +1114,37 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
     (each attempt is usually ~0.2 s, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS`). Falsifiable: in
     `trade-log export`, the close-to-next-intent time grows with the number of sessions active in
     the same minute.
-12. **Idle ticks from one-off trades (#696).** A bot's one-off settle or rejection wakes the
-    orchestrator too: three UPDATEs that match nothing and one scan. Falsifiable: `trading session
-    tick` lines with `woken ≥ 1` and `runnable: 0` around one-off trades.
+12. **Wakes from one-off trades (#696).** A bot's one-off settle or rejection wakes the
+    orchestrator too. With no active session on the account it is an idle tick: three UPDATEs that
+    match nothing and one scan. With one, it is that session's next attempt, which the one-off trade
+    had held out of the scan. Falsifiable: `trading session tick` lines with `woken ≥ 1` and
+    `runnable: 0` around one-off trades on accounts without a session.
 13. **The balance wait (#696).** (a) A snapshot written after the settlement with the amounts from
     before it: a REST GET sent before the payout and written after the `settle` (the window is one
-    GET, ≤ `BROKER_REST_TIMEOUT_MS`), or a reconnect's `user.data` at that moment — `behind` is
+    GET, ≤ `BROKER_REST_TIMEOUT_MS`), or a reconnect's `user.data` at that moment — `awaitsBalance` is
     false and a false `stake_stop` stays possible. (b) An `update_balance` with the payout that
     arrives before `close_trade.success`: with a sufficient balance there is no wait; with an
     insufficient one the session waits until the REST refresh or the limit, then stops correctly.
     (c) An account the backend does not refresh (its token expiring, Rule 12) waits until the
-    no-signal limit (100 s on 5 s), then stops `stake_stop`, as before #696. Falsifiable: a
-    `stake_stop` `insufficient_balance` less than 1 s after a won step's `settled` in `trade-log
-    export`; `trading session waits for the balance` lines in a row for longer than 60 s.
+    no-signal limit counted from the settlement (100 s on 5 s), then stops `stake_stop`, as before
+    #696. (d) The wait holds one tick: a session whose balance before the payout is below its stake
+    takes its next step 5–10 s after the settlement (the next timer tick past the hold), even when
+    `update_balance` lands milliseconds later — the price of asking the signal at most once a tick
+    under frequent wakes (review round 2, Minor 1); falsifiable: a `trading session waits for the
+    balance` line followed by the step's intent 5–10 s later. (e) A loss settled after the snapshot
+    holds a genuinely short balance for one tick before the stop; a trade opened on the broker's
+    own platform (`not_ours`) has no settle row, so its payout is not waited for, as before #696;
+    one-off trades settling one after another restart the bound, at most until the session's
+    deadline. Falsifiable: a `stake_stop` `insufficient_balance` less than 1 s after any `settled`
+    on the account in the session's mode in `trade-log export`; `trading session waits for the
+    balance` lines in a row for longer than 100 s.
+14. **The balance wait reads the account's history (#696).** The equalities go by
+    `trade_intents_account_status_idx (broker_account_id, status)`, `updated_at` is filtered over
+    the account's `settled` rows: one index pass over them per attempt. Assumed: fewer than 10 000
+    settled intents per account (the pilot: 495 session trades of all users over 07–15.10).
+    Falsifiable: `trading session attempt timed out`, or an attempt's p95 above 1 s on accounts with
+    a long history; then an index `(broker_account_id, mode, updated_at) where status = 'settled'`
+    in a task of its own, with a migration.
 
 ## Boundaries
 
