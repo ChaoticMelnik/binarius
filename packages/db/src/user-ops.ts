@@ -1,11 +1,14 @@
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import {
   addressOrNull,
   AuditAction,
   AuditActorType,
   AuditEntityType,
   BrokerAccountStatus,
+  DepositModeSwitch,
   TradeMode,
+  TradingSessionStatus,
+  UserStatus,
   botLanguageOf,
   type BotLanguage,
   decimalStringSchema,
@@ -18,8 +21,12 @@ import {
 import type { Db } from './client';
 import { auditLog } from './schema/audit-log';
 import { brokerAccounts } from './schema/broker-accounts';
+import { depositEvents } from './schema/deposit-events';
 import { referralCodes, referrals } from './schema/referrals';
+import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
+import { markDepositModeSwitch, markUserDepositModeSwitches } from './deposit-mode-switch-ops';
+import type { Tx } from './trade-intent-ops';
 import { stopUserSessions } from './trading-session-ops';
 
 export type UserStartRow = Pick<
@@ -283,32 +290,59 @@ export interface SetTradingModeResult {
   stoppedSessions: number;
 }
 
-// The one writer of users.trading_mode (#121, Rule 36). The UPDATE carries `trading_mode <> $mode`,
-// so two concurrent switches serialize on the row lock and exactly one audit row is written per
-// actual change, in the same transaction. A change also stops the user's active sessions in that
-// transaction (#327): a session runs only in its user's mode. Locks the users row, then those
-// sessions (Rule 5). undefined = no users row. The balance check of a switch to real is the route's (POST /trading/mode), not this one's.
+// Who switched the mode: the user (the mode screen, /stop) or the pass over a deposit (#686).
+type TradingModeActor =
+  { kind: 'user'; telegramUserId: bigint } | { kind: 'deposit'; depositEventId: string };
+
+// The one writer of users.trading_mode (#121, Rule 36), for setTradingMode and
+// switchTradingModeOnDeposit. The UPDATE carries `trading_mode <> $mode`, so two concurrent
+// switches serialize on the row lock and exactly one audit row is written per actual change, in
+// the caller's transaction. Returns the user's id, or undefined when nothing changed.
+async function writeTradingMode(
+  tx: Tx,
+  { by, mode, actor }: { by: SQL; mode: TradeMode; actor: TradingModeActor },
+): Promise<string | undefined> {
+  const [updated] = await tx
+    .update(users)
+    .set({ tradingMode: mode, updatedAt: sql`now()` })
+    .where(and(by, ne(users.tradingMode, mode)))
+    .returning({ id: users.id });
+  if (updated === undefined) return undefined;
+  const from = mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real;
+  await tx.insert(auditLog).values({
+    ...(actor.kind === 'user'
+      ? { actorType: AuditActorType.User, actorId: actor.telegramUserId.toString() }
+      : { actorType: AuditActorType.System, actorId: null }),
+    action: AuditAction.TradingModeChanged,
+    entityType: AuditEntityType.User,
+    entityId: updated.id,
+    payload:
+      actor.kind === 'user'
+        ? { from, to: mode }
+        : { from, to: mode, depositEventId: actor.depositEventId },
+  });
+  return updated.id;
+}
+
+// The user's own switch. A change also stops the user's active sessions in that transaction
+// (#327): a session runs only in its user's mode; and closes the user's deposits still waiting for
+// the switch after a deposit as `superseded` (#686): the user decided the mode after them. Locks
+// the users row, then those sessions, then those deposits (Rule 5). undefined = no users row. The
+// balance check of a switch to real is the route's (POST /trading/mode), not this one's.
 export async function setTradingMode(
   db: Db,
   telegramUserId: bigint,
   mode: TradeMode,
 ): Promise<SetTradingModeResult | undefined> {
   return db.transaction(async (tx) => {
-    const [updated] = await tx
-      .update(users)
-      .set({ tradingMode: mode, updatedAt: sql`now()` })
-      .where(and(eq(users.telegramUserId, telegramUserId), ne(users.tradingMode, mode)))
-      .returning({ id: users.id });
-    if (updated !== undefined) {
-      await tx.insert(auditLog).values({
-        actorType: AuditActorType.User,
-        actorId: telegramUserId.toString(),
-        action: AuditAction.TradingModeChanged,
-        entityType: AuditEntityType.User,
-        entityId: updated.id,
-        payload: { from: mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real, to: mode },
-      });
+    const userId = await writeTradingMode(tx, {
+      by: eq(users.telegramUserId, telegramUserId),
+      mode,
+      actor: { kind: 'user', telegramUserId },
+    });
+    if (userId !== undefined) {
       const stopped = await stopUserSessions(tx, { telegramUserId: telegramUserId.toString() });
+      await markUserDepositModeSwitches(tx, { userId, outcome: DepositModeSwitch.Superseded });
       return { tradingMode: mode, changed: true, stoppedSessions: stopped.length };
     }
     const [row] = await tx
@@ -319,4 +353,94 @@ export async function setTradingMode(
       ? undefined
       : { tradingMode: row.tradingMode, changed: false, stoppedSessions: 0 };
   });
+}
+
+// What one attempt of the pass made of a deposit: an outcome written on the row, or nothing —
+// `session_active` (the user runs a session; the deposit waits for its end, #686 issue item 6) and
+// `gone` (the row has an outcome already, written by another process or by setTradingMode).
+export type DepositModeSwitchAttempt = DepositModeSwitch | 'session_active' | 'gone';
+
+class DepositModeSwitchGone extends Error {}
+
+// The switch to real after a deposit (#686, docs/trading-mode.md → The automatic switch after a
+// deposit). With demoOnly (DEMO_ONLY, #396) the row is closed `demo_only` with no users lock and
+// never switches later. Otherwise, under the users lock (FOR NO KEY UPDATE, Rule 5: users →
+// deposit_events): blocked → user_blocked, real → already_real, the deposit's account not active
+// → account_inactive, a session not stopped on any account of the user → nothing (it waits),
+// else the switch with its audit row and `switched`, in one transaction. A session cannot start
+// while the users row is held (createTradingSession locks it first), so the check holds to the
+// commit.
+export async function switchTradingModeOnDeposit(
+  db: Db,
+  { depositEventId, demoOnly }: { depositEventId: string; demoOnly: boolean },
+): Promise<{ outcome: DepositModeSwitchAttempt }> {
+  if (demoOnly) {
+    const outcome = DepositModeSwitch.DemoOnly;
+    return {
+      outcome: (await markDepositModeSwitch(db, { depositEventId, outcome })) ? outcome : 'gone',
+    };
+  }
+  try {
+    return await db.transaction(async (tx) => {
+      const [deposit] = await tx
+        .select({
+          userId: depositEvents.userId,
+          brokerAccountId: depositEvents.brokerAccountId,
+          modeSwitch: depositEvents.modeSwitch,
+        })
+        .from(depositEvents)
+        .where(eq(depositEvents.id, depositEventId));
+      if (deposit?.userId == null || deposit.modeSwitch !== null) return { outcome: 'gone' };
+      const userId = deposit.userId;
+      const [user] = await tx
+        .select({ status: users.status, tradingMode: users.tradingMode })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('no key update');
+      if (user === undefined) return { outcome: 'gone' };
+      const outcome = await (async (): Promise<DepositModeSwitchAttempt> => {
+        if (user.status === UserStatus.Blocked) return DepositModeSwitch.UserBlocked;
+        if (user.tradingMode === TradeMode.Real) return DepositModeSwitch.AlreadyReal;
+        // deposit_events_owner_pair_check: an attributed row names its account
+        const accountId = deposit.brokerAccountId;
+        if (accountId === null) return DepositModeSwitch.AccountInactive;
+        const [account] = await tx
+          .select({ status: brokerAccounts.status })
+          .from(brokerAccounts)
+          .where(eq(brokerAccounts.id, accountId));
+        if (account?.status !== BrokerAccountStatus.Active)
+          return DepositModeSwitch.AccountInactive;
+        const [session] = await tx
+          .select({ id: tradingSessions.id })
+          .from(tradingSessions)
+          .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+          .where(
+            and(
+              eq(brokerAccounts.userId, userId),
+              ne(tradingSessions.status, TradingSessionStatus.Stopped),
+            ),
+          )
+          .limit(1);
+        if (session !== undefined) return 'session_active';
+        const switched = await writeTradingMode(tx, {
+          by: eq(users.id, userId),
+          mode: TradeMode.Real,
+          actor: { kind: 'deposit', depositEventId },
+        });
+        // the mode was read as demo under this lock
+        if (switched === undefined)
+          throw new Error('deposit mode switch: the user changed under its lock');
+        return DepositModeSwitch.Switched;
+      })();
+      if (outcome === 'session_active' || outcome === 'gone') return { outcome };
+      // another process closed the row since the read: its outcome stands, this one rolls back
+      if (!(await markDepositModeSwitch(tx, { depositEventId, outcome }))) {
+        throw new DepositModeSwitchGone();
+      }
+      return { outcome };
+    });
+  } catch (error) {
+    if (error instanceof DepositModeSwitchGone) return { outcome: 'gone' };
+    throw error;
+  }
 }

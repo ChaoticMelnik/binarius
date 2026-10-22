@@ -3,8 +3,11 @@ import {
   ANALYSIS_UNUSED_AFTER_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
   BrokerAccountStatus,
+  DepositModeSwitch,
   FIRST_SESSION_CHAIN,
   NotificationKind,
+  REAL_MODE_BY_DEPOSIT_AFTER_MS,
+  realModeByDepositPayloadSchema,
   REFERRAL_REWARDED_AFTER_MS,
   TOKEN_NUDGE_AFTER_MS,
   TOKEN_NUDGES,
@@ -15,6 +18,8 @@ import {
 } from '@binarius/shared';
 import { literal } from './schema/columns';
 import { brokerAccounts } from './schema/broker-accounts';
+import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
+import { depositEvents } from './schema/deposit-events';
 import { NotificationJobStatus, notificationJobs } from './schema/notification-jobs';
 import { tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
@@ -45,6 +50,10 @@ export interface MailingScenario {
   // scenario applies again; without it a canceled job keeps its key and the kind is never planned
   // again for the user
   replansCanceled?: boolean;
+  // An important kind (#686) is planned and claimed for any notification_level, while the bot can
+  // reach the user (reachable(), not deliverable()); its `sent` rows do not count in the `reduced`
+  // window, and setNotificationLevel('off') does not cancel its jobs. markTelegramBlocked does.
+  important?: true;
 }
 
 // A kind with at most one fact per user: its key reads `users` only, so the claim compares it
@@ -188,6 +197,18 @@ const tokenNudge = (kind: NotificationKind): MailingScenario => {
   });
 };
 
+// The deposits that switched the user to real (#686, docs/mailing.md → The real-mode notification):
+// one row per deposit, each its own job; the fact's moment is the switch's (mode_switch_at).
+// deposit_events' outcome is written once (markDepositModeSwitch), so a switched row stays one.
+const switchedDeposits = sql`(select ${depositEvents.modeSwitchAt} as at,
+    ${depositEvents.id} as deposit_id, ${depositEvents.brokerAccountId} as broker_account_id
+  from ${depositEvents}
+  where ${depositEvents.userId} = ${users.id}
+    and ${depositEvents.modeSwitch} = ${literal(DepositModeSwitch.Switched)})`;
+
+// the payload's key as its schema names it, so the message's parse and this SQL cannot drift apart
+const STAKE_KEY = literal(realModeByDepositPayloadSchema.keyof().enum.stake);
+
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
   [NotificationKind.FirstSession1h]: firstSessionStep(NotificationKind.FirstSession1h),
@@ -215,4 +236,28 @@ export const MAILING_SCENARIOS = {
   [NotificationKind.TokensHalf]: tokenNudge(NotificationKind.TokensHalf),
   [NotificationKind.TokensLow]: tokenNudge(NotificationKind.TokensLow),
   [NotificationKind.TokensOut]: tokenNudge(NotificationKind.TokensOut),
+  [NotificationKind.RealModeByDeposit]: {
+    facts: switchedDeposits,
+    afterMs: REAL_MODE_BY_DEPOSIT_AFTER_MS,
+    dedupeKey: sql`('real_mode_by_deposit:' || fact.deposit_id::text)`,
+    // the real stake in use: the saved one, else the broker's minimum of the deposit's account
+    // (one snapshot per account), as text (rule 2); NULL when neither is known
+    payload: sql`jsonb_build_object(${STAKE_KEY}, coalesce(${users.realStake},
+      (select ${brokerBalanceSnapshots.minTradeAmount} from ${brokerBalanceSnapshots}
+        where ${brokerBalanceSnapshots.brokerAccountId} = fact.broker_account_id))::text)`,
+    // the message says the mode is REAL: not once the user went back to demo
+    stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
+      and ${users.tradingMode} = ${literal(TradeMode.Real)})`,
+    keyApplies: sql`exists (select 1 from ${depositEvents}
+      where ${depositEvents.userId} = ${users.id}
+        and ${depositEvents.modeSwitch} = ${literal(DepositModeSwitch.Switched)}
+        and ${notificationJobs.dedupeKey} = 'real_mode_by_deposit:' || ${depositEvents.id}::text)`,
+    replansCanceled: true,
+    important: true,
+  },
 } as const satisfies Record<NotificationKind, MailingScenario>;
+
+// The important kinds (MailingScenario.important), from the scenarios alone.
+export const IMPORTANT_NOTIFICATION_KINDS: readonly NotificationKind[] = (
+  Object.keys(MAILING_SCENARIOS) as NotificationKind[]
+).filter((kind) => (MAILING_SCENARIOS[kind] as MailingScenario).important === true);

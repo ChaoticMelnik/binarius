@@ -297,6 +297,20 @@ describe('enum and uniqueness constraints', () => {
         ),
     ],
     [
+      'deposit_events_mode_switch_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into deposit_events (source, broker_user_id, payment_id, amount, mode_switch, mode_switch_at) values ('binodex', 't', 'x', 1, 'bogus', now())`,
+        ),
+    ],
+    [
+      'deposit_events_mode_switch_pair_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into deposit_events (source, broker_user_id, payment_id, amount, mode_switch) values ('binodex', 't', 'x', 1, 'switched')`,
+        ),
+    ],
+    [
       'bonus_rules_validity_check',
       (tx: Tx) =>
         tx.execute(

@@ -33,6 +33,21 @@ export const DepositEventStatus = {
 export type DepositEventStatus = (typeof DepositEventStatus)[keyof typeof DepositEventStatus];
 export const depositEventStatusSchema = z.enum(DepositEventStatus);
 
+// What the switch to real after a deposit (#686, docs/trading-mode.md → The automatic switch
+// after a deposit) made of a deposit, at most one outcome per row. NULL: not yet considered.
+// `superseded`: the user changed the mode by hand while the deposit waited; `predates`: the row
+// was there before the feature (0075's backfill).
+export const DepositModeSwitch = {
+  Switched: 'switched',
+  AlreadyReal: 'already_real',
+  UserBlocked: 'user_blocked',
+  AccountInactive: 'account_inactive',
+  DemoOnly: 'demo_only',
+  Superseded: 'superseded',
+  Predates: 'predates',
+} as const;
+export type DepositModeSwitch = (typeof DepositModeSwitch)[keyof typeof DepositModeSwitch];
+
 // --- The manual token adjustment (#246) ---------------------------------------------------------
 
 // A policy, not an integrity rule: no CHECK holds it, so changing the number needs no migration.

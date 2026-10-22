@@ -4,7 +4,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AuditAction,
   BrokerAccountStatus,
+  DepositModeSwitch,
   NotificationLevel,
+  PostbackSource,
   TradeMode,
   START_PAYLOAD_PATTERN,
   UserStatus,
@@ -17,9 +19,13 @@ import {
 import { START_PAYLOAD_CORPUS, until } from '@binarius/shared/testing';
 import { createTokenCipher } from './crypto';
 import { setNotificationLevel } from './delivery-ops';
+import { listDepositsAwaitingModeSwitch, markDepositModeSwitch } from './deposit-mode-switch-ops';
 import { confirmBrokerAccount, linkBrokerAccount } from './oauth-ops';
+import { recordPostback } from './postback-ops';
+import { stopUserSessions } from './trading-session-ops';
 import {
   createTempDatabase,
+  lockWaiters,
   seedBrokerAccount,
   seedTradingSession,
   seedUser,
@@ -28,6 +34,7 @@ import {
 import {
   auditLog,
   brokerAccounts,
+  depositEvents,
   referralCodes,
   referrals,
   tradingSessions,
@@ -41,6 +48,7 @@ import {
   setStake,
   setTradingMode,
   setUserLanguage,
+  switchTradingModeOnDeposit,
   toUserStartView,
 } from './user-ops';
 
@@ -788,6 +796,361 @@ describe('setTradingMode (#121)', () => {
     expect({ ...after, tradingMode: before.tradingMode, updatedAt: before.updatedAt }).toEqual(
       before,
     );
+  });
+});
+
+// #686 (docs/trading-mode.md → The automatic switch after a deposit)
+describe('switchTradingModeOnDeposit (#686)', () => {
+  let n = 0;
+  const depositRow = async (
+    userId: string | null,
+    accountId: string | null,
+    brokerUserId: string,
+  ): Promise<string> => {
+    const [row] = await tmp.db
+      .insert(depositEvents)
+      .values({
+        userId,
+        brokerAccountId: accountId,
+        source: PostbackSource.Binodex,
+        brokerUserId,
+        paymentId: `mode-pay-${String(++n)}`,
+        amount: '10' as DecimalString,
+      })
+      .returning({ id: depositEvents.id });
+    return row!.id;
+  };
+  // a user with an account and one deposit on it, demo and active unless told otherwise
+  const seed = async ({
+    tradingMode = TradeMode.Demo,
+    status = UserStatus.Active,
+    accountStatus = BrokerAccountStatus.Active,
+  }: {
+    tradingMode?: TradeMode;
+    status?: UserStatus;
+    accountStatus?: BrokerAccountStatus;
+  } = {}) => {
+    const user = await seedUser(tmp.db, { tradingMode, status });
+    const brokerUserId = `mode-trader-${String(++n)}`;
+    const accountId = await seedBrokerAccount(tmp.db, user.userId, {
+      status: accountStatus,
+      brokerUserId,
+    });
+    const depositEventId = await depositRow(user.userId, accountId, brokerUserId);
+    return { ...user, accountId, brokerUserId, depositEventId };
+  };
+  const attempt = (depositEventId: string, demoOnly = false) =>
+    switchTradingModeOnDeposit(tmp.db, { depositEventId, demoOnly });
+  const depositOf = async (id: string) =>
+    (
+      await tmp.db
+        .select({ modeSwitch: depositEvents.modeSwitch, modeSwitchAt: depositEvents.modeSwitchAt })
+        .from(depositEvents)
+        .where(eq(depositEvents.id, id))
+    )[0]!;
+  const modeOf = async (userId: string) =>
+    (
+      await tmp.db
+        .select({ tradingMode: users.tradingMode })
+        .from(users)
+        .where(eq(users.id, userId))
+    )[0]!.tradingMode;
+  const auditOf = (userId: string) =>
+    tmp.db
+      .select({
+        actorType: auditLog.actorType,
+        actorId: auditLog.actorId,
+        action: auditLog.action,
+        entityType: auditLog.entityType,
+        entityId: auditLog.entityId,
+        payload: auditLog.payload,
+      })
+      .from(auditLog)
+      .where(eq(auditLog.entityId, userId));
+  const dbNow = async () =>
+    (await tmp.db.execute<{ now: string }>(sql`select clock_timestamp()::text as now`)).rows[0]!
+      .now;
+  const nothingWritten = async (seeded: { userId: string; depositEventId: string }) => {
+    expect(await depositOf(seeded.depositEventId)).toEqual({
+      modeSwitch: null,
+      modeSwitchAt: null,
+    });
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Demo);
+    expect(await auditOf(seeded.userId)).toEqual([]);
+  };
+
+  it('U-dep 1 switches a demo user with an active account and no session, one audit row', async () => {
+    const seeded = await seed();
+    const before = await dbNow();
+    expect(await attempt(seeded.depositEventId)).toEqual({ outcome: DepositModeSwitch.Switched });
+    const after = await dbNow();
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Real);
+    expect(await auditOf(seeded.userId)).toEqual([
+      {
+        actorType: 'system',
+        actorId: null,
+        action: AuditAction.TradingModeChanged,
+        entityType: 'user',
+        entityId: seeded.userId,
+        payload: { from: 'demo', to: 'real', depositEventId: seeded.depositEventId },
+      },
+    ]);
+    const deposit = await depositOf(seeded.depositEventId);
+    expect(deposit.modeSwitch).toBe(DepositModeSwitch.Switched);
+    // by the database clock, inside the pass's transaction
+    const { rows } = await tmp.db.execute<{ within: boolean }>(
+      sql`select mode_switch_at between ${before}::timestamptz and ${after}::timestamptz as within
+        from deposit_events where id = ${seeded.depositEventId}`,
+    );
+    expect(rows[0]?.within).toBe(true);
+  });
+
+  it('U-dep 2 closes a deposit of a user in real as already_real, no audit row', async () => {
+    const seeded = await seed({ tradingMode: TradeMode.Real });
+    expect(await attempt(seeded.depositEventId)).toEqual({
+      outcome: DepositModeSwitch.AlreadyReal,
+    });
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Real);
+    expect(await auditOf(seeded.userId)).toEqual([]);
+    expect((await depositOf(seeded.depositEventId)).modeSwitch).toBe(DepositModeSwitch.AlreadyReal);
+  });
+
+  it('U-dep 3 a deposit on a pending account waits for the activation, then switches', async () => {
+    const cipher = createTokenCipher({ keyId: 'test-key', key: randomBytes(32) });
+    const user = await seedUser(tmp.db);
+    const telegramUserId = BigInt(user.telegramUserId);
+    const brokerUserId = `mode-pending-${String(++n)}`;
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: {
+        accessToken: 'access-mode',
+        refreshToken: 'refresh-mode',
+        tokenType: 'Bearer',
+        expiresInSec: 3_600,
+        user: { id: brokerUserId, email: 'mode@example.test', isPartnerClient: false },
+      },
+      cipher,
+      activate: false,
+    });
+    if (!linked.ok) throw new Error('link failed');
+    const paymentId = `mode-pay-${String(++n)}`;
+    const recorded = await recordPostback(tmp.db, {
+      source: PostbackSource.Binodex,
+      query: {
+        event: 'deposit',
+        id: `mode-pb-${String(n)}`,
+        payment_id: paymentId,
+        a: brokerUserId,
+        amount: '10',
+      },
+    });
+    expect(recorded.outcome).toBe('recorded');
+    const [row] = await tmp.db
+      .select({ id: depositEvents.id, userId: depositEvents.userId })
+      .from(depositEvents)
+      .where(eq(depositEvents.paymentId, paymentId));
+    expect(row?.userId).toBeNull();
+    expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1000 })).not.toContain(row!.id);
+
+    expect(
+      (await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: linked.account.id })).ok,
+    ).toBe(true);
+    expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1000 })).toContain(row!.id);
+    expect(await attempt(row!.id)).toEqual({ outcome: DepositModeSwitch.Switched });
+    expect(await modeOf(user.userId)).toBe(TradeMode.Real);
+  });
+
+  it('U-dep 4 a deposit on a revoked account does not switch: account_inactive', async () => {
+    const seeded = await seed({ accountStatus: BrokerAccountStatus.Revoked });
+    expect(await attempt(seeded.depositEventId)).toEqual({
+      outcome: DepositModeSwitch.AccountInactive,
+    });
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Demo);
+    expect(await auditOf(seeded.userId)).toEqual([]);
+  });
+
+  it('U-dep 5 waits while a session runs on any account of the user, and switches after it', async () => {
+    const seeded = await seed();
+    const other = await seedBrokerAccount(tmp.db, seeded.userId);
+    await seedTradingSession(tmp.db, other);
+    expect(await attempt(seeded.depositEventId)).toEqual({ outcome: 'session_active' });
+    await nothingWritten(seeded);
+    expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1000 })).toContain(
+      seeded.depositEventId,
+    );
+
+    // U-dep 5b: the session ends, the next attempt switches
+    await stopUserSessions(tmp.db, { telegramUserId: seeded.telegramUserId });
+    expect(await attempt(seeded.depositEventId)).toEqual({ outcome: DepositModeSwitch.Switched });
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Real);
+  });
+
+  it('U-dep 6 a user blocked by the admin is not switched: user_blocked', async () => {
+    const seeded = await seed({ status: UserStatus.Blocked });
+    expect(await attempt(seeded.depositEventId)).toEqual({
+      outcome: DepositModeSwitch.UserBlocked,
+    });
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Demo);
+    expect(await auditOf(seeded.userId)).toEqual([]);
+  });
+
+  it('U-dep 7 a second deposit after the switch is already_real: one switched fact', async () => {
+    const seeded = await seed();
+    const second = await depositRow(seeded.userId, seeded.accountId, seeded.brokerUserId);
+    expect(await attempt(seeded.depositEventId)).toEqual({ outcome: DepositModeSwitch.Switched });
+    expect(await attempt(second)).toEqual({ outcome: DepositModeSwitch.AlreadyReal });
+    expect(await auditOf(seeded.userId)).toHaveLength(1);
+    const switched = await tmp.db
+      .select({ id: depositEvents.id })
+      .from(depositEvents)
+      .where(
+        sql`${depositEvents.userId} = ${seeded.userId} and ${depositEvents.modeSwitch} = 'switched'`,
+      );
+    expect(switched).toEqual([{ id: seeded.depositEventId }]);
+  });
+
+  it('U-dep 8 with DEMO_ONLY closes the deposit demo_only without waiting for the users row', async () => {
+    const seeded = await seed();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let taken!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (taken = resolve));
+    const holder = tmp.db.transaction(async (tx) => {
+      await tx.select().from(users).where(eq(users.id, seeded.userId)).for('no key update');
+      taken();
+      await released;
+    });
+    await lockTaken;
+    let outcome: unknown;
+    const switching = attempt(seeded.depositEventId, true).then((result) => (outcome = result));
+    try {
+      await until('the DEMO_ONLY outcome while the users row is held', () => outcome !== undefined);
+    } finally {
+      release();
+      await holder;
+      await switching;
+    }
+    expect(outcome).toEqual({ outcome: DepositModeSwitch.DemoOnly });
+    expect((await depositOf(seeded.depositEventId)).modeSwitch).toBe(DepositModeSwitch.DemoOnly);
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Demo);
+    expect(await auditOf(seeded.userId)).toEqual([]);
+  });
+
+  it("U-dep 9 the user's own switch closes the waiting deposits superseded, in its transaction", async () => {
+    const seeded = await seed();
+    await seedTradingSession(tmp.db, seeded.accountId);
+    const telegramUserId = BigInt(seeded.telegramUserId);
+    // a refused audit row rolls the switch back, and the outcome with it
+    await tmp.pool.query(
+      `alter table audit_log add constraint audit_log_no_mode_686 check (action <> 'trading_mode_changed') not valid`,
+    );
+    try {
+      await expect(setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).rejects.toThrow();
+    } finally {
+      await tmp.pool.query('alter table audit_log drop constraint audit_log_no_mode_686');
+    }
+    expect(await depositOf(seeded.depositEventId)).toEqual({
+      modeSwitch: null,
+      modeSwitchAt: null,
+    });
+
+    expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).toMatchObject({
+      changed: true,
+    });
+    expect((await depositOf(seeded.depositEventId)).modeSwitch).toBe(DepositModeSwitch.Superseded);
+    expect(await attempt(seeded.depositEventId)).toEqual({ outcome: 'gone' });
+  });
+
+  it('U-dep 10 a switch that changes nothing (/stop in demo) leaves the deposit waiting', async () => {
+    const seeded = await seed();
+    await seedTradingSession(tmp.db, seeded.accountId);
+    expect(
+      await setTradingMode(tmp.db, BigInt(seeded.telegramUserId), TradeMode.Demo),
+    ).toMatchObject({ changed: false });
+    expect(await depositOf(seeded.depositEventId)).toEqual({
+      modeSwitch: null,
+      modeSwitchAt: null,
+    });
+  });
+
+  it('U-dep 11 waits behind a switch to real in flight, then finds the user in real', async () => {
+    const seeded = await seed();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let taken!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (taken = resolve));
+    const holder = tmp.db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({ tradingMode: TradeMode.Real })
+        .where(eq(users.id, seeded.userId));
+      taken();
+      await released;
+    });
+    await lockTaken;
+    let settled = false;
+    const switching = attempt(seeded.depositEventId).finally(() => (settled = true));
+    await until(
+      'the pass to queue behind the users lock',
+      async () => (await lockWaiters(tmp.db)) > 0,
+    );
+    expect(settled).toBe(false);
+    release();
+    await holder;
+    expect(await switching).toEqual({ outcome: DepositModeSwitch.AlreadyReal });
+    expect(await auditOf(seeded.userId)).toEqual([]);
+  });
+
+  it('U-dep 12 a deposit with an outcome already is gone: nothing is written', async () => {
+    const seeded = await seed();
+    expect(
+      await markDepositModeSwitch(tmp.db, {
+        depositEventId: seeded.depositEventId,
+        outcome: DepositModeSwitch.Superseded,
+      }),
+    ).toBe(true);
+    const marked = await depositOf(seeded.depositEventId);
+    expect(await attempt(seeded.depositEventId)).toEqual({ outcome: 'gone' });
+    expect(
+      await markDepositModeSwitch(tmp.db, {
+        depositEventId: seeded.depositEventId,
+        outcome: DepositModeSwitch.Switched,
+      }),
+    ).toBe(false);
+    expect(await depositOf(seeded.depositEventId)).toEqual(marked);
+    expect(await modeOf(seeded.userId)).toBe(TradeMode.Demo);
+    expect(await auditOf(seeded.userId)).toEqual([]);
+  });
+
+  describe('listDepositsAwaitingModeSwitch', () => {
+    it('L1 lists attributed deposits with no outcome, oldest first; L2 not the closed ones', async () => {
+      const older = await seed();
+      const newer = await seed();
+      await tmp.db
+        .update(depositEvents)
+        .set({ createdAt: sql`now() - interval '1 hour'` })
+        .where(eq(depositEvents.id, older.depositEventId));
+      const unattributed = await depositRow(null, null, `mode-free-${String(++n)}`);
+      const closed = await seed();
+      await markDepositModeSwitch(tmp.db, {
+        depositEventId: closed.depositEventId,
+        outcome: DepositModeSwitch.Predates,
+      });
+      const listed = await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1000 });
+      expect(listed.indexOf(older.depositEventId)).toBeGreaterThanOrEqual(0);
+      expect(listed.indexOf(older.depositEventId)).toBeLessThan(
+        listed.indexOf(newer.depositEventId),
+      );
+      expect(listed).not.toContain(unattributed);
+      expect(listed).not.toContain(closed.depositEventId);
+    });
+
+    it('L3 takes at most `limit` rows', async () => {
+      await seed();
+      await seed();
+      expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1 })).toHaveLength(1);
+      expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 2 })).toHaveLength(2);
+    });
   });
 });
 

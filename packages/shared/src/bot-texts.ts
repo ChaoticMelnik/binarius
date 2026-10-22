@@ -1874,7 +1874,7 @@ export const BOT_TEXT_CATALOG = {
     { vars: ['nudgeTokens'], fragments: { buyButton: 'buyButton' } },
   ),
   // The switch to real after a deposit (#686, docs/trading-mode.md → The automatic switch after
-  // a deposit): no deposit amount and no balance (owner's manager, В6); {stake} is effectiveStake.
+  // a deposit): no deposit amount and no balance (clarify В6); {stake} is the real stake in use.
   realModeByDeposit: html(
     g.Mailing,
     'Сообщение после пополнения реальными деньгами, когда бот перевёл пользователя из демо в реальный режим (#686); с кнопками экрана режима и меню.',

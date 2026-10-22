@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { decimalStringSchema } from './money';
 import { createTradeIntentRequestSchema } from './trading';
 
 // The kinds of notification_jobs (docs/mailing.md): the CHECK on the column is built from this
@@ -14,6 +15,7 @@ export const NotificationKind = {
   TokensHalf: 'tokens_half',
   TokensLow: 'tokens_low',
   TokensOut: 'tokens_out',
+  RealModeByDeposit: 'real_mode_by_deposit',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -69,9 +71,21 @@ export const tokenNudgePayloadSchema = z.object({
 });
 export type TokenNudgePayload = z.infer<typeof tokenNudgePayloadSchema>;
 
+// The switch to real after a deposit (#686, docs/mailing.md → The real-mode notification): due at
+// the switch's own moment, which the deposit's mode_switch_at records.
+export const REAL_MODE_BY_DEPOSIT_AFTER_MS = 0;
+
+// The job's payload: the real stake the user's trades now use (effectiveStake, #326) as text
+// (rule 2) — the saved one, else the broker's minimum from the account's snapshot; null when
+// neither is known, which the text names in words.
+export const realModeByDepositPayloadSchema = z.object({
+  stake: decimalStringSchema.nullable(),
+});
+export type RealModeByDepositPayload = z.infer<typeof realModeByDepositPayloadSchema>;
+
 // The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
-// immediate kinds (referral_rewarded and the low-token nudges, 0) are not in it: the link about
-// the planner's tick concerns only a kind that waits.
+// immediate kinds (referral_rewarded, the low-token nudges and real_mode_by_deposit, 0) are not in
+// it: the link about the planner's tick concerns only a kind that waits.
 export const MAILING_MIN_OFFSET_MS = Math.min(
   ...FIRST_SESSION_CHAIN.map((step) => step.afterHours * 3_600_000),
   ANALYSIS_UNUSED_AFTER_MS,
