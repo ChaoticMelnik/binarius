@@ -2,18 +2,21 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import {
   SessionTradeResult,
   TradeIntentStatus,
+  type TradeAction,
   TradingSessionStatus,
   TradingSessionStopReason,
   type DecimalString,
   type TradeMode,
 } from '@binarius/shared';
 import type { Db } from './client';
+import { h1SessionSql } from './h1-ops';
 import { brokerAccounts } from './schema/broker-accounts';
-import { brokerTrades } from './schema/broker-trades';
+import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { literal, sqlLiteralList } from './schema/columns';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
+import type { Tx } from './trade-intent-ops';
 
 // The session notices' state (#464, docs/bot-session.md → Trade messages): the backend's sender
 // sends every settled trade of a session - one message per martingale cycle, edited step by step
@@ -36,8 +39,16 @@ import { users } from './schema/users';
 // recordSessionCycleMessage writes it, after a new message went through. An edit never changes
 // it, so an edit whose outcome is unknown leaves it pointing at the message the next step edits
 // again with every block.
+//
+// The open trade's block (#700): once a trade of the session is open at the broker, its block
+// without a result goes into the cycle message, and its settlement edits the block into its
+// result by the cursor above. Which open trade's block was claimed is open_notice_intent_id,
+// written by claimSessionOpenNotice's CAS before the Telegram call: at most once, never repeated,
+// even when its send's outcome is unknown - the trade's result still comes by the cursor. H1
+// sessions (#670) get no open block.
 
 const SETTLED = literal(TradeIntentStatus.Settled);
+const ACCEPTED = literal(TradeIntentStatus.Accepted);
 
 // A settled trade of the session: a settled intent with its broker trade (settleIntent writes
 // both). The same count the view's `settled` and the backfill (0050) take.
@@ -56,6 +67,23 @@ const finishedSql = sql<boolean>`(${tradingSessions.status} = ${literal(TradingS
    where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
      and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
 ))`;
+
+// The session's open trade (#700): its accepted intent whose broker trade is open - markIntentAccepted
+// writes both in one transaction. At most one by trade_intents_active_account_idx (Rule 7); NULL
+// when none. One fragment for the list and the claim.
+const openTradeSql = sql<string | null>`(
+  select ${tradeIntents.id} from ${tradeIntents}
+    join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+   where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+     and ${tradeIntents.status} = ${ACCEPTED}
+     and ${brokerTrades.status} = ${literal(BrokerTradeStatus.Open)}
+   order by ${tradeIntents.createdAt} desc, ${tradeIntents.id} desc
+   limit 1
+)`;
+
+// due: the open trade's block is still to be claimed; an H1 session gets none (the sender's
+// isH1Settings, this its SQL twin)
+const openDueSql = sql<boolean>`(${openTradeSql} is not null and ${openTradeSql} is distinct from ${tradingSessions.openNoticeIntentId} and not coalesce(${h1SessionSql}, false))`;
 
 // The waiting message (#536, docs/bot-session.md → The waiting message). Its slot is the latest
 // message of the session it stands under (#587): the cycle message or the bot's recorded status
@@ -90,6 +118,9 @@ export interface PendingSessionNotice {
   // the cursor: settled trades claimed so far
   notifiedTrades: number;
   settled: number;
+  // the session's open trade's intent, and the intent whose open block was claimed (#700)
+  openIntentId: string | null;
+  openNoticeIntentId: string | null;
   finished: boolean;
   // the owner's, by the session's account: no id comes from outside (Rule 13)
   telegramUserId: bigint;
@@ -102,7 +133,8 @@ export interface PendingSessionNotice {
 }
 
 // The sessions with something to send: notices not closed yet, and a settled trade past the
-// cursor, a finished session, or a waiting message to send or to delete. Oldest first, on
+// cursor, an open trade's block to claim (#700), a finished session, or a waiting message to send
+// or to delete. Oldest first, on
 // trading_sessions_notice_pending_idx.
 export async function listPendingSessionNotices(
   db: Db,
@@ -115,6 +147,8 @@ export async function listPendingSessionNotices(
       settings: sql<unknown>`${tradingSessions.settings}`,
       notifiedTrades: tradingSessions.notifiedTrades,
       settled: settledCountSql,
+      openIntentId: openTradeSql,
+      openNoticeIntentId: tradingSessions.openNoticeIntentId,
       finished: finishedSql,
       telegramUserId: users.telegramUserId,
       telegramBlocked: sql<boolean>`${users.telegramBlockedAt} is not null`,
@@ -130,7 +164,7 @@ export async function listPendingSessionNotices(
     .where(
       and(
         isNull(tradingSessions.finalNoticeSentAt),
-        sql`(${settledCountSql} > ${tradingSessions.notifiedTrades} or ${finishedSql} or ${waitingDueSql} or ${waitingStaleSql})`,
+        sql`(${settledCountSql} > ${tradingSessions.notifiedTrades} or ${openDueSql} or ${finishedSql} or ${waitingDueSql} or ${waitingStaleSql})`,
       ),
     )
     .orderBy(asc(tradingSessions.createdAt), asc(tradingSessions.id))
@@ -153,7 +187,8 @@ export interface SessionTradeNoticeRow {
 }
 
 // The message the session's cycle is shown in: Telegram's message_id, and the index of the first
-// settled trade it shows (in the cursor's order, from 0)
+// trade it shows (in the cursor's order, from 0), settled or open: an open trade's block takes the
+// index its trade gets once it settles (#700)
 export interface SessionCycleMessage {
   messageId: number;
   from: number;
@@ -195,56 +230,158 @@ export async function claimSessionTradeNotice(
       });
     if (won === undefined) return undefined;
 
-    // broker_trades_settlement_check: a closed trade has its close price and profit
-    const rows = await tx
+    return {
+      trades: await readSettledTrades(tx, sessionId, claimed + 1),
+      cycleMessage: cycleMessageOf(won),
+    };
+  });
+}
+
+// The session's first `count` settled trades in the cursor's order, in the claim's transaction;
+// a settled trade cannot change any more.
+async function readSettledTrades(
+  tx: Tx,
+  sessionId: string,
+  count: number,
+): Promise<SessionTradeNoticeRow[]> {
+  // broker_trades_settlement_check: a closed trade has its close price and profit
+  const rows = await tx
+    .select({
+      amount: tradeIntents.amount,
+      outcome: sql<DecimalString>`case when ${brokerTrades.profit} > 0 then ${tradeIntents.amount} + ${brokerTrades.profit} else ${brokerTrades.profit} end`,
+      result: tradeResultSql,
+      openPrice: brokerTrades.openPrice,
+      closePrice: brokerTrades.closePrice,
+      assetId: tradeIntents.assetId,
+    })
+    .from(tradeIntents)
+    .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+    .where(
+      and(
+        eq(tradeIntents.tradingSessionId, sessionId),
+        eq(tradeIntents.status, TradeIntentStatus.Settled),
+      ),
+    )
+    .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id))
+    .limit(count);
+  if (rows.length !== count) {
+    throw new Error(`session ${sessionId} lost its settled trade ${count - 1}`);
+  }
+  return rows.map(({ closePrice, ...row }) => {
+    if (closePrice === null) {
+      throw new Error(`settled intent of session ${sessionId} has an open broker trade`);
+    }
+    return { ...row, closePrice };
+  });
+}
+
+// trading_sessions_cycle_message_pair_check: both or neither
+const cycleMessageOf = (row: {
+  messageId: number | null;
+  from: number | null;
+}): SessionCycleMessage | null =>
+  row.messageId === null || row.from === null ? null : { messageId: row.messageId, from: row.from };
+
+// The open trade as its block needs it (#700): the intent's stake, direction and asset, the
+// broker trade's open price.
+export interface SessionOpenNoticeRow {
+  amount: DecimalString;
+  action: TradeAction;
+  openPrice: number;
+  assetId: number;
+}
+
+export interface ClaimedSessionOpen {
+  // the session's settled trades, all claimed: the open trade's block stands below theirs
+  trades: SessionTradeNoticeRow[];
+  open: SessionOpenNoticeRow;
+  cycleMessage: SessionCycleMessage | null;
+}
+
+// Claims the open trade's block (#700): one CAS marks `intentId` on the session, only while it is
+// not marked already, the notices are not closed, the session has `settled` settled trades and
+// the cursor claimed them all (so the block stands below all their blocks), and `intentId` is
+// still the session's open trade. Undefined when the CAS lost: another sender, the cursor moved, or the trade settled since
+// the list - its result block then comes by the cursor. The rows are read in the same transaction.
+export async function claimSessionOpenNotice(
+  db: Db,
+  { sessionId, intentId, settled }: { sessionId: string; intentId: string; settled: number },
+): Promise<ClaimedSessionOpen | undefined> {
+  return db.transaction(async (tx) => {
+    const [won] = await tx
+      .update(tradingSessions)
+      .set({ openNoticeIntentId: intentId })
+      .where(
+        and(
+          eq(tradingSessions.id, sessionId),
+          sql`${tradingSessions.openNoticeIntentId} is distinct from ${intentId}`,
+          isNull(tradingSessions.finalNoticeSentAt),
+          eq(tradingSessions.notifiedTrades, settled),
+          sql`${settledCountSql} = ${settled}`,
+          sql`${openTradeSql} = ${intentId}`,
+        ),
+      )
+      .returning({
+        messageId: tradingSessions.cycleMessageId,
+        from: tradingSessions.cycleMessageFrom,
+      });
+    if (won === undefined) return undefined;
+
+    const [open] = await tx
       .select({
         amount: tradeIntents.amount,
-        outcome: sql<DecimalString>`case when ${brokerTrades.profit} > 0 then ${tradeIntents.amount} + ${brokerTrades.profit} else ${brokerTrades.profit} end`,
-        result: tradeResultSql,
+        action: tradeIntents.action,
         openPrice: brokerTrades.openPrice,
-        closePrice: brokerTrades.closePrice,
         assetId: tradeIntents.assetId,
       })
       .from(tradeIntents)
       .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
-      .where(
-        and(
-          eq(tradeIntents.tradingSessionId, sessionId),
-          eq(tradeIntents.status, TradeIntentStatus.Settled),
-        ),
-      )
-      .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id))
-      .limit(claimed + 1);
-    if (rows.length !== claimed + 1) {
-      throw new Error(`session ${sessionId} lost its settled trade ${claimed}`);
-    }
-    const trades = rows.map(({ closePrice, ...row }) => {
-      if (closePrice === null) {
-        throw new Error(`settled intent of session ${sessionId} has an open broker trade`);
-      }
-      return { ...row, closePrice };
-    });
-    // trading_sessions_cycle_message_pair_check: both or neither
-    const cycleMessage =
-      won.messageId === null || won.from === null
-        ? null
-        : { messageId: won.messageId, from: won.from };
-    return { trades, cycleMessage };
+      .where(eq(tradeIntents.id, intentId));
+    if (open === undefined) throw new Error(`session ${sessionId} lost its open trade ${intentId}`);
+    return {
+      trades: settled === 0 ? [] : await readSettledTrades(tx, sessionId, settled),
+      open,
+      cycleMessage: cycleMessageOf(won),
+    };
   });
 }
 
-// Records the new message the claimed trade was sent in as the session's cycle message (#551):
-// one CAS, only while the cursor still stands right after that trade (`claimed + 1`) and no
-// summary was sent, so a sender whose claim was overtaken never moves it. Called only after
-// Telegram answered the send with the message's id. False when refused.
+// Takes the open block's claim back after a send Telegram certainly did not deliver (429, a
+// definite refusal), so the block goes again while its trade is open: only its own intent. False
+// otherwise.
+export async function releaseSessionOpenNotice(
+  db: Db,
+  { sessionId, intentId }: { sessionId: string; intentId: string },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ openNoticeIntentId: null })
+    .where(and(eq(tradingSessions.id, sessionId), eq(tradingSessions.openNoticeIntentId, intentId)))
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
+// Records the new message a claimed block was sent in as the session's cycle message (#551): one
+// CAS, only while the cursor still stands where the claim left it - `cursor`, right after a
+// claimed trade (`claimed + 1`), or the open block's `settled` with its intent still marked
+// (`openIntentId`, #700) - and no summary was sent, so a sender whose claim was overtaken never
+// moves it. Called only after Telegram answered the send with the message's id. False when
+// refused.
 export async function recordSessionCycleMessage(
   db: Db,
   {
     sessionId,
-    claimed,
+    cursor,
+    openIntentId,
     messageId,
     from,
-  }: { sessionId: string; claimed: number; messageId: number; from: number },
+  }: {
+    sessionId: string;
+    cursor: number;
+    openIntentId?: string;
+    messageId: number;
+    from: number;
+  },
 ): Promise<boolean> {
   const rows = await db
     .update(tradingSessions)
@@ -252,8 +389,11 @@ export async function recordSessionCycleMessage(
     .where(
       and(
         eq(tradingSessions.id, sessionId),
-        eq(tradingSessions.notifiedTrades, claimed + 1),
+        eq(tradingSessions.notifiedTrades, cursor),
         isNull(tradingSessions.finalNoticeSentAt),
+        openIntentId === undefined
+          ? undefined
+          : eq(tradingSessions.openNoticeIntentId, openIntentId),
       ),
     )
     .returning({ id: tradingSessions.id });

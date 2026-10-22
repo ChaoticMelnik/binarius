@@ -2258,7 +2258,7 @@ describe('the waiting message (#536)', () => {
       await claimSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 0 });
       await recordSessionCycleMessage(tmp.db, {
         sessionId: target.session.id,
-        claimed: 0,
+        cursor: 1,
         messageId: 900 + i,
         from: 0,
       });

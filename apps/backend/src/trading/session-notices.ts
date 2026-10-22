@@ -316,7 +316,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       }
       const recorded = await recordSessionCycleMessage(db, {
         sessionId: session.sessionId,
-        claimed,
+        cursor: claimed + 1,
         messageId,
         from,
       });
