@@ -17,7 +17,7 @@ import {
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { applyBalanceEvent, upsertBalanceSnapshot } from './balance-snapshot-ops';
-import { brokerBalanceSnapshots, tradingSessions, users } from './schema/index';
+import { brokerBalanceSnapshots, tradeIntents, tradingSessions, users } from './schema/index';
 import {
   createTempDatabase,
   intentRequest,
@@ -649,7 +649,8 @@ describe('readTradingSessionView: the profit sum and the balance (#337)', () => 
   });
 });
 
-// the orchestrator's balance (#696): the same fragments as the view's balance, in one statement
+// the orchestrator's balance (#696): the view's amounts, and awaitsBalance over every settlement on
+// the account in the session's mode, in one statement
 describe('readSessionBalance (#696)', () => {
   const balanceEvent = (
     brokerAccountId: string,
@@ -662,27 +663,29 @@ describe('readSessionBalance (#696)', () => {
       balance: { available: money(available), held: money('0'), total: money(available) },
     });
 
+  const WAIT = { waitMs: 60_000 };
+
   it('SB1 an account without a snapshot has none', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
-    expect(await readSessionBalance(tmp.db, session.id)).toBeUndefined();
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toBeUndefined();
   });
 
-  it("SB2 with no settlement of the session it is not behind; the amount is the session's mode", async () => {
+  it("SB2 with no settlement on the account it awaits nothing; the amount is the session's mode", async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: TradeMode.Real });
     const demo = await seedTradingSession(tmp.db, seed.brokerAccountId);
     await stopTradingSession(tmp.db, { id: demo.id, reason: TradingSessionStopReason.Completed });
     const real = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode: TradeMode.Real });
     await snapshot(seed.brokerAccountId, '10002.5', '250.75');
-    expect(await readSessionBalance(tmp.db, demo.id)).toEqual({
+    expect(await readSessionBalance(tmp.db, demo.id, WAIT)).toEqual({
       available: '10002.50000000',
       minTradeAmount: '1.00000000',
-      behind: false,
+      awaitsBalance: false,
     });
-    expect(await readSessionBalance(tmp.db, real.id)).toEqual({
+    expect(await readSessionBalance(tmp.db, real.id, WAIT)).toEqual({
       available: '250.75000000',
       minTradeAmount: '1.00000000',
-      behind: false,
+      awaitsBalance: false,
     });
   });
 
@@ -696,43 +699,43 @@ describe('readSessionBalance (#696)', () => {
     return { seed, session };
   };
 
-  it('SB3 a settlement of the session newer than the snapshot puts it behind', async () => {
+  it('SB3 a settlement of the session newer than the snapshot awaits the balance', async () => {
     const { session } = await settledAfterSnapshot();
-    expect(await readSessionBalance(tmp.db, session.id)).toEqual({
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toEqual({
       available: '0.50000000',
       minTradeAmount: '1.00000000',
-      behind: true,
+      awaitsBalance: true,
     });
   });
 
   it("SB4 the session mode's socket event after the settlement catches it up", async () => {
     const { seed, session } = await settledAfterSnapshot();
     await balanceEvent(seed.brokerAccountId, '2.4');
-    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
       available: '2.40000000',
-      behind: false,
+      awaitsBalance: false,
     });
   });
 
-  it("SB5 the other mode's socket event leaves it behind", async () => {
+  it("SB5 the other mode's socket event leaves it awaiting", async () => {
     const { seed, session } = await settledAfterSnapshot();
     await balanceEvent(seed.brokerAccountId, '300', TradeMode.Real);
-    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
       available: '0.50000000',
-      behind: true,
+      awaitsBalance: true,
     });
   });
 
   it('SB6 a REST snapshot after the settlement catches it up', async () => {
     const { seed, session } = await settledAfterSnapshot();
     await snapshot(seed.brokerAccountId, '2.4');
-    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
       available: '2.40000000',
-      behind: false,
+      awaitsBalance: false,
     });
   });
 
-  it("SB7 another session's settlement and a one-off trade's do not put it behind", async () => {
+  it('SB7a the settlement of an intent an earlier session left live at its stop awaits the balance', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
     const other = await seedTradingSession(tmp.db, seed.brokerAccountId);
     const { intent: otherIntent } = await sessionIntent(seed, other.id, 1);
@@ -741,14 +744,58 @@ describe('readSessionBalance (#696)', () => {
       reason: TradingSessionStopReason.UserStopped,
     });
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
-    await snapshot(seed.brokerAccountId);
+    await snapshot(seed.brokerAccountId, '0.5');
     await settle(otherIntent, '0.9');
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
+      awaitsBalance: true,
+    });
+  });
+
+  it("SB7b a bot's one-off trade settled on the session's account awaits the balance", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshot(seed.brokerAccountId, '0.5');
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(seed.telegramUserId));
+    await settle(intent, '0.9');
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
+      awaitsBalance: true,
+    });
+  });
+
+  it('SB8 a settlement in the other mode and a rejected one-off trade await nothing', async () => {
+    // real mode: the real session's intent passes the gate (#121), the demo one is never gated
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: TradeMode.Real });
+    const real = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode: TradeMode.Real });
+    const { intent: realIntent } = await sessionIntent(seed, real.id, 1, TradeMode.Real);
+    await stopTradingSession(tmp.db, { id: real.id, reason: TradingSessionStopReason.UserStopped });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshot(seed.brokerAccountId, '0.5');
+    await settle(realIntent, '0.9');
     const { intent: botIntent } = await createTradeIntent(
       tmp.db,
       intentRequest(seed.telegramUserId),
     );
-    await settle(botIntent, '0.9');
-    expect(await readSessionBalance(tmp.db, session.id)).toMatchObject({ behind: false });
+    await reject(botIntent);
+    expect(botIntent.mode).toBe(TradeMode.Demo);
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
+      awaitsBalance: false,
+    });
+  });
+
+  it('SB9 the wait is bounded from the settlement, by the database clock', async () => {
+    const { seed, session } = await settledAfterSnapshot();
+    // an UPDATE without status runs no transition check; the snapshot stays older than the settle
+    await tmp.db
+      .update(tradeIntents)
+      .set({ updatedAt: sql`now() - interval '65000 milliseconds'` })
+      .where(eq(tradeIntents.tradingSessionId, session.id));
+    await backdate(seed.brokerAccountId);
+    expect(await readSessionBalance(tmp.db, session.id, WAIT)).toMatchObject({
+      awaitsBalance: false,
+    });
+    expect(await readSessionBalance(tmp.db, session.id, { waitMs: 120_000 })).toMatchObject({
+      awaitsBalance: true,
+    });
   });
 });
 
