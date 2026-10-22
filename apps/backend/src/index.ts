@@ -17,11 +17,15 @@ import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-res
 import { createBrokerSocketClient } from '@binarius/broker-socket';
 import {
   createDb,
+  createSessionIntent,
   createTokenCipher,
+  listActiveH1Sessions,
   listBotTextOverrides,
   listServiceBrokerAccounts,
+  readSessionHistory,
   recordSignalDecision,
   setLastAnalysis,
+  stopTradingSession,
 } from '@binarius/db';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
@@ -44,6 +48,7 @@ import { createMarketDataManager } from './market-data/manager';
 import { createTickStore } from './market-data/ticks';
 import { createSecondSeries } from './market-data/seconds';
 import { createH1Shadow } from './h1/shadow';
+import { createH1Driver } from './h1/driver';
 import { createTradeLogKeeper } from './trade-log/keeper';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
@@ -65,6 +70,8 @@ import {
   H1_SERIES_CAPACITY_SEC,
   H1_SHADOW_LOG_MS,
   H1_SHADOW_TICK_MS,
+  H1_DRIVER_LOG_MS,
+  H1_DRIVER_SCAN_MS,
   MARKET_DATA_BACKFILL_POLL_MS,
   MARKET_DATA_BACKFILL_RETRY_MS,
   MARKET_DATA_BACKFILL_SCAN_MS,
@@ -478,7 +485,30 @@ function createMarketData(
         },
       })
     : undefined;
-  return { manager, backfill, h1Shadow };
+  // docs/h1.md -> The driver: the H1 sessions' intents on the same series (#707); no switch, with
+  // no active H1 session it only listens. It advances the series too, so H1_SHADOW=off still
+  // closes quiet seconds
+  const h1Driver = createH1Driver({
+    series: seconds,
+    catalog: pairsCatalog,
+    streaming: () => manager.streaming(),
+    sessions: {
+      list: () => listActiveH1Sessions(db),
+      history: (id, options) => readSessionHistory(db, id, options),
+      createIntent: (input) => createSessionIntent(db, input, { demoOnly: env.demoOnly }),
+      stop: (id, reason) => stopTradingSession(db, { id, reason }),
+      record: (input) => recordSignalDecision(db, input),
+    },
+    wake: () => publisher.wake(),
+    logger: app.log,
+    config: {
+      scanMs: H1_DRIVER_SCAN_MS,
+      tickMs: H1_SHADOW_TICK_MS,
+      logMs: H1_DRIVER_LOG_MS,
+      submitBudgetMs: env.h1SubmitBudgetMs,
+    },
+  });
+  return { manager, backfill, h1Shadow, h1Driver };
 }
 const marketData =
   candleStore === undefined ? undefined : createMarketData(candleStore, signalPacer);
@@ -548,6 +578,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => serviceAccounts.stop(),
       () => tradeLogKeeper.stop(),
       async () => {
+        await marketData?.h1Driver.stop();
         await marketData?.h1Shadow?.stop();
         await marketData?.backfill.stop();
         await marketData?.manager.stop();
@@ -590,6 +621,10 @@ if (!shuttingDown) {
   app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
   app.log.info({ enabled: marketData !== undefined }, 'market data source');
   app.log.info({ enabled: marketData?.h1Shadow !== undefined }, 'h1 shadow');
+  app.log.info(
+    { enabled: marketData !== undefined, submitBudgetMs: env.h1SubmitBudgetMs },
+    'h1 driver',
+  );
   app.log.info({ capture: candleStore !== undefined }, 'trade log keeper');
 }
 if (!shuttingDown) {
@@ -604,6 +639,7 @@ if (!shuttingDown) {
   marketData?.manager.start();
   marketData?.backfill.start();
   marketData?.h1Shadow?.start();
+  marketData?.h1Driver.start();
   tradeLogKeeper.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
