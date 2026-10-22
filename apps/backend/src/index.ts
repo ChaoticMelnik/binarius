@@ -35,6 +35,7 @@ import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { createMailingEngine } from './mailing/engine';
+import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
 import { createSessionNoticeSender } from './trading/session-notices';
 import { createStarReconciler } from './payments/star-reconciler';
 import { setBotTextSource } from './auth/texts';
@@ -375,6 +376,17 @@ const mailing = createMailingEngine({
   cashierUrl: cashierUrlOf(env.webPublicUrl),
 });
 
+// docs/trading-mode.md → The automatic switch after a deposit (#686): switches a demo user to real
+// once a deposit is theirs, and wakes the planner for the message. With DEMO_ONLY nobody is
+// switched. Started with the other loops after listen(), stopped in phase 1 before the mailing
+// engine, so its last wake finds the planner still running.
+const depositModeSwitcher = createDepositModeSwitcher({
+  db,
+  demoOnly: env.demoOnly,
+  logger: app.log,
+  onSwitched: () => mailing.wakePlan(),
+});
+
 // docs/stars.md → Reconciliation (#117): credits a Stars payment whose successful_payment the bot
 // lost; the public bot's token, read-only on Telegram's side (getStarTransactions), and pushes
 // through the client push. Started with the other loops after listen(), stopped in phase 1.
@@ -573,7 +585,10 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => Promise.all(signalScanners.map((scanner) => scanner.stop())),
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
-      () => mailing.stop(),
+      async () => {
+        await depositModeSwitcher.stop();
+        await mailing.stop();
+      },
       () => sessionNotices.stop(),
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
@@ -630,6 +645,7 @@ if (!shuttingDown) {
     'h1 driver',
   );
   app.log.info({ capture: candleStore !== undefined }, 'trade log keeper');
+  app.log.info({ demoOnly: env.demoOnly }, 'deposit mode switch');
 }
 if (!shuttingDown) {
   publisher.start();
@@ -637,6 +653,7 @@ if (!shuttingDown) {
   for (const scanner of signalScanners) scanner.start();
   botTexts.start();
   mailing.start();
+  depositModeSwitcher.start();
   sessionNotices.start();
   starReconciler.start();
   serviceAccounts.start();

@@ -21,6 +21,7 @@ import {
   ANALYSIS_UNUSED_UNTIL_MS,
   CANDLE_CLOSE_SLACK_MS,
   REFERRAL_REWARDED_AFTER_MS,
+  REAL_MODE_BY_DEPOSIT_AFTER_MS,
   MAILING_MIN_OFFSET_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   TOKEN_NUDGE_AFTER_MS,
@@ -79,6 +80,9 @@ import {
   DEPOSIT_BROKER_CALL_BUDGET_MS,
   DEPOSIT_CREDITED_REFRESH_BUDGET_MS,
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
+  DEPOSIT_MODE_SWITCH_RETRY_MS,
+  DEPOSIT_MODE_SWITCH_SCAN_LIMIT,
+  DEPOSIT_MODE_SWITCH_SCAN_MS,
   MAILING_PLAN_TICK_MS,
   MAILING_SEND_BATCH,
   MAILING_SEND_PER_SECOND,
@@ -571,6 +575,17 @@ describe('broker balance timing', () => {
         TRADING_ACCESS_REFRESH_BUDGET_MS +
         CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
     ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('switches after a deposit within its tick, skips a thrown candidate for whole ticks, and is no slower than the sender (#686)', () => {
+    expect(DEPOSIT_MODE_SWITCH_SCAN_MS).toBe(5_000);
+    expect(DEPOSIT_MODE_SWITCH_SCAN_LIMIT).toBe(50);
+    expect(DEPOSIT_MODE_SWITCH_RETRY_MS).toBe(60_000);
+    expect(DEPOSIT_MODE_SWITCH_SCAN_MS).toBeLessThan(DEPOSIT_MODE_SWITCH_RETRY_MS);
+    expect(DEPOSIT_MODE_SWITCH_SCAN_MS).toBeLessThanOrEqual(MAILING_SEND_TICK_MS);
+    // the message is due at the switch (#686): the pass's tick, then the sender's (≤ 10 s)
+    expect(REAL_MODE_BY_DEPOSIT_AFTER_MS).toBe(0);
+    expect(DEPOSIT_MODE_SWITCH_SCAN_MS + MAILING_SEND_TICK_MS).toBe(10_000);
   });
 
   it('lists a tracked session for the fallback summary only ticks after its final mark (#537)', () => {
