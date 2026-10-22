@@ -650,8 +650,8 @@ served (S32). Right after a start or a gap the windows are short: those decision
 `insufficient_candles`, `candle_gap` or `stale`, each with a refill request, and signals appear as
 the backfill closes the windows.
 
-**When.** One scan a candle of the instance's interval, `SIGNAL_SCAN_SLACK_MS` (500 ms) after its
-boundary (S1). After a start, nothing is served until the first scan, at most 5.5 s later.
+**When.** One scan a candle of the instance's interval, `CANDLE_CLOSE_SLACK_MS` (500 ms, shared with
+the worker's candle hold and the stand since #697) after its boundary (S1). After a start, nothing is served until the first scan, at most 5.5 s later.
 - The timer aims at a remembered target, `nextAt`, the next boundary plus the slack. It is moved
   forward by one candle at each fire, never recomputed from the clock at that moment. So a timer
   that fires a few ms early cannot run a second scan for the same candle (S12).
@@ -669,6 +669,12 @@ boundary (S1). After a start, nothing is served until the first scan, at most 5.
   scan moment, and the decision is then on the candle before, which the route's freshness rule
   does not serve. Such a decision (the window's `closedUntil` below the boundary of the decision's
   own `nowMs`; the feed leaves the unclosed candle out, F26) is counted as `unclosed` (S29, S34); the slack is not raised (2 s would be 40 % of a `5s` candle).
+  Measured on the pilot 2026-10-22 (2 h, #697): 1.07 % of the decisions `unclosed`, in 17 events,
+  15 of them a whole scan at once (all 122 pairs: the watermark of the whole stream had not passed
+  the boundary at `+ 500`); the watermark lag p50 212 / p95 364 / max 602 ms. Since #697 a
+  session's next ask after `no_signal` or the pause comes at the same moment and reads the same
+  cache, so it trades such a decision as the scanner made it (docs/trading-session.md → The candle
+  wake); the bot's list does not serve it, as before.
 
 **Each pair.** The scan is one synchronous loop over the eligible pairs, `fromSource` for each:
 
@@ -828,8 +834,8 @@ not find the bucket a fraction of a token short (#382 review M1; `pacer.test.ts`
 
 The backend's `TIMING_CHAIN_HOLDS` adds the signal links, checked at import and in
 `timing.test.ts`:
-- for every interval of `SIGNAL_SCAN_INTERVALS`: `SIGNAL_SCAN_SLACK_MS < L` and
-  `SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < L` with `L` the candle (3 500 < 5 000 on `5s`):
+- for every interval of `SIGNAL_SCAN_INTERVALS`: `CANDLE_CLOSE_SLACK_MS < L` and
+  `SIGNAL_FETCH_BUDGET_MS + CANDLE_CLOSE_SLACK_MS < L` with `L` the candle (3 500 < 5 000 on `5s`):
   a scan starts inside its candle, and a GET by demand asked at the boundary ends inside it;
 - `SIGNAL_SCAN_BACKOFF_MIN_MS ≤ SIGNAL_SCAN_BACKOFF_MAX_MS`;
 - the env bounds around the default; `MIN_SIGNAL_SCAN_PER_MINUTE` is the literal 25 (the lowest

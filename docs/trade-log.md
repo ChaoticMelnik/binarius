@@ -84,9 +84,9 @@ the step's decision is asked again. A path that ends before a decision exists wr
 | E1 | the backend call failed | hold `retryMs` | none: no answer | O7 |
 | E2 | `fetch_failed` | hold | none: no record on a failure | O7 |
 | E3 | `no_signal` past the no-signal limit | stop `no_signal_timeout` | `no_signal` / NULL | O9 |
-| E4 | `no_signal` | hold to the next candle | `no_signal` / NULL | O2 |
+| E4 | `no_signal` | hold to the next candle (the candle wake, #697) | `no_signal` / NULL | O2 |
 | E5 | the paused direction past the limit | stop `no_signal_timeout` | `paused` / NULL (`action` the paused direction) | O10 |
-| E6 | the paused direction | hold to the next candle | `paused` / NULL | O3 |
+| E6 | the paused direction | hold to the next candle (the candle wake, #697) | `paused` / NULL | O3 |
 | E7′ | the sizer's `insufficient_balance` while a settlement on the account in the session's mode is newer than the balance, inside the no-signal limit from that settlement (#696) | hold `TRADING_SESSION_TICK_MS` | none: the step's decision is asked again on a current balance; the retry's row is the step's | BW1, BW5 |
 | E7 | the sizer's stop | stop (`STAKE_STOP_REASONS`) | `stake_stop` / the sizer's `StopReason` code | O4 |
 | E8 | the deadline, a throw or `stop()` after `evaluate` | no ending | none (risk 2) | — |

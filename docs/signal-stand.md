@@ -118,22 +118,24 @@ $STAND_DIR/
 ## The cadence model
 
 Each pair and interval is simulated as one session running through the whole cached range. The
-timing constants are copied from `apps/trading-worker/src/trading-session/config.ts`, which a
-package cannot import:
+slack after a boundary is `CANDLE_CLOSE_SLACK_MS` (500 ms, `@binarius/shared`), the worker's and the
+scanner's own (#697; a copy of 2 000 before). The other two timing
+constants are copied from `apps/trading-worker/src/trading-session/config.ts`, which a package
+cannot import:
 
 | Stand constant | Value | Worker's constant |
 |---|---|---|
-| `DECISION_SLACK_MS` | 2 000 | `TRADING_SESSION_CANDLE_SLACK_MS` |
 | `SETTLE_TICK_MS` | 5 000 | `TRADING_SESSION_TICK_MS` |
 | `ATTEMPT_WINDOW_MS` | 10 000 | `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 
 The simulation runs as follows (`simulate.ts`):
-1. The first decision falls at the first interval boundary after the range start, plus the slack.
+1. The first decision falls at the first interval boundary after the range start, plus
+   `CANDLE_CLOSE_SLACK_MS`.
 2. The decision at moment `D` sees `seriesAt(series, intervalMs, D)`. These are the cached rows
    from `chartWindow(D)`'s `start_time` to the boundary of `D`: the rows the broker would have
    answered, with the forming candle that the decider drops (`window.test.ts` W1, on the mock
    broker).
-3. No trade means the next decision is at the next boundary plus the slack.
+3. No trade means the next decision is at the next boundary plus `CANDLE_CLOSE_SLACK_MS`.
 4. A trade enters at `D + openDelay` and exits after its duration. The next decision is at the
    exit plus `SETTLE_TICK_MS`, so trades never overlap.
 5. The range ends when a trade's exit would pass its end.
@@ -163,10 +165,12 @@ Outcomes work as follows:
 - The rate is `wins / (wins + losses)`.
 - PnL at stake 1 is `+payout/100` per win, `−1` per loss and 0 per tie. It is illustrative only.
 
-`openDelay` counts from the decision moment `D`, the boundary plus `DECISION_SLACK_MS`. A trade
+`openDelay` counts from the decision moment `D`, the boundary plus `CANDLE_CLOSE_SLACK_MS`. A trade
 enters at `priceAt(D + openDelay)` and exits at `priceAt(D + openDelay + duration)`. The stand
 never enters at the last closed candle's close: at `openDelay` 0 the entry is the close of the
-`1s` row at `D`, about 2 s after that candle closed (`price.test.ts` P3, through `simulate`).
+`1s` row at `D`, about 0.5 s after that candle closed (`price.test.ts` P3, through `simulate`).
+The result tables below were taken with a slack of 2 s (before #697); the owner's next `run` or
+`calibrate` reports on the 0.5 s cadence.
 
 The grid is `OPEN_DELAY_GRID_MS = [0, 1000, 3000]`:
 - 0 is the open inside `D`'s own second, the expected case.
@@ -579,15 +583,16 @@ out of pooling.
     trades.
   - `open_timestamp − created_at` has a median of 397 ms and a p95 of 927 ms.
   - The journal's `nowMs` falls about 0.5 s after the candle boundary (the backend feed's moment).
-    That is the scanner's moment, not the session's `D`: sessions ask at the boundary + 2 s
-    (`DECISION_SLACK_MS`).
+    That is the scanner's moment, not the session's `D`: sessions then asked at the boundary + 2 s.
+    Since #697 they ask at the scanner's moment, the boundary + `CANDLE_CLOSE_SLACK_MS` (0.5 s).
 - **2026-10-15, journal shape.** Every line is a pino line with `signal`, and every entry is `v2`
   with `digits`.
 
 ## Accepted risks
 
-1. **Copied constants.** The three worker constants above are copies. This is falsifiable:
-   `grep -n 'TRADING_SESSION_CANDLE_SLACK_MS\|TRADING_SESSION_TICK_MS\|TRADING_SESSION_ATTEMPT_TIMEOUT_MS' apps/trading-worker/src/trading-session/config.ts`
+1. **Copied constants.** The two worker constants above are copies (the slack is shared since
+   #697). This is falsifiable:
+   `grep -n 'TRADING_SESSION_TICK_MS =\|TRADING_SESSION_ATTEMPT_TIMEOUT_MS =' apps/trading-worker/src/trading-session/config.ts`
    would show other values.
 2. **The `1s` price is a one-second bucket, not the broker's tick.** `calibrate` prints the error
    in ticks per `k`.
