@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CANDLE_CLOSE_SLACK_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
@@ -11,7 +12,6 @@ import { MAX_TIMER_MS } from '@binarius/broker-socket';
 import {
   sessionOrchestratorConfigHolds,
   TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
-  TRADING_SESSION_CANDLE_SLACK_MS,
   TRADING_SESSION_CHAIN_HOLDS,
   TRADING_SESSION_CONFIG,
   TRADING_SESSION_H1_CHECK_MS,
@@ -32,7 +32,9 @@ describe('the trading session constants', () => {
     expect(TRADING_SESSION_CONFIG.h1CheckMs).toBe(TRADING_SESSION_H1_CHECK_MS);
     expect(TRADING_SESSION_TICK_MS).toBeLessThanOrEqual(TRADING_SESSION_H1_CHECK_MS);
     expect(TRADING_SESSION_H1_CHECK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
-    expect(TRADING_SESSION_CANDLE_SLACK_MS).toBeLessThan(SIGNAL_SHORTEST_INTERVAL_MS);
+    // #697: the session asks at the scanner's moment
+    expect(TRADING_SESSION_CONFIG.candleSlackMs).toBe(CANDLE_CLOSE_SLACK_MS);
+    expect(TRADING_SESSION_CONFIG.candleSlackMs).toBeLessThan(SIGNAL_SHORTEST_INTERVAL_MS);
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(SESSION_MAX_DURATION_MS);
     // the deadline is the shared one the start route and the CLI check against
     expect(TRADING_SESSION_CONFIG.maxDurationMs).toBe(SESSION_MAX_DURATION_MS);

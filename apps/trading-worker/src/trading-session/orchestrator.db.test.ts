@@ -9,6 +9,7 @@ import { MockTradeOutcome, startMockBroker, type MockBroker } from '@binarius/mo
 import {
   AccountHaltReason,
   buildH1SessionSettings,
+  CANDLE_CLOSE_SLACK_MS,
   buildSessionSettings,
   decimalStringSchema,
   isClosedTrade,
@@ -77,7 +78,7 @@ import {
   type SignalOutcome,
   type SignalSource,
 } from './backend';
-import { TRADING_SESSION_CANDLE_SLACK_MS, type SessionOrchestratorConfig } from './config';
+import type { SessionOrchestratorConfig } from './config';
 import { createSessionOrchestrator, pausedDirection } from './orchestrator';
 import { eurUsd, fetchFailedAnswer, noSignalAnswer, RECORD_NOW_MS, signalAnswer } from './testing';
 
@@ -439,17 +440,17 @@ describe('the attempt and the sequence (#287)', () => {
     const orchestrator = orchestratorOf({
       signals,
       pairs: pairsOf(fresh([aapl])),
-      config: { candleSlackMs: TRADING_SESSION_CANDLE_SLACK_MS },
+      config: { candleSlackMs: CANDLE_CLOSE_SLACK_MS },
     });
     const step = 5_000;
     clock = Math.floor(Date.now() / step) * step + 1_000;
     await orchestrator.tick();
     expect(signals.calls).toEqual([{ assetId: 202, interval: '5s' }]);
-    // the next boundary is 4 s away, plus the 2 s slack
-    advance(5_900);
+    // the next boundary is 4 s away, plus the 0.5 s slack: not rounded up to a 5 s tick (#697)
+    advance(4_400);
     await orchestrator.tick();
     expect(signals.calls).toHaveLength(1);
-    advance(200);
+    advance(100);
     await orchestrator.tick();
     expect(signals.calls).toHaveLength(2);
     expect(await intentsOf(seed.session.id)).toEqual([]);
@@ -1216,6 +1217,36 @@ describe('the pause after two losses (#379)', () => {
     ],
   ])('P7 %s', (_, intents, expected) => {
     expect(pausedDirection(intents)).toBe(expected);
+  });
+
+  it('P10 (#697) the pause hold is woken by the candle timer at the boundary + the slack, with no tick called', async () => {
+    const aapl = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
+    const seed = await seedSession({
+      settings: sessionSettings({ assetId: 202, durationSec: 5, trades: 10 }),
+    });
+    const log = logger.child({ wake: 'P10' });
+    const orchestrator = orchestratorOf({
+      signals: signalsOf(signalTo(TradeAction.Down)),
+      pairs: pairsOf(fresh([aapl])),
+      config: { candleSlackMs: 300 },
+      log,
+    });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    clock = Math.ceil(clock / 5_000) * 5_000 + 4_000;
+    await orchestrator.tick();
+    expect(pauseLines(seed.session.id)).toHaveLength(1);
+    expect((await sessionRow(seed.session.id)).lastSignalAction).toBe(TradeAction.Down);
+    const ticks = () =>
+      lines.filter((line) => line.wake === 'P10' && line.msg === 'trading session tick');
+    const before = ticks().length;
+    // until the boundary + 300 ms; rounded up to a tick it would end 5 s later
+    advance(1_300);
+    await until('the second pause line', () => pauseLines(seed.session.id).length === 2);
+    await until('the woken tick line', () => ticks().length === before + 1);
+    expect(ticks().at(-1)).toMatchObject({ attempted: 1, woken: 1 });
+    expect(await intentsOf(seed.session.id)).toHaveLength(2);
+    await orchestrator.stop();
   });
 });
 
@@ -2849,6 +2880,148 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     expect(ticksOf('WK5')).toEqual([
       expect.objectContaining({ runnable: 0, attempted: 0, woken: 1 }),
     ]);
+    await orchestrator.stop();
+  });
+});
+
+describe('the candle wake (#697)', () => {
+  const aapl = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
+  const tagged = (wake: string) => logger.child({ wake });
+  const ticksOf = (wake: string) =>
+    lines.filter((line) => line.wake === wake && line.msg === 'trading session tick');
+  // a case that fails before its own stop() must not leave its timer running into the next one
+  const made: ReturnType<typeof orchestratorOf>[] = [];
+  const candleful = (options: Parameters<typeof orchestratorOf>[0]) => {
+    const orchestrator = orchestratorOf(options);
+    made.push(orchestrator);
+    return orchestrator;
+  };
+  afterEach(async () => {
+    await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
+  });
+  const boundaryOf = (step: number) => Math.floor(Date.now() / step) * step;
+  const callsOf = (signals: ReturnType<typeof signalsOf>, interval: string) =>
+    signals.calls.filter((call) => call.interval === interval);
+  const timeouts = () =>
+    process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+
+  it('CT1 the candle timer makes the next ask at the boundary + the slack, with no tick called', async () => {
+    const seed = await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
+    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
+    const orchestrator = candleful({
+      signals,
+      pairs: pairsOf(fresh([aapl])),
+      config: { candleSlackMs: 300 },
+      log: tagged('CT1'),
+    });
+    clock = boundaryOf(5_000) + 4_000;
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    const before = ticksOf('CT1').length;
+    // the boundary + 300 ms; rounded up to a tick the hold would end at the boundary + 4 000
+    advance(1_300);
+    await until('the second signal call', () => signals.calls.length === 2);
+    await until('the woken tick line', () => ticksOf('CT1').length === before + 1);
+    expect(ticksOf('CT1').at(-1)).toMatchObject({ attempted: 1, held: 1, woken: 1 });
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
+  it('CT2 after it fires, the timer is armed again for a later candle hold', async () => {
+    const five = await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
+    const fifteen = await seedSession({
+      settings: sessionSettings({ assetId: 202, durationSec: 15 }),
+    });
+    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
+    const orchestrator = candleful({
+      signals,
+      pairs: pairsOf(fresh([aapl])),
+      config: { candleSlackMs: 300 },
+      log: tagged('CT2'),
+    });
+    const b15 = boundaryOf(15_000);
+    // the 5 s session until b15 + 10 300, the 15 s one until b15 + 15 300
+    clock = b15 + 9_700;
+    await orchestrator.tick();
+    expect(callsOf(signals, '5s')).toHaveLength(1);
+    expect(callsOf(signals, '15s')).toHaveLength(1);
+    advance(5_200);
+    await until('the 5 s session asked again', () => callsOf(signals, '5s').length === 2);
+    // b15 + 14 900: the 15 s session is still held
+    expect(callsOf(signals, '15s')).toHaveLength(1);
+    advance(400);
+    await until('the 15 s session asked again', () => callsOf(signals, '15s').length === 2);
+    expect(await intentsOf(five.session.id)).toEqual([]);
+    expect(await intentsOf(fifteen.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
+  it('CT3 stop() clears the armed candle timer; no tick after it', async () => {
+    await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
+    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
+    const orchestrator = candleful({
+      signals,
+      pairs: pairsOf(fresh([aapl])),
+      config: { candleSlackMs: 300 },
+      log: tagged('CT3'),
+    });
+    clock = boundaryOf(5_000) + 4_000;
+    await orchestrator.tick();
+    const ticks = ticksOf('CT3').length;
+    const armed = timeouts();
+    // stop()'s synchronous part runs before it returns: nothing else changes the timers between
+    const stopping = orchestrator.stop();
+    expect(timeouts()).toBe(armed - 1);
+    await stopping;
+    advance(1_300);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(signals.calls).toHaveLength(1);
+    expect(ticksOf('CT3')).toHaveLength(ticks);
+  });
+
+  it('CT4 a hold that is not a candle hold arms no timer', async () => {
+    await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
+    const signals = signalsOf({ ok: true, response: fetchFailedAnswer(0) });
+    // a short tick: a wrongly armed timer would fire inside the wait below
+    const orchestrator = candleful({
+      signals,
+      pairs: pairsOf(fresh([aapl])),
+      config: { tickMs: 200 },
+      log: tagged('CT4'),
+    });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    advance(200);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(signals.calls).toHaveLength(1);
+    expect(ticksOf('CT4')).toHaveLength(1);
+    await orchestrator.stop();
+  });
+
+  it('CT5 a decision on an unclosed candle is traded like any other: no REST fallback, no new refusal', async () => {
+    const seed = await seedSession();
+    const answer = signalAnswer(TradeAction.Up);
+    if (answer.outcome !== 'decided' || answer.record === undefined) throw new Error('fixture');
+    const boundary = Math.floor(answer.record.entry.nowMs / 60_000) * 60_000;
+    // the window did not close the candle before the decision's boundary (docs/signal.md → unclosed)
+    const source = { ...answer.record.entry.source, closedUntil: boundary - 60_000 };
+    const unclosed = {
+      ...answer,
+      record: { ...answer.record, entry: { ...answer.record.entry, source } },
+    };
+    const signals = signalsOf({ ok: true, response: unclosed });
+    const orchestrator = candleful({ signals, log: tagged('CT5') });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    expect(await intentsOf(seed.session.id)).toEqual([
+      expect.objectContaining({ status: TradeIntentStatus.Queued, action: TradeAction.Up }),
+    ]);
+    expect(await decisionsOf(seed.session.id)).toEqual([
+      expect.objectContaining({ outcome: 'intent', kind: 'signal', source }),
+    ]);
+    expect(msgsOf(seed.session.id)).not.toContain('trading session waits for the next candle');
+    expect(msgsOf(seed.session.id)).not.toContain('trading session signal fetch failed');
+    expect(ticksOf('CT5').at(-1)).toMatchObject({ created: 1, held: 0 });
     await orchestrator.stop();
   });
 });
