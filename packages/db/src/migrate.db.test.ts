@@ -265,3 +265,13 @@ describe('a deadlock while applying', () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('an apply that returns without applying', () => {
+  it('M13 the runner re-reads the status and exits 1 while anything is pending', async () => {
+    const tmp = await emptyDatabase();
+    expect(await run(tmp.url, { apply: async () => {} })).toEqual({
+      code: 1,
+      lines: [`migration incomplete: still ${journal.length} pending after apply`],
+    });
+  });
+});
