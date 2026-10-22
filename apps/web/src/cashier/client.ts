@@ -17,14 +17,18 @@
 //
 // `credited` and `error` show a notice above the widget, which stays. Neither event's payload is
 // read: the credited POST carries initData alone, and the widget's error message is never shown.
+//
+// The frame's height (#671, docs/deposit.md -> The frame's height): while the widget is on screen
+// the frame fills the visible area of the Mini App under whatever stands above it, so the sheet the
+// widget draws at its frame's bottom sits at the screen's bottom. It is refitted when the widget is
+// shown, when a notice changes and on every stable viewportChanged; the widget's own resize is
+// ignored.
 export const CASHIER_CLIENT_JS = `(function () {
   'use strict';
   var SESSION_PATH = '/cashier/session';
   var CREDITED_PATH = '/cashier/credited';
   var SESSION_REUSE_MS = 45000;
-  var HEIGHT_MIN = 520;
-  var HEIGHT_MAX = 900;
-  var HEIGHT_INITIAL = 720;
+  var HEIGHT_MIN = 480;
   var RETRY_STATES = { busy: true, unavailable: true };
 
   var webApp = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -36,6 +40,7 @@ export const CASHIER_CLIENT_JS = `(function () {
   }
 
   var frame = element('widget');
+  var body = window.document.body;
   var working = element('working');
   var retry = element('retry');
   var close = element('close');
@@ -53,11 +58,35 @@ export const CASHIER_CLIENT_JS = `(function () {
     if (webApp && typeof webApp.close === 'function') webApp.close();
   }
 
+  // the last stable height the Telegram client reported; an SDK without one leaves the window's
+  function visibleHeight() {
+    var height = webApp ? webApp.viewportStableHeight : undefined;
+    if (typeof height !== 'number' || !isFinite(height) || height <= 0) height = window.innerHeight;
+    return height;
+  }
+
+  // Never below HEIGHT_MIN: under it the page scrolls rather than the form collapsing.
+  function fit() {
+    if (frame === null || frame.hidden) return;
+    var top = frame.getBoundingClientRect().top + (window.pageYOffset || 0);
+    frame.style.height = Math.max(HEIGHT_MIN, Math.floor(visibleHeight() - top)) + 'px';
+  }
+
+  // data-widget on body hides the title and main's vertical padding while the widget is on screen
+  function setFrameShown(shown) {
+    if (frame === null) return;
+    frame.hidden = !shown;
+    if (shown) body.setAttribute('data-widget', '');
+    else body.removeAttribute('data-widget');
+    if (shown) fit();
+  }
+
   function showNotice(notice) {
     var notices = window.document.querySelectorAll('[data-notice]');
     for (var index = 0; index < notices.length; index += 1) {
       notices[index].hidden = notices[index].getAttribute('data-notice') !== notice;
     }
+    fit();
   }
 
   function hideStates() {
@@ -77,7 +106,7 @@ export const CASHIER_CLIENT_JS = `(function () {
     for (var other = 0; other < blocks.length; other += 1) {
       blocks[other].hidden = blocks[other].getAttribute('data-state') !== shown;
     }
-    if (frame) frame.hidden = true;
+    setFrameShown(false);
     if (working) working.hidden = true;
     var retryable = RETRY_STATES[shown] === true;
     if (retry) retry.hidden = !retryable;
@@ -95,7 +124,7 @@ export const CASHIER_CLIENT_JS = `(function () {
   function showWidget() {
     hideStates();
     if (working) working.hidden = true;
-    frame.hidden = false;
+    setFrameShown(true);
   }
 
   // Resolves to the route's answer: { outcome: 'ready', ... } with every field the page uses, or
@@ -192,9 +221,10 @@ export const CASHIER_CLIENT_JS = `(function () {
       );
   }
 
-  function onResize(height) {
-    if (typeof height !== 'number' || !isFinite(height)) return;
-    frame.style.height = Math.min(HEIGHT_MAX, Math.max(HEIGHT_MIN, height)) + 'px';
+  if (webApp && typeof webApp.onEvent === 'function') {
+    webApp.onEvent('viewportChanged', function (event) {
+      if (event && event.isStateStable) fit();
+    });
   }
 
   // Attached before any src is set, so the widget's first ready cannot arrive unheard.
@@ -214,7 +244,7 @@ export const CASHIER_CLIENT_JS = `(function () {
         onReady();
         return;
       case 'binodex-embed:resize':
-        onResize(data.height);
+        // the frame is fitted to the visible area (#671); the widget's own height scrolls inside it
         return;
       case 'binodex-embed:close':
         closeApp();
@@ -261,7 +291,6 @@ export const CASHIER_CLIENT_JS = `(function () {
         mintedAt: Date.now(),
         reuseMs: Math.min(SESSION_REUSE_MS, answer.expiresInSec * 1000),
       };
-      frame.style.height = HEIGHT_INITIAL + 'px';
       showWidget();
       frame.src = answer.widgetUrl;
     });

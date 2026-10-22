@@ -58,6 +58,10 @@ interface Options {
   answers?: Scripted[];
   // answers of POST /cashier/credited in order; 204 when the list is spent
   creditedAnswers?: Scripted[];
+  // WebApp.viewportStableHeight, 570 by default; 'absent': the SDK has no such property
+  viewportStableHeight?: unknown;
+  // false: the SDK has no onEvent
+  onEvent?: false;
 }
 
 const respond = (next: Answer | 'reject' | 'not-json') => {
@@ -90,10 +94,12 @@ function run(options: Options) {
     }),
   };
   const assigned: string[] = [];
+  let frameTop = 0;
   const frame = {
     ...element({ hidden: true }),
     contentWindow: widgetWindow,
     style: { height: '' },
+    getBoundingClientRect: () => ({ top: frameTop }),
     _src: '',
     get src() {
       return this._src;
@@ -110,7 +116,19 @@ function run(options: Options) {
     close: element({ hidden: true }),
     widget: frame,
   };
-  const webApp = { initData: options.initData, ready: vi.fn(), close: vi.fn() };
+  const viewportHandlers: ((event: unknown) => void)[] = [];
+  const webApp: Record<string, unknown> = {
+    initData: options.initData,
+    ready: vi.fn(),
+    close: vi.fn(),
+    onEvent: vi.fn((type: string, handler: (event: unknown) => void) => {
+      if (type === 'viewportChanged') viewportHandlers.push(handler);
+    }),
+    viewportStableHeight: 'viewportStableHeight' in options ? options.viewportStableHeight : 570,
+  };
+  if (options.viewportStableHeight === 'absent') delete webApp.viewportStableHeight;
+  if (options.onEvent === false) delete webApp.onEvent;
+  const bodyAttributes = new Map<string, string>();
   const fetch = vi.fn((url: string, init: { method: string; headers: unknown; body: string }) => {
     order.push('fetch');
     requests.push({ url, body: init.body });
@@ -133,7 +151,17 @@ function run(options: Options) {
   const history = { replaceState: vi.fn(), pushState: vi.fn() };
   const sandbox: Record<string, unknown> = {
     document: {
-      body: { getAttribute: (name: string) => (name === 'data-page' ? 'cashier' : null) },
+      body: {
+        getAttribute: (name: string) =>
+          name === 'data-page' ? 'cashier' : (bodyAttributes.get(name) ?? null),
+        setAttribute: (name: string, value: string) => {
+          bodyAttributes.set(name, value);
+        },
+        removeAttribute: (name: string) => {
+          bodyAttributes.delete(name);
+        },
+        hasAttribute: (name: string) => bodyAttributes.has(name),
+      },
       getElementById: (id: string) => elements[id] ?? null,
       querySelectorAll: (selector: string) =>
         selector === '[data-state]' ? blocks : selector === '[data-notice]' ? notices : [],
@@ -149,6 +177,8 @@ function run(options: Options) {
     history,
     fetch,
     Date: { now: () => now },
+    innerHeight: 800,
+    pageYOffset: 0,
     ...(options.initData === undefined ? {} : { Telegram: { WebApp: webApp } }),
   };
   sandbox.window = sandbox;
@@ -173,7 +203,18 @@ function run(options: Options) {
   const advance = (ms: number) => {
     now += ms;
   };
+  const setFrameTop = (top: number) => {
+    frameTop = top;
+  };
+  const viewportChanged = (isStateStable: boolean) => {
+    for (const handler of viewportHandlers) handler.call(webApp, { isStateStable });
+  };
+  const widgetShown = () => bodyAttributes.has('data-widget');
   return {
+    sandbox,
+    setFrameTop,
+    viewportChanged,
+    widgetShown,
     elements,
     frame,
     shown,
@@ -182,7 +223,11 @@ function run(options: Options) {
     deferred,
     noticed,
     written,
-    webApp,
+    webApp: webApp as typeof webApp & {
+      ready: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      onEvent: ReturnType<typeof vi.fn>;
+    },
     posted,
     assigned,
     deliver,
@@ -206,7 +251,7 @@ const loaded = async (options: Options = { initData: INIT_DATA }) => {
 
 describe('the load', () => {
   it('mints a session, shows the widget at the answered URL and posts nothing yet', async () => {
-    const { fetch, frame, posted, shown, elements, webApp } = await loaded();
+    const { fetch, frame, posted, shown, elements, webApp, widgetShown } = await loaded();
     expect(webApp.ready).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledOnce();
     const [url, init] = fetch.mock.calls[0] ?? [];
@@ -216,7 +261,8 @@ describe('the load', () => {
     expect(init?.body).toBe(JSON.stringify({ initData: INIT_DATA }));
     expect(frame.src).toBe(WIDGET_URL);
     expect(frame.hidden).toBe(false);
-    expect(frame.style.height).toBe('720px');
+    expect(frame.style.height).toBe('570px');
+    expect(widgetShown()).toBe(true);
     expect(elements.working?.hidden).toBe(true);
     expect(shown()).toEqual([]);
     expect(posted).toEqual([]);
@@ -255,7 +301,7 @@ describe('the message filter', () => {
     await settle();
     expect(posted).toEqual([]);
     expect(fetch).toHaveBeenCalledOnce();
-    expect(frame.style.height).toBe('720px');
+    expect(frame.style.height).toBe('570px');
   });
 
   // C2
@@ -268,7 +314,7 @@ describe('the message filter', () => {
     expect(posted).toEqual([]);
     expect(fetch).toHaveBeenCalledOnce();
     expect(webApp.close).not.toHaveBeenCalled();
-    expect(frame.style.height).toBe('720px');
+    expect(frame.style.height).toBe('570px');
   });
 
   it('ignores every message before the widget is loaded', async () => {
@@ -374,19 +420,154 @@ describe('ready -> init', () => {
   });
 });
 
-describe('resize (C7)', () => {
+describe("the frame's height (#671)", () => {
+  it('H1 fills the visible height on load and listens for viewportChanged', async () => {
+    const { frame, webApp, widgetShown } = await loaded();
+    expect(frame.style.height).toBe('570px');
+    expect(webApp.onEvent).toHaveBeenCalledWith('viewportChanged', expect.any(Function));
+    expect(widgetShown()).toBe(true);
+  });
+
+  it('H2 shrinks by a notice above the frame, rounding down', async () => {
+    const { deliver, frame, setFrameTop, widgetShown } = await loaded();
+    setFrameTop(56);
+    deliver({ type: 'binodex-embed:credited' });
+    expect(frame.style.height).toBe('514px');
+    setFrameTop(56.5);
+    deliver({ type: 'binodex-embed:error' });
+    expect(frame.style.height).toBe('513px');
+    expect(frame.hidden).toBe(false);
+    expect(widgetShown()).toBe(true);
+  });
+
   it.each([
-    ['a string', '800', '720px'],
-    ['NaN', Number.NaN, '720px'],
-    ['Infinity', Number.POSITIVE_INFINITY, '720px'],
-    ['no height', undefined, '720px'],
-    ['100', 100, '520px'],
-    ['5000', 5000, '900px'],
-    ['700', 700, '700px'],
-  ])('%s -> %s', async (_label, height, expected) => {
+    [400, '480px'],
+    [479, '480px'],
+    [480, '480px'],
+    [481, '481px'],
+  ])('H3 a visible height of %s gives %s', async (viewportStableHeight, expected) => {
+    const { frame } = await loaded({ initData: INIT_DATA, viewportStableHeight });
+    expect(frame.style.height).toBe(expected);
+  });
+
+  it('H4 follows stable viewportChanged events only', async () => {
+    const { frame, webApp, viewportChanged } = await loaded();
+    webApp.viewportStableHeight = 844;
+    viewportChanged(true);
+    expect(frame.style.height).toBe('844px');
+    webApp.viewportStableHeight = 300;
+    viewportChanged(false);
+    expect(frame.style.height).toBe('844px');
+    webApp.viewportStableHeight = 600;
+    viewportChanged(true);
+    expect(frame.style.height).toBe('600px');
+  });
+
+  it.each([
+    ['absent', 'absent'],
+    ['undefined', undefined],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['0', 0],
+    ['-1', -1],
+    ['a string', '570'],
+  ])('H5 a viewportStableHeight that is %s falls back to the window', async (_label, value) => {
+    const { frame } = await loaded({ initData: INIT_DATA, viewportStableHeight: value });
+    expect(frame.style.height).toBe('800px');
+  });
+
+  it.each([
+    ['a string', '800'],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['no height', undefined],
+    ['100', 100],
+    ['5000', 5000],
+    ['700', 700],
+  ])('H6 ignores the widget resize with %s', async (_label, height) => {
     const { deliver, frame } = await loaded();
     deliver({ type: 'binodex-embed:resize', height });
-    expect(frame.style.height).toBe(expected);
+    expect(frame.style.height).toBe('570px');
+  });
+
+  const failedFreshMint = async () => {
+    const page = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), { body: { outcome: 'relogin' } }],
+    });
+    page.deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    expect(page.shown()).toEqual(['relogin']);
+    return page;
+  };
+
+  it('H7 a state after a failed fresh mint brings the title back', async () => {
+    const { frame, widgetShown } = await failedFreshMint();
+    expect(frame.hidden).toBe(true);
+    expect(widgetShown()).toBe(false);
+  });
+
+  it('H7b a stable viewportChanged leaves a hidden frame alone', async () => {
+    const { frame, webApp, viewportChanged } = await failedFreshMint();
+    webApp.viewportStableHeight = 900;
+    viewportChanged(true);
+    expect(frame.style.height).toBe('570px');
+  });
+
+  it('H8 «Повторить» keeps the title while the cashier opens, then fits the widget', async () => {
+    const { elements, webApp, frame, widgetShown } = await loaded({
+      initData: INIT_DATA,
+      answers: [UNAVAILABLE, UNAVAILABLE, ready('S1')],
+    });
+    expect(widgetShown()).toBe(false);
+    elements.retry?.listeners.click?.();
+    expect(elements.working?.hidden).toBe(false);
+    expect(widgetShown()).toBe(false);
+    webApp.viewportStableHeight = 650;
+    await settle();
+    expect(widgetShown()).toBe(true);
+    expect(frame.style.height).toBe('650px');
+  });
+
+  it('H9 measures the frame from the top of a scrolled page', async () => {
+    const { frame, sandbox, setFrameTop, viewportChanged } = await loaded();
+    sandbox.pageYOffset = 40;
+    setFrameTop(-40);
+    viewportChanged(true);
+    expect(frame.style.height).toBe('570px');
+    setFrameTop(16);
+    viewportChanged(true);
+    expect(frame.style.height).toBe('514px');
+  });
+
+  it('H10 loads the widget with an SDK without onEvent', async () => {
+    const { frame, widgetShown } = await loaded({ initData: INIT_DATA, onEvent: false });
+    expect(frame.hidden).toBe(false);
+    expect(frame.style.height).toBe('570px');
+    expect(widgetShown()).toBe(true);
+  });
+
+  it('H11 fits the widget again when a fresh mint brings it back', async () => {
+    const { deliver, frame, webApp, shown, widgetShown } = await loaded({
+      initData: INIT_DATA,
+      answers: [ready('S1'), BUSY, ready('S2')],
+    });
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    deliver({ type: 'binodex-embed:ready' });
+    await settle();
+    expect(shown()).toEqual(['busy']);
+    webApp.viewportStableHeight = 700;
+    deliver({ type: 'binodex-embed:reauth-required' });
+    await settle();
+    expect(widgetShown()).toBe(true);
+    expect(frame.style.height).toBe('700px');
+  });
+
+  it('H12 keeps the title on open_from_telegram', async () => {
+    const { widgetShown, frame } = await loaded({ initData: '' });
+    expect(frame.hidden).toBe(true);
+    expect(widgetShown()).toBe(false);
   });
 });
 
