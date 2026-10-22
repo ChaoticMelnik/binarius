@@ -10,6 +10,9 @@ docker compose run --rm migrate
 scripts/deploy-worker.sh
 ```
 
+One image serves every app service and `migrate` (`compose.yaml` tags them all `<project>-app`), so
+building the worker rebuilds the migrations too.
+
 ## The sequence
 
 `scripts/deploy-worker.sh` (bash, `set -euo pipefail`) runs from the checkout's root, whatever the
@@ -219,7 +222,7 @@ scripts/deploy-worker.sh; echo "exit=$?"
 # expect: "new container: <id>" (the one that appeared), "new container ready", the old one's
 # "shutting down" with exit code 0, "done: trading-worker runs as <id>", exit=0
 docker inspect -f '{{.Image}}' <id>
-# expect: the image just built (docker image inspect -f '{{.Id}}' <project>-trading-worker)
+# expect: the image just built (docker image inspect -f '{{.Id}}' <project>-app)
 docker compose up -d trading-worker
 docker compose ps trading-worker
 # expect: the same container as "runs as", not recreated

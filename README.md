@@ -118,11 +118,14 @@ Under `--watch`, edits to `src/` restart the affected app; edits to a `package.j
 `pnpm-lock.yaml`, or a tsconfig rebuild the image. Postgres (`5432`), Redis (`6379`), and the
 backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
 on `127.0.0.1` only.
+The four apps and `migrate` are built from this one Dockerfile into one image, tagged
+`<project>-app` (`binarius-app` in a checkout named `binarius`).
 
 Replacing the trading worker of a running stack without a gap in job processing:
 `scripts/deploy-worker.sh` after `docker compose build trading-worker` and
 `docker compose run --rm migrate` (the new container starts first, then the old one drains;
-[docs/worker-deploy.md](docs/worker-deploy.md)).
+[docs/worker-deploy.md](docs/worker-deploy.md)). One image serves every app service and `migrate`,
+so building the worker rebuilds the migrations too.
 
 ## Database
 
