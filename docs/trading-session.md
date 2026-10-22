@@ -935,7 +935,6 @@ dc() {
 }
 dc down -v
 dc up --build --wait backend
-dc exec -T backend pnpm db:migrate
 # the start needs the trading switch open (docs/kill-switch.md); a fresh database already has
 # it open, and the command then prints «Торговля уже открыта»
 dc exec -T backend pnpm --filter @binarius/backend kill-switch off
@@ -996,8 +995,6 @@ dc() {
 }
 dc down -v
 dc up --build --wait backend
-dc exec -T backend pnpm db:migrate
-# after the migration: a worker started before it logs `trading session tick failed` (42P01)
 dc up --build --wait trading-worker
 INTERNAL_API_TOKEN="$(dc exec -T backend printenv INTERNAL_API_TOKEN)"
 api() {

@@ -4,8 +4,9 @@ How a new trading-worker image replaces the running container without a gap in w
 takes intent jobs, and why two workers running together for a short window are safe.
 
 ```bash
-# from the checkout, after the image is built and the migrations ran
+# from the checkout
 docker compose build trading-worker
+docker compose run --rm migrate
 scripts/deploy-worker.sh
 ```
 
@@ -142,7 +143,9 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
 
 - **Migrations before the overlap.** The old worker runs on the new schema for up to the overlap.
   That already happens today between `migrate` and `up`; migrations stay forward-only and additive
-  (`.claude/CLAUDE.md` → База данных).
+  (`.claude/CLAUDE.md` → База данных). The migration is its own step before the script: a new
+  container started on a database behind its journal exits 1 at its schema check, before the ready
+  line, so the script rolls back (exit 1) and the old worker keeps running.
 - **The backend is deployed separately.** The worker may run against the previous backend (or the
   reverse) across one deploy, so the internal routes (`/trading/accounts/:id/access-token`, the
   signal and pairs routes) stay compatible across one deploy; a breaking change to one of them is a
@@ -164,8 +167,8 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
 2. **Memory on the pilot** during the overlap: two worker processes on one host. Falsifiable:
    `docker inspect -f '{{.State.OOMKilled}}' <id>` true for either container (owner step 2).
 3. **Readiness is a log line**, not a health endpoint: it proves the consumers were built, not that
-   Postgres or the broker answer. A worker that starts and then cannot reach the database still
-   lets the old one stop. Until #65/#67 the deploy's own checks after `up --wait` are the backstop.
+   Postgres or the broker answer. A database unreachable at start fails the schema check before
+   the ready line (exit 1, rollback); one lost after the start still lets the old worker stop. Until #65/#67 the deploy's own checks after `up --wait` are the backstop.
 4. **The script is not run in CI**: it needs a Docker daemon. Its evidence is the local run below
    and the owner's pilot steps.
 5. **The overlap is not bounded by code** (above).
@@ -205,7 +208,7 @@ unset. The outputs of the run on 2026-10-09 are quoted in the PR of #95.
 export COMPOSE_PROJECT_NAME=binarius-deploy-probe POSTGRES_PORT=5436 REDIS_PORT=6380 \
   BROKER_API_BASE_URL=https://127.0.0.1:9
 unset BROKER_WS_URL
-docker compose run --rm trading-worker pnpm db:migrate
+docker compose run --rm migrate
 docker compose up -d trading-worker
 until docker compose logs trading-worker | grep '"msg":"trading-worker started"'; do sleep 1; done
 # expect: one line with "sessions":false
@@ -281,6 +284,7 @@ The implementer does not touch the pilot; these are the owner's.
    `docker stop -t 5 <w-3>; docker rm <w-3>` and a plain `up -d`.
 2. **The first real run:** `docker stats --no-stream` while both containers run, and
    `docker inspect -f '{{.State.OOMKilled}}' <id>` for both afterwards.
-3. **`binarius-deploy`** (server-only, not in the repo): after the build and the migrations, call
+3. **`binarius-deploy`** (server-only, not in the repo): after `docker compose build` and
+   `docker compose run --rm migrate` (or its current `compose run -T backend pnpm db:migrate`), call
    `scripts/deploy-worker.sh`, then the existing `docker compose up -d --wait`; the worker is
    already current and is not recreated.

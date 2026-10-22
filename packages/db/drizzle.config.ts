@@ -4,6 +4,9 @@ import { defineConfig } from 'drizzle-kit';
 // pure file operations, and demanding a URL for them would make an offline drift check
 // impossible. `introspect` is drizzle-kit's alias for `pull` and does connect, so it belongs
 // here — without it the command would fall through to an empty URL and an opaque driver error.
+// `pnpm db:migrate` is not drizzle-kit: it runs src/cli/migrate.ts (same migrator, same table,
+// under an advisory lock). A hand-run `drizzle-kit migrate` stays compatible and is why
+// 'migrate' is still listed.
 const CONNECTING_COMMANDS = ['migrate', 'push', 'pull', 'introspect', 'studio'];
 const needsConnection = process.argv.some((arg) => CONNECTING_COMMANDS.includes(arg));
 

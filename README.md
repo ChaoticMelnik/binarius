@@ -120,14 +120,17 @@ backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages
 on `127.0.0.1` only.
 
 Replacing the trading worker of a running stack without a gap in job processing:
-`scripts/deploy-worker.sh` after `docker compose build trading-worker` (the new container starts
-first, then the old one drains; [docs/worker-deploy.md](docs/worker-deploy.md)).
+`scripts/deploy-worker.sh` after `docker compose build trading-worker` and
+`docker compose run --rm migrate` (the new container starts first, then the old one drains;
+[docs/worker-deploy.md](docs/worker-deploy.md)).
 
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
-`DATABASE_URL` names the dev stack's Postgres for the host-side drizzle-kit commands
-(`pnpm db:migrate`, `db:generate`, `db:check`). Even this partial start needs all eight REQUIRED
+`DATABASE_URL` names the dev stack's Postgres for the host-side commands: `pnpm db:migrate` is the
+package's own runner (`packages/db/src/cli/migrate.ts`: drizzle's migrator and its
+`drizzle.__drizzle_migrations` table, under an advisory lock so two runs never collide, one retry
+on a deadlock), `db:generate` and `db:check` are drizzle-kit. Even this partial start needs all eight REQUIRED
 values in `.env`, because Compose interpolates the whole file before it picks which services to
 run: that includes `TELEGRAM_BOT_TOKEN`, which only the `bot` and `backend` services read, so
 `docker compose up -d postgres redis` refuses to run without it:
@@ -135,7 +138,7 @@ run: that includes `TELEGRAM_BOT_TOKEN`, which only the `bot` and `backend` serv
 ```bash
 docker compose up -d postgres redis
 export DATABASE_URL=postgres://binarius:binarius@localhost:5432/binarius   # the .env.example values
-pnpm db:migrate          # apply pending migrations (idempotent)
+pnpm db:migrate          # apply pending migrations (idempotent): applied N … / nothing to apply …
 ```
 
 The integration tests never read `DATABASE_URL`. They run against the Postgres named by
@@ -240,20 +243,30 @@ skipped and the summary says so. It adds CPU pressure only, and a host that is s
 the swap. Logs and `summary.txt` go to `$STABILITY_OUT`, a fresh temporary directory by default.
 
 `packages/db/src/schema.db.test.ts` uses the migrated test database itself; every other
-integration test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly,
+integration test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly —
+except the runner's tests in `packages/db/src/migrate.db.test.ts`, which start from an empty one —
 dropped afterwards, orphans older than an hour reaped on the next run) and a random BullMQ key
 prefix — the `CREATEDB` half of the role's rights above.
 
 If another Postgres already owns host port 5432, set `POSTGRES_PORT=5433` in `.env` and use that
 port in `DATABASE_URL`.
 
-Inside the stack the same migration runs as `docker compose exec backend pnpm db:migrate`, which
-is what a deployment that never had a host-side checkout uses. Nothing applies migrations when a
-container starts yet (#75), so one of the two forms has to be run by hand before anything reads a
-table.
+Inside the stack the same runner is the one-shot `migrate` service: every `docker compose up` that
+starts `backend` or `trading-worker` runs it first, and both wait for its exit 0
+(`service_completed_successfully`) — a failed migration stops them in `created`, and `up --wait`
+exits 1. On an already-migrated volume it prints `nothing to apply` and applies nothing. Both
+processes also check the schema themselves at start: a database behind their journal makes them
+exit 1 (`database schema is behind this image, run the migrations first`; the `dev` command's
+`tsx watch` keeps the container up after that, #65), one ahead of it is a warning. To apply by hand: `docker compose run --rm migrate` (`--build` when the migration was
+generated after the image was built). Under `--watch` a generated migration is synced into the
+containers but never applied on its own (it is read first, it can DROP), so the next restart of
+either process refuses until it is. A deployment runs the migration as its own step before `up`:
+an `up` whose `migrate` fails has already removed the old containers
+([docs/worker-deploy.md](docs/worker-deploy.md)).
 
 Changing the schema: edit `packages/db/src/schema/*`, run `pnpm db:generate`, read the generated SQL
-(no DROP without a decision), `pnpm db:migrate`, and commit the migration with its `meta/` files
+(no DROP without a decision), `pnpm db:migrate` from the host or
+`docker compose run --rm --build migrate`, and commit the migration with its `meta/` files
 (`.claude/CLAUDE.md` → База данных). Committed migrations are never edited — CI rejects that; add a
 new one. `pnpm db:check` validates the migration journal. Triggers and other objects drizzle-kit does
 not model go into a custom migration (`drizzle-kit generate --custom`).
@@ -262,9 +275,9 @@ not model go into a custom migration (`drizzle-kit generate --custom`).
 
 Admin pages are behind a staff login: a password plus a confirmation in Telegram, with sessions
 that any staff member can revoke. Accounts are created from a CLI, never from the environment,
-and the generated password is printed once. The CLI needs a migrated database: `pnpm db:migrate`
-from the host ([Database](#database) above) or `docker compose exec backend pnpm db:migrate`
-inside the stack.
+and the generated password is printed once. The CLI needs a migrated database, which inside the
+stack it always has: it runs in `backend`, which starts only after the `migrate` service
+([Database](#database) above). From the host, run `pnpm db:migrate` first.
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend staff create \

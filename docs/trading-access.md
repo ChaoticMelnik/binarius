@@ -111,8 +111,8 @@ In a compose project of its own, on its own ports and volume, so it touches neit
 on start, and both bot tokens are replaced with dummies: the backend polls `ADMIN_BOT_TOKEN`
 itself (the staff bot), and a real token here would compete with the deployment that owns it.
 With a dummy, that poller logs `the staff login bot stopped polling` and the backend stays up.
-Nothing applies migrations when a container starts yet (#75). Run from the repository root, with
-`.env` filled in:
+`up` runs the `migrate` service first, so the backend starts on a migrated database. Run from the
+repository root, with `.env` filled in:
 
 ```bash
 dc() {
@@ -123,7 +123,6 @@ dc() {
 }
 dc down -v   # a leftover volume from an earlier run would keep the users row
 dc up --build --wait backend
-dc exec -T backend pnpm db:migrate
 INTERNAL_API_TOKEN="$(dc exec -T backend printenv INTERNAL_API_TOKEN)"
 access() {
   printf 'Authorization: Bearer %s\n' "$INTERNAL_API_TOKEN" |

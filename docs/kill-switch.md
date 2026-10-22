@@ -124,8 +124,8 @@ The migrations open trading, so the pilot behaves as follows from the moment the
 
 Steps:
 
-1. Apply the migrations: `docker compose exec backend pnpm db:migrate` (automatically at start
-   once #75 lands).
+1. The stack applies the migrations on `up` (the `migrate` service); a deploy runs them before
+   `up` ([worker-deploy.md](worker-deploy.md)).
 2. `docker compose exec backend pnpm --filter @binarius/backend kill-switch status` prints
    «Торговля открыта (с <changed_at>, источник migration)».
 3. If real must not trade yet, the only switch is the global one: `… kill-switch on --reason
