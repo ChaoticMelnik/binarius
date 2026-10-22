@@ -4244,7 +4244,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R1 m2 (`pg_advisory_lock` without timeout), R1 m3 (CLI entry check through a symlink), R2 m1 (`docs/worker-deploy.md:150-152, :173`: worker under `tsx watch` does not exit, rollback after 120 s), R2 m2 (old image tags stay on the pilot), R2 m3 (Rule 16 cites the old CI step name, no shared-image invariant) | Minor | other / single-source | left at the merge | → #739 |
 
 ### Process improvement proposals
-1. A mutation of a CI-only gate goes on a temporary `mut/<N>-<desc>` branch with a draft PR «не мержить» on the feature branch, red-run links in one PR comment, closed without merge; the merge relay deletes the branch after the merge — **внедрено в #744: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence), `.claude/skills/tech-lead/SKILL.md` → Merge relay**
+1. A mutation of a CI-only gate goes on a temporary `mut/<N>-<desc>` branch with a draft PR «не мержить» on the feature branch, red-run links in one PR comment, closed without merge; the merge relay deletes the branch after the merge — **внедрено в #744: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence), `.claude/skills/tech-lead/SKILL.md` → Merge relay, `.claude/CLAUDE.md` → Постоянные ответы владельца → «Доказательства мутаций»**
 2. Remaining findings — **вынесено в #739**
 
 ---
