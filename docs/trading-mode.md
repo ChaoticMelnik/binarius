@@ -1,8 +1,10 @@
 # Trading mode
 
 A user trades either demo or real, one mode at a time (#121). The mode is a persisted user
-state, `users.trading_mode`, switched only by `POST /trading/mode`, which the bot calls from its
-mode screen (#474) and from `/stop`, which returns the user to demo (#473). In real mode the bot's
+state, `users.trading_mode`, switched by the user through `POST /trading/mode`, which the bot calls
+from its mode screen (#474, opened from `/settings` since #686) and from `/stop`, which returns the
+user to demo (#473), and by the backend once, to real, after each deposit of a user in demo (#686,
+[below](#the-automatic-switch-after-a-deposit-686)). In real mode the bot's
 single trade goes to the broker with real money at the user's real stake (#326: the saved real
 stake, the broker's minimum without one), and a session runs in the user's mode (#327): a real
 session trades real money at the real stake.
@@ -11,7 +13,12 @@ session trades real money at the real stake.
 
 - `packages/db/src/schema/users.ts` — `trading_mode text not null default 'demo'`,
   `users_trading_mode_check` from `TradeMode` (Rule 1). Every existing user is `demo`.
-- `packages/db/src/user-ops.ts` — `setTradingMode`, the one writer.
+- `packages/db/src/user-ops.ts` — `writeTradingMode`, the one writer, called by `setTradingMode`
+  (the user) and `switchTradingModeOnDeposit` (a deposit, #686).
+- `packages/db/src/deposit-mode-switch-ops.ts` — the deposit's outcome columns: the pass's list,
+  `markDepositModeSwitch`, `markUserDepositModeSwitches` (#686).
+- `apps/backend/src/trading/deposit-mode-switch.ts` — the pass over the deposits (#686); the message
+  is the mailing kind `real_mode_by_deposit` ([mailing.md](mailing.md#the-real-mode-notification-686)).
 - `packages/db/src/trade-intent-ops.ts` — the gate in `createInTransaction`.
 - `packages/db/src/trading-session-ops.ts` — `checkTradingSessionStart` refuses a user in real
   mode.
@@ -19,20 +26,25 @@ session trades real money at the real stake.
 - `packages/shared/src/trading-mode.ts` — the route's contract; `decimalLessThan` in
   `stake.ts`.
 - `apps/backend/src/trading/trading-mode.ts` — `POST /trading/mode`.
-- `apps/bot/src/trading-mode.ts` — the mode screen (#474); `keyboards.ts` →
-  `statusCardKeyboard(mode)` and `MODE_CALLBACK_DATA`; `analysis.ts`, `demo.ts`, `demo-trade.ts`, `stake-picker.ts`, `trading-session.ts` — the paths that follow the
+- `apps/bot/src/trading-mode.ts` — the mode screen (#474); `bot.ts` → `levelKeyboard`, the
+  `/settings` row «⚙️ Режим торговли | 🏠 В меню» (#686); `MODE_CALLBACK_DATA` in
+  `packages/shared/src/bot-navigation.ts` (the backend's message sends it too); `keyboards.ts` →
+  `statusCardKeyboard(mode)`, without a mode button since #686; `analysis.ts`, `demo.ts`, `demo-trade.ts`, `stake-picker.ts`, `trading-session.ts` — the paths that follow the
   mode.
 
 ## The column and its writer
 
-`setTradingMode(db, telegramUserId, mode)` runs one transaction: `UPDATE users SET trading_mode
-= $mode WHERE telegram_user_id = $id AND trading_mode <> $mode RETURNING id`. A row means a
-change: one `audit_log` row in the same transaction (`actor_type = user`, `actor_id` = the
-Telegram id as text, `action = trading_mode_changed`, `entity_type = user`, `entity_id` =
-`users.id`, `payload = { from, to }`) and `{ tradingMode, changed: true }`. No row: a
-`SELECT` tells «already in that mode» (`changed: false`, nothing written) from «no user»
-(`undefined`). Two concurrent switches serialize on the row lock, so one actual change writes one
-audit row. It locks only the users row (Rule 5). Tests: `user-ops.db.test.ts` U-mode 1–5.
+`writeTradingMode(tx, { by, mode, actor })` is the column's one writer, inside its caller's
+transaction: `UPDATE users SET trading_mode = $mode WHERE <by> AND trading_mode <> $mode RETURNING
+id`. A row means a change and one `audit_log` row in the same transaction (`action =
+trading_mode_changed`, `entity_type = user`, `entity_id` = `users.id`): for the user `actor_type =
+user`, `actor_id` = the Telegram id as text, `payload = { from, to }`; for a deposit (#686)
+`actor_type = system`, `actor_id` NULL, `payload = { from, to, depositEventId }`.
+
+`setTradingMode(db, telegramUserId, mode)` runs one transaction around it: a change answers `{
+tradingMode, changed: true }`; no row: a `SELECT` tells «already in that mode» (`changed: false`,
+nothing written) from «no user» (`undefined`). Two concurrent switches serialize on the row lock,
+so one actual change writes one audit row. Tests: `user-ops.db.test.ts` U-mode 1–5.
 
 ## The gate
 
@@ -88,7 +100,9 @@ the kill-switch are not read: a blocked user's trades and a closed switch are re
 `stoppedSessions` (#327, required in `setTradingModeResponseSchema`) counts the user's active
 sessions the switch stopped: `setTradingMode` calls `stopUserSessions` in its transaction after the
 `users` UPDATE returned a row (lock order `users` → `trading_sessions`, Rule 5), so the new mode
-and the stopped sessions commit together; `0` when the user was in that mode already. The bot's
+and the stopped sessions commit together; `0` when the user was in that mode already. A change
+also closes the user's deposits still waiting for the automatic switch as `superseded` (#686, lock
+order `users` → `trading_sessions` → `deposit_events`): the user decided the mode after them. The bot's
 mode screen prints «⏹ Активная сессия остановлена.» on `stoppedSessions >= 1` (below).
 Tests: `trading-mode.db.test.ts` T1–T10, `user-ops.db.test.ts` U-mode 6–8.
 
@@ -100,13 +114,13 @@ The mode comes from `POST /trading/access` only (`tradingMode`, required: a back
 **The card.** The header prints `MODE_LABELS[tradingMode]`, the hint is `statusHint` in demo and
 `statusHintReal` in real: «⚠️ Реальный режим: сделки идут на реальные деньги на сумму $X.», X the
 real stake in force (#326). The first row is the entry alone, green: «🎮 Демо-торговля» in demo,
-«🚀 Торговать» in real; then the mode button, «👥 Позвать» and «⭐ Купить» in one row of three
-(#708): «💼 Реальный» in demo (no colour), «🎮 В демо» in real (blue) (#474, #475). The entry is
-`demo` in both; the mode button is `mode` in both and only opens the mode screen, it never switches
-by itself. Then «💳 Пополнить» alone ([bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)).
+«🚀 Торговать» in real, `demo` in both; then «👥 Позвать» and «⭐ Купить» in one row; then «💳
+Пополнить» alone ([bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)). The card has
+no mode button since #686: the mode screen is under `/settings`.
 
-**The mode screen** (#474, `trading-mode.ts`). `mode` sends it as a new message (the card, a
-photo or text by the fallback, is never edited); `mode:x` (`MODE_SCREEN_CALLBACK_DATA`, «↩️ Отмена»
+**The mode screen** (#474, `trading-mode.ts`). `mode` sends it as a new message: «⚙️ Режим
+торговли» in the last row of `/settings`, beside «🏠 В меню» (#686; a lone navigation button is
+refused, `lone_button`), and the same row under the message about the switch after a deposit; `mode:x` (`MODE_SCREEN_CALLBACK_DATA`, «↩️ Отмена»
 and «⚙️ Режим») redraws it in place from a fresh access read under the screen's own messages;
 `mode:r`, `mode:r:ok` and `mode:d` edit in place too (shown → done, gone → sent anew, transport →
 an `error` line and nothing more, anything else → `bot.catch`). The screen:
@@ -242,6 +256,73 @@ logs `warn` `trading mode line not sent` (`method`, `telegramErrorCode`), and th
 and its tracking go on. No keyboard of `/stop` carries `mode:r:ok` or `mode:d`
 (`trading-session.test.ts` ST1–ST9).
 
+## The automatic switch after a deposit (#686)
+
+The owner's rule (2026-10-20): a deposit of real money switches a user in demo to real, every
+deposit anew; the user stays in real until they switch back themselves (the mode screen or
+`/stop`). The trigger is the broker's deposit postback ([postbacks.md](postbacks.md)), not the
+cashier's widget.
+
+**The pass.** `createDepositModeSwitcher` (backend, a tick every `DEPOSIT_MODE_SWITCH_SCAN_MS`)
+lists `deposit_events` rows with `user_id` and no outcome (`mode_switch is null`, oldest first,
+`DEPOSIT_MODE_SWITCH_SCAN_LIMIT` a tick, `deposit_events_mode_switch_pending_idx`) and calls
+`switchTradingModeOnDeposit` for each. A row gets a `user_id` at the postback's receipt (an active
+account) or at the account's activation (`attachDepositsToAccount`), and the pass handles both the
+same way. One transaction per row: `users` `FOR NO KEY UPDATE` first (Rule 5: `users` →
+`deposit_events`), then
+
+| Read under the lock | Outcome on the row | Written |
+| --- | --- | --- |
+| `DEMO_ONLY` process (checked first, no lock, Rule 33) | `demo_only` | the row only; after the flag is lifted the row never switches |
+| `users.status = blocked` | `user_blocked` | the row only |
+| `trading_mode = real` | `already_real` | the row only: no audit row, no message |
+| the deposit's account is not `active` (revoked) | `account_inactive` | the row only |
+| a session not `stopped` on any account of the user | — (waits) | nothing: the row stays listed, and the next tick reads it again |
+| otherwise | `switched` | `writeTradingMode` (`actor_type = system`, `payload.depositEventId`) and the row, in one transaction |
+
+The outcome is written by `markDepositModeSwitch` only where `mode_switch is null`, with
+`mode_switch_at = now()`; a CAS that finds it set rolls the attempt back (`gone`). One payment is one
+row (`deposit_events_source_payment_idx`), so its Deposit and FTD postbacks and a re-sent postback
+switch at most once. A session cannot start while the `users` row is held (`createTradingSession`
+locks it first), so «no session» holds until the commit. The demo session runs to its end — the
+pass never stops it; the switch and the message come on the first tick after it stopped, whatever
+stopped it. `/stop` in demo changes no mode (`changed: false`) and closes nothing, so it only ends
+the session sooner.
+
+**The user's own switch.** `setTradingMode` with `changed: true` (either direction) closes every
+waiting deposit of the user as `superseded` in its transaction: the next deposit switches again.
+`0075_deposit_mode_switch` closed every row already there as `predates`, attributed or not, so
+only deposits after the deploy switch.
+
+**The message.** A `switched` row is the fact of the mailing kind `real_mode_by_deposit`: «💳
+Пополнение получено — включён реальный режим», REAL, real money, the real stake in use (the saved
+real stake, else the broker's minimum of the account's snapshot, else «минимальная ставка
+брокера»), the way back (`/settings` → «⚙️ Режим торговли»), with «⚙️ Режим торговли | 🏠 В меню».
+No deposit amount and no balance. In the user's language. The kind is important: it goes at any
+`notification_level` while the bot can reach the user
+([mailing.md](mailing.md#the-real-mode-notification-686)). After the switch's commit the pass calls
+`mailing.wakePlan()`: a planner pass now, or one more right after the pass in flight (a pass that
+began before the commit may have read past it). The message is due at the switch.
+
+**Delays.** Deposit attributed → switch: ≤ `DEPOSIT_MODE_SWITCH_SCAN_MS` (5 s). Switch → job: the
+planner pass at once or right after the one in flight. Job → message: ≤ `MAILING_SEND_TICK_MS` (5
+s) when the sender's queue is empty and Telegram asks no pause: jobs planned earlier go first
+(`scheduled_at, id`), N of them add N / `MAILING_SEND_PER_SECOND` s, and a 429 its `retry_after`.
+The plan's fallback is the planner's own tick (60 s). No wake from the postback route.
+
+**Failures.** An attempt that throws is logged `warn` `deposit mode switch failed`
+(`depositEventId`, `errorLogFields`); the row is skipped for `DEPOSIT_MODE_SWITCH_RETRY_MS` in the
+process's memory, the other rows go on. A wake that throws: `warn` `deposit mode switch wake
+failed`. `stop()` waits for the attempt in flight and takes no further row; it runs before the
+mailing engine's in phase 1.
+
+Two backends in a deploy's overlap run the pass both: the `users` lock and the CAS give one outcome
+(U-dep 11), and the job's dedupe key one message. An open bot screen with a demo stake button is
+refused by its fingerprint after the switch, as after a switch from another device.
+
+Tests: `user-ops.db.test.ts` U-dep 1–12, L1–L3; `deposit-mode-switch-migration.db.test.ts` B1–B4;
+`deposit-mode-switch.test.ts` W1–W8; `deposit-mode-switch.db.test.ts` X1–X5.
+
 ## Timing
 
 `HANDLER_CALLS`: `stop` 3 / 2 (#473: the switch after the stop, the mode line before the message),
@@ -249,6 +330,10 @@ and its tracking go on. No keyboard of `/stop` carries `mode:r:ok` or `mode:d`
 (the access read on an unknown outcome: 2 × 5 s + 3 × 8 s = 34 s), `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418
 and `cycleStakePreset` since #476, under the 50 s shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
 every terminal branch.
+
+The pass (#686, `apps/backend/src/timing.ts`): `DEPOSIT_MODE_SWITCH_SCAN_MS` 5 s, no longer than the
+sender's tick; `DEPOSIT_MODE_SWITCH_SCAN_LIMIT` 50 rows a tick; `DEPOSIT_MODE_SWITCH_RETRY_MS` 60 s,
+longer than the tick.
 
 ## Logs
 
@@ -259,19 +344,25 @@ outcome unknown` (warn): `errorLogFields` and `backendErrorFields`, never the Te
 amount. `trading mode line not sent` (warn, `/stop`): `errorLogFields` and `method` with
 `telegramErrorCode`, nothing of the text (`logging.test.ts`).
 
+The pass (#686, backend): `deposit mode switch` (info, at start `{ demoOnly }`; per tick the
+non-zero counts `{ switched, alreadyReal, userBlocked, accountInactive, demoOnly, superseded, gone,
+waiting, failed }`), `deposit mode switch failed` (warn, `depositEventId` and `errorLogFields`),
+`deposit mode switch wake failed` (warn), `deposit mode switch tick failed` (error, the list
+itself). Never a Telegram id or an amount.
+
 ## Running it locally
 
 Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 [trading-access.md](trading-access.md) plus the worker and the bot:
 
-1. Switch the user to real through the mode screen: `/menu` → «💼 Реальный» (DEMO, the real
+1. Switch the user to real through the mode screen: `/settings` → «⚙️ Режим торговли» (DEMO, the real
    balance, «💼 Сумма реальной сделки», the session line) → «💼 Включить реальный режим» (the
    confirm names the real stake) → «↩️ Отмена» (the confirm becomes the screen again) → «💼
    Включить реальный режим» → «✅ Подтверждаю» → «✅ Режим: REAL». Without the bot, the `access`
    helper of trading-access.md (the internal bearer) does the same:
    `access /trading/mode '{"telegramUserId":"<id>","mode":"real"}'` → 200
    `{"tradingMode":"real","changed":true,"stoppedSessions":0}`.
-2. `/menu` shows REAL, the real hint, «🚀 Торговать» and «🎮 В демо»; «Сигналы сейчас»
+2. `/menu` shows REAL, the real hint and «🚀 Торговать»; «Сигналы сейчас»
    has no «запустит цикл».
 3. A pair opens the launch screen with «🚀 Запустить цикл · REAL» and the real stake; the press
    starts a real session («💼 Реальная сессия», the worker's `trading session intent created`
@@ -291,10 +382,19 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 5. `/stop` back to demo (#473): switch to real again, start a real session, send `/stop` → «🎮
    Режим: DEMO — следующие сделки пойдут на демо.», then the stopped session's status; `/menu`
    shows DEMO; a second `/stop` → «Активных сессий нет.» alone.
+6. The switch after a deposit (#686), the user in demo with no session: send a deposit postback of
+   the account's trader id as in [postbacks.md](postbacks.md) → within ~10 s `/menu` shows REAL,
+   the bot sends «💳 Пополнение получено — включён реальный режим» with «⚙️ Режим торговли | 🏠 В
+   меню», and `audit_log` has one `trading_mode_changed` row with `actor_type = system`; the FTD
+   postback of the same `payment_id` adds nothing. Back to demo, a second deposit switches again.
+   A deposit during a demo session switches after the session ends. With `DEMO_ONLY=true` the row
+   reads `mode_switch = demo_only` and the mode stays DEMO.
 
 ## Boundaries
 
 - **#473** (shipped) — `/stop` returns the user to demo ([/stop](#the-bot) above).
+- **#686** — the switch after a deposit (above); crediting deposits is #386, the postbacks'
+  authenticity #142. The admin's deposits page does not show the outcome columns.
 - **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)).
   **#327** (shipped) — real sessions.
 - **#450** — the Martingale of a session: #450 merged first, so #474 added «В сессии ставка

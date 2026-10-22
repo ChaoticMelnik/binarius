@@ -452,7 +452,9 @@ existing user included), `reduced` or `off`. It is a preference beside `telegram
 `status`; none of the three writes another. The level never governs the replies to the user's
 commands and buttons, the push after a site login (#128) or the results of the user's own trades
 (the owner, 2026-10-03). It governs the mailings ([mailing.md](mailing.md)): `off` cancels what
-is pending and the engine sends nothing more, `reduced` holds a second mailing within the window.
+is pending and the engine sends nothing more, `reduced` holds a second mailing within the window —
+but the message about the switch to real after a deposit (#686), an important kind, which only a
+blocked bot holds.
 
 ```text
 /settings
@@ -461,13 +463,16 @@ is pending and the engine sends nothing more, `reduced` holds a second mailing w
          then «💵 Сумма демо-сделки: $5.00» and «💼 Сумма реальной сделки: $5.00» (each «минимальная
          ставка брокера» while unset) and a row «💵 Демо» → stk:o:d:s, «💼 Реал» → stk:o:r:s, the
          stake picker of that mode in any trading mode (#297, #326, bot-demo-trade.md → The stake)
+         and a row «⚙️ Режим торговли» → mode (the mode screen as a new message, #686,
+         trading-mode.md → The bot) | «🏠 В меню» → menu
 settings (the picker's «↩️ Настройки»)
   bot  → answerCallbackQuery ∥ POST /users/start, then the /settings message edited in place
 a level pressed (level:all, level:reduced, level:off)
   bot  → answerCallbackQuery ∥ POST /users/notification-level { telegramUserId, level }
          → { level, demoStake, realStake }, so the edit keeps both stake lines
   back → setNotificationLevel: the users row updated; for `off`, in the same transaction, the
-         user's `pending` notification_jobs → `canceled` (lock order users → notification_jobs)
+         user's `pending` notification_jobs → `canceled` but the important kinds' (#686,
+         mailing.md → Delivery rules) (lock order users → notification_jobs)
   bot  → the message edited in place from the answer's level; refused as not modified:
          nothing more; refused as gone or not editable: the same text and keyboard as a new
          message; any other refusal: bot.catch, nothing sent; failed in transport (HttpError):

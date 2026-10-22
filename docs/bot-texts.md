@@ -192,13 +192,14 @@ The labels that stand in a row of two or three were shortened to fit it (owner's
 | `stakeBackAnalysisButton` | ↩️ Назад к анализу | ↩️ К анализу | ↩️ Back to the analysis → ↩️ Analysis | 3 |
 | `stakeBackSettingsButton` | ↩️ Назад к настройкам | ↩️ Настройки | ↩️ Back to the settings → ↩️ Settings | 3 |
 | `stakeBackLaunchButton` | ↩️ К запуску | the same | ↩️ To the launch → ↩️ Launch | 3 |
-| `modeButton` | 💼 Реальный режим | 💼 Реальный (#708) | the same («💼 Real mode») | 3 |
 
 #708 took the language button off the status card (the language is the `/language` command) and
-put the mode button, the invite and the purchase in one row of three, so `modeButton` and
+put the mode button, the invite and the purchase in one row of three, so the mode button and
 `inviteButton` were shortened to the row's nine characters; `languageButton` («🌐 Язык/Language»,
-#475 from «🌐 Язык / Language») left the catalog. `modeBackDemoButton` and `buyButton` fit as
-they were.
+#475 from «🌐 Язык / Language») left the catalog. #686 took the mode button off the card too:
+`modeButton` («💼 Реальный») left the catalog, and the mode screen opens from `/settings` →
+`settingsModeButton` («⚙️ Режим торговли», «⚙️ Trading mode»), in a row of two with «🏠 В меню»
+(14 and 12 characters, the pair's limit 14).
 | `supportButton` | 💬 Написать в поддержку | 💬 Поддержка | 💬 Write to support → 💬 Support | 2 |
 | `modeBackDemoButton` | 🎮 Вернуться в демо | 🎮 В демо | 🎮 Back to demo → 🎮 To demo | 2 |
 | `resendButton` | 🔄 Запросить код ещё раз | 🔄 Новый код | 🔄 Request the code again → 🔄 New code | 2 |
@@ -287,7 +288,7 @@ compile.
 | `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
-| `stake` | on the mode screen and its confirm the real stake, the saved one or the broker's minimum, never `null`, whatever the user's mode (#474); on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464) | `formatStake` | `stakeMinimumLabel` |
+| `stake` | on the mode screen and its confirm the real stake, the saved one or the broker's minimum, never `null`, whatever the user's mode (#474); on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464); in the real-mode message after a deposit (#686) the real stake in use, the saved one or the broker's minimum of the account's snapshot, `null` without either | `formatStake` | `stakeMinimumLabel` |
 | `outcome` | a session trade's figure after «→» (#464): a win's stake plus its profit, what came back to the account (#684, reverting #539), a loss's negative profit, `$0.00` for a tie; the lines do not add up to the session's result, which stays the net sum of the profits | `formatSignedUsd` | — |
 | `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
@@ -480,10 +481,11 @@ translate the rest of the catalog (#632 `demo`, `analysis`, `trade`; #633 `sessi
   untranslated key shows the catalog's Russian default, never an override, so every English
   message is bounded by the test on the defaults. `UNTRANSLATED_BOT_TEXT_KEYS` is pinned by group:
   exactly the groups of #632 and #633, but the keys of `TRANSLATED_BEFORE_633` — the wait for a
-  signal (#664), written in both languages from the start (E4, E7). Until those parts, a user in English sees the start, the
+  signal (#664) and the real-mode message after a deposit (`realModeByDeposit`, #686), written in
+  both languages from the start (E4, E7). Until those parts, a user in English sees the start, the
   cards, the menu, `/settings`, `/language`, `/help`, `/account`, `/invite`, `/support` and the buttons in
   English, and the demo, the analysis, the trades, the sessions, Stars and every push of the
-  backend in Russian.
+  backend but the real-mode message (#686) in Russian.
 - **Proofreading.** `pnpm -s exec tsx tooling/bot-texts-table.ts` prints «key | group | русский |
   English» for every translated key under `head=` and the count (exit 1 with none); the PR carries
   it for the owner.

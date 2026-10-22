@@ -211,7 +211,7 @@ export const HANDLER_CALLS = {
   // /stop (#122): stopSessions → setTradingMode to demo (#473), then the mode line, then the #122
   // message (one session's is the reply to its stop, #536, no catalog read)
   stop: { backend: 2, telegram: 2 },
-  // the mode screen (#474, trading-mode.ts) from the card: answerCallbackQuery ∥
+  // the mode screen (#474, trading-mode.ts) from /settings (#686): answerCallbackQuery ∥
   // readTradingAccess — counted as sequential — then sendMessage
   modeOpen: { backend: 1, telegram: 2 },
   // its confirm step: answerCallbackQuery ∥ readTradingAccess, then editMessageText refused as
