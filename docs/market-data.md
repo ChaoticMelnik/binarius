@@ -207,7 +207,7 @@ built go to `ring.fill`: those that ended before its boundary and that the ring 
 that moment, `timestamp < min(floor(at, I), ring.closedUntil(I, at))`. The bucket forming at `at`
 comes as a partial row and is never filled by that GET; a bucket that closed later is an empty
 bucket for the next one. `ring.fill` then puts the rows only into closed buckets of the window that
-have no tick candle and no earlier fill. No GET starts in the first `SIGNAL_SCAN_SLACK_MS` of a `5s` candle,
+have no tick candle and no earlier fill. No GET starts in the first `CANDLE_CLOSE_SLACK_MS` of a `5s` candle,
 because the broker publishes a just-closed candle about 150 ms after the boundary. Every GET runs
 under `MARKET_DATA_BACKFILL_BUDGET_MS` and the `stop()` signal.
 
@@ -290,7 +290,7 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 | `MARKET_DATA_BACKFILL_POLL_MS` | 250 | a spare token asked for while the queue is not empty |
 | `MARKET_DATA_BACKFILL_CONCURRENCY` | 2 | backfill GETs in flight |
 
-The backfill's slack is `SIGNAL_SCAN_SLACK_MS` (500) and its GET's limit `MARKET_DATA_RING_CANDLES + 1`.
+The backfill's slack is `CANDLE_CLOSE_SLACK_MS` (500, shared since #697) and its GET's limit `MARKET_DATA_RING_CANDLES + 1`.
 The second series and the H1 shadow have four constants of their own in the same file
 (`H1_SECOND_CLOSE_MARGIN_MS`, `H1_SHADOW_TICK_MS`, `H1_SHADOW_LOG_MS`, `H1_SERIES_CAPACITY_SEC`),
 with their links: [h1.md → Constants](h1.md#constants). The tick window has `TRADE_TICKS_BUFFER_MS`
@@ -351,7 +351,7 @@ The links:
    watermark rule can close early because ticks of different pairs arrive out of timestamp order.
    Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in the line.
 4. **A quiet pair's boundary candle may still be open at the scan** (#405). The scanner fires
-   `SIGNAL_SCAN_SLACK_MS` after the boundary, before the clock rule's margin; a pair with no tick
+   `CANDLE_CLOSE_SLACK_MS` after the boundary, before the clock rule's margin; a pair with no tick
    past the boundary yet is decided on the candle before, which is not served. The scanner counts
    these as `unclosed` ([signal.md → The scanner](signal.md#the-scanner-343)). Falsifiable:
    `unclosed / decided` above 5 % in trading hours.
@@ -375,7 +375,7 @@ The links:
     more than `n` lines `market data token refused { reason: 'refresh_rate_limited' }` in 5 min.
 14. **A bucket the watermark closed just before a backfill GET may come partial.** A bucket closed
     less than about 150 ms (the broker's publication delay, #392 spike) before the request, while the
-    process clock runs behind the broker's by more than `SIGNAL_SCAN_SLACK_MS` minus 150 ms, can be
+    process clock runs behind the broker's by more than `CANDLE_CLOSE_SLACK_MS` minus 150 ms, can be
     answered before the broker has published it: the same assumption as the scanner's slack
     ([signal.md](signal.md)).
 15. **A bucket the ring had not closed when a GET was built waits for the hold-back** (≤ 15 s, one

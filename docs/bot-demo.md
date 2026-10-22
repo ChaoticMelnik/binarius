@@ -777,7 +777,7 @@ runs before the handlers, so a pair pressed under a wait ends it and the door re
 
 **The poll.** One timer for every entry while there is one, on the 5 s candle's boundary plus
 `SIGNAL_WAIT_POLL_OFFSET_MS` (1 s) by the bot's clock: the scanner decides at the boundary plus
-`SIGNAL_SCAN_SLACK_MS` (500 ms, the backend's, stated). A tick reads `GET /trading/signals` and
+`CANDLE_CLOSE_SLACK_MS` (500 ms, shared; `slack < offset` is a link of the bot's chain, #697). A tick reads `GET /trading/signals` and
 `GET /trading/pairs` once and decides every entry on that snapshot: two requests a candle whatever
 the number of waiting users. A pair has a signal now when it is in the fresh `5s` list and
 `checkDemoTrade` takes it — the list's own definition. A tick that finds the previous one in

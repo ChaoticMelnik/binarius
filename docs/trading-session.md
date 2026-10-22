@@ -487,7 +487,8 @@ on a wake, #696), in this order:
    tick's wait, not a statement; a statement that outlives it still lands, and the next attempt
    reads its result).
 7. One `debug` line `trading session tick`, `{ runnable, attempted, created, held, stopped, woken }`;
-   `woken` is the number of `wake()` calls this tick served (0 on a timer tick).
+   `woken` is the number of `wake()` calls this tick served, the candle timer's included (0 on a
+   tick of the interval).
 
 A throw out of steps 1–5, or out of an ending's write after an attempt (`stopTradingSession`,
 `markSessionDecision`), is one `error` line, `trading session tick failed`; the rest of that tick's
@@ -515,9 +516,9 @@ keeps the first reason.
 | `signals.evaluate({ assetId, interval: intervalForDuration(durationSec) })` | a backend failure | hold back `TRADING_SESSION_RETRY_MS` (E5) |
 | | `fetch_failed` | hold back `retryAfterSec` when given (0 included), else `TRADING_SESSION_RETRY_MS` (E5) |
 | | `no_signal` and `waitExpired` | stop `no_signal_timeout`, `waited: no_signal` (W1); records `no_signal` (O9) |
-| | `no_signal` | hold back until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (E4); `last_signal_action` = NULL; records `no_signal` (O2) |
+| | `no_signal` | hold back until the next candle boundary + `CANDLE_CLOSE_SLACK_MS` (E4, E4b); the candle wake serves it then (CT1); `last_signal_action` = NULL; records `no_signal` (O2) |
 | | `signal` in the paused direction while `last_signal_action` holds it, and `waitExpired` | stop `no_signal_timeout`, `waited: paused` (W4); records `paused` (O10) |
-| | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal`; `last_signal_action` stays the action (P1); records `paused` (O3) |
+| | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal` (P10); `last_signal_action` stays the action (P1); records `paused` (O3) |
 | | `signal` | the action |
 | the sizer (`nowMs = max(now, started_at)`, E11) | `stop` `insufficient_balance` while `awaitsBalance` | hold `TRADING_SESSION_TICK_MS`, `info` `trading session waits for the balance`; no row: the step's decision is asked again on a current balance, and a wake inside the hold does not ask the signal again (BW1, BW4, BW5, #696); past the limit counted from that settlement — the row below (BW3) |
 | | `stop` | a martingale limit: stop with its own reason (#450, G3–G6); any other code: stop `stake_stop` (E3, G8); the code in the line; records `stake_stop` with the code (O4) |
@@ -561,8 +562,10 @@ right after the history.
 
 - **The progress rule.** Every ending that leaves the session `active` and was reached — done,
   reschedule, every hold-back — moves `last_decision_at` (`markSessionDecision`), and every
-  hold-back is at least one tick. So a session never sits at the head of the scan twice in a row,
-  and with a full batch the head rotates. Only "no ending written" leaves the key unmoved, and it
+  hold-back but the two candle holds (`no_signal`, the pause) is at least one tick; a candle hold
+  ends exactly at the next boundary + `CANDLE_CLOSE_SLACK_MS`, when the candle wake serves it
+  (#697). So a session never sits at the head of the scan twice in a row, and with a full batch the
+  head rotates. Only "no ending written" leaves the key unmoved, and it
   is a hold-back in memory. The same write carries `last_signal_action` on the two hold-backs that
   decided a direction (`no_signal`, the pause); the traded action is written by the intent's own
   transaction; every other ending leaves it.
@@ -621,6 +624,20 @@ own terminal writes (the publisher's rejection of a `queued` intent, an operator
 safety net for those and for a wake lost to a restart. Tests: `orchestrator.db.test.ts` WK1–WK5,
 `worker.handoff.db.test.ts` H10–H13, `reconciliation.db.test.ts` RW1,
 `settlement-catchup.db.test.ts` CW1.
+
+**The candle wake (#697).** A candle hold (`no_signal`, the pause) is not rounded up to a tick: it
+ends at the next boundary of the session's signal interval + `CANDLE_CLOSE_SLACK_MS` (shared,
+500 ms), the moment the backend's scanner decides that candle, so the session reads the scanner's
+decision from the cache, not one 2–10 s later. One timer per orchestrator (not per session: the 5 s
+sessions share the boundaries) is armed at the end of every tick, its `finally` included, for the
+earliest candle hold that ends after the timer's last firing; it calls `wake()`, so its tick is the
+same tick and counts in `woken`. A tick that ends the holds arms it again for the next (CT2);
+`stop()` clears it and nothing arms it after (CT3); any other hold arms nothing (CT4). The interval
+stays the safety net: a timer that fires before `Date.now()` reaches its target (the two clocks
+drift) leaves the session to the next tick of the interval, ≤ `TRADING_SESSION_TICK_MS` later. A
+decision on a candle the ring had not closed at that moment (`unclosed`, docs/signal.md → The
+scanner) is traded like any other: no REST fallback, no new refusal (CT5). Tests:
+`orchestrator.db.test.ts` CT1–CT5, E4b, P10.
 
 ## Recovery after a restart (#131)
 
@@ -768,7 +785,8 @@ settled (300 s on `15s`), the session stops
   either, and the session stops. The fact is in the row, so a worker restart pauses the same way
   (P4).
 - **The rule:** `signal(A)` with `pausedDirection === A` and `last_signal_action === A` holds the
-  session until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (P1). A `no_signal`
+  session until the next candle boundary + `CANDLE_CLOSE_SLACK_MS` (P1); the candle wake serves it
+  then (P10). A `no_signal`
   clears the column, and the next `signal(A)` trades; `signal(B)` trades at once (P2). If that trade
   loses too, the two most recent trades are again losses in `A` and the pause re-arms — that is the
   rule, not a repeat bug.
@@ -801,7 +819,7 @@ refuses → `contract_violation`. The body is read up to `MAX_BACKEND_BODY_BYTES
 | `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` | 10 000 | one attempt: both backend calls and the statements |
 | `TRADING_SESSION_PAIRS_TIMEOUT_MS` | 4 000 | the pairs GET |
 | `TRADING_SESSION_RETRY_MS` | 60 000 | a hold-back after a transient failure or a throw |
-| `TRADING_SESSION_CANDLE_SLACK_MS` | 2 000 | how long after a candle boundary the signal is asked again. The backend's signal cache keeps a decision until the boundary on its own clock; both processes run on one host, so the two boundaries agree within the slack |
+| `CANDLE_CLOSE_SLACK_MS` (shared) | 500 | how long after a candle boundary the signal is asked again after `no_signal` or the pause: the scanner's own moment (#697; 2 000 before), served by [the candle wake](#the-orchestrator). The backend's signal cache keeps a decision until the boundary on its own clock; both processes run on one host, so the two boundaries agree within the slack |
 | `SESSION_MAX_DURATION_MS` (shared) | 3 600 000 | the deadline from `started_at`; the start route and the CLI refuse a session whose strategy's worst case cannot fit it (`sessionFitsDeadline(cycles, durationSec, strategy)`, #552) |
 | `MIN_SESSION_DURATION_SEC` (shared) | 5 | a session trade's shortest duration (#552): `SIGNAL_SHORTEST_INTERVAL_MS / 1000`, in the settings, the start request and the CLI's `DURATION_SEC` |
 | `MAX_SESSION_SUMMARY_TRADES` (shared) | 720 | `SESSION_MAX_DURATION_MS / (MIN_SESSION_DURATION_SEC × 1000)`, an integer checked at import: a session's intents run one at a time and each settles no earlier than its duration, so an hour holds no more; the bound of the summary's trades and the card's columns. Without ties the fit and `maxSteps` keep a session at 28 settled trades (7 cycles × 4 at 5 s) |
@@ -810,7 +828,9 @@ refuses → `contract_violation`. The body is read up to `MAX_BACKEND_BODY_BYTES
 `TRADING_SESSION_CHAIN_HOLDS` is checked at import (`config.test.ts` restates it):
 `PAIRS + TRADING_SIGNAL_BUDGET_MS < ATTEMPT`, `TICK < RETRY`, `TICK <= H1_CHECK < RETRY` (#670,
 `config.test.ts` K-H1), `CANDLE_SLACK <
-SIGNAL_SHORTEST_INTERVAL_MS` (5 000 since #313: the wait never skips a 5 s candle),
+SIGNAL_SHORTEST_INTERVAL_MS` (500 < 5 000; 5 000 since #313: the wait never skips a 5 s candle),
+`candleSlackMs === CANDLE_CLOSE_SLACK_MS` (`config.test.ts`, #697: the session asks at the scanner's
+moment),
 `SESSION_NO_SIGNAL_CANDLES` an integer ≥ 2 (#637: a session the bot offers gets several decisions
 before the limit), `RETRY < SESSION_NO_SIGNAL_CANDLES × SIGNAL_SHORTEST_INTERVAL_MS` (60 000 <
 100 000), `SESSION_NO_SIGNAL_CANDLES ×` the longest candle the scanner lists (15 s) `<
@@ -854,7 +874,7 @@ line is in it with its level.
 | `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 | `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
 | `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |
-| `trading session tick` | debug | `{ runnable, attempted, created, held, stopped, woken }`; `woken` — the `wake()` calls this tick served, 0 on a timer tick (#696) |
+| `trading session tick` | debug | `{ runnable, attempted, created, held, stopped, woken }`; `woken` — the `wake()` calls this tick served, the candle timer's included (#697), 0 on a tick of the interval (#696) |
 
 ## The CLI
 
@@ -1064,6 +1084,16 @@ docker compose exec -T backend sh -c 'wget -qO- --header "Authorization: Bearer 
 docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to change|no_signal_timeout|intent created'
 ```
 
+After the #697 deploy, over 24–48 h (the owner's step), the scanner's `unclosed` share, the
+interval between one session's decisions (about 5.0 s instead of about 10 s) and the `reason`s of
+`waits for the next candle` (no worse than over the same window before the deploy):
+
+```bash
+docker compose logs --no-log-prefix --since 48h backend | grep '"signal scanner"' | jq -s 'map(select(.decided>0)) | {decided: (map(.decided)|add), unclosed: (map(.unclosed)|add)}'
+docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for the next candle' | jq -r '[.time, .sessionId] | @tsv' | sort -k2,2 -k1,1n | awk '$2==prev{print ($1-pt)/1000} {prev=$2; pt=$1}' | sort -n | uniq -c
+docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for the next candle' | jq -r .reason | sort | uniq -c
+```
+
 ## Accepted risks (#287)
 
 1. **A transient refusal counts as `rejected`.** A broker 429 on the REST open, or a token refusal,
@@ -1107,8 +1137,8 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
     may still be open (its close lags by a median 189 ms, p95 507 ms, #697). The feed then decides on
     the candles before the boundary — the data that opened the trade just closed — and its cache keeps
     that decision for the rest of the next candle. The timer's tick hit this window about 4 % of the
-    time; a wake hits it whenever `close_trade.success` arrives ahead of the watermark. Aligning the
-    request with the bucket's close is #697. Falsifiable: in `trade-log export`, among decisions less
+    time; a wake hits it whenever `close_trade.success` arrives ahead of the watermark. #697 moved the
+    candle holds to the scanner's moment, not the wake after a settlement, so this stays. Falsifiable: in `trade-log export`, among decisions less
     than 1 000 ms after the previous trade's close, a share with `record.entry.source.closedUntil` at
     or before that close clearly above the timer's.
 11. **The order inside a woken tick is the SQL's (#696).** A woken tick attempts every runnable
@@ -1147,6 +1177,22 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
     Falsifiable: `trading session attempt timed out`, or an attempt's p95 above 1 s on accounts with
     a long history; then an index `(broker_account_id, mode, updated_at) where status = 'settled'`
     in a task of its own, with a migration.
+15. **The candle close slack is 500 ms against a 1 % rule at its edge (#697).** The owner's rule
+    "`unclosed/decided` < 1 % → 500" gave 1.07 % on the pilot's 2 h window (2026-10-22, 17 events,
+    15 of them a whole scan at once: the watermark had not passed the boundary at `+ 500`; the
+    watermark lag p50 212 / p95 364 / max 602 ms). The share is the scanner's at `+ 500`, which the
+    sessions read from its cache already; #697 adds none. Falsifiable: `signal scanner` lines over
+    48 h after the deploy with `unclosed/decided` clearly above 1 % — then a re-ask after a late
+    close (a task of its own) or a larger shared constant.
+16. **The candle timer and `Date.now()` drift (#697).** A timer that fires before the worker's clock
+    reaches the hold's end finds the session held; the interval's tick takes it, ≤ 5 s later — a
+    delay, never a wrong step.
+17. **Twice the decisions while a 5 s session waits (#697).** A 5 s session that waits (`no_signal`
+    or the pause) decides on every candle, about 12 a minute instead of about 6: as many
+    `signal_decisions` rows `no_signal`/`paused` and `waits for …` lines. The no-signal limit counts
+    time (20 candles), not decisions, and does not change; the rows are held by
+    `SIGNAL_DECISION_RETENTION_DAYS`. Falsifiable: `no_signal` + `paused` rows over a day after the
+    deploy about 2× those of the day before.
 
 ## Boundaries
 
