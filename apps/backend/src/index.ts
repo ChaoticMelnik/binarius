@@ -16,6 +16,7 @@ import {
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import { createBrokerSocketClient } from '@binarius/broker-socket';
 import {
+  checkSchemaAtStartup,
   createDb,
   createTokenCipher,
   listBotTextOverrides,
@@ -575,6 +576,9 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
 process.once('SIGTERM', (signal) => void shutdown(signal));
 process.once('SIGINT', (signal) => void shutdown(signal));
+
+// before the warm-up and listen(): a schema behind this image would fail requests at run time
+if (!(await checkSchemaAtStartup(pool, app.log))) process.exit(1);
 
 // A failed warm-up is logged as a warn and the route answers 503 until a tick succeeds.
 const warmed = await pairsCatalog.refresh();
