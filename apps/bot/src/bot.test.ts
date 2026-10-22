@@ -27,7 +27,6 @@ import {
   BUY_CALLBACK_DATA,
   BotLanguage,
   BOT_TEXT_SOURCES_EN,
-  LANGUAGE_CALLBACK_DATA,
 } from '@binarius/shared';
 import { runWithLanguage, type UserLanguages } from './language';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
@@ -452,13 +451,16 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // #475: the entry alone, the mode screen beside the invite (#115), the purchase (#117) beside
-  // the language (#508), the deposit (#27), the cashier Mini App, alone
-  const LANGUAGE = { text: LABELS.languageButton, callback_data: LANGUAGE_CALLBACK_DATA };
+  // #475: the entry alone, the mode screen, the invite (#115) and the purchase (#117) in one row
+  // (#708: no language button, the language is /language), the deposit (#27), the cashier Mini
+  // App, alone
   const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
   const MIDDLE_ROWS = (mode: { text: string; callback_data: string }) => [
-    [mode, { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
-    [{ text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA }, LANGUAGE],
+    [
+      mode,
+      { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
+      { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
+    ],
   ];
   const CARD_ROWS = [
     [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
@@ -510,12 +512,7 @@ describe('the status card', () => {
       expect(photo?.photo).toBeInstanceOf(InputFile);
       expect(inlineRows(photo)).toEqual(CARD_ROWS);
       // #475: the entry and the deposit green, the purchase blue, the rest without a colour
-      expect(inlineStyles(photo)).toEqual([
-        ['success'],
-        [null, null],
-        ['primary', null],
-        ['success'],
-      ]);
+      expect(inlineStyles(photo)).toEqual([['success'], [null, null, 'primary'], ['success']]);
       expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
         message_id: CARD_MESSAGE_ID,
         disable_notification: true,
@@ -543,12 +540,7 @@ describe('the status card', () => {
     );
     expect(inlineRows(photo)).toEqual(REAL_CARD_ROWS);
     // «🎮 В демо» is a secondary action (#475 Plan Update)
-    expect(inlineStyles(photo)).toEqual([
-      ['success'],
-      ['primary', null],
-      ['primary', null],
-      ['success'],
-    ]);
+    expect(inlineStyles(photo)).toEqual([['success'], ['primary', null, 'primary'], ['success']]);
   });
 
   // #27: an origin that is not https gives the bot no cashier URL, and the card no deposit row
@@ -793,7 +785,6 @@ describe('«🏠 В меню» (#350)', () => {
       { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
-      { text: LABELS.languageButton, callback_data: LANGUAGE_CALLBACK_DATA },
       { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
     ]);
   });

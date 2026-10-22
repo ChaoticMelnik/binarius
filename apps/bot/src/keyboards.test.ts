@@ -86,26 +86,25 @@ describe('the rows and colours of the shared keyboards (#475)', () => {
   const INVITE = [LABELS.inviteButton, N, null];
   const BUY = [LABELS.buyButton, S, 'primary'];
   const DEPOSIT = [LABELS.depositButton, F, 'success'];
-  const LANGUAGE = [LABELS.languageButton, N, null];
   const ANALYSIS = [LABELS.newAnalysisButton, S, 'primary'];
   const SIGNALS = [LABELS.toSignalsButton, N, null];
   const BACK = callbackButton(N, '↩️', 'back');
   const back = [LABELS.stakeBackAnalysisButton, N, null];
 
-  it('R1: the status card: the entry alone, two pairs, the deposit alone', () => {
+  // #708: no language button, the language is the /language command
+  it('R1: the status card: the entry alone, one row of three, the deposit alone', () => {
+    const DEMO_MIDDLE = [[LABELS.modeButton, N, null], INVITE, BUY];
     expect(rows(statusCardKeyboard(TradeMode.Demo, CASHIER))).toEqual([
       [[LABELS.demoButton, F, 'success']],
-      [[LABELS.modeButton, N, null], INVITE],
-      [BUY, LANGUAGE],
+      DEMO_MIDDLE,
       [DEPOSIT],
     ]);
     expect(rows(statusCardKeyboard(TradeMode.Real, CASHIER))).toEqual([
       [[LABELS.tradeButton, F, 'success']],
-      [[LABELS.modeBackDemoButton, S, 'primary'], INVITE],
-      [BUY, LANGUAGE],
+      [[LABELS.modeBackDemoButton, S, 'primary'], INVITE, BUY],
       [DEPOSIT],
     ]);
-    expect(rows(statusCardKeyboard(TradeMode.Demo, undefined)).at(-1)).toEqual([BUY, LANGUAGE]);
+    expect(rows(statusCardKeyboard(TradeMode.Demo, undefined)).at(-1)).toEqual(DEMO_MIDDLE);
   });
 
   it('R2: the entry data stays the same in both modes', () => {

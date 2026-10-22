@@ -498,7 +498,7 @@ export function createBot({
     await showInvite(ctx, from, { backend, logger });
   });
 
-  // «👥 Позвать друга» under the status card and the session's result (#115)
+  // «👥 Позвать» under the status card and the session's result (#115)
   privateChats.callbackQuery(INVITE_CALLBACK_DATA, async (ctx) => {
     await ctx.answerCallbackQuery().catch(logAnswerFailure);
     await showInvite(ctx, ctx.from, { backend, logger });
@@ -580,7 +580,7 @@ export function createBot({
   privateChats.use(tradingSession.composer);
 
   // the mode screen behind the status card's mode button (#474, docs/trading-mode.md)
-  // «🌐 Язык/Language» on the status card (#508)
+  // the language screen (#508): /language (#708), `lang` of a status card sent before #708
   privateChats.use(createLanguageScreenComposer({ backend, languages, logger }));
   privateChats.use(createTradingModeComposer({ backend, logger, connectButtons }));
 

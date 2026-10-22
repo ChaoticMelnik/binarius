@@ -37,15 +37,19 @@ const EDIT_GONE: ApiError = {
 
 function setup({
   language = BotLanguage.Ru,
+  cached = true,
   setLanguage = (_id, chosen) => Promise.resolve(chosen),
+  readLanguage: read = () => Promise.resolve(language),
 }: {
   language?: BotLanguage;
+  cached?: boolean;
   setLanguage?: BackendClient['setLanguage'];
+  readLanguage?: BackendClient['readLanguage'];
 } = {}) {
   const languages = createUserLanguages();
-  languages.set(USER.id, language);
+  if (cached) languages.set(USER.id, language);
   const set = vi.fn<BackendClient['setLanguage']>(setLanguage);
-  const readLanguage = vi.fn<BackendClient['readLanguage']>(() => Promise.resolve(language));
+  const readLanguage = vi.fn<BackendClient['readLanguage']>(read);
   const logger = fakeLogger();
   const bot = createBot({
     token: '123456:AA-bot-token',
@@ -85,6 +89,7 @@ const screenRows = (language: BotLanguage) =>
     ],
   ]);
 
+// LS1: `lang` is the button of a status card sent before #708; the entry since is /language
 describe('the language screen (#508)', () => {
   it('LS1 opens as a new message in the current language, the current one marked', async () => {
     const { press, calls, set } = setup({ language: BotLanguage.En });
@@ -172,5 +177,73 @@ describe('the language screen (#508)', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery']);
     expect(set).not.toHaveBeenCalled();
+  });
+});
+
+const USER_NOT_FOUND = () =>
+  Promise.reject(
+    new BackendError(BackendErrorCode.HttpStatus, {
+      status: 404,
+      reason: UserErrorCode.UserNotFound,
+    }),
+  );
+
+describe('/language (#708)', () => {
+  it('LS7 sends the screen as a new message in the current language, no backend call', async () => {
+    const { bot, calls, set, readLanguage } = setup({ language: BotLanguage.En });
+    await bot.handleUpdate(textUpdate('/language'));
+
+    expect(methods(calls)).toEqual(['sendMessage']);
+    expect(last(calls)?.text).toBe(BOT_TEXT_SOURCES_EN.languageScreen);
+    expect(rows(last(calls))).toEqual(screenRows(BotLanguage.En));
+    expect(set).not.toHaveBeenCalled();
+    expect(readLanguage).not.toHaveBeenCalled();
+  });
+
+  it.each(['/language@binarius_bot', '/language please'])(
+    'LS8 %s: the same one message',
+    async (text) => {
+      const { bot, calls } = setup({ language: BotLanguage.En });
+      await bot.handleUpdate(textUpdate(text));
+
+      expect(methods(calls)).toEqual(['sendMessage']);
+      expect(last(calls)?.text).toBe(BOT_TEXT_SOURCES_EN.languageScreen);
+      expect(rows(last(calls))).toEqual(screenRows(BotLanguage.En));
+    },
+  );
+
+  it('LS9 ignores /language outside a private chat', async () => {
+    const { bot, calls } = setup();
+    await bot.handleUpdate(textUpdate('/language', 'group'));
+
+    expect(calls).toEqual([]);
+  });
+
+  it('LS10 before the first /start: the screen in the client language, a choice sent to /start', async () => {
+    const { bot, calls, set, readLanguage, languages } = setup({
+      cached: false,
+      readLanguage: USER_NOT_FOUND,
+      setLanguage: USER_NOT_FOUND,
+    });
+    const from = { ...USER, language_code: 'de' };
+    await bot.handleUpdate(textUpdate('/language', 'private', from));
+
+    expect(methods(calls)).toEqual(['sendMessage']);
+    expect(last(calls)?.text).toBe(BOT_TEXT_SOURCES_EN.languageScreen);
+    expect(rows(last(calls))).toEqual(screenRows(BotLanguage.En));
+    expect(readLanguage).toHaveBeenCalledTimes(1);
+
+    await bot.handleUpdate(
+      callbackUpdate(languageSetCallbackData(BotLanguage.Ru), 'private', from),
+    );
+
+    expect(set).toHaveBeenCalledWith(String(USER.id), BotLanguage.Ru);
+    expect(last(calls)?.text).toBe(BOT_TEXT_SOURCES_EN.languageNeedsStart);
+    expect(rows(last(calls))).toEqual(
+      runWithLanguage(BotLanguage.En, () => [
+        [{ text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA }],
+      ]),
+    );
+    expect(languages.get(USER.id)).toBeUndefined();
   });
 });

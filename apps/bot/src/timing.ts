@@ -201,7 +201,7 @@ export const HANDLER_CALLS = {
   settings: { backend: 1, telegram: 1 },
   // /invite (#115): readReferral, then sendMessage
   invite: { backend: 1, telegram: 1 },
-  // «👥 Позвать друга» (#115): answerCallbackQuery, then /invite's path
+  // «👥 Позвать» (#115): answerCallbackQuery, then /invite's path
   inviteButton: { backend: 1, telegram: 2 },
   // a level pressed: answerCallbackQuery ∥ setNotificationLevel — counted the same way as confirm —
   // then editMessageText refused by Telegram (GrammyError) → sendMessage
@@ -242,9 +242,12 @@ export const HANDLER_CALLS = {
   // «Нужен возврат» (`ps:r:<id>`): answerCallbackQuery ∥ requestStarsRefund — counted as
   // sequential, as in confirm — then sendMessage
   paysupportRequest: { backend: 1, telegram: 2 },
-  // the language screen (#508, language-screen.ts) from the status card: answerCallbackQuery, then
-  // sendMessage
+  // the language screen (#508, language-screen.ts) from a status card sent before #708:
+  // answerCallbackQuery, then sendMessage
   language: { backend: 0, telegram: 2 },
+  // /language (#708): sendMessage; no backend call — the language read is languageMiddleware's,
+  // bounded by LANGUAGE_READ_TIMEOUT_MS in its own link of the shutdown chain
+  languageCommand: { backend: 0, telegram: 1 },
   // a language pressed: answerCallbackQuery ∥ setLanguage — counted as sequential, as in confirm —
   // then editMessageText refused as gone → sendMessage
   languageSet: { backend: 1, telegram: 3 },

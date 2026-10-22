@@ -13,6 +13,7 @@ export const BOT_COMMANDS = [
   { command: 'account', key: 'accountCommand' },
   { command: 'buy', key: 'buyCommand' },
   { command: 'settings', key: 'settingsCommand' },
+  { command: 'language', key: 'languageCommand' },
   { command: 'invite', key: 'inviteCommand' },
   { command: 'help', key: 'helpCommand' },
   { command: 'support', key: 'supportCommand' },

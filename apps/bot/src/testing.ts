@@ -662,18 +662,18 @@ export const chatMemberUpdate = (
     },
   }) as unknown as Update;
 
-export const callbackUpdate = (data: string, chatType = 'private'): Update =>
+export const callbackUpdate = (data: string, chatType = 'private', from: User = USER): Update =>
   ({
     update_id: ++updateId,
     callback_query: {
       id: 'query-1',
-      from: USER,
+      from,
       chat_instance: 'instance-1',
       data,
       message: {
         message_id: ++updateId,
         date: 1,
-        chat: { id: USER.id, type: chatType, first_name: USER.first_name },
+        chat: { id: from.id, type: chatType, first_name: from.first_name },
         from: { ...BOT_INFO },
       },
     },

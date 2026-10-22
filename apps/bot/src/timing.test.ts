@@ -2827,7 +2827,7 @@ const INVITE_BRANCHES: readonly Branch[] = [
   },
 ];
 
-// «👥 Позвать друга» (#115): /invite's branches after the answer
+// «👥 Позвать» (#115): /invite's branches after the answer
 const INVITE_BUTTON_BRANCHES: readonly Branch[] = [
   ...INVITE_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
     ...branch,
@@ -3213,6 +3213,20 @@ const LANGUAGE_BRANCHES: readonly Branch[] = [
   },
   LANGUAGE_WORST_CASE,
 ];
+// /language (#708): the same screen, no answerCallbackQuery
+const LANGUAGE_COMMAND_WORST_CASE: Branch = {
+  label: 'the language screen is sent',
+  update: textUpdate('/language'),
+  expected: { backend: 0, telegram: 1 },
+};
+const LANGUAGE_COMMAND_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/language', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  LANGUAGE_COMMAND_WORST_CASE,
+];
 const LANGUAGE_SET_WORST_CASE: Branch = {
   label: 'the edit is refused and the screen is sent anew',
   update: LANGUAGE_SET_UPDATE,
@@ -3414,6 +3428,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       [LANGUAGE_CURRENT_WORST_CASE],
       LANGUAGE_CURRENT_WORST_CASE,
       HANDLER_CALLS.languageCurrent,
+    );
+  });
+
+  it('/language (#708)', async () => {
+    await checkHandler(
+      'languageCommand',
+      LANGUAGE_COMMAND_BRANCHES,
+      LANGUAGE_COMMAND_WORST_CASE,
+      HANDLER_CALLS.languageCommand,
     );
   });
 

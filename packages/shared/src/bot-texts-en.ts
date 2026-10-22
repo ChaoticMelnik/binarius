@@ -204,12 +204,11 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   modeConfirmButton: '✅ I confirm',
   modeCancelButton: '↩️ Cancel',
   modeScreenButton: '⚙️ Mode',
-  inviteButton: '👥 Invite friends',
+  inviteButton: '👥 Invite',
   inviteShareButton: '📤 Share',
   buyButton: '⭐ Buy',
   depositButton: '💳 Top up',
   sessionShareButton: '📤 Share',
-  languageButton: '🌐 Язык/Language',
 
   // ---- commands, profile ---------------------------------------------------------------------
   startCommand: 'Start',
@@ -217,6 +216,7 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   stopCommand: 'Stop the session',
   accountCommand: 'Binodex account',
   settingsCommand: 'Notification settings',
+  languageCommand: 'Bot language',
   inviteCommand: 'Invite a friend',
   buyCommand: 'Buy tokens',
   helpCommand: 'Help',

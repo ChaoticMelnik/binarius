@@ -19,7 +19,7 @@ export interface InviteDeps {
 }
 
 // The /invite screen (#115, docs/referrals.md → The screen): the user's personal link and how many
-// users it brought. Reached by /invite, «👥 Позвать друга» and its «🔄 Повторить»; always a new
+// users it brought. Reached by /invite, «👥 Позвать» and its «🔄 Повторить»; always a new
 // message, since the card and the summary card it is pressed under are photos.
 export async function showInvite(
   ctx: Context,
