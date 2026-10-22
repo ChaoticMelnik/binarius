@@ -146,6 +146,9 @@ services:
       # The H1 shadow (#669, docs/h1.md): on unless set to off. Forwarded only when set; here
       # rather than in the broker anchor: the worker never reads it.
       H1_SHADOW:
+      # The H1 driver's wait for the worker's take (#707, docs/h1.md -> The driver): 700 ms unless
+      # set. Forwarded only when set; here rather than in the broker anchor: the worker never reads it.
+      H1_SUBMIT_BUDGET_MS:
       # The cashier widget's origins (#11, docs/deposit.md). Forwarded only when set; unset, the
       # backend allows the origin of BROKER_OAUTH_AUTHORIZE_URL alone. `web` below reads the same
       # line (#111): the two lists must be one, tied by both processes' timing.test.ts.
