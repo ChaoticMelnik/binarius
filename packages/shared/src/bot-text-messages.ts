@@ -773,16 +773,17 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   },
   {
     // a block of a session's cycle message, sent and edited by the backend (#551, session-texts.ts
-    // → sessionCycleText): the adaptive line above step 2's block, then the block, settled or
-    // open (#700). A cycle's message is such units a blank line apart; the sender splits it by its
-    // real length before the limit, never inside a unit, so this unit is what must fit
+    // → sessionCycleText): a block, settled or open (#700), with the adaptive line where its slot
+    // puts it (#718) - under a lost step 1, or above step 2 after a tie. A cycle's message is such
+    // units a blank line apart; the sender splits it by its real length before the limit, never
+    // inside a unit, so this unit is what must fit
     id: 'sessionTrade',
     title: 'Сообщение сделки сессии',
     limit: BOT_TEXT_LIMIT,
     body: [
       oneOf(
         [anyOf('sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied', 'sessionTradeOpen')],
-        // the line stands only above step 2: one digit
+        // the line above step 2 after a tie at step 1: one digit
         [
           k('sessionAdaptiveStake'),
           '\n\n',
@@ -797,6 +798,8 @@ const ASSEMBLED: readonly BotTextMessage[] = [
             ).map((key) => [k(key, { step: () => 1 })]),
           ),
         ],
+        // the line under a lost step 1 (#718): one digit
+        [k('sessionTradeLost', { step: () => 1 }), '\n\n', k('sessionAdaptiveStake')],
       ),
     ],
   },

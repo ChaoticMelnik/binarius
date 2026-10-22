@@ -726,6 +726,10 @@ describe('a martingale cycle is one message (#551)', () => {
     await notices.tick();
 
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    // the lost step 1 carries the adaptive line under it at once (#718)
+    expect(pushedText(sendsTo(captured.calls, target)[0]!.payload)).toBe(
+      [loss(1), ADAPTIVE].join('\n\n'),
+    );
     const edits = editsTo(captured.calls, target);
     expect(edits).toHaveLength(2);
     const id = answered.get(sendsTo(captured.calls, target)[0]!.payload);
@@ -749,7 +753,7 @@ describe('a martingale cycle is one message (#551)', () => {
     await notices.tick();
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(2);
-    expect(pushedText(sends[1]!.payload)).toBe(loss(1, 2, 4));
+    expect(pushedText(sends[1]!.payload)).toBe([loss(1, 2, 4), ADAPTIVE].join('\n\n'));
     expect(sends[1]!.payload.disable_notification).toBe(true);
     expect(await cycleStateOf(target)).toEqual({
       messageId: answered.get(sends[1]!.payload),
@@ -769,6 +773,21 @@ describe('a martingale cycle is one message (#551)', () => {
     expect(pushedText(editsTo(captured.calls, target)[0]!.payload)).toContain(
       '⚪ Ставка: $5.00 → $0.00, ставка вернулась',
     );
+  });
+
+  it('D19 a lost step 1 and a stop before step 2: the line stays under it, the summary follows (#718)', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    await settled(target, '-5');
+    await stop(target, TradingSessionStopReason.UserStopped);
+    await notices.tick();
+    await notices.tick();
+    const chat = chatOf(captured.calls, target);
+    expect(chat).toHaveLength(2);
+    expect(chat[0]).toBe([loss(1), ADAPTIVE].join('\n\n'));
+    expect(chat[1]).toContain('⏹ Сессия остановлена по твоей команде.');
+    expect(editsTo(captured.calls, target)).toEqual([]);
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
   });
 
   it('D15 a restarted sender edits the saved cycle message: nothing new is sent', async () => {
@@ -2861,5 +2880,33 @@ describe("the open trade's block (#700)", () => {
     await settle(trade, '-5');
     await notices.tick();
     expect(chatOf(captured.calls, target)).toEqual([loss(1)]);
+  });
+
+  it('O18 a tie at step 1: no line under it; step 2 opens and settles under the line, which stays one (#718)', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    const tie =
+      '⚡ Цикл 1 Шаг 1\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 0.10000 → 0.10010</pre>';
+    await settled(target, '0');
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([tie]);
+    const second = await opened(target);
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([[tie, ADAPTIVE, openBlock(2)].join('\n\n')]);
+    await settle(second, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([[tie, ADAPTIVE, loss(2)].join('\n\n')]);
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+  });
+
+  it('O19 martingale: an open step 1 without the line; settled as a loss, the line under it (#718)', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    const trade = await opened(target);
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([openBlock(1)]);
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([[loss(1), ADAPTIVE].join('\n\n')]);
   });
 });

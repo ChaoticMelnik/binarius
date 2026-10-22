@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AdaptiveLineSlot,
   SessionStakeStrategy,
   SessionTradeResult,
+  sessionAdaptiveLines,
+  sessionNextAdaptiveLine,
   sessionNextStep,
   sessionTradeSteps,
 } from './session-steps';
@@ -84,6 +87,83 @@ describe('sessionNextStep (#700)', () => {
 
 // #552: the session's closed cycles (sessionProgress, what ends it) are the cycles the messages
 // number (sessionTradeSteps) whose last trade is a win, or every cycle under fixed: one boundary
+// #718: the adaptive line stands once per martingale cycle, between steps 1 and 2 - under a lost
+// step 1 at once, above step 2 after a tie - and never under fixed
+describe('sessionAdaptiveLines (#718)', () => {
+  const { Below: B, Above: A } = AdaptiveLineSlot;
+  const histories: SessionTradeResult[][] = [[]];
+  for (let length = 1; length <= 6; length += 1) {
+    for (const prefix of histories.filter((h) => h.length === length - 1)) {
+      for (const result of [W, L, T]) histories.push([...prefix, result]);
+    }
+  }
+
+  it('AL1 a lost step 1: the line under it at once', () => {
+    expect(sessionAdaptiveLines([L], 'martingale')).toEqual([B]);
+  });
+
+  it('AL2 a lost step 1, then a tie, a loss and a win: the line under step 1 alone', () => {
+    expect(sessionAdaptiveLines([L, T, L, W], 'martingale')).toEqual([B, null, null, null]);
+  });
+
+  it('AL3 a tie at step 1: nothing under it, the line above step 2', () => {
+    expect(sessionAdaptiveLines([T, L, L, W], 'martingale')).toEqual([null, A, null, null]);
+  });
+
+  it('AL4 each cycle its own slot', () => {
+    expect(sessionAdaptiveLines([T, T, L], 'martingale')).toEqual([null, A, null]);
+    expect(sessionAdaptiveLines([L, W, L], 'martingale')).toEqual([B, null, B]);
+  });
+
+  it('AL5 fixed: no line, whatever the trades ended with', () => {
+    expect(sessionAdaptiveLines([L, L, T], 'fixed')).toEqual([null, null, null]);
+  });
+
+  it('AL6 every history of up to six trades: one line per cycle of two blocks or a lost one, between steps 1 and 2', () => {
+    for (const history of histories) {
+      expect(sessionAdaptiveLines(history, 'fixed'), history.join('')).toEqual(
+        history.map(() => null),
+      );
+      const slots = sessionAdaptiveLines(history, 'martingale');
+      const steps = sessionTradeSteps(history, 'martingale');
+      const cycles = new Map<number, number[]>();
+      steps.forEach(({ cycle }, i) => cycles.set(cycle, [...(cycles.get(cycle) ?? []), i]));
+      for (const indices of cycles.values()) {
+        const [first, second] = indices;
+        const expected = indices.map(() => null as AdaptiveLineSlot | null);
+        if (history[first!] === L) expected[0] = B;
+        else if (second !== undefined) expected[1] = A;
+        expect(
+          indices.map((i) => slots[i]),
+          history.join(''),
+        ).toEqual(expected);
+      }
+    }
+  });
+
+  it('AL7 the open block: above step 2 after a tie, else none; the result block agrees but for the line a loss puts under step 1', () => {
+    expect(sessionNextAdaptiveLine([T], 'martingale')).toBe(A);
+    expect(sessionNextAdaptiveLine([L], 'martingale')).toBeNull();
+    expect(sessionNextAdaptiveLine([], 'martingale')).toBeNull();
+    expect(sessionNextAdaptiveLine([W], 'martingale')).toBeNull();
+    expect(sessionNextAdaptiveLine([T], 'fixed')).toBeNull();
+    for (const strategy of Object.values(SessionStakeStrategy)) {
+      for (const history of histories) {
+        const open = sessionNextAdaptiveLine(history, strategy);
+        expect(open, history.join('')).not.toBe(B);
+        for (const result of [W, T]) {
+          expect(
+            sessionAdaptiveLines([...history, result], strategy).at(-1),
+            history.join(''),
+          ).toBe(open);
+        }
+        const lost = sessionAdaptiveLines([...history, L], strategy).at(-1);
+        expect(lost === B ? null : lost, history.join('')).toBe(open);
+      }
+    }
+  });
+});
+
 describe('sessionProgress against sessionTradeSteps (#552)', () => {
   const histories: SessionTradeResult[][] = [[]];
   for (let length = 1; length <= 6; length += 1) {
