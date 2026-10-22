@@ -251,7 +251,7 @@ const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
 const NEW_ANALYSIS = [
   button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
 ];
-// «👥 Позвать друга» beside the menu at every end of a session (#115)
+// «👥 Позвать» beside the menu at every end of a session (#115)
 const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
 // «💳 Пополнить» (#27): the cashier Mini App, a step forward on its own row above the invite
 // (#475)

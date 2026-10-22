@@ -7,7 +7,6 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   keyboardOf,
-  LANGUAGE_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   sessionStopCallbackData,
   STAR_PACKAGES,
@@ -61,7 +60,7 @@ export const demoButton = (): BotButton =>
 // the status card's entry, and the account card's since #350
 export const demoKeyboard = (): BotKeyboard => keyboardOf([demoButton()]);
 
-// «👥 Позвать друга» (#115, docs/referrals.md): the /invite screen. Only the bot sends it.
+// «👥 Позвать» (#115, docs/referrals.md): the /invite screen. Only the bot sends it.
 export const INVITE_CALLBACK_DATA = 'invite';
 export const inviteButton = (): BotButton =>
   callbackButton(ButtonRole.Nav, LABELS.inviteButton, INVITE_CALLBACK_DATA);
@@ -78,17 +77,13 @@ export const depositButton = (cashierUrl: string): BotButton =>
 export const depositButtons = (cashierUrl: string | undefined): BotButton[] =>
   cashierUrl === undefined ? [] : [depositButton(cashierUrl)];
 
-// «🌐 Язык/Language» (#508, language-screen.ts): the language screen as a new message. The label
-// is in both languages at once: a user who cannot read the bot's language still finds it.
-export const languageButton = (): BotButton =>
-  callbackButton(ButtonRole.Nav, LABELS.languageButton, LANGUAGE_CALLBACK_DATA);
-
 // The mode screen (#474, trading-mode.ts), opened from the status card as a new message
 export const MODE_CALLBACK_DATA = 'mode';
 
-// The status card's: the entry on its own row, the mode screen and the invite (#115), the
-// purchase (#117) and the language (#508) in two rows, then the deposit (#27) on its own (rows:
-// docs/bot-navigation.md → Roles, colours and rows). In real mode the entry reads «🚀 Торговать»
+// The status card's: the entry on its own row, the mode screen, the invite (#115) and the
+// purchase (#117) in one row of three, then the deposit (#27) on its own (rows:
+// docs/bot-navigation.md → Roles, colours and rows); the language is the /language command since
+// #708. In real mode the entry reads «🚀 Торговать»
 // and keeps DEMO_CALLBACK_DATA: the path is the same up to the stake button (#121); the mode
 // button reads «🎮 В демо» there and opens the screen too, it never switches by itself (#474).
 // The account card keeps demoKeyboard.
@@ -102,7 +97,6 @@ export const statusCardKeyboard = (mode: TradeMode, cashierUrl: string | undefin
       : [demoButton(), callbackButton(ButtonRole.Nav, LABELS.modeButton, MODE_CALLBACK_DATA)]),
     inviteButton(),
     buyButton(),
-    languageButton(),
     ...depositButtons(cashierUrl),
   ]);
 

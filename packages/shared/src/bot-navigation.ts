@@ -25,8 +25,9 @@ export const DEMO_CALLBACK_DATA = 'demo';
 export const CONNECT_CALLBACK_DATA = 'connect';
 // «🏠 В меню» (#350): the status card, as /menu.
 export const MENU_CALLBACK_DATA = 'menu';
-// «🌐 Язык/Language» on the status card (#508): the language screen, a read; `lang:<language>`
-// on that screen saves the choice, a write. Only the bot draws them, kept beside «🏠 В меню».
+// «🌐 Язык/Language» on a status card sent before #708 (#508; since #708 the entry is the
+// /language command): the language screen, a read; `lang:<language>` on that screen saves the
+// choice, a write. Only the bot draws them, kept beside «🏠 В меню».
 export const LANGUAGE_CALLBACK_DATA = 'lang';
 export const languageSetCallbackData = (language: BotLanguage): string =>
   `${LANGUAGE_CALLBACK_DATA}:${language}`;

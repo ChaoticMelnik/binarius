@@ -120,7 +120,7 @@ const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 // demo's one duration (#685: a 15 s session gets a 5 s one) - in real the session button's data,
 // so the start handler checks it as any other; in demo the amount screen (#476) - while a session
 // at that duration fits, then the end of the path with «💳 Пополнить» (#27) on its own row and
-// «👥 Позвать друга» (#115) beside the menu; the deposit, the invite and the menu alone when its
+// «👥 Позвать» (#115) beside the menu; the deposit, the invite and the menu alone when its
 // settings could not be read. A no_signal_timeout stop (#509) offers another pair instead of the
 // same one again. Under its summary (#318, #537), under the reply to its stop and under an old
 // status message the stop drew in place (#536). «📊 Анализ» and «📡 Сигналы» edit the message they

@@ -24,8 +24,8 @@ import { editMessageTextHtml, replyHtml } from './send';
 import { settle } from './settled';
 import { languageLabel, TEXTS } from './texts';
 
-// The language screen (#508, docs/bot-navigation.md → The language screen): `lang` from the status
-// card opens it as a new message; `lang:<language>` saves the choice — a write
+// The language screen (#508, docs/bot-navigation.md → The language screen): /language (#708) and
+// `lang` of a status card sent before #708 open it as a new message; `lang:<language>` saves the choice — a write
 // (WRITE_CALLBACK_PREFIXES), no «🔄 Повторить» carries it — and redraws the screen in place in the
 // new language, so the user sees the choice took. The current language pressed is only answered.
 
@@ -60,6 +60,13 @@ export function createLanguageScreenComposer<C extends Context>({
   logger,
 }: LanguageScreenDeps): Composer<C> {
   const composer = new Composer<C>();
+
+  // before the first /start the screen is in the client's language (languageMiddleware), and a
+  // choice is answered with languageNeedsStart below
+  composer.command('language', async (ctx) => {
+    const { text, keyboard } = languageScreen(currentLanguage());
+    await replyHtml(ctx, text, { reply_markup: keyboard });
+  });
 
   composer.callbackQuery(LANGUAGE_CALLBACK_DATA, async (ctx) => {
     await answerCallback(ctx, logger);
