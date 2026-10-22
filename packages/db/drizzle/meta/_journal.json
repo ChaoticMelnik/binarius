@@ -519,6 +519,13 @@
       "when": 1792609240241,
       "tag": "0073_h1_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1792658783835,
+      "tag": "0074_session_open_notice",
+      "breakpoints": true
     }
   ]
 }

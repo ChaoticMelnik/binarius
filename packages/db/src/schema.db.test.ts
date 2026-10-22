@@ -583,6 +583,8 @@ describe('enum and uniqueness constraints', () => {
       'signal_decisions_id_session_key',
       'star_payments_id_user_key',
       'trade_intents_id_account_mode_key',
+      // #700: the open block's intent is one of the session's own
+      'trade_intents_id_session_key',
       'trade_intents_id_user_key',
       // #666: a session's decision names the session's account
       'trading_sessions_id_account_key',
@@ -3644,6 +3646,41 @@ describe('trading_sessions (#130)', () => {
         .values({ ...session(seed.accountId), cycleMessageId: id, cycleMessageFrom: from })
         .returning();
       expect([row!.cycleMessageId, row!.cycleMessageFrom]).toEqual([id, from]);
+    });
+  });
+
+  // the open trade's block (#700): the intent is one of the session's own; NULL checks nothing
+  it("rejects open_notice_intent_id naming another session's intent and accepts its own", async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const stopped = { status: 'stopped', stopReason: 'completed', endedAt: new Date() };
+      const [own, other] = await tx
+        .insert(tradingSessions)
+        .values([session(seed.accountId), session(seed.accountId, stopped)])
+        .returning({ id: tradingSessions.id });
+      const [ownIntent, otherIntent] = await tx
+        .insert(tradeIntents)
+        .values([
+          intent(seed, 'open-own', { tradingSessionId: own!.id, status: 'accepted' }),
+          intent(seed, 'open-other', { tradingSessionId: other!.id, status: 'settled' }),
+        ])
+        .returning({ id: tradeIntents.id });
+      await tx.execute(sql`savepoint foreign_intent`);
+      await rejectsWith(
+        tx
+          .update(tradingSessions)
+          .set({ openNoticeIntentId: otherIntent!.id })
+          .where(eq(tradingSessions.id, own!.id)),
+        '23503',
+        'trading_sessions_open_notice_intent_fk',
+      );
+      await tx.execute(sql`rollback to savepoint foreign_intent`);
+      const [row] = await tx
+        .update(tradingSessions)
+        .set({ openNoticeIntentId: ownIntent!.id })
+        .where(eq(tradingSessions.id, own!.id))
+        .returning({ openNoticeIntentId: tradingSessions.openNoticeIntentId });
+      expect(row!.openNoticeIntentId).toBe(ownIntent!.id);
     });
   });
 
