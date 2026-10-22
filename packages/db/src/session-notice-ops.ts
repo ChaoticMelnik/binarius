@@ -279,6 +279,103 @@ export async function releaseSessionTradeNotice(
   return rows.length > 0;
 }
 
+// An H1 session's summary (#707, docs/bot-session.md → An H1 session): the first `to` settled
+// trades in the cursor's order, counted by class, and their profit summed in numeric (Rule 2)
+export interface SessionTradeTotals {
+  won: number;
+  lost: number;
+  tied: number;
+  result: DecimalString;
+}
+
+export interface ClaimedSessionTrades {
+  totals: SessionTradeTotals;
+  cycleMessage: SessionCycleMessage | null;
+}
+
+// Claims the settled trades from + 1 .. to of a session at once (#707): one CAS raises the cursor
+// from `from` to `to`, only while no summary was sent and `to` trades are settled; the batch twin
+// of claimSessionTradeNotice for the H1 summary, edited every H1_NOTICE_EVERY_TRADES trades.
+// Undefined when the CAS lost. The totals are read in the same transaction.
+export async function claimSessionTradeNotices(
+  db: Db,
+  { sessionId, from, to }: { sessionId: string; from: number; to: number },
+): Promise<ClaimedSessionTrades | undefined> {
+  return db.transaction(async (tx) => {
+    const [won] = await tx
+      .update(tradingSessions)
+      .set({ notifiedTrades: to })
+      .where(
+        and(
+          eq(tradingSessions.id, sessionId),
+          eq(tradingSessions.notifiedTrades, from),
+          isNull(tradingSessions.finalNoticeSentAt),
+          sql`${settledCountSql} >= ${to}`,
+        ),
+      )
+      .returning({
+        messageId: tradingSessions.cycleMessageId,
+        from: tradingSessions.cycleMessageFrom,
+      });
+    if (won === undefined) return undefined;
+
+    const first = tx
+      .select({ profit: brokerTrades.profit })
+      .from(tradeIntents)
+      .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+      .where(
+        and(
+          eq(tradeIntents.tradingSessionId, sessionId),
+          eq(tradeIntents.status, TradeIntentStatus.Settled),
+        ),
+      )
+      .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id))
+      .limit(to)
+      .as('first');
+    const [totals] = await tx
+      .select({
+        trades: sql<number>`count(*)::int`,
+        won: sql<number>`(count(*) filter (where ${first.profit} > 0))::int`,
+        lost: sql<number>`(count(*) filter (where ${first.profit} < 0))::int`,
+        tied: sql<number>`(count(*) filter (where ${first.profit} = 0))::int`,
+        result: sql<DecimalString>`coalesce(sum(${first.profit}), 0)::text`,
+      })
+      .from(first);
+    if (totals === undefined || totals.trades !== to) {
+      throw new Error(`session ${sessionId} lost a settled trade of the first ${to}`);
+    }
+    // trading_sessions_cycle_message_pair_check: both or neither
+    const cycleMessage =
+      won.messageId === null || won.from === null
+        ? null
+        : { messageId: won.messageId, from: won.from };
+    return {
+      totals: { won: totals.won, lost: totals.lost, tied: totals.tied, result: totals.result },
+      cycleMessage,
+    };
+  });
+}
+
+// Puts a claimed batch back (`to` → `from`): only for a send Telegram certainly did not deliver.
+// False when the cursor moved or the summary was sent.
+export async function releaseSessionTradeNotices(
+  db: Db,
+  { sessionId, from, to }: { sessionId: string; from: number; to: number },
+): Promise<boolean> {
+  const rows = await db
+    .update(tradingSessions)
+    .set({ notifiedTrades: from })
+    .where(
+      and(
+        eq(tradingSessions.id, sessionId),
+        eq(tradingSessions.notifiedTrades, to),
+        isNull(tradingSessions.finalNoticeSentAt),
+      ),
+    )
+    .returning({ id: tradingSessions.id });
+  return rows.length > 0;
+}
+
 // Closes the session's notices (#537): one CAS sets final_notice_sent_at only on a finished
 // session whose every settled trade was claimed first and whose waiting message is gone (#536),
 // so the bot's summary comes after every message of the backend. `closeSummary` - the session has

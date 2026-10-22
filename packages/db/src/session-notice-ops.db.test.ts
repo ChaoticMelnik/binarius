@@ -18,6 +18,7 @@ import { tradingSessions, users } from './schema/index';
 import {
   claimSessionFinalNotice,
   claimSessionTradeNotice,
+  claimSessionTradeNotices,
   claimSessionWaiting,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
@@ -28,6 +29,7 @@ import {
   recordSessionCycleMessage,
   releaseSummaryFallback,
   releaseSessionTradeNotice,
+  releaseSessionTradeNotices,
   releaseSessionWaiting,
 } from './session-notice-ops';
 import {
@@ -257,6 +259,67 @@ describe('claimSessionTradeNotice', () => {
       await releaseSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 1 }),
     ).toBe(false);
     expect((await rowOf(target.session)).notifiedTrades).toBe(1);
+  });
+});
+
+describe('claimSessionTradeNotices (#707, the H1 summary)', () => {
+  const claimBatch = (session: { id: string }, from: number, to: number) =>
+    claimSessionTradeNotices(tmp.db, { sessionId: session.id, from, to });
+
+  it('N24 claims up to the settled count, never past it', async () => {
+    const target = await seedSession();
+    for (const profit of ['4.6', '-5', '4.6']) await settled(target, profit);
+    expect(await claimBatch(target.session, 0, 4)).toBeUndefined();
+    expect((await rowOf(target.session)).notifiedTrades).toBe(0);
+    expect(await claimBatch(target.session, 0, 3)).toEqual({
+      totals: { won: 2, lost: 1, tied: 0, result: '4.20000000' },
+      cycleMessage: null,
+    });
+    expect((await rowOf(target.session)).notifiedTrades).toBe(3);
+  });
+
+  it('N25 a batch claims from the cursor only: a stale from loses', async () => {
+    const target = await seedSession();
+    for (const profit of ['4.6', '-5', '0']) await settled(target, profit);
+    expect(await claimBatch(target.session, 0, 2)).toBeDefined();
+    expect(await claimBatch(target.session, 0, 3)).toBeUndefined();
+    expect((await rowOf(target.session)).notifiedTrades).toBe(2);
+    expect((await claimBatch(target.session, 2, 3))?.totals).toEqual({
+      won: 1,
+      lost: 1,
+      tied: 1,
+      result: '-0.40000000',
+    });
+  });
+
+  it('N26 the totals are of the first `to` settled trades in order; a rejected step is none', async () => {
+    const target = await seedSession();
+    await settled(target, '4.6');
+    await rejected(target);
+    await settled(target, '-5');
+    await settled(target, '4.6');
+    expect((await claimBatch(target.session, 0, 2))?.totals).toEqual({
+      won: 1,
+      lost: 1,
+      tied: 0,
+      result: '-0.40000000',
+    });
+  });
+
+  it('N27 a release puts the batch back once; the closed notices refuse a claim', async () => {
+    const target = await seedSession();
+    for (const profit of ['4.6', '4.6']) await settled(target, profit);
+    await claimBatch(target.session, 0, 2);
+    const release = () =>
+      releaseSessionTradeNotices(tmp.db, { sessionId: target.session.id, from: 0, to: 2 });
+    expect(await release()).toBe(true);
+    expect((await rowOf(target.session)).notifiedTrades).toBe(0);
+    expect(await release()).toBe(false);
+    expect(await claimBatch(target.session, 0, 2)).toBeDefined();
+    await stop(target.session);
+    expect(await finalClaim(target.session)).toBe(true);
+    expect(await release()).toBe(false);
+    expect((await rowOf(target.session)).notifiedTrades).toBe(2);
   });
 });
 
