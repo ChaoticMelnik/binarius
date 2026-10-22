@@ -1,4 +1,4 @@
-# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537)
+# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never without one, and without one it waits for it, #664); a finished single trade's message
@@ -799,6 +799,27 @@ that message (`editMessageText`), which then lists every step of the cycle, the 
 bottom. The next cycle is a new message. Under the fixed strategy every trade is step 1 of its own
 cycle, so every trade is a new message of one block, as before #551.
 
+**The open block** (#700, the owner's idea 2026-10-21). Once a trade is open at the broker (its
+intent `accepted` with its `broker_trades` row `open`), its block goes into the cycle message
+before the result: the same head, the stake, the direction (`actionUp`/`actionDown` of the
+catalog) and the open price, «сделка открыта» in place of the result, and «→ …» in place of the
+close price (`sessionTradeOpen`). Step 1 sends it as a new message, a later step edits the cycle
+message, exactly as a result block would; the trade's settlement then edits the same block into
+its result. A trade already settled when the sender gets to it shows only its result block. The
+open block's cycle and step are the ones the trade settles at (`sessionNextStep`: a trade's
+position depends only on the results before it), and the adaptive line stands above an open
+step 2 as above a settled one. A trade after its open only settles (`accepted → settled` is the
+only edge out of `accepted`), so the block has no third state. H1 sessions (#670, settings v4)
+get no open block. The waiting message and its «⏹» do not change in this part: still the last
+message of the session, deleted before the open block's new message and sent again under it
+(#722 moves «⏹» under the open block).
+
+```text
+⚡ Цикл 2 Шаг 3
+⏳ Ставка: $11.50 · ⬆️ Вверх · сделка открыта
+📊 Цена: 0.49790 → …
+```
+
 ```text
 ⚡ Цикл 2 Шаг 1
 🔴 Ставка: $5.00 → -$5.00           (each block's two lines in a code block: Telegram shows it with «copy»)
@@ -873,8 +894,9 @@ cycle, so every trade is a new message of one block, as before #551.
 - **Without a trade** no summary is sent — except for a `no_signal_timeout` stop (#509): the user
   learns why the session stood, with sound, from the pair line and the stop line, now from the bot,
   as a text (#537).
-- **When.** The trades as they settle, within `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing; the
-  final mark on the tick after the last of them; the bot's summary on its tracker's next poll
+- **When.** Each trade's open block when it opens and its result when it settles, each within
+  `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing (a wake-up is #723), so a trade costs two calls
+  to its chat; the final mark on the tick after the last of them; the bot's summary on its tracker's next poll
   (≤ 10 s).
 - **An H1 session (#707)** ([h1.md → The driver](h1.md#the-driver-707)): no message per trade.
   One summary of the session (`sessionH1Progress`, `sessionH1ProgressMessage`) goes when
@@ -891,7 +913,7 @@ cycle, so every trade is a new message of one block, as before #551.
   session (`TIMING_CHAIN_HOLDS`).
 - **Who.** The session's owner by join (`trading_sessions → broker_accounts →
   users.telegram_user_id`); no id comes from outside. A user with `telegram_blocked_at` set gets
-  nothing: the trades are claimed without a call, and both marks are set by one CAS without reading
+  nothing: the trades and the open blocks are claimed without a call, and both marks are set by one CAS without reading
   the view — no balance GET for a user nothing can reach (#620, #537, D5′). The notification level
   does not apply: trade results are outside it (Rule 19).
 
@@ -934,11 +956,14 @@ out of the list and refuses the claim (#534 m5; the 0050 test's third session).
 
 **The cycle message** (#551, migration 0054): `cycle_message_id` is Telegram's `message_id` of
 the message the next step of the same cycle edits, `cycle_message_from` the index (from 0, in the
-cursor's order) of the first settled trade it shows; both or neither (CHECK), the id above 0, the
+cursor's order) of the first trade it shows, settled or open — an open block takes the index its
+trade gets once it settles (#700); both or neither (CHECK), the id above 0, the
 index from 0. The claim returns them with every settled trade up to the claimed one, so the
 sender knows the claimed trade's cycle and the blocks to show. One writer:
-`recordSessionCycleMessage`, a CAS that holds only while the cursor stands right after the claimed
-trade and no summary was sent, called only after Telegram answered a new message with its id. An
+`recordSessionCycleMessage`, a CAS that holds only while the cursor stands where the claim left
+it — right after the claimed trade, or for an open block at the settled count with
+`open_notice_intent_id` still its intent — and no summary was sent, called only after Telegram
+answered a new message with its id. An
 edit never changes them. For the claimed trade the sender:
 
 1. with no cycle message, or one that shows another cycle: sends a new message with the cycle's
@@ -958,6 +983,22 @@ Since the state is written only after a send went through, and the claim before 
 step's block is never sent twice by a retry; the next step's edit shows every block of its
 message again, so a block lost in the middle of a cycle comes back with the next step.
 
+**The open block's mark** (#700, migration 0074): `open_notice_intent_id` names the intent whose
+open block was claimed, NULL while none was. `claimSessionOpenNotice` writes it by one CAS before
+the call — only while it names another intent (or none), the notices are not closed, the session
+has the settled count the caller read and the cursor claimed them all (so the open block stands
+below every result block), and the intent is still the session's open trade (`accepted` with its
+broker trade `open`; one at most, Rule 7). `releaseSessionOpenNotice` clears it, on its own intent
+only, after a send Telegram certainly did not deliver (429, a definite refusal). The block is at
+most once: a claimed block whose send's outcome is unknown, whose process died before the call or
+that was dropped is not sent again — its trade's result comes by the cursor all the same. The
+column is owned by the composite FK `trading_sessions_open_notice_intent_fk (open_notice_intent_id,
+id) → trade_intents (id, trading_session_id)` (Rule 4; MATCH SIMPLE, so NULL checks nothing). The
+list (`listPendingSessionNotices`) adds a session whose open trade differs from the mark and whose
+settings are not H1's, with both ids; the sender's order in `serve` is: the trades past the
+cursor, then the open block, then the stale waiting message, then the final mark or the waiting
+message.
+
 ### Every way a send ends
 
 | Ending | Cursor / cycle message | Then |
@@ -976,6 +1017,15 @@ message again, so a block lost in the middle of a cycle comes back with the next
 | a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
 | the block does not fit (`BOT_TEXT_LIMIT`, 4069) | a new message from this trade; recorded from it | `info` … `split` |
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
+| **the open block** (#700): a new message sent | `open_notice_intent_id` = its intent; the cycle message = its id, `from` = the settled count, one CAS with the intent | the waiting message under it (as today); the result edits it |
+| the open block: an edit sent, or «message is not modified» | the mark set; the cycle message unchanged | the result edits it |
+| the open block: an edit gone | the mark set; after one more pace a new message with the cycle's blocks and the open block, recorded | `warn` `session open notice edited anew: the cycle message is gone` |
+| the open block: the user blocked the bot (flag), or a 403 | the mark set without a call (403: the user marked) | the result is claimed without a call |
+| the open block: 429 | the mark taken back (`releaseSessionOpenNotice`); the sender pauses | the same block first after the pause, if the trade is still open |
+| the open block: another 4xx | the mark taken back, an attempt counted; at the third left set, `warn` … `dropped` | no open block; the result comes |
+| the open block: 5xx, a timeout, the transport | the mark set; a new message records nothing | `warn` … `outcome unknown` / `edit outcome unknown`; the result: a new message after an unknown send (a repeat if it arrived, [risk 35](#accepted-risks)), an edit after an unknown edit |
+| the open block: the trade settled between the list and the claim | the claim refused (the open trade is no longer this intent) | the session's turn ends; the next tick sends its result block at once |
+| the open block: the process dies between the claim and the call; the block cannot be built (`error` `session open notice not built`) | the mark set | the open block is lost, the result comes, never a repeat |
 | the record refused (the cursor moved: another sender) | the other sender's record stands | a new message: at most repeated blocks, never a lost step; an edit: two senders' edits of one cycle message can land out of order and show the older step until the next step's edit ([risk 35](#accepted-risks); one sender in production) |
 | the message cannot be built (a bug) | a trade stays claimed; the fallback summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the fallback summary: the step is closed (`session summary not built`), the row leaves the list |
 | a statement or the fallback summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error`; the session is tried again next tick at its place in the list, every tick while it throws ([risk 84](#accepted-risks)) |
@@ -1002,7 +1052,10 @@ CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS)` = 9 333 ms < 10 000). A fallback summary a
 message's own steps start with their pace and a check of `stop()` (the summary's before its balance
 read), and the final mark is one statement without a pace, so
 these paths never add up; each is under phase 1's budget. The waiting message takes the same
-pacer's tokens (a send and a delete are calls); a new cycle is three calls instead of one. The bot's recovery after a restart adds up to 4 first polls a second on the same
+pacer's tokens (a send and a delete are calls); a new cycle is three calls instead of one. The
+open block (#700) adds a call per trade: its send (with the waiting message's delete and resend at
+step 1) or edit, then the result's edit — its own step in `serve` with its own pace and check of
+`stop()`, so the worst path in flight stays the gone edit's above. The bot's recovery after a restart adds up to 4 first polls a second on the same
 token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and only a stopped
 session's is an edit (#536, `mayDraw`) — up to 16 calls when each entry's summary is due (#537:
 a 429 adds one photo) ([risk
@@ -1183,6 +1236,10 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
 - `session trade notice edited anew: the cycle message is gone`, `session trade notice not
   recorded: no message id` (`warn`, #551); `session trade notice split: the cycle message is full`
   (`info`, with `from`, #551)
+- the open block's (#700, with `sessionId` and `intentId`): `session open notice refused`, `…
+  dropped`, `… outcome unknown`, `… edit outcome unknown`, `… refused: the user is unreachable`,
+  `… edited anew: the cycle message is gone`, `… not recorded: no message id` (`warn`); `session
+  open notice split: the cycle message is full` (`info`); `session open notice not built` (`error`)
 - `session waiting message refused`, `… dropped`, `… outcome unknown`, `… refused: the user is
   unreachable`, `… not recorded: no message id`, `… not deleted`, `… delete outcome unknown`, `…
   delete dropped`, `… not removed` (`warn`, #536), `… deleted after the stop took it over` (`warn`,
@@ -1745,6 +1802,20 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 94. **The tracked list without its third conjunct** (#537) relies on backfill 0072 and on the final
     mark closing «nothing to send» in its own statement: a row with the final mark, no trade and no
     `summary_sent_at` cannot arise after the deploy (N6′, B1).
+95. **The open block at most once, not exactly once** (#700): an unknown outcome, a drop after
+    three refusals, a process dying between the claim and the call — the open block is lost and
+    nothing repeats it; the trade's result still comes by the cursor. After an unknown outcome of
+    the open block's new message the result goes as a new message, so a block can show twice
+    (risk 35's class). Falsifiable: a trade of a running session whose result comes without its
+    open block while it stayed open longer than a tick.
+96. **Late or no open block** (#700): it comes on the sender's tick (3 s) plus the pace; a trade
+    of 5 s can settle before it, and then only the result shows (the wake-up is #723). Two calls a
+    trade go to one chat, about two in six seconds at a 5 s trade (#660's per-chat rate, not
+    measured).
+97. **The open trade in the list** (#700): the list's query gains the open-trade subquery twice —
+    in the select list and in the filter, one more SubPlan each (risk 85, not measured at the
+    pilot's volume, #660). The H1 exclusion is spelled twice, `isH1Settings` in the sender and
+    `h1SessionSql` in the list; the sender's O12 and the list's N32 pin both.
 98. **The deploy of #709**: the claim's answer loses `referralCode`, and both sides read it with a
     strict schema, so an old bot with a new backend and a new bot with an old backend lose a claimed
     summary (`ContractViolation` after the committed claim, risk 86's form; risk 87 was #537's
