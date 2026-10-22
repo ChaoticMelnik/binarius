@@ -112,7 +112,7 @@ this one and above `maxSteps`.
 | `invalid_amount`, `invalid_trade`, `invalid_payout` | the data contract (a database row or the pairs catalog) | stops the session and logs a contract problem; the same data gives the same answer |
 | `session_duration_exceeded`, `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded` | a martingale limit | ends the session with the `stop_reason` of the same name (#450) |
 | `below_min_trade_amount` | the account's broker minimum (`GET /broker/user`) | ends the session; the broker would answer 400 `Amount is below the minimum` |
-| `insufficient_balance` | the mode's balance in the snapshot | ends the session; the broker would answer 400 `Insufficient balance` — except on a balance older than the session's last settlement, which the orchestrator waits out until the no-signal limit (#696, [trading-session.md](trading-session.md#the-orchestrator) → The attempt) |
+| `insufficient_balance` | the mode's balance in the snapshot | ends the session; the broker would answer 400 `Insufficient balance` — except on a balance older than a settlement on the account in the session's mode (the session's, an earlier session's, a bot's one-off trade), which the orchestrator waits out one tick at a time until the no-signal limit counted from that settlement (#696, [trading-session.md](trading-session.md#the-orchestrator) → The attempt) |
 
 A martingale limit's stop ends the session with the `stop_reason` of the same name; every other
 `stop` ends it as `stake_stop` (#287). The code is in the log line either way. The orchestrator
