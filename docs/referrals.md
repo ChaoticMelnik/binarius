@@ -254,6 +254,7 @@ new bot against an old backend shows `unavailable` on `/invite` until the backen
 - **#633** — the English text of the reward notification (#576 sends it in Russian).
 - **#386** — deposit-based bonuses; rewards for an invitee's deposit are not in scope.
 - **#440** — the personal link in the summary's caption: done in #537 (`sessionSummaryLink`, «🤖
-  {referralLink}», the code created on the summary's claim, `?start=share` without one); #321's
-  share carries it since #538. A forward of the summary counts the newcomer as invited (#115).
+  {referralLink}», the code created on the summary's claim, `?start=share` without one); **reversed
+  by #709** (owner's decision 2026-10-21): the summary's caption carries no link, a forward of the
+  summary invites nobody. #321's share carries the personal link since #538.
 - Inline mode (`switch_inline_query`) for `/invite` and the admin card — not in scope.
