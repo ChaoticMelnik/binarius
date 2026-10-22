@@ -3981,3 +3981,35 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 1. A plan that makes a step run sooner lists every state the step reads and its writer, for every event that now triggers it, and treats a removed delay as a possible guard — **внедрено в #717: `.claude/skills/architect/SKILL.md` → Validation checklist**
 2. The manager takes the implementer's branch name from the plan when the plan names one — **внедрено в #717: `.claude/skills/manager/SKILL.md` → Night additions (Implementer)**
 3. Remaining findings — **вынесено в #716**
+
+---
+
+## #697 — Сессия: сократить задержку решения после закрытия свечи с 2 с по замеру кольца сокета (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Clean `main` c1bf86c3, Codex ready, no Fable limit in 7 days, previous audit (#696) fully statused. Open PR #720 (#698) overlapping `orchestrator.ts`, tests, docs, stand. |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended (log proxy, candle timer, one shared constant, keep the unclosed rule + test). Pilot measurement collected read-only by tech-lead over SSH with the owner's permission: 2 h window (deploy at 06:15Z), `unclosed/decided` 1.07 %, `watermarkLagMs` p95 364 ms, worker decisions every ~10 s. Plan 6336299441, ≈540 lines. |
+| Implementer | clarify | Opus. 2 questions: slack value (owner: 500 ms) and a plan defect — the holds written in #720's shape, not `main`'s. |
+| Architect | Plan Update 1 | Opus. Defect accepted (`candle: true` on both candle holds, `signalAction` kept); also found the timer armed twice (M2 could not go red) → armed once in the tick's `finally`; P10, M9, M10 added (6336446692). |
+| Implementer | first pass | Opus. PR #724, 4 commits, 428 lines, `pnpm check` 0 at `b9935cbd`, mutations 10/10 (6337137240). Commit 2 rewritten before the push after a red per-commit check. |
+| Tech Lead | Phase 3 audit | 6337157980. |
+| Reviewer | round 1 | 0 / 0 / 4; only 3c (no security surface, < 300 code lines). Codex 6-pre: usage limit until 22.10 12:53 (job task-mvjc2jkr-lre5ko), skip line. |
+| Tech Lead | merge | Owner chose to merge before #720. `--rebase --delete-branch` 2026-10-22T09:25:38Z; `gh` failed to delete the local branch held by the implementer's worktree and left the remote branch — removed by hand. Merge-order notice on #720 (6337412642). No migration. Minors → #725. |
+| Tech Lead | models | Fable first plan; Opus Plan Update, implementer, reviewer, 3c. |
+
+### Review iterations: 1
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan wrote the holds in open PR #720's shape while the branch starts from `main` | — (plan defect, caught before code) | single-source | the conflicts section read #720's diff as the target shape | Architect (first plan) |
+| Plan armed the candle timer in two places, one redundant → mutation M2 could not go red | — (plan defect) | unverified-claim | the mutation's expected test was not traced through the call path | Architect (first plan) |
+| `--delete-branch` left the remote branch | — (ops) | other | the implementer's worktree still held the branch at merge time | Tech Lead (merge relay) |
+| R1 Minors 1–4 (timer docs, «#697 adds none» only for 5s, CT5 cannot go red, P10/E4b without `stop()` on failure) | Minor | other | left at the merge | → #725 |
+
+### Process improvement proposals
+1. A plan branching from `main` while an open PR rewrites the same lines writes code in `main`'s shape, the other shape only in the rebase recipe — **внедрено в #DOCS: `.claude/skills/architect/SKILL.md` → conflicts with other in-flight branches**
+2. Remove the implementer's worktree before `gh pr merge --delete-branch` — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Merge relay**
+3. Remaining findings — **вынесено в #725**
