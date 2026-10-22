@@ -562,6 +562,7 @@ spellings) that refuses real intents and sessions in it, read at start
 ## Running it locally
 
 ```bash
+# `up` runs the migrate service first; backend and trading-worker start after it
 docker compose up --build --wait
 # read it back from the running container rather than re-parsing .env: this is the value compose
 # itself resolved, and only this one variable enters the shell

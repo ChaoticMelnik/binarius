@@ -802,11 +802,10 @@ who pressed the button even if the session is revoked between the check and the 
 
 From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram confirmation):
 
-1. `docker compose down -v`, then `docker compose up --build --wait`.
-2. `docker compose exec backend pnpm db:migrate`.
-3. Create an account and log in as in [staff-login.md](staff-login.md) → Bringing it up the first
+1. `docker compose down -v`, then `docker compose up --build --wait` (`up` applies the migrations).
+2. Create an account and log in as in [staff-login.md](staff-login.md) → Bringing it up the first
    time, steps 5–8.
-4. A clean volume has no users. Create one through the bot's own route, with a name that is markup,
+3. A clean volume has no users. Create one through the bot's own route, with a name that is markup,
    and give it a broker account (the ciphertexts are placeholders; no page decrypts them):
    ```bash
    # INTERNAL_API_TOKEN: the value from .env
@@ -818,7 +817,7 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
      access_token_expires_at) select id, 'seed-broker-1', 'Ada@Example.com', 'active',
      '\x00'::bytea, '\x00'::bytea, 'seed', now() from users where telegram_user_id = 1"
    ```
-5. Open `http://127.0.0.1:3001/admin` (→ the overview), then the users page, and search for
+4. Open `http://127.0.0.1:3001/admin` (→ the overview), then the users page, and search for
    `ada@example.com` (found despite the case), `seed-broker-1` and `1`. The name shows as
    `Ada <b>`, as text. Open the card: the account, the address, «минимальная ставка брокера».
    Search for 257 characters: 400, the form, no «Выйти».
@@ -945,7 +944,7 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
      (key, source) values ('zzz', 'x')"
    ```
    The list ends with «Строки без ключа в каталоге» and `zzz`; «Удалить» → «Строка удалена.».
-6. Check what was written:
+5. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
      -c "select action, entity_type, payload from audit_log order by created_at desc limit 8"
@@ -968,4 +967,4 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    «Опубликовать заново» (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, both `?status=bogus` (intents and
    deposits), `?kind=bogus`, `?action=bogus`, `?halted=on` and the card id that is not a uuid wrote
    nothing.
-7. `docker compose down -v` when done.
+6. `docker compose down -v` when done.

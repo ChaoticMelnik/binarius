@@ -229,8 +229,9 @@ and the same with `event=ftd`. Only `a`, `sub_id` and `company_id` are on by def
 `0044_postbacks` reshapes `deposit_events` (new `NOT NULL` columns without defaults, `postback_id`
 and `payload` dropped) and starts with a guard: it raises
 `deposit_events must be empty before 0044_postbacks (#141)` when the table has rows, and nothing
-of 0044 is applied. `pnpm db:migrate` then exits 1 without printing that text (drizzle-kit 0.31
-swallows it, checked 2026-10-10); the count below is how to tell. Before #141 nothing wrote the table, so only rows inserted by hand can be
+of 0044 is applied. `pnpm db:migrate` then exits 1 with `migration failed: Error, cause error
+P0001` — the runner prints an error's name and code, never its text (Rule 8); the count below is
+how to tell. Before #141 nothing wrote the table, so only rows inserted by hand can be
 there — the old local check of «Депозиты» inserted `postback_id` `pb-local` and `pb-local-2`.
 Before deploying, on the pilot and on any local volume where that check ran:
 
