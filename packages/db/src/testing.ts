@@ -69,11 +69,12 @@ const ORPHAN_MAX_AGE_MS = 60 * 60 * 1000;
 // the name carries its creation time so a database left behind by a crashed run can be reaped
 const NAME_PATTERN = /^binarius_test_(\d+)_[0-9a-f]{8}$/;
 
-// One migrated database per test file: integration tests commit for real (append-only tables
-// cannot be cleaned afterwards) and may open concurrent transactions. Requires CREATEDB on the
-// role of baseUrl (the tests' TEST_DATABASE_URL): the README's native role and the CI service
-// role are superusers (README → Test database).
-// `migrate` defaults to the full folder; a migration test passes a partial one (#144 S6)
+// One database per test file, migrated unless the caller says otherwise: integration tests
+// commit for real (append-only tables cannot be cleaned afterwards) and may open concurrent
+// transactions. Requires CREATEDB on the role of baseUrl (the tests' TEST_DATABASE_URL): the
+// README's native role and the CI service role are superusers (README → Test database).
+// `migrate` defaults to the full folder; a migration test passes a partial one (#144 S6), the
+// runner's tests (cli/migrate) none, so they start from an empty database
 export async function createTempDatabase(
   baseUrl: string,
   migrate: (pool: Pool) => Promise<void> = runMigrations,

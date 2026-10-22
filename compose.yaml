@@ -1,5 +1,6 @@
 x-app-environment: &app-environment
-  DATABASE_URL: postgres://${POSTGRES_USER:-binarius}:${POSTGRES_PASSWORD:-binarius}@postgres:5432/${POSTGRES_DB:-binarius}
+  # the `migrate` service reads the same value through the anchor
+  DATABASE_URL: &database-url postgres://${POSTGRES_USER:-binarius}:${POSTGRES_PASSWORD:-binarius}@postgres:5432/${POSTGRES_DB:-binarius}
   REDIS_URL: redis://redis:6379
   LOG_LEVEL: ${LOG_LEVEL:-info}
   HEALTH_TIMEOUT_MS: ${HEALTH_TIMEOUT_MS:-2000}
@@ -22,7 +23,12 @@ x-app: &app
   build: .
   init: true
   restart: ${COMPOSE_RESTART:-unless-stopped}
+  # Every service built on this anchor opens the database, so none starts before `migrate` has
+  # exited 0; a service that replaces depends_on (bot, web) drops this, and the CI compose job
+  # asserts the resolved configuration.
   depends_on:
+    migrate:
+      condition: service_completed_successfully
     postgres:
       condition: service_healthy
     redis:
@@ -36,6 +42,14 @@ x-watch-shared: &watch-shared
 x-watch-db: &watch-db
   path: ./packages/db/src
   target: /app/packages/db/src
+  action: sync
+
+# The journal and the SQL, so a process restarted under --watch checks the database against the
+# migrations on disk. Nothing applies them on a file write: a generated migration is read before
+# it is applied (it can DROP), so `pnpm db:migrate` or `docker compose run --rm --build migrate`.
+x-watch-migrations: &watch-migrations
+  path: ./packages/db/drizzle
+  target: /app/packages/db/drizzle
   action: sync
 
 x-watch-broker-rest: &watch-broker-rest
@@ -83,6 +97,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot: applies the migrations under an advisory lock (packages/db/src/cli/migrate.ts) and
+  # exits; backend and trading-worker wait for its exit 0. Not built on x-app: that anchor's
+  # restart policy would loop a finished one-shot (and hang `up`), and its depends_on names this
+  # service itself.
+  migrate:
+    build: .
+    init: true
+    restart: "no"
+    command: pnpm db:migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: *database-url
 
   backend:
     <<: *app
@@ -170,6 +199,7 @@ services:
           action: sync
         - *watch-shared
         - *watch-db
+        - *watch-migrations
         - *watch-broker-rest
         - *watch-broker-socket
         - *watch-signal
@@ -283,6 +313,7 @@ services:
           action: sync
         - *watch-shared
         - *watch-db
+        - *watch-migrations
         - *watch-broker-rest
         - *watch-broker-socket
         - *watch-signal
