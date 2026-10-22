@@ -19,7 +19,7 @@ pool.on('error', (error) => logger.error(errorLogFields(error), 'postgres pool e
 redis.on('error', (error) => logger.warn(errorLogFields(error), 'redis connection error'));
 
 // before anything reads a table: a schema behind this image would fail every pass at run time
-if (!(await checkSchemaAtStartup(pool, logger))) process.exit(1);
+await checkSchemaAtStartup(pool, logger);
 
 // the composition and both shutdown phases live in worker.ts (#95)
 const worker = createWorker({ env, db, pool, redis, logger });
