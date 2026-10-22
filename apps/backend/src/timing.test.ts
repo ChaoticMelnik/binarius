@@ -65,6 +65,11 @@ import {
   H1_SERIES_CAPACITY_SEC,
   H1_SHADOW_LOG_MS,
   H1_SHADOW_TICK_MS,
+  DEFAULT_H1_SUBMIT_BUDGET_MS,
+  H1_DRIVER_LOG_MS,
+  H1_DRIVER_SCAN_MS,
+  MAX_H1_SUBMIT_BUDGET_MS,
+  MIN_H1_SUBMIT_BUDGET_MS,
   BALANCE_STALLED_RETRY_MS,
   BOT_PROFILE_PUBLISH_CALLS,
   BOT_PROFILE_PUBLISH_TIMEOUT_MS,
@@ -189,6 +194,14 @@ describe('backend shutdown timing', () => {
   it('forwards H1_SHADOW to the backend only, without a default', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'H1_SHADOW')).toBe('');
     expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SHADOW')).toBeUndefined();
+  });
+
+  // #707: 700 unless set; the worker never reads it
+  it('forwards H1_SUBMIT_BUDGET_MS to the backend only, without a default', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'H1_SUBMIT_BUDGET_MS')).toBe('');
+    expect(
+      composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SUBMIT_BUDGET_MS'),
+    ).toBeUndefined();
   });
 
   it('forwards POSTBACK_URL_SECRET to the backend only, without a default', () => {
@@ -433,6 +446,28 @@ describe('broker balance timing', () => {
       H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1,
     );
     expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SHADOW_LOG_MS);
+  });
+
+  it("bounds the H1 driver's submit budget by the expiry and its scan by phase 1 (#707)", () => {
+    expect({
+      DEFAULT_H1_SUBMIT_BUDGET_MS,
+      MIN_H1_SUBMIT_BUDGET_MS,
+      MAX_H1_SUBMIT_BUDGET_MS,
+      H1_DRIVER_SCAN_MS,
+      H1_DRIVER_LOG_MS,
+    }).toEqual({
+      DEFAULT_H1_SUBMIT_BUDGET_MS: 700,
+      MIN_H1_SUBMIT_BUDGET_MS: 100,
+      MAX_H1_SUBMIT_BUDGET_MS: 5_000,
+      H1_DRIVER_SCAN_MS: 5_000,
+      H1_DRIVER_LOG_MS: 60_000,
+    });
+    expect(MIN_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(DEFAULT_H1_SUBMIT_BUDGET_MS);
+    expect(DEFAULT_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(MAX_H1_SUBMIT_BUDGET_MS);
+    expect(MAX_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(H1_EXPIRY_SEC * 1000);
+    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_DRIVER_SCAN_MS);
+    expect(H1_DRIVER_SCAN_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(H1_DRIVER_SCAN_MS).toBeLessThanOrEqual(H1_DRIVER_LOG_MS);
   });
 
   it('keeps a window inside the tick buffer at its latest capture and the sweep outside the capture horizon (#668)', () => {

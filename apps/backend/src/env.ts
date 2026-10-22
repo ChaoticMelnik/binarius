@@ -42,6 +42,9 @@ import {
   MIN_BALANCE_POLL_PER_MINUTE,
   MIN_BALANCE_RECONCILE_INTERVAL_MS,
   MIN_SIGNAL_SCAN_PER_MINUTE,
+  DEFAULT_H1_SUBMIT_BUDGET_MS,
+  MAX_H1_SUBMIT_BUDGET_MS,
+  MIN_H1_SUBMIT_BUDGET_MS,
 } from './timing';
 
 // the compose probe timeout (3s) is sized above this ceiling
@@ -87,6 +90,9 @@ export interface Env {
   sessionStakeStrategy: SessionStakeStrategy;
   // the H1 shadow (#669, docs/h1.md): on unless H1_SHADOW=off; nothing without BROKER_WS_URL
   h1Shadow: boolean;
+  // the H1 driver's wait for the worker's take (#707, docs/h1.md -> The driver): an intent's
+  // submit_deadline_at is taken_at_ms + this; an empty value stops the start
+  h1SubmitBudgetMs: number;
   // the origins the cashier widget may be served from (#11); default: the broker platform's origin
   depositWidgetOrigins: string[];
   // the postback route's path secret (#141); absent = the route is not registered
@@ -152,6 +158,12 @@ export function parseEnv(source: EnvSource): Env {
     demoOnly: parseDemoOnlyEnv(source),
     sessionStakeStrategy: parseSessionStakeStrategyEnv(source),
     h1Shadow: parseH1ShadowEnv(source),
+    h1SubmitBudgetMs: parseBoundedIntegerEnv(
+      readEnv(source, 'H1_SUBMIT_BUDGET_MS', String(DEFAULT_H1_SUBMIT_BUDGET_MS)),
+      'H1_SUBMIT_BUDGET_MS',
+      MIN_H1_SUBMIT_BUDGET_MS,
+      MAX_H1_SUBMIT_BUDGET_MS,
+    ),
     depositWidgetOrigins: parseDepositWidgetOriginsEnv(
       source,
       new URL(readEnv(source, 'BROKER_OAUTH_AUTHORIZE_URL')).origin,

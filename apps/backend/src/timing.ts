@@ -214,6 +214,19 @@ export const H1_SHADOW_LOG_MS = 60_000;
 // seconds of closes kept per pair: the longest window, the latest exit and a margin
 export const H1_SERIES_CAPACITY_SEC = 320;
 
+// --- The H1 driver (#707, docs/h1.md -> The driver) -----------------------------------------------
+// H1_SUBMIT_BUDGET_MS: an intent's submit_deadline_at is the decision's taken_at_ms + this; the
+// worker's take after it rejects the intent entry_window_missed without a broker call. It bounds
+// only the wait before the take; the submit after the take runs under the worker's own timeouts
+export const DEFAULT_H1_SUBMIT_BUDGET_MS = 700;
+export const MIN_H1_SUBMIT_BUDGET_MS = 100;
+export const MAX_H1_SUBMIT_BUDGET_MS = 5_000;
+// how often the driver reads the active H1 sessions: a new one trades, a stopped one is dropped
+// within this
+export const H1_DRIVER_SCAN_MS = 5_000;
+// the `h1 driver` line
+export const H1_DRIVER_LOG_MS = 60_000;
+
 // --- The ticks around a decision and the trade log's retention (#668, docs/trade-log.md) ----------
 // the window's start before decided_at_ms (owner, #668 В4)
 export const TRADE_TICKS_BEFORE_MS = 60_000;
@@ -520,6 +533,16 @@ const TIMING_CHAIN_HOLDS =
   H1_SECOND_CLOSE_MARGIN_MS < TICK_MAX_SKEW_MS &&
   H1_SERIES_CAPACITY_SEC >= H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1 &&
   H1_SHADOW_TICK_MS <= H1_SHADOW_LOG_MS &&
+  // the H1 driver (#707): the default sits inside its bounds; a take after the expiry would open a
+  // trade whose predicted window has passed; the series' clock (the shadow's tick) is no slower
+  // than the scan, the scan ends inside phase 1 and the line spans scans. stop() waits for the
+  // intent creations in flight, ordinary database latency (above)
+  MIN_H1_SUBMIT_BUDGET_MS <= DEFAULT_H1_SUBMIT_BUDGET_MS &&
+  DEFAULT_H1_SUBMIT_BUDGET_MS <= MAX_H1_SUBMIT_BUDGET_MS &&
+  MAX_H1_SUBMIT_BUDGET_MS <= H1_EXPIRY_SEC * 1000 &&
+  H1_SHADOW_TICK_MS <= H1_DRIVER_SCAN_MS &&
+  H1_DRIVER_SCAN_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  H1_DRIVER_SCAN_MS <= H1_DRIVER_LOG_MS &&
   // the ticks around a decision (#668): at the latest capture (decided + max wait, closed by the
   // clock rule, seen a scan later) the pair's watermark, at most the receipt clock + the clamp, has
   // not pruned the window's start; a watermark close precedes the clock close by at most the
