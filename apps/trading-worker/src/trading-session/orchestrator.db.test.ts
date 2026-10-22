@@ -2490,9 +2490,16 @@ describe('an H1 session (#670)', () => {
     });
     return source;
   };
+  // a case that fails before its own stop() must not leave its ticks running into the next one
+  const made: ReturnType<typeof orchestratorOf>[] = [];
+  afterEach(async () => {
+    await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
+  });
   const h1Orchestrator = (pairs: PairsSource = pairsOf(fresh([h1Pair()]))) => {
     const signals = noSignals();
-    return { signals, orchestrator: orchestratorOf({ signals, pairs }) };
+    const orchestrator = orchestratorOf({ signals, pairs });
+    made.push(orchestrator);
+    return { signals, orchestrator };
   };
   const driverTrade = async (
     seed: Awaited<ReturnType<typeof seedSession>>,
@@ -2665,6 +2672,50 @@ describe('an H1 session (#670)', () => {
       status: TradingSessionStatus.Stopped,
       stopReason: TradingSessionStopReason.RejectedTwice,
     });
+    await orchestrator.stop();
+  });
+
+  it('H1-BW a settlement newer than the balance holds the stake stop a tick; the payout clears it', async () => {
+    const WAITS = 'trading session waits for the balance';
+    const demoBalance = (brokerAccountId: string, available: string) =>
+      applyBalanceEvent(tmp.db, {
+        brokerAccountId,
+        mode: TradeMode.Demo,
+        balance: balance(available),
+      });
+    const seed = await seedSession({ settings: h1Settings(), demo: '1.50' });
+    const { intent } = await createSessionIntent(tmp.db, {
+      sessionId: seed.session.id,
+      step: 1,
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      assetId: 202,
+      amount: decimalStringSchema.parse('1.00'),
+      action: TradeAction.Up,
+      durationSec: 5,
+      decision: null,
+    });
+    expect(await processIntent(intent.id)).toBe('accepted');
+    // the snapshot after the opening holds the stake; the win settles before update_balance
+    await demoBalance(seed.brokerAccountId, '0.50');
+    await settle(seed, intent.id, MockTradeOutcome.Win);
+    const { signals, orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(linesOf(seed.session.id).find((line) => line.msg === WAITS)).toMatchObject({
+      level: 30,
+      step: 2,
+    });
+    const DRIVER = 'trading session waits for the H1 driver';
+    expect(msgsOf(seed.session.id)).not.toContain(DRIVER);
+    advance(CONFIG.tickMs);
+    await demoBalance(seed.brokerAccountId, '2.40');
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(seed.session.id)).toContain(DRIVER);
+    expect(msgsOf(seed.session.id).filter((msg) => msg === WAITS)).toHaveLength(1);
+    expect(signals.calls).toEqual([]);
     await orchestrator.stop();
   });
 });
