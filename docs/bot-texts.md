@@ -288,7 +288,7 @@ compile.
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
 | `stake` | on the mode screen and its confirm the real stake, the saved one or the broker's minimum, never `null`, whatever the user's mode (#474); on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); on the demo amount screen (#476) the amount marked ✅, the saved demo stake or the broker's minimum, never `null`; in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one; in a session's trade message the trade's own amount (#464) | `formatStake` | `stakeMinimumLabel` |
-| `outcome` | a session trade's figure after «→» (#464): the broker trade's profit (#539), positive for a win, negative for a loss, `$0.00` for a tie; the lines of a session add up to its result | `formatSignedUsd` | — |
+| `outcome` | a session trade's figure after «→» (#464): a win's stake plus its profit, what came back to the account (#684, reverting #539), a loss's negative profit, `$0.00` for a tie; the lines do not add up to the session's result, which stays the net sum of the profits | `formatSignedUsd` | — |
 | `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318), printed on the picture | `formatSignedUsd` | — |
@@ -595,7 +595,8 @@ on the defaults and to the keys it reads.
 
 Widths from a schema are enforced there: an address entered by the user 254, a USD amount 20, a
 stake 25 (`formatStake` over an unsigned `numeric(20,8)`: either saved stake, the broker's minimum
-and either balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
+and either balance), a win's return 28 (`formatSignedUsd` over the sum of two `numeric(20,8)`,
+#684), a count 25, an int4 asset id or duration, and the `/account` list, which the
 backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are stated
 assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a pair label ≤ 64
 (`PAIR_LABEL_MAX_LENGTH`: the symbol without « OTC», cut to 64, #631), a session's counters

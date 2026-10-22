@@ -141,8 +141,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   the four `SESSION_TRACK_*` constants, the two `SESSION_RESUME_*` (#567) and
   `SESSION_SUMMARY_RETRY_WAIT_MS` (#537) ([Timing](#timing)).
 - `packages/shared/src/bot-text-format.ts` — `formatSignedUsd`, the session's result with its sign
-  (#337), next to `formatUsd`; the catalog's `profit` and `outcome` (#539) variables print through
-  it.
+  (#337), next to `formatUsd`; the catalog's `profit` and `outcome` (#539, #684) variables print
+  through it.
 
 ## Sequence
 
@@ -811,17 +811,21 @@ cycle, so every trade is a new message of one block, as before #551.
 📊 Цена: 0.49790 → 0.49790
 
 ⚡ Цикл 2 Шаг 3
-🟢 Ставка: $11.50 → +$10.58
+🟢 Ставка: $11.50 → +$22.08
 📊 Цена: 0.49790 → 0.49815
 ```
 
-- **The figures** (#539): after «→» every outcome prints the broker trade's profit
-  (`broker_trades.profit`, one `numeric` column of the claim, Rule 2) by `formatSignedUsd`: a win
-  🟢 `+profit`, a loss 🔴 `-loss` (`-$5.00` for a full loss), a tie ⚪ `$0.00, ставка вернулась`
-  (a zero has no sign). The stake is the intent's amount, printed by `formatStake` (every fraction
-  digit, at least two). The class is the same SQL `case` on the profit's sign the view's counters
-  use, so a profit of `0.001` is a win and prints `+$0.001`. The trades' lines add up to the
-  summary's «💰 Результат», the SQL sum of the same profits.
+- **The figures** (#539, #684): after «→» a win 🟢 prints what came back to the account, the stake
+  plus the broker trade's profit (`+$22.08` for $11.50 at a profit of 10.58, the owner's decision
+  2026-10-20); a loss 🔴 prints the profit, `-loss` (`-$5.00` for a full loss); a tie ⚪
+  `$0.00, ставка вернулась` (a zero has no sign). The figure is one SQL expression of the claim,
+  `case when profit > 0 then trade_intents.amount + broker_trades.profit else profit end`, a
+  `numeric` the code only prints by `formatSignedUsd` with every fraction digit (Rule 2): a profit
+  of `0.001` on a $5 stake prints `+$5.001`, `0.0046` on $0.005 prints `+$0.0096`. The stake is the
+  intent's amount, printed by `formatStake` (every fraction digit, at least two). The class is the
+  same SQL `case` on the profit's sign the view's counters use, so a profit of `0.001` is a win.
+  The trades' lines do not add up to the summary's «💰 Результат», which stays the SQL sum of the
+  profits (#337, risk 29).
 - **The prices** are `broker_trades.open_price` → `close_price`, `formatPrice` with the pair's
   `digits` from the backend's pairs catalog; with no catalog or the pair gone, as the double prints
   (`String()`).
@@ -1440,7 +1444,10 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     loss, no double, the other sessions wait too. A rate per chat is #660 (#534 m2).
 28. **Latency** (#464): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
     after its settle.
-29. Closed by #539: the trade lines print the profit and add up to «💰 Результат».
+29. **The lines and the result** (#539 → #684, the owner's decision 2026-10-20): a win's line
+    prints what came back to the account, the stake plus the profit; «💰 Результат» stays the net
+    sum of the profits (#337), so the trades' lines no longer add up to it; #539 had printed the
+    profit so that they did.
 30. **A stopped session stuck on manual review** (#464) is not in the sender's list once its
     settled trades are claimed (`finishedSql` is false, the cursor equals the settled count, no
     waiting message): it costs nothing until an operator settles or rejects the trade, when it is
