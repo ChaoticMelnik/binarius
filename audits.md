@@ -4042,3 +4042,233 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. The closing fence on its own line, and the hand-off copies `head=`/`list-sha256=` from the posted comment — **внедрено в #736: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
 2. Remaining findings — **вынесено в #735**
+
+---
+
+## #698 — Сессия: убрать паузу после двух проигрышей (не влияет на win %, срезает 10–16 % сделок) (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Day `/manager` session 2026-10-22 10:10 – 16:55 MSK (report artifact XYqTuBaYie4hxQBqixJowF); taken 10:12 (6335002068). Start: clean `main` c1bf86c3, no open PRs, shared test DB 74 migrations with hashes = `main`, DEMO_ONLY preconditions met, no services, no stand, no external content; no Codex (manager rule 2026-10-15). 8 tasks, 8 PRs left In Review; #697 skipped (needs a pilot measurement — later done by a parallel day session). |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended (6335118250: `last_signal_action` column kept, its drop → follow-up #719; stand pause overlay kept as a comparison). Plan 6335249413, ≈150 lines. |
+| Implementer | first pass | Opus. 1 clarify question, recommended (6335276456: `headlinePause` stays, `false` everywhere). PR #720, 3 commits, +116 / −477; per-commit check, `pnpm check` 0 at `1b94beda`, mutations M1/M2 red in one call (6335448864). Phase 3 audit clean (6335468164; `docs/trading-session.md` in the code commit because test L1 reads its table — justified in the PR). |
+| Reviewer | round 1 | 0 / 0 / 2 (review 5610811904); 3c + 3b (intent-creation transaction, `trading_sessions` schema file), 3d skipped (< 300 code lines). Codex skip line; ready-to-merge 6335555100 at `1b94beda`. |
+| Tech Lead | merge | CONFLICTING after #697 (PR #724) merged by a parallel day session mid-run; merge-order notice 6337412642. Rebase-only implementer spawn onto `main` `f586672d`: head `cbe3beff`; beyond conflicts the rebase dropped main's P10 (the pause candle-hold test), the now-unused `parseAmount` import and pause mentions in #697's texts, and rewrote M1's loss predicate (`startsWith('-')`); mutations re-taken whole, 2/2 red (6345456421). Rebase check by a reviewer spawn: no findings (6345626590), CI green (run 39811696617). Implementer worktree removed first, merged `--rebase --delete-branch` 2026-10-22T16:20:31Z on the owner's yes; #698 Done (16:20:36Z). No migration. Minor m1–m2 → #740. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3b, 3c, rebase implementer and rebase-check reviewer `claude-opus-5-5`) — checked in the session's subagent transcripts (`3b5da011…/subagents`). |
+
+### Review iterations: 1 (no Blocker/Major) + rebase check
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #720 became CONFLICTING: #697 (#724) merged into `main` by a parallel day session during the manager run | — (ops) | other | two sessions on one board; the manager branched from `main` before #697 landed | Manager / day session (proposal in the #684 entry) |
+| The #720 rebase spawn wrote its scripts to the shared scratchpad root and overwrote the parallel #729 rebase spawn's files | — (ops) | other | tech-lead gave the two parallel rebase spawns no separate subdirectories; corrected from the next spawns (`rebase-721/`, `rebase-727/`) | Tech Lead (merge relay) |
+| m1: `docs/trading-session.md:55` and Rule 28 say no one reads `last_signal_action`, but `stopTradingSession(...).returning()` selects it | Minor | unverified-claim | wording stronger than the code | → #740 |
+| m2: stale test-id ranges (O1–O14 in `docs/trade-log.md`, W1–W8 in Rule 28) | Minor | single-source | id ranges copied into docs, not updated on deletion | → #740 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #740**; the column drop and the calibrate era without the pause — **#719** (architect's follow-up)
+
+---
+
+## #684 — Сообщения сделок сессии: при выигрыше показывать ставку + прибыль (откат #539) (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 10:46 (6335572896). |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended (6335690817: stake + profit summed in the claim's SQL as `numeric`, `{outcome}` placeholder kept, no EN text until #633, registry width 28). Plan 6335757764, ≈80 lines, «merge before #700/#718». |
+| Implementer | first pass | Opus. 2 clarify questions, recommended (6335786749). PR #721, 2 commits, +68 / −47; per-commit check, `pnpm check` 0 at `e0e8fb9a`, mutations M1–M5 red in one call (6335903823). Phase 3 audit clean (6335919429). |
+| Reviewer | round 1 | 0 / 0 / 0 (review 5611112524); 3c + 3b (money figure, claim SQL in `packages/db`), 3d skipped (~20 code lines). Codex skip line; ready-to-merge 6336023419 at `e0e8fb9a`. |
+| Tech Lead | merge | Base of the stack #721 → #727 → #730; CONFLICTING after #697 (#724). Rebase-only implementer spawn (16:17Z, while #720's merge question was still open): onto `main` `87a29e87` → head `64e0ad35` (mutations 6345748644); `main` then moved by #720, the same spawn rebased again onto `80df0a55` → head `f1b78259`, mutations 5/5 red re-taken whole (6346386290). Conflict only in Rule 28, nothing beyond the resolution (per the implementer's report) — no rebase-check spawn. #727 retargeted to `main` first; merged `--rebase` without `--delete-branch` 2026-10-22T17:03:29Z on the owner's yes; #684 Done (17:03:33Z); then worktree `impl-684` removed and `feat/684-win-stake-plus-profit` deleted by hand once no PR pointed at it. No migration. No Minors — no Backlog task. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3b, 3c, rebase implementer `claude-opus-5-5`). |
+
+### Review iterations: 1 (no findings)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #721 (stack base) became CONFLICTING after #697 (#724) merged by a parallel day session; the whole stack #721 → #727 → #730 needed rebases at the merge | — (ops) | other | the manager stacked on a session PR without re-checking that the base stayed mergeable against a moving `main` | Manager |
+| #721 rebased twice: its rebase spawn started before #720 merged, `main` moved under it | — (cost) | other | tech-lead planned the stack after #720 «to avoid a double rebase», then spawned #721's rebase in parallel with #720's merge | Tech Lead (merge relay) |
+
+### Process improvement proposals
+1. Day manager session: before stacking on a session PR, check the base's mergeability; the morning merge rebases per tech-lead «A PR left In Review by a manager session» — **внедрено в #PR: `.claude/skills/manager/SKILL.md` → Task selection → Stacking**
+
+---
+
+## #700 — Сессия: блок «сделка открыта» сразу при открытии, результат — правкой; «Ждём сигнал» только при реальном ожидании (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 11:13 (6336041124). |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended (6336340772: wake via Postgres NOTIFY — probed on the test DB, 3 s tick as a fallback; «Ждём сигнал» by the last `no_signal` row; «⏹» under the cycle message; RU/EN open-block text). Whole task ≈5 000 lines → split before the plan (Step 4a): A here, B → #722, C (NOTIFY wake) → #723, both Backlog. Plan 6336574925, part A ≈1 900–2 000 lines, stacked on `feat/684-win-stake-plus-profit`. |
+| Implementer | first pass | Opus. 2 clarify questions (6336629659: e2e waits for the open blocks of trades 1–2; the no-FK fallback only with proof). PR #727 on base `feat/684-win-stake-plus-profit` («Merge after #721»), 7 commits, 1 419 added lines without the snapshot, migration 0074 (`trading_sessions.open_notice_intent_id`, composite FK; generated SQL reordered by hand, FK after its unique key, meta/snapshot untouched); each commit checked on its own DB, `pnpm check` 0 at `957f564a`, mutations 16/16 red (6337444372). Phase 3 audit (6337478182): Minor — the EN text of `sessionTradeOpen` not added against decision В4, decided in the PR instead of returned as a question. |
+| Reviewer | round 1 | 0 / 0 / 2 (review 5612159785); 3b/3c/3d all run (schema, migration, Telegram send). Hand-reordered migration accepted. Codex skip line; ready-to-merge 6337595626 at `957f564a`. |
+| Tech Lead | merge | After #721: rebase-only implementer spawn onto `main` `5eab6a27` → head `cd35daad`; conflicts with #707 (H1 summary) and #709 resolved: the sender's `Delivery` merged with #707's (H1 record CAS now `cursor: due`), risks renumbered 95–97 then #709's 98; per the implementer's report each of 7 commits checked with migrations through #75's new runner; mutations 16/16 re-taken (M7 adapted to `main`'s H1 branch, 6346869044). The implementer reported nothing beyond the resolution, but tech-lead saw the change to merged #707 code → rebase check by a reviewer spawn: no findings (6347012154), CI green. `Closes #700` linked after retarget to `main`. #730 retargeted to `main` first; merged `--rebase` without `--delete-branch` 2026-10-22T17:30:11Z on the owner's yes; #700 Done (17:30:14Z); worktree `impl-700` removed and `feat/700-session-open-block` deleted by hand. Shared test DB: `db:migrate` applied 0074, 75/75 hashes = `main`. Minor m1–m2 → #742. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3b, 3c, rebase implementer, rebase-check reviewer `claude-opus-5-5`; 3d `claude-sonnet-5-5`). |
+
+### Review iterations: 1 (no Blocker/Major) + rebase check
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Implementer did not add the EN open-block text (decision В4) and decided it in the PR instead of returning a question | Minor (process) | other | no rule for a clarify decision the implementer cannot carry out; added to the session's implementer prompts from the next task | Implementer (Step 3) |
+| Rebase report said «nothing beyond conflict resolution» while the resolution rewrote merged #707 code (H1 summary CAS) | — (caught by tech-lead, checked clean) | unverified-claim | «conflict resolution» covered a semantic merge of two features' sender | Implementer (rebase) |
+| m1: EN text of `sessionTradeOpen` missing (Session group Russian until #633) | Minor | other | left at the merge, proposed EN text to carry into #633 | → #742 |
+| m2: e2e S7 counts open blocks only in total, not «at most one per trade, before its result» | Minor | other | weaker than the plan's assertion (covered by O4/O5, N30/N31) | → #742 |
+
+### Process improvement proposals
+1. A clarify decision the implementer cannot carry out returns as a question (or a plan defect), not decided in the PR — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 0**
+2. Remaining findings — **вынесено в #742**; parts B and C — **#722**, **#723** (architect's split)
+
+---
+
+## #708 — Бот: выбор языка - команда /language вместо кнопки на карточке статуса (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 12:37 (6337618036). Plan against `main` 1603c0ae (after #697/#724), base `main`. |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended (6337792310: status card one row of three with short labels, widths probed; `/language` after `/settings`; `languageButton` key removed, pilot override → `bot-text reset`; old `lang` button handler kept). Plan 6337908829, ≈180 lines. |
+| Implementer | first pass | Opus. 2 clarify questions (6337937553). PR #728, 2 commits, +225 / −113; per-commit check, `pnpm check` 0 at `fe5a2d7b`, mutations 9/9 red (6338154965; full re-run after a red+extra M2). Phase 3 audit (6338172400): Minor — the plan's file list missed two tests with the command-menu literal (`publish.test.ts` U2, `admin/routes.db.test.ts` T9/T16/T19), added by the implementer. |
+| Reviewer | round 1 | 0 / 0 / 4, docs only (review 5612581433); only 3c (no security surface, ~40 code lines). Codex skip line; ready-to-merge 6338252674 at `fe5a2d7b`. |
+| Tech Lead | merge | No rebase needed: MERGEABLE at `fe5a2d7b` after #707 and #733 moved `main` (textually clean). Worktree `impl-708` removed first, merged `--rebase --delete-branch` 2026-10-22T15:48:19Z on the owner's yes; #708 Done (15:48:35Z). No migration. Minor m1–m4 → #738. Owner step after the bot deploy: `bot-text reset languageButton` if `bot-text list` shows it unknown. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3c `claude-opus-5-5`). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan missed two tests holding the command-menu literal | Minor (process) | instance-vs-class | the plan's Conflicts/file sweep covered Rules, not every place holding the literal (the same session's #709 plan reused risk number 95 taken by #727) | Architect (Step 4), caught by implementer |
+| m1–m4: #708 paragraph splits the Abbreviations table in `docs/bot-texts.md` (+ `modeBackDemoButton` narrowest row 2 → 3); old «👥 Позвать / друга» label in `docs/deposit.md`; `lang` button still in `statusCardKeyboard` in `docs/bot-menu.md`; `docs/bot-navigation.md` says an old card keeps the button forever | Minor | single-source | docs copies of the keyboard not swept | → #738 |
+
+### Process improvement proposals
+1. Architect Step 4 Conflicts: check the numbers of numbered docs lists (risks) and literals shared with parallel PRs, not only Rules — **внедрено в #PR: `.claude/skills/architect/SKILL.md` → Step 4**
+2. Remaining findings — **вынесено в #738**
+
+---
+
+## #709 — Бот: убрать реферальную ссылку из подписи итога сессии (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 13:13 MSK (6338270656), base `main`. |
+| Architect | first plan | Fable 5.1. The first run died at 10:16:58Z on API 403 «Request not allowed» (`<synthetic>`, nothing posted) and was continued by the same agent with SendMessage at 10:28:28Z. 3 clarify questions, all recommended (6338624194: `referralCode` out of the summary contract, dead `botUsername` removed along the chain, one `sessionSummary` build with limit 1024). Plan 6338755763, ≈125 lines. |
+| Architect | Plan Update round 0 | Opus, fresh spawn. Implementer's plan defect: the new risk was numbered 95, which open PR #727 already used in `docs/bot-session.md` → risk 98 (6338841176). |
+| Implementer | first pass | Opus. 2 clarify items (6338848980: the risk number → Plan Update; Rule 47 gets #709's deploy order). PR #729, 2 commits (`1b9eabcc` code, `6d0d1114` docs), +128 / −221; per-commit check, `pnpm check` 0 at `6d0d1114`, mutations 6/6 in one call (6339099759). Phase 3 audit 6339116292: 2 Minor (Conflicts section missed risk 95 of #727; coverage table missed `resumer.start(…, 'binarius_bot')` in `apps/bot/src/logging.test.ts` and some docs mentions, found by the implementer). |
+| Reviewer | round 1 | 0 / 0 / 2 (5613177279); 3b + 3c, 3d skipped (< 300 code lines). Minor 1: the owner deploy step (`stop bot && up -d backend bot`) was not tied to `binarius-deploy`, so the mixed bot/backend window stayed open; Minor 2: stale «with the owner's link under them» at `docs/bot-session.md:857`. Ready-to-merge 6339216867. Manager decided to fix both before the merge (6339227685). |
+| Architect | round-1 Plan Update | Opus, fresh spawn (6339372321). |
+| Implementer | round-1 fix | Opus, fresh spawn. 1 clarify question, recommended (6339406962). Commit `4bfbb8b3` (deploy step = `docker compose stop bot`, then `binarius-deploy`, in the PR body, risk 98 and Rule 47; the docs sentence), mutations 6/6 re-taken (6339476754), reply 6339484916. |
+| Reviewer | round 2 | Whole-feature diff, 0 / 0 / 0 (5613411658); 3b + 3c. Ready-to-merge 6339585056 at `4bfbb8b3`. Codex skip line (manager PR). |
+| Tech Lead | merge | PR turned CONFLICTING after #734 (#707, Rule 48) and #728 (#708, `docs/bot-texts.md`). Rebase-only implementer spawn (15:51Z, in parallel with #720's) onto `main` `f586672d`: head `c7384151`, range-diff — code commit `=`, both docs commits only conflict resolution (Rule 47 / 48, removed-keys paragraph), risk stays 98; per-commit check 3/3; `pnpm check` first run exit 1 on BW4 (`orchestrator.db.test.ts`, untouched) while #720's rebase ran its checks on the shared test DB, re-run 0 (16 005 tests); mutations 6/6 re-taken (6345341419); CI green. No reviewer delta pass (nothing beyond conflicts). Worktree `impl-709` removed first, merged `--rebase --delete-branch` 2026-10-22T16:11:43Z on the owner's yes; #709 Done. No migration. No open Minor → no Backlog task. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1` plus one `<synthetic>` 403 entry; both Plan Updates, implementers, reviewers, 3b / 3c and the rebase spawn `claude-opus-5-5`) — checked in the session's subagent transcripts. |
+
+### Review iterations: 2 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| New risk numbered 95, already taken by open PR #727 in `docs/bot-session.md` | — (caught before code) | single-source | the Conflicts section checked line ranges and Rule numbers of open PRs, not numbered docs lists | Architect (caught by implementer) |
+| Coverage table missed `resumer.start(…, 'binarius_bot')` in `apps/bot/src/logging.test.ts` and several docs mentions | — (caught before PR) | instance-vs-class | consumers listed by hand, not by a grep of the removed parameter | Architect (caught by implementer via `tsc`) |
+| R1 Minor 1: owner deploy step not tied to `binarius-deploy` → the mixed pair window stayed | Minor | env-parity | the step was written against `compose up`, not the real deploy procedure | Architect / Implementer → fixed in round 2 |
+| R1 Minor 2: stale caption sentence at `docs/bot-session.md:857` | Minor | single-source | one doc kept the old caption text | Implementer → fixed in round 2 |
+| Architect run died on a one-off API 403; resumed 11.5 min later by the same agent | — (ops) | other | the «Fable limit → Opus» rule does not name a 403 | Manager |
+| Parallel rebase spawns #720 / #729 shared one scratchpad: #720's agent overwrote #729's `guard.sh`, `limit.sh`, `percommit.sh` mid-loop; #729 moved to `own-709/` | — (ops) | other | the rebase-only prompts named no scratch subdirectory (the #730 prompt later did: `rebase-730/`) | Tech Lead (merge relay prompt) |
+| #729's `pnpm check` after rebase went red on BW4 while #720's rebase ran checks on the shared test DB | — (ops, re-run green) | other | two rebase spawns in parallel on one test DB | Tech Lead (merge relay) |
+
+### Process improvement proposals
+1. Architect Step 4 Conflicts: check the numbers of numbered docs lists (risks) against open PRs, not only Rules — **внедрено в #PR: `.claude/skills/architect/SKILL.md` → Step 4**
+2. Manager: a one-off API 403 gets one continuation attempt before switching to Opus — **внедрено в #PR: `.claude/skills/manager/SKILL.md` → Substitutions → 4**
+3. Rebase-only spawns get their own `<scratchpad>/rebase-<N>/`, like `impl-<N>/` — **внедрено в #PR: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own scratch subdirectory**
+
+---
+
+## #718 — Сессия: «Адаптивная ставка включена» сразу после проигрыша шага 1 (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 14:26 MSK (6339602097). Stacked on #727's branch (`feat/700-session-open-block`, head `957f564a`), depth 3: #721 → #727 → #730; #721 was already CONFLICTING after the day session merged #724 (09:25Z). |
+| Architect | first plan | Fable 5.1. 3 clarify questions, all recommended (6339859092: step-1 draw as in #551, the line stays without step 2, text unchanged). Plan 6339933429, ≈360–400 lines, stack on #727. |
+| Implementer | first pass | Opus. 1 clarify question, recommended (6339968310: PR from `957f564a`, rebase recipe in the PR). PR #730 `--base feat/700-session-open-block`, «Merge after #727», 2 commits, +398 / −88; own DB `binarius_impl_718`; `pnpm check` 0 at `f5045bfb`; mutations exit 1: M1, M5 red, M2–M4, M6 red+extra (old #551/#700/#464 tests of the same text) (6340246967). Hand-off said «each pushed», but the docs commit `f5045bfb` was local, PR head `15b6e70f`; found by the manager at the phase boundary and pushed fast-forward. Phase 3 audit 6340275305. |
+| Reviewer | round 1 | 0 / 0 / 2 (5613901530); 3c only (no security surface, ~60 code lines); red+extra rows not a finding (new tests not the only guard). Ready-to-merge 6340394153 at `f5045bfb`. Codex skip line (manager PR). |
+| Tech Lead | merge | Last of the stack: #730 retargeted to `main` 17:28:59Z before #727's merge (`Closes #718` linked after it). Rebase-only implementer spawn (own `scratchpad/rebase-730/`), `rebase --onto origin/main 957f564a` onto `e99f67ff`: head `a598bdf8`, code commit `3c9810e8` identical patch, docs commit only conflict resolution (Rule 28; `docs/e2e-demo-cycle.md` S7 this PR, S8 `main`'s #709 text); per-commit check 2/2, `pnpm check` 0 (16 057 tests), mutations re-taken with the same red / red+extra sets (6347187609), CI green. Worktree `impl-718` removed first, merged `--rebase --delete-branch` 2026-10-22T17:42:09Z on the owner's yes; #718 Done; m1–m2 → #743. No migration of its own. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3c, rebase spawn `claude-opus-5-5`). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Docs commit `f5045bfb` not pushed at hand-off although the hand-off said «each pushed»; PR head ≠ head of `pnpm check` and mutations | Minor (process) | unverified-claim | hand-off written without `git status -sb` / `headRefOid` check | Implementer (hand-off; caught by manager) |
+| Stack of depth 3 built on #721 that was already CONFLICTING after the day session's #724 → three serial rebase spawns at the merge | — (process) | other | the day manager session stacked without re-checking the base's mergeability | Manager |
+| m1 (third `sessionTrade` registry alternative is redundant, comment and docs read as if the limit depends on it), m2 (B4 second case duplicates the test at line 141) | Minor | other | left at the merge | → #743 |
+
+### Process improvement proposals
+1. Implementer before hand-off: `git status -sb` without «ahead» and `gh pr view --json headRefOid` = head of the checks — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 8**
+2. Day manager session checks the base's mergeability before stacking on it — **внедрено в #PR: `.claude/skills/manager/SKILL.md` → Task selection → Stacking**
+3. Remaining findings — **вынесено в #743**
+
+---
+
+## #75 — Миграции не накатываются в контейнерах: стек стартует на пустой схеме (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 15:11 MSK (6340420274). Plan 2026-10-06 older than 24 h and from another session → Plan Update round 0 first. |
+| Architect | first plan (2026-10-06) | Fable 5.1, session `e0165a26`: plan 6020989156 (Codex plan review skipped on the limit at the time), post-hoc Codex re-check Plan Update 6027071802 (2026-10-06 23:06Z). |
+| Architect | Plan Update round 0 | Opus. 2 clarify questions, both recommended (6340625172: one retry of the apply on deadlock `40P01`; `.claude/CLAUDE.md` not edited in the PR, replacement text as an owner step). Plan Update 6340664804 against `main` `1603c0ae`: task not solved (no `migrate` service), the #147 paragraph corrected (`up -d --wait` with a failing `migrate` on redeploy = downtime, so the migrate step before `up` in `binarius-deploy` stays), ≈795 lines. |
+| Architect | Plan Update round 0 (defect) | Same architect agent continued. Implementer's plan defect: CI-step mutations as temporary red commits + revert in the feature branch contradicted the standing answer «без красных коммитов» → temporary branch `mut/75-schema-check` with a draft PR «не мержить», closed without merge (6340712894). |
+| Implementer | first pass | Opus. 1 clarify item (6340720847, the defect above). PR #731, 4 commits, +868 / −73; per-commit check, `pnpm check` 0 at `141a58af`; mutations 16/16 in one call (6341049385); CI mutations M-c1 / M-c2 on draft PR #732 (`mut/75-schema-check` → `fix/75-migrate-service`, closed unmerged 12:56:30Z, 6341296445), red runs 39780820655 / 39781694058 (6341296014). Phase 3 audit 6341317281 (1 Minor: the r0 mutation method). |
+| Reviewer | round 1 | 0 / 0 / 3 (5614630064); 3b / 3c / 3d all run; `binarius-deploy` on the pilot works unchanged. Minor 1: the worker deploy recipe (`docs/worker-deploy.md:7-9`, `README.md:122-124`) runs `migrate` from a stale image (own `build: .` without `image:`). Ready-to-merge 6341458165. Manager decided to fix Minor 1 before the merge, Minor 2–3 to the report (6341470752). |
+| Architect | round-1 Plan Update | Opus, same agent continued (6341531357): one tag `${COMPOSE_PROJECT_NAME}-app` for `migrate` and `x-app`. |
+| Implementer | round-1 fix | Opus, fresh spawn. 2 clarify questions, recommended (6341564284). Commits `0d509a03`, `75380c28`; mutations 17/17 re-taken whole, MU17 new (6341703013); reply 6341713400. |
+| Reviewer | round 2 | Whole-feature diff, 0 / 0 / 3 new (5614917904); 3b / 3c / 3d; first `binarius-deploy` after the merge and the `deploy-worker.sh` rollback checked against the shared tag. Ready-to-merge 6341864603 at `75380c28`. Codex skip line (manager PR). |
+| Tech Lead | merge | No rebase needed (`75380c28` MERGEABLE). Worktree `impl-75` removed first, merged `--rebase --delete-branch` 2026-10-22T15:50:10Z on the owner's yes; #75 Done; R1 m2–m3 and R2 m1–m3 → #739. No migration of its own; `pnpm db:migrate` is now #731's runner (`tsx src/cli/migrate.ts`) — its first use on the shared test DB applied #700's 0074 at 17:30Z, 75/75 hashes match. Remote branch `mut/75-schema-check` not deleted at the merge (still at `8f0d3a34`). |
+| Tech Lead | models | 2026-10-06 plan and its post-hoc Plan Update `claude-fable-5-1`; Plan Update round 0, the defect update and round 1 one `claude-opus-5-5` architect agent; implementers, reviewers, 3b / 3c `claude-opus-5-5`; 3d `claude-sonnet-5-5` (both rounds). |
+
+### Review iterations: 2 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan Update r0 proved the CI step with temporary red commits in the feature branch, against the standing answer | — (caught before code) | single-source | the standing answer covers `tooling/mutations.ts`; a CI-only gate has no named route | Architect (caught by implementer) |
+| R1 Minor 1: worker deploy recipe ran `migrate` from a stale image | Minor | env-parity | `migrate` had its own `build: .` without `image:`; the recipe was not traced through Compose's image naming | Implementer → fixed in round 2 |
+| `mut/75-schema-check` left on the remote after the merge | — (process) | other | the manager may not delete branches, and the day merge relay did not pick up the PR's owner step | Tech Lead (merge relay) |
+| `.claude/CLAUDE.md` → «База данных» still describes the entrypoint as not fixed | — (owner step) | single-source | manager sessions may not edit `.claude/CLAUDE.md`; text is in PR #731's body | Owner step (open) |
+| R1 m2 (`pg_advisory_lock` without timeout), R1 m3 (CLI entry check through a symlink), R2 m1 (`docs/worker-deploy.md:150-152, :173`: worker under `tsx watch` does not exit, rollback after 120 s), R2 m2 (old image tags stay on the pilot), R2 m3 (Rule 16 cites the old CI step name, no shared-image invariant) | Minor | other / single-source | left at the merge | → #739 |
+
+### Process improvement proposals
+1. A mutation of a CI-only gate goes on a temporary `mut/<N>-<desc>` branch with a draft PR «не мержить» on the feature branch, red-run links in one PR comment, closed without merge; the merge relay deletes the branch after the merge — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence), `.claude/skills/tech-lead/SKILL.md` → Merge relay**
+2. Remaining findings — **вынесено в #739**
+
+---
+
+## #671 — Касса: подогнать виджет под видимую высоту миниаппа — блок пополнения целиком без разворачивания (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #698 (same session); taken 16:26 MSK (6341902452), base `main`; last task of the session (ended 16:55 MSK). |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended (6342066301: `HEIGHT_MIN` 480 px, no ceiling, no `disableVerticalSwipes()`, keyboard shrinks the frame). SDK facts from the downloaded `telegram-web-app.js?63` with line numbers. Plan 6342169727, ≈215 lines. |
+| Implementer | first pass | Opus. 1 clarify question, recommended (6342207340: subscribe to `viewportChanged` once at start). PR #733, 2 commits, +282 / −31; `pnpm check` 0 at `d74b8ffc`; mutations 9/9 in one call (6342348608). Phase 3 audit 6342365997: 2 Minor (head docs commit not checked separately in a throwaway worktree; plan kept C1/C2's `570px` assertion that can no longer fail). |
+| Reviewer | round 1 | 0 / 0 / 3 (5615329066); 3c only (filter unchanged, ~50 code lines); SDK facts re-checked against the source. Ready-to-merge 6342491519. Codex skip line (manager PR). |
+| Tech Lead | merge | No rebase needed (`d74b8ffc` MERGEABLE after #734 and #736). Worktree `impl-671` removed first, merged `--rebase --delete-branch` 2026-10-22T15:45:30Z on the owner's yes; #671 Done; m1–m3 → #737. No migration. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3c `claude-opus-5-5`). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Head docs commit `d74b8ffc` not checked separately per commit (covered by the full `pnpm check` at the same head) | Minor (process) | other | per-commit loop skipped the head commit | Implementer (Step 5) |
+| m1: C1/C2 `resize` lines and the `570px` assertion can no longer fail | Minor | unverified-claim | the plan kept assertions whose code path it removed | Architect → #737 |
+| m2 (`docs/deposit.md`: «Открываем кассу…» does not hide the frame in code), m3 (`viewportStableHeight` wording) | Minor | single-source | left at the merge | → #737 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #737**
