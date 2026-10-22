@@ -474,10 +474,12 @@ describe("the open trade's block (#700)", () => {
     const target = await seedSession();
     const trade = await opened(target);
     await settleOpen(trade);
-    expect(await openClaim(target.session, trade.intent.id, 0)).toBeUndefined();
+    // its result claimed: the counts match, only the open trade refuses
+    await claim(target.session, 0);
+    expect(await openClaim(target.session, trade.intent.id, 1)).toBeUndefined();
     target.step += 1;
     const queued = await intentOf(target, target.step);
-    expect(await openClaim(target.session, queued.id, 0)).toBeUndefined();
+    expect(await openClaim(target.session, queued.id, 1)).toBeUndefined();
     expect(await markOf(target.session)).toBeNull();
   });
 
