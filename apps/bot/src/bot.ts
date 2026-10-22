@@ -36,6 +36,7 @@ import {
   commandRetryCallbackData,
   CONNECT_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
+  MODE_CALLBACK_DATA,
   RETRY_COMMANDS,
   type RetryCommand,
   telegramErrorFields,
@@ -52,6 +53,7 @@ import {
   demoButton,
   demoKeyboard,
   INVITE_CALLBACK_DATA,
+  menuButton,
   menuKeyboard,
   retryButton,
   retryKeyboard,
@@ -1090,6 +1092,8 @@ function levelKeyboard(current: NotificationLevel): BotKeyboard {
         stakeOpenCallbackData(TradeMode.Real, { kind: 'settings' }),
       ),
     ],
+    // the mode screen (#474) since #686, beside the menu: a lone navigation button is refused
+    [callbackButton(ButtonRole.Nav, LABELS.settingsModeButton, MODE_CALLBACK_DATA), menuButton()],
   );
 }
 

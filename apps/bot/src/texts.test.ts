@@ -1511,7 +1511,6 @@ describe('the facades over the catalog', () => {
         'loginButton',
         'menuButton',
         'modeBackDemoButton',
-        'modeButton',
         'modeCancelButton',
         'modeConfirmButton',
         'modeEnableButton',
@@ -1527,6 +1526,7 @@ describe('the facades over the catalog', () => {
         // drawn by the bot only after an unknown stop outcome under the waiting message (#587)
         'sessionStopButton',
         'settingsCommand',
+        'settingsModeButton',
         'settingsStakeDemoButton',
         'settingsStakeRealButton',
         'showSignalsButton',

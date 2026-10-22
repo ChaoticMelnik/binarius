@@ -13,6 +13,7 @@ import {
   type TradingAccessResponse,
   type TradingSessionView,
   demoAnalysisCallbackData,
+  MODE_CALLBACK_DATA,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
 import { createBot } from './bot';
@@ -27,7 +28,6 @@ import {
   stakeMenuCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
-import { MODE_CALLBACK_DATA } from './keyboards';
 import { MODE_SCREEN_CALLBACK_DATA } from './trading-mode';
 import {
   stakeCustomCallbackData,
@@ -220,7 +220,7 @@ const SCENES: Scene[] = [
       }),
     ];
   }),
-  // the mode screen (#474): opened from the card and redrawn in place («↩️ Отмена», «⚙️ Режим»);
+  // the mode screen (#474): opened from /settings (#686) and redrawn in place («↩️ Отмена», «⚙️ Режим»);
   // a switch's result is no scene: after «🎮 В демо» the user is in demo
   press('the mode screen of a real user', MODE_CALLBACK_DATA),
   press('the mode screen in place', MODE_SCREEN_CALLBACK_DATA),
@@ -297,8 +297,9 @@ describe('the real path (#121)', () => {
     ['the analysis, a signal', '🚀 Сессия из 5 циклов · REAL'],
     ['«➕ Ещё»', '🚀 Сессия из 5 циклов · REAL'],
     ['the refresh of a settled real trade', '🚀 Сессия из 5 циклов · REAL'],
-    // #474: the card's way to the mode screen, and the screen's way back to demo
-    ['/menu', '🎮 В демо'],
+    // the card's entry (#121; since #686 the card has no mode button), and the mode screen's way
+    // back to demo (#474)
+    ['/menu', '🚀 Торговать'],
     ['the mode screen of a real user', 'Сейчас: <b>REAL</b>'],
     ['the mode screen in place', '🎮 В демо'],
   ])('%s shows «%s»', async (name, expected) => {

@@ -854,7 +854,7 @@ describe('/settings', () => {
     );
     expect(sent?.text).toContain('Сумма демо-сделки: <b>$2.50</b>');
     expect(sent?.text).toContain('Сумма реальной сделки: <b>$7.00</b>');
-    expect(rowsOf(sent).at(-1)).toEqual([
+    expect(rowsOf(sent).at(-2)).toEqual([
       button(LABELS.settingsStakeDemoButton, 'stk:o:d:s'),
       button(LABELS.settingsStakeRealButton, 'stk:o:r:s'),
     ]);

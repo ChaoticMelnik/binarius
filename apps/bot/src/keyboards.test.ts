@@ -21,7 +21,7 @@ import {
   inviteKeyboard,
   menuButton,
   menuKeyboard,
-  MODE_CALLBACK_DATA,
+  INVITE_CALLBACK_DATA,
   retryKeyboard,
   statusCardKeyboard,
   supportKeyboard,
@@ -91,27 +91,27 @@ describe('the rows and colours of the shared keyboards (#475)', () => {
   const BACK = callbackButton(N, '↩️', 'back');
   const back = [LABELS.stakeBackAnalysisButton, N, null];
 
-  // #708: no language button, the language is the /language command
-  it('R1: the status card: the entry alone, one row of three, the deposit alone', () => {
-    const DEMO_MIDDLE = [[LABELS.modeButton, N, null], INVITE, BUY];
+  // #708: no language button, the language is the /language command; #686: no mode button, the
+  // mode screen is under /settings
+  it('R1: the status card: the entry alone, the invite and the purchase, the deposit alone', () => {
     expect(rows(statusCardKeyboard(TradeMode.Demo, CASHIER))).toEqual([
       [[LABELS.demoButton, F, 'success']],
-      DEMO_MIDDLE,
+      [INVITE, BUY],
       [DEPOSIT],
     ]);
     expect(rows(statusCardKeyboard(TradeMode.Real, CASHIER))).toEqual([
       [[LABELS.tradeButton, F, 'success']],
-      [[LABELS.modeBackDemoButton, S, 'primary'], INVITE, BUY],
+      [INVITE, BUY],
       [DEPOSIT],
     ]);
-    expect(rows(statusCardKeyboard(TradeMode.Demo, undefined)).at(-1)).toEqual(DEMO_MIDDLE);
+    expect(rows(statusCardKeyboard(TradeMode.Demo, undefined)).at(-1)).toEqual([INVITE, BUY]);
   });
 
-  it('R2: the entry data stays the same in both modes', () => {
+  it('R2: the entry data stays the same in both modes, the invite next', () => {
     for (const mode of Object.values(TradeMode)) {
       const wire = statusCardKeyboard(mode, CASHIER).inline_keyboard;
       expect(wire[0]?.[0]).toMatchObject({ callback_data: DEMO_CALLBACK_DATA });
-      expect(wire[1]?.[0]).toMatchObject({ callback_data: MODE_CALLBACK_DATA });
+      expect(wire[1]?.[0]).toMatchObject({ callback_data: INVITE_CALLBACK_DATA });
     }
   });
 

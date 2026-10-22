@@ -77,24 +77,16 @@ export const depositButton = (cashierUrl: string): BotButton =>
 export const depositButtons = (cashierUrl: string | undefined): BotButton[] =>
   cashierUrl === undefined ? [] : [depositButton(cashierUrl)];
 
-// The mode screen (#474, trading-mode.ts), opened from the status card as a new message
-export const MODE_CALLBACK_DATA = 'mode';
-
-// The status card's: the entry on its own row, the mode screen, the invite (#115) and the
-// purchase (#117) in one row of three, then the deposit (#27) on its own (rows:
-// docs/bot-navigation.md → Roles, colours and rows); the language is the /language command since
-// #708. In real mode the entry reads «🚀 Торговать»
-// and keeps DEMO_CALLBACK_DATA: the path is the same up to the stake button (#121); the mode
-// button reads «🎮 В демо» there and opens the screen too, it never switches by itself (#474).
-// The account card keeps demoKeyboard.
+// The status card's: the entry on its own row, the invite (#115) and the purchase (#117) in one
+// row, then the deposit (#27) on its own (rows: docs/bot-navigation.md → Roles, colours and rows);
+// the language is the /language command since #708, the mode screen is under /settings since #686.
+// In real mode the entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA: the path is the same up
+// to the stake button (#121). The account card keeps demoKeyboard.
 export const statusCardKeyboard = (mode: TradeMode, cashierUrl: string | undefined): BotKeyboard =>
   keyboardOf([
-    ...(mode === TradeMode.Real
-      ? [
-          callbackButton(ButtonRole.Forward, LABELS.tradeButton, DEMO_CALLBACK_DATA),
-          callbackButton(ButtonRole.Secondary, LABELS.modeBackDemoButton, MODE_CALLBACK_DATA),
-        ]
-      : [demoButton(), callbackButton(ButtonRole.Nav, LABELS.modeButton, MODE_CALLBACK_DATA)]),
+    mode === TradeMode.Real
+      ? callbackButton(ButtonRole.Forward, LABELS.tradeButton, DEMO_CALLBACK_DATA)
+      : demoButton(),
     inviteButton(),
     buyButton(),
     ...depositButtons(cashierUrl),
