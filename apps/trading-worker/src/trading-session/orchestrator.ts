@@ -59,7 +59,9 @@ import type { SessionOrchestratorConfig } from './config';
 // runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
 // holds the session back in memory; the step comes from the database's history, never from memory.
 // A write in the worker that ends an intent or halts its account wakes it (#696): a tick at once,
-// the interval is the safety net.
+// the interval is the safety net. A hold until the next candle (no_signal, the pause) ends at the
+// boundary + the slack, not rounded up to a tick, and one timer wakes the tick then (#697); the
+// interval is its safety net too.
 
 export interface SessionOrchestratorDeps {
   db: Db;
@@ -100,7 +102,8 @@ const STAKE_STOP_REASONS = {
 } as const satisfies Record<StopReason, TradingSessionStopReason>;
 
 // A hold must say whether the pause's memory (last_signal_action, #379) is cleared (null after a
-// no_signal) or kept (the paused action). The traded action travels with the intent row
+// no_signal) or kept (the paused action); a candle hold (#697) is the exact wait for the next
+// candle's ask. The traded action travels with the intent row
 // (createTradeIntent), never through an ending: an ending can be lost after the INSERT. An ending
 // reached after a decision carries its trade log row (#666, docs/trade-log.md → The writers and
 // their outcomes), written by apply after the ending's own write; the intent's row is in the
@@ -114,7 +117,13 @@ type Ending =
     }
   | { kind: 'created' }
   | { kind: 'reschedule'; record?: SignalDecisionInput }
-  | { kind: 'hold'; ms: number; signalAction?: TradeAction | null; record?: SignalDecisionInput }
+  | {
+      kind: 'hold';
+      ms: number;
+      signalAction?: TradeAction | null;
+      candle?: true;
+      record?: SignalDecisionInput;
+    }
   // the session is no longer active: nothing to write
   | { kind: 'gone' }
   // no ending written: the deadline, a throw or the stop signal
@@ -230,6 +239,14 @@ export function createSessionOrchestrator({
   let running: Promise<void> | undefined;
   // wake() calls no tick has served yet
   let pending = 0;
+  // the sessions whose hold is a candle hold (#697): the candle timer wakes the tick at the
+  // earliest of their heldUntil
+  const candleHeld = new Set<string>();
+  let candleTimer: ReturnType<typeof setTimeout> | undefined;
+  let candleWakeAt: number | undefined;
+  // a timer that fired before now() reached its target (its clock against Date.now) leaves the
+  // session to the interval: targets at or before the last firing are not armed again
+  let lastFiredAt = Number.NEGATIVE_INFINITY;
 
   function logStop(
     row: StoppedSession,
@@ -487,14 +504,20 @@ export function createSessionOrchestrator({
         { ...ids, reason: response.decision.reason },
         'trading session waits for the next candle',
       );
-      return withRow({ kind: 'hold', ms: untilNextCandle(), signalAction: null }, row);
+      return withRow(
+        { kind: 'hold', ms: untilNextCandle(), signalAction: null, candle: true },
+        row,
+      );
     }
     const action: TradeAction = response.decision.action;
     if (pausedDirection(history.intents) === action && session.lastSignalAction === action) {
       const row = decisionRow(SignalDecisionOutcome.Paused);
       if (history.waitExpired) return noSignalStop('paused', row);
       logger.info({ ...ids, action }, 'trading session waits for the signal to change');
-      return withRow({ kind: 'hold', ms: untilNextCandle(), signalAction: action }, row);
+      return withRow(
+        { kind: 'hold', ms: untilNextCandle(), signalAction: action, candle: true },
+        row,
+      );
     }
 
     const startedAtMs = session.startedAt.getTime();
@@ -606,8 +629,36 @@ export function createSessionOrchestrator({
     return Promise.race([run, expired]).finally(() => clearTimeout(timeout));
   }
 
-  const hold = (sessionId: string, ms: number) =>
-    heldUntil.set(sessionId, now() + Math.max(ms, config.tickMs));
+  const hold = (sessionId: string, ms: number, candle = false) => {
+    heldUntil.set(sessionId, now() + (candle ? ms : Math.max(ms, config.tickMs)));
+    if (candle) candleHeld.add(sessionId);
+    else candleHeld.delete(sessionId);
+  };
+
+  // Armed after every tick, so after the endings' writes: the woken tick reads them
+  function armCandleWake() {
+    if (stopped) return;
+    let target: number | undefined;
+    for (const id of candleHeld) {
+      const until = heldUntil.get(id);
+      if (until === undefined || until <= lastFiredAt) continue;
+      if (target === undefined || until < target) target = until;
+    }
+    if (candleTimer !== undefined && target === candleWakeAt) return;
+    clearTimeout(candleTimer);
+    candleTimer = undefined;
+    candleWakeAt = target;
+    if (target === undefined) return;
+    candleTimer = setTimeout(
+      () => {
+        candleTimer = undefined;
+        candleWakeAt = undefined;
+        lastFiredAt = now();
+        wake();
+      },
+      Math.max(0, target - now()),
+    );
+  }
 
   // The decision's row follows its ending's own write, whether that write's CAS matched or not
   // (docs/trade-log.md → The order of writes); a failure loses the row only, never the ending
@@ -637,7 +688,7 @@ export function createSessionOrchestrator({
         return;
       }
       case 'hold':
-        hold(session.id, ending.ms);
+        hold(session.id, ending.ms, ending.candle === true);
         await markSessionDecision(db, { id: session.id, signalAction: ending.signalAction });
         await recordDecision(session, ending.record);
         return;
@@ -672,7 +723,11 @@ export function createSessionOrchestrator({
     logStops(halted, TradingSessionStopReason.ManualReview);
 
     const tickAt = now();
-    for (const [id, until] of heldUntil) if (until <= tickAt) heldUntil.delete(id);
+    for (const [id, until] of heldUntil) {
+      if (until > tickAt) continue;
+      heldUntil.delete(id);
+      candleHeld.delete(id);
+    }
     const runnable = await listRunnableSessions(db, {
       limit: config.batchSize,
       maxDurationMs: config.maxDurationMs,
@@ -708,17 +763,20 @@ export function createSessionOrchestrator({
       })
       .finally(() => {
         running = undefined;
+        armCandleWake();
         if (pending > 0) void tick();
       });
     return running;
   }
 
+  function wake() {
+    pending += 1;
+    if (running === undefined) void tick();
+  }
+
   return {
     tick,
-    wake() {
-      pending += 1;
-      if (running === undefined) void tick();
-    },
+    wake,
     start() {
       if (stopped || timer !== undefined) return;
       void tick();
@@ -727,6 +785,7 @@ export function createSessionOrchestrator({
     async stop() {
       stopped = true;
       clearInterval(timer);
+      clearTimeout(candleTimer);
       stopping.abort();
       await running;
     },

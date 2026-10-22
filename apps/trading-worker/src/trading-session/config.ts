@@ -1,5 +1,6 @@
 import {
   BROKER_BALANCE_SLA_MS,
+  CANDLE_CLOSE_SLACK_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
@@ -18,11 +19,14 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         the signal POST, the statements
 //   TRADING_SESSION_PAIRS_TIMEOUT_MS    — the pairs GET (a cache read on the backend)
 //   TRADING_SESSION_RETRY_MS            — the hold-back after a transient failure or a throw
-//   TRADING_SESSION_CANDLE_SLACK_MS     — how long after a candle boundary the signal is asked
-//                                         again after no_signal. The backend's cache keeps a
-//                                         decision until the boundary on its own clock; both
-//                                         processes run on one host (one kernel clock), so the
-//                                         two boundaries agree within the slack
+//   CANDLE_CLOSE_SLACK_MS (shared)      — how long after a candle boundary the signal is asked
+//                                         again after no_signal or the pause: the scanner's own
+//                                         scan moment (#697). That hold is not rounded up to a
+//                                         tick; a one-off timer wakes the tick at its end. The
+//                                         backend's cache keeps a decision until the boundary on
+//                                         its own clock; both processes run on one host (one
+//                                         kernel clock), so the two boundaries agree within the
+//                                         slack
 //   SESSION_MAX_DURATION_MS (shared)    — the session's deadline from started_at (database clock);
 //                                         the start route and the CLI refuse a session that
 //                                         cannot fit it in its strategy's worst case
@@ -54,7 +58,6 @@ const TRADING_SESSION_BATCH_SIZE = 200;
 export const TRADING_SESSION_ATTEMPT_TIMEOUT_MS = 10_000;
 export const TRADING_SESSION_PAIRS_TIMEOUT_MS = 4_000;
 export const TRADING_SESSION_RETRY_MS = 60_000;
-export const TRADING_SESSION_CANDLE_SLACK_MS = 2_000;
 export const TRADING_SESSION_H1_CHECK_MS = 5_000;
 
 export interface SessionOrchestratorConfig {
@@ -73,7 +76,7 @@ export const TRADING_SESSION_CONFIG: Readonly<SessionOrchestratorConfig> = Objec
   batchSize: TRADING_SESSION_BATCH_SIZE,
   attemptTimeoutMs: TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
   retryMs: TRADING_SESSION_RETRY_MS,
-  candleSlackMs: TRADING_SESSION_CANDLE_SLACK_MS,
+  candleSlackMs: CANDLE_CLOSE_SLACK_MS,
   h1CheckMs: TRADING_SESSION_H1_CHECK_MS,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
