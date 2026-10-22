@@ -6,15 +6,16 @@ picture with a caption of the trading mode, the real balance, the demo balance, 
 status or age line when the broker balance is missing or old, a hint, and these rows (#475,
 [bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)): «🎮 Демо-торговля» (#320; «🚀
 Торговать» in real mode, #121, [trading-mode.md](trading-mode.md)) alone and green; the mode
-button — «💼 Реальный режим» in demo, «🎮 В демо» (blue) in real, both opening the mode screen
-(#474, [trading-mode.md](trading-mode.md#the-bot)) — beside «👥 Позвать друга» (#115,
-[referrals.md](referrals.md)); «⭐ Купить» (#117, both modes, [stars.md](stars.md), blue) beside
-«🌐 Язык/Language» (#508, the language screen,
-[bot-navigation.md](bot-navigation.md#the-language-screen-508)); and last «💳 Пополнить» (#27, both
+button — «💼 Реальный» in demo, «🎮 В демо» (blue) in real, both opening the mode screen
+(#474, [trading-mode.md](trading-mode.md#the-bot)) — «👥 Позвать» (#115,
+[referrals.md](referrals.md)) and «⭐ Купить» (#117, both modes, [stars.md](stars.md), blue) in one
+row of three; and last «💳 Пополнить» (#27, both
 modes, the cashier Mini App, [deposit.md](deposit.md); only when `WEB_PUBLIC_URL` is https) alone
 and green. It is pinned in place of whatever was pinned before. The card is in the user's
 language ([bot-texts.md](bot-texts.md#languages)); `/start`, `/menu` and «🏠 В меню» put the
-language their `/users/start` answer carries into the bot's cache.
+language their `/users/start` answer carries into the bot's cache. The language is chosen with the
+`/language` command (#708, [bot-navigation.md](bot-navigation.md#the-language-screen-508)); until
+#708 it was a «🌐 Язык/Language» button on the card.
 
 ## Components
 

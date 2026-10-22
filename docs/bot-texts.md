@@ -179,9 +179,8 @@ The labels that stand in a row of two or three were shortened to fit it (owner's
 
 | Key | Was (ru) | Now (ru) | en was → now | Narrowest row |
 |---|---|---|---|---|
-| `inviteButton` | 👥 Пригласить друга | 👥 Позвать друга | 👥 Invite a friend → 👥 Invite friends | 2 |
+| `inviteButton` | 👥 Пригласить друга | 👥 Позвать (#708; #475: 👥 Позвать друга) | 👥 Invite a friend → 👥 Invite (#708; #475: 👥 Invite friends) | 3 |
 | `buyButton` | ⭐ Купить токены | ⭐ Купить | ⭐ Buy tokens → ⭐ Buy | 3 |
-| `languageButton` | 🌐 Язык / Language | 🌐 Язык/Language | the same | 2 |
 | `demoManualButton` | 🧭 Выбрать пару вручную | 🧭 Вручную | 🧭 Choose a pair manually → 🧭 Manually | 3 |
 | `repeatAnalysisButton` | 🔄 Повторить анализ | 🔄 Заново | 🔄 Repeat the analysis → 🔄 Again | 3 |
 | `refreshIntentButton` | 🔄 Обновить статус | 🔄 Обновить | 🔄 Refresh the status → 🔄 Refresh | 2 |
@@ -193,6 +192,13 @@ The labels that stand in a row of two or three were shortened to fit it (owner's
 | `stakeBackAnalysisButton` | ↩️ Назад к анализу | ↩️ К анализу | ↩️ Back to the analysis → ↩️ Analysis | 3 |
 | `stakeBackSettingsButton` | ↩️ Назад к настройкам | ↩️ Настройки | ↩️ Back to the settings → ↩️ Settings | 3 |
 | `stakeBackLaunchButton` | ↩️ К запуску | the same | ↩️ To the launch → ↩️ Launch | 3 |
+| `modeButton` | 💼 Реальный режим | 💼 Реальный (#708) | the same («💼 Real mode») | 3 |
+
+#708 took the language button off the status card (the language is the `/language` command) and
+put the mode button, the invite and the purchase in one row of three, so `modeButton` and
+`inviteButton` were shortened to the row's nine characters; `languageButton` («🌐 Язык/Language»,
+#475 from «🌐 Язык / Language») left the catalog. `modeBackDemoButton` and `buyButton` fit as
+they were.
 | `supportButton` | 💬 Написать в поддержку | 💬 Поддержка | 💬 Write to support → 💬 Support | 2 |
 | `modeBackDemoButton` | 🎮 Вернуться в демо | 🎮 В демо | 🎮 Back to demo → 🎮 To demo | 2 |
 | `resendButton` | 🔄 Запросить код ещё раз | 🔄 Новый код | 🔄 Request the code again → 🔄 New code | 2 |
@@ -248,7 +254,7 @@ built when it is published. The tests of the source swap hold one place each (`b
 
 Data and identifiers, not texts (decision on the issue's plan, approved by the owner):
 
-- the command names `/start`, `/menu`, `/stop`, `/account`, `/buy`, `/settings`, `/invite`, `/help`, `/support`, `/paysupport` —
+- the command names `/start`, `/menu`, `/stop`, `/account`, `/buy`, `/settings`, `/language`, `/invite`, `/help`, `/support`, `/paysupport` —
   the bot routes by them; only their descriptions are entries. The names and their order are
   `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
@@ -343,7 +349,9 @@ removes. #536 removes `sessionCycle`, `sessionScore`, `sessionSettings`, `sessio
 `sessionRefreshButton` and the variable `cyclesPlanned`: a saved override of them is an unknown
 key (`bot-text reset <key>`). #631 removes `demoPayoutTooLow`, `sessionPayoutTooLow`,
 `analysisCycleUnavailable` and the variable `payoutFloor` (the payout refuses no cycle any more):
-a saved override of them is an unknown key (`bot-text reset <key>`).
+a saved override of them is an unknown key (`bot-text reset <key>`). #708 removes `languageButton`
+(the language is the `/language` command): a saved override of it is an unknown key
+(`bot-text reset languageButton`).
 
 ## Adding a text
 
@@ -471,7 +479,7 @@ translate the rest of the catalog (#632 `demo`, `analysis`, `trade`; #633 `sessi
   message is bounded by the test on the defaults. `UNTRANSLATED_BOT_TEXT_KEYS` is pinned by group:
   exactly the groups of #632 and #633, but the keys of `TRANSLATED_BEFORE_633` — the wait for a
   signal (#664), written in both languages from the start (E4, E7). Until those parts, a user in English sees the start, the
-  cards, the menu, `/settings`, `/help`, `/account`, `/invite`, `/support` and the buttons in
+  cards, the menu, `/settings`, `/language`, `/help`, `/account`, `/invite`, `/support` and the buttons in
   English, and the demo, the analysis, the trades, the sessions, Stars and every push of the
   backend in Russian.
 - **Proofreading.** `pnpm -s exec tsx tooling/bot-texts-table.ts` prints «key | group | русский |

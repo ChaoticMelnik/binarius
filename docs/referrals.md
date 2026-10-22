@@ -112,7 +112,7 @@ the same code, so the bot treats it as a read.
 
 ## The screen
 
-`/invite` (in the command menu after `/settings`), «👥 Позвать друга» under the status card and
+`/invite` (in the command menu after `/language`, #708), «👥 Позвать» under the status card and
 under a stopped session's status and summary (#537) ([bot-session.md](bot-session.md)), and
 «🔄 Повторить» `cmd:invite` all run `showInvite`. The button answers the press first; the screen is
 always a new message, since the cards are photos.
