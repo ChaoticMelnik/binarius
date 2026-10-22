@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { breakEvenPct, MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import {
+  H1_DECISION_SETS,
   H1_ENTRY_WINDOW_SEC,
+  H1_SESSION_DECISION_SET,
+  H1ShadowSet,
   H1_EXPIRY_SEC,
   H1_MIN_PAYOUT_PCT,
   H1_PRICE_RANGE,
@@ -116,6 +119,17 @@ describe('the H1 shadow row (#669)', () => {
     expect(h1ShadowSourceSchema.safeParse({ ...entry.source, closedBy: 'rest' }).success).toBe(
       false,
     );
+  });
+
+  it("H-S9: the driver's rows (#707) carry set session; every shadow set is a decision set", () => {
+    expect(H1_SESSION_DECISION_SET).toBe('session');
+    expect(h1ShadowParamsSchema.parse({ ...params, set: 'session' }).set).toBe('session');
+    expect(h1ShadowEntrySchema.parse({ ...entry, params: { ...params, set: 'session' } })).toEqual({
+      ...entry,
+      params: { ...params, set: 'session' },
+    });
+    for (const set of Object.values(H1ShadowSet)) expect(H1_DECISION_SETS).toContain(set);
+    expect(h1ShadowParamsSchema.safeParse({ ...params, set: 'sessions' }).success).toBe(false);
   });
 
   it('H-S7: an up wins on a rise, a tie is neither, a down mirrors', () => {

@@ -111,6 +111,10 @@ export const h1SessionSignalSchema = z.strictObject({
 });
 export type H1SessionSignal = z.infer<typeof h1SessionSignalSchema>;
 
+// settled trades per edit of an H1 session's Telegram summary (#707, docs/h1.md -> The session
+// message): one message, edited every this many trades and at the finish
+export const H1_NOTICE_EVERY_TRADES = 10;
+
 // A tie returns the stake: neither a win nor a loss. A type, not an `as const` object: the bot's
 // session card has a tone of the same three values that is not a trade's outcome, and
 // local/no-status-literal would tie the two.
@@ -126,6 +130,14 @@ export function tradeOutcomeOf(action: TradeAction, entry: number, exit: number)
 // the two parameter sets the shadow decides with; a jsonb key of the row (params.set), not a status
 export const H1ShadowSet = { R1: 'r1', H1: 'h1' } as const;
 export type H1ShadowSet = (typeof H1ShadowSet)[keyof typeof H1ShadowSet];
+// params.set of the H1 driver's decision rows (#707, context = session): the shadow's row shape,
+// so the export's replay reads both; the shadow's own report reads only context = shadow
+export const H1_SESSION_DECISION_SET = 'session';
+export const H1_DECISION_SETS = [
+  H1ShadowSet.R1,
+  H1ShadowSet.H1,
+  H1_SESSION_DECISION_SET,
+] as const satisfies readonly (H1ShadowSet | typeof H1_SESSION_DECISION_SET)[];
 
 // what closed the decision's second: the pair's first tick past it or the process clock
 export const H1SecondClosedBy = { Tick: 'tick', Clock: 'clock' } as const;
@@ -141,7 +153,7 @@ export const H1ShadowEntryOutcome = {
 export type H1ShadowEntryOutcome = (typeof H1ShadowEntryOutcome)[keyof typeof H1ShadowEntryOutcome];
 
 export const h1ShadowParamsSchema = h1ParamsSchema.extend({
-  set: z.enum(H1ShadowSet),
+  set: z.enum(H1_DECISION_SETS),
   entryDelaySec: z.int().min(1),
   expirySec: z.int().min(1),
 });

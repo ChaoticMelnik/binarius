@@ -21,6 +21,8 @@ import {
   createTradeIntentRequestSchema,
   INT4_MAX,
   TRADE_INTENT_TRANSITIONS,
+  TradeIntentErrorCode,
+  TradeIntentStatus,
   telegramUserIdSchema,
   tradeActionSchema,
   tradeAmountSchema,
@@ -221,6 +223,124 @@ export type TradingSessionStopReason =
   (typeof TradingSessionStopReason)[keyof typeof TradingSessionStopReason];
 
 export const tradingSessionStopReasonSchema = z.enum(TradingSessionStopReason);
+
+export type SessionIntentRefusal =
+  { kind: 'stop'; reason: TradingSessionStopReason } | { kind: 'reschedule' };
+
+const accountUnavailable = {
+  kind: 'stop',
+  reason: TradingSessionStopReason.AccountUnavailable,
+} as const;
+
+// What a session's intent creator does with each refusal of createSessionIntent: the worker's
+// orchestrator and the backend's H1 driver (#707) read the same table. Every code createTradeIntent
+// can refuse with; a code added later fails tsc here.
+export const SESSION_INTENT_REFUSALS = {
+  [TradeIntentErrorCode.UserNotFound]: accountUnavailable,
+  [TradeIntentErrorCode.UserBlocked]: accountUnavailable,
+  [TradeIntentErrorCode.BrokerAccountNotFound]: accountUnavailable,
+  [TradeIntentErrorCode.AmbiguousBrokerAccount]: accountUnavailable,
+  [TradeIntentErrorCode.AccountRevoked]: accountUnavailable,
+  [TradeIntentErrorCode.AccountNotConfirmed]: accountUnavailable,
+  [TradeIntentErrorCode.InsufficientTokens]: accountUnavailable,
+  // a halt committed while the backend calls were in flight (reconciliation's write, Rule 25)
+  [TradeIntentErrorCode.AccountHalted]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.ManualReview,
+  },
+  // the kill switch closed while the backend calls were in flight (#144)
+  [TradeIntentErrorCode.TradingPaused]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.KillSwitch,
+  },
+  // a bot trade or a second worker on the account: the scan waits for it
+  [TradeIntentErrorCode.ActiveIntentExists]: { kind: 'reschedule' },
+  // the step key exists with other terms: the next attempt reads that intent in the history
+  [TradeIntentErrorCode.ClientRequestIdConflict]: { kind: 'reschedule' },
+  // the stake bounds of either mode (#297, #326): only POST /trading/intents asks for them, so a
+  // session intent never gets these; were it to, they mean what the sizer's own stop means
+  [TradeIntentErrorCode.BalanceUnavailable]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.BalanceUnavailable,
+  },
+  [TradeIntentErrorCode.StakePrecision]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.StakeStop,
+  },
+  [TradeIntentErrorCode.StakeBelowMinimum]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.StakeStop,
+  },
+  [TradeIntentErrorCode.InsufficientBalance]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.StakeStop,
+  },
+  // the process runs DEMO_ONLY and the session is real (#396): durable for this process
+  [TradeIntentErrorCode.DemoOnly]: accountUnavailable,
+  // the user is not in real mode (#121): a switch to demo stops the user's sessions itself
+  // (setTradingMode, #327), so this is the race with that switch, whose stop wins the CAS, or a
+  // trading_mode written by hand
+  [TradeIntentErrorCode.RealModeOff]: accountUnavailable,
+} as const satisfies Record<TradeIntentErrorCode, SessionIntentRefusal>;
+
+export const SessionIntentBlockReason = {
+  // started_at + the maximum duration passed, on the database clock
+  Expired: 'expired',
+  // an intent of the session is not finished
+  Live: 'live',
+  // sessionProgress reached its plan
+  Completed: 'completed',
+  // the next stake would take the loss past maxLoss (an H1 session's lossLimit)
+  MaxLoss: 'max_loss',
+  // the session's last two intents are rejected (an entry_window_missed among them)
+  RejectedTwice: 'rejected_twice',
+} as const;
+export type SessionIntentBlockReason =
+  (typeof SessionIntentBlockReason)[keyof typeof SessionIntentBlockReason];
+
+export interface SessionIntentBlockHistory {
+  expired: boolean;
+  lossLimitReached: boolean;
+  intents: readonly { status: TradeIntentStatus; profit: string | null }[];
+}
+
+export type SessionIntentBlock =
+  | { reason: typeof SessionIntentBlockReason.Completed; settled: number; done: number }
+  | {
+      reason: Exclude<SessionIntentBlockReason, typeof SessionIntentBlockReason.Completed>;
+    };
+
+// a profit above zero; numeric(20,8) text is always a plain decimal, so no parse is needed
+const POSITIVE_DECIMAL = /^\d+(\.\d+)?$/;
+const isWin = (profit: string | null) =>
+  profit !== null && POSITIVE_DECIMAL.test(profit) && /[1-9]/.test(profit);
+
+// Why a session may not create its next intent now, in the order its creators check it (#707):
+// the orchestrator's attempt turns a reason into its stop or reschedule, the H1 driver into a skip.
+// A settled intent without a profit is no win. lossLimitReached is only ever true when the reader
+// passed a lossLimit (an H1 session's).
+export function sessionIntentBlock(
+  history: SessionIntentBlockHistory,
+  settings: TradingSessionSettings,
+): SessionIntentBlock | null {
+  if (history.expired) return { reason: SessionIntentBlockReason.Expired };
+  if (history.intents.some((intent) => TRADE_INTENT_TRANSITIONS[intent.status].length > 0)) {
+    return { reason: SessionIntentBlockReason.Live };
+  }
+  const settledIntents = history.intents.filter((i) => i.status === TradeIntentStatus.Settled);
+  const settled = settledIntents.length;
+  const won = settledIntents.filter((i) => isWin(i.profit)).length;
+  const progress = sessionProgress(settings, { settled, won });
+  if (progress.done >= progress.planned) {
+    return { reason: SessionIntentBlockReason.Completed, settled, done: progress.done };
+  }
+  if (history.lossLimitReached) return { reason: SessionIntentBlockReason.MaxLoss };
+  const lastTwo = history.intents.slice(-2);
+  if (lastTwo.length === 2 && lastTwo.every((i) => i.status === TradeIntentStatus.Rejected)) {
+    return { reason: SessionIntentBlockReason.RejectedTwice };
+  }
+  return null;
+}
 
 // The fixed stake of a session from the account's min_trade_amount: the canonical spelling
 // (normalizeDecimal) and its own fraction length as the scale, so every positive numeric(20,8)

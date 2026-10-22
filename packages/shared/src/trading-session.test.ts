@@ -3,7 +3,7 @@ import { PairsCatalogErrorCode } from './catalog';
 import { H1_EXPIRY_SEC, H1_R1_PARAMS } from './h1';
 import { decimalStringSchema } from './money';
 import { SIGNAL_SHORTEST_INTERVAL_MS } from './signal';
-import { INT4_MAX, TradeIntentStatus, type TradeIntentView } from './trading';
+import { INT4_MAX, TradeIntentErrorCode, TradeIntentStatus, type TradeIntentView } from './trading';
 import {
   TRACKED_SESSIONS_MAX,
   safeParseForgetSessionStatusMessageRequest,
@@ -47,6 +47,9 @@ import {
   H1_SESSION_SETTINGS_VERSION,
   isH1Settings,
   MAX_H1_LOSS_MULTIPLIER,
+  SESSION_INTENT_REFUSALS,
+  sessionIntentBlock,
+  SessionIntentBlockReason,
 } from './trading-session';
 
 const settings = {
@@ -835,5 +838,108 @@ describe('settings v4, the H1 session (#670)', () => {
     expect(isH1Settings(safeParse(settingsV2))).toBe(false);
     expect(isH1Settings(safeParse(settingsV3))).toBe(false);
     expect(MIN_SESSION_DURATION_SEC).toBe(H1_EXPIRY_SEC);
+  });
+
+  it('H1-S6 SESSION_INTENT_REFUSALS: every code, two reschedules, a halt is manual_review', () => {
+    expect(Object.keys(SESSION_INTENT_REFUSALS).sort()).toEqual(
+      Object.values(TradeIntentErrorCode).sort(),
+    );
+    const reschedules = Object.entries(SESSION_INTENT_REFUSALS)
+      .filter(([, refusal]) => refusal.kind === 'reschedule')
+      .map(([code]) => code)
+      .sort();
+    expect(reschedules).toEqual(
+      [
+        TradeIntentErrorCode.ActiveIntentExists,
+        TradeIntentErrorCode.ClientRequestIdConflict,
+      ].sort(),
+    );
+    expect(SESSION_INTENT_REFUSALS[TradeIntentErrorCode.AccountHalted]).toEqual({
+      kind: 'stop',
+      reason: TradingSessionStopReason.ManualReview,
+    });
+    expect(SESSION_INTENT_REFUSALS[TradeIntentErrorCode.TradingPaused]).toEqual({
+      kind: 'stop',
+      reason: TradingSessionStopReason.KillSwitch,
+    });
+    expect(SESSION_INTENT_REFUSALS[TradeIntentErrorCode.DemoOnly]).toEqual({
+      kind: 'stop',
+      reason: TradingSessionStopReason.AccountUnavailable,
+    });
+  });
+});
+
+describe('sessionIntentBlock (#707): why a session may not create its next intent', () => {
+  const h1 = safeParse({
+    version: 4,
+    assetId: 101,
+    durationSec: 5,
+    trades: 3,
+    stake: { strategy: 'fixed', baseStake: '1', stakeScale: 0 },
+    signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
+    maxLoss: '20',
+  });
+  const won = { status: TradeIntentStatus.Settled, profit: '0.92' };
+  const lost = { status: TradeIntentStatus.Settled, profit: '-1' };
+  const rejected = { status: TradeIntentStatus.Rejected, profit: null };
+  const live = { status: TradeIntentStatus.Submitting, profit: null };
+  const history = (
+    intents: { status: TradeIntentStatus; profit: string | null }[],
+    patch: { expired?: boolean; lossLimitReached?: boolean } = {},
+  ) => ({ expired: false, lossLimitReached: false, intents, ...patch });
+
+  it('H1-S7 nothing blocks a session inside its limits', () => {
+    expect(sessionIntentBlock(history([]), h1)).toBeNull();
+    expect(sessionIntentBlock(history([won, rejected, lost]), h1)).toBeNull();
+  });
+
+  it('H1-S8 each reason alone blocks, every other condition clear', () => {
+    expect(sessionIntentBlock(history([won], { expired: true }), h1)).toEqual({
+      reason: SessionIntentBlockReason.Expired,
+    });
+    expect(sessionIntentBlock(history([won, live]), h1)).toEqual({
+      reason: SessionIntentBlockReason.Live,
+    });
+    expect(
+      sessionIntentBlock(history([{ status: TradeIntentStatus.ManualReview, profit: null }]), h1),
+    ).toEqual({ reason: SessionIntentBlockReason.Live });
+    expect(sessionIntentBlock(history([won, lost, lost]), h1)).toEqual({
+      reason: SessionIntentBlockReason.Completed,
+      settled: 3,
+      done: 3,
+    });
+    expect(sessionIntentBlock(history([lost], { lossLimitReached: true }), h1)).toEqual({
+      reason: SessionIntentBlockReason.MaxLoss,
+    });
+    expect(sessionIntentBlock(history([won, rejected, rejected]), h1)).toEqual({
+      reason: SessionIntentBlockReason.RejectedTwice,
+    });
+  });
+
+  it('H1-S9 the order: expired, live, completed, max loss, two rejections', () => {
+    const all = history([won, lost, rejected, rejected, live], {
+      expired: true,
+      lossLimitReached: true,
+    });
+    expect(sessionIntentBlock(all, h1)?.reason).toBe(SessionIntentBlockReason.Expired);
+    expect(sessionIntentBlock({ ...all, expired: false }, h1)?.reason).toBe(
+      SessionIntentBlockReason.Live,
+    );
+    const done = history([won, lost, won], { lossLimitReached: true });
+    expect(sessionIntentBlock(done, h1)?.reason).toBe(SessionIntentBlockReason.Completed);
+    const twice = history([rejected, rejected], { lossLimitReached: true });
+    expect(sessionIntentBlock(twice, h1)?.reason).toBe(SessionIntentBlockReason.MaxLoss);
+  });
+
+  it('H1-S10 a martingale v3 session counts cycles by wins; a zero or missing profit is no win', () => {
+    const v3 = safeParse({ ...settingsV3, cycles: 2 });
+    const zero = { status: TradeIntentStatus.Settled, profit: '0.00000000' };
+    const missing = { status: TradeIntentStatus.Settled, profit: null };
+    expect(sessionIntentBlock(history([won, lost, zero, missing]), v3)).toBeNull();
+    expect(sessionIntentBlock(history([won, lost, won]), v3)).toEqual({
+      reason: SessionIntentBlockReason.Completed,
+      settled: 3,
+      done: 2,
+    });
   });
 });
