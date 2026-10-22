@@ -34,6 +34,7 @@ export const SignalDecisionOutcome = {
   Intent: 'intent',
   Started: 'started',
   NoSignal: 'no_signal',
+  // no writer since #698; rows before it read and export as before
   Paused: 'paused',
   StakeStop: 'stake_stop',
   Refused: 'refused',

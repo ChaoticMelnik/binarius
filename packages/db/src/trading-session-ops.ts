@@ -192,8 +192,6 @@ export interface RunnableSession {
   settings: unknown;
   startedAt: Date;
   lastDecisionAt: Date | null;
-  // the direction the last deciding attempt saw; NULL after a no_signal or before any (#379)
-  lastSignalAction: TradeAction | null;
 }
 
 export interface RunnableSessionsOptions {
@@ -225,7 +223,6 @@ export async function listRunnableSessions(
       settings: sql<unknown>`${tradingSessions.settings}`,
       startedAt: tradingSessions.startedAt,
       lastDecisionAt: tradingSessions.lastDecisionAt,
-      lastSignalAction: tradingSessions.lastSignalAction,
     })
     .from(tradingSessions)
     .where(
@@ -487,19 +484,11 @@ export async function stopUserSessions(
     .returning(stoppedColumns);
 }
 
-// Moves the scan's order key of a session that stays active. signalAction: undefined leaves the
-// column, null clears it, an action sets it (#379, the pause after two losses).
-export async function markSessionDecision(
-  db: Db,
-  { id, signalAction }: { id: string; signalAction?: TradeAction | null },
-): Promise<void> {
+// Moves the scan's order key of a session that stays active.
+export async function markSessionDecision(db: Db, { id }: { id: string }): Promise<void> {
   await db
     .update(tradingSessions)
-    .set({
-      lastDecisionAt: sql`now()`,
-      updatedAt: sql`now()`,
-      ...(signalAction === undefined ? {} : { lastSignalAction: signalAction }),
-    })
+    .set({ lastDecisionAt: sql`now()`, updatedAt: sql`now()` })
     .where(
       and(eq(tradingSessions.id, id), eq(tradingSessions.status, TradingSessionStatus.Active)),
     );

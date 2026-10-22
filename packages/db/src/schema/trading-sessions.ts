@@ -44,8 +44,8 @@ export const tradingSessions = pgTable(
     endedAt: timestamp('ended_at', { withTimezone: true }),
     // the order key of the runnable scan; NULL until the first attempt reached an ending
     lastDecisionAt: timestamp('last_decision_at', { withTimezone: true }),
-    // the direction of the last attempt that decided anything, NULL after a no_signal or before
-    // any decision: the pause after two losses holds while it stays the losing direction (#379)
+    // the pause's memory (#379) until #698: no writer and no reader since; the column and its
+    // CHECK stay until the drop migration (#719)
     lastSignalAction: text('last_signal_action').$type<TradeAction>(),
     // the direction of the signal the start route checked (#568): the bot's session picture until
     // the session's first trade. Written only by createTradingSession from POST /trading/sessions,

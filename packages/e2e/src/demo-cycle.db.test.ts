@@ -262,7 +262,6 @@ it('runs /start → the email login → a demo session → its result', async ()
   );
   expect(await reads.sessionOf(account.id)).toMatchObject({
     stopReason: TradingSessionStopReason.Completed,
-    lastSignalAction: 'up',
     endedAt: expect.any(Date),
   });
   const intents = await reads.intentsOf(started.id);

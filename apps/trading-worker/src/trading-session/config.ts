@@ -20,7 +20,7 @@ import { isTimerMs } from '@binarius/broker-socket';
 //   TRADING_SESSION_PAIRS_TIMEOUT_MS    — the pairs GET (a cache read on the backend)
 //   TRADING_SESSION_RETRY_MS            — the hold-back after a transient failure or a throw
 //   CANDLE_CLOSE_SLACK_MS (shared)      — how long after a candle boundary the signal is asked
-//                                         again after no_signal or the pause: the scanner's own
+//                                         again after no_signal: the scanner's own
 //                                         scan moment (#697). That hold is not rounded up to a
 //                                         tick; a one-off timer wakes the tick at its end. The
 //                                         backend's cache keeps a decision until the boundary on
