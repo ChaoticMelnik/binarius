@@ -230,8 +230,15 @@ it('runs /start → the email login → a demo session → its result', async ()
   );
   await until('the first waiting message is sent', () => backend.push.calls.some(isWaiting));
 
-  // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it
+  // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it - the
+  // first two once the backend showed their open block (#700): step 1 a new message, step 2 its edit
   const amounts = [1, 2.18, 1, 1, 1, 1];
+  const openShown = [
+    (call: ApiCall) =>
+      call.method === 'sendMessage' && textOf(call).startsWith(`⚡ Цикл 1 Шаг 1\n<pre>⏳`),
+    (call: ApiCall) =>
+      call.method === 'editMessageText' && textOf(call).includes(`⚡ Цикл 1 Шаг 2\n<pre>⏳`),
+  ];
   for (let n = 1; n <= amounts.length; n += 1) {
     await until(
       `trade ${n} open at the broker`,
@@ -248,6 +255,10 @@ it('runs /start → the email login → a demo session → its result', async ()
       `intent ${n} accepted`,
       async () => (await reads.intentsOf(started.id))[n - 1]?.status === TradeIntentStatus.Accepted,
     );
+    const shown = openShown[n - 1];
+    if (shown !== undefined) {
+      await until(`trade ${n}'s open block`, () => backend.push.calls.some(shown));
+    }
     broker.trades.settle(Number(trade?.id), {
       outcome: n === 1 ? MockTradeOutcome.Loss : MockTradeOutcome.Win,
     });
@@ -302,9 +313,32 @@ it('runs /start → the email login → a demo session → its result', async ()
     expect(call.payload).toMatchObject({ disable_notification: true });
     expect(call.payload.reply_markup).toBeUndefined();
   }
-  const edits = push.filter((call) => call.method === 'editMessageText');
-  expect(edits).toHaveLength(1);
-  expect(edits[0]?.payload.message_id).toBe(backend.push.messageIdOf(cycles[0]!));
+  // the first cycle's message: its open block, the open block of step 2, the result of each (#700)
+  const firstCycle = push.filter(
+    (call) =>
+      call.method === 'editMessageText' &&
+      call.payload.message_id === backend.push.messageIdOf(cycles[0]!),
+  );
+  expect(firstCycle.map((call) => textOf(call).match(/[🟢🔴⚪⏳]/gu))).toEqual([
+    ['🔴'],
+    ['🔴', '⏳'],
+    ['🔴', '🟢'],
+  ]);
+  expect(textOf(cycles[0]!)).toContain('сделка открыта');
+  // an open block at most once a trade, each before its result; none is left in the chat
+  const shownLast = new Map<unknown, string>();
+  for (const call of push) {
+    if (call.method === 'sendMessage') shownLast.set(backend.push.messageIdOf(call), textOf(call));
+    if (call.method === 'editMessageText') shownLast.set(call.payload.message_id, textOf(call));
+  }
+  expect([...shownLast.values()].filter((text) => text.includes('⏳'))).toEqual([]);
+  const opens = push.filter(
+    (call) =>
+      (call.method === 'sendMessage' || call.method === 'editMessageText') &&
+      textOf(call).includes('сделка открыта'),
+  );
+  expect(opens.length).toBeGreaterThanOrEqual(2);
+  expect(opens.length).toBeLessThanOrEqual(amounts.length);
   // every waiting message is deleted after it went out and before the next message the backend
   // sends, or at all when nothing follows it
   const waiting = push.filter(isWaiting);
