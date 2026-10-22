@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
+  foreignKey,
   index,
+  type AnyPgColumn,
   integer,
   jsonb,
   pgTable,
@@ -20,6 +22,14 @@ import {
 } from '@binarius/shared';
 import { createdAt, id, inList, literal, updatedAt } from './columns';
 import { brokerAccounts } from './broker-accounts';
+import { tradeIntents } from './trade-intents';
+
+// trade_intents references this table too: the return type annotation keeps the two tables'
+// inferred types from depending on each other (TS7022 without it)
+const openNoticeIntentTarget = (): [AnyPgColumn, AnyPgColumn] => [
+  tradeIntents.id,
+  tradeIntents.tradingSessionId,
+];
 
 // The session orchestrator's table (#130; the orchestrator is #287; docs/trading-session.md). `settings` is typed for the
 // writers only: $type has no runtime effect, so the orchestrator parses the column at read.
@@ -66,11 +76,19 @@ export const tradingSessions = pgTable(
     finalNoticeSentAt: timestamp('final_notice_sent_at', { withTimezone: true }),
     // The session's live cycle message (#551, docs/bot-session.md → The state): Telegram's
     // message_id of the message the next step of the same cycle edits, and the index (from 0, in
-    // the cursor's order) of the first settled trade it shows. Both NULL until a new message of
+    // the cursor's order) of the first trade it shows, settled or open (#700: an open trade's block
+    // takes the index the trade gets once it settles). Both NULL until a new message of
     // the session was sent; written only by recordSessionCycleMessage after a send went through,
     // never cleared: a later cycle's trade sends a new message and moves them.
     cycleMessageId: integer('cycle_message_id'),
     cycleMessageFrom: integer('cycle_message_from'),
+    // The open trade's block (#700, docs/bot-session.md → Trade messages): the intent of the
+    // session whose «сделка открыта» block the sender claimed for the cycle message, NULL while no
+    // open trade's block was claimed. Written only by claimSessionOpenNotice's CAS before the
+    // Telegram call and cleared only by releaseSessionOpenNotice, on its own intent, after a send
+    // Telegram certainly did not deliver. The block is at most once: a claimed block is never sent
+    // again, its trade's result comes by the cursor.
+    openNoticeIntentId: uuid('open_notice_intent_id'),
     // The bot's status message of the session (#567, docs/bot-session.md → Recovery after a
     // restart): Telegram's message_id of the newest status message the bot tracked it on, so the
     // bot can track it again after a restart. Written by recordSessionStatusMessage's CAS (`is
@@ -102,6 +120,13 @@ export const tradingSessions = pgTable(
     unique('trading_sessions_id_account_mode_key').on(t.id, t.brokerAccountId, t.mode),
     // FK target for signal_decisions: a session's decision names the session's account (#666)
     unique('trading_sessions_id_account_key').on(t.id, t.brokerAccountId),
+    // the open block's intent is one of the session's own (#700, Rule 4); MATCH SIMPLE: NULL
+    // checks nothing
+    foreignKey({
+      name: 'trading_sessions_open_notice_intent_fk',
+      columns: [t.openNoticeIntentId, t.id],
+      foreignColumns: openNoticeIntentTarget(),
+    }).onDelete('restrict'),
     index('trading_sessions_account_status_idx').on(t.brokerAccountId, t.status),
     inList('trading_sessions_mode_check', t.mode, TradeMode),
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),

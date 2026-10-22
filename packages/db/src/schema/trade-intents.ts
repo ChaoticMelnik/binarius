@@ -96,6 +96,9 @@ export const tradeIntents = pgTable(
     unique('trade_intents_id_account_mode_key').on(t.id, t.brokerAccountId, t.mode),
     // FK target for token_ledger.intent_id
     unique('trade_intents_id_user_key').on(t.id, t.userId),
+    // FK target for trading_sessions_open_notice_intent_fk (#700): the open block's intent is
+    // one of the session's own
+    unique('trade_intents_id_session_key').on(t.id, t.tradingSessionId),
     // the intent's user must own the broker account
     foreignKey({
       name: 'trade_intents_account_owner_fk',
