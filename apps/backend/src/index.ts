@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import {
   BOT_TEXTS_REFRESH_MS,
   BROKER_RATE_LIMIT_PER_MINUTE,
+  CANDLE_CLOSE_SLACK_MS,
   brokerGetsPerMinute,
   cashierUrlOf,
   closeAll,
@@ -86,7 +87,6 @@ import {
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
   SIGNAL_SCAN_LOG_MS,
-  SIGNAL_SCAN_SLACK_MS,
   signalRestCapacity,
   STARS_TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
@@ -234,7 +234,7 @@ const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) =>
       warn: (object, message) => app.log.warn(object, message),
     },
     now: Date.now,
-    slackMs: SIGNAL_SCAN_SLACK_MS,
+    slackMs: CANDLE_CLOSE_SLACK_MS,
     logEveryMs: SIGNAL_SCAN_LOG_MS,
   }),
 );
@@ -439,7 +439,7 @@ function createMarketData(
       attempts: MARKET_DATA_BACKFILL_ATTEMPTS,
       budgetMs: MARKET_DATA_BACKFILL_BUDGET_MS,
       concurrency: MARKET_DATA_BACKFILL_CONCURRENCY,
-      slackMs: SIGNAL_SCAN_SLACK_MS,
+      slackMs: CANDLE_CLOSE_SLACK_MS,
       candles: MARKET_DATA_RING_CANDLES,
     },
   });

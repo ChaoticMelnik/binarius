@@ -130,6 +130,15 @@ const SHORTEST_INTERVAL = SIGNAL_INTERVALS.reduce((shortest, interval) =>
 );
 export const SIGNAL_SHORTEST_INTERVAL_MS: number = SIGNAL_CHART_INTERVAL_MS[SHORTEST_INTERVAL];
 
+// How long after a candle boundary a closed candle is read, in every reader: the scanner's scan
+// (apps/backend), a session's next ask after no_signal or the pause (apps/trading-worker, #697),
+// the earliest backfill GET and the stand's decision moment. Below the ring's clock rule
+// (MARKET_DATA_SKEW_MARGIN_MS, 2 s): on a stalled stream the read comes first and the decision
+// is on the candle before (`unclosed`, docs/signal.md -> The scanner). The live broker returned
+// the just-closed 15s candle 150 ms after the boundary (2026-10-08). Pilot 2026-10-22: the
+// watermark lag p50 212 / p95 364 / max 602 ms, 1.07 % of the scans unclosed at +500.
+export const CANDLE_CLOSE_SLACK_MS = 500;
+
 const INTERVALS_LONGEST_FIRST = SIGNAL_INTERVALS.map(
   (interval) => [interval, SIGNAL_CHART_INTERVAL_MS[interval]] as const,
 ).sort(([, a], [, b]) => b - a);

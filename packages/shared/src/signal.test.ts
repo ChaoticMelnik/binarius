@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
+  CANDLE_CLOSE_SLACK_MS,
   DATA_REFUSAL_REASONS,
   intervalForDuration,
   NoSignalReason,
@@ -150,6 +151,12 @@ describe('intervalForDuration', () => {
 
   it('S3 the shortest interval is 5s', () => {
     expect(SIGNAL_SHORTEST_INTERVAL_MS).toBe(5_000);
+  });
+
+  it('S3b the candle close slack is 0.5 s, a whole number of ms below the shortest candle', () => {
+    expect(CANDLE_CLOSE_SLACK_MS).toBe(500);
+    expect(Number.isInteger(CANDLE_CLOSE_SLACK_MS)).toBe(true);
+    expect(CANDLE_CLOSE_SLACK_MS).toBeLessThan(SIGNAL_SHORTEST_INTERVAL_MS);
   });
 
   it.each([0, -60, 1.5, Number.NaN])('S3 refuses %s', (durationSec) => {

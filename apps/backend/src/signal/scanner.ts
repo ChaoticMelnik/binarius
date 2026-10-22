@@ -13,7 +13,7 @@ import {
 import type { CachedSignalFeed, SignalDecidedEvaluation } from '@binarius/signal';
 
 // docs/signal.md -> The scanner (#343, #405). One instance per interval of SIGNAL_SCAN_INTERVALS
-// (#382): on every candle of its interval, SIGNAL_SCAN_SLACK_MS after its boundary, it decides
+// (#382): on every candle of its interval, CANDLE_CLOSE_SLACK_MS after its boundary, it decides
 // every eligible pair of the fresh catalog from the data socket's window (fromSource of the cached
 // feed: synchronous, no broker call, no pacer), so a manual analysis of a scanned pair in that
 // candle is a cache hit. Its decisions write no journal line; the cache writes one when a route

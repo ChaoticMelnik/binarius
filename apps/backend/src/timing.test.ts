@@ -19,6 +19,7 @@ import {
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
+  CANDLE_CLOSE_SLACK_MS,
   REFERRAL_REWARDED_AFTER_MS,
   MAILING_MIN_OFFSET_MS,
   SESSION_SUMMARY_FALLBACK_MS,
@@ -108,7 +109,6 @@ import {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
-  SIGNAL_SCAN_SLACK_MS,
   signalRestCapacity,
   signalRestWorstWindow,
   STARS_RECONCILE_MAX_PAGES,
@@ -274,8 +274,8 @@ describe('broker balance timing', () => {
   });
 
   it.each(SIGNAL_SCAN_INTERVALS)('starts and ends a scan inside its %s candle', (interval) => {
-    expect(SIGNAL_SCAN_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS[interval]);
-    expect(SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS).toBeLessThan(
+    expect(CANDLE_CLOSE_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS[interval]);
+    expect(SIGNAL_FETCH_BUDGET_MS + CANDLE_CLOSE_SLACK_MS).toBeLessThan(
       SIGNAL_CHART_INTERVAL_MS[interval],
     );
   });

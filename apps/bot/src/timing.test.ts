@@ -5,6 +5,7 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
+  CANDLE_CLOSE_SLACK_MS,
   confirmCallbackData,
   NotificationLevel,
   OAuthErrorCode,
@@ -3844,8 +3845,10 @@ describe("the wait for a signal's bounds (#664)", () => {
     expect(signalWaitBoundsHold({ shutdownBudgetMs: 41_999 })).toBe(true);
   });
 
-  it('the chain fails on a poll offset outside the candle, a TTL under a candle or a bound past 48 h', () => {
+  it('the chain fails on a poll offset outside the candle or before the scan, a TTL under a candle or a bound past 48 h', () => {
     expect(signalWaitBoundsHold({ pollOffsetMs: 0 })).toBe(false);
+    expect(signalWaitBoundsHold({ pollOffsetMs: CANDLE_CLOSE_SLACK_MS })).toBe(false);
+    expect(signalWaitBoundsHold({ pollOffsetMs: CANDLE_CLOSE_SLACK_MS + 1 })).toBe(true);
     expect(signalWaitBoundsHold({ pollOffsetMs: 5_000 })).toBe(false);
     expect(signalWaitBoundsHold({ listTtlMs: 5_000 })).toBe(false);
     expect(signalWaitBoundsHold({ maxMs: 48 * 3_600_000 })).toBe(false);
