@@ -32,7 +32,9 @@ backfill after `listen()` with the other loops, and stops the backfill and then 
 shutdown phase 1. The start line
 `market data source { enabled }` says whether it runs. The second series is built with the ring,
 and the H1 shadow on it with the backfill and the manager, unless `H1_SHADOW=off`; it starts after
-them and stops before them ([h1.md](h1.md#start-stop-and-the-switch)).
+them and stops before them ([h1.md](h1.md#start-stop-and-the-switch)). The H1 driver (#707) is
+built with them always, starts after the shadow and stops before it
+([h1.md → The driver](h1.md#the-driver-707)).
 
 ## The state machine
 

@@ -126,6 +126,29 @@ attempt, with `reason: 'record_missing'` (a backend before #666), `'record_inval
 failed its schema) or `'record_mismatch'` (it is not the answer's decision, pair or interval); the
 attempt goes on and its intent names no decision (O7).
 
+### The H1 driver (`context = session`, `version = h1`, #707)
+
+The backend's driver ([h1.md → The driver](h1.md#the-driver-707)) writes rows only for the
+signals it acts on; a `no_signal` and a skip (a live intent, the limits, an ineligible pair) are
+the counters of its `h1 driver` line. `params` is the shadow row's shape with `set = session`, so
+the export prints the row as an entry `replayH1Entry` decides again; `interval` and
+`ticks_until_ms` are NULL, `source` is the series' (`kind: ticks`).
+
+| # | Path (`apps/backend/src/h1/driver.ts`) | Ending | Row: `outcome` / `detail` | Test |
+|---|---|---|---|---|
+| D1 | `created: true` | the intent, `submit_deadline_at = taken_at_ms + H1_SUBMIT_BUDGET_MS`; a wake | `intent` / NULL, in the intent's transaction | H1-DR1, H1-DB1 |
+| D2 | `created: true` with the decision's INSERT refused | the intent without the link; `warn` `insert_refused` | none | H1-DR13 |
+| D3 | `created: false` (a replay) | the cadence held | none | H1-DR12 |
+| D4 | a stop refusal of `SESSION_INTENT_REFUSALS` | `stopTradingSession` with its reason, the session forgotten | `refused` / the code, after the stop, best-effort (`warn` `h1 driver decision not recorded`) | H1-DR10 |
+| D5 | `active_intent_exists`, `client_request_id_conflict` | the session kept | `refused` / the code | H1-DR11 |
+| D6 | `TradingSessionNotActiveError`, the history gone | forgotten | none | H1-DR17 |
+| D7 | a skip of `sessionIntentBlock` (the hour, a live intent, N trades, the loss limit, two rejections) | none: the orchestrator stops it | none | H1-DR4, H1-DR6 |
+| D8 | `no_signal` | none | none (В3 (a) #670) | H1-DR20 |
+| D9 | any other throw of `createSessionIntent` | `errors`, a `warn` | none: rolled back with the intent | — |
+
+`docs/h1.md` → Comparing with the shadow joins these rows with their trades and the shadow's R1
+row of the same pair and second.
+
 ### The start route (`context = session_start`, no `step`)
 
 | # | Path (`session-routes.ts`) | Answer | Row: `outcome` / `detail` | Test |
