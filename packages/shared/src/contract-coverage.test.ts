@@ -494,12 +494,11 @@ describe('contract coverage (issue #6)', () => {
     >();
   });
 
-  it('Session summary (issues #318, #537)', () => {
+  it('Session summary (issues #318, #537, #709)', () => {
     expectTypeOf<keyof SessionSummaryResponse>().toEqualTypeOf<'summary'>();
     expectTypeOf<SessionSummaryResponse['summary']>().toEqualTypeOf<{
       result: DecimalString;
       trades: { profit: DecimalString; openPrice: number; closePrice: number }[];
-      referralCode: string | null;
     }>();
     expectTypeOf<SessionSummaryRefusal['error']>().toEqualTypeOf<'summary_unavailable'>();
   });

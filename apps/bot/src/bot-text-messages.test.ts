@@ -14,8 +14,6 @@ import {
   botTextChangeProblems,
   resolveBotTextOverrides,
   INT4_MAX,
-  REFERRAL_CODE_LENGTH,
-  referralLinkOf,
   LinkBonusSkipReason,
   MAX_PAIR_DIGITS,
   MAX_SESSION_CYCLES,
@@ -77,7 +75,6 @@ import {
   sessionCardFooter,
   sessionStatusText,
   sessionStopReplyText,
-  sessionSummaryCaption,
   sessionTexts as notices,
   setBotTextSource,
   settingsText,
@@ -524,16 +521,6 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   // the finished session's summary as a text, the backend's fallback and the bot's text (#464, #537)
   sessionSummary: () =>
     summaryInputs().map(({ symbol, view }) => notices.sessionSummaryText(symbol, INT4_MAX, view)),
-  // the same lines under the card's photo, then the owner's link at its widest (#537)
-  sessionSummaryCaption: () =>
-    summaryInputs().map(({ symbol, view }) =>
-      sessionSummaryCaption(
-        symbol,
-        INT4_MAX,
-        view,
-        referralLinkOf(x(W.botUsername), x(REFERRAL_CODE_LENGTH)),
-      ),
-    ),
   // the card's footer (#318): plain text on the image, at each plural and every count tied
   sessionCardFooter: () =>
     [N, 992, 991].map(
@@ -785,7 +772,7 @@ describe('the assembled messages, against the real assembly', () => {
 
   // #637: the no-signal line made the widest of its anyOf, so its two variables' estimates decide
   // the message's
-  it.each(['sessionStopped', 'sessionStopReply', 'sessionSummary', 'sessionSummaryCaption'])(
+  it.each(['sessionStopped', 'sessionStopReply', 'sessionSummary'])(
     'M7 estimates %s exactly with the no-signal line widest',
     (id) => {
       const texts = {

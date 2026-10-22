@@ -21,7 +21,7 @@ export interface SessionResumer {
   // the session composer's resume, wired once by createBot
   attach(resume: ResumeSession): void;
   // the first pass now, not awaited, then one every intervalMs
-  start(api: Api, botUsername: string): void;
+  start(api: Api): void;
   // no pass after it; waits for the one in flight
   stop(): Promise<void>;
 }
@@ -54,7 +54,7 @@ export function createSessionResumer({
   let inFlight: Promise<void> | undefined;
   let stopping = false;
 
-  async function pass(api: Api, botUsername: string, attached: ResumeSession): Promise<void> {
+  async function pass(api: Api, attached: ResumeSession): Promise<void> {
     const [listed, catalog] = await Promise.allSettled([
       backend.listTrackedSessions(),
       backend.readPairs(),
@@ -69,7 +69,7 @@ export function createSessionResumer({
     let resumed = 0;
     for (const session of listed.value) {
       if (tracker.has(session.id)) continue;
-      attached(api, botUsername, session, labelOf(catalog, session.assetId));
+      attached(api, session, labelOf(catalog, session.assetId));
       resumed += 1;
     }
     if (resumed > 0) {
@@ -77,9 +77,9 @@ export function createSessionResumer({
     }
   }
 
-  const run = (api: Api, botUsername: string, attached: ResumeSession): void => {
+  const run = (api: Api, attached: ResumeSession): void => {
     if (stopping || inFlight !== undefined) return;
-    inFlight = pass(api, botUsername, attached)
+    inFlight = pass(api, attached)
       .catch((error: unknown) => {
         logger.error(errorLogFields(error), 'trading sessions resume failed');
       })
@@ -92,12 +92,12 @@ export function createSessionResumer({
     attach(next) {
       resume = next;
     },
-    start(api, botUsername) {
+    start(api) {
       const attached = resume;
       if (attached === undefined) throw new Error('session resumer started before attach()');
       if (stopping || timer !== undefined) return;
-      run(api, botUsername, attached);
-      timer = setInterval(() => run(api, botUsername, attached), intervalMs);
+      run(api, attached);
+      timer = setInterval(() => run(api, attached), intervalMs);
     },
     async stop() {
       stopping = true;

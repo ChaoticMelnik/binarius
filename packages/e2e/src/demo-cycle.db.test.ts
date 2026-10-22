@@ -329,7 +329,7 @@ it('runs /start → the email login → a demo session → its result', async ()
   }
 
   // S8 the bot: the status message finished, then the summary in one message - the card's photo
-  // with the whole summary and the owner's link as its caption, with sound
+  // with the whole summary as its caption, with sound
   await until('the summary is sent', () =>
     botCalls.some((call) => call.method === 'sendPhoto' && textOf(call).startsWith('📈')),
   );
@@ -346,9 +346,9 @@ it('runs /start → the email login → a demo session → its result', async ()
   expect(caption[0]).toBe(`📈 ${pairLabel({ symbol: E2E_PAIR.symbol })}`);
   expect(textOf(summary)).toContain('+$4.25');
   expect(textOf(summary)).toMatch(/🧪 Демобаланс: \$10.004\.25/);
-  const referralCode = await reads.referralCodeOf(user.id);
-  expect(referralCode).toBeDefined();
-  expect(caption.at(-1)).toBe(`🤖 https://t.me/binarius_bot?start=ref_${referralCode!}`);
+  // #709: no referral link in the caption, and the claim creates no code
+  expect(textOf(summary)).not.toContain('t.me/');
+  expect(await reads.referralCodeOf(user.id)).toBeUndefined();
   expect(labelsOf(summary.payload)).toContain(LABELS.menuButton);
 
   // S9 the tokens: the pack less one per trade, nothing left reserved

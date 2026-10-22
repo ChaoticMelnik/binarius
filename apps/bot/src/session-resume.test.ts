@@ -13,7 +13,6 @@ import { fakeLogger, PAIR_EURUSD, PAIRS_RESPONSE } from './testing';
 
 const INTERVAL = 600_000;
 const API = {} as Api;
-const USERNAME = 'binarius_bot';
 
 const row = (id: string, patch: Partial<TrackedSession> = {}): TrackedSession => ({
   id,
@@ -56,7 +55,7 @@ function setup(
 }
 
 const resumedIds = (resume: ReturnType<typeof setup>['resume']) =>
-  resume.mock.calls.map((call) => call[2].id);
+  resume.mock.calls.map((call) => call[1].id);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -68,14 +67,14 @@ afterEach(() => {
 describe('the session resumer (#567)', () => {
   it('Q1 at the start reads the list beside the catalog and resumes every row on its label', async () => {
     const scene = setup();
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     expect(scene.listTrackedSessions).toHaveBeenCalledTimes(1);
     expect(scene.readPairs).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(0);
     expect(scene.resume.mock.calls).toEqual([
-      [API, USERNAME, row(C), pairLabel(PAIR_EURUSD)],
-      [API, USERNAME, row(A, { assetId: null }), null],
-      [API, USERNAME, row(B), pairLabel(PAIR_EURUSD)],
+      [API, row(C), pairLabel(PAIR_EURUSD)],
+      [API, row(A, { assetId: null }), null],
+      [API, row(B), pairLabel(PAIR_EURUSD)],
     ]);
     expect(scene.logger.info.mock.calls).toEqual([
       [{ listed: 3, resumed: 3 }, 'trading sessions resumed'],
@@ -85,7 +84,7 @@ describe('the session resumer (#567)', () => {
 
   it('Q2 passes again once per interval', async () => {
     const scene = setup();
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     await vi.advanceTimersByTimeAsync(INTERVAL - 1);
     expect(scene.listTrackedSessions).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -97,7 +96,7 @@ describe('the session resumer (#567)', () => {
 
   it('Q3 leaves a session the tracker holds alone', async () => {
     const scene = setup({ tracked: [A] });
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     await vi.advanceTimersByTimeAsync(0);
     expect(resumedIds(scene.resume)).toEqual([C, B]);
     expect(scene.logger.info.mock.calls).toEqual([
@@ -114,7 +113,7 @@ describe('the session resumer (#567)', () => {
           ? Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 503 }))
           : Promise.resolve([row(A)]),
     });
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     await vi.advanceTimersByTimeAsync(0);
     expect(scene.resume).not.toHaveBeenCalled();
     expect(scene.logger.warn.mock.calls.map((call) => [call[0].backendStatus, call[1]])).toEqual([
@@ -129,16 +128,16 @@ describe('the session resumer (#567)', () => {
     const scene = setup({
       pairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     await vi.advanceTimersByTimeAsync(0);
-    expect(scene.resume.mock.calls.map((call) => call[3])).toEqual([null, null, null]);
+    expect(scene.resume.mock.calls.map((call) => call[2])).toEqual([null, null, null]);
     expect(scene.logger.warn).not.toHaveBeenCalled();
     await scene.resumer.stop();
   });
 
   it('Q6 an empty list is quiet', async () => {
     const scene = setup({ list: () => Promise.resolve([]) });
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     await vi.advanceTimersByTimeAsync(0);
     expect(scene.resume).not.toHaveBeenCalled();
     expect(scene.logger.info).not.toHaveBeenCalled();
@@ -154,7 +153,7 @@ describe('the session resumer (#567)', () => {
           release = resolve;
         }),
     });
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     let stopped = false;
     const stopping = scene.resumer.stop().then(() => {
       stopped = true;
@@ -166,7 +165,7 @@ describe('the session resumer (#567)', () => {
     expect(resumedIds(scene.resume)).toEqual([A]);
     await vi.advanceTimersByTimeAsync(INTERVAL * 2);
     expect(scene.listTrackedSessions).toHaveBeenCalledTimes(1);
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     expect(scene.listTrackedSessions).toHaveBeenCalledTimes(1);
   });
 
@@ -178,7 +177,7 @@ describe('the session resumer (#567)', () => {
           release = resolve;
         }),
     });
-    scene.resumer.start(API, USERNAME);
+    scene.resumer.start(API);
     await vi.advanceTimersByTimeAsync(INTERVAL * 2);
     expect(scene.listTrackedSessions).toHaveBeenCalledTimes(1);
     release([]);
@@ -195,6 +194,6 @@ describe('the session resumer (#567)', () => {
       logger: fakeLogger(),
       intervalMs: INTERVAL,
     });
-    expect(() => resumer.start(API, USERNAME)).toThrow('session resumer started before attach()');
+    expect(() => resumer.start(API)).toThrow('session resumer started before attach()');
   });
 });

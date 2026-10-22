@@ -11,6 +11,7 @@ import {
 import { BotTextKind } from './bot-text-template';
 import { BOT_TEXT_CATALOG, defaultBotTextSource, type BotTextKey } from './bot-texts';
 import { REFERRAL_CODE_LENGTH, referralLinkOf } from './referral';
+import { TELEGRAM_CAPTION_LIMIT } from './telegram-html';
 
 const message = (id: string) => {
   const found = BOT_TEXT_MESSAGES.find((m) => m.id === id);
@@ -136,6 +137,11 @@ describe('the assembled messages', () => {
     for (const key of ['launchStake', 'launchStakeMinimum', 'launchCycle', 'launchCycleReal']) {
       expect(launch, key).toContain(key);
     }
+  });
+
+  it('#709 bounds the summary by the caption limit', () => {
+    expect(message('sessionSummary').limit).toBe(TELEGRAM_CAPTION_LIMIT);
+    expect(BOT_TEXT_MESSAGES.some((m) => m.id === 'sessionSummaryCaption')).toBe(false);
   });
 
   it('reads the labels a width is made of as keys of the message', () => {

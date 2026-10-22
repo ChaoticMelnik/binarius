@@ -9,7 +9,6 @@ import {
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
-  referralLinkOf,
   SESSION_STOP_PATTERN,
   TradeMode,
   TradingModeErrorCode,
@@ -85,7 +84,7 @@ import {
   sendPhotoByIdHtml,
 } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
-import { attachShareButton, shareFallbackLink } from './session-share';
+import { attachShareButton } from './session-share';
 import {
   SESSION_NOT_FOUND,
   type SessionDrawing,
@@ -100,7 +99,7 @@ import {
   sessionAgainButtonLabel,
   sessionStatusText,
   sessionStopReplyText,
-  sessionSummaryCaption,
+  sessionTexts,
   TEXTS,
   textOf,
 } from './texts';
@@ -299,12 +298,7 @@ export type SessionStartData = Pick<
 // Tracks a session again on its recorded status message after a restart (#567,
 // session-resume.ts): the same entry a press makes, with no view read yet, the deadline from the
 // session's start, and the message already recorded. The label is the catalog's, or null.
-export type ResumeSession = (
-  api: Api,
-  botUsername: string,
-  session: TrackedSession,
-  label: PairLabel | null,
-) => void;
+export type ResumeSession = (api: Api, session: TrackedSession, label: PairLabel | null) => void;
 
 export type StartSession = (
   ctx: Context,
@@ -859,11 +853,11 @@ export function createTradingSessionComposer<C extends Context>({
     messageId: number,
   ): void {
     const target = { sessionId: view.id, telegramUserId, symbol, chatId, messageId };
-    follow(ctx.api, ctx.me.username, target, { view, record: true, language: currentLanguage() });
+    follow(ctx.api, target, { view, record: true, language: currentLanguage() });
   }
 
   // a private chat's id is its user's id (Telegram ids fit in 52 bits, so Number keeps them)
-  const resume: ResumeSession = (api, botUsername, session, label) => {
+  const resume: ResumeSession = (api, session, label) => {
     const target = {
       sessionId: session.id,
       telegramUserId: session.telegramUserId,
@@ -871,7 +865,7 @@ export function createTradingSessionComposer<C extends Context>({
       chatId: Number(session.telegramUserId),
       messageId: session.messageId,
     };
-    follow(api, botUsername, target, {
+    follow(api, target, {
       view: null,
       record: false,
       startedAt: Date.parse(session.startedAt),
@@ -882,7 +876,6 @@ export function createTradingSessionComposer<C extends Context>({
 
   function follow(
     api: Api,
-    botUsername: string,
     {
       sessionId,
       telegramUserId,
@@ -929,7 +922,7 @@ export function createTradingSessionComposer<C extends Context>({
               editMessagePhotoByIdHtmlWithoutNextStep(api, chatId, messageId, photo, text, reason),
             );
       },
-      summary: (current) => sendSummary(api, chatId, telegramUserId, symbol, botUsername, current),
+      summary: (current) => sendSummary(api, chatId, telegramUserId, symbol, current),
     });
   }
 
@@ -945,7 +938,6 @@ export function createTradingSessionComposer<C extends Context>({
     chatId: number,
     telegramUserId: string,
     symbol: PairLabel | null,
-    botUsername: string,
     view: TradingSessionView,
   ): Promise<void> {
     const fields = { sessionId: view.id };
@@ -971,14 +963,7 @@ export function createTradingSessionComposer<C extends Context>({
       return;
     }
     if (summary === null) return;
-    const caption = sessionSummaryCaption(
-      symbol,
-      assetId,
-      view,
-      summary.referralCode === null
-        ? shareFallbackLink(botUsername)
-        : referralLinkOf(botUsername, summary.referralCode),
-    );
+    const caption = sessionTexts.sessionSummaryText(symbol, assetId, view);
     const keyboard = sessionCardKeyboard(view, cashierUrl);
     // «📤 Поделиться» (#321): catches its own failures; a session without a trade has no card to
     // share (session-share.ts answers it with nothing), so no button

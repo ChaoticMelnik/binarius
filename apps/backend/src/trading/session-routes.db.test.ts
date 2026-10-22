@@ -1689,7 +1689,6 @@ describe('POST /trading/sessions/:id/summary (#318, #537)', () => {
       });
       expect(response.statusCode).toBe(200);
       expect(safeParseSessionSummaryResponse(response.json()).success).toBe(true);
-      const [code] = await codesOf(seed.userId);
       expect(response.json()).toEqual({
         summary: {
           result: '-0.15000000',
@@ -1697,7 +1696,6 @@ describe('POST /trading/sessions/:id/summary (#318, #537)', () => {
             { profit: '0.85000000', openPrice: 1.08765, closePrice: 1.08712 },
             { profit: '-1.00000000', openPrice: 1.08765, closePrice: 1.08712 },
           ],
-          referralCode: code,
         },
       });
       expect(refreshCalls).toHaveLength(0);
@@ -1749,27 +1747,22 @@ describe('POST /trading/sessions/:id/summary (#318, #537)', () => {
     expect(await sentAt(seed.sessionId)).toBeNull();
   });
 
-  it("U6 the answer carries the owner's referral code, created on first use and the same after; a blocked owner's is null", async () => {
+  it('U6 the claim reads and creates no referral code (#709), a blocked owner as well', async () => {
     const seed = await finishedIn(TradeMode.Demo);
     expect(await codesOf(seed.userId)).toEqual([]);
     const response = await summary(appWith(), seed.sessionId, {
       telegramUserId: seed.telegramUserId,
     });
-    const codes = await codesOf(seed.userId);
-    expect(codes).toHaveLength(1);
-    expect((response.json() as { summary: { referralCode: unknown } }).summary.referralCode).toBe(
-      codes[0],
-    );
+    expect(response.statusCode).toBe(200);
+    expect(await codesOf(seed.userId)).toEqual([]);
 
     const blocked = await finishedIn(TradeMode.Demo);
     await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, blocked.userId));
-    const refused = await summary(appWith(), blocked.sessionId, {
+    const answered = await summary(appWith(), blocked.sessionId, {
       telegramUserId: blocked.telegramUserId,
     });
-    expect(refused.statusCode).toBe(200);
-    expect(
-      (refused.json() as { summary: { referralCode: unknown } }).summary.referralCode,
-    ).toBeNull();
+    expect(answered.statusCode).toBe(200);
+    expect(await codesOf(blocked.userId)).toEqual([]);
   });
 
   it('U7 a no-signal stop without a trade is claimed: 200 with no trades', async () => {

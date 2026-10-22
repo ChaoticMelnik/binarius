@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
   pairLabel,
-  referralLinkOf,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -71,7 +70,7 @@ import {
 import {
   sessionStatusText,
   sessionStopReplyText,
-  sessionSummaryCaption,
+  sessionTexts,
   TEXTS,
   textOf,
   LABELS,
@@ -79,7 +78,7 @@ import {
 import { sessionCardKeyboard, sessionOutcomeUnknown, START_REFUSALS } from './trading-session';
 import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
-import { shareFallbackLink, shareQuery } from './session-share';
+import { shareQuery } from './session-share';
 
 const START = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
 const REAL_START = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5);
@@ -109,7 +108,6 @@ const SUMMARY: SessionSummary = {
     { profit: d('0.85000000'), openPrice: 1.1, closePrice: 1.2 },
     { profit: d('-1.00000000'), openPrice: 1.2, closePrice: 1.1 },
   ],
-  referralCode: 'AbC123xY',
 };
 
 function setup(
@@ -1303,9 +1301,8 @@ describe('the summary in one message (#318, #537)', () => {
     stopReason: TradingSessionStopReason.NoSignalTimeout,
   });
   const CARD_ROWS = STOPPED_ROWS;
-  const OWNER_LINK = referralLinkOf(BOT_INFO.username, SUMMARY.referralCode!);
-  const captionOf = (view: TradingSessionView, link = OWNER_LINK, label = pairLabel(PAIR_EURUSD)) =>
-    sessionSummaryCaption(label, PAIR_EURUSD.id, view, link).value;
+  const captionOf = (view: TradingSessionView, label: PairLabel | null = pairLabel(PAIR_EURUSD)) =>
+    sessionTexts.sessionSummaryText(label, PAIR_EURUSD.id, view).value;
   // the tracker's entry of a started session: its summary is what the tracker calls
   const entryOf = async (setupResult: ReturnType<typeof setup>) => {
     await setupResult.press(START);
@@ -1367,7 +1364,9 @@ describe('the summary in one message (#318, #537)', () => {
     expect(photo?.caption).toContain(`💰 Результат: ${formatSignedUsd(SUMMARY.result)}`);
     expect(photo?.caption).toMatch(/🧪 Демобаланс: \$9.104\.12/);
     expect(photo?.caption).toContain('🕒 Баланс Binodex обновлён');
-    expect(lines.at(-1)).toBe(`🤖 ${OWNER_LINK}`);
+    // #709: the caption ends with the summary's last line, no referral link
+    expect(photo?.caption).not.toContain('t.me/');
+    expect(lines.at(-1)).not.toMatch(/^🤖/);
     expect(rowsOf(photo)).toEqual(CARD_ROWS);
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
@@ -1425,22 +1424,12 @@ describe('the summary in one message (#318, #537)', () => {
     });
   });
 
-  it("K11 without the owner's code, the last line is the bot's plain share link", async () => {
-    const scene = setup({
-      readSession: () => Promise.resolve(DONE),
-      claimSessionSummary: () => Promise.resolve({ ...SUMMARY, referralCode: null }),
-    });
-    await (await entryOf(scene)).summary(DONE);
-    const caption = String(payloadOf(scene.calls, 'sendPhoto')?.caption);
-    expect(caption).toBe(captionOf(DONE, shareFallbackLink(BOT_INFO.username)));
-    expect(caption.split('\n').at(-1)).toBe(`🤖 https://t.me/${BOT_INFO.username}?start=share`);
-  });
+  // K11 (the caption without the owner's code) went with the link (#709)
 
   it('K12 a no-signal stop without trades: one text with sound, «🔀 Выбрать другую пару» and the menu, no photo', async () => {
     const scene = setup({
       readSession: () => Promise.resolve(NO_SIGNAL),
-      claimSessionSummary: () =>
-        Promise.resolve({ result: d('0.00000000'), trades: [], referralCode: 'AbC123xY' }),
+      claimSessionSummary: () => Promise.resolve({ result: d('0.00000000'), trades: [] }),
     });
     const entry = await entryOf(scene);
     const before = scene.calls.length;
@@ -1669,7 +1658,7 @@ describe('the summary in one message (#318, #537)', () => {
     await (await entryOf(scene)).summary(bare);
     const photo = payloadOf(scene.calls, 'sendPhoto');
     expect(photo?.caption).toBe(
-      sessionSummaryCaption(null, bare.lastIntent!.assetId, bare, OWNER_LINK).value,
+      sessionTexts.sessionSummaryText(null, bare.lastIntent!.assetId, bare).value,
     );
     expect(rowsOf(photo)).toEqual([DEPOSIT, INVITE_MENU]);
     expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
@@ -1850,7 +1839,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
   const resumed = (scene: ReturnType<typeof setup>, label: PairLabel | null) => {
     const resume = scene.sessionResumer.attach.mock.calls[0]?.[0];
     if (resume === undefined) throw new Error('createBot attached no resume');
-    resume(scene.bot.api, 'resumed_bot', tracked, label);
+    resume(scene.bot.api, tracked, label);
     expect(scene.sessionTracker.track).toHaveBeenCalledTimes(1);
     return scene.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
   };
@@ -1879,14 +1868,10 @@ describe('the resume of a tracked session after a restart (#567)', () => {
     expect(edit).not.toHaveProperty('reply_markup');
   });
 
-  it("RS2' the summary goes to the owner's chat, its link with the resume's bot username", async () => {
+  it("RS2' the summary goes to the owner's chat", async () => {
     const scene = setup();
     await resumed(scene, pairLabel(PAIR_EURUSD)).summary(DONE);
-    const photo = payloadOf(scene.calls, 'sendPhoto');
-    expect(photo?.chat_id).toBe(USER.id);
-    expect(String(photo?.caption).split('\n').at(-1)).toBe(
-      `🤖 ${referralLinkOf('resumed_bot', SUMMARY.referralCode!)}`,
-    );
+    expect(payloadOf(scene.calls, 'sendPhoto')?.chat_id).toBe(USER.id);
   });
 
   it("RS3' the label is what the resume was handed; null names the asset by its id", async () => {
@@ -1895,12 +1880,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
     expect(entry.label).toBeNull();
     await entry.summary(DONE);
     expect(payloadOf(scene.calls, 'sendPhoto')?.caption).toBe(
-      sessionSummaryCaption(
-        null,
-        PAIR_EURUSD.id,
-        DONE,
-        referralLinkOf('resumed_bot', SUMMARY.referralCode!),
-      ).value,
+      sessionTexts.sessionSummaryText(null, PAIR_EURUSD.id, DONE).value,
     );
   });
 });

@@ -663,11 +663,10 @@ export const sessionSummaryTradeSchema = z.strictObject({
 
 // result is the sum of the trades' profit by SQL at scale 8, the view's own fragment. trades is
 // empty only for a session stopped by no_signal_timeout (#537): its summary is a text, nothing to
-// draw. referralCode is the owner's, for the caption's last line (#537), null as in the share.
+// draw. No referral code (#709): the caption carries no link, the share's route creates its own.
 export const sessionSummarySchema = z.strictObject({
   result: decimalStringSchema,
   trades: z.array(sessionSummaryTradeSchema).max(MAX_SESSION_SUMMARY_TRADES),
-  referralCode: z.string().regex(REFERRAL_CODE_PATTERN).nullable(),
 });
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 

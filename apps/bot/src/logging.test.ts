@@ -1909,7 +1909,7 @@ describe('what the session tracker and the recovery write (#567, #570 m5)', () =
     });
     resumer.attach(resume);
     const pass = async () => {
-      resumer.start({} as Api, 'binarius_bot');
+      resumer.start({} as Api);
       await vi.advanceTimersByTimeAsync(0);
       await resumer.stop();
     };
