@@ -717,7 +717,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
   async function runTick(): Promise<void> {
     if (now() < pausedUntil) return;
-    const pending = await listPendingSessionNotices(db, { limit: config.scan });
+    const pending = await listPendingSessionNotices(db, { limit: config.scan, exclude: [] });
     for (const session of pending) {
       if (stopped) return;
       let step: Step;
@@ -738,6 +738,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     const fallback = await listSummaryFallback(db, {
       limit: config.scan,
       graceMs: config.summaryFallbackMs,
+      exclude: [],
     });
     for (const session of fallback) {
       if (stopped) return;
