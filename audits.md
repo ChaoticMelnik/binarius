@@ -3978,6 +3978,6 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R3 Minor 1: BW4 can pass on the `reschedule` mutant | Minor | other | left at the merge | → #716 |
 
 ### Process improvement proposals
-1. A plan that makes a step run sooner lists every state the step reads and its writer, for every event that now triggers it, and treats a removed delay as a possible guard — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Validation checklist**
-2. The manager takes the implementer's branch name from the plan when the plan names one — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Night additions (Implementer)**
+1. A plan that makes a step run sooner lists every state the step reads and its writer, for every event that now triggers it, and treats a removed delay as a possible guard — **внедрено в #717: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. The manager takes the implementer's branch name from the plan when the plan names one — **внедрено в #717: `.claude/skills/manager/SKILL.md` → Night additions (Implementer)**
 3. Remaining findings — **вынесено в #716**
