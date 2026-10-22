@@ -35,3 +35,15 @@ export function sessionTradeSteps(
   }
   return steps;
 }
+
+// The cycle and step of the session's open trade (#700): the position the trade takes once it
+// settles, whatever it ends with - a trade's position depends only on the results before it, so
+// the open block and the result block of one trade print the same «⚡ Цикл N Шаг M».
+export function sessionNextStep(
+  results: readonly SessionTradeResult[],
+  strategy: SessionStakeStrategy,
+): SessionTradeStep {
+  const next = sessionTradeSteps([...results, SessionTradeResult.Won], strategy).at(-1);
+  if (next === undefined) throw new Error('a session has no next step');
+  return next;
+}

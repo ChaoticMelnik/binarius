@@ -1717,12 +1717,13 @@ export const BOT_TEXT_CATALOG = {
     { ...caption, vars: ['referralLink'] },
   ),
 
-  // Sent by the backend only (#464, #551, docs/bot-session.md → Trade messages): a message per
-  // cycle of a session, its steps added by editing it, without sound and without buttons, and the
-  // summary once it is finished.
+  // Sent by the backend only (#464, #551, #700, docs/bot-session.md → Trade messages): a message
+  // per cycle of a session, its steps added by editing it - each trade's block when it opens, then
+  // edited into its result - without sound and without buttons, and the summary once it is
+  // finished.
   sessionTradeWon: html(
     g.Session,
-    'Блок сделки в сообщении цикла сессии, выигрыш: цикл и шаг, ставка → ставка + прибыль, цена открытия → закрытия. Следующие шаги цикла дописываются в то же сообщение. Без звука и без кнопок.',
+    'Блок сделки в сообщении цикла сессии, выигрыш: цикл и шаг, ставка → ставка + прибыль, цены. Заменяет блок открытой сделки; шаги цикла дописываются в то же сообщение. Без звука и без кнопок.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>🟢 Ставка: {stake} → {outcome}
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1744,9 +1745,17 @@ export const BOT_TEXT_CATALOG = {
 📊 Цена: {openPrice} → {closePrice}</pre>`,
     { vars: tradeNotice },
   ),
+  sessionTradeOpen: html(
+    g.Session,
+    'Блок открытой сделки в сообщении цикла сессии (#700): цикл и шаг, ставка, направление, цена открытия, без итога. При расчёте тот же блок правится в выигрыш, проигрыш или ничью.',
+    `⚡ Цикл {cycle} Шаг {step}
+<pre>⏳ Ставка: {stake} · {action} · сделка открыта
+📊 Цена: {openPrice} → …</pre>`,
+    { vars: ['cycle', 'step', 'stake', 'action', 'openPrice'] },
+  ),
   sessionAdaptiveStake: html(
     g.Session,
-    'Строка сообщения цикла сессии над блоком шага 2: один раз на цикл.',
+    'Строка сообщения цикла сессии над блоком шага 2, открытым или рассчитанным: один раз на цикл.',
     `🔄 Адаптивная ставка включена`,
   ),
   sessionSummarySymbol: html(

@@ -312,6 +312,8 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
     symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')),
     stake: () => w.stake,
   },
+  // the open trade's direction is the catalog's word alone (session-texts.ts → sessionCycleText)
+  sessionTradeOpen: { ...tradeNoticeWidths, action: (m) => m.longest('actionUp', 'actionDown') },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
   // the mode screen names the real stake, the saved one or the broker's minimum: never the label
@@ -771,23 +773,28 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   },
   {
     // a block of a session's cycle message, sent and edited by the backend (#551, session-texts.ts
-    // → sessionCycleText): the adaptive line above step 2's block, then the block. A cycle's
-    // message is such units a blank line apart; the sender splits it by its real length before
-    // the limit, never inside a unit, so this unit is what must fit
+    // → sessionCycleText): the adaptive line above step 2's block, then the block, settled or
+    // open (#700). A cycle's message is such units a blank line apart; the sender splits it by its
+    // real length before the limit, never inside a unit, so this unit is what must fit
     id: 'sessionTrade',
     title: 'Сообщение сделки сессии',
     limit: BOT_TEXT_LIMIT,
     body: [
       oneOf(
-        [anyOf('sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied')],
+        [anyOf('sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied', 'sessionTradeOpen')],
         // the line stands only above step 2: one digit
         [
           k('sessionAdaptiveStake'),
           '\n\n',
           oneOf(
-            ...(['sessionTradeWon', 'sessionTradeLost', 'sessionTradeTied'] as const).map((key) => [
-              k(key, { step: () => 1 }),
-            ]),
+            ...(
+              [
+                'sessionTradeWon',
+                'sessionTradeLost',
+                'sessionTradeTied',
+                'sessionTradeOpen',
+              ] as const
+            ).map((key) => [k(key, { step: () => 1 })]),
           ),
         ],
       ),

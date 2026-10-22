@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { SessionStakeStrategy, SessionTradeResult, sessionTradeSteps } from './session-steps';
+import {
+  SessionStakeStrategy,
+  SessionTradeResult,
+  sessionNextStep,
+  sessionTradeSteps,
+} from './session-steps';
 import { safeParseTradingSessionSettings, sessionProgress } from './trading-session';
 
 const { Won: W, Lost: L, Tied: T } = SessionTradeResult;
@@ -41,6 +46,39 @@ describe('sessionTradeSteps', () => {
 
   it('no trades, no steps', () => {
     expect(sessionTradeSteps([], 'martingale')).toEqual([]);
+  });
+});
+
+// #700: the open trade's block prints the position its result block will print, whatever the
+// trade ends with, over every history of up to six trades under both strategies
+describe('sessionNextStep (#700)', () => {
+  const histories: SessionTradeResult[][] = [[]];
+  for (let length = 1; length <= 6; length += 1) {
+    for (const prefix of histories.filter((h) => h.length === length - 1)) {
+      for (const result of [W, L, T]) histories.push([...prefix, result]);
+    }
+  }
+
+  it.each(Object.values(SessionStakeStrategy))(
+    '%s: the open trade takes the position it settles at, on any result',
+    (strategy) => {
+      for (const history of histories) {
+        const open = sessionNextStep(history, strategy);
+        for (const result of [W, L, T]) {
+          expect(
+            sessionTradeSteps([...history, result], strategy).at(-1),
+            history.join(''),
+          ).toEqual(open);
+        }
+      }
+    },
+  );
+
+  it('martingale: after a win a new cycle, after a loss or a tie the next step', () => {
+    expect(sessionNextStep([L, W], 'martingale')).toEqual({ cycle: 2, step: 1 });
+    expect(sessionNextStep([L, T], 'martingale')).toEqual({ cycle: 1, step: 3 });
+    expect(sessionNextStep([], 'martingale')).toEqual({ cycle: 1, step: 1 });
+    expect(sessionNextStep([L, L], 'fixed')).toEqual({ cycle: 3, step: 1 });
   });
 });
 
