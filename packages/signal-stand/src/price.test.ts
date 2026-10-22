@@ -1,6 +1,5 @@
-import { TradeAction } from '@binarius/shared';
+import { CANDLE_CLOSE_SLACK_MS, TradeAction } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { DECISION_SLACK_MS } from './config';
 import { firstPrice, priceIndex } from './price';
 import { simulate } from './simulate';
 import { aggregate, secondsPath, T0 } from './testing';
@@ -20,13 +19,13 @@ describe('price', () => {
   });
 
   it('P3 at openDelay 0 the entry is the 1s close at D, not the last closed candle; the exit is the 1s close at D + duration', () => {
-    // D = T0 + 5 000 + DECISION_SLACK_MS = row 7; a 5 s trade exits at row 12
-    const level = (i: number) => (i < 7 ? 1 : i === 7 ? 1.2 : i === 12 ? 1.1 : 1.3);
+    // D = T0 + 5 000 + CANDLE_CLOSE_SLACK_MS (500) = row 5; a 5 s trade exits at row 10
+    const level = (i: number) => (i < 5 ? 1 : i === 5 ? 1.2 : i === 10 ? 1.1 : 1.3);
     const seconds = secondsPath(T0, 60, level);
     const fives = aggregate(seconds, 5_000);
-    const decidedAt = fives[1].timestamp + DECISION_SLACK_MS;
+    const decidedAt = fives[1].timestamp + CANDLE_CLOSE_SLACK_MS;
     expect(fives[0].close).toBe(1);
-    expect(seconds[7].timestamp).toBe(decidedAt);
+    expect(seconds[5].timestamp).toBe(Math.floor(decidedAt / 1_000) * 1_000);
     const once: Variant = {
       name: 'once',
       intervals: ['5s'],

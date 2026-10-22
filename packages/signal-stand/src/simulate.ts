@@ -1,4 +1,5 @@
 import {
+  CANDLE_CLOSE_SLACK_MS,
   tradeOutcomeOf,
   type Candle,
   type SignalDecision,
@@ -8,7 +9,7 @@ import {
   type TradeOutcome,
 } from '@binarius/shared';
 import { DEFAULT_SIGNAL_PARAMS, displayIndicators, SIGNAL_FETCH_LIMIT } from '@binarius/signal';
-import { DECISION_SLACK_MS, SETTLE_TICK_MS, TRADE_INTERVALS, type TradeInterval } from './config';
+import { SETTLE_TICK_MS, TRADE_INTERVALS, type TradeInterval } from './config';
 import type { PriceAt } from './price';
 import {
   v1Decider,
@@ -121,11 +122,12 @@ function pausedDirection(priced: readonly SimTrade[]): TradeAction | undefined {
     : undefined;
 }
 
-// The worker's cadence (docs/signal-stand.md -> The cadence model): ask at a boundary + slack;
+// The worker's cadence (docs/signal-stand.md -> The cadence model): ask at a boundary + slack
+// (CANDLE_CLOSE_SLACK_MS, shared with the worker and the scanner);
 // no trade -> the next boundary + slack; a trade -> after it settles. Trades never overlap.
 export function simulate(market: Market, config: SimConfig): SimResult {
   const { intervalMs, durationSec } = TRADE_INTERVALS[config.interval];
-  const nextAsk = (ms: number) => Math.ceil(ms / intervalMs) * intervalMs + DECISION_SLACK_MS;
+  const nextAsk = (ms: number) => Math.ceil(ms / intervalMs) * intervalMs + CANDLE_CLOSE_SLACK_MS;
   const result: SimResult = { decisions: 0, trades: [], refusals: {} };
   const refuse = (reason: string) => {
     result.refusals[reason] = (result.refusals[reason] ?? 0) + 1;
