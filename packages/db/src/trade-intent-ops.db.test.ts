@@ -1867,6 +1867,81 @@ describe('concludeReconciled (#89)', () => {
   });
 });
 
+describe("the broker row's domain (#675)", () => {
+  async function acceptedRow(patch: Partial<OpenTrade>) {
+    const { intent } = await submittingIntent();
+    const open = openTradeFor(intent, patch);
+    expect(await accept(intent, open)).toMatchObject({ status: 'accepted' });
+    const [row] = await tradesOf(intent.id);
+    return { row: row!, open };
+  }
+
+  it('D1 accepts a negative payout and stores NULL, raw keeps it', async () => {
+    const { row, open } = await acceptedRow({ payout: -5 });
+    expect(row).toMatchObject({ status: 'open', payout: null, raw: { ...open, payout: -5 } });
+  });
+
+  it('D2 stores NULL for a payout of 10000', async () => {
+    const { row } = await acceptedRow({ payout: 10_000 });
+    expect(row.payout).toBeNull();
+  });
+
+  it('D3 stores the largest payout the column holds', async () => {
+    const { row } = await acceptedRow({ payout: 9999.9999 });
+    expect(row.payout).toBe(9999.9999);
+  });
+
+  it('D4 stores NULL for a payout that would round up past the column', async () => {
+    const { row } = await acceptedRow({ payout: 9999.99995 });
+    expect(row.payout).toBeNull();
+  });
+
+  it('D5 stores a zero potential profit', async () => {
+    const { row } = await acceptedRow({ potentialProfit: '0' as DecimalString });
+    expect(row.potentialProfit).toBe('0.00000000');
+  });
+
+  it.each(['-1', '1234567890123', '0.123456789'])(
+    'D6 stores NULL for a potential profit of %s, raw keeps it',
+    async (value) => {
+      const { row } = await acceptedRow({ potentialProfit: value as DecimalString });
+      expect(row).toMatchObject({ potentialProfit: null, raw: { potentialProfit: value } });
+    },
+  );
+
+  it.each([0, -1])('D7 accepts an open price of %s as given', async (openPrice) => {
+    const { row } = await acceptedRow({ openPrice });
+    expect(row.openPrice).toBe(openPrice);
+  });
+
+  it('D8 settles a trade closed at a zero price', async () => {
+    const { intent, open } = await acceptedIntent();
+    const closed = closedTradeFor(open, { closePrice: 0 });
+    expect(await settle(intent, closed)).toMatchObject({ status: 'settled' });
+    expect(await tradesOf(intent.id)).toMatchObject([
+      { status: 'closed', closePrice: 0, profit: '-10.00000000' },
+    ]);
+  });
+
+  it('D9 concludes a closed trade with an out-of-column payout and a negative close price', async () => {
+    const { intent } = await claimedIntent();
+    const closed = closedTradeFor(openTradeFor(intent, { payout: -5 }), { closePrice: -0.5 });
+    expect(await conclude(intent, closed)).toMatchObject({ status: 'settled' });
+    expect(await tradesOf(intent.id)).toMatchObject([
+      { status: 'closed', payout: null, closePrice: -0.5, potentialProfit: null },
+    ]);
+  });
+
+  it('D10 settles a never-linked manual_review intent with an out-of-column payout', async () => {
+    const { intent } = await parkedIntent('manual_review');
+    const closed = closedTradeFor(openTradeFor(intent, { payout: 10_000 }));
+    expect(await settle(intent, closed, 'manual_review')).toMatchObject({ status: 'settled' });
+    expect(await tradesOf(intent.id)).toMatchObject([
+      { brokerTradeId: closed.id, status: 'closed', payout: null },
+    ]);
+  });
+});
+
 describe('markIntentManualReview (#89)', () => {
   it('parks the intent with the reserve kept, then the operator may still reject it', async () => {
     const { intent, userId } = await claimedIntent();

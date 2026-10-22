@@ -1160,7 +1160,7 @@ describe('POST /trading/sessions: the start decision row (#666)', () => {
     expect(JSON.stringify(warns)).not.toContain('boom');
   });
 
-  // the second writer of signalDecisionPayout: the catalog's payout is unbounded (#631)
+  // the second writer of payoutInColumn: the catalog's payout is unbounded (#631)
   it('R43 a catalog payout the column cannot hold still starts; the row records it as NULL', async () => {
     const seed = await seedReady();
     const response = await start(

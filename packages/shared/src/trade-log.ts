@@ -93,7 +93,8 @@ export const tradeLogSessionSchema = z.strictObject({
 
 export const tradeLogBrokerTradeSchema = z.strictObject({
   status: z.enum({ Open: 'open', Closed: 'closed' }),
-  payout: z.number(),
+  // null when the broker's payout was outside the column (#675)
+  payout: z.number().nullable(),
   openPrice: z.number(),
   openTimestampMs: unixMsSchema,
   closePrice: z.number().nullable(),

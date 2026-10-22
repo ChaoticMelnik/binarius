@@ -60,14 +60,22 @@ export const nonNegativeNumeric = (name: string, column: AnyPgColumn) =>
 export const nullablePositiveNumeric = (name: string, column: AnyPgColumn) =>
   check(name, sql`${column} is null or (${column} > 0 and ${column} <> 'NaN'::numeric)`);
 
-// `NaN < Infinity` is false in PostgreSQL's float ordering, so the upper bound excludes both
+export const nullableNonNegativeNumeric = (name: string, column: AnyPgColumn) =>
+  check(name, sql`${column} is null or (${column} >= 0 and ${column} <> 'NaN'::numeric)`);
+
+// A float column holds a broker's price, which nothing computes on: the sign and 0 are the
+// broker's to send (#675), NaN and the infinities are not values. `NaN < Infinity` is false in
+// PostgreSQL's float ordering, so the upper bound excludes both NaN and Infinity.
 export const finiteFloat = (name: string, column: AnyPgColumn) =>
-  check(name, sql`${column} > 0 and ${column} < 'Infinity'::double precision`);
+  check(
+    name,
+    sql`${column} > '-Infinity'::double precision and ${column} < 'Infinity'::double precision`,
+  );
 
 export const nullableFiniteFloat = (name: string, column: AnyPgColumn) =>
   check(
     name,
-    sql`${column} is null or (${column} > 0 and ${column} < 'Infinity'::double precision)`,
+    sql`${column} is null or (${column} > '-Infinity'::double precision and ${column} < 'Infinity'::double precision)`,
   );
 
 // text + CHECK instead of pgEnum: adding or removing a value is one forward migration.
@@ -107,3 +115,28 @@ export const sqlTextLiteral = (value: string, what: string): ReturnType<typeof s
   }
   return sql.raw(`'${value}'`);
 };
+
+// numeric(8,4): signal_decisions.payout and broker_trades.payout. PAYOUT_MAX is the largest value
+// the column holds; a writer stores NULL past it (or below 0), so a broker's payout never refuses
+// the row (#673, #675).
+export const PAYOUT_PRECISION = 8;
+export const PAYOUT_SCALE = 4;
+export const PAYOUT_MAX = 10 ** (PAYOUT_PRECISION - PAYOUT_SCALE) - 10 ** -PAYOUT_SCALE;
+export const payout = (name: string) =>
+  numeric(name, { precision: PAYOUT_PRECISION, scale: PAYOUT_SCALE, mode: 'number' });
+
+export function payoutInColumn(value: number | null): number | null {
+  return value !== null && Number.isFinite(value) && value >= 0 && value <= PAYOUT_MAX
+    ? value
+    : null;
+}
+
+// A broker's money text the money column holds as written: numeric rounds extra fraction digits
+// silently, fails on extra integer digits and refuses a sign, so the shape decides, not rounding.
+export const MONEY_SHAPE = new RegExp(
+  `^\\d{1,${MONEY_INTEGER_DIGITS}}(\\.\\d{1,${MONEY_SCALE}})?$`,
+);
+
+export function moneyInColumn(value: DecimalString): DecimalString | null {
+  return MONEY_SHAPE.test(value) ? value : null;
+}

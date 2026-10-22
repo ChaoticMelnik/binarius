@@ -5,7 +5,8 @@ import { decimalStringSchema, type DecimalString } from '@binarius/shared';
 // tradeAmountSchema.
 export const AMOUNT_INTEGER_DIGITS = 12;
 export const AMOUNT_SCALE = 8;
-// broker_trades.payout is numeric(8,4)
+// the catalog payout's arithmetic domain, the same digits as the numeric(8,4) payout columns
+// (PAYOUT_PRECISION/PAYOUT_SCALE in packages/db) but kept here: the sizer imports no schema
 export const PAYOUT_INTEGER_DIGITS = 4;
 export const PAYOUT_SCALE = 4;
 

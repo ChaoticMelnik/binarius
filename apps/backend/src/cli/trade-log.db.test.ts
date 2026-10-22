@@ -673,6 +673,30 @@ describe('trade-log export (#666)', () => {
     ]);
   });
 
+  it('X16 a broker payout outside the column: the broker object with payout null, trades-json without the key (#675)', async () => {
+    const session = await seedSession();
+    const { intent } = await sessionIntent(session, 1);
+    await seedBrokerTradeFor(tmp.db, intent, { payout: -5, profit: '0.85' as DecimalString });
+    const { code, out } = await run('export', '--from', FROM, '--session', session.sessionId);
+    expect(code).toBe(0);
+    expect(linesOf(out).map((line) => line.trade?.broker)).toEqual([
+      expect.objectContaining({ status: 'closed', payout: null, profit: '0.85000000' }),
+    ]);
+    const json = await run(
+      'export',
+      '--from',
+      FROM,
+      '--session',
+      session.sessionId,
+      '--format',
+      'trades-json',
+    );
+    expect(json.code).toBe(0);
+    const rows: unknown = JSON.parse(json.out);
+    z.array(tradeLogTradeJsonSchema).length(1).parse(rows);
+    expect(Object.keys((rows as object[])[0]!)).not.toContain('payout');
+  });
+
   it('X9 lines without a trade: a start decision without a session, a refusal with its detail and result', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
     const quiet = noSignalRecord();

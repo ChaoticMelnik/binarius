@@ -27,7 +27,7 @@ import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { tokenLedger } from './schema/token-ledger';
-import { sqlLiteralList } from './schema/columns';
+import { moneyInColumn, payoutInColumn, sqlLiteralList } from './schema/columns';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
@@ -761,7 +761,7 @@ function tradeRow(intent: TradeIntentRow, trade: OpenTrade | ClosedTrade) {
     assetId: trade.assetId,
     action: trade.action,
     amount: trade.amount,
-    payout: trade.payout,
+    payout: payoutInColumn(trade.payout),
     openPrice: trade.openPrice,
     openTimestampMs: trade.openTimestamp,
     source: trade.source ?? null,
@@ -803,7 +803,8 @@ export interface MarkAcceptedOptions {
 // never change after creation, so an unlocked read is enough), then the CAS, then the open
 // broker_trades row is written. A four-field mismatch throws before
 // any write; a lost CAS answers undefined and inserts nothing; a trade already linked throws from
-// the insert, and the caller's transaction rolls the CAS back.
+// the insert, and the caller's transaction rolls the CAS back. A payout or potential profit the
+// column cannot hold is stored NULL (#675); raw keeps it.
 export async function markIntentAccepted(
   tx: Tx,
   {
@@ -836,7 +837,7 @@ export async function markIntentAccepted(
   if (row === undefined) return undefined;
   await insertTrade(tx, row, trade, {
     status: BrokerTradeStatus.Open,
-    potentialProfit: isClosedTrade(trade) ? null : trade.potentialProfit,
+    potentialProfit: isClosedTrade(trade) ? null : moneyInColumn(trade.potentialProfit),
   });
   return row;
 }

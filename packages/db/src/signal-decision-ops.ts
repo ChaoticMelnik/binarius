@@ -27,10 +27,10 @@ import {
 } from '@binarius/shared';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
-import { literal } from './schema/columns';
+import { literal, payoutInColumn } from './schema/columns';
 import { brokerTrades, type BrokerTradeStatus } from './schema/broker-trades';
 import { decisionTicks } from './schema/decision-ticks';
-import { SIGNAL_DECISION_PAYOUT_MAX, signalDecisions } from './schema/signal-decisions';
+import { signalDecisions } from './schema/signal-decisions';
 import { tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { tradeResultSql } from './session-notice-ops';
@@ -102,17 +102,6 @@ export function signalDecisionInput(
   };
 }
 
-// The payout is the broker catalog's, unbounded by design (#631): one the column cannot hold is
-// stored as NULL, so a writer's INSERT is never refused over it.
-export function signalDecisionPayout(payout: number | null): number | null {
-  return payout !== null &&
-    Number.isFinite(payout) &&
-    payout >= 0 &&
-    payout <= SIGNAL_DECISION_PAYOUT_MAX
-    ? payout
-    : null;
-}
-
 export async function recordSignalDecision(
   exec: DbExecutor,
   input: SignalDecisionInput,
@@ -131,7 +120,7 @@ export async function recordSignalDecision(
       takenAtMs: input.takenAtMs,
       kind: input.kind,
       action: input.action,
-      payout: signalDecisionPayout(input.payout),
+      payout: payoutInColumn(input.payout),
       digits: input.digits,
       params: input.params,
       decision: input.decision,
@@ -186,7 +175,7 @@ export interface TradeLogSessionRow {
 
 export interface TradeLogBrokerRow {
   status: BrokerTradeStatus;
-  payout: number;
+  payout: number | null;
   openPrice: number;
   openTimestampMs: number;
   closePrice: number | null;
@@ -390,7 +379,6 @@ export async function readTradeLogPage(
               submitDeadlineAt: row.intentSubmitDeadlineAt,
               broker:
                 row.brokerStatus === null ||
-                row.brokerPayout === null ||
                 row.brokerOpenPrice === null ||
                 row.brokerOpenTimestampMs === null
                   ? null

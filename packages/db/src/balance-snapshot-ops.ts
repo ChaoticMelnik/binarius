@@ -9,7 +9,7 @@ import {
   type BrokerUser,
 } from '@binarius/shared';
 import type { Db } from './client';
-import { MONEY_INTEGER_DIGITS, MONEY_SCALE, sqlLiteralList } from './schema/columns';
+import { MONEY_SHAPE, sqlLiteralList } from './schema/columns';
 import { brokerAccounts } from './schema/broker-accounts';
 import {
   BalanceRefreshError,
@@ -39,7 +39,6 @@ import { millisecondsAgo, millisecondsFromNow } from './trade-intent-ops';
 
 export type BalanceSnapshotWrite = { written: true } | { written: false; field: string };
 
-const MONEY_SHAPE = new RegExp(`^\\d{1,${MONEY_INTEGER_DIGITS}}(\\.\\d{1,${MONEY_SCALE}})?$`);
 const LEVEL_RANK_SHAPE = new RegExp(
   `^\\d{1,${LEVEL_RANK_INTEGER_DIGITS}}(\\.\\d{1,${LEVEL_RANK_SCALE}})?$`,
 );
@@ -48,9 +47,8 @@ const LEVEL_RANK_SHAPE = new RegExp(
 const LEVEL_CODE_SHAPE = new RegExp(`^[^\\p{Cc}]{1,${LEVEL_CODE_MAX_LENGTH}}$`, 'u');
 
 // The wire schemas accept a sign and any number of digits, because broker_trades shares them and
-// signs a profit. The columns here would round extra fraction digits silently, fail on extra
-// integer digits and refuse a sign, so a value outside them is refused before the statement and
-// named by its path. The rank is checked by its decimal form: a range check on the number lets
+// signs a profit. A money value outside MONEY_SHAPE (schema/columns.ts) is refused before the
+// statement and named by its path. The rank is checked by its decimal form: a range check on the number lets
 // 9999.99995 round up to an overflow and 1e-7 round down to 0.
 function amountsOutOfDomain(amounts: readonly [string, string][]): string | undefined {
   for (const [field, value] of amounts) {
