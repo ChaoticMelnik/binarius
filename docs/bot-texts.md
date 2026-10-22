@@ -293,7 +293,7 @@ compile.
 | `age` | seconds | `formatAge` | — |
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318), printed on the picture | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
-| `referralLink` | the user's personal link, `referralLinkOf` (#115); in `sessionShareCaption` and `sessionSummaryLink` (#537) `?start=share` without a code | as is | — |
+| `referralLink` | the user's personal link, `referralLinkOf` (#115); in `sessionShareCaption` `?start=share` without a code (#538; the summary's `sessionSummaryLink` went with #709) | as is | — |
 | `connected` | invitees with a confirmed partner account, `/invite` (#116) | as is | — |
 | `earnedTokens` | the tokens the user's invitations paid, `/invite` (#116) | `formatCount` | — |
 | `rewardTokens` | one reward's tokens, the ledger row's `balance_delta`, `referralRewarded` (#576) | `formatCount` | — |
@@ -351,7 +351,9 @@ key (`bot-text reset <key>`). #631 removes `demoPayoutTooLow`, `sessionPayoutToo
 `analysisCycleUnavailable` and the variable `payoutFloor` (the payout refuses no cycle any more):
 a saved override of them is an unknown key (`bot-text reset <key>`). #708 removes `languageButton`
 (the language is the `/language` command): a saved override of it is an unknown key
-(`bot-text reset languageButton`).
+(`bot-text reset languageButton`). #709 removes `sessionSummaryLink` (the summary ends with its
+last line, no referral link): a saved override of it is an unknown key
+(`bot-text reset sessionSummaryLink`).
 
 ## Adding a text
 
@@ -578,9 +580,8 @@ result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; a block of the session's cycle message with its
 adaptive line — the unit the backend never splits; it splits a cycle's message by its real length
 between blocks, #551 — the summary as a text, `sessionSummary`, the backend's fallback through the
-shared builders of `packages/shared/src/session-texts.ts` (#464, #537), and the same lines as the
-bot's caption under the card with the owner's link, `sessionSummaryCaption`, a caption of 1024
-(#537); the
+shared builders of `packages/shared/src/session-texts.ts` (#464, #537), the same lines as the
+bot's caption under the card and its text, a caption of 1024 (#709); the
 analysis card, `analysisCard`, a caption of 1024, #482), and
 each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:

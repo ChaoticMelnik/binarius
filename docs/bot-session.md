@@ -29,7 +29,7 @@ last of the session's messages while it runs, the backend keeps the waiting mess
 для следующей сделки…» with «⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)).
 When the session is over, its summary comes in one message with sound, sent by the bot after every
 message of the backend (#537): the picture of its trades with the whole summary as the caption —
-the pair, the end line, the total, the result, the balance and its age, the owner's referral link
+the pair, the end line, the total, the result, the balance and its age, no referral link since #709
 ([The summary message](#the-summary-message-537-the-card-of-318)); the backend sends a text summary
 only as the fallback, when the bot cannot ([The fallback](#the-fallback)). «📤 Поделиться» under
 it sends a promo card of the session (#538) into a chat the user picks
@@ -55,7 +55,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   sessionTracker, connectButtons, cashierUrl?, setupCardPhotos })` returns `{ composer, startSession, resume }`:
   the start and stop presses, an old status message's «🔄 Обновить» (#536) and the command `/stop`
   (#122); `startSession(ctx, data, catalog, { retryUnknown, removeScreen })` is the one start path,
-  which the amount screen's presses use too (`cycle-stake.ts`, #476); `resume(api, botUsername,
+  which the amount screen's presses use too (`cycle-stake.ts`, #476); `resume(api,
   trackedSession, label)` tracks a session again on its recorded message after a restart (#567).
   Also `sessionCardKeyboard` (the end of the path under a stopped session), `START_REFUSALS` and
   `sessionOutcomeUnknown`. `sendSummary` (#537) is the tracker's last step of a done session: the
@@ -80,8 +80,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId, waitingMessageId?)` (#587),
   `stopSessions(telegramUserId)`
   (#122, `POST /trading/sessions/stop`) ([The client](#the-client)),
-  `claimSessionSummary(id, telegramUserId)` → the summary (its trades, possibly none, and the
-  owner's `referralCode`, #537) or `null` (#318),
+  `claimSessionSummary(id, telegramUserId)` → the summary (its trades, possibly none) or `null`
+  (#318, #537; no referral code since #709),
   `recordSessionMessage(id, telegramUserId, messageId)` → the view,
   `forgetSessionMessage(id, telegramUserId, messageId)` → whether it was forgotten, and
   `listTrackedSessions()` (#567, `GET /trading/sessions/tracked?limit=2000`, its own body ceiling
@@ -103,7 +103,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 - `apps/bot/src/backend-client.ts` — `readSessionShare(id, telegramUserId)` (#538,
   `POST /trading/sessions/:id/share`).
 - `apps/bot/src/texts.ts` — `sessionStatusText` (the session message), `sessionStopReplyText`
-  (the reply to the stop, #536), `sessionSummaryCaption` (the summary's caption and text, #537),
+  (the reply to the stop, #536),
   `sessionEndLine`, `sessionStartButtonLabel` and `sessionTexts`,
   the shared session words over the bot's catalog; the texts are the `session` group of the catalog
   ([bot-texts.md](bot-texts.md)). `sessionWaitingSignal` is the backend's (the waiting message):
@@ -1205,8 +1205,8 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   settled trade gets none, except the `no_signal_timeout` stop, whose summary is a text.
 - **At most once.** `POST /trading/sessions/:id/summary` ([trading-session.md](trading-session.md#routes))
   sets `trading_sessions.summary_sent_at` by one CAS UPDATE — only once `final_notice_sent_at` is
-  set, with a settled trade or the `no_signal_timeout` stop — and answers the card's rows and the
-  owner's referral code; every other answer is 409 `summary_unavailable`, and the bot then sends
+  set, with a settled trade or the `no_signal_timeout` stop — and answers the card's rows (no
+  referral code since #709); every other answer is 409 `summary_unavailable`, and the bot then sends
   nothing. Two entries of one session, or the bot and [the fallback](#the-fallback), race the claim
   and one wins. After the claim nothing takes the mark back: a lost send is a lost summary (risk 86).
 - **How it ends** (`sendSummary`, `apps/bot/src/trading-session.ts`):
@@ -1238,14 +1238,14 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   session without ties has at most 20 trades, and only many ties make the columns crowd); blue entry markers, exits green,
   red or grey; the legend; the footer «5 сделок · 3 в плюс, 2 в минус», «в ноль» only when a trade
   tied. Every word is the catalog's (`sessionCard*`), XML-escaped, and shrinks to fit its slot.
-- **The caption** is `sessionSummaryCaption` (`texts.ts`, #537): the summary's lines
-  ([Trade messages and the summary](#trade-messages-and-the-summary-464)) — «📈 {pair}», the end
-  line, «📊 Итог», «💰 Результат», the balance and its age — then `sessionSummaryLink`, «🤖
-  {referralLink}»: the owner's link `https://t.me/{bot}?start=ref_{code}` (#538's `referralLinkOf`,
-  the code from the claim's answer, created on first use), `?start=share` without a code (a blocked
-  owner), the bot's `ctx.me.username` from the press that started tracking. Its assembly
-  `sessionSummaryCaption` in the registry holds it under Telegram's 1024 for a caption (Rule 30);
-  the text path sends the same caption with the width spacer.
+- **The caption** is `sessionSummaryText` (`packages/shared/src/session-texts.ts`, #537, #709):
+  the summary's lines ([Trade messages and the summary](#trade-messages-and-the-summary-464)) —
+  «📈 {pair}», the end line, «📊 Итог», «💰 Результат», the balance and its age — and nothing
+  after them. #709 removed the owner's referral link that ended it (`sessionSummaryLink`, the
+  owner's decision 2026-10-21): a forward of the summary invites nobody; «📤 Поделиться» carries the
+  link. The registry's one assembly `sessionSummary` holds the lines under Telegram's 1024 for a
+  caption (Rule 30) — the caption, the bot's text and the backend's fallback text are the same
+  lines; the text path sends them with the width spacer.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
   сессия» at 5 s (#685) while a session at it fits, «📊 Анализ» and
   «📡 Сигналы» in one row, «💳 Пополнить» (#27, https only) on its own row, «👥 Позвать»
@@ -1721,13 +1721,13 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     not sent`): such sessions get the text and no photo. The other order would lose summaries: the
     new backend sends no text, and the old bot cannot read the claim's answer after it committed.
 88. **The fallback's text is poorer** (#537): «🏠 В меню» (and «🔀» for `no_signal_timeout`), no
-    card, no referral link; it is for sessions the bot does not track or did not claim in 30 min.
+    card; it is for sessions the bot does not track or did not claim in 30 min.
 89. **Up to 30 minutes without a summary** (#537) when the bot is alive, the status message is
     recorded and the claim is not taken (an edit refused other than gone again and again, a tracker
     bug). Falsifiable: fallback `session summary` sends of sessions with a status message while the
     bot runs.
-90. **A referral code is created when a session ends** (#537, as #538's risk for the share): a
-    `referral_codes` row for a user who never invited anyone.
+90. **A referral code was created when a session ended** (#537) — no more since #709: the claim
+    reads no code; the share's press (risk 75) still creates one.
 91. **The backfill closes the old cards** (#537): sessions whose text summary went before the deploy
     and whose card did not (the bot was down, the card's claim failed) get no card; otherwise the
     fallback would send a second text.
@@ -1738,6 +1738,13 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 94. **The tracked list without its third conjunct** (#537) relies on backfill 0072 and on the final
     mark closing «nothing to send» in its own statement: a row with the final mark, no trade and no
     `summary_sent_at` cannot arise after the deploy (N6′, B1).
+98. **The deploy of #709**: the claim's answer loses `referralCode`, and both sides read it with a
+    strict schema, so an old bot with a new backend and a new bot with an old backend lose a claimed
+    summary (`ContractViolation` after the committed claim, risk 86's form; risk 87 was #537's
+    window). The owner's step: `docker compose stop bot && docker compose up -d backend bot` — the
+    pair never runs mixed, and a claim while the backend is down does not commit (a transport
+    error, retried by the tracker or the resume pass). Falsifiable: `warn` `trading session summary
+    not sent` with `summary_sent_at` set on sessions in the minute of the deploy.
 
 ## Running it locally
 

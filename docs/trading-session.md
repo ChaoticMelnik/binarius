@@ -354,16 +354,12 @@ of the backend, #464, #537), no intent of the session outside `TERMINAL_TRADE_IN
 at least one `settled` intent with its broker trade or `stop_reason = 'no_signal_timeout'` (#537:
 its summary tells why, trades or not). In the same transaction it reads the settled intents' trades
 in creation order (`profit`, `open_price`, `close_price`) and their sum by `sessionProfitSumSql` —
-the fragment the view's `trades.profit` is — over the same rows. Before the claim the route reads
-the caller's referral code by `readUserReferral`, which creates it on first use as `/share` does
-(null for a blocked user or one without a `users` row): read first, so a failure after a committed
-claim cannot lose the summary. 200 `{ summary: { result, trades: [{ profit, openPrice, closePrice
-}], referralCode } }` (`trades` may be empty, `referralCode` a string or null), built field by
-field. Every miss — not the owner's or missing, not stopped, the notices not closed yet, a trade
-still able to move, no settled trade and not the no-signal stop, claimed already (by the bot, the
-fallback or the final mark) — and a non-uuid id are one 409 `{ error: 'summary_unavailable' }`
-that writes nothing. A
-bad body is 400. No broker call. Terminal intents and a stopped session cannot change, so the rows
+the fragment the view's `trades.profit` is — over the same rows. 200 `{ summary: { result,
+trades: [{ profit, openPrice, closePrice }] } }` (`trades` may be empty), built field by field; no
+referral code (#709): the share's route creates it. Every miss — not the owner's or missing, not
+stopped, the notices not closed yet, a trade still able to move, no settled trade and not the
+no-signal stop, claimed already (by the bot, the fallback or the final mark) — and a non-uuid id
+are one 409 `{ error: 'summary_unavailable' }` that writes nothing. A bad body is 400. No broker call. Terminal intents and a stopped session cannot change, so the rows
 read after the claim are the ones it checked. Two claims at once: the row lock serialises them and
 the second re-checks `summary_sent_at is null`, so one wins. A lost answer after the commit loses
 the summary (accepted, [bot-session.md](bot-session.md#the-summary-message-537-the-card-of-318)).
