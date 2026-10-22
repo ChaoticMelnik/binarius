@@ -27,6 +27,7 @@ import {
   STARS_PRECHECKOUT_BUDGET_MS,
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
+  H1_NOTICE_EVERY_TRADES,
 } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
@@ -468,6 +469,13 @@ describe('broker balance timing', () => {
     expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_DRIVER_SCAN_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThanOrEqual(H1_DRIVER_LOG_MS);
+  });
+
+  it("edits an H1 session's summary at most once a minute at R1's fastest cadence (#707)", () => {
+    expect(H1_NOTICE_EVERY_TRADES).toBe(10);
+    expect(
+      H1_NOTICE_EVERY_TRADES * (H1_ENTRY_WINDOW_SEC.from + H1_EXPIRY_SEC + 1) * 1000,
+    ).toBeGreaterThanOrEqual(60_000);
   });
 
   it('keeps a window inside the tick buffer at its latest capture and the sweep outside the capture horizon (#668)', () => {

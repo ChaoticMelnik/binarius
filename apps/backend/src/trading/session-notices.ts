@@ -4,10 +4,13 @@ import {
   deleteRefusal,
   editRefusal,
   errorLogFields,
+  H1_NOTICE_EVERY_TRADES,
+  isH1Settings,
   safeParseTradingSessionSettings,
   SESSION_SUMMARY_FALLBACK_MS,
   TradingSessionStatus,
   TradingSessionStopReason,
+  type H1SessionSettings,
   type TelegramHtml,
   type TradingSessionSettings,
   telegramErrorFields,
@@ -15,6 +18,7 @@ import {
 import {
   claimSessionFinalNotice,
   claimSessionTradeNotice,
+  claimSessionTradeNotices,
   claimSessionWaiting,
   claimSummaryFallback,
   clearSessionWaitingMessage,
@@ -24,6 +28,7 @@ import {
   recordSessionCycleMessage,
   recordSessionWaitingMessage,
   releaseSessionTradeNotice,
+  releaseSessionTradeNotices,
   releaseSessionWaiting,
   releaseSummaryFallback,
   type Db,
@@ -44,6 +49,7 @@ import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import {
   pairOf,
   sessionCycleMessage,
+  sessionH1ProgressMessage,
   sessionSummaryMessage,
   sessionWaitingMessage,
   type SessionCycleNotice,
@@ -126,6 +132,17 @@ type Removal =
 
 // The memory's mirror of waitingDueSql once a step freed the slot or left it behind; the SQL
 // decides, so a wrong hint costs one refused claim or one tick.
+// A claimed notice's delivery: the trade's message (#551) or an H1 session's summary (#707)
+interface Delivery {
+  label: 'session trade notice' | 'session h1 notice';
+  key: string;
+  fields: Record<string, unknown>;
+  // recordSessionCycleMessage's `claimed`: the cursor stands at claimed + 1 after the claim
+  claimed: number;
+  // puts the claim back: only for a send Telegram certainly did not deliver
+  release: () => Promise<unknown>;
+}
+
 const waitingMayGo = (session: PendingSessionNotice): boolean =>
   session.status === TradingSessionStatus.Active && !session.telegramBlocked;
 
@@ -173,18 +190,6 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     claimed: number,
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, claimed };
-    const key = `${session.sessionId}:${claimed}`;
-    const tradeFailure = {
-      session,
-      label: 'session trade notice',
-      key,
-      fields,
-      release: () => releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed }),
-      afterForbidden: () => {
-        session.telegramBlocked = true;
-        return Promise.resolve();
-      },
-    } as const;
     if (!session.telegramBlocked) await pace();
     // after the pace, so a stop during its sleep claims nothing more
     if (stopped) return 'skip';
@@ -205,25 +210,95 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       logger.error({ ...fields, ...errorLogFields(error) }, 'session trade notice not built');
       return 'skip';
     }
+    return deliver(session, notice, {
+      label: 'session trade notice',
+      key: `${session.sessionId}:${claimed}`,
+      fields,
+      claimed,
+      release: () => releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed }),
+    });
+  }
+
+  // An H1 session's summary after `due` settled trades (#707, docs/bot-session.md → An H1
+  // session): the trades from the cursor to `due` claimed at once, then the summary sent as the
+  // session's one message, or its edit. `due` is a multiple of H1_NOTICE_EVERY_TRADES, or the
+  // settled count of a finished session, so the final mark follows.
+  async function sendH1Progress(
+    session: PendingSessionNotice,
+    settings: H1SessionSettings,
+    due: number,
+  ): Promise<Step> {
+    const from = session.notifiedTrades;
+    const fields = { sessionId: session.sessionId, from, to: due };
+    if (!session.telegramBlocked) await pace();
+    if (stopped) return 'skip';
+    const claim = await claimSessionTradeNotices(db, {
+      sessionId: session.sessionId,
+      from,
+      to: due,
+    });
+    if (claim === undefined) return 'skip';
+    session.notifiedTrades = due;
+    // nothing can be delivered (Rule 19): the trades count as sent
+    if (session.telegramBlocked) return 'next';
+    let notice: SessionCycleNotice;
+    try {
+      notice = sessionH1ProgressMessage(
+        claim,
+        settings,
+        pairOf(catalog.read(), settings.assetId).label,
+        due,
+      );
+    } catch (error) {
+      logger.error({ ...fields, ...errorLogFields(error) }, 'session h1 notice not built');
+      return 'skip';
+    }
+    return deliver(session, notice, {
+      label: 'session h1 notice',
+      key: `${session.sessionId}:h1:${String(due)}`,
+      fields,
+      claimed: due - 1,
+      release: () =>
+        releaseSessionTradeNotices(db, { sessionId: session.sessionId, from, to: due }),
+    });
+  }
+
+  // A claimed notice's message (#551): a new message, or the edit of the session's cycle message.
+  async function deliver(
+    session: PendingSessionNotice,
+    notice: SessionCycleNotice,
+    { label, key, fields, claimed, release }: Delivery,
+  ): Promise<Step> {
+    const failure = {
+      session,
+      label,
+      key,
+      fields,
+      release,
+      afterForbidden: () => {
+        session.telegramBlocked = true;
+        return Promise.resolve();
+      },
+    } as const;
 
     // A new message: the cycle message from now on, recorded only once Telegram answered with its
     // id. An id that is not a positive integer is not recorded: the next step sends anew. The
     // waiting message is deleted first (#536), on the pace this call came with, and its slot
     // freed, so whatever becomes of the new message, the waiting message is due under it; the new
-    // message then takes a pace of its own. A delete that did not clear puts the trade back, so
+    // message then takes a pace of its own. A delete that did not clear puts the claim back, so
     // no new message goes out under a waiting message that may still be there; one that found the
-    // user unreachable sends nothing more (Rule 19), the trade counting as sent and the waiting
+    // user unreachable sends nothing more (Rule 19), the claim counting as sent and the waiting
     // message's id kept, so it is deleted first once the user is reachable (#587).
     const sendNew = async (text: TelegramHtml, from: number): Promise<Step> => {
       if (session.waitingMessageId !== null) {
         const removal = await removeWaiting(session, session.waitingMessageId);
         if (removal.kind === 'blocked') return 'next';
         if (removal.kind !== 'cleared') {
-          // nothing was sent: the trade goes again after the pause, or next tick after the delete
-          await releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
+          // nothing was sent: the claim goes again after the pause, or next tick after the delete
+          await release();
           return removal.kind === 'wait' ? pauseFor(removal.ms) : 'skip';
         }
-        // the delete found the user unreachable: nothing more is delivered (Rule 19), the trade
+        // the delete found the user unreachable: nothing more is delivered (Rule 19), the claim
         // counts as sent
         if (session.telegramBlocked) return 'next';
         await pace();
@@ -232,11 +307,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       try {
         messageId = await push.sendSessionTrade(session.telegramUserId, text);
       } catch (error) {
-        return sendFailed({ ...tradeFailure, method: 'sendMessage', error });
+        return sendFailed({ ...failure, method: 'sendMessage', error });
       }
       attempts.delete(key);
       if (!Number.isInteger(messageId) || messageId <= 0) {
-        logger.warn(fields, 'session trade notice not recorded: no message id');
+        logger.warn(fields, `${label} not recorded: no message id`);
         return 'next';
       }
       const recorded = await recordSessionCycleMessage(db, {
@@ -252,10 +327,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
     if (notice.kind === 'send') {
       if (notice.split) {
-        logger.info(
-          { ...fields, from: notice.from },
-          'session trade notice split: the cycle message is full',
-        );
+        logger.info({ ...fields, from: notice.from }, `${label} split: the cycle message is full`);
       }
       return sendNew(notice.text, notice.from);
     }
@@ -271,15 +343,15 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         return 'next';
       }
       if (refusal === 'gone') {
-        // deleted by the user or no longer editable: the same blocks in a new message, now
+        // deleted by the user or no longer editable: the same text in a new message, now
         logger.warn(
           { ...fields, ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageText') },
-          'session trade notice edited anew: the cycle message is gone',
+          `${label} edited anew: the cycle message is gone`,
         );
         await pace();
         return sendNew(notice.text, notice.from);
       }
-      return sendFailed({ ...tradeFailure, method: 'editMessageText', error });
+      return sendFailed({ ...failure, method: 'editMessageText', error });
     }
   }
 
@@ -299,7 +371,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     afterForbidden,
   }: {
     session: Pick<PendingSessionNotice, 'telegramUserId'>;
-    label: 'session trade notice' | 'session summary' | 'session waiting message';
+    label: Delivery['label'] | 'session summary' | 'session waiting message';
     key: string;
     method: 'sendMessage' | 'editMessageText';
     fields: Record<string, unknown>;
@@ -552,16 +624,27 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // every trade past the cursor in order, then the stale waiting message's delete, then the
-  // final mark of a finished session or the waiting message due; the first step that does not go
-  // ends the session's turn, so its later trades never overtake it and the waiting message is
-  // the last message of the turn
+  // every trade past the cursor in order (an H1 session: its summary, when due), then the stale
+  // waiting message's delete, then the final mark of a finished session or the waiting message
+  // due; the first step that does not go ends the session's turn, so its later trades never
+  // overtake it and the waiting message is the last message of the turn
   async function serve(session: PendingSessionNotice): Promise<Step> {
     const parsed = safeParseTradingSessionSettings(session.settings);
     const settings = parsed.success ? parsed.data : null;
-    for (let claimed = session.notifiedTrades; claimed < session.settled; claimed += 1) {
-      const step = await sendTrade(session, settings, claimed);
-      if (step !== 'next') return step;
+    if (settings !== null && isH1Settings(settings)) {
+      // every H1_NOTICE_EVERY_TRADES settled trades, and at the finish the rest (#707)
+      const due = session.finished
+        ? session.settled
+        : Math.floor(session.settled / H1_NOTICE_EVERY_TRADES) * H1_NOTICE_EVERY_TRADES;
+      if (due > session.notifiedTrades) {
+        const step = await sendH1Progress(session, settings, due);
+        if (step !== 'next') return step;
+      }
+    } else {
+      for (let claimed = session.notifiedTrades; claimed < session.settled; claimed += 1) {
+        const step = await sendTrade(session, settings, claimed);
+        if (step !== 'next') return step;
+      }
     }
     if (session.waitingStale && session.waitingMessageId !== null) {
       const step = await deleteStaleWaiting(session);

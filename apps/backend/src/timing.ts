@@ -26,6 +26,7 @@ import {
   ANALYSIS_UNUSED_UNTIL_MS,
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
+  H1_NOTICE_EVERY_TRADES,
   MAILING_MIN_OFFSET_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
@@ -543,6 +544,9 @@ const TIMING_CHAIN_HOLDS =
   H1_SHADOW_TICK_MS <= H1_DRIVER_SCAN_MS &&
   H1_DRIVER_SCAN_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   H1_DRIVER_SCAN_MS <= H1_DRIVER_LOG_MS &&
+  // an H1 session's summary (#707): at R1's fastest cadence (one trade per entry + expiry + 1 s)
+  // H1_NOTICE_EVERY_TRADES trades take at least a minute, so at most one edit a minute a session
+  H1_NOTICE_EVERY_TRADES * (H1_ENTRY_WINDOW_SEC.from + H1_EXPIRY_SEC + 1) * 1000 >= 60_000 &&
   // the ticks around a decision (#668): at the latest capture (decided + max wait, closed by the
   // clock rule, seen a scan later) the pair's watermark, at most the receipt clock + the clamp, has
   // not pruned the window's start; a watermark close precedes the clock close by at most the
