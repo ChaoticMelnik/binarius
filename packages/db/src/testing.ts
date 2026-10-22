@@ -493,6 +493,7 @@ export async function seedBrokerTradeFor(
   trade: {
     openPrice?: number;
     openTimestamp?: number;
+    payout?: number;
     profit?: DecimalString;
     closePrice?: number;
   } = {},
@@ -506,6 +507,7 @@ export async function seedBrokerTradeFor(
   const open = openTradeFor(intent, {
     ...(trade.openPrice === undefined ? {} : { openPrice: trade.openPrice }),
     ...(trade.openTimestamp === undefined ? {} : { openTimestamp: trade.openTimestamp }),
+    ...(trade.payout === undefined ? {} : { payout: trade.payout }),
   });
   await db.transaction((tx) =>
     markIntentAccepted(tx, {

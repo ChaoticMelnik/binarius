@@ -235,7 +235,7 @@ export function toTradeJson(line: TradeLogLine): TradeLogTradeJson | undefined {
     close_price: broker.closePrice,
     profit: broker.profit,
     submitted_at_ms: trade.submittedAtMs,
-    payout: broker.payout,
+    ...(broker.payout === null ? {} : { payout: broker.payout }),
     intent_id: trade.intentId,
     decision_id: line.decision.id,
     mode: trade.mode,

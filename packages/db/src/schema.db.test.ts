@@ -201,6 +201,13 @@ const trade = (seed: { accountId: string }, patch: Record<string, unknown> = {})
   ...patch,
 });
 
+const settledAt = (closePrice: number) => ({
+  status: 'closed' as const,
+  closeTimestampMs: 1790028556624,
+  closePrice,
+  profit: '8.50',
+});
+
 describe('users.language (#508)', () => {
   it('takes ru and en, refuses another case, an empty string and NULL', async () => {
     for (const language of ['ru', 'en'] as const) {
@@ -1498,19 +1505,33 @@ describe('broker_trades', () => {
       'broker_trades_open_price_check',
     ],
     ['a NaN open price', { openPrice: Number.NaN }, 'broker_trades_open_price_check'],
-    ['a zero open price', { openPrice: 0 }, 'broker_trades_open_price_check'],
+    [
+      'a negative-infinite open price',
+      { openPrice: Number.NEGATIVE_INFINITY },
+      'broker_trades_open_price_check',
+    ],
     ['a negative payout', { payout: -5 }, 'broker_trades_payout_check'],
     ['a NaN payout', { payout: Number.NaN }, 'broker_trades_payout_check'],
     ['a non-positive open timestamp', { openTimestampMs: 0 }, 'broker_trades_open_timestamp_check'],
     ['a NaN potential profit', { potentialProfit: 'NaN' }, 'broker_trades_potential_profit_check'],
     [
-      'a non-positive close price on a settled trade',
-      {
-        status: 'closed' as const,
-        closeTimestampMs: 1790028556624,
-        closePrice: 0,
-        profit: '8.50',
-      },
+      'a negative potential profit',
+      { potentialProfit: '-1' },
+      'broker_trades_potential_profit_check',
+    ],
+    [
+      'an infinite close price on a settled trade',
+      settledAt(Number.POSITIVE_INFINITY),
+      'broker_trades_close_price_check',
+    ],
+    [
+      'a negative-infinite close price on a settled trade',
+      settledAt(Number.NEGATIVE_INFINITY),
+      'broker_trades_close_price_check',
+    ],
+    [
+      'a NaN close price on a settled trade',
+      settledAt(Number.NaN),
       'broker_trades_close_price_check',
     ],
     [
@@ -1532,6 +1553,22 @@ describe('broker_trades', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       await rejectsWith(tx.insert(brokerTrades).values(trade(seed, patch)), '23514', constraint);
+    });
+  });
+
+  // the domain widened by 0077 (#675): a broker's value the column holds is not refused
+  it.each([
+    ['a NULL payout', { payout: null }, 'payout', null],
+    ['a zero potential profit', { potentialProfit: '0' }, 'potentialProfit', '0.00000000'],
+    ['a zero open price', { openPrice: 0 }, 'openPrice', 0],
+    ['a negative open price', { openPrice: -1 }, 'openPrice', -1],
+    ['a zero close price on a settled trade', settledAt(0), 'closePrice', 0],
+    ['a negative close price on a settled trade', settledAt(-2.5), 'closePrice', -2.5],
+  ] as const)('accepts %s', async (_label, patch, column, stored) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx.insert(brokerTrades).values(trade(seed, patch)).returning();
+      expect(row![column]).toBe(stored);
     });
   });
 });

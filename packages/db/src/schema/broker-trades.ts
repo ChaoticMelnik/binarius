@@ -7,7 +7,6 @@ import {
   index,
   integer,
   jsonb,
-  numeric,
   pgTable,
   text,
   unique,
@@ -21,9 +20,9 @@ import {
   inList,
   literal,
   money,
-  nonNegativeNumeric,
   nullableFiniteFloat,
-  nullablePositiveNumeric,
+  nullableNonNegativeNumeric,
+  payout,
   positiveNumeric,
   updatedAt,
 } from './columns';
@@ -35,6 +34,8 @@ export type BrokerTradeStatus = (typeof BrokerTradeStatus)[keyof typeof BrokerTr
 
 // Broker timestamps are Unix ms (bigint) as the broker sends them; prices are JSON numbers,
 // not money. close_* / profit are NULL until settlement: the broker omits them, it never sends 0.
+// payout/potential_profit are NULL when the broker's value is outside the column (#675,
+// payoutInColumn/moneyInColumn); prices are any finite double.
 export const brokerTrades = pgTable(
   'broker_trades',
   {
@@ -48,7 +49,7 @@ export const brokerTrades = pgTable(
     assetId: integer('asset_id').notNull(),
     action: text('action').$type<TradeAction>().notNull(),
     amount: money('amount').notNull(),
-    payout: numeric('payout', { precision: 8, scale: 4, mode: 'number' }).notNull(),
+    payout: payout('payout'),
     openPrice: doublePrecision('open_price').notNull(),
     openTimestampMs: bigint('open_timestamp_ms', { mode: 'number' }).$type<UnixMs>().notNull(),
     closePrice: doublePrecision('close_price'),
@@ -77,12 +78,12 @@ export const brokerTrades = pgTable(
     inList('broker_trades_status_check', t.status, BrokerTradeStatus),
     check('broker_trades_asset_id_check', sql`${t.assetId} > 0`),
     positiveNumeric('broker_trades_amount_check', t.amount),
-    nullablePositiveNumeric('broker_trades_potential_profit_check', t.potentialProfit),
+    nullableNonNegativeNumeric('broker_trades_potential_profit_check', t.potentialProfit),
     // profit is the one signed money column: a losing trade settles negative, so only NaN is
     // excluded. A test asserts a negative profit is accepted, to keep this from being
     // "tightened" back to > 0 without the suite noticing.
     check('broker_trades_profit_check', sql`${t.profit} is null or ${t.profit} <> 'NaN'::numeric`),
-    nonNegativeNumeric('broker_trades_payout_check', t.payout),
+    nullableNonNegativeNumeric('broker_trades_payout_check', t.payout),
     finiteFloat('broker_trades_open_price_check', t.openPrice),
     nullableFiniteFloat('broker_trades_close_price_check', t.closePrice),
     check('broker_trades_open_timestamp_check', sql`${t.openTimestampMs} > 0`),
