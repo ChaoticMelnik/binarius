@@ -239,6 +239,29 @@ describe('h1 session start (#670)', () => {
   });
 });
 
+describe('h1 session start: the mark under the account lock (#707)', () => {
+  it('H1-R7 an unmark after the check and before the insert refuses the start and says so', async () => {
+    const seed = await marked();
+    const { deps } = catalogOf([pair()]);
+    // the catalog is read after the CLI's own mark check: the unmark lands in between
+    const racing: H1SessionDeps = {
+      ...deps,
+      catalog: async () => {
+        await tmp.db.transaction((tx) =>
+          setH1Mark(tx, { accountId: seed.brokerAccountId, h1: false }),
+        );
+        return deps.catalog!();
+      },
+    };
+    expect(await run(startArgs(seed.brokerAccountId), racing)).toEqual({
+      code: 1,
+      out: '',
+      err: ['метка H1 снята во время старта — сессия не создана'],
+    });
+    expect(await sessionsOfAccount(seed.brokerAccountId)).toEqual([]);
+  });
+});
+
 describe('h1 session stop and status (#670)', () => {
   it('H1-R4 stops only an H1 session; status shows the last H1 session; none is exit 1', async () => {
     const seed = await marked();
