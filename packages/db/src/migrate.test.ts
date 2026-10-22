@@ -118,4 +118,10 @@ describe('the compose migrate service', () => {
     expect(composeServiceValue(composeYaml, 'migrate', 'command')).toBe('pnpm db:migrate');
     expect(composeServiceEnvValue(composeYaml, 'migrate', 'DATABASE_URL')).toBe('*database-url');
   });
+
+  it('runs from the image the app services share', () => {
+    expect(composeServiceValue(composeYaml, 'migrate', 'image')).toBe(
+      '${COMPOSE_PROJECT_NAME}-app',
+    );
+  });
 });

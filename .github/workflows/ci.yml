@@ -152,8 +152,9 @@ jobs:
       # The dependency on migrate lives in the x-app anchor; a service-level depends_on replaces
       # the whole mapping (bot and web do exactly that), and a successful `up` is no oracle: migrate
       # usually finishes before either tsx process reaches its schema check. So the resolved
-      # configuration is asserted, on the runner's own Compose.
-      - name: backend and trading-worker start only after migrate, which never restarts
+      # configuration is asserted, on the runner's own Compose. The one image tag too: a service
+      # with its own tag keeps an older journal after a partial `build` (#75, PR #731).
+      - name: backend and trading-worker start only after migrate, which never restarts, and every built service shares one image
         run: |
           config="$(docker compose config --format json)"
           for service in backend trading-worker; do
@@ -166,6 +167,11 @@ jobs:
           restart="$(printf '%s' "$config" | jq -r '.services.migrate.restart')"
           if [ "$restart" != no ]; then
             echo "::error::migrate must not restart (restart = $restart)"
+            exit 1
+          fi
+          bad="$(printf '%s' "$config" | jq -r '.name as $p | .services | to_entries[] | select(.value.build != null) | select(.value.image != ($p + "-app")) | "\(.key)=\(.value.image)"')"
+          if [ -n "$bad" ]; then
+            echo "::error::services not on the project's one image: $bad"
             exit 1
           fi
       # The guard: each required variable must be required on its own, and an empty value has

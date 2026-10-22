@@ -19,8 +19,11 @@ x-broker-environment: &broker-environment
   # by the backend's start route and the worker's session-start CLI; see docs/stake.md -> Defaults
   SESSION_STAKE_STRATEGY:
 
+# One tag for every service built from this repository (`migrate` names it too), so a partial
+# `build` or `up --build <service>` never leaves `migrate` on an older journal (#75, PR #731).
 x-app: &app
   build: .
+  image: ${COMPOSE_PROJECT_NAME}-app
   init: true
   restart: ${COMPOSE_RESTART:-unless-stopped}
   # Every service built on this anchor opens the database, so none starts before `migrate` has
@@ -101,9 +104,11 @@ services:
   # One-shot: applies the migrations under an advisory lock (packages/db/src/cli/migrate.ts) and
   # exits; backend and trading-worker wait for its exit 0. Not built on x-app: that anchor's
   # restart policy would loop a finished one-shot (and hang `up`), and its depends_on names this
-  # service itself.
+  # service itself. It still shares the anchor's image tag, so a partial build never leaves it on
+  # an older journal.
   migrate:
     build: .
+    image: ${COMPOSE_PROJECT_NAME}-app
     init: true
     restart: "no"
     command: pnpm db:migrate
