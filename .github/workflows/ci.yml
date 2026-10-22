@@ -149,6 +149,25 @@ jobs:
       # ran on a newer Compose, and this is what says which one actually enforced them here
       - run: docker compose version
       - run: docker compose config -q
+      # The dependency on migrate lives in the x-app anchor; a service-level depends_on replaces
+      # the whole mapping (bot and web do exactly that), and a successful `up` is no oracle: migrate
+      # usually finishes before either tsx process reaches its schema check. So the resolved
+      # configuration is asserted, on the runner's own Compose.
+      - name: backend and trading-worker start only after migrate, which never restarts
+        run: |
+          config="$(docker compose config --format json)"
+          for service in backend trading-worker; do
+            condition="$(printf '%s' "$config" | jq -r --arg s "$service" '.services[$s].depends_on.migrate.condition')"
+            if [ "$condition" != service_completed_successfully ]; then
+              echo "::error::$service does not wait for migrate (depends_on.migrate.condition = $condition)"
+              exit 1
+            fi
+          done
+          restart="$(printf '%s' "$config" | jq -r '.services.migrate.restart')"
+          if [ "$restart" != no ]; then
+            echo "::error::migrate must not restart (restart = $restart)"
+            exit 1
+          fi
       # The guard: each required variable must be required on its own, and an empty value has
       # to be refused as well as a missing one — `cp .env.example .env` produces empty ones, and
       # ${VAR?} would accept them while ${VAR:?} does not. One variable at a time, with the other
@@ -226,7 +245,8 @@ jobs:
       # container running, and `bot` has no healthcheck — so --wait would report success over a
       # dead bot. That supervisor gap is the same in all four app services and is issue #65.
       # The list is derived rather than written out, so a service added to compose.yaml later
-      # is started here instead of being silently left behind.
+      # is started here instead of being silently left behind. It names the one-shot `migrate`
+      # too: --wait accepts it once it exited 0 and fails the step when it exited otherwise.
       - name: start every service except bot
         run: |
           services="$(docker compose config --services | grep -v '^bot$' || true)"
@@ -259,6 +279,58 @@ jobs:
             fi
             sleep 2
           done
+      # The fresh volume this job starts from is what makes `applied` (not `nothing to apply`) the
+      # expected line. --wait does not wait for trading-worker (no healthcheck), so its line is
+      # polled to a deadline, the same way as the admin pages above. Logs are read into a variable
+      # and grepped from a here-string: under pipefail, `grep -q` closing a pipe early would fail
+      # the writer with SIGPIPE on a long log.
+      - name: the migrate service applied the schema and both processes checked it
+        run: |
+          set -u
+          current='"msg":"database schema is current"'
+          logs="$(docker compose logs --no-log-prefix migrate)"
+          grep -E '^applied [0-9]+ migrations?:' <<<"$logs" || {
+            echo '::error::the migrate service did not apply the migrations'
+            printf '%s\n' "$logs"
+            exit 1
+          }
+          grep -qF "$current" <<<"$(docker compose logs --no-log-prefix backend)" || {
+            echo '::error::the backend did not log a current schema'
+            exit 1
+          }
+          deadline=$((SECONDS + 60))
+          until grep -qF "$current" <<<"$(docker compose logs --no-log-prefix trading-worker)"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo '::error::the trading-worker never logged a current schema'
+              docker compose logs trading-worker
+              exit 1
+            fi
+            sleep 2
+          done
+      # The schema check in each index.ts, by its exit code: `run --no-deps` starts the process
+      # without migrate, against a database nothing migrated, and plain `tsx` (not the `dev`
+      # script's `tsx watch`, whose supervisor survives the exit, #65) leaves with the process's
+      # own code. `timeout` turns a process that never exits into 124 instead of the job's limit.
+      - name: a process refuses a database behind its journal
+        run: |
+          set -u
+          docker compose exec -T postgres createdb -U binarius binarius_empty
+          empty=postgres://binarius:binarius@postgres:5432/binarius_empty
+          for pair in "backend @binarius/backend" "trading-worker @binarius/trading-worker"; do
+            set -- $pair
+            out="$(timeout 120 docker compose run --rm --no-deps -T -e DATABASE_URL="$empty" "$1" \
+              pnpm --filter "$2" exec tsx src/index.ts </dev/null 2>&1)" && status=0 || status=$?
+            if [ "$status" -ne 1 ]; then
+              echo "::error::$1 on an empty database exited $status, expected 1"
+              printf '%s\n' "$out"
+              exit 1
+            fi
+            grep -qF '"msg":"database schema is behind this image, run the migrations first"' <<<"$out" || {
+              echo "::error::$1 exited 1 without the schema line"
+              printf '%s\n' "$out"
+              exit 1
+            }
+          done
       # Without this the document and this job would be independent copies of the same procedure,
       # and the step below would keep passing after an edit dropped a command from the document —
       # which is exactly how the procedure came to stop at "create an account" on a volume nothing
@@ -269,8 +341,8 @@ jobs:
       - name: the document still carries the three commands this job runs
         run: |
           section="$(sed -n '/^## Bringing it up the first time/,$p' docs/staff-login.md)"
-          printf '%s' "$section" | grep -qF 'docker compose exec backend pnpm db:migrate' || {
-            echo '::error::docs/staff-login.md → Bringing it up lost the migration step this job runs'
+          printf '%s' "$section" | grep -qF 'docker compose logs --no-log-prefix migrate' || {
+            echo '::error::docs/staff-login.md → Bringing it up lost the migration check this job runs'
             exit 1
           }
           printf '%s' "$section" | grep -qF 'docker compose exec backend pnpm --filter @binarius/backend staff create' || {
@@ -281,14 +353,13 @@ jobs:
             echo '::error::docs/staff-login.md → Bringing it up lost the page probe this job polls with'
             exit 1
           }
-      # Steps 4 and 6 of docs/staff-login.md → "Bringing it up the first time", on the fresh volume
-      # this job always starts from: --wait reports the backend healthy on an empty database, so
-      # without the migration `staff create` fails with `relation "staff" does not exist`. Step 3's
-      # log check needs a real token — with the fake one this job uses, the line *is* in the log —
-      # and step 5 needs a person. Applying the migrations on container start with fail-fast is #75.
+      # Step 6 of docs/staff-login.md → "Bringing it up the first time", on the fresh volume this
+      # job always starts from: the migrate service applied the schema before the backend started
+      # (step 4's line is checked above), so `staff create` finds its table. Step 3's log check
+      # needs a real token — with the fake one this job uses, the line *is* in the log — and
+      # step 5 needs a person.
       - name: the first-run procedure creates a staff account on a fresh volume
         run: |
-          docker compose exec -T backend pnpm db:migrate
           docker compose exec -T backend pnpm --filter @binarius/backend staff create \
             --login ci-staff --telegram-id 1 | grep -q 'Пароль:'
       - if: failure()

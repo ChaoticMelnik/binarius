@@ -122,11 +122,11 @@ that each is required on its own.
 ## Accounts
 
 Created from a CLI in the backend container, never from the environment — who did what is only
-answerable while every login belongs to someone. The generated password is printed once. On a
-migrated database: nothing in the stack applies migrations on start yet (#75), so a volume that
-has never been migrated answers `Команда не выполнена: Error (error 42P01)` and
-`База данных не мигрирована: выполните pnpm db:migrate` (see «Bringing it up the first time»
-below, or `pnpm db:migrate` from the host).
+answerable while every login belongs to someone. The generated password is printed once. Inside
+the stack the database is migrated: the backend starts only after the `migrate` service applied
+the migrations, and refuses to start on a database behind its journal. Run from the host against
+a database nothing migrated, the CLI answers `Команда не выполнена: Error (error 42P01)` and
+`База данных не мигрирована: выполните pnpm db:migrate`.
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend staff create \
@@ -393,16 +393,15 @@ real Telegram. The first person to deploy it should walk this through once.
 3. **Start.** `docker compose up --build --wait`. Then
    `curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'` should succeed — the command
    CI's *the admin pages answer* step polls with, and a CI step checks this section still carries
-   it — and the backend log should **not** contain `the staff login bot stopped polling`. `--wait` says nothing about the schema: the backend is
-   healthy on an empty database, which is what the next step is for.
-4. **Apply the migrations.**
+   it — and the backend log should **not** contain `the staff login bot stopped polling`. `--wait`
+   returns 0 only after the one-shot `migrate` service exited 0 and the backend is healthy; a
+   failed migration makes it exit 1 with `service "migrate" didn't complete successfully`.
+4. **Check the migrations were applied.**
    ```bash
-   docker compose exec backend pnpm db:migrate
+   docker compose logs --no-log-prefix migrate
    ```
-   It prints `migrations applied successfully!`. Nothing in the stack applies them on start yet
-   (#75), so on a volume that has never been migrated — a fresh clone, a new deployment — step 6
-   would otherwise answer `База данных не мигрирована: выполните pnpm db:migrate`. The command
-   is idempotent, so running it on an already-migrated volume is a no-op.
+   On a volume that has never been migrated — a fresh clone, a new deployment — it prints
+   `applied N migrations: …`; on one migrated before, `nothing to apply: N migrations, last …`.
 5. **Learn your Telegram ID.** Send `/start` to the new bot. It answers «Доступа нет» with your
    own id.
 6. **Create an account**, with that id:
