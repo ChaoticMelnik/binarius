@@ -43,7 +43,7 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 | `buildApp` | the same, with the trading, pairs, sessions, signal, auth and users deps. `signals`, `payments` and `admin` take the `unused*Deps` of the suites, so a call there fails the test. `deposit` takes `unusedDepositDeps` with the real init-data verifier. Its logs go to the backend's sink |
 | `OutboxPublisher` | the same; `pollMs` 50 (every queued intent wakes it anyway) |
 | `createBalanceReconciler` | built, not started: the routes call `refresh()` themselves |
-| `createSessionNoticeSender` | the same; `tickMs` 200, `perSecond` 50 (production: `SESSION_NOTICE_TICK_MS`, `SESSION_NOTICE_SEND_PER_SECOND`) |
+| `createSessionNoticeSender` | the same; `tickMs` 200, `perSecond` 50, `chatGapMs` 100 (production: `SESSION_NOTICE_TICK_MS`, `SESSION_NOTICE_SEND_PER_SECOND`, `SESSION_NOTICE_CHAT_GAP_MS`) |
 | `signalScanners` | not built: the run takes the manual path, not «Сигналы сейчас» |
 | `createAdminBot`, `createMailingEngine`, `createStarReconciler`, `createServiceAccountKeeper` | not built: no staff, mailing, Stars or service account takes part in the cycle |
 | `marketData` | not built: it exists only with the backend's `BROKER_WS_URL`; without it the feed reads REST (#405), as here |
