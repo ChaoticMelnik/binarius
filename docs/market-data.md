@@ -15,7 +15,7 @@ pnpm test --project unit apps/backend/src/market-data   # mock broker and fake c
 
 | Piece | Where | What it does |
 |---|---|---|
-| `createCandleRing` | `apps/backend/src/market-data/ring.ts` | one #392 builder (`createCandleBuilder`, `packages/signal/src/ticks.ts`) per (pair, interval), the closing rule, holes, `read`/`fill`/`missing` |
+| `createCandleRing` | `apps/backend/src/market-data/ring.ts` | one #392 builder (`createCandleBuilder`, `packages/signal/src/ticks.ts`) per (pair, interval), the closing rule, the bound on a tick ahead of its receipt (#683), holes, `read`/`fill`/`missing` |
 | `createMarketDataManager` | `apps/backend/src/market-data/manager.ts` | the two socket clients on service accounts, failover, token refusals, hold-back, subscriptions, the log line |
 | `createCandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the adapter over the ring and the request set that implements the feed's port `SignalCandleSource` (`packages/signal/src/source.ts`, #405): a window only while the manager's `streaming()` is true and only for `SIGNAL_SCAN_INTERVALS`, `request` only for those; and the bounded request set the backfill drains (`pending()`) |
 | `createCandleBackfill` | `apps/backend/src/market-data/backfill.ts` | the REST backfill: due elements, the queue, one native GET per (pair, interval), `fill` (#590) |
@@ -102,6 +102,18 @@ Both offsets count from the bucket's end, `b + I`. `read()` returns the closed c
 (`chartWindow(nowMs, I, 300)`, the same window as the feed's fetch), the latest unclosed bucket
 apart as `forming` (the current bucket, or the one before it until a rule closes it; the feed uses
 it only when it is the current one, [signal.md](signal.md)), and the empty closed buckets as `gaps`.
+
+**A tick ahead of its receipt is dropped.** A tick whose timestamp is more than
+`MARKET_DATA_SKEW_MARGIN_MS` past its receipt is dropped for the ring and counted (`ahead`), before
+any builder (#683). It passes the builder's `tickProblem` (±`TICK_MAX_SKEW_MS`, 60 s), and it would
+move `W` to it and close the buckets of every pair up to it at once; its own pair's builder would
+jump to that bucket and refuse the pair's real ticks as `late` until the clock caught up. It opens
+no pair and ends no hole. The boundary is inclusive: a tick exactly the margin ahead is taken. So the
+watermark rule closes a bucket at most `2 × MARKET_DATA_SKEW_MARGIN_MS` before the clock rule would
+(an accepted tick stamped `b + I` is received no earlier than `b + I − margin`; the clock closes at
+`b + I + margin`). The tick store keeps such a tick and clamps its watermark (`TRADE_TICKS_AHEAD_MS`,
+[trade-log.md](trade-log.md#the-ticks-around-a-decision)); the second series drops it at its own
+margin (`H1_SECOND_CLOSE_MARGIN_MS`, [h1.md](h1.md#the-second-series)).
 
 **Holes are per pair, in broker time.** When the active leaves `ready`, every pair keeps its own
 watermark. Its first tick past that watermark, from whichever socket is active by then, marks
@@ -256,9 +268,11 @@ warms cold again.
 | `market data backfill tick failed` | error | `{ err }`: the backstop of the backfill's timers and of a GET's promise; no case reaches it |
 
 The `market data` line, with counters for the period since the previous line:
-`{ accounts, held, active: { accountId, socketState, connection, subscriptions } | null, reserve: { accountId, socketState } | null, ticks, ticksPerSec, late, invalid, skewed, holed, unknownAsset, skippedDigits, holes, lateClose: { watermark, clock }, failovers, watermarkLagMs, closed: { '15s', '5s' }, pairs, pending, backfill: { queued, fetched, filled, failed, rateLimited, spare }, seconds: { pairs, ahead, late, closedByTick, closedByClock, holeSeconds, resets }, buffer: { pairs, held, ahead, dropped, holes } }`.
+`{ accounts, held, active: { accountId, socketState, connection, subscriptions } | null, reserve: { accountId, socketState } | null, ticks, ticksPerSec, late, invalid, skewed, ahead, holed, unknownAsset, skippedDigits, holes, lateClose: { watermark, clock }, failovers, watermarkLagMs, closed: { '15s', '5s' }, pairs, pending, backfill: { queued, fetched, filled, failed, rateLimited, spare }, seconds: { pairs, ahead, late, closedByTick, closedByClock, holeSeconds, resets }, buffer: { pairs, held, ahead, dropped, holes } }`.
 `lateClose` counts ticks that changed a candle the ring already called closed, split by the rule
-that closed it. `closed` counts tick candles whose bucket closed in the period. In `backfill`,
+that closed it. `ahead` counts ticks more than `MARKET_DATA_SKEW_MARGIN_MS` past their receipt,
+dropped for the ring (#683); `watermarkLagMs` is at least `−MARKET_DATA_SKEW_MARGIN_MS` since then.
+`closed` counts tick candles whose bucket closed in the period. In `backfill`,
 `queued` is the queue's length now and the rest count the period: answered GETs, rows put into the
 ring, failed attempts, 429s, and spare tokens taken (one per GET started). In `seconds`, `pairs` is
 the series' pairs now and the rest count the period: ticks more than the series' close margin past
@@ -281,7 +295,7 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 | `MARKET_DATA_LOG_MS` | 60 000 | the `market data` line |
 | `MARKET_DATA_FAILOVER_GRACE_MS` | 2 000 | the active out of `ready` (start, connection, reconnection) while a ready reserve waits |
 | `MARKET_DATA_RESERVE_READY_MS` | 25 000 | the reserve out of `ready` before it gives way to the next account |
-| `MARKET_DATA_SKEW_MARGIN_MS` | 2 000 | the clock rule of closing |
+| `MARKET_DATA_SKEW_MARGIN_MS` | 2 000 | the clock rule of closing; the ring's bound on a tick ahead of its receipt (#683) |
 | `MARKET_DATA_ACCOUNT_RETRY_MS` | 300 000 | an account's hold-back |
 | `MARKET_DATA_RING_CANDLES` | `SIGNAL_FETCH_LIMIT` (300) | candles per (pair, interval) |
 | `MARKET_DATA_PENDING_MAX` | 288 | `request()`s waiting for the backfill (144 pairs × 2) |
@@ -306,7 +320,8 @@ The links:
   bounded here: a slower one ends in the switch.
 - `GRACE < 5 s`: the switch happens within one `5s` candle.
 - `BROKER_HTTP_TIMEOUT_MS + SOCKET_CONNECT + SOCKET_AUTH < RESERVE_READY` (20 s < 25 s): a start ends first.
-- `SKEW_MARGIN < 5 s` and `< TICK_MAX_SKEW_MS`.
+- `SKEW_MARGIN < 5 s` and `< TICK_MAX_SKEW_MS` (the ring's bound on a tick ahead of its receipt is
+  tighter than the tick filter's: a tick beyond 60 s is `skewed`, never `ahead`).
 - `TICK ≤ LOG`.
 - `SERVICE_ACCOUNTS_TICK_MS < ACCOUNT_RETRY`: the keeper gets a tick to repair an account before it
   is retried.
@@ -319,7 +334,7 @@ The links:
 
 ## Tests
 
-- `ring.test.ts` R1-R9, R12, with R3b/R3c (`lateClose`).
+- `ring.test.ts` R1-R9, R12, with R3b/R3c (`lateClose`); R10-R10c the tick ahead of its receipt (#683).
 - `source.test.ts` S1-S3; S4-S6 the adapter `createCandleSource` (#405).
 - `backfill.test.ts` B1-B17, with B2b-B2d, B3c-B3e and B5b, on a fake `getChart`, the real ring and the real pacer under an injected
   clock.
@@ -351,7 +366,9 @@ The links:
 3. **Closing may come before a bucket's last ticks.** The clock rule can close early when the
    process clock runs ahead of the broker's by more than the margin during a quiet stream. The
    watermark rule can close early because ticks of different pairs arrive out of timestamp order.
-   Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in the line.
+   Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in the line. Since #683 the
+   watermark rule's early close is bounded by `2 × MARKET_DATA_SKEW_MARGIN_MS`: a tick further ahead
+   of its receipt is dropped (`ahead`).
 4. **A quiet pair's boundary candle may still be open at the scan** (#405). The scanner fires
    `CANDLE_CLOSE_SLACK_MS` after the boundary, before the clock rule's margin; a pair with no tick
    past the boundary yet is decided on the candle before, which is not served. The scanner counts
@@ -384,6 +401,11 @@ The links:
     more GET), as in a quiet stream within the first `MARKET_DATA_SKEW_MARGIN_MS` of a candle.
     Falsifiable: `backfill.fetched` grows faster than the number of elements per period while
     `filled` stays near 0.
+16. **A broker clock ahead of the process by more than `MARKET_DATA_SKEW_MARGIN_MS` minus the receipt
+    delay** drops every tick for the ring (#683): no tick candles, the feed sees gaps and asks the
+    backfill, the scanner refuses with `candle_gap` until REST fills the closed buckets; the second
+    series has the same shape at 500 ms ([h1.md → Accepted risks 8](h1.md#accepted-risks)).
+    Falsifiable: `ahead` close to `ticks` in the line.
 
 ## Owner's steps after the merge (pilot)
 
@@ -406,6 +428,9 @@ The links:
    `fetched > 0` and `filled > 0`, and `queued` has fallen to 0; `spare` grows with `queued`, and the
    `signal scanner` lines show `source: "live"`.
 5. After any `market data failover`, `queued` rises and is back to 0 within minutes, in the day too.
+6. After the deploy of #683: `docker compose logs --since 1h backend | grep -E '"market data"' | tail -3`:
+   `ahead` is 0 in trading hours; a line with `ahead > 0` means the broker stamped a tick more than
+   2 s ahead of its receipt, and that is a task.
 
 ## Boundaries
 
