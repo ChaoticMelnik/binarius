@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  AdaptiveLineSlot,
   BOT_TEXT_LIMIT,
   botTextMessageOverflows,
   createBotTexts,
@@ -72,6 +73,7 @@ const martingale: TradingSessionSettings = {
     },
   },
 };
+const ADAPTIVE = '🔄 Адаптивная ставка включена';
 const textOf = (notice: SessionCycleNotice) => notice.text.value;
 const heads = (notice: SessionCycleNotice) =>
   textOf(notice)
@@ -87,7 +89,9 @@ describe('sessionCycleMessage (#551)', () => {
     );
     expect(notice).toEqual({
       kind: 'send',
-      text: shared.sessionCycleText([{ ...row(T, 3), digits: 5, cycle: 4, step: 1 }]),
+      text: shared.sessionCycleText([
+        { ...row(T, 3), digits: 5, cycle: 4, step: 1, adaptiveLine: null },
+      ]),
       from: 3,
       split: false,
     });
@@ -106,7 +110,7 @@ describe('sessionCycleMessage (#551)', () => {
   it('a martingale cycle without a cycle message: a new message with the whole cycle so far', () => {
     const first = sessionCycleMessage(claimed([W, L]), martingale, 5);
     expect(first).toMatchObject({ kind: 'send', from: 1, split: false });
-    expect(heads(first)).toEqual(['⚡ Цикл 2 Шаг 1']);
+    expect(heads(first)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка включена']);
     // a session met mid-cycle (a deploy, an unknown send): the cycle's steps so far
     const later = sessionCycleMessage(claimed([W, L, T, L]), martingale, 5);
     expect(later).toMatchObject({ kind: 'send', from: 1 });
@@ -135,9 +139,9 @@ describe('sessionCycleMessage (#551)', () => {
     );
   });
 
-  it('a continuation after a split shows from its own from: the adaptive line only when step 2 is in it', () => {
+  it('a continuation after a split shows from its own from', () => {
     const fromTwo = sessionCycleMessage(
-      claimed([L, L, L], { messageId: 9, from: 1 }),
+      claimed([T, L, L], { messageId: 9, from: 1 }),
       martingale,
       5,
     );
@@ -161,7 +165,7 @@ describe('sessionCycleMessage (#551)', () => {
       5,
     );
     expect(notice).toMatchObject({ kind: 'send', from: 2, split: false });
-    expect(heads(notice)).toEqual(['⚡ Цикл 2 Шаг 1']);
+    expect(heads(notice)).toEqual(['⚡ Цикл 2 Шаг 1', ADAPTIVE]);
   });
 
   it('prints the prices as the broker sent them when the catalog has no digits', () => {
@@ -169,8 +173,9 @@ describe('sessionCycleMessage (#551)', () => {
   });
 
   describe('the length limit, under an override the registry accepts', () => {
-    // a loss's block of about 440 characters: eight losses of a cycle fit in BOT_TEXT_LIMIT, nine
-    // do not — 4079, inside the Bot API's 4096
+    // a loss's block of about 440 characters: eight losses of a cycle with the adaptive line fit in
+    // BOT_TEXT_LIMIT, nine do not — 4079, inside the Bot API's 4096; the line under step 1 (#718)
+    // is as long as it was above step 2
     const PAD = 'ж'.repeat(380);
     const source = {
       sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
@@ -180,7 +185,7 @@ describe('sessionCycleMessage (#551)', () => {
     };
     afterEach(() => setBotTextSource(defaultBotTextSource));
 
-    it('the override passes the registry: one block with its adaptive line fits', () => {
+    it('B6 the override passes the registry: a lost step 1 with the line under it fits', () => {
       expect(botTextMessageOverflows(source)).toEqual([]);
     });
 
@@ -202,6 +207,7 @@ describe('sessionCycleMessage (#551)', () => {
           digits: 5,
           cycle: 1,
           step: i + 1,
+          adaptiveLine: i === 0 ? AdaptiveLineSlot.Below : null,
         })),
       );
       expect(plainTextOf(nine).length).toBeGreaterThan(BOT_TEXT_LIMIT);
@@ -241,6 +247,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
         digits: 5,
         cycle: 2,
         step: 1,
+        adaptiveLine: null,
       }),
       from: 2,
       split: false,
@@ -269,7 +276,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       '⚡ Цикл 2 Шаг 3',
     ]);
     expect(textOf(notice).split('\n\n').at(-1)).toContain('сделка открыта');
-    // step 2 open: the adaptive line above it
+    // step 2 open after a lost step 1: the line under step 1, above the open block
     expect(
       heads(sessionCycleMessage(withOpen([L], { messageId: 42, from: 0 }), martingale, 5)),
     ).toEqual(['⚡ Цикл 1 Шаг 1', '🔄 Адаптивная ставка включена', '⚡ Цикл 1 Шаг 2']);
@@ -283,7 +290,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       5,
     );
     expect(result).toMatchObject({ kind: 'edit', messageId: 50, from: 2 });
-    expect(heads(result)).toEqual(['⚡ Цикл 2 Шаг 1']);
+    expect(heads(result)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка включена']);
     expect(textOf(result)).not.toContain('сделка открыта');
   });
 
@@ -330,6 +337,65 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       expect(heads(split)).toEqual(['⚡ Цикл 1 Шаг 9']);
       expect(textOf(split)).toContain('сделка открыта');
     });
+  });
+});
+
+describe('sessionCycleMessage: the adaptive line (#718)', () => {
+  const OPEN = { amount: d('11.5'), action: TradeAction.Down, openPrice: 7, assetId: 101 };
+  const withOpen = (
+    results: SessionTradeResult[],
+    cycleMessage: ClaimedSessionTrade['cycleMessage'] = null,
+  ) => ({ ...claimed(results, cycleMessage), open: OPEN });
+
+  it('B1 a lost step 1: its new message carries the line under its block at once', () => {
+    const notice = sessionCycleMessage(claimed([W, L]), martingale, 5);
+    expect(notice).toMatchObject({ kind: 'send', from: 1 });
+    expect(textOf(notice)).toBe(
+      `⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 2.00000 → 2.50000</pre>\n\n${ADAPTIVE}`,
+    );
+  });
+
+  it('B2 step 2 opens and settles under the line, which stays one', () => {
+    const opened = sessionCycleMessage(withOpen([W, L], { messageId: 42, from: 1 }), martingale, 5);
+    expect(opened).toMatchObject({ kind: 'edit', messageId: 42, from: 1 });
+    expect(heads(opened)).toEqual(['⚡ Цикл 2 Шаг 1', ADAPTIVE, '⚡ Цикл 2 Шаг 2']);
+    const settled = sessionCycleMessage(
+      claimed([W, L, L], { messageId: 42, from: 1 }),
+      martingale,
+      5,
+    );
+    expect(heads(settled)).toEqual(['⚡ Цикл 2 Шаг 1', ADAPTIVE, '⚡ Цикл 2 Шаг 2']);
+    expect(textOf(settled).split(ADAPTIVE)).toHaveLength(2);
+  });
+
+  it('B3 a tie at step 1: nothing under it, the line comes with step 2, open or settled', () => {
+    expect(heads(sessionCycleMessage(claimed([T]), martingale, 5))).toEqual(['⚡ Цикл 1 Шаг 1']);
+    expect(
+      heads(sessionCycleMessage(withOpen([T], { messageId: 42, from: 0 }), martingale, 5)),
+    ).toEqual(['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2']);
+    expect(
+      heads(sessionCycleMessage(claimed([T, L], { messageId: 42, from: 0 }), martingale, 5)),
+    ).toEqual(['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2']);
+  });
+
+  it('B4 a continuation from step 2: the line only after a tie, the lost step 1 already carried it', () => {
+    expect(
+      heads(sessionCycleMessage(claimed([L, L, L], { messageId: 9, from: 1 }), martingale, 5)),
+    ).toEqual(['⚡ Цикл 1 Шаг 2', '⚡ Цикл 1 Шаг 3']);
+    expect(
+      heads(sessionCycleMessage(claimed([T, L, L], { messageId: 9, from: 1 }), martingale, 5)),
+    ).toEqual([ADAPTIVE, '⚡ Цикл 1 Шаг 2', '⚡ Цикл 1 Шаг 3']);
+  });
+
+  it('B5 fixed and settings that cannot be read: a loss without the line', () => {
+    const fixed: TradingSessionSettings = {
+      ...martingale,
+      stake: { strategy: 'fixed', baseStake: d('5'), stakeScale: 2 },
+    };
+    for (const read of [settings, fixed, null]) {
+      expect(textOf(sessionCycleMessage(claimed([L]), read, 5))).not.toContain(ADAPTIVE);
+      expect(textOf(sessionCycleMessage(withOpen([T]), read, 5))).not.toContain(ADAPTIVE);
+    }
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createBotTexts, defaultBotTextSource } from './bot-texts';
 import { pairLabel, type PairLabel } from './catalog';
 import type { DecimalString } from './money';
-import { SessionTradeResult } from './session-steps';
+import { AdaptiveLineSlot, SessionTradeResult } from './session-steps';
 import {
   createSessionTexts,
   SESSION_STOP_LINES,
@@ -26,6 +26,7 @@ const trade = (patch: Partial<SessionTradeNotice> = {}): SessionTradeNotice => (
   digits: 5,
   cycle: 3,
   step: 1,
+  adaptiveLine: null,
   ...patch,
 });
 
@@ -109,11 +110,21 @@ describe('sessionCycleText (#551)', () => {
     );
   });
 
-  it('lists the steps a blank line apart, the adaptive line once, alone, above step 2', () => {
+  const { Below, Above } = AdaptiveLineSlot;
+  const lost = (patch: Partial<SessionTradeNotice> = {}) =>
+    trade({ result: SessionTradeResult.Lost, outcome: d('-11.5'), ...patch });
+
+  it('CT1 a lost step 1 with its slot below: the block, then the adaptive line alone (#718)', () => {
+    expect(text([lost({ adaptiveLine: Below })])).toBe(
+      `⚡ Цикл 3 Шаг 1\n<pre>🔴 Ставка: $11.50 → -$11.50\n📊 Цена: 0.49803 → 0.49820</pre>\n\n${ADAPTIVE}`,
+    );
+  });
+
+  it('CT2 lists the steps a blank line apart, the adaptive line once, alone, under the lost step 1', () => {
     const blocks = text([
-      trade({ result: SessionTradeResult.Lost, outcome: d('-5'), amount: d('5'), step: 1 }),
+      lost({ outcome: d('-5'), amount: d('5'), step: 1, adaptiveLine: Below }),
       trade({ result: SessionTradeResult.Tied, outcome: d('0'), amount: d('11.5'), step: 2 }),
-      trade({ result: SessionTradeResult.Lost, outcome: d('-11.5'), step: 3 }),
+      lost({ step: 3 }),
       trade({ step: 4 }),
     ]).split('\n\n');
     expect(blocks.map((block) => block.split('\n')[0])).toEqual([
@@ -126,21 +137,29 @@ describe('sessionCycleText (#551)', () => {
     expect(blocks[1]).toBe(ADAPTIVE);
   });
 
-  it('prints the adaptive line at step 2 whatever its stake, after a tie at the base stake too', () => {
+  it('CT3 a tie at step 1: the adaptive line above step 2, whatever its stake (#551)', () => {
     const tied = text([
       trade({ result: SessionTradeResult.Tied, outcome: d('0'), step: 1 }),
-      trade({ step: 2 }),
+      trade({ step: 2, adaptiveLine: Above }),
     ]);
     expect(tied).toContain(`</pre>\n\n${ADAPTIVE}\n\n⚡ Цикл 3 Шаг 2`);
+    expect(tied.split(ADAPTIVE)).toHaveLength(2);
   });
 
-  it('a continuation that starts at step 2 starts with the adaptive line; one past it has none', () => {
-    expect(text([trade({ step: 2 })]).startsWith(`${ADAPTIVE}\n\n⚡ Цикл 3 Шаг 2\n`)).toBe(true);
+  it('CT4 a continuation from step 2 starts with the line only when its slot is above', () => {
+    expect(text([trade({ step: 2 })])).not.toContain(ADAPTIVE);
+    expect(
+      text([trade({ step: 2, adaptiveLine: Above })]).startsWith(
+        `${ADAPTIVE}\n\n⚡ Цикл 3 Шаг 2\n`,
+      ),
+    ).toBe(true);
     expect(text([trade({ step: 3 }), trade({ step: 4 })])).not.toContain(ADAPTIVE);
   });
 
-  it('a fixed session has no step 2, so no adaptive line', () => {
-    expect(text([trade({ step: 1, cycle: 4 })])).not.toContain(ADAPTIVE);
+  it('CT5 blocks without a slot, as under fixed, have no adaptive line', () => {
+    expect(text([lost({ step: 1, cycle: 4 }), lost({ step: 1, cycle: 5 })])).not.toContain(
+      ADAPTIVE,
+    );
   });
 
   it('prints the prices with the pair’s digits, and as the broker sent them without a catalog', () => {
@@ -148,9 +167,12 @@ describe('sessionCycleText (#551)', () => {
     expect(text([trade({ digits: null })])).toContain('📊 Цена: 0.49803 → 0.4982');
   });
 
-  it('names no strategy to the user', () => {
+  it('CT7 names no strategy to the user', () => {
     for (const result of Object.values(SessionTradeResult)) {
-      const printed = text([trade({ step: 1 }), trade({ result, step: 2 })]);
+      const printed = text([
+        lost({ step: 1, adaptiveLine: Below }),
+        trade({ result, step: 2, adaptiveLine: Above }),
+      ]);
       expect(printed.toLowerCase()).not.toMatch(/мартингейл|martingale/);
     }
   });
@@ -165,6 +187,7 @@ describe('sessionCycleText with the open trade (#700)', () => {
     digits: 5,
     cycle: 2,
     step: 1,
+    adaptiveLine: null,
     ...patch,
   });
   const text = (trades: SessionTradeNotice[], block?: SessionOpenNotice) =>
@@ -196,13 +219,26 @@ describe('sessionCycleText with the open trade (#700)', () => {
     expect(blocks[1]).toContain('сделка открыта');
   });
 
-  it('the adaptive line stands above an open step 2 as above a settled one, once', () => {
-    const printed = text([trade({ result: SessionTradeResult.Lost, step: 1 })], open({ step: 2 }));
-    expect(printed).toContain(`</pre>\n\n${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n<pre>⏳`);
-    expect(printed.split(ADAPTIVE)).toHaveLength(2);
-    expect(text([], open({ step: 2 })).startsWith(`${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n`)).toBe(true);
-    expect(text([], open({ step: 3 }))).not.toContain(ADAPTIVE);
-    expect(text([], open({ step: 1 }))).not.toContain(ADAPTIVE);
+  it('CT6 the open block prints its slot as a settled one: above it once; under a lost step 1 the line stands between (#718)', () => {
+    const { Below, Above } = AdaptiveLineSlot;
+    const afterTie = text(
+      [trade({ result: SessionTradeResult.Tied, outcome: d('0'), cycle: 2, step: 1 })],
+      open({ step: 2, adaptiveLine: Above }),
+    );
+    expect(afterTie).toContain(`</pre>\n\n${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n<pre>⏳`);
+    expect(afterTie.split(ADAPTIVE)).toHaveLength(2);
+    const afterLoss = text(
+      [trade({ result: SessionTradeResult.Lost, cycle: 2, step: 1, adaptiveLine: Below })],
+      open({ step: 2 }),
+    );
+    expect(afterLoss).toContain(`</pre>\n\n${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n<pre>⏳`);
+    expect(afterLoss.split(ADAPTIVE)).toHaveLength(2);
+    expect(
+      text([], open({ step: 2, adaptiveLine: Above })).startsWith(
+        `${ADAPTIVE}\n\n⚡ Цикл 2 Шаг 2\n`,
+      ),
+    ).toBe(true);
+    expect(text([], open({ step: 2 }))).not.toContain(ADAPTIVE);
   });
 
   it('without the open trade, the settled blocks alone', () => {

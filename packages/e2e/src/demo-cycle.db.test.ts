@@ -325,6 +325,11 @@ it('runs /start → the email login → a demo session → its result', async ()
     ['🔴', '🟢'],
   ]);
   expect(textOf(cycles[0]!)).toContain('сделка открыта');
+  // the lost step 1 carries the adaptive line at once; the cycle's last text holds it once, between
+  // the loss and the win (#718)
+  const ADAPTIVE = '🔄 Адаптивная ставка включена';
+  expect(textOf(firstCycle[0]!)).toContain(`</pre>\n\n${ADAPTIVE}`);
+  expect(textOf(firstCycle.at(-1)!).match(/[🟢🔴🔄]/gu)).toEqual(['🔴', '🔄', '🟢']);
   // an open block at most once a trade, each before its result; none is left in the chat
   const shownLast = new Map<unknown, string>();
   for (const call of push) {

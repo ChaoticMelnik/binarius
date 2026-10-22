@@ -2,7 +2,7 @@ import { formatPrice, formatUsd } from './bot-text-format';
 import type { PairLabel } from './catalog';
 import type { BotHtmlTexts, BotPlainTexts, BotStaticHtmlKey } from './bot-texts';
 import type { DecimalString } from './money';
-import { SessionTradeResult } from './session-steps';
+import { AdaptiveLineSlot, SessionTradeResult } from './session-steps';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
 import { TradeAction, TradeMode } from './trading';
 import {
@@ -83,6 +83,7 @@ export interface SessionTradeNotice {
   digits: number | null;
   cycle: number;
   step: number;
+  adaptiveLine: AdaptiveLineSlot | null;
 }
 
 // The session's open trade as its block prints it (#700): the cycle and step it settles at, its
@@ -94,6 +95,7 @@ export interface SessionOpenNotice {
   digits: number | null;
   cycle: number;
   step: number;
+  adaptiveLine: AdaptiveLineSlot | null;
 }
 
 // The Russian plural form after a number: one for 1, 21, …; few for 2-4, 22-24, …; many
@@ -219,17 +221,21 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
 
   // A cycle's message (#551): the blocks of its trades in their order, a blank line apart, each
   // the cycle and step and the trade in a code block; the open trade's block, when given, last
-  // (#700); the adaptive line stands once, alone, above the block of step 2, wherever that block is
-  // printed, settled or open. The sender splits a cycle into more messages by length only between
-  // blocks, never inside one.
+  // (#700); the adaptive line stands alone where its block's slot puts it (sessionAdaptiveLines,
+  // #718): under a lost step 1, above step 2 after a tie - this function only prints the slot. The
+  // sender splits a cycle into more messages by length only between blocks, never inside one.
   const sessionCycleText = (
     trades: readonly SessionTradeNotice[],
     open?: SessionOpenNotice,
   ): TelegramHtml => {
     const parts: TelegramHtml[] = [];
+    const withLine = (block: TelegramHtml, slot: AdaptiveLineSlot | null): void => {
+      if (slot === AdaptiveLineSlot.Above) parts.push(html.sessionAdaptiveStake);
+      parts.push(block);
+      if (slot === AdaptiveLineSlot.Below) parts.push(html.sessionAdaptiveStake);
+    };
     for (const trade of trades) {
-      if (trade.step === 2) parts.push(html.sessionAdaptiveStake);
-      parts.push(
+      withLine(
         html[SESSION_TRADE_LINES[trade.result]]({
           cycle: String(trade.cycle),
           step: String(trade.step),
@@ -238,11 +244,11 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
           openPrice: priceOf(trade.openPrice, trade.digits),
           closePrice: priceOf(trade.closePrice, trade.digits),
         }),
+        trade.adaptiveLine,
       );
     }
     if (open !== undefined) {
-      if (open.step === 2) parts.push(html.sessionAdaptiveStake);
-      parts.push(
+      withLine(
         html.sessionTradeOpen({
           cycle: String(open.cycle),
           step: String(open.step),
@@ -250,6 +256,7 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
           action: open.action === TradeAction.Up ? plain.actionUp : plain.actionDown,
           openPrice: priceOf(open.openPrice, open.digits),
         }),
+        open.adaptiveLine,
       );
     }
     return joinHtmlLines(parts.flatMap((part, i) => (i === 0 ? [part] : [telegramHtml``, part])));

@@ -9,6 +9,8 @@ import {
   plainTextOf,
   sessionStopCallbackData,
   SessionStakeStrategy,
+  sessionAdaptiveLines,
+  sessionNextAdaptiveLine,
   sessionNextStep,
   sessionStakeParams,
   sessionTradeSteps,
@@ -56,7 +58,9 @@ export type SessionCycleNotice =
 // below them all (#700). A block's cycle and step come from the session's trades before it, by the
 // session's own strategy (#450; settings that cannot be read count as fixed, so every trade is a
 // cycle of its own and a new message); the open trade's are those it settles at (sessionNextStep),
-// and its index is the one it gets once settled. The cycle message is edited when it shows the
+// and its index is the one it gets once settled. Each block carries its adaptive line's slot by the
+// same history (sessionAdaptiveLines, #718), so the line stands once per cycle wherever the cycle
+// is split. The cycle message is edited when it shows the
 // claimed block's cycle; otherwise a new message shows the cycle so far. A text longer than
 // BOT_TEXT_LIMIT (Telegram's limit less the width spacer the seam appends, #506), measured as
 // Telegram counts it after parsing the entities (as telegramTextProblems does), opens a new message
@@ -74,9 +78,13 @@ export function sessionCycleMessage(
     settings === null ? SessionStakeStrategy.Fixed : sessionStakeParams(settings).strategy;
   const results = trades.map((row) => row.result);
   const positions = sessionTradeSteps(results, strategy);
+  const lines = sessionAdaptiveLines(results, strategy);
   const blocks = trades.map((row, index): SessionTradeNotice => {
     const position = positions[index];
-    if (position === undefined) throw new Error('a claimed trade has no position in its session');
+    const adaptiveLine = lines[index];
+    if (position === undefined || adaptiveLine === undefined) {
+      throw new Error('a claimed trade has no position in its session');
+    }
     return {
       amount: row.amount,
       outcome: row.outcome,
@@ -86,6 +94,7 @@ export function sessionCycleMessage(
       digits,
       cycle: position.cycle,
       step: position.step,
+      adaptiveLine,
     };
   });
   const openBlock: SessionOpenNotice | undefined =
@@ -97,6 +106,7 @@ export function sessionCycleMessage(
           openPrice: open.openPrice,
           digits,
           ...sessionNextStep(results, strategy),
+          adaptiveLine: sessionNextAdaptiveLine(results, strategy),
         };
   const shown: { cycle: number; step: number }[] =
     openBlock === undefined ? blocks : [...blocks, openBlock];

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  AdaptiveLineSlot,
   BOT_TEXT_CATALOG,
   BOT_TEXT_MESSAGES,
   BOT_TEXT_WIDTHS,
@@ -495,40 +496,55 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   // a unit of a session's cycle message, sent by the backend through the same builder (#551):
   // one trade's block, at step 2 with the adaptive line above it and at another step without it,
-  // each class and the open block in either direction (#700), the prices with the most digits a
-  // pair has and as String() prints the widest double
+  // each class and the open block in either direction (#700), and a lost step 1 with the line
+  // under it (#718); the prices with the most digits a pair has and as String() prints the widest
+  // double
   sessionTrade: () =>
-    [2, N].flatMap((step) =>
-      [
-        { digits: MAX_PAIR_DIGITS, price: -999_999_999.123 },
-        { digits: null, price: -1.2345678901234567e-308 },
-      ].flatMap(({ digits, price }) => [
-        ...Object.values(SessionTradeResult).map((result) =>
-          notices.sessionCycleText([
-            {
-              amount: STAKE,
-              outcome: d('1999999999999.99999998'),
-              result,
-              openPrice: price,
-              closePrice: price,
-              digits,
-              cycle: N,
-              step,
-            },
-          ]),
-        ),
-        ...Object.values(TradeAction).map((action) =>
-          notices.sessionCycleText([], {
+    [
+      { digits: MAX_PAIR_DIGITS, price: -999_999_999.123 },
+      { digits: null, price: -1.2345678901234567e-308 },
+    ].flatMap(({ digits, price }) => {
+      const settled = (
+        result: SessionTradeResult,
+        step: number,
+        adaptiveLine: AdaptiveLineSlot | null,
+      ) =>
+        notices.sessionCycleText([
+          {
             amount: STAKE,
-            action,
+            outcome: d('1999999999999.99999998'),
+            result,
             openPrice: price,
+            closePrice: price,
             digits,
             cycle: N,
             step,
-          }),
-        ),
-      ]),
-    ),
+            adaptiveLine,
+          },
+        ]);
+      return [
+        ...(
+          [
+            [2, AdaptiveLineSlot.Above],
+            [N, null],
+          ] as const
+        ).flatMap(([step, adaptiveLine]) => [
+          ...Object.values(SessionTradeResult).map((result) => settled(result, step, adaptiveLine)),
+          ...Object.values(TradeAction).map((action) =>
+            notices.sessionCycleText([], {
+              amount: STAKE,
+              action,
+              openPrice: price,
+              digits,
+              cycle: N,
+              step,
+              adaptiveLine,
+            }),
+          ),
+        ]),
+        settled(SessionTradeResult.Lost, 1, AdaptiveLineSlot.Below),
+      ];
+    }),
   // the finished session's summary as a text, the backend's fallback and the bot's text (#464, #537)
   sessionSummary: () =>
     summaryInputs().map(({ symbol, view }) => notices.sessionSummaryText(symbol, INT4_MAX, view)),
