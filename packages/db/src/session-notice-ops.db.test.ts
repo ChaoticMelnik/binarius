@@ -189,7 +189,7 @@ const finalClaim = (session: { id: string }, closeSummary = false) =>
 const rowOf = async (session: { id: string }) =>
   (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, session.id)))[0]!;
 const pendingOf = async (session: { id: string }) =>
-  (await listPendingSessionNotices(tmp.db, { limit: 10_000 })).find(
+  (await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude: [] })).find(
     (row) => row.sessionId === session.id,
   );
 
@@ -553,6 +553,30 @@ describe("the open trade's block (#700)", () => {
     });
   });
 
+  it('L3 lists the next open trade while the block claimed is an earlier one (#660)', async () => {
+    const target = await seedSession();
+    const first = await opened(target);
+    await openClaim(target.session, first.intent.id, 0);
+    await settleOpen(first);
+    await claim(target.session, 0);
+    // the waiting message's slot taken, so only the open trade can list the session
+    await tmp.db
+      .update(tradingSessions)
+      .set({ waitingAfterMessage: 0 })
+      .where(eq(tradingSessions.id, target.session.id));
+    expect(await markOf(target.session)).toBe(first.intent.id);
+    expect(await pendingOf(target.session)).toBeUndefined();
+    const second = await opened(target);
+    expect(await pendingOf(target.session)).toMatchObject({
+      notifiedTrades: 1,
+      settled: 1,
+      openIntentId: second.intent.id,
+      openNoticeIntentId: first.intent.id,
+    });
+    await openClaim(target.session, second.intent.id, 1);
+    expect(await pendingOf(target.session)).toBeUndefined();
+  });
+
   it("N32 an H1 session's open trade is not listed (#670)", async () => {
     const built = buildH1SessionSettings({
       assetId: 101,
@@ -658,7 +682,7 @@ describe('the two marks (#537)', () => {
 describe('the fallback summary (#537)', () => {
   const GRACE_MS = 1_800_000;
   const listed = async (session: { id: string }, graceMs = GRACE_MS) =>
-    (await listSummaryFallback(tmp.db, { limit: 10_000, graceMs })).find(
+    (await listSummaryFallback(tmp.db, { limit: 10_000, graceMs, exclude: [] })).find(
       (row) => row.sessionId === session.id,
     );
   const setRow = (session: { id: string }, values: PgUpdateSetSource<typeof tradingSessions>) =>
@@ -717,12 +741,29 @@ describe('the fallback summary (#537)', () => {
     const newer = await closedWithTrade();
     await markAgo(newer.session, 1);
     await markAgo(older.session, 2);
-    const all = await listSummaryFallback(tmp.db, { limit: 10_000, graceMs: GRACE_MS });
+    const all = await listSummaryFallback(tmp.db, {
+      limit: 10_000,
+      graceMs: GRACE_MS,
+      exclude: [],
+    });
     const ids = all.map((row) => row.sessionId);
     expect(ids.indexOf(older.session.id)).toBeLessThan(ids.indexOf(newer.session.id));
-    expect(await listSummaryFallback(tmp.db, { limit: 2, graceMs: GRACE_MS })).toEqual(
-      all.slice(0, 2),
-    );
+    expect(
+      await listSummaryFallback(tmp.db, { limit: 2, graceMs: GRACE_MS, exclude: [] }),
+    ).toEqual(all.slice(0, 2));
+  });
+
+  it('L1b leaves out only the sessions it is told to exclude (#660)', async () => {
+    const held = await closedWithTrade();
+    const other = await closedWithTrade();
+    const ids = async (exclude: readonly string[]) =>
+      (await listSummaryFallback(tmp.db, { limit: 10_000, graceMs: GRACE_MS, exclude })).map(
+        (row) => row.sessionId,
+      );
+    expect(await ids([])).toEqual(expect.arrayContaining([held.session.id, other.session.id]));
+    const excluded = await ids([held.session.id]);
+    expect(excluded).not.toContain(held.session.id);
+    expect(excluded).toContain(other.session.id);
   });
 
   it('N20 flags a user who blocked the bot', async () => {
@@ -831,9 +872,24 @@ describe('listPendingSessionNotices', () => {
     expect(await pendingOf(fresh.session)).toBeUndefined();
   });
 
+  it('L1a leaves out only the sessions it is told to exclude (#660)', async () => {
+    const held = await seedSession();
+    await settled(held, '4.6');
+    const other = await seedSession();
+    await settled(other, '-5');
+    const ids = async (exclude: readonly string[]) =>
+      (await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude })).map(
+        (row) => row.sessionId,
+      );
+    expect(await ids([])).toEqual(expect.arrayContaining([held.session.id, other.session.id]));
+    const excluded = await ids([held.session.id]);
+    expect(excluded).not.toContain(held.session.id);
+    expect(excluded).toContain(other.session.id);
+  });
+
   it('N7 lists the oldest first and stops at its limit', async () => {
-    const all = await listPendingSessionNotices(tmp.db, { limit: 10_000 });
-    const firstTwo = await listPendingSessionNotices(tmp.db, { limit: 2 });
+    const all = await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude: [] });
+    const firstTwo = await listPendingSessionNotices(tmp.db, { limit: 2, exclude: [] });
     expect(firstTwo).toEqual(all.slice(0, 2));
   });
 });

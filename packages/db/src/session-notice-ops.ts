@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, notInArray, sql } from 'drizzle-orm';
 import {
   SessionTradeResult,
   TradeIntentStatus,
@@ -81,9 +81,24 @@ const openTradeSql = sql<string | null>`(
    limit 1
 )`;
 
-// due: the open trade's block is still to be claimed; an H1 session gets none (the sender's
-// isH1Settings, this its SQL twin)
-const openDueSql = sql<boolean>`(${openTradeSql} is not null and ${openTradeSql} is distinct from ${tradingSessions.openNoticeIntentId} and not coalesce(${h1SessionSql}, false))`;
+// The list's filter (#660): a settled trade past the cursor, the open trade's block still to be
+// claimed (an H1 session gets none - the sender's isH1Settings, this its SQL twin) or the finish,
+// as one aggregate over the session's intents - one index scan per candidate instead of a
+// subquery per fact. The select list keeps settledCountSql, openTradeSql and finishedSql: the
+// sender reads them, and the claims decide. At most one open intent per session (Rule 7), so «an
+// open trade other than the claimed one exists» is «the open trade is not the claimed one». Over
+// no intent at all the aggregate is one row: count 0, bool_or NULL - a stopped session without
+// intents is finished, as finishedSql's not exists has it.
+const sessionNoticeDueSql = sql<boolean>`(
+  select count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.intentId} is not null) > ${tradingSessions.notifiedTrades}
+      or (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)}
+          and not coalesce(bool_or(${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})), false))
+      or (coalesce(bool_or(${tradeIntents.status} = ${ACCEPTED} and ${brokerTrades.status} = ${literal(BrokerTradeStatus.Open)}
+                           and ${tradeIntents.id} is distinct from ${tradingSessions.openNoticeIntentId}), false)
+          and not coalesce(${h1SessionSql}, false))
+    from ${tradeIntents} left join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+   where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+)`;
 
 // The waiting message (#536, docs/bot-session.md → The waiting message). Its slot is the latest
 // message of the session it stands under (#587): the cycle message or the bot's recorded status
@@ -135,10 +150,11 @@ export interface PendingSessionNotice {
 // The sessions with something to send: notices not closed yet, and a settled trade past the
 // cursor, an open trade's block to claim (#700), a finished session, or a waiting message to send
 // or to delete. Oldest first, on
-// trading_sessions_notice_pending_idx.
+// trading_sessions_notice_pending_idx. `exclude`: the sessions the sender holds back after a turn
+// that threw (#660), ids from its own lists.
 export async function listPendingSessionNotices(
   db: Db,
-  { limit }: { limit: number },
+  { limit, exclude }: { limit: number; exclude: readonly string[] },
 ): Promise<PendingSessionNotice[]> {
   const rows = await db
     .select({
@@ -164,7 +180,8 @@ export async function listPendingSessionNotices(
     .where(
       and(
         isNull(tradingSessions.finalNoticeSentAt),
-        sql`(${settledCountSql} > ${tradingSessions.notifiedTrades} or ${openDueSql} or ${finishedSql} or ${waitingDueSql} or ${waitingStaleSql})`,
+        exclude.length === 0 ? undefined : notInArray(tradingSessions.id, [...exclude]),
+        sql`(${sessionNoticeDueSql} or ${waitingDueSql} or ${waitingStaleSql})`,
       ),
     )
     .orderBy(asc(tradingSessions.createdAt), asc(tradingSessions.id))
@@ -568,9 +585,10 @@ export interface SummaryFallbackSession {
 // status message the bot could track (status_message_id NULL: at once) or with the mark older
 // than `graceMs` by the database's clock, the bot not having claimed it. Oldest mark first, on
 // trading_sessions_summary_fallback_idx. Not scoped by a user: the sender's internal list.
+// `exclude` as listPendingSessionNotices's (#660).
 export async function listSummaryFallback(
   db: Db,
-  { limit, graceMs }: { limit: number; graceMs: number },
+  { limit, graceMs, exclude }: { limit: number; graceMs: number; exclude: readonly string[] },
 ): Promise<SummaryFallbackSession[]> {
   return db
     .select({
@@ -584,6 +602,7 @@ export async function listSummaryFallback(
     .where(
       and(
         summaryFallbackClaimableSql,
+        exclude.length === 0 ? undefined : notInArray(tradingSessions.id, [...exclude]),
         sql`(${tradingSessions.statusMessageId} is null or ${tradingSessions.finalNoticeSentAt} < now() - make_interval(secs => ${graceMs / 1000}))`,
       ),
     )
