@@ -872,6 +872,19 @@ cycle, so every trade is a new message of one block, as before #551.
 - **When.** The trades as they settle, within `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing; the
   final mark on the tick after the last of them; the bot's summary on its tracker's next poll
   (≤ 10 s).
+- **An H1 session (#707)** ([h1.md → The driver](h1.md#the-driver-707)): no message per trade.
+  One summary of the session (`sessionH1Progress`, `sessionH1ProgressMessage`) goes when
+  `H1_NOTICE_EVERY_TRADES` (10) trades are settled, and the same message is edited every 10 more
+  and at the finish (the settled count of a finished session, so 9 trades and a stop give one
+  summary of 9): the pair, «Сделок: N из M», the score, the SQL sum of the profits and the base
+  stake. Silent and without buttons, as a trade's message. The sender claims the trades from the
+  cursor to the due count at once (`claimSessionTradeNotices`, below) and records the first
+  summary as the cycle message from 0, so every later one is its edit, and an edit refused as gone
+  sends it anew; the waiting message with «⏹» stands under it as under a cycle message (none before
+  the first summary: the CLI's session has no status message). The final mark and the summary
+  follow as for any session; a CLI session gets the fallback text summary at once (no status
+  message). At R1's fastest cadence (7 s a trade) 10 trades take 70 s: at most one edit a minute a
+  session (`TIMING_CHAIN_HOLDS`).
 - **Who.** The session's owner by join (`trading_sessions → broker_accounts →
   users.telegram_user_id`); no id comes from outside. A user with `telegram_blocked_at` set gets
   nothing: the trades are claimed without a call, and both marks are set by one CAS without reading
@@ -930,6 +943,12 @@ edit never changes them. For the claimed trade the sender:
 2. otherwise: renders the trades from `cycle_message_from` to the claimed one; past the length
    limit it sends a new message from the claimed trade and records it from there; else it edits the
    cycle message.
+
+**An H1 session's batch** (#707): `claimSessionTradeNotices({ from, to })` raises the cursor from
+`from` to `to` in one CAS — only while no summary was sent and `to` trades are settled — and reads
+the first `to` settled trades' counts by class and the sum of their profits (numeric) in the same
+transaction; `releaseSessionTradeNotices` puts the batch back (`to` → `from`) on a 429 or a
+refusal, as the single trade's release. The single trade's claim and release are unchanged.
 
 Since the state is written only after a send went through, and the claim before every call, a
 step's block is never sent twice by a retry; the next step's edit shows every block of its
