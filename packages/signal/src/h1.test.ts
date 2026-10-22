@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertH1Params,
   assertH1ShadowSet,
+  assertH1WindowFits,
   createH1Detector,
   DEFAULT_H1_PARAMS,
   H1_SHADOW_MAX_WINDOW_SEC,
@@ -432,5 +433,16 @@ describe('the H1 shadow sets and replay (#669)', () => {
     for (const set of H1_SHADOW_SETS) expect(mismatches(set.params), set.name).toBe(0);
     // the check can see a window that misses a close: the wide shape's earliest read falls out
     expect(mismatches(wide)).toBeGreaterThan(0);
+  });
+
+  it("H-D19: assertH1WindowFits (#707, the driver's check) refuses moveSec > sdStepSec, passes R1 and the defaults", () => {
+    expect(() =>
+      assertH1WindowFits({ ...DEFAULT_H1_PARAMS, moveSec: 6, sdStepSec: 5 }, 'session s1'),
+    ).toThrow(/session s1: moveSec \(6\) must be <= sdStepSec \(5\)/);
+    expect(() => assertH1WindowFits(H1_R1_PARAMS, 'r1')).not.toThrow();
+    expect(() => assertH1WindowFits(DEFAULT_H1_PARAMS, 'h1')).not.toThrow();
+    expect(() =>
+      assertH1WindowFits({ ...DEFAULT_H1_PARAMS, moveSec: 5, sdStepSec: 5 }, 'equal'),
+    ).not.toThrow();
   });
 });

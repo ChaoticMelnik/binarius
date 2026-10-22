@@ -10,7 +10,6 @@ import {
   stopHaltedSessions,
   stopPausedSessions,
   stopTradingSession,
-  TERMINAL_TRADE_INTENT_STATUSES,
   touchBalanceRequested,
   TradeIntentError,
   TradingSessionNotActiveError,
@@ -21,13 +20,13 @@ import {
   type StoppedSession,
 } from '@binarius/db';
 import {
+  assertExhausted,
   errorLogFields,
   intervalForDuration,
   isH1Settings,
   isPairOpen,
   pairAcceptsDuration,
   safeParseTradingSessionSettings,
-  sessionProgress,
   sessionStakeParams,
   sessionNoSignalTimeoutMs,
   SIGNAL_CHART_INTERVAL_MS,
@@ -35,9 +34,12 @@ import {
   SignalDecisionOutcome,
   SignalFeedOutcome,
   SignalKind,
-  TradeIntentErrorCode,
+  SESSION_INTENT_REFUSALS,
+  sessionIntentBlock,
+  SessionIntentBlockReason,
   TradeIntentStatus,
   TradingSessionStopReason,
+  type SessionIntentRefusal,
   type SignalRecord,
   type TradeAction,
   type TradingSessionSettings,
@@ -129,64 +131,6 @@ type Ending =
   // no ending written: the deadline, a throw or the stop signal
   | { kind: 'failed' }
   | { kind: 'stopped' };
-
-type CreateRefusal = { kind: 'stop'; reason: TradingSessionStopReason } | { kind: 'reschedule' };
-
-const accountUnavailable = {
-  kind: 'stop',
-  reason: TradingSessionStopReason.AccountUnavailable,
-} as const;
-
-// every code createTradeIntent can refuse with; a code added later fails tsc here
-const CREATE_REFUSALS = {
-  [TradeIntentErrorCode.UserNotFound]: accountUnavailable,
-  [TradeIntentErrorCode.UserBlocked]: accountUnavailable,
-  [TradeIntentErrorCode.BrokerAccountNotFound]: accountUnavailable,
-  [TradeIntentErrorCode.AmbiguousBrokerAccount]: accountUnavailable,
-  [TradeIntentErrorCode.AccountRevoked]: accountUnavailable,
-  [TradeIntentErrorCode.AccountNotConfirmed]: accountUnavailable,
-  [TradeIntentErrorCode.InsufficientTokens]: accountUnavailable,
-  // a halt committed while the backend calls were in flight (reconciliation's write, Rule 25)
-  [TradeIntentErrorCode.AccountHalted]: {
-    kind: 'stop',
-    reason: TradingSessionStopReason.ManualReview,
-  },
-  // the kill switch closed while the backend calls were in flight (#144)
-  [TradeIntentErrorCode.TradingPaused]: {
-    kind: 'stop',
-    reason: TradingSessionStopReason.KillSwitch,
-  },
-  // a bot trade or a second worker on the account: the scan waits for it
-  [TradeIntentErrorCode.ActiveIntentExists]: { kind: 'reschedule' },
-  // the step key exists with other terms: the next attempt reads that intent in the history
-  [TradeIntentErrorCode.ClientRequestIdConflict]: { kind: 'reschedule' },
-  // the stake bounds of either mode (#297, #326): only POST /trading/intents asks for them, so a
-  // session intent never gets these; were it to, they mean what the sizer's own stop means
-  [TradeIntentErrorCode.BalanceUnavailable]: {
-    kind: 'stop',
-    reason: TradingSessionStopReason.BalanceUnavailable,
-  },
-  [TradeIntentErrorCode.StakePrecision]: {
-    kind: 'stop',
-    reason: TradingSessionStopReason.StakeStop,
-  },
-  [TradeIntentErrorCode.StakeBelowMinimum]: {
-    kind: 'stop',
-    reason: TradingSessionStopReason.StakeStop,
-  },
-  [TradeIntentErrorCode.InsufficientBalance]: {
-    kind: 'stop',
-    reason: TradingSessionStopReason.StakeStop,
-  },
-  // the process runs DEMO_ONLY and the session is real (#396): durable for this process
-  [TradeIntentErrorCode.DemoOnly]: accountUnavailable,
-  // the user is not in real mode (#121): a switch to demo stops the user's sessions itself
-  // (setTradingMode, #327), so this is the race with that switch, whose stop wins the CAS, or a
-  // trading_mode written by hand
-  [TradeIntentErrorCode.RealModeOff]: accountUnavailable,
-} as const satisfies Record<TradeIntentErrorCode, CreateRefusal>;
-
-const TERMINAL = new Set<string>(TERMINAL_TRADE_INTENT_STATUSES);
 
 // the sizer's view of the session's intents; a settled intent without its trade's profit and a
 // manual_review one have no result the sizer can use
@@ -319,43 +263,37 @@ export function createSessionOrchestrator({
     }
     // the step this attempt tries: its intent key and every decision row it writes (#666)
     const step = history.intents.length + 1;
-    // the scan skips expired sessions; this catches one whose deadline passed since the scan
-    if (history.expired) return { kind: 'stop', reason: TradingSessionStopReason.Timeout };
-    if (history.intents.some((intent) => !TERMINAL.has(intent.status))) {
-      logger.info(ids, 'trading session has a live intent');
-      return { kind: 'reschedule' };
-    }
-    const settledIntents = history.intents.filter((i) => i.status === TradeIntentStatus.Settled);
-    const settled = settledIntents.length;
-    // a settled intent without a readable profit is no win; the sizer stops the session on it:
-    // unresolved_trade when the profit is missing (toSessionTrade), invalid_amount when its text
-    // does not parse - both stake_stop
-    const won = settledIntents.filter((i) => {
-      const profit = i.profit === null ? undefined : parseAmount(i.profit);
-      return profit !== undefined && profit > 0n;
-    }).length;
-    const progress = sessionProgress(settings, { settled, won });
-    if (progress.done >= progress.planned) {
-      return {
-        kind: 'stop',
-        reason: TradingSessionStopReason.Completed,
-        fields: { settled, cycles: progress.done },
-      };
-    }
-    if (h1 && history.lossLimitReached) {
-      return {
-        kind: 'stop',
-        reason: TradingSessionStopReason.MaxSessionLossExceeded,
-        fields: { maxLoss: settings.maxLoss },
-      };
-    }
-    const lastTwo = history.intents.slice(-2);
-    if (lastTwo.length === 2 && lastTwo.every((i) => i.status === TradeIntentStatus.Rejected)) {
-      return {
-        kind: 'stop',
-        reason: TradingSessionStopReason.RejectedTwice,
-        fields: { lastErrors: lastTwo.map((i) => i.lastError) },
-      };
+    // the scan skips expired sessions; this catches one whose deadline passed since the scan.
+    // The H1 driver (#707) skips on the same reasons, so its intents never outrun these stops
+    const block = sessionIntentBlock(history, settings);
+    if (block !== null) {
+      switch (block.reason) {
+        case SessionIntentBlockReason.Expired:
+          return { kind: 'stop', reason: TradingSessionStopReason.Timeout };
+        case SessionIntentBlockReason.Live:
+          logger.info(ids, 'trading session has a live intent');
+          return { kind: 'reschedule' };
+        case SessionIntentBlockReason.Completed:
+          return {
+            kind: 'stop',
+            reason: TradingSessionStopReason.Completed,
+            fields: { settled: block.settled, cycles: block.done },
+          };
+        case SessionIntentBlockReason.MaxLoss:
+          return {
+            kind: 'stop',
+            reason: TradingSessionStopReason.MaxSessionLossExceeded,
+            fields: { maxLoss: h1 ? settings.maxLoss : null },
+          };
+        case SessionIntentBlockReason.RejectedTwice:
+          return {
+            kind: 'stop',
+            reason: TradingSessionStopReason.RejectedTwice,
+            fields: { lastErrors: history.intents.slice(-2).map((i) => i.lastError) },
+          };
+        default:
+          return assertExhausted(block, 'session intent block');
+      }
     }
 
     const snapshot = await readSessionBalance(db, session.id, { waitMs: noSignalTimeoutMs });
@@ -570,7 +508,7 @@ export function createSessionOrchestrator({
         return { kind: 'gone' };
       }
       if (!(error instanceof TradeIntentError)) throw error;
-      const refusal: CreateRefusal = CREATE_REFUSALS[error.code];
+      const refusal: SessionIntentRefusal = SESSION_INTENT_REFUSALS[error.code];
       const row = decisionRow(SignalDecisionOutcome.Refused, error.code);
       if (refusal.kind === 'reschedule') {
         logger.warn({ ...ids, step, code: error.code }, 'trading session intent refused');
