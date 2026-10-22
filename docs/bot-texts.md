@@ -578,7 +578,7 @@ its picture since #568, a caption of 1024 — and the reply to its stop (#536), 
 `/settings` with the stake line and the stake picker, the mode screen, its confirm and a switch's
 result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; a block of the session's cycle message with its
-adaptive line — the unit the backend never splits; it splits a cycle's message by its real length
+adaptive line, under a lost step 1 or above step 2 (#718) — the unit the backend never splits; it splits a cycle's message by its real length
 between blocks, #551 — the summary as a text, `sessionSummary`, the backend's fallback through the
 shared builders of `packages/shared/src/session-texts.ts` (#464, #537), the same lines as the
 bot's caption under the card and its text, a caption of 1024 (#709); the
