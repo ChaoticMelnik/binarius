@@ -183,17 +183,36 @@ export interface ActiveH1Session {
   id: string;
   brokerAccountId: string;
   mode: TradeMode;
+  // the owner, by the session's account: createSessionIntent's telegramUserId
+  telegramUserId: string;
+  // raw: the driver parses it
+  settings: unknown;
+  startedAt: Date;
 }
 
-// the driver's list (#707): every active H1 session, oldest start first
+// The driver's list (#707): every active H1 session on a marked account, oldest start first. A v4
+// session on an unmarked account (only by hand since createTradingSession re-reads the mark under
+// the account's lock) is not traded; the orchestrator holds it until its hour.
 export async function listActiveH1Sessions(db: Db): Promise<ActiveH1Session[]> {
-  return db
+  const rows = await db
     .select({
       id: tradingSessions.id,
       brokerAccountId: tradingSessions.brokerAccountId,
       mode: tradingSessions.mode,
+      telegramUserId: users.telegramUserId,
+      settings: sql<unknown>`${tradingSessions.settings}`,
+      startedAt: tradingSessions.startedAt,
     })
     .from(tradingSessions)
-    .where(and(eq(tradingSessions.status, TradingSessionStatus.Active), h1SessionSql))
+    .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(
+      and(
+        eq(tradingSessions.status, TradingSessionStatus.Active),
+        h1SessionSql,
+        isNotNull(brokerAccounts.h1Since),
+      ),
+    )
     .orderBy(asc(tradingSessions.startedAt), asc(tradingSessions.id));
+  return rows.map((row) => ({ ...row, telegramUserId: row.telegramUserId.toString() }));
 }

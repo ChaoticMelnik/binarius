@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
+  isH1Settings,
   TokenLedgerKind,
   TradingSessionErrorCode,
   TradeIntentStatus,
@@ -65,6 +66,9 @@ export const TradingSessionDbErrorCode = {
   ModeNotAllowed: 'mode_not_allowed',
   // a real session on a DEMO_ONLY process (#396), before the transaction and mode_not_allowed
   DemoOnly: 'demo_only',
+  // an H1 session (settings v4) on an account whose h1_since is NULL under the account's lock
+  // (#707, review of #711): an unmark committed between the CLI's check and the insert
+  AccountNotH1: 'account_not_h1',
 } as const;
 export type TradingSessionDbErrorCode =
   (typeof TradingSessionDbErrorCode)[keyof typeof TradingSessionDbErrorCode];
@@ -131,7 +135,11 @@ export async function createTradingSession(
         throw new TradingSessionError(TradingSessionDbErrorCode.ModeNotAllowed);
       }
       const [locked] = await tx
-        .select({ status: brokerAccounts.status, tradingHalted: brokerAccounts.tradingHalted })
+        .select({
+          status: brokerAccounts.status,
+          tradingHalted: brokerAccounts.tradingHalted,
+          h1Since: brokerAccounts.h1Since,
+        })
         .from(brokerAccounts)
         .where(eq(brokerAccounts.id, input.brokerAccountId))
         .for('no key update');
@@ -146,6 +154,11 @@ export async function createTradingSession(
       }
       if (locked.tradingHalted) {
         throw new TradingSessionError(TradingSessionDbErrorCode.AccountHalted);
+      }
+      // the mark read under the row setH1Mark locks first (#707, review of #711): an unmark either
+      // committed before this lock and is seen here, or waits for the insert and finds the session
+      if (isH1Settings(input.settings) && locked.h1Since === null) {
+        throw new TradingSessionError(TradingSessionDbErrorCode.AccountNotH1);
       }
       // a plain read (Rule 5): a kill-switch commit after it is caught by stopPausedSessions
       if (!isTradingOpen(await readTradingSwitch(tx))) {

@@ -87,6 +87,7 @@ const CREATE_LINES = {
   [TradingSessionDbErrorCode.TradingPaused]: 'торговля остановлена выключателем',
   [TradingSessionDbErrorCode.ModeNotAllowed]: 'режим пользователя сменился — сессия не создана',
   [TradingSessionDbErrorCode.DemoOnly]: 'DEMO_ONLY=true: real-сессии отключены',
+  [TradingSessionDbErrorCode.AccountNotH1]: 'метка H1 снята во время старта — сессия не создана',
 } as const satisfies Record<TradingSessionDbErrorCode, string>;
 
 // checkStake's refusals of the session's stake against the snapshot

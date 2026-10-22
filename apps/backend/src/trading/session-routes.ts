@@ -58,7 +58,7 @@ import {
   touchBalanceRequested,
   type Db,
   type SignalDecisionInput,
-  type TradingSessionDbErrorCode,
+  TradingSessionDbErrorCode,
 } from '@binarius/db';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import type { CachedSignalFeed } from '@binarius/signal';
@@ -116,7 +116,8 @@ const STATUS_OF = {
 } as const satisfies Record<ErrorCode, 404 | 409 | 503>;
 
 // createTradingSession's refusals under its locks; a db code added without a wire code fails the
-// typecheck
+// typecheck. account_not_h1 (#707) needs settings v4, which this route never writes: the catch
+// rethrows it as an opaque 500 (Rule 9) rather than a false wire code
 const DB_CODE_TO_WIRE = {
   account_not_found: TradingSessionErrorCode.BrokerAccountNotFound,
   account_revoked: TradingSessionErrorCode.AccountRevoked,
@@ -127,7 +128,10 @@ const DB_CODE_TO_WIRE = {
   trading_paused: TradingSessionErrorCode.TradingPaused,
   mode_not_allowed: TradingSessionErrorCode.ModeNotAllowed,
   demo_only: TradingSessionErrorCode.DemoOnly,
-} as const satisfies Record<TradingSessionDbErrorCode, ErrorCode>;
+} as const satisfies Record<
+  Exclude<TradingSessionDbErrorCode, typeof TradingSessionDbErrorCode.AccountNotH1>,
+  ErrorCode
+>;
 
 const idParamSchema = z.uuid();
 
@@ -347,6 +351,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       );
     } catch (error) {
       if (!(error instanceof TradingSessionError)) throw error;
+      if (error.code === TradingSessionDbErrorCode.AccountNotH1) throw error;
       const code = DB_CODE_TO_WIRE[error.code];
       await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
       if (code === TradingSessionErrorCode.ActiveSessionExists) {

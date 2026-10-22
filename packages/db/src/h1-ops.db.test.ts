@@ -226,8 +226,32 @@ describe('the H1 reads (#670)', () => {
     });
     expect(await readActiveH1Session(tmp.db, brokerAccountId)).toEqual({ id: live.id, isH1: true });
     expect(await readLastH1Session(tmp.db, brokerAccountId)).toBe(live.id);
-    expect(await listActiveH1Sessions(tmp.db)).toEqual([
-      { id: live.id, brokerAccountId, mode: 'demo' },
+  });
+
+  it("H1-M8 the driver's list (#707): active H1 sessions on marked accounts only, with the owner and settings", async () => {
+    const marked = await seedUserWithAccount(tmp.db);
+    const unmarked = await seedUserWithAccount(tmp.db);
+    const other = await seedUserWithAccount(tmp.db);
+    expect(await mark(marked.brokerAccountId, true)).toBe('marked');
+    expect(await mark(other.brokerAccountId, true)).toBe('marked');
+    const live = await seedTradingSession(tmp.db, marked.brokerAccountId, {
+      settings: h1Settings(),
+    });
+    // a v4 row on an unmarked account: only by hand after #707's lock
+    await seedTradingSession(tmp.db, unmarked.brokerAccountId, { settings: h1Settings() });
+    // not an H1 session on a marked account
+    await seedTradingSession(tmp.db, other.brokerAccountId);
+
+    const list = await listActiveH1Sessions(tmp.db);
+    expect(list).toEqual([
+      {
+        id: live.id,
+        brokerAccountId: marked.brokerAccountId,
+        mode: 'demo',
+        telegramUserId: marked.telegramUserId,
+        settings: h1Settings(),
+        startedAt: expect.any(Date),
+      },
     ]);
   });
 });
