@@ -39,7 +39,7 @@ decisions without a trade ([Retention](#retention)).
 | `taken_at_ms` | when the writer took the decision | the orchestrator's clock right after `evaluate` returned; the start route's after its signal and balance reads; the shadow's right after its detector |
 | `recorded_at` | the row's insert | database clock, the transaction's start |
 | `kind`, `action` | the decision's kind (`SignalKind`) and, for a signal only, its direction (`signal_decisions_action_pair_check`) | |
-| `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed, and NULL also when the catalog's value is outside the column (`signalDecisionPayout`) | the catalog the writer read |
+| `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed, and NULL also when the catalog's value is outside the column (`payoutInColumn`, `packages/db/src/schema/columns.ts`, shared with `broker_trades.payout`, #675) | the catalog the writer read |
 | `digits` | the pair's quote precision the decider used, 0..`MAX_PAIR_DIGITS` | |
 | `params`, `decision`, `source`, `series` | the journal entry's fields as the backend answered them (jsonb, objects and an array) | |
 | `last_tick` | `{ price, timestamp, receivedAtMs }`, the pair's newest data-socket tick when `POST /trading/signal` answered; NULL without the socket or before the pair's first tick | `timestamp` the broker's, `receivedAtMs` the backend's |
@@ -319,7 +319,7 @@ column, so that recording never stops trading.
 
 | Column | Source | Guard | Test |
 |---|---|---|---|
-| `payout` | the writer's catalog read (the worker's and the start route's `pair.payout`), the broker's `z.number()`, unbounded by design (#631) | `signalDecisionPayout` in `recordSignalDecision`, the only INSERT: NULL unless finite and in `[0, SIGNAL_DECISION_PAYOUT_MAX]` (9999.9999, from the column's precision and scale) | SD14, O14, R43 |
+| `payout` | the writer's catalog read (the worker's and the start route's `pair.payout`), the broker's `z.number()`, unbounded by design (#631) | `payoutInColumn` (`schema/columns.ts`, shared with `broker_trades.payout`, #675) in `recordSignalDecision`, the only INSERT: NULL unless finite and in `[0, PAYOUT_MAX]` (9999.9999, from the column's precision and scale) | SD14, O14, R43 |
 | `digits` | `entry.digits`, the backend's catalog | the record's entry schema: 0..`MAX_PAIR_DIGITS`, the CHECK's constant; out of range drops the record | B7, S-rec4 |
 | `decided_at_ms` | `entry.nowMs`, the backend's clock | the record's entry schema: a positive safe integer | B7, S-rec4 |
 | `asset_id`, `interval` | the entry | pinned to the request (`assetId` is the request's positive int4) | B7 |
@@ -362,7 +362,7 @@ the database's text so microseconds survive. The data goes to stdout, the count 
 | `decision` | `id`, `context`, `outcome`, `detail`, `version`, `assetId`, `interval`, `step`, `kind`, `action`, `decidedAtMs`, `takenAtMs`, `recordedAtMs`, `ticksUntilMs`, `payout`, `lastTick`, `result` |
 | `signal` | the journal entry (`journalEntryOf`); the stand's `parseJournalLine` reads it from this key, as from a log line. A shadow row's entry is `h1ShadowEntrySchema`'s, which `replayH1Entry` decides again ([h1.md](h1.md#replay-and-reading)) |
 | `session` | `id`, `userId`, `brokerAccountId`, `mode`, `strategy`, `baseStake`, `durationSec` (from the row's settings; NULL when they do not parse), `stopReason`; `null` for a start without a session |
-| `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `lastError` (the intent's failure reason, `null` without one; `entry_window_missed` when an H1 session's entry window closed before the take, #670), `submitDeadlineAtMs` (`trade_intents.submit_deadline_at`, `null` without a window, #670), `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout`, `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent. A trade on a later page keeps its session's numbering (X8) |
+| `trade` | the decision's intent: `intentId`, `status`, `mode`, `action`, `amount`, `durationSec`, `createdAtMs`, `submittedAtMs`, `lastError` (the intent's failure reason, `null` without one; `entry_window_missed` when an H1 session's entry window closed before the take, #670), `submitDeadlineAtMs` (`trade_intents.submit_deadline_at`, `null` without a window, #670), `cycle` and `cycleStep` (the bot's numbering, `sessionTradeSteps`, settled trades only), and `broker`: `status`, `payout` (`null` when the broker's payout was outside the column, #675), `openPrice`, `openTimestampMs`, `closePrice`, `closeTimestampMs`, `profit`, or `null` before the broker trade; `null` without an intent. A trade on a later page keeps its session's numbering (X8) |
 | `ticks` | the decision's `decision_ticks` row (`tradeLogTicksSchema`): `status`, `detail`, `fromMs`, `untilMs`, `count`, `rows` (the stored `[timestamp, receivedAtMs, price]` tuples, `[]` for none); `null` without a row — not a candidate, not captured yet, or past the horizon |
 
 The chain of a trade is `decision.decidedAtMs → decision.takenAtMs → trade.createdAtMs →
@@ -373,7 +373,8 @@ the database's twice and the broker's clocks ([trade-executor.md](trade-executor
 stand's `calibrate --trades` shape (`tradeLogTradeJsonSchema`): `trading_session_id`, `asset_id`,
 `action`, `duration_sec`, `created_at_ms`, `open_timestamp_ms`, `open_price`,
 `close_timestamp_ms`, `close_price`, `profit` (the #381 export's ten), plus `submitted_at_ms`,
-`payout`, `intent_id`, `decision_id`, `mode`, `amount`. A decision without an intent, an intent
+`payout` (absent when the broker's payout was outside the column, #675; X16), `intent_id`,
+`decision_id`, `mode`, `amount`. A decision without an intent, an intent
 without a broker trade (a `rejected` one) and an open broker trade are left out; they are in the
 JSONL (`trade-log.db.test.ts` X3 for every field of the line, X4 for every field of the row). The
 ticks are in the JSONL only; `trades-json` is the same with or without them (X14).
