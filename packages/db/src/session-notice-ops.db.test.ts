@@ -186,7 +186,7 @@ describe('claimSessionTradeNotice', () => {
       trades: [
         {
           amount: '5.00000000',
-          outcome: '4.60000000',
+          outcome: '9.60000000',
           result: 'won',
           openPrice: 1,
           closePrice: 1.5,
@@ -221,7 +221,7 @@ describe('claimSessionTradeNotice', () => {
     expect(claimed.map((row) => row?.trades.at(-1)?.openPrice)).toEqual([1, 3, 4]);
     // every settled trade up to the claimed one, in order: its cycle's blocks
     expect(claimed.at(-1)?.trades.map((row) => [row.openPrice, row.result, row.outcome])).toEqual([
-      [1, 'won', '4.60000000'],
+      [1, 'won', '9.60000000'],
       [3, 'lost', '-5.00000000'],
       [4, 'tied', '0.00000000'],
     ]);
@@ -229,16 +229,17 @@ describe('claimSessionTradeNotice', () => {
   });
 
   it.each([
-    ['4.6', '4.60000000', 'won'],
-    ['0.001', '0.00100000', 'won'],
-    ['-5', '-5.00000000', 'lost'],
-    ['-2.5', '-2.50000000', 'lost'],
-    ['0', '0.00000000', 'tied'],
+    ['5', '4.6', '9.60000000', 'won'],
+    ['5', '0.001', '5.00100000', 'won'],
+    ['5', '-5', '-5.00000000', 'lost'],
+    ['5', '-2.5', '-2.50000000', 'lost'],
+    ['5', '0', '0.00000000', 'tied'],
+    ['0.005', '0.0046', '0.00960000', 'won'],
   ])(
-    'N4 a stake of 5 at profit %s prints its profit %s (#539), %s',
-    async (profit, outcome, result) => {
+    'N4 a stake of %s at profit %s prints %s after the arrow (#684), %s',
+    async (amount, profit, outcome, result) => {
       const target = await seedSession();
-      await settled(target, profit);
+      await settled(target, profit, amount);
       expect((await claim(target.session, 0))?.trades.at(-1)).toMatchObject({ outcome, result });
     },
   );

@@ -506,7 +506,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
           notices.sessionCycleText([
             {
               amount: STAKE,
-              outcome: d('-999999999999.99999999'),
+              outcome: d('1999999999999.99999998'),
               result,
               openPrice: price,
               closePrice: price,

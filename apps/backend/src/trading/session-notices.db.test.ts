@@ -356,10 +356,10 @@ describe('the session notices (#464)', () => {
       expect(call.payload.parse_mode).toBe('HTML');
     }
     expect(trades.map((call) => pushedText(call.payload))).toEqual([
-      '⚡ Цикл 1 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$4.60\n📊 Цена: 0.10000 → 0.10010</pre>',
+      '⚡ Цикл 1 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$9.60\n📊 Цена: 0.10000 → 0.10010</pre>',
       '⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 0.20000 → 0.20010</pre>',
       '⚡ Цикл 3 Шаг 1\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 0.30000 → 0.30010</pre>',
-      '⚡ Цикл 4 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$4.25\n📊 Цена: 0.40000 → 0.40010</pre>',
+      '⚡ Цикл 4 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$9.25\n📊 Цена: 0.40000 → 0.40010</pre>',
       '⚡ Цикл 5 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 0.50000 → 0.50010</pre>',
     ]);
     const summary = sends[5]!;
@@ -729,7 +729,7 @@ describe('a martingale cycle is one message (#551)', () => {
         loss(1),
         ADAPTIVE,
         loss(2),
-        '⚡ Цикл 1 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$4.60\n📊 Цена: 0.30000 → 0.30010</pre>',
+        '⚡ Цикл 1 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$9.60\n📊 Цена: 0.30000 → 0.30010</pre>',
       ].join('\n\n'),
     );
     expect(await cycleStateOf(target)).toEqual({ messageId: id, from: 0 });

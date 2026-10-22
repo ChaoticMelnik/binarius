@@ -44,6 +44,9 @@ export const BOT_TEXT_WIDTHS = {
   usd: 20,
   // formatSignedUsd over numeric(20,8), every fraction digit: -$999 999 999 999.99999999 (#450)
   signedUsd: 26,
+  // formatSignedUsd over the sum of two numeric(20,8): a win's stake + profit after the arrow of
+  // its session message, +$1 999 999 999 999.99999998 (#684)
+  returnedUsd: 28,
   // formatUsd('0'), both amounts of a card with no balance
   zeroUsd: 5,
   // formatStake over an unsigned numeric(20,8): $999 999 999 999.99999999 — either saved stake, the
@@ -216,8 +219,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   cycle: () => w.sessionCount,
   // «5 циклов»: settings.cycles, at most MAX_SESSION_CYCLES
   cycles: (m) => String(MAX_SESSION_CYCLES).length + 1 + cycles(m),
-  // a session trade's profit, a numeric(20,8) printed by formatSignedUsd (#539)
-  outcome: () => w.signedUsd,
+  // a session trade's figure after «→»: a win's stake + profit, the sum of two numeric(20,8) (#684)
+  outcome: () => w.returnedUsd,
   // formatPrice with the pair's digits, or String() without them (session-texts.ts → priceOf)
   openPrice: () => Math.max(w.price, w.rawPrice),
   closePrice: () => Math.max(w.price, w.rawPrice),

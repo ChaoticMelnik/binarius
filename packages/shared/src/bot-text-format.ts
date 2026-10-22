@@ -22,7 +22,8 @@ export function formatUsd(amount: string): string {
   return `${negative && !zero ? '-' : ''}$${groupDigits(whole)}.${cents}`;
 }
 
-// A session's result (#337), a trade's profit on the summary card and in its message (#539):
+// A session's result (#337), a trade's profit on the summary card, a trade's figure after the arrow
+// in its session message (#539; a win's stake + profit since #684):
 // every fraction digit it has, at least two, so a loss of 1.7515 is not shown as the smaller
 // -$1.75 (#450: the live broker's profit is S × p / 100 unrounded). '1.5' → '+$1.50',
 // '-1.7515' → '-$1.7515'; a zero keeps no sign, as in formatUsd

@@ -138,10 +138,11 @@ export async function listPendingSessionNotices(
   return rows;
 }
 
-// A settled trade as its message needs it. `outcome` is the figure after «→»: the broker trade's
-// profit (#539), so the lines of a session add up to its result; `result` the class by the sign
-// of the profit, as the view's counters compare it. The stake is the intent's amount, equal to the
-// broker trade's (Rule 15).
+// A settled trade as its message needs it. `outcome` is the figure after «→»: a win's stake plus
+// its profit, what came back to the account (#684, reverting #539), a loss's or a tie's profit; the
+// lines no longer add up to the session's result, which stays the sum of the profits (#337).
+// `result` the class by the sign of the profit, as the view's counters compare it. The stake is the
+// intent's amount, equal to the broker trade's (Rule 15).
 export interface SessionTradeNoticeRow {
   amount: DecimalString;
   outcome: DecimalString;
@@ -198,7 +199,7 @@ export async function claimSessionTradeNotice(
     const rows = await tx
       .select({
         amount: tradeIntents.amount,
-        outcome: sql<DecimalString>`${brokerTrades.profit}`,
+        outcome: sql<DecimalString>`case when ${brokerTrades.profit} > 0 then ${tradeIntents.amount} + ${brokerTrades.profit} else ${brokerTrades.profit} end`,
         result: tradeResultSql,
         openPrice: brokerTrades.openPrice,
         closePrice: brokerTrades.closePrice,

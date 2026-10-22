@@ -70,9 +70,10 @@ ${line}`,
   );
 
 // A settled trade of a session as its message prints it (#464). `outcome` is the figure after
-// «→», the broker trade's profit (#539): positive for a win, negative for a loss, zero for a tie,
-// so the lines of a session add up to its result. The prices are the broker trade's; `digits` the
-// pair's, null when the catalog could not say.
+// «→»: a win's stake plus its profit, what came back to the account (#684, reverting #539), a
+// loss's negative profit, a tie's zero; the lines no longer add up to the session's result, which
+// stays the sum of the profits (#337). The prices are the broker trade's; `digits` the pair's,
+// null when the catalog could not say.
 export interface SessionTradeNotice {
   amount: DecimalString;
   outcome: DecimalString;
