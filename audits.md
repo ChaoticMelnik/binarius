@@ -4093,7 +4093,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | #721 rebased twice: its rebase spawn started before #720 merged, `main` moved under it | — (cost) | other | tech-lead planned the stack after #720 «to avoid a double rebase», then spawned #721's rebase in parallel with #720's merge | Tech Lead (merge relay) |
 
 ### Process improvement proposals
-1. Day manager session: before stacking on a session PR, check the base's mergeability; the morning merge rebases per tech-lead «A PR left In Review by a manager session» — **внедрено в #PR: `.claude/skills/manager/SKILL.md` → Task selection → Stacking**
+1. Day manager session: before stacking on a session PR, check the base's mergeability; the morning merge rebases per tech-lead «A PR left In Review by a manager session» — **внедрено в #744: `.claude/skills/manager/SKILL.md` → Task selection → Stacking**
 
 ---
 
@@ -4120,7 +4120,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m2: e2e S7 counts open blocks only in total, not «at most one per trade, before its result» | Minor | other | weaker than the plan's assertion (covered by O4/O5, N30/N31) | → #742 |
 
 ### Process improvement proposals
-1. A clarify decision the implementer cannot carry out returns as a question (or a plan defect), not decided in the PR — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 0**
+1. A clarify decision the implementer cannot carry out returns as a question (or a plan defect), not decided in the PR — **внедрено в #744: `.claude/skills/implementer/SKILL.md` → Step 0**
 2. Remaining findings — **вынесено в #742**; parts B and C — **#722**, **#723** (architect's split)
 
 ---
@@ -4146,7 +4146,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1–m4: #708 paragraph splits the Abbreviations table in `docs/bot-texts.md` (+ `modeBackDemoButton` narrowest row 2 → 3); old «👥 Позвать / друга» label in `docs/deposit.md`; `lang` button still in `statusCardKeyboard` in `docs/bot-menu.md`; `docs/bot-navigation.md` says an old card keeps the button forever | Minor | single-source | docs copies of the keyboard not swept | → #738 |
 
 ### Process improvement proposals
-1. Architect Step 4 Conflicts: check the numbers of numbered docs lists (risks) and literals shared with parallel PRs, not only Rules — **внедрено в #PR: `.claude/skills/architect/SKILL.md` → Step 4**
+1. Architect Step 4 Conflicts: check the numbers of numbered docs lists (risks) and literals shared with parallel PRs, not only Rules — **внедрено в #744: `.claude/skills/architect/SKILL.md` → Step 4**
 2. Remaining findings — **вынесено в #738**
 
 ---
@@ -4181,9 +4181,9 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | #729's `pnpm check` after rebase went red on BW4 while #720's rebase ran checks on the shared test DB | — (ops, re-run green) | other | two rebase spawns in parallel on one test DB | Tech Lead (merge relay) |
 
 ### Process improvement proposals
-1. Architect Step 4 Conflicts: check the numbers of numbered docs lists (risks) against open PRs, not only Rules — **внедрено в #PR: `.claude/skills/architect/SKILL.md` → Step 4**
-2. Manager: a one-off API 403 gets one continuation attempt before switching to Opus — **внедрено в #PR: `.claude/skills/manager/SKILL.md` → Substitutions → 4**
-3. Rebase-only spawns get their own `<scratchpad>/rebase-<N>/`, like `impl-<N>/` — **внедрено в #PR: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own scratch subdirectory**
+1. Architect Step 4 Conflicts: check the numbers of numbered docs lists (risks) against open PRs, not only Rules — **внедрено в #744: `.claude/skills/architect/SKILL.md` → Step 4**
+2. Manager: a one-off API 403 gets one continuation attempt before switching to Opus — **внедрено в #744: `.claude/skills/manager/SKILL.md` → Substitutions → 4**
+3. Rebase-only spawns get their own `<scratchpad>/rebase-<N>/`, like `impl-<N>/` — **внедрено в #744: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own scratch subdirectory**
 
 ---
 
@@ -4209,8 +4209,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1 (third `sessionTrade` registry alternative is redundant, comment and docs read as if the limit depends on it), m2 (B4 second case duplicates the test at line 141) | Minor | other | left at the merge | → #743 |
 
 ### Process improvement proposals
-1. Implementer before hand-off: `git status -sb` without «ahead» and `gh pr view --json headRefOid` = head of the checks — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 8**
-2. Day manager session checks the base's mergeability before stacking on it — **внедрено в #PR: `.claude/skills/manager/SKILL.md` → Task selection → Stacking**
+1. Implementer before hand-off: `git status -sb` without «ahead» and `gh pr view --json headRefOid` = head of the checks — **внедрено в #744: `.claude/skills/implementer/SKILL.md` → Step 8**
+2. Day manager session checks the base's mergeability before stacking on it — **внедрено в #744: `.claude/skills/manager/SKILL.md` → Task selection → Stacking**
 3. Remaining findings — **вынесено в #743**
 
 ---
@@ -4244,7 +4244,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R1 m2 (`pg_advisory_lock` without timeout), R1 m3 (CLI entry check through a symlink), R2 m1 (`docs/worker-deploy.md:150-152, :173`: worker under `tsx watch` does not exit, rollback after 120 s), R2 m2 (old image tags stay on the pilot), R2 m3 (Rule 16 cites the old CI step name, no shared-image invariant) | Minor | other / single-source | left at the merge | → #739 |
 
 ### Process improvement proposals
-1. A mutation of a CI-only gate goes on a temporary `mut/<N>-<desc>` branch with a draft PR «не мержить» on the feature branch, red-run links in one PR comment, closed without merge; the merge relay deletes the branch after the merge — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence), `.claude/skills/tech-lead/SKILL.md` → Merge relay**
+1. A mutation of a CI-only gate goes on a temporary `mut/<N>-<desc>` branch with a draft PR «не мержить» on the feature branch, red-run links in one PR comment, closed without merge; the merge relay deletes the branch after the merge — **внедрено в #744: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence), `.claude/skills/tech-lead/SKILL.md` → Merge relay**
 2. Remaining findings — **вынесено в #739**
 
 ---
