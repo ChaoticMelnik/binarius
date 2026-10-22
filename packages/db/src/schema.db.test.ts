@@ -3483,7 +3483,7 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
-  // #379: the pause after two losses reads the direction the last deciding attempt saw
+  // #379...#698: the pause's memory; the column stays until #719
   it.each([null, 'up', 'down'] as const)('accepts last_signal_action %s', async (action) => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);

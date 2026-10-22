@@ -46,7 +46,6 @@ import {
 } from '@binarius/shared';
 import type { Logger } from '../intents/processor';
 import { SessionTradeKind, StakeKind, StopReason } from '../stake/codes';
-import { parseAmount } from '../stake/money';
 import {
   createStakeSizer,
   type SessionTrade,
@@ -61,7 +60,7 @@ import type { SessionOrchestratorConfig } from './config';
 // runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
 // holds the session back in memory; the step comes from the database's history, never from memory.
 // A write in the worker that ends an intent or halts its account wakes it (#696): a tick at once,
-// the interval is the safety net. A hold until the next candle (no_signal, the pause) ends at the
+// the interval is the safety net. A hold until the next candle (a no_signal) ends at the
 // boundary + the slack, not rounded up to a tick, and one timer wakes the tick then (#697); the
 // interval is its safety net too.
 
@@ -103,13 +102,10 @@ const STAKE_STOP_REASONS = {
   [StopReason.InsufficientBalance]: TradingSessionStopReason.StakeStop,
 } as const satisfies Record<StopReason, TradingSessionStopReason>;
 
-// A hold must say whether the pause's memory (last_signal_action, #379) is cleared (null after a
-// no_signal) or kept (the paused action); a candle hold (#697) is the exact wait for the next
-// candle's ask. The traded action travels with the intent row
-// (createTradeIntent), never through an ending: an ending can be lost after the INSERT. An ending
-// reached after a decision carries its trade log row (#666, docs/trade-log.md → The writers and
-// their outcomes), written by apply after the ending's own write; the intent's row is in the
-// intent's transaction instead.
+// A candle hold (#697) is the exact wait for the next candle's ask. An ending reached after a
+// decision carries its trade log row (#666, docs/trade-log.md → The writers and their outcomes),
+// written by apply after the ending's own write; the intent's row is in the intent's transaction
+// instead.
 type Ending =
   | {
       kind: 'stop';
@@ -119,13 +115,7 @@ type Ending =
     }
   | { kind: 'created' }
   | { kind: 'reschedule'; record?: SignalDecisionInput }
-  | {
-      kind: 'hold';
-      ms: number;
-      signalAction?: TradeAction | null;
-      candle?: true;
-      record?: SignalDecisionInput;
-    }
+  | { kind: 'hold'; ms: number; candle?: true; record?: SignalDecisionInput }
   // the session is no longer active: nothing to write
   | { kind: 'gone' }
   // no ending written: the deadline, a throw or the stop signal
@@ -140,23 +130,6 @@ function toSessionTrade(intent: SessionHistoryIntent): SessionTrade {
     return { kind: SessionTradeKind.Settled, stake: intent.amount, profit: intent.profit };
   }
   return { kind: SessionTradeKind.Unresolved };
-}
-
-// docs/trading-session.md -> The pause after two losses (#379). A rejected intent between the two
-// losses is not a trade, so it neither breaks nor extends the streak. A trailing one was created
-// only once the pause had lifted, and a refusal is not a new loss to re-arm it on.
-export function pausedDirection(intents: readonly SessionHistoryIntent[]): TradeAction | undefined {
-  if (intents.at(-1)?.status === TradeIntentStatus.Rejected) return undefined;
-  const trades = intents.filter((intent) => intent.status !== TradeIntentStatus.Rejected);
-  const lastTwo = trades.slice(-2);
-  if (lastTwo.length < 2) return undefined;
-  const lost = lastTwo.every((intent) => {
-    if (intent.status !== TradeIntentStatus.Settled || intent.profit === null) return false;
-    const profit = parseAmount(intent.profit);
-    return profit !== undefined && profit < 0n;
-  });
-  const [first, second] = lastTwo;
-  return lost && first.action === second.action ? second.action : undefined;
 }
 
 class AttemptAborted extends Error {
@@ -334,12 +307,12 @@ export function createSessionOrchestrator({
         fields: { assetId: settings.assetId, listed: pair !== undefined },
       };
     }
-    // The three waits for a signal end at the no-signal limit (#509, owner), config.noSignalCandles
-    // candles of the session's signal interval (#637): a closed pair, a no_signal, the pause after
-    // two losses. A failure to read the pairs or the signal is not a wait for a signal, so it
-    // neither stops the session nor moves the count.
+    // The two waits for a signal end at the no-signal limit (#509, owner), config.noSignalCandles
+    // candles of the session's signal interval (#637): a closed pair, a no_signal (the pause after
+    // two losses was the third until #698). A failure to read the pairs or the signal is not a
+    // wait for a signal, so it neither stops the session nor moves the count.
     const noSignalStop = (
-      waited: 'pair_closed' | 'no_signal' | 'paused',
+      waited: 'pair_closed' | 'no_signal',
       record?: SignalDecisionInput,
     ): Ending => ({
       kind: 'stop',
@@ -442,21 +415,9 @@ export function createSessionOrchestrator({
         { ...ids, reason: response.decision.reason },
         'trading session waits for the next candle',
       );
-      return withRow(
-        { kind: 'hold', ms: untilNextCandle(), signalAction: null, candle: true },
-        row,
-      );
+      return withRow({ kind: 'hold', ms: untilNextCandle(), candle: true }, row);
     }
     const action: TradeAction = response.decision.action;
-    if (pausedDirection(history.intents) === action && session.lastSignalAction === action) {
-      const row = decisionRow(SignalDecisionOutcome.Paused);
-      if (history.waitExpired) return noSignalStop('paused', row);
-      logger.info({ ...ids, action }, 'trading session waits for the signal to change');
-      return withRow(
-        { kind: 'hold', ms: untilNextCandle(), signalAction: action, candle: true },
-        row,
-      );
-    }
 
     const startedAtMs = session.startedAt.getTime();
     const decision = sizer.next({
@@ -627,7 +588,7 @@ export function createSessionOrchestrator({
       }
       case 'hold':
         hold(session.id, ending.ms, ending.candle === true);
-        await markSessionDecision(db, { id: session.id, signalAction: ending.signalAction });
+        await markSessionDecision(db, { id: session.id });
         await recordDecision(session, ending.record);
         return;
       case 'created':
