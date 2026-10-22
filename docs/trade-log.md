@@ -85,8 +85,7 @@ the step's decision is asked again. A path that ends before a decision exists wr
 | E2 | `fetch_failed` | hold | none: no record on a failure | O7 |
 | E3 | `no_signal` past the no-signal limit | stop `no_signal_timeout` | `no_signal` / NULL | O9 |
 | E4 | `no_signal` | hold to the next candle (the candle wake, #697) | `no_signal` / NULL | O2 |
-| E5 | the paused direction past the limit | stop `no_signal_timeout` | `paused` / NULL (`action` the paused direction) | O10 |
-| E6 | the paused direction | hold to the next candle (the candle wake, #697) | `paused` / NULL | O3 |
+| E5/E6 | the paused direction (#379…#698) | — | `paused` / NULL: no writer since #698; rows before it read and export (X-tests) | — |
 | E7′ | the sizer's `insufficient_balance` while a settlement on the account in the session's mode is newer than the balance, inside the no-signal limit from that settlement (#696) | hold `TRADING_SESSION_TICK_MS` | none: the step's decision is asked again on a current balance; the retry's row is the step's | BW1, BW5 |
 | E7 | the sizer's stop | stop (`STAKE_STOP_REASONS`) | `stake_stop` / the sizer's `StopReason` code | O4 |
 | E8 | the deadline, a throw or `stop()` after `evaluate` | no ending | none (risk 2) | — |
@@ -104,7 +103,7 @@ intent's INSERT) rolls that row back with the transaction, so the `refused` row 
 one (O5). E13: the first process's transaction recorded its own `intent` row (or none, with an
 old backend), this attempt records `replayed` with the same `step`: the lost ending is visible.
 
-A stop after the no-signal limit (E3, E5) records the wait's outcome; the stop itself is a session
+A stop after the no-signal limit (E3) records the wait's outcome; the stop itself is a session
 fact with one source, `trading_sessions.stop_reason`, which the export's `session.stopReason`
 carries. When it is `no_signal_timeout`, the stopping decision is the session's last row by
 `(recorded_at, id)` — unless that row's write failed (a `warn`), or a second worker's attempt in a
