@@ -124,6 +124,16 @@ export const TELEGRAM_BOT_SENDS_PER_SECOND = 30;
 export const MAILING_RETRY_MS = 300_000;
 export const MAILING_MAX_ATTEMPTS = 3;
 
+// --- The switch to real after a deposit (#686) --------------------------------------------------
+// docs/trading-mode.md → The automatic switch after a deposit. The pass over the attributed
+// deposits with no outcome: a deposit switches the mode at most this much after it is attributed,
+// then wakes the planner, and the sender's tick sends the message.
+export const DEPOSIT_MODE_SWITCH_SCAN_MS = 5_000;
+// the candidates one tick takes, oldest first; the rest wait for the next tick
+export const DEPOSIT_MODE_SWITCH_SCAN_LIMIT = 50;
+// a candidate whose attempt threw is skipped this long, so one broken row does not run every tick
+export const DEPOSIT_MODE_SWITCH_RETRY_MS = 60_000;
+
 // --- The session notices (#464) ----------------------------------------------------------------
 // docs/bot-session.md → Trade messages. The sender's tick: a settled trade's message comes at most
 // this much after the settle, plus the pacing.
@@ -471,6 +481,10 @@ const TIMING_CHAIN_HOLDS =
   // for the send in flight - the pace's gap, then a fallback summary's balance refresh and its
   // one send (#537)
   MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
+  // the switch after a deposit (#686): a thrown candidate is skipped for whole ticks; the pass's
+  // tick is no longer than the sender's, so a deposit's message comes within the two ticks
+  DEPOSIT_MODE_SWITCH_SCAN_MS < DEPOSIT_MODE_SWITCH_RETRY_MS &&
+  DEPOSIT_MODE_SWITCH_SCAN_MS <= MAILING_SEND_TICK_MS &&
   // the fallback's grace (#537) spans ticks: a session the bot tracks is listed only after it
   SESSION_NOTICE_TICK_MS < SESSION_SUMMARY_FALLBACK_MS &&
   1000 / SESSION_NOTICE_SEND_PER_SECOND +
