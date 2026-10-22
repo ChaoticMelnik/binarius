@@ -4013,3 +4013,32 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 1. A plan branching from `main` while an open PR rewrites the same lines writes code in `main`'s shape, the other shape only in the rebase recipe — **внедрено в #726: `.claude/skills/architect/SKILL.md` → conflicts with other in-flight branches**
 2. Remove the implementer's worktree before `gh pr merge --delete-branch` — **внедрено в #726: `.claude/skills/tech-lead/SKILL.md` → Merge relay**
 3. Remaining findings — **вынесено в #725**
+
+---
+
+## #707 — H1, часть 3b: драйвер backend, дедлайн входа из env, сводка H1-сессии в Telegram (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Phase 0 | Clean `main` 1603c0ae, Codex ready, no Fable limit in 7 days, previous audit (#697) fully statused. Shadow verdict taken on prod first (R1 g=1 57.59 %, CI 57.19-58.00 vs 51.55), posted on #707 (6341202710). Open PRs #720 #721 #727-#731 from other sessions. |
+| Architect | first plan | Fable 5.1. 4 clarify questions; owner kept the Telegram summary in this PR (В1 (c), against the recommended split) with a rebase recipe onto the stack #684→#700→#718; others recommended. Plan 6341774688, ≈2 360 lines. |
+| Implementer | clarify | Opus. 2 questions: shared `sessionIntentBlock` for orchestrator + driver (owner: yes, deviation from the plan) and a `refused` row on every refusal (yes). No plan defects. |
+| Implementer | first pass | Opus. PR #734, 9 commits, 2 861 lines, `pnpm check` 0 at `f130b5b9`, per-commit checks 9/9 (two reruns for outside causes: `57P01`, BW4), mutations 27/27 (6342972389). |
+| Tech Lead | Phase 3 audit | 6343001112 (one Minor: hand-off `list-sha256` differed from the comment). |
+| Reviewer | round 1 | 0 / 0 / 4; 3b-3d + checklist. Codex 6-pre task-mvjn7rap-5aoy52 at the head (diff-sha256 re-hashed by tech-lead); its Major on cadence after a restart rejected (the 301 s window). |
+| Tech Lead | merge | Owner's yes; worktrees removed first, `--rebase --delete-branch` 2026-10-22T15:00:46Z. No migration. Minors → #735. |
+| Tech Lead | models | Fable first plan; Opus implementer, reviewer, 3b/3c; Sonnet 3d. |
+
+### Review iterations: 1
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Hand-off named a `list-sha256` different from the posted comment | Minor (process) | unverified-claim | the hand-off was written from an earlier run, not from the comment | Implementer (hand-off) |
+| Mutation comment's closing fence on the JSON line, `<details>` rendered broken | Minor (process) | other | no rule on the fence | Implementer (PR comment) |
+| R1 Minors m1-m4 (misplaced comment, unused fields + join, copied helpers, Rule 31 docs) | Minor | other | left at the merge | → #735 |
+
+### Process improvement proposals
+1. The closing fence on its own line, and the hand-off copies `head=`/`list-sha256=` from the posted comment — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
+2. Remaining findings — **вынесено в #735**
