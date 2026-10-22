@@ -437,9 +437,9 @@ drew in place and the summary (#537): «🔁 Ещё сессия» (#320) on the
 only when the view has `settings` and its duration is one the demo still offers (`durationOf`) —
 then (#350, [bot-navigation.md](bot-navigation.md)) «📊 Анализ» on the same pair and
 duration (when the demo still offers it) and «📡 Сигналы» in one row, «💳 Пополнить» (#27,
-[deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https) on its own row, «👥 Позвать друга»
+[deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https) on its own row, «👥 Позвать»
 (#115, [referrals.md](referrals.md)) and «🏠 В меню» in one row (the rows: bot-navigation.md →
-Roles, colours and rows, #475); without `settings` only «💳 Пополнить», then «👥 Позвать друга»
+Roles, colours and rows, #475); without `settings` only «💳 Пополнить», then «👥 Позвать»
 and «🏠 В меню» in one row. A session stopped by the no-signal limit (`no_signal_timeout`, #509) offers
 another pair, not the same one again: no «🔁 Ещё сессия» and no «📊 Анализ», and «🔀 Выбрать
 другую пару» in place of «📡 Сигналы», on the same data (`demo:sig`, #685;
@@ -1229,8 +1229,8 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   the text path sends the same caption with the width spacer.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
   сессия» at 5 s (#685) while a session at it fits, «📊 Анализ» and
-  «📡 Сигналы» in one row, «💳 Пополнить» (#27, https only) on its own row, «👥 Позвать друга»
-  (#115) and «🏠 В меню» in one row (#475); «💳 Пополнить», then «👥 Позвать друга» and «🏠 В меню»
+  «📡 Сигналы» in one row, «💳 Пополнить» (#27, https only) on its own row, «👥 Позвать»
+  (#115) and «🏠 В меню» in one row (#475); «💳 Пополнить», then «👥 Позвать» and «🏠 В меню»
   without `settings`
   (`sessionCardKeyboard`); under a `no_signal_timeout` stop «🔀 Выбрать другую пару» in place of the
   first three (#509). «📤 Поделиться» comes on top of these rows by

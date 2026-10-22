@@ -89,7 +89,7 @@ own (owner's decisions 1 and 3, 2026-10-14):
 | `stake` / `stake_risk` | a stake preset below / from `STAKE_RISK_THRESHOLD` ($10, inclusive), the latter labelled «· риск» (`stakeRiskButton`) | `success` / `danger` | a list |
 | `up` / `down` | a pair of the signals list or of the wait, by its signal's direction | `success` / `danger` | a list |
 | `secondary` | refresh, repeat, «➕ Ещё», «💵 Ставка»/«💵 Сумма», «✏️ Ввести», «🔁 Минимум», «🔄 Новый код», «✏️ Изменить адрес», «⭐ Купить», «🎮 В демо», «💵 Демо»/«💼 Реал» of /settings, «👥 Пригласить ещё», «📊 Анализ» at the end of a path | `primary` (blue) | shared |
-| `nav` | the menu, a way back, the types, the pairs, a page, support, «🧭 Вручную», «📡 Сигналы», «⚙️ Режим», «💼 Реальный режим» of the status card, «👥 Позвать друга», «🌐 Язык/Language», a choice among options (a level of /settings, a language, a type, a pair of the manual path) with its current ✅ | none | shared |
+| `nav` | the menu, a way back, the types, the pairs, a page, support, «🧭 Вручную», «📡 Сигналы», «⚙️ Режим», «💼 Реальный» of the status card, «👥 Позвать», a choice among options (a level of /settings, a language, a type, a pair of the manual path) with its current ✅ | none | shared |
 
 `BUTTON_ROLE_STYLES` and `FULL_WIDTH_ROLES` are the one place of the colour and the row: a new
 button gets them by its role, never by a field of its own.
@@ -143,16 +143,15 @@ longer than its row: Telegram cuts them with an ellipsis; the loader still takes
 | Key | Label (ru) | Role | Colour | Row |
 |---|---|---|---|---|
 | `demoButton`, `tradeButton` | 🎮 Демо-торговля, 🚀 Торговать | forward | green | own |
-| `modeButton` | 💼 Реальный режим (status card) | nav | — | 2 |
+| `modeButton` | 💼 Реальный (status card) | nav | — | 3 |
 | `modeEnableButton` | 💼 Включить реальный режим (mode screen) | forward | green | own |
 | `modeScreenButton` | ⚙️ Режим | nav | — | 2 |
-| `modeBackDemoButton` | 🎮 В демо | secondary | blue | 2 |
+| `modeBackDemoButton` | 🎮 В демо | secondary | blue | 3 |
 | `modeConfirmButton`, `modeCancelButton` | ✅ Подтверждаю, ↩️ Отмена | forward, nav | green, — | own, own |
-| `inviteButton` | 👥 Позвать друга | nav | — | 2 |
+| `inviteButton` | 👥 Позвать | nav | — | 3 |
 | `inviteShareButton`, `sessionShareButton` | 📤 Поделиться | forward | green | own |
 | `buyButton` | ⭐ Купить | secondary | blue | 3 |
 | `depositButton` | 💳 Пополнить | forward | green | own |
-| `languageButton` | 🌐 Язык/Language | nav | — | 2 |
 | `connectButton`, `confirmButton` | 🔗 Подключить аккаунт Binodex, ✅ Подтвердить: … | forward | green | own |
 | `resendButton`, `changeEmailButton` | 🔄 Новый код, ✏️ Изменить адрес | secondary | blue | 2 |
 | `menuButton` | 🏠 В меню | nav | — | 3 |
@@ -236,8 +235,8 @@ chat with the bot:
   the purchase in one row with the caller's actions) and `buyPackagesKeyboard`
   ([stars.md](stars.md)); since #27 `depositButton` and `depositButtons` («💳 Пополнить», a `web_app`
   button with no callback data; no button without a URL; the only builders, `keyboards.test.ts`,
-  [deposit.md](deposit.md)); since #508 `languageButton` (`lang`, «🌐 Язык/Language», the label in
-  both languages so a user who cannot read the bot's language still finds it). The rows' shapes:
+  [deposit.md](deposit.md)); `languageButton` (#508, `lang`, «🌐 Язык/Language») left the status
+  card with #708: the entry is the `/language` command. The rows' shapes:
   `keyboards.test.ts` → «the rows and colours of the shared keyboards (#475)».
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Анализ»,
   `toSignalsButton` «📡 Сигналы»; reused: `demoRetryButton` «🔄 Повторить»,
@@ -275,8 +274,8 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить аккаунт Binodex |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить: … (one per waiting link) |
-| status card | 🎮 Демо-торговля // 💼 Реальный режим \| 👥 Позвать друга (#115) // ⭐ Купить (#117) \| 🌐 Язык/Language (#508) // 💳 Пополнить (#27, https only); in real: 🚀 Торговать // 🎮 В демо \| 👥 Позвать друга // the same; «💼 Реальный режим» and «🎮 В демо» open the mode screen (#474) |
-| the language screen (`lang`, #508) | 🇷🇺 Русский \| 🇬🇧 English \| 🏠 В меню (the current one with ✅) |
+| status card | 🎮 Демо-торговля // 💼 Реальный \| 👥 Позвать (#115) \| ⭐ Купить (#117) // 💳 Пополнить (#27, https only); in real: 🚀 Торговать // 🎮 В демо \| 👥 Позвать \| ⭐ Купить // the same; «💼 Реальный» and «🎮 В демо» open the mode screen (#474); no language button since #708 |
+| the language screen (#508: `/language` since #708, `lang` of a status card sent before #708) | 🇷🇺 Русский \| 🇬🇧 English \| 🏠 В меню (the current one with ✅) |
 | `languageNeedsStart`, `unavailable` after a language set (a write) | 🏠 В меню |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
@@ -291,7 +290,7 @@ no repeat.
 | `/account` with a waiting link or none active | ✅ Подтвердить: … // 🔗 Подключить аккаунт Binodex, each on its own row |
 | `/support` | 💬 Поддержка \| 🏠 В меню |
 | `/help` | 🏠 В меню |
-| `/invite`, «👥 Позвать друга» (#115) | 📤 Поделиться (a URL) // 🏠 В меню |
+| `/invite`, «👥 Позвать» (#115) | 📤 Поделиться (a URL) // 🏠 В меню |
 | `inviteNeedsStart` (`/invite` before the first `/start`) | 🏠 В меню |
 | `/buy`, «⭐ Купить» (#117, [stars.md](stars.md)) | a package per row (`buy:<code>`) // 🏠 В меню |
 | `buyNeedsAccount` | 🔗 Подключить аккаунт Binodex |
@@ -336,7 +335,7 @@ no repeat.
 | trade status, where the tracker stops (accepted, every terminal status) | 🚀 Сессия из 5 циклов (#360; at 5 s for a trade of any duration, #685) // accepted: 🔄 Обновить \| 📊 Анализ // 📡 Сигналы \| 🏠 В меню; terminal: 📊 Анализ \| 📡 Сигналы \| 🏠 В меню |
 | the session message (#536; the picture of its signal's direction with the text as its caption, #568, or the text) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
 | the waiting message (#536, sent by the backend) | ⏹ Остановить сессию (`session:stop:<id>:w`, red) |
-| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) // 📊 Анализ \| 📡 Сигналы // 💳 Пополнить (#27, https only) // 👥 Позвать друга (#115) \| 🏠 В меню; without `settings` 💳 Пополнить // 👥 Позвать друга \| 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару // 💳 Пополнить // 👥 Позвать друга \| 🏠 В меню |
+| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) // 📊 Анализ \| 📡 Сигналы // 💳 Пополнить (#27, https only) // 👥 Позвать (#115) \| 🏠 В меню; without `settings` 💳 Пополнить // 👥 Позвать \| 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару // 💳 Пополнить // 👥 Позвать \| 🏠 В меню |
 | an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
@@ -367,7 +366,8 @@ applies to what is sent after the deploy.
 
 ## The language screen (#508)
 
-«🌐 Язык/Language» (`lang`) on the status card sends the screen as a new message, in the user's
+The `/language` command (#708, in the command menu and in `/help`,
+[bot-start.md](bot-start.md#command-menu)) sends the screen as a new message, in the user's
 language, «🇷🇺 Русский | 🇬🇧 English | 🏠 В меню» in one row (#475) with ✅ on the current one
 (`apps/bot/src/language-screen.ts`). A language pressed (`lang:ru`, `lang:en`, a write in
 `WRITE_CALLBACK_PREFIXES`) saves it (`POST /users/language`), puts it into the bot's cache and
@@ -376,6 +376,13 @@ current language pressed is only answered. A user with no row yet (404 `user_not
 `languageNeedsStart`; any other failure `unavailable` under «🏠 В меню», with the cache entry
 dropped, so the next update reads the language again instead of inferring it from the failure
 ([bot-texts.md](bot-texts.md#languages)).
+
+Before #708 the entry was «🌐 Язык/Language» (`lang`) on the status card. A card sent before the
+deploy, a pinned one included, keeps that button until the next `/start`, `/menu` or «🏠 В меню»,
+and `lang` still opens the screen the same way. `/language` before the first `/start` opens the
+screen in the client's language (the language read answers 404, `botLanguageOf` of the update's
+`language_code`), and a choice there gets `languageNeedsStart` (`language-screen.test.ts` LS10).
+`HANDLER_CALLS.languageCommand` = 0 / 1, as `/help`; the language read is the middleware's.
 
 ## Timing
 

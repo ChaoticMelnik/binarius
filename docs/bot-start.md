@@ -666,11 +666,12 @@ is missing from the answer; `timing.test.ts` holds the declared calls.
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list ten commands, in this
+Telegram's «Меню» button and the hints shown when the user types `/` list eleven commands, in this
 order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/stop` —
 «Остановить сессию» ([bot-session.md](bot-session.md#stop-122)), `/account` —
 «Аккаунт Binodex» ([bot-account.md](bot-account.md)), `/buy` — «Купить токены» ([stars.md](stars.md), #117),
-`/settings` — «Настройки уведомлений», `/invite` — «Пригласить друга» ([referrals.md](referrals.md)),
+`/settings` — «Настройки уведомлений», `/language` — «Язык бота»
+([bot-navigation.md](bot-navigation.md#the-language-screen-508), #708), `/invite` — «Пригласить друга» ([referrals.md](referrals.md)),
 `/help` — «Помощь» ([/help](#help-184)), `/support` —
 «Поддержка» ([Notification level and /support](#notification-level-and-support-120)) and `/paysupport` —
 «Вопросы по оплате Stars и возврат» ([stars.md](stars.md#paysupport), #118). The list is `BOT_COMMANDS` in
@@ -679,7 +680,9 @@ the key of its description, the catalog's `commands` group, which the CLI can ov
 ([bot-texts.md](bot-texts.md) → Publishing). The bot reads it through `botCommands()` in
 `texts.ts`, with the descriptions in effect at that moment. The next command is one more pair there,
 one more key in the catalog, and one more literal in each of the two `setMyCommands` assertions of
-`lifecycle.test.ts`, which name the values on purpose.
+`lifecycle.test.ts`, which name the values on purpose, and in the menus the backend's publish tests
+name (`DEFAULT_MENU`/`EN_MENU` of `apps/backend/src/cli/bot-text.db.test.ts`, the menus of
+`apps/backend/src/bot-texts/publish.test.ts` and `apps/backend/src/admin/routes.db.test.ts`).
 `packages/shared/src/bot-commands.test.ts` holds the list equal to the `commands` group (each key
 once) and the Bot API limits (a command of 1-32 lowercase letters, digits and underscores, a
 description of 1-256 UTF-16 code units, at most 100 commands, each once); an override is held to

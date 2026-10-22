@@ -27,7 +27,7 @@ backend (#112): POST /deposit/credited {initData} → DEMO_ONLY → initData →
 
 The bot's button (#27, `apps/bot/src/keyboards.ts` → `depositButton`/`depositButtons`, the bot's
 only builders) stands at three entries, in both trading modes, always green on a row of its own (a
-step forward, #475): the last row of the status card (under «⭐ Купить | 🌐 Язык/Language»); above
+step forward, #475): the last row of the status card (under «💼 Реальный | 👥 Позвать | ⭐ Купить»); above
 «⭐ Купить», the way back and the menu in the two «не хватает токенов» refusals (a trade, a session
 start); at the end of a session, on the stopped status and on the summary card, above «👥 Позвать
 друга | 🏠 В меню» (the rows: [bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)). The backend's 80 % and

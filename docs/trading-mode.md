@@ -100,10 +100,10 @@ The mode comes from `POST /trading/access` only (`tradingMode`, required: a back
 **The card.** The header prints `MODE_LABELS[tradingMode]`, the hint is `statusHint` in demo and
 `statusHintReal` in real: «⚠️ Реальный режим: сделки идут на реальные деньги на сумму $X.», X the
 real stake in force (#326). The first row is the entry alone, green: «🎮 Демо-торговля» in demo,
-«🚀 Торговать» in real; then the mode button beside «👥 Позвать друга»: «💼 Реальный режим» in demo
-(no colour), «🎮 В демо» in real (blue) (#474, #475). The entry is `demo` in both; the mode button
-is `mode` in both and only opens the mode screen, it never switches by itself. Then «⭐ Купить»
-beside «🌐 Язык/Language», and «💳 Пополнить» alone ([bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)).
+«🚀 Торговать» in real; then the mode button, «👥 Позвать» and «⭐ Купить» in one row of three
+(#708): «💼 Реальный» in demo (no colour), «🎮 В демо» in real (blue) (#474, #475). The entry is
+`demo` in both; the mode button is `mode` in both and only opens the mode screen, it never switches
+by itself. Then «💳 Пополнить» alone ([bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)).
 
 **The mode screen** (#474, `trading-mode.ts`). `mode` sends it as a new message (the card, a
 photo or text by the fallback, is never edited); `mode:x` (`MODE_SCREEN_CALLBACK_DATA`, «↩️ Отмена»
@@ -264,7 +264,7 @@ amount. `trading mode line not sent` (warn, `/stop`): `errorLogFields` and `meth
 Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 [trading-access.md](trading-access.md) plus the worker and the bot:
 
-1. Switch the user to real through the mode screen: `/menu` → «💼 Реальный режим» (DEMO, the real
+1. Switch the user to real through the mode screen: `/menu` → «💼 Реальный» (DEMO, the real
    balance, «💼 Сумма реальной сделки», the session line) → «💼 Включить реальный режим» (the
    confirm names the real stake) → «↩️ Отмена» (the confirm becomes the screen again) → «💼
    Включить реальный режим» → «✅ Подтверждаю» → «✅ Режим: REAL». Without the bot, the `access`
