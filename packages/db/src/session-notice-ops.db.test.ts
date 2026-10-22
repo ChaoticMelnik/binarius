@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,7 @@ import {
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
+  buildH1SessionSettings,
   decimalStringSchema,
   type DecimalString,
 } from '@binarius/shared';
@@ -17,6 +19,7 @@ import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { tradingSessions, users } from './schema/index';
 import {
   claimSessionFinalNotice,
+  claimSessionOpenNotice,
   claimSessionTradeNotice,
   claimSessionTradeNotices,
   claimSessionWaiting,
@@ -28,6 +31,7 @@ import {
   listSummaryFallback,
   recordSessionCycleMessage,
   releaseSummaryFallback,
+  releaseSessionOpenNotice,
   releaseSessionTradeNotice,
   releaseSessionTradeNotices,
   releaseSessionWaiting,
@@ -65,9 +69,13 @@ afterAll(() => tmp.drop());
 
 type Seed = Awaited<ReturnType<typeof seedUserWithAccount>>;
 
-async function seedSession() {
+async function seedSession(settings?: unknown) {
   const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
-  const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+  const session = await seedTradingSession(
+    tmp.db,
+    seed.brokerAccountId,
+    settings === undefined ? {} : { settings },
+  );
   return { seed, session, step: 0 };
 }
 
@@ -129,6 +137,13 @@ async function settled(
     }),
   );
   return intent;
+}
+
+// the next step of the session, open at the broker (#700)
+async function opened(target: Awaited<ReturnType<typeof seedSession>>, amount = '5') {
+  target.step += 1;
+  const intent = await intentOf(target, target.step, amount);
+  return { intent, open: await accept(intent, target.step) };
 }
 
 async function rejected(target: Awaited<ReturnType<typeof seedSession>>) {
@@ -326,7 +341,12 @@ describe('claimSessionTradeNotices (#707, the H1 summary)', () => {
 
 describe('the cycle message (#551)', () => {
   const record = (session: { id: string }, claimed: number, messageId: number, from: number) =>
-    recordSessionCycleMessage(tmp.db, { sessionId: session.id, claimed, messageId, from });
+    recordSessionCycleMessage(tmp.db, {
+      sessionId: session.id,
+      cursor: claimed + 1,
+      messageId,
+      from,
+    });
   const stateOf = async (session: { id: string }) => {
     const row = await rowOf(session);
     return [row.cycleMessageId, row.cycleMessageFrom];
@@ -375,6 +395,173 @@ describe('the cycle message (#551)', () => {
     expect((await claim(target.session, 0))?.cycleMessage).toBeNull();
     await record(target.session, 0, 41, 0);
     expect((await claim(target.session, 1))?.cycleMessage).toEqual({ messageId: 41, from: 0 });
+  });
+});
+
+describe("the open trade's block (#700)", () => {
+  const openClaim = (session: { id: string }, intentId: string, settled: number) =>
+    claimSessionOpenNotice(tmp.db, { sessionId: session.id, intentId, settled });
+  const openRelease = (session: { id: string }, intentId: string) =>
+    releaseSessionOpenNotice(tmp.db, { sessionId: session.id, intentId });
+  const markOf = async (session: { id: string }) => (await rowOf(session)).openNoticeIntentId;
+  const settleOpen = ({ intent, open }: Awaited<ReturnType<typeof opened>>) =>
+    tmp.db.transaction((tx) =>
+      settleIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.Accepted,
+        trade: closedTradeFor(open, { profit: '-5' as DecimalString, closePrice: 9.5 }),
+      }),
+    );
+
+  it('N30 claims the open trade once, with the settled trades above it and its stake, direction, open price and asset', async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await claim(target.session, 0);
+    const trade = await opened(target, '11.5');
+    expect(await openClaim(target.session, trade.intent.id, 1)).toEqual({
+      trades: [
+        {
+          amount: '5.00000000',
+          outcome: '-5.00000000',
+          result: 'lost',
+          openPrice: 1,
+          closePrice: 1.5,
+          assetId: 101,
+        },
+      ],
+      open: { amount: '11.50000000', action: 'up', openPrice: 2, assetId: 101 },
+      cycleMessage: null,
+    });
+    expect(await markOf(target.session)).toBe(trade.intent.id);
+    // the cursor is untouched: the open block is no settled trade
+    expect((await rowOf(target.session)).notifiedTrades).toBe(1);
+    expect(await openClaim(target.session, trade.intent.id, 1)).toBeUndefined();
+  });
+
+  it('N30 the first trade of the session: no settled trade above it', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    expect(await openClaim(target.session, trade.intent.id, 0)).toMatchObject({
+      trades: [],
+      open: { openPrice: 1 },
+    });
+  });
+
+  it('N31 two claims of the same open trade at once: exactly one wins', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    const results = await Promise.all([
+      openClaim(target.session, trade.intent.id, 0),
+      openClaim(target.session, trade.intent.id, 0),
+    ]);
+    expect(results.filter((result) => result !== undefined)).toHaveLength(1);
+    expect(await markOf(target.session)).toBe(trade.intent.id);
+  });
+
+  it('N32 is refused while a settled trade above it is not claimed yet', async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    const trade = await opened(target);
+    // the cursor behind the settled trades, whether the caller counts them or not
+    expect(await openClaim(target.session, trade.intent.id, 1)).toBeUndefined();
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeUndefined();
+    expect(await markOf(target.session)).toBeNull();
+    await claim(target.session, 0);
+    expect(await openClaim(target.session, trade.intent.id, 1)).toBeDefined();
+  });
+
+  it('N32 is refused once the trade settled, and for an intent that is not open at the broker', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    await settleOpen(trade);
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeUndefined();
+    target.step += 1;
+    const queued = await intentOf(target, target.step);
+    expect(await openClaim(target.session, queued.id, 0)).toBeUndefined();
+    expect(await markOf(target.session)).toBeNull();
+  });
+
+  it('N32 is refused once the notices are closed', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    await tmp.db
+      .update(tradingSessions)
+      .set({ finalNoticeSentAt: sql`now()` })
+      .where(eq(tradingSessions.id, target.session.id));
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeUndefined();
+    expect(await markOf(target.session)).toBeNull();
+  });
+
+  it('N33 a release clears only its own intent, and the block is claimable again', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    await openClaim(target.session, trade.intent.id, 0);
+    expect(await openRelease(target.session, randomUUID())).toBe(false);
+    expect(await markOf(target.session)).toBe(trade.intent.id);
+    expect(await openRelease(target.session, trade.intent.id)).toBe(true);
+    expect(await markOf(target.session)).toBeNull();
+    expect(await openRelease(target.session, trade.intent.id)).toBe(false);
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeDefined();
+  });
+
+  it("N34 the open block's message is recorded only at its cursor with its intent still marked", async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await claim(target.session, 0);
+    const trade = await opened(target);
+    await openClaim(target.session, trade.intent.id, 1);
+    const record = (cursor: number, openIntentId: string, messageId: number) =>
+      recordSessionCycleMessage(tmp.db, {
+        sessionId: target.session.id,
+        cursor,
+        openIntentId,
+        messageId,
+        from: 1,
+      });
+    expect(await record(1, randomUUID(), 99)).toBe(false);
+    expect(await record(0, trade.intent.id, 99)).toBe(false);
+    expect((await rowOf(target.session)).cycleMessageId).toBeNull();
+    expect(await record(1, trade.intent.id, 41)).toBe(true);
+    expect([
+      (await rowOf(target.session)).cycleMessageId,
+      (await rowOf(target.session)).cycleMessageFrom,
+    ]).toEqual([41, 1]);
+    // once settled, the trade's own claim returns the message its open block went in
+    await settleOpen(trade);
+    expect((await claim(target.session, 1))?.cycleMessage).toEqual({ messageId: 41, from: 1 });
+  });
+
+  it('N35 lists the open trade until its block is claimed, then not until it settles', async () => {
+    const target = await seedSession();
+    expect(await pendingOf(target.session)).toBeUndefined();
+    const trade = await opened(target);
+    expect(await pendingOf(target.session)).toMatchObject({
+      notifiedTrades: 0,
+      settled: 0,
+      openIntentId: trade.intent.id,
+      openNoticeIntentId: null,
+    });
+    await openClaim(target.session, trade.intent.id, 0);
+    expect(await pendingOf(target.session)).toBeUndefined();
+    await settleOpen(trade);
+    expect(await pendingOf(target.session)).toMatchObject({
+      settled: 1,
+      openIntentId: null,
+      openNoticeIntentId: trade.intent.id,
+    });
+  });
+
+  it("N32 an H1 session's open trade is not listed (#670)", async () => {
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      trades: 10,
+      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
+      maxLossMultiplier: 10,
+    });
+    if (!built.success) throw new Error('fixture settings do not parse');
+    const target = await seedSession(built.data);
+    await opened(target);
+    expect(await pendingOf(target.session)).toBeUndefined();
   });
 });
 
@@ -671,7 +858,7 @@ describe('the waiting message (#536)', () => {
     await claim(target.session, claimed);
     await recordSessionCycleMessage(tmp.db, {
       sessionId: target.session.id,
-      claimed,
+      cursor: claimed + 1,
       messageId,
       from: claimed,
     });
