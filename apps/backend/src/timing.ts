@@ -22,6 +22,7 @@ import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
+  CANDLE_CLOSE_SLACK_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
@@ -311,11 +312,8 @@ export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
 // --- The signal scanner (#343) and the signal REST (#405) -----------------------------------
 // docs/signal.md -> The scanner. One scanner per interval of SIGNAL_SCAN_INTERVALS (`5s` only
-// since #685), one scan a candle, this long after its boundary: the live broker returned the
-// just-closed 15s candle 150 ms after the boundary (2026-10-08), and the rest covers the host's
-// clock against the broker's. The 5s close was not observed (#382). The scan decides from the data
-// socket's window and takes no token (#405).
-export const SIGNAL_SCAN_SLACK_MS = 500;
+// since #685), one scan a candle, CANDLE_CLOSE_SLACK_MS (shared, #697) after its boundary. The
+// scan decides from the data socket's window and takes no token (#405).
 // the signal pacer's pause after a 429 without Retry-After: doubles from the first to the second;
 // a Retry-After is held to the same bounds
 export const SIGNAL_SCAN_BACKOFF_MIN_MS = 15_000;
@@ -407,8 +405,8 @@ const TIMING_CHAIN_HOLDS =
   // boundary by a session step, bounded by the cache, ends inside it too
   SIGNAL_SCAN_INTERVALS.every(
     (interval) =>
-      SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
-      SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval],
+      CANDLE_CLOSE_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
+      SIGNAL_FETCH_BUDGET_MS + CANDLE_CLOSE_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval],
   ) &&
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
   MIN_SIGNAL_SCAN_PER_MINUTE <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&

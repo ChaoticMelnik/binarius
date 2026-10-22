@@ -1,5 +1,6 @@
 import {
   BOT_TEXTS_REFRESH_MS,
+  CANDLE_CLOSE_SLACK_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   SIGNAL_SHORTEST_INTERVAL_MS,
@@ -329,9 +330,9 @@ export const SESSION_RESUME_GAP_MS = 1000 / SESSION_RESUME_PER_SECOND;
 // The wait for a signal (#664, signal-wait.ts, docs/bot-demo.md → The wait for a signal): one
 // poll of GET /trading/signals and GET /trading/pairs for every waiting user, once a candle of the
 // demo's one duration, between updates like the trackers, so not in HANDLER_CALLS. The poll comes
-// POLL_OFFSET after the candle's boundary: the backend's scanner decides at the boundary plus its
-// SIGNAL_SCAN_SLACK_MS (500 ms) — the backend's constant, not importable here, so the relation is
-// stated, not checked.
+// POLL_OFFSET after the candle's boundary: the backend's scanner decides at the boundary plus
+// CANDLE_CLOSE_SLACK_MS (500 ms, shared since #697), so the poll comes after the scan
+// (signalWaitBoundsHold).
 export const SIGNAL_WAIT_POLL_MS = SIGNAL_SHORTEST_INTERVAL_MS;
 export const SIGNAL_WAIT_POLL_OFFSET_MS = 1_000;
 // how long the buttons of pairs with a signal stand, the list's and the alternatives' (owner's
@@ -361,6 +362,7 @@ export const SIGNAL_WAIT_INFLIGHT_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELE
 
 // The wait's links of the chain, a function so a test can show which value breaks them.
 export const signalWaitBoundsHold = ({
+  slackMs = CANDLE_CLOSE_SLACK_MS,
   pollOffsetMs = SIGNAL_WAIT_POLL_OFFSET_MS,
   pollMs = SIGNAL_WAIT_POLL_MS,
   listTtlMs = SIGNALS_LIST_TTL_MS,
@@ -368,6 +370,7 @@ export const signalWaitBoundsHold = ({
   inflightMs = SIGNAL_WAIT_INFLIGHT_MS,
   shutdownBudgetMs = SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
 }: {
+  slackMs?: number;
   pollOffsetMs?: number;
   pollMs?: number;
   listTtlMs?: number;
@@ -376,6 +379,8 @@ export const signalWaitBoundsHold = ({
   shutdownBudgetMs?: number;
 } = {}): boolean =>
   0 < pollOffsetMs &&
+  // the list read after the scanner's scan of the candle
+  slackMs < pollOffsetMs &&
   pollOffsetMs < pollMs &&
   pollMs < listTtlMs &&
   listTtlMs < maxMs &&

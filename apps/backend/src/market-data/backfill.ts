@@ -311,7 +311,7 @@ export function createCandleBackfill(deps: CandleBackfillDeps): CandleBackfill {
   function dispatch(): void {
     if (stopped) return;
     const at = now();
-    // a candle just closed is published by the broker after the boundary (SIGNAL_SCAN_SLACK_MS)
+    // a candle just closed is published by the broker after the boundary (CANDLE_CLOSE_SLACK_MS)
     if (at - floorTo(at, SHORTEST_MS) < config.slackMs) return;
     while (inflight.size < config.concurrency && queue.length > 0) {
       const [head] = queue;
