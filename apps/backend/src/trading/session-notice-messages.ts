@@ -9,18 +9,20 @@ import {
   plainTextOf,
   sessionStopCallbackData,
   SessionStakeStrategy,
+  sessionNextStep,
   sessionStakeParams,
   sessionTradeSteps,
   TradingSessionStopReason,
   type PairLabel,
   type H1SessionSettings,
   type PairsCatalogView,
+  type SessionOpenNotice,
   type SessionTradeNotice,
   type TelegramHtml,
   type TradingSessionSettings,
   type TradingSessionView,
 } from '@binarius/shared';
-import type { ClaimedSessionTrade, ClaimedSessionTrades } from '@binarius/db';
+import type { ClaimedSessionTrade, ClaimedSessionTrades, SessionOpenNoticeRow } from '@binarius/db';
 import { menuButton, type ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 
@@ -42,32 +44,36 @@ export function pairOf(
   };
 }
 
-// What the claimed trade's turn sends (#551, docs/bot-session.md → The state): a new
-// message showing the trades from `from` to the claimed one, or the edit of the session's cycle
-// message to the trades from its own `from`. `split` marks a new message the cycle message had no
+// What the claimed block's turn sends (#551, #700, docs/bot-session.md → The state): a new
+// message showing the blocks from `from` to the claimed one, or the edit of the session's cycle
+// message to the blocks from its own `from`. `split` marks a new message the cycle message had no
 // room for.
 export type SessionCycleNotice =
   | { kind: 'send'; text: TelegramHtml; from: number; split: boolean }
   | { kind: 'edit'; messageId: number; text: TelegramHtml; from: number };
 
-// The claimed trade (the last of `trades`) in its cycle's message. Its cycle and step come from
-// the session's trades up to it, by the session's own strategy (#450; settings that cannot be read
-// count as fixed, so every trade is a cycle of its own and a new message). The cycle message is
-// edited when it shows this trade's cycle; otherwise a new message shows the cycle so far. A text
-// longer than BOT_TEXT_LIMIT (Telegram's limit less the width spacer the seam appends, #506),
-// measured as Telegram counts it after parsing the entities (as telegramTextProblems does), opens
-// a new message from the claimed trade, so a cycle splits only between blocks.
+// The claimed block in its cycle's message: the last settled trade of `trades`, or the open trade
+// below them all (#700). A block's cycle and step come from the session's trades before it, by the
+// session's own strategy (#450; settings that cannot be read count as fixed, so every trade is a
+// cycle of its own and a new message); the open trade's are those it settles at (sessionNextStep),
+// and its index is the one it gets once settled. The cycle message is edited when it shows the
+// claimed block's cycle; otherwise a new message shows the cycle so far. A text longer than
+// BOT_TEXT_LIMIT (Telegram's limit less the width spacer the seam appends, #506), measured as
+// Telegram counts it after parsing the entities (as telegramTextProblems does), opens a new message
+// from the claimed block, so a cycle splits only between blocks.
 export function sessionCycleMessage(
-  { trades, cycleMessage }: ClaimedSessionTrade,
+  {
+    trades,
+    open,
+    cycleMessage,
+  }: Pick<ClaimedSessionTrade, 'trades' | 'cycleMessage'> & { open?: SessionOpenNoticeRow },
   settings: TradingSessionSettings | null,
   digits: number | null,
 ): SessionCycleNotice {
   const strategy =
     settings === null ? SessionStakeStrategy.Fixed : sessionStakeParams(settings).strategy;
-  const positions = sessionTradeSteps(
-    trades.map((row) => row.result),
-    strategy,
-  );
+  const results = trades.map((row) => row.result);
+  const positions = sessionTradeSteps(results, strategy);
   const blocks = trades.map((row, index): SessionTradeNotice => {
     const position = positions[index];
     if (position === undefined) throw new Error('a claimed trade has no position in its session');
@@ -82,10 +88,22 @@ export function sessionCycleMessage(
       step: position.step,
     };
   });
-  const last = blocks.at(-1);
+  const openBlock: SessionOpenNotice | undefined =
+    open === undefined
+      ? undefined
+      : {
+          amount: open.amount,
+          action: open.action,
+          openPrice: open.openPrice,
+          digits,
+          ...sessionNextStep(results, strategy),
+        };
+  const shown: { cycle: number; step: number }[] =
+    openBlock === undefined ? blocks : [...blocks, openBlock];
+  const last = shown.at(-1);
   if (last === undefined) throw new Error('a claim carries no trade');
-  const claimed = blocks.length - 1;
-  const render = (from: number) => notices.sessionCycleText(blocks.slice(from));
+  const claimed = shown.length - 1;
+  const render = (from: number) => notices.sessionCycleText(blocks.slice(from), openBlock);
   const fits = (text: TelegramHtml) => plainTextOf(text).length <= BOT_TEXT_LIMIT;
   const splitFromClaimed = (): SessionCycleNotice => ({
     kind: 'send',
@@ -98,10 +116,10 @@ export function sessionCycleMessage(
     return fits(text) ? { kind: 'send', text, from, split: false } : splitFromClaimed();
   };
 
-  // the step is the trade's number in its cycle, so the cycle starts that many trades back
+  // the step is the block's number in its cycle, so the cycle starts that many trades back
   const cycleStart = claimed - (last.step - 1);
-  const shown = cycleMessage === null ? undefined : blocks[cycleMessage.from];
-  if (cycleMessage === null || cycleMessage.from > claimed || shown?.cycle !== last.cycle) {
+  const first = cycleMessage === null ? undefined : shown[cycleMessage.from];
+  if (cycleMessage === null || cycleMessage.from > claimed || first?.cycle !== last.cycle) {
     return sendFrom(cycleStart);
   }
   const text = render(cycleMessage.from);
