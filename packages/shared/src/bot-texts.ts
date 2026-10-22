@@ -1762,6 +1762,19 @@ export const BOT_TEXT_CATALOG = {
     { vars: ['symbol'] },
   ),
 
+  // Sent by the backend only (#707, docs/bot-session.md → An H1 session): an H1 session's one
+  // message, edited every H1_NOTICE_EVERY_TRADES settled trades and at the finish.
+  sessionH1Progress: html(
+    g.Session,
+    'Сводка H1-сессии: одно сообщение, правится каждые 10 сделок и в конце сессии; без звука и без кнопок. Пара, сделок из плана, счёт, результат, ставка.',
+    `⚡ H1 · {symbol}
+📈 Сделок: {count} из {trades}
+🧮 Счёт: {score}
+💰 Результат: {profit}
+💵 Ставка: {stake}`,
+    { vars: ['symbol', 'count', 'trades', 'score', 'profit', 'stake'] },
+  ),
+
   // ---- Пополнение (#112, docs/deposit.md) -------------------------------------------------
   // Sent by the backend only, after the cashier's credited event, with the «menuButton» button.
   depositCredited: html(

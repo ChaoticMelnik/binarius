@@ -13,13 +13,14 @@ import {
   sessionTradeSteps,
   TradingSessionStopReason,
   type PairLabel,
+  type H1SessionSettings,
   type PairsCatalogView,
   type SessionTradeNotice,
   type TelegramHtml,
   type TradingSessionSettings,
   type TradingSessionView,
 } from '@binarius/shared';
-import type { ClaimedSessionTrade } from '@binarius/db';
+import type { ClaimedSessionTrade, ClaimedSessionTrades } from '@binarius/db';
 import { menuButton, type ClientPushMessage } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 
@@ -106,6 +107,28 @@ export function sessionCycleMessage(
   const text = render(cycleMessage.from);
   if (!fits(text)) return splitFromClaimed();
   return { kind: 'edit', messageId: cycleMessage.messageId, text, from: cycleMessage.from };
+}
+
+// An H1 session's summary after `due` settled trades (#707, docs/bot-session.md → An H1 session):
+// the first one a new message, every later one the edit of it (the cycle message, from 0)
+export function sessionH1ProgressMessage(
+  { totals, cycleMessage }: ClaimedSessionTrades,
+  settings: H1SessionSettings,
+  label: PairLabel | null,
+  due: number,
+): SessionCycleNotice {
+  const text = notices.sessionH1ProgressText({
+    label,
+    assetId: settings.assetId,
+    settled: due,
+    planned: settings.trades,
+    score: totals,
+    result: totals.result,
+    stake: settings.stake.baseStake,
+  });
+  return cycleMessage === null
+    ? { kind: 'send', text, from: 0, split: false }
+    : { kind: 'edit', messageId: cycleMessage.messageId, text, from: 0 };
 }
 
 // The finished session's fallback text summary (#537: the bot sends the summary; this text only
