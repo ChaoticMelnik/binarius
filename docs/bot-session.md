@@ -1037,14 +1037,16 @@ message.
 | the open block: the process dies between the claim and the call; the block cannot be built (`error` `session open notice not built`) | the mark set | the open block is lost, the result comes, never a repeat |
 | the record refused (the cursor moved: another sender) | the other sender's record stands | a new message: at most repeated blocks, never a lost step; an edit: two senders' edits of one cycle message can land out of order and show the older step until the next step's edit ([risk 35](#accepted-risks); one sender in production) |
 | the message cannot be built (a bug) | a trade stays claimed; the fallback summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the fallback summary: the step is closed (`session summary not built`), the row leaves the list |
-| a statement or the fallback summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error`; the session is tried again next tick at its place in the list, every tick while it throws ([risk 84](#accepted-risks)) |
+| a statement or the fallback summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error` with `holdMs`; the session is held out of both lists for `SESSION_NOTICE_HOLD_MS` (60 s, in memory, #660), then tried again; a restart tries it at once ([risk 84](#accepted-risks)) |
+| the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, an H1 summary, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick) |
 | `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a final mark or a fallback summary does not start (no balance read) and goes after the next start |
 
-Every ending after a claim moves the cursor, so no sent trade holds a session's place. One ending
-before any claim does not: a thrown statement or refresh (the row above) leaves the session listed
-at its `created_at` (or the fallback's at its mark) and tried every tick; the lists are
-oldest-first and `SESSION_NOTICE_SCAN` (200) rows, so 200 such sessions would starve every newer
-one ([risk 84](#accepted-risks); the hold-back is #660). A fallback summary that cannot be built
+Every ending after a claim moves the cursor, so no sent trade holds a session's place. A cooling
+chat ends the turn before any claim, for one tick at most. A thrown statement or refresh (the row
+above) would leave the session listed at its `created_at` (or the fallback's at its mark) and tried
+every tick, and the lists are oldest-first and `SESSION_NOTICE_SCAN` (200) rows: the hold-back
+(#660) takes such a session out of both lists (`exclude`) for `SESSION_NOTICE_HOLD_MS`, so the
+newer ones are served ([risk 84](#accepted-risks)). A fallback summary that cannot be built
 closes its step instead (#537). The fallback's 429 or refusal takes back only the mark its own claim
 wrote: a mark the bot wrote after it stays.
 
@@ -1073,16 +1075,34 @@ a 429 adds one photo) ([risk
 so its edits pause on a 429 for its `retry_after`
 ([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)).
 
-The list's query evaluates each correlated subquery twice per row — in the select list and in the
-filter, over the sessions with `final_notice_sent_at` null: Postgres plans one SubPlan per
-occurrence. `EXPLAIN` of the query as drizzle sends it, on an empty migrated database
-(PostgreSQL 18.6, 2026-10-18): 4 SubPlans — the settled count twice as an index probe by session
-id, the select list's «finished» as an index probe and the filter's as a hashed SubPlan over
-`trade_intents` by status; the same two subqueries under `WITH … AS MATERIALIZED`, which drizzle
-0.45 cannot emit: 2 SubPlans, both index probes. The plan at the pilot's volume is not measured
-([risk 85](#accepted-risks)). A claim reads the session's settled trades up to the claimed one, so
+**The gap per chat** (#660): Telegram asks for no more than about one message a second to one chat
+(Bot API FAQ; stated, not measured). One chat gets at most one step of the sender within
+`SESSION_NOTICE_CHAT_GAP_MS` (1 000 ms): every send or edit — a trade's message, an H1 summary, the
+open block, the waiting message, the fallback summary — marks the chat, delivered or not; a step
+whose chat is cooling ends the session's turn before its pace and its claim, and goes on a later
+tick. The calls inside one step go one after the other as before (an edit, then on «gone» the
+waiting message's delete and the new message; a delete and the new message of a cycle; a waiting
+message and the delete of one whose record was refused). A delete neither waits for the gap nor
+marks the chat ([risk 99](#accepted-risks)). The gap is a skip, never a sleep: `stop()` waits for
+no more than above, and `1000 / 9 < SESSION_NOTICE_CHAT_GAP_MS <= SESSION_NOTICE_TICK_MS`
+(`TIMING_CHAIN_HOLDS`), so a deferred step goes on the next tick: one chat's backlog goes one step a
+tick ([risk 28](#accepted-risks)). Different chats are not held by each other. A 429 still pauses
+the whole sender (a chat's 429 cannot be told from the bot's).
+
+The list's filter is one aggregate over the session's intents per candidate (#660): the settled
+count past the cursor, the finish (stopped, no intent outside the terminal statuses) and the open
+trade not yet claimed, in one pass over the session's intents with a left join to
+`broker_trades`; the select list keeps its own subqueries. `EXPLAIN` of the query as drizzle sends
+it, on an empty migrated database (PostgreSQL 18.6, 2026-10-22): 4 SubPlans — the filter's aggregate
+per candidate (`final_notice_sent_at` null), the select list's «finished» per row that passes the
+filter, and its settled count and open trade above the `Sort`, for the listed rows only; before
+#660 the filter alone took the settled count, the open trade twice and the finish's not-exists per
+candidate — 7 SubPlans. The `WITH … AS MATERIALIZED` form computes every subquery per candidate
+before the `Limit` (the architect's probe, 2026-10-22): no less work, and raw SQL; not taken. The
+plan at the pilot's volume is not measured ([risk 85](#accepted-risks)). A claim reads the
+session's settled trades up to the claimed one, so
 a session's sends read Σ ≤ 406 rows at ≤ 28 settled trades (Rule 28), ≤ 260 k at the 720 ceiling
-(`MAX_SESSION_SUMMARY_TRADES`; risk 85, #660).
+(`MAX_SESSION_SUMMARY_TRADES`; risk 85).
 
 ### The waiting message (#536)
 
@@ -1216,7 +1236,9 @@ deletes it first — never a second «⏹» beside it.
   The list is read `SESSION_NOTICE_SCAN` (200) rows a tick, oldest first; a tick longer than the
   interval makes the next one a no-op, so the catch-up is ticks at 9 calls a second, not a burst:
   the last of N such sessions gets its waiting message within 3 s + N/9 s of the backend's start
-  (2 000 → about 225 s). A later session's trade messages wait behind them, once a deploy.
+  (2 000 → about 225 s). A later session's trade messages wait behind them, once a deploy. The gap
+  per chat (#660) does not change that volume: each waiting message goes to a chat of its own; one
+  chat's backlog (a session's trades after the restart) goes one step a tick.
 - **The order of the deploy**: the bot first (`docker compose up -d --no-deps bot`), then the
   backend (`binarius-deploy`); the steps are the PR's. The bot's recovery pass only reads a running
   session (`mayDraw`): an old status message keeps its «🔄»/«⏹» until its session stops ([risk
@@ -1256,7 +1278,8 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
   not recorded` (`info`, #536), `… taken over: not deleted` (`info`, #587 round 1)
 - `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
 - `session trade notice not built`, `session summary not built` (the fallback's step closed,
-  #537), `session notices failed for a session`, `session notice tick failed` (`error`)
+  #537), `session notices failed for a session` (with `holdMs`, #660), `session notice tick failed`
+  (`error`)
 
 ## The summary message (#537, the card of #318)
 
@@ -1507,9 +1530,17 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     to one chat (stated, not measured): a session's backlog — after a restart, a pause or an
     unblock — goes to its one chat at the sender's 9 a second, up to 28 trades plus the waiting
     message's delete and send, so a 429 on that chat pauses the whole sender for `retry_after`; no
-    loss, no double, the other sessions wait too. A rate per chat is #660 (#534 m2).
-28. **Latency** (#464): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
-    after its settle.
+    loss, no double, the other sessions wait too. Since #660 (#534 m2) one chat gets at most one
+    step a `SESSION_NOTICE_CHAT_GAP_MS` (1 s): the sends and the edits count, the deletes do not
+    (risk 99); a 429 still pauses the whole sender.
+28. **Latency** (#464, #660): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
+    after its settle. One chat's backlog goes one step per tick: the gap per chat
+    (`SESSION_NOTICE_CHAT_GAP_MS`, no longer than the tick) defers the rest of the turn to the next
+    tick, so the 28 trades a martingale session holds without ties (Rule 28) reach one chat in about
+    28 × `SESSION_NOTICE_TICK_MS` ≈ 84 s instead of 3–4 s. A backlog builds after a restart of the
+    backend, a 429 pause or an unblock. The tick stays 3 s (the manager's decision 2026-10-22, В-И2
+    (a); the owner may revisit it at review). The «⏹» under a new cycle message comes on the next
+    tick too: the waiting message is a step of its own.
 29. **The lines and the result** (#539 → #684, the owner's decision 2026-10-20): a win's line
     prints what came back to the account, the stake plus the profit; «💰 Результат» stays the net
     sum of the profits (#337), so the trades' lines no longer add up to it; #539 had printed the
@@ -1772,17 +1803,21 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     and inside Telegram's 48-hour edit window of that message; after that every such session is
     stopped, every read answers the stopped view, and no stale edit exists. Falsifiable: a message
     sent before #536 showing «Торговая сессия запущена…» under a summary card.
-84. **A session whose turn ends before any claim stays listed** (#534 m4): a thrown statement or
-    balance refresh (`session notices failed for a session`) leaves the session in the list at its
-    `created_at` (the fallback's at its mark), tried every tick — one view read and one refresh
-    attempt a tick; a fallback summary that cannot be built closes its step since #537. The list is
-    oldest-first, 200 rows a tick, so 200 such sessions would starve every newer one; nothing in the
-    sender frees the slot (the hold-back is #660). Falsifiable: the same `sessionId` in that `error` line
-    lines on consecutive ticks.
-85. **The list's duplicated subqueries and the claim's growing read** (#534 m7): the numbers of
-    [Rate and timing](#rate-and-timing); a tick longer than `SESSION_NOTICE_TICK_MS` makes the next
-    one a no-op, never two ticks at once. Falsifiable: `EXPLAIN ANALYZE` of the list's query on the
-    pilot's database over 300 ms (an owner's step; #660 holds the `MATERIALIZED` form).
+84. **A session whose turn throws is held, not dropped** (#534 m4, #660): a thrown statement or
+    balance refresh (`session notices failed for a session`, with `holdMs`) holds the session out of
+    both lists for `SESSION_NOTICE_HOLD_MS` (60 s) — any throw, before a claim or after it (a claim
+    already made stays; its message is a minute late). The hold is in memory: a restart tries every
+    such session at once, and the held ids — at most the rows read in 20 ticks, 8 000 in the worst
+    case — go to the list as one `not in` parameter list. A session that throws every time gets one
+    attempt a minute; a cooling chat is not a throw and holds nothing. A fallback summary that cannot
+    be built closes its step since #537. Falsifiable: the same `sessionId` in that `error` line less
+    than 60 s apart from one process.
+85. **The list's per-candidate aggregate and the claim's growing read** (#534 m7, #660): the list's
+    filter is one aggregate over the session's intents per candidate (4 SubPlans instead of 7, the
+    numbers of [Rate and timing](#rate-and-timing)); a claim still reads the session's settled
+    trades up to the claimed one, Σ ≤ 406 rows at ≤ 28 settled trades, ≤ 260 k at 720. A tick longer
+    than `SESSION_NOTICE_TICK_MS` makes the next one a no-op, never two ticks at once. Falsifiable:
+    `EXPLAIN ANALYZE` of the list's query on the pilot's database over 300 ms (an owner's step).
 
 86. **The summary at most once, not exactly once** (#537): a bot crash between the claim and
     `sendPhoto`, a second failure after a 429, a photo of unknown outcome — the summary is lost and
@@ -1807,7 +1842,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 92. **A session with its status message deleted gets the text, not the card** (#537): the bot no
     longer tracks it.
 93. **The fallback's list** (#537) is bounded by `SESSION_NOTICE_SCAN` (200); a row whose view does
-    not read or whose statement throws stays at its head (risk 84's class).
+    not read stays at its head; one whose statement or balance refresh throws is held out of it for
+    `SESSION_NOTICE_HOLD_MS` (#660, risk 84).
 94. **The tracked list without its third conjunct** (#537) relies on backfill 0072 and on the final
     mark closing «nothing to send» in its own statement: a row with the final mark, no trade and no
     `summary_sent_at` cannot arise after the deploy (N6′, B1).
@@ -1819,11 +1855,11 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     open block while it stayed open longer than a tick.
 96. **Late or no open block** (#700): it comes on the sender's tick (3 s) plus the pace; a trade
     of 5 s can settle before it, and then only the result shows (the wake-up is #723). Two calls a
-    trade go to one chat, about two in six seconds at a 5 s trade (#660's per-chat rate, not
-    measured).
-97. **The open trade in the list** (#700): the list's query gains the open-trade subquery twice —
-    in the select list and in the filter, one more SubPlan each (risk 85, not measured at the
-    pilot's volume, #660). The H1 exclusion is spelled twice, `isH1Settings` in the sender and
+    trade go to one chat, about two in six seconds at a 5 s trade; the gap per chat (#660) keeps
+    them a tick apart.
+97. **The open trade in the list** (#700): the list's select list gains the open-trade subquery;
+    since #660 the filter's open trade is part of its one aggregate (risk 85, not measured at the
+    pilot's volume). The H1 exclusion is spelled twice, `isH1Settings` in the sender and
     `h1SessionSql` in the list; the sender's O12 and the list's N32 pin both.
 98. **The deploy of #709**: the claim's answer loses `referralCode`, and both sides read it with a
     strict schema, so an old bot with a new backend and a new bot with an old backend lose a claimed
@@ -1841,6 +1877,10 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     drain ≤ 40 s, [worker-deploy.md](worker-deploy.md)); Telegram keeps the updates for the new
     bot. Falsifiable: `warn` `trading session summary not sent` with `summary_sent_at` set on
     sessions in the minute of the deploy.
+99. **The gap per chat counts the sender's messages only** (#660): a delete is not a message of the
+    gap (the Bot API FAQ speaks of messages), and the bot's own replies and edits to the same chat
+    are outside the sender's gap — stated, not measured. Falsifiable: a 429 on `deleteMessage`, or a
+    chat's 429 while the sender sends it one step a second, in the logs.
 
 ## Running it locally
 
