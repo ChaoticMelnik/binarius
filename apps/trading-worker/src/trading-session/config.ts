@@ -44,10 +44,10 @@ import { isTimerMs } from '@binarius/broker-socket';
 // 15 s session of the CLI or from before #685 waits 20 x 15 s, still before it; on 5m and longer
 // it does not, and the deadline ends the session (accepted risk, docs/trading-session.md -> The
 // no-signal limit); NO_SIGNAL x the longest candle (1h) stays a timer value, the bound of the
-// SQL ::int cast; the balance wait after a settlement (#696) ends at the no-signal limit, and the
-// backend's REST refresh (its interval at most the SLA) and one GET fit before it
-// (BROKER_BALANCE_SLA + BROKER_REST_TIMEOUT < NO_SIGNAL x the shortest candle); every *_MS is an
-// integer in [1, MAX_TIMER_MS].
+// SQL ::int cast; the balance wait after a settlement (#696) ends at the no-signal limit counted
+// from that settlement, and the backend's REST refresh (its interval at most the SLA) and one GET
+// fit before it (BROKER_BALANCE_SLA + BROKER_REST_TIMEOUT < NO_SIGNAL x the shortest candle);
+// every *_MS is an integer in [1, MAX_TIMER_MS].
 // The link to the shutdown budget is in intents/config.ts.
 export const TRADING_SESSION_TICK_MS = 5_000;
 const TRADING_SESSION_BATCH_SIZE = 200;

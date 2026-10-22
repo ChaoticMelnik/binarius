@@ -341,20 +341,21 @@ export function createSessionOrchestrator({
       };
     }
 
-    const snapshot = await readSessionBalance(db, session.id);
+    const snapshot = await readSessionBalance(db, session.id, { waitMs: noSignalTimeoutMs });
     if (snapshot === undefined) {
       return { kind: 'stop', reason: TradingSessionStopReason.BalanceUnavailable };
     }
     // the executor sends the intent's mode, so the stake is sized against the same mode's balance
     const available = snapshot.available;
-    // #696: the payout of the session's last settlement is not in the snapshot yet (update_balance,
-    // the pass's balance check or the backend's refresh writes it); until the no-signal limit the
-    // step is asked again rather than stopped
+    // #696: a settlement on the account in the session's mode (this session's, an earlier one's, a
+    // bot's one-off) is newer than the balance; its update_balance, the pass's check or the
+    // backend's refresh brings the payout. Until the no-signal limit counted from that settlement
+    // the step waits a tick (a hold: a wake does not ask the signal again inside it), then the
+    // sizer's stop stands
     const waitsForBalance = (decision: StakeDecision) =>
       decision.kind === StakeKind.Stop &&
       decision.reason === StopReason.InsufficientBalance &&
-      snapshot.behind &&
-      !history.waitExpired;
+      snapshot.awaitsBalance;
     checkpoint();
     // keeps the account "in work": the balance refresh and the broker session stay on it
     await touchBalanceRequested(db, session.brokerAccountId);
@@ -504,7 +505,7 @@ export function createSessionOrchestrator({
     });
     if (waitsForBalance(decision)) {
       logger.info({ ...ids, step }, 'trading session waits for the balance');
-      return { kind: 'reschedule' };
+      return { kind: 'hold', ms: config.tickMs };
     }
     if (decision.kind === StakeKind.Stop) {
       return withRow(

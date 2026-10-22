@@ -649,7 +649,8 @@ const sessionProfitSumSql = sql<DecimalString>`coalesce(sum(${brokerTrades.profi
 // The account's balance in the session's mode (#337): the newest observation is the REST read or
 // that mode's socket event, whichever is later (greatest() skips a NULL event). It is current
 // when no settle row of this session's intents in token_ledger - the database clock of a
-// settlement - is newer than it; with no settlement at all it is current.
+// settlement - is newer than it; with no settlement at all it is current. That is the view's
+// question: this session's trades; the orchestrator asks wider, awaitsBalanceSql below.
 const isRealSession = sql`${tradingSessions.mode} = ${literal(TradeMode.Real)}`;
 const sessionAvailable = sql<DecimalString | null>`case when ${isRealSession} then ${brokerBalanceSnapshots.realAvailable} else ${brokerBalanceSnapshots.demoAvailable} end`;
 const sessionObservedAt = sql`greatest(${brokerBalanceSnapshots.restObservedAt}, case when ${isRealSession} then ${brokerBalanceSnapshots.realEventAt} else ${brokerBalanceSnapshots.demoEventAt} end)`;
@@ -661,24 +662,42 @@ const sessionBalanceCurrent = sql<boolean>`not exists (
      and ${tokenLedger.createdAt} > ${sessionObservedAt}
 )`;
 
+// The orchestrator's question (#696): may the balance still lack a settlement? Any settled
+// intent on the session's account in its mode counts - this session's, an earlier session's left
+// live at its stop, a bot's one-off trade - because the balance writers (update_balance, the
+// pass's check, the backend's refresh) all land after the settle's commit. A settled intent's
+// updated_at is its settle's database clock, written once (settled is terminal). The wait is
+// bounded from that settlement, not from this session's intents.
+const awaitsBalanceSql = (waitMs: number) => sql<boolean>`exists (
+  select 1 from ${tradeIntents}
+   where ${tradeIntents.brokerAccountId} = ${tradingSessions.brokerAccountId}
+     and ${tradeIntents.mode} = ${tradingSessions.mode}
+     and ${tradeIntents.status} = ${SETTLED}
+     and ${tradeIntents.updatedAt} > ${sessionObservedAt}
+     and ${tradeIntents.updatedAt} >= ${millisecondsAgo(waitMs)}
+)`;
+
 export interface SessionBalanceRead {
   available: DecimalString;
   minTradeAmount: DecimalString;
-  // the view's balance.current false: a settlement of this session is newer than the balance
-  behind: boolean;
+  // a settlement on the session's account in its mode is newer than the balance and less than
+  // waitMs old (database clock)
+  awaitsBalance: boolean;
 }
 
-// The orchestrator's balance (#696): the amounts and behind come from one statement, because an
-// update_balance committed between two reads would pair the new amounts with the old verdict.
+// The orchestrator's balance (#696): the amounts and awaitsBalance come from one statement,
+// because an update_balance committed between two reads would pair the new amounts with the old
+// verdict.
 export async function readSessionBalance(
   db: Db,
   sessionId: string,
+  { waitMs }: { waitMs: number },
 ): Promise<SessionBalanceRead | undefined> {
   const [row] = await db
     .select({
       available: sql<DecimalString>`${sessionAvailable}`,
       minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
-      behind: sql<boolean>`not ${sessionBalanceCurrent}`,
+      awaitsBalance: awaitsBalanceSql(waitMs),
     })
     .from(tradingSessions)
     .innerJoin(

@@ -2807,8 +2807,8 @@ describe('the balance wait after a settlement (#696)', () => {
   const WAITS = 'trading session waits for the balance';
   // a case that fails before its own stop() must not leave its ticks running into the next one
   const made: ReturnType<typeof orchestratorOf>[] = [];
-  const stoppable = () => {
-    const orchestrator = orchestratorOf();
+  const stoppable = (options?: Parameters<typeof orchestratorOf>[0]) => {
+    const orchestrator = orchestratorOf(options);
     made.push(orchestrator);
     return orchestrator;
   };
@@ -2851,6 +2851,8 @@ describe('the balance wait after a settlement (#696)', () => {
       level: 30,
       step: 2,
     });
+    // the wait holds the session one tick
+    advance(CONFIG.tickMs);
     await demoBalance(seed.brokerAccountId, '2.40');
     await orchestrator.tick();
     expect((await intentsOf(seed.session.id)).map((intent) => intent.amount)).toEqual([
@@ -2879,17 +2881,16 @@ describe('the balance wait after a settlement (#696)', () => {
     await orchestrator.stop();
   });
 
-  it('BW3 past the no-signal limit the balance behind the settlement stops the session', async () => {
+  it('BW3 past the no-signal limit counted from the settlement the short balance stops the session', async () => {
     const orchestrator = stoppable();
     const seed = await wonBeforePayout(orchestrator);
-    // the settle row keeps its time, so the snapshot stays behind; an UPDATE without status
-    // runs no transition trigger
-    await tmp.db
-      .update(tradingSessions)
-      .set({ startedAt: sql`now() - (${LIMIT + 5_000}::int * interval '1 millisecond')` })
-      .where(eq(tradingSessions.id, seed.session.id));
+    // the settlement is aged past the limit and the snapshot further back, so the settlement stays
+    // newer than the balance; an UPDATE without status runs no transition trigger
     await tmp.db.execute(
       sql`update trade_intents set updated_at = now() - (${LIMIT + 5_000}::int * interval '1 millisecond') where trading_session_id = ${seed.session.id}`,
+    );
+    await tmp.db.execute(
+      sql`update broker_balance_snapshots set rest_observed_at = now() - (${2 * LIMIT}::int * interval '1 millisecond'), demo_event_at = now() - (${2 * LIMIT}::int * interval '1 millisecond') where broker_account_id = ${seed.brokerAccountId}`,
     );
     await orchestrator.tick();
     expect(await sessionRow(seed.session.id)).toMatchObject({
@@ -2905,6 +2906,91 @@ describe('the balance wait after a settlement (#696)', () => {
     expect(msgsOf(seed.session.id)).not.toContain(WAITS);
     await orchestrator.stop();
   });
+
+  it('BW4 inside the hold a wake does not ask the signal again; after it the step is tried once more', async () => {
+    const signals = signalsOf();
+    const orchestrator = stoppable({ signals });
+    const seed = await wonBeforePayout(orchestrator);
+    orchestrator.wake();
+    await until('the wait', () => msgsOf(seed.session.id).includes(WAITS));
+    const asked = signals.calls.length;
+    const waits = () => msgsOf(seed.session.id).filter((msg) => msg === WAITS).length;
+    orchestrator.wake();
+    // single-flight: tick() returns the woken tick
+    await orchestrator.tick();
+    expect(waits()).toBe(1);
+    expect(signals.calls).toHaveLength(asked);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    advance(CONFIG.tickMs);
+    await orchestrator.tick();
+    expect(waits()).toBe(2);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    await orchestrator.stop();
+  });
+
+  // another intent on the session's account in its mode, opened while the session is held out of
+  // the scan by it, then won before the payout
+  const oneOff = async () => {
+    const seed = await seedSession({ demo: '1.50' });
+    const { intent } = await createTradeIntent(tmp.db, {
+      telegramUserId: seed.telegramUserId,
+      mode: TradeMode.Demo,
+      assetId: 101,
+      amount: '1.00' as DecimalString,
+      action: TradeAction.Up,
+      durationSec: 60,
+      clientRequestId: `bot-${seed.session.id}`,
+    });
+    return { seed, session: seed.session, intentId: intent.id };
+  };
+  const earlierSession = async (orchestrator: ReturnType<typeof orchestratorOf>) => {
+    const seed = await seedSession({ demo: '1.50' });
+    await orchestrator.tick();
+    const [intent] = await intentsOf(seed.session.id);
+    await stopTradingSession(tmp.db, {
+      id: seed.session.id,
+      reason: TradingSessionStopReason.UserStopped,
+    });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      settings: sessionSettings(),
+    });
+    return { seed, session, intentId: intent!.id };
+  };
+
+  const arrangements: [
+    string,
+    (orchestrator: ReturnType<typeof orchestratorOf>) => ReturnType<typeof oneOff>,
+  ][] = [
+    ["a bot's one-off trade", () => oneOff()],
+    ['the intent an earlier session left live at its stop', earlierSession],
+  ];
+  it.each(arrangements)(
+    'BW5 the settlement of %s on the account waits too, bounded from that settlement',
+    async (_name, arrange) => {
+      const orchestrator = stoppable();
+      const { seed, session, intentId } = await arrange(orchestrator);
+      // the session's own bound would have passed: it has no intent, and started long ago
+      await tmp.db
+        .update(tradingSessions)
+        .set({ startedAt: sql`now() - (${LIMIT + 5_000}::int * interval '1 millisecond')` })
+        .where(eq(tradingSessions.id, session.id));
+      expect(await processIntent(intentId)).toBe('accepted');
+      await demoBalance(seed.brokerAccountId, '0.50');
+      await settle(seed, intentId, MockTradeOutcome.Win);
+      orchestrator.wake();
+      await until('the wait', () => msgsOf(session.id).includes(WAITS));
+      expect(await sessionRow(session.id)).toMatchObject({
+        status: TradingSessionStatus.Active,
+        stopReason: null,
+      });
+      expect(await intentsOf(session.id)).toHaveLength(0);
+      advance(CONFIG.tickMs);
+      await demoBalance(seed.brokerAccountId, '2.40');
+      await orchestrator.tick();
+      expect((await intentsOf(session.id)).map((intent) => intent.amount)).toEqual(['1.00000000']);
+      await orchestrator.stop();
+    },
+  );
 });
 
 describe('L1 the log lines (#287)', () => {
