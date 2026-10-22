@@ -542,8 +542,10 @@ differences: after `completed` it stops `max_session_loss_exceeded` when `lossLi
 TRADING_SESSION_RETRY_MS)` whatever `waitExpired` says (H1-O6); and past the pair it never asks the
 signal (`orchestrator.db.test.ts` H1-O1: a signal source that throws). The sizer of its fixed stake
 still runs (the minimum, the balance, the history's integrity: `stake_stop`, `balance_unavailable`
-before it, H1-O8), and then the ending is a hold-back of `TRADING_SESSION_H1_CHECK_MS` with the
-`debug` line `trading session waits for the H1 driver`. The payout is not read (owner 2026-10-19:
+before it, H1-O8); its `insufficient_balance` while `awaitsBalance` is the same one-tick hold with
+the `info` line `trading session waits for the balance` as above (#696, H1-BW). Then the ending is a
+hold-back of `TRADING_SESSION_H1_CHECK_MS` with the `debug` line `trading session waits for the H1
+driver`. The payout is not read (owner 2026-10-19:
 the 94 % floor is the start's only, H1-O7), and no path of it reaches `no_signal_timeout`. The
 tick's three sweeps — the kill switch, the hour, a halt — apply to it unchanged (H1-O4). The
 `completed` (H1-O2), `rejected_twice` (H1-O9) and `pair_unavailable` (H1-O5) rows are the common

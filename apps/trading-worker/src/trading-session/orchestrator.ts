@@ -412,6 +412,10 @@ export function createSessionOrchestrator({
         sessionStartedAtMs: startedAtMs,
         nowMs: Math.max(now(), startedAtMs),
       });
+      if (waitsForBalance(decision)) {
+        logger.info({ ...ids, step }, 'trading session waits for the balance');
+        return { kind: 'hold', ms: config.tickMs };
+      }
       if (decision.kind === StakeKind.Stop) {
         return {
           kind: 'stop',
