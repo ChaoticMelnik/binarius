@@ -92,8 +92,10 @@ describe('the candle ring (#404)', () => {
   it('R4 takes the later of the two rules', () => {
     const ring = makeRing();
     expect(ring.closedUntil('5s', T0 + 12_000)).toBe(T0 + 10_000);
-    push(ring, EURUSD, T0 + 21_000, 1.1, T0 + 12_000);
-    expect(ring.closedUntil('5s', T0 + 12_000)).toBe(T0 + 20_000);
+    // a tick 1 s ahead of its receipt, inside the margin: the watermark rule is ahead of the
+    // clock's (15 000 by the clock alone)
+    push(ring, EURUSD, T0 + 21_000, 1.1, T0 + 20_000);
+    expect(ring.closedUntil('5s', T0 + 20_000)).toBe(T0 + 20_000);
     expect(ring.closedUntil('5s', T0 + 40_000)).toBe(T0 + 35_000);
   });
 
@@ -215,6 +217,59 @@ describe('the candle ring (#404)', () => {
     expect(before).toBe(ring.read(EURUSD, '5s', now).gaps.length);
     ring.fill(EURUSD, '5s', [{ timestamp: T0, open: 1, high: 1, low: 1, close: 1 }], now);
     expect(ring.missing(EURUSD, '5s', now)).toBe(before - 1);
+  });
+
+  it("R10 drops a tick more than the margin ahead of its receipt: no bucket of any pair closes, its pair's real ticks are not late", () => {
+    const ring = makeRing();
+    push(ring, EURUSD, T0 + 1_000, 1.1);
+    push(ring, AAPL, T0 + 1_000, 2.1);
+    // stamped 59 s ahead of its receipt: inside the tick filter, beyond the ring's margin
+    push(ring, AAPL, T0 + 60_000, 2.2, T0 + 1_100);
+    expect(ring.watermark).toBe(T0 + 1_000);
+    expect(ring.closedUntil('5s', T0 + 1_100)).toBe(T0);
+    const window = ring.read(EURUSD, '5s', T0 + 1_200);
+    expect(window.candles).toEqual([]);
+    expect(window.forming?.timestamp).toBe(T0);
+    expect(ring.counters()).toMatchObject({
+      ahead: 1,
+      late: 0,
+      lateClose: { watermark: 0, clock: 0 },
+      pairs: 2,
+    });
+    push(ring, AAPL, T0 + 3_000, 2.3);
+    push(ring, AAPL, T0 + 6_000, 2.4);
+    expect(ring.read(AAPL, '5s', T0 + 6_050).candles).toEqual([
+      { timestamp: T0, open: 2.1, high: 2.3, low: 2.1, close: 2.3 },
+    ]);
+    expect(ring.counters().late).toBe(0);
+  });
+
+  it('R10b takes a tick exactly the margin ahead and drops one a millisecond further', () => {
+    const ring = makeRing();
+    push(ring, EURUSD, T0 + 1_000);
+    push(ring, EURUSD, T0 + 5_000 + MARGIN, 1.2, T0 + 5_000);
+    expect(ring.watermark).toBe(T0 + 5_000 + MARGIN);
+    expect(ring.closedUntil('5s', T0 + 5_000)).toBe(T0 + 5_000);
+    push(ring, AAPL, T0 + 10_000 + MARGIN + 1, 1.3, T0 + 10_000);
+    expect(ring.watermark).toBe(T0 + 5_000 + MARGIN);
+    // inside TICK_MAX_SKEW_MS: ahead, not skewed
+    expect(ring.counters()).toMatchObject({ ahead: 1, skewed: 0 });
+  });
+
+  it("R10c opens no pair for a tick ahead and leaves a drop's hole pending", () => {
+    const ring = makeRing();
+    push(ring, EURUSD, T0 + 1_000);
+    push(ring, EURUSD, T0 + 6_000);
+    ring.onDrop();
+    // the pair's next tick is from the future: not its first tick past the drop watermark
+    push(ring, EURUSD, T0 + 30_000, 1.2, T0 + 6_100);
+    expect(ring.counters()).toMatchObject({ ahead: 1, holes: 0, pairs: 1 });
+    // a pair first heard from the future is not opened
+    push(ring, AAPL, T0 + 30_000, 2.2, T0 + 6_200);
+    expect(ring.counters()).toMatchObject({ ahead: 2, holes: 0, pairs: 1 });
+    push(ring, EURUSD, T0 + 21_000);
+    expect(ring.counters()).toMatchObject({ holes: 1 });
+    expect(times(ring.read(EURUSD, '5s', T0 + 31_000).candles)).toEqual([0]);
   });
 
   it('R12 keeps the capacity of candles per builder, the oldest going first', () => {

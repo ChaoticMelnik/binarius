@@ -559,7 +559,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
     if (stopped) return;
     const at = now();
     const counters = ring.counters();
-    const since = (key: 'late' | 'invalid' | 'skewed' | 'holed' | 'holes') =>
+    const since = (key: 'late' | 'invalid' | 'skewed' | 'ahead' | 'holed' | 'holes') =>
       counters[key] - reportedCounters[key];
     const closed: Record<string, number> = {};
     for (const interval of SIGNAL_SCAN_INTERVALS) {
@@ -591,6 +591,7 @@ export function createMarketDataManager(deps: MarketDataManagerDeps): MarketData
         late: since('late'),
         invalid: since('invalid'),
         skewed: since('skewed'),
+        ahead: since('ahead'),
         holed: since('holed'),
         unknownAsset,
         skippedDigits,

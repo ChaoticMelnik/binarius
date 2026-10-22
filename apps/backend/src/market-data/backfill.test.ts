@@ -431,8 +431,10 @@ describe('the candle backfill (#590)', () => {
   it('B3e fills no bucket past the boundary of the GET, though a tick ahead closed it', async () => {
     const h = harness({ pairs: [pair(1, { maxTimeframe: 5 })] });
     const forming = Math.floor(START / 5_000) * 5_000;
-    // the broker's clock ahead, within TICK_MAX_SKEW_MS: the watermark closes the forming bucket
-    h.ring.push(2, 5, { price: TICK_PRICE, timestamp: START + 10_000 }, START);
+    // the broker's clock ahead, inside the ring's margin: the watermark closes the forming bucket
+    // (the clock rule would not until forming + 7 000)
+    h.clock.now = START + 1_000;
+    h.ring.push(2, 5, { price: TICK_PRICE, timestamp: forming + 5_000 }, h.clock.now);
     h.chart.next.push((call) => {
       const rows = rowsFor(call, h.chart);
       h.clock.now += 1_000;
