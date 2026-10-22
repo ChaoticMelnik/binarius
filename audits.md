@@ -4040,5 +4040,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R1 Minors m1-m4 (misplaced comment, unused fields + join, copied helpers, Rule 31 docs) | Minor | other | left at the merge | → #735 |
 
 ### Process improvement proposals
-1. The closing fence on its own line, and the hand-off copies `head=`/`list-sha256=` from the posted comment — **внедрено в #PR: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
+1. The closing fence on its own line, and the hand-off copies `head=`/`list-sha256=` from the posted comment — **внедрено в #736: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
 2. Remaining findings — **вынесено в #735**
