@@ -3892,3 +3892,92 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. A phase continued after a model limit gets its remaining steps in the skill's order — for an implementer, «check the commit, then push», never «push first» — **внедрено в #706: `.claude/skills/tech-lead/SKILL.md` → Failed or stalled phase**
 2. Remaining findings — **вынесено в #705**
+
+---
+
+## #670 — H1, часть 3a: метка аккаунта H1, сессия v4 из CLI, дедлайн сабмита intent'а (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Night `/manager` session 2026-10-21 21:25 – 2026-10-22 03:57 MSK (report artifact VGUu7HuptKJcRWyPj5ytBJ); taken 21:30. No Codex (manager rule 2026-10-15), no stand, no external content; shared test DB matched `main` (73/73). |
+| Architect | first plan | Fable 5.1. 4 clarify questions, all recommended (6323700411). Whole part 3 estimated ~3 200 lines → split before the plan: 3a here (plan 6323914830, ~1 930 lines), driver + Telegram summary → #707 (Backlog). |
+| Architect | Plan Update round 0 | Opus. Implementer's plan defect (the fallback split line cited the wrong steps) → Plan Update 6324012663. |
+| Implementer | first pass | Opus. 1 clarify question, recommended (6323967358: CLI commands in `cli/h1-mark.ts` / `cli/h1-session.ts`, `cli/h1.ts` a dispatcher). PR #711, 9 commits, 2 460 added lines without the drizzle snapshot, migration 0073; per-commit check 9/9, `pnpm check` 0 at `a6942221`, mutations 22/22 in one call (6324688296); Phase 3 audit clean (6324715567). |
+| Reviewer | round 1 | Clean, 3 Minor; 3b/3c/3d all run (migration, intent submit path). Codex skip line. Minor 1 (TOCTOU of the mark: `h1 session start` reads `h1_since` outside the transaction, `listActiveH1Sessions` does not filter on it; no trades in 3a) recorded as a requirement in #707 (6324860213). |
+| Tech Lead | merge | No rebase needed (head `a6942221` on `main`). Merged `--rebase --delete-branch` 2026-10-22T04:43:36Z on the owner's yes; #670 Done; shared test DB migrated to 0073 (74/74); Minor 2–3 → #714. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`, Plan Update / implementer / reviewer / 3b / 3c `claude-opus-5-5`, 3d `claude-sonnet-5-5`) — checked in the night session's subagent transcripts. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan's fallback split line cited the wrong steps | — (caught before code) | other | split line written before the steps were renumbered | Architect (caught by implementer) |
+| Minor 1: TOCTOU of the H1 mark | Minor | other | harmless in 3a (no trades); becomes a defect with the driver | → requirement in #707 |
+| Minor 2–3 (unused `H1Account.userId`/`userStatus`, `readActiveH1Session` name and duplicated predicate) | Minor | other | left at the merge | → #714 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #714** (Minor 2–3), **в #707** (Minor 1)
+
+---
+
+## #475 — Боты: цвет и раскладка кнопок по роли, крупные ставки — красные с «риск» (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #670 (same session); taken 22:39 MSK. Dependencies (#685, #664, #537, #476, #506) merged — no stack. |
+| Architect | first plan | Fable 5.1. Clarify questions all recommended (6325223458), incl. lifting #506's «🏠 В меню всегда один» by the owner's decision 3 of the issue. Plan 6325462579, ~2 250 lines, one PR, fallback split line bot / backend. |
+| Architect | Plan Update round 0 | Opus. Implementer's plan defect (two roles for «Реальный режим») → Plan Update 6325549115. |
+| Implementer | first pass | Opus. 1 clarify question, recommended (6325506469: «риск» from $10 inclusive, as #476's code). PR #712, 5 commits, +2 825 / −1 335; per-commit check, `pnpm check` 0 at `9578df7a`, mutations 32/32 in one call (6326422112). Phase 3 audit (6326445935): check that `prettier --write` did not reformat code outside the task. |
+| Reviewer | round 1 | Clean, 3 Minor; 3b/3c/3d all run; no out-of-task prettier changes found. Codex skip line. |
+| Tech Lead | merge | Rebase onto `main` `9e8fb955` after #711: the only conflict was Rule 48 / 49 in `architect/SKILL.md`; mutations re-taken whole at the new head (6333176998), CI green. Merged `--rebase --delete-branch` 2026-10-22T05:10:05Z (head `249a6fd7`) on the owner's yes; #475 Done; m1–m3 → #715. No migration. |
+| Tech Lead | models | Every spawn on its policy model (checked in transcripts). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan gave «💼 Реальный режим» two roles | — (caught before code) | single-source | one button described in two places of the plan | Architect (caught by implementer) |
+| m1–m3 (stale `languageButton` description, keyboard test helpers duplicated in bot and backend `testing.ts`, unused `analysisTail` export) | Minor | single-source / other | left at the merge | → #715 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #715**
+
+---
+
+## #696 — Сессия: следующая попытка сразу после расчёта сделки, без ожидания тика 5 с (2026-10-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Shared with #670 (same session); taken 00:10 MSK, base `main` (text conflicts with #711 expected, merge order in the report). |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended (6326829064: `wake()` without arguments, every worker write that ends an intent or stops an account wakes, optional `onIntentEnded` dep). |
+| Implementer | first pass | Opus. 3 clarify questions (6327060542); the branch-name answer first picked the plan's name, not the recommended option, corrected 2 min later (6327063648). PR #713, `pnpm check` 0, mutations 14/14 at `907b5b82`. |
+| Reviewer | round 1 | Major 1 (the wake after `close_trade.success` reads the balance snapshot before `update_balance` writes the payout → false `stake_stop` / `insufficient_balance` after a win), 2 Minor; 3b + 3c, 3d skipped (< 300 code lines). Codex skip line. → Todo. |
+| Architect | round-1 Plan Update | Opus. Hold instead of a stop on a stale snapshot (6328390710). |
+| Implementer | round-1 fix | Opus, fresh spawn. Fix for the session's own settlements; head `838e4fa0`, mutations 20/20. |
+| Reviewer | round 2 | Whole-feature diff. Major 1 (the same class: `behind` counted only the session's own settlements, while the wake also fires on other intents of the account), 2 Minor. → Todo; by the night rule, re-plan from scratch. |
+| Architect | re-plan | Opus. New plan 6329433503: wait for a fresh balance after any settled intent of the account in the session's mode, by `trade_intents.updated_at`, no migration. |
+| Implementer | round-2 fix | Opus, fresh spawn. Head `589d47bd`, mutations 27/27 (6329933827). |
+| Reviewer | round 3 (last) | 0 / 0 / 1 — every round 1–2 finding closed as a class; Minor 1 (BW4 can pass on the `reschedule` mutant). Codex skip line. |
+| Tech Lead | merge | Rebase onto `main` `ef47992e` after #711 and #712, plus commit `c73704f8`: the H1 branch (#711) gets the same balance wait (H1-BW) — the rule the second merger owed (6328402945). Check after rebase on that commit only: 0 / 0 / 0 (6333921013); mutations re-taken at `c73704f8` (6333871435). Merged `--rebase --delete-branch` 2026-10-22T06:04:44Z on the owner's yes; #696 Done; Minor 1 → #716. No migration. |
+| Tech Lead | models | Every spawn on its policy model (Fable first plan, Opus Plan Update / re-plan / implementers / reviewers / 3b / 3c). |
+
+### Review iterations: 3
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1 M1: wake after a settlement read the balance snapshot before `update_balance` → false `insufficient_balance` stop after a win | Major | other | the 5 s tick was an unnamed guard: by the next tick the payout's `update_balance` had landed; the plan removed the delay without listing what the woken step reads and who writes it | Architect (first plan) |
+| R2 M1: the round-1 fix waited only after the session's own settlements; the wake also fires on other intents of the account | Major | instance-vs-class | the Plan Update closed the reviewer's example, not the trigger set the plan itself defined | Architect (Plan Update 1) |
+| Branch-name clarify answered with the plan's name, not the recommended option | — | other | the manager picks the branch before the plan, the architect names one in the plan | Manager (Night additions) |
+| R1–R2 Minors (4) | Minor | other | fixed in rounds 1–2 | — |
+| R3 Minor 1: BW4 can pass on the `reschedule` mutant | Minor | other | left at the merge | → #716 |
+
+### Process improvement proposals
+1. A plan that makes a step run sooner lists every state the step reads and its writer, for every event that now triggers it, and treats a removed delay as a possible guard — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. The manager takes the implementer's branch name from the plan when the plan names one — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Night additions (Implementer)**
+3. Remaining findings — **вынесено в #716**
