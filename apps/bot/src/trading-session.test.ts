@@ -25,6 +25,7 @@ import {
   demoAnalysisCallbackData,
   sessionStopCallbackData,
   BotLanguage,
+  MODE_CALLBACK_DATA,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -76,7 +77,7 @@ import {
   LABELS,
 } from './texts';
 import { sessionCardKeyboard, sessionOutcomeUnknown, START_REFUSALS } from './trading-session';
-import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
+import { INVITE_CALLBACK_DATA } from './keyboards';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
 import { shareQuery } from './session-share';
 

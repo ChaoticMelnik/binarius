@@ -11,11 +11,11 @@ import {
   TradingModeErrorCode,
   UserStatus,
   type BrokerBalanceView,
+  MODE_CALLBACK_DATA,
 } from '@binarius/shared';
 import type { ApiError } from 'grammy/types';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
-import { MODE_CALLBACK_DATA } from './keyboards';
 import {
   ACCESS_VIEW,
   BOT_INFO,

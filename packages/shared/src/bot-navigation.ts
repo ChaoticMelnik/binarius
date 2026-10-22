@@ -25,6 +25,9 @@ export const DEMO_CALLBACK_DATA = 'demo';
 export const CONNECT_CALLBACK_DATA = 'connect';
 // «🏠 В меню» (#350): the status card, as /menu.
 export const MENU_CALLBACK_DATA = 'menu';
+// «⚙️ Режим торговли» (#474, #686): the mode screen as a new message. Under /settings, and under
+// the backend's message about the switch to real after a deposit.
+export const MODE_CALLBACK_DATA = 'mode';
 // «🌐 Язык/Language» on a status card sent before #708 (#508; since #708 the entry is the
 // /language command): the language screen, a read; `lang:<language>` on that screen saves the
 // choice, a write. Only the bot draws them, kept beside «🏠 В меню».

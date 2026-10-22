@@ -4,6 +4,7 @@ import {
   callbackButton,
   editRefusal,
   keyboardOf,
+  MODE_CALLBACK_DATA,
   BrokerBalanceUnavailableReason,
   checkStake,
   decimalLessThan,
@@ -25,7 +26,7 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
-import { MODE_CALLBACK_DATA, menuKeyboard, supportKeyboard, withMenu } from './keyboards';
+import { menuKeyboard, supportKeyboard, withMenu } from './keyboards';
 import type { Logger } from './logging';
 import { answerCallback } from './answer-callback';
 import { settle, type Settled } from './settled';
@@ -40,10 +41,10 @@ import {
 } from './texts';
 
 // The mode screen (#474, docs/trading-mode.md → The mode screen): the user's trading mode, switched
-// in the bot only here. `mode` opens it from the status card — a photo, or text by the fallback,
-// never edited — as a new message; `mode:x` redraws it in place under the screen's own messages
-// («↩️ Отмена» of the confirm, «⚙️ Режим» under a refusal), so a cancelled confirm loses its
-// «✅ Подтверждаю»; `mode:r` asks to confirm real, `mode:r:ok` switches to real, `mode:d` back to
+// in the bot only here. `mode` opens it as a new message — from /settings (#686) and from the
+// backend's message about the switch to real after a deposit; `mode:x` redraws it in place under
+// the screen's own messages («↩️ Отмена» of the confirm, «⚙️ Режим» under a refusal), so a
+// cancelled confirm loses its «✅ Подтверждаю»; `mode:r` asks to confirm real, `mode:r:ok` switches to real, `mode:d` back to
 // demo; all but `mode` edit in place. The two switches are writes (WRITE_CALLBACK_PREFIXES): no
 // «🔄 Повторить» ever carries them, every failure leads to «⚙️ Режим» and the menu; `mode:x` and
 // `mode:r` are reads.

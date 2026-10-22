@@ -22,6 +22,7 @@ import {
   COMMAND_RETRY_PATTERN,
   commandRetryCallbackData,
   MENU_CALLBACK_DATA,
+  MODE_CALLBACK_DATA,
   RETRY_COMMANDS,
   supportUrl,
   BUY_CALLBACK_DATA,
@@ -42,7 +43,7 @@ import {
 
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import { SETTINGS_CALLBACK_DATA } from './stake-picker';
-import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
+import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
@@ -451,27 +452,25 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // #475: the entry alone, the mode screen, the invite (#115) and the purchase (#117) in one row
-  // (#708: no language button, the language is /language), the deposit (#27), the cashier Mini
-  // App, alone
+  // #475: the entry alone, the invite (#115) and the purchase (#117) in one row (#708: no language
+  // button, the language is /language; #686: no mode button, the mode screen is under /settings),
+  // the deposit (#27), the cashier Mini App, alone
   const DEPOSIT_ROW = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
-  const MIDDLE_ROWS = (mode: { text: string; callback_data: string }) => [
+  const MIDDLE_ROWS = [
     [
-      mode,
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
     ],
   ];
   const CARD_ROWS = [
     [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
-    ...MIDDLE_ROWS({ text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA }),
+    ...MIDDLE_ROWS,
     DEPOSIT_ROW,
   ];
-  // in real mode the entry reads «🚀 Торговать» (#121) and the mode button «🎮 В демо», which
-  // opens the mode screen (#474); the purchase and the deposit in both modes
+  // in real mode the entry reads «🚀 Торговать» (#121); the purchase and the deposit in both modes
   const REAL_CARD_ROWS = [
     [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
-    ...MIDDLE_ROWS({ text: LABELS.modeBackDemoButton, callback_data: MODE_CALLBACK_DATA }),
+    ...MIDDLE_ROWS,
     DEPOSIT_ROW,
   ];
   // the line's default holds none of its variables
@@ -512,7 +511,7 @@ describe('the status card', () => {
       expect(photo?.photo).toBeInstanceOf(InputFile);
       expect(inlineRows(photo)).toEqual(CARD_ROWS);
       // #475: the entry and the deposit green, the purchase blue, the rest without a colour
-      expect(inlineStyles(photo)).toEqual([['success'], [null, null, 'primary'], ['success']]);
+      expect(inlineStyles(photo)).toEqual([['success'], [null, 'primary'], ['success']]);
       expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
         message_id: CARD_MESSAGE_ID,
         disable_notification: true,
@@ -539,8 +538,7 @@ describe('the status card', () => {
       plainTextOf(TEXTS.statusHint(userContextOf(USER.first_name, TradeMode.Demo, real))),
     );
     expect(inlineRows(photo)).toEqual(REAL_CARD_ROWS);
-    // «🎮 В демо» is a secondary action (#475 Plan Update)
-    expect(inlineStyles(photo)).toEqual([['success'], ['primary', null, 'primary'], ['success']]);
+    expect(inlineStyles(photo)).toEqual([['success'], [null, 'primary'], ['success']]);
   });
 
   // #27: an origin that is not https gives the bot no cashier URL, and the card no deposit row
@@ -782,7 +780,6 @@ describe('«🏠 В меню» (#350)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
     expect(inlineButtons(sentPayload(calls, 'sendPhoto'))).toEqual([
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
-      { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
       { text: LABELS.buyButton, callback_data: BUY_CALLBACK_DATA },
       { text: LABELS.depositButton, web_app: { url: CASHIER_URL } },
@@ -2394,6 +2391,11 @@ describe('/settings', () => {
     { text: LABELS.settingsStakeDemoButton, callback_data: 'stk:o:d:s' },
     { text: LABELS.settingsStakeRealButton, callback_data: 'stk:o:r:s' },
   ];
+  // the mode screen beside the menu (#686)
+  const modeRow = [
+    { text: LABELS.settingsModeButton, callback_data: MODE_CALLBACK_DATA },
+    { text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA },
+  ];
   const levelButtons = (current: NotificationLevel) =>
     Object.values(NotificationLevel).map((level) =>
       level === current
@@ -2417,11 +2419,17 @@ describe('/settings', () => {
       expect(sends[0]?.payload.text).toBe(
         settingsText(notificationLevel, null, null, USER.first_name).value,
       );
-      expect(inlineRows(sends[0]?.payload)).toEqual([levelButtons(notificationLevel), stakeRow]);
-      // #475: a level is a choice, no colour; the stakes' pickers secondary
+      expect(inlineRows(sends[0]?.payload)).toEqual([
+        levelButtons(notificationLevel),
+        stakeRow,
+        modeRow,
+      ]);
+      // #475: a level is a choice, no colour; the stakes' pickers secondary; the mode screen and
+      // the menu navigation (#686)
       expect(inlineStyles(sends[0]?.payload)).toEqual([
         [null, null, null],
         ['primary', 'primary'],
+        [null, null],
       ]);
     },
   );
@@ -2502,7 +2510,7 @@ describe('/settings', () => {
         text: settingsText(NotificationLevel.Off, null, null, USER.first_name).value,
         parse_mode: 'HTML',
       });
-      expect(inlineRows(edit)).toEqual([levelButtons(NotificationLevel.Off), stakeRow]);
+      expect(inlineRows(edit)).toEqual([levelButtons(NotificationLevel.Off), stakeRow, modeRow]);
     });
 
     it('keeps both stakes the level answer carries (#326)', async () => {

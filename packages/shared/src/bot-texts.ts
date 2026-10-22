@@ -1873,6 +1873,18 @@ export const BOT_TEXT_CATALOG = {
 👇 «{buyButton}» — пакеты токенов.`,
     { vars: ['nudgeTokens'], fragments: { buyButton: 'buyButton' } },
   ),
+  // The switch to real after a deposit (#686, docs/trading-mode.md → The automatic switch after
+  // a deposit): no deposit amount and no balance (owner's manager, В6); {stake} is effectiveStake.
+  realModeByDeposit: html(
+    g.Mailing,
+    'Сообщение после пополнения реальными деньгами, когда бот перевёл пользователя из демо в реальный режим (#686); с кнопками экрана режима и меню.',
+    `💳 <b>Пополнение получено — включён реальный режим</b>
+
+Режим: REAL. Сделки и сессии теперь идут на реальные деньги.
+💵 Сумма сделки: {stake}
+Вернуться в демо: /settings → «{settingsModeButton}».`,
+    { vars: ['stake'], fragments: { settingsModeButton: 'settingsModeButton' } },
+  ),
   // a label of the backend's message only, so in this group and not in «Кнопки» (#576)
   inviteMoreButton: plain(
     g.Mailing,
@@ -2014,18 +2026,19 @@ export const BOT_TEXT_CATALOG = {
     '/settings: кнопка смены суммы реальной сделки (#326).',
     '💼 Реал',
   ),
+  // in one row with «🏠 В меню» (#686): a lone navigation button is refused (lone_button)
+  settingsModeButton: plain(
+    g.Buttons,
+    '/settings и сообщение о переходе в реальный режим после пополнения (#686): экран режима торговли.',
+    '⚙️ Режим торговли',
+  ),
 
   tradeButton: plain(
     g.Buttons,
     'Карточка статуса и напоминание о токенах (#123) в реальном режиме: вход в торговлю, как «Демо-торговля».',
     '🚀 Торговать',
   ),
-  modeButton: plain(g.Buttons, 'Карточка статуса в демо: экран режима торговли.', '💼 Реальный'),
-  modeBackDemoButton: plain(
-    g.Buttons,
-    'Карточка статуса в реальном режиме — открывает экран режима; экран режима — возврат в демо.',
-    '🎮 В демо',
-  ),
+  modeBackDemoButton: plain(g.Buttons, 'Экран режима: возврат в демо.', '🎮 В демо'),
   modeEnableButton: plain(
     g.Buttons,
     'Экран режима: шаг подтверждения реального режима.',

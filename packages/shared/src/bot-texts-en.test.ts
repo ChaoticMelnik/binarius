@@ -56,7 +56,7 @@ describe('the English texts (#508)', () => {
   });
 
   // the groups of #632 and #633 show their Russian defaults until those parts translate them, but
-  // the keys translated ahead of them (#664)
+  // the keys translated ahead of them (#664, #686)
   it('E4 leaves untranslated exactly the groups of the later parts, but the keys translated before #633', () => {
     const translated: readonly BotTextKey[] = TRANSLATED_BEFORE_633;
     expect([...UNTRANSLATED_BOT_TEXT_KEYS].sort()).toEqual(

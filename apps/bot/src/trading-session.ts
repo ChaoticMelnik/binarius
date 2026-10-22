@@ -28,6 +28,7 @@ import {
   type TradingSessionView,
   telegramErrorFields,
   type BotLanguage,
+  MODE_CALLBACK_DATA,
 } from '@binarius/shared';
 import {
   BackendError,
@@ -59,7 +60,6 @@ import {
   backToAnalysisKeyboard,
   depositButtons,
   inviteButton,
-  MODE_CALLBACK_DATA,
   menuButton,
   menuKeyboard,
   supportKeyboard,

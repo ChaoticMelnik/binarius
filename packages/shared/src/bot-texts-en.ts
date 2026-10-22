@@ -156,6 +156,13 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   pairWaitingAlternatives: `Other pairs have a signal already — pick one below instead of waiting 👇`,
   analysisWaiting: `⏳ <b>Checking the signal…</b> As soon as it appears, the signal card opens here.`,
 
+  // ---- the switch to real after a deposit (#686): translated ahead of the Mailing group --------
+  realModeByDeposit: `💳 <b>Deposit received — real mode is on</b>
+
+Mode: REAL. Trades and sessions now use real money.
+💵 Trade amount: {stake}
+Back to demo: /settings → “{settingsModeButton}”.`,
+
   // ---- buttons -------------------------------------------------------------------------------
   confirmButton: '✅ Confirm: {email}',
   confirmButtonNoEmail: '✅ Confirm the link',
@@ -197,8 +204,8 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   stakeBackButton: '↩️ Back',
   settingsStakeDemoButton: '💵 Demo',
   settingsStakeRealButton: '💼 Real',
+  settingsModeButton: '⚙️ Trading mode',
   tradeButton: '🚀 Trade',
-  modeButton: '💼 Real mode',
   modeBackDemoButton: '🎮 To demo',
   modeEnableButton: '💼 Turn on real mode',
   modeConfirmButton: '✅ I confirm',
@@ -242,13 +249,15 @@ export const enBotTextSource: BotTextSource<BotTextKey> = {
 };
 
 // The keys of the groups #632 and #633 translate that are translated already: the wait for a
-// signal (#664) was written in both languages from the start.
+// signal (#664) and the switch to real after a deposit (#686) were written in both languages from
+// the start.
 export const TRANSLATED_BEFORE_633 = [
   'signalsWaiting',
   'signalsExpired',
   'pairWaiting',
   'pairWaitingAlternatives',
   'analysisWaiting',
+  'realModeByDeposit',
 ] as const satisfies readonly BotTextKey[];
 
 export const UNTRANSLATED_BOT_TEXT_KEYS: readonly BotTextKey[] = (
