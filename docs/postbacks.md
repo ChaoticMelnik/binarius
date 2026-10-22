@@ -138,6 +138,19 @@ ran; that deposit stays without an owner. At pilot volume (1-3k accounts, a few 
 the two overlapping is expected 0 times; such a row shows in «Депозиты» with «—» for the owner and
 its trader id, and is attached by hand or by #386's tooling.
 
+### The trading mode after a deposit (#686)
+
+An attributed row is what switches its user from demo to real
+([trading-mode.md](trading-mode.md#the-automatic-switch-after-a-deposit-686)): the backend's pass
+lists the rows with `user_id` and no `mode_switch`, whichever way they got the owner (at ingest or
+at activation), and writes one outcome per row (`mode_switch`, `mode_switch_at`;
+`deposit_events_mode_switch_check`, `deposit_events_mode_switch_pair_check`). The writer of this
+page does not change: ingest still takes no `users` lock and writes neither the mode nor the
+outcome. One row per payment, so the Deposit and the FTD postback of one payment switch at most
+once. A deposit attributed to a `revoked` account is closed `account_inactive`. 0075 closed every row
+already there as `predates`. Crediting (#386) reads `status`/`processed_at`, which the switch never
+writes.
+
 ## Visibility
 
 - Deposits: the admin page «Депозиты» and the user card's «Депозиты» section
@@ -262,6 +275,8 @@ one payment, and the HTTP method if the cabinet shows it.
 ## Boundaries
 
 - Crediting — #386 (the rule params are recorded there; the rule stays inactive).
+- The switch to real after a deposit — #686 (above); it trusts the postback as crediting would, so
+  #142's authenticity guards it too.
 - Authenticity of a postback (signature or another server mechanism) — #142; until then automatic
   crediting stays off.
 - Reconciliation of deposits with the broker — #140; end-to-end duplicate scenarios — #106.

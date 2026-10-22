@@ -581,7 +581,7 @@ export function createBot({
   privateChats.use(cycleStake.composer);
   privateChats.use(tradingSession.composer);
 
-  // the mode screen behind the status card's mode button (#474, docs/trading-mode.md)
+  // the mode screen behind /settings → «⚙️ Режим торговли» (#474, #686, docs/trading-mode.md)
   // the language screen (#508): /language (#708), `lang` of a status card sent before #708
   privateChats.use(createLanguageScreenComposer({ backend, languages, logger }));
   privateChats.use(createTradingModeComposer({ backend, logger, connectButtons }));

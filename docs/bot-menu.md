@@ -5,17 +5,17 @@ A user with an active Binodex account gets the **status card** (#24) as the bot'
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
 status or age line when the broker balance is missing or old, a hint, and these rows (#475,
 [bot-navigation.md](bot-navigation.md#roles-colours-and-rows-475)): «🎮 Демо-торговля» (#320; «🚀
-Торговать» in real mode, #121, [trading-mode.md](trading-mode.md)) alone and green; the mode
-button — «💼 Реальный» in demo, «🎮 В демо» (blue) in real, both opening the mode screen
-(#474, [trading-mode.md](trading-mode.md#the-bot)) — «👥 Позвать» (#115,
-[referrals.md](referrals.md)) and «⭐ Купить» (#117, both modes, [stars.md](stars.md), blue) in one
-row of three; and last «💳 Пополнить» (#27, both
+Торговать» in real mode, #121, [trading-mode.md](trading-mode.md)) alone and green; «👥 Позвать»
+(#115, [referrals.md](referrals.md)) and «⭐ Купить» (#117, both modes, [stars.md](stars.md), blue)
+in one row; and last «💳 Пополнить» (#27, both
 modes, the cashier Mini App, [deposit.md](deposit.md); only when `WEB_PUBLIC_URL` is https) alone
 and green. It is pinned in place of whatever was pinned before. The card is in the user's
 language ([bot-texts.md](bot-texts.md#languages)); `/start`, `/menu` and «🏠 В меню» put the
 language their `/users/start` answer carries into the bot's cache. The language is chosen with the
 `/language` command (#708, [bot-navigation.md](bot-navigation.md#the-language-screen-508)); until
-#708 it was a «🌐 Язык/Language» button on the card.
+#708 it was a «🌐 Язык/Language» button on the card. The mode screen (#474) is opened from
+`/settings` → «⚙️ Режим торговли» since #686, which took the mode button off the card
+([trading-mode.md](trading-mode.md#the-bot)).
 
 ## Components
 
@@ -32,9 +32,8 @@ language their `/users/start` answer carries into the bot's cache. The language 
   `userContextOf`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
   catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard` with
-  `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` button by mode beside the `mode` button,
-  #474, then the `invite` button, #115, then the `buy` button, #117, then the deposit and the
-  `lang` button, #508),
+  `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` button by mode, then the `invite` button,
+  #115, and the `buy` button, #117, then the deposit, #27),
   `pinCard`.
 - `packages/shared/src/bot-commands.ts` — `/menu` «Главное меню», right after `/start`.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.start`, `.menu`, `.demo`, and the conjunct
@@ -192,7 +191,7 @@ pnpm test --project unit apps/bot/src
   [bot-session.md](bot-session.md)); the callback data stays. Since #360 the hint names the
   autosession as the main scenario.
 - **#201** — levels and their progress on this card.
-- **#474** (shipped) — the mode screen behind the card's mode button
+- **#474** (shipped) — the mode screen, behind `/settings` → «⚙️ Режим торговли» since #686
   ([trading-mode.md](trading-mode.md)); #144's `tradingOpen` is the backend's switch, not a
   user's mode.
 - A «🔄 Обновить» button that edits the caption in place — not asked; `/menu` sends a new card.

@@ -89,7 +89,7 @@ own (owner's decisions 1 and 3, 2026-10-14):
 | `stake` / `stake_risk` | a stake preset below / from `STAKE_RISK_THRESHOLD` ($10, inclusive), the latter labelled «· риск» (`stakeRiskButton`) | `success` / `danger` | a list |
 | `up` / `down` | a pair of the signals list or of the wait, by its signal's direction | `success` / `danger` | a list |
 | `secondary` | refresh, repeat, «➕ Ещё», «💵 Ставка»/«💵 Сумма», «✏️ Ввести», «🔁 Минимум», «🔄 Новый код», «✏️ Изменить адрес», «⭐ Купить», «🎮 В демо», «💵 Демо»/«💼 Реал» of /settings, «👥 Пригласить ещё», «📊 Анализ» at the end of a path | `primary` (blue) | shared |
-| `nav` | the menu, a way back, the types, the pairs, a page, support, «🧭 Вручную», «📡 Сигналы», «⚙️ Режим», «💼 Реальный» of the status card, «👥 Позвать», a choice among options (a level of /settings, a language, a type, a pair of the manual path) with its current ✅ | none | shared |
+| `nav` | the menu, a way back, the types, the pairs, a page, support, «🧭 Вручную», «📡 Сигналы», «⚙️ Режим», «⚙️ Режим торговли» of /settings and of the real-mode message (#686), «👥 Позвать», a choice among options (a level of /settings, a language, a type, a pair of the manual path) with its current ✅ | none | shared |
 
 `BUTTON_ROLE_STYLES` and `FULL_WIDTH_ROLES` are the one place of the colour and the row: a new
 button gets them by its role, never by a field of its own.
@@ -143,10 +143,10 @@ longer than its row: Telegram cuts them with an ellipsis; the loader still takes
 | Key | Label (ru) | Role | Colour | Row |
 |---|---|---|---|---|
 | `demoButton`, `tradeButton` | 🎮 Демо-торговля, 🚀 Торговать | forward | green | own |
-| `modeButton` | 💼 Реальный (status card) | nav | — | 3 |
+| `settingsModeButton` | ⚙️ Режим торговли (/settings, the real-mode message, #686) | nav | — | 2 |
 | `modeEnableButton` | 💼 Включить реальный режим (mode screen) | forward | green | own |
 | `modeScreenButton` | ⚙️ Режим | nav | — | 2 |
-| `modeBackDemoButton` | 🎮 В демо | secondary | blue | 3 |
+| `modeBackDemoButton` | 🎮 В демо (mode screen) | secondary | blue | 2 |
 | `modeConfirmButton`, `modeCancelButton` | ✅ Подтверждаю, ↩️ Отмена | forward, nav | green, — | own, own |
 | `inviteButton` | 👥 Позвать | nav | — | 3 |
 | `inviteShareButton`, `sessionShareButton` | 📤 Поделиться | forward | green | own |
@@ -274,7 +274,7 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить аккаунт Binodex |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить: … (one per waiting link) |
-| status card | 🎮 Демо-торговля // 💼 Реальный \| 👥 Позвать (#115) \| ⭐ Купить (#117) // 💳 Пополнить (#27, https only); in real: 🚀 Торговать // 🎮 В демо \| 👥 Позвать \| ⭐ Купить // the same; «💼 Реальный» and «🎮 В демо» open the mode screen (#474); no language button since #708 |
+| status card | 🎮 Демо-торговля // 👥 Позвать (#115) \| ⭐ Купить (#117) // 💳 Пополнить (#27, https only); in real: 🚀 Торговать // the same; no language button since #708, no mode button since #686 (the mode screen is under /settings) |
 | the language screen (#508: `/language` since #708, `lang` of a status card sent before #708) | 🇷🇺 Русский \| 🇬🇧 English \| 🏠 В меню (the current one with ✅) |
 | `languageNeedsStart`, `unavailable` after a language set (a write) | 🏠 В меню |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
@@ -285,7 +285,7 @@ no repeat.
 | `unavailable` after `/account`, `/settings`, `/invite` | 🔄 Повторить (`cmd:…`) \| 🏠 В меню |
 | `unavailable` after the picker's way back (`settings`) | 🔄 Повторить (`settings`) \| 🏠 В меню |
 | `unavailable` after a level set (a write) | 🏠 В меню |
-| `/settings` | 🔔 Все \| 🔕 Реже \| ❌ Выключить (✅ on the current) // 💵 Демо \| 💼 Реал |
+| `/settings` | 🔔 Все \| 🔕 Реже \| ❌ Выключить (✅ on the current) // 💵 Демо \| 💼 Реал // ⚙️ Режим торговли (`mode`, the mode screen as a new message, #686) \| 🏠 В меню |
 | `/account` with an active link | 🎮 Демо-торговля // 🏠 В меню |
 | `/account` with a waiting link or none active | ✅ Подтвердить: … // 🔗 Подключить аккаунт Binodex, each on its own row |
 | `/support` | 💬 Поддержка \| 🏠 В меню |
@@ -347,6 +347,7 @@ no repeat.
 | the analysis reminder `analysisUnusedReminder` (#484, the backend's mailing, [mailing.md](mailing.md)) | 📊 Анализ (`demo:an:<assetId>:<sec>` of the analysed pair and duration, green) — one button, as the chain's reminders |
 | the low-token nudges (#123) | 50 %: 🎮 Демо-торговля (🚀 Торговать in real); 80 % and 100 %: 💳 Пополнить (the entry without https) // ⭐ Купить |
 | the inviter's reward notification `referralRewarded` (#576, the backend's mailing, [mailing.md](mailing.md)) | 👥 Пригласить ещё (`cmd:invite`, the /invite screen as a new message) — one button, as the reminders |
+| the real-mode message after a deposit `realModeByDeposit` (#686, the backend's mailing, [mailing.md](mailing.md#the-real-mode-notification-686)) | ⚙️ Режим торговли (`mode`, the mode screen) \| 🏠 В меню, in the user's language |
 | the staff bot (`apps/backend/src/admin/telegram.ts`) | `/start`: Войти в админку; the login prompt: Подтвердить вход // Это не я (red) |
 
 «📊 Анализ» opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never

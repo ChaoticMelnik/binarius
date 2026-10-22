@@ -5,11 +5,13 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries four scenarios: the **first-session chain**, three reminders that lead a user who
+Today it carries five scenarios: the **first-session chain**, three reminders that lead a user who
 connected an account but has not started a trading session into the demo, the **analysis
 reminder** (#484), one reminder after an analysis card nobody acted on, the **referral reward
-notification** (#576), one message to an inviter per reward, and the **low-token nudge** (#123),
-one push when the balance falls to a share of the user's starter pack. #124 (retention) adds its
+notification** (#576), one message to an inviter per reward, the **low-token nudge** (#123),
+one push when the balance falls to a share of the user's starter pack, and the **real-mode
+notification** (#686), one message per deposit that switched the user to real, the one
+*important* kind. #124 (retention) adds its
 scenarios to the same engine.
 
 ```bash
@@ -24,22 +26,27 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   their offsets), `ANALYSIS_UNUSED_AFTER_MS`/`ANALYSIS_UNUSED_UNTIL_MS` and
   `analysisUnusedPayloadSchema` (#484), `REFERRAL_REWARDED_AFTER_MS` and
   `referralRewardedPayloadSchema` (#576), `TOKEN_NUDGES`, `TOKEN_NUDGE_AFTER_MS` and
-  `tokenNudgePayloadSchema` (#123), and `MAILING_MIN_OFFSET_MS`, the earliest offset among the
-  kinds that wait.
+  `tokenNudgePayloadSchema` (#123), `REAL_MODE_BY_DEPOSIT_AFTER_MS` and
+  `realModeByDepositPayloadSchema` (#686), and `MAILING_MIN_OFFSET_MS`, the earliest offset among
+  the kinds that wait.
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
   from (`facts`, a lateral row source over the user's row with a column `at`), the offset
   (`afterMs`), the dedupe key and the job's payload (SQL over the user's row and the fact; the
   payload `'{}'` when absent), the predicate it holds while it applies (`stillApplies`) and the
   claim's key predicate (`keyApplies`), and whether the planner takes a canceled job back
-  (`replansCanceled`, #123). A kind with one fact per user goes through `oneFact`: its facts are
-  one row, its key reads the user's row only and the claim compares it directly.
+  (`replansCanceled`, #123), and whether it is important (`important`, #686, Delivery rules);
+  `IMPORTANT_NOTIFICATION_KINDS` lists those, from the scenarios alone. A kind with one fact per
+  user goes through `oneFact`: its facts are one row, its key reads the user's row only and the
+  claim compares it directly.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
-  job's payload and the `MailingContext` (the cashier's URL, the user's mode at the claim); the
+  job's payload and the `MailingContext` (the cashier's URL, the user's mode and language at the
+  claim; only #686's kind reads the language, the others are Russian until #633); the
   chain's keyboard is the demo button (`demoKeyboard`, `client-push.ts`), the same as the link
   push's re-login, the analysis reminder's a new analysis.
-- `apps/backend/src/mailing/engine.ts` — the two loops, the pacer and the failure policy; its
+- `apps/backend/src/mailing/engine.ts` — the two loops, the pacer, the failure policy and
+  `wakePlan()` (#686, The planner → The wake); its
   `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, passed once by `apps/backend/src/index.ts`;
   `apps/backend/src/auth/client-push.ts` — `sendMailing`, beside the link push.
 - `apps/backend/src/timing.ts` — the `MAILING_*` numbers and their links in `TIMING_CHAIN_HOLDS`.
@@ -47,8 +54,9 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 `MAILING_SCENARIOS` and `MAILING_MESSAGES` are checked with `satisfies Record<NotificationKind, …>`:
 a kind without either does not compile. The tests named below by their ids are in
 `packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484; R1–R8 for #576; T1–T16 for #123), `apps/backend/src/mailing/engine.db.test.ts`
-(M7–M11, E1–E2, E-R1–E-R2; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
-the pacer alone) and `apps/backend/src/mailing/messages.test.ts`.
+(M7–M11, E1–E2, E-R1–E-R2, E-MR; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
+the pacer alone; WP1–WP6, the wake) and `apps/backend/src/mailing/messages.test.ts`; MR1–MR9 for
+#686 in `mailing-ops.db.test.ts`.
 
 ## The first-session chain
 
@@ -95,7 +103,9 @@ way; its fact is written only by a backend that has that migration, so its cutof
 The referral reward notification's row is seeded by `0065_referral_rewarded_seed.sql`: rewards
 granted before its deploy get no notification and stay visible in /invite only. The low-token
 nudges' rows are seeded by `0067_tokens_nudge_kinds_seed.sql`; their fact is the planning moment,
-so the row only switches them on (The low-token nudge → At the deploy).
+so the row only switches them on (The low-token nudge → At the deploy). The real-mode
+notification's row is seeded by `0076_real_mode_by_deposit_seed.sql`; 0075 closed every earlier
+deposit as `predates`, so no switch precedes it anyway.
 
 ## The analysis reminder (#484)
 
@@ -190,6 +200,42 @@ What becomes of a job of this kind:
 Tests: `mailing-ops.db.test.ts` R1–R8 and its CUT, `engine.db.test.ts` E-R1–E-R2,
 `messages.test.ts`, the pin in `timing.test.ts`.
 
+## The real-mode notification (#686)
+
+| Kind                   | Sent                                            | Text (`mailing` group) | Buttons                                                      |
+| ---------------------- | ----------------------------------------------- | ---------------------- | ------------------------------------------------------------ |
+| `real_mode_by_deposit` | right after a deposit switched the user to real | `realModeByDeposit`    | «⚙️ Режим торговли» (`mode`) \| «🏠 В меню» (`menu`), one row |
+
+A deposit of a user in demo switches them to real
+([trading-mode.md](trading-mode.md#the-automatic-switch-after-a-deposit-686)); this kind tells
+them: the deposit came, the mode is REAL, trades go on real money, the stake, and the way back
+(`/settings` → «⚙️ Режим торговли»). No deposit amount and no balance.
+
+- **The fact** is a `deposit_events` row with `mode_switch = 'switched'`, at its `mode_switch_at`;
+  a user may have several (back to demo, another deposit), each its own job. The outcome is written
+  once, so the fact never goes away.
+- **It applies** while the user is active and in real (`stillApplies`): a user who went back to
+  demo before the send gets nothing. `keyApplies`: the key names a switched deposit of this user.
+- **One message per switch.** The key is `real_mode_by_deposit:` and the deposit's id. The payload
+  is `{ stake }`: `coalesce(users.real_stake, the account snapshot's min_trade_amount)::text`
+  (rule 2), `null` without either, which the text names «минимальная ставка брокера»; a payload
+  that does not parse (`realModeByDepositPayloadSchema`) is `mailing not built`. The stake is the
+  planning moment's (≤ a tick after the switch); the mode screen shows the current one.
+- **The user's language** (#508): the claim returns `users.language`, and the message is built
+  with `clientTextsOf(language)` and `clientLabelsOf(language)` (`auth/texts.ts`; Russian with the
+  staff overrides, English the static source). The English text is in `BOT_TEXT_SOURCES_EN`,
+  listed in `TRANSLATED_BEFORE_633`.
+- **Important** (Delivery rules): planned and claimed at any `notification_level` while the bot can
+  reach the user; `off` does not cancel it; a block cancels it, and `replansCanceled` plans it
+  again after the unblock while the user is still active and in real.
+- **Timing.** `REAL_MODE_BY_DEPOSIT_AFTER_MS` is 0. The pass wakes the planner after the switch's
+  commit (`wakePlan()`, The planner → The wake), so the job does not wait for the planner's tick;
+  the sender's tick sends it (≤ `MAILING_SEND_TICK_MS` when its queue is empty).
+
+Tests: `mailing-ops.db.test.ts` MR1–MR9 and its CUT, `delivery-ops.db.test.ts` (`reachable`,
+A-win, `except`), `engine.db.test.ts` E-MR, `messages.test.ts`, `deposit-mode-switch.db.test.ts`
+X1–X5.
+
 ## The low-token nudge (#123)
 
 | Kind          | Applies when the balance is at or under | Text (`mailing` group) | Buttons                                                                  |
@@ -249,15 +295,25 @@ Every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kind
 `INSERT … SELECT … ON CONFLICT (user_id, dedupe_key) DO NOTHING` per kind (`DO UPDATE … WHERE
 status = 'canceled'` for a kind with `replansCanceled`, The low-token nudge): a job for every user
 whose fact plus the offset has come, whose fact is at or after the kind's `plans_from`, whom the
-bot may reach (`deliverable()`: not blocked in Telegram, notifications not `off`), and for whom the
+bot may reach (`deliverable()`: not blocked in Telegram, notifications not `off`; an important
+kind: `reachable()`, not blocked in Telegram, #686), and for whom the
 scenario applies — one job per row of the kind's `facts` (`cross join lateral`). `scheduled_at` is
 the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
 `…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`;
-`tokens:50`, `tokens:80`, `tokens:100`) makes it idempotent: a second run, a second backend process or a restart
+`tokens:50`, `tokens:80`, `tokens:100`; `real_mode_by_deposit:<deposit id>`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
 
 The planner reads facts; no trading or linking path writes a mailing.
+
+**The wake (#686).** `wakePlan()` runs a pass now, or one more right after the pass in flight; wakes
+during a pass merge into one more pass (a counter reset before the pass's first statement, so a
+wake that came before it is served by that pass), and after `stop()` it does nothing — the repeat
+goes through `planTick()`, which checks `stopped`. A plain `planTick()` would join the pass in
+flight, which may have read past the commit; its fact would then wait for the timer. The one
+caller is the deposit pass after a switch; the timer stays the fallback. A wake during the pass
+that `stop()` ends gives no repeat. Tests: `engine.test.ts` WP1–WP6, `deposit-mode-switch.db.test.ts`
+X5.
 
 ## The sender
 
@@ -265,7 +321,7 @@ Every `MAILING_SEND_TICK_MS` (5 s) the sender takes up to `MAILING_SEND_BATCH` (
 a time, each by one statement (`claimMailingJob`):
 
 1. among the `MAILING_CLAIM_SCAN` (50) earliest `pending` jobs that are due, of users that
-   `acceptsMailing()` admits now, locked `FOR UPDATE … SKIP LOCKED` (a second process skips them);
+   `acceptsMailing()` admits now (an important kind's: `reachable()`, #686), locked `FOR UPDATE … SKIP LOCKED` (a second process skips them);
 2. those whose scenario no longer applies, or whose dedupe key is not the one the scenario would
    plan now (a newer fact: another analysis), become `canceled`; a predicate that is NULL (the
    fact gone) counts as not applying (`coalesce(…, false)`), so such a job never sits at the head
@@ -317,11 +373,19 @@ jobs not yet claimed stay `pending` for the next start (M11).
 
 ## Delivery rules
 
-Only `acceptsMailing()` decides (rule 19): `off` sends nothing, and `setNotificationLevel('off')`
+For an ordinary kind only `acceptsMailing()` decides (rule 19): `off` sends nothing, and `setNotificationLevel('off')`
 cancels what is pending; `reduced` sends at most one mailing per `REDUCED_LEVEL_WINDOW_HOURS`
 (24 h, counted from `sent_at`, M5) — the job waits, it is not dropped; a user marked unreachable
 (`telegram_blocked_at`) gets nothing, and `markTelegramBlocked` cancels what is pending (M6). The
 mailings' own `sent` rows are what the `reduced` window reads.
+
+**Important kinds** (#686; today `real_mode_by_deposit`, `important: true` in its scenario,
+`IMPORTANT_NOTIFICATION_KINDS`): a message about the user's money that the level does not hold.
+The planner and the claim take `reachable()` (`telegram_blocked_at is null`) for them instead of
+`deliverable()`/`acceptsMailing()`; their `sent` rows do not count in the `reduced` window; and
+`setNotificationLevel('off')` cancels everything pending but them
+(`cancelPendingNotificationJobs(tx, userId, { except: IMPORTANT_NOTIFICATION_KINDS })`).
+`markTelegramBlocked` cancels them too.
 
 Lock order: every statement here is one autocommit statement on `Db`. The sender locks
 `notification_jobs` rows only, never `users`, so `cancelPendingNotificationJobs`' order
@@ -343,6 +407,8 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
    `keyApplies`, the claim's predicate over the user's row and the job that the key is still one
    it would plan. `replansCanceled: true` when a job canceled because the condition stopped holding
    should come back once it holds again (#123); without it a canceled key is never planned again.
+   `important: true` only for a message the notification level must not hold (#686, Delivery
+   rules → Important kinds).
 4. A link in `TIMING_CHAIN_HOLDS` only for a kind that waits: its offset counts in
    `MAILING_MIN_OFFSET_MS`, which the planner's tick must stay under; a kind due at its fact (0)
    is left out of it.
