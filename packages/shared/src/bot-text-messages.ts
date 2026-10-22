@@ -302,6 +302,13 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionTradeWon: tradeNoticeWidths,
   sessionTradeLost: tradeNoticeWidths,
   sessionTradeTied: tradeNoticeWidths,
+  // an H1 session's summary (#707): the settled count of at most MAX_SESSION_SUMMARY_TRADES, the
+  // pair or the asset's id, the session's base stake
+  sessionH1Progress: {
+    count: () => w.sessionCount,
+    symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')),
+    stake: () => w.stake,
+  },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
   // the mode screen names the real stake, the saved one or the broker's minimum: never the label

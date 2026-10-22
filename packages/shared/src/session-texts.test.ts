@@ -260,3 +260,40 @@ describe('sessionSummaryText (#464)', () => {
     expect(lines(view(), null)[0]).toBe(`📈 ${texts.plain.intentAssetFallback({ assetId: '42' })}`);
   });
 });
+
+describe('the H1 summary (#707)', () => {
+  const text = (patch: Partial<Parameters<typeof session.sessionH1ProgressText>[0]> = {}) =>
+    session
+      .sessionH1ProgressText({
+        label: pairLabel({ symbol: 'EUR/USD' }),
+        assetId: 42,
+        settled: 20,
+        planned: 50,
+        score: { won: 12, lost: 7, tied: 1 },
+        result: d('3.04000000'),
+        stake: d('1.50'),
+        ...patch,
+      })
+      .value.split('\n');
+
+  it('prints the pair, the settled trades of the plan, the score, the result and the stake', () => {
+    expect(text()).toEqual([
+      '⚡ H1 · EUR/USD',
+      '📈 Сделок: 20 из 50 сделок',
+      '🧮 Счёт: 12 в плюс, 7 в минус, 1 в ноль',
+      '💰 Результат: +$3.04',
+      '💵 Ставка: $1.50',
+    ]);
+  });
+
+  it('without a tie no «в ноль»; a loss signed; the asset by its id without the catalog', () => {
+    const lines = text({
+      label: null,
+      score: { won: 3, lost: 7, tied: 0 },
+      result: d('-4.24000000'),
+    });
+    expect(lines[0]).toBe(`⚡ H1 · ${texts.plain.intentAssetFallback({ assetId: '42' })}`);
+    expect(lines[2]).toBe('🧮 Счёт: 3 в плюс, 7 в минус');
+    expect(lines[3]).toBe('💰 Результат: -$4.24');
+  });
+});

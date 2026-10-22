@@ -13,6 +13,8 @@ import {
   TradingSessionStopReason,
   type BinaryPair,
   type DecimalString,
+  H1_R1_PARAMS,
+  type H1SessionSettings,
   type TradingSessionSettings,
   type TradingSessionView,
 } from '@binarius/shared';
@@ -22,6 +24,7 @@ import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
 import {
   pairOf,
   sessionCycleMessage,
+  sessionH1ProgressMessage,
   sessionSummaryMessage,
   sessionWaitingMessage,
   type SessionCycleNotice,
@@ -303,5 +306,39 @@ describe('pairOf', () => {
     expect(pairOf(catalog, 101)).toEqual({ label: 'EUR/USD', digits: 5 });
     expect(pairOf(catalog, 7)).toEqual({ label: null, digits: null });
     expect(pairOf(undefined, 101)).toEqual({ label: null, digits: null });
+  });
+});
+
+describe('sessionH1ProgressMessage (#707)', () => {
+  const h1: H1SessionSettings = {
+    version: 4,
+    assetId: 101,
+    durationSec: 5,
+    trades: 50,
+    stake: { strategy: 'fixed', baseStake: d('1.5'), stakeScale: 2 },
+    signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
+    maxLoss: d('30'),
+  };
+  const totals = { won: 6, lost: 4, tied: 0, result: d('0.52') };
+  const expected = shared.sessionH1ProgressText({
+    label: LABEL,
+    assetId: 101,
+    settled: 10,
+    planned: 50,
+    score: totals,
+    result: totals.result,
+    stake: d('1.5'),
+  });
+
+  it('sends the first summary as a new message from 0, edits the cycle message after it', () => {
+    expect(sessionH1ProgressMessage({ totals, cycleMessage: null }, h1, LABEL, 10)).toEqual({
+      kind: 'send',
+      text: expected,
+      from: 0,
+      split: false,
+    });
+    expect(
+      sessionH1ProgressMessage({ totals, cycleMessage: { messageId: 77, from: 0 } }, h1, LABEL, 10),
+    ).toEqual({ kind: 'edit', messageId: 77, text: expected, from: 0 });
   });
 });
