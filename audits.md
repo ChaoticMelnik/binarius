@@ -4010,6 +4010,6 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | R1 Minors 1–4 (timer docs, «#697 adds none» only for 5s, CT5 cannot go red, P10/E4b without `stop()` on failure) | Minor | other | left at the merge | → #725 |
 
 ### Process improvement proposals
-1. A plan branching from `main` while an open PR rewrites the same lines writes code in `main`'s shape, the other shape only in the rebase recipe — **внедрено в #DOCS: `.claude/skills/architect/SKILL.md` → conflicts with other in-flight branches**
-2. Remove the implementer's worktree before `gh pr merge --delete-branch` — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Merge relay**
+1. A plan branching from `main` while an open PR rewrites the same lines writes code in `main`'s shape, the other shape only in the rebase recipe — **внедрено в #726: `.claude/skills/architect/SKILL.md` → conflicts with other in-flight branches**
+2. Remove the implementer's worktree before `gh pr merge --delete-branch` — **внедрено в #726: `.claude/skills/tech-lead/SKILL.md` → Merge relay**
 3. Remaining findings — **вынесено в #725**
