@@ -1,8 +1,12 @@
 import { sql } from 'drizzle-orm';
-import { NotificationKind, type TradeMode } from '@binarius/shared';
+import { NotificationKind, type BotLanguage, type TradeMode } from '@binarius/shared';
 import type { Db } from './client';
-import { acceptsMailing, deliverable } from './delivery-ops';
-import { MAILING_SCENARIOS, type MailingScenario } from './mailing-scenarios';
+import { acceptsMailing, deliverable, reachable } from './delivery-ops';
+import {
+  IMPORTANT_NOTIFICATION_KINDS,
+  MAILING_SCENARIOS,
+  type MailingScenario,
+} from './mailing-scenarios';
 import { literal } from './schema/columns';
 import {
   NotificationJobStatus,
@@ -32,13 +36,14 @@ const replanCanceled = sql`do update set status = ${literal(NotificationJobStatu
 
 // One INSERT … SELECT per kind, idempotent through notification_jobs_dedupe_key_idx: a second
 // planner, a restart or a slow tick inserts nothing twice. A job is planned only once due, for a
-// fact at or after the kind's plans_from, to a user the bot may reach, while the scenario applies.
+// fact at or after the kind's plans_from, to a user the bot may mail (an important kind: reach,
+// whatever the level, #686), while the scenario applies.
 // Returns how many jobs each kind gained, re-planned ones included.
 export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, number>> {
   const planned = {} as Record<NotificationKind, number>;
   for (const kind of KINDS) {
     const scenario: MailingScenario = MAILING_SCENARIOS[kind];
-    const { facts, afterMs, dedupeKey, stillApplies, replansCanceled } = scenario;
+    const { facts, afterMs, dedupeKey, stillApplies, replansCanceled, important } = scenario;
     const payload = scenario.payload ?? sql`'{}'::jsonb`;
     const after = sql`make_interval(secs => ${afterMs / 1000})`;
     const result = await db.execute(sql`
@@ -49,7 +54,7 @@ export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, 
       join ${notificationKinds} on ${notificationKinds.kind} = ${literal(kind)}
       where fact.at >= ${notificationKinds.plansFrom}
         and fact.at + ${after} <= now()
-        and ${deliverable()}
+        and ${important === true ? reachable() : deliverable()}
         and ${stillApplies}
       on conflict (user_id, dedupe_key) where dedupe_key is not null
       ${replansCanceled === true ? replanCanceled : sql`do nothing`}`);
@@ -66,6 +71,8 @@ export interface ClaimedMailingJob {
   telegramUserId: bigint;
   // the user's mode at the claim, for a button whose label follows it (#123)
   tradingMode: TradeMode;
+  // the user's language at the claim; only real_mode_by_deposit reads it so far (#686, #633)
+  language: BotLanguage;
 }
 
 // A job applies while its scenario holds and its key is one the scenario would plan now
@@ -81,7 +88,19 @@ const appliesByKind = sql`case ${notificationJobs.kind} ${sql.join(
   sql` `,
 )} else false end`;
 
-// Takes the earliest due job of a user the bot may mail now (acceptsMailing) and marks it `sent`
+// Whom a job may go to now: an important kind's to a user the bot can reach (#686), any other's to
+// a user who accepts mailing (acceptsMailing: the level and the `reduced` window).
+const IMPORTANT = sql.join(
+  IMPORTANT_NOTIFICATION_KINDS.map((kind) => literal(kind)),
+  sql`, `,
+);
+const acceptsJob =
+  IMPORTANT_NOTIFICATION_KINDS.length === 0
+    ? acceptsMailing()
+    : sql`((${notificationJobs.kind} in (${IMPORTANT}) and ${reachable()})
+      or (${notificationJobs.kind} not in (${IMPORTANT}) and ${acceptsMailing()}))`;
+
+// Takes the earliest due job of a user the bot may mail now (acceptsJob) and marks it `sent`
 // with MAILING_OUTCOME_UNKNOWN before anything reaches Telegram, so no restart or second process
 // sends it again. Among the `scan` earliest due jobs, those whose scenario no longer applies are
 // canceled in the same statement. One job per call: the next claim of the same user sees this
@@ -98,6 +117,7 @@ export async function claimMailingJob(
     attempts: number | null;
     telegram_user_id: string | null;
     trading_mode: TradeMode | null;
+    language: BotLanguage | null;
   }>(sql`
     with due as (
       select ${notificationJobs.id} as id, ${notificationJobs.scheduledAt} as scheduled_at,
@@ -106,7 +126,7 @@ export async function claimMailingJob(
       join ${users} on ${users.id} = ${notificationJobs.userId}
       where ${notificationJobs.status} = ${literal(NotificationJobStatus.Pending)}
         and ${notificationJobs.scheduledAt} <= now()
-        and ${acceptsMailing()}
+        and ${acceptsJob}
       order by ${notificationJobs.scheduledAt}, ${notificationJobs.id}
       limit ${scan}
       for update of ${notificationJobs} skip locked
@@ -124,7 +144,7 @@ export async function claimMailingJob(
     )
     select (select count(*)::int from canceled) as canceled, claimed.id, claimed.kind,
       claimed.payload, claimed.attempts, ${users.telegramUserId}::text as telegram_user_id,
-      ${users.tradingMode} as trading_mode
+      ${users.tradingMode} as trading_mode, ${users.language} as language
     from (select 1) one
     left join claimed on true
     left join ${users} on ${users.id} = claimed.user_id`);
@@ -134,7 +154,8 @@ export async function claimMailingJob(
     row?.id == null ||
     row.kind === null ||
     row.telegram_user_id === null ||
-    row.trading_mode === null
+    row.trading_mode === null ||
+    row.language === null
   ) {
     return { job: undefined, canceled };
   }
@@ -146,6 +167,7 @@ export async function claimMailingJob(
       attempts: row.attempts ?? 0,
       telegramUserId: BigInt(row.telegram_user_id),
       tradingMode: row.trading_mode,
+      language: row.language,
     },
     canceled,
   };

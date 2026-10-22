@@ -7,22 +7,28 @@ import {
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
   keyboardOf,
+  MENU_CALLBACK_DATA,
+  MODE_CALLBACK_DATA,
   NotificationKind,
+  realModeByDepositPayloadSchema,
   referralRewardedPayloadSchema,
   tokenNudgePayloadSchema,
   TradeMode,
   webAppButton,
+  type BotLanguage,
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { CLIENT_LABELS, CLIENT_TEXTS, clientLabelsOf, clientTextsOf } from '../auth/texts';
 
 type Payload = Record<string, unknown>;
 
 // What a message reads besides its payload: the cashier's Mini App URL (cashierUrlOf, undefined
-// without https) and the user's mode at the claim.
+// without https), the user's mode and language at the claim. Only real_mode_by_deposit reads the
+// language so far (#686; the others are Russian until #633).
 export interface MailingContext {
   cashierUrl: string | undefined;
   tradingMode: TradeMode;
+  language: BotLanguage;
 }
 
 // The first-session chain leads into the demo (#320's entry), the path to a session.
@@ -99,6 +105,22 @@ const tokenNudge =
     };
   };
 
+// The switch to real after a deposit (#686, docs/mailing.md → The real-mode notification): the
+// stake from the payload (text, rule 2; null names the broker's minimum in words), the mode
+// screen and the menu in one row — a lone navigation button is refused (lone_button). In the
+// user's language. A payload that does not parse throws (`mailing not built`).
+function realModeByDeposit(payload: Payload, { language }: MailingContext): ClientPushMessage {
+  const { stake } = realModeByDepositPayloadSchema.parse(payload);
+  const labels = clientLabelsOf(language);
+  return {
+    text: clientTextsOf(language).realModeByDeposit({ stake }),
+    reply_markup: keyboardOf([
+      callbackButton(ButtonRole.Nav, labels.settingsModeButton, MODE_CALLBACK_DATA),
+      callbackButton(ButtonRole.Nav, labels.menuButton, MENU_CALLBACK_DATA),
+    ]),
+  };
+}
+
 // What each kind sends (docs/mailing.md), built from the job's payload when the job is sent so a
 // text override reaches it. One entry per kind: a kind added to NotificationKind without a message
 // does not compile.
@@ -111,6 +133,7 @@ const MAILING_MESSAGES = {
   [NotificationKind.TokensHalf]: tokenNudge((vars) => CLIENT_TEXTS.tokensHalfUsed(vars), false),
   [NotificationKind.TokensLow]: tokenNudge((vars) => CLIENT_TEXTS.tokensLow(vars), true),
   [NotificationKind.TokensOut]: tokenNudge((vars) => CLIENT_TEXTS.tokensOut(vars), true),
+  [NotificationKind.RealModeByDeposit]: realModeByDeposit,
 } as const satisfies Record<
   NotificationKind,
   (payload: Payload, context: MailingContext) => ClientPushMessage

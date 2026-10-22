@@ -59,10 +59,15 @@ export interface MailingEngineDeps {
   // Telegram's pause
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  // the tests' planner pass, to hold one in flight (#686); planMailingJobs by default
+  plan?: typeof planMailingJobs;
 }
 
 export interface MailingEngine {
   planTick(): Promise<void>;
+  // After a commit whose fact a scenario plans at once (#686): a pass now, or one more right
+  // after the pass in flight, which may have read past the commit. Wakes merge; no-op after stop().
+  wakePlan(): void;
   sendTick(): Promise<void>;
   start(): void;
   // Ends both loops and waits for the planner tick and the sender's job in flight: at most one
@@ -129,9 +134,13 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   let sending: Promise<void> | undefined;
   let planTimer: NodeJS.Timeout | undefined;
   let sendTimer: NodeJS.Timeout | undefined;
+  const plan = deps.plan ?? planMailingJobs;
+  let planWoken = 0;
 
   async function runPlanTick(): Promise<void> {
-    const planned = await planMailingJobs(db);
+    // before the first await: a wakePlan() after this line is served by the next pass
+    planWoken = 0;
+    const planned = await plan(db);
     if (Object.values(planned).some((count) => count > 0)) {
       logger.info({ planned }, 'mailing planned');
     }
@@ -182,6 +191,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       message = mailingMessage(job.kind, job.payload, {
         cashierUrl: deps.cashierUrl,
         tradingMode: job.tradingMode,
+        language: job.language,
       });
     } catch (error) {
       logger.error(
@@ -248,8 +258,16 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       .catch((error: unknown) => logger.error(errorLogFields(error), 'mailing plan tick failed'))
       .finally(() => {
         planning = undefined;
+        // through planTick, so a stop() during the pass ends the wakes too
+        if (planWoken > 0) void planTick();
       });
     return planning;
+  }
+
+  function wakePlan(): void {
+    if (stopped) return;
+    planWoken += 1;
+    if (planning === undefined) void planTick();
   }
 
   function sendTick(): Promise<void> {
@@ -264,6 +282,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
 
   return {
     planTick,
+    wakePlan,
     sendTick,
     start() {
       if (stopped || planTimer !== undefined) return;

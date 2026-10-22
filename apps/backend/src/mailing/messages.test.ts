@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { FIRST_SESSION_CHAIN, NotificationKind, TOKEN_NUDGES, TradeMode } from '@binarius/shared';
+import {
+  BotLanguage,
+  FIRST_SESSION_CHAIN,
+  NotificationKind,
+  TOKEN_NUDGES,
+  TradeMode,
+  decimalStringSchema,
+} from '@binarius/shared';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
 import { inlineRows, inlineStyles } from '../admin/testing';
 import { mailingMessage, type MailingContext } from './messages';
 
 const CASHIER_URL = 'https://web.example/cashier';
-const DEMO: MailingContext = { cashierUrl: CASHIER_URL, tradingMode: TradeMode.Demo };
+const DEMO: MailingContext = {
+  cashierUrl: CASHIER_URL,
+  tradingMode: TradeMode.Demo,
+  language: BotLanguage.Ru,
+};
 
 const buttonsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message }).flat();
 const stylesOf = (message: ReturnType<typeof mailingMessage>) => inlineStyles({ ...message });
@@ -159,7 +170,7 @@ describe('the low-token nudge messages', () => {
   it.each([LOW.kind, OUT.kind])(
     'gives %s the entry in the cashier’s place without https',
     (kind) => {
-      const context = { cashierUrl: undefined, tradingMode: TradeMode.Demo };
+      const context = { ...DEMO, cashierUrl: undefined };
       expect(rowsOf(mailingMessage(kind, { tokens: '0' }, context))).toStrictEqual([[demo], [buy]]);
       expect(
         rowsOf(mailingMessage(kind, { tokens: '0' }, { ...context, tradingMode: TradeMode.Real })),
@@ -192,4 +203,66 @@ describe('the low-token nudge messages', () => {
   )('%s throws on payload %j, which the sender settles as not built', (kind, payload) => {
     expect(() => mailingMessage(kind, payload, DEMO)).toThrow();
   });
+});
+
+// #686
+describe('the real-mode message after a deposit', () => {
+  const REAL: MailingContext = { ...DEMO, tradingMode: TradeMode.Real };
+  const kind = NotificationKind.RealModeByDeposit;
+
+  it('says the deposit came, the mode is REAL, the stake, and the way back to demo', () => {
+    const message = mailingMessage(kind, { stake: '5.00000000' }, REAL);
+    const text = message.text.value;
+    expect(text).toContain('Пополнение получено');
+    expect(text).toContain('REAL');
+    expect(text).toContain('реальные деньги');
+    expect(text).toContain('$5.00');
+    expect(text).toContain(`/settings → «${CLIENT_LABELS.settingsModeButton}»`);
+    expect(buttonsOf(message)).toStrictEqual([
+      { text: CLIENT_LABELS.settingsModeButton, callback_data: 'mode' },
+      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+    ]);
+    // one row of two navigation buttons, no colour
+    expect(stylesOf(message)).toEqual([[null, null]]);
+  });
+
+  it('names the broker minimum in words without a stake', () => {
+    expect(mailingMessage(kind, { stake: null }, REAL).text.value).toContain(
+      'минимальная ставка брокера',
+    );
+    expect(
+      mailingMessage(kind, { stake: null }, { ...REAL, language: BotLanguage.En }).text.value,
+    ).toContain("broker's minimum stake");
+  });
+
+  it('speaks the user’s language, the text and both labels', () => {
+    const message = mailingMessage(
+      kind,
+      { stake: '5.00000000' },
+      { ...REAL, language: BotLanguage.En },
+    );
+    expect(message.text.value).toContain('Deposit received');
+    expect(message.text.value).toContain('$5.00');
+    expect(buttonsOf(message)).toStrictEqual([
+      { text: '⚙️ Trading mode', callback_data: 'mode' },
+      { text: '🏠 Menu', callback_data: 'menu' },
+    ]);
+  });
+
+  it('promises no result', () => {
+    for (const language of Object.values(BotLanguage)) {
+      const stake = decimalStringSchema.parse('5');
+      const text = mailingMessage(kind, { stake }, { ...REAL, language }).text.value.toLowerCase();
+      for (const word of ['вероятност', 'точност', 'гарант', 'прибыл', 'profit', 'guarantee']) {
+        expect(text).not.toContain(word);
+      }
+    }
+  });
+
+  it.each([{}, { stake: 'x' }, { stake: 5 }, { stake: '' }])(
+    'throws on payload %j, which the sender settles as not built',
+    (payload) => {
+      expect(() => mailingMessage(kind, payload, REAL)).toThrow();
+    },
+  );
 });

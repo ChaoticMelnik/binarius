@@ -1,4 +1,4 @@
-import { DepositEventStatus, PostbackSource } from '@binarius/shared';
+import { DepositEventStatus, DepositModeSwitch, PostbackSource } from '@binarius/shared';
 import { sql } from 'drizzle-orm';
 import {
   check,
@@ -42,6 +42,11 @@ export const depositEvents = pgTable(
       .notNull()
       .default(DepositEventStatus.Received),
     processedAt: timestamp('processed_at', { withTimezone: true }),
+    // what the switch to real after a deposit made of the row (#686, docs/trading-mode.md → The
+    // automatic switch after a deposit): NULL until considered, then one outcome, never changed —
+    // the pass and setTradingMode write it only where it is NULL
+    modeSwitch: text('mode_switch').$type<DepositModeSwitch>(),
+    modeSwitchAt: timestamp('mode_switch_at', { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -76,5 +81,14 @@ export const depositEvents = pgTable(
     index('deposit_events_broker_account_id_idx').on(t.brokerAccountId),
     index('deposit_events_broker_user_id_idx').on(t.brokerUserId),
     inList('deposit_events_status_check', t.status, DepositEventStatus),
+    inList('deposit_events_mode_switch_check', t.modeSwitch, DepositModeSwitch),
+    check(
+      'deposit_events_mode_switch_pair_check',
+      sql`(${t.modeSwitch} is null) = (${t.modeSwitchAt} is null)`,
+    ),
+    // the pass's work queue: attributed rows not yet considered, oldest first
+    index('deposit_events_mode_switch_pending_idx')
+      .on(t.createdAt)
+      .where(sql`${t.userId} is not null and ${t.modeSwitch} is null`),
   ],
 );

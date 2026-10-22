@@ -3,14 +3,20 @@ import { HttpError } from 'grammy';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  BotLanguage,
+  DepositModeSwitch,
   FIRST_SESSION_CHAIN,
   logOptions,
   NotificationKind,
+  PostbackSource,
+  TradeMode,
+  type DecimalString,
   TOKEN_NUDGES,
   TokenLedgerKind,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
+  depositEvents,
   MAILING_OUTCOME_UNKNOWN,
   NotificationJobStatus,
   notificationJobs,
@@ -29,7 +35,7 @@ import {
 } from '@binarius/db/testing';
 import { captureApi, callsTo, inlineButtons, inlineRows, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { CLIENT_LABELS, CLIENT_TEXTS, clientTextsOf } from '../auth/texts';
 import { MAILING_SEND_PER_SECOND } from '../timing';
 import { createMailingEngine, type MailingConfig } from './engine';
 
@@ -779,4 +785,64 @@ describe('the low-token nudge through the engine', () => {
     ]);
     await mailing.stop();
   });
+});
+
+// #686: the message after the switch to real, in the user's language
+describe('the real-mode notification through the engine', () => {
+  let n = 0;
+  async function switched(language: BotLanguage) {
+    const user = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    const brokerUserId = `e-mr-trader-${String(++n)}`;
+    const accountId = await seedBrokerAccount(tmp.db, user.userId, { brokerUserId });
+    await tmp.db
+      .update(users)
+      .set({ language, realStake: '5' as DecimalString })
+      .where(eq(users.id, user.userId));
+    await tmp.db.insert(depositEvents).values({
+      userId: user.userId,
+      brokerAccountId: accountId,
+      source: PostbackSource.Binodex,
+      brokerUserId,
+      paymentId: `e-mr-pay-${String(n)}`,
+      amount: '10' as DecimalString,
+      modeSwitch: DepositModeSwitch.Switched,
+      modeSwitchAt: sql`now()`,
+    });
+    return user;
+  }
+
+  it.each([
+    [BotLanguage.En, '⚙️ Trading mode', '🏠 Menu'],
+    [BotLanguage.Ru, '⚙️ Режим торговли', '🏠 В меню'],
+  ])(
+    'E-MR sends one message in %s with the mode screen and the menu',
+    async (language, mode, menu) => {
+      const user = await switched(language);
+      const { mailing, captured } = engine();
+      await mailing.planTick();
+      await mailing.sendTick();
+      await mailing.sendTick();
+
+      const sends = sendsTo(captured.calls, user.telegramUserId);
+      expect(sends).toHaveLength(1);
+      const payload = sends[0]!.payload;
+      expect(pushedText(payload)).toBe(
+        clientTextsOf(language).realModeByDeposit({ stake: '5.00000000' as DecimalString }).value,
+      );
+      expect(pushedText(payload)).toContain('$5.00');
+      expect(payload.parse_mode).toBe('HTML');
+      expect(inlineRows(payload)).toEqual([
+        [
+          { text: mode, callback_data: 'mode' },
+          { text: menu, callback_data: 'menu' },
+        ],
+      ]);
+      const jobs = (await jobsOf(user.userId)).filter(
+        (job) => job.kind === NotificationKind.RealModeByDeposit,
+      );
+      expect(jobs.map((job) => [job.status, job.lastError])).toEqual([
+        [NotificationJobStatus.Sent, null],
+      ]);
+    },
+  );
 });

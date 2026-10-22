@@ -526,6 +526,20 @@
       "when": 1792658783835,
       "tag": "0074_session_open_notice",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1792696068847,
+      "tag": "0075_deposit_mode_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1792696077446,
+      "tag": "0076_real_mode_by_deposit_seed",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,8 @@
 import {
+  BotLanguage,
   createBotTexts,
   defaultBotTextSource,
+  enBotTextSource,
   type BotHtmlTexts,
   type BotPlainTexts,
   type BotTextKey,
@@ -19,3 +21,12 @@ const { html, plain } = createBotTexts({ sourceOf: (key) => active.sourceOf(key)
 // annotated: the inferred type of the whole catalog is past what tsc serializes into a .d.ts
 export const CLIENT_TEXTS: BotHtmlTexts = html;
 export const CLIENT_LABELS: BotPlainTexts = plain;
+
+// The user's language (#508), for the messages that already read it (#686; the other pushes stay
+// Russian until #633). Russian is the catalog read through `active`, staff overrides included;
+// English is the static source, which overrides do not reach (Rule 30).
+const en = createBotTexts(enBotTextSource);
+export const clientTextsOf = (language: BotLanguage): BotHtmlTexts =>
+  language === BotLanguage.En ? en.html : CLIENT_TEXTS;
+export const clientLabelsOf = (language: BotLanguage): BotPlainTexts =>
+  language === BotLanguage.En ? en.plain : CLIENT_LABELS;

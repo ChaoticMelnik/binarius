@@ -1,16 +1,20 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  BotLanguage,
   BrokerAccountStatus,
+  DepositModeSwitch,
   FIRST_SESSION_CHAIN,
   NotificationKind,
   NotificationLevel,
+  PostbackSource,
   TOKEN_NUDGES,
   TokenLedgerKind,
   TradeMode,
   TradingSessionStatus,
   TradingSessionStopReason,
   UserStatus,
+  type DecimalString,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
@@ -18,6 +22,7 @@ import {
   createTempDatabase,
   intentRequest,
   lockWaiters,
+  seedBalanceSnapshot,
   seedBrokerAccount,
   seedTradingSession,
   seedUser,
@@ -26,6 +31,7 @@ import {
 } from './testing';
 import {
   brokerAccounts,
+  depositEvents,
   NotificationJobStatus,
   notificationJobs,
   notificationKinds,
@@ -35,7 +41,7 @@ import {
   users,
 } from './schema/index';
 import { createTradeIntent } from './trade-intent-ops';
-import { markTelegramBlocked, setNotificationLevel } from './delivery-ops';
+import { markTelegramBlocked, markTelegramReachable, setNotificationLevel } from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
 import { grantReferralReward, lockReferralInviter } from './referral-reward-ops';
 import {
@@ -1473,5 +1479,271 @@ describe('the low-token nudge', () => {
         plansFrom: sql`now() - interval '200 hours'`,
       });
     }
+  });
+});
+
+// #686 (docs/mailing.md → The real-mode notification): one job per deposit that switched the user
+// to real, an important kind. Last in the file: its beforeEach takes every earlier user out of
+// reach, so a claim here takes only this suite's jobs.
+describe('the real-mode notification (#686)', () => {
+  const KIND = NotificationKind.RealModeByDeposit;
+  let n = 0;
+
+  beforeAll(() => plansFromMinutesAgo(hours(200)));
+  beforeEach(async () => {
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(sql`${users.telegramBlockedAt} is null`);
+  });
+
+  // a user in real whose deposit switched them `minutes` ago, as the pass leaves it
+  async function switched({
+    minutes = 1,
+    realStake,
+    minTradeAmount,
+    level,
+  }: {
+    minutes?: number;
+    realStake?: string;
+    minTradeAmount?: string;
+    level?: NotificationLevel;
+  } = {}) {
+    const user = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    const brokerUserId = `mr-trader-${String(++n)}`;
+    const accountId = await seedBrokerAccount(tmp.db, user.userId, { brokerUserId });
+    if (realStake !== undefined) {
+      await tmp.db
+        .update(users)
+        .set({ realStake: realStake as DecimalString })
+        .where(eq(users.id, user.userId));
+    }
+    if (minTradeAmount !== undefined) {
+      await seedBalanceSnapshot(tmp.db, accountId, { minTradeAmount });
+    }
+    if (level !== undefined) {
+      await tmp.db.update(users).set({ notificationLevel: level }).where(eq(users.id, user.userId));
+    }
+    const [row] = await tmp.db
+      .insert(depositEvents)
+      .values({
+        userId: user.userId,
+        brokerAccountId: accountId,
+        source: PostbackSource.Binodex,
+        brokerUserId,
+        paymentId: `mr-pay-${String(n)}`,
+        amount: '10' as DecimalString,
+        modeSwitch: DepositModeSwitch.Switched,
+        modeSwitchAt: sql`now() - make_interval(secs => ${minutes * 60})`,
+      })
+      .returning({ id: depositEvents.id, modeSwitchAt: depositEvents.modeSwitchAt });
+    return {
+      userId: user.userId,
+      telegramUserId: BigInt(user.telegramUserId),
+      accountId,
+      brokerUserId,
+      depositEventId: row!.id,
+      switchedAt: row!.modeSwitchAt!,
+    };
+  }
+  const modeJobsOf = async (userId: string) =>
+    (await jobsOf(userId)).filter((job) => job.kind === KIND);
+
+  it('MR1 plans one job per switched deposit at its moment, with the real stake in use', async () => {
+    const saved = await switched({ realStake: '7', minTradeAmount: '1' });
+    const minimum = await switched({ minTradeAmount: '2.5' });
+    const none = await switched();
+    // another outcome is no fact
+    const already = await switched();
+    await tmp.db
+      .update(depositEvents)
+      .set({ modeSwitch: DepositModeSwitch.AlreadyReal })
+      .where(eq(depositEvents.id, already.depositEventId));
+
+    await planMailingJobs(tmp.db);
+
+    for (const [user, stake] of [
+      [saved, '7.00000000'],
+      [minimum, '2.50000000'],
+      [none, null],
+    ] as const) {
+      expect(
+        (await modeJobsOf(user.userId)).map((job) => ({
+          dedupeKey: job.dedupeKey,
+          payload: job.payload,
+          scheduledAt: job.scheduledAt,
+          status: job.status,
+        })),
+      ).toEqual([
+        {
+          dedupeKey: `real_mode_by_deposit:${user.depositEventId}`,
+          payload: { stake },
+          scheduledAt: user.switchedAt,
+          status: NotificationJobStatus.Pending,
+        },
+      ]);
+    }
+    expect(await modeJobsOf(already.userId)).toEqual([]);
+  });
+
+  it('MR2 plans and claims for a user at `off` and at `reduced` inside the window, not for one who blocked the bot', async () => {
+    const off = await switched({ level: NotificationLevel.Off });
+    const reduced = await switched({ level: NotificationLevel.Reduced });
+    // another mailing sent to the reduced user an hour ago: inside the window
+    await tmp.db.insert(notificationJobs).values({
+      userId: reduced.userId,
+      kind: NotificationKind.ReferralRewarded,
+      dedupeKey: `mr-window-${String(++n)}`,
+      status: NotificationJobStatus.Sent,
+      scheduledAt: sql`now() - interval '1 hour'`,
+      sentAt: sql`now() - interval '1 hour'`,
+    });
+    const unreachable = await switched();
+    await markTelegramBlocked(tmp.db, unreachable.telegramUserId);
+
+    await planMailingJobs(tmp.db);
+
+    expect(await modeJobsOf(off.userId)).toHaveLength(1);
+    expect(await modeJobsOf(reduced.userId)).toHaveLength(1);
+    expect(await modeJobsOf(unreachable.userId)).toEqual([]);
+    const claimed = [
+      (await claimMailingJob(tmp.db, { scan: SCAN })).job?.telegramUserId,
+      (await claimMailingJob(tmp.db, { scan: SCAN })).job?.telegramUserId,
+    ];
+    expect(claimed.sort()).toEqual([off.telegramUserId, reduced.telegramUserId].sort());
+    expect((await claimMailingJob(tmp.db, { scan: SCAN })).job).toBeUndefined();
+  });
+
+  it('MR3 its sent row does not hold a reduced user’s next mailing, and another mailing does not hold it', async () => {
+    const first = await switched({ level: NotificationLevel.Reduced, minutes: 3 });
+    await planMailingJobs(tmp.db);
+    expect((await claimMailingJob(tmp.db, { scan: SCAN })).job?.kind).toBe(KIND);
+    const reward = await rewarded(1, {
+      inviter: { userId: first.userId, telegramUserId: first.telegramUserId },
+    });
+    await planMailingJobs(tmp.db);
+    const ordinary = (await claimMailingJob(tmp.db, { scan: SCAN })).job;
+    expect(ordinary).toMatchObject({ kind: NotificationKind.ReferralRewarded });
+    expect(ordinary?.payload).toEqual({ tokens: '50' });
+    expect(reward.inviterId).toBe(first.userId);
+
+    // the other way round: a reward sent first, the switch after it
+    const second = await switched({ level: NotificationLevel.Reduced, minutes: 0 });
+    await tmp.db.insert(notificationJobs).values({
+      userId: second.userId,
+      kind: NotificationKind.ReferralRewarded,
+      dedupeKey: `mr-window-${String(++n)}`,
+      status: NotificationJobStatus.Sent,
+      scheduledAt: sql`now() - interval '1 minute'`,
+      sentAt: sql`now() - interval '1 minute'`,
+    });
+    await planMailingJobs(tmp.db);
+    expect((await claimMailingJob(tmp.db, { scan: SCAN })).job).toMatchObject({
+      kind: KIND,
+      telegramUserId: second.telegramUserId,
+    });
+  });
+
+  it('MR4 cancels at the claim once the user is back in demo or blocked by the admin', async () => {
+    const demo = await switched();
+    const blocked = await switched();
+    await planMailingJobs(tmp.db);
+    await setTradingMode(tmp.db, demo.telegramUserId, TradeMode.Demo);
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, blocked.userId));
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 2 });
+    for (const user of [demo, blocked]) {
+      expect((await modeJobsOf(user.userId)).map((job) => job.status)).toEqual([
+        NotificationJobStatus.Canceled,
+      ]);
+    }
+  });
+
+  it('MR5 `off` keeps the job; blocking the bot cancels it, and the unblock plans it again while the user is in real', async () => {
+    const real = await switched();
+    const demo = await switched();
+    await planMailingJobs(tmp.db);
+
+    await setNotificationLevel(tmp.db, real.telegramUserId, NotificationLevel.Off);
+    expect((await modeJobsOf(real.userId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Pending,
+    ]);
+
+    for (const user of [real, demo]) await markTelegramBlocked(tmp.db, user.telegramUserId);
+    for (const user of [real, demo]) {
+      expect((await modeJobsOf(user.userId)).map((job) => job.status)).toEqual([
+        NotificationJobStatus.Canceled,
+      ]);
+    }
+    await setTradingMode(tmp.db, demo.telegramUserId, TradeMode.Demo);
+    for (const user of [real, demo]) await markTelegramReachable(tmp.db, user.telegramUserId);
+    await planMailingJobs(tmp.db);
+    expect((await modeJobsOf(real.userId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Pending,
+    ]);
+    expect((await modeJobsOf(demo.userId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Canceled,
+    ]);
+  });
+
+  it('CUT plans nothing for a switch before the kind’s plans_from, and the job for one after', async () => {
+    await plansFromMinutesAgo(30, KIND);
+    try {
+      const before = await switched({ minutes: 40 });
+      const after = await switched({ minutes: 20 });
+      await planMailingJobs(tmp.db);
+      expect(await modeJobsOf(before.userId)).toEqual([]);
+      expect(await modeJobsOf(after.userId)).toHaveLength(1);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('MR7 cancels at the claim a job whose key names no switched deposit of this user', async () => {
+    const own = await switched();
+    const other = await switched();
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, other.userId));
+    const jobs = await tmp.db
+      .insert(notificationJobs)
+      .values(
+        [
+          `real_mode_by_deposit:${other.depositEventId}`,
+          `real_mode_by_deposit:${crypto.randomUUID()}`,
+        ].map((dedupeKey) => ({
+          userId: own.userId,
+          kind: KIND,
+          dedupeKey,
+          payload: { stake: null },
+          scheduledAt: sql`now() - interval '5 minutes'`,
+        })),
+      )
+      .returning({ id: notificationJobs.id });
+    const claim = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(claim.canceled).toBe(2);
+    for (const job of jobs) {
+      expect((await jobRow(job.id)).status).toBe(NotificationJobStatus.Canceled);
+    }
+  });
+
+  it('MR8 the claim carries the user’s language', async () => {
+    const user = await switched();
+    await tmp.db.update(users).set({ language: BotLanguage.En }).where(eq(users.id, user.userId));
+    await planMailingJobs(tmp.db);
+    expect((await claimMailingJob(tmp.db, { scan: SCAN })).job).toMatchObject({
+      kind: KIND,
+      telegramUserId: user.telegramUserId,
+      language: BotLanguage.En,
+    });
+  });
+
+  it('MR9 plans one job however many planners run', async () => {
+    const user = await switched();
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    expect(await modeJobsOf(user.userId)).toHaveLength(1);
   });
 });

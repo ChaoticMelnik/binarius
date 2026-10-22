@@ -9,6 +9,7 @@ import {
   deliverable,
   markTelegramBlocked,
   markTelegramReachable,
+  reachable,
   REDUCED_LEVEL_WINDOW_HOURS,
   setNotificationLevel,
 } from './delivery-ops';
@@ -156,6 +157,7 @@ const matches = async (userId: string, predicate: SQL): Promise<boolean> => {
 };
 const isDeliverable = (userId: string) => matches(userId, deliverable());
 const isMailable = (userId: string) => matches(userId, acceptsMailing());
+const isReachable = (userId: string) => matches(userId, reachable());
 
 const setLevel = (user: { telegramUserId: string }, level: NotificationLevel) =>
   setNotificationLevel(tmp.db, BigInt(user.telegramUserId), level);
@@ -254,6 +256,20 @@ describe('setNotificationLevel', () => {
   });
 });
 
+// #686: what an important kind needs — the mark only, whatever the level
+describe('reachable', () => {
+  it('holds at every level, fails on the mark, where deliverable fails at off too', async () => {
+    const user = await seedUser(tmp.db);
+    for (const level of Object.values(NotificationLevel)) {
+      await setLevel(user, level);
+      expect(await isReachable(user.userId)).toBe(true);
+      expect(await isDeliverable(user.userId)).toBe(level !== NotificationLevel.Off);
+    }
+    await markTelegramBlocked(tmp.db, BigInt(user.telegramUserId));
+    expect(await isReachable(user.userId)).toBe(false);
+  });
+});
+
 describe('acceptsMailing', () => {
   // sent_at on the database clock, `hours` before now()
   const seedJobAt = async (
@@ -310,6 +326,18 @@ describe('acceptsMailing', () => {
     expect(await isMailable(user.userId)).toBe(true);
   });
 
+  // #686: an important kind's message is not one of the mailings the user limited
+  it('A-win at reduced: a sent real_mode_by_deposit inside the window does not count', async () => {
+    const user = await userAt(NotificationLevel.Reduced);
+    await tmp.db.insert(notificationJobs).values({
+      userId: user.userId,
+      kind: NotificationKind.RealModeByDeposit,
+      status: NotificationJobStatus.Sent,
+      sentAt: sql`now() - interval '1 hour'`,
+    });
+    expect(await isMailable(user.userId)).toBe(true);
+  });
+
   it('at off: refuses with no mailing; on the mark: refuses at all', async () => {
     expect(await isMailable((await userAt(NotificationLevel.Off)).userId)).toBe(false);
     const marked = await userAt(NotificationLevel.All);
@@ -325,5 +353,41 @@ describe('cancelPendingNotificationJobs', () => {
     await seedJob(user.userId, NotificationJobStatus.Failed);
     const count = await tmp.db.transaction((tx) => cancelPendingNotificationJobs(tx, user.userId));
     expect(count).toBe(0);
+  });
+});
+
+// #686: `off` keeps the important kinds' jobs, the mark cancels them all
+describe('cancelPendingNotificationJobs: except', () => {
+  const seedKind = async (userId: string, kind: NotificationKind) => {
+    const [row] = await tmp.db
+      .insert(notificationJobs)
+      .values({ userId, kind, status: NotificationJobStatus.Pending })
+      .returning({ id: notificationJobs.id });
+    return row!.id;
+  };
+
+  it('cancels every pending job but the kinds in `except`', async () => {
+    const user = await seedUser(tmp.db);
+    const ordinary = await seedKind(user.userId, NotificationKind.FirstSession1h);
+    const important = await seedKind(user.userId, NotificationKind.RealModeByDeposit);
+    const count = await tmp.db.transaction((tx) =>
+      cancelPendingNotificationJobs(tx, user.userId, {
+        except: [NotificationKind.RealModeByDeposit],
+      }),
+    );
+    expect(count).toBe(1);
+    expect(await jobStatus(ordinary)).toBe(NotificationJobStatus.Canceled);
+    expect(await jobStatus(important)).toBe(NotificationJobStatus.Pending);
+  });
+
+  it('`off` keeps real_mode_by_deposit pending; the mark cancels it', async () => {
+    const user = await seedUser(tmp.db);
+    const ordinary = await seedKind(user.userId, NotificationKind.FirstSession1h);
+    const important = await seedKind(user.userId, NotificationKind.RealModeByDeposit);
+    expect((await setLevel(user, NotificationLevel.Off))?.canceledJobs).toBe(1);
+    expect(await jobStatus(ordinary)).toBe(NotificationJobStatus.Canceled);
+    expect(await jobStatus(important)).toBe(NotificationJobStatus.Pending);
+    await markTelegramBlocked(tmp.db, BigInt(user.telegramUserId));
+    expect(await jobStatus(important)).toBe(NotificationJobStatus.Canceled);
   });
 });
