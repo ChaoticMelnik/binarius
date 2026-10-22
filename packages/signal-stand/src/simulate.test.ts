@@ -1,6 +1,6 @@
-import { TradeAction } from '@binarius/shared';
+import { CANDLE_CLOSE_SLACK_MS, TradeAction } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { DECISION_SLACK_MS, SETTLE_TICK_MS } from './config';
+import { SETTLE_TICK_MS } from './config';
 import { priceIndex, type PriceAt } from './price';
 import {
   createDecisionMemo,
@@ -14,7 +14,7 @@ import { VARIANTS, type Variant } from './variants';
 
 const STEP = 5_000;
 const { Up, Down } = TradeAction;
-const FIRST = Math.ceil((T0 + 1) / STEP) * STEP + DECISION_SLACK_MS;
+const FIRST = Math.ceil((T0 + 1) / STEP) * STEP + CANDLE_CLOSE_SLACK_MS;
 
 // answers a script by call order (undefined = no signal), then no signal; records each nowMs
 function scripted(script: readonly (TradeAction | undefined)[], seen: number[] = []): Variant {
@@ -161,7 +161,7 @@ describe('simulate', () => {
       market(),
       config(scripted([undefined, Up], seen), { interval: '1m', until: T0 + 600_000 }),
     );
-    const first = Math.ceil((T0 + 1) / 60_000) * 60_000 + DECISION_SLACK_MS;
+    const first = Math.ceil((T0 + 1) / 60_000) * 60_000 + CANDLE_CLOSE_SLACK_MS;
     expect(seen.slice(0, 2)).toEqual([first, first + 60_000]);
     expect(result.trades[0].exitAt - result.trades[0].entryAt).toBe(60_000);
   });
