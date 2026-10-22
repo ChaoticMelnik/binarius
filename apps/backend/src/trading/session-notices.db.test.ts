@@ -8,6 +8,7 @@ import {
   TradeIntentStatus,
   TradingSessionStopReason,
   BOT_TEXT_LIMIT,
+  buildH1SessionSettings,
   botTextMessageOverflows,
   H1_R1_PARAMS,
   decimalStringSchema,
@@ -181,8 +182,8 @@ async function nextIntent(target: Target): Promise<TradeIntentRow> {
   ).intent;
 }
 
-// the next step settled at `profit`, opened at step/10 and closed 0.0001 above
-async function settled(target: Target, profit: string): Promise<void> {
+// the next step open at the broker, at step/10 (#700)
+async function opened(target: Target) {
   const intent = await nextIntent(target);
   const taken = (await takeIntent(tmp.db, {
     id: intent.id,
@@ -198,16 +199,26 @@ async function settled(target: Target, profit: string): Promise<void> {
       trade: open,
     }),
   );
+  return { intent, open, closePrice: target.step / 10 + 0.0001 };
+}
+
+// an open trade settled at `profit`, closed 0.0001 above its open price
+async function settle(
+  { intent, open, closePrice }: Awaited<ReturnType<typeof opened>>,
+  profit: string,
+): Promise<void> {
   await tmp.db.transaction((tx) =>
     settleIntent(tx, {
       id: intent.id,
       from: TradeIntentStatus.Accepted,
-      trade: closedTradeFor(open, {
-        profit: profit as DecimalString,
-        closePrice: target.step / 10 + 0.0001,
-      }),
+      trade: closedTradeFor(open, { profit: profit as DecimalString, closePrice }),
     }),
   );
+}
+
+// the next step settled at `profit`, opened at step/10 and closed 0.0001 above
+async function settled(target: Target, profit: string): Promise<void> {
+  await settle(await opened(target), profit);
 }
 
 const stop = (
@@ -2481,5 +2492,374 @@ describe('an H1 session: one summary, edited every 10 trades (#707)', () => {
     expect([...textsTo(a.captured.calls, target), ...textsTo(b.captured.calls, target)]).toEqual([
       summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
     ]);
+  });
+});
+
+// #700: the open trade's block, sent at the open and edited into its result at the settle
+describe("the open trade's block (#700)", () => {
+  const OPEN_MARK = 'сделка открыта';
+  const openBlock = (step: number, cycle = 1, at = step) =>
+    `⚡ Цикл ${cycle} Шаг ${step}\n<pre>⏳ Ставка: $5.00 · ⬆️ Вверх · ${OPEN_MARK}\n📊 Цена: ${(at / 10).toFixed(5)} → …</pre>`;
+  const STATUS_ID = 1;
+  const statusMessage = (target: Target) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: STATUS_ID })
+      .where(eq(tradingSessions.id, target.session.id));
+  const markOf = async (target: Target) => (await rowOf(target)).openNoticeIntentId;
+  // every call to the user that showed an open block
+  const openCallsTo = (calls: readonly ApiCall[], target: Target) =>
+    calls.filter(
+      (call) =>
+        call.payload.chat_id === target.seed.telegramUserId &&
+        (call.method === 'sendMessage' || call.method === 'editMessageText') &&
+        pushedText(call.payload).includes(OPEN_MARK),
+    );
+  const sequenceOf = (calls: readonly ApiCall[], target: Target) =>
+    calls
+      .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
+      .map((call) =>
+        call.method === 'sendMessage'
+          ? isWaiting(call)
+            ? 'waiting'
+            : pushedText(call.payload).includes(OPEN_MARK)
+              ? 'open'
+              : 'trade'
+          : call.method,
+      );
+  async function blocked(target: Target) {
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, target.seed.userId));
+  }
+
+  it('O1 open: one silent message with the block without a result, no keyboard; settled: the same message edited into the result', async () => {
+    const target = await seedSession();
+    const { notices, captured } = sender();
+    const trade = await opened(target);
+    await notices.tick();
+    const [sent] = sendsTo(captured.calls, target);
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    expect(pushedText(sent!.payload)).toBe(openBlock(1));
+    expect(sent!.payload).toMatchObject({ disable_notification: true, parse_mode: 'HTML' });
+    expect(sent!.payload.reply_markup).toBeUndefined();
+    expect(await rowOf(target)).toMatchObject({
+      openNoticeIntentId: trade.intent.id,
+      cycleMessageId: answered.get(sent!.payload),
+      cycleMessageFrom: 0,
+      notifiedTrades: 0,
+    });
+    await notices.tick();
+    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
+
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    const [edit] = editsTo(captured.calls, target);
+    expect(edit?.payload.message_id).toBe(answered.get(sent!.payload));
+    expect(chatOf(captured.calls, target)).toEqual([loss(1)]);
+  });
+
+  it('O2 a settled step and the next one open in one tick: the cycle message, then its edit with the open block last', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    await settled(target, '-5');
+    const second = await opened(target);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'editMessageText', 'waiting']);
+    expect(chatOf(captured.calls, target)).toEqual([
+      [loss(1), ADAPTIVE, openBlock(2)].join('\n\n'),
+    ]);
+    await settle(second, '-5');
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'trade',
+      'editMessageText',
+      'waiting',
+      'editMessageText',
+    ]);
+    expect(chatOf(captured.calls, target)).toEqual([[loss(1), ADAPTIVE, loss(2)].join('\n\n')]);
+  });
+
+  it('O2 a cycle message of an earlier cycle: the open step 1 of a new cycle sends anew', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured } = sender();
+    await settled(target, '4.6');
+    await notices.tick();
+    await opened(target);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target).map((call) => pushedText(call.payload))).toEqual([
+      expect.stringContaining('⚡ Цикл 1 Шаг 1'),
+      openBlock(1, 2, 2),
+    ]);
+  });
+
+  it('O3 a trade settled before the tick: its result block at once, no open block', async () => {
+    const target = await seedSession();
+    const { notices, captured } = sender();
+    await settle(await opened(target), '-5');
+    await notices.tick();
+    expect(openCallsTo(captured.calls, target)).toEqual([]);
+    expect(chatOf(captured.calls, target)).toEqual([loss(1)]);
+    expect(await markOf(target)).toBeNull();
+  });
+
+  it('O4 a restart between the open block and the settle: the block is not sent again, the result edits it', async () => {
+    const target = await seedSession();
+    const first = sender();
+    const trade = await opened(target);
+    await first.notices.tick();
+    await first.notices.stop();
+    const second = sender();
+    await second.notices.tick();
+    expect(
+      second.captured.calls.filter((c) => c.payload.chat_id === target.seed.telegramUserId),
+    ).toEqual([]);
+    await settle(trade, '-5');
+    await second.notices.tick();
+    expect(editsTo(second.captured.calls, target)).toHaveLength(1);
+    expect(editsTo(second.captured.calls, target)[0]!.payload.message_id).toBe(
+      answered.get(sendsTo(first.captured.calls, target)[0]!.payload),
+    );
+    expect(sendsTo(second.captured.calls, target)).toEqual([]);
+  });
+
+  it('O5 two senders ticking together send the open block once', async () => {
+    const target = await seedSession();
+    await opened(target);
+    const a = sender();
+    const b = sender();
+    await Promise.all([a.notices.tick(), b.notices.tick(), a.notices.tick(), b.notices.tick()]);
+    expect([
+      ...openCallsTo(a.captured.calls, target),
+      ...openCallsTo(b.captured.calls, target),
+    ]).toHaveLength(1);
+  });
+
+  it.each([
+    ['a 5xx', () => telegramError(502)],
+    [
+      'a transport failure',
+      () => new HttpError("Network request for 'sendMessage' failed!", new Error('timed out')),
+    ],
+  ])(
+    'O6 %s: the outcome is unknown, nothing recorded, the block never sent again; the result goes as a new message',
+    async (_name, failure) => {
+      const target = await seedSession();
+      const trade = await opened(target);
+      const { notices, captured, logs } = sender();
+      failFirst(captured, 1, failure());
+      await notices.tick();
+      await notices.tick();
+      expect(openCallsTo(captured.calls, target)).toHaveLength(1);
+      expect(messagesOf(logs(), WARN)).toEqual(['session open notice outcome unknown']);
+      expect(await rowOf(target)).toMatchObject({
+        openNoticeIntentId: trade.intent.id,
+        cycleMessageId: null,
+      });
+      await settle(trade, '-5');
+      await notices.tick();
+      expect(sendsTo(captured.calls, target).map((call) => pushedText(call.payload))).toEqual([
+        openBlock(1),
+        loss(1),
+      ]);
+    },
+  );
+
+  it('O7 429: the claim is taken back, nothing goes until the pause has passed, then the block once', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, captured, logs } = sender({}, clock);
+    captured.apiErrors.set('sendMessage', telegramError(429, 30));
+    await notices.tick();
+    expect(await markOf(target)).toBeNull();
+    expect(messagesOf(logs(), WARN)).toContain('session notices paused: Telegram asked to wait');
+    captured.apiErrors.delete('sendMessage');
+    clock.now += 29_999;
+    await notices.tick();
+    expect(openCallsTo(captured.calls, target)).toHaveLength(1);
+    clock.now += 1;
+    await notices.tick();
+    await notices.tick();
+    expect(openCallsTo(captured.calls, target)).toHaveLength(2);
+    expect(await markOf(target)).toBe(trade.intent.id);
+    expect((await rowOf(target)).cycleMessageId).toBe(
+      answered.get(openCallsTo(captured.calls, target)[1]!.payload),
+    );
+  });
+
+  it('O8 another 4xx: tried again on later ticks, then dropped; the result still comes', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, captured, logs } = sender({ config: { maxAttempts: 3 } });
+    failFirst(captured, 3, telegramError(400));
+    for (let i = 0; i < 4; i += 1) await notices.tick();
+    expect(messagesOf(logs(), WARN)).toEqual([
+      'session open notice refused',
+      'session open notice refused',
+      'session open notice dropped',
+    ]);
+    expect(openCallsTo(captured.calls, target)).toHaveLength(3);
+    expect(await markOf(target)).toBe(trade.intent.id);
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([loss(1)]);
+  });
+
+  it('O9 403: the user is marked unreachable; the result is claimed without a call', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, captured } = sender();
+    captured.apiErrors.set('sendMessage', telegramError(403));
+    await notices.tick();
+    expect(await markOf(target)).toBe(trade.intent.id);
+    const [user] = await tmp.db
+      .select({ at: users.telegramBlockedAt })
+      .from(users)
+      .where(eq(users.id, target.seed.userId));
+    expect(user?.at).toBeInstanceOf(Date);
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(sendsTo(captured.calls, target)).toHaveLength(1);
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+  });
+
+  it('O10 an edit refused as gone: the cycle in a new message with the open block, recorded; the result edits it', async () => {
+    const target = await seedSession(MARTINGALE);
+    const { notices, captured, logs } = sender();
+    await settled(target, '-5');
+    await notices.tick();
+    const second = await opened(target);
+    captured.apiErrors.set('editMessageText', refusal('Bad Request: message to edit not found'));
+    await notices.tick();
+    captured.apiErrors.delete('editMessageText');
+    expect(messagesOf(logs(), WARN)).toContain(
+      'session open notice edited anew: the cycle message is gone',
+    );
+    const anew = sendsTo(captured.calls, target)[1]!;
+    expect(pushedText(anew.payload)).toBe([loss(1), ADAPTIVE, openBlock(2)].join('\n\n'));
+    expect(await rowOf(target)).toMatchObject({
+      cycleMessageId: answered.get(anew.payload),
+      cycleMessageFrom: 0,
+    });
+    await settle(second, '-5');
+    await notices.tick();
+    expect(editsTo(captured.calls, target).at(-1)!.payload.message_id).toBe(
+      answered.get(anew.payload),
+    );
+  });
+
+  it('O12 an H1 session (#670) with an open trade: no open block, no claim - listed or not', async () => {
+    const built = buildH1SessionSettings({
+      assetId: ASSET,
+      trades: 10,
+      stake: { baseStake: decimalStringSchema.parse('5'), stakeScale: 0 },
+      maxLossMultiplier: 10,
+    });
+    if (!built.success) throw new Error('fixture settings do not parse');
+    const target = await seedSession(built.data);
+    // the status message lists it for its waiting message
+    await statusMessage(target);
+    await opened(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await notices.tick();
+    expect(openCallsTo(captured.calls, target)).toEqual([]);
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
+    expect(await markOf(target)).toBeNull();
+  });
+
+  it('O13 the waiting message: deleted before the open block’s new message, sent again under it; the result’s edit leaves it', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    const trade = await opened(target);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'open',
+      'waiting',
+    ]);
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'open',
+      'waiting',
+      'editMessageText',
+    ]);
+  });
+
+  it('O14 a session stopped with its trade open: the open block, the result, then the final mark', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    await stop(target, TradingSessionStopReason.UserStopped);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['open']);
+    expect((await rowOf(target)).finalNoticeSentAt).toBeNull();
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target)[0]).toBe(loss(1));
+    expect((await rowOf(target)).finalNoticeSentAt).toBeInstanceOf(Date);
+  });
+
+  it('O15 fixed: each open block a new message of its own cycle', async () => {
+    const target = await seedSession();
+    const { notices, captured } = sender();
+    await settle(await opened(target), '-5');
+    await notices.tick();
+    await opened(target);
+    await notices.tick();
+    expect(sendsTo(captured.calls, target).map((call) => pushedText(call.payload))).toEqual([
+      loss(1),
+      openBlock(1, 2, 2),
+    ]);
+  });
+
+  it('O16 a user who blocked the bot: the block claimed without a call, the result too', async () => {
+    const target = await seedSession();
+    await blocked(target);
+    const trade = await opened(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(await markOf(target)).toBe(trade.intent.id);
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(captured.calls.filter((c) => c.payload.chat_id === target.seed.telegramUserId)).toEqual(
+      [],
+    );
+    expect((await rowOf(target)).notifiedTrades).toBe(1);
+  });
+
+  it('O17 a block that cannot be built: logged, the block is not sent again, the result comes', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    let reads = 0;
+    const { notices, captured, logs } = sender({
+      catalog: {
+        read: () => {
+          reads += 1;
+          if (reads === 1) throw new TypeError('bug');
+          return catalogView;
+        },
+      },
+    });
+    await notices.tick();
+    await notices.tick();
+    expect(openCallsTo(captured.calls, target)).toEqual([]);
+    expect(
+      logs()
+        .filter((entry) => entry.level === 50)
+        .map((entry) => entry.msg),
+    ).toEqual(['session open notice not built']);
+    await settle(trade, '-5');
+    await notices.tick();
+    expect(chatOf(captured.calls, target)).toEqual([loss(1)]);
   });
 });

@@ -17,6 +17,7 @@ import {
 } from '@binarius/shared';
 import {
   claimSessionFinalNotice,
+  claimSessionOpenNotice,
   claimSessionTradeNotice,
   claimSessionTradeNotices,
   claimSessionWaiting,
@@ -27,6 +28,7 @@ import {
   readSessionWaitingMessage,
   recordSessionCycleMessage,
   recordSessionWaitingMessage,
+  releaseSessionOpenNotice,
   releaseSessionTradeNotice,
   releaseSessionTradeNotices,
   releaseSessionWaiting,
@@ -73,7 +75,10 @@ import { readFinishedSessionView } from './session-view';
 // so a message the stop route took over is not deleted (#587 round 1; the call in flight: docs
 // risk 82). A restart of the bot or the backend repeats no send by a retry: the cursor, the cycle
 // message and the waiting message are in trading_sessions; a block can show twice only by the
-// endings docs risk 35 names (a new message whose outcome was unknown, a second sender).
+// endings docs risk 35 names (a new message whose outcome was unknown, a second sender). A trade
+// open at the broker shows first as its block without a result (#700), claimed the same way
+// (open_notice_intent_id) below every settled trade's block; its settlement edits it into the
+// result. H1 sessions get no open block.
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -132,13 +137,15 @@ type Removal =
 
 // The memory's mirror of waitingDueSql once a step freed the slot or left it behind; the SQL
 // decides, so a wrong hint costs one refused claim or one tick.
-// A claimed notice's delivery: the trade's message (#551) or an H1 session's summary (#707)
+// A claimed notice's delivery: the trade's message (#551), the open trade's block (#700) or an H1
+// session's summary (#707)
 interface Delivery {
-  label: 'session trade notice' | 'session h1 notice';
+  label: 'session trade notice' | 'session h1 notice' | 'session open notice';
   key: string;
   fields: Record<string, unknown>;
-  // recordSessionCycleMessage's `claimed`: the cursor stands at claimed + 1 after the claim
-  claimed: number;
+  // where the claim left the cursor, and the open block's intent (#700): the record's CAS
+  cursor: number;
+  openIntentId?: string;
   // puts the claim back: only for a send Telegram certainly did not deliver
   release: () => Promise<unknown>;
 }
@@ -157,8 +164,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     now,
     sleep: deps.sleep ?? defaultSleep,
   });
-  // the definite refusals of one send, by `${sessionId}:${claimed}`, `${sessionId}:summary` or
-  // `${sessionId}:waiting:${slot}`, and the unknown outcomes of a waiting message's delete, by
+  // the definite refusals of one send, by `${sessionId}:${claimed}`, `${sessionId}:open:${intentId}`,
+  // `${sessionId}:summary` or `${sessionId}:waiting:${slot}`, and the unknown outcomes of a waiting message's delete, by
   // `${sessionId}:delete:${messageId}`; in memory: a restart gives each send its attempts again,
   // which is a bounded retry, never a second delivery
   const attempts = new Map<string, number>();
@@ -214,7 +221,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       label: 'session trade notice',
       key: `${session.sessionId}:${claimed}`,
       fields,
-      claimed,
+      cursor: claimed + 1,
       release: () => releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed }),
     });
   }
@@ -257,9 +264,51 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       label: 'session h1 notice',
       key: `${session.sessionId}:h1:${String(due)}`,
       fields,
-      claimed: due - 1,
+      cursor: due,
       release: () =>
         releaseSessionTradeNotices(db, { sessionId: session.sessionId, from, to: due }),
+    });
+  }
+
+  // The open trade's block (#700): claimed below every settled trade's block, then sent or edited
+  // into the cycle message as a trade's block is. A claim lost (the trade settled since the list,
+  // another sender) skips the session this tick: its result comes by the cursor.
+  async function sendOpen(
+    session: PendingSessionNotice,
+    settings: TradingSessionSettings | null,
+    intentId: string,
+  ): Promise<Step> {
+    const fields = { sessionId: session.sessionId, intentId };
+    if (!session.telegramBlocked) await pace();
+    if (stopped) return 'skip';
+    const claim = await claimSessionOpenNotice(db, {
+      sessionId: session.sessionId,
+      intentId,
+      settled: session.settled,
+    });
+    if (claim === undefined) return 'skip';
+    session.openNoticeIntentId = intentId;
+    // nothing can be delivered (Rule 19): the block counts as sent
+    if (session.telegramBlocked) return 'next';
+    let notice: SessionCycleNotice;
+    try {
+      notice = sessionCycleMessage(
+        claim,
+        settings,
+        pairOf(catalog.read(), claim.open.assetId).digits,
+      );
+    } catch (error) {
+      // a bug: the block is not sent again, its trade's result comes by the cursor
+      logger.error({ ...fields, ...errorLogFields(error) }, 'session open notice not built');
+      return 'skip';
+    }
+    return deliver(session, notice, {
+      label: 'session open notice',
+      key: `${session.sessionId}:open:${intentId}`,
+      fields,
+      cursor: session.settled,
+      openIntentId: intentId,
+      release: () => releaseSessionOpenNotice(db, { sessionId: session.sessionId, intentId }),
     });
   }
 
@@ -267,7 +316,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   async function deliver(
     session: PendingSessionNotice,
     notice: SessionCycleNotice,
-    { label, key, fields, claimed, release }: Delivery,
+    { label, key, fields, cursor, openIntentId, release }: Delivery,
   ): Promise<Step> {
     const failure = {
       session,
@@ -285,20 +334,20 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     // id. An id that is not a positive integer is not recorded: the next step sends anew. The
     // waiting message is deleted first (#536), on the pace this call came with, and its slot
     // freed, so whatever becomes of the new message, the waiting message is due under it; the new
-    // message then takes a pace of its own. A delete that did not clear puts the claim back, so
+    // message then takes a pace of its own. A delete that did not clear puts the block back, so
     // no new message goes out under a waiting message that may still be there; one that found the
-    // user unreachable sends nothing more (Rule 19), the claim counting as sent and the waiting
+    // user unreachable sends nothing more (Rule 19), the block counting as sent and the waiting
     // message's id kept, so it is deleted first once the user is reachable (#587).
     const sendNew = async (text: TelegramHtml, from: number): Promise<Step> => {
       if (session.waitingMessageId !== null) {
         const removal = await removeWaiting(session, session.waitingMessageId);
         if (removal.kind === 'blocked') return 'next';
         if (removal.kind !== 'cleared') {
-          // nothing was sent: the claim goes again after the pause, or next tick after the delete
+          // nothing was sent: the block goes again after the pause, or next tick after the delete
           await release();
           return removal.kind === 'wait' ? pauseFor(removal.ms) : 'skip';
         }
-        // the delete found the user unreachable: nothing more is delivered (Rule 19), the claim
+        // the delete found the user unreachable: nothing more is delivered (Rule 19), the block
         // counts as sent
         if (session.telegramBlocked) return 'next';
         await pace();
@@ -316,7 +365,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       }
       const recorded = await recordSessionCycleMessage(db, {
         sessionId: session.sessionId,
-        cursor: claimed + 1,
+        cursor,
+        ...(openIntentId === undefined ? {} : { openIntentId }),
         messageId,
         from,
       });
@@ -624,10 +674,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // every trade past the cursor in order (an H1 session: its summary, when due), then the stale
-  // waiting message's delete, then the final mark of a finished session or the waiting message
-  // due; the first step that does not go ends the session's turn, so its later trades never
-  // overtake it and the waiting message is the last message of the turn
+  // every trade past the cursor in order (an H1 session: its summary, when due), then the open
+  // trade's block (#700), then the stale waiting message's delete, then the final mark of a
+  // finished session or the waiting message due; the first step that does not go ends the
+  // session's turn, so its later trades never overtake it and the waiting message is the last
+  // message of the turn
   async function serve(session: PendingSessionNotice): Promise<Step> {
     const parsed = safeParseTradingSessionSettings(session.settings);
     const settings = parsed.success ? parsed.data : null;
@@ -645,6 +696,15 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         const step = await sendTrade(session, settings, claimed);
         if (step !== 'next') return step;
       }
+    }
+    const { openIntentId } = session;
+    if (
+      openIntentId !== null &&
+      openIntentId !== session.openNoticeIntentId &&
+      !(settings !== null && isH1Settings(settings))
+    ) {
+      const step = await sendOpen(session, settings, openIntentId);
+      if (step !== 'next') return step;
     }
     if (session.waitingStale && session.waitingMessageId !== null) {
       const step = await deleteStaleWaiting(session);
