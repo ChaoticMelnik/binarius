@@ -1420,6 +1420,7 @@ describe('the market data log (#404)', () => {
         'late',
         'invalid',
         'skewed',
+        'ahead',
         'holed',
         'unknownAsset',
         'skippedDigits',

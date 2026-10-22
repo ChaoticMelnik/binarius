@@ -26,7 +26,9 @@ export interface TickStoreCounters {
 }
 
 export interface TickStore {
-  // receivedAtMs: the local clock when the tick arrived; a tick the ring would refuse is dropped
+  // receivedAtMs: the local clock when the tick arrived; a tick `tickProblem` refuses is dropped;
+  // a tick ahead of its receipt is kept here and clamps the watermark, while the ring drops it
+  // beyond its margin (#683)
   push(assetId: number, tick: Tick, receivedAtMs: number): void;
   // the newest tick by broker time, kept until a newer one, never cleared (a socket drop, a
   // failover, a quiet pair): a reader bounds its age itself

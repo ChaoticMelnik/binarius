@@ -14,6 +14,8 @@ import {
 // active socket, any pair) reaches b + I, or once the process clock reaches b + I + skewMarginMs.
 // Holes: when the active socket leaves `ready`, each pair keeps its own watermark; its first tick
 // past it, from whichever socket comes next, marks [watermark, tick] a hole on both builders.
+// A tick more than skewMarginMs past its receipt is dropped before any builder (#683): only
+// accepted ticks move W, so W closes a bucket at most 2 × skewMarginMs before the clock would.
 
 export interface CandleRingOptions {
   capacity: number;
@@ -25,6 +27,8 @@ export interface CandleRingCounters {
   // per tick, before any builder
   invalid: number;
   skewed: number;
+  // ticks more than skewMarginMs past their receipt: counted, not applied
+  ahead: number;
   // summed over the builders of every interval
   late: number;
   holed: number;
@@ -82,6 +86,7 @@ export function createCandleRing(options: CandleRingOptions): CandleRing {
   let drops = 0;
   let invalid = 0;
   let skewed = 0;
+  let ahead = 0;
   let holes = 0;
   const lateClose = { watermark: 0, clock: 0 };
 
@@ -159,6 +164,12 @@ export function createCandleRing(options: CandleRingOptions): CandleRing {
       if (problem === 'invalid') invalid += 1;
       if (problem === 'skewed') skewed += 1;
       if (problem !== undefined) return;
+      // a tick from the future would move the watermark past receipt + margin and close the
+      // buckets of every pair up to it; before the pair lookup, so it opens no pair and ends no hole
+      if (tick.timestamp > receivedAtMs + skewMarginMs) {
+        ahead += 1;
+        return;
+      }
       const pair = pairOf(assetId);
       if (pair.builders.size === 0) {
         for (const interval of intervals) {
@@ -260,6 +271,7 @@ export function createCandleRing(options: CandleRingOptions): CandleRing {
       return {
         invalid,
         skewed,
+        ahead,
         late,
         holed,
         holes,
