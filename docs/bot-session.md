@@ -170,8 +170,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
         message gone: the final mark (final_notice_sent_at), no message (#537)
   tracker, once the session is done, its final text is on screen and the final mark is set:
         POST /trading/sessions/<id>/summary { telegramUserId }   (#318, #537, at most once)
-        → sendPhoto to the session message's chat, with sound: the card, the whole summary and the
-          owner's link as its caption, «🔁 Ещё сессия» and the end of path; no trade (no_signal_timeout),
+        → sendPhoto to the session message's chat, with sound: the card, the whole summary as its
+          caption (no link since #709), «🔁 Ещё сессия» and the end of path; no trade (no_signal_timeout),
           a drawing that threw or a photo refused for good → sendMessage of the same caption;
           429 → the wait of retry_after (≤ 5 s) and sendPhoto once more
         → editMessageReplyMarkup of it: «📤 Поделиться» on top of those rows (#321; not on a session
@@ -854,7 +854,7 @@ cycle, so every trade is a new message of one block, as before #551.
   session's mode and its age line when it predates the last trade. Its balance is read as the route
   reads it (`readFinishedSessionView`): at most one successful broker GET per session — a refresh
   that did not answer `ok` is repeated by each later read of the finished view — `mayRefresh:
-  false`. The bot prints them as its caption with the owner's link under them; the fallback's text
+  false`. The bot prints them as its caption (no link since #709); the fallback's text
   prints them with «🏠 В меню» under it, and under a `no_signal_timeout` stop (#509) «🔀 Выбрать
   другую пару» above it — `demo:sig` at every duration (`DEMO_SIGNALS_CALLBACK_DATA`,
   `packages/shared/src/bot-navigation.ts`, #685) (D10, D12).
@@ -1741,10 +1741,19 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 98. **The deploy of #709**: the claim's answer loses `referralCode`, and both sides read it with a
     strict schema, so an old bot with a new backend and a new bot with an old backend lose a claimed
     summary (`ContractViolation` after the committed claim, risk 86's form; risk 87 was #537's
-    window). The owner's step: `docker compose stop bot && docker compose up -d backend bot` — the
-    pair never runs mixed, and a claim while the backend is down does not commit (a transport
-    error, retried by the tracker or the resume pass). Falsifiable: `warn` `trading session summary
-    not sent` with `summary_sent_at` set on sessions in the minute of the deploy.
+    window). The owner's step: `docker compose stop bot`, then `binarius-deploy` — its
+    `up -d --wait` starts the new bot only once the new backend is healthy (the bot's `depends_on:
+    backend: condition: service_healthy`, `compose.yaml`), and the build, the migrations and
+    `deploy-worker.sh` start no bot: the pair never runs mixed, and no claim is made while the bot
+    is down; the sessions that end meanwhile get their summary from the new bot's recovery pass (a
+    window over 30 min gives them the backend's text instead, `SESSION_SUMMARY_FALLBACK_MS`). Run
+    before the build, a plain `up -d` only restarts the old pair; run after `binarius-deploy`, the
+    window is already past. If `binarius-deploy` fails before its `up -d --wait`, `docker compose
+    start bot` brings the old bot back to the old backend. The cost: the bot is silent from the stop
+    to the new backend's health — the build, the migrations, the worker swap (ready ≤ 120 s plus
+    drain ≤ 40 s, [worker-deploy.md](worker-deploy.md)); Telegram keeps the updates for the new
+    bot. Falsifiable: `warn` `trading session summary not sent` with `summary_sent_at` set on
+    sessions in the minute of the deploy.
 
 ## Running it locally
 
