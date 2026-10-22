@@ -1940,6 +1940,34 @@ describe("the broker row's domain (#675)", () => {
       { brokerTradeId: closed.id, status: 'closed', payout: null },
     ]);
   });
+
+  const refusalOf = (promise: Promise<unknown>) =>
+    promise.then(
+      () => undefined,
+      (thrown: unknown) => (thrown as { cause?: unknown }).cause,
+    );
+
+  it('D11 refuses a negative-infinite open price: the intent stays submitting, no row', async () => {
+    const { intent } = await submittingIntent();
+    const open = openTradeFor(intent, { openPrice: Number.NEGATIVE_INFINITY });
+    expect(await refusalOf(accept(intent, open))).toMatchObject({
+      code: '23514',
+      constraint: 'broker_trades_open_price_check',
+    });
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'submitting' });
+    expect(await tradesOf(intent.id)).toEqual([]);
+  });
+
+  it('D12 refuses a negative-infinite close price: the intent stays accepted, its row open', async () => {
+    const { intent, open } = await acceptedIntent();
+    const closed = closedTradeFor(open, { closePrice: Number.NEGATIVE_INFINITY });
+    expect(await refusalOf(settle(intent, closed))).toMatchObject({
+      code: '23514',
+      constraint: 'broker_trades_close_price_check',
+    });
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'accepted' });
+    expect(await tradesOf(intent.id)).toMatchObject([{ status: 'open' }]);
+  });
 });
 
 describe('markIntentManualReview (#89)', () => {
