@@ -887,9 +887,7 @@ describe('claimSessionSummary (#318, #537)', () => {
         { profit: '0.00000000', openPrice: 3, closePrice: 3.5 },
       ],
     });
-    expect(
-      safeParseSessionSummaryResponse({ summary: { ...summary, referralCode: null } }).success,
-    ).toBe(true);
+    expect(safeParseSessionSummaryResponse({ summary }).success).toBe(true);
     expect(await sentAt(session)).toBeInstanceOf(Date);
     // S4: the second claim of the same session
     expect(await claim(session, seed)).toBeUndefined();

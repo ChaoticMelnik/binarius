@@ -123,9 +123,8 @@ runBot({
   bot,
   tracker: intentTracker,
   sessionTracker,
-  // bot.api and the username are known once bot.init() ran, before onStart
   sessionResumer: {
-    start: () => sessionResumer.start(bot.api, bot.botInfo.username),
+    start: () => sessionResumer.start(bot.api),
     stop: () => sessionResumer.stop(),
   },
   signalWaiter,

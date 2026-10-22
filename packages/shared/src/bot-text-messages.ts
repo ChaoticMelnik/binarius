@@ -791,20 +791,13 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     ],
   },
   {
-    // the finished session's summary as a text (#464, session-texts.ts → sessionSummaryText): the
-    // backend's fallback sender's message (#537), and the bot's text when no photo goes
+    // the finished session's summary (#464, session-texts.ts → sessionSummaryText): the bot's
+    // caption under the card's photo, its text when no photo goes and the backend's fallback
+    // sender's message (#537) are the same lines, so the caption's limit binds all three (#709)
     id: 'sessionSummary',
     title: 'Итог сессии',
-    limit: BOT_TEXT_LIMIT,
-    body: sessionSummaryBody,
-  },
-  {
-    // the bot's summary in one message (#537, texts.ts → sessionSummaryCaption): the same lines
-    // under the photo of the card, then the owner's referral link; a caption, so 1024
-    id: 'sessionSummaryCaption',
-    title: 'Итог сессии: подпись картинки',
     limit: TELEGRAM_CAPTION_LIMIT,
-    body: [...sessionSummaryBody, '\n', k('sessionSummaryLink')],
+    body: sessionSummaryBody,
   },
   {
     // the summary card's footer (#318, texts.ts → sessionCardFooter): plain text drawn on the

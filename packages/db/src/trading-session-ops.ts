@@ -836,7 +836,7 @@ const sessionOwnedBy = (telegramUserId: string) => sql`exists (
 export async function claimSessionSummary(
   db: Db,
   { id, telegramUserId }: { id: string; telegramUserId: string },
-): Promise<Omit<SessionSummary, 'referralCode'> | undefined> {
+): Promise<SessionSummary | undefined> {
   return db.transaction(async (tx) => {
     const settled = and(
       eq(tradeIntents.tradingSessionId, id),

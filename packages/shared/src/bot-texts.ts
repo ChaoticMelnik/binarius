@@ -1642,7 +1642,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   // The summary card (#318, docs/bot-session.md → The summary message): labels drawn on the image,
   // each limit the width of its slot there; the caption under the photo is the whole summary
-  // (#537, sessionSummaryCaption in bot-text-messages.ts).
+  // (#537, #709: sessionSummary in bot-text-messages.ts).
   sessionCardTitle: plain(g.Session, 'Картинка-итог: подпись под активом.', 'СЕССИЯ ЗАВЕРШЕНА', {
     limit: 24,
   }),
@@ -1670,12 +1670,6 @@ export const BOT_TEXT_CATALOG = {
     'Картинка-итог: нижняя строка — число сделок и счёт.',
     '{trades} · {score}',
     { vars: ['trades', 'score'], limit: 64 },
-  ),
-  sessionSummaryLink: html(
-    g.Session,
-    'Итог сессии (картинка-итог): последняя строка подписи — реферальная ссылка владельца сессии (без кода — общая ссылка бота), простым текстом; её видят и те, кому итог переслали.',
-    `🤖 {referralLink}`,
-    { ...caption, vars: ['referralLink'] },
   ),
   // The promo card shared by «📤 Поделиться» (#538, docs/bot-session.md → Sharing the card): a
   // card of its own, drawn when the share is pressed; each limit the width of its slot there.

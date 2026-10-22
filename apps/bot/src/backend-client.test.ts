@@ -1412,7 +1412,6 @@ describe('claimSessionSummary (#318, #537)', () => {
       { profit: '0.85000000', openPrice: 1.1, closePrice: 1.2 },
       { profit: '-1.00000000', openPrice: 1.2, closePrice: 1.1 },
     ],
-    referralCode: 'AbC123xY',
   };
   const claim = (baseUrl: string) =>
     createBackendClient({ baseUrl, token: TOKEN }).claimSessionSummary(SESSION_ID, '4242');
@@ -1428,8 +1427,8 @@ describe('claimSessionSummary (#318, #537)', () => {
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
   });
 
-  it('returns a summary without trades and without a code (#537: the no-signal stop)', async () => {
-    const empty = { result: '0.00000000', trades: [], referralCode: null };
+  it('returns a summary without trades (#537: the no-signal stop)', async () => {
+    const empty = { result: '0.00000000', trades: [] };
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 200, { summary: empty });
     });
@@ -1465,8 +1464,8 @@ describe('claimSessionSummary (#318, #537)', () => {
 
   it('reports a broken 2xx as a contract violation', async () => {
     const { baseUrl } = await serve((_request, reply) => {
-      // the backend before #537: no referralCode
-      json(reply, 200, { summary: { result: SUMMARY.result, trades: SUMMARY.trades } });
+      // the backend before #709: a referralCode outside the strict schema (bot-session.md, risk 98)
+      json(reply, 200, { summary: { ...SUMMARY, referralCode: 'AbC123xY' } });
     });
     expect(await rejectionOf(claim(baseUrl))).toMatchObject({
       code: BackendErrorCode.ContractViolation,
@@ -2186,7 +2185,6 @@ describe('body size', () => {
               openPrice: NUMBER,
               closePrice: NUMBER,
             })),
-            referralCode: 'x'.repeat(REFERRAL_CODE_LENGTH),
           },
         },
       },
