@@ -181,10 +181,40 @@ Web's own messages from `window.parent` included.
 |---|---|
 | `binodex-embed:ready` | the **first** `ready` takes the session minted on load while it is younger than `min(45 s, expiresInSec)` and clears it; otherwise, and on every later `ready` (the widget reloaded itself), a fresh `POST /cashier/session`. Then `{ type: 'binodex-embed:init', session }` is posted with target origin `widgetOrigin`, never `'*'`. A failed fresh mint shows its state and posts nothing |
 | `binodex-embed:reauth-required` (#112) | the load session is dropped and a fresh `POST /cashier/session` is posted as `init` to the same frame: no reload, `src` untouched (C18) |
-| `binodex-embed:resize` | `iframe.style.height` = `height` clamped to 520–900 px, only for a finite number (initial 720 px) |
+| `binodex-embed:resize` | ignored (#671): the frame is fitted to the visible area, the widget's own height scrolls inside it (H6) |
 | `binodex-embed:close` | `Telegram.WebApp.close()` |
 | `binodex-embed:credited` (#112) | the `credited` notice above the widget, which stays (the user may pay again; `close` is the widget's); `POST /cashier/credited` with `{ initData }` only — the event's payload (amount, currency) is never read, and the POST's answer or failure changes nothing on the page (C15, C16) |
 | `binodex-embed:error` (#112) | the `widget_error` notice above the widget, which stays; the event's `message` is never read, shown, sent or logged (C17) |
+
+**The frame's height** (#671). The widget draws its deposit block as a sheet at the bottom of its
+own frame, over its own dark background, so the frame's bottom has to be the screen's. While the
+widget is on screen, `iframe.style.height` = `max(HEIGHT_MIN, floor(visible − top))` (`client.ts`):
+
+- `visible` is `Telegram.WebApp.viewportStableHeight` — the last stable height the client reported
+  — or `window.innerHeight` when that is not a finite number above 0 (H5);
+- `top` is `getBoundingClientRect().top + pageYOffset`, the frame's offset from the top of the
+  document: whatever stands above it (a notice, with its margins) whatever the scroll (H2, H9);
+- `HEIGHT_MIN` is 480 px (manager's decision on #671, the sheet's height on the owner's screenshot):
+  below it the page scrolls rather than the form collapsing (H3). There is no ceiling: in Telegram
+  Desktop or on a tall screen the frame fills the whole visible height, the sheet at its bottom.
+
+It is refitted when the widget is shown (the load and a fresh mint that brings it back, H1, H11),
+when a notice changes (H2) and on every `viewportChanged` with `isStateStable` (H4); an unstable one
+(the expand animation) leaves it, and a hidden frame is never refitted (H7b). A client that shrinks
+the visible area for the keyboard sends a stable `viewportChanged` too, so the frame shrinks to the
+rest, not below 480. Facts of the SDK the page loads (`TELEGRAM_SDK_URL`,
+`telegram-web-app.js?63`, read 2026-10-22): `viewportStableHeight` is `window.innerHeight` until the
+client's first event; it is updated before `viewportChanged` is dispatched, so the handler reads
+the new value; `onEvent` calls the handler with `{ isStateStable }`; outside a client the SDK itself
+sends a stable `viewportChanged` on `window.resize`. An SDK without `onEvent` gets the load's fit
+only (H10). While the frame is shown the script sets `data-widget` on `body`, and `MINI_APP_CSS`
+hides the `h1` and `main`'s vertical padding under it (H1, H7, H8, H12); every state and «Открываем
+кассу…» hide the frame and keep both. The script calls neither `expand()` nor fullscreen (the
+owner, 2026-10-20) nor `disableVerticalSwipes()` (manager, 2026-10-22).
+
+Accepted (#671): during the expand animation the frame keeps its old height until the stable event;
+scrolling the form inside the cross-origin frame and the keyboard on a phone are checked by the
+owner (check 4 below), not by a test.
 
 **The order of mint results** (#112; closes #492's review m1). The script keeps a `generation`,
 bumped by every load (the first one and «Повторить»), which also clears the held session, the
@@ -205,7 +235,8 @@ fresh-mint flag and `widgetOrigin` (so the old frame's messages are ignored duri
 
 **Notices.** `credited` and `error` show one of two server-rendered blocks (`<p data-notice="credited"
 role="status" hidden>`, `<p data-notice="widget_error" …>`) above the iframe; the latest event's
-notice is shown and the other hidden; a load and every state hide both. The script still holds no
+notice is shown and the other hidden; a load and every state hide both. The iframe shrinks by the
+notice's height (#671). The script still holds no
 text and writes no `textContent`/`innerHTML`.
 
 The session lives in the script's closure, the POST answer and `postMessage` only: never in a URL,
@@ -278,6 +309,13 @@ The script maps an unknown outcome, a non-JSON body and a rejected fetch to `una
    link to `WEB_PUBLIC_URL/cashier` set in BotFather): the widget loads, the payment form and a payment method's next screen open, and the
    webview console shows no CSP violation. With `DEMO_ONLY=true` the page says «Пополнение на этом
    сервере отключено» — expected.
+4. The frame's height (#671), screenshots from a phone: with the Mini App half open, the «Пополнить»
+   block whole, with no empty area above it and without expanding; expanded by hand, the sheet at
+   the bottom edge, neither cut nor with a gap under it; after a payment, with the «Пополнение
+   получено» notice, the sheet still at the bottom without scrolling. «По карте»: the form scrolls
+   inside the frame, the input field is visible with the keyboard open, and a swipe over the form
+   does not collapse the Mini App (if it does — a task for `disableVerticalSwipes()`). Telegram
+   Desktop: the block is visible, the frame fills the window's height.
 
 Accepted: a browser may check the widget frame's own navigations against this page's `frame-src`;
 if the widget navigates its frame to another origin (3-D Secure, a payment provider) instead of a
