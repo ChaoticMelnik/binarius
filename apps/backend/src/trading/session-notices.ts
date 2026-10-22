@@ -42,6 +42,8 @@ import type { ClientPush, ClientPushMessage } from '../auth/client-push';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
 import { createSendPacer, sendFailureOf } from '../mailing/engine';
 import {
+  SESSION_NOTICE_CHAT_GAP_MS,
+  SESSION_NOTICE_HOLD_MS,
   SESSION_NOTICE_MAX_ATTEMPTS,
   SESSION_NOTICE_SCAN,
   SESSION_NOTICE_SEND_PER_SECOND,
@@ -79,6 +81,12 @@ import { readFinishedSessionView } from './session-view';
 // open at the broker shows first as its block without a result (#700), claimed the same way
 // (open_notice_intent_id) below every settled trade's block; its settlement edits it into the
 // result. H1 sessions get no open block.
+// One chat gets at most one step of the sender within the gap (#660, docs → Rate and timing): a
+// send or an edit marks the chat, delivered or not; a step whose chat is cooling ends the turn
+// before its pace and its claim, and goes on a later tick. The calls inside one step go one after
+// the other, and a delete neither waits for the gap nor marks the chat. A turn that threw holds its
+// session out of both lists for a while (#660), so a row that throws every tick cannot hold the
+// head of the list; both maps are in memory, and a restart tries at once.
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -87,6 +95,10 @@ export interface SessionNoticeConfig {
   maxAttempts: number;
   // the fallback's grace for a session the bot tracks (#537)
   summaryFallbackMs: number;
+  // one step per chat within it (#660); 0 turns the gap off
+  chatGapMs: number;
+  // how long a session whose turn threw is left out of the lists (#660)
+  holdMs: number;
 }
 
 const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
@@ -95,6 +107,8 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
   perSecond: SESSION_NOTICE_SEND_PER_SECOND,
   maxAttempts: SESSION_NOTICE_MAX_ATTEMPTS,
   summaryFallbackMs: SESSION_SUMMARY_FALLBACK_MS,
+  chatGapMs: SESSION_NOTICE_CHAT_GAP_MS,
+  holdMs: SESSION_NOTICE_HOLD_MS,
 };
 
 export interface SessionNoticeSenderDeps {
@@ -124,8 +138,9 @@ export interface SessionNoticeSender {
   stop(): Promise<void>;
 }
 
-// how a trade's turn ended for the session: on to its next trade, skip the session this tick, or
-// pause the whole sender (Telegram asked to wait)
+// how a trade's turn ended for the session: on to its next trade, skip the session this tick (a
+// refused claim, a refusal to try again, or its chat cooling, #660), or pause the whole sender
+// (Telegram asked to wait)
 type Step = 'next' | 'skip' | 'pause';
 
 // how a delete of the waiting message ended: its id dropped (deleted, already gone, never to be
@@ -173,6 +188,20 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   let pausedUntil = -Infinity;
   let ticking: Promise<void> | undefined;
   let timer: NodeJS.Timeout | undefined;
+  // until when each chat is cooling, by telegramUserId, and each held session, by its id (#660)
+  const chatNextAt = new Map<string, number>();
+  const heldUntil = new Map<string, number>();
+
+  const chatOf = (telegramUserId: bigint) => String(telegramUserId);
+  const cooling = (telegramUserId: bigint) =>
+    now() < (chatNextAt.get(chatOf(telegramUserId)) ?? -Infinity);
+  // after every send or edit to the chat, delivered or not
+  const messaged = (telegramUserId: bigint) => {
+    chatNextAt.set(chatOf(telegramUserId), now() + config.chatGapMs);
+  };
+  const prune = (map: Map<string, number>) => {
+    for (const [key, until] of map) if (until <= now()) map.delete(key);
+  };
 
   const pauseFor = (ms: number): Step => {
     pausedUntil = now() + ms;
@@ -197,7 +226,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     claimed: number,
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, claimed };
-    if (!session.telegramBlocked) await pace();
+    if (!session.telegramBlocked) {
+      if (cooling(session.telegramUserId)) return 'skip';
+      await pace();
+    }
     // after the pace, so a stop during its sleep claims nothing more
     if (stopped) return 'skip';
     const claim = await claimSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
@@ -237,7 +269,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   ): Promise<Step> {
     const from = session.notifiedTrades;
     const fields = { sessionId: session.sessionId, from, to: due };
-    if (!session.telegramBlocked) await pace();
+    if (!session.telegramBlocked) {
+      if (cooling(session.telegramUserId)) return 'skip';
+      await pace();
+    }
     if (stopped) return 'skip';
     const claim = await claimSessionTradeNotices(db, {
       sessionId: session.sessionId,
@@ -279,7 +314,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     intentId: string,
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, intentId };
-    if (!session.telegramBlocked) await pace();
+    if (!session.telegramBlocked) {
+      if (cooling(session.telegramUserId)) return 'skip';
+      await pace();
+    }
     if (stopped) return 'skip';
     const claim = await claimSessionOpenNotice(db, {
       sessionId: session.sessionId,
@@ -357,6 +395,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         messageId = await push.sendSessionTrade(session.telegramUserId, text);
       } catch (error) {
         return sendFailed({ ...failure, method: 'sendMessage', error });
+      } finally {
+        messaged(session.telegramUserId);
       }
       attempts.delete(key);
       if (!Number.isInteger(messageId) || messageId <= 0) {
@@ -383,9 +423,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
     try {
       await push.editSessionTrade(session.telegramUserId, notice.messageId, notice.text);
+      messaged(session.telegramUserId);
       attempts.delete(key);
       return 'next';
     } catch (error) {
+      messaged(session.telegramUserId);
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       // the same text again (an edit whose outcome was unknown went through): shown
       if (refusal === 'shown') {
@@ -557,6 +599,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // over, #587).
   async function sendWaiting(session: PendingSessionNotice): Promise<Step> {
     const fields = { sessionId: session.sessionId };
+    if (cooling(session.telegramUserId)) return 'skip';
     await pace();
     if (stopped) return 'skip';
     const claim = await claimSessionWaiting(db, { sessionId: session.sessionId });
@@ -568,7 +611,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         session.telegramUserId,
         sessionWaitingMessage(session.sessionId),
       );
+      messaged(session.telegramUserId);
     } catch (error) {
+      messaged(session.telegramUserId);
       // 403: certainly not delivered, the slot is freed, due again once the user is reachable;
       // unknown: it may have been delivered, the slot stays claimed, never a second one on it
       const release = () =>
@@ -639,6 +684,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       await claimSummaryFallback(db, { sessionId });
       return 'next';
     }
+    if (cooling(session.telegramUserId)) return 'skip';
     const telegramUserId = String(session.telegramUserId);
     const view = await readFinishedSessionView({ db, balance }, sessionId, telegramUserId);
     if (view === undefined) return 'skip';
@@ -659,9 +705,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     const key = `${sessionId}:summary`;
     try {
       await push.sendSessionSummary(session.telegramUserId, message);
+      messaged(session.telegramUserId);
       attempts.delete(key);
       return 'next';
     } catch (error) {
+      messaged(session.telegramUserId);
       return sendFailed({
         session,
         label: 'session summary',
@@ -717,16 +765,21 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
   async function runTick(): Promise<void> {
     if (now() < pausedUntil) return;
-    const pending = await listPendingSessionNotices(db, { limit: config.scan, exclude: [] });
+    prune(chatNextAt);
+    prune(heldUntil);
+    const exclude = [...heldUntil.keys()];
+    const pending = await listPendingSessionNotices(db, { limit: config.scan, exclude });
     for (const session of pending) {
       if (stopped) return;
       let step: Step;
       try {
         step = await serve(session);
       } catch (error) {
-        // a statement or a refresh that threw: what was claimed stays claimed, the rest waits
+        // a statement or a refresh that threw: what was claimed stays claimed, the rest waits, and
+        // the session is held out of the lists for a while (#660)
+        heldUntil.set(session.sessionId, now() + config.holdMs);
         logger.error(
-          { sessionId: session.sessionId, ...errorLogFields(error) },
+          { sessionId: session.sessionId, holdMs: config.holdMs, ...errorLogFields(error) },
           'session notices failed for a session',
         );
         continue;
@@ -738,7 +791,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     const fallback = await listSummaryFallback(db, {
       limit: config.scan,
       graceMs: config.summaryFallbackMs,
-      exclude: [],
+      exclude,
     });
     for (const session of fallback) {
       if (stopped) return;
@@ -746,8 +799,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       try {
         step = await serveFallback(session);
       } catch (error) {
+        heldUntil.set(session.sessionId, now() + config.holdMs);
         logger.error(
-          { sessionId: session.sessionId, ...errorLogFields(error) },
+          { sessionId: session.sessionId, holdMs: config.holdMs, ...errorLogFields(error) },
           'session notices failed for a session',
         );
         continue;

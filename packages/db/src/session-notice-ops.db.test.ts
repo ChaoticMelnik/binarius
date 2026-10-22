@@ -748,9 +748,9 @@ describe('the fallback summary (#537)', () => {
     });
     const ids = all.map((row) => row.sessionId);
     expect(ids.indexOf(older.session.id)).toBeLessThan(ids.indexOf(newer.session.id));
-    expect(
-      await listSummaryFallback(tmp.db, { limit: 2, graceMs: GRACE_MS, exclude: [] }),
-    ).toEqual(all.slice(0, 2));
+    expect(await listSummaryFallback(tmp.db, { limit: 2, graceMs: GRACE_MS, exclude: [] })).toEqual(
+      all.slice(0, 2),
+    );
   });
 
   it('L1b leaves out only the sessions it is told to exclude (#660)', async () => {
