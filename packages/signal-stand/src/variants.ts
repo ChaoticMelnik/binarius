@@ -36,7 +36,8 @@ export interface Variant {
   name: string;
   intervals: readonly TradeInterval[];
   grid: readonly GridPoint[];
-  // the overlay production runs with (Rule 28): the headline rows use it
+  // the pause overlay: production's rule from #379 to #698, kept for table (d); the headline rows
+  // run without it
   headlinePause: boolean;
   decide(ctx: DecisionContext, point: GridPoint): VariantDecision;
 }
@@ -175,7 +176,7 @@ export const VARIANTS: readonly Variant[] = [
     name: 'v2',
     intervals: ['5s', '15s', '1m'],
     grid: V2_GRID,
-    headlinePause: true,
+    headlinePause: false,
     decide: (ctx, point) => decisionOf(ctx.v2(asV2Point(point))),
   },
   {
@@ -183,7 +184,7 @@ export const VARIANTS: readonly Variant[] = [
     name: 'revert',
     intervals: ['5s', '15s'],
     grid: REVERT_GRID,
-    headlinePause: true,
+    headlinePause: false,
     decide(ctx, point) {
       const band = numberOf(point, 'band');
       const decision = ctx.v2();
@@ -202,7 +203,7 @@ export const VARIANTS: readonly Variant[] = [
     name: 'v2+1m',
     intervals: ['5s', '15s'],
     grid: [{}],
-    headlinePause: true,
+    headlinePause: false,
     decide(ctx) {
       const decision = ctx.v2();
       if (decision.kind === SignalKind.NoSignal) return { refusal: decision.reason };
@@ -216,21 +217,21 @@ export const VARIANTS: readonly Variant[] = [
     name: 'v2+macd',
     intervals: ['5s', '15s'],
     grid: MACD_GRID,
-    headlinePause: true,
+    headlinePause: false,
     decide: (ctx, point) => gated(ctx, [macdGate(point)]),
   },
   {
     name: 'v2+ma',
     intervals: ['5s', '15s'],
     grid: MA_GRID,
-    headlinePause: true,
+    headlinePause: false,
     decide: (ctx, point) => gated(ctx, [maGate(point)]),
   },
   {
     name: 'v2+macd+ma',
     intervals: ['5s', '15s'],
     grid: MACD_MA_GRID,
-    headlinePause: true,
+    headlinePause: false,
     decide: (ctx, point) => gated(ctx, [macdGate(point), maGate(point)]),
   },
 ];
