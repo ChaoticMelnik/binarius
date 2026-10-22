@@ -1,4 +1,4 @@
-# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700)
+# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700, #718)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never without one, and without one it waits for it, #664); a finished single trade's message
@@ -807,10 +807,10 @@ close price (`sessionTradeOpen`). Step 1 sends it as a new message, a later step
 message, exactly as a result block would; the trade's settlement then edits the same block into
 its result. A trade already settled when the sender gets to it shows only its result block. The
 open block's cycle and step are the ones the trade settles at (`sessionNextStep`: a trade's
-position depends only on the results before it), and the adaptive line stands above an open
-step 2 as above a settled one. A trade after its open only settles (`accepted → settled` is the
-only edge out of `accepted`), so the block has no third state. H1 sessions (#670, settings v4)
-get no open block. The waiting message and its «⏹» do not change in this part: still the last
+position depends only on the results before it), and the adaptive line stands between step 1
+and step 2 as with a settled step 2: under a lost step 1 at once, above step 2 after a tie (#718).
+A trade after its open only settles (`accepted → settled` is the only edge out of `accepted`),
+so the block has no third state. H1 sessions (#670, settings v4) get no open block. The waiting message and its «⏹» do not change in this part: still the last
 message of the session, deleted before the open block's new message and sent again under it
 (#722 moves «⏹» under the open block).
 
@@ -860,9 +860,17 @@ message of the session, deleted before the open block's new message and sent aga
   passes the session's own strategy, `sessionStakeParams(settings).strategy` (#450): settings v1
   and settings that cannot be read count as `fixed`.
 - **«🔄 Адаптивная ставка включена»** stands once per cycle, alone, between the blocks of step 1
-  and step 2, whatever the stake of step 2 (after a tie it is the base stake). It is not repeated
-  above steps 3, 4…; under the fixed strategy there is no step 2, so no line. No text says
-  «Мартингейл».
+  and step 2, printed as soon as it is known (#718, the owner's decision 2026-10-22): a lost step 1
+  carries it under its block in the same send or edit, and step 2's block, open or settled, is
+  added under the line later; after a tie at step 1 nothing stands under the tie, and the line
+  comes above step 2's block with it, whatever its stake (the base stake, #551); a win closes the
+  cycle with no line. When no step 2 follows a lost step 1 (a limit, the user, the kill switch or
+  the deadline stops the session first), the line stays: the cycle message's text is a function of
+  its blocks alone, and the summary's stop line names the reason. It is not repeated above steps
+  3, 4…; under the fixed strategy there is no step 2, so no line. Each block carries its slot
+  (`sessionAdaptiveLines`, `sessionNextAdaptiveLine` for the open block, in
+  `packages/shared/src/session-steps.ts`); `sessionCycleText` only prints it, so a continuation
+  after a split from step 2 has the line only after a tie. No text says «Мартингейл».
 - **The length.** Before an edit the sender measures the text as Telegram counts it after parsing
   the entities (`plainTextOf`, as `telegramTextProblems`); a text past `BOT_TEXT_LIMIT` (4069: the
   Bot API's 4096 less the width spacer the seam appends,
@@ -870,8 +878,9 @@ message of the session, deleted before the open block's new message and sent aga
   the trade that did not fit,
   and the full one stays as it is. The defaults never get there — a cycle has at most `maxSteps`
   (4) trades plus its ties, of about 100 characters each — so only an override can; the assembled-messages registry
-  (`sessionTrade`, [bot-texts.md](bot-texts.md)) keeps one block with its adaptive line within the
-  limit, so the unit the sender never splits always fits.
+  (`sessionTrade`, [bot-texts.md](bot-texts.md)) keeps one block with its adaptive line — a lost
+  step 1 with the line under it, or a step 2 with the line above it — within the limit, so the
+  unit the sender never splits always fits.
 - **The summary's lines** are the pair («📈 {symbol}», `sessionSummarySymbol`, or «актив #N»), then
   the stopped session's closing lines (`sessionClosingLines`), the first of them the session
   message's end line (#536): «🏁 Сессия завершена: …» for a completed session, otherwise the stop
@@ -1853,8 +1862,8 @@ signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5
 - **#283** — the start, read and stop routes.
 - **#29** — notifications; the session's trade messages and summary are #464's.
 - **#450** — the martingale strategy by default ([stake.md](stake.md#defaults)): the session's
-  strategy goes to `sessionTradeSteps`, the adaptive line appears on the raised steps, and the four
-  limits stop the session with their own lines.
+  strategy goes to `sessionTradeSteps`, the adaptive line stands between steps 1 and 2 (under a
+  lost step 1 at once, #718), and the four limits stop the session with their own lines.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade;
   since **#509** on a signal only, and every door's press or start checks the pair's signal.
