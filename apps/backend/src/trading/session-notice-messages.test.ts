@@ -37,7 +37,7 @@ const { Won: W, Lost: L, Tied: T } = SessionTradeResult;
 
 const row = (result: SessionTradeResult, index: number) => ({
   amount: d('5'),
-  outcome: d(result === W ? '4.6' : result === L ? '-5' : '0'),
+  outcome: d(result === W ? '9.6' : result === L ? '-5' : '0'),
   result,
   openPrice: index + 1,
   closePrice: index + 1.5,
@@ -129,7 +129,7 @@ describe('sessionCycleMessage (#551)', () => {
         '⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 2.00000 → 2.50000</pre>',
         '🔄 Адаптивная ставка включена',
         '⚡ Цикл 2 Шаг 2\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 3.00000 → 3.50000</pre>',
-        '⚡ Цикл 2 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$4.60\n📊 Цена: 4.00000 → 4.50000</pre>',
+        '⚡ Цикл 2 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$9.60\n📊 Цена: 4.00000 → 4.50000</pre>',
       ].join('\n\n'),
     );
   });

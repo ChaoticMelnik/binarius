@@ -18,7 +18,7 @@ const d = (value: string) => value as DecimalString;
 
 const trade = (patch: Partial<SessionTradeNotice> = {}): SessionTradeNotice => ({
   amount: d('11.50000000'),
-  outcome: d('10.58000000'),
+  outcome: d('22.08000000'),
   result: SessionTradeResult.Won,
   openPrice: 0.49803,
   closePrice: 0.4982,
@@ -87,9 +87,15 @@ describe('sessionCycleText (#551)', () => {
   const ADAPTIVE = '🔄 Адаптивная ставка включена';
   const text = (trades: SessionTradeNotice[]) => session.sessionCycleText(trades).value;
 
-  it('a cycle of one trade is its block alone: the cycle and step, stake → profit, the prices', () => {
+  it('a cycle of one trade is its block alone: the cycle and step, stake → stake + profit, the prices', () => {
     expect(text([trade()])).toBe(
-      '⚡ Цикл 3 Шаг 1\n<pre>🟢 Ставка: $11.50 → +$10.58\n📊 Цена: 0.49803 → 0.49820</pre>',
+      '⚡ Цикл 3 Шаг 1\n<pre>🟢 Ставка: $11.50 → +$22.08\n📊 Цена: 0.49803 → 0.49820</pre>',
+    );
+  });
+
+  it('prints a fractional stake and its return with every fraction digit (#684)', () => {
+    expect(text([trade({ amount: d('0.005'), outcome: d('0.0096') })])).toContain(
+      '🟢 Ставка: $0.005 → +$0.0096\n',
     );
   });
 
