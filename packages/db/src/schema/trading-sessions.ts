@@ -59,9 +59,6 @@ export const tradingSessions = pgTable(
     endedAt: timestamp('ended_at', { withTimezone: true }),
     // the order key of the runnable scan; NULL until the first attempt reached an ending
     lastDecisionAt: timestamp('last_decision_at', { withTimezone: true }),
-    // the pause's memory (#379) until #698: no writer and no reader since; the column and its
-    // CHECK stay until the drop migration (#719)
-    lastSignalAction: text('last_signal_action').$type<TradeAction>(),
     // the direction of the signal the start route checked (#568): the bot's session picture until
     // the session's first trade. Written only by createTradingSession from POST /trading/sessions,
     // never updated; NULL on rows before #568 and on the CLI's session-start, which checks no signal
@@ -136,7 +133,6 @@ export const tradingSessions = pgTable(
     inList('trading_sessions_mode_check', t.mode, TradeMode),
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),
     inList('trading_sessions_stop_reason_check', t.stopReason, TradingSessionStopReason),
-    inList('trading_sessions_last_signal_action_check', t.lastSignalAction, TradeAction),
     inList('trading_sessions_start_signal_action_check', t.startSignalAction, TradeAction),
     // Two CHECKs, not one: a single `(stopped) = (reason and end)` accepts paused/reason/NULL and
     // active/NULL/now, because false = false holds. Each pair alone pins its column to `stopped`.
