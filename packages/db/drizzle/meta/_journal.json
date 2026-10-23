@@ -547,6 +547,13 @@
       "when": 1792705462841,
       "tag": "0077_broker_trade_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1792759250439,
+      "tag": "0078_drop_last_signal_action",
+      "breakpoints": true
     }
   ]
 }

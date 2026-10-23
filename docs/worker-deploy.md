@@ -146,9 +146,14 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
 
 - **Migrations before the overlap.** The old worker runs on the new schema for up to the overlap.
   That already happens today between `migrate` and `up`; migrations stay forward-only and additive
-  (`.claude/CLAUDE.md` → База данных). The migration is its own step before the script: a new
-  container started on a database behind its journal exits 1 at its schema check, before the ready
-  line, so the script rolls back (exit 1) and the old worker keeps running.
+  (`.claude/CLAUDE.md` → База данных). The one drop so far is 0078 (#719,
+  `trading_sessions.last_signal_action`): a column no running code read, whose only enumeration
+  was drizzle's whole-row `RETURNING` of `createTradingSession` and `stopTradingSession` — those
+  fail `42703` in the old backend and the old orchestrator between `migrate` and the new
+  containers, write nothing, and are retried by the user or the next tick. A drop is planned only
+  on those terms (the plan of #719 names every statement). The migration is its own step before
+  the script: a new container started on a database behind its journal exits 1 at its schema
+  check, before the ready line, so the script rolls back (exit 1) and the old worker keeps running.
 - **The backend is deployed separately.** The worker may run against the previous backend (or the
   reverse) across one deploy, so the internal routes (`/trading/accounts/:id/access-token`, the
   signal and pairs routes) stay compatible across one deploy; a breaking change to one of them is a

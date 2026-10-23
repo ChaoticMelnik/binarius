@@ -966,7 +966,7 @@ describe('the endings of an attempt (#287)', () => {
 });
 
 // docs/trading-session.md -> The pause after two losses (#379, removed by #698): a signal trades
-// whatever the session's trades before it, and nothing writes last_signal_action
+// whatever the session's trades before it (#719 dropped the pause's column)
 describe('no pause after two losses (#698)', () => {
   const signalTo = (action: TradeAction): SignalOutcome => ({
     ok: true,
@@ -977,7 +977,6 @@ describe('no pause after two losses (#698)', () => {
     const seed = await seedSession({ settings: sessionSettings({ trades: 10 }) });
     const orchestrator = orchestratorOf({ signals: signalsOf(signalTo(TradeAction.Down)) });
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    expect((await sessionRow(seed.session.id)).lastSignalAction).toBeNull();
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
     await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
 
@@ -985,7 +984,6 @@ describe('no pause after two losses (#698)', () => {
     const intents = await intentsOf(seed.session.id);
     expect(intents).toHaveLength(4);
     expect(intents[3]!.action).toBe(TradeAction.Down);
-    expect((await sessionRow(seed.session.id)).lastSignalAction).toBeNull();
     expect((await decisionsOf(seed.session.id)).map((row) => row.outcome)).toEqual([
       'intent',
       'intent',

@@ -3536,29 +3536,6 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
-  // #379...#698: the pause's memory; the column stays until #719
-  it.each([null, 'up', 'down'] as const)('accepts last_signal_action %s', async (action) => {
-    await rolledBack(async (tx) => {
-      const seed = await seedAccount(tx);
-      const [row] = await tx
-        .insert(tradingSessions)
-        .values(session(seed.accountId, { lastSignalAction: action }))
-        .returning();
-      expect(row!.lastSignalAction).toBe(action);
-    });
-  });
-
-  it.each(['bogus', ''])('rejects last_signal_action %j', async (action) => {
-    await rolledBack(async (tx) => {
-      const seed = await seedAccount(tx);
-      await rejectsWith(
-        tx.insert(tradingSessions).values(session(seed.accountId, { lastSignalAction: action })),
-        '23514',
-        'trading_sessions_last_signal_action_check',
-      );
-    });
-  });
-
   // #568: the direction of the signal the start route checked
   it.each([null, 'up', 'down'] as const)('accepts start_signal_action %s', async (action) => {
     await rolledBack(async (tx) => {
