@@ -1013,10 +1013,9 @@ describe('the no-signal limit of an H1 session is the driver’s (#775, review r
     await h.feedSettled(A, F + 99_000, flat(1));
     expect(h.stops).toEqual(STOPPED);
     expect(decided(h.records)).toEqual([F, F + 99_000]);
-    expect(h.records.map((one) => [one.outcome, one.step])).toEqual([
-      ['no_signal', 1],
-      ['no_signal', 1],
-    ]);
+    // the waiting row's own shape is H1-DR29's
+    expect(h.records.map((one) => one.step)).toEqual([1, 1]);
+    expect(h.records[1]).toMatchObject({ outcome: 'no_signal', kind: 'no_signal' });
     await h.feedSettled(A, F + 100_000, flat(11));
     expect(h.stops).toEqual(STOPPED);
     expect(h.records).toHaveLength(2);
@@ -1138,10 +1137,9 @@ describe('the no-signal limit of an H1 session is the driver’s (#775, review r
     expect(h.creates).toEqual([]);
     await h.feedSettled(A, F + 1_000, flat(1));
     expect(h.creates).toHaveLength(1);
+    // the repeat by its source; its version and missing deadline are H1-DR25's and H1-DR27's
     expect(h.creates[0]).toMatchObject({ step: 2, action: 'down' });
-    expect('submitDeadlineAt' in h.creates[0]!).toBe(false);
     expect(h.creates[0]!.decision).toMatchObject({
-      version: 'h1-repeat',
       source: { kind: 'settlement', trigger: 'tick' },
     });
     expect(h.records).toEqual([]);
@@ -1158,29 +1156,25 @@ describe('the no-signal limit of an H1 session is the driver’s (#775, review r
     expect(h.stops).toEqual([]);
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]!.decision).toMatchObject({
-      version: 'h1-repeat',
-      source: { trigger: 'tick' },
+      source: { kind: 'settlement', trigger: 'tick' },
     });
   });
 
   it('H1-DR38: a pending repeat is retried while the digits are unknown (m2)', async () => {
     const h = await warmed(lostStep1);
     h.digits.value = undefined;
-    const enough = h.balance.read;
-    h.balance.read = {
-      available: decimalStringSchema.parse('0.50'),
-      minTradeAmount: decimalStringSchema.parse('1'),
-      awaitsBalance: true,
-    };
+    const fresh = h.catalog.view;
+    // the repeat is held by the pair (a stale catalog), then retried on the next closed second
+    h.catalog.view = { pairs: [pairOf(A)], fetchedAt: T, ageMs: 90_000, fresh: false };
     h.driver.notice('s1');
     await flush();
     expect(h.creates).toEqual([]);
-    h.balance.read = enough;
+    h.catalog.view = fresh;
     await h.feedSettled(A, F, flat(1));
     expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 2, action: 'down' });
     expect(h.creates[0]!.decision).toMatchObject({
-      version: 'h1-repeat',
-      source: { trigger: 'tick' },
+      source: { kind: 'settlement', trigger: 'tick' },
     });
     expect(h.line()).toMatchObject({ decisions: 0, repeatPending: 1 });
   });

@@ -520,10 +520,13 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
       const stopped = await stateOf();
       expect(stopped).toMatchObject({ status: 'stopped', stopReason: 'no_signal_timeout' });
       expect(stopped.endedAt).not.toBeNull();
-      expect((await rowsOf()).map((row) => [row.decidedAtMs, row.outcome, row.step])).toEqual([
-        [f, 'no_signal', 1],
-        [f + 99_000, 'no_signal', 1],
+      // the waiting row's own shape is H1-DB5's
+      const rows = await rowsOf();
+      expect(rows.map((row) => [row.decidedAtMs, row.step])).toEqual([
+        [f, 1],
+        [f + 99_000, 1],
       ]);
+      expect(rows[1]).toMatchObject({ kind: 'no_signal', outcome: 'no_signal' });
     } finally {
       await driver.stop();
     }
