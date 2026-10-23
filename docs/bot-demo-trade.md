@@ -168,7 +168,7 @@ same in both modes.
 
 | Callback (≤ 45 bytes) | Action |
 | --- | --- |
-| `stk:o:<m>:<origin>` | open: read access, edit to the picker of mode `<m>` |
+| `stk:o:<m>:<origin>` | open: read access, edit to the picker of mode `<m>`; under the analysis card (a photo, #482) the picker goes as a new message at once (#761) |
 | `stk:s:<amount>:<m>:<origin>` | a preset: save exactly this amount as the stake of `<m>` |
 | `stk:z:<m>:<origin>` | reset the stake of `<m>` to the broker minimum (`amount: null`) |
 | `stk:c:<m>:<origin>` | custom: the input step of `<m>`, the prompt in place with «↩️ Назад» → `stk:o:<m>:<origin>` |
