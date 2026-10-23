@@ -168,7 +168,9 @@ export const HANDLER_CALLS = {
   // ∥ stopSession ∥ readPairs, readSession after a 409 session_not_active, then editMessageText
   // refused as gone → sendMessage. Under the waiting message (`:w`, #536) it is 2 / 3:
   // answerCallbackQuery ∥ stopSession, readSession after a 409, then editMessageText refused as
-  // gone → sendMessage (#587: the reply in place of the pressed message)
+  // gone → sendMessage (#587: the reply in place of the pressed message). Under the open trade's
+  // block (`:c`, #722) 2 / 3: answerCallbackQuery ∥ stopSession, readSession after a 409, then
+  // sendMessage and editMessageReplyMarkup
   sessionStop: { backend: 3, telegram: 3 },
   // «📤 Поделиться»'s inline query (#321, #538): readSessionShare, then sendPhoto of the promo card
   // to the storage channel and answerInlineQuery with its file id; an old button's query, a refusal

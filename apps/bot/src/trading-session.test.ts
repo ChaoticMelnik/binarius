@@ -90,6 +90,8 @@ const CARD_FILE_ID = 'AgACAgIAAxkBAAIBlarge';
 const REFRESH = `session:${SESSION_ID}`;
 const STOP = sessionStopCallbackData(SESSION_ID);
 const WAITING_STOP = sessionStopCallbackData(SESSION_ID, { waiting: true });
+// the stop under the open trade's block (#722)
+const CYCLE_STOP = sessionStopCallbackData(SESSION_ID, { cycle: true });
 
 interface Button {
   text: string;
@@ -830,6 +832,159 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     await press(WAITING_STOP, 'group');
     expect(calls).toEqual([]);
     expect(stopSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('«⏹ Остановить сессию» under the open trade’s block (#722)', () => {
+  const open = sessionView({
+    ...STOPPED,
+    lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+  });
+  const infos = (logger: ReturnType<typeof fakeLogger>) =>
+    logger.info.mock.calls.map((call) => call[1] as string);
+
+  it('SC1 stops without the pressed message, answers with a new message under the end of the path, then takes the block’s keyboard off', async () => {
+    const { press, calls, stopSession, readPairs, readSession, sessionTracker, logger } = setup();
+    await press(CYCLE_STOP);
+    expect(methods(calls)).toEqual([
+      'answerCallbackQuery',
+      'sendMessage',
+      'editMessageReplyMarkup',
+    ]);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(STOPPED));
+    expect(sent?.parse_mode).toBe('HTML');
+    expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
+    // the cycle's blocks are the backend's: no hand-over, no edit of its text
+    expect(stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), undefined]]);
+    expect(payloadOf(calls, 'editMessageReplyMarkup')?.reply_markup).toBeUndefined();
+    expect(readPairs).not.toHaveBeenCalled();
+    expect(readSession).not.toHaveBeenCalled();
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+    expect(warnings(logger)).toEqual([]);
+  });
+
+  it('SC2 a session stopped with its trade open: read on 409, «how it ended» says the trade plays out, the keyboard off', async () => {
+    const { press, calls, readSession } = setup({
+      stopSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive)),
+      readSession: () => Promise.resolve(open),
+    });
+    await press(CYCLE_STOP);
+    expect(readSession).toHaveBeenCalledWith(SESSION_ID, String(USER.id));
+    expect(methods(calls)).toEqual([
+      'answerCallbackQuery',
+      'sendMessage',
+      'editMessageReplyMarkup',
+    ]);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(replyOf(open));
+    expect(payloadOf(calls, 'sendMessage')?.text).toContain(TEXTS.sessionOpenTradePlaysOut.value);
+  });
+
+  it('SC3 a failed stop or read: a new message under the menu, the block’s «⏹» left for another press', async () => {
+    const broken = setup({ stopSession: () => Promise.reject(httpError(500)) });
+    await broken.press(CYCLE_STOP);
+    expect(methods(broken.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual([MENU_ROW]);
+    expect(warnings(broken.logger)).toEqual(['trading session not stopped']);
+
+    const missing = setup({ stopSession: () => Promise.reject(httpError(404, 'not_found')) });
+    await missing.press(CYCLE_STOP);
+    expect(methods(missing.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(missing.calls, 'sendMessage')?.text).toBe(
+      TEXTS.sessionStatusUnavailable.value,
+    );
+    expect(rowsOf(payloadOf(missing.calls, 'sendMessage'))).toEqual([MENU_ROW]);
+    expect(warnings(missing.logger)).toEqual([]);
+
+    const unread = setup({
+      stopSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive)),
+      readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await unread.press(CYCLE_STOP);
+    expect(methods(unread.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(unread.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(warnings(unread.logger)).toEqual(['trading session status not read']);
+  });
+
+  it.each([
+    [
+      'gone',
+      {
+        ok: false,
+        error_code: 400,
+        description: 'Bad Request: message to edit not found',
+      } as ApiError,
+    ],
+    [
+      'not modified',
+      {
+        ok: false,
+        error_code: 400,
+        description: 'Bad Request: message is not modified',
+      } as ApiError,
+    ],
+    ['a transport failure', new HttpError('Network request failed!', new Error('reset'))],
+  ])('SC4 the keyboard’s removal refused (%s): logged at info, nothing more', async (_, error) => {
+    const run = setup();
+    run.apiErrors.set('editMessageReplyMarkup', error);
+    await run.press(CYCLE_STOP);
+    expect(methods(run.calls)).toEqual([
+      'answerCallbackQuery',
+      'sendMessage',
+      'editMessageReplyMarkup',
+    ]);
+    expect(infos(run.logger)).toContain('the keyboard of a pressed button was not removed');
+    expect(warnings(run.logger)).toEqual([]);
+  });
+
+  it('SC5 a real session: the same reply, its again button marked REAL', async () => {
+    const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
+    const { press, calls } = setup({ stopSession: () => Promise.resolve(realStopped) });
+    await press(CYCLE_STOP);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(realStopped));
+    expect(rowsOf(sent)[0]).toEqual([
+      button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+    ]);
+  });
+
+  it('SC6 ignores a press in a group', async () => {
+    const { press, calls, stopSession } = setup();
+    await press(CYCLE_STOP, 'group');
+    expect(calls).toEqual([]);
+    expect(stopSession).not.toHaveBeenCalled();
+  });
+
+  // issue #722 п. 6: the session can be stopped in every state of its run, by the way each state
+  // offers - the waiting message's «⏹» while it waits, the open block's while a trade is open,
+  // /stop always
+  it.each([
+    ['before the first decision', 'command', STOPPED],
+    ['waiting for a signal', WAITING_STOP, STOPPED],
+    ['a trade open', CYCLE_STOP, open],
+    ['between a settlement and the next decision', 'command', STOPPED],
+  ] as const)('SC7 %s: stopped, and the answer names how', async (_, entry, view) => {
+    const run = setup({
+      stopSession: () => Promise.resolve(view),
+      stopSessions: () => Promise.resolve([view]),
+    });
+    if (entry === 'command') await run.send('/stop');
+    else await run.press(entry);
+    const answered = run.calls.find(
+      (call) => call.method === 'sendMessage' || call.method === 'editMessageText',
+    );
+    expect(answered?.payload.text).toBe(replyOf(view));
+    expect(run.stopSession.mock.calls.length + run.stopSessions.mock.calls.length).toBe(1);
+  });
+
+  it('SC7 stopped already with its trade open: the open block’s «⏹» answers how it ended', async () => {
+    const run = setup({
+      stopSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive)),
+      readSession: () => Promise.resolve(open),
+    });
+    await run.press(CYCLE_STOP);
+    expect(payloadOf(run.calls, 'sendMessage')?.text).toBe(replyOf(open));
   });
 });
 

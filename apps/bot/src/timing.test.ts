@@ -1695,6 +1695,9 @@ const sessionStopUpdate = (chatType?: string) =>
   callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id), chatType);
 const waitingStopUpdate = () =>
   callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id, { waiting: true }));
+// the one under the open trade's block (#722)
+const cycleStopUpdate = () =>
+  callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id, { cycle: true }));
 const notActive = () =>
   Promise.reject(sessionHttpError(409, TradingSessionErrorCode.SessionNotActive));
 const SESSION_STOP_WORST_CASE: Branch = {
@@ -1767,6 +1770,44 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
     update: waitingStopUpdate(),
     stopSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the open block: stopped, the reply sent, the keyboard taken off',
+    update: cycleStopUpdate(),
+    expected: { backend: 1, telegram: 3 },
+  },
+  {
+    label:
+      'the open block: the session had ended, it is read, the reply sent, the keyboard taken off',
+    update: cycleStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(STOPPED_SESSION),
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the open block: the session is not found',
+    update: cycleStopUpdate(),
+    stopSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the open block: the session had ended and the read fails',
+    update: cycleStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the open block: the stop fails',
+    update: cycleStopUpdate(),
+    stopSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the open block: the keyboard’s removal is refused',
+    update: cycleStopUpdate(),
+    apiErrors: [['editMessageReplyMarkup', EDIT_GONE]],
+    expected: { backend: 1, telegram: 3 },
   },
 ];
 

@@ -44,6 +44,7 @@ import {
   placeOf,
   pressedPlace,
   removeLegacyKeyboard,
+  stripKeyboard,
   SESSION_START_PATTERN,
   sessionStartCallbackData,
   sessionFits,
@@ -107,7 +108,8 @@ import {
 // The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
 // buttons start one through POST /trading/sessions, one session message without buttons follows it
 // (session-tracker.ts), and the «⏹» under the backend's waiting message stops it (#536), its reply
-// drawn in place of that message (#587). The trades
+// drawn in place of that message (#587), or the one under the open trade's block (#722), its reply
+// a new message. The trades
 // themselves are the worker's (#287), their messages the backend's (#464). The launch screen (#418)
 // and the amount screen of a demo cycle (#476) are deleted once the session message is sent.
 
@@ -383,8 +385,8 @@ export function createTradingSessionComposer<C extends Context>({
     }
   }
 
-  // The session message, without a keyboard (#536): the backend's waiting message under it
-  // carries the «⏹». With a signal's direction it is that direction's picture with the text as
+  // The session message, without a keyboard (#536): the backend's waiting message under it, or its
+  // open trade's block (#722), carries the «⏹». With a signal's direction it is that direction's picture with the text as
   // its caption (#568); a refused photo (a stale file_id among others) forgets its file_id and
   // sends the same text as a message. A transport failure is thrown, as a text's is: a second
   // message after an unknown delivery could be a duplicate (#126).
@@ -446,17 +448,22 @@ export function createTradingSessionComposer<C extends Context>({
   // «⏹ Остановить сессию». No confirmation and no retry: a second stop is harmless (409 → the
   // session read). Under the waiting message (`:w`, #536) the stop names the pressed message, so the
   // backend takes it over from its sender (#587), and the reply - or a failure - is drawn in its
-  // place: the summary the backend sends next comes under it. Under an old status message (no
-  // `:w`) the reply is drawn in its place, as before #536, and tracked.
+  // place: the summary the backend sends next comes under it. Under the open trade's block (`:c`,
+  // #722) the reply goes as a new message, as /stop's for one session, and the pressed block only
+  // loses its keyboard: the cycle's blocks are the backend's, and its result's edit follows; a
+  // failure is a new message too, the «⏹» left for another press. Under an old status message (no
+  // suffix) the reply is drawn in its place, as before #536, and tracked.
   composer.callbackQuery(SESSION_STOP_PATTERN, async (ctx) => {
     const sessionId = ctx.match[1] ?? '';
-    const waiting = ctx.match[2] !== undefined;
+    const under = ctx.match[2];
+    const waiting = under === 'w';
+    const cycle = under === 'c';
     const telegramUserId = String(ctx.from.id);
     const pressed = waiting ? ctx.callbackQuery.message?.message_id : undefined;
     const [, stopped, catalog] = await Promise.all([
       answer(ctx),
       settle(backend.stopSession(sessionId, telegramUserId, pressed)),
-      waiting ? undefined : settle(backend.readPairs()),
+      under === undefined ? settle(backend.readPairs()) : undefined,
     ]);
     let view: TradingSessionView;
     if (stopped.ok) {
@@ -472,6 +479,13 @@ export function createTradingSessionComposer<C extends Context>({
     } else {
       const again = waiting && { sessionId };
       await stopFailure(ctx, stopped.error, 'trading session not stopped', again);
+      return;
+    }
+    if (cycle) {
+      await replyHtml(ctx, sessionStopReplyText(view), {
+        reply_markup: sessionCardKeyboard(view, cashierUrl),
+      });
+      await stripKeyboard(ctx, logger, 'the keyboard of a pressed button was not removed');
       return;
     }
     if (waiting) {
