@@ -1200,4 +1200,4 @@ docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for
   the mode stops the user's active sessions in its transaction ([trading-mode.md](trading-mode.md)).
   The `demo_only` refusal (#396) comes before both. The CLI `session-start` creates demo sessions
   only. A loss limit or a daily cap for real sessions is a later issue.
-- The invariant is Architecture Rules → "Торговая сессия" in `.claude/skills/architect/SKILL.md`.
+- The invariant is Rule 28 «Торговая сессия» in `.claude/skills/architect/rules/trading.md` (index: `.claude/skills/architect/SKILL.md` → Architecture Rules).

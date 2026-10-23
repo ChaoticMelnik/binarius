@@ -29,6 +29,8 @@ Use the `/github` skill's "Read Issue + Comments" template — one filtered `gh 
 
 CodeGraph first, always (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»): `codegraph_context` for the issue's area, then one `codegraph_explore` for the symbols it surfaces; `codegraph_search`/`codegraph_files` for the rest. grep/Read only for literal text, the two shapes codegraph loses, and code outside the indexed tree. The plan names the codegraph calls it rested on.
 
+Then `node tooling/rules-for.ts <files the issue names>` and Read every rule file it names (`.claude/skills/architect/rules/*.md`, the index is in this file → Architecture Rules); the plan quotes the script's `--list` output for its own file list.
+
 **Scope rule:** cover the entire affected domain, not just explicitly mentioned entities. If the issue touches an architectural constraint, apply it to every entity in that domain — missed entities get caught at review, expensively.
 
 ### Step 3: Domain-wide impact scan (mandatory)
@@ -108,7 +110,7 @@ Do not proceed to Step 6 while a question is unanswered.
 
 ### Validation checklist
 - [ ] All affected domain entities covered (not just issue-mentioned ones)
-- [ ] Every invariant from "Architecture Rules" below that the change touches is named in the plan and preserved
+- [ ] Every rule `node tooling/rules-for.ts <the plan's files>` prints (output quoted in the plan) that the change touches is named in the plan and preserved; a rule the change adds or alters goes to `.claude/skills/architect/rules/<area>.md` with its line in the index (next free number)
 - [ ] No new build/type/lint/test failures (`pnpm check` passes)
 - [ ] Every mutating endpoint has authorization consistent with adjacent code
 - [ ] read→mutate patterns: atomic guard, or race condition explicitly accepted with reason
