@@ -468,9 +468,12 @@ is `malformed_line`); `calibrate` compares candle decisions with session trades 
 - `v1` before `V2_MERGED_AT` (#379's merge, 2026-10-09 16:13 UTC).
 - `ambiguous` before `V2_FIRST_CLEAN_AT` (2026-10-10 00:00 UTC). The deploy time is unknown, so
   these trades are counted and left out of every comparison.
-- `v2` from then on.
+- `v2` before `PAUSE_REMOVED_AT` (#698's merge, PR #720, 2026-10-22 16:20:31 UTC).
+- `v2np` from then on: v2 without the pause (#719). A v2np trade's line is v2 — the journal's
+  version did not change.
 
-A matched line whose version is not its trade's era counts `version_mismatch`.
+A matched line whose version is not its trade's era's version (`v2np` → `v2`) counts
+`version_mismatch`.
 
 **Matching.** For each trade, the stand takes the latest journal line of the same `assetId` and
 `intervalForDuration(duration_sec)` whose `nowMs` is at or before `created_at` and within
@@ -501,7 +504,8 @@ entry counts `unsupported_duration`; it stays in gate 2 and the delay choice, an
    best `k` counts.
 3. For each era × duration with at least `CALIBRATE_MIN_ERA_TRADES` (30) live trades, the live
    win rate lies inside the Wilson interval of the stand's own rate. The stand's rate comes from
-   v1, or v2 at 15/5 with the pause (the rule of those trades; the era after #698 is #719),
+   v1, v2 at 15/5 with the pause (#379…#698) or v2np at 15/5 without it (#719) — the rule of
+   those trades,
    simulated inside each session's window: from its first `created_at` to its last
    `close_timestamp`, at the headline delay. A gated row whose stand
    has no win or loss is "FAIL no stand evidence": an empty sample's interval would hold any
@@ -615,7 +619,10 @@ out of pooling.
 10. **One row may be lost after a long gap** (the first-row rule above). That row then shows up
     as a `candle_gap` or an unpriced trade, never as a guessed value.
 11. **The era cut is the merge time, not the deploy time.** A v2 deploy later than 10-10 00:00
-    UTC would mislabel v1 trades as v2.
+    UTC would mislabel v1 trades as v2. #698's deploy came the evening of 10-22, after its
+    16:20 UTC merge, so trades of that evening were made with the pause and are labelled v2np
+    (their stand runs without it; the pause changes which signals are taken, not their
+    direction — table (d)).
 12. **The 85 % floor comes from one sample** (443/494). A sample below it fails `calibrate`, and
     the floor is not lowered silently.
 13. **The mock broker pages differently.** It caps a page by rows, not by the time window. The
