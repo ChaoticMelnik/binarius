@@ -5,14 +5,15 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries five scenarios: the **first-session chain**, three reminders that lead a user who
+Today it carries six scenarios: the **first-session chain**, three reminders that lead a user who
 connected an account but has not started a trading session into the demo, the **analysis
 reminder** (#484), one reminder after an analysis card nobody acted on, the **referral reward
 notification** (#576), one message to an inviter per reward, the **low-token nudge** (#123),
 one push when the balance falls to a share of the user's starter pack, and the **real-mode
 notification** (#686), one message per deposit that switched the user to real, the one
-*important* kind. #124 (retention) adds its
-scenarios to the same engine.
+*important* kind, and **retention** (#124), four pushes that bring back a user who stopped: after
+three days without activity, a day after the last session, a weekly summary of the demo trades,
+and a second word two days after the tokens ran out.
 
 ```bash
 pnpm test --project unit apps/backend/src/mailing apps/backend/src/auth/client-push.test.ts apps/backend/src/trading/signal-routes.test.ts   # no database or Redis
@@ -27,8 +28,10 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `analysisUnusedPayloadSchema` (#484), `REFERRAL_REWARDED_AFTER_MS` and
   `referralRewardedPayloadSchema` (#576), `TOKEN_NUDGES`, `TOKEN_NUDGE_AFTER_MS` and
   `tokenNudgePayloadSchema` (#123), `REAL_MODE_BY_DEPOSIT_AFTER_MS` and
-  `realModeByDepositPayloadSchema` (#686), and `MAILING_MIN_OFFSET_MS`, the earliest offset among
-  the kinds that wait.
+  `realModeByDepositPayloadSchema` (#686), `INACTIVE_AFTER_MS`, `INACTIVE_REPEAT_DAYS`,
+  `SESSION_IDLE_AFTER_MS`, `WEEKLY_SUMMARY_HOUR_UTC`, `TOKENS_OUT_REPEAT_AFTER_MS`,
+  `sessionIdlePayloadSchema` and `weeklySummaryPayloadSchema` (#124), and `MAILING_MIN_OFFSET_MS`,
+  the earliest offset among the kinds that wait.
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
   from (`facts`, a lateral row source over the user's row with a column `at`), the offset
   (`afterMs`), the dedupe key and the job's payload (SQL over the user's row and the fact; the
@@ -37,7 +40,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   (`replansCanceled`, #123), and whether it is important (`important`, #686, Delivery rules);
   `IMPORTANT_NOTIFICATION_KINDS` lists those, from the scenarios alone. A kind with one fact per
   user goes through `oneFact`: its facts are one row, its key reads the user's row only and the
-  claim compares it directly.
+  claim compares it directly. `weeklyAnchor`, `weeklyRange` and `weeklyKey` (#124) are the weekly
+  summary's week as builders over a moment, exported for the tests.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
@@ -54,9 +58,9 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 `MAILING_SCENARIOS` and `MAILING_MESSAGES` are checked with `satisfies Record<NotificationKind, …>`:
 a kind without either does not compile. The tests named below by their ids are in
 `packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484; R1–R8 for #576; T1–T16 for #123), `apps/backend/src/mailing/engine.db.test.ts`
-(M7–M11, E1–E2, E-R1–E-R2, E-MR; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
-the pacer alone; WP1–WP6, the wake) and `apps/backend/src/mailing/messages.test.ts`; MR1–MR9 for
-#686 in `mailing-ops.db.test.ts`.
+(M7–M11, E1–E2, E-R1–E-R2, E-MR, E-RT; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
+the pacer alone; WP1–WP6, the wake) and `apps/backend/src/mailing/messages.test.ts` (RM1–RM6 for
+#124); MR1–MR9 for #686 and RT, RS, RW, RZ for #124 in `mailing-ops.db.test.ts`.
 
 ## The first-session chain
 
@@ -105,7 +109,10 @@ granted before its deploy get no notification and stay visible in /invite only. 
 nudges' rows are seeded by `0067_tokens_nudge_kinds_seed.sql`; their fact is the planning moment,
 so the row only switches them on (The low-token nudge → At the deploy). The real-mode
 notification's row is seeded by `0076_real_mode_by_deposit_seed.sql`; 0075 closed every earlier
-deposit as `predates`, so no switch precedes it anyway.
+deposit as `predates`, so no switch precedes it anyway. The four retention kinds' rows are seeded by
+`0080_retention_kinds_seed.sql` in one statement (#124, answer 2 (a) of 2026-10-23): only activity,
+sessions, weeks and sent `tokens_out` jobs after the deploy count, so the deploy sends no wave over
+the whole base, and the first weekly summary goes out on the first Monday after it.
 
 ## The analysis reminder (#484)
 
@@ -289,6 +296,95 @@ Tests: `mailing-ops.db.test.ts` T1–T16 and its CUT, `engine.db.test.ts` (the 8
 their keyboard, a jump 51 → 0, cancel → re-plan → one send), `messages.test.ts`, the pin in
 `timing.test.ts`.
 
+## Retention (#124)
+
+| Kind               | Sent                                                                   | Text (`mailing` group) | Buttons                                                                          |
+| ------------------ | ---------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------- |
+| `inactive_3d`      | 72 h after the last activity of a user who ran a session; ≤ 1 a week   | `inactiveReminder`     | the entry «🎮 Демо-торговля» (`demo`)                                            |
+| `session_idle_24h` | 24 h after the newest session stopped, none started since              | `sessionIdleReminder`  | «🔁 Запустить снова» (`demo:l:<assetId>:<sec>:n`), the entry without a pair      |
+| `weekly_summary`   | Monday 10:00 UTC, the previous ISO week's settled demo trades          | `weeklySummary`        | the entry                                                                        |
+| `tokens_out_2d`    | 48 h after the sent `tokens_out`, while the balance has not moved      | `tokensOutStill`       | the same as `tokens_low`: the cashier, then «⭐ Купить»                          |
+
+The owner's four scenarios (2026-10-08) with the manager's answers of 2026-10-23
+(https://github.com/ChaoticMelnik/binarius/issues/124#issuecomment-6372732680): scenario 4 follows
+the sent `tokens_out`, once per user (1 (a)); only facts after the deploy (2 (a), Cutoff); scenarios
+1–3 go to demo users only and the summary counts demo trades only (3 (a)). None is important; the
+engine's rules hold (`reduced`: one mailing a day). The texts show counts only — no money, so rule 2
+is untouched (profit is only compared to 0 in SQL) — and promise no result.
+
+- **The last activity** is `greatest(` the newest `trading_sessions.started_at` and the newest
+  `trade_intents.created_at` on the user's accounts, `broker_balance_snapshots.last_requested_at` of
+  those accounts, `users.last_analysis_at` `)`. `last_requested_at` moves on `/trading/access` (the
+  bot's menu and trading screens), a session start, a deposit credit and every tick of a running
+  session. It is an approximation: a user who only reads `/help` or `/settings` counts as inactive.
+- **`inactive_3d`** applies while the user is not blocked by the admin, trades demo, has an active
+  account and trading is open (`tradingOpenSql`, rule 22), has at least one session, has had no
+  `inactive_3d` sent in the last `INACTIVE_REPEAT_DAYS` (7), and has no `session_idle_24h` or
+  `tokens_out_2d` job pending (the more specific one goes first). The key is `inactive_3d:` and the
+  epoch of the activity: newer activity is a new key, and the old job is canceled at the claim.
+- **`session_idle_24h`**: the fact is the `ended_at` of the user's newest session by
+  `started_at desc, id desc` (`newestSessionFrom`); `ended_at` is set exactly when the session is
+  stopped (`trading_sessions_ended_at_pair_check`), so a running or paused newest session plans
+  nothing. The key is `session_idle:` and that session's id; the claim compares it with the newest
+  session now (`keyApplies`, the same fragment), so a session started since cancels the job. It
+  applies under the same conditions as `inactive_3d`'s first four. The payload is
+  `{ assetId, durationSec, settled, won, lost, tied }`: the pair and duration from the settings when
+  they are JSON numbers (else `null`), and the session's settled trades split by the sign of
+  `broker_trades.profit`, as the session's own view counts them. The text prints the result as the
+  session messages do (`createSessionTexts(…).resultOf`, «4 сделки — 2 в плюс, 1 в минус, 1 в
+  ноль»; a session with no settled trade: «0 сделок — 0 в плюс, 0 в минус»). The button is the
+  cycle's door (`cycleDoorCallbackData`, `packages/shared/src/bot-navigation.ts`; the bot's
+  `demoLaunchCallbackData(…, 'n')` draws the same form): in demo the amount screen, in real the
+  launch screen, after the pair's signal check (#664), as a new message. Without a pair or a
+  duration the button is the entry, so the text names no button. A legacy duration (15 s) leads
+  where the bot sends such data (#685).
+- **`weekly_summary`**: the anchor is the latest passed Monday 10:00 UTC:
+  `date_trunc('week', (now at time zone 'UTC') − 10 h) + 10 h`, a UTC timestamp, so the session's
+  `TimeZone` does not move it (RW2); the fact's moment is the anchor, always at or before now. The
+  summarised week is `[anchor − 10 h − 7 d, anchor − 10 h)` over `trade_intents.created_at`, the ISO
+  week before the anchor's Monday; its key is `weekly_summary:` and `to_char(…, 'IYYY-"W"IW')`
+  (ISO year: 2025-01-06 sums 2025-W01). Counted: `status = settled` and `mode = demo`, on any of the
+  user's accounts, single and session trades alike; no settled trade, no fact. The payload is the
+  four counts as the planning saw them. It applies while the user is not blocked by the admin and
+  trades demo. Next Monday's key cancels a job of the week before that is still pending (a `reduced`
+  user). The offset is 0, so it is not in `MAILING_MIN_OFFSET_MS`.
+- **`tokens_out_2d`**: the fact is the `sent_at` of the user's `sent` `tokens_out` job
+  (`tokensOutSentAt`; one at most, its key `tokens:100` is constant). It applies while the user is
+  not blocked by the admin, `token_balance = 0`, and no `token_ledger` row with `balance_delta <> 0`
+  was written after that `sent_at`. A refill at any moment after the send closes the scenario for
+  good, and a refill between planning and the claim cancels the job; no `replansCanceled`, and the
+  key is constant, so once per user. `<> 0` rather than `> 0`: at 0 nothing lowers the balance
+  (`users_token_balance_check`, a reserve needs available tokens), so a row after the send is a
+  credit — or the spend of a credit whose transaction began before the claim of `tokens_out` and
+  committed after it, whose own `created_at` is earlier than `sent_at`. `> 0` would miss that
+  credit and push once it is spent back to 0; `<> 0` sees the spend. The trading mode is not read,
+  as for `tokens_out`.
+- **A job exists only once it is due** (The planner), so no scenario relies on a job planned ahead:
+  staleness lives in the key and in `stillApplies`, both checked again at the claim.
+
+**Late planning.** When a predicate turns true again late — the admin unblocks the user, the level
+comes back from `off`, the bot is unblocked, the user goes back to demo, trading reopens — the kind
+is planned then, not at its offset. So no text names an age («2 дня», «3 дня», «вчера», «сутки»):
+a late message stays true (`messages.test.ts` RM5).
+
+### Accepted risks
+
+- The activity is an approximation (above).
+- Planner load: each kind is one `INSERT … SELECT` per 60 s over all users with correlated
+  subqueries (`trade_intents_user_id_idx`, `notification_jobs_user_id_idx`). Assumed scale: up to
+  10 000 users and 10 000 intents per user keep one pass under 1 s; not measured, no new index here.
+- Two pushes in three days are possible: `session_idle_24h` on day 1 and `inactive_3d` on day 3,
+  both owner-chosen; `reduced` caps them.
+- The weekly payload is the week as planned: a trade of the week that settles after the planning is
+  not counted.
+- `tokens_out_2d` left open: a straddling credit taken back whole by a single row that also
+  straddles the claim (a Stars refund racing its own purchase) leaves no row after `sent_at`, and
+  the push goes out at a balance of 0 — which is still true.
+
+Tests: `mailing-ops.db.test.ts` RT1–RT9, RS1–RS7, RW1–RW8, RZ1–RZ10 (each kind's CUT is RT8, RS6, RW7,
+RZ9), `engine.db.test.ts` E-RT, `messages.test.ts` RM1–RM6, `bot-navigation.test.ts` BD1, the pin in
+`timing.test.ts`.
+
 ## The planner
 
 Every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
@@ -300,7 +396,8 @@ kind: `reachable()`, not blocked in Telegram, #686), and for whom the
 scenario applies — one job per row of the kind's `facts` (`cross join lateral`). `scheduled_at` is
 the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
 `…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`;
-`tokens:50`, `tokens:80`, `tokens:100`; `real_mode_by_deposit:<deposit id>`) makes it idempotent: a second run, a second backend process or a restart
+`tokens:50`, `tokens:80`, `tokens:100`; `real_mode_by_deposit:<deposit id>`; `inactive_3d:<epoch>`,
+`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
 
@@ -458,3 +555,4 @@ recorded`) and the analysis is answered; there is then no reminder. The write ru
   the text names the balance, so it stays true.
 - No repeat after a purchase or a reward: a user who refills and spends again gets no second push
   for a threshold already sent (owner 2026-10-18).
+- Retention (#124): its own list, Retention → Accepted risks.
