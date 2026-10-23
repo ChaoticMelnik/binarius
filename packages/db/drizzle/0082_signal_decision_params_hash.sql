@@ -1,0 +1,2 @@
+ALTER TABLE "signal_decisions" ADD COLUMN "params_hash" text GENERATED ALWAYS AS (md5("params"::text)) STORED NOT NULL;--> statement-breakpoint
+CREATE INDEX "signal_decisions_version_params_idx" ON "signal_decisions" USING btree ("version","params_hash");

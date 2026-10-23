@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import {
   H1_VERSION,
   H1ShadowEntryOutcome,
@@ -7,6 +7,7 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   sessionStakeParams,
   sessionTradeSteps,
+  SessionTradeResult,
   SignalDecisionContext,
   SignalDecisionOutcome,
   SignalKind,
@@ -28,7 +29,7 @@ import {
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { literal, payoutInColumn } from './schema/columns';
-import { brokerTrades, type BrokerTradeStatus } from './schema/broker-trades';
+import { brokerTrades, BrokerTradeStatus } from './schema/broker-trades';
 import { decisionTicks } from './schema/decision-ticks';
 import { signalDecisions } from './schema/signal-decisions';
 import { tradeIntents } from './schema/trade-intents';
@@ -616,5 +617,151 @@ export async function readH1ShadowStats(
     entries: entries.rows,
     pairs: pairs.rows,
     sets: sets.rows,
+  };
+}
+
+// --- The trade report's read (#502, docs/trade-log.md → The report) -----------------------------
+
+// where an intent's direction came from: a session's decision row, a one-off trade (no session),
+// or a session intent without a decision row (before 0068, or record_missing)
+export const TradeReportOrigin = {
+  Signal: 'signal',
+  Manual: 'manual',
+  Unlinked: 'unlinked',
+} as const;
+export type TradeReportOrigin = (typeof TradeReportOrigin)[keyof typeof TradeReportOrigin];
+
+// one group of intents; pooled: the group over every pair (assetId null). Money columns are the
+// SQL sums as text, null when the group has no closed trade.
+export type TradeReportCell = {
+  mode: TradeMode;
+  origin: TradeReportOrigin;
+  version: string | null;
+  paramsHash: string | null;
+  interval: SignalInterval | null;
+  durationSec: number;
+  assetId: number | null;
+  pooled: boolean;
+  symbol: string | null;
+  intents: number;
+  trades: number;
+  notClosed: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  // closed trades with a payout; the mean, min and max are over them alone
+  priced: number;
+  payoutMean: number | null;
+  payoutMin: number | null;
+  payoutMax: number | null;
+  staked: DecimalString | null;
+  pnl: DecimalString | null;
+  roiPct: string | null;
+  firstAt: string | null;
+  lastAt: string | null;
+};
+
+// one parameter set of a version, over its closed trades of the window
+export type TradeReportVersion = {
+  version: string;
+  paramsHash: string;
+  params: string;
+  trades: number;
+  firstAt: string;
+  lastAt: string;
+};
+
+export type TradeReportNotClosed = {
+  status: TradeIntentStatus;
+  count: number;
+};
+
+export interface TradeReportStats {
+  intents: number;
+  trades: number;
+  cells: TradeReportCell[];
+  versions: TradeReportVersion[];
+  notClosed: TradeReportNotClosed[];
+}
+
+const isoText = (value: SQL) =>
+  sql`to_char(${value} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+
+// Three aggregates over the intents of [from, to) by trade_intents.created_at, each with its broker
+// trade and decision row; only groups reach the process. A trade is a closed broker trade, its
+// result tradeResultSql; money stays SQL numeric (Rule 2).
+export async function readTradeReportStats(
+  db: Db,
+  { from, to }: { from: Date; to: Date },
+): Promise<TradeReportStats> {
+  const i = tradeIntents;
+  const b = brokerTrades;
+  const d = signalDecisions;
+  const rows = sql`select ${i.id} as id, ${i.mode} as mode, ${i.status} as status,
+      case when ${i.tradingSessionId} is null then ${literal(TradeReportOrigin.Manual)}
+        when ${d.id} is null then ${literal(TradeReportOrigin.Unlinked)}
+        else ${literal(TradeReportOrigin.Signal)} end as origin,
+      ${d.version} as version, ${d.paramsHash} as params_hash, ${d.params}::text as params,
+      ${d.interval} as interval, ${i.durationSec} as duration_sec, ${i.assetId} as asset_id,
+      ${d.source}->>'symbol' as symbol, ${i.amount} as amount, ${i.createdAt} as created_at,
+      ${b.payout} as payout, ${b.profit} as profit,
+      coalesce(${b.status} = ${literal(BrokerTradeStatus.Closed)}, false) as closed,
+      ${tradeResultSql} as result
+    from ${i}
+    left join ${b} on ${b.intentId} = ${i.id}
+    left join ${d} on ${d.id} = ${i.signalDecisionId}
+    where ${and(gte(i.createdAt, from), lt(i.createdAt, to))}`;
+  const won = literal(SessionTradeResult.Won);
+  const lost = literal(SessionTradeResult.Lost);
+  const tied = literal(SessionTradeResult.Tied);
+
+  const cells = await db.execute<TradeReportCell>(sql`
+    select r.mode as "mode", r.origin as "origin", r.version as "version",
+      r.params_hash as "paramsHash", r.interval as "interval", r.duration_sec as "durationSec",
+      r.asset_id as "assetId", grouping(r.asset_id) = 1 as "pooled",
+      min(r.symbol) as "symbol",
+      count(*)::int as "intents",
+      (count(*) filter (where r.closed))::int as "trades",
+      (count(*) filter (where not r.closed))::int as "notClosed",
+      (count(*) filter (where r.closed and r.result = ${won}))::int as "wins",
+      (count(*) filter (where r.closed and r.result = ${lost}))::int as "losses",
+      (count(*) filter (where r.closed and r.result = ${tied}))::int as "ties",
+      (count(r.payout) filter (where r.closed))::int as "priced",
+      (avg(r.payout) filter (where r.closed))::float8 as "payoutMean",
+      (min(r.payout) filter (where r.closed))::float8 as "payoutMin",
+      (max(r.payout) filter (where r.closed))::float8 as "payoutMax",
+      (sum(r.amount) filter (where r.closed))::text as "staked",
+      (sum(r.profit) filter (where r.closed))::text as "pnl",
+      round(100 * sum(r.profit) filter (where r.closed)
+        / nullif(sum(r.amount) filter (where r.closed), 0), 2)::text as "roiPct",
+      ${isoText(sql`min(r.created_at) filter (where r.closed)`)} as "firstAt",
+      ${isoText(sql`max(r.created_at) filter (where r.closed)`)} as "lastAt"
+    from (${rows}) r
+    group by grouping sets (
+      (r.mode, r.origin, r.version, r.params_hash, r.interval, r.duration_sec, r.asset_id),
+      (r.mode, r.origin, r.version, r.params_hash, r.interval, r.duration_sec))`);
+
+  const versions = await db.execute<TradeReportVersion>(sql`
+    select r.version as "version", r.params_hash as "paramsHash", min(r.params) as "params",
+      count(*)::int as "trades",
+      ${isoText(sql`min(r.created_at)`)} as "firstAt",
+      ${isoText(sql`max(r.created_at)`)} as "lastAt"
+    from (${rows}) r
+    where r.origin = ${literal(TradeReportOrigin.Signal)} and r.closed
+    group by r.version, r.params_hash`);
+
+  const notClosed = await db.execute<TradeReportNotClosed>(sql`
+    select r.status as "status", count(*)::int as "count"
+    from (${rows}) r
+    where not r.closed
+    group by r.status`);
+
+  const pooled = cells.rows.filter((cell) => cell.pooled);
+  return {
+    intents: pooled.reduce((sum, cell) => sum + cell.intents, 0),
+    trades: pooled.reduce((sum, cell) => sum + cell.trades, 0),
+    cells: cells.rows,
+    versions: versions.rows,
+    notClosed: notClosed.rows,
   };
 }
