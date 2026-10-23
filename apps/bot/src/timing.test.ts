@@ -5,6 +5,7 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
+  buildH1SessionSettings,
   CANDLE_CLOSE_SLACK_MS,
   confirmCallbackData,
   NotificationLevel,
@@ -1708,6 +1709,20 @@ const SESSION_STOP_WORST_CASE: Branch = {
   apiErrors: [['editMessageText', EDIT_GONE]],
   expected: { backend: 3, telegram: 3 },
 };
+// an H1 session's own message, a photo (#745): the stop draws the stopped photo in place
+const h1Built = buildH1SessionSettings({
+  assetId: PAIR_EURUSD.id,
+  trades: 50,
+  stake: { baseStake: decimalStringSchema.parse('1.00'), stakeScale: 2 },
+  maxLossMultiplier: 20,
+});
+if (!h1Built.success) throw new Error('fixture: H1 settings');
+const H1_STOPPED_SESSION = sessionView({
+  ...STOPPED_SESSION,
+  settings: h1Built.data,
+  signalAction: TradeAction.Up,
+});
+const h1StopUpdate = () => photoCallbackUpdate(sessionStopCallbackData(SESSION_VIEW.id));
 const SESSION_STOP_BRANCHES: readonly Branch[] = [
   {
     label: 'the chat is not private',
@@ -1745,6 +1760,27 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
     expected: { backend: 3, telegram: 2 },
   },
   SESSION_STOP_WORST_CASE,
+  {
+    label: "an H1 session's photo: stopped and drawn in place",
+    update: h1StopUpdate(),
+    stopSession: () => Promise.resolve(H1_STOPPED_SESSION),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: "an H1 session's photo: the session had ended, it is read and drawn in place",
+    update: h1StopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(H1_STOPPED_SESSION),
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: "an H1 session's photo: the session had ended, it is read, and the message is gone",
+    update: h1StopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(H1_STOPPED_SESSION),
+    apiErrors: [['editMessageMedia', EDIT_GONE]],
+    expected: { backend: 3, telegram: 3 },
+  },
   {
     label: 'the waiting message: stopped, the reply drawn in its place',
     update: waitingStopUpdate(),
