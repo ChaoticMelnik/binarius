@@ -621,7 +621,10 @@ own terminal writes (the publisher's rejection of a `queued` intent, an operator
 `manual_review`) are another process: the timer's tick finds them. `TRADING_SESSION_TICK_MS` is the
 safety net for those and for a wake lost to a restart. Tests: `orchestrator.db.test.ts` WK1–WK5,
 `worker.handoff.db.test.ts` H10–H13, `reconciliation.db.test.ts` RW1,
-`settlement-catchup.db.test.ts` CW1.
+`settlement-catchup.db.test.ts` CW1. The backend's sender of the trade messages has a wake of its
+own (#723): `transitionIntent` notifies Postgres on an accept or a settle of a session's intent, and
+the backend's listener wakes the sender ([bot-session.md → Rate and timing](bot-session.md#rate-and-timing));
+it does not wake this orchestrator.
 
 **The candle wake (#697).** A candle hold (`no_signal`) is not rounded up to a tick: it ends
 at the next boundary of the session's signal interval + `CANDLE_CLOSE_SLACK_MS` (shared,

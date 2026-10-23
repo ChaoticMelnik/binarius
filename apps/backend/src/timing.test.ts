@@ -606,18 +606,18 @@ describe('broker balance timing', () => {
     expect(SESSION_NOTICE_TICK_MS).toBeLessThan(SESSION_NOTICE_HOLD_MS);
   });
 
-  it('pins the wake of the session notice sender: the listen retry and the floor between woken ticks (#723)', () => {
+  it('TW1 pins the wake of the session notice sender: the listen retry and the floor between woken ticks (#723)', () => {
     expect(SESSION_NOTICE_LISTEN_RETRY_MS).toBe(1_000);
     expect(SESSION_NOTICE_WAKE_GAP_MS).toBe(250);
     expect(sessionNoticeWakeBoundsHold()).toBe(true);
   });
 
-  it('breaks the wake chain with a listen retry longer than the sender tick (#723)', () => {
+  it('TW2 breaks the wake chain with a listen retry longer than the sender tick (#723)', () => {
     expect(sessionNoticeWakeBoundsHold({ listenRetryMs: SESSION_NOTICE_TICK_MS })).toBe(true);
     expect(sessionNoticeWakeBoundsHold({ listenRetryMs: SESSION_NOTICE_TICK_MS + 1 })).toBe(false);
   });
 
-  it('breaks the wake chain with a floor between woken ticks not below the chat gap (#723)', () => {
+  it('TW3 breaks the wake chain with a floor between woken ticks not below the chat gap (#723)', () => {
     expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS - 1 })).toBe(true);
     expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS })).toBe(false);
   });
