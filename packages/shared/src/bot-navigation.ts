@@ -17,6 +17,13 @@ export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
 export const demoAnalysisCallbackData = (assetId: number, durationSec: number): string =>
   `demo:an:${String(assetId)}:${String(durationSec)}`;
 
+// The cycle's door of a pair and duration (#476, #664): the amount screen in demo, the launch screen
+// in real, after the pair's signal check, as a new message. The bot's «🔁 Ещё сессия» and, since
+// #124, the backend's «🔁 Запустить снова» carry it; the bot's demoLaunchCallbackData draws its `n`
+// form through this. The longest, `demo:l:2147483647:5:n`, is 21 bytes.
+export const cycleDoorCallbackData = (assetId: number, durationSec: number): string =>
+  `demo:l:${String(assetId)}:${String(durationSec)}:n`;
+
 // The status card's button (#24), and since #350 the account card's: the signals screen (#320).
 // Kept as `demo`, so a button on an old card leads there too.
 export const DEMO_CALLBACK_DATA = 'demo';

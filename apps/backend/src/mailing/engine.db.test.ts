@@ -13,6 +13,8 @@ import {
   type DecimalString,
   TOKEN_NUDGES,
   TokenLedgerKind,
+  TradingSessionStatus,
+  TradingSessionStopReason,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
@@ -23,12 +25,14 @@ import {
   notificationKinds,
   referrals,
   tokenLedger,
+  tradingSessions,
   users,
 } from '@binarius/db';
 import {
   bonusRuleRef,
   createTempDatabase,
   seedBrokerAccount,
+  sessionSettings,
   seedTradingSession,
   seedUser,
   type TempDatabase,
@@ -845,4 +849,41 @@ describe('the real-mode notification through the engine', () => {
       ]);
     },
   );
+});
+
+// #124 (docs/mailing.md → Retention)
+describe('the retention messages through the engine', () => {
+  it('E-RT sends the last session’s result with «🔁 Запустить снова», the cycle door of its pair', async () => {
+    const user = await seedUser(tmp.db);
+    const accountId = await seedBrokerAccount(tmp.db, user.userId);
+    // a session that stopped with no settled trade: the result still prints its zero counts
+    await tmp.db.insert(tradingSessions).values({
+      brokerAccountId: accountId,
+      mode: TradeMode.Demo,
+      settings: sessionSettings({ assetId: 202, durationSec: 5 }),
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+      startedAt: sql`now() - interval '25 hours'`,
+      endedAt: sql`now() - interval '24 hours 1 minute'`,
+    });
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.sendTick();
+
+    const sends = sendsTo(captured.calls, user.telegramUserId);
+    expect(sends).toHaveLength(1);
+    const payload = sends[0]!.payload;
+    expect(pushedText(payload)).toBe(
+      CLIENT_TEXTS.sessionIdleReminder({ result: '0 сделок — 0 в плюс, 0 в минус' }).value,
+    );
+    expect(payload.parse_mode).toBe('HTML');
+    expect(inlineRows(payload)).toEqual([
+      [{ text: '🔁 Запустить снова', callback_data: 'demo:l:202:5:n' }],
+    ]);
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status, job.lastError])).toEqual(
+      [[NotificationKind.SessionIdle24h, NotificationJobStatus.Sent, null]],
+    );
+    await mailing.stop();
+  });
 });

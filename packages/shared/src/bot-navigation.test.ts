@@ -5,6 +5,7 @@ import {
   LANGUAGE_SET_PATTERN,
   SESSION_STOP_PATTERN,
   cashierUrlOf,
+  cycleDoorCallbackData,
   demoAnalysisCallbackData,
   languageSetCallbackData,
   sessionStopCallbackData,
@@ -27,6 +28,14 @@ describe('demoAnalysisCallbackData (#484)', () => {
     const longest = demoAnalysisCallbackData(2147483647, 5);
     expect(longest).toBe('demo:an:2147483647:5');
     expect(new TextEncoder().encode(longest).length).toBe(20);
+  });
+});
+
+describe('cycleDoorCallbackData (#124)', () => {
+  it('BD1 draws the cycle door of a pair and duration as a new message, within the 64 bytes', () => {
+    const longest = cycleDoorCallbackData(2147483647, 5);
+    expect(longest).toBe('demo:l:2147483647:5:n');
+    expect(new TextEncoder().encode(longest).length).toBe(21);
   });
 });
 

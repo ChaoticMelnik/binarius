@@ -143,7 +143,8 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
       plain.sessionLost({ count: String(lost) }),
       ...(tied > 0 ? [plain.sessionTied({ count: String(tied) })] : []),
     ].join(', ');
-  const resultOf = (trades: TradingSessionView['trades']): string =>
+  // a session's view, or the counts a mailing payload carries (#124)
+  const resultOf = (trades: SessionScore & Pick<TradingSessionView['trades'], 'settled'>): string =>
     `${tradesCount(trades.settled)} — ${scoreOf(trades)}`;
 
   // the session's pair label, or the asset's id when the catalog could not say

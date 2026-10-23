@@ -16,6 +16,10 @@ export const NotificationKind = {
   TokensLow: 'tokens_low',
   TokensOut: 'tokens_out',
   RealModeByDeposit: 'real_mode_by_deposit',
+  Inactive3d: 'inactive_3d',
+  SessionIdle24h: 'session_idle_24h',
+  WeeklySummary: 'weekly_summary',
+  TokensOut2d: 'tokens_out_2d',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -83,10 +87,47 @@ export const realModeByDepositPayloadSchema = z.object({
 });
 export type RealModeByDepositPayload = z.infer<typeof realModeByDepositPayloadSchema>;
 
+// Retention (#124, docs/mailing.md → Retention; owner 2026-10-08, manager 2026-10-23): a demo user
+// with a session behind them and no activity for INACTIVE_AFTER, at most once per
+// INACTIVE_REPEAT_DAYS; the newest session stopped SESSION_IDLE_AFTER ago with none since; the
+// previous ISO week's demo trades on Monday at WEEKLY_SUMMARY_HOUR_UTC; and the balance still at 0
+// TOKENS_OUT_REPEAT_AFTER after the sent tokens_out.
+export const INACTIVE_AFTER_MS = 72 * 3_600_000;
+export const INACTIVE_REPEAT_DAYS = 7;
+export const SESSION_IDLE_AFTER_MS = 24 * 3_600_000;
+export const WEEKLY_SUMMARY_HOUR_UTC = 10;
+export const TOKENS_OUT_REPEAT_AFTER_MS = 48 * 3_600_000;
+
+const tradeCountSchema = z.int().nonnegative();
+// a settled-trade count and its split by the sign of the profit; counts only, no money (rule 2)
+const settledScoreShape = {
+  settled: tradeCountSchema,
+  won: tradeCountSchema,
+  lost: tradeCountSchema,
+  tied: tradeCountSchema,
+};
+
+// session_idle_24h's payload: the newest session's pair and duration for «🔁 Запустить снова»
+// (null when its settings do not carry them) and its settled trades.
+export const sessionIdlePayloadSchema = z.object({
+  assetId: createTradeIntentRequestSchema.shape.assetId.nullable(),
+  durationSec: createTradeIntentRequestSchema.shape.durationSec.nullable(),
+  ...settledScoreShape,
+});
+export type SessionIdlePayload = z.infer<typeof sessionIdlePayloadSchema>;
+
+// weekly_summary's payload: the previous ISO week's settled demo trades, as the planning saw them
+export const weeklySummaryPayloadSchema = z.object(settledScoreShape);
+export type WeeklySummaryPayload = z.infer<typeof weeklySummaryPayloadSchema>;
+
 // The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
-// immediate kinds (referral_rewarded, the low-token nudges and real_mode_by_deposit, 0) are not in
-// it: the link about the planner's tick concerns only a kind that waits.
+// immediate kinds (referral_rewarded, the low-token nudges, real_mode_by_deposit and
+// weekly_summary, 0) are not in it: the link about the planner's tick concerns only a kind that
+// waits.
 export const MAILING_MIN_OFFSET_MS = Math.min(
   ...FIRST_SESSION_CHAIN.map((step) => step.afterHours * 3_600_000),
   ANALYSIS_UNUSED_AFTER_MS,
+  INACTIVE_AFTER_MS,
+  SESSION_IDLE_AFTER_MS,
+  TOKENS_OUT_REPEAT_AFTER_MS,
 );

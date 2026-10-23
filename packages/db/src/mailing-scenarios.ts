@@ -5,26 +5,35 @@ import {
   BrokerAccountStatus,
   DepositModeSwitch,
   FIRST_SESSION_CHAIN,
+  INACTIVE_AFTER_MS,
+  INACTIVE_REPEAT_DAYS,
   NotificationKind,
   REAL_MODE_BY_DEPOSIT_AFTER_MS,
   realModeByDepositPayloadSchema,
   REFERRAL_REWARDED_AFTER_MS,
+  SESSION_IDLE_AFTER_MS,
   TOKEN_NUDGE_AFTER_MS,
   TOKEN_NUDGES,
   TokenLedgerKind,
+  TOKENS_OUT_REPEAT_AFTER_MS,
+  TradeIntentStatus,
   TradeMode,
   TradingSessionStatus,
   UserStatus,
+  WEEKLY_SUMMARY_HOUR_UTC,
+  weeklySummaryPayloadSchema,
 } from '@binarius/shared';
 import { literal } from './schema/columns';
 import { brokerAccounts } from './schema/broker-accounts';
 import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
+import { brokerTrades } from './schema/broker-trades';
 import { depositEvents } from './schema/deposit-events';
 import { NotificationJobStatus, notificationJobs } from './schema/notification-jobs';
 import { tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
+import { tradingOpenSql } from './trading-switch-ops';
 
 // What the planner and the sender know about a kind (docs/mailing.md). Every SQL fragment reads
 // the outer `users` row and locks nothing.
@@ -209,6 +218,87 @@ const switchedDeposits = sql`(select ${depositEvents.modeSwitchAt} as at,
 // the payload's key as its schema names it, so the message's parse and this SQL cannot drift apart
 const STAKE_KEY = literal(realModeByDepositPayloadSchema.keyof().enum.stake);
 
+// ---- Retention (#124, docs/mailing.md → Retention) ---------------------------------------------
+// A job exists only once it is due (planMailingJobs), so each kind's staleness lives in its key
+// and its stillApplies, never in a job planned ahead.
+
+// Scenarios 1-2 (manager 2026-10-23, answer 3 (a)): the user is not blocked by the admin, trades
+// demo, has an active account, and trading is open (rule 22: no «trade again» push while the switch
+// is closed). A job planned before a switch to real is cancelled at the claim.
+const commonRetention = sql`(${users.status} = ${literal(UserStatus.Active)}
+  and ${users.tradingMode} = ${literal(TradeMode.Demo)}
+  and exists (select 1 from ${brokerAccounts}
+    where ${brokerAccounts.userId} = ${users.id}
+      and ${brokerAccounts.status} = ${literal(BrokerAccountStatus.Active)})
+  and ${tradingOpenSql})`;
+
+// The user's last activity, an approximation (docs/mailing.md → Retention): the newest session
+// start and trade on any of their accounts, the newest balance request of those accounts (the
+// bot's menu and trading screens, a session's ticks) and the last analysis. greatest() skips NULLs.
+const lastActivityAt = sql`greatest(
+    (select max(${tradingSessions.startedAt}) from ${tradingSessions}
+      join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+      where ${brokerAccounts.userId} = ${users.id}),
+    (select max(${tradeIntents.createdAt}) from ${tradeIntents}
+      where ${tradeIntents.userId} = ${users.id}),
+    (select max(${brokerBalanceSnapshots.lastRequestedAt}) from ${brokerBalanceSnapshots}
+      join ${brokerAccounts} on ${brokerAccounts.id} = ${brokerBalanceSnapshots.brokerAccountId}
+      where ${brokerAccounts.userId} = ${users.id}),
+    ${users.lastAnalysisAt})`;
+
+// The user's newest session, by start: the fact of session_idle_24h at planning and its key at the
+// claim, one fragment for both.
+const newestSessionFrom = sql`from ${tradingSessions}
+  join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+  where ${brokerAccounts.userId} = ${users.id}
+  order by ${tradingSessions.startedAt} desc, ${tradingSessions.id} desc
+  limit 1`;
+
+// The settled trades of a scope and their split by the sign of the profit, as the session's own
+// view counts them (trading-session-ops.ts → the session's counts). Counts only, no money (rule 2).
+const settledScore = (scope: SQL) => sql`(select count(*)::int as settled,
+    count(*) filter (where ${brokerTrades.profit} > 0)::int as won,
+    count(*) filter (where ${brokerTrades.profit} < 0)::int as lost,
+    count(*) filter (where ${brokerTrades.profit} = 0)::int as tied
+  from ${tradeIntents}
+  left join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+  where ${scope}
+    and ${tradeIntents.status} = ${literal(TradeIntentStatus.Settled)})`;
+
+// the counts as jsonb_build_object's arguments, read from `alias`; the keys as the payload's schema
+// names them, so the message's parse and this SQL cannot drift apart
+const scorePayload = (alias: string) =>
+  sql.join(
+    weeklySummaryPayloadSchema
+      .keyof()
+      .options.map((key) => sql`${literal(key)}, ${sql.raw(alias)}.${sql.identifier(key)}`),
+    sql`, `,
+  );
+
+// The weekly summary's week, spelled in UTC so the session's TimeZone does not move it: the anchor
+// is the latest passed Monday WEEKLY_SUMMARY_HOUR_UTC:00 UTC (a timestamp without time zone, in
+// UTC), the summarised week the ISO week before that Monday. Builders over `now`, so a test can pass
+// a literal moment.
+const SUMMARY_HOUR = sql`make_interval(hours => ${WEEKLY_SUMMARY_HOUR_UTC})`;
+export const weeklyAnchor = (now: SQL) =>
+  sql`(date_trunc('week', (${now}) at time zone 'UTC' - ${SUMMARY_HOUR}) + ${SUMMARY_HOUR})`;
+const weekStart = (now: SQL) => sql`(${weeklyAnchor(now)} - ${SUMMARY_HOUR} - interval '7 days')`;
+const weekEnd = (now: SQL) => sql`(${weeklyAnchor(now)} - ${SUMMARY_HOUR})`;
+// `column` (a timestamptz) lies in the summarised week
+export const weeklyRange = (now: SQL, column: SQL | Column) =>
+  sql`(${column} >= ${weekStart(now)} at time zone 'UTC'
+    and ${column} < ${weekEnd(now)} at time zone 'UTC')`;
+export const weeklyKey = (now: SQL) =>
+  sql`('weekly_summary:' || to_char(${weekStart(now)}, 'IYYY-"W"IW'))`;
+
+// The moment the user's tokens_out was sent (#123): at most one row, the key tokens:100 being
+// constant; max() keeps the subquery scalar whatever matches. The fact of tokens_out_2d and the
+// start of its no-change window, one fragment for both.
+const tokensOutSentAt = sql`(select max(sent_out.sent_at) from ${notificationJobs} sent_out
+  where sent_out.user_id = ${users.id}
+    and sent_out.kind = ${literal(NotificationKind.TokensOut)}
+    and sent_out.status = ${literal(NotificationJobStatus.Sent)})`;
+
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
   [NotificationKind.FirstSession1h]: firstSessionStep(NotificationKind.FirstSession1h),
@@ -255,6 +345,80 @@ export const MAILING_SCENARIOS = {
     replansCanceled: true,
     important: true,
   },
+  // Scenario 1 (#124): a demo user with a session behind them, inactive since the fact. Newer
+  // activity is a new key, so the old job is cancelled at the claim; at most one sent in
+  // INACTIVE_REPEAT_DAYS; it waits while a more specific retention job is pending.
+  [NotificationKind.Inactive3d]: oneFact({
+    factAt: lastActivityAt,
+    afterMs: INACTIVE_AFTER_MS,
+    // the activity's own moment, microseconds and UTC whatever the session's TimeZone
+    dedupeKey: sql`('inactive_3d:' || extract(epoch from ${lastActivityAt})::text)`,
+    stillApplies: sql`(${commonRetention}
+      and exists (select 1 from ${tradingSessions}
+        join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+        where ${brokerAccounts.userId} = ${users.id})
+      and not exists (select 1 from ${notificationJobs} recent
+        where recent.user_id = ${users.id}
+          and recent.kind = ${literal(NotificationKind.Inactive3d)}
+          and recent.status = ${literal(NotificationJobStatus.Sent)}
+          and recent.sent_at > now() - make_interval(days => ${INACTIVE_REPEAT_DAYS}))
+      and not exists (select 1 from ${notificationJobs} pending_job
+        where pending_job.user_id = ${users.id}
+          and pending_job.status = ${literal(NotificationJobStatus.Pending)}
+          and pending_job.kind in (${literal(NotificationKind.SessionIdle24h)}, ${literal(NotificationKind.TokensOut2d)})))`,
+  }),
+  // Scenario 2 (#124): the newest session stopped (ended_at is set exactly when it is stopped,
+  // trading_sessions_ended_at_pair_check) and none started since; a newer session is a new key.
+  // The payload: the pair and duration from the settings when they are numbers, and the score.
+  [NotificationKind.SessionIdle24h]: {
+    facts: sql`(select ${tradingSessions.endedAt} as at, ${tradingSessions.id} as session_id,
+        ${tradingSessions.settings} as settings
+      ${newestSessionFrom})`,
+    afterMs: SESSION_IDLE_AFTER_MS,
+    dedupeKey: sql`('session_idle:' || fact.session_id::text)`,
+    payload: sql`(select jsonb_build_object(
+        'assetId', case when jsonb_typeof(fact.settings->'assetId') = 'number'
+          then fact.settings->'assetId' end,
+        'durationSec', case when jsonb_typeof(fact.settings->'durationSec') = 'number'
+          then fact.settings->'durationSec' end,
+        ${scorePayload('score')})
+      from ${settledScore(sql`${tradeIntents.tradingSessionId} = fact.session_id`)} score)`,
+    stillApplies: commonRetention,
+    keyApplies: sql`${notificationJobs.dedupeKey} = 'session_idle:' || (select ${tradingSessions.id}
+      ${newestSessionFrom})::text`,
+  },
+  // Scenario 3 (#124): the previous ISO week's settled demo trades on any of the user's accounts,
+  // as the planning saw them; no settled trade, no fact. Next Monday's key cancels a job of the
+  // week before that is still pending.
+  [NotificationKind.WeeklySummary]: {
+    facts: sql`(select ${weeklyAnchor(sql`now()`)} at time zone 'UTC' as at, week.*
+      from ${settledScore(sql`${tradeIntents.userId} = ${users.id}
+        and ${tradeIntents.mode} = ${literal(TradeMode.Demo)}
+        and ${weeklyRange(sql`now()`, tradeIntents.createdAt)}`)} week
+      where week.settled > 0)`,
+    afterMs: 0,
+    dedupeKey: weeklyKey(sql`now()`),
+    payload: sql`jsonb_build_object(${scorePayload('fact')})`,
+    stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
+      and ${users.tradingMode} = ${literal(TradeMode.Demo)})`,
+    keyApplies: sql`${notificationJobs.dedupeKey} = ${weeklyKey(sql`now()`)}`,
+  },
+  // Scenario 4 (#124, manager 2026-10-23, answer 1 (a)): TOKENS_OUT_REPEAT_AFTER after the sent
+  // tokens_out, once per user, while the balance has not moved since. `<> 0`, not `> 0`: at 0
+  // nothing lowers the balance, so a row after the send is a credit or the spend of a credit that
+  // straddled the claim (docs/mailing.md → Retention). Any refill closes it for good: no
+  // replansCanceled, and the key is constant. trading_mode is not read, as for tokens_out.
+  [NotificationKind.TokensOut2d]: oneFact({
+    factAt: tokensOutSentAt,
+    afterMs: TOKENS_OUT_REPEAT_AFTER_MS,
+    dedupeKey: sql`${'tokens_out_2d'}`,
+    stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
+      and ${users.tokenBalance} = 0
+      and not exists (select 1 from ${tokenLedger}
+        where ${tokenLedger.userId} = ${users.id}
+          and ${tokenLedger.balanceDelta} <> 0
+          and ${tokenLedger.createdAt} > ${tokensOutSentAt}))`,
+  }),
 } as const satisfies Record<NotificationKind, MailingScenario>;
 
 // The important kinds (MailingScenario.important), from the scenarios alone.

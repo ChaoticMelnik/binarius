@@ -266,3 +266,90 @@ describe('the real-mode message after a deposit', () => {
     },
   );
 });
+
+// #124 (docs/mailing.md → Retention)
+describe('the retention messages', () => {
+  const demo = { text: CLIENT_LABELS.demoButton, callback_data: 'demo' };
+  const deposit = { text: CLIENT_LABELS.depositButton, web_app: { url: CASHIER_URL } };
+  const buy = { text: CLIENT_LABELS.buyButton, callback_data: 'buy' };
+  const rowsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message });
+  const score = { settled: 4, won: 2, lost: 1, tied: 1 };
+  const idle = { assetId: 101, durationSec: 5, ...score };
+
+  it('RM1 sends the last session’s result and «🔁 Запустить снова», the cycle door of its pair', () => {
+    const message = mailingMessage(NotificationKind.SessionIdle24h, idle, DEMO);
+    expect(message.text).toStrictEqual(
+      CLIENT_TEXTS.sessionIdleReminder({ result: '4 сделки — 2 в плюс, 1 в минус, 1 в ноль' }),
+    );
+    expect(rowsOf(message)).toStrictEqual([
+      [{ text: '🔁 Запустить снова', callback_data: 'demo:l:101:5:n' }],
+    ]);
+    expect(stylesOf(message)).toEqual([['success']]);
+  });
+
+  it('RM2 gives the entry in its place when the session’s settings named no pair', () => {
+    expect(
+      rowsOf(mailingMessage(NotificationKind.SessionIdle24h, { ...idle, assetId: null }, DEMO)),
+    ).toStrictEqual([[demo]]);
+  });
+
+  it.each([
+    [NotificationKind.Inactive3d, {}, CLIENT_TEXTS.inactiveReminder],
+    [
+      NotificationKind.WeeklySummary,
+      score,
+      CLIENT_TEXTS.weeklySummary({ result: '4 сделки — 2 в плюс, 1 в минус, 1 в ноль' }),
+    ],
+  ] as const)('RM3 sends %s with the catalog text and the entry', (kind, payload, text) => {
+    const message = mailingMessage(kind, payload, DEMO);
+    expect(message.text).toStrictEqual(text);
+    expect(message.text.value).toContain(`«${CLIENT_LABELS.demoButton}»`);
+    expect(rowsOf(message)).toStrictEqual([[demo]]);
+    expect(stylesOf(message)).toEqual([['success']]);
+  });
+
+  it('RM4 gives tokens_out_2d the cashier, then the purchase; the entry in the cashier’s place without https', () => {
+    const kind = NotificationKind.TokensOut2d;
+    const message = mailingMessage(kind, {}, DEMO);
+    expect(message.text).toStrictEqual(CLIENT_TEXTS.tokensOutStill);
+    expect(message.text.value).toContain(`«${CLIENT_LABELS.buyButton}»`);
+    expect(rowsOf(message)).toStrictEqual([[deposit], [buy]]);
+    expect(stylesOf(message)).toEqual([['success'], ['primary']]);
+    expect(rowsOf(mailingMessage(kind, {}, { ...DEMO, cashierUrl: undefined }))).toStrictEqual([
+      [demo],
+      [buy],
+    ]);
+  });
+
+  // a push may be planned late (docs/mailing.md → Retention → Late planning), so no text names an
+  // age; counts only, so no money; and no promise of a result (#123's words)
+  it.each([
+    [NotificationKind.Inactive3d, {}],
+    [NotificationKind.SessionIdle24h, idle],
+    [NotificationKind.WeeklySummary, score],
+    [NotificationKind.TokensOut2d, {}],
+  ] as const)('RM5 %s names no age, no money and promises no result', (kind, payload) => {
+    const text = mailingMessage(kind, payload, DEMO).text.value.toLowerCase();
+    for (const word of ['вероятност', 'точност', 'обуч', 'учится', 'модел', 'гарант', 'прибыл']) {
+      expect(text).not.toContain(word);
+    }
+    expect(text).not.toContain('$');
+    expect(text).not.toMatch(/\d\s*(дн|сут|час)/);
+    expect(text).not.toContain('вчера');
+  });
+
+  it.each([
+    [NotificationKind.SessionIdle24h, {}],
+    [NotificationKind.SessionIdle24h, { ...idle, settled: -1 }],
+    [NotificationKind.SessionIdle24h, { ...idle, won: 1.5 }],
+    [NotificationKind.SessionIdle24h, { ...idle, assetId: 0 }],
+    [NotificationKind.SessionIdle24h, { ...idle, durationSec: '5' }],
+    [NotificationKind.WeeklySummary, {}],
+    [NotificationKind.WeeklySummary, { ...score, tied: '1' }],
+  ] as const)(
+    'RM6 %s throws on payload %j, which the sender settles as not built',
+    (kind, payload) => {
+      expect(() => mailingMessage(kind, payload, DEMO)).toThrow();
+    },
+  );
+});
