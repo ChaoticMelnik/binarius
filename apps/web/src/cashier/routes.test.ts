@@ -65,6 +65,8 @@ beforeEach(() => {
     serviceAccounts: unused,
     setServiceMark: unused,
     setH1Mark: unused,
+    starRefunds: unused,
+    refundStarPayment: unused,
     audit: unused,
     changePassword: unused,
     botTexts: unused,

@@ -20,6 +20,7 @@ import {
   type AdminLedgerRow,
 } from './admin-ledger-ops';
 import { readUserIntentsSection, type AdminUserIntentRows } from './admin-trading-ops';
+import { listStarPaymentsForAdmin, type AdminStarPaymentRow } from './star-payment-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { users } from './schema/users';
@@ -171,11 +172,12 @@ export interface AdminUserCard {
   intents: AdminUserIntentRows;
   ledger: AdminLedgerRow[];
   deposits: AdminDepositRow[];
+  starPayments: AdminStarPaymentRow[];
 }
 
-// Six selects without a shared snapshot (READ COMMITTED): an account linked, an intent created, a
-// ledger row written or a deposit recorded in between may or may not show, and either answer was
-// true at its moment. Ciphertexts, the key id, the refresh-token hash and a deposit's payload are
+// Seven selects without a shared snapshot (READ COMMITTED): an account linked, an intent created, a
+// ledger row written, a deposit or a Stars payment recorded in between may or may not show, and
+// either answer was true at its moment. Ciphertexts, the key id, the refresh-token hash and a deposit's payload are
 // never selected.
 export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUserCard | undefined> {
   const [user] = await tx
@@ -214,7 +216,8 @@ export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUse
     filters: { userId },
     limit: ADMIN_USER_RECENT_LEDGER,
   });
-  return { user, brokerAccounts: accounts, intents, ledger, deposits };
+  const starPayments = await listStarPaymentsForAdmin(tx, userId, ADMIN_USER_RECENT_LEDGER);
+  return { user, brokerAccounts: accounts, intents, ledger, deposits, starPayments };
 }
 
 export interface AdminOverviewRow {

@@ -1,6 +1,5 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { Api, GrammyError } from 'grammy';
 import { Pool } from 'pg';
 import {
   DATABASE_URL_RULES,
@@ -15,12 +14,13 @@ import {
   createDb,
   listOpenStarRefundRequests,
   readStarPaymentByCharge,
-  recordStarRefund,
+  recordStarRefundBySystem,
+  STAR_REFUND_REQUESTS_LIST_LIMIT,
   StarsRefundEvidence,
   StarsRefundSource,
   type StarRefundRecord,
 } from '@binarius/db';
-import { STARS_TELEGRAM_API_TIMEOUT_MS } from '../timing';
+import { askRefund, createStarsRefundApi, type StarsRefundApi } from '../payments/star-refund';
 import { formatFailure } from './kill-switch';
 
 // Stars refunds by a staff member (#118, docs/stars.md → Refunds). `refund` asks Telegram to refund
@@ -36,11 +36,6 @@ const USAGE = `Возвраты Telegram Stars.
   stars requests                                 заявки на возврат из /paysupport
 
 Причина — 1-${STAR_REFUND_REASON_MAX} символов без управляющих.`;
-
-// Telegram's word that the charge was refunded before (assumption 2 of docs/stars.md → Refunds:
-// the MTProto error the Bot API passes through, not observed live). Case-sensitive, as Telegram
-// writes its error names.
-export const CHARGE_ALREADY_REFUNDED = 'CHARGE_ALREADY_REFUNDED';
 
 type Parsed = { command: 'refund'; chargeId: string; reason: string } | { command: 'requests' };
 
@@ -90,44 +85,8 @@ export function parseStarsArgs(argv: readonly string[]): Parsed {
   }
 }
 
-export interface StarsRefundApi {
-  // Bot API refundStarPayment: true, or a GrammyError (Telegram refused) / anything else (unknown)
-  refundStarPayment(userId: number, telegramPaymentChargeId: string): Promise<true>;
-}
-
 export interface StarsCliDeps {
   createApi(options: { token: string }): StarsRefundApi;
-}
-
-const createRefundApi = ({ token }: { token: string }): StarsRefundApi => {
-  const api = new Api(token, { timeoutSeconds: STARS_TELEGRAM_API_TIMEOUT_MS / 1000 });
-  return { refundStarPayment: (userId, chargeId) => api.refundStarPayment(userId, chargeId) };
-};
-
-// How the Telegram call ended, as the outcome table of docs/stars.md → Refunds reads it.
-type TelegramOutcome =
-  | { kind: 'refunded' }
-  | { kind: 'already_refunded' }
-  | { kind: 'refused'; errorCode: number; description: string }
-  | { kind: 'unknown'; error: unknown };
-
-async function askTelegram(
-  api: StarsRefundApi,
-  payer: bigint,
-  chargeId: string,
-): Promise<TelegramOutcome> {
-  try {
-    await api.refundStarPayment(Number(payer), chargeId);
-    return { kind: 'refunded' };
-  } catch (error) {
-    // A GrammyError is Telegram's answer, given before anything happened. Anything else — a
-    // timeout, a dropped connection — may have come after the refund.
-    if (!(error instanceof GrammyError)) return { kind: 'unknown', error };
-    if (error.error_code === 400 && error.description.includes(CHARGE_ALREADY_REFUNDED)) {
-      return { kind: 'already_refunded' };
-    }
-    return { kind: 'refused', errorCode: error.error_code, description: error.description };
-  }
 }
 
 function describeRecord(record: StarRefundRecord, againInTelegram: boolean): string[] {
@@ -154,7 +113,7 @@ export async function runStarsCli(
   argv: readonly string[],
   source: NodeJS.ProcessEnv,
   print: (line: string) => void,
-  deps: StarsCliDeps = { createApi: createRefundApi },
+  deps: StarsCliDeps = { createApi: createStarsRefundApi },
 ): Promise<number> {
   let parsed: Parsed;
   try {
@@ -184,7 +143,9 @@ export async function runStarsCli(
   try {
     if (parsed.command === 'requests') {
       try {
-        const requests = await listOpenStarRefundRequests(db);
+        const { rows: requests } = await listOpenStarRefundRequests(db, {
+          limit: STAR_REFUND_REQUESTS_LIST_LIMIT,
+        });
         if (requests.length === 0) {
           print('Заявок нет');
           return EXIT_OK;
@@ -222,7 +183,7 @@ export async function runStarsCli(
     }
 
     // no transaction is open across the call
-    const answer = await askTelegram(
+    const answer = await askRefund(
       deps.createApi({ token }),
       payment.payerTelegramUserId,
       parsed.chargeId,
@@ -244,7 +205,7 @@ export async function runStarsCli(
     let record: StarRefundRecord;
     try {
       record = await db.transaction((tx) =>
-        recordStarRefund(tx, {
+        recordStarRefundBySystem(tx, {
           telegramPaymentChargeId: parsed.chargeId,
           source: StarsRefundSource.Cli,
           telegramAnswer:

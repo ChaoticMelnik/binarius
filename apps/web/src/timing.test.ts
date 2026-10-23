@@ -5,6 +5,7 @@ import {
   ADMIN_LOGIN_BUDGET_MS,
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   DEPOSIT_CREDITED_BUDGET_MS,
+  STARS_REFUND_BUDGET_MS,
   DEPOSIT_WIDGET_SESSION_BUDGET_MS,
 } from '@binarius/shared';
 import { OAUTH_CALLBACK_BUDGET_MS, OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
@@ -35,6 +36,8 @@ describe('web timing', () => {
     expect(ADMIN_LOGIN_BUDGET_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
     // a publish after a bot text write, or «Опубликовать заново» (#361)
     expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
+    // «Вернуть Stars» (#510)
+    expect(STARS_REFUND_BUDGET_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
     expect(OAUTH_CALLBACK_BUDGET_MS).toBeLessThan(OAUTH_CALLBACK_REQUEST_TIMEOUT_MS);
     expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
     expect(OAUTH_CALLBACK_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);

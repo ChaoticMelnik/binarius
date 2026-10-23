@@ -24,11 +24,14 @@ import {
   adminIntentsSearchParams,
   adminTokensSearchParams,
   adminTradingSessionsSearchParams,
+  adminStarRefundsSearchParams,
   adminUsersSearchParams,
   AuditAction,
   AuditEntityType,
   BrokerAccountStatus,
   DepositEventStatus,
+  STAR_REFUND_REASON_MAX,
+  StarPaymentStatus,
   TOKEN_ADJUSTMENT_MAX_TOKENS,
   TOKEN_LEDGER_NOTE_MAX,
   TokenLedgerKind,
@@ -42,6 +45,9 @@ import {
   type AdminBrokerAccountView,
   type AdminServiceAccountsResponse,
   type AdminServiceAccountView,
+  type AdminStarPaymentView,
+  type AdminStarRefundRequestItem,
+  type AdminStarRefundsQuery,
   type AdminDepositsQuery,
   type AdminDepositView,
   type AdminIntentsQuery,
@@ -206,6 +212,7 @@ const orNone = (value: string | null): string => value ?? TEXTS.none;
 const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 
 export const SERVICE_ACCOUNTS_PATH = '/admin/service-accounts';
+export const STAR_REFUNDS_PATH = '/admin/star-refunds';
 
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
@@ -220,7 +227,8 @@ export type AdminNavKey =
   | 'botTexts'
   | 'deposits'
   | 'brokerAccounts'
-  | 'serviceAccounts';
+  | 'serviceAccounts'
+  | 'starRefunds';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string; icon: IconName }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview, icon: 'layout-dashboard' },
@@ -254,6 +262,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string; icon: IconN
     label: TEXTS.navServiceAccounts,
     icon: 'server',
   },
+  { key: 'starRefunds', href: STAR_REFUNDS_PATH, label: TEXTS.navStarRefunds, icon: 'star' },
 ];
 
 /**
@@ -616,6 +625,66 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
     </tbody>
   </table>`;
 
+// «Вернуть Stars» (#510): only on a payment that can still be refunded
+const starRefundForm = (paymentId: string, returnPath: string): SafeHtml =>
+  html`<form class="stack" method="post" action="/admin/star-payments/${paymentId}/refund">
+    <input type="hidden" name="return" value="${returnPath}" />
+    <label
+      >${TEXTS.starRefundReason}
+      <input name="reason" maxlength="${STAR_REFUND_REASON_MAX}" required />
+    </label>
+    <button type="submit">${TEXTS.starRefundSubmit}</button>
+  </form>`;
+
+// The Stars payments of the user card and of the requests page (with the owner column): one set
+// of columns. The payer is who gets the Stars back, a forwarded invoice's payer included.
+const starPaymentsTable = <T extends AdminStarPaymentView>(
+  payments: readonly T[],
+  returnPath: string,
+  owner?: (payment: T) => SafeHtml,
+): SafeHtml =>
+  html`<table>
+    <thead>
+      <tr>
+        ${owner === undefined ? '' : html`<th>${TEXTS.columnUser}</th>`}
+        <th>${TEXTS.columnChargeId}</th>
+        <th>${TEXTS.columnPayer}</th>
+        <th>${TEXTS.columnPackage}</th>
+        <th>${TEXTS.columnStars}</th>
+        <th>${TEXTS.columnTokens}</th>
+        <th>${TEXTS.columnStatus}</th>
+        <th>${TEXTS.columnPaidAt}</th>
+        <th>${TEXTS.columnRefundedAt}</th>
+        <th>${TEXTS.columnRequestedAt}</th>
+        <th>${TEXTS.columnRefund}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${payments.map(
+        (payment) =>
+          html`<tr>
+            ${owner === undefined ? '' : html`<td>${owner(payment)}</td>`}
+            <td><code>${payment.telegramPaymentChargeId}</code></td>
+            <td>${payment.payerTelegramUserId}</td>
+            <td>${payment.packageCode}</td>
+            <td>${payment.totalAmount}</td>
+            <td>${orNone(payment.tokens)}</td>
+            <td>${TEXTS.starPaymentStatus[payment.status]}</td>
+            <td>${when(payment.paidAt)}</td>
+            <td>${whenOrNone(payment.refundedAt)}</td>
+            <td>${whenOrNone(payment.requestedAt)}</td>
+            <td>
+              ${
+                payment.status === StarPaymentStatus.Refunded
+                  ? TEXTS.none
+                  : starRefundForm(payment.id, returnPath)
+              }
+            </td>
+          </tr>`,
+      )}
+    </tbody>
+  </table>`;
+
 /** What the staff member submitted, put back into the form after a refusal (#246). */
 export interface TokenAdjustmentForm {
   direction: 'credit' | 'debit';
@@ -637,7 +706,7 @@ const tokenAdjustmentForm = (
   const form = adjustment?.form;
   const debit = form?.direction === 'debit';
   return html`<h3>${TEXTS.userAdjustHeading}</h3>
-    ${notice === undefined ? '' : html`<p class="notice">${TEXTS.userNotice[notice]}</p>`}
+    ${notice === 'adjusted' ? html`<p class="notice">${TEXTS.userNotice[notice]}</p>` : ''}
     ${error(adjustment?.message)}
     <form class="stack" method="post" action="/admin/users/${user.id}/tokens">
       <input type="hidden" name="balance" value="${user.tokens.balance}" />
@@ -678,7 +747,7 @@ const tokenAdjustmentForm = (
 };
 
 export const userPage = (
-  { user, brokerAccounts, intents, ledger, deposits }: Omit<AdminUserResponse, 'me'>,
+  { user, brokerAccounts, intents, ledger, deposits, starPayments }: Omit<AdminUserResponse, 'me'>,
   login: string,
   options: UserPageOptions = {},
 ): SafeHtml =>
@@ -759,6 +828,18 @@ export const userPage = (
               ${depositsTable(deposits.recent)}`
       }
       <p><a href="${depositsHref({ user: user.id })}">${TEXTS.userDepositsAll}</a></p>
+      <h2>${TEXTS.userStarPayments}</h2>
+      ${
+        options.notice === 'refunded' || options.notice === 'refundRecorded'
+          ? html`<p class="notice">${TEXTS.starRefundNotice[options.notice]}</p>`
+          : ''
+      }
+      ${
+        starPayments.recent.length === 0
+          ? html`<p>${TEXTS.starPaymentsEmpty}</p>`
+          : html`<p class="hint">${TEXTS.userStarPaymentsRecent(ADMIN_USER_RECENT_LEDGER)}</p>
+              ${starPaymentsTable(starPayments.recent, `/admin/users/${user.id}`)}`
+      }
       <h2>${TEXTS.userAudit}</h2>
       <p>
         <a href="${auditHref({ entityType: AuditEntityType.User, entityId: user.id })}"
@@ -1013,6 +1094,57 @@ export const tradingSessionsPage = (
             ? ''
             : html`<a href="${tradingSessionsHref({ cursor: options.nextCursor })}"
                 >${TEXTS.tradingSessionsNext}</a
+              >`
+        }
+      </p>`,
+  });
+
+/** The requests list URL (#510), through the shared serializer as the other lists. */
+export const starRefundsHref = (query: AdminStarRefundsQuery): string => {
+  const params = adminStarRefundsSearchParams(query);
+  return params.size > 0 ? `${STAR_REFUNDS_PATH}?${params}` : STAR_REFUNDS_PATH;
+};
+
+export const starRefundsPage = (
+  requests: readonly AdminStarRefundRequestItem[],
+  options: {
+    cursor?: string;
+    nextCursor: string | null;
+    login: string;
+    notice?: keyof typeof TEXTS.starRefundNotice;
+  },
+): SafeHtml =>
+  adminShell({
+    title: TEXTS.starRefundsTitle,
+    active: 'starRefunds',
+    login: options.login,
+    body: html`<h1>${TEXTS.starRefundsHeading}</h1>
+      ${
+        options.notice === undefined
+          ? ''
+          : html`<p class="notice">${TEXTS.starRefundNotice[options.notice]}</p>`
+      }
+      <p class="hint">${TEXTS.starRefundsHint}</p>
+      ${
+        requests.length === 0
+          ? html`<p>${TEXTS.starRefundsEmpty}</p>`
+          : starPaymentsTable(
+              requests,
+              STAR_REFUNDS_PATH,
+              (request) => html`<a href="/admin/users/${request.userId}">${request.userId}</a>`,
+            )
+      }
+      <p class="pager">
+        ${
+          options.cursor !== undefined || requests.length === 0
+            ? html`<a href="${starRefundsHref({})}">${TEXTS.starRefundsFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${starRefundsHref({ cursor: options.nextCursor })}"
+                >${TEXTS.starRefundsNext}</a
               >`
         }
       </p>`,

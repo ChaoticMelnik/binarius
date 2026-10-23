@@ -20,6 +20,7 @@ import {
 } from '@binarius/shared/broker-budget';
 import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
+  STARS_REFUND_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
   CANDLE_CLOSE_SLACK_MS,
@@ -485,6 +486,10 @@ const TIMING_CHAIN_HOLDS =
   // request timeout above (the admin routes publish inside a request, #361), and inside phase 1
   BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS <= BOT_PROFILE_PUBLISH_BUDGET_MS &&
   BOT_PROFILE_PUBLISH_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the admin's Stars refund (#510): one refundStarPayment under withinDeadline, whose grammY
+  // timeout fits inside it; the route ends inside phase 1 (web's link is in apps/web/src/timing.ts)
+  STARS_TELEGRAM_API_TIMEOUT_MS <= STARS_REFUND_BUDGET_MS &&
+  STARS_REFUND_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the mailing engine: stop() waits for the job in flight — the pace's gap, then the claim, the
   // one send, the settle and the 403 mark — and for a planner tick (one statement per kind); the
   // statements are ordinary latency, as phase 1's own comment counts them, so the gap and the

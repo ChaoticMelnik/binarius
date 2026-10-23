@@ -23,10 +23,14 @@ import {
   listKnownStarCharges,
   listOpenStarRefundRequests,
   listStarChargesToRefund,
+  listStarPaymentsForAdmin,
   listStarPaymentsForPayer,
   readStarPaymentByCharge,
+  readStarPaymentById,
   readStarsBuyer,
   recordStarRefund,
+  recordStarRefundBySystem,
+  STAR_REFUND_REQUESTS_LIST_LIMIT,
   requestStarRefund,
   StarsCreditSource,
   StarsRefundEvidence,
@@ -291,7 +295,9 @@ const refundOf = (charge: string, patch: Partial<StarRefundInput> = {}): StarRef
   ...patch,
 });
 
-const refund = (input: StarRefundInput) => tmp.db.transaction((tx) => recordStarRefund(tx, input));
+// the CLI's and the reconciler's record: the writer and its system row (#510)
+const refund = (input: StarRefundInput) =>
+  tmp.db.transaction((tx) => recordStarRefundBySystem(tx, input));
 
 async function paymentRow(charge: string) {
   const [row] = await tmp.db
@@ -472,7 +478,7 @@ describe('recordStarRefund', () => {
     let markHeld!: () => void;
     const held = new Promise<void>((resolve) => (markHeld = resolve));
     const first = tmp.db.transaction(async (tx) => {
-      const result = await recordStarRefund(tx, refundOf(payment.telegramPaymentChargeId));
+      const result = await recordStarRefundBySystem(tx, refundOf(payment.telegramPaymentChargeId));
       markHeld();
       await gate;
       return result;
@@ -553,6 +559,78 @@ describe('recordStarRefund', () => {
     }
     await holder;
     expect(await record).toMatchObject({ outcome: 'refunded' });
+  });
+
+  // #510: the row is the caller's, so it can name who recorded the refund
+  it('R10 writes no stars_refunded row of its own', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    const result = await tmp.db.transaction((tx) =>
+      recordStarRefund(tx, refundOf(payment.telegramPaymentChargeId)),
+    );
+    expect(result).toMatchObject({ outcome: 'refunded', taken: 50n });
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(row.status).toBe(StarPaymentStatus.Refunded);
+    expect((await auditOf(row.id)).filter((a) => a.action === AuditAction.StarsRefunded)).toEqual(
+      [],
+    );
+  });
+});
+
+describe('the admin reads of Stars payments (#510)', () => {
+  it('A1 lists the user’s newest payments first, with the request’s time, up to the limit', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const rows = [];
+    for (let day = 1; day <= 3; day += 1) {
+      const payment = paymentOf(user, { paidAt: new Date(`2026-09-0${day}T00:00:00.000Z`) });
+      await credit(payment);
+      rows.push(await paymentRow(payment.telegramPaymentChargeId));
+    }
+    await requestStarRefund(tmp.db, {
+      telegramUserId: BigInt(user.telegramUserId),
+      paymentId: rows[2]!.id,
+    });
+    const listed = await tmp.db.transaction((tx) => listStarPaymentsForAdmin(tx, user.userId, 2));
+    expect(listed.map((p) => p.id)).toEqual([rows[2]!.id, rows[1]!.id]);
+    expect(listed[0]!.requestedAt).toBeInstanceOf(Date);
+    expect(listed[1]!.requestedAt).toBeNull();
+  });
+
+  it('A2 does not list another user’s payment, a forwarded invoice’s payer included', async () => {
+    const owner = await seedUser(tmp.db, { balance: 0n });
+    const other = await seedUser(tmp.db, { balance: 0n });
+    const forwarded = paymentOf(owner, { payerTelegramUserId: BigInt(other.telegramUserId) });
+    await credit(forwarded);
+    const forOwner = await tmp.db.transaction((tx) =>
+      listStarPaymentsForAdmin(tx, owner.userId, 20),
+    );
+    expect(forOwner).toEqual([
+      expect.objectContaining({
+        telegramPaymentChargeId: forwarded.telegramPaymentChargeId,
+        payerTelegramUserId: BigInt(other.telegramUserId),
+      }),
+    ]);
+    expect(
+      await tmp.db.transaction((tx) => listStarPaymentsForAdmin(tx, other.userId, 20)),
+    ).toEqual([]);
+  });
+
+  it('A3 readStarPaymentById reads a row with its request, undefined for an unknown id', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payment = paymentOf(user);
+    await credit(payment);
+    const row = await paymentRow(payment.telegramPaymentChargeId);
+    expect(await readStarPaymentById(tmp.db, row.id)).toMatchObject({
+      id: row.id,
+      telegramPaymentChargeId: payment.telegramPaymentChargeId,
+      status: StarPaymentStatus.Paid,
+      tokens: 50n,
+      requestedAt: null,
+    });
+    expect(
+      await readStarPaymentById(tmp.db, '00000000-0000-4000-8000-00000000beef'),
+    ).toBeUndefined();
   });
 });
 
@@ -705,7 +783,7 @@ describe('listStarPaymentsForPayer and requestStarRefund (#118)', () => {
     ).toEqual([]);
   });
 
-  it('listOpenStarRefundRequests lists open requests oldest first and hides refunded ones', async () => {
+  it('Q4 listOpenStarRefundRequests without a cursor is the CLI’s list: open requests oldest first', async () => {
     const user = await seedUser(tmp.db, { balance: 0n });
     const payer = BigInt(user.telegramUserId);
     const rows = [];
@@ -717,10 +795,63 @@ describe('listStarPaymentsForPayer and requestStarRefund (#118)', () => {
       rows.push(row);
     }
     await refund(refundOf(rows[1]!.telegramPaymentChargeId));
-    const open = (await listOpenStarRefundRequests(tmp.db)).filter(
-      (request) => request.payment.userId === user.userId,
-    );
+    const { rows: listed } = await listOpenStarRefundRequests(tmp.db, {
+      limit: STAR_REFUND_REQUESTS_LIST_LIMIT,
+    });
+    expect(listed.length).toBeLessThanOrEqual(STAR_REFUND_REQUESTS_LIST_LIMIT);
+    const open = listed.filter((request) => request.payment.userId === user.userId);
     expect(open.map((request) => request.payment.id)).toEqual([rows[0]!.id, rows[2]!.id]);
     expect(open[0]!.requestedAt).toBeInstanceOf(Date);
+  });
+});
+
+// The admin's page of requests (#510): keyset by the request. Their times are set in 1990, before
+// any other row of this database, so these four are the first rows of the list whatever ran before.
+describe('listOpenStarRefundRequests: the pages (#510)', () => {
+  const requestIds: string[] = [];
+  const paymentIds: string[] = [];
+  beforeAll(async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const payer = BigInt(user.telegramUserId);
+    for (let i = 0; i < 4; i += 1) {
+      const payment = paymentOf(user);
+      await credit(payment);
+      const row = await paymentRow(payment.telegramPaymentChargeId);
+      const requested = await requestStarRefund(tmp.db, {
+        telegramUserId: payer,
+        paymentId: row.id,
+      });
+      if (requested.outcome !== 'requested') throw new Error(requested.outcome);
+      const [request] = await tmp.db
+        .update(starRefundRequests)
+        .set({ requestedAt: new Date(Date.UTC(1990, 0, 1, 0, 0, i + 1)) })
+        .where(eq(starRefundRequests.starPaymentId, row.id))
+        .returning({ id: starRefundRequests.id });
+      requestIds.push(request!.id);
+      paymentIds.push(row.id);
+    }
+    // the newest of the four is refunded: its request is no longer open
+    await refund(
+      refundOf((await readStarPaymentById(tmp.db, paymentIds[3]!))!.telegramPaymentChargeId),
+    );
+  });
+
+  it('Q1 lists the oldest first and names the next page’s cursor when more are open', async () => {
+    const page = await listOpenStarRefundRequests(tmp.db, { limit: 2 });
+    expect(page.rows.map((row) => row.requestId)).toEqual([requestIds[0], requestIds[1]]);
+    expect(page.rows.map((row) => row.payment.id)).toEqual([paymentIds[0], paymentIds[1]]);
+    expect(page.nextCursor).toBe(requestIds[1]);
+  });
+
+  it('Q2 hides a request whose payment is refunded', async () => {
+    const page = await listOpenStarRefundRequests(tmp.db, { limit: 1000 });
+    const ids = page.rows.map((row) => row.requestId);
+    expect(ids).toEqual(expect.arrayContaining(requestIds.slice(0, 3)));
+    expect(ids).not.toContain(requestIds[3]);
+  });
+
+  it('Q3 starts the next page after the cursor’s row and repeats nothing', async () => {
+    const page = await listOpenStarRefundRequests(tmp.db, { cursor: requestIds[1], limit: 1 });
+    expect(page.rows.map((row) => row.requestId)).toEqual([requestIds[2]]);
   });
 });

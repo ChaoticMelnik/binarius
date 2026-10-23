@@ -1,4 +1,4 @@
-import { BOT_PROFILE_PUBLISH_BUDGET_MS } from '@binarius/shared';
+import { BOT_PROFILE_PUBLISH_BUDGET_MS, STARS_REFUND_BUDGET_MS } from '@binarius/shared';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import { DEPOSIT_CREDITED_BUDGET_MS, DEPOSIT_WIDGET_SESSION_BUDGET_MS } from '@binarius/shared';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
@@ -13,7 +13,8 @@ import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 // login that is still going to succeed, and the staff member would see an error over a
 // challenge that exists. A save or reset of a command or profile text, and «Опубликовать
 // заново», wait for a publish of the command menu and the profile after the write
-// (BOT_PROFILE_PUBLISH_BUDGET_MS, #361); the statements around it are ordinary latency.
+// (BOT_PROFILE_PUBLISH_BUDGET_MS, #361); «Вернуть Stars» waits for one refundStarPayment
+// (STARS_REFUND_BUDGET_MS, #510); the statements around them are ordinary latency.
 export const BACKEND_REQUEST_TIMEOUT_MS = 8_000;
 // The forward of the Mini App's callback to the backend's public POST /auth/binodex/callback.
 // Above what the backend may spend there — the code exchange and the push — for the same
@@ -36,6 +37,7 @@ export const COMPOSE_STOP_GRACE_PERIOD_MS = 14_000;
 const TIMING_CHAIN_HOLDS =
   ADMIN_LOGIN_BUDGET_MS < BACKEND_REQUEST_TIMEOUT_MS &&
   BOT_PROFILE_PUBLISH_BUDGET_MS < BACKEND_REQUEST_TIMEOUT_MS &&
+  STARS_REFUND_BUDGET_MS < BACKEND_REQUEST_TIMEOUT_MS &&
   OAUTH_CALLBACK_BUDGET_MS < OAUTH_CALLBACK_REQUEST_TIMEOUT_MS &&
   DEPOSIT_WIDGET_SESSION_BUDGET_MS < DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS &&
   DEPOSIT_CREDITED_BUDGET_MS < DEPOSIT_CREDITED_REQUEST_TIMEOUT_MS &&

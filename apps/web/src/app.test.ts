@@ -32,6 +32,7 @@ import {
   type AdminIntentsQuery,
   type AdminTokensQuery,
   type AdminTradingSessionsQuery,
+  type AdminStarRefundsQuery,
   type AdminUsersQuery,
   type DecimalString,
   type StaffSessionView,
@@ -52,6 +53,10 @@ import {
   SAMPLE_SERVICE_ACCOUNTS,
   SAMPLE_SERVICE_MARKED,
   SAMPLE_H1_MARKED,
+  SAMPLE_REFUNDED,
+  SAMPLE_STAR_PAYMENT,
+  SAMPLE_STAR_PAYMENT_REFUNDED,
+  SAMPLE_STAR_REFUNDS,
   H1_SINCE,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSIT_UNOWNED,
@@ -140,6 +145,8 @@ interface Calls {
   serviceAccounts: string[];
   setServiceMark: unknown[][];
   setH1Mark: unknown[][];
+  starRefunds: [string, AdminStarRefundsQuery][];
+  refundStarPayment: unknown[][];
   audit: [string, AdminAuditQuery][];
   changePassword: unknown[][];
   botTexts: unknown[];
@@ -176,6 +183,8 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     serviceAccounts: [],
     setServiceMark: [],
     setH1Mark: [],
+    starRefunds: [],
+    refundStarPayment: [],
     audit: [],
     changePassword: [],
     botTexts: [],
@@ -266,6 +275,14 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     setH1Mark: async (token, id, request) => {
       calls.setH1Mark.push([token, id, request]);
       return SAMPLE_H1_MARKED;
+    },
+    starRefunds: async (token, query) => {
+      calls.starRefunds.push([token, query]);
+      return SAMPLE_STAR_REFUNDS;
+    },
+    refundStarPayment: async (token, id, request) => {
+      calls.refundStarPayment.push([token, id, request]);
+      return SAMPLE_REFUNDED;
     },
     audit: async (token, query) => {
       calls.audit.push([token, query]);
@@ -499,7 +516,7 @@ describe('the admin design system (#459)', () => {
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(body)?.[1] ?? '';
     expect(
       nav.match(/<a href="[^"]*"[^>]*>\s*<svg class="icon"[^>]*><use href="#i-[a-z-]+"\/><\/svg>/g),
-    ).toHaveLength(11);
+    ).toHaveLength(12);
     for (const name of nav.matchAll(/<use href="#i-([a-z-]+)"/g)) {
       expect(body).toContain(`<symbol id="i-${name[1]}"`);
     }
@@ -1493,6 +1510,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navDeposits,
     TEXTS.navBrokerAccounts,
     TEXTS.navServiceAccounts,
+    TEXTS.navStarRefunds,
   ];
 
   it.each([
@@ -1509,7 +1527,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     '/admin/deposits',
     '/admin/broker-accounts',
     '/admin/service-accounts',
-  ])('%s carries the eleven nav items in order, staff sessions named as such', async (url) => {
+    '/admin/star-refunds',
+  ])('%s carries the twelve nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -1525,6 +1544,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Депозиты',
       'Брокерские аккаунты',
       'Служебные аккаунты',
+      'Возвраты Stars',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -2222,7 +2242,7 @@ describe('the deposits page and the card section (#341)', () => {
     expectAccountBlock(response.body, 'ada');
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
     expect(nav.trimEnd()).toMatch(
-      /aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>$/,
+      /aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>\s*<a href="\/admin\/star-refunds"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Возвраты Stars\s*<\/a\s*>$/,
     );
   });
 
@@ -2443,7 +2463,7 @@ describe('the broker accounts page (#342)', () => {
     expectAccountBlock(response.body, 'ada');
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
     expect(nav.trimEnd()).toMatch(
-      /aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>$/,
+      /aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>\s*<a href="\/admin\/star-refunds"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Возвраты Stars\s*<\/a\s*>$/,
     );
   });
 
@@ -3203,13 +3223,13 @@ describe('the bot texts pages (#300)', () => {
   const versionsOf = (body: string) =>
     [...body.matchAll(/name="version" value="(\d+)"/g)].map((match) => match[1]);
 
-  // «Депозиты» (#341), «Брокерские аккаунты» (#342) and «Служебные аккаунты» (#391) were appended
-  // after it
+  // «Депозиты» (#341), «Брокерские аккаунты» (#342), «Служебные аккаунты» (#391) and «Возвраты
+  // Stars» (#510) were appended after it
   it('W1 puts «Тексты бота» in the nav right before «Депозиты» and marks it current', async () => {
     const response = await get('/admin/bot-texts', withCookie);
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>\s*<\/nav>/,
+      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Брокерские аккаунты\s*<\/a\s*>\s*<a href="\/admin\/service-accounts"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Служебные аккаунты\s*<\/a\s*>\s*<a href="\/admin\/star-refunds"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Возвраты Stars\s*<\/a\s*>\s*<\/nav>/,
     );
   });
 
@@ -3911,12 +3931,14 @@ describe('the service accounts (#391)', () => {
     expect(response.body).toContain(TEXTS.serviceAccountsHint);
   });
 
-  it('W2 marks «Служебные аккаунты» as the current page, last in the nav', async () => {
+  it('W2 marks «Служебные аккаунты» as the current page, right before «Возвраты Stars»', async () => {
     const response = await get('/admin/service-accounts', withCookie);
     expect(response.body).toMatch(/<a href="\/admin\/service-accounts"\s+aria-current="page"/);
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
-    expect(nav.trimEnd()).toMatch(/>\s*Служебные аккаунты\s*<\/a\s*>$/);
+    expect(nav.trimEnd()).toMatch(
+      />\s*Служебные аккаунты\s*<\/a\s*>\s*<a href="\/admin\/star-refunds"\s*>\s*(?:<svg[\s\S]*?<\/svg>)?\s*Возвраты Stars\s*<\/a\s*>$/,
+    );
   });
 
   it('W3 offers «Сделать служебным» for an unmarked account and the date with «Снять» for a marked one', async () => {
@@ -4136,5 +4158,171 @@ describe('the H1 mark (#745)', () => {
     const gone = await post(url, { h1: 'on' }, withCookie);
     expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
     expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+  });
+});
+
+describe('the Stars refund and the requests page (#510)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const PAYMENT = SAMPLE_STAR_PAYMENT.id;
+  const url = `/admin/star-payments/${PAYMENT}/refund`;
+  const CARD = `/admin/users/${SAMPLE_USER_ID}`;
+  const REASON = 'просьба пользователя';
+  const rebuild = async (backend: Partial<BackendClient>) => {
+    await app.close();
+    app = build(backend);
+  };
+  const formOf = (id: string, returnPath: string) =>
+    new RegExp(
+      `<form class="stack" method="post" action="/admin/star-payments/${id}/refund">\\s*` +
+        `<input type="hidden" name="return" value="${returnPath}" />`,
+    );
+
+  it('SR-W1 the card carries «Оплаты Stars» after «Депозиты», the form on a refundable payment only', async () => {
+    const card = await get(CARD, withCookie);
+    expect(card.statusCode).toBe(200);
+    const deposits = card.body.indexOf(`<h2>${TEXTS.userDeposits}</h2>`);
+    const stars = card.body.indexOf(`<h2>${TEXTS.userStarPayments}</h2>`);
+    expect(deposits).toBeGreaterThan(-1);
+    expect(stars).toBeGreaterThan(deposits);
+    expect(card.body).toContain(`<th>${TEXTS.columnPayer}</th>`);
+    // the charge id is escaped
+    expect(card.body).toContain('<code>charge-&lt;1&gt;</code>');
+    expect(card.body).toMatch(formOf(PAYMENT, CARD));
+    expect(card.body).not.toMatch(formOf(SAMPLE_STAR_PAYMENT_REFUNDED.id, CARD));
+    expect(card.body).toContain(`<button type="submit">${TEXTS.starRefundSubmit}</button>`);
+  });
+
+  it('SR-W2 the requests page lists the requests with the user link and the form, the nav item current', async () => {
+    const page = await get('/admin/star-refunds', withCookie);
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain(`<h1>${TEXTS.starRefundsHeading}</h1>`);
+    expect(page.body).toContain(`<a href="/admin/users/${SAMPLE_USER_ID}">${SAMPLE_USER_ID}</a>`);
+    expect(page.body).toMatch(formOf(PAYMENT, '/admin/star-refunds'));
+    expect(page.body).toMatch(/<a href="\/admin\/star-refunds"\s+aria-current="page"/);
+    expect(calls.starRefunds).toEqual([[TOKEN, { cursor: undefined }]]);
+
+    const cursor = '00000000-0000-4000-8000-0000000000e9';
+    await rebuild({
+      starRefunds: async () => ({ ...SAMPLE_STAR_REFUNDS, nextCursor: cursor }),
+    });
+    const paged = await get(`/admin/star-refunds?cursor=${cursor}`, withCookie);
+    expect(paged.body).toContain(`<a href="/admin/star-refunds">${TEXTS.starRefundsFirst}</a>`);
+    expect(paged.body).toMatch(
+      new RegExp(`<a href="/admin/star-refunds\\?cursor=${cursor}"\\s*>${TEXTS.starRefundsNext}<`),
+    );
+  });
+
+  it('SR-W3 sends the refund and goes back to the card or the list with its notice', async () => {
+    const done = await post(url, { reason: ` ${REASON} `, return: CARD }, withCookie);
+    expect([done.statusCode, done.headers.location]).toEqual([303, `${CARD}?notice=refunded`]);
+    expect(calls.refundStarPayment).toEqual([[TOKEN, PAYMENT, { reason: REASON }]]);
+    const card = await get(`${CARD}?notice=refunded`, withCookie);
+    expect(card.body).toContain(TEXTS.starRefundNotice.refunded);
+
+    await rebuild({
+      refundStarPayment: async () => ({
+        me: SAMPLE_ME,
+        outcome: 'already_recorded',
+        payment: SAMPLE_STAR_PAYMENT_REFUNDED,
+      }),
+    });
+    const again = await post(url, { reason: REASON, return: '/admin/star-refunds' }, withCookie);
+    expect([again.statusCode, again.headers.location]).toEqual([
+      303,
+      '/admin/star-refunds?notice=refundRecorded',
+    ]);
+    const list = await get('/admin/star-refunds?notice=refundRecorded', withCookie);
+    expect(list.body).toContain(TEXTS.starRefundNotice.refundRecorded);
+  });
+
+  it('SR-W4 answers a refusal with 409 and Telegram’s text escaped, an unknown outcome with 500, a missing payment with 404', async () => {
+    await rebuild({
+      refundStarPayment: async () => ({
+        me: SAMPLE_ME,
+        outcome: 'refused',
+        payment: SAMPLE_STAR_PAYMENT,
+        telegramErrorCode: 400,
+        description: 'Bad Request: <b>nope</b>',
+      }),
+    });
+    const refused = await post(url, { reason: REASON }, withCookie);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.body).toContain('Telegram отказал в возврате: 400 Bad Request: &lt;b&gt;nope');
+    expect(refused.body).not.toContain('<b>nope</b>');
+
+    await rebuild({
+      refundStarPayment: async () => ({
+        me: SAMPLE_ME,
+        outcome: 'unknown',
+        payment: SAMPLE_STAR_PAYMENT,
+      }),
+    });
+    const unknown = await post(url, { reason: REASON }, withCookie);
+    expect(unknown.statusCode).toBe(500);
+    expect(unknown.body).toContain(TEXTS.starRefundOutcomeUnknown);
+
+    for (const failure of [new BackendError(BackendErrorCode.Unreachable), httpFailure(500)]) {
+      await rebuild({ refundStarPayment: async () => Promise.reject(failure) });
+      const lost = await post(url, { reason: REASON }, withCookie);
+      expect(lost.statusCode).toBe(500);
+      expect(lost.body).toContain(TEXTS.starRefundOutcomeUnknown);
+    }
+
+    await rebuild({
+      refundStarPayment: async () => Promise.reject(httpFailure(404, AdminErrorCode.NotFound)),
+    });
+    const missing = await post(url, { reason: REASON }, withCookie);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.body).toContain(TEXTS.starPaymentNotFoundBody);
+  });
+
+  it.each([
+    ['another site', 'https://evil.example/admin/star-refunds'],
+    ['a path with ..', '/admin/users/../star-refunds'],
+    ['a query', '/admin/star-refunds?cursor=x'],
+    ['the service page', '/admin/service-accounts'],
+  ])('SR-W5 goes back to the list for a return of %s', async (_label, back) => {
+    const done = await post(url, { reason: REASON, return: back }, withCookie);
+    expect([done.statusCode, done.headers.location]).toEqual([
+      303,
+      '/admin/star-refunds?notice=refunded',
+    ]);
+  });
+
+  it('SR-W5 refuses an id that is not a uuid without the backend, and a bad form with 400', async () => {
+    const bad = await post(
+      '/admin/star-payments/not-a-uuid/refund',
+      { reason: REASON },
+      withCookie,
+    );
+    expect(bad.statusCode).toBe(404);
+    expect(bad.body).toContain(TEXTS.starPaymentNotFoundBody);
+    for (const payload of [
+      {} as Record<string, string>,
+      { reason: '   ' },
+      { reason: 'a\tb' },
+      { reason: 'x'.repeat(201) },
+    ]) {
+      const refused = await post(url, payload, withCookie);
+      expect(refused.statusCode).toBe(400);
+      expect(refused.body).toContain(TEXTS.starRefundBadForm(200));
+    }
+    expect(calls.refundStarPayment).toEqual([]);
+  });
+
+  it('SR-W6 clears a session the backend calls gone', async () => {
+    await rebuild({
+      refundStarPayment: async () =>
+        Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await post(url, { reason: REASON }, withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+  });
+
+  it('SR-W7 drops a cursor of the wrong shape from the list', async () => {
+    const response = await get('/admin/star-refunds?cursor=nope', withCookie);
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/star-refunds']);
+    expect(calls.starRefunds).toEqual([]);
   });
 });

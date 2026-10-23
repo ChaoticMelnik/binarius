@@ -4,10 +4,17 @@ import {
   ServiceAccountNotWorkingReason,
   type BotLanguage,
   type BotProfileMethod,
+  type StarPaymentStatus,
   type TradingSessionSettings,
 } from '@binarius/shared';
 
 // Everything the admin pages say. Russian, per the project's language convention.
+
+// After «Вернуть Stars» (#510): on the user card and on the requests page, wherever it was pressed
+const STAR_REFUND_NOTICE = {
+  refunded: 'Возврат Stars выполнен и записан.',
+  refundRecorded: 'Оплата уже была возвращена — записано раньше.',
+} as const;
 
 export const TEXTS = {
   loginTitle: 'Вход в админку',
@@ -57,6 +64,7 @@ export const TEXTS = {
   navDeposits: 'Депозиты',
   navBrokerAccounts: 'Брокерские аккаунты',
   navServiceAccounts: 'Служебные аккаунты',
+  navStarRefunds: 'Возвраты Stars',
   navLabel: 'Разделы админки',
 
   // the shell of the design system (#459)
@@ -235,6 +243,44 @@ export const TEXTS = {
   userDepositsRecent: (n: number) => `Последние ${n}`,
   userDepositsAll: 'Все записи →',
 
+  // Stars payments and their refunds (#510, docs/admin-pages.md → Возврат Stars)
+  userStarPayments: 'Оплаты Stars',
+  userStarPaymentsRecent: (n: number) => `${n} последних оплат`,
+  starPaymentsEmpty: 'Оплат Stars нет.',
+  columnUser: 'Пользователь',
+  columnChargeId: 'Charge ID',
+  columnPayer: 'Плательщик',
+  columnPackage: 'Пакет',
+  columnStars: 'Stars',
+  columnPaidAt: 'Оплачена',
+  columnRefundedAt: 'Возвращена',
+  columnRequestedAt: 'Запрос возврата',
+  columnRefund: 'Возврат',
+  starPaymentStatus: {
+    paid: 'оплачена',
+    held: 'задержана',
+    refunded: 'возвращена',
+  } satisfies Record<StarPaymentStatus, string>,
+  starRefundReason: 'Причина',
+  starRefundSubmit: 'Вернуть Stars',
+  starRefundsTitle: 'Возвраты Stars',
+  starRefundsHeading: 'Заявки на возврат Stars',
+  starRefundsHint:
+    'Заявки из /paysupport по оплатам, которые ещё не возвращены, — сначала старые. Stars уходят плательщику; списываются токены, оставшиеся от пакета.',
+  starRefundsEmpty: 'Открытых заявок нет.',
+  starRefundsNext: 'Далее',
+  starRefundsFirst: 'В начало',
+  starRefundTitle: 'Возврат Stars',
+  starRefundBadForm: (max: number) =>
+    `Проверьте форму: причина — от 1 до ${max} символов без управляющих символов`,
+  starRefundRefused: (code: number, description: string) =>
+    `Telegram отказал в возврате: ${code} ${description}. Ничего не записано.`,
+  starRefundOutcomeUnknown:
+    'Возврат мог пройти — откройте карточку пользователя: статус оплаты «возвращена» покажет это (сверка записывает возврат в течение 5 минут). Повторить безопасно: если возврат прошёл, Telegram ответит «уже возвращена», и он будет записан один раз.',
+  starPaymentNotFoundTitle: 'Оплата не найдена',
+  starPaymentNotFoundBody: 'Такой оплаты Stars нет.',
+  starRefundNotice: STAR_REFUND_NOTICE,
+
   brokerAccountsTitle: 'Брокерские аккаунты',
   brokerAccountsHeading: 'Брокерские аккаунты',
   brokerAccountsFilterStatus: 'Статус',
@@ -324,7 +370,7 @@ export const TEXTS = {
   userAdjustAmount: (max: bigint) => `Токены (1–${max})`,
   userAdjustNote: 'Причина',
   userAdjustSubmit: 'Применить',
-  userNotice: { adjusted: 'Токены скорректированы.' },
+  userNotice: { adjusted: 'Токены скорректированы.', ...STAR_REFUND_NOTICE },
   tokenAdjustBadForm: (max: bigint, noteMax: number) =>
     `Проверьте форму: количество — целое число от 1 до ${max}, причина — от 1 до ${noteMax} символов без управляющих символов`,
   tokenAdjustInsufficient: (available: string) =>

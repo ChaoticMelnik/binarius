@@ -1058,9 +1058,10 @@ export async function findStaffForPasswordChange(
 
 /**
  * The staff member behind a live session, by the same predicate as runAsStaff, without the touch
- * and without an audit row. Its one caller is POST /admin/bot-texts/publish (#361): its Bot API
- * calls cannot run inside a transaction that holds the session row, and its audit row has to
- * carry their result, so the route writes that row itself after the calls.
+ * and without an audit row. Its callers are POST /admin/bot-texts/publish (#361) and POST
+ * /admin/star-payments/:id/refund (#510): their Bot API calls cannot run inside a transaction that
+ * holds the session row, and their audit row has to carry the result, so each route writes that
+ * row itself after the calls.
  */
 export async function readLiveStaffContext(
   db: Db,

@@ -11,7 +11,7 @@ import {
   creditStarPayment,
   listKnownStarCharges,
   listStarChargesToRefund,
-  recordStarRefund,
+  recordStarRefundBySystem,
   StarsCreditSource,
   StarsRefundEvidence,
   StarsRefundSource,
@@ -34,8 +34,9 @@ import { logCredit } from './routes';
 // Star transactions from offset 0 and credits each of ours that star_payments does not hold,
 // through the same creditStarPayment the bot's route calls, so a race with the bot credits once.
 // It records refunds the same way (#118, docs/stars.md → Refunds): an outgoing transaction to a user
-// whose id is a charge star_payments holds as paid or held goes through recordStarRefund, the CLI's
-// writer, so a refund the CLI made but could not record — or one made by hand — is recorded once.
+// whose id is a charge star_payments holds as paid or held goes through recordStarRefundBySystem, the
+// CLI's writer, so a refund the CLI or the admin (#510) made but could not record — or one made by
+// hand — is recorded once.
 
 export interface StarReconcilerConfig {
   tickMs: number;
@@ -203,7 +204,7 @@ export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
       // refunded already: by the CLI, or by an earlier tick
       if (!refundable.has(refund.id)) continue;
       const record = await db.transaction((tx) =>
-        recordStarRefund(tx, {
+        recordStarRefundBySystem(tx, {
           telegramPaymentChargeId: refund.id,
           source: StarsRefundSource.Reconciler,
           telegramAnswer: StarsRefundEvidence.Transaction,

@@ -20,6 +20,7 @@ import {
   adminDepositsSearchParams,
   adminTokensSearchParams,
   adminTradingSessionsSearchParams,
+  adminStarRefundsSearchParams,
   adminUsersSearchParams,
   safeParseAdminIntentResponse,
   safeParseAdminIntentsResponse,
@@ -33,6 +34,8 @@ import {
   safeParseAdminTokenAdjustmentResponse,
   safeParseAdminTokensResponse,
   safeParseAdminTradingSessionsResponse,
+  safeParseAdminStarRefundResponse,
+  safeParseAdminStarRefundsResponse,
   safeParseAdminUserResponse,
   safeParseAdminUsersResponse,
   safeParseChangePasswordResponse,
@@ -73,6 +76,10 @@ import {
   type AdminTokensResponse,
   type AdminTradingSessionsQuery,
   type AdminTradingSessionsResponse,
+  type AdminStarRefundRequest,
+  type AdminStarRefundResponse,
+  type AdminStarRefundsQuery,
+  type AdminStarRefundsResponse,
   type AdminUserResponse,
   type AdminUsersQuery,
   type AdminUsersResponse,
@@ -185,6 +192,14 @@ export interface BackendClient {
     accountId: string,
     request: AdminH1MarkRequest,
   ): Promise<AdminH1MarkResponse>;
+  /** the open /paysupport requests (#510) */
+  starRefunds(token: string, query: AdminStarRefundsQuery): Promise<AdminStarRefundsResponse>;
+  /** «Вернуть Stars» (#510); a refusal or an unknown outcome is an outcome, not an error */
+  refundStarPayment(
+    token: string,
+    paymentId: string,
+    request: AdminStarRefundRequest,
+  ): Promise<AdminStarRefundResponse>;
   audit(token: string, query: AdminAuditQuery): Promise<AdminAuditResponse>;
   changePassword(
     token: string,
@@ -427,6 +442,20 @@ export function createBackendClient({
       return parsed(
         safeParseAdminH1MarkResponse,
         await call('POST', `admin/broker-accounts/${encodeURIComponent(accountId)}/h1`, {
+          body: request,
+          session,
+        }),
+      );
+    },
+    async starRefunds(session, query) {
+      const params = adminStarRefundsSearchParams(query);
+      const path = params.size > 0 ? `admin/star-refunds?${params}` : 'admin/star-refunds';
+      return parsed(safeParseAdminStarRefundsResponse, await call('GET', path, { session }));
+    },
+    async refundStarPayment(session, paymentId, request) {
+      return parsed(
+        safeParseAdminStarRefundResponse,
+        await call('POST', `admin/star-payments/${encodeURIComponent(paymentId)}/refund`, {
           body: request,
           session,
         }),

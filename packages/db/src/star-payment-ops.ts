@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import {
   AuditAction,
   AuditActorType,
@@ -11,6 +11,7 @@ import {
   UserStatus,
   starPackageOf,
   STARS_PAYSUPPORT_LIST_LIMIT,
+  type AdminStarPaymentView,
   type StarPaymentView,
 } from '@binarius/shared';
 import type { Db } from './client';
@@ -20,7 +21,7 @@ import { starPayments } from './schema/star-payments';
 import { starRefundRequests } from './schema/star-refund-requests';
 import { tokenLedger } from './schema/token-ledger';
 import { users } from './schema/users';
-import type { Tx } from './trade-intent-ops';
+import type { DbExecutor, Tx } from './trade-intent-ops';
 
 // Buying tokens for Telegram Stars (#117, docs/stars.md): the credit, and the reads the invoice,
 // the pre-checkout and the reconciler need.
@@ -225,9 +226,10 @@ export async function creditStarPayment(
 
 // --- Refunds (#118, docs/stars.md → Refunds) ---------------------------------------------------
 
-// Who records a refund: `stars refund` after Telegram's answer, or the reconciler that saw the
-// refund among the bot's Star transactions. Recorded in the audit row only.
-export const StarsRefundSource = { Cli: 'cli', Reconciler: 'reconciler' } as const;
+// Who records a refund: `stars refund` after Telegram's answer, the reconciler that saw the
+// refund among the bot's Star transactions, or a staff member in the admin (#510). Recorded in the
+// audit row only.
+export const StarsRefundSource = { Cli: 'cli', Reconciler: 'reconciler', Admin: 'admin' } as const;
 export type StarsRefundSource = (typeof StarsRefundSource)[keyof typeof StarsRefundSource];
 
 // What told us the Stars went back: refundStarPayment's `true`, its CHARGE_ALREADY_REFUNDED
@@ -256,6 +258,10 @@ export type StarRefundRecord =
   | {
       outcome: 'refunded';
       paymentId: string;
+      userId: string;
+      payerTelegramUserId: bigint;
+      packageCode: string;
+      totalAmount: number;
       fromStatus: typeof StarPaymentStatus.Paid | typeof StarPaymentStatus.Held;
       taken: bigint;
       notRecovered: bigint;
@@ -275,6 +281,8 @@ export type StarRefundRecord =
 // cache. The barrier against a second record — a CLI repeat, the CLI racing the reconciler, two
 // ticks — is the status read under that lock and the CAS on it; token_ledger_star_payment_idx is
 // the second barrier on the ledger side, and the only one a refund that takes no token lacks.
+// It writes no audit row: its callers do, in the same transaction (recordStarRefundBySystem,
+// recordStarRefundByStaff), so the row names who recorded the refund (#510).
 // What is taken is what is left of the payment's tokens and available now (balance − reserved):
 // tokens already spent are not recovered, and a reserve held by a live intent is never touched.
 export async function recordStarRefund(tx: Tx, input: StarRefundInput): Promise<StarRefundRecord> {
@@ -354,34 +362,159 @@ export async function recordStarRefund(tx: Tx, input: StarRefundInput): Promise<
   // unreachable under the payment lock: the status was read as paid or held
   if (refunded === undefined) throw new Error('star refund: the payment changed under its lock');
 
-  await tx.insert(auditLog).values({
-    actorType: AuditActorType.System,
-    actorId: null,
-    action: AuditAction.StarsRefunded,
-    entityType: AuditEntityType.StarPayment,
-    entityId: payment.id,
-    payload: {
-      userId: payment.userId,
-      payerTelegramUserId: payment.payerTelegramUserId.toString(),
-      fromStatus,
-      packageCode: payment.packageCode,
-      totalAmount: payment.totalAmount,
-      tokensTaken: taken.toString(),
-      tokensNotRecovered: notRecovered.toString(),
-      via: input.source,
-      telegramAnswer: input.telegramAnswer,
-      ...(input.reason === undefined ? {} : { reason: input.reason }),
-      ...(input.transactionType === undefined ? {} : { transactionType: input.transactionType }),
-    },
-  });
   return {
     outcome: 'refunded',
     paymentId: payment.id,
+    userId: payment.userId,
+    payerTelegramUserId: payment.payerTelegramUserId,
+    packageCode: payment.packageCode,
+    totalAmount: payment.totalAmount,
     fromStatus,
     taken,
     notRecovered,
     balance,
   };
+}
+
+type RecordedRefund = Extract<StarRefundRecord, { outcome: 'refunded' }>;
+
+// The one payload of a recorded refund's stars_refunded row, whoever writes it. Amounts as strings
+// (Rule 2).
+export function starsRefundedPayload(
+  input: StarRefundInput,
+  record: RecordedRefund,
+): Record<string, unknown> {
+  return {
+    userId: record.userId,
+    payerTelegramUserId: record.payerTelegramUserId.toString(),
+    fromStatus: record.fromStatus,
+    packageCode: record.packageCode,
+    totalAmount: record.totalAmount,
+    tokensTaken: record.taken.toString(),
+    tokensNotRecovered: record.notRecovered.toString(),
+    via: input.source,
+    telegramAnswer: input.telegramAnswer,
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
+    ...(input.transactionType === undefined ? {} : { transactionType: input.transactionType }),
+  };
+}
+
+// The CLI's and the reconciler's record: the writer and its row, actor `system`.
+export async function recordStarRefundBySystem(
+  tx: Tx,
+  input: StarRefundInput,
+): Promise<StarRefundRecord> {
+  const record = await recordStarRefund(tx, input);
+  if (record.outcome === 'refunded') {
+    await tx.insert(auditLog).values({
+      actorType: AuditActorType.System,
+      actorId: null,
+      action: AuditAction.StarsRefunded,
+      entityType: AuditEntityType.StarPayment,
+      entityId: record.paymentId,
+      payload: starsRefundedPayload(input, record),
+    });
+  }
+  return record;
+}
+
+export interface StaffRefundActor {
+  staffId: string;
+  sessionId: string;
+  path: string;
+}
+
+export interface StaffStarRefundInput {
+  telegramPaymentChargeId: string;
+  reason: string;
+  // null: Telegram was not asked, the payment was read as refunded already
+  telegramAnswer:
+    typeof StarsRefundEvidence.Refunded | typeof StarsRefundEvidence.AlreadyRefunded | null;
+}
+
+// The admin's record (#510): the writer and one row by the staff member, for a refund recorded
+// now and for one recorded before. receiver_mismatch and not_found write nothing: the admin gives
+// no receiver and has read the payment, so the route treats them as a failure.
+export async function recordStarRefundByStaff(
+  tx: Tx,
+  input: StaffStarRefundInput,
+  actor: StaffRefundActor,
+): Promise<StarRefundRecord> {
+  const record = await recordStarRefund(tx, {
+    telegramPaymentChargeId: input.telegramPaymentChargeId,
+    source: StarsRefundSource.Admin,
+    telegramAnswer: input.telegramAnswer ?? StarsRefundEvidence.AlreadyRefunded,
+    reason: input.reason,
+  });
+  if (record.outcome === 'refunded') {
+    // unreachable: refunded is the last status, and the route asks Telegram unless it read it
+    if (input.telegramAnswer === null) throw new Error('a refund recorded without an answer');
+    await writeStaffRefundRow(tx, actor, {
+      result: 'refunded',
+      paymentId: record.paymentId,
+      payload: starsRefundedPayload(
+        {
+          telegramPaymentChargeId: input.telegramPaymentChargeId,
+          source: StarsRefundSource.Admin,
+          telegramAnswer: input.telegramAnswer,
+          reason: input.reason,
+        },
+        record,
+      ),
+    });
+  } else if (record.outcome === 'already_recorded') {
+    await writeStaffRefundRow(tx, actor, {
+      result: 'already_recorded',
+      paymentId: record.paymentId,
+      payload: {
+        via: StarsRefundSource.Admin,
+        ...(input.telegramAnswer === null ? {} : { telegramAnswer: input.telegramAnswer }),
+      },
+    });
+  }
+  return record;
+}
+
+export type StaffRefundAttemptResult = 'refused' | 'unknown' | 'not_found';
+
+// A staff member's refund that recorded nothing (#510): Telegram refused, its answer told nothing,
+// or no such payment. The row names the attempt; no amounts, since none moved.
+export async function recordStarRefundAttemptByStaff(
+  db: DbExecutor,
+  actor: StaffRefundActor,
+  attempt: { result: StaffRefundAttemptResult; paymentId?: string; telegramErrorCode?: number },
+): Promise<void> {
+  await writeStaffRefundRow(db, actor, {
+    result: attempt.result,
+    paymentId: attempt.paymentId,
+    payload: {
+      via: StarsRefundSource.Admin,
+      ...(attempt.telegramErrorCode === undefined
+        ? {}
+        : { telegramErrorCode: attempt.telegramErrorCode }),
+    },
+  });
+}
+
+async function writeStaffRefundRow(
+  db: DbExecutor,
+  actor: StaffRefundActor,
+  row: { result: string; paymentId: string | undefined; payload: Record<string, unknown> },
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorType: AuditActorType.Admin,
+    actorId: actor.staffId,
+    action: AuditAction.StarsRefunded,
+    entityType: AuditEntityType.StarPayment,
+    entityId: row.paymentId ?? null,
+    payload: {
+      path: actor.path,
+      result: row.result,
+      sessionId: actor.sessionId,
+      ...(row.paymentId === undefined ? {} : { paymentId: row.paymentId }),
+      ...row.payload,
+    },
+  });
 }
 
 export interface StarPaymentRow {
@@ -409,6 +542,60 @@ const starPaymentColumns = {
   paidAt: starPayments.paidAt,
   refundedAt: starPayments.refundedAt,
 };
+
+export interface AdminStarPaymentRow extends StarPaymentRow {
+  requestedAt: Date | null;
+}
+
+// The admin refund's read before it calls Telegram (#510), by the payment's id: advisory, as
+// readStarPaymentByCharge.
+export async function readStarPaymentById(
+  db: DbExecutor,
+  id: string,
+): Promise<AdminStarPaymentRow | undefined> {
+  const [row] = await db
+    .select({ ...starPaymentColumns, requestedAt: starRefundRequests.requestedAt })
+    .from(starPayments)
+    .leftJoin(starRefundRequests, eq(starRefundRequests.starPaymentId, starPayments.id))
+    .where(eq(starPayments.id, id));
+  return row;
+}
+
+// The user card's «Оплаты Stars» (#510): the user's newest payments, by the owner (users row), with
+// the /paysupport request's time when one was made.
+export async function listStarPaymentsForAdmin(
+  tx: Tx,
+  userId: string,
+  limit: number,
+): Promise<AdminStarPaymentRow[]> {
+  return tx
+    .select({ ...starPaymentColumns, requestedAt: starRefundRequests.requestedAt })
+    .from(starPayments)
+    .leftJoin(starRefundRequests, eq(starRefundRequests.starPaymentId, starPayments.id))
+    .where(eq(starPayments.userId, userId))
+    .orderBy(desc(starPayments.paidAt), desc(starPayments.id))
+    .limit(limit);
+}
+
+// Key by key, the row is never spread (Rule 9).
+export function toAdminStarPaymentView(
+  row: StarPaymentRow,
+  requestedAt: Date | null,
+): AdminStarPaymentView {
+  return {
+    id: row.id,
+    userId: row.userId,
+    telegramPaymentChargeId: row.telegramPaymentChargeId,
+    payerTelegramUserId: row.payerTelegramUserId.toString(),
+    packageCode: row.packageCode,
+    totalAmount: row.totalAmount,
+    tokens: row.tokens === null ? null : row.tokens.toString(),
+    status: row.status,
+    paidAt: row.paidAt.toISOString(),
+    refundedAt: row.refundedAt === null ? null : row.refundedAt.toISOString(),
+    requestedAt: requestedAt === null ? null : requestedAt.toISOString(),
+  };
+}
 
 // `stars refund`'s read before it calls Telegram, without a lock: advisory, the record re-reads
 // under its lock.
@@ -520,20 +707,40 @@ export async function requestStarRefund(
 }
 
 export interface OpenStarRefundRequest {
+  requestId: string;
   requestedAt: Date;
   payment: StarPaymentRow;
 }
 
 export const STAR_REFUND_REQUESTS_LIST_LIMIT = 50;
 
-// `stars requests`: the requests whose payment is not refunded yet, oldest first.
-export async function listOpenStarRefundRequests(db: Db): Promise<OpenStarRefundRequest[]> {
+// The requests whose payment is not refunded yet, oldest first: `stars requests` (one page of
+// STAR_REFUND_REQUESTS_LIST_LIMIT) and the admin's page (#510, keyset by the request's id).
+export async function listOpenStarRefundRequests(
+  db: DbExecutor,
+  options: { cursor?: string; limit: number },
+): Promise<{ rows: OpenStarRefundRequest[]; nextCursor: string | null }> {
+  const conditions: SQL[] = [ne(starPayments.status, StarPaymentStatus.Refunded)];
+  if (options.cursor !== undefined) {
+    conditions.push(
+      sql`(${starRefundRequests.requestedAt}, ${starRefundRequests.id}) > (select c.requested_at, c.id from ${starRefundRequests} as c where c.id = ${options.cursor})`,
+    );
+  }
   const rows = await db
-    .select({ requestedAt: starRefundRequests.requestedAt, payment: starPaymentColumns })
+    .select({
+      requestId: starRefundRequests.id,
+      requestedAt: starRefundRequests.requestedAt,
+      payment: starPaymentColumns,
+    })
     .from(starRefundRequests)
     .innerJoin(starPayments, eq(starPayments.id, starRefundRequests.starPaymentId))
-    .where(ne(starPayments.status, StarPaymentStatus.Refunded))
+    .where(and(...conditions))
     .orderBy(asc(starRefundRequests.requestedAt), asc(starRefundRequests.id))
-    .limit(STAR_REFUND_REQUESTS_LIST_LIMIT);
-  return rows;
+    .limit(options.limit + 1);
+  const page = rows.slice(0, options.limit);
+  const last = page.at(-1);
+  return {
+    rows: page,
+    nextCursor: rows.length > options.limit && last !== undefined ? last.requestId : null,
+  };
 }

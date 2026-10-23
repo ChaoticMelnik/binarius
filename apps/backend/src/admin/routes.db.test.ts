@@ -50,6 +50,11 @@ import {
   adminTradingSessionViewSchema,
   adminUserResponseSchema,
   adminUsersResponseSchema,
+  adminStarRefundResponseSchema,
+  adminStarRefundsResponseSchema,
+  STAR_REFUND_REASON_MAX,
+  STARS_REFUND_DESCRIPTION_MAX,
+  StarPaymentStatus,
   BrokerAccountStatus,
   DepositEventStatus,
   staffSessionsResponseSchema,
@@ -63,6 +68,10 @@ import { until } from '@binarius/shared/testing';
 import {
   auditLog,
   botTextOverrides,
+  creditStarPayment,
+  requestStarRefund,
+  StarsCreditSource,
+  starPayments,
   brokerAccounts,
   recordPostback,
   saveBotTextOverride,
@@ -1932,6 +1941,7 @@ describe('the read pages (#107)', () => {
       'intents',
       'ledger',
       'deposits',
+      'starPayments',
     ]);
     expect(Object.keys(raw.user)).toEqual([
       'id',
@@ -3790,6 +3800,7 @@ describe('the token adjustment (#246)', () => {
       'intents',
       'ledger',
       'deposits',
+      'starPayments',
     ]);
     const answer = adminTokenAdjustmentResponseSchema.parse(raw);
     if (answer.outcome !== 'insufficient_available') throw new Error(`got ${answer.outcome}`);
@@ -4362,5 +4373,489 @@ describe('what reaches the backend log', () => {
     for (const secret of [current, newPassword, seeded.passwordHash, newHash, token]) {
       expect(written).not.toContain(secret);
     }
+  });
+});
+
+describe('the Stars refund and the requests page (#510)', () => {
+  const PATH = '/admin/star-payments/:id/refund';
+  const REASON = 'просьба пользователя';
+  const urlOf = (paymentId: string) => `/admin/star-payments/${paymentId}/refund`;
+  let charges = 0;
+
+  interface RefundCall {
+    userId: number;
+    chargeId: string;
+  }
+  type Answer = (call: RefundCall, signal: AbortSignal | undefined) => Promise<true>;
+  // the fake refundStarPayment: every call recorded, answered by `answer`
+  const withTelegram = async (answer: Answer = () => Promise.resolve(true)) => {
+    const calls: RefundCall[] = [];
+    await app.close();
+    app = build({
+      refundStarPayment: (userId: number, chargeId: string, signal?: AbortSignal) => {
+        const call = { userId, chargeId };
+        calls.push(call);
+        return answer(call, signal);
+      },
+    });
+    return calls;
+  };
+  const telegramError = (errorCode: number, description: string) =>
+    new GrammyError(
+      'Call to refundStarPayment failed',
+      { ok: false, error_code: errorCode, description },
+      'refundStarPayment',
+      {},
+    );
+
+  // a 50-token purchase by the user, or held when `payer` is someone else (a forwarded invoice)
+  const paid = async (user: { userId: string; telegramUserId: string }, payer?: bigint) => {
+    const telegramPaymentChargeId = `admin-charge-${++charges}`;
+    const result = await tmp.db.transaction((tx) =>
+      creditStarPayment(tx, {
+        telegramPaymentChargeId,
+        providerPaymentChargeId: null,
+        packageCode: 'p50',
+        userId: user.userId,
+        currency: 'XTR',
+        totalAmount: 100,
+        payerTelegramUserId: payer ?? BigInt(user.telegramUserId),
+        paidAt: new Date(Date.UTC(2026, 9, 1, 0, 0, charges)),
+        source: StarsCreditSource.Bot,
+      }),
+    );
+    if (result.outcome === 'user_unknown') throw new Error(result.outcome);
+    return { paymentId: result.paymentId, chargeId: telegramPaymentChargeId };
+  };
+  const paymentStatus = async (paymentId: string) => {
+    const [row] = await tmp.db
+      .select({ status: starPayments.status })
+      .from(starPayments)
+      .where(eq(starPayments.id, paymentId));
+    return row?.status;
+  };
+  const refundLedger = async (userId: string) =>
+    (await tmp.db.select().from(tokenLedger).where(eq(tokenLedger.userId, userId))).filter(
+      (row) => row.kind === TokenLedgerKind.Refund,
+    );
+  const refundRows = async (paymentId: string) =>
+    tmp.db
+      .select({
+        actorType: auditLog.actorType,
+        actorId: auditLog.actorId,
+        entityId: auditLog.entityId,
+        payload: auditLog.payload,
+      })
+      .from(auditLog)
+      .where(and(eq(auditLog.action, AuditAction.StarsRefunded), eq(auditLog.entityId, paymentId)))
+      .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
+  const sessionIdOf = async (staffId: string) => {
+    const [row] = await tmp.db
+      .select({ id: staffSessions.id })
+      .from(staffSessions)
+      .where(eq(staffSessions.staffId, staffId));
+    return row!.id;
+  };
+
+  it('SR1 refuses without a live session before Telegram, writing nothing', async () => {
+    const calls = await withTelegram();
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+    const before = await auditCount();
+    for (const token of [undefined, 'a'.repeat(43), 'short']) {
+      const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(calls).toEqual([]);
+    expect(await auditCount()).toBe(before);
+    expect(await paymentStatus(paymentId)).toBe(StarPaymentStatus.Paid);
+  });
+
+  it('SR2 refunds a paid payment: the payer asked, the writer’s effects, one row by the staff member', async () => {
+    const calls = await withTelegram();
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 7n });
+    const { paymentId, chargeId } = await paid(user);
+
+    const response = await postAsStaff(urlOf(paymentId), token, { reason: ` ${REASON} ` });
+
+    expect(response.statusCode).toBe(200);
+    const answer = adminStarRefundResponseSchema.parse(response.json());
+    expect(answer).toMatchObject({
+      outcome: 'refunded',
+      telegramAnswer: 'refunded',
+      tokensTaken: '50',
+      tokensNotRecovered: '0',
+      balance: '7',
+      payment: { id: paymentId, status: StarPaymentStatus.Refunded },
+    });
+    expect(answer.me.staffId).toBe(seeded.staffId);
+    expect(calls).toEqual([{ userId: Number(user.telegramUserId), chargeId }]);
+    expect(await paymentStatus(paymentId)).toBe(StarPaymentStatus.Refunded);
+    expect(await refundLedger(user.userId)).toHaveLength(1);
+    expect(await refundRows(paymentId)).toEqual([
+      {
+        actorType: AuditActorType.Admin,
+        actorId: seeded.staffId,
+        entityId: paymentId,
+        payload: {
+          path: PATH,
+          result: 'refunded',
+          sessionId: await sessionIdOf(seeded.staffId),
+          paymentId,
+          userId: user.userId,
+          payerTelegramUserId: user.telegramUserId,
+          fromStatus: StarPaymentStatus.Paid,
+          packageCode: 'p50',
+          totalAmount: 100,
+          tokensTaken: '50',
+          tokensNotRecovered: '0',
+          via: 'admin',
+          telegramAnswer: 'refunded',
+          reason: REASON,
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ['a blank reason', { reason: '   ' }],
+    [`a reason of ${String(STAR_REFUND_REASON_MAX + 1)} characters`, { reason: 'x'.repeat(201) }],
+    ['a control character', { reason: 'a\nb' }],
+    ['no reason', {}],
+    ['an extra key', { reason: REASON, extra: 1 }],
+  ])('SR3 refuses %s with 400 before the session, writing nothing', async (_label, payload) => {
+    const calls = await withTelegram();
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+    const before = await auditCount();
+
+    const response = await postAsStaff(urlOf(paymentId), token, payload);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+    expect(calls).toEqual([]);
+  });
+
+  it('SR4 answers a refunded payment already_recorded without asking Telegram, with one row', async () => {
+    const calls = await withTelegram();
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+    expect((await postAsStaff(urlOf(paymentId), token, { reason: REASON })).statusCode).toBe(200);
+    calls.length = 0;
+
+    const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+    expect(response.statusCode).toBe(200);
+    expect(adminStarRefundResponseSchema.parse(response.json())).toMatchObject({
+      outcome: 'already_recorded',
+      payment: { id: paymentId, status: StarPaymentStatus.Refunded },
+    });
+    expect(calls).toEqual([]);
+    expect(await refundLedger(user.userId)).toHaveLength(1);
+    const rows = await refundRows(paymentId);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toEqual({
+      actorType: AuditActorType.Admin,
+      actorId: seeded.staffId,
+      entityId: paymentId,
+      payload: {
+        path: PATH,
+        result: 'already_recorded',
+        sessionId: await sessionIdOf(seeded.staffId),
+        paymentId,
+        via: 'admin',
+      },
+    });
+  });
+
+  it('SR5 records a refund Telegram calls already refunded once; a repeat is already_recorded', async () => {
+    const calls = await withTelegram(() =>
+      Promise.reject(telegramError(400, 'Bad Request: CHARGE_ALREADY_REFUNDED')),
+    );
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+
+    const first = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+    const second = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+    expect(adminStarRefundResponseSchema.parse(first.json())).toMatchObject({
+      outcome: 'refunded',
+      telegramAnswer: 'already_refunded',
+    });
+    expect(adminStarRefundResponseSchema.parse(second.json()).outcome).toBe('already_recorded');
+    expect(calls).toHaveLength(1);
+    expect(await refundLedger(user.userId)).toHaveLength(1);
+    expect((await refundRows(paymentId)).map((row) => row.payload.result)).toEqual([
+      'refunded',
+      'already_recorded',
+    ]);
+  });
+
+  it('SR6 refunds a held forwarded payment to its payer and takes nothing', async () => {
+    const calls = await withTelegram();
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 3n });
+    const { paymentId, chargeId } = await paid(user, 777_000_111n);
+
+    const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+    expect(adminStarRefundResponseSchema.parse(response.json())).toMatchObject({
+      outcome: 'refunded',
+      tokensTaken: '0',
+      tokensNotRecovered: '0',
+      balance: '3',
+      payment: { payerTelegramUserId: '777000111' },
+    });
+    expect(calls).toEqual([{ userId: 777_000_111, chargeId }]);
+    expect(await refundLedger(user.userId)).toEqual([]);
+  });
+
+  it('SR7 the card carries the user’s Stars payments, newest first, also in a refused adjustment', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const older = await paid(user);
+    const newer = await paid(user);
+    await requestStarRefund(tmp.db, {
+      telegramUserId: BigInt(user.telegramUserId),
+      paymentId: older.paymentId,
+    });
+
+    const card = adminUserResponseSchema.parse(
+      (await withSession('GET', `/admin/users/${user.userId}`, token)).json(),
+    );
+    expect(card.starPayments.recent.map((p) => p.id)).toEqual([newer.paymentId, older.paymentId]);
+    expect(card.starPayments.recent[0]!.requestedAt).toBeNull();
+    expect(card.starPayments.recent[1]!.requestedAt).not.toBeNull();
+    expect(card.starPayments.recent[1]).toMatchObject({
+      telegramPaymentChargeId: older.chargeId,
+      payerTelegramUserId: user.telegramUserId,
+      tokens: '50',
+      status: StarPaymentStatus.Paid,
+      refundedAt: null,
+    });
+
+    const refused = adminTokenAdjustmentResponseSchema.parse(
+      (
+        await postAsStaff(`/admin/users/${user.userId}/tokens`, token, {
+          delta: '-1000',
+          note: 'x',
+          expectedBalance: '100',
+        })
+      ).json(),
+    );
+    if (refused.outcome === 'adjusted') throw new Error('adjusted');
+    expect(refused.starPayments.recent).toHaveLength(2);
+  });
+
+  it('SR8 lists the open requests with a viewed row; a bad cursor is a 400 before the session', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const open = await paid(user);
+    const refunded = await paid(user);
+    for (const { paymentId } of [open, refunded]) {
+      await requestStarRefund(tmp.db, { telegramUserId: BigInt(user.telegramUserId), paymentId });
+    }
+    await withTelegram();
+    await postAsStaff(urlOf(refunded.paymentId), token, { reason: REASON });
+
+    const response = await readOnce(seeded.staffId, '/admin/star-refunds', token);
+
+    expect(response.statusCode).toBe(200);
+    const page = adminStarRefundsResponseSchema.parse(response.json());
+    const mine = page.requests.filter((request) => request.userId === user.userId);
+    expect(mine.map((request) => request.id)).toEqual([open.paymentId]);
+    expect(mine[0]!.requestedAt).toEqual(expect.any(String));
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.StarsRefundRequestsViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/star-refunds' },
+    });
+
+    const cursor = mine[0]!.requestId;
+    await readOnce(seeded.staffId, `/admin/star-refunds?cursor=${cursor}`, token);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/star-refunds',
+      cursor,
+    });
+
+    const before = await auditCount();
+    const bad = await withSession('GET', '/admin/star-refunds?cursor=nope', token);
+    expect(bad.statusCode).toBe(400);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('SR9 records the refund for the staff member whose session is revoked during the call', async () => {
+    let revoke: () => Promise<void> = () => Promise.resolve();
+    await withTelegram(async () => {
+      await revoke();
+      return true;
+    });
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const sessionId = await sessionIdOf(seeded.staffId);
+    revoke = async () => {
+      await tmp.db
+        .update(staffSessions)
+        .set({ revokedAt: new Date() })
+        .where(eq(staffSessions.id, sessionId));
+    };
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+
+    const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+    expect(adminStarRefundResponseSchema.parse(response.json()).outcome).toBe('refunded');
+    expect(await paymentStatus(paymentId)).toBe(StarPaymentStatus.Refunded);
+    expect(await refundRows(paymentId)).toEqual([
+      expect.objectContaining({
+        actorId: seeded.staffId,
+        payload: expect.objectContaining({ sessionId }),
+      }),
+    ]);
+    const next = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+    expect(next.statusCode).toBe(401);
+  });
+
+  it('SR10 answers Telegram’s refusal with its code and text cut to the limit, a refused row, nothing written', async () => {
+    const text = `Bad Request: ${'ж'.repeat(400)}`;
+    await withTelegram(() => Promise.reject(telegramError(400, text)));
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+
+    const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+    expect(response.statusCode).toBe(200);
+    const answer = adminStarRefundResponseSchema.parse(response.json());
+    if (answer.outcome !== 'refused') throw new Error(answer.outcome);
+    expect(answer.telegramErrorCode).toBe(400);
+    expect(answer.description).toBe(text.slice(0, STARS_REFUND_DESCRIPTION_MAX));
+    expect(await paymentStatus(paymentId)).toBe(StarPaymentStatus.Paid);
+    expect(await refundLedger(user.userId)).toEqual([]);
+    expect(await refundRows(paymentId)).toEqual([
+      expect.objectContaining({
+        actorId: seeded.staffId,
+        payload: {
+          path: PATH,
+          result: 'refused',
+          sessionId: await sessionIdOf(seeded.staffId),
+          paymentId,
+          via: 'admin',
+          telegramErrorCode: 400,
+        },
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      'a call that hangs until the deadline aborts it',
+      (_call: RefundCall, signal: AbortSignal | undefined) =>
+        new Promise<true>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }),
+    ],
+    ['a 502', () => Promise.reject(telegramError(502, 'Bad Gateway'))],
+  ])(
+    'SR11 answers unknown for %s, with an unknown row and nothing written',
+    async (_label, answer) => {
+      await withTelegram(answer);
+      const seeded = await seedStaff(tmp.db);
+      const token = await openSession(seeded);
+      const user = await seedUser(tmp.db, { balance: 0n });
+      const { paymentId } = await paid(user);
+
+      const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+      expect(response.statusCode).toBe(200);
+      expect(adminStarRefundResponseSchema.parse(response.json()).outcome).toBe('unknown');
+      expect(await paymentStatus(paymentId)).toBe(StarPaymentStatus.Paid);
+      expect(await refundRows(paymentId)).toEqual([
+        expect.objectContaining({ payload: expect.objectContaining({ result: 'unknown' }) }),
+      ]);
+    },
+  );
+
+  it('SR12 answers 404 for a non-uuid id (a row without it) and an unknown uuid (a row with it)', async () => {
+    const calls = await withTelegram();
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const sessionId = await sessionIdOf(seeded.staffId);
+
+    const bad = await postAsStaff('/admin/star-payments/not-a-uuid/refund', token, {
+      reason: REASON,
+    });
+    expect([bad.statusCode, bad.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.StarsRefunded,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.StarPayment,
+      entityId: null,
+      payload: { path: PATH, result: 'not_found', sessionId, via: 'admin' },
+    });
+
+    const unknown = randomUUID();
+    const missing = await postAsStaff(urlOf(unknown), token, { reason: REASON });
+    expect(missing.statusCode).toBe(404);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: PATH,
+      result: 'not_found',
+      sessionId,
+      paymentId: unknown,
+      via: 'admin',
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('SR13 answers 500 with an error line when the record fails after Telegram refunded', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const { paymentId } = await paid(user);
+    const lines: string[] = [];
+    // only the recording transaction fails: the session read, the payment read and the rows work
+    const failing = new Proxy(tmp.db, {
+      get: (target, key, receiver) =>
+        key === 'transaction'
+          ? () => Promise.reject(new Error('the database went away'))
+          : Reflect.get(target, key, receiver),
+    });
+    await app.close();
+    app = build(
+      { db: failing, refundStarPayment: () => Promise.resolve(true) },
+      { write: (line) => void lines.push(line) },
+      'error',
+    );
+
+    const response = await postAsStaff(urlOf(paymentId), token, { reason: REASON });
+
+    expect([response.statusCode, response.json()]).toEqual([500, { error: 'internal' }]);
+    expect(await paymentStatus(paymentId)).toBe(StarPaymentStatus.Paid);
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(logged).toEqual([
+      expect.objectContaining({
+        msg: 'stars refund by admin: the record failed after Telegram answered',
+        starPaymentId: paymentId,
+        telegramAnswer: 'refunded',
+      }),
+    ]);
   });
 });
