@@ -266,6 +266,54 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     match: 'expect(Date.now() - settledAt).toBeLessThan(',
     reason: WAKE_BOUND,
   },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F3',
+    match: 'expect(Date.now() - settledAt).toBeLessThan(1_000);',
+    reason: `${WAKE_BOUND}; #723: the sender's wake, a result within ~1 s (K1, K5)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F3',
+    match: 'expect(Date.now() - acceptedAt).toBeLessThan(1_000);',
+    reason: `${WAKE_BOUND}; #723: the sender's wake, an open block within ~1 s (K2)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F4',
+    match: 'await realSleep(10);',
+    reason: `${DURATION} (the wakes spread over the pause, K6)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F4',
+    match: 'await realSleep(20);',
+    reason: `${DURATION} (the wakes spread past the first tick, K7)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F4',
+    match: 'await new Promise((resolve) => setTimeout(resolve, 600));',
+    reason: `${NEGATIVE} (no paused tick may follow the last wake, K6)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F4',
+    match: 'await new Promise((resolve) => setTimeout(resolve, WAKE_GAP + 100));',
+    reason: `${NEGATIVE} (no tick past the floor, K7)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F4',
+    match: 'await new Promise((resolve) => setTimeout(resolve, 200));',
+    reason: `${NEGATIVE} (no tick may follow stop(), K8)`,
+  },
+  {
+    file: 'apps/backend/src/trading/session-notices.db.test.ts',
+    form: 'F4',
+    match: 'await new Promise((resolve) => setTimeout(resolve, 300));',
+    reason: `${NEGATIVE} (no tick armed by the tick stop() ended, K8b)`,
+  },
 ];
 
 // Files that in-flight issues still own; their conversion is the follow-up to #205. Each has to

@@ -23,13 +23,14 @@ import {
   type PairsCatalogView,
   type TradingSessionSettings,
 } from '@binarius/shared';
-import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
   claimSessionTradeNotice,
   clearSessionWaitingMessage,
   createSessionIntent,
   markIntentAccepted,
   markTelegramReachable,
+  SESSION_NOTICE_CHANNEL,
   recordSessionCycleMessage,
   recordSessionStatusMessage,
   recordSignalDecision,
@@ -67,10 +68,13 @@ import {
   SESSION_NOTICE_CHAT_GAP_MS,
   SESSION_NOTICE_HOLD_MS,
   SESSION_NOTICE_SEND_PER_SECOND,
+  SESSION_NOTICE_WAKE_GAP_MS,
 } from '../timing';
+import { createSessionNoticeListener, type SessionNoticeListener } from './session-notice-listener';
 import {
   createSessionNoticeSender,
   type SessionNoticeConfig,
+  type SessionNoticeSender,
   type SessionNoticeSenderDeps,
 } from './session-notices';
 import { readFinishedSessionView } from './session-view';
@@ -270,6 +274,7 @@ function sender(
     config?: Partial<SessionNoticeConfig>;
   } = {},
   clock = { now: 0 },
+  level: 'info' | 'debug' = 'info',
 ) {
   const push = createClientPush({ token: PUSH_TOKEN });
   const captured = captureApi(push);
@@ -295,7 +300,7 @@ function sender(
         return Promise.resolve<BalanceRefreshOutcome>('unavailable');
       },
     },
-    logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
+    logger: pino(logOptions(level), { write: (line: string) => void lines.push(line) }),
     now: () => clock.now,
     sleep: async () => {},
     ...patch,
@@ -303,9 +308,16 @@ function sender(
     // turn it on
     config: { chatGapMs: 0, ...patch.config },
   });
+  senders.push(notices);
   const logs = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   return { notices, captured, push, logs, refreshCalls };
 }
+// A step skipped for a cooling chat arms a timer that wakes its sender (#723): every sender is
+// stopped after its case, so none ticks under a later case's sessions
+const senders: SessionNoticeSender[] = [];
+afterEach(async () => {
+  await Promise.all(senders.splice(0).map((notices) => notices.stop()));
+});
 
 let messageIds = 0;
 // the id each answered send got, by its recorded payload
@@ -3564,5 +3576,217 @@ describe('the hold-back of a thrown turn (#660)', () => {
     clock.now += SESSION_NOTICE_HOLD_MS - 1;
     await first.notices.tick();
     expect(calls.refresh).toBe(3);
+  });
+});
+
+describe('the wake (#723)', () => {
+  const OPEN_MARK = 'сделка открыта';
+  const WAKE_GAP = SESSION_NOTICE_WAKE_GAP_MS;
+  const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const made: { notices: SessionNoticeSender; listener?: SessionNoticeListener }[] = [];
+  afterEach(async () => {
+    for (const { notices, listener } of made.splice(0)) {
+      await listener?.stop();
+      await notices.stop();
+    }
+  });
+  const timeouts = () =>
+    process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+
+  // the sender on the real clock and sleep, its tick lines at debug; with `listen`, the listener
+  // on the test database wakes it, as index.ts wires them; start() is never called, so every tick
+  // the case does not call is a woken one
+  async function wakeful(config: Partial<SessionNoticeConfig> = {}, listen = true) {
+    const built = sender(
+      { now: () => performance.now(), sleep: realSleep, config: { chatGapMs: 0, ...config } },
+      undefined,
+      'debug',
+    );
+    const ticks = () => built.logs().filter((line) => line.msg === 'session notice tick');
+    if (!listen) {
+      made.push({ notices: built.notices });
+      return { ...built, ticks, listener: undefined };
+    }
+    const lines: string[] = [];
+    const listener = createSessionNoticeListener({
+      pool: tmp.pool,
+      channel: SESSION_NOTICE_CHANNEL,
+      onNotification: () => built.notices.wake(),
+      logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
+    });
+    made.push({ notices: built.notices, listener });
+    listener.start();
+    await until('the listener', () => lines.some((line) => line.includes('listening')));
+    return { ...built, ticks, listener };
+  }
+  const openSendsTo = (calls: readonly ApiCall[], target: Target) =>
+    sendsTo(calls, target).filter((call) => pushedText(call.payload).includes(OPEN_MARK));
+
+  it('K1 a settle wakes the sender: the result edits the message within a second, no tick called', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, captured, ticks } = await wakeful();
+    await notices.tick();
+    expect(openSendsTo(captured.calls, target)).toHaveLength(1);
+    await settle(trade, '-5');
+    const settledAt = Date.now();
+    await until('the result', () => editsTo(captured.calls, target).length === 1);
+    expect(Date.now() - settledAt).toBeLessThan(1_000);
+    expect(pushedText(editsTo(captured.calls, target)[0]!.payload)).not.toContain(OPEN_MARK);
+    // a tick's line follows its calls
+    await until('the line of the woken tick', () => ticks().length === 2);
+    expect(ticks().map((line) => line.woken)).toEqual([0, 1]);
+  });
+
+  it('K2 an accept wakes the sender: the open block is sent within a second, no tick called', async () => {
+    const target = await seedSession();
+    const { captured, ticks } = await wakeful();
+    await opened(target);
+    const acceptedAt = Date.now();
+    await until('the open block', () => openSendsTo(captured.calls, target).length === 1);
+    expect(Date.now() - acceptedAt).toBeLessThan(1_000);
+    await until('the line of the woken tick', () => ticks().length === 1);
+    expect(ticks().map((line) => line.woken)).toEqual([1]);
+  });
+
+  it('K3 wakes during a tick merge into one more tick right after it', async () => {
+    const target = await seedSession();
+    await opened(target);
+    const { notices, captured, ticks } = await wakeful({}, false);
+    let release: () => void = () => {};
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', (payload) => {
+      const result = answer(payload);
+      return new Promise((resolve) => {
+        release = () => resolve(result);
+      });
+    });
+    const inFlight = notices.tick();
+    await until('the held send', () => openSendsTo(captured.calls, target).length === 1);
+    notices.wake();
+    notices.wake();
+    notices.wake();
+    release();
+    await inFlight;
+    await until('the woken tick', () => ticks().length === 2);
+    expect(ticks()[1]).toMatchObject({ woken: 3, pending: 0 });
+    expect(captured.calls).toHaveLength(1);
+  });
+
+  it('K4 a lost notification: the tick serves the settle', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, captured, ticks, listener } = await wakeful();
+    await notices.tick();
+    await listener!.stop();
+    await settle(trade, '-5');
+    expect(editsTo(captured.calls, target)).toEqual([]);
+    await notices.tick();
+    expect(editsTo(captured.calls, target)).toHaveLength(1);
+    expect(ticks().map((line) => line.woken)).toEqual([0, 0]);
+  });
+
+  it('K5 a woken step whose chat is cooling goes at the end of the gap, with no tick called', async () => {
+    // wider than the floor and the manual tick with the settle after it, so the woken tick finds
+    // the chat cooling
+    const GAP = 500;
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, captured, ticks } = await wakeful({ chatGapMs: GAP });
+    const at = new WeakMap<object, number>();
+    for (const method of ['sendMessage', 'editMessageText']) {
+      const answer = captured.answers.get(method)!;
+      captured.answers.set(method, (payload) => {
+        at.set(payload, performance.now());
+        return answer(payload);
+      });
+    }
+    await notices.tick();
+    const [open] = openSendsTo(captured.calls, target);
+    await settle(trade, '-5');
+    const settledAt = Date.now();
+    await until('the result', () => editsTo(captured.calls, target).length >= 1);
+    expect(Date.now() - settledAt).toBeLessThan(1_000);
+    const [edit] = editsTo(captured.calls, target);
+    expect(at.get(edit!.payload)! - at.get(open!.payload)!).toBeGreaterThanOrEqual(GAP);
+    expect(editsTo(captured.calls, target)).toHaveLength(1);
+    // the woken tick skipped the cooling chat; the end of its gap woke the next one, whose line
+    // follows its edit
+    await until('the line of the tick that edited', () => ticks().length === 3);
+    expect(ticks().map((line) => line.woken)).toEqual([0, 1, 1]);
+  });
+
+  it('K6 woken ticks while Telegram asked to wait are empty, and stop once the wakes stop', async () => {
+    const target = await seedSession();
+    await opened(target);
+    const { notices, captured, ticks } = await wakeful({}, false);
+    failFirst(captured, 1, telegramError(429, 2));
+    await notices.tick();
+    const paused = () => ticks().filter((line) => line.paused === true);
+    const startedAt = performance.now();
+    for (let i = 0; i < 20; i += 1) {
+      notices.wake();
+      await realSleep(10);
+    }
+    await until('a paused tick', () => paused().length >= 1);
+    const seen = paused().length;
+    expect(seen).toBeLessThanOrEqual(Math.floor((performance.now() - startedAt) / WAKE_GAP) + 1);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(paused()).toHaveLength(seen);
+    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
+  });
+
+  it('K7 woken ticks start no closer than the floor', async () => {
+    const { notices, ticks } = await wakeful({}, false);
+    const startedAt = performance.now();
+    for (let i = 0; i < 10; i += 1) {
+      notices.wake();
+      await realSleep(20);
+    }
+    await until('the tick on the floor', () => ticks().length >= 2);
+    await new Promise((resolve) => setTimeout(resolve, WAKE_GAP + 100));
+    // the first wake ticks at once, every later tick on the floor: a slow loop only widens the bound
+    const spanMs = performance.now() - startedAt;
+    expect(ticks().length).toBeLessThanOrEqual(Math.floor(spanMs / WAKE_GAP) + 1);
+    expect(ticks().reduce((sum, line) => sum + Number(line.woken), 0)).toBe(10);
+  });
+
+  it('K8 stop() clears the timer for the end of a gap; a wake after stop() ticks nothing', async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    const { notices, ticks } = await wakeful({ chatGapMs: 2_000 });
+    await notices.tick();
+    await settle(trade, '-5');
+    await until('the woken tick that skipped the chat', () => ticks().length === 2);
+    const before = timeouts();
+    const stopping = notices.stop();
+    expect(timeouts()).toBe(before - 1);
+    await stopping;
+    notices.wake();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(ticks()).toHaveLength(2);
+  });
+
+  it('K8b a wake during the tick stop() ends arms no tick after it', async () => {
+    const target = await seedSession();
+    await opened(target);
+    const { notices, captured, ticks } = await wakeful({}, false);
+    let release: () => void = () => {};
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', (payload) => {
+      const result = answer(payload);
+      return new Promise((resolve) => {
+        release = () => resolve(result);
+      });
+    });
+    void notices.tick();
+    await until('the held send', () => captured.calls.length === 1);
+    notices.wake();
+    const stopping = notices.stop();
+    release();
+    await stopping;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // the tick stop() ended returned before its line, and its finally armed nothing
+    expect(ticks()).toEqual([]);
   });
 });

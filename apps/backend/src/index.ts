@@ -25,6 +25,7 @@ import {
   listServiceBrokerAccounts,
   readSessionHistory,
   recordSignalDecision,
+  SESSION_NOTICE_CHANNEL,
   setLastAnalysis,
   stopTradingSession,
 } from '@binarius/db';
@@ -36,6 +37,7 @@ import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { createMailingEngine } from './mailing/engine';
 import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
+import { createSessionNoticeListener } from './trading/session-notice-listener';
 import { createSessionNoticeSender } from './trading/session-notices';
 import { createStarReconciler } from './payments/star-reconciler';
 import { setBotTextSource } from './auth/texts';
@@ -536,6 +538,14 @@ const sessionNotices = createSessionNoticeSender({
   balance: balanceReconciler,
   logger: app.log,
 });
+// a trade opened or settled wakes the sender (#723): one client of the pool LISTENs for the whole
+// run; started with the other loops after listen(), stopped in phase 1 before the sender
+const sessionNoticeListener = createSessionNoticeListener({
+  pool,
+  channel: SESSION_NOTICE_CHANNEL,
+  onNotification: () => sessionNotices.wake(),
+  logger: app.log,
+});
 
 // docs/signal.md -> The budget: the defaults fit the broker's per-IP window (checked at import);
 // ceilings raised over it are the operator's choice, said once here
@@ -589,7 +599,10 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
         await depositModeSwitcher.stop();
         await mailing.stop();
       },
-      () => sessionNotices.stop(),
+      async () => {
+        await sessionNoticeListener.stop();
+        await sessionNotices.stop();
+      },
       () => starReconciler.stop(),
       () => serviceAccounts.stop(),
       () => tradeLogKeeper.stop(),
@@ -655,6 +668,7 @@ if (!shuttingDown) {
   mailing.start();
   depositModeSwitcher.start();
   sessionNotices.start();
+  sessionNoticeListener.start();
   starReconciler.start();
   serviceAccounts.start();
   marketData?.manager.start();
