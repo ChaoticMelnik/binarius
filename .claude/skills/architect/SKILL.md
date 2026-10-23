@@ -258,6 +258,7 @@ Implementer picks it up only once this comment exists.
 | Путь | Правила |
 |---|---|
 | `.github` | core 14, 16 |
+| `apps` | core 51; signal-h1 20, 43; bot-ui 18 |
 | `apps/backend/src` | core 9, 10, 14, 16, 17; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
 | `apps/backend/src/admin` | core 3, 5, 7, 8, 10, 14; trading 22, 28, 33, 36; signal-h1 48; bot-ui 18, 19, 29, 30, 31, 46; auth 12, 13 |
 | `apps/backend/src/auth` | core 3, 5, 7; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49; payments 35; auth 12, 13 |
@@ -291,6 +292,7 @@ Implementer picks it up only once this comment exists.
 | `compose.yaml` | core 16; bot-ui 47 |
 | `docs` | trading 21, 22, 24, 28; bot-ui 18; payments 37, 38; auth 12, 13 |
 | `eslint.config.js` | core 8; bot-ui 18 |
+| `packages` | core 51; bot-ui 18 |
 | `packages/broker-rest/src` | core 10, 26; trading 15, 27, 28, 33; signal-h1 44, 45 |
 | `packages/broker-socket/src` | core 10, 14; trading 15, 27, 28, 33; signal-h1 44, 45 |
 | `packages/db/drizzle` | core 3, 51 |
