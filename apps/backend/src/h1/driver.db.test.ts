@@ -479,4 +479,53 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
       await driver.stop();
     }
   });
+
+  it('H1-DB6: the 100th decided second of a session past the limit stops it no_signal_timeout, after its waiting row', async () => {
+    const { session } = await markedSession();
+    await tmp.db.execute(
+      sql`update trading_sessions set started_at = now() - interval '10 minutes' where id = ${session.id}`,
+    );
+    const series = scriptedSeries();
+    const { driver } = driverOn(series);
+    const rowsOf = async () =>
+      (
+        await tmp.db
+          .select()
+          .from(signalDecisions)
+          .where(eq(signalDecisions.tradingSessionId, session.id))
+          .orderBy(signalDecisions.decidedAtMs)
+      ).filter((row) => row.context === 'session');
+    const stateOf = async () =>
+      (
+        await tmp.db
+          .select({
+            status: tradingSessions.status,
+            stopReason: tradingSessions.stopReason,
+            endedAt: tradingSessions.endedAt,
+          })
+          .from(tradingSessions)
+          .where(eq(tradingSessions.id, session.id))
+      )[0]!;
+    try {
+      driver.start();
+      await driver.scan();
+      const t = Math.floor(Date.now() / 1000) * 1000 - 300_000;
+      const f = t + 300_000;
+      series.feed(t, Array<number>(301).fill(1.1));
+      await until('the waiting row', async () => (await rowsOf()).length === 1);
+      series.feed(f + 1_000, Array<number>(98).fill(1.1));
+      expect(await stateOf()).toMatchObject({ status: 'active', stopReason: null });
+      series.feed(f + 99_000, [1.1]);
+      await until('the stopping row', async () => (await rowsOf()).length === 2);
+      const stopped = await stateOf();
+      expect(stopped).toMatchObject({ status: 'stopped', stopReason: 'no_signal_timeout' });
+      expect(stopped.endedAt).not.toBeNull();
+      expect((await rowsOf()).map((row) => [row.decidedAtMs, row.outcome, row.step])).toEqual([
+        [f, 'no_signal', 1],
+        [f + 99_000, 'no_signal', 1],
+      ]);
+    } finally {
+      await driver.stop();
+    }
+  });
 });

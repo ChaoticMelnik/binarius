@@ -5,6 +5,7 @@ import {
   H1_REPEAT_VERSION,
   H1_SESSION_DECISION_SET,
   H1_VERSION,
+  H1NoSignalReason,
   isH1Settings,
   isPairOpen,
   isWin,
@@ -23,6 +24,7 @@ import {
   SignalDecisionOutcome,
   SignalKind,
   TradeIntentStatus,
+  TradingSessionStopReason,
   type BinaryPair,
   type DecimalString,
   type H1Decision,
@@ -32,7 +34,6 @@ import {
   type H1ShadowSource,
   type LastTick,
   type TradeAction,
-  type TradingSessionStopReason,
 } from '@binarius/shared';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import {
@@ -63,8 +64,10 @@ import type { ClosedSecond, SecondSeries } from '../market-data/seconds';
 // a submit deadline, its signal_decisions row in the intent's transaction, then a publisher wake.
 // Шаг 2 after a lost or tied Шаг 1 is the repeat step: created at the settlement's notice, in that
 // trade's direction, without a window. A no_signal second opens a waiting period, recorded once.
-// It never reads the payout as a gate and stops a session only on a stop refusal of
-// createSessionIntent: the limits' stops are the orchestrator's.
+// It never reads the payout as a gate and stops a session on a stop refusal of createSessionIntent
+// and at the no-signal limit, counted on the seconds the detector decided no_signal (#775, review
+// round 1): the attempt never asks H1, so only the driver has that evidence. The other limits'
+// stops are the orchestrator's.
 
 export interface H1DriverConfig {
   // how often the active H1 sessions are read
@@ -286,7 +289,7 @@ interface Tracked {
   detector: H1Detector;
   // the session's sizer (#775): the orchestrator's, over the same history
   sizer: StakeSizer;
-  // a run in flight (a trade, a notice, the waiting row): the next signal of the session is skipped
+  // a run in flight (a trade, a notice, the no-signal run): the next signal of the session is skipped
   busy: boolean;
   // the first second the session may decide again (one trade at a time)
   nextAt: number;
@@ -299,6 +302,12 @@ interface Tracked {
   // a due repeat step not created yet (the balance awaited, the pair ineligible): retried on
   // every closed second of the pair
   repeatPending: boolean;
+  // the seconds the detector decided no_signal on a full window (below_threshold, no_volatility)
+  // since the driver last saw the session change: an intent, a notice, add(). In memory, so a
+  // restart counts from zero: a second without a decision never moves it (#775, review round 1)
+  noSignalSeconds: number;
+  // the no-signal limit in those seconds: the orchestrator's limit of the session's duration
+  noSignalLimitSec: number;
 }
 
 const percentile = (sorted: readonly number[], p: number) =>
@@ -326,6 +335,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     repeatPending: 0,
     refused: 0,
     stops: 0,
+    noSignalStops: 0,
     skippedLive: 0,
     held: 0,
     warming: 0,
@@ -375,6 +385,8 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         waitingRetryAt: -Infinity,
         renotice: false,
         repeatPending: false,
+        noSignalSeconds: 0,
+        noSignalLimitSec: sessionNoSignalTimeoutMs(parsed.data.durationSec) / SECOND_MS,
       });
     } catch (error) {
       invalid.add(session.id);
@@ -414,7 +426,12 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     return job;
   }
 
-  async function stopSession(state: Tracked, reason: TradingSessionStopReason, code: string) {
+  // false when the stop threw: the session is kept
+  async function stopSession(
+    state: Tracked,
+    reason: TradingSessionStopReason,
+    code: string,
+  ): Promise<boolean> {
     const ids = { sessionId: state.session.id, brokerAccountId: state.session.brokerAccountId };
     try {
       const row = await sessions.stop(state.session.id, reason);
@@ -425,9 +442,11 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         logger.warn({ ...ids, reason, code }, 'h1 driver stopped the session');
       }
       forget(state.session.id);
+      return true;
     } catch (error) {
       counts.errors += 1;
       logger.warn({ ...ids, reason, code, ...errorLogFields(error) }, 'h1 driver stop failed');
+      return false;
     }
   }
 
@@ -610,6 +629,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     }
     state.repeatPending = false;
     state.waitingRecorded = false;
+    state.noSignalSeconds = 0;
     // one trade at a time: the signal's from its second (entry + expiry + 1 s), the repeat's from
     // its creation on the process clock (expiry + 1 s)
     state.nextAt =
@@ -632,9 +652,12 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     if (!stopped) wake();
   }
 
-  // The waiting period's row (#775, В3): one no_signal row once the session has nothing live and
-  // nothing to repeat; a block writes nothing and the next no-signal second tries again
-  async function recordWaiting(state: Tracked, facts: H1DriverDecisionFacts) {
+  // The no-signal run (#775, В3, В5, review round 1), on a second the detector decided no_signal:
+  // nothing while a block stands (the orchestrator's) or the repeat step is due (it goes on the
+  // next closed second); else the waiting period's row, once; then, with that row written, the
+  // no-signal limit reached and the database's wait expired too, the stop
+  async function onNoSignal(state: Tracked, facts: H1DriverDecisionFacts) {
+    const { settings } = state;
     const history = await historyOf(state);
     if (stopped) return;
     if (history === undefined) {
@@ -642,14 +665,34 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       forget(state.session.id);
       return;
     }
-    if (sessionIntentBlock(history, state.settings) !== null) return;
-    const step = history.intents.length + 1;
-    if (await record(h1DriverDecisionInput(facts, step, SignalDecisionOutcome.NoSignal, null))) {
-      state.waitingRecorded = true;
-      counts.waitingRows += 1;
-    } else {
-      state.waitingRetryAt = now() + config.scanMs;
+    if (sessionIntentBlock(history, settings) !== null) return;
+    if (repeatDue(history, settings) !== null) {
+      state.repeatPending = true;
+      counts.repeatPending += 1;
+      return;
     }
+    const row = () =>
+      h1DriverDecisionInput(
+        facts,
+        history.intents.length + 1,
+        SignalDecisionOutcome.NoSignal,
+        null,
+      );
+    if (!state.waitingRecorded) {
+      if (now() < state.waitingRetryAt) return;
+      if (await record(row())) {
+        state.waitingRecorded = true;
+        counts.waitingRows += 1;
+      } else {
+        state.waitingRetryAt = now() + config.scanMs;
+      }
+      return;
+    }
+    if (state.noSignalSeconds < state.noSignalLimitSec || !history.waitExpired) return;
+    if (!(await stopSession(state, TradingSessionStopReason.NoSignalTimeout, 'no_signal'))) return;
+    counts.noSignalStops += 1;
+    // the stopping second's row, after the stop whether its CAS matched or not (Rule 42)
+    await record(row());
   }
 
   function launch(state: Tracked, run: () => Promise<void>) {
@@ -677,6 +720,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     const state = tracked.get(sessionId);
     if (state === undefined) return;
     state.waitingRecorded = false;
+    state.noSignalSeconds = 0;
     if (state.busy) {
       state.renotice = true;
       return;
@@ -689,8 +733,8 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     if (own.length === 0) return;
     const pair = eligiblePair(assetId);
     if (pair === undefined) return;
+    // a pending repeat needs no digits: its row has none
     const digits = series.digitsOf(assetId);
-    if (digits === undefined) return;
     for (const state of own) {
       if (state.busy) {
         counts.skippedLive += 1;
@@ -705,6 +749,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         counts.held += 1;
         continue;
       }
+      if (digits === undefined) continue;
       const length = state.settings.signal.params.sdWindowSec + 1;
       const { closes, complete } = series.window(assetId, f, length);
       if (!complete) {
@@ -733,8 +778,14 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       };
       if (decision.kind === SignalKind.NoSignal) {
         noSignal[decision.reason] = (noSignal[decision.reason] ?? 0) + 1;
-        if (!state.waitingRecorded && takenAtMs >= state.waitingRetryAt) {
-          launch(state, () => recordWaiting(state, facts));
+        // a missing price is a hole in the data, not a reading of the market: not counted
+        if (decision.reason === H1NoSignalReason.NoPrice) continue;
+        state.noSignalSeconds += 1;
+        if (
+          (!state.waitingRecorded && takenAtMs >= state.waitingRetryAt) ||
+          state.noSignalSeconds >= state.noSignalLimitSec
+        ) {
+          launch(state, () => onNoSignal(state, facts));
         }
         continue;
       }

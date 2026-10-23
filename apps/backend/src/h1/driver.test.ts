@@ -79,7 +79,7 @@ const sessionOf = (id: string, settings: unknown = h1Settings()): ActiveH1Sessio
 
 const clock = { now: T };
 
-function scriptedSeries() {
+function scriptedSeries(digits: { value: number | undefined }) {
   const prices = new Map<number, Map<number, number>>();
   const closedUntil = new Map<number, number>();
   const firstHeld = new Map<number, number>();
@@ -109,7 +109,7 @@ function scriptedSeries() {
       const price = close(assetId, f);
       return Number.isNaN(price) ? undefined : { price, timestamp: f - 100, receivedAtMs: f - 60 };
     },
-    digitsOf: () => 5,
+    digitsOf: () => digits.value,
   };
   return {
     api,
@@ -161,6 +161,11 @@ interface Harness {
   answers: (() => Promise<CreateTradeIntentResult>)[];
   // the next record() calls that throw (a refused INSERT)
   recordFailures: { n: number };
+  // the pair's digits as the series knows them; undefined before its first tick
+  digits: { value: number | undefined };
+  // the next sessions.stop answers: undefined (another writer stopped it first) or a throw
+  stopAnswers: (() => Promise<unknown>)[];
+  historyReads: { n: number };
   feed(assetId: number, from: number, prices: readonly number[]): void;
   // as feed, letting each second from F on finish its trade before the next one closes
   feedSettled(assetId: number, from: number, prices: readonly number[]): Promise<void>;
@@ -182,7 +187,8 @@ const created = (id = 'intent-1'): CreateTradeIntentResult => ({
 async function harness(
   options: { sessions?: ActiveH1Session[]; pairs?: BinaryPair[]; start?: boolean } = {},
 ): Promise<Harness> {
-  const series = scriptedSeries();
+  const digits: { value: number | undefined } = { value: 5 };
+  const series = scriptedSeries(digits);
   const lines: string[] = [];
   const logger = pino(logOptions('debug'), { write: (line: string) => lines.push(line) });
   const listed = options.sessions ?? [sessionOf('s1')];
@@ -193,6 +199,8 @@ async function harness(
   const wakes = { n: 0 };
   const answers: (() => Promise<CreateTradeIntentResult>)[] = [];
   const recordFailures = { n: 0 };
+  const stopAnswers: (() => Promise<unknown>)[] = [];
+  const historyReads = { n: 0 };
   const balance: { read: SessionBalanceRead | undefined } = {
     read: {
       available: decimalStringSchema.parse('1000'),
@@ -223,6 +231,9 @@ async function harness(
     streaming,
     answers,
     recordFailures,
+    digits,
+    stopAnswers,
+    historyReads,
     feed(assetId, from, prices) {
       prices.forEach((price, i) => series.closeSecond(assetId, from + i * 1_000, price));
     },
@@ -251,7 +262,10 @@ async function harness(
     streaming: () => streaming.on,
     sessions: {
       list: () => Promise.resolve([...h.listed]),
-      history: (id) => Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory()),
+      history: (id) => {
+        historyReads.n += 1;
+        return Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory());
+      },
       balance: () => Promise.resolve(balance.read),
       createIntent: (input) => {
         creates.push(input);
@@ -262,7 +276,7 @@ async function harness(
       },
       stop: (id, reason) => {
         stops.push({ id, reason });
-        return Promise.resolve({ id });
+        return stopAnswers.shift()?.() ?? Promise.resolve({ id });
       },
       record: (input) => {
         records.push(input);
@@ -964,5 +978,211 @@ describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
       }),
     ]);
     expect(h.line()).toMatchObject({ refused: 1, sessions: 1 });
+  });
+});
+
+// #775, review round 1: the no-signal limit is the driver's, counted on the seconds the detector
+// decided no_signal on a full window. The cases add the session after the warm-up T … F − 1 (but
+// H1-DR32), so only the seconds from F decide
+const expiredHistory = (history = emptyHistory()): SessionHistory => ({
+  ...history,
+  waitExpired: true,
+});
+const decided = (records: SignalDecisionInput[]) => records.map((one) => one.decidedAtMs);
+const STOPPED = [{ id: 's1', reason: 'no_signal_timeout' }];
+
+async function warmed(history: SessionHistory = expiredHistory()) {
+  const h = await harness({ sessions: [] });
+  h.feed(A, T, flat(300));
+  h.histories.set('s1', history);
+  h.listed.push(sessionOf('s1'));
+  await h.driver.scan();
+  return h;
+}
+
+describe('the no-signal limit of an H1 session is the driver’s (#775, review round 1)', () => {
+  it('H1-DR32: a cold series after a restart: the warm-up neither counts nor stops; the 100th decided second stops', async () => {
+    const h = await harness();
+    h.histories.set('s1', expiredHistory());
+    await h.feedSettled(A, T, flat(300));
+    expect(h.stops).toEqual([]);
+    expect(h.records).toEqual([]);
+    await h.feedSettled(A, F, flat(99));
+    expect(h.stops).toEqual([]);
+    expect(decided(h.records)).toEqual([F]);
+    await h.feedSettled(A, F + 99_000, flat(1));
+    expect(h.stops).toEqual(STOPPED);
+    expect(decided(h.records)).toEqual([F, F + 99_000]);
+    expect(h.records.map((one) => [one.outcome, one.step])).toEqual([
+      ['no_signal', 1],
+      ['no_signal', 1],
+    ]);
+    await h.feedSettled(A, F + 100_000, flat(11));
+    expect(h.stops).toEqual(STOPPED);
+    expect(h.records).toHaveLength(2);
+    expect(h.line()).toMatchObject({ warming: 300, noSignalStops: 1, sessions: 0 });
+  });
+
+  it.each([
+    ['(a) the source down', 0, (h: Harness, on: boolean): void => void (h.streaming.on = !on)],
+    [
+      '(b) the catalog stale',
+      0,
+      (h: Harness, on: boolean): void =>
+        void (h.catalog.view = { pairs: [pairOf(A)], fetchedAt: T, ageMs: 0, fresh: !on }),
+    ],
+    [
+      '(c) the pair not listed',
+      0,
+      (h: Harness, on: boolean): void =>
+        void (h.catalog.view = {
+          pairs: on ? [pairOf(B)] : [pairOf(A)],
+          fetchedAt: T,
+          ageMs: 0,
+          fresh: true,
+        }),
+    ],
+    [
+      '(d) the digits unknown',
+      0,
+      (h: Harness, on: boolean): void => void (h.digits.value = on ? undefined : 5),
+    ],
+    // the first three priced seconds still miss the close at f − 3 s: no_price too
+    ['(e) a hole in the prices (no_price)', 3, null],
+  ] as const)('H1-DR33: %s does not count', async (_name, extra, condition) => {
+    const h = await warmed();
+    condition?.(h, true);
+    await h.feedSettled(A, F, condition === null ? flat(150, NaN) : flat(150));
+    expect(h.stops).toEqual([]);
+    expect(h.records).toEqual([]);
+    condition?.(h, false);
+    const first = F + (150 + extra) * 1_000;
+    await h.feedSettled(A, F + 150_000, flat(extra + 99));
+    expect(h.stops).toEqual([]);
+    expect(decided(h.records)).toEqual([first]);
+    await h.feedSettled(A, first + 99_000, flat(1));
+    expect(h.stops).toEqual(STOPPED);
+    expect(decided(h.records)).toEqual([first, first + 99_000]);
+  });
+
+  it('H1-DR34: a notice and an intent reset the count', async () => {
+    const noticed = await warmed();
+    await noticed.feedSettled(A, F, flat(60));
+    noticed.driver.notice('s1');
+    await flush();
+    await noticed.feedSettled(A, F + 60_000, flat(99));
+    expect(noticed.stops).toEqual([]);
+    await noticed.feedSettled(A, F + 159_000, flat(1));
+    expect(noticed.stops).toEqual(STOPPED);
+    expect(decided(noticed.records)).toEqual([F, F + 60_000, F + 159_000]);
+
+    const traded = await warmed();
+    await traded.feedSettled(A, F, flat(60));
+    // a signal at F + 60 s, then the level holds: F + 61 s … F + 66 s are held by the cadence
+    await traded.feedSettled(A, F + 60_000, flat(7 + 99, 1.1001));
+    expect(decided(traded.creates.map((one) => one.decision!))).toEqual([F + 60_000]);
+    expect(traded.stops).toEqual([]);
+    await traded.feedSettled(A, F + 166_000, flat(1, 1.1001));
+    expect(traded.stops).toEqual(STOPPED);
+    expect(decided(traded.records)).toEqual([F, F + 67_000, F + 166_000]);
+  });
+
+  it("H1-DR35: the database's wait is a conjunct: no stop while it has not expired", async () => {
+    const h = await warmed(emptyHistory());
+    await h.feedSettled(A, F, flat(130));
+    expect(h.stops).toEqual([]);
+    expect(decided(h.records)).toEqual([F]);
+    // F, then every counted second from the 100th (F + 99 s … F + 129 s) reads the history
+    expect(h.historyReads.n).toBe(1 + 31);
+    h.histories.set('s1', expiredHistory());
+    await h.feedSettled(A, F + 130_000, flat(1));
+    expect(h.stops).toEqual(STOPPED);
+    expect(decided(h.records)).toEqual([F, F + 130_000]);
+  });
+
+  it('H1-DR35b: no stop before the waiting row: refused rows are retried every scanMs', async () => {
+    const h = await warmed();
+    h.recordFailures.n = 1_000;
+    await h.feedSettled(A, F, flat(150));
+    expect(h.stops).toEqual([]);
+    const tries = Array.from({ length: 30 }, (_, i) => F + i * 5_000);
+    expect(decided(h.records)).toEqual(tries);
+    expect(h.line()).toMatchObject({ failed: 30, waitingRows: 0, noSignalStops: 0 });
+  });
+
+  it("H1-DR36: the stop's endings: already stopped forgets with the row; a throw keeps the session and tries again", async () => {
+    const raced = await warmed();
+    raced.stopAnswers.push(() => Promise.resolve(undefined));
+    await raced.feedSettled(A, F, flat(100));
+    expect(raced.stops).toEqual(STOPPED);
+    expect(decided(raced.records)).toEqual([F, F + 99_000]);
+    expect(raced.logs('h1 driver session already stopped')).toEqual([
+      expect.objectContaining({ sessionId: 's1', code: 'no_signal' }),
+    ]);
+    expect(raced.line()).toMatchObject({ sessions: 0 });
+
+    const failing = await warmed();
+    failing.stopAnswers.push(() => Promise.reject(new Error('connection reset')));
+    await failing.feedSettled(A, F, flat(100));
+    expect(failing.stops).toEqual(STOPPED);
+    expect(decided(failing.records)).toEqual([F]);
+    expect(failing.line()).toMatchObject({ errors: 1, sessions: 1, noSignalStops: 0 });
+    await failing.feedSettled(A, F + 100_000, flat(1));
+    expect(failing.stops).toEqual([...STOPPED, ...STOPPED]);
+    expect(decided(failing.records)).toEqual([F, F + 100_000]);
+    expect(failing.line()).toMatchObject({ sessions: 0, noSignalStops: 1 });
+  });
+
+  it('H1-DR37: a due repeat writes no waiting row: the next second creates Шаг 2 (m1)', async () => {
+    const h = await warmed(lostStep1);
+    await h.feedSettled(A, F, flat(1));
+    expect(h.creates).toEqual([]);
+    await h.feedSettled(A, F + 1_000, flat(1));
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 2, action: 'down' });
+    expect('submitDeadlineAt' in h.creates[0]!).toBe(false);
+    expect(h.creates[0]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { kind: 'settlement', trigger: 'tick' },
+    });
+    expect(h.records).toEqual([]);
+  });
+
+  it('H1-DR37b: a due repeat beats the stop', async () => {
+    const h = await warmed();
+    await h.feedSettled(A, F, flat(99));
+    h.histories.set('s1', expiredHistory(lostStep1));
+    await h.feedSettled(A, F + 99_000, flat(1));
+    expect(h.stops).toEqual([]);
+    expect(h.creates).toEqual([]);
+    await h.feedSettled(A, F + 100_000, flat(1));
+    expect(h.stops).toEqual([]);
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { trigger: 'tick' },
+    });
+  });
+
+  it('H1-DR38: a pending repeat is retried while the digits are unknown (m2)', async () => {
+    const h = await warmed(lostStep1);
+    h.digits.value = undefined;
+    const enough = h.balance.read;
+    h.balance.read = {
+      available: decimalStringSchema.parse('0.50'),
+      minTradeAmount: decimalStringSchema.parse('1'),
+      awaitsBalance: true,
+    };
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toEqual([]);
+    h.balance.read = enough;
+    await h.feedSettled(A, F, flat(1));
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { trigger: 'tick' },
+    });
+    expect(h.line()).toMatchObject({ decisions: 0, repeatPending: 1 });
   });
 });
