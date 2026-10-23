@@ -16,6 +16,7 @@ import {
 } from '@binarius/signal';
 import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
+  STARS_REFUND_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   ANALYSIS_UNUSED_AFTER_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
@@ -342,6 +343,12 @@ describe('broker balance timing', () => {
       BOT_PROFILE_PUBLISH_BUDGET_MS,
     );
     expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  // web's link, STARS_REFUND_BUDGET_MS < its BACKEND_REQUEST_TIMEOUT_MS, is in apps/web/src/timing.ts
+  it('fits the admin’s refundStarPayment in its budget and the budget inside phase 1 (#510)', () => {
+    expect(STARS_TELEGRAM_API_TIMEOUT_MS).toBeLessThanOrEqual(STARS_REFUND_BUDGET_MS);
+    expect(STARS_REFUND_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   // S9 (#117): restated so a change to the chain's conjuncts shows in review next to its test

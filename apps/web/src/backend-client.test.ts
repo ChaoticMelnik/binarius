@@ -72,6 +72,11 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   UserStatus,
+  safeParseAdminStarRefundResponse,
+  safeParseAdminStarRefundsResponse,
+  STAR_CHARGE_ID_MAX,
+  StarPaymentStatus,
+  STARS_REFUND_DESCRIPTION_MAX,
 } from '@binarius/shared';
 import {
   SAMPLE_ADJUSTED,
@@ -1208,6 +1213,20 @@ describe('body size', () => {
       processedAt: AT,
       createdAt: AT,
     };
+    // a Stars payment (#510): the charge id is Telegram's opaque string, the column's bound
+    const starPayment = {
+      id: UUID,
+      userId: UUID,
+      telegramPaymentChargeId: controls(STAR_CHARGE_ID_MAX),
+      payerTelegramUserId: INT8,
+      packageCode: controls(16),
+      totalAmount: INT4_MAX,
+      tokens: INT8,
+      status: longest(StarPaymentStatus),
+      paidAt: AT,
+      refundedAt: AT,
+      requestedAt: AT,
+    };
     const card = {
       user: {
         id: UUID,
@@ -1233,6 +1252,7 @@ describe('body size', () => {
       intents: { recent: times(ADMIN_USER_RECENT_INTENTS, intent), total: COUNT, active: COUNT },
       ledger: { recent: times(ADMIN_USER_RECENT_LEDGER, ledgerEntry) },
       deposits: { recent: times(ADMIN_USER_RECENT_LEDGER, deposit) },
+      starPayments: { recent: times(ADMIN_USER_RECENT_LEDGER, starPayment) },
     };
     const textView = {
       key: KEY,
@@ -1418,6 +1438,25 @@ describe('body size', () => {
             telegramUserId: INT8,
           }),
           nextCursor: UUID,
+        },
+      },
+      starRefunds: {
+        parse: safeParseAdminStarRefundsResponse,
+        sample: {
+          me: ME,
+          requests: times(ADMIN_PAGE_SIZE, { ...starPayment, requestId: UUID }),
+          nextCursor: UUID,
+        },
+      },
+      // the refusal carries Telegram's text, the longest of the four
+      refundStarPayment: {
+        parse: safeParseAdminStarRefundResponse,
+        sample: {
+          me: ME,
+          outcome: 'refused',
+          payment: starPayment,
+          telegramErrorCode: INT4_MAX,
+          description: controls(STARS_REFUND_DESCRIPTION_MAX),
         },
       },
       serviceAccounts: {

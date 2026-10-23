@@ -75,6 +75,8 @@ export const AuditAction = {
   // a Stars payment refunded, and a refund asked for from /paysupport (#118)
   StarsRefunded: 'stars_refunded',
   StarsRefundRequested: 'stars_refund_requested',
+  // the admin's /paysupport requests page (#510)
+  StarsRefundRequestsViewed: 'stars_refund_requests_viewed',
   // admin service accounts (#391)
   ServiceAccountsViewed: 'service_accounts_viewed',
   BrokerAccountServiceSet: 'broker_account_service_set',

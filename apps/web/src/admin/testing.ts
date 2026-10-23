@@ -10,6 +10,7 @@ import {
   BrokerAccountStatus,
   DepositEventStatus,
   NotificationLevel,
+  StarPaymentStatus,
   TokenLedgerKind,
   TradeAction,
   TradeIntentFailureReason,
@@ -27,6 +28,9 @@ import {
   type AdminBrokerAccountListItem,
   type AdminBrokerAccountsResponse,
   type AdminServiceAccountsResponse,
+  type AdminStarPaymentView,
+  type AdminStarRefundResponse,
+  type AdminStarRefundsResponse,
   type AdminH1MarkResponse,
   type AdminServiceMarkResponse,
   type AdminBrokerAccountView,
@@ -186,6 +190,31 @@ export const SAMPLE_DEPOSIT_UNOWNED: AdminDepositView = {
   createdAt: AT,
 };
 
+// A Stars purchase of the sample user (#510), still refundable, its refund asked for
+export const SAMPLE_STAR_PAYMENT: AdminStarPaymentView = {
+  id: '00000000-0000-4000-8000-0000000000e1',
+  userId: SAMPLE_USER_ID,
+  telegramPaymentChargeId: 'charge-<1>',
+  payerTelegramUserId: '4242',
+  packageCode: 'p50',
+  totalAmount: 100,
+  tokens: '50',
+  status: StarPaymentStatus.Paid,
+  paidAt: AT,
+  refundedAt: null,
+  requestedAt: AT,
+};
+
+// one refunded before: no refund form
+export const SAMPLE_STAR_PAYMENT_REFUNDED: AdminStarPaymentView = {
+  ...SAMPLE_STAR_PAYMENT,
+  id: '00000000-0000-4000-8000-0000000000e2',
+  telegramPaymentChargeId: 'charge-2',
+  status: StarPaymentStatus.Refunded,
+  refundedAt: AT,
+  requestedAt: null,
+};
+
 export const SAMPLE_BROKER_ACCOUNT: AdminBrokerAccountView = {
   id: '00000000-0000-4000-8000-0000000000d1',
   brokerUserId: 'broker-7',
@@ -226,6 +255,30 @@ export const SAMPLE_USER: AdminUserResponse = {
   intents: { recent: [SAMPLE_INTENT], total: 3, active: 1 },
   ledger: { recent: [SAMPLE_LEDGER_ENTRY] },
   deposits: { recent: [SAMPLE_DEPOSIT] },
+  starPayments: { recent: [SAMPLE_STAR_PAYMENT, SAMPLE_STAR_PAYMENT_REFUNDED] },
+};
+
+// The requests page (#510): one open request, of the sample payment
+export const SAMPLE_STAR_REFUNDS: AdminStarRefundsResponse = {
+  me: SAMPLE_ME,
+  requests: [
+    {
+      ...SAMPLE_STAR_PAYMENT,
+      requestId: '00000000-0000-4000-8000-0000000000e9',
+      requestedAt: AT,
+    },
+  ],
+  nextCursor: null,
+};
+
+export const SAMPLE_REFUNDED: AdminStarRefundResponse = {
+  me: SAMPLE_ME,
+  outcome: 'refunded',
+  payment: { ...SAMPLE_STAR_PAYMENT, status: StarPaymentStatus.Refunded, refundedAt: AT },
+  telegramAnswer: 'refunded',
+  tokensTaken: '3',
+  tokensNotRecovered: '47',
+  balance: '2',
 };
 
 // The token adjustment (#246): a credit of 50 on the sample user's balance of 5, and the two

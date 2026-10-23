@@ -22,6 +22,7 @@ const NAV_PAGES: Readonly<Record<AdminNavKey, string>> = {
   deposits: 'deposits',
   brokerAccounts: 'broker-accounts',
   serviceAccounts: 'service-accounts',
+  starRefunds: 'star-refunds',
 };
 
 let dir: string;

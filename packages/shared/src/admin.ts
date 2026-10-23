@@ -18,6 +18,12 @@ import {
 } from './ledger';
 import { decimalStringSchema } from './money';
 import { serviceAccountNotWorkingReasonSchema } from './service-accounts';
+import {
+  STAR_CHARGE_ID_MAX,
+  StarPaymentStatus,
+  STARS_REFUND_DESCRIPTION_MAX,
+  starRefundReasonSchema,
+} from './stars';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
 import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './trading';
 import { tokenBalanceViewSchema } from './trading-access';
@@ -375,6 +381,29 @@ export const adminUserDepositsSectionSchema = z.strictObject({
 });
 export type AdminUserDepositsSection = z.infer<typeof adminUserDepositsSectionSchema>;
 
+// The Stars payment row (#510), declared ahead of the card for the same reason as the ledger row.
+// `requestedAt` is the /paysupport request's time, null when none was made. The payer is the
+// Telegram user the refund goes to, which a forwarded invoice makes someone else than the owner.
+export const adminStarPaymentViewSchema = z.strictObject({
+  id: z.uuid(),
+  userId: z.uuid(),
+  telegramPaymentChargeId: z.string().min(1).max(STAR_CHARGE_ID_MAX),
+  payerTelegramUserId: telegramUserIdSchema,
+  packageCode: z.string().min(1).max(16),
+  totalAmount: z.int().positive(),
+  tokens: tokenCountSchema.nullable(),
+  status: z.enum(StarPaymentStatus),
+  paidAt: isoDateTime,
+  refundedAt: isoDateTime.nullable(),
+  requestedAt: isoDateTime.nullable(),
+});
+export type AdminStarPaymentView = z.infer<typeof adminStarPaymentViewSchema>;
+
+export const adminUserStarPaymentsSectionSchema = z.strictObject({
+  recent: z.array(adminStarPaymentViewSchema).max(ADMIN_USER_RECENT_LEDGER),
+});
+export type AdminUserStarPaymentsSection = z.infer<typeof adminUserStarPaymentsSectionSchema>;
+
 // The card without `me`: the user page's answer and a refused token adjustment's (#246) carry it.
 const adminUserCardShape = {
   user: adminUserDetailSchema,
@@ -382,6 +411,7 @@ const adminUserCardShape = {
   intents: adminUserIntentsSectionSchema,
   ledger: adminUserLedgerSectionSchema,
   deposits: adminUserDepositsSectionSchema,
+  starPayments: adminUserStarPaymentsSectionSchema,
 };
 
 export const adminUserResponseSchema = z.strictObject({
@@ -738,6 +768,84 @@ export const adminTokenAdjustmentResponseSchema = z.discriminatedUnion('outcome'
 export type AdminTokenAdjustmentResponse = z.infer<typeof adminTokenAdjustmentResponseSchema>;
 export type AdminTokenAdjustmentOutcome = AdminTokenAdjustmentResponse['outcome'];
 
+// --- Stars refunds (#510, docs/stars.md -> Refunds) -----------------------------------------------
+
+// The open /paysupport requests, oldest first: only the cursor, unknown keys stripped.
+export const adminStarRefundsQuerySchema = z.object({
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminStarRefundsQuery = z.infer<typeof adminStarRefundsQuerySchema>;
+
+export function adminStarRefundsSearchParams(query: AdminStarRefundsQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(
+    adminStarRefundsQuerySchema.shape,
+  ) as (keyof AdminStarRefundsQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+export const adminStarRefundRequestItemSchema = z.strictObject({
+  ...adminStarPaymentViewSchema.shape,
+  requestId: z.uuid(),
+  requestedAt: isoDateTime,
+});
+export type AdminStarRefundRequestItem = z.infer<typeof adminStarRefundRequestItemSchema>;
+
+export const adminStarRefundsResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  requests: z.array(adminStarRefundRequestItemSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminStarRefundsResponse = z.infer<typeof adminStarRefundsResponseSchema>;
+
+export const adminStarRefundRequestSchema = z.strictObject({ reason: starRefundReasonSchema });
+export type AdminStarRefundRequest = z.infer<typeof adminStarRefundRequestSchema>;
+
+// `refunded`: recorded now, on Telegram's `true` or its CHARGE_ALREADY_REFUNDED. `already_recorded`:
+// the payment was refunded before (a repeat, the CLI or the reconciler). `refused`: Telegram said
+// no, nothing happened. `unknown`: no answer that tells, the refund may have happened.
+export const AdminStarRefundOutcome = {
+  Refunded: 'refunded',
+  AlreadyRecorded: 'already_recorded',
+  Refused: 'refused',
+  Unknown: 'unknown',
+} as const;
+export type AdminStarRefundOutcome =
+  (typeof AdminStarRefundOutcome)[keyof typeof AdminStarRefundOutcome];
+
+export const adminStarRefundResponseSchema = z.discriminatedUnion('outcome', [
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal(AdminStarRefundOutcome.Refunded),
+    payment: adminStarPaymentViewSchema,
+    telegramAnswer: z.enum(['refunded', 'already_refunded']),
+    tokensTaken: tokenCountSchema,
+    tokensNotRecovered: tokenCountSchema,
+    balance: tokenCountSchema,
+  }),
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal(AdminStarRefundOutcome.AlreadyRecorded),
+    payment: adminStarPaymentViewSchema,
+  }),
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal(AdminStarRefundOutcome.Refused),
+    payment: adminStarPaymentViewSchema,
+    telegramErrorCode: z.int(),
+    description: z.string().max(STARS_REFUND_DESCRIPTION_MAX),
+  }),
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal(AdminStarRefundOutcome.Unknown),
+    payment: adminStarPaymentViewSchema,
+  }),
+]);
+export type AdminStarRefundResponse = z.infer<typeof adminStarRefundResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -807,3 +915,11 @@ export const safeParseAdminH1MarkRequest = (input: unknown) =>
   adminH1MarkRequestSchema.safeParse(input);
 export const safeParseAdminH1MarkResponse = (input: unknown) =>
   adminH1MarkResponseSchema.safeParse(input);
+export const safeParseAdminStarRefundsQuery = (input: unknown) =>
+  adminStarRefundsQuerySchema.safeParse(input);
+export const safeParseAdminStarRefundsResponse = (input: unknown) =>
+  adminStarRefundsResponseSchema.safeParse(input);
+export const safeParseAdminStarRefundRequest = (input: unknown) =>
+  adminStarRefundRequestSchema.safeParse(input);
+export const safeParseAdminStarRefundResponse = (input: unknown) =>
+  adminStarRefundResponseSchema.safeParse(input);

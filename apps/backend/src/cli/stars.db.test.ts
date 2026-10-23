@@ -17,7 +17,8 @@ import {
   type SeededUser,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { CHARGE_ALREADY_REFUNDED, parseStarsArgs, runStarsCli, type StarsRefundApi } from './stars';
+import { CHARGE_ALREADY_REFUNDED, type StarsRefundApi } from '../payments/star-refund';
+import { parseStarsArgs, runStarsCli } from './stars';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -241,7 +242,6 @@ describe('stars refund', () => {
     ['another 400', 400, 'Bad Request: CHARGE_NOT_FOUND'],
     ['the name in other case', 400, 'Bad Request: charge_already_refunded'],
     [`${CHARGE_ALREADY_REFUNDED} with another code`, 403, `Forbidden: ${CHARGE_ALREADY_REFUNDED}`],
-    ['a 5xx', 502, 'Bad Gateway'],
   ])('C4 writes nothing for %s and prints Telegram’s answer', async (_label, errorCode, text) => {
     const user = await seedUser(tmp.db, { balance: 0n });
     const charge = await paid(user);
@@ -256,6 +256,24 @@ describe('stars refund', () => {
     expect((await rowOf(charge)).status).toBe(StarPaymentStatus.Paid);
     expect(await refundRows(user.userId)).toEqual([]);
     expect(lines.join('\n')).not.toContain(TOKEN);
+  });
+
+  // #626 п.3, #510: a 5xx may follow a refund Telegram carried out, so it is not a refusal
+  it('C10 writes nothing for a 5xx and says the outcome is unknown', async () => {
+    const user = await seedUser(tmp.db, { balance: 0n });
+    const charge = await paid(user);
+    const { code, lines } = await run(
+      ['refund', charge, '--reason', 'r'],
+      fakeTelegram(() => Promise.reject(telegramError(502, 'Bad Gateway'))),
+    );
+    expect(code).toBe(1);
+    expect(lines).toEqual([
+      expect.stringMatching(
+        /^Исход неизвестен \(GrammyError\)\. Ничего не записано\. Повторите команду/,
+      ),
+    ]);
+    expect((await rowOf(charge)).status).toBe(StarPaymentStatus.Paid);
+    expect(await refundRows(user.userId)).toEqual([]);
   });
 
   it('C5 writes nothing on a timeout and says the outcome is unknown', async () => {

@@ -3,6 +3,7 @@ import * as z from 'zod';
 import {
   AdminErrorCode,
   AdminH1MarkOutcome,
+  AdminStarRefundOutcome,
   BOT_TEXT_KEY_PATTERN,
   botProfileMethodsOf,
   isBotTextKey,
@@ -20,6 +21,9 @@ import {
   safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
+  safeParseAdminStarRefundRequest,
+  safeParseAdminStarRefundsQuery,
+  STAR_REFUND_REASON_MAX,
   safeParseAdminUsersQuery,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_LOGIN_LINK_TOKEN_PATTERN,
@@ -49,6 +53,9 @@ import {
   brokerAccountsPage,
   SERVICE_ACCOUNTS_PATH,
   serviceAccountsPage,
+  STAR_REFUNDS_PATH,
+  starRefundsHref,
+  starRefundsPage,
   confirmPage,
   depositsHref,
   depositsPage,
@@ -204,16 +211,23 @@ const h1MarkBody = z.object({
   h1: z.enum(['on', 'off']),
   return: z.string().optional(),
 });
+// «Вернуть Stars» (#510): only the body's shape, then the shared schema (the reason's bounds live
+// there); `return` is the user card or the requests page
+const refundForm = z.object({ reason: z.string(), return: z.string().optional() });
 const SERVICE_RETURN_PAGES: readonly string[] = [SERVICE_ACCOUNTS_PATH, '/admin/broker-accounts'];
+const REFUND_RETURN_PAGES: readonly string[] = [STAR_REFUNDS_PATH];
 const USER_CARD_PREFIX = '/admin/users/';
-// anything else — another site, a path with `..`, a query, another letter case — goes back to the
-// service page
-const returnPathOf = (value: string | undefined): string =>
+// a user card, or one of the form's own `pages`; anything else — another site, a path with `..`,
+// a query, another letter case — goes back to the first of them
+const returnPathOf = (
+  value: string | undefined,
+  pages: readonly string[] = SERVICE_RETURN_PAGES,
+): string =>
   value !== undefined &&
-  (SERVICE_RETURN_PAGES.includes(value) ||
+  (pages.includes(value) ||
     (value.startsWith(USER_CARD_PREFIX) && UUID_PATTERN.test(value.slice(USER_CARD_PREFIX.length))))
     ? value
-    : SERVICE_ACCOUNTS_PATH;
+    : pages[0]!;
 
 /**
  * A query string before its schema: a key whose value is the empty string is no key — an
@@ -1196,6 +1210,91 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         throw error;
       }
       return reply.redirect(returnPathOf(form.data.return), 303);
+    }),
+  );
+
+  // --- Stars refunds (#510, docs/admin-pages.md → Возврат Stars) --------------------------------
+
+  app.get(STAR_REFUNDS_PATH, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      // no filters: a cursor of the wrong shape (or twice) is dropped, as on the other lists
+      const parsed = safeParseAdminStarRefundsQuery(compactQuery(request.query));
+      if (!parsed.success) return reply.redirect(starRefundsHref({}), 302);
+      const { cursor } = parsed.data;
+      const { me, requests, nextCursor } = await backend.starRefunds(token, { cursor });
+      const notice = noticeOf(request.query, TEXTS.starRefundNotice);
+      return sendHtml(
+        reply,
+        200,
+        starRefundsPage(requests, { cursor, nextCursor, login: me.login, notice }),
+      );
+    }),
+  );
+
+  const starPaymentNotFound = (reply: FastifyReply) =>
+    sendHtml(
+      reply,
+      404,
+      adminNoticePage(TEXTS.starPaymentNotFoundTitle, TEXTS.starPaymentNotFoundBody),
+    );
+
+  app.post('/admin/star-payments/:id/refund', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const { id } = request.params as { id: string };
+      // a shape it cannot be is refused here, before the backend is asked (see revoke above)
+      if (!UUID_PATTERN.test(id)) return starPaymentNotFound(reply);
+      const form = refundForm.safeParse(request.body);
+      const parsed = form.success
+        ? safeParseAdminStarRefundRequest({ reason: form.data.reason })
+        : undefined;
+      if (!form.success || parsed?.success !== true) {
+        return sendHtml(
+          reply,
+          400,
+          adminNoticePage(TEXTS.starRefundTitle, TEXTS.starRefundBadForm(STAR_REFUND_REASON_MAX)),
+        );
+      }
+      const back = returnPathOf(form.data.return, REFUND_RETURN_PAGES);
+      let answer;
+      try {
+        answer = await backend.refundStarPayment(token, id, parsed.data);
+      } catch (error) {
+        if (isNotFound(error)) return starPaymentNotFound(reply);
+        const answered = outcome(error);
+        // not answered or a 5xx: Telegram may have refunded and the record may have happened, so
+        // the staff member reads the card rather than guessing
+        if (answered === undefined || answered.status >= 500) {
+          request.log.error(errorLogFields(error), 'the Stars refund outcome is unknown');
+          return sendHtml(
+            reply,
+            500,
+            adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.starRefundOutcomeUnknown),
+          );
+        }
+        // session_invalid clears the cookie in withStaffSession; anything else is our failure
+        throw error;
+      }
+      switch (answer.outcome) {
+        case AdminStarRefundOutcome.Refunded:
+          return reply.redirect(`${back}?notice=refunded`, 303);
+        case AdminStarRefundOutcome.AlreadyRecorded:
+          return reply.redirect(`${back}?notice=refundRecorded`, 303);
+        case AdminStarRefundOutcome.Refused:
+          return sendHtml(
+            reply,
+            409,
+            adminNoticePage(
+              TEXTS.starRefundTitle,
+              TEXTS.starRefundRefused(answer.telegramErrorCode, answer.description),
+            ),
+          );
+        case AdminStarRefundOutcome.Unknown:
+          return sendHtml(
+            reply,
+            500,
+            adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.starRefundOutcomeUnknown),
+          );
+      }
     }),
   );
 

@@ -147,7 +147,7 @@ export const paymentsRoutes: FastifyPluginAsync<PaymentsRoutesDeps> = async (
   // «Нужен возврат». One request per payment, by its payer only: another payer's id answers as a
   // missing one (Rule 13). The staff are told after the commit, and only by the press that
   // inserted; the reply does not wait for them, and a lost notice leaves the request listed by
-  // `stars requests`.
+  // `stars requests` and on the admin's «Возвраты Stars» (#510).
   app.post('/payments/stars/refund-request', async (request, reply) => {
     const parsed = starsRefundRequestSchema.safeParse(request.body);
     if (!parsed.success) {

@@ -64,6 +64,11 @@ export function parseStarsInvoicePayload(
 // above it, and Telegram's 10 s for the answer above both (apps/bot/src/timing.ts).
 export const STARS_PRECHECKOUT_BUDGET_MS = 2_000;
 
+// What POST /admin/star-payments/:id/refund (#510) may spend on its one refundStarPayment call. Web's
+// timeout for the route sits above it (apps/web/src/timing.ts), the backend's shutdown phase 1
+// above it too (apps/backend/src/timing.ts).
+export const STARS_REFUND_BUDGET_MS = 3_500;
+
 // --- The routes ---------------------------------------------------------------------------------
 
 export const StarsErrorCode = {
@@ -174,6 +179,9 @@ export const starRefundReasonSchema = z
   .regex(REFUND_REASON_SHAPE, {
     error: `expected 1-${STAR_REFUND_REASON_MAX} characters without control characters`,
   });
+
+// The most of Telegram's refusal text the admin shows (#510), in code points as zod's max() counts.
+export const STARS_REFUND_DESCRIPTION_MAX = 256;
 
 // The payments /paysupport lists: the payer's newest.
 export const STARS_PAYSUPPORT_LIST_LIMIT = 5;

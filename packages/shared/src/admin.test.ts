@@ -392,7 +392,16 @@ describe('admin read responses', () => {
   const intents = { recent: [], total: 0, active: 0 };
   const ledger = { recent: [] };
   const deposits = { recent: [] };
-  const user = { me: ME, user: detail, brokerAccounts: [account], intents, ledger, deposits };
+  const starPayments = { recent: [] };
+  const user = {
+    me: ME,
+    user: detail,
+    brokerAccounts: [account],
+    intents,
+    ledger,
+    deposits,
+    starPayments,
+  };
 
   const overview = {
     me: ME,
@@ -441,6 +450,7 @@ describe('admin read responses', () => {
         intents,
         ledger,
         deposits,
+        starPayments,
       }).success,
     ).toBe(true);
     expect(
@@ -650,7 +660,7 @@ describe('token ledger contracts (#109)', () => {
     );
   });
 
-  it('puts the ledger and the deposits sections last on the user card, in that order', () => {
+  it('puts the ledger, the deposits and the Stars payments (#510) sections last on the user card, in that order', () => {
     const user = adminUserResponseSchema.shape;
     expect(Object.keys(user)).toEqual([
       'me',
@@ -659,6 +669,7 @@ describe('token ledger contracts (#109)', () => {
       'intents',
       'ledger',
       'deposits',
+      'starPayments',
     ]);
     expect(user.ledger).toBe(adminUserLedgerSectionSchema);
     expect(user.deposits).toBe(adminUserDepositsSectionSchema);
@@ -1393,6 +1404,7 @@ describe('token adjustment contracts (#246)', () => {
     intents: { recent: [], total: 0, active: 0 },
     ledger: { recent: [] },
     deposits: { recent: [] },
+    starPayments: { recent: [] },
   };
   const entry = {
     id: '00000000-0000-4000-8000-000000000050',

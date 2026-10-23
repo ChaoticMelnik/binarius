@@ -43,6 +43,8 @@ import {
   safeParseAdminLoginRequest,
   safeParseAdminH1MarkRequest,
   safeParseAdminServiceMarkRequest,
+  safeParseAdminStarRefundRequest,
+  safeParseAdminStarRefundsQuery,
   safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
@@ -53,6 +55,12 @@ import {
   UUID_PATTERN,
   type AdminH1MarkResponse,
   type AdminServiceMarkResponse,
+  type AdminStarRefundResponse,
+  AdminStarRefundOutcome,
+  StarPaymentStatus,
+  STARS_REFUND_BUDGET_MS,
+  STARS_REFUND_DESCRIPTION_MAX,
+  withinDeadline,
   type AdminTokenAdjustmentResponse,
   type StaffSessionView,
   telegramErrorFields,
@@ -83,6 +91,13 @@ import {
   listDepositsForAdmin,
   listLedgerForAdmin,
   listLiveStaffSessions,
+  listOpenStarRefundRequests,
+  readStarPaymentById,
+  recordStarRefundAttemptByStaff,
+  recordStarRefundByStaff,
+  StarsRefundEvidence,
+  toAdminStarPaymentView,
+  type StaffRefundActor,
   listTradingSessionsForAdmin,
   listUsersForAdmin,
   markChallengePromptSent,
@@ -135,6 +150,7 @@ import {
   type BotProfileMethodResult,
 } from '../bot-texts/publish';
 import type { AdminTelegram } from './telegram';
+import { askRefund, type StarsRefundApi } from '../payments/star-refund';
 
 // Ceilings on the unauthenticated routes, taken before the body is read: they bound how much
 // work an anonymous caller can ask this process for. Real staff logins are orders of magnitude
@@ -159,6 +175,8 @@ export interface AdminRoutesDeps {
   telegram: AdminTelegram;
   // the public bot's command menu and profile, published after a save or reset (#361)
   botProfileApi: BotProfileApi;
+  // the public bot's refundStarPayment, for the admin's Stars refund (#510)
+  refundStarPayment: StarsRefundApi['refundStarPayment'];
   // the seams the tests need; production takes every default
   passwordQueue?: PasswordQueue;
   verify?: (stored: string, password: string) => Promise<boolean>;
@@ -1493,6 +1511,192 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     },
   );
 
+  // --- Stars refunds (#510, docs/admin-pages.md -> Возврат Stars, docs/stars.md -> Refunds) -------
+
+  app.get('/admin/star-refunds', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminStarRefundsQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listOpenStarRefundRequests(tx, { cursor, limit: ADMIN_PAGE_SIZE });
+      return {
+        result: {
+          me: meOf(ctx),
+          requests: page.rows.map(({ requestId, requestedAt, payment }) => ({
+            ...toAdminStarPaymentView(payment, requestedAt),
+            requestId,
+            requestedAt: requestedAt.toISOString(),
+          })),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.StarsRefundRequestsViewed,
+          payload: { path: '/admin/star-refunds', ...(cursor === undefined ? {} : { cursor }) },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // «Вернуть Stars»: the second admin route outside asStaff, for #361's reason — refundStarPayment
+  // cannot run inside a transaction that holds the session row, and the row has to carry its
+  // result. The session is checked without the touch, Telegram is asked under
+  // STARS_REFUND_BUDGET_MS, and the record is the CLI's writer in a transaction of its own: the row
+  // names the staff member identified before the call even if the session is revoked during it.
+  // 200 on every outcome of a known payment, as the token adjustment: web picks the status.
+  app.post(
+    '/admin/star-payments/:id/refund',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      // before the session: a body outside the schema costs no transaction and leaves no row
+      const parsed = safeParseAdminStarRefundRequest(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { reason } = parsed.data;
+      const token = tokenOf(request);
+      const ctx =
+        token === undefined ? undefined : await readLiveStaffContext(deps.db, { token, idleMs });
+      if (ctx === undefined) {
+        request.log.info('a staff session was refused');
+        return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      }
+      const actor: StaffRefundActor = {
+        staffId: ctx.staffId,
+        sessionId: ctx.sessionId,
+        path: '/admin/star-payments/:id/refund',
+      };
+      const paymentId = (request.params as { id?: unknown }).id;
+      // an id that is not a uuid is arbitrary input, so it is not recorded (as token_adjusted)
+      if (typeof paymentId !== 'string' || !UUID_PATTERN.test(paymentId)) {
+        await recordStarRefundAttemptByStaff(deps.db, actor, { result: 'not_found' });
+        return reply.code(404).send({ error: AdminErrorCode.NotFound });
+      }
+      // advisory: the record re-reads the row under its lock
+      const payment = await readStarPaymentById(deps.db, paymentId);
+      if (payment === undefined) {
+        await recordStarRefundAttemptByStaff(deps.db, actor, { result: 'not_found', paymentId });
+        return reply.code(404).send({ error: AdminErrorCode.NotFound });
+      }
+      const chargeId = payment.telegramPaymentChargeId;
+
+      const record = async (
+        telegramAnswer:
+          typeof StarsRefundEvidence.Refunded | typeof StarsRefundEvidence.AlreadyRefunded | null,
+      ): Promise<AdminStarRefundResponse> => {
+        const recorded = await deps.db.transaction(async (tx) => {
+          const result = await recordStarRefundByStaff(
+            tx,
+            { telegramPaymentChargeId: chargeId, reason, telegramAnswer },
+            actor,
+          );
+          const after = await readStarPaymentById(tx, paymentId);
+          return { result, after };
+        });
+        const { result, after } = recorded;
+        // the row was read above and nothing deletes it
+        if (after === undefined) throw new Error('the refunded star payment disappeared');
+        const view = toAdminStarPaymentView(after, after.requestedAt);
+        switch (result.outcome) {
+          case 'refunded':
+            return {
+              me: meOf(ctx),
+              outcome: AdminStarRefundOutcome.Refunded,
+              payment: view,
+              // unreachable null: recordStarRefundByStaff refuses a refund without an answer
+              telegramAnswer: telegramAnswer ?? StarsRefundEvidence.AlreadyRefunded,
+              tokensTaken: result.taken.toString(),
+              tokensNotRecovered: result.notRecovered.toString(),
+              balance: result.balance.toString(),
+            };
+          case 'already_recorded':
+            return {
+              me: meOf(ctx),
+              outcome: AdminStarRefundOutcome.AlreadyRecorded,
+              payment: view,
+            };
+          // unreachable: no receiver is given, and the row was read before (the CLI's describeRecord)
+          case 'receiver_mismatch':
+          case 'not_found':
+            throw new Error(`star refund by admin not recorded: ${result.outcome}`);
+        }
+      };
+
+      if (payment.status === StarPaymentStatus.Refunded) {
+        return reply.send(await record(null));
+      }
+
+      // no transaction is open across the call
+      const answer = await withinDeadline(STARS_REFUND_BUDGET_MS, undefined, async (signal) =>
+        askRefund(
+          { refundStarPayment: deps.refundStarPayment },
+          payment.payerTelegramUserId,
+          chargeId,
+          signal,
+        ),
+      ).catch((error: unknown) => ({ kind: 'unknown' as const, error }));
+      const view = toAdminStarPaymentView(payment, payment.requestedAt);
+      if (answer.kind === 'refused') {
+        request.log.warn(
+          { method: 'refundStarPayment', telegramErrorCode: answer.errorCode, paymentId },
+          'stars refund by admin: Telegram refused',
+        );
+        await recordStarRefundAttemptByStaff(deps.db, actor, {
+          result: 'refused',
+          paymentId,
+          telegramErrorCode: answer.errorCode,
+        });
+        return reply.send({
+          me: meOf(ctx),
+          outcome: AdminStarRefundOutcome.Refused,
+          payment: view,
+          telegramErrorCode: answer.errorCode,
+          // code points, as zod's max() counts them
+          description: Array.from(answer.description)
+            .slice(0, STARS_REFUND_DESCRIPTION_MAX)
+            .join(''),
+        } satisfies AdminStarRefundResponse);
+      }
+      if (answer.kind === 'unknown') {
+        request.log.warn(
+          { ...errorLogFields(answer.error), method: 'refundStarPayment', paymentId },
+          'stars refund by admin: the outcome is unknown',
+        );
+        await recordStarRefundAttemptByStaff(deps.db, actor, { result: 'unknown', paymentId });
+        return reply.send({
+          me: meOf(ctx),
+          outcome: AdminStarRefundOutcome.Unknown,
+          payment: view,
+        } satisfies AdminStarRefundResponse);
+      }
+      const telegramAnswer =
+        answer.kind === 'refunded'
+          ? StarsRefundEvidence.Refunded
+          : StarsRefundEvidence.AlreadyRefunded;
+      let response: AdminStarRefundResponse;
+      try {
+        response = await record(telegramAnswer);
+      } catch (error) {
+        // Telegram refunded: the reconciler records it within a tick, a repeat meets
+        // CHARGE_ALREADY_REFUNDED
+        request.log.error(
+          { ...errorLogFields(error), starPaymentId: paymentId, telegramAnswer },
+          'stars refund by admin: the record failed after Telegram answered',
+        );
+        return reply.code(500).send({ error: 'internal' });
+      }
+      return reply.send(response);
+    },
+  );
+
   // --- Service accounts (#391, docs/service-accounts.md) ------------------------------------------
 
   app.get('/admin/service-accounts', async (request, reply) => {
@@ -1625,6 +1829,9 @@ function toAdminUserCard(card: AdminUserCard) {
     },
     ledger: { recent: card.ledger.map(toAdminLedgerEntry) },
     deposits: { recent: card.deposits.map(toAdminDepositView) },
+    starPayments: {
+      recent: card.starPayments.map((row) => toAdminStarPaymentView(row, row.requestedAt)),
+    },
   };
 }
 

@@ -229,6 +229,7 @@ export const unusedAdminDeps = (): AdminRoutesDeps => ({
       throw new Error('unused');
     },
   }).api,
+  refundStarPayment: () => Promise.reject(new Error('unused')),
 });
 
 export interface BotProfileCall {

@@ -382,6 +382,8 @@ describe('POST /payments/stars/list and /payments/stars/refund-request', () => {
     await until('the staff notice', () => Promise.resolve(notices.length === 1));
     expect(notices[0]).toContain(row.telegramPaymentChargeId);
     expect(notices[0]).toContain(`stars refund ${row.telegramPaymentChargeId}`);
+    // the admin's page (#510)
+    expect(notices[0]).toContain('Или в админке: раздел «Возвраты Stars».');
     expect(notices[0]).toContain(seed.telegramUserId);
     expect((await list(seed.telegramUserId)).json()).toMatchObject({
       payments: [{ id: row.id, requested: true }],

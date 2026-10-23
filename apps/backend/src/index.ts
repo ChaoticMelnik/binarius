@@ -33,6 +33,7 @@ import {
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
 import { createBotProfileApi } from './bot-texts/publish';
+import { createStarsRefundApi } from './payments/star-refund';
 import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
@@ -346,6 +347,8 @@ const app = buildApp({
     adminWebToken: env.adminWebToken,
     telegram: adminBot,
     botProfileApi: createBotProfileApi({ token: env.telegramBotToken }),
+    // the public bot's, the one that was paid (#510)
+    refundStarPayment: createStarsRefundApi({ token: env.telegramBotToken }).refundStarPayment,
   },
   deposit: {
     db,

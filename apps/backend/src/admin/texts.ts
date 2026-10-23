@@ -85,6 +85,7 @@ export const ADMIN_TEXTS = {
       '',
       'Команда на сервере:',
       `pnpm --filter @binarius/backend stars refund ${chargeId} --reason "…"`,
+      'Или в админке: раздел «Возвраты Stars».',
     ].join('\n'),
 
   confirmButton: 'Подтвердить вход',
