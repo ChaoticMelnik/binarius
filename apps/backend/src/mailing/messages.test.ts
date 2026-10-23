@@ -267,6 +267,14 @@ describe('the real-mode message after a deposit', () => {
   );
 });
 
+// an age in digits or in words, which a late push must not name (docs/mailing.md → Late planning)
+const AGES = [
+  /\d\s*(мин|час|дн|сут|недел|мес)/u,
+  /(?<![а-яё])(сут[ко]|вчера|позавчера|назад)/u,
+  /(?<![а-яё])(одн|один|два|две|двое|двух|три|трое|трёх|трех|четыр|пят|шест|сем|несколь)[а-яё]*\s+(минут|час|дн|дня|дней|сут|недел|месяц)/u,
+];
+const namesAnAge = (text: string) => AGES.some((age) => age.test(text.toLowerCase()));
+
 // #124 (docs/mailing.md → Retention)
 describe('the retention messages', () => {
   const demo = { text: CLIENT_LABELS.demoButton, callback_data: 'demo' };
@@ -334,8 +342,22 @@ describe('the retention messages', () => {
       expect(text).not.toContain(word);
     }
     expect(text).not.toContain('$');
-    expect(text).not.toMatch(/\d\s*(дн|сут|час)/);
-    expect(text).not.toContain('вчера');
+    expect(namesAnAge(text)).toBe(false);
+  });
+
+  it('RM5a the age guard catches ages in digits and in words, and not the summarised week', () => {
+    const ages = ['3 дня', '72 часа', 'сутки', 'двое суток', 'три дня', 'несколько дней'];
+    for (const age of [...ages, 'неделю назад', 'вчера']) {
+      expect([age, namesAnAge(age)]).toEqual([age, true]);
+    }
+    for (const fine of ['демо-итоги прошлой недели', 'рынок не спит', 'пятница']) {
+      expect([fine, namesAnAge(fine)]).toEqual([fine, false]);
+    }
+  });
+
+  it('RM7 heads the weekly result with «Итог», not a second «Сделки»', () => {
+    const text = mailingMessage(NotificationKind.WeeklySummary, score, DEMO).text.value;
+    expect(text).toContain('📊 Итог: 4 сделки — 2 в плюс, 1 в минус, 1 в ноль.');
   });
 
   it.each([
