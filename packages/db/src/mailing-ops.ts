@@ -41,26 +41,33 @@ const replanCanceled = sql`do update set status = ${literal(NotificationJobStatu
 // Returns how many jobs each kind gained, re-planned ones included.
 export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, number>> {
   const planned = {} as Record<NotificationKind, number>;
-  for (const kind of KINDS) {
-    const scenario: MailingScenario = MAILING_SCENARIOS[kind];
-    const { facts, afterMs, dedupeKey, stillApplies, replansCanceled, important } = scenario;
-    const payload = scenario.payload ?? sql`'{}'::jsonb`;
-    const after = sql`make_interval(secs => ${afterMs / 1000})`;
-    const result = await db.execute(sql`
-      insert into ${notificationJobs} (user_id, kind, dedupe_key, payload, scheduled_at)
-      select ${users.id}, ${literal(kind)}, ${dedupeKey}, ${payload}, fact.at + ${after}
-      from ${users}
-      cross join lateral ${facts} fact
-      join ${notificationKinds} on ${notificationKinds.kind} = ${literal(kind)}
-      where fact.at >= ${notificationKinds.plansFrom}
-        and fact.at + ${after} <= now()
-        and ${important === true ? reachable() : deliverable()}
-        and ${stillApplies}
-      on conflict (user_id, dedupe_key) where dedupe_key is not null
-      ${replansCanceled === true ? replanCanceled : sql`do nothing`}`);
-    planned[kind] = result.rowCount ?? 0;
-  }
+  for (const kind of KINDS) planned[kind] = await planMailingKind(db, kind);
   return planned;
+}
+
+// One kind's statement. `scenario` is the kind's own; a test passes the same scenario built over a
+// literal moment (weeklySummaryAt, #124), so a calendar rule is planned at a moment it chooses.
+export async function planMailingKind(
+  db: Db,
+  kind: NotificationKind,
+  scenario: MailingScenario = MAILING_SCENARIOS[kind],
+): Promise<number> {
+  const { facts, afterMs, dedupeKey, stillApplies, replansCanceled, important } = scenario;
+  const payload = scenario.payload ?? sql`'{}'::jsonb`;
+  const after = sql`make_interval(secs => ${afterMs / 1000})`;
+  const result = await db.execute(sql`
+    insert into ${notificationJobs} (user_id, kind, dedupe_key, payload, scheduled_at)
+    select ${users.id}, ${literal(kind)}, ${dedupeKey}, ${payload}, fact.at + ${after}
+    from ${users}
+    cross join lateral ${facts} fact
+    join ${notificationKinds} on ${notificationKinds.kind} = ${literal(kind)}
+    where fact.at >= ${notificationKinds.plansFrom}
+      and fact.at + ${after} <= now()
+      and ${important === true ? reachable() : deliverable()}
+      and ${stillApplies}
+    on conflict (user_id, dedupe_key) where dedupe_key is not null
+    ${replansCanceled === true ? replanCanceled : sql`do nothing`}`);
+  return result.rowCount ?? 0;
 }
 
 export interface ClaimedMailingJob {
