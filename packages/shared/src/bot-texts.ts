@@ -1877,6 +1877,56 @@ export const BOT_TEXT_CATALOG = {
 Вернуться в демо: /settings → «{settingsModeButton}».`,
     { vars: ['stake'], fragments: { settingsModeButton: 'settingsModeButton' } },
   ),
+  // Retention (#124, docs/mailing.md → Retention): demo users only, except tokensOutStill. A push
+  // may be planned late (an unblock, the level back from off), so no text names an age. Counts
+  // only, no money; no promise of a result.
+  inactiveReminder: html(
+    g.Mailing,
+    'Напоминание демо-пользователю, у которого была хотя бы одна сессия, после трёх суток без активности; не чаще раза в неделю, с кнопкой входа в демо.',
+    `🌙 <b>Рынок не спит</b>
+
+📡 Бот продолжает проверять пары на сигналы — можно посмотреть, что есть сейчас.
+🎮 Это демо: деньги не нужны, бот сам проводит сделки.
+👇 Нажми «{demoButton}», чтобы продолжить.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+  // with «sessionRelaunchButton», the cycle's door of the session's pair, or the entry when the
+  // session's settings do not name it, so the text names no button
+  sessionIdleReminder: html(
+    g.Mailing,
+    'Напоминание через сутки после конца демо-сессии, если новая не запускалась: итог той сессии и кнопка запуска на той же паре.',
+    `🔁 <b>Последняя демо-сессия завершена</b>
+
+📊 Её итог: {result}.
+🎮 Новую сессию можно запустить в один шаг.
+👇 Нажми кнопку ниже.`,
+    { vars: ['result'] },
+  ),
+  weeklySummary: html(
+    g.Mailing,
+    'Сводка по понедельникам (10:00 UTC) демо-пользователю со сделками за прошлую неделю: число сделок, в плюс, в минус, в ноль.',
+    `📅 <b>Демо-итоги прошлой недели</b>
+
+📊 Сделки: {result}.
+💡 Это демо: деньги в сделках не участвуют.
+👇 Нажми «{demoButton}», чтобы продолжить.`,
+    { vars: ['result'], fragments: { demoButton: 'demoButton' } },
+  ),
+  // after tokensOut, with the cashier («depositButton», or the entry without https) and «buyButton»
+  tokensOutStill: html(
+    g.Mailing,
+    'Повтор через двое суток после напоминания «нет токенов», если баланс так и остался нулевым; один раз, с кнопками кассы и покупки токенов.',
+    `🔋 <b>Токенов на балансе по-прежнему нет</b>
+
+Без токенов автоторговля не запускается: каждой сделке нужен один токен.
+👇 «{buyButton}» — пакеты токенов.`,
+    { fragments: { buyButton: 'buyButton' } },
+  ),
+  sessionRelaunchButton: plain(
+    g.Mailing,
+    'Напоминание после демо-сессии: новая сессия на той же паре — экран суммы цикла.',
+    '🔁 Запустить снова',
+  ),
   // a label of the backend's message only, so in this group and not in «Кнопки» (#576)
   inviteMoreButton: plain(
     g.Mailing,

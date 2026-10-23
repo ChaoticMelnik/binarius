@@ -1,4 +1,5 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   BotLanguage,
@@ -10,15 +11,21 @@ import {
   PostbackSource,
   TOKEN_NUDGES,
   TokenLedgerKind,
+  TradeAction,
+  TradeIntentStatus,
   TradeMode,
   TradingSessionStatus,
   TradingSessionStopReason,
   UserStatus,
+  WEEKLY_SUMMARY_HOUR_UTC,
   type DecimalString,
+  type TradingSessionSettings,
+  type UnixMs,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   bonusRuleRef,
+  closeTradingSwitch,
   createTempDatabase,
   intentRequest,
   lockWaiters,
@@ -26,20 +33,27 @@ import {
   seedBrokerAccount,
   seedTradingSession,
   seedUser,
+  sessionSettings,
   SEEDED_REFERRAL_REWARD_TOKENS,
   type TempDatabase,
 } from './testing';
 import {
   brokerAccounts,
+  brokerBalanceSnapshots,
+  BrokerTradeStatus,
+  brokerTrades,
   depositEvents,
   NotificationJobStatus,
   notificationJobs,
   notificationKinds,
   referrals,
   tokenLedger,
+  tradeIntents,
   tradingSessions,
+  tradingSwitch,
   users,
 } from './schema/index';
+import { weeklyAnchor, weeklyKey, weeklyRange } from './mailing-scenarios';
 import { createTradeIntent } from './trade-intent-ops';
 import { markTelegramBlocked, markTelegramReachable, setNotificationLevel } from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
@@ -1745,5 +1759,729 @@ describe('the real-mode notification (#686)', () => {
     const user = await switched();
     await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
     expect(await modeJobsOf(user.userId)).toHaveLength(1);
+  });
+});
+
+// ---- Retention (#124, docs/mailing.md → Retention) ---------------------------------------------
+// Offsets are literals, not the constants, so a changed constant reddens them. Each block sets the
+// earlier pending jobs aside (`failed`, so the planner does not take them back), and a claim here
+// runs with every other pending job set aside, so it can only take or cancel the case's own.
+
+const kindJobsOf = async (userId: string, kind: NotificationKind) =>
+  (await jobsOf(userId)).filter((job) => job.kind === kind);
+
+const pendingOf = async (userId: string, kind: NotificationKind) =>
+  (await kindJobsOf(userId, kind)).filter((job) => job.status === NotificationJobStatus.Pending);
+
+const setAsidePendingJobs = (except?: string) =>
+  tmp.db
+    .update(notificationJobs)
+    .set({ status: NotificationJobStatus.Failed })
+    .where(
+      and(
+        eq(notificationJobs.status, NotificationJobStatus.Pending),
+        except === undefined ? undefined : ne(notificationJobs.id, except),
+      ),
+    );
+
+const claimOnly = async (jobId: string) => {
+  await setAsidePendingJobs(jobId);
+  return claimMailingJob(tmp.db, { scan: SCAN });
+};
+
+const minutesAgo = (minutes: number) => sql`now() - make_interval(secs => ${minutes * 60})`;
+
+interface Retained {
+  userId: string;
+  telegramUserId: bigint;
+  accountId: string;
+}
+
+// a user with an active account and no starter pack, so neither the chain nor a token nudge
+async function retained({
+  balance = 5n,
+  tradingMode,
+}: { balance?: bigint; tradingMode?: TradeMode } = {}): Promise<Retained> {
+  const user = await seedUser(tmp.db, { balance, tradingMode });
+  const accountId = await seedBrokerAccount(tmp.db, user.userId);
+  return { userId: user.userId, telegramUserId: BigInt(user.telegramUserId), accountId };
+}
+
+const stoppedSession = async (
+  accountId: string,
+  { started, ended, settings }: { started: number; ended: number; settings?: unknown },
+) => {
+  const [row] = await tmp.db
+    .insert(tradingSessions)
+    .values({
+      brokerAccountId: accountId,
+      mode: TradeMode.Demo,
+      settings: (settings ?? sessionSettings({ durationSec: 5 })) as TradingSessionSettings,
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+      startedAt: minutesAgo(started),
+      endedAt: minutesAgo(ended),
+    })
+    .returning();
+  return row!;
+};
+
+let retentionSeq = 0;
+// A trade written directly, settled with its closed broker trade, or rejected
+async function trade(
+  user: Retained,
+  {
+    createdAt,
+    sessionId,
+    mode = TradeMode.Demo,
+    profit = '1',
+    status = TradeIntentStatus.Settled,
+  }: {
+    createdAt: SQL;
+    sessionId?: string;
+    mode?: TradeMode;
+    profit?: string;
+    status?: typeof TradeIntentStatus.Settled | typeof TradeIntentStatus.Rejected;
+  },
+): Promise<void> {
+  const n = ++retentionSeq;
+  const [intent] = await tmp.db
+    .insert(tradeIntents)
+    .values({
+      brokerAccountId: user.accountId,
+      userId: user.userId,
+      tradingSessionId: sessionId,
+      mode,
+      assetId: 101,
+      amount: '1' as DecimalString,
+      action: TradeAction.Up,
+      durationSec: 5,
+      clientRequestId: `retention-${String(n)}`,
+      status,
+      tokensReserved: 0n,
+      createdAt,
+    })
+    .returning({ id: tradeIntents.id });
+  if (status !== TradeIntentStatus.Settled) return;
+  await tmp.db.insert(brokerTrades).values({
+    brokerAccountId: user.accountId,
+    intentId: intent!.id,
+    brokerTradeId: `retention-trade-${String(n)}`,
+    mode,
+    assetId: 101,
+    action: TradeAction.Up,
+    amount: '1' as DecimalString,
+    openPrice: 1,
+    openTimestampMs: 1 as UnixMs,
+    closePrice: 1,
+    closeTimestampMs: 2 as UnixMs,
+    profit: profit as DecimalString,
+    status: BrokerTradeStatus.Closed,
+    raw: {},
+  });
+}
+
+const insertJob = async (
+  userId: string,
+  kind: NotificationKind,
+  dedupeKey: string,
+  { status, minutes = 0 }: { status: NotificationJobStatus; minutes?: number },
+) => {
+  const [row] = await tmp.db
+    .insert(notificationJobs)
+    .values({
+      userId,
+      kind,
+      dedupeKey,
+      status,
+      scheduledAt: minutesAgo(minutes + 1),
+      sentAt: status === NotificationJobStatus.Sent ? minutesAgo(minutes) : null,
+    })
+    .returning();
+  return row!;
+};
+
+const openTrading = () => tmp.db.update(tradingSwitch).set({ tradingEnabled: true });
+
+const retentionSetup = () => {
+  beforeAll(async () => {
+    await plansFromMinutesAgo(hours(200));
+    await planMailingJobs(tmp.db);
+    await setAsidePendingJobs();
+  });
+  beforeEach(() => setAsidePendingJobs());
+};
+
+describe('retention: inactive_3d', () => {
+  retentionSetup();
+  const KIND = NotificationKind.Inactive3d;
+
+  // A demo user whose one session started `started` minutes ago and stopped a minute later; its
+  // session_idle_24h job is already settled (canceled), so it neither plans nor holds this one
+  async function inactiveUser(started = hours(100)) {
+    const user = await retained();
+    const session = await stoppedSession(user.accountId, { started, ended: started - 1 });
+    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${session.id}`, {
+      status: NotificationJobStatus.Canceled,
+    });
+    return { ...user, session };
+  }
+
+  it('RT1 plans one job 72 h after the last activity, keyed by its moment, and nothing at 71 h', async () => {
+    const due = await inactiveUser(hours(72) + 1);
+    const early = await inactiveUser(hours(71));
+    await planMailingJobs(tmp.db);
+
+    const jobs = await kindJobsOf(due.userId, KIND);
+    const epoch = await tmp.db.execute<{ epoch: string }>(
+      sql`select extract(epoch from ${tradingSessions.startedAt})::text as epoch
+        from ${tradingSessions} where ${tradingSessions.id} = ${due.session.id}`,
+    );
+    expect(jobs.map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
+      [NotificationJobStatus.Pending, `inactive_3d:${epoch.rows[0]!.epoch}`, {}],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.session.startedAt.getTime() + 72 * 3_600_000);
+    expect(await kindJobsOf(early.userId, KIND)).toEqual([]);
+  });
+
+  it('RT2a counts a trade as activity', async () => {
+    const user = await inactiveUser();
+    await trade(user, { createdAt: minutesAgo(hours(10)), status: TradeIntentStatus.Rejected });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT2b counts a balance request (the bot’s menu and trading screens) as activity', async () => {
+    const user = await inactiveUser();
+    await seedBalanceSnapshot(tmp.db, user.accountId);
+    await tmp.db
+      .update(brokerBalanceSnapshots)
+      .set({ lastRequestedAt: minutesAgo(hours(10)) })
+      .where(eq(brokerBalanceSnapshots.brokerAccountId, user.accountId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT2c counts an analysis as activity', async () => {
+    const user = await inactiveUser();
+    await backdateAnalysis(user.userId, hours(10));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT3 cancels at the claim a job whose user started a session after it was planned', async () => {
+    const user = await inactiveUser();
+    await planMailingJobs(tmp.db);
+    const [planned] = await kindJobsOf(user.userId, KIND);
+    await seedTradingSession(tmp.db, user.accountId);
+    expect(await claimOnly(planned!.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RT4 plans nothing within 7 days of a sent one', async () => {
+    const user = await inactiveUser();
+    await insertJob(user.userId, KIND, 'inactive_3d:earlier', {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(24 * 6),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await pendingOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT4b plans once the sent one is older than 7 days', async () => {
+    const user = await inactiveUser();
+    await insertJob(user.userId, KIND, 'inactive_3d:earlier', {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(24 * 8),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await pendingOf(user.userId, KIND)).toHaveLength(1);
+  });
+
+  it('RT4c is not held by another kind sent within the 7 days', async () => {
+    const user = await inactiveUser();
+    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${randomUUID()}`, {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(48),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await pendingOf(user.userId, KIND)).toHaveLength(1);
+  });
+
+  it.each([
+    ['RT5a', NotificationKind.SessionIdle24h, `session_idle:${randomUUID()}`],
+    ['RT5b', NotificationKind.TokensOut2d, 'tokens_out_2d'],
+  ] as const)('%s waits while a %s job is pending', async (_id, kind, key) => {
+    const user = await inactiveUser();
+    await insertJob(user.userId, kind, key, { status: NotificationJobStatus.Pending });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT6a plans nothing for a user in real mode', async () => {
+    const user = await inactiveUser();
+    await setTradingMode(tmp.db, user.telegramUserId, TradeMode.Real);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT6b plans nothing for a user blocked by the admin', async () => {
+    const user = await inactiveUser();
+    await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, user.userId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT6c plans nothing once the account is revoked, the session staying on it', async () => {
+    const user = await inactiveUser();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: BrokerAccountStatus.Revoked })
+      .where(eq(brokerAccounts.id, user.accountId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT6d plans nothing while trading is closed', async () => {
+    const user = await inactiveUser();
+    await closeTradingSwitch(tmp.db);
+    try {
+      await planMailingJobs(tmp.db);
+    } finally {
+      await openTrading();
+    }
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT7 plans nothing for a user who never ran a session', async () => {
+    const user = await retained();
+    await backdateAnalysis(user.userId, hours(100));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT8 CUT plans nothing for activity before the kind’s plans_from, and the job for activity after', async () => {
+    await plansFromMinutesAgo(hours(100) + 30, KIND);
+    try {
+      const before = await inactiveUser(hours(100) + 40);
+      const after = await inactiveUser(hours(100) + 20);
+      await planMailingJobs(tmp.db);
+      expect(await kindJobsOf(before.userId, KIND)).toEqual([]);
+      expect(await kindJobsOf(after.userId, KIND)).toHaveLength(1);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('RT9 plans one job when two planners run at the same time', async () => {
+    const user = await inactiveUser();
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+});
+
+describe('retention: session_idle_24h', () => {
+  retentionSetup();
+  const KIND = NotificationKind.SessionIdle24h;
+
+  async function idleUser(
+    ended = hours(24) + 1,
+    settings: unknown = sessionSettings({ durationSec: 5 }),
+  ) {
+    const user = await retained();
+    const session = await stoppedSession(user.accountId, { started: ended + 30, ended, settings });
+    return { ...user, session };
+  }
+
+  it('RS1 plans one job 24 h after the newest session stopped, with its pair and settled trades, and nothing at 23 h', async () => {
+    const due = await idleUser();
+    for (const profit of ['1', '2', '-1', '0']) {
+      await trade(due, { createdAt: sql`now()`, sessionId: due.session.id, profit });
+    }
+    await trade(due, {
+      createdAt: sql`now()`,
+      sessionId: due.session.id,
+      status: TradeIntentStatus.Rejected,
+    });
+    const early = await idleUser(hours(23));
+    await planMailingJobs(tmp.db);
+
+    const jobs = await kindJobsOf(due.userId, KIND);
+    expect(jobs.map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
+      [
+        NotificationJobStatus.Pending,
+        `session_idle:${due.session.id}`,
+        { assetId: 101, durationSec: 5, settled: 4, won: 2, lost: 1, tied: 1 },
+      ],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.session.endedAt!.getTime() + 24 * 3_600_000);
+    expect(await kindJobsOf(early.userId, KIND)).toEqual([]);
+  });
+
+  it('RS1b counts only the newest session’s trades', async () => {
+    const user = await retained();
+    const older = await stoppedSession(user.accountId, { started: hours(50), ended: hours(49) });
+    const newest = await stoppedSession(user.accountId, { started: hours(26), ended: hours(25) });
+    await trade(user, { createdAt: sql`now()`, sessionId: older.id, profit: '-1' });
+    await trade(user, { createdAt: sql`now()`, sessionId: older.id, profit: '-1' });
+    await trade(user, { createdAt: sql`now()`, sessionId: newest.id, profit: '1' });
+    await planMailingJobs(tmp.db);
+    expect((await kindJobsOf(user.userId, KIND)).map((job) => job.payload)).toEqual([
+      { assetId: 101, durationSec: 5, settled: 1, won: 1, lost: 0, tied: 0 },
+    ]);
+  });
+
+  it('RS2 plans nothing while the newest session runs, however long ago an older one stopped', async () => {
+    const user = await retained();
+    await stoppedSession(user.accountId, { started: hours(31), ended: hours(30) });
+    await seedTradingSession(tmp.db, user.accountId);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RS3 cancels at the claim a job whose user started a session after it was planned', async () => {
+    const user = await idleUser();
+    await planMailingJobs(tmp.db);
+    const [planned] = await kindJobsOf(user.userId, KIND);
+    await seedTradingSession(tmp.db, user.accountId);
+    expect(await claimOnly(planned!.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RS4 carries no pair when the session’s settings do not name it', async () => {
+    const user = await idleUser(hours(24) + 1, { durationSec: 5 });
+    await planMailingJobs(tmp.db);
+    expect((await kindJobsOf(user.userId, KIND)).map((job) => job.payload)).toEqual([
+      { assetId: null, durationSec: 5, settled: 0, won: 0, lost: 0, tied: 0 },
+    ]);
+  });
+
+  it('RS5a plans nothing for a user in real mode', async () => {
+    const user = await idleUser();
+    await setTradingMode(tmp.db, user.telegramUserId, TradeMode.Real);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RS5b plans nothing for a user blocked by the admin', async () => {
+    const user = await idleUser();
+    await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, user.userId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RS5c plans nothing once the account is revoked, the session staying on it', async () => {
+    const user = await idleUser();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: BrokerAccountStatus.Revoked })
+      .where(eq(brokerAccounts.id, user.accountId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RS5d plans nothing while trading is closed', async () => {
+    const user = await idleUser();
+    await closeTradingSwitch(tmp.db);
+    try {
+      await planMailingJobs(tmp.db);
+    } finally {
+      await openTrading();
+    }
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RS6 CUT plans nothing for a session stopped before the kind’s plans_from, and the job for one after', async () => {
+    await plansFromMinutesAgo(hours(30), KIND);
+    try {
+      const before = await idleUser(hours(30) + 10);
+      const after = await idleUser(hours(30) - 10);
+      await planMailingJobs(tmp.db);
+      expect(await kindJobsOf(before.userId, KIND)).toEqual([]);
+      expect(await kindJobsOf(after.userId, KIND)).toHaveLength(1);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('RS7 plans one job when two planners run at the same time', async () => {
+    const user = await idleUser();
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+});
+
+describe('retention: weekly_summary', () => {
+  retentionSetup();
+  const KIND = NotificationKind.WeeklySummary;
+
+  const moment = (text: string) => sql`${text}::timestamptz`;
+  const utcEpoch = (iso: string) => String(Date.parse(iso) / 1000);
+
+  // the anchor's instant and the key at `now`, under the session's time zone `zone`
+  const weekOf = (zone: string, now: string) =>
+    tmp.db.transaction(async (tx) => {
+      await tx.execute(sql.raw(`set local time zone '${zone}'`));
+      const result = await tx.execute<{ at: string; key: string }>(
+        sql`select extract(epoch from ${weeklyAnchor(moment(now))} at time zone 'UTC')::bigint::text
+            as at, ${weeklyKey(moment(now))} as key`,
+      );
+      return result.rows[0]!;
+    });
+
+  const PROBES = [
+    ['2026-10-25 23:59:59+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42'],
+    ['2026-10-26 09:59:59+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42'],
+    ['2026-10-26 10:00:00+00', '2026-10-26T10:00:00Z', 'weekly_summary:2026-W43'],
+    ['2027-01-04 10:00:00+00', '2027-01-04T10:00:00Z', 'weekly_summary:2026-W53'],
+    ['2025-01-06 10:00:00+00', '2025-01-06T10:00:00Z', 'weekly_summary:2025-W01'],
+  ] as const;
+
+  it('RW1 anchors on the latest passed Monday 10:00 UTC and keys the ISO week before it', async () => {
+    for (const [now, at, key] of PROBES) {
+      expect(await weekOf('UTC', now)).toEqual({ at: utcEpoch(at), key });
+    }
+  });
+
+  it('RW1r counts the ISO week before the anchor, Monday 00:00 in, the next Monday 00:00 out', async () => {
+    const inside = await tmp.db.transaction(async (tx) => {
+      await tx.execute(sql`set local time zone 'UTC'`);
+      const now = moment('2026-10-21 12:00:00+00');
+      const result = await tx.execute<{ inside: boolean[] }>(
+        sql`select array[
+          ${weeklyRange(now, moment('2026-10-12 00:00:00+00'))},
+          ${weeklyRange(now, moment('2026-10-18 23:59:59.999999+00'))},
+          ${weeklyRange(now, moment('2026-10-19 00:00:00+00'))},
+          ${weeklyRange(now, moment('2026-10-11 23:59:59.999999+00'))}] as inside`,
+      );
+      return result.rows[0]!.inside;
+    });
+    expect(inside).toEqual([true, true, false, false]);
+  });
+
+  it.each(['Europe/Moscow', 'America/Los_Angeles'])(
+    'RW2 gives the same anchor and key on both sides of Monday 10:00 UTC under %s',
+    async (zone) => {
+      for (const [now, at, key] of PROBES.slice(1, 3)) {
+        expect(await weekOf(zone, now)).toEqual({ at: utcEpoch(at), key });
+      }
+    },
+  );
+
+  // a moment `minutes` after the summarised week's start, through the scenario's own anchor
+  const inWeek = (minutes: number) =>
+    sql`(${weeklyAnchor(sql`now()`)} - make_interval(hours => ${WEEKLY_SUMMARY_HOUR_UTC})
+      - interval '7 days' + make_interval(mins => ${minutes})) at time zone 'UTC'`;
+
+  it('RW3 plans one job with the week’s settled demo trades, under the week’s key', async () => {
+    const user = await retained();
+    for (const profit of ['1', '3', '-1', '0']) {
+      await trade(user, { createdAt: inWeek(hours(24)), profit });
+    }
+    await trade(user, { createdAt: inWeek(hours(24)), status: TradeIntentStatus.Rejected });
+    await trade(user, { createdAt: inWeek(hours(24)), mode: TradeMode.Real });
+    await trade(user, { createdAt: inWeek(-hours(24)) });
+    await planMailingJobs(tmp.db);
+
+    const key = await tmp.db.execute<{ key: string }>(sql`select ${weeklyKey(sql`now()`)} as key`);
+    expect(
+      (await kindJobsOf(user.userId, KIND)).map((job) => [job.status, job.dedupeKey, job.payload]),
+    ).toEqual([
+      [NotificationJobStatus.Pending, key.rows[0]!.key, { settled: 4, won: 2, lost: 1, tied: 1 }],
+    ]);
+  });
+
+  it('RW4 plans nothing without a settled demo trade in the week', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: inWeek(-hours(24)) });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RW4b plans for one settled trade in the week', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: inWeek(hours(24)), profit: '-1' });
+    await planMailingJobs(tmp.db);
+    expect((await kindJobsOf(user.userId, KIND)).map((job) => job.payload)).toEqual([
+      { settled: 1, won: 0, lost: 1, tied: 0 },
+    ]);
+  });
+
+  it('RW5a plans nothing for a user in real mode', async () => {
+    const user = await retained({ tradingMode: TradeMode.Real });
+    await trade(user, { createdAt: inWeek(hours(24)) });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RW5b plans nothing for a user blocked by the admin', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: inWeek(hours(24)) });
+    await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, user.userId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RW6 cancels at the claim a job of an earlier week still pending', async () => {
+    const user = await retained();
+    const job = await insertJob(user.userId, KIND, 'weekly_summary:2020-W01', {
+      status: NotificationJobStatus.Pending,
+    });
+    expect(await claimOnly(job.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(job.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RW7 CUT plans nothing for a week anchored before the kind’s plans_from', async () => {
+    await plansFromMinutesAgo(0, KIND);
+    try {
+      const user = await retained();
+      await trade(user, { createdAt: inWeek(hours(24)) });
+      await planMailingJobs(tmp.db);
+      expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('RW8 plans one job when two planners run at the same time', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: inWeek(hours(24)) });
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+});
+
+describe('retention: tokens_out_2d', () => {
+  retentionSetup();
+  const KIND = NotificationKind.TokensOut2d;
+
+  // a linked user whose tokens_out (#123) was sent `sent` minutes ago, the balance `balance`
+  async function outUser(sent: number, { balance = 0n }: { balance?: bigint } = {}) {
+    const user = await linked(hours(100), { balance });
+    const job = await insertJob(user.userId, NotificationKind.TokensOut, 'tokens:100', {
+      status: NotificationJobStatus.Sent,
+      minutes: sent,
+    });
+    return { ...user, sentAt: job.sentAt! };
+  }
+
+  const adjust = (userId: string, delta: bigint, createdAt: SQL) =>
+    tmp.db.insert(tokenLedger).values({
+      userId,
+      kind: TokenLedgerKind.Adjustment,
+      balanceDelta: delta,
+      note: 'retention test',
+      createdAt,
+    });
+
+  it('RZ1 plans one job 48 h after the sent tokens_out at a balance of 0, and nothing at 47 h', async () => {
+    const due = await outUser(hours(48) + 1);
+    const early = await outUser(hours(47));
+    await planMailingJobs(tmp.db);
+
+    const jobs = await kindJobsOf(due.userId, KIND);
+    expect(jobs.map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
+      [NotificationJobStatus.Pending, 'tokens_out_2d', {}],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.sentAt.getTime() + 48 * 3_600_000);
+    expect(await kindJobsOf(early.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ2a plans nothing after a tokens_out that failed', async () => {
+    const user = await linked(hours(100), { balance: 0n });
+    await insertJob(user.userId, NotificationKind.TokensOut, 'tokens:100', {
+      status: NotificationJobStatus.Failed,
+      minutes: hours(49),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ2b plans nothing after another nudge', async () => {
+    const user = await linked(hours(100), { balance: 0n });
+    await insertJob(user.userId, NotificationKind.TokensLow, 'tokens:80', {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(49),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ3 plans nothing, ever, once the balance moved after the send, even back to 0', async () => {
+    const user = await outUser(hours(49));
+    await adjust(user.userId, 50n, minutesAgo(hours(30)));
+    await adjust(user.userId, -50n, minutesAgo(hours(20)));
+    await planMailingJobs(tmp.db);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ3b plans nothing once a credit made just before the send was spent after it', async () => {
+    const user = await outUser(hours(49));
+    await adjust(user.userId, 50n, sql`now() - make_interval(secs => ${hours(49) * 60 + 1})`);
+    await adjust(user.userId, -50n, minutesAgo(hours(48)));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ4 plans nothing for a balance above 0', async () => {
+    const user = await outUser(hours(49), { balance: 100n });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ5 plans nothing for a user blocked by the admin', async () => {
+    const user = await outUser(hours(49));
+    await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, user.userId));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RZ6 cancels at the claim a job whose user got tokens after it was planned', async () => {
+    const user = await outUser(hours(49));
+    await planMailingJobs(tmp.db);
+    const [planned] = await kindJobsOf(user.userId, KIND);
+    await adjust(user.userId, 50n, sql`now()`);
+    await tmp.db.update(users).set({ tokenBalance: 50n }).where(eq(users.id, user.userId));
+    expect(await claimOnly(planned!.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RZ7 plans and claims the job of a user in real mode', async () => {
+    const user = await outUser(hours(49));
+    await setTradingMode(tmp.db, user.telegramUserId, TradeMode.Real);
+    await planMailingJobs(tmp.db);
+    const [planned] = await kindJobsOf(user.userId, KIND);
+    expect((await claimOnly(planned!.id)).job).toMatchObject({ id: planned!.id, kind: KIND });
+  });
+
+  it('RZ8 plans nothing more once the job was sent', async () => {
+    const user = await outUser(hours(49));
+    await planMailingJobs(tmp.db);
+    const [planned] = await kindJobsOf(user.userId, KIND);
+    expect((await claimOnly(planned!.id)).job?.id).toBe(planned!.id);
+    await planMailingJobs(tmp.db);
+    expect((await kindJobsOf(user.userId, KIND)).map((job) => [job.id, job.status])).toEqual([
+      [planned!.id, NotificationJobStatus.Sent],
+    ]);
+  });
+
+  it('RZ9 CUT plans nothing for a send before the kind’s plans_from, and the job for one after', async () => {
+    await plansFromMinutesAgo(hours(49), KIND);
+    try {
+      const before = await outUser(hours(50));
+      const after = await outUser(hours(48) + 30);
+      await planMailingJobs(tmp.db);
+      expect(await kindJobsOf(before.userId, KIND)).toEqual([]);
+      expect(await kindJobsOf(after.userId, KIND)).toHaveLength(1);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('RZ10 plans one job when two planners run at the same time', async () => {
+    const user = await outUser(hours(49));
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
   });
 });

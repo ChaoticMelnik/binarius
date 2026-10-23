@@ -4,6 +4,8 @@ import {
   ButtonRole,
   callbackButton,
   commandRetryCallbackData,
+  createSessionTexts,
+  cycleDoorCallbackData,
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
   keyboardOf,
@@ -12,9 +14,11 @@ import {
   NotificationKind,
   realModeByDepositPayloadSchema,
   referralRewardedPayloadSchema,
+  sessionIdlePayloadSchema,
   tokenNudgePayloadSchema,
   TradeMode,
   webAppButton,
+  weeklySummaryPayloadSchema,
   type BotLanguage,
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
@@ -80,30 +84,77 @@ const entryButton = (tradingMode: TradeMode) =>
     DEMO_CALLBACK_DATA,
   );
 
+// The cashier (#27), or the entry without https, then the token purchase (#117), each on its own
+// row: the purchase is the one secondary button there (#475). Without the cashier: the entry alone.
+const tokenKeyboard = (cashier: boolean, { cashierUrl, tradingMode }: MailingContext) => {
+  const first =
+    cashier && cashierUrl !== undefined
+      ? webAppButton(ButtonRole.Forward, CLIENT_LABELS.depositButton, cashierUrl)
+      : entryButton(tradingMode);
+  return keyboardOf(
+    cashier
+      ? [first, callbackButton(ButtonRole.Secondary, CLIENT_LABELS.buyButton, BUY_CALLBACK_DATA)]
+      : [first],
+  );
+};
+
 // The low-token nudge (#123, docs/mailing.md → The low-token nudge): the threshold's balance from
-// the payload. 50 %: the entry. 80 % and 100 %: the cashier (#27), or the entry without https, then
-// the token purchase (#117), each on its own row: the purchase is the one secondary button there
-// (#475). A payload that does not parse throws (`mailing not built`).
+// the payload. 50 %: the entry. 80 % and 100 %: the cashier keyboard. A payload that does not parse
+// throws (`mailing not built`).
 const tokenNudge =
   (text: (vars: { nudgeTokens: string }) => ClientPushMessage['text'], cashier: boolean) =>
-  (payload: Payload, { cashierUrl, tradingMode }: MailingContext): ClientPushMessage => {
+  (payload: Payload, context: MailingContext): ClientPushMessage => {
     const { tokens } = tokenNudgePayloadSchema.parse(payload);
-    const first =
-      cashier && cashierUrl !== undefined
-        ? webAppButton(ButtonRole.Forward, CLIENT_LABELS.depositButton, cashierUrl)
-        : entryButton(tradingMode);
     return {
       text: text({ nudgeTokens: tokens }),
-      reply_markup: keyboardOf(
-        cashier
-          ? [
-              first,
-              callbackButton(ButtonRole.Secondary, CLIENT_LABELS.buyButton, BUY_CALLBACK_DATA),
-            ]
-          : [first],
-      ),
+      reply_markup: tokenKeyboard(cashier, context),
     };
   };
+
+// Retention (#124, docs/mailing.md → Retention). The result is the session messages' own
+// («5 сделок — 3 в плюс, 2 в минус»), from the payload's counts.
+const sessionTexts = createSessionTexts({ html: CLIENT_TEXTS, plain: CLIENT_LABELS });
+
+// The entry into trading alone, for the scenarios whose button is the way in.
+const entryOnly =
+  (text: () => ClientPushMessage['text']) =>
+  (_payload: Payload, { tradingMode }: MailingContext): ClientPushMessage => ({
+    text: text(),
+    reply_markup: keyboardOf([entryButton(tradingMode)]),
+  });
+
+// The last session's result and «🔁 Запустить снова»: the cycle's door of its pair and duration
+// (the amount screen in demo, after the pair's signal check), or the entry when the session's
+// settings did not name them. A payload that does not parse throws (`mailing not built`).
+function sessionIdle(payload: Payload, { tradingMode }: MailingContext): ClientPushMessage {
+  const { assetId, durationSec, ...score } = sessionIdlePayloadSchema.parse(payload);
+  return {
+    text: CLIENT_TEXTS.sessionIdleReminder({ result: sessionTexts.resultOf(score) }),
+    reply_markup: keyboardOf([
+      assetId === null || durationSec === null
+        ? entryButton(tradingMode)
+        : callbackButton(
+            ButtonRole.Forward,
+            CLIENT_LABELS.sessionRelaunchButton,
+            cycleDoorCallbackData(assetId, durationSec),
+          ),
+    ]),
+  };
+}
+
+function weeklySummary(payload: Payload, { tradingMode }: MailingContext): ClientPushMessage {
+  const score = weeklySummaryPayloadSchema.parse(payload);
+  return {
+    text: CLIENT_TEXTS.weeklySummary({ result: sessionTexts.resultOf(score) }),
+    reply_markup: keyboardOf([entryButton(tradingMode)]),
+  };
+}
+
+// The second push about no tokens: tokens_out's keyboard; its payload is empty.
+const tokensOutStill = (_payload: Payload, context: MailingContext): ClientPushMessage => ({
+  text: CLIENT_TEXTS.tokensOutStill,
+  reply_markup: tokenKeyboard(true, context),
+});
 
 // The switch to real after a deposit (#686, docs/mailing.md → The real-mode notification): the
 // stake from the payload (text, rule 2; null names the broker's minimum in words), the mode
@@ -134,6 +185,10 @@ const MAILING_MESSAGES = {
   [NotificationKind.TokensLow]: tokenNudge((vars) => CLIENT_TEXTS.tokensLow(vars), true),
   [NotificationKind.TokensOut]: tokenNudge((vars) => CLIENT_TEXTS.tokensOut(vars), true),
   [NotificationKind.RealModeByDeposit]: realModeByDeposit,
+  [NotificationKind.Inactive3d]: entryOnly(() => CLIENT_TEXTS.inactiveReminder),
+  [NotificationKind.SessionIdle24h]: sessionIdle,
+  [NotificationKind.WeeklySummary]: weeklySummary,
+  [NotificationKind.TokensOut2d]: tokensOutStill,
 } as const satisfies Record<
   NotificationKind,
   (payload: Payload, context: MailingContext) => ClientPushMessage

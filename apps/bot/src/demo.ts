@@ -29,6 +29,7 @@ import {
   tradeModeSchema,
   ButtonRole,
   callbackButton,
+  cycleDoorCallbackData,
   keyboardOf,
   type BotButton,
   type BotKeyboard,
@@ -128,7 +129,10 @@ export const demoLaunchCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
   origin: CycleOrigin = 'l',
-): string => `demo:l:${assetId}:${durationSec}${origin === 'l' ? '' : `:${origin}`}`;
+): string =>
+  origin === 'n'
+    ? cycleDoorCallbackData(assetId, durationSec)
+    : `demo:l:${assetId}:${durationSec}${origin === 'l' ? '' : `:${origin}`}`;
 // An amount of the amount screen (#476): the press saves it as the demo stake, then starts the
 // cycle (cycle-stake.ts). The amount in the data is the one saved, as the picker's preset: a stale
 // button saves what it shows, bounded by the backend. The longest,
