@@ -518,6 +518,7 @@ const sessionSummaryBody: BotTextMessage['body'] = [
   '\n',
   oneOf(
     [k('sessionCompleted')],
+    [k('sessionCompletedH1')],
     [anyOf(...sessionStopLines, 'sessionStopNoSignalTimeoutNoSettings'), '\n', k('sessionTotal')],
   ),
   ...sessionOutcome,
@@ -746,7 +747,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionCompleted',
     title: 'Сессия завершена',
     limit: TELEGRAM_CAPTION_LIMIT,
-    body: [...sessionHead, '\n\n', k('sessionCompleted')],
+    body: [...sessionHead, '\n\n', anyOf('sessionCompleted', 'sessionCompletedH1')],
   },
   {
     id: 'sessionStopped',
@@ -763,6 +764,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     body: [
       anyOf(
         'sessionCompleted',
+        'sessionCompletedH1',
         ...sessionStopLines,
         'sessionStopNoSignalTimeoutNoSettings',
         'sessionStatusUnavailable',

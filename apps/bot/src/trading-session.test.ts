@@ -3,6 +3,8 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
+  buildH1SessionSettings,
+  H1_MIN_PAYOUT_PCT,
   pairLabel,
   TradeAction,
   TradeIntentStatus,
@@ -269,6 +271,8 @@ const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
 // for want of tokens, the deposit (#27) on its own row, the purchase beside the way back (#117)
 const BUY_ONLY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA), BACK, ...MENU_ROW]];
 const BUY_ROWS = [DEPOSIT, ...BUY_ONLY_ROWS];
+// a refusal of the pair itself (#745): another pair, or the menu
+const OTHER_PAIR_ROWS = [[button(LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)], MENU_ROW];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
@@ -314,7 +318,7 @@ describe('the session button', () => {
     const { press, calls, sessionTracker } = setup();
     await press(START);
     const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
-    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
+    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction, keyboard: null });
 
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit).toMatchObject({
@@ -327,7 +331,7 @@ describe('the session button', () => {
     expect(edit).not.toHaveProperty('reply_markup');
 
     // #350: a session gone from the backend gets the menu only
-    await entry.edit({ text: telegramHtml`gone`, picture: null }, 'not_found');
+    await entry.edit({ text: telegramHtml`gone`, picture: null, keyboard: null }, 'not_found');
     expect(
       rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
     ).toEqual([MENU]);
@@ -379,6 +383,7 @@ describe('the session button', () => {
       stakeMenu?: true;
       buy?: true;
       log?: true;
+      otherPair?: true;
     } = START_REFUSALS[code];
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(textOf(refusal.text).value);
@@ -391,7 +396,9 @@ describe('the session button', () => {
             ? STAKE_MENU_ROWS
             : refusal.buy === true
               ? BUY_ROWS
-              : BACK_ROWS,
+              : refusal.otherPair === true
+                ? OTHER_PAIR_ROWS
+                : BACK_ROWS,
     );
     // only the refusal for want of tokens offers the purchase (#117)
     expect(
@@ -2014,7 +2021,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
       // #508: the owner's language from the list, not the store of an update
       language: BotLanguage.En,
     });
-    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
+    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction, keyboard: null });
     const edit = payloadOf(scene.calls, 'editMessageText');
     expect(edit).toMatchObject({
       chat_id: USER.id,
@@ -2150,9 +2157,13 @@ describe('the session picture (#568)', () => {
       photoAnswer(CARD_MESSAGE_ID, ['bear-small', 'bear-large']),
     );
     const entry = entryOf(scene);
-    await entry.edit({ text: telegramHtml`down`, picture: DOWN.signalAction });
-    await entry.edit({ text: telegramHtml`down again`, picture: DOWN.signalAction });
-    await entry.edit({ text: telegramHtml`up`, picture: UP.signalAction });
+    await entry.edit({ text: telegramHtml`down`, picture: DOWN.signalAction, keyboard: null });
+    await entry.edit({
+      text: telegramHtml`down again`,
+      picture: DOWN.signalAction,
+      keyboard: null,
+    });
+    await entry.edit({ text: telegramHtml`up`, picture: UP.signalAction, keyboard: null });
     expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
       'setup-bear.png',
       'bear-large',
@@ -2166,14 +2177,14 @@ describe('the session picture (#568)', () => {
     const entry = entryOf(scene);
     scene.apiErrors.set('editMessageMedia', NOT_MODIFIED);
     await expect(
-      entry.edit({ text: telegramHtml`same`, picture: UP.signalAction }),
+      entry.edit({ text: telegramHtml`same`, picture: UP.signalAction, keyboard: null }),
     ).rejects.toBeInstanceOf(GrammyError);
     scene.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
     await expect(
-      entry.edit({ text: telegramHtml`stale`, picture: UP.signalAction }),
+      entry.edit({ text: telegramHtml`stale`, picture: UP.signalAction, keyboard: null }),
     ).rejects.toBeInstanceOf(GrammyError);
     scene.apiErrors.delete('editMessageMedia');
-    await entry.edit({ text: telegramHtml`again`, picture: UP.signalAction });
+    await entry.edit({ text: telegramHtml`again`, picture: UP.signalAction, keyboard: null });
     expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
       CARD_FILE_ID,
       CARD_FILE_ID,
@@ -2186,7 +2197,7 @@ describe('the session picture (#568)', () => {
     await scene.press(START);
     const entry = entryOf(scene);
     await entry.edit(
-      { text: TEXTS.sessionStatusUnavailable, picture: UP.signalAction },
+      { text: TEXTS.sessionStatusUnavailable, picture: UP.signalAction, keyboard: null },
       'not_found',
     );
     const edit = payloadOf(scene.calls, 'editMessageMedia');
@@ -2197,7 +2208,7 @@ describe('the session picture (#568)', () => {
     });
     expect(rowsOf(edit)).toEqual([MENU]);
     await entry.edit(
-      { text: TEXTS.sessionStatusUnavailable, picture: SESSION_VIEW.signalAction },
+      { text: TEXTS.sessionStatusUnavailable, picture: SESSION_VIEW.signalAction, keyboard: null },
       'not_found',
     );
     expect(methods(scene.calls).filter((m) => m.startsWith('edit'))).toEqual([
@@ -2210,7 +2221,11 @@ describe('the session picture (#568)', () => {
     const scene = started(SESSION_VIEW);
     await scene.press(START);
     expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    await entryOf(scene).edit({ text: telegramHtml`stopped`, picture: STOPPED.signalAction });
+    await entryOf(scene).edit({
+      text: telegramHtml`stopped`,
+      picture: STOPPED.signalAction,
+      keyboard: null,
+    });
     expect(methods(scene.calls).at(-1)).toBe('editMessageText');
   });
 
@@ -2219,5 +2234,127 @@ describe('the session picture (#568)', () => {
     await scene.press(STOP);
     expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(payloadOf(scene.calls, 'editMessageText')?.text).toContain('📡 Сигнал: ⬆️ Вверх');
+  });
+});
+
+describe('an H1 session from the bot (#745)', () => {
+  const built = buildH1SessionSettings({
+    assetId: PAIR_EURUSD.id,
+    trades: 50,
+    stake: { baseStake: d('1.00'), stakeScale: 2 },
+    maxLossMultiplier: 20,
+  });
+  if (!built.success) throw new Error('fixture: H1 settings');
+  const H1 = sessionView({ settings: built.data });
+  const H1_UP = sessionView({ settings: built.data, signalAction: 'up' });
+  const H1_STOPPED = sessionView({ ...STOPPED, settings: built.data });
+  const H1_COMPLETED = sessionView({
+    ...STOPPED,
+    settings: built.data,
+    stopReason: TradingSessionStopReason.Completed,
+    cycles: { planned: 0, closed: 0 },
+    trades: { settled: 50, rejected: 0, won: 30, lost: 20, tied: 0, profit: d('5') },
+  });
+  const STOP_ROWS = [[button(LABELS.sessionStopButton, STOP)]];
+  const PHOTO_REFUSED: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: wrong file identifier/HTTP URL specified',
+  };
+  const started = (view: TradingSessionView) =>
+    setup({ startSession: () => Promise.resolve({ started: view }) });
+  const entryOf = (scene: ReturnType<typeof setup>) =>
+    scene.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
+
+  it('H1-B1 the session message carries the «⏹» with no suffix: a photo, a text, the text after a refused photo', async () => {
+    const photo = started(H1_UP);
+    await photo.press(START);
+    expect(methods(photo.calls)).toEqual(['answerCallbackQuery', 'sendPhoto']);
+    expect(payloadOf(photo.calls, 'sendPhoto')?.caption).toBe(statusOf(H1_UP));
+    expect(rowsOf(payloadOf(photo.calls, 'sendPhoto'))).toEqual(STOP_ROWS);
+
+    const text = started(H1);
+    await text.press(START);
+    expect(payloadOf(text.calls, 'sendMessage')?.text).toBe(statusOf(H1));
+    expect(rowsOf(payloadOf(text.calls, 'sendMessage'))).toEqual(STOP_ROWS);
+
+    const refused = started(H1_UP);
+    refused.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await refused.press(START);
+    expect(methods(refused.calls)).toEqual(['answerCallbackQuery', 'sendPhoto', 'sendMessage']);
+    expect(rowsOf(payloadOf(refused.calls, 'sendMessage'))).toEqual(STOP_ROWS);
+
+    // another session's message stays without a keyboard (#536)
+    const plain = started(SESSION_VIEW);
+    await plain.press(START);
+    expect(payloadOf(plain.calls, 'sendMessage')).not.toHaveProperty('reply_markup');
+  });
+
+  it("H1-B2 the tracker's edit keeps the «⏹» while the session runs and drops it with the stop", async () => {
+    const scene = started(H1_UP);
+    await scene.press(START);
+    const entry = entryOf(scene);
+    await entry.edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1_UP));
+    const media = payloadOf(scene.calls, 'editMessageMedia');
+    expect(rowsOf(media)).toEqual(STOP_ROWS);
+    await entry.edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1));
+    expect(rowsOf(payloadOf(scene.calls, 'editMessageText'))).toEqual(STOP_ROWS);
+    await entry.edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1_STOPPED));
+    const last = scene.calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload;
+    expect(last?.text).toBe(statusOf(H1_STOPPED));
+    expect(last).not.toHaveProperty('reply_markup');
+  });
+
+  it('H1-B3 a press of that «⏹» stops through the in-place path, with no waiting message named', async () => {
+    const { press, calls, stopSession, sessionTracker } = setup({
+      stopSession: () => Promise.resolve(H1_STOPPED),
+    });
+    await press(STOP);
+    expect(stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), undefined]]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(statusOf(H1_STOPPED));
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: H1_STOPPED });
+  });
+
+  it('H1-B4 h1_payout_too_low: its text under another pair and the menu, no warning', async () => {
+    const { press, calls, logger, sessionTracker } = setup({
+      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.H1PayoutTooLow)),
+    });
+    await press(START);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.sessionH1PayoutTooLow.value);
+    expect(sent?.text).toContain(`${String(H1_MIN_PAYOUT_PCT)} %`);
+    expect(rowsOf(sent)).toEqual(OTHER_PAIR_ROWS);
+    expect(warnings(logger)).toEqual([]);
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+  });
+
+  it('H1-B5 h1_duration_unsupported is a logged bug; account_not_h1 says the account changed', async () => {
+    const duration = setup({
+      startSession: () =>
+        Promise.reject(httpError(409, TradingSessionErrorCode.H1DurationUnsupported)),
+    });
+    await duration.press(START);
+    expect(payloadOf(duration.calls, 'sendMessage')?.text).toBe(TEXTS.sessionPairUnavailable.value);
+    expect(warnings(duration.logger)).toEqual(['trading session not started']);
+
+    const changed = setup({
+      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.AccountNotH1)),
+    });
+    await changed.press(START);
+    const sent = payloadOf(changed.calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.sessionAccountChanged.value);
+    expect(rowsOf(sent)).toEqual(BACK_ROWS);
+    expect(warnings(changed.logger)).toEqual([]);
+  });
+
+  it('H1-B6 a completed H1 session counts its trades, not cycles, in the status and the stop reply', () => {
+    const line = '🏁 H1-сессия завершена: 50 сделок — 30 в плюс, 20 в минус';
+    expect(statusOf(H1_COMPLETED)).toContain(line);
+    expect(statusOf(H1_COMPLETED)).not.toContain('цикл');
+    expect(replyOf(H1_COMPLETED).split('\n')[0]).toBe(line);
+    expect(statusOf(sessionView({ ...H1_COMPLETED, settings: SESSION_VIEW.settings }))).toContain(
+      '🏁 Сессия завершена: 0 циклов',
+    );
   });
 });

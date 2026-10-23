@@ -550,7 +550,8 @@ export type TradingSessionStartRefusal =
   | typeof TradingSessionErrorCode.ModeNotAllowed;
 
 export type TradingSessionStartCheck =
-  | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date }
+  // h1Since: the account's H1 mark (#745), the start route's choice of settings v4
+  | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date; h1Since: Date | null }
   | { ok: false; code: TradingSessionStartRefusal; activeSessionId?: string };
 
 const refused = (code: TradingSessionStartRefusal): TradingSessionStartCheck => ({
@@ -598,6 +599,7 @@ export async function checkTradingSessionStart(
       status: brokerAccounts.status,
       tradingHalted: brokerAccounts.tradingHalted,
       accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
+      h1Since: brokerAccounts.h1Since,
     })
     .from(brokerAccounts)
     .where(eq(brokerAccounts.id, resolved.brokerAccountId));
@@ -623,6 +625,7 @@ export async function checkTradingSessionStart(
     ok: true,
     brokerAccountId: resolved.brokerAccountId,
     accessTokenExpiresAt: account.accessTokenExpiresAt,
+    h1Since: account.h1Since,
   };
 }
 

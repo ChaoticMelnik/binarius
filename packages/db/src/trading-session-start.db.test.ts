@@ -17,6 +17,7 @@ import {
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { applyBalanceEvent, upsertBalanceSnapshot } from './balance-snapshot-ops';
+import { setH1Mark } from './h1-ops';
 import { brokerBalanceSnapshots, tradeIntents, tradingSessions, users } from './schema/index';
 import {
   createTempDatabase,
@@ -152,6 +153,14 @@ describe('checkTradingSessionStart', () => {
     const result = await check(seed.telegramUserId);
     expect(result).toMatchObject({ ok: true, brokerAccountId: seed.brokerAccountId });
     expect(result.ok && result.accessTokenExpiresAt).toBeInstanceOf(Date);
+  });
+
+  it("H1-H6 returns the account's H1 mark (#745): null, then the mark's date", async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    expect(await check(seed.telegramUserId)).toMatchObject({ ok: true, h1Since: null });
+    await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
+    const result = await check(seed.telegramUserId);
+    expect(result.ok && result.h1Since).toBeInstanceOf(Date);
   });
 
   it('E0 a closed trading switch refuses first, before the user and the account', async () => {

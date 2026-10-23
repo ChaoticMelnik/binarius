@@ -8,6 +8,7 @@ import {
   BrokerBalanceUnavailableReason,
   BrokerRestErrorCode,
   botTextMessageKeys,
+  buildH1SessionSettings,
   defaultBotTextSource,
   BotLanguage,
   enBotTextSource,
@@ -284,8 +285,17 @@ const SESSION_BALANCES: TradingSessionView['balance'][] = [
 ];
 // the session picture's direction, or none (#568)
 const SIGNAL_ACTIONS = [null, ...Object.values(TradeAction)];
+// an H1 session (#745): its completed line counts trades, not cycles
+const builtH1 = buildH1SessionSettings({
+  assetId: INT4_MAX,
+  trades: MAX_SESSION_SUMMARY_TRADES,
+  stake: { baseStake: STAKE, stakeScale: 8 },
+  maxLossMultiplier: 1,
+});
+if (!builtH1.success) throw new Error('fixture: H1 settings');
+const H1_SETTINGS = builtH1.data;
 // a session on the longest candle (INT4_MAX s -> 1h, «3600» in the no-signal line, #637), or one
-// whose settings do not parse (the line without the figure)
+// whose settings do not parse (the line without the figure), or an H1 session's
 const STOP_SETTINGS: TradingSessionView['settings'][] = [
   {
     version: 1,
@@ -295,6 +305,7 @@ const STOP_SETTINGS: TradingSessionView['settings'][] = [
     stake: { baseStake: STAKE, stakeScale: 8 },
   },
   null,
+  H1_SETTINGS,
 ];
 const sessionTexts = (
   status: TradingSessionStatus,
@@ -466,8 +477,21 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     [TradingSessionStatus.Active, TradingSessionStatus.Paused].flatMap((status) =>
       sessionTexts(status, [null]),
     ),
-  sessionCompleted: () =>
-    sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
+  sessionCompleted: () => [
+    ...sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
+    // an H1 session's (#745)
+    ...[N, 992, 991].map((settled) =>
+      sessionStatusText(
+        pairLabel({ symbol: x(W.symbol + 10) }),
+        sessionView({
+          status: TradingSessionStatus.Stopped,
+          stopReason: TradingSessionStopReason.Completed,
+          settings: H1_SETTINGS,
+          trades: { settled, rejected: 0, won: N, lost: N, tied: N, profit: USD },
+        }),
+      ),
+    ),
+  ],
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
   // the reply to the stop (#536): every end line, with the last trade's line by its status or
   // without

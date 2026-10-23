@@ -13,8 +13,8 @@ import { users } from './schema/users';
 import type { DbExecutor, Tx } from './trade-intent-ops';
 
 // H1 sessions (#670, docs/h1.md -> Sessions): the account's mark and the reads of the h1 CLI
-// (apps/backend/src/cli/h1-mark.ts, h1-session.ts). The mark is the only gate of `h1 session
-// start`; nothing else on the row reads it.
+// (apps/backend/src/cli/h1-mark.ts, h1-session.ts). The mark gates `h1 session start`, and makes a
+// session the bot starts on the account an H1 one (#745, checkTradingSessionStart).
 
 // a session of settings v4 (settingsV4Schema): the kind is a bound parameter, not a literal in SQL
 export const h1SessionSql: SQL = sql`(${tradingSessions.settings} #>> '{signal,kind}') = ${H1_SESSION_SIGNAL_KIND}`;

@@ -156,6 +156,11 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   pairWaitingAlternatives: `Other pairs have a signal already — pick one below instead of waiting 👇`,
   analysisWaiting: `⏳ <b>Checking the signal…</b> As soon as it appears, the signal card opens here.`,
 
+  // ---- an H1 session from the bot (#745): translated ahead of the Session group ---------------
+  sessionCompletedH1: `🏁 H1 session completed: {result}`,
+  sessionH1PayoutTooLow: `⚡ H1 needs a pair that pays at least 94 %. Pick another pair 👇`,
+  sessionAccountChanged: `⚙️ The account settings changed — open the analysis again.`,
+
   // ---- the switch to real after a deposit (#686): translated ahead of the Mailing group --------
   realModeByDeposit: `💳 <b>Deposit received — real mode is on</b>
 
@@ -258,6 +263,9 @@ export const TRANSLATED_BEFORE_633 = [
   'pairWaitingAlternatives',
   'analysisWaiting',
   'realModeByDeposit',
+  'sessionCompletedH1',
+  'sessionH1PayoutTooLow',
+  'sessionAccountChanged',
 ] as const satisfies readonly BotTextKey[];
 
 export const UNTRANSLATED_BOT_TEXT_KEYS: readonly BotTextKey[] = (

@@ -14,6 +14,11 @@ import {
   type TradeAction,
   TradingSessionStopReason,
   UserStatus,
+  H1_BOT_MAX_LOSS_MULTIPLIER,
+  H1_BOT_SESSION_TRADES,
+  H1_EXPIRY_SEC,
+  H1_MIN_PAYOUT_PCT,
+  buildH1SessionSettings,
   buildSessionSettings,
   errorLogFields,
   intervalForDuration,
@@ -111,13 +116,16 @@ const STATUS_OF = {
   stake_below_minimum: 409,
   insufficient_balance: 409,
   no_signal: 409,
+  h1_payout_too_low: 409,
+  h1_duration_unsupported: 409,
+  account_not_h1: 409,
   catalog_unavailable: 503,
   signal_unavailable: 503,
 } as const satisfies Record<ErrorCode, 404 | 409 | 503>;
 
 // createTradingSession's refusals under its locks; a db code added without a wire code fails the
-// typecheck. account_not_h1 (#707) needs settings v4, which this route never writes: the catch
-// rethrows it as an opaque 500 (Rule 9) rather than a false wire code
+// typecheck. account_not_h1 (#707): the H1 mark removed between the start's check and the lock of
+// a settings v4 start (#745)
 const DB_CODE_TO_WIRE = {
   account_not_found: TradingSessionErrorCode.BrokerAccountNotFound,
   account_revoked: TradingSessionErrorCode.AccountRevoked,
@@ -128,10 +136,8 @@ const DB_CODE_TO_WIRE = {
   trading_paused: TradingSessionErrorCode.TradingPaused,
   mode_not_allowed: TradingSessionErrorCode.ModeNotAllowed,
   demo_only: TradingSessionErrorCode.DemoOnly,
-} as const satisfies Record<
-  Exclude<TradingSessionDbErrorCode, typeof TradingSessionDbErrorCode.AccountNotH1>,
-  ErrorCode
->;
+  account_not_h1: TradingSessionErrorCode.AccountNotH1,
+} as const satisfies Record<TradingSessionDbErrorCode, ErrorCode>;
 
 const idParamSchema = z.uuid();
 
@@ -215,6 +221,16 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     const pair = view.pairs.find((candidate) => candidate.id === assetId);
     if (pair === undefined || !isPairOpen(pair, now()) || !pairAcceptsDuration(pair, durationSec)) {
       return refuse(reply, TradingSessionErrorCode.PairUnavailable);
+    }
+    // An H1-marked account (#745, docs/h1.md -> From the bot): its session is H1's, so its trade
+    // plan's expiry and payout floor, checked before the signal is read - no decision row. The
+    // payout is read at the start only (owner 2026-10-19).
+    const h1 = eligible.h1Since !== null;
+    if (h1 && durationSec !== H1_EXPIRY_SEC) {
+      return refuse(reply, TradingSessionErrorCode.H1DurationUnsupported);
+    }
+    if (h1 && pair.payout < H1_MIN_PAYOUT_PCT) {
+      return refuse(reply, TradingSessionErrorCode.H1PayoutTooLow);
     }
 
     // The pair's signal on the current candle (#509): no session starts on a pair without one. A
@@ -328,14 +344,18 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
 
     // a stored min_trade_amount of 0 is valid and gives baseStake '0', which the settings refuse:
     // the snapshot offers no stake to trade with, the same answer as no snapshot; so does a stake
-    // whose martingale limits would leave numeric(20,8) (#450)
-    const stakeSettings = buildSessionSettings({
-      assetId,
-      durationSec,
-      cycles,
-      stake: stakeSettingsFrom(savedStake, snapshot.minTradeAmount),
-      strategy: stakeStrategy,
-    });
+    // whose martingale limits would leave numeric(20,8) (#450). An H1 session (#745) takes the
+    // same stake, fixed, H1_BOT_SESSION_TRADES trades and a ceiling of H1_BOT_MAX_LOSS_MULTIPLIER
+    // stakes; the request's cycles are martingale cycles and do not apply.
+    const stake = stakeSettingsFrom(savedStake, snapshot.minTradeAmount);
+    const stakeSettings = h1
+      ? buildH1SessionSettings({
+          assetId,
+          trades: H1_BOT_SESSION_TRADES,
+          stake,
+          maxLossMultiplier: H1_BOT_MAX_LOSS_MULTIPLIER,
+        })
+      : buildSessionSettings({ assetId, durationSec, cycles, stake, strategy: stakeStrategy });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');
       return refuseDecided(TradingSessionErrorCode.BalanceUnavailable);
@@ -351,7 +371,6 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       );
     } catch (error) {
       if (!(error instanceof TradingSessionError)) throw error;
-      if (error.code === TradingSessionDbErrorCode.AccountNotH1) throw error;
       const code = DB_CODE_TO_WIRE[error.code];
       await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
       if (code === TradingSessionErrorCode.ActiveSessionExists) {

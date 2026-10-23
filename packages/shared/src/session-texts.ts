@@ -6,6 +6,7 @@ import { AdaptiveLineSlot, SessionTradeResult } from './session-steps';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
 import { TradeAction, TradeMode } from './trading';
 import {
+  isH1Settings,
   SESSION_NO_SIGNAL_CANDLES,
   sessionSignalCandleMs,
   TradingSessionStopReason,
@@ -173,6 +174,10 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   }: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles' | 'settings'>):
     TelegramHtml | undefined => {
     if (stopReason === TradingSessionStopReason.Completed) {
+      // an H1 session (#745) plans trades, not martingale cycles
+      if (settings !== null && isH1Settings(settings)) {
+        return html.sessionCompletedH1({ result: resultOf(trades) });
+      }
       return html.sessionCompleted({
         cycles: cyclesCount(cycles.closed),
         result: resultOf(trades),
