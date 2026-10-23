@@ -336,7 +336,6 @@ no repeat.
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить» redraws (no tracker follows that one): 🔄 Обновить \| 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🚀 Сессия из 5 циклов (#360; at 5 s for a trade of any duration, #685) // accepted: 🔄 Обновить \| 📊 Анализ // 📡 Сигналы \| 🏠 В меню; terminal: 📊 Анализ \| 📡 Сигналы \| 🏠 В меню |
 | the session message (#536; the picture of its signal's direction with the text as its caption, #568, or the text) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
-| the session message of an active H1 session (#745) | ⏹ Остановить сессию (`session:stop:<id>`, no suffix), until the stop's edit |
 | the waiting message (#536, sent by the backend while the session waits for a signal, #722) | ⏹ Остановить сессию (`session:stop:<id>:w`, red) |
 | the cycle message with an open trade's block (#722, sent or edited by the backend; a session the sender read stopped gets none) | ⏹ Остановить сессию (`session:stop:<id>:c`, red); the result's edit takes it off |
 | the reply to the stop under the open trade's block (#722, a new message) | the end of the path (`sessionCardKeyboard`), as `/stop`'s for one session; a failure: 🏠 В меню, the block's «⏹» stays |
@@ -365,7 +364,7 @@ edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with
 (`not_found`, `deadline`), `SessionTrackRequest.edit(drawing, end?)` with `not_found` only. So
 the last edit draws its next step too: the end of the path on a trade's stop status, the menu alone
 on a 404, the refresh and the menu at the deadline of a live trade; the session message's edits
-draw none (#536, `session_status`), but an active H1 session's, which keeps its «⏹» (#745).
+draw none (#536, `session_status`; an H1 session's too since #775).
 
 An old message sent before #350 keeps the keyboard it had: Telegram keeps old messages, and the rule
 applies to what is sent after the deploy.

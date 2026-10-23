@@ -1,12 +1,14 @@
 # Stake sizing v1 (issue #19, default Martingale #450)
 
-`packages/stake/src/` (`@binarius/stake`, #775) decides the amount of the next trade in a session, or stops the
-session with a reason. It is a pure function: it reads no clock, no environment, no network and no
+`packages/stake/src/` (`@binarius/stake`, #775) decides the amount of the next trade in a
+session, or stops the session with a reason. It is a pure function: it reads no clock, no environment, no network and no
 database, and writes no log. The same parameters and input always give the same decision. Its
-caller is the session orchestrator (#287, `trading-session/orchestrator.ts`,
-[trading-session.md](trading-session.md)), which builds the parameters with
-`sessionStakeParams(settings)` from the session's `trading_sessions.settings` and feeds it the
-session's history (#130).
+callers are the session orchestrator (#287, `trading-session/orchestrator.ts`,
+[trading-session.md](trading-session.md)) and, since #775, the backend's H1 driver
+(`apps/backend/src/h1/driver.ts`, [h1.md → The driver](h1.md#the-driver-707)); both build the
+parameters with `sessionStakeParams(settings)` from the session's `trading_sessions.settings` and
+feed it the session's history (#130) through `sessionTradeOf` (`history.ts`), so the driver's stake
+is the one the orchestrator would compute.
 
 Two strategies exist. `fixed` sends the same stake every time. `martingale` is a bounded
 Martingale: after each loss the next stake recovers the loss of the streak plus the profit of the

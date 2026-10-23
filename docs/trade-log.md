@@ -126,13 +126,17 @@ attempt, with `reason: 'record_missing'` (a backend before #666), `'record_inval
 failed its schema) or `'record_mismatch'` (it is not the answer's decision, pair or interval); the
 attempt goes on and its intent names no decision (O7).
 
-### The H1 driver (`context = session`, `version = h1`, #707)
+### The H1 driver (`context = session`, `version = h1` or `h1-repeat`, #707, #775)
 
-The backend's driver ([h1.md → The driver](h1.md#the-driver-707)) writes rows only for the
-signals it acts on; a `no_signal` and a skip (a live intent, the limits, an ineligible pair) are
-the counters of its `h1 driver` line. `params` is the shadow row's shape with `set = session`, so
-the export prints the row as an entry `replayH1Entry` decides again; `interval` and
-`ticks_until_ms` are NULL, `source` is the series' (`kind: ticks`).
+The backend's driver ([h1.md → The driver](h1.md#the-driver-707)) writes rows for the signals it
+acts on, for the repeat steps (#775) and for one `no_signal` per waiting period (#775); a skip (a
+live intent, the limits, the sizer, an ineligible pair) is a counter of its `h1 driver` line.
+`params` of a `version = h1` row is the shadow row's shape with `set = session`, so the export
+prints the row as an entry `replayH1Entry` decides again; `interval` and `ticks_until_ms` are
+NULL, `source` is the series' (`kind: ticks`). A repeat row (`version = h1-repeat`) is decided by
+the rule, not the detector: `params = { rule: repeat_step_2, strategy }`, `decision.after` the
+settled trade it repeats, `source = { kind: settlement, trigger }`, `series = []`, `digits` NULL;
+the export prints it as stored, the stand reports `unsupported_version`.
 
 | # | Path (`apps/backend/src/h1/driver.ts`) | Ending | Row: `outcome` / `detail` | Test |
 |---|---|---|---|---|
@@ -142,9 +146,12 @@ the export prints the row as an entry `replayH1Entry` decides again; `interval` 
 | D4 | a stop refusal of `SESSION_INTENT_REFUSALS` | `stopTradingSession` with its reason, the session forgotten | `refused` / the code, after the stop, best-effort (`warn` `h1 driver decision not recorded`) | H1-DR10 |
 | D5 | `active_intent_exists`, `client_request_id_conflict` | the session kept | `refused` / the code | H1-DR11 |
 | D6 | `TradingSessionNotActiveError`, the history gone | forgotten | none | H1-DR17 |
-| D7 | a skip of `sessionIntentBlock` (the hour, a live intent, N trades, the loss limit, two rejections) | none: the orchestrator stops it | none | H1-DR4, H1-DR6 |
-| D8 | `no_signal` | none | none (В3 (a) #670) | H1-DR20 |
-| D9 | any other throw of `createSessionIntent` | `errors`, a `warn` | none: rolled back with the intent | — |
+| D7 | a skip of `sessionIntentBlock` (the hour, a live intent, the cycles, two rejections) or of the sizer (its stops, no balance, a balance hold) | none: the orchestrator stops it | none | H1-DR4, H1-DR6, H1-DR22–DR24 |
+| D8 | `no_signal` opening a waiting period (not busy, past the cadence, no block, none written since the last intent or notice) | the waiting message is due | `no_signal` / NULL, `version = h1`, the detector's decision and series; refused: `failed`, tried again after `scanMs` | H1-DR29, H1-DR30, H1-DB5 |
+| D9 | the repeat step (Шаг 2 after a lost or tied Шаг 1, #775) | the intent without a submit deadline, at the sizer's stake, in the lost trade's direction; a wake | `intent` / NULL (or `refused` / the code), `version = h1-repeat` | H1-DR25–DR28, H1-DR31, H1-DB4 |
+| D10 | any other throw of `createSessionIntent` | `errors`, a `warn` | none: rolled back with the intent | — |
+
+Tests of the shapes: `signal-decision-ops.db.test.ts` SD19, `trade-log.db.test.ts` X17.
 
 `docs/h1.md` → Comparing with the shadow joins these rows with their trades and the shadow's R1
 row of the same pair and second.
@@ -153,7 +160,7 @@ row of the same pair and second.
 
 | # | Path (`session-routes.ts`) | Answer | Row: `outcome` / `detail` | Test |
 |---|---|---|---|---|
-| S0 | `session_too_long`, the eligibility refusals (`active_session_exists` included), `catalog_unavailable`, `pair_unavailable`, the H1 fence (`h1_duration_unsupported`, `h1_payout_too_low`, #745) | 4xx/503 | none: before the signal read | R42, H1-R3, H1-R4 |
+| S0 | `session_too_long`, the eligibility refusals (`active_session_exists` included), `catalog_unavailable`, `pair_unavailable`, the H1 fence (`h1_duration_unsupported`, #745; no payout floor since #775) | 4xx/503 | none: before the signal read | R42, H1-R4, H1-R5′ |
 | S1 | `fetch_failed` or a throw of the feed | 503 `signal_unavailable` | none: no entry | R42 |
 | S2 | `no_signal` | 409 | `no_signal` / NULL, no session | R37 |
 | S3 | a signal, no balance snapshot | 409 `balance_unavailable` | `refused` / `balance_unavailable` | R38 |
@@ -165,8 +172,8 @@ row of the same pair and second.
 
 `broker_account_id` is the eligible account, `payout` the catalog's, `taken_at_ms` the route's
 clock after its reads. An H1 session from the bot (#745) starts with this `session_start` row (the
-candle check, version v2) before the driver's `version = h1` rows; the export replays each by its
-version. The write is best-effort: a throw is `warn` `session start decision not
+candle check, version v2) before the driver's `version = h1` and `h1-repeat` rows; the export
+replays each by its version. The write is best-effort: a throw is `warn` `session start decision not
 recorded` (account, asset, name and code), the answer unchanged (R39).
 
 ## The record of POST /trading/signal

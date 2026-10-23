@@ -115,31 +115,36 @@ stops a session whose settings fail as `invalid_settings`, so a row written by h
 too. The bot's view and the admin list ([admin-pages.md](admin-pages.md), #330) show such settings
 as null.
 
-**Version 4 is an H1 session (#670, [h1.md](h1.md#sessions-670)).** Two writers, both through
-`buildH1SessionSettings`: `h1 session start` (the backend's h1 CLI) and, since #745, the start
-route on an H1-marked account (`H1_BOT_SESSION_TRADES` 50 trades, k = `H1_BOT_MAX_LOSS_MULTIPLIER`
-20, [h1.md → From the bot](h1.md#from-the-bot-745)); `TRADING_SESSION_SETTINGS_VERSION` stays 3,
-and `session-start` never writes v4:
+**Version 5 is an H1 session (#775, [h1.md](h1.md#sessions-670)): a v3 session whose entries come
+from the H1 signal.** Two writers, both through `buildH1SessionSettings({ assetId, cycles, stake,
+strategy })`: `h1 session start` (the backend's h1 CLI) and the start route on an H1-marked account
+([h1.md → From the bot](h1.md#from-the-bot-745)); `TRADING_SESSION_SETTINGS_VERSION` stays 3, and
+`session-start` never writes v5:
 
 ```json
-{ "version": 4, "assetId": 202, "durationSec": 5, "trades": 50,
-  "stake": { "strategy": "fixed", "baseStake": "1", "stakeScale": 2 },
+{ "version": 5, "assetId": 202, "durationSec": 5, "cycles": 5,
+  "stake": { "strategy": "martingale", "baseStake": "1", "stakeScale": 2,
+             "limits": { "maxSteps": 4, "maxStake": "12", "maxSessionLoss": "20",
+                         "maxSessionDurationMs": 3600000 } },
   "signal": { "kind": "h1", "params": { "moveSec": 3, "sdWindowSec": 300, "sdStepSec": 5,
-              "threshold": 1 }, "entryDelaySec": 1, "expirySec": 5 },
-  "maxLoss": "20" }
+              "threshold": 1 }, "entryDelaySec": 1, "expirySec": 5 } }
 ```
 
-`durationSec` and `signal.expirySec` are `H1_EXPIRY_SEC` (5) and nothing else, `trades` 1 –
-`MAX_SESSION_SUMMARY_TRADES` (720), the stake always `fixed`, `signal.params` the detector's shape
+`durationSec` and `signal.expirySec` are `H1_EXPIRY_SEC` (5) and nothing else, `cycles` 1 –
+`MAX_SESSION_CYCLES` (20), the stake as v3's (the process's `SESSION_STAKE_STRATEGY`; under
+martingale with `martingaleLimitsFor(baseStake)`), `signal.params` the detector's shape
 (`h1ParamsSchema`; the writer puts `H1_R1_PARAMS`), `entryDelaySec` ≥ 1 (the writer puts
-`H1_ENTRY_WINDOW_SEC.from`), `maxLoss` an amount inside `numeric(20,8)`: `k × baseStake` in bigint
-(`multiplyDecimal`, Rule 2; k 1 – `MAX_H1_LOSS_MULTIPLIER`, 1 000). `isH1Settings(settings)` is the
-one guard of the version. `sessionFitsDeadline` is not applied to it: a session whose N trades do
-not fit the hour ends with `timeout`. `trading-session.test.ts` H1-S1 – S5.
+`H1_ENTRY_WINDOW_SEC.from`). `sessionFitsDeadline(cycles, 5, strategy)` applies as to any session.
+
+**Version 4 (#670) is read-only since #775**: a fixed stake, `trades` 1 – 720 and `maxLoss`; nothing
+writes it, the rows on the pilot still parse, the driver and the orchestrator run such a row as an
+H1 session with a fixed stake, and its `maxLoss` is no longer enforced (the owner stops an active
+one before the deploy of #775). `isH1Settings(settings)` (version 4 or 5) is the one guard of an
+H1 session. `trading-session.test.ts` H1-S1 – S5 (v4), H1-S1′ – S4′ (v5).
 
 **The session's progress** is `sessionProgress(settings, { settled, won })` → `{ planned, done }`,
 the one rule both the orchestrator's completion and the view's `cycles` read: v1/v2 and v4 —
-`planned = trades`, `done = settled`; v3 fixed — `planned = cycles`, `done = settled`; v3 martingale —
+`planned = trades`, `done = settled`; v3 and v5 fixed — `planned = cycles`, `done = settled`; v3 and v5 martingale —
 `planned = cycles`, `done = won` (only a win closes a cycle, as the sizer's `readHistory` resets its
 series on a positive profit and the trade messages' `sessionTradeSteps` start a new cycle after
 one; `session-steps.test.ts` holds the two equal over every history of up to six trades). A loss,
@@ -182,7 +187,7 @@ keeps the broker minimum.
 | `rejected_twice` | the last two intents of the session are `rejected` | the orchestrator (#287) |
 | `timeout` | `started_at` + the maximum duration passed (database clock) | `stopExpiredSessions` |
 | `stake_stop` | the stake sizer answered stop with a data, minimum or balance code (in the log line) | the orchestrator (#287) |
-| `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded`, `session_duration_exceeded` | the sizer's martingale limit of the same name ([stake.md](stake.md#defaults)); `session_duration_exceeded` is the hour on the worker's clock, which `timeout` on the database's clock usually ends first. An H1 session (v4, #670) stops with `max_session_loss_exceeded` when `readSessionHistory`'s `lossLimitReached` is true: the sum of its settled trades' profit minus `baseStake` is below `-maxLoss`, in SQL `numeric` — the sizer's rule of the martingale ceiling, the next stake included | the orchestrator (#450, `STAKE_STOP_REASONS`; #670) |
+| `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded`, `session_duration_exceeded` | the sizer's martingale limit of the same name ([stake.md](stake.md#defaults)); `session_duration_exceeded` is the hour on the worker's clock, which `timeout` on the database's clock usually ends first. An H1 session (v5, #775) stops on the same limits of its sizer; the `maxLoss` of a v4 row (#670) is no longer enforced | the orchestrator (#450, `STAKE_STOP_REASONS`) |
 | `account_unavailable` | intent creation refused for a durable reason | the orchestrator (#287) |
 | `pair_unavailable` | the pair left the catalog or refuses the duration | the orchestrator (#287) |
 | `balance_unavailable` | no balance snapshot row for the account | the orchestrator (#287) |
@@ -198,7 +203,7 @@ session trades on its signals ([The payout order key](#the-payout-order-key-379-
 
 | Operation | Statement | Notes |
 |---|---|---|
-| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings, startSignalAction? }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first, before any read (`demo_only`); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`) and compares the session's mode with `users.trading_mode` in the same statement's row (`mode_not_allowed`, #327: a switch committed before the lock is seen, one after it waits for the creation and then stops the session), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); for settings v4 the account's `h1_since` read under the same lock (`account_not_h1` when NULL, #707: an `h1 unmark` that committed between `h1 session start`'s check and the insert); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
+| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings, startSignalAction? }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first, before any read (`demo_only`); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`) and compares the session's mode with `users.trading_mode` in the same statement's row (`mode_not_allowed`, #327: a switch committed before the lock is seen, one after it waits for the creation and then stops the session), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); for H1 settings (v5, a v4 row) the account's `h1_since` read under the same lock (`account_not_h1` when NULL, #707: an `h1 unmark` that committed between `h1 session start`'s check and the insert); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`, whose `action` is `signalAction`, else the row's `start_signal_action` (#568). `settings` that fail every version read as `null`, with `cycles` `{ planned: 0, closed: 0 }`; otherwise `cycles` is `sessionProgress` over the same counters (#552) |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
@@ -256,15 +261,14 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 3 | `checkTradingSessionStart({ mode })` | 409 `trading_paused` first; 404 `user_not_found`; 409 `user_blocked`; 409 `mode_not_allowed` when `mode` is not the user's `trading_mode` (#327, before any account read); 404 `broker_account_not_found`; 409 `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
-| 4b | an H1-marked account (step 3's `h1Since`, #745): `durationSec` is not `H1_EXPIRY_SEC` (5) | 409 `h1_duration_unsupported`, before the signal: no decision row (H1-R4) |
-| 4b′ | an H1-marked account: the pair's catalog payout under `H1_MIN_PAYOUT_PCT` (94), read at the start only | 409 `h1_payout_too_low`, before the signal: no decision row (H1-R3, H1-R5) |
+| 4b | an H1-marked account (step 3's `h1Since`, #745): `durationSec` is not `H1_EXPIRY_SEC` (5); no payout floor since #775 (H1-R3′) | 409 `h1_duration_unsupported`, before the signal: no decision row (H1-R4, H1-R5′) |
 | 4c | the pair's signal on the current candle (#509): `signals.evaluate({ assetId, interval: intervalForDuration(durationSec), digits })`, the cached feed `POST /trading/signal` reads, in parallel with steps 5–5b; its refusal answers before theirs (R32b); a signal's direction goes to step 7 as `start_signal_action` (#568, R34) | 503 `signal_unavailable` on `fetch_failed` (`rate_limited` included) or a throw (R29); 409 `no_signal` on a `no_signal` decision (R28) |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
 | 6a | `checkStake(savedStake ?? minTradeAmount, { minTradeAmount, available })` on the same snapshot (#297): the saved stake and `available` of the session's mode, `demo_stake`/`demo.available` or `real_stake`/`real.available` (#327) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_balance`; without a saved stake, a minimum above that mode's balance is refused here rather than as `stake_stop` on the first trade |
-| 6 | `buildSessionSettings` with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450): settings v3, for martingale with the limits of that stake. On an H1-marked account (#745) `buildH1SessionSettings` with the same stake, fixed: settings v4, `H1_BOT_SESSION_TRADES` trades, `maxLoss = H1_BOT_MAX_LOSS_MULTIPLIER × stake`; `cycles` does not apply (H1-R1, H1-R7) | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
-| 7 | `createTradingSession(…, mode, startSignalAction)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand; on an H1-marked account too, H1-R8); `account_not_h1` (409, #745: the H1 mark removed between step 3 and the account's lock of a v4 start; a mark set in between gives a v3 session, H1-R6) |
+| 6 | `buildSessionSettings` with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450): settings v3, for martingale with the limits of that stake. On an H1-marked account (#775) `buildH1SessionSettings` with the same cycles, stake and strategy: settings v5 (H1-R1′, H1-R7′) | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
+| 7 | `createTradingSession(…, mode, startSignalAction)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand; on an H1-marked account too, H1-R8); `account_not_h1` (409, #745: the H1 mark removed between step 3 and the account's lock of a v5 start; a mark set in between gives a v3 session, H1-R6) |
 | 8 | 201 `{ session }` | — |
 
 - **The view on `active_session_exists`.** A second start — a double press, or a retry after a
@@ -536,26 +540,28 @@ keeps the first reason.
 The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code added to
 `TradeIntentErrorCode` fails `tsc` until it has an ending.
 
-**An H1 session (settings v4, #670).** Its trades are opened by the backend's driver (#707), not
-by the attempt, so the attempt only stops it or holds it. It reads the history with `lossLimit: {
-maxLoss, nextStake: baseStake }` and runs the rows above in order up to the pair, with three
-differences: after `completed` it stops `max_session_loss_exceeded` when `lossLimitReached`
-(`fields: { maxLoss }`, H1-O3); a closed pair holds it back `min(scheduledUntil − now,
-TRADING_SESSION_RETRY_MS)` whatever `waitExpired` says (H1-O6); and past the pair it never asks the
-signal (`orchestrator.db.test.ts` H1-O1: a signal source that throws). The sizer of its fixed stake
-still runs (the minimum, the balance, the history's integrity: `stake_stop`, `balance_unavailable`
-before it, H1-O8); its `insufficient_balance` while `awaitsBalance` is the same one-tick hold with
-the `info` line `trading session waits for the balance` as above (#696, H1-BW). Then the ending is a
-hold-back of `TRADING_SESSION_H1_CHECK_MS` with the `debug` line `trading session waits for the H1
-driver`. The payout is not read (owner 2026-10-19:
-the 94 % floor is the start's only, H1-O7), and no path of it reaches `no_signal_timeout`. The
-tick's three sweeps — the kill switch, the hour, a halt — apply to it unchanged (H1-O4). The
-`completed` (H1-O2), `rejected_twice` (H1-O9) and `pair_unavailable` (H1-O5) rows are the common
-ones. Since #707 the checks from the hour to the two rejections are one function the attempt and
-the driver both read (`sessionIntentBlock`, `packages/shared/src/trading-session.ts`, H1-S7–S10):
-the driver skips where the attempt stops, so its intents never outrun these stops, and its
-refusal table is the attempt's own (`SESSION_INTENT_REFUSALS`, H1-S6). A live intent of the
-driver makes the attempt reschedule.
+**An H1 session (settings v5, #775; a read-only v4 row of #670).** Its trades are opened by the
+backend's driver (#707), not by the attempt, so the attempt only stops it or holds it. It runs the
+rows above in order up to the pair (H1-O2: `completed` by cycles, under martingale by wins; H1-O4:
+the hour; H1-O5: `pair_unavailable`; H1-O9: `rejected_twice`); a closed pair past the no-signal
+limit stops it `no_signal_timeout` with `waited: pair_closed`, as any session (H1-O6′); past the
+pair it never asks the signal (`orchestrator.db.test.ts` H1-O1: a signal source that throws). The
+sizer runs as for any session (its martingale limits, H1-O3′; the minimum, the balance, the
+history's integrity: `stake_stop`, `balance_unavailable` before it, H1-O8); its
+`insufficient_balance` while `awaitsBalance` is the same one-tick hold with the `info` line
+`trading session waits for the balance` as above (#696, H1-BW). Then, with no intent's change
+within the no-signal limit (`waitExpired`: `SESSION_NO_SIGNAL_CANDLES` × 5 s = 100 s from the
+later of `started_at` and the session's last intent's `updated_at`), it stops `no_signal_timeout`
+with `waited: no_signal` and no decision row (#775, В5; H1-O5′) - the driver's `no_signal` rows do
+not reset the count, as a regular session's rows do not. Else the ending is a hold-back of
+`TRADING_SESSION_H1_CHECK_MS` with the `debug` line `trading session waits for the H1 driver`. The
+payout is not read (H1-O7). A v4 row runs with its fixed stake and no `maxLoss` (H1-O10). The
+tick's three sweeps — the kill switch, the hour, a halt — apply to it unchanged. Since #707 the
+checks from the hour to the two rejections are one function the attempt and the driver both read
+(`sessionIntentBlock`, `packages/shared/src/trading-session.ts`, H1-S7–S10), and since #775 both
+size with the same sizer (`@binarius/stake`, `sessionTradeOf`): the driver skips where the attempt
+stops, so its intents never outrun these stops, and its refusal table is the attempt's own
+(`SESSION_INTENT_REFUSALS`, H1-S6). A live intent of the driver makes the attempt reschedule.
 
 **The decision rows (#666).** Every ending reached after a decision writes one `signal_decisions`
 row, the trade log of [trade-log.md](trade-log.md#the-writers-and-their-outcomes): the
@@ -791,7 +797,7 @@ refuses → `contract_violation`. The body is read up to `MAX_BACKEND_BODY_BYTES
 
 | Constant | Value | Bounds |
 |---|---|---|
-| `TRADING_SESSION_H1_CHECK_MS` | 5 000 | the hold of an H1 session (v4, #670) after an attempt that found nothing to stop: its N trades, its loss ceiling and its pair are checked again no later than this plus a tick |
+| `TRADING_SESSION_H1_CHECK_MS` | 5 000 | the hold of an H1 session (#670, #775) after an attempt that found nothing to stop: its cycles, the sizer's limits, its pair and the no-signal limit are checked again no later than this plus a tick |
 | `TRADING_SESSION_TICK_MS` | 5 000 | the scan interval; since #696 the safety net — a write in the worker that ends an intent or halts its account runs a tick at once ([The wake](#the-orchestrator)) |
 | `TRADING_SESSION_BATCH_SIZE` | 200 | runnable sessions attempted per tick |
 | `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` | 10 000 | one attempt: both backend calls and the statements |
@@ -831,7 +837,7 @@ line is in it with its level.
 
 | msg | level | When |
 |---|---|---|
-| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `maxLoss` (`max_session_loss_exceeded` of an H1 session, #670), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed` or `no_signal`, #509 — `paused` until #698; the session's limit in ms, #637) |
+| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed` or `no_signal`, #509 — `paused` until #698; the session's limit in ms, #637) |
 | `trading session stopped for manual review` | error | the halt sweep, or `account_halted` from the attempt (`code`) |
 | `trading session completed` | info | the session's last cycle closed (`sessionProgress`, #552): `settled` and `cycles` (the closed ones) |
 | `trading session vanished` | warn | a race: the row was gone between the scan and the history |
@@ -841,7 +847,7 @@ line is in it with its level.
 | `trading session signal unavailable` | warn | the signal call failed (`reason`, `status`) |
 | `trading session signal fetch failed` | warn | the backend answered `fetch_failed` (`code`, `retryAfterSec`) |
 | `trading session waits for the next candle` | info | `no_signal` (`reason`) |
-| `trading session waits for the H1 driver` | debug | an H1 session (settings v4, #670) passed the attempt's checks and is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
+| `trading session waits for the H1 driver` | debug | an H1 session (settings v5, #775) passed the attempt's checks and is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
 | `trading session waits for the balance` | info | the sizer's `insufficient_balance` while a settlement on the account in the session's mode is newer than the balance, inside the no-signal limit from that settlement; the session is held for one tick (`step`, #696) |
 | `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
@@ -855,7 +861,8 @@ line is in it with its level.
 
 ## The CLI
 
-An H1 session (v4) is started by the backend's `h1 session start`, not by this CLI:
+An H1 session (v5) is started by the backend's `h1 session start` or the start route on a marked
+account, not by this CLI:
 [h1.md → Sessions](h1.md#sessions-670).
 
 ```bash

@@ -284,8 +284,7 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `no_signal` | the same (#509): the pair has no signal on the current candle — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | the wait for the signal (#664, [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)): «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + «🧭 Вручную» and «🏠 В меню», in place of the launch or the amount screen (`removeScreen`; gone → a new message), as a new message for any other press and a typed amount; the other pairs with a signal from the first poll; the signal there: the amount screen (demo, its way back kept) or the launch (real) in the same message (`trading-session.test.ts` W-start1–3) |
 | 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
-| 409 `h1_payout_too_low` | an H1-marked account (#745, [h1.md → From the bot](h1.md#from-the-bot-745)): the pair pays under `H1_MIN_PAYOUT_PCT`, before the signal is read | «⚡ Для H1 нужна пара с выплатой не ниже 94 %. Выбери другую пару 👇» (`sessionH1PayoutTooLow`) + «🔀 Выбрать другую пару» and «🏠 В меню», no log |
-| 409 `h1_duration_unsupported` | an H1-marked account: a duration other than 5 s, which this bot never sends | `sessionPairUnavailable`; `warn` `trading session not started` |
+| 409 `h1_duration_unsupported` | an H1-marked account (#745, [h1.md → From the bot](h1.md#from-the-bot-745); no payout floor since #775): a duration other than 5 s, which this bot never sends | `sessionPairUnavailable`; `warn` `trading session not started` |
 | 409 `account_not_h1` | the H1 mark was removed during the start (`createTradingSession` under the account's lock) | «⚙️ Настройки аккаунта изменились — открой анализ заново.» (`sessionAccountChanged`) + the way back to the analysis, no log; the next press starts an ordinary session |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
 | any other 5xx, no answer, a broken body (a 409 `active_session_exists` whose body is not the contract's included) | unknown: the session may have been committed | one more `startSession` with the same request. A committed first attempt answers 409 with its session; otherwise the session is created once. Still unknown → «⚠️ Не удалось узнать, запущена ли сессия…» and `warn` `trading session not started` |
@@ -401,12 +400,10 @@ direction) and after the stop.
 
 Once the session stopped, the last line is its end line (`sessionEndLine`,
 `packages/shared/src/session-texts.ts`): «🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в
-минус» for a completed one (#552: the closed cycles, then the trades and the score by trade); an
-H1 session's (#745, settings v4) plans trades, not cycles: «🏁 H1-сессия завершена: 50 сделок — 30 в
-плюс, 20 в минус» (`sessionCompletedH1`, chosen by `isH1Settings`, in the status, the reply to the
-stop, the bot's summary and the backend's fallback alike);
-otherwise the reason's line below, «⚠️ Статус сессии недоступен.» with no reason (the CHECKs refuse
-that, the view's schema allows it). Nothing else: no trade number, no
+минус» for a completed one (#552: the closed cycles, then the trades and the score by trade; an
+H1 session's too since #775, settings v5); otherwise the reason's line below, «⚠️ Статус сессии
+недоступен.» with no reason (the CHECKs refuse that, the view's schema allows it). Nothing else: no
+trade number, no
 score, no trade line, no «🔎 Ждём сигнал…» (the waiting message is the backend's, [The waiting
 message](#the-waiting-message-536)); the trades are the backend's cycle messages, the result and the
 balance the summary's (#464, #537). The same end line opens the summary under its pair
@@ -451,16 +448,9 @@ the map from the view's `settings`.
 `replyHtmlWithoutNextStep` and edited by `editMessagePhotoByIdHtmlWithoutNextStep` or
 `editMessageTextByIdHtmlWithoutNextStep` (#568) with the reason `session_status`
 ([bot-navigation.md](bot-navigation.md) → Exceptions): the next step of a running session is the
-waiting message's «⏹», of a stopped one the summary's (#537). **An H1 session's** (#745) has no
-waiting message and no open block (#722), so while it is `active` its own message carries
-«⏹ Остановить сессию» (`h1SessionStopKeyboard`, `session:stop:<id>` with no suffix): the drawing's
-`keyboard` (`sessionDrawing`), sent by `replyWithPhotoHtml` / `replyHtml` (the text after a refused
-photo keeps it) and kept by every tracker's edit through `editMessagePhotoByIdHtml` /
-`editMessageTextByIdHtml`; a stopped session's drawing has none, so both the tracker's edit at
-the stop and the «⏹»'s own edit in place (`editSessionMessage`, the same seam) remove it. The render key carries whether the
-keyboard is there (`sessionRenderKey`), so an edit that only adds or drops it is never skipped. A
-restored entry (#567) draws only a stopped session, so after a bot restart the «⏹» stays until the
-stop's edit; pressed meanwhile it works. An edit without
+waiting message's «⏹», of a stopped one the summary's (#537); an H1 session's too since #775 (its
+waiting message and open block are any session's; the «⏹» #745 put on its own message is gone).
+An edit without
 `reply_markup` removes the inline keyboard on screen, so an old status message sent before #536
 loses its «🔄 Обновить» and «⏹» on the tracker's edit at the stop. A 404 while tracking draws
 «⚠️ Статус сессии недоступен.» under «🏠 В меню», as the caption of the picture when the last view
@@ -551,27 +541,6 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   the end of the path; gone → a new message, recorded by its newer id (#567, #587). The session is
   tracked on that message, so its summary comes as before. A stale edit of the old entry can land
   after the handler's — [risk 83](#accepted-risks).
-- **The «⏹» of an H1 session's message** (#745) — the same data, told apart by the view
-  (`isH1Settings`); the message is usually a photo (the start always has a signal's direction).
-  The catalog read beside the stop, 409 → the read, as above; then `stopH1InPlace` draws the
-  stopped session's drawing (`sessionDrawing`: the status as the caption, the picture kept, no
-  keyboard) on the pressed message by the tracker's own edit (`editSessionMessage`:
-  `editMessageMedia` with a picture, `editMessageText` without, reason `session_status`). The end
-  of the path comes with the summary card, as for an H1 session ended any other way.
-
-  | The edit of the pressed message | Then | Log |
-  | --- | --- | --- |
-  | done, or 400 «not modified» | tracked on the same message with the stopped drawing as rendered: its first poll edits nothing and sends the summary once the notices are closed | — |
-  | 400 gone (deleted in that second) | a new message `sessionStopReplyText` under the end of the path (`sessionCardKeyboard`), not tracked: the old entry's next edit is refused as gone, it forgets the message, and the backend's fallback summary goes | `info` `the pressed message was already gone` |
-  | any other Telegram refusal, a transport failure | nothing more, not tracked: the entry still holds the running drawing, so its next poll draws the stop | `warn` `trading session message not edited` |
-  | anything else | rethrown to `bot.catch` | `error` |
-
-  No chat or message id on the callback: nothing drawn, nothing tracked. A failure before the view
-  (the stop failed, the read after a 409 failed, 404) is a new message under «🏠 В меню», the
-  pressed «⏹» kept for another press. Calls: backend ≤ 3 (the stop, the catalog, the read),
-  Telegram ≤ 3 (`answerCallbackQuery`, the edit, the gone reply) — inside
-  `HANDLER_CALLS.sessionStop` (3 / 3; `timing.test.ts` → the H1 rows). A stale edit of the old
-  entry can land after the press's — [risk 83](#accepted-risks).
 - **An old «🔄 Обновить»** (`session:<id>`, `LEGACY_SESSION_REFRESH_PATTERN`): its keyboard is
   stripped (`removeLegacyKeyboard` of `demo.ts`: `answerCallbackQuery`, then
   `editMessageReplyMarkup`), nothing read or sent (the owner's answer 5).
@@ -894,7 +863,7 @@ open block's cycle and step are the ones the trade settles at (`sessionNextStep`
 position depends only on the results before it), and the adaptive line stands between step 1
 and step 2 as with a settled step 2: under a lost step 1 at once, above step 2 after a tie (#718).
 A trade after its open only settles (`accepted → settled` is the only edge out of `accepted`),
-so the block has no third state. H1 sessions (#670, settings v4) get no open block.
+so the block has no third state. An H1 session's open trade gets its block as any (#775).
 **The open block's «⏹»** (#722): its send, its edit and a new message after a gone edit carry one
 button, «⏹ Остановить сессию» (`ButtonRole.Danger`, `session:stop:<id>:c`,
 `sessionCycleStopKeyboard`, through `sendSessionTrade`/`editSessionTrade`'s `reply_markup`); the
@@ -1001,19 +970,9 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   (3 s) is the safety net for a lost wake. A trade costs two calls to its chat; the final mark on
   the tick after the last of them (the last settle wakes it); the bot's summary on its tracker's
   next poll (≤ 10 s).
-- **An H1 session (#707)** ([h1.md → The driver](h1.md#the-driver-707)): no message per trade.
-  One summary of the session (`sessionH1Progress`, `sessionH1ProgressMessage`) goes when
-  `H1_NOTICE_EVERY_TRADES` (10) trades are settled, and the same message is edited every 10 more
-  and at the finish (the settled count of a finished session, so 9 trades and a stop give one
-  summary of 9): the pair, «Сделок: N из M», the score, the SQL sum of the profits and the base
-  stake. Silent and without buttons, as a trade's message. The sender claims the trades from the
-  cursor to the due count at once (`claimSessionTradeNotices`, below) and records the first
-  summary as the cycle message from 0, so every later one is its edit, and an edit refused as gone
-  sends it anew; the waiting message with «⏹» stands under it as under a cycle message (none before
-  the first summary: the CLI's session has no status message). The final mark and the summary
-  follow as for any session; a CLI session gets the fallback text summary at once (no status
-  message). At R1's fastest cadence (7 s a trade) 10 trades take 70 s: at most one edit a minute a
-  session (`TIMING_CHAIN_HOLDS`).
+- **An H1 session** (#775, [h1.md → The session message](h1.md#the-session-message)): messaged as
+  any session - a block per trade, the open block, the waiting message after the driver's
+  `no_signal` row; the H1 summary of #707 is gone.
 - **Who.** The session's owner by join (`trading_sessions → broker_accounts →
   users.telegram_user_id`); no id comes from outside. A user with `telegram_blocked_at` set gets
   nothing: the trades and the open blocks are claimed without a call, and both marks are set by one CAS without reading
@@ -1076,12 +1035,6 @@ edit never changes them. For the claimed trade the sender:
    limit it sends a new message from the claimed trade and records it from there; else it edits the
    cycle message.
 
-**An H1 session's batch** (#707): `claimSessionTradeNotices({ from, to })` raises the cursor from
-`from` to `to` in one CAS — only while no summary was sent and `to` trades are settled — and reads
-the first `to` settled trades' counts by class and the sum of their profits (numeric) in the same
-transaction; `releaseSessionTradeNotices` puts the batch back (`to` → `from`) on a 429 or a
-refusal, as the single trade's release. The single trade's claim and release are unchanged.
-
 Since the state is written only after a send went through, and the claim before every call, a
 step's block is never sent twice by a retry; the next step's edit shows every block of its
 message again, so a block lost in the middle of a cycle comes back with the next step.
@@ -1097,8 +1050,8 @@ most once: a claimed block whose send's outcome is unknown, whose process died b
 that was dropped is not sent again — its trade's result comes by the cursor all the same. The
 column is owned by the composite FK `trading_sessions_open_notice_intent_fk (open_notice_intent_id,
 id) → trade_intents (id, trading_session_id)` (Rule 4; MATCH SIMPLE, so NULL checks nothing). The
-list (`listPendingSessionNotices`) adds a session whose open trade differs from the mark and whose
-settings are not H1's, with both ids; the sender's order in `serve` is: the trades past the
+list (`listPendingSessionNotices`) adds a session whose open trade differs from the mark, with both
+ids; the sender's order in `serve` is: the trades past the
 cursor, then the open block, then the stale waiting message, then the final mark or the waiting
 message.
 
@@ -1132,7 +1085,7 @@ message.
 | the record refused (the cursor moved: another sender) | the other sender's record stands | a new message: at most repeated blocks, never a lost step; an edit: two senders' edits of one cycle message can land out of order and show the older step until the next step's edit ([risk 35](#accepted-risks); one sender in production) |
 | the message cannot be built (a bug) | a trade stays claimed; the fallback summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the fallback summary: the step is closed (`session summary not built`), the row leaves the list |
 | a statement or the fallback summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error` with `holdMs`; the session is held out of both lists for `SESSION_NOTICE_HOLD_MS` (60 s, in memory, #660), then tried again; a restart tries it at once ([risk 84](#accepted-risks)) |
-| the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, an H1 summary, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick), or sooner: the tick arms a timer that wakes the sender at the end of the earliest such gap (#723) |
+| the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick), or sooner: the tick arms a timer that wakes the sender at the end of the earliest such gap (#723) |
 | `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a final mark or a fallback summary does not start (no balance read) and goes after the next start |
 
 Every ending after a claim moves the cursor, so no sent trade holds a session's place. A cooling
@@ -1195,7 +1148,7 @@ stated, the e2e harness builds the same.
 
 **The gap per chat** (#660): Telegram asks for no more than about one message a second to one chat
 (Bot API FAQ; stated, not measured). One chat gets at most one step of the sender within
-`SESSION_NOTICE_CHAT_GAP_MS` (1 000 ms): every send or edit — a trade's message, an H1 summary, the
+`SESSION_NOTICE_CHAT_GAP_MS` (1 000 ms): every send or edit — a trade's message, the
 open block, the waiting message, the fallback summary — marks the chat, delivered or not; a step
 whose chat is cooling ends the session's turn before its pace and its claim, and goes on a later
 tick. The calls inside one step go one after the other as before (an edit, then on «gone» the
@@ -1234,7 +1187,8 @@ session`, by `recorded_at` then `id` (`signal_decisions_session_idx`,
 [trade-log.md](trade-log.md)) — is `no_signal` (#666). The intent's row, written in the
 transaction that creates the intent, ends the wait, and so does every other outcome (`refused`,
 `replayed`, `stake_stop`); a session with no row yet (just started, before its first decision) does
-not wait; an H1 session (#670) asks no signal and writes no `no_signal`, so it never gets one. A
+not wait; an H1 session's driver writes one `no_signal` row per waiting period (#775,
+[h1.md → The driver](h1.md#the-driver-707)), so it gets one as any session. A
 signal at once after a settlement shows no waiting message at all; a failed write of the
 decision's row (`warn`, the hold stays) delays it by one candle ([risk
 100](#accepted-risks)). While the session waits, the waiting message is the last message of the
@@ -1375,8 +1329,7 @@ deletes it first — never a second «⏹» beside it.
 - **At the deploy of #722**: an active session whose live waiting message no longer has a reason —
   its latest decision is an intent or another outcome, or it has no row — is stale on the first
   tick: one delete, at the sender's pace; one whose latest decision is `no_signal` keeps it; an
-  active session without one and with its latest `no_signal` is due as before. An H1 session's
-  waiting message is deleted the same way and never sent again. An open trade's block claimed after
+  active session without one and with its latest `no_signal` is due as before. An open trade's block claimed after
   the deploy carries the «⏹» (`:c`); one already shown keeps no keyboard until its result's edit.
   The order: **the bot first** (`docker compose up -d --no-deps bot`), then the backend
   (`binarius-deploy`) — an old bot does not match `:c` (its pattern is `(?::(w))?$`), and a press
@@ -1925,9 +1878,7 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     resvg without a word (#538), as on the #318 card.
 77. **The reply in place refused as gone becomes a new message** (#587): a press in the same second
     as a settlement (the sender deleting the waiting message before the stop's UPDATE), or a user
-    who deleted the waiting message: the reply then may land under the summary. The same holds
-    for an H1 session message deleted as its «⏹» is pressed (#745): the stop's reply goes as a new
-    message, untracked, and the backend's fallback summary follows. Falsifiable: `the
+    who deleted the waiting message: the reply then may land under the summary. Falsifiable: `the
     pressed message was already gone` with a stop reply under a summary more than rarely.
 78. **`/stop`'s reply and the mode screen's line are new messages** (#587, the manager's answer В5):
     no waiting message is handed over, so they may swap with the summary; the card is last either
@@ -1972,13 +1923,7 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     pre-#536 button was pressed — the first `SESSION_MAX_DURATION_MS` (1 h) after #536's deploy —
     and inside Telegram's 48-hour edit window of that message; after that every such session is
     stopped, every read answers the stopped view, and no stale edit exists. Falsifiable: a message
-    sent before #536 showing «Торговая сессия запущена…» under a summary card. **The same now
-    reaches H1** (#745, accepted as the rest of this risk): `stopH1InPlace` retargets the tracker
-    to the pressed message, and a read the old entry started before the stop can answer a running
-    view whose picture turned (H1 trades change direction); its edit landing after the press's
-    leaves the photo with the running caption and «⏹», the moved entry holding the stopped drawing
-    as rendered. Pressed again, it answers 409, reads, and draws the stop in place. Falsifiable: a
-    stopped H1 session whose message still carries «⏹» after the summary was sent.
+    sent before #536 showing «Торговая сессия запущена…» under a summary card.
 84. **A session whose turn throws is held, not dropped** (#534 m4, #660): a thrown statement or
     balance refresh (`session notices failed for a session`, with `holdMs`) holds the session out of
     both lists for `SESSION_NOTICE_HOLD_MS` (60 s) — any throw, before a claim or after it (a claim
@@ -2038,8 +1983,7 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     second.
 97. **The open trade in the list** (#700): the list's select list gains the open-trade subquery;
     since #660 the filter's open trade is part of its one aggregate (risk 85, not measured at the
-    pilot's volume). The H1 exclusion is spelled twice, `isH1Settings` in the sender and
-    `h1SessionSql` in the list; the sender's O12 and the list's N32 pin both.
+    pilot's volume). Since #775 an H1 session's open trade is listed and served as any (O12, N32).
 98. **The deploy of #709**: the claim's answer loses `referralCode`, and both sides read it with a
     strict schema, so an old bot with a new backend and a new bot with an old backend lose a claimed
     summary (`ContractViolation` after the committed claim, risk 86's form; risk 87 was #537's
