@@ -11,7 +11,7 @@ Accepted risks (from the plan — do not re-raise): <list, or "none">
 Known, moved open into a follow-up issue by the owner (do not re-raise; a finding this PR fixed is never listed here): <list with the issue number, or "none">
 
 Invariants:
-- the project's list: `.claude/skills/architect/SKILL.md` → "Architecture Rules to Enforce in Every Plan" (read it; flag any change that breaks one)
+- the project's list: the index `.claude/skills/architect/SKILL.md` → "Architecture Rules to Enforce in Every Plan" and the rule files for this diff — <output of `node tooling/rules-for.ts --files …`> (read them; flag any change that breaks one)
 - <task-specific invariant from the plan>
 - check command (`pnpm check`) passes
 

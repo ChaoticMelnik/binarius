@@ -306,4 +306,4 @@ trades only, and an unresolved trade stops the sizer, so the pre-check never und
 - #89: the result of an unresolved trade.
 - The module's bigint arithmetic stays here; the limits' multiplication is shared's
   `multiplyDecimal` (`packages/shared/src/stake.ts`), which the start route and the CLI need.
-- The invariant is Architecture Rules -> "Размер ставки v1" in `.claude/skills/architect/SKILL.md`.
+- The invariant is Rule 23 «Размер ставки v1» in `.claude/skills/architect/rules/trading.md` (index: `.claude/skills/architect/SKILL.md` → Architecture Rules).

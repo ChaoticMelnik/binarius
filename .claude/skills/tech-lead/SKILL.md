@@ -50,7 +50,7 @@ The criterion is the implementer's: only the conflict hunks changed → «тол
 A later rebase adds a new comment whose `old-head` is the previous comment's `new-head`, and a new line in the PR body; the earlier lines stay. The **anchor** is the head the evidence covered — the mutation table, the CI-only `mut/<N>-*` runs and, once approved, the Codex final pass and the LGTM. To find it, walk back from the last line through an unbroken run of «только конфликты» lines: the first comment's `old-head` is the anchor, and the last comment's `new-head` must equal `headRefOid`. A «сверх конфликтов» link ends the walk: its cascade covers its new head, which becomes the anchor.
 
 What the verdict redoes depends on whether the PR already has an approving verdict (LGTM, Minor-only, or a round-3 verdict):
-- «только конфликты»: nothing is re-taken. CI must be green at the new head — or report «no checks» on a PR of `.claude/**` and `audits.md` only (`paths-ignore`, #646).
+- «только конфликты»: nothing is re-taken. CI must be green at the new head — or report «no checks» on a PR of `.claude/**` and `audits.md` only (#646), none of it under `.claude/skills/architect/**` (#770).
 - «сверх конфликтов», before an approving verdict: the same implementer re-takes the mutation table at the new head in one call of `tooling/mutations.ts` and re-cuts the CI-only `mut/<N>-*` runs (implementer Step 5); the next review round reviews the whole feature. CI is green.
 - «сверх конфликтов», after an approving verdict: the same re-take, then three more steps.
   - A short reviewer spawn (`model: "opus"`) on what the comment marks, and only that: the inner diff of each `!` pair with a change outside its conflict hunks, and `git show` of each `>` commit. Its Blocker/Major are handled as a round's (Phase 4); on a PR whose three rounds are used, the pass is a check, not a round, and a Blocker/Major goes to the Phase 4 iteration 3 branches.
@@ -96,7 +96,7 @@ At the end of a session, for its `audits.md` entry (Mode 2 → Phase 5), or when
 - [ ] If a Blocker/Major was found: reviewer returned the issue to **Todo** before any re-implementation started; a Minor-only review did not
 - [ ] If clean: the ready-to-merge comment is posted (by the reviewer, or by the spawner after a classifier refusal), carries the skip line when Codex was skipped, and the reviewer did not self-approve
 - [ ] Every review round reviewed `gh pr diff` (the whole feature), never an iteration delta
-- [ ] CI (`gh pr checks`) was green on the merged head (a PR of `.claude/**` and `audits.md` only has none, #646) — `pnpm check` there carries the automated gates (manifest targets, status literals, constraint coverage); the reviewer's Runtime check took it from CI, not from a local `pnpm check`
+- [ ] CI (`gh pr checks`) was green on the merged head (a PR of `.claude/**` and `audits.md` only has none, #646, unless it touches `.claude/skills/architect/**`, #770) — `pnpm check` there carries the automated gates (manifest targets, status literals, constraint coverage); the reviewer's Runtime check took it from CI, not from a local `pnpm check`
 - [ ] Neither tech-lead nor `/manager` ran a test (`pnpm check`/`test`/`typecheck`/`lint`, vitest, mutations, a per-commit check) in the main context ("Phases run as spawned agents" → «The main context runs no tests»)
 
 ### Whole-feature pass — check
@@ -422,7 +422,7 @@ A limit that ends the session early triggers it too, while the main context stil
    - `вынесено в #<N>` — the issue is created and added to the board now (`/github`), not "later";
    - `открыто (<YYYY-MM-DD>, <владелец>)` — allowed, and Phase 0 of the next session warns about it.
 4. **Docs PR** — branch `docs/audit-<YYYY-MM-DD>` of the session's start date from `main` — when `git ls-remote --exit-code --heads origin docs/audit-<date>` finds it taken, the first free of `-2`, `-3` …; title «audit: сессия <YYYY-MM-DD> (#N1, #N2 …)», the entry and the skill edits, PR body with `Refs #N1, #N2 …` instead of `Closes` (the issues are already Done; `.claude/CLAUDE.md` → Git-процесс). It gets no reviewer phase, no 3b-3d sub-agents and no Codex pass (owner's decision 2026-10-23, #769) — process text, not code:
-   - CI: a docs PR of `.claude/**` and `audits.md` only runs none (`paths-ignore`, #646) — `gh pr checks` answering «no checks reported» is expected; do not wait for it. A docs PR that touches any other file waits for green CI before the merge question, as any PR.
+   - CI: a docs PR of `.claude/**` and `audits.md` only runs none (#646), unless it touches `.claude/skills/architect/**` (#770) — `gh pr checks` answering «no checks reported» is expected; do not wait for it. A docs PR that touches any other file waits for green CI before the merge question, as any PR.
    - The merge relay as for any PR: `AskUserQuestion` immediately before the merge; the question names the entry's proposals with their statuses.
 
 A night's entry is written by the manager itself (manager → Substitution 5); the morning session merges that PR and records only its own work; a night that ended before its Phase 5 is written by the next session of any kind (item 2a).
@@ -446,7 +446,7 @@ A night's entry is written by the manager itself (manager → Substitution 5); t
 | Пакетный менеджер | pnpm workspaces, единый monorepo | корень репозитория |
 | Развёртывание | Docker Compose + HTTPS reverse proxy | пилот — VPS (Hetzner, EU), оценка ресурсов и регион уточняются нагрузочным тестом, не решены здесь |
 
-Доменные инварианты, подтверждённые кодом, — `.claude/skills/architect/SKILL.md` → Architecture Rules to Enforce (единственный полный список). Точный контракт Binodex Broker/Partner API, бонусная сетка, лимиты сессии и параметры хостинга здесь не зафиксированы: архитектор проектирует и проверяет их для конкретного issue, а не переносит из чернового плана.
+Доменные инварианты, подтверждённые кодом, — индекс `.claude/skills/architect/SKILL.md` → Architecture Rules to Enforce и файлы `.claude/skills/architect/rules/*.md` (единственный полный список; по файлам задачи — `node tooling/rules-for.ts <files>`). Точный контракт Binodex Broker/Partner API, бонусная сетка, лимиты сессии и параметры хостинга здесь не зафиксированы: архитектор проектирует и проверяет их для конкретного issue, а не переносит из чернового плана.
 
 ---
 
