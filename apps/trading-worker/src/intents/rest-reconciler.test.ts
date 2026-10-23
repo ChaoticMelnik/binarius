@@ -1,5 +1,5 @@
 import pino from 'pino';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { BrokerRestError, type TradeListFilter } from '@binarius/broker-rest';
 import {
   TradeIntentFailureReason,
@@ -9,7 +9,7 @@ import {
   type OpenTrade,
   type UnixMs,
 } from '@binarius/shared';
-import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import { hashToken, type TradeIntentRow } from '@binarius/db';
 import type { AccessTokenOutcome, AccessTokenOptions } from '../broker/access-token';
 import {
@@ -703,9 +703,9 @@ describe('createRestReconciler: two agreeing attempts (#274)', () => {
     const h = harness({ open: [], closed: [] }, { holdClosed: hold });
     const aborted = new AbortController();
     const pending = h.run(intent(), aborted.signal);
-    await vi.waitFor(() => {
-      expect(h.requests.some((r) => r.filter.status === 'closed')).toBe(true);
-    });
+    await until('the closed list asked', () =>
+      h.requests.some((r) => r.filter.status === 'closed'),
+    );
     aborted.abort();
     release();
     expect(await pending).toEqual({ outcome: 'unavailable', reason: 'timeout' });
