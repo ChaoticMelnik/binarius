@@ -59,6 +59,9 @@ importers:
       '@binarius/signal':
         specifier: workspace:*
         version: link:../../packages/signal
+      '@binarius/stake':
+        specifier: workspace:*
+        version: link:../../packages/stake
       bullmq:
         specifier: ^6.3.8
         version: 6.3.8(ioredis@6.0.0)(pg@8.23.0)
@@ -126,6 +129,9 @@ importers:
       '@binarius/signal':
         specifier: workspace:*
         version: link:../../packages/signal
+      '@binarius/stake':
+        specifier: workspace:*
+        version: link:../../packages/stake
       bullmq:
         specifier: ^6.3.8
         version: 6.3.8(ioredis@6.0.0)(pg@8.23.0)
@@ -328,6 +334,12 @@ importers:
       '@binarius/mock-broker':
         specifier: workspace:*
         version: link:../mock-broker
+
+  packages/stake:
+    dependencies:
+      '@binarius/shared':
+        specifier: workspace:*
+        version: link:../shared
 
 packages:
 

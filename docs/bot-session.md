@@ -942,7 +942,7 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   `digits` from the backend's pairs catalog; with no catalog or the pair gone, as the double prints
   (`String()`).
 - **Cycle and step** (`sessionTradeSteps`). A cycle is the stake sizer's series (`readHistory` in
-  `apps/trading-worker/src/stake/size.ts`): only a win closes it. Under martingale the step is the
+  `packages/stake/src/size.ts`): only a win closes it. Under martingale the step is the
   trade's number within its cycle (#551): a loss and a tie both move to the next step. The sizer's
   own step counts the losses in a row plus one and bounds its raises (`maxSteps`,
   [stake.md](stake.md)), so the message's step is the sizer's plus the ties since the last win

@@ -15,7 +15,6 @@ import {
   TradingSessionNotActiveError,
   type Db,
   type RunnableSession,
-  type SessionHistoryIntent,
   type SignalDecisionInput,
   type StoppedSession,
 } from '@binarius/db';
@@ -37,7 +36,6 @@ import {
   SESSION_INTENT_REFUSALS,
   sessionIntentBlock,
   SessionIntentBlockReason,
-  TradeIntentStatus,
   TradingSessionStopReason,
   type SessionIntentRefusal,
   type SignalRecord,
@@ -45,13 +43,14 @@ import {
   type TradingSessionSettings,
 } from '@binarius/shared';
 import type { Logger } from '../intents/processor';
-import { SessionTradeKind, StakeKind, StopReason } from '../stake/codes';
 import {
   createStakeSizer,
-  type SessionTrade,
+  sessionTradeOf,
+  StakeKind,
+  StopReason,
   type StakeDecision,
   type StakeSizer,
-} from '../stake/size';
+} from '@binarius/stake';
 import type { PairsSource, SignalSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
 
@@ -121,16 +120,6 @@ type Ending =
   // no ending written: the deadline, a throw or the stop signal
   | { kind: 'failed' }
   | { kind: 'stopped' };
-
-// the sizer's view of the session's intents; a settled intent without its trade's profit and a
-// manual_review one have no result the sizer can use
-function toSessionTrade(intent: SessionHistoryIntent): SessionTrade {
-  if (intent.status === TradeIntentStatus.Rejected) return { kind: SessionTradeKind.Rejected };
-  if (intent.status === TradeIntentStatus.Settled && intent.profit !== null) {
-    return { kind: SessionTradeKind.Settled, stake: intent.amount, profit: intent.profit };
-  }
-  return { kind: SessionTradeKind.Unresolved };
-}
 
 class AttemptAborted extends Error {
   constructor() {
@@ -333,7 +322,7 @@ export function createSessionOrchestrator({
     if (h1) {
       const startedAtMs = session.startedAt.getTime();
       const decision = sizer.next({
-        history: history.intents.map(toSessionTrade),
+        history: history.intents.map(sessionTradeOf),
         payout: pair.payout,
         minTradeAmount: snapshot.minTradeAmount,
         available,
@@ -421,7 +410,7 @@ export function createSessionOrchestrator({
 
     const startedAtMs = session.startedAt.getTime();
     const decision = sizer.next({
-      history: history.intents.map(toSessionTrade),
+      history: history.intents.map(sessionTradeOf),
       payout: pair.payout,
       minTradeAmount: snapshot.minTradeAmount,
       available,

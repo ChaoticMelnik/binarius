@@ -10,7 +10,7 @@ import {
   type SessionStakeStrategy,
   type TradingSessionSettings,
 } from '@binarius/shared';
-import { assertStakeParams } from '../stake/config';
+import { assertStakeParams } from '@binarius/stake';
 
 // The session-start CLI's pure part (docs/trading-session.md -> The CLI): which account, which
 // settings, and the Russian texts of its refusals. Nothing here reads the database.

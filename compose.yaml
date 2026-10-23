@@ -70,6 +70,11 @@ x-watch-signal: &watch-signal
   target: /app/packages/signal/src
   action: sync
 
+x-watch-stake: &watch-stake
+  path: ./packages/stake/src
+  target: /app/packages/stake/src
+  action: sync
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -208,6 +213,7 @@ services:
         - *watch-broker-rest
         - *watch-broker-socket
         - *watch-signal
+        - *watch-stake
         - path: ./apps/backend/package.json
           action: rebuild
         - path: ./apps/backend/tsconfig.json
@@ -223,6 +229,10 @@ services:
         - path: ./packages/signal/package.json
           action: rebuild
         - path: ./packages/signal/tsconfig.json
+          action: rebuild
+        - path: ./packages/stake/package.json
+          action: rebuild
+        - path: ./packages/stake/tsconfig.json
           action: rebuild
         - path: ./packages/shared/package.json
           action: rebuild
@@ -322,6 +332,7 @@ services:
         - *watch-broker-rest
         - *watch-broker-socket
         - *watch-signal
+        - *watch-stake
         - path: ./apps/trading-worker/package.json
           action: rebuild
         - path: ./apps/trading-worker/tsconfig.json
@@ -337,6 +348,10 @@ services:
         - path: ./packages/signal/package.json
           action: rebuild
         - path: ./packages/signal/tsconfig.json
+          action: rebuild
+        - path: ./packages/stake/package.json
+          action: rebuild
+        - path: ./packages/stake/tsconfig.json
           action: rebuild
         - path: ./packages/shared/package.json
           action: rebuild
