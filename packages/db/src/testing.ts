@@ -412,6 +412,31 @@ export const decisionFixture = (
     ...facts,
   });
 
+// the orchestrator's «no signal» row of a session (#722): the fixture record with a no_signal
+// decision, no action, outcome no_signal - the row that makes the session wait for a signal
+export const noSignalDecisionFixture = (
+  session: { sessionId: string; brokerAccountId: string },
+  facts: Partial<SignalDecisionFacts> = {},
+): SignalDecisionInput => {
+  const record = signalRecordFixture();
+  return decisionFixture(
+    session,
+    { outcome: SignalDecisionOutcome.NoSignal, ...facts },
+    {
+      ...record,
+      entry: {
+        ...record.entry,
+        decision: {
+          kind: SignalKind.NoSignal,
+          version: 'v2',
+          reason: 'insufficient_candles',
+          detail: { closedCandles: 9, required: 50 },
+        },
+      },
+    },
+  );
+};
+
 export const SHADOW_FIXTURE_DECIDED_AT_MS = 1_760_000_000_000;
 export const R1_SHADOW_PARAMS_FIXTURE: H1ShadowParams = {
   set: H1ShadowSet.R1,

@@ -1,6 +1,8 @@
 import { and, asc, eq, isNull, notInArray, sql } from 'drizzle-orm';
 import {
   SessionTradeResult,
+  SignalDecisionContext,
+  SignalDecisionOutcome,
   TradeIntentStatus,
   type TradeAction,
   TradingSessionStatus,
@@ -13,6 +15,7 @@ import { h1SessionSql } from './h1-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { literal, sqlLiteralList } from './schema/columns';
+import { signalDecisions } from './schema/signal-decisions';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
@@ -108,19 +111,35 @@ const sessionNoticeDueSql = sql<boolean>`(
 // fragments below alone decide what the sender does with it.
 const sessionSlotSql = sql<number>`greatest(coalesce(${tradingSessions.cycleMessageId}, 0), coalesce(${tradingSessions.statusMessageId}, 0))`;
 
-// The fragment both the list and the claim take: an active session with no live waiting message,
-// whose slot was not claimed yet, under a message of the session - the bot's recorded status
-// message (#567) or a claimed trade, whose message goes only after the session's, recorded or not
-// - so the waiting message never stands above the session's message.
-const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0))`;
+// The session waits for a signal (#722): its latest decision of the trading loop (context
+// `session`, by recorded_at then id, on signal_decisions_session_idx) is `no_signal`. An intent's
+// row, written in the intent's transaction, ends the wait; so does every other outcome (refused,
+// replayed, stake_stop; an H1 session writes no no_signal row, #670). The start's row is
+// `session_start` and does not count. No row at all is false, not NULL: coalesce, so `not` of it
+// in the stale fragment is true.
+const waitingForSignalSql = sql<boolean>`coalesce((
+  select ${signalDecisions.outcome} from ${signalDecisions}
+   where ${signalDecisions.tradingSessionId} = ${tradingSessions.id}
+     and ${signalDecisions.context} = ${literal(SignalDecisionContext.Session)}
+   order by ${signalDecisions.recordedAt} desc, ${signalDecisions.id} desc
+   limit 1
+) = ${literal(SignalDecisionOutcome.NoSignal)}, false)`;
+
+// The fragment both the list and the claim take: an active session that waits for a signal, with
+// no live waiting message, whose slot was not claimed yet, under a message of the session - the
+// bot's recorded status message (#567), a claimed trade, whose message goes only after the
+// session's, recorded or not, or the cycle message of an open trade's block (#722) - so the
+// waiting message never stands above the session's message.
+const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0 or ${tradingSessions.cycleMessageId} is not null) and ${waitingForSignalSql})`;
 
 // due: a waiting message is to be sent; nothing goes to a user who blocked the bot (Rule 19)
 const waitingDueSql = sql<boolean>`(${waitingClaimableSql} and ${users.telegramBlockedAt} is null)`;
 
 // stale: the live waiting message is to be deleted - the session stopped, or a newer message of
-// the session went out under it and the user can be reached: a blocked user's active session keeps
-// its waiting message's id until the user is reachable again (#587), so it is not listed each tick
-const waitingStaleSql = sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or (${tradingSessions.waitingAfterMessage} <> ${sessionSlotSql} and ${users.telegramBlockedAt} is null)))`;
+// the session went out under it, or the session no longer waits for a signal (#722), and the user
+// can be reached: a blocked user's active session keeps its waiting message's id until the user is
+// reachable again (#587), so it is not listed each tick
+const waitingStaleSql = sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or ((${tradingSessions.waitingAfterMessage} <> ${sessionSlotSql} or not ${waitingForSignalSql}) and ${users.telegramBlockedAt} is null)))`;
 
 export interface PendingSessionNotice {
   sessionId: string;
@@ -145,6 +164,9 @@ export interface PendingSessionNotice {
   waitingMessageId: number | null;
   waitingDue: boolean;
   waitingStale: boolean;
+  // the session waits for a signal (#722): the sender's hint after its own send or delete; the
+  // claim decides
+  waitingForSignal: boolean;
 }
 
 // The sessions with something to send: notices not closed yet, and a settled trade past the
@@ -173,6 +195,7 @@ export async function listPendingSessionNotices(
       waitingMessageId: tradingSessions.waitingMessageId,
       waitingDue: waitingDueSql,
       waitingStale: waitingStaleSql,
+      waitingForSignal: waitingForSignalSql,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))

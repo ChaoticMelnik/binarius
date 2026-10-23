@@ -10,6 +10,7 @@ import {
   SESSION_SUMMARY_FALLBACK_MS,
   TradingSessionStatus,
   TradingSessionStopReason,
+  type BotKeyboard,
   type H1SessionSettings,
   type TelegramHtml,
   type TradingSessionSettings,
@@ -53,6 +54,7 @@ import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import {
   pairOf,
   sessionCycleMessage,
+  sessionCycleStopKeyboard,
   sessionH1ProgressMessage,
   sessionSummaryMessage,
   sessionWaitingMessage,
@@ -69,11 +71,13 @@ import { readFinishedSessionView } from './session-view';
 // too. Each trade is claimed by a CAS before the Telegram call (session-notice-ops.ts): a call
 // whose outcome is unknown is never repeated for that trade, so a trade's block can be lost but
 // a message never doubled by a retry; the next step's edit shows every block of its cycle again.
-// Under them stands the waiting message with its «⏹» (#536): deleted before a new message of the
-// session (a cycle message, or a relaunch's status message, #587) and sent again after it, deleted
-// once the session stopped, before the final mark - unless its «⏹» stopped the session: the stop
-// route then hands it to the bot, which draws its reply in place of it (#587), and the mark
-// follows with no delete. The sender re-reads the waiting message's id right before each delete,
+// Under them stands the waiting message with its «⏹» (#536) while the session waits for a signal
+// (#722: its latest decision is no_signal, session-notice-ops.ts): deleted before a new message of
+// the session (a cycle message, or a relaunch's status message, #587) and sent again after it
+// while the wait lasts, deleted once the session no longer waits - before the open trade's block,
+// which carries the «⏹» itself, so two never stand together - or stopped, before the final mark -
+// unless its «⏹» stopped the session: the stop route then hands it to the bot, which draws its
+// reply in place of it (#587), and the mark follows with no delete. The sender re-reads the waiting message's id right before each delete,
 // so a message the stop route took over is not deleted (#587 round 1; the call in flight: docs
 // risk 82). A restart of the bot or the backend repeats no send by a retry: the cursor, the cycle
 // message and the waiting message are in trading_sessions; a block can show twice only by the
@@ -163,6 +167,9 @@ interface Delivery {
   openIntentId?: string;
   // puts the claim back: only for a send Telegram certainly did not deliver
   release: () => Promise<unknown>;
+  // the open block's «⏹» (#722): on its send, its edit and a new message after a gone edit; a
+  // delivery without one is sent or edited without a keyboard, which takes the «⏹» off
+  keyboard?: BotKeyboard;
 }
 
 const waitingMayGo = (session: PendingSessionNotice): boolean =>
@@ -347,6 +354,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       cursor: session.settled,
       openIntentId: intentId,
       release: () => releaseSessionOpenNotice(db, { sessionId: session.sessionId, intentId }),
+      // a session the list read stopped gets no «⏹»: a stop after the read reaches the bot's 409
+      ...(session.status === TradingSessionStatus.Active
+        ? { keyboard: sessionCycleStopKeyboard(session.sessionId) }
+        : {}),
     });
   }
 
@@ -354,7 +365,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   async function deliver(
     session: PendingSessionNotice,
     notice: SessionCycleNotice,
-    { label, key, fields, cursor, openIntentId, release }: Delivery,
+    { label, key, fields, cursor, openIntentId, release, keyboard }: Delivery,
   ): Promise<Step> {
     const failure = {
       session,
@@ -392,7 +403,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       }
       let messageId: number;
       try {
-        messageId = await push.sendSessionTrade(session.telegramUserId, text);
+        messageId = await push.sendSessionTrade(session.telegramUserId, text, keyboard);
       } catch (error) {
         return sendFailed({ ...failure, method: 'sendMessage', error });
       } finally {
@@ -410,8 +421,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         messageId,
         from,
       });
-      // a new cycle message: the waiting message is due under it
-      if (recorded && session.waitingMessageId === null) session.waitingDue = true;
+      // a new cycle message: the waiting message is due under it while the session waits
+      if (recorded && session.waitingMessageId === null) {
+        session.waitingDue = session.waitingForSignal;
+      }
       return 'next';
     };
 
@@ -422,7 +435,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       return sendNew(notice.text, notice.from);
     }
     try {
-      await push.editSessionTrade(session.telegramUserId, notice.messageId, notice.text);
+      await push.editSessionTrade(session.telegramUserId, notice.messageId, notice.text, keyboard);
       messaged(session.telegramUserId);
       attempts.delete(key);
       return 'next';
@@ -519,7 +532,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         logger.warn(fields, 'session waiting message deleted after the stop took it over');
       }
       session.waitingMessageId = null;
-      session.waitingDue = true;
+      session.waitingDue = session.waitingForSignal;
       return { kind: 'cleared' };
     };
     const unreachable = (): Promise<Removal> =>
@@ -579,8 +592,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // The stale waiting message's own step (#536): the session stopped, or a newer message of the
-  // session went out under it. A message the user cannot be reached for stays (#587).
+  // The stale waiting message's own step (#536): the session stopped, a newer message of the
+  // session went out under it, or the session no longer waits for a signal (#722). A message the
+  // user cannot be reached for stays (#587).
   async function deleteStaleWaiting(session: PendingSessionNotice): Promise<Step> {
     const messageId = session.waitingMessageId;
     if (messageId === null) return 'next';
@@ -722,11 +736,12 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // every trade past the cursor in order (an H1 session: its summary, when due), then the open
-  // trade's block (#700), then the stale waiting message's delete, then the final mark of a
+  // every trade past the cursor in order (an H1 session: its summary, when due), then the stale
+  // waiting message's delete, then the open trade's block (#700), then the final mark of a
   // finished session or the waiting message due; the first step that does not go ends the
   // session's turn, so its later trades never overtake it and the waiting message is the last
-  // message of the turn
+  // message of the turn. The delete goes before the open block (#722): the block carries the
+  // session's «⏹», and an edit of the cycle message under a live waiting message would show two.
   async function serve(session: PendingSessionNotice): Promise<Step> {
     const parsed = safeParseTradingSessionSettings(session.settings);
     const settings = parsed.success ? parsed.data : null;
@@ -745,6 +760,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         if (step !== 'next') return step;
       }
     }
+    if (session.waitingStale && session.waitingMessageId !== null) {
+      const step = await deleteStaleWaiting(session);
+      if (step !== 'next') return step;
+    }
     const { openIntentId } = session;
     if (
       openIntentId !== null &&
@@ -752,10 +771,6 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       !(settings !== null && isH1Settings(settings))
     ) {
       const step = await sendOpen(session, settings, openIntentId);
-      if (step !== 'next') return step;
-    }
-    if (session.waitingStale && session.waitingMessageId !== null) {
-      const step = await deleteStaleWaiting(session);
       if (step !== 'next') return step;
     }
     // a finished session's trades are all settled or rejected: none appears after the list's read

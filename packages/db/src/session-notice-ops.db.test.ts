@@ -6,6 +6,8 @@ import { eq, sql } from 'drizzle-orm';
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  SignalDecisionContext,
+  SignalDecisionOutcome,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -36,8 +38,11 @@ import {
   releaseSessionTradeNotices,
   releaseSessionWaiting,
 } from './session-notice-ops';
+import { recordSignalDecision } from './signal-decision-ops';
 import {
   createTempDatabase,
+  decisionFixture,
+  noSignalDecisionFixture,
   seedTradingSession,
   seedUserWithAccount,
   type TempDatabase,
@@ -95,7 +100,11 @@ const intentOf = async (
       amount: decimalStringSchema.parse(amount),
       action: TradeAction.Up,
       durationSec: 60,
-      decision: null,
+      // the intent's row of the decision log, in its transaction, as the orchestrator writes it
+      decision: decisionFixture(
+        { sessionId: session.id, brokerAccountId: seed.brokerAccountId },
+        { step },
+      ),
     })
   ).intent;
 
@@ -925,47 +934,163 @@ describe('the waiting message (#536)', () => {
     const row = await rowOf(session);
     return [row.waitingMessageId, row.waitingAfterMessage];
   };
+  // a decision of the trading loop for the session's next step (#722): `no_signal` makes it wait
+  // for a signal, any other outcome ends the wait
+  const decide = (
+    target: Awaited<ReturnType<typeof seedSession>>,
+    outcome: SignalDecisionOutcome,
+    detail: string | null = null,
+  ) => {
+    const session = { sessionId: target.session.id, brokerAccountId: target.seed.brokerAccountId };
+    const facts = { step: target.step + 1, outcome, detail };
+    return recordSignalDecision(
+      tmp.db,
+      outcome === SignalDecisionOutcome.NoSignal
+        ? noSignalDecisionFixture(session, facts)
+        : decisionFixture(session, facts),
+    );
+  };
+  const noSignal = (target: Awaited<ReturnType<typeof seedSession>>) =>
+    decide(target, SignalDecisionOutcome.NoSignal);
 
   it('N13 claims a slot once, only on an active session under its status or a claimed trade', async () => {
     const target = await seedSession();
+    await noSignal(target);
     // no message of the session yet: the waiting message would stand above it
     expect(await waitingClaim(target.session)).toBeUndefined();
     await statusMessage(target.session, 7);
     expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
     expect(await waitingClaim(target.session)).toBeUndefined();
     expect(await waitingOf(target.session)).toEqual([null, 7]);
-    // a new cycle message leaves the slot behind
+    // a new cycle message leaves the slot behind; its trade's intent row ended the wait (#722)
     await cycleMessage(target, 0, 41);
+    expect(await waitingClaim(target.session)).toBeUndefined();
+    await noSignal(target);
     expect(await waitingClaim(target.session)).toEqual({ slot: 41 });
     expect(await waitingClaim(target.session)).toBeUndefined();
 
     // a live waiting message on an earlier slot holds the claim until it is cleared
     await waitingRecord(target.session, 41, 50);
     await cycleMessage(target, 1, 42);
+    await noSignal(target);
     expect(await waitingClaim(target.session)).toBeUndefined();
     await waitingClear(target.session, 50);
     expect(await waitingClaim(target.session)).toEqual({ slot: 42 });
 
     const cycleOnly = await seedSession();
     await cycleMessage(cycleOnly, 0, 41);
+    await noSignal(cycleOnly);
     expect(await waitingClaim(cycleOnly.session)).toEqual({ slot: 41 });
 
     // a claimed trade whose message was not recorded: its message went after the session's
     const claimedOnly = await seedSession();
     await settled(claimedOnly, '-5');
+    await noSignal(claimedOnly);
     expect(await waitingClaim(claimedOnly.session)).toBeUndefined();
     await claim(claimedOnly.session, 0);
     expect(await waitingClaim(claimedOnly.session)).toEqual({ slot: 0 });
 
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
+    await noSignal(stopped);
     await stop(stopped.session, TradingSessionStopReason.UserStopped);
     expect(await waitingClaim(stopped.session)).toBeUndefined();
+  });
+
+  // #722: the waiting message only while the session waits for a signal - its latest decision of
+  // the trading loop is no_signal; none at all, an intent or any other outcome is no wait
+  it.each([
+    ['no decision yet', [], false],
+    ['an intent', [SignalDecisionOutcome.Intent], false],
+    ['no signal', [SignalDecisionOutcome.NoSignal], true],
+    [
+      'no signal, then an intent',
+      [SignalDecisionOutcome.NoSignal, SignalDecisionOutcome.Intent],
+      false,
+    ],
+    [
+      'an intent, then no signal',
+      [SignalDecisionOutcome.Intent, SignalDecisionOutcome.NoSignal],
+      true,
+    ],
+    [
+      'no signal, then refused',
+      [SignalDecisionOutcome.NoSignal, SignalDecisionOutcome.Refused],
+      false,
+    ],
+    [
+      'no signal, then a stake stop',
+      [SignalDecisionOutcome.NoSignal, SignalDecisionOutcome.StakeStop],
+      false,
+    ],
+    [
+      'no signal, then replayed',
+      [SignalDecisionOutcome.NoSignal, SignalDecisionOutcome.Replayed],
+      false,
+    ],
+  ] as const)('N40 the claim after %s: %s', async (_, outcomes, claims) => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    for (const outcome of outcomes) {
+      const detailed =
+        outcome === SignalDecisionOutcome.Refused || outcome === SignalDecisionOutcome.StakeStop;
+      await decide(target, outcome, detailed ? 'fixture_detail' : null);
+    }
+    expect(await waitingClaim(target.session)).toEqual(claims ? { slot: 7 } : undefined);
+  });
+
+  it('N41 the cycle message of an open block alone is an anchor (#722)', async () => {
+    const target = await seedSession();
+    await tmp.db
+      .update(tradingSessions)
+      .set({ cycleMessageId: 41, cycleMessageFrom: 0 })
+      .where(eq(tradingSessions.id, target.session.id));
+    await noSignal(target);
+    expect(await rowOf(target.session)).toMatchObject({ statusMessageId: null, notifiedTrades: 0 });
+    expect(await waitingClaim(target.session)).toEqual({ slot: 41 });
+  });
+
+  it("N42 the start's row does not end the wait, even recorded after the loop's no_signal (#722)", async () => {
+    const target = await seedSession();
+    await statusMessage(target.session, 7);
+    await noSignal(target);
+    const { id } = await recordSignalDecision(
+      tmp.db,
+      decisionFixture(
+        { sessionId: target.session.id, brokerAccountId: target.seed.brokerAccountId },
+        {
+          context: SignalDecisionContext.SessionStart,
+          outcome: SignalDecisionOutcome.Started,
+          step: null,
+        },
+      ),
+    );
+    await tmp.db.execute(
+      sql`update signal_decisions set recorded_at = now() + interval '1 minute' where id = ${id}`,
+    );
+    expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
+  });
+
+  it("N43 an H1 session's intents are no wait (#722, #670)", async () => {
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      trades: 10,
+      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
+      maxLossMultiplier: 10,
+    });
+    if (!built.success) throw new Error('fixture settings do not parse');
+    const target = await seedSession(built.data);
+    await statusMessage(target.session, 7);
+    await settled(target, '-1');
+    await claim(target.session, 0);
+    expect(await waitingClaim(target.session)).toBeUndefined();
+    expect(await pendingOf(target.session)).toBeUndefined();
   });
 
   it('N13 two claims of the same slot at once: exactly one wins', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
+    await noSignal(target);
     const results = await Promise.all([waitingClaim(target.session), waitingClaim(target.session)]);
     expect(results.filter((result) => result !== undefined)).toEqual([{ slot: 7 }]);
   });
@@ -973,6 +1098,7 @@ describe('the waiting message (#536)', () => {
   it('N14 the id is recorded only on its own claimed slot without an id, on an active session', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
+    await noSignal(target);
     // nothing claimed
     expect(await waitingRecord(target.session, 7, 50)).toBe(false);
     await waitingClaim(target.session);
@@ -983,6 +1109,7 @@ describe('the waiting message (#536)', () => {
 
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
+    await noSignal(stopped);
     await waitingClaim(stopped.session);
     await stop(stopped.session, TradingSessionStopReason.UserStopped);
     expect(await waitingRecord(stopped.session, 7, 50)).toBe(false);
@@ -992,6 +1119,7 @@ describe('the waiting message (#536)', () => {
   it('N15 a release frees the claimed slot only while no id was recorded', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
+    await noSignal(target);
     await waitingClaim(target.session);
     expect(await releaseSessionWaiting(tmp.db, { sessionId: target.session.id, slot: 41 })).toBe(
       false,
@@ -1011,6 +1139,7 @@ describe('the waiting message (#536)', () => {
   it('N16 a clear drops only its own id and frees the slot', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
+    await noSignal(target);
     await waitingClaim(target.session);
     await waitingRecord(target.session, 7, 50);
     expect(await waitingClear(target.session, 51)).toBe(false);
@@ -1026,6 +1155,7 @@ describe('the waiting message (#536)', () => {
       readSessionWaitingMessage(tmp.db, { sessionId: session.id });
     const cleared = await seedSession();
     await statusMessage(cleared.session, 7);
+    await noSignal(cleared);
     await waitingClaim(cleared.session);
     await waitingRecord(cleared.session, 7, 50);
     expect(await reread(cleared.session)).toEqual({
@@ -1039,6 +1169,7 @@ describe('the waiting message (#536)', () => {
     });
     const handedOver = await seedSession();
     await statusMessage(handedOver.session, 7);
+    await noSignal(handedOver);
     await waitingClaim(handedOver.session);
     await waitingRecord(handedOver.session, 7, 50);
     await stopTradingSession(tmp.db, {
@@ -1056,6 +1187,7 @@ describe('the waiting message (#536)', () => {
   it('N17 the summary is refused while a waiting message is live, granted once it is cleared', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
+    await noSignal(target);
     await waitingClaim(target.session);
     await waitingRecord(target.session, 7, 50);
     await stop(target.session, TradingSessionStopReason.UserStopped);
@@ -1069,18 +1201,22 @@ describe('the waiting message (#536)', () => {
   it('N18 lists a session with a waiting message due or stale, never one of a blocked user', async () => {
     const due = await seedSession();
     await statusMessage(due.session, 7);
+    await noSignal(due);
     const live = await seedSession();
     await statusMessage(live.session, 7);
+    await noSignal(live);
     await waitingClaim(live.session);
     await waitingRecord(live.session, 7, 50);
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
+    await noSignal(stopped);
     await waitingClaim(stopped.session);
     await waitingRecord(stopped.session, 7, 50);
     await rejected(stopped);
     await stop(stopped.session, TradingSessionStopReason.UserStopped);
     const blocked = await seedSession();
     await statusMessage(blocked.session, 7);
+    await noSignal(blocked);
     await tmp.db
       .update(users)
       .set({ telegramBlockedAt: sql`now()` })
@@ -1091,6 +1227,7 @@ describe('the waiting message (#536)', () => {
       waitingMessageId: null,
       waitingDue: true,
       waitingStale: false,
+      waitingForSignal: true,
       finished: false,
     });
     expect(await pendingOf(live.session)).toBeUndefined();
@@ -1110,6 +1247,9 @@ describe('the waiting message (#536)', () => {
       waitingStale: true,
     });
     await waitingClear(live.session, 50);
+    // its trade's intent row ended the wait: nothing until the next no_signal (#722)
+    expect(await pendingOf(live.session)).toBeUndefined();
+    await noSignal(live);
     expect(await pendingOf(live.session)).toMatchObject({
       waitingMessageId: null,
       waitingDue: true,
@@ -1117,10 +1257,58 @@ describe('the waiting message (#536)', () => {
     });
   });
 
+  it('N44 a live waiting message is stale once the session no longer waits for a signal (#722)', async () => {
+    const block = (target: Awaited<ReturnType<typeof seedSession>>) =>
+      tmp.db
+        .update(users)
+        .set({ telegramBlockedAt: sql`now()` })
+        .where(eq(users.id, target.seed.userId));
+    // a live one on its own slot: the deploy's state, or a claim before the decision's row
+    const live = async (target: Awaited<ReturnType<typeof seedSession>>) => {
+      await statusMessage(target.session, 7);
+      await tmp.db
+        .update(tradingSessions)
+        .set({ waitingMessageId: 50, waitingAfterMessage: 7 })
+        .where(eq(tradingSessions.id, target.session.id));
+    };
+    const waits = await seedSession();
+    await live(waits);
+    await noSignal(waits);
+    expect(await pendingOf(waits.session)).toBeUndefined();
+    await decide(waits, SignalDecisionOutcome.Intent);
+    expect(await pendingOf(waits.session)).toMatchObject({
+      waitingMessageId: 50,
+      waitingDue: false,
+      waitingStale: true,
+      waitingForSignal: false,
+    });
+
+    const noDecision = await seedSession();
+    await live(noDecision);
+    expect(await pendingOf(noDecision.session)).toMatchObject({
+      waitingMessageId: 50,
+      waitingStale: true,
+      waitingForSignal: false,
+    });
+
+    // a blocked user keeps the id until reachable again (#587)
+    const blocked = await seedSession();
+    await live(blocked);
+    await decide(blocked, SignalDecisionOutcome.Intent);
+    await block(blocked);
+    expect(await pendingOf(blocked.session)).toBeUndefined();
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: null })
+      .where(eq(users.id, blocked.seed.userId));
+    expect(await pendingOf(blocked.session)).toMatchObject({ waitingStale: true });
+  });
+
   it('N20 a status message recorded after the cycle message (a relaunch) moves the slot (#587)', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
     await cycleMessage(target, 0, 41);
+    await noSignal(target);
     expect(await waitingClaim(target.session)).toEqual({ slot: 41 });
     await waitingRecord(target.session, 41, 50);
     expect(await pendingOf(target.session)).toBeUndefined();
@@ -1142,6 +1330,7 @@ describe('the waiting message (#536)', () => {
         .where(eq(users.id, target.seed.userId));
     const active = await seedSession();
     await statusMessage(active.session, 7);
+    await noSignal(active);
     await waitingClaim(active.session);
     await waitingRecord(active.session, 7, 50);
     await block(active);
@@ -1151,6 +1340,7 @@ describe('the waiting message (#536)', () => {
     expect(await waitingOf(active.session)).toEqual([50, 7]);
     const stopped = await seedSession();
     await statusMessage(stopped.session, 7);
+    await noSignal(stopped);
     await waitingClaim(stopped.session);
     await waitingRecord(stopped.session, 7, 50);
     await block(stopped);
@@ -1162,18 +1352,26 @@ describe('the waiting message (#536)', () => {
   });
 
   // No backfill (owner 2026-10-17): the DDL leaves both columns NULL on every session at the
-  // deploy, so a running one with its status or a claimed trade is due at the backend's start
-  it("N19 the deploy's state: a running session with an anchor is due, a stopped one is not", async () => {
+  // deploy, so a running one with its status or a claimed trade is due at the backend's start -
+  // since #722 only while its latest decision is no_signal
+  it("N19 the deploy's state: a running session with an anchor that waits for a signal is due, a stopped one is not", async () => {
     const recorded = await seedSession();
     await statusMessage(recorded.session, 7);
     await cycleMessage(recorded, 0, 41);
+    await noSignal(recorded);
     const claimedOnly = await seedSession();
     await settled(claimedOnly, '-5');
     await claim(claimedOnly.session, 0);
+    await noSignal(claimedOnly);
+    const decided = await seedSession();
+    await statusMessage(decided.session, 7);
+    await cycleMessage(decided, 0, 41);
     const bare = await seedSession();
+    await noSignal(bare);
     const ended = await seedSession();
     await statusMessage(ended.session, 7);
     await cycleMessage(ended, 0, 41);
+    await noSignal(ended);
     await stop(ended.session, TradingSessionStopReason.UserStopped);
     for (const target of [recorded, claimedOnly, bare, ended]) {
       expect(await waitingOf(target.session)).toEqual([null, null]);
@@ -1182,6 +1380,7 @@ describe('the waiting message (#536)', () => {
     expect(await pendingOf(recorded.session)).toMatchObject({ waitingDue: true });
     expect(await pendingOf(claimedOnly.session)).toMatchObject({ waitingDue: true });
     expect(await pendingOf(bare.session)).toBeUndefined();
+    expect(await pendingOf(decided.session)).toBeUndefined();
     // listed for its summary, if at all, never for a waiting message
     expect((await pendingOf(ended.session))?.waitingDue ?? false).toBe(false);
     expect(await waitingClaim(recorded.session)).toEqual({ slot: 41 });

@@ -123,8 +123,11 @@ const labelsOf = (payload: Record<string, unknown> | undefined) =>
 const textOf = (call: ApiCall) => String(call.payload.text ?? call.payload.caption ?? '');
 const isSummary = (call: ApiCall) =>
   call.method === 'sendMessage' && labelsOf(call.payload).includes(LABELS.menuButton);
+// by its data: the open block's «⏹» has the same label and `:c` (#722)
 const isWaiting = (call: ApiCall) =>
-  call.method === 'sendMessage' && labelsOf(call.payload).some((l) => l.startsWith('⏹'));
+  call.method === 'sendMessage' &&
+  inlineButtons(call.payload).some((button) => /:w$/.test(button.callback_data ?? ''));
+const OPEN_MARK = 'сделка открыта';
 
 it('runs /start → the email login → a demo session → its result', async () => {
   const reads = e2eReads(tmp.db);
@@ -228,7 +231,8 @@ it('runs /start → the email login → a demo session → its result', async ()
     async () =>
       (await reads.sessionOf(account.id))?.statusMessageId === bot.telegram.messageIdOf(status),
   );
-  await until('the first waiting message is sent', () => backend.push.calls.some(isWaiting));
+  // no waiting message to wait for: the mock gives a signal on every candle, and the waiting
+  // message goes only after a no_signal decision (#722)
 
   // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it - the
   // first two once the backend showed their open block (#700): step 1 a new message, step 2 its edit
@@ -299,8 +303,9 @@ it('runs /start → the email login → a demo session → its result', async ()
   });
   expect(sockets.stop().worst).toBe(1);
 
-  // S7 the backend's messages: the cycles silent and without a keyboard, every waiting message
-  // gone, then the final mark - and no text summary: the bot tracks the session (#537)
+  // S7 the backend's messages: the cycles silent, with the «⏹» only on an open block (#722), every
+  // waiting message gone, then the final mark - and no text summary: the bot tracks the session
+  // (#537)
   const push = backend.push.calls;
   await until('the notices are closed', async () =>
     Boolean((await reads.sessionOf(account.id))?.finalNoticeSentAt),
@@ -311,7 +316,22 @@ it('runs /start → the email login → a demo session → its result', async ()
   expect(cycles).toHaveLength(5);
   for (const call of cycles) {
     expect(call.payload).toMatchObject({ disable_notification: true });
-    expect(call.payload.reply_markup).toBeUndefined();
+  }
+  // every send or edit of a cycle message: the open block's «⏹» `:c` with the block, no keyboard
+  // without it - an edit into the result takes the «⏹» off
+  const sessionId = (await reads.sessionOf(account.id))!.id;
+  for (const call of push.filter(
+    (other) =>
+      (other.method === 'sendMessage' || other.method === 'editMessageText') &&
+      textOf(other).startsWith('⚡'),
+  )) {
+    if (textOf(call).includes(OPEN_MARK)) {
+      expect(inlineButtons(call.payload)).toEqual([
+        { text: LABELS.sessionStopButton, callback_data: `session:stop:${sessionId}:c` },
+      ]);
+    } else {
+      expect(call.payload.reply_markup).toBeUndefined();
+    }
   }
   // the first cycle's message: its open block, the open block of step 2, the result of each (#700)
   const firstCycle = push.filter(
@@ -340,14 +360,14 @@ it('runs /start → the email login → a demo session → its result', async ()
   const opens = push.filter(
     (call) =>
       (call.method === 'sendMessage' || call.method === 'editMessageText') &&
-      textOf(call).includes('сделка открыта'),
+      textOf(call).includes(OPEN_MARK),
   );
   expect(opens.length).toBeGreaterThanOrEqual(2);
   expect(opens.length).toBeLessThanOrEqual(amounts.length);
   // every waiting message is deleted after it went out and before the next message the backend
-  // sends, or at all when nothing follows it
+  // sends, or at all when nothing follows it; there is one only after a no_signal decision (#722)
   const waiting = push.filter(isWaiting);
-  expect(waiting.length).toBeGreaterThanOrEqual(1);
+  if ((await reads.noSignalCountOf(sessionId)) === 0) expect(waiting).toEqual([]);
   for (const call of waiting) {
     const sent = push.indexOf(call);
     const deleted = push.findIndex(
