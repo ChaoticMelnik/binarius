@@ -6,7 +6,6 @@ import { AdaptiveLineSlot, SessionTradeResult } from './session-steps';
 import { telegramHtml, type TelegramHtml } from './telegram-html';
 import { TradeAction, TradeMode } from './trading';
 import {
-  isH1Settings,
   SESSION_NO_SIGNAL_CANDLES,
   sessionSignalCandleMs,
   TradingSessionStopReason,
@@ -174,10 +173,6 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
   }: Pick<SessionClosingView, 'stopReason' | 'trades' | 'cycles' | 'settings'>):
     TelegramHtml | undefined => {
     if (stopReason === TradingSessionStopReason.Completed) {
-      // an H1 session (#745) plans trades, not martingale cycles
-      if (settings !== null && isH1Settings(settings)) {
-        return html.sessionCompletedH1({ result: resultOf(trades) });
-      }
       return html.sessionCompleted({
         cycles: cyclesCount(cycles.closed),
         result: resultOf(trades),
@@ -267,34 +262,6 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     return joinHtmlLines(parts.flatMap((part, i) => (i === 0 ? [part] : [telegramHtml``, part])));
   };
 
-  // An H1 session's summary (#707, docs/bot-session.md → An H1 session): the pair, the settled
-  // trades of the plan, the score, the result and the base stake
-  const sessionH1ProgressText = ({
-    label,
-    assetId,
-    settled,
-    planned,
-    score,
-    result,
-    stake,
-  }: {
-    label: PairLabel | null;
-    assetId: number;
-    settled: number;
-    planned: number;
-    score: SessionScore;
-    result: DecimalString;
-    stake: DecimalString;
-  }): TelegramHtml =>
-    html.sessionH1Progress({
-      symbol: sessionAssetLabel(label, assetId),
-      count: String(settled),
-      trades: tradesCount(planned),
-      score: scoreOf(score),
-      profit: result,
-      stake,
-    });
-
   return {
     pluralTrades,
     tradesCount,
@@ -307,7 +274,6 @@ export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain:
     sessionEndLine,
     sessionSummaryText,
     sessionCycleText,
-    sessionH1ProgressText,
   };
 }
 export type SessionTexts = ReturnType<typeof createSessionTexts>;

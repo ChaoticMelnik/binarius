@@ -8,6 +8,7 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   type TradingSessionSettings,
+  SessionStakeStrategy,
 } from '@binarius/shared';
 import {
   listActiveH1Sessions,
@@ -55,9 +56,9 @@ beforeEach(async () => {
 const h1Settings = (): TradingSessionSettings => {
   const built = buildH1SessionSettings({
     assetId: 101,
-    trades: 10,
+    cycles: 5,
     stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
-    maxLossMultiplier: 20,
+    strategy: SessionStakeStrategy.Martingale,
   });
   if (!built.success) throw new Error('H1 fixture settings do not parse');
   return built.data;

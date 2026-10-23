@@ -22,6 +22,7 @@ import {
   DepositEventStatus,
   TOKEN_ADJUSTMENT_MAX_TOKENS,
   TOKEN_LEDGER_NOTE_MAX,
+  H1_R1_PARAMS,
   TokenLedgerKind,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
@@ -1569,7 +1570,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     expect(response.body.match(/<td>\s*—\s*<\/td>/g)).toHaveLength(7);
   });
 
-  // #552: settings v3 count the session in cycles, v1/v2 in trades
+  // #552: settings v3 count the session in cycles, v1/v2 in trades; v5 too, an H1 session (#775)
   it('prints the length of a session by its settings version', async () => {
     await app.close();
     const stake = { strategy: 'fixed', baseStake: '1.5' as DecimalString, stakeScale: 1 } as const;
@@ -1583,6 +1584,16 @@ describe('the trading sessions page, the card section and the overview breakdown
             { ...SAMPLE_TRADING_SESSION, settings: { ...v3, cycles: 1 } },
             { ...SAMPLE_TRADING_SESSION, settings: { ...v3, cycles: 2 } },
             { ...SAMPLE_TRADING_SESSION, settings: { ...v3, version: 2, trades: 3 } },
+            {
+              ...SAMPLE_TRADING_SESSION,
+              settings: {
+                ...v3,
+                version: 5,
+                durationSec: 5,
+                cycles: 7,
+                signal: { kind: 'h1', params: H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
+              },
+            },
           ],
         }),
     });
@@ -1594,6 +1605,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       '<td>1 цикл</td>',
       '<td>2 цикла</td>',
       '<td>3 сделки</td>',
+      '<td>7 циклов</td>',
     ]);
     expect(response.body).toContain(`<th>${TEXTS.columnLength}</th>`);
   });

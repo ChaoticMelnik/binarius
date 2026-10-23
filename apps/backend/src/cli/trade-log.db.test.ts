@@ -12,8 +12,11 @@ import {
   TradeMode,
   TradingSessionStatus,
   TradingSessionStopReason,
+  buildH1SessionSettings,
   buildSessionSettings,
   decimalStringSchema,
+  H1_R1_PARAMS,
+  isH1Settings,
   tradeLogLineSchema,
   tradeLogTradeJsonSchema,
   h1ShadowEntrySchema,
@@ -46,6 +49,7 @@ import {
 } from '@binarius/db/testing';
 import {
   DEFAULT_SIGNAL_PARAMS,
+  createH1Detector,
   createSignalDecider,
   H1_SHADOW_SETS,
   replayH1Entry,
@@ -53,6 +57,7 @@ import {
   toJournalCandle,
   type SignalJournalEntry,
 } from '@binarius/signal';
+import { h1DriverDecisionInput, h1RepeatDecisionInput, H1RepeatTrigger } from '../h1/driver';
 import { parseTradeLogArgs, runTradeLogCli, TRADE_LOG_PAGE_ROWS } from './trade-log';
 
 // The trade log's export (#666, docs/trade-log.md → The export) through runTradeLogCli on a
@@ -854,6 +859,102 @@ describe('trade-log export (#666)', () => {
     ]);
     expect(out).toContain('"context":"shadow"');
   });
+  it("X17 an H1 session's repeat row and waiting row (#775): both exported; the waiting row replays", async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      cycles: 5,
+      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
+      strategy: SessionStakeStrategy.Martingale,
+    });
+    if (!built.success || !isH1Settings(built.data)) throw new Error('fixture: H1 settings');
+    const settings = built.data;
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { settings });
+    const closes = new Float64Array(H1_R1_PARAMS.sdWindowSec + 1).fill(1.1);
+    const f = 1_170_000_000_000;
+    const waiting = h1DriverDecisionInput(
+      {
+        sessionId: session.id,
+        brokerAccountId: seed.brokerAccountId,
+        settings,
+        assetId: 101,
+        f,
+        takenAtMs: f + 320,
+        decision: createH1Detector(H1_R1_PARAMS).decide({
+          closes,
+          at: H1_R1_PARAMS.sdWindowSec,
+        }),
+        payout: 92,
+        digits: 5,
+        symbol: 'EUR/USD',
+        closedBy: 'tick',
+        closedAtMs: f + 300,
+        series: Array.from(closes),
+        lastTick: null,
+      },
+      2,
+      SignalDecisionOutcome.NoSignal,
+      null,
+    );
+    const repeat = h1RepeatDecisionInput({
+      sessionId: session.id,
+      brokerAccountId: seed.brokerAccountId,
+      assetId: 101,
+      step: 2,
+      takenAtMs: f + 9_000,
+      payout: 92,
+      strategy: SessionStakeStrategy.Martingale,
+      after: {
+        intentId: '00000000-0000-4000-8000-000000000001',
+        action: TradeAction.Down,
+        profit: decimalStringSchema.parse('-1'),
+      },
+      trigger: H1RepeatTrigger.Notice,
+      outcome: SignalDecisionOutcome.Refused,
+      detail: 'active_intent_exists',
+    });
+    const rows = [
+      await recordSignalDecision(tmp.db, waiting),
+      await recordSignalDecision(tmp.db, repeat),
+    ];
+    await tmp.db.execute(
+      sql`update ${signalDecisions} set recorded_at = '2007-01-01T00:00:01Z'::timestamptz where id in (${rows[0]!.id}::uuid, ${rows[1]!.id}::uuid)`,
+    );
+    const { code, out, err } = await run(
+      'export',
+      '--from',
+      '2007-01-01T00:00:00Z',
+      '--to',
+      '2007-01-02T00:00:00Z',
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual(['строк: 2']);
+    const lines = linesOf(out);
+    const byVersion = new Map(lines.map((line) => [line.decision.version, line]));
+    expect(byVersion.get('h1')?.decision).toMatchObject({
+      context: 'session',
+      kind: 'no_signal',
+      outcome: 'no_signal',
+      step: 2,
+    });
+    const entry = h1ShadowEntrySchema.parse(byVersion.get('h1')!.signal);
+    expect(replayH1Entry(entry)).toEqual(entry.decision);
+    expect(byVersion.get('h1-repeat')?.decision).toMatchObject({
+      context: 'session',
+      kind: 'signal',
+      action: 'down',
+      outcome: 'refused',
+      detail: 'active_intent_exists',
+      step: 2,
+    });
+    expect(byVersion.get('h1-repeat')?.signal).toMatchObject({
+      version: 'h1-repeat',
+      series: [],
+      params: { rule: 'repeat_step_2', strategy: 'martingale' },
+      source: { kind: 'settlement', trigger: 'notice' },
+    });
+  });
+
   describe('the ticks around a decision (#668)', () => {
     const ticks: [number, number, number][] = [
       [1_760_000_001_000, 1_760_000_001_180, 1.08761],

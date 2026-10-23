@@ -11,7 +11,6 @@ import {
   type TradeMode,
 } from '@binarius/shared';
 import type { Db } from './client';
-import { h1SessionSql } from './h1-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { literal, sqlLiteralList } from './schema/columns';
@@ -47,8 +46,8 @@ import type { Tx } from './trade-intent-ops';
 // without a result goes into the cycle message, and its settlement edits the block into its
 // result by the cursor above. Which open trade's block was claimed is open_notice_intent_id,
 // written by claimSessionOpenNotice's CAS before the Telegram call: at most once, never repeated,
-// even when its send's outcome is unknown - the trade's result still comes by the cursor. H1
-// sessions (#670) get no open block.
+// even when its send's outcome is unknown - the trade's result still comes by the cursor. An H1
+// session's open trade gets its block as any (#775).
 
 const SETTLED = literal(TradeIntentStatus.Settled);
 const ACCEPTED = literal(TradeIntentStatus.Accepted);
@@ -85,7 +84,7 @@ const openTradeSql = sql<string | null>`(
 )`;
 
 // The list's filter (#660): a settled trade past the cursor, the open trade's block still to be
-// claimed (an H1 session gets none - the sender's isH1Settings, this its SQL twin) or the finish,
+// claimed or the finish,
 // as one aggregate over the session's intents - one index scan per candidate instead of a
 // subquery per fact. The select list keeps settledCountSql, openTradeSql and finishedSql: the
 // sender reads them, and the claims decide. At most one open intent per session (Rule 7), so «an
@@ -97,8 +96,7 @@ const sessionNoticeDueSql = sql<boolean>`(
       or (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)}
           and not coalesce(bool_or(${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})), false))
       or (coalesce(bool_or(${tradeIntents.status} = ${ACCEPTED} and ${brokerTrades.status} = ${literal(BrokerTradeStatus.Open)}
-                           and ${tradeIntents.id} is distinct from ${tradingSessions.openNoticeIntentId}), false)
-          and not coalesce(${h1SessionSql}, false))
+                           and ${tradeIntents.id} is distinct from ${tradingSessions.openNoticeIntentId}), false))
     from ${tradeIntents} left join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
    where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
 )`;
@@ -114,9 +112,9 @@ const sessionSlotSql = sql<number>`greatest(coalesce(${tradingSessions.cycleMess
 // The session waits for a signal (#722): its latest decision of the trading loop (context
 // `session`, by recorded_at then id, on signal_decisions_session_idx) is `no_signal`. An intent's
 // row, written in the intent's transaction, ends the wait; so does every other outcome (refused,
-// replayed, stake_stop; an H1 session writes no no_signal row, #670). The start's row is
-// `session_start` and does not count. No row at all is false, not NULL: coalesce, so `not` of it
-// in the stale fragment is true.
+// replayed, stake_stop). An H1 session's driver writes one no_signal row per waiting period (#775).
+// The start's row is `session_start` and does not count. No row at all is false, not NULL:
+// coalesce, so `not` of it in the stale fragment is true.
 const waitingForSignalSql = sql<boolean>`coalesce((
   select ${signalDecisions.outcome} from ${signalDecisions}
    where ${signalDecisions.tradingSessionId} = ${tradingSessions.id}
@@ -453,103 +451,6 @@ export async function releaseSessionTradeNotice(
       and(
         eq(tradingSessions.id, sessionId),
         eq(tradingSessions.notifiedTrades, claimed + 1),
-        isNull(tradingSessions.finalNoticeSentAt),
-      ),
-    )
-    .returning({ id: tradingSessions.id });
-  return rows.length > 0;
-}
-
-// An H1 session's summary (#707, docs/bot-session.md → An H1 session): the first `to` settled
-// trades in the cursor's order, counted by class, and their profit summed in numeric (Rule 2)
-export interface SessionTradeTotals {
-  won: number;
-  lost: number;
-  tied: number;
-  result: DecimalString;
-}
-
-export interface ClaimedSessionTrades {
-  totals: SessionTradeTotals;
-  cycleMessage: SessionCycleMessage | null;
-}
-
-// Claims the settled trades from + 1 .. to of a session at once (#707): one CAS raises the cursor
-// from `from` to `to`, only while no summary was sent and `to` trades are settled; the batch twin
-// of claimSessionTradeNotice for the H1 summary, edited every H1_NOTICE_EVERY_TRADES trades.
-// Undefined when the CAS lost. The totals are read in the same transaction.
-export async function claimSessionTradeNotices(
-  db: Db,
-  { sessionId, from, to }: { sessionId: string; from: number; to: number },
-): Promise<ClaimedSessionTrades | undefined> {
-  return db.transaction(async (tx) => {
-    const [won] = await tx
-      .update(tradingSessions)
-      .set({ notifiedTrades: to })
-      .where(
-        and(
-          eq(tradingSessions.id, sessionId),
-          eq(tradingSessions.notifiedTrades, from),
-          isNull(tradingSessions.finalNoticeSentAt),
-          sql`${settledCountSql} >= ${to}`,
-        ),
-      )
-      .returning({
-        messageId: tradingSessions.cycleMessageId,
-        from: tradingSessions.cycleMessageFrom,
-      });
-    if (won === undefined) return undefined;
-
-    const first = tx
-      .select({ profit: brokerTrades.profit })
-      .from(tradeIntents)
-      .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
-      .where(
-        and(
-          eq(tradeIntents.tradingSessionId, sessionId),
-          eq(tradeIntents.status, TradeIntentStatus.Settled),
-        ),
-      )
-      .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id))
-      .limit(to)
-      .as('first');
-    const [totals] = await tx
-      .select({
-        trades: sql<number>`count(*)::int`,
-        won: sql<number>`(count(*) filter (where ${first.profit} > 0))::int`,
-        lost: sql<number>`(count(*) filter (where ${first.profit} < 0))::int`,
-        tied: sql<number>`(count(*) filter (where ${first.profit} = 0))::int`,
-        result: sql<DecimalString>`coalesce(sum(${first.profit}), 0)::text`,
-      })
-      .from(first);
-    if (totals === undefined || totals.trades !== to) {
-      throw new Error(`session ${sessionId} lost a settled trade of the first ${to}`);
-    }
-    // trading_sessions_cycle_message_pair_check: both or neither
-    const cycleMessage =
-      won.messageId === null || won.from === null
-        ? null
-        : { messageId: won.messageId, from: won.from };
-    return {
-      totals: { won: totals.won, lost: totals.lost, tied: totals.tied, result: totals.result },
-      cycleMessage,
-    };
-  });
-}
-
-// Puts a claimed batch back (`to` → `from`): only for a send Telegram certainly did not deliver.
-// False when the cursor moved or the summary was sent.
-export async function releaseSessionTradeNotices(
-  db: Db,
-  { sessionId, from, to }: { sessionId: string; from: number; to: number },
-): Promise<boolean> {
-  const rows = await db
-    .update(tradingSessions)
-    .set({ notifiedTrades: from })
-    .where(
-      and(
-        eq(tradingSessions.id, sessionId),
-        eq(tradingSessions.notifiedTrades, to),
         isNull(tradingSessions.finalNoticeSentAt),
       ),
     )

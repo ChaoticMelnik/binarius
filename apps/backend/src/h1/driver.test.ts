@@ -9,9 +9,11 @@ import {
   toBinaryPair,
   TradeIntentErrorCode,
   TradeIntentStatus,
+  sessionStakeParams,
   type BinaryPair,
   type H1SessionSettings,
   type PairsCatalogView,
+  SessionStakeStrategy,
 } from '@binarius/shared';
 import {
   TradeIntentError,
@@ -20,11 +22,13 @@ import {
   type CreateSessionIntentInput,
   type CreateTradeIntentResult,
   type SessionHistory,
+  type SessionBalanceRead,
   type SessionHistoryIntent,
   type SignalDecisionInput,
   type TradeIntentRow,
 } from '@binarius/db';
 import { createH1Detector, replayH1Entry } from '@binarius/signal';
+import { createStakeSizer, sessionTradeOf } from '@binarius/stake';
 import type { ClosedSecond } from '../market-data/seconds';
 import { createH1Driver, type H1Driver, type H1DriverDeps } from './driver';
 
@@ -56,12 +60,12 @@ const pairOf = (id: number, patch: Partial<BinaryPair> = {}): BinaryPair => ({
 function h1Settings(patch: Partial<H1SessionSettings> = {}): H1SessionSettings {
   const built = buildH1SessionSettings({
     assetId: A,
-    trades: 50,
+    cycles: 5,
     stake: { baseStake: decimalStringSchema.parse('1.5'), stakeScale: 2 },
-    maxLossMultiplier: 20,
+    strategy: SessionStakeStrategy.Martingale,
   });
-  if (!built.success || built.data.version !== 4) throw new Error('H1 fixture settings');
-  return { ...built.data, ...patch };
+  if (!built.success || built.data.version !== 5) throw new Error('H1 fixture settings');
+  return { ...built.data, ...patch } as H1SessionSettings;
 }
 
 const sessionOf = (id: string, settings: unknown = h1Settings()): ActiveH1Session => ({
@@ -129,7 +133,6 @@ const emptyHistory = (intents: Partial<SessionHistoryIntent>[] = []): SessionHis
   telegramUserId: '1001',
   expired: false,
   waitExpired: false,
-  lossLimitReached: false,
   intents: intents.map((intent, i) => ({
     id: `h-${i}`,
     action: 'up',
@@ -146,6 +149,8 @@ interface Harness {
   series: ReturnType<typeof scriptedSeries>;
   listed: ActiveH1Session[];
   histories: Map<string, SessionHistory | undefined>;
+  // the session's balance read (#775): undefined is no snapshot
+  balance: { read: SessionBalanceRead | undefined };
   creates: CreateSessionIntentInput[];
   records: SignalDecisionInput[];
   stops: { id: string; reason: string }[];
@@ -154,6 +159,8 @@ interface Harness {
   streaming: { on: boolean };
   // the next createIntent answers: a result, a throw, or a pending promise the test resolves
   answers: (() => Promise<CreateTradeIntentResult>)[];
+  // the next record() calls that throw (a refused INSERT)
+  recordFailures: { n: number };
   feed(assetId: number, from: number, prices: readonly number[]): void;
   // as feed, letting each second from F on finish its trade before the next one closes
   feedSettled(assetId: number, from: number, prices: readonly number[]): Promise<void>;
@@ -185,6 +192,14 @@ async function harness(
   const stops: { id: string; reason: string }[] = [];
   const wakes = { n: 0 };
   const answers: (() => Promise<CreateTradeIntentResult>)[] = [];
+  const recordFailures = { n: 0 };
+  const balance: { read: SessionBalanceRead | undefined } = {
+    read: {
+      available: decimalStringSchema.parse('1000'),
+      minTradeAmount: decimalStringSchema.parse('1'),
+      awaitsBalance: false,
+    },
+  };
   const catalog = {
     view: {
       pairs: options.pairs ?? [pairOf(A), pairOf(B)],
@@ -199,6 +214,7 @@ async function harness(
     series,
     listed,
     histories,
+    balance,
     creates,
     records,
     stops,
@@ -206,6 +222,7 @@ async function harness(
     catalog,
     streaming,
     answers,
+    recordFailures,
     feed(assetId, from, prices) {
       prices.forEach((price, i) => series.closeSecond(assetId, from + i * 1_000, price));
     },
@@ -235,6 +252,7 @@ async function harness(
     sessions: {
       list: () => Promise.resolve([...h.listed]),
       history: (id) => Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory()),
+      balance: () => Promise.resolve(balance.read),
       createIntent: (input) => {
         creates.push(input);
         const answer = answers.shift();
@@ -248,6 +266,10 @@ async function harness(
       },
       record: (input) => {
         records.push(input);
+        if (recordFailures.n > 0) {
+          recordFailures.n -= 1;
+          return Promise.reject(Object.assign(new Error('refused'), { code: '23514' }));
+        }
         return Promise.resolve();
       },
     },
@@ -288,7 +310,7 @@ describe('the H1 driver (#707)', () => {
       brokerAccountId: 'acc-s1',
       mode: 'demo',
       assetId: A,
-      amount: '1.5',
+      amount: '1.50',
       action: 'up',
       durationSec: 5,
       submitDeadlineAt: new Date(takenAtMs + BUDGET_MS),
@@ -371,10 +393,6 @@ describe('the H1 driver (#707)', () => {
 
   it.each([
     ['completed', emptyHistory(Array.from({ length: 50 }, () => ({})))],
-    [
-      'max_loss',
-      { ...emptyHistory([{ profit: decimalStringSchema.parse('-1.5') }]), lossLimitReached: true },
-    ],
     [
       'rejected_twice',
       emptyHistory([
@@ -593,5 +611,351 @@ describe('the H1 driver (#707)', () => {
       lagMsP50: 320,
       lagMsP95: 320,
     });
+  });
+});
+
+// #775: the session is a regular one - the sizer's stake, the repeat step, the waiting row
+const settledStep = (action: 'up' | 'down', amount: string, profit: string) => ({
+  action,
+  amount: decimalStringSchema.parse(amount),
+  profit: decimalStringSchema.parse(profit),
+});
+// the stake the orchestrator's sizer gives over the same history and the harness's balance
+const sizerStake = (history: SessionHistory, settings = h1Settings(), payout = 96) => {
+  const decision = createStakeSizer(sessionStakeParams(settings)).next({
+    history: history.intents.map(sessionTradeOf),
+    payout,
+    minTradeAmount: decimalStringSchema.parse('1'),
+    available: decimalStringSchema.parse('1000'),
+    sessionStartedAtMs: T,
+    nowMs: T,
+  });
+  if (decision.kind !== 'stake') throw new Error('fixture: the sizer stops');
+  return decision.amount;
+};
+const lostStep1 = emptyHistory([settledStep('down', '1.50', '-1.50')]);
+const fixedSettings = () => {
+  const built = buildH1SessionSettings({
+    assetId: A,
+    cycles: 5,
+    stake: { baseStake: decimalStringSchema.parse('1.5'), stakeScale: 2 },
+    strategy: SessionStakeStrategy.Fixed,
+  });
+  if (!built.success) throw new Error('fixture: fixed H1 settings');
+  return built.data;
+};
+
+describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
+  it("H1-DR21: the signal's intent carries the sizer's stake: after two losses the raise, the signal's direction", async () => {
+    const h = await harness();
+    const history = emptyHistory([
+      settledStep('down', '1.50', '-1.50'),
+      settledStep('down', '3.07', '-3.07'),
+    ]);
+    h.histories.set('s1', history);
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    const expected = sizerStake(history);
+    expect(expected).not.toBe('1.50');
+    expect(h.creates[0]).toMatchObject({ step: 3, action: 'up', amount: expected });
+    expect(h.creates[0]!.decision).toMatchObject({ version: 'h1', action: 'up' });
+  });
+
+  it("H1-DR22: a sizer stop creates nothing and stops nothing: the orchestrator's stop", async () => {
+    const h = await harness();
+    h.histories.set(
+      's1',
+      emptyHistory([
+        settledStep('down', '1.50', '-1.50'),
+        settledStep('down', '3.07', '-3.07'),
+        settledStep('down', '6.34', '-6.34'),
+        settledStep('down', '13.00', '-13.00'),
+      ]),
+    );
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.stops).toEqual([]);
+    expect(h.line()).toMatchObject({ skippedLimits: { max_steps_exceeded: 1 }, intents: 0 });
+  });
+
+  it('H1-DR23: no balance snapshot skips with balance_unavailable', async () => {
+    const h = await harness();
+    h.balance.read = undefined;
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.line()).toMatchObject({ skippedLimits: { balance_unavailable: 1 } });
+  });
+
+  it('H1-DR24: a settlement the balance has not caught up with holds; otherwise the stop skips', async () => {
+    const held = await harness();
+    held.balance.read = {
+      available: decimalStringSchema.parse('0.50'),
+      minTradeAmount: decimalStringSchema.parse('1'),
+      awaitsBalance: true,
+    };
+    held.feed(A, T, ramp(1));
+    await flush();
+    expect(held.creates).toEqual([]);
+    expect(held.line()).toMatchObject({ heldBalance: 1, skippedLimits: {} });
+    const skipped = await harness();
+    skipped.balance.read = { ...held.balance.read, awaitsBalance: false };
+    skipped.feed(A, T, ramp(1));
+    await flush();
+    expect(skipped.creates).toEqual([]);
+    expect(skipped.line()).toMatchObject({
+      heldBalance: 0,
+      skippedLimits: { insufficient_balance: 1 },
+    });
+  });
+
+  it('H1-DR24b: a repeat held for the balance is retried on the next closed second', async () => {
+    const h = await harness();
+    h.feed(A, T, flat(300));
+    h.histories.set('s1', lostStep1);
+    const enough = h.balance.read;
+    h.balance.read = {
+      available: decimalStringSchema.parse('0.50'),
+      minTradeAmount: decimalStringSchema.parse('1'),
+      awaitsBalance: true,
+    };
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toEqual([]);
+    h.balance.read = enough;
+    h.series.closeSecond(A, F, 1.1);
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { kind: 'settlement', trigger: 'tick' },
+    });
+    expect(h.line()).toMatchObject({ heldBalance: 1, repeatPending: 1, repeats: 1 });
+  });
+
+  it('H1-DR25: a notice after a lost Шаг 1 creates Шаг 2 at once: its direction, the raise, no window', async () => {
+    const h = await harness();
+    h.feed(A, T, flat(300));
+    h.histories.set('s1', lostStep1);
+    const noticedAt = clock.now;
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    const input = h.creates[0]!;
+    expect(input).toMatchObject({
+      step: 2,
+      action: 'down',
+      amount: sizerStake(lostStep1),
+      durationSec: 5,
+    });
+    expect('submitDeadlineAt' in input).toBe(false);
+    expect(input.decision).toEqual({
+      context: 'session',
+      tradingSessionId: 's1',
+      brokerAccountId: 'acc-s1',
+      step: 2,
+      assetId: A,
+      interval: null,
+      version: 'h1-repeat',
+      decidedAtMs: noticedAt,
+      takenAtMs: noticedAt,
+      kind: 'signal',
+      action: 'down',
+      payout: 96,
+      digits: null,
+      params: { rule: 'repeat_step_2', strategy: 'martingale' },
+      decision: {
+        kind: 'signal',
+        version: 'h1-repeat',
+        action: 'down',
+        after: { intentId: 'h-0', action: 'down', profit: '-1.50' },
+      },
+      source: { kind: 'settlement', trigger: 'notice' },
+      series: [],
+      lastTick: null,
+      outcome: 'intent',
+      detail: null,
+      ticksUntilMs: null,
+    });
+    expect(h.wakes.n).toBe(1);
+    // one trade at a time: the seconds before the repeat's creation + 6 s are held
+    h.histories.set('s1', emptyHistory([settledStep('down', '1.50', '-1.50'), {}]));
+    await h.feedSettled(A, F, ramp(7).slice(300));
+    await flush();
+    expect(h.creates.map((one) => one.decision!.decidedAtMs)).toEqual([noticedAt, F + 6_000]);
+    expect(h.line()).toMatchObject({ repeats: 1, intents: 2, held: 6 });
+  });
+
+  it('H1-DR25b: a tie at Шаг 1 repeats with the base stake in its direction', async () => {
+    const h = await harness();
+    h.histories.set('s1', emptyHistory([settledStep('up', '1.50', '0.00000000')]));
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 2, action: 'up', amount: '1.50' });
+    expect(h.creates[0]!.decision).toMatchObject({ version: 'h1-repeat' });
+  });
+
+  it('H1-DR25c: a notice after a win does nothing', async () => {
+    const h = await harness();
+    h.histories.set('s1', emptyHistory([settledStep('down', '1.50', '1.44')]));
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.line()).toMatchObject({ noticeIdle: 1, repeats: 0 });
+  });
+
+  it('H1-DR25d: after a lost Шаг 2 nothing repeats; the next signal opens Шаг 3 in its direction', async () => {
+    const h = await harness();
+    const history = emptyHistory([
+      settledStep('down', '1.50', '-1.50'),
+      settledStep('down', '3.07', '-3.07'),
+    ]);
+    h.histories.set('s1', history);
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.line()).toMatchObject({ noticeIdle: 1 });
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 3, action: 'up' });
+    expect(h.creates[0]!.decision).toMatchObject({ version: 'h1' });
+  });
+
+  it('H1-DR26: a notice while a run is in flight runs once more after it', async () => {
+    const h = await harness();
+    let resolve!: (result: CreateTradeIntentResult) => void;
+    h.answers.push(() => new Promise((done) => (resolve = done)));
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    // Шаг 1 settles lost while its creation's answer is still on the way
+    h.histories.set('s1', emptyHistory([settledStep('up', '1.50', '-1.50')]));
+    h.driver.notice('s1');
+    resolve(created());
+    await flush();
+    await flush();
+    expect(h.creates).toHaveLength(2);
+    expect(h.creates[1]).toMatchObject({ step: 2, action: 'up' });
+    expect(h.creates[1]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { trigger: 'notice' },
+    });
+  });
+
+  it("H1-DR27: a signal while the repeat is due creates the repeat, not the signal's step", async () => {
+    const h = await harness();
+    h.histories.set('s1', lostStep1);
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 2, action: 'down', amount: sizerStake(lostStep1) });
+    expect('submitDeadlineAt' in h.creates[0]!).toBe(false);
+    expect(h.creates[0]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { kind: 'settlement', trigger: 'signal' },
+    });
+  });
+
+  it('H1-DR28: under fixed nothing ever repeats: the signal opens the next trade', async () => {
+    const h = await harness({ sessions: [sessionOf('s1', fixedSettings())] });
+    h.histories.set('s1', lostStep1);
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toEqual([]);
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 2, action: 'up', amount: '1.50' });
+    expect(h.creates[0]!.submitDeadlineAt).toBeInstanceOf(Date);
+    expect(h.creates[0]!.decision).toMatchObject({ version: 'h1' });
+  });
+
+  it('H1-DR29: a waiting period writes one no_signal row; a notice opens the next period', async () => {
+    const h = await harness();
+    await h.feedSettled(A, T, flat(303));
+    await flush();
+    expect(h.records).toHaveLength(1);
+    const row = h.records[0]!;
+    expect(row).toMatchObject({
+      context: 'session',
+      tradingSessionId: 's1',
+      step: 1,
+      version: 'h1',
+      kind: 'no_signal',
+      action: null,
+      outcome: 'no_signal',
+      detail: null,
+      decidedAtMs: F,
+      params: { set: 'session' },
+    });
+    expect(row.series).toHaveLength(301);
+    // the shadow's shape: the export's replay decides it again to itself
+    const entry = h1ShadowEntrySchema.parse({
+      assetId: row.assetId,
+      interval: row.interval,
+      digits: row.digits,
+      nowMs: row.decidedAtMs,
+      source: row.source,
+      version: row.version,
+      params: row.params,
+      series: row.series,
+      decision: row.decision,
+    });
+    expect(replayH1Entry(entry)).toEqual(row.decision);
+    h.driver.notice('s1');
+    await flush();
+    await h.feedSettled(A, F + 3_000, flat(2));
+    await flush();
+    expect(h.records.map((one) => one.decidedAtMs)).toEqual([F, F + 3_000]);
+    expect(h.line()).toMatchObject({ waitingRows: 2 });
+  });
+
+  it('H1-DR30: no waiting row while the cadence holds or an intent is live; a refused row is retried after scanMs', async () => {
+    const held = await harness();
+    // a signal at F, then the level holds: no move, no signal
+    await held.feedSettled(A, T, [...ramp(1), ...flat(7, 1.1001)]);
+    await flush();
+    expect(held.creates).toHaveLength(1);
+    expect(held.records.map((one) => one.decidedAtMs)).toEqual([F + 7_000]);
+
+    const live = await harness();
+    live.histories.set('s1', emptyHistory([{ status: TradeIntentStatus.Accepted, profit: null }]));
+    await live.feedSettled(A, T, flat(303));
+    await flush();
+    expect(live.records).toEqual([]);
+
+    const refused = await harness();
+    refused.recordFailures.n = 1;
+    await refused.feedSettled(A, T, flat(306));
+    await flush();
+    // F refused; F + 1 s … F + 4 s inside scanMs (5 s) try nothing; F + 5 s writes it
+    expect(refused.records.map((one) => one.decidedAtMs)).toEqual([F, F + 5_000]);
+    expect(refused.line()).toMatchObject({ failed: 1, waitingRows: 1 });
+  });
+
+  it("H1-DR31: a refused repeat writes the repeat's refused row and keeps the session", async () => {
+    const h = await harness();
+    h.histories.set('s1', lostStep1);
+    h.answers.push(() =>
+      Promise.reject(new TradeIntentError(TradeIntentErrorCode.ActiveIntentExists)),
+    );
+    h.driver.notice('s1');
+    await flush();
+    expect(h.stops).toEqual([]);
+    expect(h.records).toEqual([
+      expect.objectContaining({
+        version: 'h1-repeat',
+        step: 2,
+        action: 'down',
+        outcome: 'refused',
+        detail: 'active_intent_exists',
+        source: { kind: 'settlement', trigger: 'notice' },
+      }),
+    ]);
+    expect(h.line()).toMatchObject({ refused: 1, sessions: 1 });
   });
 });

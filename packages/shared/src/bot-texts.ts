@@ -1479,12 +1479,6 @@ export const BOT_TEXT_CATALOG = {
     `🏁 Сессия завершена: {cycles}, {result}`,
     { vars: ['cycles', 'result'] },
   ),
-  sessionCompletedH1: html(
-    g.Session,
-    'H1-сессия из бота (#745): итог, когда все сделки плана закрыты; сделки и счёт, без циклов.',
-    `🏁 H1-сессия завершена: {result}`,
-    { vars: ['result'] },
-  ),
   sessionTotal: html(g.Session, 'Сессия: итог под причиной остановки.', `📊 Итог: {result}`, {
     vars: ['result'],
   }),
@@ -1564,11 +1558,6 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Кнопка сессии: пара недоступна.',
     `⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.`,
-  ),
-  sessionH1PayoutTooLow: html(
-    g.Session,
-    'Кнопка сессии на аккаунте с меткой H1 (#745): пара платит меньше порога H1 (H1_MIN_PAYOUT_PCT).',
-    `⚡ Для H1 нужна пара с выплатой не ниже 94 %. Выбери другую пару 👇`,
   ),
   sessionAccountChanged: html(
     g.Session,
@@ -1779,19 +1768,6 @@ export const BOT_TEXT_CATALOG = {
     "Итог сессии (со звуком): первая строка подписи картинки-итога, которую шлёт бот; под ней строки итога из сообщения сессии. Текстовый итог backend'а (запасной путь) — те же строки.",
     `📈 {symbol}`,
     { vars: ['symbol'] },
-  ),
-
-  // Sent by the backend only (#707, docs/bot-session.md → An H1 session): an H1 session's one
-  // message, edited every H1_NOTICE_EVERY_TRADES settled trades and at the finish.
-  sessionH1Progress: html(
-    g.Session,
-    'Сводка H1-сессии: одно сообщение, правится каждые 10 сделок и в конце сессии; без звука и без кнопок. Пара, сделок из плана, счёт, результат, ставка.',
-    `⚡ H1 · {symbol}
-📈 Сделок: {count} из {trades}
-🧮 Счёт: {score}
-💰 Результат: {profit}
-💵 Ставка: {stake}`,
-    { vars: ['symbol', 'count', 'trades', 'score', 'profit', 'stake'] },
   ),
 
   // ---- Пополнение (#112, docs/deposit.md) -------------------------------------------------

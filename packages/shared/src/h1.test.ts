@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { breakEvenPct, MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import {
-  H1_BOT_MAX_LOSS_MULTIPLIER,
-  H1_BOT_SESSION_TRADES,
   H1_DECISION_SETS,
   H1_ENTRY_WINDOW_SEC,
   H1_SESSION_DECISION_SET,
@@ -11,6 +9,7 @@ import {
   H1_MIN_PAYOUT_PCT,
   H1_PRICE_RANGE,
   H1_R1_PARAMS,
+  H1_REPEAT_VERSION,
   H1_VERSION,
   h1DecisionSchema,
   h1ShadowEntrySchema,
@@ -19,14 +18,9 @@ import {
   h1ShadowSourceSchema,
   tradeOutcomeOf,
 } from './h1';
+import { SIGNAL_ALGORITHM_VERSIONS } from './signal';
 import { TradeAction } from './trading';
 import { SIGNAL_VERSION_PATTERN } from './trade-log';
-import {
-  buildH1SessionSettings,
-  MAX_H1_LOSS_MULTIPLIER,
-  MAX_SESSION_SUMMARY_TRADES,
-} from './trading-session';
-import type { DecimalString } from './money';
 
 const features = { move: 3, sd: 1, z: 3, moves: 60, lastClose: 1004 };
 const signal = { kind: 'signal', version: 'h1', action: 'up', features };
@@ -166,23 +160,12 @@ describe('the H1 shadow row (#669)', () => {
   });
 });
 
-describe('an H1 session from the bot (#745)', () => {
-  const settingsFor = (baseStake: string) =>
-    buildH1SessionSettings({
-      assetId: 42,
-      trades: H1_BOT_SESSION_TRADES,
-      stake: { baseStake: baseStake as DecimalString, stakeScale: 2 },
-      maxLossMultiplier: H1_BOT_MAX_LOSS_MULTIPLIER,
-    });
-
-  it("H-S10: the bot's length and loss ceiling fit the settings' bounds; a zero stake is refused", () => {
-    expect(H1_BOT_SESSION_TRADES).toBeGreaterThanOrEqual(1);
-    expect(H1_BOT_SESSION_TRADES).toBeLessThanOrEqual(MAX_SESSION_SUMMARY_TRADES);
-    expect(H1_BOT_MAX_LOSS_MULTIPLIER).toBeGreaterThanOrEqual(1);
-    expect(H1_BOT_MAX_LOSS_MULTIPLIER).toBeLessThanOrEqual(MAX_H1_LOSS_MULTIPLIER);
-    const built = settingsFor('1.00');
-    expect(built.success).toBe(true);
-    expect(built.data).toMatchObject({ version: 4, trades: 50, maxLoss: '20' });
-    expect(settingsFor('0').success).toBe(false);
+describe('the repeat step of an H1 session (#775)', () => {
+  it("H-S10′: the repeat row's version fits the pattern, is no signal algorithm and is not H1's", () => {
+    expect(H1_REPEAT_VERSION).toMatch(SIGNAL_VERSION_PATTERN);
+    expect((SIGNAL_ALGORITHM_VERSIONS as readonly string[]).includes(H1_REPEAT_VERSION)).toBe(
+      false,
+    );
+    expect(H1_REPEAT_VERSION).not.toBe(H1_VERSION);
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PairsCatalogErrorCode } from './catalog';
 import { H1_EXPIRY_SEC, H1_R1_PARAMS } from './h1';
 import { decimalStringSchema } from './money';
+import { SessionStakeStrategy } from './session-steps';
 import { SIGNAL_SHORTEST_INTERVAL_MS } from './signal';
 import { INT4_MAX, TradeIntentErrorCode, TradeIntentStatus, type TradeIntentView } from './trading';
 import {
@@ -46,7 +47,6 @@ import {
   buildH1SessionSettings,
   H1_SESSION_SETTINGS_VERSION,
   isH1Settings,
-  MAX_H1_LOSS_MULTIPLIER,
   SESSION_INTENT_REFUSALS,
   sessionIntentBlock,
   SessionIntentBlockReason,
@@ -73,6 +73,15 @@ const settingsV3 = {
   durationSec: 60,
   cycles: 5,
   stake: martingaleStake,
+};
+
+const h1V5 = {
+  version: 5,
+  assetId: 101,
+  durationSec: 5,
+  cycles: 5,
+  stake: martingaleStake,
+  signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
 };
 
 const refused = (input: unknown) => safeParseTradingSessionSettings(input).success === false;
@@ -597,13 +606,14 @@ describe('tradingSessionRefusalSchema', () => {
 
   it('parses the H1 refusals of the start (#745); account_not_h1 is the db code', () => {
     for (const error of [
-      TradingSessionErrorCode.H1PayoutTooLow,
       TradingSessionErrorCode.H1DurationUnsupported,
       TradingSessionErrorCode.AccountNotH1,
     ]) {
       expect(safeParseTradingSessionRefusal({ error }).success).toBe(true);
     }
     expect(TradingSessionErrorCode.AccountNotH1).toBe('account_not_h1');
+    // no payout floor at the start since #775 (В2)
+    expect(safeParseTradingSessionRefusal({ error: 'h1_payout_too_low' }).success).toBe(false);
   });
 
   it('spells catalog_unavailable as the pairs route does', () => {
@@ -769,7 +779,7 @@ describe('sessionShareResponseSchema (#538)', () => {
   });
 });
 
-describe('settings v4, the H1 session (#670)', () => {
+describe('settings v4, the H1 session of #670, read-only since #775', () => {
   const h1Settings = {
     version: 4,
     assetId: 101,
@@ -799,7 +809,7 @@ describe('settings v4, the H1 session (#670)', () => {
     expect(refused(v4({ maxLoss: undefined }))).toBe(true);
   });
 
-  it('H1-S2 counts every settled trade against settings.trades', () => {
+  it('H1-S2 a v4 row counts every settled trade against settings.trades', () => {
     expect(sessionProgress(safeParse(v4()), { settled: 3, won: 1 })).toEqual({
       planned: 50,
       done: 3,
@@ -810,40 +820,10 @@ describe('settings v4, the H1 session (#670)', () => {
     expect(sessionStakeParams(safeParse(v4()))).toEqual(h1Settings.stake);
   });
 
-  it('H1-S4 buildH1SessionSettings writes R1, entry +1 s, expiry 5 s and maxLoss = k × B', () => {
-    const built = buildH1SessionSettings({
-      assetId: 101,
-      trades: 50,
-      stake: { baseStake: decimalStringSchema.parse('1.5'), stakeScale: 2 },
-      maxLossMultiplier: 20,
-    });
-    expect(built.success && built.data).toEqual(h1Settings);
-    const ceiling = buildH1SessionSettings({
-      assetId: 101,
-      trades: 1,
-      stake: { baseStake: decimalStringSchema.parse('0.00000001'), stakeScale: 8 },
-      maxLossMultiplier: MAX_H1_LOSS_MULTIPLIER,
-    });
-    expect(ceiling.success && ceiling.data.version === 4 && ceiling.data.maxLoss).toBe('0.00001');
-    const zero = buildH1SessionSettings({
-      assetId: 101,
-      trades: 50,
-      stake: { baseStake: decimalStringSchema.parse('0'), stakeScale: 0 },
-      maxLossMultiplier: 20,
-    });
-    expect(zero.success).toBe(false);
-    const overflow = buildH1SessionSettings({
-      assetId: 101,
-      trades: 50,
-      stake: { baseStake: decimalStringSchema.parse('999999999999'), stakeScale: 0 },
-      maxLossMultiplier: 2,
-    });
-    expect(overflow.success).toBe(false);
-  });
-
-  it('H1-S5 isH1Settings is true for v4 only; the shortest session trade is the H1 expiry', () => {
-    expect(H1_SESSION_SETTINGS_VERSION).toBe(4);
+  it('H1-S5 isH1Settings is true for v4 and v5 only; the shortest session trade is the H1 expiry', () => {
+    expect(H1_SESSION_SETTINGS_VERSION).toBe(5);
     expect(isH1Settings(safeParse(v4()))).toBe(true);
+    expect(isH1Settings(safeParse(h1V5))).toBe(true);
     expect(isH1Settings(safeParse(settings))).toBe(false);
     expect(isH1Settings(safeParse(settingsV2))).toBe(false);
     expect(isH1Settings(safeParse(settingsV3))).toBe(false);
@@ -879,15 +859,68 @@ describe('settings v4, the H1 session (#670)', () => {
   });
 });
 
+describe('settings v5, the H1 session (#775)', () => {
+  const v5 = (patch: Record<string, unknown> = {}) => ({ ...h1V5, ...patch });
+  const fixedStake = { strategy: 'fixed', baseStake: '1', stakeScale: 0 };
+
+  it('H1-S1′ reads v5 and refuses it outside its bounds; a v4 row still reads', () => {
+    expect(safeParseTradingSessionSettings(v5()).success).toBe(true);
+    expect(safeParseTradingSessionSettings(v5({ stake: fixedStake })).success).toBe(true);
+    expect(safeParseTradingSessionSettings(v5({ cycles: MAX_SESSION_CYCLES })).success).toBe(true);
+    expect(refused(v5({ cycles: 0 }))).toBe(true);
+    expect(refused(v5({ cycles: MAX_SESSION_CYCLES + 1 }))).toBe(true);
+    expect(refused(v5({ durationSec: 15 }))).toBe(true);
+    expect(refused(v5({ stake: { ...martingaleStake, limits: undefined } }))).toBe(true);
+    expect(refused(v5({ signal: undefined }))).toBe(true);
+    expect(refused(v5({ trades: 50 }))).toBe(true);
+    expect(refused(v5({ maxLoss: '20' }))).toBe(true);
+  });
+
+  it('H1-S2′ v5 counts cycles: wins under martingale, settled trades under fixed', () => {
+    expect(sessionProgress(safeParse(v5()), { settled: 4, won: 1 })).toEqual({
+      planned: 5,
+      done: 1,
+    });
+    expect(sessionProgress(safeParse(v5({ stake: fixedStake })), { settled: 4, won: 1 })).toEqual({
+      planned: 5,
+      done: 4,
+    });
+  });
+
+  it('H1-S4′ buildH1SessionSettings writes v5: the limits under martingale, R1, entry +1 s, expiry 5 s', () => {
+    const stake = { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 };
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      cycles: 5,
+      stake,
+      strategy: SessionStakeStrategy.Martingale,
+    });
+    expect(built.success && built.data).toEqual({
+      ...h1V5,
+      stake: { strategy: 'martingale', ...stake, limits: martingaleLimitsFor(stake.baseStake) },
+    });
+    const fixed = buildH1SessionSettings({
+      assetId: 101,
+      cycles: 3,
+      stake,
+      strategy: SessionStakeStrategy.Fixed,
+    });
+    expect(fixed.success && fixed.data).toEqual({ ...h1V5, cycles: 3, stake: fixedStake });
+    const zero = buildH1SessionSettings({
+      assetId: 101,
+      cycles: 5,
+      stake: { baseStake: decimalStringSchema.parse('0'), stakeScale: 0 },
+      strategy: SessionStakeStrategy.Martingale,
+    });
+    expect(zero.success).toBe(false);
+  });
+});
+
 describe('sessionIntentBlock (#707): why a session may not create its next intent', () => {
   const h1 = safeParse({
-    version: 4,
-    assetId: 101,
-    durationSec: 5,
-    trades: 3,
+    ...h1V5,
+    cycles: 3,
     stake: { strategy: 'fixed', baseStake: '1', stakeScale: 0 },
-    signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
-    maxLoss: '20',
   });
   const won = { status: TradeIntentStatus.Settled, profit: '0.92' };
   const lost = { status: TradeIntentStatus.Settled, profit: '-1' };
@@ -895,8 +928,8 @@ describe('sessionIntentBlock (#707): why a session may not create its next inten
   const live = { status: TradeIntentStatus.Submitting, profit: null };
   const history = (
     intents: { status: TradeIntentStatus; profit: string | null }[],
-    patch: { expired?: boolean; lossLimitReached?: boolean } = {},
-  ) => ({ expired: false, lossLimitReached: false, intents, ...patch });
+    patch: { expired?: boolean } = {},
+  ) => ({ expired: false, intents, ...patch });
 
   it('H1-S7 nothing blocks a session inside its limits', () => {
     expect(sessionIntentBlock(history([]), h1)).toBeNull();
@@ -918,27 +951,22 @@ describe('sessionIntentBlock (#707): why a session may not create its next inten
       settled: 3,
       done: 3,
     });
-    expect(sessionIntentBlock(history([lost], { lossLimitReached: true }), h1)).toEqual({
-      reason: SessionIntentBlockReason.MaxLoss,
-    });
     expect(sessionIntentBlock(history([won, rejected, rejected]), h1)).toEqual({
       reason: SessionIntentBlockReason.RejectedTwice,
     });
   });
 
-  it('H1-S9 the order: expired, live, completed, max loss, two rejections', () => {
-    const all = history([won, lost, rejected, rejected, live], {
-      expired: true,
-      lossLimitReached: true,
-    });
+  it('H1-S9 the order: expired, live, completed, two rejections; four reasons (#775)', () => {
+    expect(Object.values(SessionIntentBlockReason).sort()).toEqual(
+      ['completed', 'expired', 'live', 'rejected_twice'].sort(),
+    );
+    const all = history([won, lost, rejected, rejected, live], { expired: true });
     expect(sessionIntentBlock(all, h1)?.reason).toBe(SessionIntentBlockReason.Expired);
     expect(sessionIntentBlock({ ...all, expired: false }, h1)?.reason).toBe(
       SessionIntentBlockReason.Live,
     );
-    const done = history([won, lost, won], { lossLimitReached: true });
+    const done = history([won, lost, won, rejected, rejected]);
     expect(sessionIntentBlock(done, h1)?.reason).toBe(SessionIntentBlockReason.Completed);
-    const twice = history([rejected, rejected], { lossLimitReached: true });
-    expect(sessionIntentBlock(twice, h1)?.reason).toBe(SessionIntentBlockReason.MaxLoss);
   });
 
   it('H1-S10 a martingale v3 session counts cycles by wins; a zero or missing profit is no win', () => {

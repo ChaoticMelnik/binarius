@@ -305,13 +305,6 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionTradeWon: tradeNoticeWidths,
   sessionTradeLost: tradeNoticeWidths,
   sessionTradeTied: tradeNoticeWidths,
-  // an H1 session's summary (#707): the settled count of at most MAX_SESSION_SUMMARY_TRADES, the
-  // pair or the asset's id, the session's base stake
-  sessionH1Progress: {
-    count: () => w.sessionCount,
-    symbol: (m) => Math.max(w.symbol, m.length('intentAssetFallback')),
-    stake: () => w.stake,
-  },
   // the open trade's direction is the catalog's word alone (session-texts.ts → sessionCycleText)
   sessionTradeOpen: { ...tradeNoticeWidths, action: (m) => m.longest('actionUp', 'actionDown') },
   // shown only with an amount; launchStakeMinimum stands in without one
@@ -518,7 +511,6 @@ const sessionSummaryBody: BotTextMessage['body'] = [
   '\n',
   oneOf(
     [k('sessionCompleted')],
-    [k('sessionCompletedH1')],
     [anyOf(...sessionStopLines, 'sessionStopNoSignalTimeoutNoSettings'), '\n', k('sessionTotal')],
   ),
   ...sessionOutcome,
@@ -747,7 +739,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionCompleted',
     title: 'Сессия завершена',
     limit: TELEGRAM_CAPTION_LIMIT,
-    body: [...sessionHead, '\n\n', anyOf('sessionCompleted', 'sessionCompletedH1')],
+    body: [...sessionHead, '\n\n', k('sessionCompleted')],
   },
   {
     id: 'sessionStopped',
@@ -764,7 +756,6 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     body: [
       anyOf(
         'sessionCompleted',
-        'sessionCompletedH1',
         ...sessionStopLines,
         'sessionStopNoSignalTimeoutNoSettings',
         'sessionStatusUnavailable',

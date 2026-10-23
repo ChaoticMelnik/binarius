@@ -205,8 +205,9 @@ export function createSessionOrchestrator({
       };
     }
 
-    // an H1 session (#670, settings v4): its driver opens the trades (#707); the attempt only
-    // stops it or holds it, never asks the signal and never stops it with no_signal_timeout
+    // an H1 session (#775, settings v5; a read-only v4 row of #670): its driver opens the trades
+    // (#707); the attempt never asks the signal, it stops the session or holds it - the sizer's
+    // stops and, as for any session, no_signal_timeout
     const h1 = isH1Settings(settings);
     const noSignalTimeoutMs = sessionNoSignalTimeoutMs(
       settings.durationSec,
@@ -215,9 +216,6 @@ export function createSessionOrchestrator({
     const history = await readSessionHistory(db, session.id, {
       maxDurationMs: config.maxDurationMs,
       noSignalTimeoutMs,
-      ...(h1
-        ? { lossLimit: { maxLoss: settings.maxLoss, nextStake: settings.stake.baseStake } }
-        : {}),
     });
     if (history === undefined) {
       logger.warn(ids, 'trading session vanished');
@@ -240,12 +238,6 @@ export function createSessionOrchestrator({
             kind: 'stop',
             reason: TradingSessionStopReason.Completed,
             fields: { settled: block.settled, cycles: block.done },
-          };
-        case SessionIntentBlockReason.MaxLoss:
-          return {
-            kind: 'stop',
-            reason: TradingSessionStopReason.MaxSessionLossExceeded,
-            fields: { maxLoss: h1 ? settings.maxLoss : null },
           };
         case SessionIntentBlockReason.RejectedTwice:
           return {
@@ -311,13 +303,13 @@ export function createSessionOrchestrator({
     });
     const nowMs = now();
     if (!isPairOpen(pair, nowMs)) {
-      if (!h1 && history.waitExpired) return noSignalStop('pair_closed');
+      if (history.waitExpired) return noSignalStop('pair_closed');
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
       return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
     }
     // since #631 no payout refuses a session, not even at the start (#509 kept the floor
-    // there): a pair whose payout fell keeps trading on its signals. An H1 session's floor is its
-    // start's only (H1_MIN_PAYOUT_PCT, owner 2026-10-19)
+    // there): a pair whose payout fell keeps trading on its signals; an H1 session has no floor
+    // either (#775, В2)
 
     if (h1) {
       const startedAtMs = session.startedAt.getTime();
@@ -340,6 +332,8 @@ export function createSessionOrchestrator({
           fields: { stopReason: decision.reason, detail: decision.detail },
         };
       }
+      // no intent change within the no-signal limit: the driver found no H1 signal (#775, В5)
+      if (history.waitExpired) return noSignalStop('no_signal');
       logger.debug(ids, 'trading session waits for the H1 driver');
       return { kind: 'hold', ms: config.h1CheckMs };
     }

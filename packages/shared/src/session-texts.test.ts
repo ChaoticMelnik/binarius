@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createBotTexts, defaultBotTextSource } from './bot-texts';
 import { pairLabel, type PairLabel } from './catalog';
 import type { DecimalString } from './money';
-import { AdaptiveLineSlot, SessionTradeResult } from './session-steps';
+import { AdaptiveLineSlot, SessionStakeStrategy, SessionTradeResult } from './session-steps';
 import {
   createSessionTexts,
   SESSION_STOP_LINES,
@@ -358,62 +358,24 @@ describe('sessionSummaryText (#464)', () => {
   });
 });
 
-describe('the H1 summary (#707)', () => {
-  const text = (patch: Partial<Parameters<typeof session.sessionH1ProgressText>[0]> = {}) =>
-    session
-      .sessionH1ProgressText({
-        label: pairLabel({ symbol: 'EUR/USD' }),
-        assetId: 42,
-        settled: 20,
-        planned: 50,
-        score: { won: 12, lost: 7, tied: 1 },
-        result: d('3.04000000'),
-        stake: d('1.50'),
-        ...patch,
-      })
-      .value.split('\n');
-
-  it('prints the pair, the settled trades of the plan, the score, the result and the stake', () => {
-    expect(text()).toEqual([
-      '⚡ H1 · EUR/USD',
-      '📈 Сделок: 20 из 50 сделок',
-      '🧮 Счёт: 12 в плюс, 7 в минус, 1 в ноль',
-      '💰 Результат: +$3.04',
-      '💵 Ставка: $1.50',
-    ]);
-  });
-
-  it('without a tie no «в ноль»; a loss signed; the asset by its id without the catalog', () => {
-    const lines = text({
-      label: null,
-      score: { won: 3, lost: 7, tied: 0 },
-      result: d('-4.24000000'),
-    });
-    expect(lines[0]).toBe(`⚡ H1 · ${texts.plain.intentAssetFallback({ assetId: '42' })}`);
-    expect(lines[2]).toBe('🧮 Счёт: 3 в плюс, 7 в минус');
-    expect(lines[3]).toBe('💰 Результат: -$4.24');
-  });
-});
-
-describe('the completed line of an H1 session (#745)', () => {
+describe('the completed line of an H1 session (#775)', () => {
   const h1 = buildH1SessionSettings({
     assetId: 42,
-    trades: 50,
+    cycles: 5,
     stake: { baseStake: d('1.00'), stakeScale: 2 },
-    maxLossMultiplier: 20,
+    strategy: SessionStakeStrategy.Martingale,
   });
   if (!h1.success) throw new Error('fixture: H1 settings');
   const completed = view({
     settings: h1.data,
-    cycles: { planned: 0, closed: 0 },
-    trades: { settled: 50, rejected: 0, won: 30, lost: 20, tied: 0, profit: d('5') },
+    cycles: { planned: 5, closed: 5 },
+    trades: { settled: 8, rejected: 0, won: 5, lost: 3, tied: 0, profit: d('5') },
   });
 
-  it('prints the trades and the score, never the cycles, in the summary and the end line', () => {
-    const line = '🏁 H1-сессия завершена: 50 сделок — 30 в плюс, 20 в минус';
+  it('H1-F1′ counts the cycles as any session, in the summary and the end line', () => {
+    const line = '🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус';
     const summary = session.sessionSummaryText(pairLabel({ symbol: 'EUR/USD' }), 42, completed);
     expect(summary.value.split('\n')[1]).toBe(line);
-    expect(summary.value).not.toContain('цикл');
     expect(session.sessionEndLine(completed).value).toBe(line);
   });
 

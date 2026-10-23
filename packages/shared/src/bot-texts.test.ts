@@ -17,7 +17,6 @@ import {
 import { plainTextOf } from './telegram-html';
 import { BUTTON_LABEL_WIDTHS, buttonLabelWidth } from './bot-keyboard';
 import { BOT_TEXT_SOURCES_EN } from './bot-texts-en';
-import { H1_MIN_PAYOUT_PCT } from './h1';
 
 const ENTRIES = Object.entries(BOT_TEXT_CATALOG) as [
   BotTextKey,
@@ -323,12 +322,4 @@ describe('button label widths (#475)', () => {
       expect(buttonLabelWidth(text)).toBeLessThanOrEqual(limit);
     },
   );
-});
-
-describe('the H1 texts of the start (#745)', () => {
-  it('names the payout floor of H1_MIN_PAYOUT_PCT, in Russian and in English', () => {
-    const floor = `${String(H1_MIN_PAYOUT_PCT)} %`;
-    expect(BOT_TEXT_CATALOG.sessionH1PayoutTooLow.source).toContain(floor);
-    expect(BOT_TEXT_SOURCES_EN.sessionH1PayoutTooLow).toContain(floor);
-  });
 });

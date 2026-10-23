@@ -34,8 +34,7 @@ export const NO_NEXT_STEP_REASONS = {
   // session's pair and settings above its trades, the caption of the signal's picture or a text;
   // the next step stands under the backend's messages - the waiting message's «⏹» while the
   // session waits for a signal, the open trade block's while a trade is open (#722) - and under
-  // the session's summary once the session ended (#537). Not an H1 session's while it runs: its
-  // message carries its «⏹» (#745)
+  // the session's summary once the session ended (#537); an H1 session's too (#775)
   SessionStatus: 'session_status',
 } as const;
 export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];

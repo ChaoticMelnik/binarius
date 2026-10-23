@@ -54,14 +54,6 @@ export const waitingStopKeyboard = (sessionId: string): BotKeyboard =>
     ),
   ]);
 
-// An H1 session's «⏹» on the bot's own session message (#745, docs/bot-session.md -> The session
-// message): an H1 session has no waiting message (#722), so this is its one button. No suffix: the
-// stop handler's path of a status message's button, the reply drawn in place.
-export const h1SessionStopKeyboard = (sessionId: string): BotKeyboard =>
-  keyboardOf([
-    callbackButton(ButtonRole.Danger, LABELS.sessionStopButton, sessionStopCallbackData(sessionId)),
-  ]);
-
 export const demoButton = (): BotButton =>
   callbackButton(ButtonRole.Forward, LABELS.demoButton, DEMO_CALLBACK_DATA);
 

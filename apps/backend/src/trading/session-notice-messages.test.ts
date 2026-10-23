@@ -26,7 +26,6 @@ import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
 import {
   pairOf,
   sessionCycleMessage,
-  sessionH1ProgressMessage,
   sessionSummaryMessage,
   sessionWaitingMessage,
   type SessionCycleNotice,
@@ -424,30 +423,25 @@ describe('sessionSummaryMessage (#464)', () => {
     ]);
   });
 
-  // #745: an H1 session from the bot completes on its trades, not on cycles
-  it('H1-F1 the fallback summary of a completed H1 session counts trades; a v1 one its cycles', () => {
+  // #775: an H1 session completes on its cycles, as any session
+  it('H1-F1′ the fallback summary of a completed H1 session counts its cycles', () => {
     const h1: H1SessionSettings = {
-      version: 4,
+      version: 5,
       assetId: 101,
       durationSec: 5,
-      trades: 50,
+      cycles: 5,
       stake: { strategy: 'fixed', baseStake: d('1'), stakeScale: 2 },
       signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
-      maxLoss: d('20'),
     };
     const completed = {
       ...view,
+      settings: h1,
       stopReason: TradingSessionStopReason.Completed,
-      trades: { settled: 50, rejected: 0, won: 30, lost: 20, tied: 0, profit: d('5') },
+      cycles: { planned: 5, closed: 5 },
+      trades: { settled: 8, rejected: 0, won: 5, lost: 3, tied: 0, profit: d('5') },
     };
-    const lines = sessionSummaryMessage({ ...completed, settings: h1 }, LABEL).text.value.split(
-      '\n',
-    );
-    expect(lines[1]).toBe('🏁 H1-сессия завершена: 50 сделок — 30 в плюс, 20 в минус');
-    expect(lines.join('\n')).not.toContain('цикл');
-    expect(sessionSummaryMessage(completed, LABEL).text.value).toContain(
-      '🏁 Сессия завершена: 2 цикла, 50 сделок',
-    );
+    const lines = sessionSummaryMessage(completed, LABEL).text.value.split('\n');
+    expect(lines[1]).toBe('🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус');
   });
 
   // #685: the signals list is one, so its data is `demo:sig` at every duration
@@ -509,39 +503,5 @@ describe('pairOf', () => {
     expect(pairOf(catalog, 101)).toEqual({ label: 'EUR/USD', digits: 5 });
     expect(pairOf(catalog, 7)).toEqual({ label: null, digits: null });
     expect(pairOf(undefined, 101)).toEqual({ label: null, digits: null });
-  });
-});
-
-describe('sessionH1ProgressMessage (#707)', () => {
-  const h1: H1SessionSettings = {
-    version: 4,
-    assetId: 101,
-    durationSec: 5,
-    trades: 50,
-    stake: { strategy: 'fixed', baseStake: d('1.5'), stakeScale: 2 },
-    signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
-    maxLoss: d('30'),
-  };
-  const totals = { won: 6, lost: 4, tied: 0, result: d('0.52') };
-  const expected = shared.sessionH1ProgressText({
-    label: LABEL,
-    assetId: 101,
-    settled: 10,
-    planned: 50,
-    score: totals,
-    result: totals.result,
-    stake: d('1.5'),
-  });
-
-  it('sends the first summary as a new message from 0, edits the cycle message after it', () => {
-    expect(sessionH1ProgressMessage({ totals, cycleMessage: null }, h1, LABEL, 10)).toEqual({
-      kind: 'send',
-      text: expected,
-      from: 0,
-      split: false,
-    });
-    expect(
-      sessionH1ProgressMessage({ totals, cycleMessage: { messageId: 77, from: 0 } }, h1, LABEL, 10),
-    ).toEqual({ kind: 'edit', messageId: 77, text: expected, from: 0 });
   });
 });

@@ -13,6 +13,7 @@ import {
   botTextMessageOverflows,
   H1_R1_PARAMS,
   decimalStringSchema,
+  isH1Settings,
   defaultBotTextSource,
   logOptions,
   plainTextOf,
@@ -22,8 +23,10 @@ import {
   type DecimalString,
   type PairsCatalogView,
   type TradingSessionSettings,
+  SessionStakeStrategy,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
+import { createH1Detector } from '@binarius/signal';
 import {
   claimSessionTradeNotice,
   clearSessionWaitingMessage,
@@ -70,6 +73,7 @@ import {
   SESSION_NOTICE_SEND_PER_SECOND,
   SESSION_NOTICE_WAKE_GAP_MS,
 } from '../timing';
+import { h1DriverDecisionInput } from '../h1/driver';
 import { createSessionNoticeListener, type SessionNoticeListener } from './session-notice-listener';
 import {
   createSessionNoticeSender,
@@ -2415,172 +2419,129 @@ describe('the waiting message (#536)', () => {
   });
 });
 
-describe('an H1 session: one summary, edited every 10 trades (#707)', () => {
-  const H1: TradingSessionSettings = {
-    version: 4,
-    assetId: ASSET,
-    durationSec: 5,
-    trades: 30,
-    stake: { strategy: 'fixed', baseStake: '5' as DecimalString, stakeScale: 0 },
-    signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
-    maxLoss: '100' as DecimalString,
-  };
-  const settledMany = async (target: Target, profits: readonly string[]) => {
-    for (const profit of profits) await settled(target, profit);
-  };
-  // ten trades: six wins of 4.6, four losses of 5 → +7.60
-  const TEN = [...Array<string>(6).fill('4.6'), ...Array<string>(4).fill('-5')];
-  const summaryOf = (count: number, score: string, profit: string) =>
-    [
-      '⚡ H1 · EUR/USD',
-      `📈 Сделок: ${count} из 30 сделок`,
-      `🧮 Счёт: ${score}`,
-      `💰 Результат: ${profit}`,
-      '💵 Ставка: $5.00',
-    ].join('\n');
-
-  it('H1-N1 nine settled trades of a running session: nothing is sent, the cursor stays', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN.slice(0, 9));
-    const { notices, captured } = sender();
-    await notices.tick();
-    expect(sendsTo(captured.calls, target)).toEqual([]);
-    expect(editsTo(captured.calls, target)).toEqual([]);
-    expect((await rowOf(target)).notifiedTrades).toBe(0);
-  });
-
-  it('H1-N2 the tenth trade sends the summary once, no waiting message under it (#722); the twentieth edits it', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN);
-    const { notices, captured } = sender();
-    await notices.tick();
-    expect(textsTo(captured.calls, target)).toEqual([
-      summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
-    ]);
-    // an H1 session asks no signal: no no_signal row, no wait
-    expect(waitingTo(captured.calls, target)).toEqual([]);
-    const first = sendsTo(captured.calls, target)[0]!;
-    expect(first.payload.disable_notification).toBe(true);
-    expect(first.payload.reply_markup).toBeUndefined();
-    expect(await rowOf(target)).toMatchObject({
-      notifiedTrades: 10,
-      cycleMessageId: answered.get(first.payload),
-      cycleMessageFrom: 0,
+// #775: an H1 session's messages are any session's: the trade blocks, the open block, the waiting
+// message after the driver's no_signal row, the final mark
+describe('an H1 session is messaged as any session (#775)', () => {
+  const h1Settings = () => {
+    const built = buildH1SessionSettings({
+      assetId: ASSET,
+      cycles: 5,
+      stake: { baseStake: decimalStringSchema.parse('5'), stakeScale: 0 },
+      strategy: SessionStakeStrategy.Martingale,
     });
+    if (!built.success) throw new Error('fixture settings do not parse');
+    return built.data;
+  };
+  const STATUS_ID = 1;
+  const statusMessage = (target: Target) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: STATUS_ID })
+      .where(eq(tradingSessions.id, target.session.id));
+  // the driver's own waiting row: its builder over a flat window, the detector's no_signal
+  const driverNoSignal = (target: Target) => {
+    const settings = h1Settings();
+    if (!isH1Settings(settings)) throw new Error('fixture: H1 settings');
+    const closes = new Float64Array(H1_R1_PARAMS.sdWindowSec + 1).fill(1.1);
+    const decision = createH1Detector(H1_R1_PARAMS).decide({
+      closes,
+      at: H1_R1_PARAMS.sdWindowSec,
+    });
+    const f = Date.now() - 1_000;
+    return recordSignalDecision(
+      tmp.db,
+      h1DriverDecisionInput(
+        {
+          sessionId: target.session.id,
+          brokerAccountId: target.seed.brokerAccountId,
+          settings,
+          assetId: ASSET,
+          f,
+          takenAtMs: f + 320,
+          decision,
+          payout: 92,
+          digits: 5,
+          symbol: 'EUR/USD',
+          closedBy: 'tick',
+          closedAtMs: f + 300,
+          series: Array.from(closes),
+          lastTick: null,
+        },
+        target.step + 1,
+        SignalDecisionOutcome.NoSignal,
+        null,
+      ),
+    );
+  };
 
-    await settledMany(target, ['0', ...TEN.slice(0, 8)]);
-    await notices.tick();
-    expect(editsTo(captured.calls, target)).toEqual([]);
+  it("H1-N1′ its settled trades get their step blocks and the cycle message, as a martingale session's", async () => {
+    const target = await seedSession(h1Settings());
+    const { notices, captured } = sender();
     await settled(target, '-5');
+    await settled(target, '4.6');
+    await settled(target, '4.6');
     await notices.tick();
-    expect(sendsTo(captured.calls, target)).toHaveLength(1);
-    expect(waitingTo(captured.calls, target)).toEqual([]);
-    expect(chatOf(captured.calls, target)).toEqual([
-      summaryOf(20, '12 в плюс, 7 в минус, 1 в ноль', '+$20.20'),
+    await notices.tick();
+    expect(chatOf(captured.calls, target).map(heads)).toEqual([
+      ['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2'],
+      ['⚡ Цикл 2 Шаг 1'],
     ]);
-    expect((await rowOf(target)).notifiedTrades).toBe(20);
+    expect((await rowOf(target)).notifiedTrades).toBe(3);
   });
 
-  it('H1-N3 a restarted sender edits the saved summary: nothing new is sent', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN);
-    const first = sender();
-    await first.notices.tick();
-    await first.notices.stop();
-    await settledMany(target, TEN);
-    const second = sender();
-    await second.notices.tick();
-    expect(sendsTo(second.captured.calls, target)).toEqual([]);
-    expect(editsTo(second.captured.calls, target).map((call) => pushedText(call.payload))).toEqual([
-      summaryOf(20, '12 в плюс, 8 в минус', '+$15.20'),
-    ]);
-  });
-
-  it('H1-N4 a stop after nine trades: the summary of nine, the final mark and the fallback summary in one tick', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN.slice(0, 9));
-    await stop(target, TradingSessionStopReason.UserStopped);
+  it('H1-N2′ its open trade gets the open block with its «⏹»', async () => {
+    const target = await seedSession(h1Settings());
+    await statusMessage(target);
+    await opened(target);
     const { notices, captured } = sender();
     await notices.tick();
-    const texts = textsTo(captured.calls, target);
-    expect(texts).toHaveLength(2);
-    expect(texts[0]).toBe(summaryOf(9, '6 в плюс, 3 в минус', '+$12.60'));
-    expect(texts[1]?.split('\n')[0]).toBe('📈 EUR/USD');
+    const [open] = sendsTo(captured.calls, target);
+    expect(pushedText(open!.payload)).toContain('сделка открыта');
+    expect(inlineButtons(open!.payload)).toEqual([
+      {
+        text: CLIENT_LABELS.sessionStopButton,
+        callback_data: `session:stop:${target.session.id}:c`,
+      },
+    ]);
+    expect((await rowOf(target)).openNoticeIntentId).not.toBeNull();
+  });
+
+  it("H1-N3′ the waiting message after the driver's no_signal row; the intent's row deletes it", async () => {
+    const target = await seedSession(h1Settings());
+    await statusMessage(target);
+    await driverNoSignal(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    const [waiting] = waitingTo(captured.calls, target);
+    expect(waiting).toBeDefined();
+    expect(inlineButtons(waiting!.payload)).toEqual([
+      {
+        text: CLIENT_LABELS.sessionStopButton,
+        callback_data: `session:stop:${target.session.id}:w`,
+      },
+    ]);
+    await opened(target);
+    await notices.tick();
+    expect(deletesTo(captured.calls, target)).toEqual([answered.get(waiting!.payload)]);
+    expect((await rowOf(target)).waitingMessageId).toBeNull();
+  });
+
+  it("H1-N4′ the finish: the final mark; a CLI session's fallback summary counts cycles", async () => {
+    const target = await seedSession(h1Settings());
+    for (const profit of ['4.6', '4.6', '-5', '4.6', '4.6', '4.6']) await settled(target, profit);
+    await stop(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await notices.tick();
     expect(await rowOf(target)).toMatchObject({
-      notifiedTrades: 9,
+      notifiedTrades: 6,
       finalNoticeSentAt: expect.any(Date),
       summarySentAt: expect.any(Date),
     });
-  });
-
-  it('H1-N5 an edit refused as gone: the same summary in a new message', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN);
-    const { notices, captured } = sender();
-    await notices.tick();
-    await settledMany(target, TEN);
-    const errors = new Map<string, ApiError | HttpError>();
-    let left = 1;
-    errors.get = (method: string) =>
-      method === 'editMessageText' && left-- > 0
-        ? refusal('Bad Request: message to edit not found')
-        : undefined;
-    captured.apiErrors = errors;
-    await notices.tick();
-    expect(textsTo(captured.calls, target)).toEqual([
-      summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
-      summaryOf(20, '12 в плюс, 8 в минус', '+$15.20'),
-    ]);
-    expect((await cycleStateOf(target)).messageId).toBe(
-      answered.get(sendsTo(captured.calls, target)[1]!.payload),
+    const summary = textsTo(captured.calls, target).find((text) => text.startsWith('📈'));
+    expect(summary?.split('\n')[1]).toBe(
+      '🏁 Сессия завершена: 5 циклов, 6 сделок — 5 в плюс, 1 в минус',
     );
-  });
-
-  it('H1-N6 429 on the summary: the batch is put back, nothing until the pause, then it goes once', async () => {
-    const clock = { now: 1_000_000 };
-    const target = await seedSession(H1);
-    await settledMany(target, TEN);
-    const { notices, captured } = sender({}, clock);
-    captured.apiErrors.set('sendMessage', telegramError(429, 30));
-    await notices.tick();
-    expect((await rowOf(target)).notifiedTrades).toBe(0);
-    captured.apiErrors.delete('sendMessage');
-    clock.now += 29_999;
-    await notices.tick();
-    expect(sendsTo(captured.calls, target)).toHaveLength(1);
-    clock.now += 1;
-    await notices.tick();
-    expect(textsTo(captured.calls, target)).toEqual([
-      summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
-      summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
-    ]);
-    expect((await rowOf(target)).notifiedTrades).toBe(10);
-  });
-
-  it('H1-N7 a user who blocked the bot: the batch claimed without a call', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN);
-    await tmp.db
-      .update(users)
-      .set({ telegramBlockedAt: sql`now()` })
-      .where(eq(users.id, target.seed.userId));
-    const { notices, captured } = sender();
-    await notices.tick();
-    expect(
-      captured.calls.filter((call) => call.payload.chat_id === target.seed.telegramUserId),
-    ).toEqual([]);
-    expect((await rowOf(target)).notifiedTrades).toBe(10);
-  });
-
-  it('H1-N8 two senders at once: one summary', async () => {
-    const target = await seedSession(H1);
-    await settledMany(target, TEN);
-    const a = sender();
-    const b = sender();
-    await Promise.all([a.notices.tick(), b.notices.tick()]);
-    expect([...textsTo(a.captured.calls, target), ...textsTo(b.captured.calls, target)]).toEqual([
-      summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
-    ]);
   });
 });
 
@@ -2847,25 +2808,23 @@ describe("the open trade's block (#700)", () => {
     );
   });
 
-  it('O12 an H1 session (#670) with an open trade: no open block, no claim - listed or not', async () => {
+  it('O12 an H1 session (#775) with an open trade: its open block and its claim, as any', async () => {
     const built = buildH1SessionSettings({
       assetId: ASSET,
-      trades: 10,
+      cycles: 5,
       stake: { baseStake: decimalStringSchema.parse('5'), stakeScale: 0 },
-      maxLossMultiplier: 10,
+      strategy: SessionStakeStrategy.Martingale,
     });
     if (!built.success) throw new Error('fixture settings do not parse');
     const target = await seedSession(built.data);
-    // with its status message: before #722 that listed it for its waiting message, which an H1
-    // session no longer gets (no no_signal row)
     await statusMessage(target);
-    await opened(target);
+    const { intent } = await opened(target);
     const { notices, captured } = sender();
     await notices.tick();
     await notices.tick();
-    expect(openCallsTo(captured.calls, target)).toEqual([]);
-    expect(sequenceOf(captured.calls, target)).toEqual([]);
-    expect(await markOf(target)).toBeNull();
+    expect(openCallsTo(captured.calls, target)).toHaveLength(1);
+    expect(sequenceOf(captured.calls, target)).toEqual(['open']);
+    expect(await markOf(target)).toBe(intent.id);
   });
 
   it('O13 the waiting message: deleted before the open block’s new message, not sent under it (#722); the result’s edit takes the «⏹» off, the next no_signal brings the waiting message back', async () => {

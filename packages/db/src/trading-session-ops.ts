@@ -66,7 +66,7 @@ export const TradingSessionDbErrorCode = {
   ModeNotAllowed: 'mode_not_allowed',
   // a real session on a DEMO_ONLY process (#396), before the transaction and mode_not_allowed
   DemoOnly: 'demo_only',
-  // an H1 session (settings v4) on an account whose h1_since is NULL under the account's lock
+  // an H1 session (settings v5, or a v4 row) on an account whose h1_since is NULL under the account's lock
   // (#707, review of #711): an unmark committed between the CLI's check and the insert
   AccountNotH1: 'account_not_h1',
 } as const;
@@ -360,16 +360,7 @@ export interface SessionHistory {
   // counts from its start, and a bot trade on the account (NULL session) moves nothing. The
   // milliseconds are the worker's candle count times the session's signal candle (#637)
   waitExpired: boolean;
-  // the next stake would take the session's loss past its ceiling (#670, an H1 session's maxLoss):
-  // sum(profit of settled trades) - nextStake < -maxLoss, in numeric (Rule 2) — the sizer's rule
-  // of the martingale ceiling. false without a lossLimit
-  lossLimitReached: boolean;
   intents: SessionHistoryIntent[];
-}
-
-export interface SessionLossLimit {
-  maxLoss: DecimalString;
-  nextStake: DecimalString;
 }
 
 // The session's own intents in creation order: a bot trade on the same account (NULL session) is
@@ -377,11 +368,7 @@ export interface SessionLossLimit {
 export async function readSessionHistory(
   db: Db,
   sessionId: string,
-  {
-    maxDurationMs,
-    noSignalTimeoutMs,
-    lossLimit,
-  }: { maxDurationMs: number; noSignalTimeoutMs: number; lossLimit?: SessionLossLimit },
+  { maxDurationMs, noSignalTimeoutMs }: { maxDurationMs: number; noSignalTimeoutMs: number },
 ): Promise<SessionHistory | undefined> {
   const [owner] = await db
     .select({
@@ -393,14 +380,6 @@ export async function readSessionHistory(
         (select max(${tradeIntents.updatedAt}) from ${tradeIntents}
           where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
       ) < ${millisecondsAgo(noSignalTimeoutMs)}`,
-      lossLimitReached:
-        lossLimit === undefined
-          ? sql<boolean>`false`
-          : sql<boolean>`(select coalesce(sum(${brokerTrades.profit}) filter (where ${tradeIntents.status} = ${SETTLED}), 0)
-              from ${tradeIntents}
-              left join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
-              where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
-            - ${lossLimit.nextStake}::numeric < -(${lossLimit.maxLoss}::numeric)`,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -424,7 +403,6 @@ export async function readSessionHistory(
     telegramUserId: owner.telegramUserId.toString(),
     expired: owner.expired,
     waitExpired: owner.waitExpired,
-    lossLimitReached: owner.lossLimitReached,
     intents,
   };
 }
@@ -550,7 +528,7 @@ export type TradingSessionStartRefusal =
   | typeof TradingSessionErrorCode.ModeNotAllowed;
 
 export type TradingSessionStartCheck =
-  // h1Since: the account's H1 mark (#745), the start route's choice of settings v4
+  // h1Since: the account's H1 mark (#745), the start route's choice of settings v5 (#775)
   | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date; h1Since: Date | null }
   | { ok: false; code: TradingSessionStartRefusal; activeSessionId?: string };
 

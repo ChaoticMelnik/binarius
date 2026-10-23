@@ -9,6 +9,10 @@ import { TradeAction, tradeActionSchema } from './trading';
 // stand and the live parts (#669, #670) read one source.
 
 export const H1_VERSION = 'h1';
+// the version of the H1 driver's repeat-step decision row (#775, docs/h1.md -> The driver): Шаг 2
+// after a lost or tied Шаг 1, in that trade's direction, decided by the rule, not by the detector.
+// A stored shape the stand does not replay, not a signal algorithm
+export const H1_REPEAT_VERSION = 'h1-repeat';
 
 export const H1NoSignalReason = {
   NoPrice: 'no_price',
@@ -98,10 +102,10 @@ export const H1_MIN_PAYOUT_PCT = 94;
 
 // --- H1 sessions (#670, docs/h1.md -> Sessions) ---------------------------------------------------
 
-// settings.signal.kind of a version 4 trading session: a jsonb key of the row, not a status
+// settings.signal.kind of an H1 trading session (version 5, read-only 4): a jsonb key of the row, not a status
 export const H1_SESSION_SIGNAL_KIND = 'h1';
 
-// the signal of an H1 session's settings (settingsV4Schema): the detector's parameters, the entry
+// the signal of an H1 session's settings (settingsV5Schema): the detector's parameters, the entry
 // delay after the decision's closed second and the trade's expiry
 export const h1SessionSignalSchema = z.strictObject({
   kind: z.literal(H1_SESSION_SIGNAL_KIND),
@@ -110,16 +114,6 @@ export const h1SessionSignalSchema = z.strictObject({
   expirySec: z.literal(H1_EXPIRY_SEC),
 });
 export type H1SessionSignal = z.infer<typeof h1SessionSignalSchema>;
-
-// settled trades per edit of an H1 session's Telegram summary (#707, docs/h1.md -> The session
-// message): one message, edited every this many trades and at the finish
-export const H1_NOTICE_EVERY_TRADES = 10;
-
-// An H1 session started from the bot (#745, decision В2 of 2026-10-23): its length in trades and
-// its loss ceiling as a multiple of the fixed stake; the bot asks for neither, the request's cycles
-// are martingale cycles and do not apply
-export const H1_BOT_SESSION_TRADES = 50;
-export const H1_BOT_MAX_LOSS_MULTIPLIER = 20;
 
 // A tie returns the stake: neither a win nor a loss. A type, not an `as const` object: the bot's
 // session card has a tone of the same three values that is not a trade's outcome, and

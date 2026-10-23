@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
   buildH1SessionSettings,
-  H1_MIN_PAYOUT_PCT,
   pairLabel,
   TradeAction,
   TradeIntentStatus,
@@ -28,6 +27,7 @@ import {
   sessionStopCallbackData,
   BotLanguage,
   MODE_CALLBACK_DATA,
+  SessionStakeStrategy,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -58,7 +58,6 @@ import {
   intentView,
   messageAnswer,
   photoAnswer,
-  photoCallbackUpdate,
   sessionView,
   stubSessionResumer,
   stubSignalWaiter,
@@ -319,7 +318,7 @@ describe('the session button', () => {
     const { press, calls, sessionTracker } = setup();
     await press(START);
     const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
-    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction, keyboard: null });
+    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
 
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit).toMatchObject({
@@ -332,7 +331,7 @@ describe('the session button', () => {
     expect(edit).not.toHaveProperty('reply_markup');
 
     // #350: a session gone from the backend gets the menu only
-    await entry.edit({ text: telegramHtml`gone`, picture: null, keyboard: null }, 'not_found');
+    await entry.edit({ text: telegramHtml`gone`, picture: null }, 'not_found');
     expect(
       rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
     ).toEqual([MENU]);
@@ -2022,7 +2021,7 @@ describe('the resume of a tracked session after a restart (#567)', () => {
       // #508: the owner's language from the list, not the store of an update
       language: BotLanguage.En,
     });
-    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction, keyboard: null });
+    await entry.edit({ text: telegramHtml`edited`, picture: STOPPED.signalAction });
     const edit = payloadOf(scene.calls, 'editMessageText');
     expect(edit).toMatchObject({
       chat_id: USER.id,
@@ -2158,13 +2157,12 @@ describe('the session picture (#568)', () => {
       photoAnswer(CARD_MESSAGE_ID, ['bear-small', 'bear-large']),
     );
     const entry = entryOf(scene);
-    await entry.edit({ text: telegramHtml`down`, picture: DOWN.signalAction, keyboard: null });
+    await entry.edit({ text: telegramHtml`down`, picture: DOWN.signalAction });
     await entry.edit({
       text: telegramHtml`down again`,
       picture: DOWN.signalAction,
-      keyboard: null,
     });
-    await entry.edit({ text: telegramHtml`up`, picture: UP.signalAction, keyboard: null });
+    await entry.edit({ text: telegramHtml`up`, picture: UP.signalAction });
     expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
       'setup-bear.png',
       'bear-large',
@@ -2178,14 +2176,14 @@ describe('the session picture (#568)', () => {
     const entry = entryOf(scene);
     scene.apiErrors.set('editMessageMedia', NOT_MODIFIED);
     await expect(
-      entry.edit({ text: telegramHtml`same`, picture: UP.signalAction, keyboard: null }),
+      entry.edit({ text: telegramHtml`same`, picture: UP.signalAction }),
     ).rejects.toBeInstanceOf(GrammyError);
     scene.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
     await expect(
-      entry.edit({ text: telegramHtml`stale`, picture: UP.signalAction, keyboard: null }),
+      entry.edit({ text: telegramHtml`stale`, picture: UP.signalAction }),
     ).rejects.toBeInstanceOf(GrammyError);
     scene.apiErrors.delete('editMessageMedia');
-    await entry.edit({ text: telegramHtml`again`, picture: UP.signalAction, keyboard: null });
+    await entry.edit({ text: telegramHtml`again`, picture: UP.signalAction });
     expect(media(scene.calls).map((m) => fileName(m.media))).toEqual([
       CARD_FILE_ID,
       CARD_FILE_ID,
@@ -2198,7 +2196,7 @@ describe('the session picture (#568)', () => {
     await scene.press(START);
     const entry = entryOf(scene);
     await entry.edit(
-      { text: TEXTS.sessionStatusUnavailable, picture: UP.signalAction, keyboard: null },
+      { text: TEXTS.sessionStatusUnavailable, picture: UP.signalAction },
       'not_found',
     );
     const edit = payloadOf(scene.calls, 'editMessageMedia');
@@ -2209,7 +2207,7 @@ describe('the session picture (#568)', () => {
     });
     expect(rowsOf(edit)).toEqual([MENU]);
     await entry.edit(
-      { text: TEXTS.sessionStatusUnavailable, picture: SESSION_VIEW.signalAction, keyboard: null },
+      { text: TEXTS.sessionStatusUnavailable, picture: SESSION_VIEW.signalAction },
       'not_found',
     );
     expect(methods(scene.calls).filter((m) => m.startsWith('edit'))).toEqual([
@@ -2225,7 +2223,6 @@ describe('the session picture (#568)', () => {
     await entryOf(scene).edit({
       text: telegramHtml`stopped`,
       picture: STOPPED.signalAction,
-      keyboard: null,
     });
     expect(methods(scene.calls).at(-1)).toBe('editMessageText');
   });
@@ -2238,202 +2235,55 @@ describe('the session picture (#568)', () => {
   });
 });
 
-describe('an H1 session from the bot (#745)', () => {
+describe('an H1 session from the bot (#745, #775): drawn as any session', () => {
   const built = buildH1SessionSettings({
     assetId: PAIR_EURUSD.id,
-    trades: 50,
+    cycles: 5,
     stake: { baseStake: d('1.00'), stakeScale: 2 },
-    maxLossMultiplier: 20,
+    strategy: SessionStakeStrategy.Martingale,
   });
   if (!built.success) throw new Error('fixture: H1 settings');
   const H1 = sessionView({ settings: built.data });
   const H1_UP = sessionView({ settings: built.data, signalAction: 'up' });
   const H1_STOPPED = sessionView({ ...STOPPED, settings: built.data });
-  const H1_UP_STOPPED = sessionView({ ...STOPPED, settings: built.data, signalAction: 'up' });
   const H1_COMPLETED = sessionView({
     ...STOPPED,
     settings: built.data,
     stopReason: TradingSessionStopReason.Completed,
-    cycles: { planned: 0, closed: 0 },
-    trades: { settled: 50, rejected: 0, won: 30, lost: 20, tied: 0, profit: d('5') },
+    cycles: { planned: 5, closed: 5 },
+    trades: { settled: 8, rejected: 0, won: 5, lost: 3, tied: 0, profit: d('5') },
   });
-  const STOP_ROWS = [[button(LABELS.sessionStopButton, STOP)]];
-  const PHOTO_REFUSED: ApiError = {
-    ok: false,
-    error_code: 400,
-    description: 'Bad Request: wrong file identifier/HTTP URL specified',
-  };
   const started = (view: TradingSessionView) =>
     setup({ startSession: () => Promise.resolve({ started: view }) });
   const entryOf = (scene: ReturnType<typeof setup>) =>
     scene.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
 
-  it('H1-B1 the session message carries the «⏹» with no suffix: a photo, a text, the text after a refused photo', async () => {
+  it('H1-B7 the session message and its edits carry no keyboard; the old «⏹» path draws in place; the end counts cycles', async () => {
     const photo = started(H1_UP);
     await photo.press(START);
     expect(methods(photo.calls)).toEqual(['answerCallbackQuery', 'sendPhoto']);
     expect(payloadOf(photo.calls, 'sendPhoto')?.caption).toBe(statusOf(H1_UP));
-    expect(rowsOf(payloadOf(photo.calls, 'sendPhoto'))).toEqual(STOP_ROWS);
+    expect(payloadOf(photo.calls, 'sendPhoto')).not.toHaveProperty('reply_markup');
 
     const text = started(H1);
     await text.press(START);
     expect(payloadOf(text.calls, 'sendMessage')?.text).toBe(statusOf(H1));
-    expect(rowsOf(payloadOf(text.calls, 'sendMessage'))).toEqual(STOP_ROWS);
+    expect(payloadOf(text.calls, 'sendMessage')).not.toHaveProperty('reply_markup');
+    await entryOf(text).edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1));
+    expect(payloadOf(text.calls, 'editMessageText')).not.toHaveProperty('reply_markup');
 
-    const refused = started(H1_UP);
-    refused.apiErrors.set('sendPhoto', PHOTO_REFUSED);
-    await refused.press(START);
-    expect(methods(refused.calls)).toEqual(['answerCallbackQuery', 'sendPhoto', 'sendMessage']);
-    expect(rowsOf(payloadOf(refused.calls, 'sendMessage'))).toEqual(STOP_ROWS);
+    // a «⏹» with no suffix is an old status message's: the reply in its place, as for any session
+    const stop = setup({ stopSession: () => Promise.resolve(H1_STOPPED) });
+    await stop.press(STOP);
+    expect(methods(stop.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(payloadOf(stop.calls, 'editMessageText')?.text).toBe(statusOf(H1_STOPPED));
 
-    // another session's message stays without a keyboard (#536)
-    const plain = started(SESSION_VIEW);
-    await plain.press(START);
-    expect(payloadOf(plain.calls, 'sendMessage')).not.toHaveProperty('reply_markup');
+    const line = '🏁 Сессия завершена: 5 циклов, 8 сделок — 5 в плюс, 3 в минус';
+    expect(statusOf(H1_COMPLETED)).toContain(line);
+    expect(replyOf(H1_COMPLETED).split('\n')[0]).toBe(line);
   });
 
-  it("H1-B2 the tracker's edit keeps the «⏹» while the session runs and drops it with the stop", async () => {
-    const scene = started(H1_UP);
-    await scene.press(START);
-    const entry = entryOf(scene);
-    await entry.edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1_UP));
-    const media = payloadOf(scene.calls, 'editMessageMedia');
-    expect(rowsOf(media)).toEqual(STOP_ROWS);
-    await entry.edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1));
-    expect(rowsOf(payloadOf(scene.calls, 'editMessageText'))).toEqual(STOP_ROWS);
-    await entry.edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1_STOPPED));
-    const last = scene.calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload;
-    expect(last?.text).toBe(statusOf(H1_STOPPED));
-    expect(last).not.toHaveProperty('reply_markup');
-  });
-
-  const NO_TEXT: ApiError = {
-    ok: false,
-    error_code: 400,
-    description: 'Bad Request: there is no text in the message to edit',
-  };
-  const NOT_MODIFIED: ApiError = {
-    ok: false,
-    error_code: 400,
-    description:
-      'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
-  };
-  const ENDED = () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive));
-  // a press of the «⏹» on the H1 session message, a photo by default (its start had a signal)
-  const pressStop = (scene: ReturnType<typeof setup>, photo = true, messageId?: number) => {
-    const update = photo ? photoCallbackUpdate(STOP) : callbackUpdate(STOP);
-    const message = (update as unknown as { callback_query: { message: { message_id: number } } })
-      .callback_query.message;
-    if (messageId !== undefined) message.message_id = messageId;
-    return { messageId: message.message_id, done: scene.pressUpdate(update) };
-  };
-  const mediaOf = (calls: readonly ApiCall[]) =>
-    calls.filter((call) => call.method === 'editMessageMedia').map((call) => call.payload);
-  const infos = (logger: ReturnType<typeof fakeLogger>) =>
-    logger.info.mock.calls.map((call) => call[1] as string);
-
-  it('H1-B3 a press on the photo draws the stopped photo in place, without the «⏹», and tracks it', async () => {
-    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
-    // the old path's text edit of a photo would be refused so
-    scene.apiErrors.set('editMessageText', NO_TEXT);
-    const { messageId, done } = pressStop(scene);
-    await done;
-    expect(scene.stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), undefined]]);
-    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
-    const [media] = mediaOf(scene.calls);
-    expect(media).toMatchObject({ chat_id: USER.id, message_id: messageId });
-    expect((media?.media as Record<string, unknown>).caption).toBe(statusOf(H1_UP_STOPPED));
-    expect(media).not.toHaveProperty('reply_markup');
-    expect(scene.sessionTracker.track).toHaveBeenCalledTimes(1);
-    expect(scene.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
-      view: H1_UP_STOPPED,
-      messageId,
-    });
-  });
-
-  it('H1-B3b a press on a text H1 message draws the stopped text in place and tracks it', async () => {
-    const scene = setup({ stopSession: () => Promise.resolve(H1_STOPPED) });
-    const { messageId, done } = pressStop(scene, false);
-    await done;
-    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
-    const edited = payloadOf(scene.calls, 'editMessageText');
-    expect(edited).toMatchObject({ message_id: messageId, text: statusOf(H1_STOPPED) });
-    expect(edited).not.toHaveProperty('reply_markup');
-    expect(scene.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
-      view: H1_STOPPED,
-      messageId,
-    });
-  });
-
-  it('H1-B3c an H1 session ended already: read, then the same photo edit in place', async () => {
-    const scene = setup({ stopSession: ENDED, readSession: () => Promise.resolve(H1_UP_STOPPED) });
-    const { messageId, done } = pressStop(scene);
-    await done;
-    expect(scene.readSession).toHaveBeenCalledTimes(1);
-    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
-    expect(mediaOf(scene.calls)[0]).not.toHaveProperty('reply_markup');
-    expect(scene.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ messageId });
-  });
-
-  it('H1-B3d the pressed photo gone: the stop reply anew under the end of the path, not tracked', async () => {
-    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
-    scene.apiErrors.set('editMessageMedia', EDIT_GONE);
-    await pressStop(scene).done;
-    expect(methods(scene.calls)).toEqual([
-      'answerCallbackQuery',
-      'editMessageMedia',
-      'sendMessage',
-    ]);
-    const sent = payloadOf(scene.calls, 'sendMessage');
-    expect(sent?.text).toBe(replyOf(H1_UP_STOPPED));
-    expect(sent?.reply_markup).toEqual(sessionCardKeyboard(H1_UP_STOPPED, CASHIER_URL));
-    expect(scene.sessionTracker.track).not.toHaveBeenCalled();
-    expect(infos(scene.logger)).toContain('the pressed message was already gone');
-  });
-
-  it('H1-B3e the photo edit refused otherwise: logged, nothing sent, not tracked', async () => {
-    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
-    scene.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
-    await pressStop(scene).done;
-    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
-    expect(scene.sessionTracker.track).not.toHaveBeenCalled();
-    expect(warnings(scene.logger)).toEqual(['trading session message not edited']);
-  });
-
-  it('H1-B3f a second press on the same photo: one more edit, «not modified» is drawn, tracked again', async () => {
-    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
-    const first = pressStop(scene);
-    await first.done;
-    scene.stopSession.mockImplementation(ENDED);
-    scene.readSession.mockImplementation(() => Promise.resolve(H1_UP_STOPPED));
-    scene.apiErrors.set('editMessageMedia', NOT_MODIFIED);
-    await pressStop(scene, true, first.messageId).done;
-    expect(methods(scene.calls)).toEqual([
-      'answerCallbackQuery',
-      'editMessageMedia',
-      'answerCallbackQuery',
-      'editMessageMedia',
-    ]);
-    expect(scene.sessionTracker.track).toHaveBeenCalledTimes(2);
-    expect(scene.sessionTracker.track.mock.calls[1]?.[0]).toMatchObject({
-      messageId: first.messageId,
-    });
-  });
-
-  it('H1-B4 h1_payout_too_low: its text under another pair and the menu, no warning', async () => {
-    const { press, calls, logger, sessionTracker } = setup({
-      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.H1PayoutTooLow)),
-    });
-    await press(START);
-    const sent = payloadOf(calls, 'sendMessage');
-    expect(sent?.text).toBe(TEXTS.sessionH1PayoutTooLow.value);
-    expect(sent?.text).toContain(`${String(H1_MIN_PAYOUT_PCT)} %`);
-    expect(rowsOf(sent)).toEqual(OTHER_PAIR_ROWS);
-    expect(warnings(logger)).toEqual([]);
-    expect(sessionTracker.track).not.toHaveBeenCalled();
-  });
-
-  it('H1-B5 h1_duration_unsupported is a logged bug; account_not_h1 says the account changed', async () => {
+  it('H1-B8 h1_duration_unsupported is a logged bug; account_not_h1 says the account changed', async () => {
     const duration = setup({
       startSession: () =>
         Promise.reject(httpError(409, TradingSessionErrorCode.H1DurationUnsupported)),
@@ -2450,15 +2300,5 @@ describe('an H1 session from the bot (#745)', () => {
     expect(sent?.text).toBe(TEXTS.sessionAccountChanged.value);
     expect(rowsOf(sent)).toEqual(BACK_ROWS);
     expect(warnings(changed.logger)).toEqual([]);
-  });
-
-  it('H1-B6 a completed H1 session counts its trades, not cycles, in the status and the stop reply', () => {
-    const line = '🏁 H1-сессия завершена: 50 сделок — 30 в плюс, 20 в минус';
-    expect(statusOf(H1_COMPLETED)).toContain(line);
-    expect(statusOf(H1_COMPLETED)).not.toContain('цикл');
-    expect(replyOf(H1_COMPLETED).split('\n')[0]).toBe(line);
-    expect(statusOf(sessionView({ ...H1_COMPLETED, settings: SESSION_VIEW.settings }))).toContain(
-      '🏁 Сессия завершена: 0 циклов',
-    );
   });
 });

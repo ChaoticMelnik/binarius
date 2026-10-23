@@ -33,7 +33,8 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         (sessionFitsDeadline: cycles × steps per cycle, #552)
 //   TRADING_SESSION_H1_CHECK_MS         — the hold of an H1 session (#670) between the
 //                                         orchestrator's checks: its driver opens the trades, the
-//                                         orchestrator only stops it (N trades, maxLoss, the pair)
+//                                         orchestrator only stops it (cycles, the sizer, the
+//                                         pair, no_signal_timeout - #775)
 //   SESSION_NO_SIGNAL_CANDLES (shared)  — how many candles of its signal interval a session waits
 //                                         for a signal before it stops with no_signal_timeout
 //                                         (#509, in candles since #637), from the later of

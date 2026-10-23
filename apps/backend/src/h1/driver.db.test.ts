@@ -1,47 +1,58 @@
 import { readFileSync } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildH1SessionSettings,
   decimalStringSchema,
-  H1_BOT_MAX_LOSS_MULTIPLIER,
-  H1_BOT_SESSION_TRADES,
   h1ShadowEntrySchema,
   logOptions,
   toBinaryPair,
+  TradeIntentStatus,
   TradeMode,
+  TradingSessionStopReason,
   type PairsCatalogView,
+  SessionStakeStrategy,
 } from '@binarius/shared';
-import { until } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
   createSessionIntent,
   createTradingSession,
   journalEntryOf,
   listActiveH1Sessions,
+  listPendingSessionNotices,
+  markIntentAccepted,
   outboxEvents,
+  readSessionBalance,
   readSessionHistory,
   readTradeLogPage,
   recordSignalDecision,
+  SESSION_NOTICE_CHANNEL,
   setH1Mark,
+  settleIntent,
   signalDecisions,
   stopTradingSession,
+  takeIntent,
   tradeIntents,
+  tradingSessions,
+  type TradeIntentRow,
 } from '@binarius/db';
 import {
   createTempDatabase,
   R1_SHADOW_PARAMS_FIXTURE,
+  seedBalanceSnapshot,
   seedBrokerTradeFor,
   seedUserWithAccount,
   shadowDecisionFixture,
   type TempDatabase,
 } from '@binarius/db/testing';
+import { createSessionNoticeListener } from '../trading/session-notice-listener';
 import { replayH1Entry } from '@binarius/signal';
 import type { ClosedSecond } from '../market-data/seconds';
 import { createH1Driver, type H1Driver, type H1DriverDeps } from './driver';
 
 // The driver against the real operations (#707, docs/h1.md -> The driver) on a temporary migrated
-// database: a marked account's v4 session, a scripted series whose ramp from F signals up.
+// database: a marked account's v5 session, a scripted series whose ramp from F signals up.
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
   throw new Error(
@@ -127,11 +138,13 @@ const catalog: PairsCatalogView = {
 async function markedSession() {
   const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
   await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
+  // the sizer's balance (#775)
+  await seedBalanceSnapshot(tmp.db, seed.brokerAccountId);
   const built = buildH1SessionSettings({
     assetId: ASSET,
-    trades: 50,
+    cycles: 5,
     stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
-    maxLossMultiplier: 20,
+    strategy: SessionStakeStrategy.Martingale,
   });
   if (!built.success) throw new Error('H1 fixture settings');
   const session = await createTradingSession(
@@ -156,6 +169,7 @@ function driverOn(series: ReturnType<typeof scriptedSeries>) {
     sessions: {
       list: () => listActiveH1Sessions(tmp.db),
       history: (id, options) => readSessionHistory(tmp.db, id, options),
+      balance: (id, options) => readSessionBalance(tmp.db, id, options),
       createIntent: (input) => createSessionIntent(tmp.db, input, { demoOnly: false }),
       stop: (id, reason) => stopTradingSession(tmp.db, { id, reason }),
       record: (input) => recordSignalDecision(tmp.db, input),
@@ -294,17 +308,17 @@ describe('the H1 driver on the database (#707)', () => {
   });
 });
 
-// #745: the start route writes the same v4 with the bot's constants; the driver lists such a session
-// while its account is marked, whoever created it
+// #745, #775: the start route writes the same v5; the driver lists such a session while its account
+// is marked, whoever created it
 describe("the driver's list and a session of the bot's settings (#745)", () => {
   it('H1-DB3: listed with its owner while marked; not listed once the mark is gone', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
     await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
     const built = buildH1SessionSettings({
       assetId: ASSET,
-      trades: H1_BOT_SESSION_TRADES,
+      cycles: 5,
       stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
-      maxLossMultiplier: H1_BOT_MAX_LOSS_MULTIPLIER,
+      strategy: SessionStakeStrategy.Martingale,
     });
     if (!built.success) throw new Error('H1 fixture settings');
     const session = await createTradingSession(
@@ -325,5 +339,144 @@ describe("the driver's list and a session of the bot's settings (#745)", () => {
       sql`update broker_accounts set h1_since = null where id = ${seed.brokerAccountId}`,
     );
     expect((await listActiveH1Sessions(tmp.db)).map((row) => row.id)).not.toContain(session.id);
+  });
+});
+
+// #775: the repeat step on the settlement's real notification, and the waiting row the sender reads
+describe('the H1 driver as a regular session on the database (#775)', () => {
+  async function settleLost(intent: TradeIntentRow) {
+    const taken = (await takeIntent(tmp.db, {
+      id: intent.id,
+      expectedVersion: intent.version,
+      maxAgeMs: 60_000,
+    }))!;
+    const open = openTradeFor(intent, { openPrice: 1.1001 });
+    await tmp.db.transaction((tx) =>
+      markIntentAccepted(tx, {
+        id: taken.id,
+        expectedVersion: taken.version,
+        transport: 'rest_fallback',
+        trade: open,
+      }),
+    );
+    await tmp.db.transaction((tx) =>
+      settleIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.Accepted,
+        trade: closedTradeFor(open, {
+          profit: decimalStringSchema.parse('-1.00'),
+          closePrice: 1.1,
+        }),
+      }),
+    );
+  }
+  // the earlier cases' sessions stay active on the same pair: each case trades its own alone
+  beforeEach(async () => {
+    for (const listed of await listActiveH1Sessions(tmp.db)) {
+      await stopTradingSession(tmp.db, {
+        id: listed.id,
+        reason: TradingSessionStopReason.UserStopped,
+      });
+    }
+  });
+  const intentsOf = (sessionId: string) =>
+    tmp.db
+      .select()
+      .from(tradeIntents)
+      .where(eq(tradeIntents.tradingSessionId, sessionId))
+      .orderBy(tradeIntents.createdAt);
+
+  it('H1-DB4: a lost Шаг 1 settled -> the LISTEN round trip -> Шаг 2 in its direction, no deadline', async () => {
+    const { session } = await markedSession();
+    const series = scriptedSeries();
+    const { driver, wakes } = driverOn(series);
+    const lines: string[] = [];
+    const listener = createSessionNoticeListener({
+      pool: tmp.pool,
+      channel: SESSION_NOTICE_CHANNEL,
+      onNotification: (payload) => driver.notice(payload),
+      logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
+    });
+    try {
+      driver.start();
+      await driver.scan();
+      listener.start();
+      await until('the listener', () =>
+        Promise.resolve(lines.some((line) => line.includes('listening'))),
+      );
+      const t = Math.floor(Date.now() / 1000) * 1000 - 300_000;
+      series.feed(t, RAMP);
+      await until('Шаг 1', () => Promise.resolve(wakes.n === 1));
+      const [first] = await intentsOf(session.id);
+      await settleLost(first!);
+      await until('Шаг 2', async () => (await intentsOf(session.id)).length === 2);
+      const [, second] = await intentsOf(session.id);
+      expect(second).toMatchObject({
+        status: 'queued',
+        action: 'up',
+        durationSec: 5,
+        submitDeadlineAt: null,
+        clientRequestId: `session:${session.id}:2`,
+      });
+      expect(Number(second!.amount)).toBeGreaterThan(1);
+      const [row] = await tmp.db
+        .select()
+        .from(signalDecisions)
+        .where(eq(signalDecisions.id, second!.signalDecisionId!));
+      expect(row).toMatchObject({
+        context: 'session',
+        step: 2,
+        version: 'h1-repeat',
+        kind: 'signal',
+        action: 'up',
+        outcome: 'intent',
+        source: { kind: 'settlement', trigger: 'notice' },
+        series: [],
+      });
+      const events = await tmp.db
+        .select({ id: outboxEvents.id })
+        .from(outboxEvents)
+        .where(eq(outboxEvents.intentId, second!.id));
+      expect(events).toHaveLength(1);
+      expect(wakes.n).toBe(2);
+    } finally {
+      await listener.stop();
+      await driver.stop();
+    }
+  });
+
+  it("H1-DB5: the driver's no_signal row makes the session wait: the sender lists it waitingDue", async () => {
+    const { session } = await markedSession();
+    await tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: 7 })
+      .where(eq(tradingSessions.id, session.id));
+    const series = scriptedSeries();
+    const { driver } = driverOn(series);
+    try {
+      driver.start();
+      await driver.scan();
+      const t = Math.floor(Date.now() / 1000) * 1000 - 300_000;
+      series.feed(t, Array<number>(301).fill(1.1));
+      const waiting = async () =>
+        (await listPendingSessionNotices(tmp.db, { limit: 100, exclude: [] })).find(
+          (row) => row.sessionId === session.id,
+        );
+      await until('the waiting row', async () => (await waiting())?.waitingDue === true);
+      const rows = await tmp.db
+        .select()
+        .from(signalDecisions)
+        .where(eq(signalDecisions.tradingSessionId, session.id));
+      expect(rows.filter((row) => row.context === 'session')).toEqual([
+        expect.objectContaining({
+          kind: 'no_signal',
+          outcome: 'no_signal',
+          version: 'h1',
+          step: 1,
+        }),
+      ]);
+    } finally {
+      await driver.stop();
+    }
   });
 });
