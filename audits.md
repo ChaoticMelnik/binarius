@@ -4391,3 +4391,161 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 ### Process improvement proposals
 1. Architect Validation checklist: for each mutation, name the test that executes the mutated line/text and observes its effect (a migration-text mutation only through a test file that builds its DB from the migration files, `createTempDatabase`; not `schema.db.test.ts` on the shared DB), and check multi-conjunct guards for equivalent mutants before posting — **внедрено в #756: `.claude/skills/architect/SKILL.md` → Validation checklist**
 2. Remaining findings — **вынесено в #754**
+
+---
+
+## #274 — Reconciliation: доказанное отсутствие сделки у брокера — `not_found` и release резерва (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Day `/manager` session 2026-10-23 11:00 MSK; taken 11:09 on the owner's board note «Задачу можно брать» (6359883633: live probe A1/A3/A5/A7 confirmed, 0 parked intents). Base `main` `18bf5a23`. |
+| Architect | Plan Update 0 | Opus (transcript: 84 turns `claude-opus-5-5`). The plan of 2026-10-07 reconciled against `main` (6360486638): no new forks; R2 of #131 rewritten (demo release, session goes on), R2r new for real; the «≥ 2 trades» conjunct dropped as equivalent. The hand-off named «Fable» — wrong. |
+| Implementer | first pass | Opus (152). 1 clarify question, recommended (6360525769: `brokerTradeCount` takes `isDemo`, checked at `orchestrator.db.test.ts:1749`). PR #757, 3 commits, +643/−236; `pnpm check` 0 at `28cec653`; mutations 14/14 red (6360745953). Commit `4e7f7b63` was pushed with a red per-commit check (`test-timing` F2): the wrapper ended with `cat`, exit 0; fixed by `e06396ee`; force-push forbidden at night, so the red commit stayed. Phase 3 audit 6360764686. |
+| Reviewer | round 1 | 0 / 0 / 3 (3b + 3c; 3d skipped, ≈ 190 code lines). Ready-to-merge 6360869555 (squash). |
+| Tech Lead | merge | Merged `--squash` 2026-10-23T14:16:06Z (`77660321`) on its own question; GitHub answered 504 mid-request — the merge went through, the remote branch was deleted by hand. #274 Done. Note to #290 (6367001616). Minor → #764. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| A red commit pushed: the per-commit wrapper ended with `cat`, so its exit code was 0 whatever the check returned | Minor (process) | unverified-claim | implementer Step 5 named pipes and `;`, not a wrapper's own last command | Implementer (Step 5) |
+| The Plan Update's hand-off named Fable while every turn ran Opus | — (process) | unverified-claim | the model was named from memory, not from the transcript (same as #675 Plan Update 1) | Architect |
+| m1 (release rests on broker/DB clocks within the window margins, unwritten), m2 («two attempts in a row» is per process), m3 (2.5–3.5 min vs up to ~4 min) | Minor | unverified-claim / single-source | left at the merge | → #764 |
+
+### Process improvement proposals
+1. A wrapper exits with the check's own code; a trailing `cat`/`echo` turns every verdict into 0 — **внедрено в #DOCSPR: `.claude/skills/implementer/SKILL.md` → Step 5 (the check's exit code)**
+2. A byline or hand-off names the model only from the agent's transcript — **внедрено в #DOCSPR: `.claude/skills/architect/SKILL.md` → How this role runs**
+3. Remaining findings — **вынесено в #764**
+
+---
+
+## #722 — Сессия: «🔎 Ждём сигнал…» только при реальном ожидании; «⏹» под блоком открытой сделки (часть B #700) (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session; taken 11:34; part A (#727) merged. Base `main`. |
+| Architect | first plan | Fable (121 turns `claude-fable-5-1`). 4 clarify questions, all recommended (6361195971; В3 checked: the e2e mock gives `signal:up` on every candle, `demo-cycle.db.test.ts:231` waits for the first waiting message). Plan 6361222350, ≈1 450–1 600 lines, no migration; deploy order bot → backend. |
+| Implementer | first pass | Opus (227). 1 clarify question, recommended (6361265474: the log text a parameter, checked at `demo.ts:338`). Steps 3+4 one commit (standing answer). PR #758, 4 commits, +1168/−168; every commit checked before its push; one local commit made after a red check with `;`, undone before the push; `pnpm check` 0 at `a976aa09`; mutations 13/13 red. Phase 3 audit 6361656845. |
+| Reviewer | round 1 | 0 / 0 / 3 (3c only: no security surface; 3d skipped, ≈ 162 code lines). Ready-to-merge 6361771581. |
+| Tech Lead | merge | Stack base: #759 retargeted to `main` first; merged `--rebase` without `--delete-branch` 2026-10-23T14:17:51Z; the branch deleted after #759's rebase, when no PR targeted it. #722 Done. Minor → #765. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| A local commit made after a red check (`;` before `git commit`), undone before the push | — (process) | unverified-claim | the second verdict lost in a command chain the same day as #274 | Implementer (Step 5) |
+| m1 (an intent without its decision row keeps the session waiting: two «⏹» for about a trade), m2 (the open block's «⏹» can outlive its trade), m3 (wording) | Minor | instance-vs-class / single-source | left at the merge | → #765 |
+
+### Process improvement proposals
+1. Same as #274 proposal 1 — **внедрено в #DOCSPR: `.claude/skills/implementer/SKILL.md` → Step 5**
+2. Remaining findings — **вынесено в #765**
+
+---
+
+## #723 — Сессия: пробуждение отправителя сообщений при открытии и расчёте сделки — Postgres NOTIFY/LISTEN (часть C #700) (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session; taken 12:27; stacked on #758's branch (same sender files), depth 2. |
+| Architect | first plan | Fable (103). 5 clarify questions, all recommended (6362209073; В1 and В3 checked on the base branch: `timing.ts:153`, `session-notices.ts:207`, `harness/backend.ts:53`). Probe NOTIFY/LISTEN on a throwaway database; fake-timer model of `wake()`. Plan 6362244664, ≈960 lines. |
+| Architect | Plan Update (defect) | Opus (25). Implementer's clarify: plan mutation M13 was a `load-error` by construction (an import-time `TIMING_CHAIN_HOLDS` link). The manager routed it to the architect (6362283484, implementer Step 5) instead of answering it; Plan Update 6362341973: `sessionNoticeWakeBoundsHold()` + TW1–TW3, M13 → M13a–M13f, the redundant link named equivalent. |
+| Implementer | first pass | Opus (252). PR #759 `--base feat/722-…`, 4 commits, +985/−36; every commit checked before its push (`&&` in the spawn prompt); `pnpm check` 0 at `baad1ce5`; mutations 18/18 red. Top-level `afterEach` stopping every sender added to existing tests, K5–K7 timing made robust — named in the PR, accepted by the review. Phase 3 audit 6363073127. |
+| Reviewer | round 1 | 0 / 0 / 3 (3b + 3c; 3d skipped, ≈ 270 code lines). Ready-to-merge 6363191537 with the stack order. |
+| Tech Lead | merge | #760 retargeted to `main` first. Rebase-only implementer spawn `--onto origin/main a976aa09` (`scratchpad/rebase-759/`): no conflicts, range-diff 4× `=`, every rewritten commit checked, new head `4fa66c23`, mutations 18/18 re-taken (6367312792), `closingIssuesReferences` = #723, CI green. Merged `--rebase` without `--delete-branch` 2026-10-23T14:47:41Z; #723 Done. Minor → #767. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan mutation M13 could not turn red (import-time throw) | — (caught before the PR) | unverified-claim | a link checked only at import has no test to redden; the plan wrote «не red по построению» and kept the row | Architect (caught by the implementer; Validation checklist item of #756 names it) |
+| m1 (an empty woken tick < 250 ms after the previous one), m2 (listener and sender stop in sequence: up to ~13.9 s against phase 1's 10 s), m3 (L2 possibly flaky) | Minor | unverified-claim | left at the merge | → #767 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #767**
+
+---
+
+## #745 — H1 в обычных сессиях из бота на помеченном аккаунте (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session; taken 13:51; stacked on #759's branch, depth 3 (the H1 «⏹» builds on #758's behaviour). |
+| Architect | first plan | Fable (99). 5 clarify questions, all recommended (6363408544; В2 checked: `docs/h1.md:297`, `trading-session.ts:174`). Plan 6363600713, ≈1 900 lines; fallback split — the admin H1 mark. |
+| Implementer | first pass | Opus (317). 2 clarify questions (6363642748): one corrected the manager's В5 wording, which would have printed the trade count twice (`{result}` starts with it). PR #760 `--base feat/723-…`, 3 commits, +1445/−134; `pnpm check` 0 at `9c057684`; mutations 15/15 red. Phase 3 audit 6364079950. |
+| Reviewer | round 1 | 0 / **1** / 0 (3b + 3c + 3d). Major 1: the H1 session message is a photo; the unsuffixed «⏹» went through `showInPlace`'s `editMessageText`, refused on a photo → a second message, the photo kept a live «⏹». Issue → Todo. |
+| Architect | Plan Update 1 | Opus (75 turns, all `claude-opus-5-5`; the hand-off claimed «one Fable entry»). U1–U4 (6364376353): `editSessionMessage` shared with the tracker, `stopH1InPlace`; the class checked (`:w`/`:c` and ordinary sessions cannot land on a photo); sibling defect on `main` → #761 (Backlog). |
+| Implementer | fix round | Fresh Opus spawn (113). `0715977b`, `17ea65cf`; `pnpm check` 0; mutations 20/20 red; reply 6364602581. |
+| Reviewer | round 2 | 0 / 0 / 3 (whole feature, 3b + 3c + 3d). Ready-to-merge 6364717352. |
+| Tech Lead | merge | Retargeted to `main` before #759's merge. Rebase-only spawn `--onto origin/main baad1ce5`: no conflicts, range-diff 4× `=` and one `!` (context line: Rule 51 from #763 next to the Rule 48 edit, checked), new head `c73aa7e2`, mutations 20/20 re-taken (6367860397), CI green. Merged `--rebase --delete-branch` 2026-10-23T17:06:31Z; #745 Done. Minor → #768. PIR 6370687454. |
+
+### Review iterations: 2 (round 1 — 1 Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| The H1 «⏹» reused the in-place stop that edits text; the H1 message is a photo | Major (round 1, fixed) | instance-vs-class | a reused path was not checked against the input form the new caller produces; the test drove only a text message | Architect (Validation) / Implementer (test on the production form) |
+| The manager's clarify answer В5 set a text with `{trades}` before a `{result}` that already starts with the count | — (caught by the implementer) | unverified-claim | the answer's variables were not checked against what they hold | Manager (Substitution 1) |
+| The Plan Update's hand-off claimed a Fable turn the transcript does not have | — (process) | unverified-claim | as #274 | Architect |
+| m1–m3 (style in `trading-session.ts`) | Minor | other | left at the merge | → #768 |
+
+### Process improvement proposals
+1. Validation checklist: a reused path names the input forms it accepts, and the test drives the form the new caller produces in production — **внедрено в #DOCSPR: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. A manager answer that sets a text with variables is checked against what each variable holds — **внедрено в #DOCSPR: `.claude/skills/manager/SKILL.md` → Substitution 1**
+3. Model named only from the transcript — **внедрено в #DOCSPR (see #274 proposal 2)**
+4. Remaining findings — **вынесено в #768**
+
+---
+
+## #719 — После деплоя #698: удалить trading_sessions.last_signal_action и отсечь эру calibrate без паузы (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session; taken 15:21; base `main` (no migration in #757–#760). The deploy condition met: the owner confirmed #698 on the pilot in the issue body. |
+| Architect | first plan | Fable (90). 4 clarify questions, all recommended (6365061016; В1: ordinary deploy with an accepted `42703` window — 0078 is the repo's first non-additive migration; В4 checked: `docs/worker-deploy.md:148` «forward-only and additive»). Probes: `drizzle-kit generate` (two statements), DROP on a throwaway DB, the stand's `simulate` with/without the pause. CodeGraph under-reported `stopTradingSession`'s callers; grep was the authority. Plan 6365067080. |
+| Implementer | first pass | Opus (93). No clarify question (comment on the issue). Own DB `binarius_impl_719`; 0078 generated, SQL read; PR #762, 2 commits, +5308/−76 (≈5 019 the snapshot); `pnpm check` 0 at `d8271f7f`; mutations 7/7 red. Phase 3 audit 6365341313. |
+| Reviewer | round 1 | 0 / 0 / 1 (3b + 3c). m1: the deploy window is milder in the docs than the old worker behaves. Ready-to-merge 6365443471. |
+| Tech Lead | merge | Merged last, after the stack, so that no rebase spawn ran on a shared DB at 0078. CONFLICTING after the stack: rebase spawn on `main` `4ac83a6f` — one conflict (Rule 28 line: main's line + this PR's two substitutions), no new reader of the column, 0078 kept its number, `db:check` clean; range-diff `!` only on that line; new head `f6dd4444`; mutations 7/7 (6370511375; the list identical, its sha256 differs by a trailing newline). Merged `--rebase --delete-branch` 2026-10-23T17:19:25Z; #719 Done. Shared test DB `db:migrate` → 0078, 79/79 hashes; `binarius_impl_719` dropped. Minor → #772. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1: the old orchestrator's stop by outcome throws `42703` outside `attemptWithDeadline` and aborts the whole tick — sessions after it in the batch do not trade for the window; docs and the PR say «retried by the next tick» | Minor | unverified-claim | the window was described from the planned code, not traced through the old worker's tick | → #772 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #772**
+
+---
+
+## #158 — Семь писателей now() защищены недостижимостью, а не конструкцией — условие нигде не записано (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session, last task; taken 16:00 (In Progress since 2026-10-10, plan of 2026-10-06 by another session; skipped the night before at stack depth 4). |
+| Architect | Plan Update 0 | Opus (87). 2 clarify questions, both recommended (6365664451: `.claude/CLAUDE.md` untouched at night, the memo line an owner step; the exact write count per column so M13 turns red). Scan re-run on `main`: 7 columns (+ `staff_login_links.used_at` from #448), 9 writes in 9 functions; the old plan's deliberately red first commit rewritten as green commits. Plan Update 6365669352. |
+| Implementer | first pass | Opus (116). No clarify question (6365703152). PR #763, 2 commits, +519/−37; `pnpm check` 0 at `487f18ba`; mutations 15/15 red. Deviation decided in the PR, not asked: the count pin counts every recognized write per column (the plan: only `statementNow()` ones). Phase 3 audit 6365941577. |
+| Reviewer | round 1 | 0 / 0 / 3 (3b + 3c). The deviation accepted (the allowlist already forces `statementNow()`; M13 still red). Ready-to-merge 6366052532. |
+| Tech Lead | merge | Merged `--rebase --delete-branch` 2026-10-23T14:19:32Z on its own question (no file shared with the stack's code); #158 Done. Minor → #766 (with the owner's memo line). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| The implementer changed the pin's meaning in the PR's Deviations instead of returning it as a question | Minor (process) | other | implementer Step 0 already says so (#700); accepted by the review | Implementer (Step 0) |
+| m1–m3: the scanner misses a quoted SQL identifier, `sql<Date>` templates and strict CHECKs; Rule 51 claims more for `drizzle/*.sql` | Minor | unverified-claim | left at the merge | → #766 |
+
+### Process improvement proposals
+1. Remaining findings and the owner's memo line for `.claude/CLAUDE.md` — **вынесено в #766**
+
+Docs PR of this session's audit: no Codex pass — the owner's answer 2026-10-23 (decision «один аудит за сессию, docs PR без Codex», #769).
