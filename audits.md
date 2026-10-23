@@ -4326,7 +4326,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Minor 1 («the deferred step runs on the next tick» in `timing.ts`/docs/Rule 10 is stronger than the code), Minor 2 (G6 cannot turn red) | Minor | unverified-claim | left at the merge | → #752 |
 
 ### Process improvement proposals
-1. Mutation list rows checked for a test that executes the mutated text — **внедрено в #PRN: `.claude/skills/architect/SKILL.md` → Validation checklist** (proposal 1 of #675)
+1. Mutation list rows checked for a test that executes the mutated text — **внедрено в #756: `.claude/skills/architect/SKILL.md` → Validation checklist** (proposal 1 of #675)
 2. Flaky K9 — **вынесено в #753**; remaining findings — **вынесено в #752**
 
 ---
@@ -4355,8 +4355,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1 (`docs/h1.md` accepted risk 8 worded stronger than the code), m2 (the value of the `ahead` field in the `market data` line is untested) | Minor | single-source / unverified-claim | left at the merge | → #751 |
 
 ### Process improvement proposals
-1. The implementer never drops a plan mutation; one that cannot turn red is a plan defect to the spawner — **внедрено в #PRN: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
-2. Rule 41/44 wording from the plan's section «Для docs-PR аудита Phase 5» — **внедрено в #PRN: `.claude/skills/architect/SKILL.md` → Architecture Rules → 41, 44**
+1. The implementer never drops a plan mutation; one that cannot turn red is a plan defect to the spawner — **внедрено в #756: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
+2. Rule 41/44 wording from the plan's section «Для docs-PR аудита Phase 5» — **внедрено в #756: `.claude/skills/architect/SKILL.md` → Architecture Rules → 41, 44**
 3. Exclude `.claude/worktrees/` from the CodeGraph index and check its completeness — **вынесено в #755**
 4. Remaining findings — **вынесено в #751**
 
@@ -4388,5 +4388,5 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Minor 1: docs and Rule 50 say the session chart takes any finite value; `span` can overflow to Infinity (the render failure is caught) | Minor | unverified-claim | left at the merge | → #754 |
 
 ### Process improvement proposals
-1. Architect Validation checklist: for each mutation, name the test that executes the mutated line/text and observes its effect (a migration-text mutation only through a test file that builds its DB from the migration files, `createTempDatabase`; not `schema.db.test.ts` on the shared DB), and check multi-conjunct guards for equivalent mutants before posting — **внедрено в #PRN: `.claude/skills/architect/SKILL.md` → Validation checklist**
+1. Architect Validation checklist: for each mutation, name the test that executes the mutated line/text and observes its effect (a migration-text mutation only through a test file that builds its DB from the migration files, `createTempDatabase`; not `schema.db.test.ts` on the shared DB), and check multi-conjunct guards for equivalent mutants before posting — **внедрено в #756: `.claude/skills/architect/SKILL.md` → Validation checklist**
 2. Remaining findings — **вынесено в #754**
