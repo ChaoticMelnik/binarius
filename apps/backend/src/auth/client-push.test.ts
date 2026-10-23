@@ -31,13 +31,17 @@ import {
   linkPushMessage,
   type LinkPushOutcome,
 } from './client-push';
-import { sessionWaitingMessage } from '../trading/session-notice-messages';
+import {
+  sessionCycleStopKeyboard,
+  sessionWaitingMessage,
+} from '../trading/session-notice-messages';
 import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from './texts';
 
 const TOKEN = '123456:AA-link-push-token';
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
 // above 2^53, so a conversion through number would round it
 const TELEGRAM_USER_ID = 9_007_199_254_740_993n;
+const SESSION_ID = '00000000-0000-4000-8000-000000000000';
 
 const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> =>
   promise.then(
@@ -210,6 +214,22 @@ describe('the session notices (#464)', () => {
       text: '<pre>a &amp; b</pre>',
       parse_mode: 'HTML',
     });
+  });
+
+  it("sends and edits the cycle message with the open block's «⏹» when given one (#722)", async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendMessage', () => ({ message_id: 4242 }));
+    const reply_markup = sessionCycleStopKeyboard(SESSION_ID);
+    await push.sendSessionTrade(TELEGRAM_USER_ID, telegramHtml`<b>open</b>`, reply_markup);
+    await push.editSessionTrade(TELEGRAM_USER_ID, 4242, telegramHtml`<b>open</b>`, reply_markup);
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage', 'editMessageText']);
+    const stop = [
+      { text: CLIENT_LABELS.sessionStopButton, callback_data: `session:stop:${SESSION_ID}:c` },
+    ];
+    expect(inlineButtons(sentPayload(calls, 'sendMessage'))).toEqual(stop);
+    expect(inlineButtons(sentPayload(calls, 'editMessageText'))).toEqual(stop);
+    expect(sentPayload(calls, 'sendMessage')?.disable_notification).toBe(true);
   });
 
   it('sends the summary with its keyboard and with sound', async () => {
@@ -429,6 +449,12 @@ describe('the roles of the pushes (#475)', () => {
 
   it('C6 the waiting message: its «⏹» red', () => {
     const message = sessionWaitingMessage('00000000-0000-4000-8000-000000000000');
+    expect(roles(message)).toEqual([[ButtonRole.Danger]]);
+    expect(styles(message)).toEqual([['danger']]);
+  });
+
+  it("C8 the open block's «⏹» (#722): red, its own row", () => {
+    const message = { reply_markup: sessionCycleStopKeyboard(SESSION_ID) };
     expect(roles(message)).toEqual([[ButtonRole.Danger]]);
     expect(styles(message)).toEqual([['danger']]);
   });

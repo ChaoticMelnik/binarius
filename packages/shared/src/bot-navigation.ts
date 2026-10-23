@@ -71,15 +71,17 @@ export const CASHIER_PAGE_PATH = '/cashier';
 export const cashierUrlOf = (origin: string): string | undefined =>
   new URL(origin).protocol === 'https:' ? `${origin}${CASHIER_PAGE_PATH}` : undefined;
 
-// «⏹ Остановить сессию» (#122; since #536 under the waiting message the backend sends, docs/
-// bot-session.md → The waiting message). `:w` says it was pressed under the waiting message, so
-// the bot hands that message to the stop and draws its reply in place of it (#587); the data
-// without it is the old status message's button.
+// «⏹ Остановить сессию» (#122; since #536 under the waiting message the backend sends, since #722
+// also under the open trade's block, docs/bot-session.md → The waiting message, The stop). `:w`
+// says it was pressed under the waiting message, so the bot hands that message to the stop and
+// draws its reply in place of it (#587); `:c` under the cycle message's open block, so the bot
+// answers with a new message and leaves the cycle's blocks alone; the data without a suffix is
+// the old status message's button.
 // The id carries no authority: the backend stops only the presser's own session. 49 / 51 bytes.
 const SESSION_UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 export const sessionStopCallbackData = (
   sessionId: string,
-  { waiting = false }: { waiting?: boolean } = {},
-): string => `session:stop:${sessionId}${waiting ? ':w' : ''}`;
-// group 1 the session's id, group 2 `w` or undefined
-export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${SESSION_UUID}(?::(w))?$`);
+  under: { waiting?: true; cycle?: never } | { cycle?: true; waiting?: never } = {},
+): string => `session:stop:${sessionId}${under.waiting ? ':w' : under.cycle ? ':c' : ''}`;
+// group 1 the session's id, group 2 `w`, `c` or undefined
+export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${SESSION_UUID}(?::(w|c))?$`);

@@ -112,14 +112,24 @@ export interface ClientPush {
   sendLink(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
   sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
   sendDepositCredited(telegramUserId: bigint, balance: BotTextBalance): Promise<void>;
-  // A session's cycle message (#464, #551, docs/bot-session.md → Trade messages): without sound
-  // and without a keyboard, the one exception of this seam (docs/bot-navigation.md → Exceptions,
-  // `session_trade`). It takes the text alone, so no other message can drop its keyboard here.
-  // Resolves to the sent message's message_id, which the next step of the cycle edits.
-  sendSessionTrade(telegramUserId: bigint, text: TelegramHtml): Promise<number>;
-  // The next step of a cycle (#551): the cycle message edited to `text`, still without a
-  // keyboard. An edit makes no sound.
-  editSessionTrade(telegramUserId: bigint, messageId: number, text: TelegramHtml): Promise<void>;
+  // A session's cycle message (#464, #551, docs/bot-session.md → Trade messages): without sound.
+  // Without an open trade's block it has no keyboard, the one exception of this seam
+  // (docs/bot-navigation.md → Exceptions, `session_trade`); with one it carries the block's «⏹»
+  // (#722). Resolves to the sent message's message_id, which the next step of the cycle edits.
+  sendSessionTrade(
+    telegramUserId: bigint,
+    text: TelegramHtml,
+    reply_markup?: BotKeyboard,
+  ): Promise<number>;
+  // The next step of a cycle (#551): the cycle message edited to `text`. An edit without
+  // `reply_markup` removes the keyboard (Bot API), so the result's edit takes the «⏹» off. An
+  // edit makes no sound.
+  editSessionTrade(
+    telegramUserId: bigint,
+    messageId: number,
+    text: TelegramHtml,
+    reply_markup?: BotKeyboard,
+  ): Promise<void>;
   // the finished session's fallback text summary (#464, #537: the bot sends the summary, this only
   // when it cannot): with sound and its next step
   sendSessionSummary(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
@@ -158,10 +168,15 @@ export function createClientPush({
   const send = async (telegramUserId: bigint, { text, reply_markup }: ClientPushMessage) => {
     await api.sendMessage(String(telegramUserId), sent(text), { parse_mode: 'HTML', reply_markup });
   };
-  const sendSessionTrade = async (telegramUserId: bigint, text: TelegramHtml) => {
+  const sendSessionTrade = async (
+    telegramUserId: bigint,
+    text: TelegramHtml,
+    reply_markup?: BotKeyboard,
+  ) => {
     const message = await api.sendMessage(String(telegramUserId), sent(text), {
       parse_mode: 'HTML',
       disable_notification: true,
+      ...(reply_markup === undefined ? {} : { reply_markup }),
     });
     return message.message_id;
   };
@@ -169,9 +184,11 @@ export function createClientPush({
     telegramUserId: bigint,
     messageId: number,
     text: TelegramHtml,
+    reply_markup?: BotKeyboard,
   ) => {
     await api.editMessageText(String(telegramUserId), messageId, sent(text), {
       parse_mode: 'HTML',
+      ...(reply_markup === undefined ? {} : { reply_markup }),
     });
   };
   const sendSessionWaiting = async (

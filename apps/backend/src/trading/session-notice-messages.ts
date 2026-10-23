@@ -23,6 +23,7 @@ import {
   type TelegramHtml,
   type TradingSessionSettings,
   type TradingSessionView,
+  type BotKeyboard,
 } from '@binarius/shared';
 import type { ClaimedSessionTrade, ClaimedSessionTrades, SessionOpenNoticeRow } from '@binarius/db';
 import { menuButton, type ClientPushMessage } from '../auth/client-push';
@@ -185,6 +186,17 @@ export function sessionSummaryMessage(
     reply_markup: keyboardOf([...otherPair, menuButton()]),
   };
 }
+
+// The open trade's block carries the session's «⏹» (#722, docs/bot-session.md → Trade messages):
+// `:c` tells the bot to answer with a new message and leave the cycle's blocks alone.
+export const sessionCycleStopKeyboard = (sessionId: string): BotKeyboard =>
+  keyboardOf([
+    callbackButton(
+      ButtonRole.Danger,
+      CLIENT_LABELS.sessionStopButton,
+      sessionStopCallbackData(sessionId, { cycle: true }),
+    ),
+  ]);
 
 // The waiting message (#536, docs/bot-session.md → The waiting message): the wait for the next
 // signal, with the one button that stops the session; `:w` tells the bot to delete it on a press.
