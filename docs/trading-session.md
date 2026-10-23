@@ -116,9 +116,11 @@ stops a session whose settings fail as `invalid_settings`, so a row written by h
 too. The bot's view and the admin list ([admin-pages.md](admin-pages.md), #330) show such settings
 as null.
 
-**Version 4 is an H1 session (#670, [h1.md](h1.md#sessions-670)).** Only `h1 session start` (the
-backend's h1 CLI) writes it, through `buildH1SessionSettings`; `TRADING_SESSION_SETTINGS_VERSION`
-stays 3, and the start route and `session-start` never write v4:
+**Version 4 is an H1 session (#670, [h1.md](h1.md#sessions-670)).** Two writers, both through
+`buildH1SessionSettings`: `h1 session start` (the backend's h1 CLI) and, since #745, the start
+route on an H1-marked account (`H1_BOT_SESSION_TRADES` 50 trades, k = `H1_BOT_MAX_LOSS_MULTIPLIER`
+20, [h1.md → From the bot](h1.md#from-the-bot-745)); `TRADING_SESSION_SETTINGS_VERSION` stays 3,
+and `session-start` never writes v4:
 
 ```json
 { "version": 4, "assetId": 202, "durationSec": 5, "trades": 50,
@@ -255,13 +257,15 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 3 | `checkTradingSessionStart({ mode })` | 409 `trading_paused` first; 404 `user_not_found`; 409 `user_blocked`; 409 `mode_not_allowed` when `mode` is not the user's `trading_mode` (#327, before any account read); 404 `broker_account_not_found`; 409 `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
+| 4b | an H1-marked account (step 3's `h1Since`, #745): `durationSec` is not `H1_EXPIRY_SEC` (5) | 409 `h1_duration_unsupported`, before the signal: no decision row (H1-R4) |
+| 4b′ | an H1-marked account: the pair's catalog payout under `H1_MIN_PAYOUT_PCT` (94), read at the start only | 409 `h1_payout_too_low`, before the signal: no decision row (H1-R3, H1-R5) |
 | 4c | the pair's signal on the current candle (#509): `signals.evaluate({ assetId, interval: intervalForDuration(durationSec), digits })`, the cached feed `POST /trading/signal` reads, in parallel with steps 5–5b; its refusal answers before theirs (R32b); a signal's direction goes to step 7 as `start_signal_action` (#568, R34) | 503 `signal_unavailable` on `fetch_failed` (`rate_limited` included) or a throw (R29); 409 `no_signal` on a `no_signal` decision (R28) |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
 | 6a | `checkStake(savedStake ?? minTradeAmount, { minTradeAmount, available })` on the same snapshot (#297): the saved stake and `available` of the session's mode, `demo_stake`/`demo.available` or `real_stake`/`real.available` (#327) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_balance`; without a saved stake, a minimum above that mode's balance is refused here rather than as `stake_stop` on the first trade |
-| 6 | `buildSessionSettings` with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450): settings v3, for martingale with the limits of that stake | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
-| 7 | `createTradingSession(…, mode, startSignalAction)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand); `account_not_h1` needs settings v4, which the route never writes, so it is rethrown as an opaque 500 (#707) |
+| 6 | `buildSessionSettings` with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450): settings v3, for martingale with the limits of that stake. On an H1-marked account (#745) `buildH1SessionSettings` with the same stake, fixed: settings v4, `H1_BOT_SESSION_TRADES` trades, `maxLoss = H1_BOT_MAX_LOSS_MULTIPLIER × stake`; `cycles` does not apply (H1-R1, H1-R7) | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
+| 7 | `createTradingSession(…, mode, startSignalAction)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand; on an H1-marked account too, H1-R8); `account_not_h1` (409, #745: the H1 mark removed between step 3 and the account's lock of a v4 start; a mark set in between gives a v3 session, H1-R6) |
 | 8 | 201 `{ session }` | — |
 
 - **The view on `active_session_exists`.** A second start — a double press, or a retry after a
@@ -280,7 +284,8 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 - **No session without a signal (#509).** Step 4c covers every door of the bot and a direct call
   alike. A refusal of the signal also leaves steps 5–5b's refresh state, as any later refusal.
   The CLI `session-start` (an operator's tool, demo only) does not ask for the signal (stated),
-  and writes no `start_signal_action` (#568).
+  and writes no `start_signal_action` (#568). An H1 session from the bot (#745) reads it too, at
+  the start only: its trades are then the driver's.
 - **Time.** Step 5b dominates: under `TRADING_SESSION_START_BUDGET_MS` (4 s), which is inside the
   backend's shutdown phase 1 (`apps/backend/src/timing.ts`, asserted at import). Step 4c runs
   beside it, so the route waits for the longer of the two, and its chart GET is bounded by
