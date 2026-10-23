@@ -424,6 +424,32 @@ describe('sessionSummaryMessage (#464)', () => {
     ]);
   });
 
+  // #745: an H1 session from the bot completes on its trades, not on cycles
+  it('H1-F1 the fallback summary of a completed H1 session counts trades; a v1 one its cycles', () => {
+    const h1: H1SessionSettings = {
+      version: 4,
+      assetId: 101,
+      durationSec: 5,
+      trades: 50,
+      stake: { strategy: 'fixed', baseStake: d('1'), stakeScale: 2 },
+      signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
+      maxLoss: d('20'),
+    };
+    const completed = {
+      ...view,
+      stopReason: TradingSessionStopReason.Completed,
+      trades: { settled: 50, rejected: 0, won: 30, lost: 20, tied: 0, profit: d('5') },
+    };
+    const lines = sessionSummaryMessage({ ...completed, settings: h1 }, LABEL).text.value.split(
+      '\n',
+    );
+    expect(lines[1]).toBe('🏁 H1-сессия завершена: 50 сделок — 30 в плюс, 20 в минус');
+    expect(lines.join('\n')).not.toContain('цикл');
+    expect(sessionSummaryMessage(completed, LABEL).text.value).toContain(
+      '🏁 Сессия завершена: 2 цикла, 50 сделок',
+    );
+  });
+
   // #685: the signals list is one, so its data is `demo:sig` at every duration
   it.each([5, 15, 60] as const)(
     'a no_signal_timeout stop at %i s offers another pair with demo:sig above the menu',

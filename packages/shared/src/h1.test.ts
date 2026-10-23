@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { breakEvenPct, MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import {
+  H1_BOT_MAX_LOSS_MULTIPLIER,
+  H1_BOT_SESSION_TRADES,
   H1_DECISION_SETS,
   H1_ENTRY_WINDOW_SEC,
   H1_SESSION_DECISION_SET,
@@ -19,6 +21,12 @@ import {
 } from './h1';
 import { TradeAction } from './trading';
 import { SIGNAL_VERSION_PATTERN } from './trade-log';
+import {
+  buildH1SessionSettings,
+  MAX_H1_LOSS_MULTIPLIER,
+  MAX_SESSION_SUMMARY_TRADES,
+} from './trading-session';
+import type { DecimalString } from './money';
 
 const features = { move: 3, sd: 1, z: 3, moves: 60, lastClose: 1004 };
 const signal = { kind: 'signal', version: 'h1', action: 'up', features };
@@ -155,5 +163,26 @@ describe('the H1 shadow row (#669)', () => {
         entries: [{ entryDelaySec: 1, entryPrice: 1, exitPrice: 1, outcome: 'refund' }],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('an H1 session from the bot (#745)', () => {
+  const settingsFor = (baseStake: string) =>
+    buildH1SessionSettings({
+      assetId: 42,
+      trades: H1_BOT_SESSION_TRADES,
+      stake: { baseStake: baseStake as DecimalString, stakeScale: 2 },
+      maxLossMultiplier: H1_BOT_MAX_LOSS_MULTIPLIER,
+    });
+
+  it("H-S10: the bot's length and loss ceiling fit the settings' bounds; a zero stake is refused", () => {
+    expect(H1_BOT_SESSION_TRADES).toBeGreaterThanOrEqual(1);
+    expect(H1_BOT_SESSION_TRADES).toBeLessThanOrEqual(MAX_SESSION_SUMMARY_TRADES);
+    expect(H1_BOT_MAX_LOSS_MULTIPLIER).toBeGreaterThanOrEqual(1);
+    expect(H1_BOT_MAX_LOSS_MULTIPLIER).toBeLessThanOrEqual(MAX_H1_LOSS_MULTIPLIER);
+    const built = settingsFor('1.00');
+    expect(built.success).toBe(true);
+    expect(built.data).toMatchObject({ version: 4, trades: 50, maxLoss: '20' });
+    expect(settingsFor('0').success).toBe(false);
   });
 });

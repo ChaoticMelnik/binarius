@@ -115,6 +115,12 @@ export type H1SessionSignal = z.infer<typeof h1SessionSignalSchema>;
 // message): one message, edited every this many trades and at the finish
 export const H1_NOTICE_EVERY_TRADES = 10;
 
+// An H1 session started from the bot (#745, decision В2 of 2026-10-23): its length in trades and
+// its loss ceiling as a multiple of the fixed stake; the bot asks for neither, the request's cycles
+// are martingale cycles and do not apply
+export const H1_BOT_SESSION_TRADES = 50;
+export const H1_BOT_MAX_LOSS_MULTIPLIER = 20;
+
 // A tie returns the stake: neither a win nor a loss. A type, not an `as const` object: the bot's
 // session card has a tone of the same three values that is not a trade's outcome, and
 // local/no-status-literal would tie the two.

@@ -11,7 +11,7 @@ import {
   type SessionTradeNotice,
 } from './session-texts';
 import { TradeAction, TradeMode } from './trading';
-import { TradingSessionStopReason } from './trading-session';
+import { buildH1SessionSettings, TradingSessionStopReason } from './trading-session';
 
 const texts = createBotTexts(defaultBotTextSource);
 const session = createSessionTexts(texts);
@@ -392,5 +392,34 @@ describe('the H1 summary (#707)', () => {
     expect(lines[0]).toBe(`⚡ H1 · ${texts.plain.intentAssetFallback({ assetId: '42' })}`);
     expect(lines[2]).toBe('🧮 Счёт: 3 в плюс, 7 в минус');
     expect(lines[3]).toBe('💰 Результат: -$4.24');
+  });
+});
+
+describe('the completed line of an H1 session (#745)', () => {
+  const h1 = buildH1SessionSettings({
+    assetId: 42,
+    trades: 50,
+    stake: { baseStake: d('1.00'), stakeScale: 2 },
+    maxLossMultiplier: 20,
+  });
+  if (!h1.success) throw new Error('fixture: H1 settings');
+  const completed = view({
+    settings: h1.data,
+    cycles: { planned: 0, closed: 0 },
+    trades: { settled: 50, rejected: 0, won: 30, lost: 20, tied: 0, profit: d('5') },
+  });
+
+  it('prints the trades and the score, never the cycles, in the summary and the end line', () => {
+    const line = '🏁 H1-сессия завершена: 50 сделок — 30 в плюс, 20 в минус';
+    const summary = session.sessionSummaryText(pairLabel({ symbol: 'EUR/USD' }), 42, completed);
+    expect(summary.value.split('\n')[1]).toBe(line);
+    expect(summary.value).not.toContain('цикл');
+    expect(session.sessionEndLine(completed).value).toBe(line);
+  });
+
+  it('a completed v1 session keeps its cycles line', () => {
+    expect(session.sessionEndLine(view()).value).toBe(
+      '🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в минус',
+    );
   });
 });

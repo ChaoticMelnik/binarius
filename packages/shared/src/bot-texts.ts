@@ -1479,6 +1479,12 @@ export const BOT_TEXT_CATALOG = {
     `🏁 Сессия завершена: {cycles}, {result}`,
     { vars: ['cycles', 'result'] },
   ),
+  sessionCompletedH1: html(
+    g.Session,
+    'H1-сессия из бота (#745): итог, когда все сделки плана закрыты; сделки и счёт, без циклов.',
+    `🏁 H1-сессия завершена: {result}`,
+    { vars: ['result'] },
+  ),
   sessionTotal: html(g.Session, 'Сессия: итог под причиной остановки.', `📊 Итог: {result}`, {
     vars: ['result'],
   }),
@@ -1558,6 +1564,16 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Кнопка сессии: пара недоступна.',
     `⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.`,
+  ),
+  sessionH1PayoutTooLow: html(
+    g.Session,
+    'Кнопка сессии на аккаунте с меткой H1 (#745): пара платит меньше порога H1 (H1_MIN_PAYOUT_PCT).',
+    `⚡ Для H1 нужна пара с выплатой не ниже 94 %. Выбери другую пару 👇`,
+  ),
+  sessionAccountChanged: html(
+    g.Session,
+    'Кнопка сессии (#745): метку H1 аккаунта сняли во время старта; новый анализ стартует обычную сессию.',
+    `⚙️ Настройки аккаунта изменились — открой анализ заново.`,
   ),
   sessionSignalUnavailable: html(
     g.Session,

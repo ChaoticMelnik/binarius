@@ -3,6 +3,10 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  H1_BOT_SESSION_TRADES,
+  H1_EXPIRY_SEC,
+  H1_MIN_PAYOUT_PCT,
+  H1_R1_PARAMS,
   SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
@@ -54,6 +58,7 @@ import {
   readTradingSessionView,
   recordSignalDecision,
   referralCodes,
+  setH1Mark,
   setStake,
   signalDecisions,
   setTradingMode,
@@ -2266,5 +2271,158 @@ describe('the recovery routes (#567)', () => {
       'validation',
     ]);
     expect(await recordedOf(seed.sessionId)).toBe(41);
+  });
+});
+
+// #745: an H1-marked account's start from the bot writes settings v4 (docs/h1.md -> From the bot)
+describe('POST /trading/sessions on an H1-marked account (#745)', () => {
+  // a pair H1 trades: it accepts the 5 s expiry and pays above H1_MIN_PAYOUT_PCT
+  const h1Pair: BinaryPair = { ...pair, minTimeframe: 5, payout: 95 };
+  const h1App = (options: Parameters<typeof appWith>[0] = {}, pairs: BinaryPair[] = [h1Pair]) =>
+    appWith({ catalog: freshCatalog(pairs), ...options });
+  const mark = (accountId: string, h1: boolean) =>
+    tmp.db.transaction((tx) => setH1Mark(tx, { accountId, h1 }));
+  const markedReady = async () => {
+    const seed = await seedReady();
+    expect(await mark(seed.brokerAccountId, true)).toBe('marked');
+    return seed;
+  };
+  const h1Body = (seed: { telegramUserId: string }, patch: object = {}) =>
+    bodyFor(seed, { durationSec: H1_EXPIRY_SEC, ...patch });
+  const startRows = (brokerAccountId: string) =>
+    tmp.db
+      .select()
+      .from(signalDecisions)
+      .where(eq(signalDecisions.brokerAccountId, brokerAccountId));
+
+  it('H1-R1 writes v4: the plan of trades, the saved stake fixed, the loss ceiling, the R1 signal', async () => {
+    const seed = await markedReady();
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Demo,
+      decimalStringSchema.parse('2.50'),
+    );
+    const response = await start(h1App(), h1Body(seed));
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.settings).toEqual({
+      version: 4,
+      assetId: ASSET,
+      durationSec: H1_EXPIRY_SEC,
+      trades: H1_BOT_SESSION_TRADES,
+      stake: { strategy: 'fixed', baseStake: '2.5', stakeScale: 2 },
+      signal: { kind: 'h1', params: H1_R1_PARAMS, entryDelaySec: 1, expirySec: H1_EXPIRY_SEC },
+      maxLoss: '50',
+    });
+    const [row] = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    expect(row?.settings).toEqual(session.settings);
+    expect(row?.startSignalAction).toBe('up');
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      context: 'session_start',
+      outcome: 'started',
+      tradingSessionId: session.id,
+    });
+  });
+
+  it('H1-R2 the same request on an unmarked account writes v3, as before', async () => {
+    const seed = await seedReady();
+    const response = await start(h1App(), h1Body(seed));
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).settings).toMatchObject({
+      version: 3,
+      durationSec: H1_EXPIRY_SEC,
+      cycles: 5,
+      stake: { strategy: 'martingale' },
+    });
+  });
+
+  it('H1-R3 a pair paying under the floor is 409 h1_payout_too_low before the signal; the floor itself starts', async () => {
+    const seed = await markedReady();
+    const before = await sessionCount();
+    const under = await start(
+      h1App({}, [{ ...h1Pair, payout: H1_MIN_PAYOUT_PCT - 0.01 }]),
+      h1Body(seed),
+    );
+    await expectRefusal(under, 409, 'h1_payout_too_low', before);
+    expect(signalCalls).toEqual([]);
+    expect(await startRows(seed.brokerAccountId)).toEqual([]);
+
+    const at = await start(h1App({}, [{ ...h1Pair, payout: H1_MIN_PAYOUT_PCT }]), h1Body(seed));
+    expect(at.statusCode).toBe(201);
+  });
+
+  it("H1-R4 a duration other than H1's is 409 h1_duration_unsupported before the signal", async () => {
+    const seed = await markedReady();
+    const before = await sessionCount();
+    // the file's pair accepts 60 s, so step 4 passes; it pays 95
+    const response = await start(h1App({}, [{ ...pair, payout: 95 }]), bodyFor(seed));
+    await expectRefusal(response, 409, 'h1_duration_unsupported', before);
+    expect(signalCalls).toEqual([]);
+    expect(await startRows(seed.brokerAccountId)).toEqual([]);
+  });
+
+  it('H1-R5 the order: the pair before the payout, the payout before the signal', async () => {
+    const seed = await markedReady();
+    const before = await sessionCount();
+    // the pair refuses the 5 s expiry and pays 93: pair_unavailable
+    await expectRefusal(
+      await start(h1App({}, [{ ...pair, payout: 93 }]), h1Body(seed)),
+      409,
+      'pair_unavailable',
+      before,
+    );
+    // pays 93, no signal: the payout answers
+    await expectRefusal(
+      await start(
+        h1App({ signal: sessionSignalEvaluation('no_signal') }, [{ ...h1Pair, payout: 93 }]),
+        h1Body(seed),
+      ),
+      409,
+      'h1_payout_too_low',
+      before,
+    );
+  });
+
+  it('H1-R6 the mark removed during the start is 409 account_not_h1, recorded refused', async () => {
+    const seed = await markedReady();
+    const before = await sessionCount();
+    const unmarkFirst = async () => {
+      expect(await mark(seed.brokerAccountId, false)).toBe('unmarked');
+      return sessionSignalEvaluation('signal');
+    };
+    const response = await start(h1App({ signal: unmarkFirst }), h1Body(seed));
+    await expectRefusal(response, 409, 'account_not_h1', before);
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows.map((row) => [row.outcome, row.detail])).toEqual([['refused', 'account_not_h1']]);
+    // the next press starts an ordinary session
+    const next = await start(h1App(), h1Body(seed));
+    expect(sessionOf(next).settings?.version).toBe(3);
+  });
+
+  it("H1-R7 the request's cycles do not change the plan of trades", async () => {
+    const seed = await markedReady();
+    const response = await start(
+      h1App({ stakeStrategy: SessionStakeStrategy.Fixed }),
+      h1Body(seed, { cycles: 20 }),
+    );
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).settings).toMatchObject({
+      version: 4,
+      trades: H1_BOT_SESSION_TRADES,
+    });
+  });
+
+  it('H1-R8 DEMO_ONLY: a real H1 start is 409 demo_only, past the fence', async () => {
+    const seed = await markedReady();
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+    const before = await sessionCount();
+    const response = await start(h1App({ demoOnly: true }), h1Body(seed, { mode: TradeMode.Real }));
+    await expectRefusal(response, 409, 'demo_only', before);
   });
 });

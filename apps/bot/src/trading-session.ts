@@ -80,6 +80,7 @@ import {
   NO_NEXT_STEP_REASONS,
   replyHtml,
   replyHtmlWithoutNextStep,
+  replyWithPhotoHtml,
   replyWithPhotoHtmlWithoutNextStep,
   sendHtmlById,
   sendPhotoByIdHtml,
@@ -107,7 +108,8 @@ import {
 
 // The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
 // buttons start one through POST /trading/sessions, one session message without buttons follows it
-// (session-tracker.ts), and the «⏹» under the backend's waiting message stops it (#536), its reply
+// (session-tracker.ts; an H1 session's carries its «⏹», #745), and the «⏹» under the backend's
+// waiting message stops it (#536), its reply
 // drawn in place of that message (#587), or the one under the open trade's block (#722), its reply
 // a new message. The trades
 // themselves are the worker's (#287), their messages the backend's (#464). The launch screen (#418)
@@ -197,6 +199,8 @@ interface Refusal {
   wait?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
+  // «🔀 Выбрать другую пару» and the menu: a refusal of the pair itself (#745: H1's payout floor)
+  otherPair?: true;
 }
 
 // Every refusal of POST /trading/sessions, by its code. Each is answered before a row is
@@ -233,6 +237,11 @@ export const START_REFUSALS = {
   // answers of the read and stop routes, not of the start
   [TradingSessionErrorCode.NotFound]: { text: 'unavailable', log: true },
   [TradingSessionErrorCode.SessionNotActive]: { text: 'unavailable', log: true },
+  // an H1-marked account's start (#745): a pair that pays under H1's floor; a duration other than
+  // H1's, which this bot never sends (DEMO_DURATION_SEC); the mark removed during the start
+  [TradingSessionErrorCode.H1PayoutTooLow]: { text: 'sessionH1PayoutTooLow', otherPair: true },
+  [TradingSessionErrorCode.H1DurationUnsupported]: { text: 'sessionPairUnavailable', log: true },
+  [TradingSessionErrorCode.AccountNotH1]: { text: 'sessionAccountChanged' },
   // the saved stake against the account's snapshot (#297): the texts of the stake press, but the
   // session press reads no access, so the minimum is not named — the picker shows it
   [TradingSessionErrorCode.StakePrecision]: { text: 'stakePrecision', stakeMenu: true },
@@ -386,21 +395,30 @@ export function createTradingSessionComposer<C extends Context>({
   }
 
   // The session message, without a keyboard (#536): the backend's waiting message under it, or its
-  // open trade's block (#722), carries the «⏹». With a signal's direction it is that direction's picture with the text as
-  // its caption (#568); a refused photo (a stale file_id among others) forgets its file_id and
-  // sends the same text as a message. A transport failure is thrown, as a text's is: a second
-  // message after an unknown delivery could be a duplicate (#126).
+  // open trade's block (#722), carries the «⏹». An H1 session's has neither (#722), so its own
+  // message carries the «⏹» (#745, the drawing's keyboard). With a signal's direction it is that
+  // direction's picture with the text as its caption (#568); a refused photo (a stale file_id among
+  // others) forgets its file_id and sends the same text as a message, the keyboard kept. A
+  // transport failure is thrown, as a text's is: a second message after an unknown delivery could
+  // be a duplicate (#126).
   async function sendSessionMessage(
     ctx: Context,
-    { text, picture: signalAction }: SessionDrawing,
+    { text, picture: signalAction, keyboard }: SessionDrawing,
   ): Promise<{ sent: { chat: { id: number }; message_id: number }; photoRefused: boolean }> {
     const reason = NO_NEXT_STEP_REASONS.SessionStatus;
+    const replyText = () =>
+      keyboard === null
+        ? replyHtmlWithoutNextStep(ctx, text, reason)
+        : replyHtml(ctx, text, { reply_markup: keyboard });
     if (signalAction === null) {
-      return { sent: await replyHtmlWithoutNextStep(ctx, text, reason), photoRefused: false };
+      return { sent: await replyText(), photoRefused: false };
     }
     const photo = setupCardPhotos.photo(signalAction);
     try {
-      const sent = await replyWithPhotoHtmlWithoutNextStep(ctx, photo, text, reason);
+      const sent =
+        keyboard === null
+          ? await replyWithPhotoHtmlWithoutNextStep(ctx, photo, text, reason)
+          : await replyWithPhotoHtml(ctx, photo, text, { reply_markup: keyboard });
       setupCardPhotos.remember(signalAction, sent);
       return { sent, photoRefused: false };
     } catch (error) {
@@ -414,7 +432,7 @@ export function createTradingSessionComposer<C extends Context>({
         },
         'the session photo was refused, sending its text',
       );
-      return { sent: await replyHtmlWithoutNextStep(ctx, text, reason), photoRefused: true };
+      return { sent: await replyText(), photoRefused: true };
     }
   }
 
@@ -640,7 +658,9 @@ export function createTradingSessionComposer<C extends Context>({
               ])
             : refusal.buy === true
               ? withBuy([backToAnalysisButton(assetId, durationSec), menuButton()], cashierUrl)
-              : backToAnalysisKeyboard(assetId, durationSec);
+              : refusal.otherPair === true
+                ? appendEndOfPath([], assetId, [], { otherPair: true })
+                : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
     await replyHtml(ctx, textOf(text), { reply_markup });
@@ -917,13 +937,22 @@ export function createTradingSessionComposer<C extends Context>({
       label: symbol,
       ...entry,
       // the session message has no keyboard (#536): an edit without one strips an old status
-      // message's buttons too; a session gone leaves only the menu (#350). Its kind follows the
-      // drawing's picture (#568, sessionEditMethod).
-      edit: ({ text, picture: drawn }, end) => {
+      // message's buttons too; a session gone leaves only the menu (#350). An active H1 session's
+      // keeps its «⏹» (#745), the stop's edit drops it. Its kind follows the drawing's picture
+      // (#568, sessionEditMethod).
+      edit: ({ text, picture: drawn, keyboard }, end) => {
         const picture = sessionEditMethod(drawn) === 'editMessageMedia' ? drawn : null;
         const reason = NO_NEXT_STEP_REASONS.SessionStatus;
         if (end === 'not_found') {
           const extra = { reply_markup: menuKeyboard() };
+          return picture === null
+            ? editMessageTextByIdHtml(api, chatId, messageId, text, extra)
+            : editSessionPhoto(picture, (photo) =>
+                editMessagePhotoByIdHtml(api, chatId, messageId, photo, text, extra),
+              );
+        }
+        if (keyboard !== null) {
+          const extra = { reply_markup: keyboard };
           return picture === null
             ? editMessageTextByIdHtml(api, chatId, messageId, text, extra)
             : editSessionPhoto(picture, (photo) =>

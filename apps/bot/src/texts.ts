@@ -610,8 +610,8 @@ ${state}`;
 // strings and are never escaped — an entity here would be shown literally. The catalog's
 // `buttons` and `commands` groups; the confirm button branches on the address here.
 // The waiting message's «⏹» (#536) and the open trade block's (#722) are the backend's; the bot
-// draws sessionStopButton only in place of a pressed waiting message after an unknown stop outcome
-// (#587, waitingStopKeyboard).
+// draws sessionStopButton in place of a pressed waiting message after an unknown stop outcome
+// (#587, waitingStopKeyboard) and on an H1 session's own message (#745, h1SessionStopKeyboard).
 type LabelKey = Exclude<
   BotTextKeyOfGroup<typeof BotTextGroup.Buttons | typeof BotTextGroup.Commands>,
   'confirmButtonNoEmail'

@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildH1SessionSettings,
   decimalStringSchema,
+  H1_BOT_MAX_LOSS_MULTIPLIER,
+  H1_BOT_SESSION_TRADES,
   h1ShadowEntrySchema,
   logOptions,
   toBinaryPair,
@@ -289,5 +291,39 @@ describe('the H1 driver on the database (#707)', () => {
     expect(own).toHaveLength(1);
     const entry = h1ShadowEntrySchema.parse(journalEntryOf(own[0]!.decision));
     expect(replayH1Entry(entry)).toEqual(own[0]!.decision.decision);
+  });
+});
+
+// #745: the start route writes the same v4 with the bot's constants; the driver lists such a session
+// while its account is marked, whoever created it
+describe("the driver's list and a session of the bot's settings (#745)", () => {
+  it('H1-DB3: listed with its owner while marked; not listed once the mark is gone', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
+    await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
+    const built = buildH1SessionSettings({
+      assetId: ASSET,
+      trades: H1_BOT_SESSION_TRADES,
+      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
+      maxLossMultiplier: H1_BOT_MAX_LOSS_MULTIPLIER,
+    });
+    if (!built.success) throw new Error('H1 fixture settings');
+    const session = await createTradingSession(
+      tmp.db,
+      {
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode: TradeMode.Demo,
+        settings: built.data,
+        startSignalAction: 'up',
+      },
+      { demoOnly: false },
+    );
+    const listed = (await listActiveH1Sessions(tmp.db)).find((row) => row.id === session.id);
+    expect(listed).toMatchObject({ telegramUserId: seed.telegramUserId, settings: built.data });
+    // the mark cleared by hand under an active session (setH1Mark refuses it), as risk 3 of #707
+    await tmp.db.execute(
+      sql`update broker_accounts set h1_since = null where id = ${seed.brokerAccountId}`,
+    );
+    expect((await listActiveH1Sessions(tmp.db)).map((row) => row.id)).not.toContain(session.id);
   });
 });

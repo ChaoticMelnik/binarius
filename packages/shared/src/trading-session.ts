@@ -504,6 +504,14 @@ export const TradingSessionErrorCode = {
   SignalUnavailable: 'signal_unavailable',
   NotFound: 'not_found',
   SessionNotActive: 'session_not_active',
+  // an H1 session from the bot (#745): the start's fence on a marked account, after the pair's
+  // check and before the signal's read - the pair pays less than H1_MIN_PAYOUT_PCT, or the request's
+  // duration is not H1_EXPIRY_SEC
+  H1PayoutTooLow: 'h1_payout_too_low',
+  H1DurationUnsupported: 'h1_duration_unsupported',
+  // the string of TradingSessionDbErrorCode.AccountNotH1 (#707): createTradingSession found the H1
+  // mark removed under the account's lock
+  AccountNotH1: 'account_not_h1',
   // the session's stake against the account's snapshot (#297, checkStake)
   StakePrecision: StakeRefusal.Precision,
   StakeBelowMinimum: StakeRefusal.BelowMinimum,

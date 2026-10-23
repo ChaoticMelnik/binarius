@@ -2,7 +2,9 @@ import { GrammyError, HttpError } from 'grammy';
 import {
   editRefusal,
   errorLogFields,
+  isH1Settings,
   isTradingSessionFinished,
+  type BotKeyboard,
   type PairLabel,
   type TelegramHtml,
   type TradeAction,
@@ -17,6 +19,7 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
+import { h1SessionStopKeyboard } from './keyboards';
 import type { Logger } from './logging';
 import { runWithLanguage } from './language';
 import { sessionStatusText, TEXTS } from './texts';
@@ -42,13 +45,16 @@ const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 // balance for the same predicate (#337), so the two cannot drift.
 export const sessionTrackingDone = isTradingSessionFinished;
 
-// What the session message shows of its view: the text and the picture (the signal's direction;
-// null - a text message). The edit draws exactly this and the render key is made of all of it, so
-// nothing the edit draws can change unseen by the key (#568: equal overrides of the two signal
-// lines must not hide a turn of direction, which a text-only key did; session-tracker.test.ts Q1).
+// What the session message shows of its view: the text, the picture (the signal's direction;
+// null - a text message) and the keyboard. The edit draws exactly this and the render key is made
+// of all of it, so nothing the edit draws can change unseen by the key (#568: equal overrides of
+// the two signal lines must not hide a turn of direction, which a text-only key did;
+// session-tracker.test.ts Q1).
 export interface SessionDrawing {
   text: TelegramHtml;
   picture: TradeAction | null;
+  // the «⏹» of an active H1 session (#745); null for every other session and once it stopped
+  keyboard: BotKeyboard | null;
 }
 
 // the one derivation of the picture from a view
@@ -56,10 +62,21 @@ const sessionPicture = (
   view: Pick<TradingSessionView, 'signalAction'> | null,
 ): TradeAction | null => view?.signalAction ?? null;
 
+const sessionKeyboard = (view: TradingSessionView): BotKeyboard | null =>
+  view.status === TradingSessionStatus.Active &&
+  view.settings !== null &&
+  isH1Settings(view.settings)
+    ? h1SessionStopKeyboard(view.id)
+    : null;
+
 export const sessionDrawing = (
   label: PairLabel | null,
   view: TradingSessionView,
-): SessionDrawing => ({ text: sessionStatusText(label, view), picture: sessionPicture(view) });
+): SessionDrawing => ({
+  text: sessionStatusText(label, view),
+  picture: sessionPicture(view),
+  keyboard: sessionKeyboard(view),
+});
 
 // The one choice of the session message's kind (#568, docs/bot-session.md → The session message):
 // a drawing with a picture is drawn by editMessageMedia, which turns a text message into a photo
@@ -87,8 +104,8 @@ export interface SessionTrackRequest {
   // the first poll records messageId with the backend (#567) and reads the view from that answer;
   // false when the backend has it already (a recovered session)
   record: boolean;
-  // draws the drawing on the session message, without a keyboard (#536), or under the menu alone
-  // once the session is gone (#350)
+  // draws the drawing on the session message, with its keyboard (none but an active H1 session's
+  // «⏹», #536, #745), or under the menu alone once the session is gone (#350)
   edit: (drawing: SessionDrawing, end?: 'not_found') => Promise<unknown>;
   // sends the session's summary under the final status (#318, #537): called once, as the entry
   // ends on a done view whose final edit landed and whose notices the backend closed (#464); it
@@ -132,16 +149,20 @@ interface Entry extends SessionTrackRequest {
   editFailures: number;
 }
 
-// What the message shows of the view, and its key: the whole drawing, its text and its picture
-// (#536, #568), so the edit happens only when either changes - the session's stop, a pair's label,
-// an override of the catalog's texts (#570), a turn of the signal's direction - and never because
-// of a counter the message does not print. The picture holds no newline, so the key is unambiguous.
+// What the message shows of the view, and its key: the whole drawing, its text, its picture and
+// whether it has the «⏹» (#536, #568, #745), so the edit happens only when one changes - the
+// session's stop, a pair's label, an override of the catalog's texts (#570), a turn of the
+// signal's direction - and never because of a counter the message does not print. The picture and
+// the keyboard's marker hold no newline, so the key is unambiguous.
+export const sessionRenderKey = ({ text, picture, keyboard }: SessionDrawing): string =>
+  `${picture ?? ''}\n${keyboard === null ? '' : 'stop'}\n${text.value}`;
+
 const finalOf = (
   label: PairLabel | null,
   view: TradingSessionView,
 ): { key: string; drawing: SessionDrawing } => {
   const drawing = sessionDrawing(label, view);
-  return { key: `${drawing.picture ?? ''}\n${drawing.text.value}`, drawing };
+  return { key: sessionRenderKey(drawing), drawing };
 };
 
 // The summary waits for the done view's drawing on screen and the backend's closed notices (#464,
@@ -314,7 +335,11 @@ export function createSessionTracker({
         if (current(entry)) {
           await editTo(
             entry,
-            { text: TEXTS.sessionStatusUnavailable, picture: sessionPicture(entry.view) },
+            {
+              text: TEXTS.sessionStatusUnavailable,
+              picture: sessionPicture(entry.view),
+              keyboard: null,
+            },
             SESSION_NOT_FOUND,
             'not_found',
           );

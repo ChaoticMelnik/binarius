@@ -595,6 +595,17 @@ describe('tradingSessionRefusalSchema', () => {
     expect(safeParseTradingSessionRefusal({ error: 'validation' }).success).toBe(false);
   });
 
+  it('parses the H1 refusals of the start (#745); account_not_h1 is the db code', () => {
+    for (const error of [
+      TradingSessionErrorCode.H1PayoutTooLow,
+      TradingSessionErrorCode.H1DurationUnsupported,
+      TradingSessionErrorCode.AccountNotH1,
+    ]) {
+      expect(safeParseTradingSessionRefusal({ error }).success).toBe(true);
+    }
+    expect(TradingSessionErrorCode.AccountNotH1).toBe('account_not_h1');
+  });
+
   it('spells catalog_unavailable as the pairs route does', () => {
     expect(TradingSessionErrorCode.CatalogUnavailable).toBe(PairsCatalogErrorCode.Unavailable);
   });
