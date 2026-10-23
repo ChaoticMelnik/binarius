@@ -4272,3 +4272,121 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 1. Remaining findings — **вынесено в #737**
+
+---
+
+## #686 — Режим торговли: кнопка из стартового экрана в /settings, автопереход в реал при каждом депозите (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Night session 2026-10-22 21:26 – 01:06 MSK (session `133c8722`), first task; taken 21:29 MSK (6348218604), base `main`. No stand brought up, no external content. |
+| Architect | first plan | Fable 5.1. 8 clarify questions, all recommended (6348504191: the message «important» at any `notification_level`; a manual mode change closes waiting deposits `superseded`; `DEMO_ONLY` → `demo_only`; message on the user's language; the mode button in `/settings`; `revoked` → `account_inactive`). Plan 6348742962, ≈2 200 lines with a fallback split line; deviation from В5 named in the plan: the button is paired with «🏠 В меню», because the `lone_button` gate (`botKeyboardProblems`, `packages/shared/src/testing.ts`) refuses a lone non-forward button. |
+| Architect | Plan Update round 0 (defect) | Opus, fresh spawn. Implementer's В1: `onSwitched: () => mailing.planTick()` cannot keep the plan's «≤ ~10 с» — `planTick()` is single-flight (`apps/backend/src/mailing/engine.ts:245-252`), a call during a running pass returns that pass, which may have planned before the switch committed → next pass after `MAILING_PLAN_TICK_MS` (60 с). Fixed with `wakePlan()` (one extra pass after the running one, like the orchestrator's `wake()`, #696); «новых развилок нет» (6348885005). |
+| Implementer | first pass | Opus. 2 clarify items (6348780406: В1 → architect; В2 the `/settings` row pair accepted by the manager). PR #746, 4 commits by plan step, 2 565 added lines without the 0075/0076 snapshots (2 000–3 000 band — one PR, standing answer), migrations 0075/0076; per-commit check (commits 2 and 4 reworked before push after a red per-commit run, no red commit on the remote); `pnpm check` 0 at `2f5c3710`; mutations 15/15 red in one call (6349568079); RU/EN texts of the new keys in a separate comment for the owner (6349568622). Phase 3 audit 6349591316, no deviation beyond the accepted В5 pairing. |
+| Reviewer | round 1 | 0 / 0 / 4 (review on `2f5c3710`); 3b, 3c, 3d all run (money/real-mode switch, schema, migrations; > 300 code lines); mutation header and list hash checked. Ready-to-merge 6349722763 with the manager skip line. Manager decision 6349737092: no Minor fixed before the merge; m4 — the switch stays live behind `POSTBACK_URL_SECRET` before #142, docs to be corrected in the follow-up. |
+| Tech Lead | merge | Base of the stack #746 → #747 → #749. The owner said «Мержи»; each merge got its own `AskUserQuestion` — the first answer for #746 was «Нет» (the owner's misclick), asked again: «Мержи все». #747 retargeted to `main` first, then #746 merged `--rebase` without `--delete-branch` 2026-10-23T04:43:28Z at `2f5c3710` (no rebase needed: #748, merged 23 s earlier, shares no file); the branch deleted after #747's retarget; #686 Done. Shared test DB: `db:migrate` applied 0075/0076. m1–m4 → #750. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; Plan Update, implementer, reviewer, 3b, 3c `claude-opus-5-5`; 3d `claude-sonnet-5-5`). No Codex — PR of a `/manager` session (decision 2026-10-15), not a deviation. |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan woke the mailing planner with single-flight `planTick()`: a pass already running when the switch commits does not see the `switched` row, the «≤ ~10 с» promise breaks (up to 60 с) | — (caught before code) | instance-vs-class | the «step runs sooner» checklist item (architect Validation checklist, #696) was applied to a pass that starts after the call, not to one already in flight | Architect (caught by implementer at clarify) |
+| Architect did not follow manager decision В5 (button on its own row): the `lone_button` gate refuses it, so the button is paired with «🏠 В меню» | — (accepted by the manager, 6348780406 В2) | other | the decision was offered without checking the keyboard gate; the plan named the deviation instead of silently changing it | Architect (Step 5 options) |
+| m1 (the pass's queue can stall newer deposits behind waiting/held rows), m2 (`replansCanceled` can bring back a stale message of an earlier switch), m3 (in-transaction CAS-miss rollback untested), m4 (`docs/postbacks.md:277-278` says #142 guards the switch, today only `POSTBACK_URL_SECRET` does) | Minor | other / single-source | left at the merge (manager decision, owner did not change it) | → #750 |
+
+### Process improvement proposals
+1. Remaining findings — **вынесено в #750**
+
+---
+
+## #660 — Отправитель сообщений сессии: темп на чат, hold-back зависших сессий, MATERIALIZED CTE списка (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session; taken 22:45 MSK (6349761376). Stacked on #686's branch (PR #746: shared `apps/backend/src/timing.ts` and `.claude/skills/architect/SKILL.md`). |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended (6350111359: the gap per chat counts sends and edits; 429 keeps the sender-wide pause; the list as one aggregate subquery — EXPLAIN probe on PostgreSQL 18.6 showed the `MATERIALIZED` form evaluates every subquery per candidate before `Limit`; hold-back `SESSION_NOTICE_HOLD_MS` 60 000 on any throw). Plan 6350243719 against `feat/686-real-mode-on-deposit` @ `2f5c3710`. |
+| Architect | Plan Update round 0 (defect) | Opus, fresh spawn (6350382603). Implementer's В-И1: M10/M11 expected L1, which calls the list directly and cannot see a mutation of the sender's call. Checking every row found more of the class: no mutation of the lists' own `exclude` condition (M16/M17 added, L1 split into L1a/L1b), M15 (a link of `TIMING_CHAIN_HOLDS`, checked at import) is a `load-error`, five more call sites in `session-notice-ops.db.test.ts` needed `exclude: []`, two `old` texts not unique. Mutation table replaced whole; «новых развилок нет». |
+| Implementer | first pass | Opus. 3 clarify items (6350291341: В-И1 → architect; В-И2 the backlog of one chat drains one step per 3 s tick, 28 trades ≈ 84 с, accepted and written into risk 28; В-И3 three commits). PR #747 `--base feat/686-real-mode-on-deposit`, «Merge after #746», 3 commits, +637 / −87; per-commit check 3/3; `pnpm check` 0 at `370548df`; mutations 17/17 red (6350663980) — `expect` of nine rows widened after a first run with `red+extra` rows (tests of the same class, as the Plan Update allows), the table re-taken whole. Phase 3 audit 6350684972: Minor (to check) the widened `expect` lists; `closingIssuesReferences` empty until the retarget. |
+| Reviewer | round 1 | 0 / 0 / 2 (review on `370548d`); 3c only (no security surface; ≈ 120 code lines); the widened `expect` tests confirmed to be of the same class. Ready-to-merge 6350801053 with the manager skip line. Manager decision 6350811278: no Minor fixed before the merge. |
+| Tech Lead | merge | Retargeted to `main` after #746; rebase-only implementer spawn (`scratchpad/rebase-747/`): range-diff identical, new head `0d85f3f7`; mutations 17/17 re-taken on it (6357659849). First CI run red on K9 in `apps/backend/src/deposit/credited.db.test.ts` (outside the diff: a 300 ms push window by wall clock), re-run green. Merge question asked again at the new head; merged `--rebase --delete-branch` 2026-10-23T05:02:05Z; `Closes #660` linked after the retarget; #660 Done. No migration of its own. Minor 1–2 → #752, K9 → #753. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; Plan Update, implementer, reviewer, 3c, rebase spawn `claude-opus-5-5`). No Codex (manager PR). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Mutation list: M10/M11 expected a test that never runs the mutated call; the lists' `exclude` condition had no mutation; M15 a `load-error`; non-unique `old`; missed call sites | — (caught before code) | unverified-claim | the plan named an expected test per mutation without checking that it executes the mutated line — same class as #675 and #683 the same night | Architect (caught by implementer; proposal 1 of #675) |
+| `red+extra` on the first run: nine `expect` lists named too few tests | — (re-taken, confirmed by the reviewer) | unverified-claim | expected tests listed by intent, not by what the mutation reddens by construction | Architect (Plan Update) |
+| K9 in `deposit/credited.db.test.ts` red on CI after the rebase, outside the diff | — (ops, re-run green) | env-parity | a 300 ms window by wall clock on a slower runner | → #753 |
+| Minor 1 («the deferred step runs on the next tick» in `timing.ts`/docs/Rule 10 is stronger than the code), Minor 2 (G6 cannot turn red) | Minor | unverified-claim | left at the merge | → #752 |
+
+### Process improvement proposals
+1. Mutation list rows checked for a test that executes the mutated text — **внедрено в #PRN: `.claude/skills/architect/SKILL.md` → Validation checklist** (proposal 1 of #675)
+2. Flaky K9 — **вынесено в #753**; remaining findings — **вынесено в #752**
+
+---
+
+## #683 — Кольцо свечей: тик из будущего (до 60 с) сдвигает общий watermark и закрывает корзины всех пар (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session; taken 23:40 MSK (6350825303), base `main` (no file shared with open #746/#747). |
+| Architect | first plan | Fable 5.1. 3 clarify questions, all recommended (6350991988: the ring's bound is `skewMarginMs` (`MARKET_DATA_SKEW_MARGIN_MS`, 2 000 мс), counter `ahead`, the tick opens no pair; branch from `main`, the Rule 41/44 wording left to this docs PR (В2); `ticks.ts` → `last()` untouched). Defect reproduced by a probe on `main` `5fc08a2f` (a tick +59 с closed every pair's buckets). Plan 6351118445, ≈105 lines. CodeGraph returned 6 of the 12 files of `apps/backend/src/market-data/` (no `seconds.ts`, `ticks.ts`, `backfill.ts`) plus copies from `.claude/worktrees/`; the rest was read with Read/grep, named in the plan. |
+| Implementer | first pass | Opus. 1 clarify question, recommended (6351147045: only the `ahead` counter, no separate warn). PR #748, 2 commits (code, docs), +116 / −15; per-commit check; `pnpm check` 0 at `3ef52130`; mutations 5/5 red (6351257501). Plan mutation M3 (the check moved after `pairOf`) stayed green and was left out of the list by the implementer alone, named in the PR Deviations, not returned to the architect. Phase 3 audit 6351271738: that as Minor (to check); `prettier --write` on the existing `ring.test.ts` touched only new lines. |
+| Reviewer | round 1 | 0 / 0 / 2 (review on `3ef52130`); 3c only (no security surface, ≈ 15 code lines). M3 confirmed equivalent: under it a future tick of an unknown pair creates a `PairState` without builders that no reader can observe — no test missing. Ready-to-merge 6351373260 with the manager skip line. Manager decision 6351380721: no Minor fixed before the merge. |
+| Tech Lead | merge | No rebase needed (`3ef52130` from `main`, no file shared with the stack). Merged `--rebase --delete-branch` 2026-10-23T04:43:05Z on its own question; #683 Done. No migration. m1–m2 and the Rule 41/44 text → #751; the Rule 41/44 text is carried into this docs PR from the plan's section «Для docs-PR аудита Phase 5». |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; implementer, reviewer, 3c `claude-opus-5-5`). No Codex (manager PR). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan mutation M3 is an equivalent mutant (the check's order against `pairOf` is unobservable) | — (confirmed by the reviewer) | unverified-claim | the plan's per-mutation reasoning («M3 opens pair AAPL in R10c») was not run against the planned code — same class as #660 and #675 | Architect (proposal 1 of #675) |
+| Implementer dropped M3 from the evidence itself instead of returning a plan defect, against the standing answer «все мутации из плана» | Minor (process) | other | implementer Step 5 had no rule for a plan mutation that cannot turn red; #660 and #675 the same night returned theirs | Implementer (Step 5) |
+| CodeGraph index: 393 files from `.claude/worktrees/` indexed, main-checkout files missing (6 of 12 in `market-data/`) | — (ops) | env-parity | the index walks the worktrees under `.claude/` and is incomplete for the main checkout | → #755 |
+| Rule 41/44 in `architect/SKILL.md` still said the ring takes a tick ahead of its receipt between the merge and this docs PR | — (planned, decision В2) | single-source | the PR kept off files of open #746/#747 | this docs PR |
+| m1 (`docs/h1.md` accepted risk 8 worded stronger than the code), m2 (the value of the `ahead` field in the `market data` line is untested) | Minor | single-source / unverified-claim | left at the merge | → #751 |
+
+### Process improvement proposals
+1. The implementer never drops a plan mutation; one that cannot turn red is a plan defect to the spawner — **внедрено в #PRN: `.claude/skills/implementer/SKILL.md` → Step 5 (mutation evidence)**
+2. Rule 41/44 wording from the plan's section «Для docs-PR аудита Phase 5» — **внедрено в #PRN: `.claude/skills/architect/SKILL.md` → Architecture Rules → 41, 44**
+3. Exclude `.claude/worktrees/` from the CodeGraph index and check its completeness — **вынесено в #755**
+4. Remaining findings — **вынесено в #751**
+
+---
+
+## #675 — broker_trades.payout: выплата сделки брокера вне диапазона откатывает запись принятой сделки (2026-10-23)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | Same session, last task; taken 00:10 MSK (6351395375). Stacked on #747's branch (`feat/660-session-notice-chat-gap` @ `370548df`, migration 0077 after 0075/0076), depth 3 — the maximum. #158 was skipped: it would be depth 4 and shares `packages/db/src/schema/columns.ts` with this PR. |
+| Architect | first plan | Fable 5.1. 5 clarify questions, all recommended (6351709727: an out-of-range `payout` stored NULL — migration 0077 `DROP NOT NULL`, one guard `payoutInColumn`; price CHECKs widened to «finite»; `potential_profit` NULL outside `MONEY_SHAPE`; timestamps `> 0` and `profit` overflow as accepted risks). Probes on PostgreSQL 18.6 and zod 4. Plan 6351827104, ≈420 lines without the snapshot, Rule 50. |
+| Architect | Plan Update 1 (defect) | Opus, fresh spawn (6351952097). Implementer's В1: mutation 3 (drop `Number.isFinite` in `payoutInColumn`) is equivalent — the range conjuncts already refuse NaN and ±Infinity. The update dropped it, found two more equivalent spots in 0077 and a missing `close_price` −Infinity row, and moved the CHECK proofs to 0077 mutations M13–M18. The comment's byline said «Fable 5.1»; the transcript shows `claude-opus-5-5` — manager correction 6351963412. |
+| Architect | Plan Update 2 (defect) | Same Opus agent continued (6352161166). Implementer's run on `98a55660` (manager relay 6352147484): Plan Update 1 claimed 0077 edits reach `schema.db.test.ts` through `createTempDatabase`; that file runs on the shared, already migrated `TEST_DATABASE_URL`, so M16/M18 stayed green and M13/M14/M15/M17 were red-partial. Every 0077 mutation now expects only `trade-intent-ops.db.test.ts` (temp DB from the migration files), D11/D12 added; a loop over the base's `*.db.test.ts` files listed which file builds its own DB. |
+| Implementer | first pass | Opus, one agent through both Plan Updates. 1 clarify question + 1 defect relay (6351862006, 6352147484); no mutation dropped by the implementer. PR #749 `--base feat/660-session-notice-chat-gap`, «Merge after #747», 3 commits, ≈ 318 added lines without `0077_snapshot.json`; per-commit check on a DB migrated by each commit's own migrations; `pnpm check` 0 at `22b59ad1`; mutations 18/18 red (6352234913). Phase 3 audit 6352251981. Plan's «nothing computes on a price» weakened to «no decision rests on a price» (`session-card.ts`/`session-promo.ts` scale prices into a chart), named in the PR. |
+| Reviewer | round 1 | 0 / 0 / 1 (review on `22b59ad`); 3b + 3c (migration 0077, money CHECKs), 3d skipped (≈ 95 code lines). Ready-to-merge 6352324657 with the manager skip line. Manager decision 6352330911: Minor not fixed before the merge. |
+| Tech Lead | merge | Retargeted to `main` after #747; rebase-only implementer spawn (`scratchpad/rebase-749/`): range-diff identical, new head `826679c2`, migration chain 0076 → 0077 checked; mutations 18/18 re-taken (6357886187); CI green. Merge question asked again at the new head; merged `--rebase --delete-branch` 2026-10-23T05:16:32Z; #675 Done. Shared test DB: `db:migrate` applied 0077, 78/78 hashes = `main`. Minor → #754. |
+| Tech Lead | models | Every spawn on its policy model (architect `claude-fable-5-1`; both Plan Updates one `claude-opus-5-5` agent; implementer, reviewer, 3b, 3c, rebase spawn `claude-opus-5-5`). No Codex (manager PR). |
+
+### Review iterations: 1 (no Blocker/Major)
+
+### Findings
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Mutation 3 of the plan was an equivalent mutant (`Number.isFinite` beside range conjuncts that already refuse NaN/±Infinity) | — (caught before the PR) | unverified-claim | the planned predicate was evaluated per row, but not per conjunct removal for every input class | Architect (caught by implementer) |
+| Plan Update 1 expected 0077 text mutations in `schema.db.test.ts`, which runs on the shared, already migrated DB and never executes 0077 | — (caught before the PR) | unverified-claim | «reaches the test» was asserted from `createTempDatabase` existing, not checked per test file | Architect Plan Update 1 (caught by implementer's run; the manager verified it) |
+| Three plans of one night (#660, #675, #683) had mutation-evidence defects of one class: an expected test that does not execute the mutated line/text, or an equivalent mutant | — (process) | instance-vs-class | the Validation checklist item (#199, #637) covers «a mutation that cannot reach its assertion» but names no per-row check of the executing test file, no migration/shared-DB case and no equivalent-conjunct check | Architect (Validation checklist) |
+| Plan Update 1 byline «Fable 5.1» while the agent ran `claude-opus-5-5` | — (corrected by the manager) | unverified-claim | the byline was not taken from the model the agent ran on | Architect Plan Update 1 |
+| Minor 1: docs and Rule 50 say the session chart takes any finite value; `span` can overflow to Infinity (the render failure is caught) | Minor | unverified-claim | left at the merge | → #754 |
+
+### Process improvement proposals
+1. Architect Validation checklist: for each mutation, name the test that executes the mutated line/text and observes its effect (a migration-text mutation only through a test file that builds its DB from the migration files, `createTempDatabase`; not `schema.db.test.ts` on the shared DB), and check multi-conjunct guards for equivalent mutants before posting — **внедрено в #PRN: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. Remaining findings — **вынесено в #754**
