@@ -49,7 +49,7 @@ import {
 
 // the compose probe timeout (3s) is sized above this ceiling
 const MIN_HEALTH_TIMEOUT_MS = 500;
-const MAX_HEALTH_TIMEOUT_MS = 2500;
+export const MAX_HEALTH_TIMEOUT_MS = 2500;
 
 // AES-256-GCM: the cipher refuses anything else, and a short key would fail at the first login
 const TOKEN_ENCRYPTION_KEY_BYTES = 32;

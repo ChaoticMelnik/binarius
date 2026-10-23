@@ -49,6 +49,7 @@ import {
   SESSION_NOTICE_SCAN,
   SESSION_NOTICE_SEND_PER_SECOND,
   SESSION_NOTICE_TICK_MS,
+  SESSION_NOTICE_WAKE_GAP_MS,
 } from '../timing';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import {
@@ -91,6 +92,11 @@ import { readFinishedSessionView } from './session-view';
 // the other, and a delete neither waits for the gap nor marks the chat. A turn that threw holds its
 // session out of both lists for a while (#660), so a row that throws every tick cannot hold the
 // head of the list; both maps are in memory, and a restart tries at once.
+// A trade opened or settled wakes the sender (#723): transitionIntent notifies on the commit, the
+// listener (session-notice-listener.ts) calls wake(), and the woken tick is the same tick as the
+// interval's - the interval stays as the safety net for a lost notification. Woken ticks start at
+// least wakeGapMs apart, so a storm of notifications costs at most a few ticks a second; a step
+// skipped because its chat was cooling wakes the sender again at the end of that chat's gap.
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -103,6 +109,8 @@ export interface SessionNoticeConfig {
   chatGapMs: number;
   // how long a session whose turn threw is left out of the lists (#660)
   holdMs: number;
+  // the least time between the starts of a tick and a woken tick after it (#723)
+  wakeGapMs: number;
 }
 
 const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
@@ -113,6 +121,7 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
   summaryFallbackMs: SESSION_SUMMARY_FALLBACK_MS,
   chatGapMs: SESSION_NOTICE_CHAT_GAP_MS,
   holdMs: SESSION_NOTICE_HOLD_MS,
+  wakeGapMs: SESSION_NOTICE_WAKE_GAP_MS,
 };
 
 export interface SessionNoticeSenderDeps {
@@ -136,6 +145,9 @@ export interface SessionNoticeSenderDeps {
 
 export interface SessionNoticeSender {
   tick(): Promise<void>;
+  // a tick now, or right after the one in flight, no sooner than wakeGapMs after the last tick's
+  // start; calls before that tick merge into it, and after stop() it does nothing (#723)
+  wake(): void;
   start(): void;
   // Ends the loop and waits for the tick in flight: no claim and no fallback summary's balance read
   // starts after it; the call in flight completes or times out (timing.ts).
@@ -198,10 +210,24 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // until when each chat is cooling, by telegramUserId, and each held session, by its id (#660)
   const chatNextAt = new Map<string, number>();
   const heldUntil = new Map<string, number>();
+  // the wake (#723): wake() calls no tick has served yet, when the last tick started, the floor's
+  // timer, and the timer for the earliest end of a gap this tick's skipped chats wait for
+  let wakes = 0;
+  let lastTickAt = -Infinity;
+  let wakeTimer: NodeJS.Timeout | undefined;
+  let wakeAt = Infinity;
+  let coolingTimer: NodeJS.Timeout | undefined;
+  let coolingAt = Infinity;
+  let lastCoolingFiredAt = -Infinity;
+  let coolingUntil: number | undefined;
 
   const chatOf = (telegramUserId: bigint) => String(telegramUserId);
-  const cooling = (telegramUserId: bigint) =>
-    now() < (chatNextAt.get(chatOf(telegramUserId)) ?? -Infinity);
+  const cooling = (telegramUserId: bigint) => {
+    const until = chatNextAt.get(chatOf(telegramUserId)) ?? -Infinity;
+    if (now() >= until) return false;
+    coolingUntil = Math.min(coolingUntil ?? Infinity, until);
+    return true;
+  };
   // after every send or edit to the chat, delivered or not
   const messaged = (telegramUserId: bigint) => {
     chatNextAt.set(chatOf(telegramUserId), now() + config.chatGapMs);
@@ -779,7 +805,15 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   }
 
   async function runTick(): Promise<void> {
-    if (now() < pausedUntil) return;
+    // before the first await and before the pause: a wake() after this line is the next tick's
+    lastTickAt = now();
+    const woken = wakes;
+    wakes = 0;
+    coolingUntil = undefined;
+    if (now() < pausedUntil) {
+      logger.debug({ woken, paused: true }, 'session notice tick');
+      return;
+    }
     prune(chatNextAt);
     prune(heldUntil);
     const exclude = [...heldUntil.keys()];
@@ -823,6 +857,54 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       }
       if (step === 'pause') return;
     }
+    logger.debug(
+      { pending: pending.length, fallback: fallback.length, woken },
+      'session notice tick',
+    );
+  }
+
+  // a woken tick at `at`, or sooner when one is already armed for sooner
+  function armWake(at: number) {
+    if (stopped) return;
+    if (at <= now()) {
+      clearTimeout(wakeTimer);
+      wakeTimer = undefined;
+      void tick();
+      return;
+    }
+    if (wakeTimer !== undefined && wakeAt <= at) return;
+    clearTimeout(wakeTimer);
+    wakeAt = at;
+    wakeTimer = setTimeout(
+      () => {
+        wakeTimer = undefined;
+        void tick();
+      },
+      Math.max(0, Math.ceil(at - now())),
+    );
+  }
+
+  // a wake at the end of a skipped chat's gap; an end at or before the last firing is not armed
+  // again, so a timer that fired early cannot loop - the interval's tick serves it
+  function armCooling(at: number) {
+    if (stopped || at <= lastCoolingFiredAt) return;
+    if (coolingTimer !== undefined && coolingAt <= at) return;
+    clearTimeout(coolingTimer);
+    coolingAt = at;
+    coolingTimer = setTimeout(
+      () => {
+        coolingTimer = undefined;
+        lastCoolingFiredAt = now();
+        wake();
+      },
+      Math.max(0, Math.ceil(at - now())),
+    );
+  }
+
+  function wake() {
+    if (stopped) return;
+    wakes += 1;
+    if (ticking === undefined) armWake(lastTickAt + config.wakeGapMs);
   }
 
   // a tick longer than its interval makes the next one a no-op
@@ -832,12 +914,15 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       .catch((error: unknown) => logger.error(errorLogFields(error), 'session notice tick failed'))
       .finally(() => {
         ticking = undefined;
+        if (coolingUntil !== undefined) armCooling(coolingUntil);
+        if (wakes > 0) armWake(lastTickAt + config.wakeGapMs);
       });
     return ticking;
   }
 
   return {
     tick,
+    wake,
     start() {
       if (stopped || timer !== undefined) return;
       timer = setInterval(() => void tick(), config.tickMs);
@@ -846,6 +931,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       stopped = true;
       clearInterval(timer);
       timer = undefined;
+      clearTimeout(wakeTimer);
+      wakeTimer = undefined;
+      clearTimeout(coolingTimer);
+      coolingTimer = undefined;
       await ticking;
     },
   };

@@ -154,6 +154,22 @@ export const SESSION_NOTICE_CHAT_GAP_MS = 1_000;
 // a session whose turn threw is left out of the sender's lists this long (#660), in memory, so a
 // row that throws every tick cannot hold the head of the list
 export const SESSION_NOTICE_HOLD_MS = 60_000;
+// The wake (#723): a trade opened or settled wakes the sender through Postgres NOTIFY. The
+// listener's pause before it connects again after a refusal or a lost connection - a notification
+// sent meanwhile is lost, and the tick serves it
+export const SESSION_NOTICE_LISTEN_RETRY_MS = 1_000;
+// the least time between the start of a tick and a woken tick after it, so a storm of
+// notifications (two a trade) runs at most a few ticks a second, each two list reads
+export const SESSION_NOTICE_WAKE_GAP_MS = 250;
+// The wake's links of the chain (#723), a function so a test can show which value breaks them: a
+// lost LISTEN connection costs no more than one tick of wakes (the tick is the safety net), and the
+// end of a chat's gap is served with a delay below the gap - and so below the tick, since the gap
+// per chat is no longer than the tick (#660, below).
+export const sessionNoticeWakeBoundsHold = ({
+  listenRetryMs = SESSION_NOTICE_LISTEN_RETRY_MS,
+  wakeGapMs = SESSION_NOTICE_WAKE_GAP_MS,
+}: { listenRetryMs?: number; wakeGapMs?: number } = {}): boolean =>
+  listenRetryMs <= SESSION_NOTICE_TICK_MS && wakeGapMs < SESSION_NOTICE_CHAT_GAP_MS;
 
 // --- The Stars reconciler (#117) --------------------------------------------------------------
 // docs/stars.md → Reconciliation. Long polling confirms an update's offset even when its handler
@@ -500,6 +516,7 @@ const TIMING_CHAIN_HOLDS =
   1000 / SESSION_NOTICE_SEND_PER_SECOND < SESSION_NOTICE_CHAT_GAP_MS &&
   SESSION_NOTICE_CHAT_GAP_MS <= SESSION_NOTICE_TICK_MS &&
   SESSION_NOTICE_TICK_MS < SESSION_NOTICE_HOLD_MS &&
+  sessionNoticeWakeBoundsHold() &&
   1000 / SESSION_NOTICE_SEND_PER_SECOND +
     TRADING_ACCESS_REFRESH_BUDGET_MS +
     CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <

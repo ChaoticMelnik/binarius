@@ -90,7 +90,10 @@ import {
   SESSION_NOTICE_CHAT_GAP_MS,
   SESSION_NOTICE_HOLD_MS,
   SESSION_NOTICE_SEND_PER_SECOND,
+  SESSION_NOTICE_LISTEN_RETRY_MS,
   SESSION_NOTICE_TICK_MS,
+  SESSION_NOTICE_WAKE_GAP_MS,
+  sessionNoticeWakeBoundsHold,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
@@ -146,6 +149,7 @@ import {
   TRADE_TICKS_SCAN_LIMIT,
   TRADE_TICKS_SCAN_MS,
 } from './timing';
+import { MAX_HEALTH_TIMEOUT_MS } from './env';
 
 const composeYaml = readFileSync(
   fileURLToPath(new URL('../../../compose.yaml', import.meta.url)),
@@ -600,6 +604,28 @@ describe('broker balance timing', () => {
     expect(1000 / SESSION_NOTICE_SEND_PER_SECOND).toBeLessThan(SESSION_NOTICE_CHAT_GAP_MS);
     expect(SESSION_NOTICE_CHAT_GAP_MS).toBeLessThanOrEqual(SESSION_NOTICE_TICK_MS);
     expect(SESSION_NOTICE_TICK_MS).toBeLessThan(SESSION_NOTICE_HOLD_MS);
+  });
+
+  it('pins the wake of the session notice sender: the listen retry and the floor between woken ticks (#723)', () => {
+    expect(SESSION_NOTICE_LISTEN_RETRY_MS).toBe(1_000);
+    expect(SESSION_NOTICE_WAKE_GAP_MS).toBe(250);
+    expect(sessionNoticeWakeBoundsHold()).toBe(true);
+  });
+
+  it('breaks the wake chain with a listen retry longer than the sender tick (#723)', () => {
+    expect(sessionNoticeWakeBoundsHold({ listenRetryMs: SESSION_NOTICE_TICK_MS })).toBe(true);
+    expect(sessionNoticeWakeBoundsHold({ listenRetryMs: SESSION_NOTICE_TICK_MS + 1 })).toBe(false);
+  });
+
+  it('breaks the wake chain with a floor between woken ticks not below the chat gap (#723)', () => {
+    expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS - 1 })).toBe(true);
+    expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS })).toBe(false);
+  });
+
+  // the listener's stop() waits for a pool.connect() in flight, bounded by the pool's
+  // connectionTimeoutMillis (the health timeout - 200, index.ts) (#723)
+  it('ends the session notice listener stop inside phase 1 (#723)', () => {
+    expect(MAX_HEALTH_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   // the step's worst path ends with the next trade's pace; a summary does not start after stop()
