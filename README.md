@@ -130,6 +130,8 @@ so building the worker rebuilds the migrations too.
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
+The backend keeps one client of its pool (`pg`'s default 10) for its whole run, `LISTEN`ing for
+the session notice wake (#723, [docs/bot-session.md](docs/bot-session.md#rate-and-timing)).
 `DATABASE_URL` names the dev stack's Postgres for the host-side commands: `pnpm db:migrate` is the
 package's own runner (`packages/db/src/cli/migrate.ts`: drizzle's migrator and its
 `drizzle.__drizzle_migrations` table, under an advisory lock so two runs never collide, one retry

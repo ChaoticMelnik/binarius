@@ -1,4 +1,4 @@
-# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700, #718)
+# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700, #718, #723)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never without one, and without one it waits for it, #664); a finished single trade's message
@@ -130,6 +130,12 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   final mark, the fallback text summary (#537) and the waiting message (#536: `sessionWaitingMessage`, and `sendSessionWaiting` /
   `deleteSessionWaiting` of `apps/backend/src/auth/client-push.ts`) ([Trade messages and the
   summary](#trade-messages-and-the-summary-464)).
+- `apps/backend/src/trading/session-notice-listener.ts` (#723) — `createSessionNoticeListener({
+  pool, channel, onNotification, logger, retryMs? })` → `{ start, stop }`: one client of the
+  backend's pool `LISTEN`s on `SESSION_NOTICE_CHANNEL` (`session_notices`,
+  `packages/db/src/schema/trading-sessions.ts`) and calls the sender's `wake()`; `transitionIntent`
+  (`packages/db/src/trade-intent-ops.ts`) notifies the channel when a session's intent becomes
+  `accepted` or `settled` ([Rate and timing → The wake](#rate-and-timing)).
 - `apps/bot/src/send.ts` — `NO_NEXT_STEP_REASONS.SessionStatus` (`session_status`, #536): the
   session message goes by `replyWithPhotoHtmlWithoutNextStep` (#568), or by
   `replyHtmlWithoutNextStep` without a direction or after a refused photo, and the tracker edits it
@@ -952,10 +958,13 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
 - **Without a trade** no summary is sent — except for a `no_signal_timeout` stop (#509): the user
   learns why the session stood, with sound, from the pair line and the stop line, now from the bot,
   as a text (#537).
-- **When.** Each trade's open block when it opens and its result when it settles, each within
-  `SESSION_NOTICE_TICK_MS` (3 s) plus the pacing (a wake-up is #723), so a trade costs two calls
-  to its chat; the final mark on the tick after the last of them; the bot's summary on its tracker's next poll
-  (≤ 10 s).
+- **When.** Each trade's open block when it opens and its result when it settles, each on the
+  sender's wake (#723): within about half a second of the commit — the floor between woken ticks
+  (≤ 250 ms) plus the pacing — or, when the chat got a message less than
+  `SESSION_NOTICE_CHAT_GAP_MS` ago, at the end of that gap; the tick every `SESSION_NOTICE_TICK_MS`
+  (3 s) is the safety net for a lost wake. A trade costs two calls to its chat; the final mark on
+  the tick after the last of them (the last settle wakes it); the bot's summary on its tracker's
+  next poll (≤ 10 s).
 - **An H1 session (#707)** ([h1.md → The driver](h1.md#the-driver-707)): no message per trade.
   One summary of the session (`sessionH1Progress`, `sessionH1ProgressMessage`) goes when
   `H1_NOTICE_EVERY_TRADES` (10) trades are settled, and the same message is edited every 10 more
@@ -1087,7 +1096,7 @@ message.
 | the record refused (the cursor moved: another sender) | the other sender's record stands | a new message: at most repeated blocks, never a lost step; an edit: two senders' edits of one cycle message can land out of order and show the older step until the next step's edit ([risk 35](#accepted-risks); one sender in production) |
 | the message cannot be built (a bug) | a trade stays claimed; the fallback summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the fallback summary: the step is closed (`session summary not built`), the row leaves the list |
 | a statement or the fallback summary's balance refresh throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error` with `holdMs`; the session is held out of both lists for `SESSION_NOTICE_HOLD_MS` (60 s, in memory, #660), then tried again; a restart tries it at once ([risk 84](#accepted-risks)) |
-| the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, an H1 summary, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick) |
+| the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, an H1 summary, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick), or sooner: the tick arms a timer that wakes the sender at the end of the earliest such gap (#723) |
 | `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a final mark or a fallback summary does not start (no balance read) and goes after the next start |
 
 Every ending after a claim moves the cursor, so no sent trade holds a session's place. A cooling
@@ -1124,6 +1133,30 @@ a 429 adds one photo) ([risk
 so its edits pause on a 429 for its `retry_after`
 ([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)).
 
+**The wake** (#723, the owner's decision 2026-10-21). `transitionIntent` runs
+`select pg_notify('session_notices', <session id>)` in the writer's transaction when an intent of a
+session becomes `accepted` or `settled`; Postgres delivers it on the commit and never on a
+rollback, and merges equal notifications of one transaction (an accept and a settle of one
+reconciliation give one). Every writer goes through it: the processor's accept, the socket's and
+the catch-up's settle, the reconciliation, the operator's CLI. Other transitions (`rejected`,
+`manual_review`) and a session's stop do not wake: the tick serves them. The backend's listener
+holds one client of the pool for the whole run (the pool's default 10 leave 9 to the routes and
+the loops) and calls `wake()`; the payload is not read — a wake runs the same tick as the
+interval's, the same lists and steps ([risk 106](#accepted-risks)). `wake()`: a tick now, or one
+more right after the tick in flight, never sooner than `SESSION_NOTICE_WAKE_GAP_MS` (250 ms) after
+the start of the last tick; calls before that tick merge into it (`woken` in its `debug` line).
+A step skipped because its chat was cooling arms one timer for the earliest end of those gaps,
+which wakes the sender then; a 429's pause makes a woken tick empty. A lost connection is
+logged and listened again after `SESSION_NOTICE_LISTEN_RETRY_MS` (1 000 ms); a notification sent
+meanwhile, or while the backend restarts, is lost and the tick serves it. The links of the chain
+are `sessionNoticeWakeBoundsHold` (`timing.ts`, in `TIMING_CHAIN_HOLDS`): the retry no longer
+than the tick, the floor below the gap per chat (and so below the tick); `timing.test.ts` TW1–TW3
+pin them. `stop()` of the listener goes in phase 1 before the sender's and waits for a connect in
+flight, bounded by the pool's `connectionTimeoutMillis` (`MAX_HEALTH_TIMEOUT_MS` − 200 < 10 000).
+Tests: `trade-intent-ops.db.test.ts` N1–N6, `session-notice-listener.db.test.ts` L1–L5,
+`session-notices.db.test.ts` K1–K8b, `demo-cycle.db.test.ts` S6; the wiring in `index.ts` is
+stated, the e2e harness builds the same.
+
 **The gap per chat** (#660): Telegram asks for no more than about one message a second to one chat
 (Bot API FAQ; stated, not measured). One chat gets at most one step of the sender within
 `SESSION_NOTICE_CHAT_GAP_MS` (1 000 ms): every send or edit — a trade's message, an H1 summary, the
@@ -1134,8 +1167,8 @@ waiting message's delete and the new message; a delete and the new message of a 
 message and the delete of one whose record was refused). A delete neither waits for the gap nor
 marks the chat ([risk 99](#accepted-risks)). The gap is a skip, never a sleep: `stop()` waits for
 no more than above, and `1000 / 9 < SESSION_NOTICE_CHAT_GAP_MS <= SESSION_NOTICE_TICK_MS`
-(`TIMING_CHAIN_HOLDS`), so a deferred step goes on the next tick: one chat's backlog goes one step a
-tick ([risk 28](#accepted-risks)). Different chats are not held by each other. A 429 still pauses
+(`TIMING_CHAIN_HOLDS`), so a deferred step goes on the next tick at the latest, and since #723 on
+the wake at the end of its gap: one chat's backlog goes one step a gap ([risk 28](#accepted-risks)). Different chats are not held by each other. A 429 still pauses
 the whole sender (a chat's 429 cannot be told from the bot's).
 
 The list's filter is one aggregate over the session's intents per candidate (#660): the settled
@@ -1299,6 +1332,10 @@ deletes it first — never a second «⏹» beside it.
 
 #### At the deploy and at a restart (#536)
 
+- **At the deploy of #723**: no migration and no order between the services. An old worker beside
+  a new backend writes no NOTIFY: the listener hears nothing and the tick serves as before; a new
+  worker beside an old backend notifies a channel nobody listens to. At the backend's start the
+  first tick serves everything due, and the listener wakes the sender from then on.
 - **At the deploy of #722**: an active session whose live waiting message no longer has a reason —
   its latest decision is an intent or another outcome, or it has no row — is stale on the first
   tick: one delete, at the sender's pace; one whose latest decision is `no_signal` keeps it; an
@@ -1322,7 +1359,8 @@ deletes it first — never a second «⏹» beside it.
   the last of N such sessions gets its waiting message within 3 s + N/9 s of the backend's start
   (2 000 → about 225 s). A later session's trade messages wait behind them, once a deploy. The gap
   per chat (#660) does not change that volume: each waiting message goes to a chat of its own; one
-  chat's backlog (a session's trades after the restart) goes one step a tick.
+  chat's backlog (a session's trades after the restart) goes one step a gap (#723: the end of the
+  gap wakes the sender).
 - **The order of the deploy**: the bot first (`docker compose up -d --no-deps bot`), then the
   backend (`binarius-deploy`); the steps are the PR's. The bot's recovery pass only reads a running
   session (`mayDraw`): an old status message keeps its «🔄»/«⏹» until its session stops ([risk
@@ -1361,6 +1399,12 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
   #587 round 1, [risk 82](#accepted-risks)); `session waiting message already gone`, `… removed:
   not recorded` (`info`, #536), `… taken over: not deleted` (`info`, #587 round 1)
 - `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
+- `session notice tick` (`debug`, #723) at the end of a tick: `pending`, `fallback` (the lists'
+  lengths) and `woken` (the `wake()` calls it served); `{ woken, paused: true }` for a tick the
+  pause left empty
+- the listener's (#723): `session notice listener listening` (`info`, `channel`); `session notice
+  listener not connected` (a refused connect or `LISTEN`) and `… lost` (`warn`, `retryMs`, the
+  error's name and code); no payload is logged
 - `session trade notice not built`, `session summary not built` (the fallback's step closed,
   #537), `session notices failed for a session` (with `holdMs`, #660), `session notice tick failed`
   (`error`)
@@ -1617,14 +1661,16 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     loss, no double, the other sessions wait too. Since #660 (#534 m2) one chat gets at most one
     step a `SESSION_NOTICE_CHAT_GAP_MS` (1 s): the sends and the edits count, the deletes do not
     (risk 99); a 429 still pauses the whole sender.
-28. **Latency** (#464, #660): a trade's message comes up to `SESSION_NOTICE_TICK_MS` plus the pacing
-    after its settle. One chat's backlog goes one step per tick: the gap per chat
-    (`SESSION_NOTICE_CHAT_GAP_MS`, no longer than the tick) defers the rest of the turn to the next
-    tick, so the 28 trades a martingale session holds without ties (Rule 28) reach one chat in about
-    28 × `SESSION_NOTICE_TICK_MS` ≈ 84 s instead of 3–4 s. A backlog builds after a restart of the
+28. **Latency** (#464, #660, #723): a trade's message comes on the sender's wake, or up to
+    `SESSION_NOTICE_TICK_MS` plus the pacing after its settle when the wake is lost. One chat's
+    backlog goes one step per gap: the gap per chat (`SESSION_NOTICE_CHAT_GAP_MS`, no longer than
+    the tick) defers the rest of the turn, and since #723 the end of the gap wakes the sender, so the
+    28 trades a martingale session holds without ties (Rule 28) reach one chat in about
+    28 × (`SESSION_NOTICE_CHAT_GAP_MS` + up to `SESSION_NOTICE_WAKE_GAP_MS`) ≈ 28–35 s instead of
+    28 × `SESSION_NOTICE_TICK_MS` ≈ 84 s before #723 (3–4 s before #660). A backlog builds after a restart of the
     backend, a 429 pause or an unblock. The tick stays 3 s (the manager's decision 2026-10-22, В-И2
     (a); the owner may revisit it at review). The «⏹» under a new cycle message comes on the next
-    tick too: the waiting message is a step of its own.
+    wake or tick too: the waiting message is a step of its own.
 29. **The lines and the result** (#539 → #684, the owner's decision 2026-10-20): a win's line
     prints what came back to the account, the stake plus the profit; «💰 Результат» stays the net
     sum of the profits (#337), so the trades' lines no longer add up to it; #539 had printed the
@@ -1939,10 +1985,13 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     the open block's new message the result goes as a new message, so a block can show twice
     (risk 35's class). Falsifiable: a trade of a running session whose result comes without its
     open block while it stayed open longer than a tick.
-96. **Late or no open block** (#700): it comes on the sender's tick (3 s) plus the pace; a trade
-    of 5 s can settle before it, and then only the result shows (the wake-up is #723). Two calls a
-    trade go to one chat, about two in six seconds at a 5 s trade; the gap per chat (#660) keeps
-    them a tick apart.
+96. **Late or no open block** (#700): since #723 it comes on the sender's wake, within about half
+    a second of the accept, or at the end of the chat's gap ([risk 104](#accepted-risks)); a trade
+    settled before the woken tick reaches it (a lost wake, a backlog of the pace) shows only its
+    result. Two calls a trade go to one chat, about two in six seconds at a 5 s trade; the gap per
+    chat (#660) keeps them at least `SESSION_NOTICE_CHAT_GAP_MS` apart. Falsifiable: a trade of a
+    running session whose result comes without its open block while it stayed open longer than a
+    second.
 97. **The open trade in the list** (#700): the list's select list gains the open-trade subquery;
     since #660 the filter's open trade is part of its one aggregate (risk 85, not measured at the
     pilot's volume). The H1 exclusion is spelled twice, `isH1Settings` in the sender and
@@ -1986,6 +2035,22 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 103. **Three subqueries of the latest decision per listed session** (#722): due and stale in the
     list's filter, `waitingForSignal` in its select list — each a backward scan of
     `signal_decisions_session_idx` of two rows (probed, not measured on the pilot's volume).
+104. **The wake's delay** (#723, decisions В1, В2): a woken tick starts no sooner than 250 ms after
+    the last one, so a block can come up to 250 ms later than it might, for at most four woken
+    ticks a second under any storm of notifications (two a trade); a block whose chat got a
+    message less than a second ago (the previous trade's result in a tight cycle) comes at the end
+    of that gap — up to ~1,4 s after the accept. Falsifiable: `session notice tick` lines more often
+    than four a second, or open blocks later than ~1,5 s after `accepted` on a reachable chat.
+105. **A lost wake, one client held** (#723): a notification sent while the listener reconnects
+    (`SESSION_NOTICE_LISTEN_RETRY_MS`) or the backend restarts is lost; the tick (3 s) serves it.
+    The listener holds one client of the backend's pool for the whole run: 9 of the default 10
+    remain for the routes and the loops; Postgres' `max_connections` is unchanged. Falsifiable:
+    `session notice listener lost` beside blocks late by a tick; pool waits in the routes' logs.
+106. **The wake is the whole tick, not one session** (#723): a wake lists every pending session
+    (two list reads a woken tick), not the notified one; a serve of one session by the payload is
+    #660's scale. A second backend process (an overlapping deploy, which `binarius-deploy` does not
+    do) would have two listeners and two senders — [risk 35](#accepted-risks)'s class. Falsifiable:
+    the list's time in the tick lines growing with the session count.
 
 ## Running it locally
 
