@@ -456,7 +456,8 @@ waiting message and no open block (#722), so while it is `active` its own messag
 «⏹ Остановить сессию» (`h1SessionStopKeyboard`, `session:stop:<id>` with no suffix): the drawing's
 `keyboard` (`sessionDrawing`), sent by `replyWithPhotoHtml` / `replyHtml` (the text after a refused
 photo keeps it) and kept by every tracker's edit through `editMessagePhotoByIdHtml` /
-`editMessageTextByIdHtml`; the stop's edit draws without it. The render key carries whether the
+`editMessageTextByIdHtml`; a stopped session's drawing has none, so both the tracker's edit at
+the stop and the «⏹»'s own edit in place (`editSessionMessage`, the same seam) remove it. The render key carries whether the
 keyboard is there (`sessionRenderKey`), so an edit that only adds or drops it is never skipped. A
 restored entry (#567) draws only a stopped session, so after a bot restart the «⏹» stays until the
 stop's edit; pressed meanwhile it works. An edit without
@@ -544,13 +545,33 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   Calls: backend ≤ 2 (the stop, the read after a 409), Telegram ≤ 3 (`answerCallbackQuery`,
   `sendMessage`, `editMessageReplyMarkup`) — inside `HANDLER_CALLS.sessionStop` (3 / 3, whose worst
   path stays the old status message's).
-- **«⏹» under an old status message** (`session:stop:<id>`, sent before #536; the owner's answer
-  5, decision В4) — and, the same data, **the «⏹» of an H1 session's message** (#745) — is answered
-  as before: the catalog read beside the stop, 409 → the read, and the
-  session message drawn in place of the pressed one (`editMessageText`), under the end of the path;
-  gone → a new message, recorded by its newer id (#567, #587). The session is tracked on that
-  message, so its summary comes as before. A stale edit of the old entry can land after the
-  handler's — [risk 83](#accepted-risks).
+- **«⏹» under an old status message** (`session:stop:<id>`, sent before #536, always a text; the
+  owner's answer 5, decision В4) is answered as before: the catalog read beside the stop, 409 →
+  the read, and the session message drawn in place of the pressed one (`editMessageText`), under
+  the end of the path; gone → a new message, recorded by its newer id (#567, #587). The session is
+  tracked on that message, so its summary comes as before. A stale edit of the old entry can land
+  after the handler's — [risk 83](#accepted-risks).
+- **The «⏹» of an H1 session's message** (#745) — the same data, told apart by the view
+  (`isH1Settings`); the message is usually a photo (the start always has a signal's direction).
+  The catalog read beside the stop, 409 → the read, as above; then `stopH1InPlace` draws the
+  stopped session's drawing (`sessionDrawing`: the status as the caption, the picture kept, no
+  keyboard) on the pressed message by the tracker's own edit (`editSessionMessage`:
+  `editMessageMedia` with a picture, `editMessageText` without, reason `session_status`). The end
+  of the path comes with the summary card, as for an H1 session ended any other way.
+
+  | The edit of the pressed message | Then | Log |
+  | --- | --- | --- |
+  | done, or 400 «not modified» | tracked on the same message with the stopped drawing as rendered: its first poll edits nothing and sends the summary once the notices are closed | — |
+  | 400 gone (deleted in that second) | a new message `sessionStopReplyText` under the end of the path (`sessionCardKeyboard`), not tracked: the old entry's next edit is refused as gone, it forgets the message, and the backend's fallback summary goes | `info` `the pressed message was already gone` |
+  | any other Telegram refusal, a transport failure | nothing more, not tracked: the entry still holds the running drawing, so its next poll draws the stop | `warn` `trading session message not edited` |
+  | anything else | rethrown to `bot.catch` | `error` |
+
+  No chat or message id on the callback: nothing drawn, nothing tracked. A failure before the view
+  (the stop failed, the read after a 409 failed, 404) is a new message under «🏠 В меню», the
+  pressed «⏹» kept for another press. Calls: backend ≤ 3 (the stop, the catalog, the read),
+  Telegram ≤ 3 (`answerCallbackQuery`, the edit, the gone reply) — inside
+  `HANDLER_CALLS.sessionStop` (3 / 3; `timing.test.ts` → the H1 rows). A stale edit of the old
+  entry can land after the press's — [risk 83](#accepted-risks).
 - **An old «🔄 Обновить»** (`session:<id>`, `LEGACY_SESSION_REFRESH_PATTERN`): its keyboard is
   stripped (`removeLegacyKeyboard` of `demo.ts`: `answerCallbackQuery`, then
   `editMessageReplyMarkup`), nothing read or sent (the owner's answer 5).
@@ -1904,7 +1925,9 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     resvg without a word (#538), as on the #318 card.
 77. **The reply in place refused as gone becomes a new message** (#587): a press in the same second
     as a settlement (the sender deleting the waiting message before the stop's UPDATE), or a user
-    who deleted the waiting message: the reply then may land under the summary. Falsifiable: `the
+    who deleted the waiting message: the reply then may land under the summary. The same holds
+    for an H1 session message deleted as its «⏹» is pressed (#745): the stop's reply goes as a new
+    message, untracked, and the backend's fallback summary follows. Falsifiable: `the
     pressed message was already gone` with a stop reply under a summary more than rarely.
 78. **`/stop`'s reply and the mode screen's line are new messages** (#587, the manager's answer В5):
     no waiting message is handed over, so they may swap with the summary; the card is last either
@@ -1949,7 +1972,13 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     pre-#536 button was pressed — the first `SESSION_MAX_DURATION_MS` (1 h) after #536's deploy —
     and inside Telegram's 48-hour edit window of that message; after that every such session is
     stopped, every read answers the stopped view, and no stale edit exists. Falsifiable: a message
-    sent before #536 showing «Торговая сессия запущена…» under a summary card.
+    sent before #536 showing «Торговая сессия запущена…» under a summary card. **The same now
+    reaches H1** (#745, accepted as the rest of this risk): `stopH1InPlace` retargets the tracker
+    to the pressed message, and a read the old entry started before the stop can answer a running
+    view whose picture turned (H1 trades change direction); its edit landing after the press's
+    leaves the photo with the running caption and «⏹», the moved entry holding the stopped drawing
+    as rendered. Pressed again, it answers 409, reads, and draws the stop in place. Falsifiable: a
+    stopped H1 session whose message still carries «⏹» after the summary was sent.
 84. **A session whose turn throws is held, not dropped** (#534 m4, #660): a thrown statement or
     balance refresh (`session notices failed for a session`, with `holdMs`) holds the session out of
     both lists for `SESSION_NOTICE_HOLD_MS` (60 s) — any throw, before a claim or after it (a claim
