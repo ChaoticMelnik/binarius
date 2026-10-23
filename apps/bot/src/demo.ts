@@ -325,6 +325,13 @@ export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promis
       'answering the callback query failed',
     );
   });
+  await stripKeyboard(ctx, logger, 'the keyboard of an old button was not removed');
+}
+
+// The pressed message's keyboard taken off (#722: also the open block's «⏹» after its press). A
+// refusal or a transport failure is logged at info under `message` - the press itself was
+// answered - and anything else is thrown.
+export async function stripKeyboard(ctx: Context, logger: Logger, message: string): Promise<void> {
   try {
     await ctx.editMessageReplyMarkup();
   } catch (error) {
@@ -333,9 +340,9 @@ export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promis
       {
         ...errorLogFields(error),
         ...telegramErrorFields(error, 'editMessageReplyMarkup'),
-        callbackData,
+        callbackData: ctx.callbackQuery?.data,
       },
-      'the keyboard of an old button was not removed',
+      message,
     );
   }
 }

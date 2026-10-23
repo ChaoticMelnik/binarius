@@ -609,8 +609,9 @@ ${state}`;
 // Button labels and the command descriptions: Telegram does not parse them, so they are plain
 // strings and are never escaped — an entity here would be shown literally. The catalog's
 // `buttons` and `commands` groups; the confirm button branches on the address here.
-// The waiting message's «⏹» (#536) is the backend's; the bot draws sessionStopButton only in place
-// of a pressed waiting message after an unknown stop outcome (#587, waitingStopKeyboard).
+// The waiting message's «⏹» (#536) and the open trade block's (#722) are the backend's; the bot
+// draws sessionStopButton only in place of a pressed waiting message after an unknown stop outcome
+// (#587, waitingStopKeyboard).
 type LabelKey = Exclude<
   BotTextKeyOfGroup<typeof BotTextGroup.Buttons | typeof BotTextGroup.Commands>,
   'confirmButtonNoEmail'
