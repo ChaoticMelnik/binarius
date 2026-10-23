@@ -194,7 +194,7 @@ keeps the broker minimum.
 | `invalid_settings` | settings fail the schema or the sizer's parameter rules | the orchestrator (#287) |
 | `user_stopped` | the stop routes; a switch of the user's trading mode (`setTradingMode`) | #283, #122, #327 |
 | `kill_switch` | the global trading switch is closed ([kill-switch.md](kill-switch.md)) | `stopPausedSessions` (#144), the tick's first sweep; the attempt on `trading_paused` |
-| `no_signal_timeout` | the session waited for a signal `SESSION_NO_SIGNAL_CANDLES` (20) candles of its signal interval — 100 s on `5s`, 300 s on `15s` (#637) — a closed pair or `no_signal` ([The no-signal limit](#the-no-signal-limit-509)) | the orchestrator (#509) |
+| `no_signal_timeout` | the session waited for a signal `SESSION_NO_SIGNAL_CANDLES` (20) candles of its signal interval — 100 s on `5s`, 300 s on `15s` (#637) — a closed pair or `no_signal` ([The no-signal limit](#the-no-signal-limit-509)) | the orchestrator (#509); an H1 session's `no_signal` wait — the backend's H1 driver (#775) |
 
 Since #509 a pair whose payout fell below 80 % after the start neither waits nor stops: the
 session trades on its signals ([The payout order key](#the-payout-order-key-379-631)).
@@ -549,17 +549,18 @@ pair it never asks the signal (`orchestrator.db.test.ts` H1-O1: a signal source 
 sizer runs as for any session (its martingale limits, H1-O3′; the minimum, the balance, the
 history's integrity: `stake_stop`, `balance_unavailable` before it, H1-O8); its
 `insufficient_balance` while `awaitsBalance` is the same one-tick hold with the `info` line
-`trading session waits for the balance` as above (#696, H1-BW). Then, with no intent's change
-within the no-signal limit (`waitExpired`: `SESSION_NO_SIGNAL_CANDLES` × 5 s = 100 s from the
-later of `started_at` and the session's last intent's `updated_at`), it stops `no_signal_timeout`
-with `waited: no_signal` and no decision row (#775, В5; H1-O5′) - the driver's `no_signal` rows do
-not reset the count, as a regular session's rows do not. Else the ending is a hold-back of
+`trading session waits for the balance` as above (#696, H1-BW). The attempt does not stop an H1
+session for no signal (#775, review round 1; H1-O5″): it never asks H1, so it has no evidence that
+a signal was looked for - a backend restart's warm-up, a source down or a stale catalog would read
+as «no signal». That stop is the driver's, on the seconds it decided `no_signal`, with
+`waitExpired` as a conjunct ([h1.md → The no-signal limit](h1.md#the-driver-707)). The ending is a
+hold-back of
 `TRADING_SESSION_H1_CHECK_MS` with the `debug` line `trading session waits for the H1 driver`. The
 payout is not read (H1-O7). A v4 row runs with its fixed stake and no `maxLoss` (H1-O10). The
 tick's three sweeps — the kill switch, the hour, a halt — apply to it unchanged. Since #707 the
 checks from the hour to the two rejections are one function the attempt and the driver both read
 (`sessionIntentBlock`, `packages/shared/src/trading-session.ts`, H1-S7–S10), and since #775 both
-size with the same sizer (`@binarius/stake`, `sessionTradeOf`): the driver skips where the attempt
+size with the same sizer over the same input (`@binarius/stake`, `sessionStakeInput`): the driver skips where the attempt
 stops, so its intents never outrun these stops, and its refusal table is the attempt's own
 (`SESSION_INTENT_REFUSALS`, H1-S6). A live intent of the driver makes the attempt reschedule.
 
@@ -747,6 +748,12 @@ should not stand waiting with no word to the user.
 - **What does not.** A backend or broker failure — the pairs unavailable, the signal unavailable,
   `fetch_failed` — is not a wait for a signal: it neither stops the session nor moves the count,
   and the first `no_signal` after it stops at once (W6).
+- **An H1 session** (#775, review round 1). The attempt never asks H1, so its `no_signal` wait is
+  not the attempt's: the backend's H1 driver stops it, after 100 seconds the detector decided
+  `no_signal` since the session last changed and with `waitExpired` as a conjunct; the seconds it
+  cannot decide (a backend restart's warm-up, the source down, a stale catalog) do not count
+  ([h1.md → The no-signal limit](h1.md#the-driver-707), H1-DR32–DR36, H1-DB6). The closed pair is
+  the attempt's, as for any session (H1-O6′).
 - **Lateness.** The count is read at the start of the attempt, so the stop comes at most one
   attempt late, and on a closed pair at most one hold-back (`TRADING_SESSION_RETRY_MS`) late.
 - **Tokens.** The start reserves nothing; a reserve is an intent's (Rule 2). A stop with no intent

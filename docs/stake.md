@@ -7,8 +7,10 @@ callers are the session orchestrator (#287, `trading-session/orchestrator.ts`,
 [trading-session.md](trading-session.md)) and, since #775, the backend's H1 driver
 (`apps/backend/src/h1/driver.ts`, [h1.md → The driver](h1.md#the-driver-707)); both build the
 parameters with `sessionStakeParams(settings)` from the session's `trading_sessions.settings` and
-feed it the session's history (#130) through `sessionTradeOf` (`history.ts`), so the driver's stake
-is the one the orchestrator would compute.
+feed it one input, `sessionStakeInput` (`history.ts`, #775): the session's history (#130) through
+`sessionTradeOf`, the payout, the snapshot's minimum and available, and the clock held at
+`started_at` (the database's clock; a process clock behind it would make the sizer throw), so the
+driver's stake is the one the orchestrator would compute.
 
 Two strategies exist. `fixed` sends the same stake every time. `martingale` is a bounded
 Martingale: after each loss the next stake recovers the loss of the streak plus the profit of the
