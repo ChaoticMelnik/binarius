@@ -5,7 +5,7 @@ import { hashToken } from './oauth-ops';
 import { millisecondsAgo, millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
 import { AuditAction, AuditActorType, AuditEntityType } from '@binarius/shared';
 import { auditLog } from './schema/audit-log';
-import { sqlLiteralList } from './schema/columns';
+import { sqlLiteralList, statementNow } from './schema/columns';
 import { staff, StaffStatus } from './schema/staff';
 import {
   OPEN_CHALLENGE_STATUSES,
@@ -497,7 +497,7 @@ export async function startLoginChallenge(
 export async function markChallengePromptSent(db: Db, challengeId: string): Promise<void> {
   await db
     .update(staffLoginChallenges)
-    .set({ promptSentAt: sql`now()` })
+    .set({ promptSentAt: statementNow() })
     .where(
       and(
         eq(staffLoginChallenges.id, challengeId),
@@ -602,7 +602,7 @@ export async function confirmChallengeFromTelegram(
       update ${staffLoginChallenges} as c
          set status = ${StaffLoginChallengeStatus.Confirmed},
              code_hash = ${hashToken(code)},
-             confirmed_at = coalesce(c.confirmed_at, now())
+             confirmed_at = coalesce(c.confirmed_at, ${statementNow()})
         from ${staff} as s
        where c.id = ${input.challengeId}
          and c.staff_id = s.id
@@ -641,7 +641,7 @@ export async function markChallengeCodeSent(
 ): Promise<boolean> {
   const [row] = await db
     .update(staffLoginChallenges)
-    .set({ codeSentAt: sql`now()` })
+    .set({ codeSentAt: statementNow() })
     .where(
       and(
         eq(staffLoginChallenges.id, challengeId),
@@ -919,7 +919,7 @@ export async function runAsStaff<T>(
     // which renders them qualified by the real table name
     const { rows } = await tx.execute<{ id: string; staff_id: string; login: string }>(sql`
       update ${staffSessions}
-         set last_seen_at = now()
+         set last_seen_at = ${statementNow()}
         from ${staff} as st
        where ${staffSessions.tokenHash} = ${tokenHash}
          and st.id = ${staffSessions.staffId}
@@ -996,7 +996,7 @@ export async function revokeStaffSession(
 ): Promise<RevokedSession | undefined> {
   const [row] = await tx
     .update(staffSessions)
-    .set({ revokedAt: sql`now()`, revokedByStaffId: input.byStaffId })
+    .set({ revokedAt: statementNow(), revokedByStaffId: input.byStaffId })
     .where(
       and(
         eq(staffSessions.id, input.sessionId),
@@ -1015,7 +1015,7 @@ export async function endStaffSession(
 ): Promise<void> {
   await tx
     .update(staffSessions)
-    .set({ revokedAt: sql`now()`, revokedByStaffId: byStaffId })
+    .set({ revokedAt: statementNow(), revokedByStaffId: byStaffId })
     .where(and(eq(staffSessions.id, sessionId), sql`${staffSessions.revokedAt} is null`));
 }
 
@@ -1207,16 +1207,13 @@ async function invalidateIssued(
       ),
     )
     .returning({ id: staffLoginLinks.id });
-  // clock_timestamp(), not now(): now() is the transaction's start, and under READ COMMITTED this
-  // UPDATE still matches a session committed by a completeLogin that began later. That row's
-  // created_at is after our now(), and staff_sessions_revoked_after_created_check then aborts the
-  // whole disable or reset (#149); the statement clock is read after the statement's snapshot, so
-  // it is later than anything the statement can see. The predicate keeps now() on purpose: it is
-  // the same reading of "live" as everywhere else, and stamping one that expired in between is
-  // harmless.
+  // statementNow(): a session committed by a completeLogin or completeLinkLogin that began later is
+  // visible here with a created_at past this transaction's start (#149); the rule and its reason -
+  // schema/columns.ts -> statementNow. The predicate keeps now() on purpose: the same reading of
+  // "live" as everywhere else.
   const revoked = await tx
     .update(staffSessions)
-    .set({ revokedAt: sql`clock_timestamp()`, revokedByStaffId: opts.revokedByStaffId ?? null })
+    .set({ revokedAt: statementNow(), revokedByStaffId: opts.revokedByStaffId ?? null })
     .where(
       and(
         eq(staffSessions.staffId, staffId),

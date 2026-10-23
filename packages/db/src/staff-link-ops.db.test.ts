@@ -675,7 +675,7 @@ describe('the CLI racing a login by link (Rule 5)', () => {
   // The login holds the link and has inserted its session: the CLI's UPDATE of `staff` does not
   // wait (the FK's KEY SHARE is compatible with NO KEY UPDATE), its UPDATE of the links does, and
   // afterwards it revokes the session the login committed — with revoked_at not before its
-  // created_at (clock_timestamp(), the class of #149).
+  // created_at (statementNow(), #149, #158).
   it('a login that holds the link first is revoked by the disable behind it', async () => {
     const seeded = await seedStaff(tmp.db);
     const issued = await issue(seeded);

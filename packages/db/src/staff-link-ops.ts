@@ -4,6 +4,7 @@ import { AuditAction, AuditActorType, AuditEntityType, LinkState } from '@binari
 import type { Db } from './client';
 import { hashToken } from './oauth-ops';
 import { millisecondsAgo, millisecondsFromNow, type Tx } from './trade-intent-ops';
+import { statementNow } from './schema/columns';
 import { staff, StaffStatus } from './schema/staff';
 import { staffLoginLinks, StaffLoginLinkStatus } from './schema/staff-login-links';
 import { insertStaffSession, writeAuditEntry, writeAuditEntryOnce } from './staff-ops';
@@ -226,8 +227,8 @@ export type CompleteLinkLoginResult =
  * database's clock, and its owner is active — so two requests carrying the token produce one
  * session and one refusal, and a disable committed before this one leaves the link dead.
  *
- * `used_at` is clock_timestamp(): the CHECK orders it against `created_at`, and the statement
- * clock is never earlier than a row the statement can see (the class of #149).
+ * `used_at` takes statementNow(): the CHECK orders it against `created_at` (schema/columns.ts ->
+ * statementNow, #149, #158).
  */
 export async function completeLinkLogin(
   db: Db,
@@ -238,7 +239,7 @@ export async function completeLinkLogin(
     const { rows } = await tx.execute<{ id: string; staff_id: string }>(sql`
       update ${staffLoginLinks} as l
          set status = ${StaffLoginLinkStatus.Used},
-             used_at = clock_timestamp()
+             used_at = ${statementNow()}
         from ${staff} as s
        where l.token_hash = ${tokenHash}
          and l.staff_id = s.id
