@@ -25,6 +25,7 @@ COPY --chown=node:node packages/mock-broker/package.json packages/mock-broker/
 COPY --chown=node:node packages/shared/package.json packages/shared/
 COPY --chown=node:node packages/signal/package.json packages/signal/
 COPY --chown=node:node packages/signal-stand/package.json packages/signal-stand/
+COPY --chown=node:node packages/stake/package.json packages/stake/
 RUN pnpm install --frozen-lockfile --offline
 
 COPY --chown=node:node . .

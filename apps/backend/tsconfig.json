@@ -15,6 +15,7 @@
     { "path": "../../packages/broker-socket" },
     { "path": "../../packages/mock-broker" },
     { "path": "../../packages/signal" },
+    { "path": "../../packages/stake" },
     { "path": "../web" }
   ]
 }

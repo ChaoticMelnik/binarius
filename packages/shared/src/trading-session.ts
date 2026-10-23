@@ -71,7 +71,7 @@ const stakeFields = {
   stakeScale: z.int().min(0).max(MAX_STAKE_SCALE),
 };
 
-// the rules against baseStake are the worker's assertStakeParams (apps/trading-worker/src/stake/
+// the rules against baseStake are @binarius/stake's assertStakeParams (packages/stake/src/
 // config.ts), which planSessionStart and the orchestrator run
 export const martingaleLimitsSchema = z.strictObject({
   maxSteps: z.int().min(2),
@@ -152,8 +152,8 @@ export function sessionStakeParams(settings: TradingSessionSettings): SessionSta
 // The session's length and how much of it is done (#552; docs/trading-session.md -> The
 // attempt): the session completes when done reaches planned. A v1/v2 row counts settled trades
 // against settings.trades, as it did. A v3 row counts cycles: under fixed every settled trade is
-// a cycle; under martingale only a win closes one (readHistory in apps/trading-worker/src/stake/
-// size.ts, sessionTradeSteps), so a loss or a tie never ends the session mid-series.
+// a cycle; under martingale only a win closes one (readHistory in packages/stake/src/size.ts,
+// sessionTradeSteps), so a loss or a tie never ends the session mid-series.
 export function sessionProgress(
   settings: TradingSessionSettings,
   counts: { settled: number; won: number },

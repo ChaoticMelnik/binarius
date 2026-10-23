@@ -1,6 +1,6 @@
 # Stake sizing v1 (issue #19, default Martingale #450)
 
-`apps/trading-worker/src/stake/` decides the amount of the next trade in a session, or stops the
+`packages/stake/src/` (`@binarius/stake`, #775) decides the amount of the next trade in a session, or stops the
 session with a reason. It is a pure function: it reads no clock, no environment, no network and no
 database, and writes no log. The same parameters and input always give the same decision. Its
 caller is the session orchestrator (#287, `trading-session/orchestrator.ts`,
@@ -16,7 +16,7 @@ sizer's own default without parameters (`DEFAULT_STAKE_PARAMS`) stays `fixed`: o
 it.
 
 ```bash
-pnpm test --project unit apps/trading-worker/src/stake   # needs no database or Redis
+pnpm test --project unit packages/stake   # needs no database or Redis
 ```
 
 ## Use

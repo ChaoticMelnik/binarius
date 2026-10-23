@@ -3,8 +3,8 @@
 export const SessionTradeResult = { Won: 'won', Lost: 'lost', Tied: 'tied' } as const;
 export type SessionTradeResult = (typeof SessionTradeResult)[keyof typeof SessionTradeResult];
 
-// The stake strategies' wire names (#450): settings v2 and v3 carry one, the worker's sizer takes it
-// (apps/trading-worker/src/stake/codes.ts re-exports it) and settings v1 read as fixed
+// The stake strategies' wire names (#450): settings v2 and v3 carry one, the stake sizer takes it
+// (packages/stake/src/codes.ts re-exports it) and settings v1 read as fixed
 export const SessionStakeStrategy = { Fixed: 'fixed', Martingale: 'martingale' } as const;
 export type SessionStakeStrategy = (typeof SessionStakeStrategy)[keyof typeof SessionStakeStrategy];
 
@@ -16,7 +16,7 @@ export interface SessionTradeStep {
 // The cycle and step of each settled trade of a session, in their order (docs/bot-session.md →
 // Trade messages). Under martingale the step is the trade's number within its cycle (#551): a win
 // ends the cycle, a loss and a tie both move to the next step. A cycle is the sizer's series
-// (readHistory in apps/trading-worker/src/stake/size.ts): only a win closes it. The sizer's own
+// (readHistory in packages/stake/src/size.ts): only a win closes it. The sizer's own
 // step counts the losses in a row plus one and bounds its raises (maxSteps), so the message's
 // step exceeds it by the ties of the series (steps-parity.test.ts). Under fixed every trade is
 // step 1 of the next cycle.
