@@ -301,7 +301,7 @@ their keyboard, a jump 51 → 0, cancel → re-plan → one send), `messages.tes
 | Kind               | Sent                                                                   | Text (`mailing` group) | Buttons                                                                          |
 | ------------------ | ---------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------- |
 | `inactive_3d`      | 72 h after the last activity of a user who ran a session; ≤ 1 a week   | `inactiveReminder`     | the entry «🎮 Демо-торговля» (`demo`)                                            |
-| `session_idle_24h` | 24 h after the newest session stopped, none started since              | `sessionIdleReminder`  | «🔁 Запустить снова» (`demo:l:<assetId>:<sec>:n`), the entry without a pair      |
+| `session_idle_24h` | 24 h after the newest session, a demo one, stopped; none started since | `sessionIdleReminder`  | «🔁 Запустить снова» (`demo:l:<assetId>:<sec>:n`), the entry without a pair      |
 | `weekly_summary`   | Monday 10:00 UTC, the previous ISO week's settled demo trades          | `weeklySummary`        | the entry                                                                        |
 | `tokens_out_2d`    | 48 h after the sent `tokens_out`, while the balance has not moved      | `tokensOutStill`       | the same as `tokens_low`: the cashier, then «⭐ Купить»                          |
 
@@ -320,13 +320,25 @@ is untouched (profit is only compared to 0 in SQL) — and promise no result.
 - **`inactive_3d`** applies while the user is not blocked by the admin, trades demo, has an active
   account and trading is open (`tradingOpenSql`, rule 22), has at least one session, has had no
   `inactive_3d` sent in the last `INACTIVE_REPEAT_DAYS` (7), and has no `session_idle_24h` or
-  `tokens_out_2d` job pending (the more specific one goes first). The key is `inactive_3d:` and the
-  epoch of the activity: newer activity is a new key, and the old job is canceled at the claim.
+  `tokens_out_2d` job pending. The key is `inactive_3d:` and the epoch of the activity: newer
+  activity is a new key, and the old job is canceled at the claim. The pending-job rule has two
+  cases. A specific job pending first (a `reduced` user waiting for the 24-hour window): no
+  `inactive_3d` is planned; it is planned once that job is sent, and the `reduced` window puts it
+  at least a day later. Both planned in the same pass (late planning: the planner walks the kinds
+  in `NotificationKind` order, `inactive_3d` first): the claim sees the pending specific job and
+  cancels `inactive_3d`, its key spent for that inactivity spell, so the user gets the specific
+  push alone (RT10). The rule is not planning-only on purpose: then both jobs would be claimed and
+  sent seconds apart to a `full` user.
 - **`session_idle_24h`**: the fact is the `ended_at` of the user's newest session by
-  `started_at desc, id desc` (`newestSessionFrom`); `ended_at` is set exactly when the session is
-  stopped (`trading_sessions_ended_at_pair_check`), so a running or paused newest session plans
-  nothing. The key is `session_idle:` and that session's id; the claim compares it with the newest
-  session now (`keyApplies`, the same fragment), so a session started since cancels the job. It
+  `started_at desc, id desc` (`newestSessionFrom`), only when that session is a demo one;
+  `ended_at` is set exactly when the session is stopped (`trading_sessions_ended_at_pair_check`),
+  so a running or paused newest session plans nothing. A real newest session (a switch to demo
+  stops the running real session, #327) has no fact and still counts as the session since: an
+  older demo session is not summarised (RS8, RS8b). The key is `session_idle:` and that session's
+  id; the claim compares it with the newest session of any mode now (`keyApplies`, the same
+  fragment), so a session started since, demo or real, cancels the job (RS3, RS3b). The counted
+  trades are in the session's mode: `trade_intents_session_account_fk` ties an intent's `mode` to
+  its session's, and no UPDATE writes `trading_sessions.mode`. It
   applies under the same conditions as `inactive_3d`'s first four. The payload is
   `{ assetId, durationSec, settled, won, lost, tied }`: the pair and duration from the settings when
   they are JSON numbers (else `null`), and the session's settled trades split by the sign of
@@ -364,8 +376,9 @@ is untouched (profit is only compared to 0 in SQL) — and promise no result.
 
 **Late planning.** When a predicate turns true again late — the admin unblocks the user, the level
 comes back from `off`, the bot is unblocked, the user goes back to demo, trading reopens — the kind
-is planned then, not at its offset. So no text names an age («2 дня», «3 дня», «вчера», «сутки»):
-a late message stays true (`messages.test.ts` RM5).
+is planned then, not at its offset. So no text names an age, in digits or in words («2 дня»,
+«три дня», «сутки», «вчера», «неделю назад»): a late message stays true (`messages.test.ts` RM5,
+the guard's own samples RM5a).
 
 ### Accepted risks
 
@@ -381,8 +394,9 @@ a late message stays true (`messages.test.ts` RM5).
   straddles the claim (a Stars refund racing its own purchase) leaves no row after `sent_at`, and
   the push goes out at a balance of 0 — which is still true.
 
-Tests: `mailing-ops.db.test.ts` RT1–RT9, RS1–RS7, RW1–RW8, RZ1–RZ10 (each kind's CUT is RT8, RS6, RW7,
-RZ9), `engine.db.test.ts` E-RT, `messages.test.ts` RM1–RM6, `bot-navigation.test.ts` BD1, the pin in
+Tests: `mailing-ops.db.test.ts` RT1–RT10, RS1–RS8 (with RS1b, RS3b, RS8b), RW1–RW8, RZ1–RZ10 (each
+kind's CUT is RT8, RS6, RW7, RZ9), `engine.db.test.ts` E-RT, `messages.test.ts` RM1–RM7 (with RM5a),
+`bot-navigation.test.ts` BD1, the pin in
 `timing.test.ts`.
 
 ## The planner
