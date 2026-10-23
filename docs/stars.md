@@ -1,4 +1,4 @@
-# Buying tokens for Telegram Stars (#117), refunds and /paysupport (#118)
+# Buying tokens for Telegram Stars (#117), refunds and /paysupport (#118, #510)
 
 A user with an active Binodex account buys a package of automation tokens in the bot and pays in
 Telegram Stars. A payment credits its tokens exactly once, whoever reports it: the bot's
@@ -141,8 +141,12 @@ reconciler is the only protection against that paid-but-not-credited case.
 
 ## Refunds
 
-Every refund goes through a staff member, by the charge id (the owner's answer of 2026-10-08).
-Telegram refunds the whole charge; nothing refunds automatically.
+Every refund goes through a staff member (the owner's answer of 2026-10-08): in the admin, «Вернуть
+Stars» on the user card's «Оплаты Stars» or on «Возвраты Stars» (#510, `docs/admin-pages.md` →
+Возврат Stars), or by the charge id with the CLI over SSH. Telegram refunds the whole charge;
+nothing refunds automatically. Both paths ask Telegram through one module,
+`apps/backend/src/payments/star-refund.ts` (`createStarsRefundApi`, `classifyRefundAnswer`), and
+record through the same writer.
 
 ```bash
 pnpm --filter @binarius/backend stars requests                          # /paysupport's open requests
@@ -161,6 +165,7 @@ with no transaction open, and acts on the answer:
 |---|---|---|---|
 | `true` | refunded | the record below; prints the tokens taken, not recovered, the balance | 0 |
 | `GrammyError` 400 whose description contains `CHARGE_ALREADY_REFUNDED` (case-sensitive) | refunded before (an earlier run whose record failed, or by hand) | the record below; a row already `refunded` is `already_recorded`, nothing written | 0 |
+| a `GrammyError` with `error_code` 500 or above | unknown: a 5xx may follow a refund Telegram carried out (#626 п.3, #510) | nothing written; «Исход неизвестен … Повторите команду» | 1 |
 | any other `GrammyError` | Telegram refused, nothing happened | nothing written; prints Telegram's `error_code` and `description` | 1 |
 | a timeout, a dropped connection, anything else | unknown | nothing written; «Исход неизвестен … Повторите команду» | 1 |
 | `true`, then the record fails | refunded, not recorded | «Возврат в Telegram выполнен, запись в БД не сделана — повторите команду (безопасно) или дождитесь сверки» | 1 |
@@ -176,14 +181,42 @@ the refund state and of the `refund` ledger rows, and the seventh writer of the 
    (nothing was credited; crediting a held payment is #246's adjustment). A `refund` ledger row of
    −taken when it is above 0, and `users.token_balance −= taken`;
 4. `status = refunded, refunded_at = now()` by CAS on `paid | held`;
-5. one `audit_log` row `stars_refunded`, actor `system`: the user, the payer, the status it came
-   from, the package, the amount, `tokensTaken`, `tokensNotRecovered`, `via` (`cli` or
-   `reconciler`), Telegram's answer, the reason (CLI) or the transaction type (reconciler).
+5. no audit row of its own (#510): its caller writes one `stars_refunded` row in the same
+   transaction, with the payload of `starsRefundedPayload` — the user, the payer, the status it
+   came from, the package, the amount, `tokensTaken`, `tokensNotRecovered`, `via` (`cli`,
+   `reconciler` or `admin`), Telegram's answer, the reason (CLI, admin) or the transaction type
+   (reconciler). `recordStarRefundBySystem` (the CLI and the reconciler) writes it with actor
+   `system`; `recordStarRefundByStaff` (the admin) with actor `admin`, the staff member's id, and
+   `path`, `result` and the staff `sessionId` added. A refund already recorded writes the admin's
+   row only (`result: already_recorded`, no amounts); the CLI and the reconciler write none.
 
 Exactly once: the status read under the payment's lock and the CAS are the barrier against a
 repeated command, the command racing the reconciler and two ticks; `token_ledger_star_payment_idx`
 is the second barrier on the ledger side. Tokens already spent are not recovered, and a reserve held
 by a live intent is never touched; both are `tokensNotRecovered`.
+
+### From the admin (#510)
+
+`POST /admin/star-payments/:id/refund { reason }` (`apps/backend/src/admin/routes.ts`), the second
+admin route outside `asStaff` after #361's publish, for the same reason: the Bot API call cannot run
+inside a transaction that holds the session row, and the row has to carry its result. In order:
+the body (`starRefundReasonSchema`) → 400 before the session; `readLiveStaffContext` → 401 (no
+touch, no row); a non-uuid id → 404 with a `not_found` row; an unknown payment → 404 with a
+`not_found` row naming it; a payment already `refunded` → `recordStarRefundByStaff` without
+Telegram → `already_recorded`. Otherwise `refundStarPayment(payer, charge id)` under
+`withinDeadline(STARS_REFUND_BUDGET_MS)`, and the answer by `classifyRefundAnswer`:
+
+| Telegram's answer | Answer (200 unless said) | Row (`stars_refunded`, actor the staff member) |
+|---|---|---|
+| `true`, or the 400 `CHARGE_ALREADY_REFUNDED` | `refunded` with the tokens taken, not recovered and the balance; `already_recorded` when the reconciler or a parallel press recorded it first | the writer's, `result: refunded` with the amounts, or `already_recorded` |
+| another `GrammyError` below 500 | `refused` with Telegram's `error_code` and `description` (at most 256 code points); nothing written | `result: refused`, `telegramErrorCode` |
+| a 5xx `GrammyError`, a transport failure, the deadline | `unknown`; nothing written | `result: unknown` |
+| `true`, then the record fails | 500 `internal` and the `error` line «stars refund by admin: the record failed after Telegram answered» | none: the reconciler records it within a tick, a repeat meets `CHARGE_ALREADY_REFUNDED` |
+
+The row is written for the staff member identified before the call even when the session is
+revoked during it; the next request is a 401. The payer, not the card's user, gets the Stars (a
+forwarded invoice's `held` payment). The log carries the code or the error identity, never
+Telegram's text (Rule 8).
 
 **Assumption 1** (owner check 1): a refund shows in `getStarTransactions` as an outgoing transaction
 whose `id` is the charge id and whose `receiver.type` is `user` (`@grammyjs/types` 5.0.0
@@ -216,9 +249,14 @@ all carry «↩️ К списку оплат» and the menu, never the press ag
 
 After the commit, and only when a row was inserted, the staff bot (`AdminBot.notifyStaff`, plain
 text from `ADMIN_TEXTS.refundRequested`) tells every active staff member the charge id, the
-package, the amount, the status, the payer's Telegram id and the command. The reply does not wait;
-a failed send is a `warn` per recipient, not repeated, and a notice lost by a shutdown leaves the
-request in `stars requests`.
+package, the amount, the status, the payer's Telegram id, the command and the admin's section
+«Возвраты Stars». The reply does not wait; a failed send is a `warn` per recipient, not repeated,
+and a notice lost by a shutdown leaves the request in `stars requests` and on «Возвраты Stars».
+
+The open requests (the payment not `refunded`), oldest first, are one query,
+`listOpenStarRefundRequests(db, { cursor?, limit })`: `stars requests` reads one page of 50, the
+admin's `GET /admin/star-refunds` pages of `ADMIN_PAGE_SIZE` by a keyset on `(requested_at, id)`
+with the audit row `stars_refund_requests_viewed`.
 
 ## Timing (Rule 10)
 
@@ -230,8 +268,10 @@ request in `stars requests`.
   `paysupportList` 1 / 2, `paysupportRequest` 1 / 2; none moves `HANDLER_BUDGET_MS`.
 - Backend (`apps/backend/src/timing.ts`): the pre-checkout budget and a reconciler stop (one call
   and one push) inside phase 1; `MAX_PAGES × STARS_TELEGRAM_API_TIMEOUT_MS < STARS_RECONCILE_TICK_MS
-  < STARS_RECONCILE_WINDOW_S`.
-- Both chains throw at import.
+  < STARS_RECONCILE_WINDOW_S`; the admin's refund (#510): `STARS_TELEGRAM_API_TIMEOUT_MS ≤
+  STARS_REFUND_BUDGET_MS` (3.5 s, `packages/shared/src/stars.ts`) `< SHUTDOWN_PHASE1_BUDGET_MS`.
+- Web (`apps/web/src/timing.ts`): `STARS_REFUND_BUDGET_MS < BACKEND_REQUEST_TIMEOUT_MS`.
+- The chains throw at import.
 
 ## Accepted risks
 
@@ -246,9 +286,15 @@ request in `stars requests`.
    how many.
 5. **Between a refund and its record**, when the command's record fails: at most one reconciler tick
    (5 min). Falsifiable: the reconciler runs (started after `listen()`) and assumption 1 holds.
-6. **A staff notice lost by a shutdown**: the request stays listed by `stars requests`.
-7. **The refund's audit actor is `system`**: the staff member who ran the command is not identified
-   (#510 brings the admin button and the staff identity).
+6. **A staff notice lost by a shutdown**: the request stays listed by `stars requests` and on
+   «Возвраты Stars».
+7. **The CLI's refund is recorded with actor `system`**: the staff member who ran the command is not
+   identified. The admin's refund (#510) names the staff member and the session.
+8. **Between an admin refund and its record**, when the route's record fails: the same window as
+   risk 5; the staff member sees «Результат неизвестен» and the card shows `refunded` once the
+   reconciler records it.
+9. **The card lists a user's 20 newest Stars payments** (#510); an older `paid` one is refunded from
+   «Возвраты Stars» (if asked for) or the CLI. Falsifiable: no pilot user has more than 20.
 
 ## Owner checks (not run by the pipeline)
 
@@ -269,7 +315,11 @@ request in `stars requests`.
    ```
 
    Expect «Возврат выполнен и записан», one `refund` row of −50 (less if spent). The same command
-   again answers «Уже возвращена …» from the row, without Telegram. Observe the order of the
+   again answers «Уже возвращена …» from the row, without Telegram. The admin path (#510): a second
+   test purchase, «Вернуть Stars» with a reason on the user card's «Оплаты Stars» → the notice
+   «Возврат Stars выполнен и записан», one `refund` row, a `stars_refunded` row with `actor_type =
+   admin` and the staff member's id, the request gone from «Возвраты Stars»; the button is gone from
+   the row and a repeat by the CLI answers «Уже возвращена». Observe the order of the
    transactions and the refund's shape once (assumption 1: `id` = the charge id, `receiver.type =
    user`, and its `transaction_type`) and note them here:
 
@@ -292,8 +342,8 @@ request in `stars requests`.
 
 ## Boundaries
 
-- **#510** — the refund button and the requests page in the admin, with the staff member's identity
-  in the audit row.
+- **#510** (done) — the refund button and the requests page in the admin, with the staff member's
+  identity in the audit row.
 - **#246** — crediting a `held` payment, by the manual adjustment.
 - **#123** (done) — the buy row under the 80 % / 100 % nudges.
 - **#27** (done) — «💳 Пополнить» under the buy row of the status card and beside «⭐ Купить

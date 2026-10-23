@@ -261,7 +261,7 @@ Implementer picks it up only once this comment exists.
 | `.github` | core 14, 16 |
 | `apps/backend` | signal-h1 20, 43 |
 | `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
-| `apps/backend/src/admin` | core 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 48; bot-ui 18, 19, 29, 30, 31, 46; auth 12, 13 |
+| `apps/backend/src/admin` | core 2, 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 48; bot-ui 18, 19, 29, 30, 31, 46; payments 39; auth 12, 13 |
 | `apps/backend/src/auth` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49; payments 35; auth 12, 13 |
 | `apps/backend/src/bot-texts` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/backend/src/broker` | core 26; trading 21; auth 12 |
