@@ -314,6 +314,18 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     match: 'await new Promise((resolve) => setTimeout(resolve, 300));',
     reason: `${NEGATIVE} (no tick armed by the tick stop() ended, K8b)`,
   },
+  {
+    file: 'packages/e2e/src/demo-cycle.db.test.ts',
+    form: 'F3',
+    match: 'expect(Date.now() - acceptedAt).toBeLessThan(1_000);',
+    reason: `${WAKE_BOUND}; #723: the open block within ~1 s of the accept, on production's tick`,
+  },
+  {
+    file: 'packages/e2e/src/demo-cycle.db.test.ts',
+    form: 'F3',
+    match: 'expect(Date.now() - settledAt).toBeLessThan(1_000);',
+    reason: `${WAKE_BOUND}; #723: the result within ~1 s of the settle, on production's tick`,
+  },
 ];
 
 // Files that in-flight issues still own; their conversion is the follow-up to #205. Each has to

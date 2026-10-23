@@ -10,6 +10,7 @@ import {
   createClientPush,
   createInitDataVerifier,
   createScanPacer,
+  createSessionNoticeListener,
   createSessionNoticeSender,
   DEPOSIT_INIT_DATA_MAX_AGE_MS,
   ensureFreshAccessToken,
@@ -19,6 +20,7 @@ import {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
+  SESSION_NOTICE_TICK_MS,
   signalRestCapacity,
   unusedAdminDeps,
   unusedDepositDeps,
@@ -27,7 +29,13 @@ import {
   type TradingRoutesDeps,
 } from '@binarius/backend/e2e';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
-import { createTokenCipher, recordSignalDecision, setLastAnalysis, type Db } from '@binarius/db';
+import {
+  createTokenCipher,
+  recordSignalDecision,
+  SESSION_NOTICE_CHANNEL,
+  setLastAnalysis,
+  type Db,
+} from '@binarius/db';
 import { SessionStakeStrategy } from '@binarius/shared';
 import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
@@ -49,8 +57,9 @@ export const E2E_BACKEND_TUNING = {
   publisherPollMs: 50,
   // the session messages' tick, pace and gap per chat (production: SESSION_NOTICE_TICK_MS,
   // SESSION_NOTICE_SEND_PER_SECOND, SESSION_NOTICE_CHAT_GAP_MS); the gap no longer than the tick,
-  // as in production (#660)
-  noticeTickMs: 200,
+  // as in production (#660). The tick is production's (#723): a message within a second of its
+  // trade is the wake's, not a short tick's
+  noticeTickMs: SESSION_NOTICE_TICK_MS,
   noticePerSecond: 50,
   noticeChatGapMs: 100,
   // one warm-up before listen(), as index.ts does; nothing in the run waits for a second refresh
@@ -212,6 +221,12 @@ export async function startE2eBackend(deps: {
       chatGapMs: E2E_BACKEND_TUNING.noticeChatGapMs,
     },
   });
+  const sessionNoticeListener = createSessionNoticeListener({
+    pool,
+    channel: SESSION_NOTICE_CHANNEL,
+    onNotification: () => sessionNotices.wake(),
+    logger: app.log,
+  });
 
   await pairsCatalog.refresh();
   pairsCatalog.start();
@@ -219,6 +234,7 @@ export async function startE2eBackend(deps: {
   const { port } = app.server.address() as AddressInfo;
   publisher.start();
   sessionNotices.start();
+  sessionNoticeListener.start();
 
   return {
     url: `http://127.0.0.1:${port}`,
@@ -228,6 +244,7 @@ export async function startE2eBackend(deps: {
       await publisher.stop();
       pairsCatalog.stop();
       await balanceReconciler.stop();
+      await sessionNoticeListener.stop();
       await sessionNotices.stop();
       await jobs.close();
       await queueRedis.quit();

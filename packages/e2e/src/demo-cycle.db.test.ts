@@ -235,7 +235,13 @@ it('runs /start → the email login → a demo session → its result', async ()
   // message goes only after a no_signal decision (#722)
 
   // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it - the
-  // first two once the backend showed their open block (#700): step 1 a new message, step 2 its edit
+  // first two once the backend showed their open block (#700): step 1 a new message, step 2 its edit.
+  // The sender ticks every 3 s as in production: the open blocks and step 2's result come within
+  // a second only because the accept and the settle wake it (#723)
+  const resultShown = (call: ApiCall) =>
+    call.method === 'editMessageText' &&
+    textOf(call).includes('Шаг 2') &&
+    !textOf(call).includes('⏳');
   const amounts = [1, 2.18, 1, 1, 1, 1];
   const openShown = [
     (call: ApiCall) =>
@@ -259,9 +265,11 @@ it('runs /start → the email login → a demo session → its result', async ()
       `intent ${n} accepted`,
       async () => (await reads.intentsOf(started.id))[n - 1]?.status === TradeIntentStatus.Accepted,
     );
+    const acceptedAt = Date.now();
     const shown = openShown[n - 1];
     if (shown !== undefined) {
       await until(`trade ${n}'s open block`, () => backend.push.calls.some(shown));
+      expect(Date.now() - acceptedAt).toBeLessThan(1_000);
     }
     broker.trades.settle(Number(trade?.id), {
       outcome: n === 1 ? MockTradeOutcome.Loss : MockTradeOutcome.Win,
@@ -270,6 +278,11 @@ it('runs /start → the email login → a demo session → its result', async ()
       `intent ${n} settled`,
       async () => (await reads.intentsOf(started.id))[n - 1]?.status === TradeIntentStatus.Settled,
     );
+    if (n === 2) {
+      const settledAt = Date.now();
+      await until("trade 2's result", () => backend.push.calls.some(resultShown));
+      expect(Date.now() - settledAt).toBeLessThan(1_000);
+    }
   }
   await until(
     'the session stops',
