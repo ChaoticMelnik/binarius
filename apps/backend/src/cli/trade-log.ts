@@ -24,11 +24,19 @@ import {
   type TradeLogRow,
 } from '@binarius/db';
 import { formatFailure } from './kill-switch';
+import {
+  EXIT_USAGE as REPORT_EXIT_USAGE,
+  parseTradeReportArgs,
+  runTradeReport,
+  type TradeReportArgs,
+} from './trade-report';
 
 // The trade log's export (#666, docs/trade-log.md → The export): the decisions recorded in a
 // period, one JSON line each, or the closed trades among them in the stand's calibrate shape.
 // Internal ids only: no telegram id, no broker user id, no token, no raw broker payload.
 // 0 done (no rows included: an export is not a gate), 1 failed, 2 not understood.
+// The entry point of the trade report too (#502, docs/trade-log.md → The report): parsed and
+// rendered in trade-report.ts; this file dispatches the subcommand and owns the connection.
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
@@ -38,13 +46,18 @@ export const TRADE_LOG_PAGE_ROWS = 200;
 export const TradeLogFormat = { Jsonl: 'jsonl', TradesJson: 'trades-json' } as const;
 export type TradeLogFormat = (typeof TradeLogFormat)[keyof typeof TradeLogFormat];
 
-const USAGE = `Выгрузка журнала решений сессий (docs/trade-log.md).
+const USAGE = `Выгрузка журнала решений сессий и отчёт по сделкам (docs/trade-log.md).
 
   trade-log export --from <ISO 8601> [--to <ISO 8601>] [--format jsonl|trades-json] [--session <uuid>]
+  trade-log report --since <ISO 8601 | Nh | Nd> [--until <ISO 8601>]
 
---from — начало периода (включительно), --to — конец (не включительно, по умолчанию — сейчас
+export: --from — начало периода (включительно), --to — конец (не включительно, по умолчанию — сейчас
 по часам базы), по времени записи решения; время — с зоной, до миллисекунд. jsonl — строка на решение; trades-json — массив закрытых сделок
-для stand calibrate. Данные — в stdout, итог — в stderr.`;
+для stand calibrate. Данные — в stdout, итог — в stderr. Код выхода: 0 — сделано, 1 — ошибка, 2 — не понято.
+report: --since — начало периода (включительно): дата ISO 8601 с зоной или N часов (h) / дней (d) до
+--until, N от 1 до 9999; --until — конец (не включительно, по умолчанию — сейчас по часам базы); по
+времени создания intent'а. Отчёт — в stdout, итог — в stderr. Код выхода: 0 — отчёт напечатан,
+1 — нет закрытых сделок за период или ошибка, 2 — не понято.`;
 
 export interface TradeLogArgs {
   from: Date;
@@ -119,6 +132,15 @@ export function parseTradeLogArgs(argv: readonly string[]): TradeLogArgs {
     format,
     ...(values.session === undefined ? {} : { sessionId: values.session }),
   };
+}
+
+export type TradeLogCommand =
+  { kind: 'export'; args: TradeLogArgs } | { kind: 'report'; args: TradeReportArgs };
+
+export function parseTradeLogCommand(argv: readonly string[]): TradeLogCommand {
+  return argv[0] === 'report'
+    ? { kind: 'report', args: parseTradeReportArgs(argv) }
+    : { kind: 'export', args: parseTradeLogArgs(argv) };
 }
 
 // One line, field by field (Rule 9): nothing of a row reaches the output unnamed.
@@ -283,9 +305,9 @@ export async function runTradeLogCli(
   out: (text: string) => void,
   err: (line: string) => void,
 ): Promise<number> {
-  let args: TradeLogArgs;
+  let command: TradeLogCommand;
   try {
-    args = parseTradeLogArgs(argv);
+    command = parseTradeLogCommand(argv);
   } catch (error) {
     err(error instanceof Error ? error.message : String(error));
     err(USAGE);
@@ -303,6 +325,16 @@ export async function runTradeLogCli(
 
   const pool = new Pool({ connectionString: databaseUrl });
   const db = createDb(pool);
+  if (command.kind === 'report') {
+    try {
+      const code = await runTradeReport(db, command.args, out, err);
+      if (code === REPORT_EXIT_USAGE) err(USAGE);
+      return code;
+    } finally {
+      await pool.end().catch(() => undefined);
+    }
+  }
+  const { args } = command;
   try {
     let count = 0;
     if (args.format === TradeLogFormat.Jsonl) {

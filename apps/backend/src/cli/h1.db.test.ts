@@ -25,7 +25,8 @@ import {
 } from '@binarius/db/testing';
 import { H1_SHADOW_SETS } from '@binarius/signal';
 import { h1ShadowParams } from '../h1/shadow';
-import { ALL_PAIRS, NO_PAYOUT, NO_SET, NO_TRADES, parseH1Args, runH1Cli } from './h1';
+import { NO_SET, parseH1Args, runH1Cli } from './h1';
+import { ALL_PAIRS, NO_PAYOUT, NO_TRADES } from './report';
 import { runTradeLogCli } from './trade-log';
 
 // The H1 shadow report (#681, docs/h1.md → The report) through runH1Cli on a temporary migrated
