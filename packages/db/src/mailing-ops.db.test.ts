@@ -2343,9 +2343,11 @@ describe('retention: weekly_summary', () => {
     }
   });
 
+  // two trades: one is RW4b's boundary
   it('RW8 plans one job when two planners run at the same time', async () => {
     const user = await retained();
     await trade(user, { createdAt: inWeek(hours(24)) });
+    await trade(user, { createdAt: inWeek(hours(25)) });
     await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
     expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
   });
