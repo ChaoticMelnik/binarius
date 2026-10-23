@@ -58,6 +58,7 @@ import {
   intentView,
   messageAnswer,
   photoAnswer,
+  photoCallbackUpdate,
   sessionView,
   stubSessionResumer,
   stubSignalWaiter,
@@ -2248,6 +2249,7 @@ describe('an H1 session from the bot (#745)', () => {
   const H1 = sessionView({ settings: built.data });
   const H1_UP = sessionView({ settings: built.data, signalAction: 'up' });
   const H1_STOPPED = sessionView({ ...STOPPED, settings: built.data });
+  const H1_UP_STOPPED = sessionView({ ...STOPPED, settings: built.data, signalAction: 'up' });
   const H1_COMPLETED = sessionView({
     ...STOPPED,
     settings: built.data,
@@ -2305,15 +2307,117 @@ describe('an H1 session from the bot (#745)', () => {
     expect(last).not.toHaveProperty('reply_markup');
   });
 
-  it('H1-B3 a press of that «⏹» stops through the in-place path, with no waiting message named', async () => {
-    const { press, calls, stopSession, sessionTracker } = setup({
-      stopSession: () => Promise.resolve(H1_STOPPED),
+  const NO_TEXT: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: there is no text in the message to edit',
+  };
+  const NOT_MODIFIED: ApiError = {
+    ok: false,
+    error_code: 400,
+    description:
+      'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
+  };
+  const ENDED = () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive));
+  // a press of the «⏹» on the H1 session message, a photo by default (its start had a signal)
+  const pressStop = (scene: ReturnType<typeof setup>, photo = true, messageId?: number) => {
+    const update = photo ? photoCallbackUpdate(STOP) : callbackUpdate(STOP);
+    const message = (update as unknown as { callback_query: { message: { message_id: number } } })
+      .callback_query.message;
+    if (messageId !== undefined) message.message_id = messageId;
+    return { messageId: message.message_id, done: scene.pressUpdate(update) };
+  };
+  const mediaOf = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'editMessageMedia').map((call) => call.payload);
+  const infos = (logger: ReturnType<typeof fakeLogger>) =>
+    logger.info.mock.calls.map((call) => call[1] as string);
+
+  it('H1-B3 a press on the photo draws the stopped photo in place, without the «⏹», and tracks it', async () => {
+    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
+    // the old path's text edit of a photo would be refused so
+    scene.apiErrors.set('editMessageText', NO_TEXT);
+    const { messageId, done } = pressStop(scene);
+    await done;
+    expect(scene.stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), undefined]]);
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
+    const [media] = mediaOf(scene.calls);
+    expect(media).toMatchObject({ chat_id: USER.id, message_id: messageId });
+    expect((media?.media as Record<string, unknown>).caption).toBe(statusOf(H1_UP_STOPPED));
+    expect(media).not.toHaveProperty('reply_markup');
+    expect(scene.sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(scene.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
+      view: H1_UP_STOPPED,
+      messageId,
     });
-    await press(STOP);
-    expect(stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), undefined]]);
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
-    expect(payloadOf(calls, 'editMessageText')?.text).toBe(statusOf(H1_STOPPED));
-    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: H1_STOPPED });
+  });
+
+  it('H1-B3b a press on a text H1 message draws the stopped text in place and tracks it', async () => {
+    const scene = setup({ stopSession: () => Promise.resolve(H1_STOPPED) });
+    const { messageId, done } = pressStop(scene, false);
+    await done;
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const edited = payloadOf(scene.calls, 'editMessageText');
+    expect(edited).toMatchObject({ message_id: messageId, text: statusOf(H1_STOPPED) });
+    expect(edited).not.toHaveProperty('reply_markup');
+    expect(scene.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({
+      view: H1_STOPPED,
+      messageId,
+    });
+  });
+
+  it('H1-B3c an H1 session ended already: read, then the same photo edit in place', async () => {
+    const scene = setup({ stopSession: ENDED, readSession: () => Promise.resolve(H1_UP_STOPPED) });
+    const { messageId, done } = pressStop(scene);
+    await done;
+    expect(scene.readSession).toHaveBeenCalledTimes(1);
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
+    expect(mediaOf(scene.calls)[0]).not.toHaveProperty('reply_markup');
+    expect(scene.sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ messageId });
+  });
+
+  it('H1-B3d the pressed photo gone: the stop reply anew under the end of the path, not tracked', async () => {
+    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
+    scene.apiErrors.set('editMessageMedia', EDIT_GONE);
+    await pressStop(scene).done;
+    expect(methods(scene.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageMedia',
+      'sendMessage',
+    ]);
+    const sent = payloadOf(scene.calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(H1_UP_STOPPED));
+    expect(sent?.reply_markup).toEqual(sessionCardKeyboard(H1_UP_STOPPED, CASHIER_URL));
+    expect(scene.sessionTracker.track).not.toHaveBeenCalled();
+    expect(infos(scene.logger)).toContain('the pressed message was already gone');
+  });
+
+  it('H1-B3e the photo edit refused otherwise: logged, nothing sent, not tracked', async () => {
+    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
+    scene.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
+    await pressStop(scene).done;
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
+    expect(scene.sessionTracker.track).not.toHaveBeenCalled();
+    expect(warnings(scene.logger)).toEqual(['trading session message not edited']);
+  });
+
+  it('H1-B3f a second press on the same photo: one more edit, «not modified» is drawn, tracked again', async () => {
+    const scene = setup({ stopSession: () => Promise.resolve(H1_UP_STOPPED) });
+    const first = pressStop(scene);
+    await first.done;
+    scene.stopSession.mockImplementation(ENDED);
+    scene.readSession.mockImplementation(() => Promise.resolve(H1_UP_STOPPED));
+    scene.apiErrors.set('editMessageMedia', NOT_MODIFIED);
+    await pressStop(scene, true, first.messageId).done;
+    expect(methods(scene.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageMedia',
+      'answerCallbackQuery',
+      'editMessageMedia',
+    ]);
+    expect(scene.sessionTracker.track).toHaveBeenCalledTimes(2);
+    expect(scene.sessionTracker.track.mock.calls[1]?.[0]).toMatchObject({
+      messageId: first.messageId,
+    });
   });
 
   it('H1-B4 h1_payout_too_low: its text under another pair and the menu, no warning', async () => {
