@@ -22,7 +22,8 @@ backend under the staff session — a `GET` for every read page, the `POST /admi
 #78 for a password change (its own section below; its backend phases are in staff-login.md), a
 `POST /admin/bot-texts/:key/preview|save|reset` and `POST /admin/bot-texts/publish` for the bot
 texts (Bot texts below), a `POST /admin/users/:id/tokens` for a token adjustment (Корректировка
-токенов below). A read page
+токенов below), a `POST /admin/star-payments/:id/refund` for a Stars refund (Возврат Stars below).
+A read page
 goes like this:
 
 1. `web` reads the `admin_session` cookie. A cookie of the wrong shape counts as none: it is
@@ -62,12 +63,13 @@ How `web` acts on a backend answer:
 | 404 `not_found` (bot text) | 404 «Текст не найден»: web's catalog has a key the backend's lacks; the row is already written |
 | 404 `not_found` (token adjustment) | 404 «Пользователь не найден»; the row is already written, nothing else |
 | 404 `not_found` (service mark) | 404 «Аккаунт не найден»; the row is already written, nothing else |
+| 404 `not_found` (Stars refund) | 404 «Оплата не найдена»; the row is already written, nothing else |
 | anything else | 500, cookie kept, the error logged by name and code |
 
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты | Служебные аккаунты) and the account block («login · Сменить пароль · Выйти»: the login, the link to the password
+Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты | Служебные аккаунты | Возвраты Stars) and the account block («login · Сменить пароль · Выйти»: the login, the link to the password
 page and the logout button). The login shown is the one in the `me` of the backend answer the page
 was built from; a page rendered without asking the backend (a refused search, a refused password
 form) shows no account block.
@@ -180,13 +182,19 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   the columns of the deposits list (or «Депозитов нет.»), and «Все записи →»: the list filtered by
   this user. Read by the list's own query. The owner of a deposit is `deposit_events.user_id` alone:
   a row that names one of the user's accounts but no user is not in the section.
+- **Оплаты Stars** (#510) — the `ADMIN_USER_RECENT_LEDGER` newest `star_payments` of the user (by
+  `user_id`, the payload's user; newest `paid_at` first) or «Оплат Stars нет.»: the charge id, the
+  payer (who gets the Stars back — a forwarded invoice's payer differs from the user), the package,
+  the Stars, the tokens, the status, paid, refunded, the time of a /paysupport request, and
+  «Вернуть Stars» with a «Причина» on a `paid` or `held` payment (Возврат Stars below). Read by
+  `listStarPaymentsForAdmin` (`packages/db/src/star-payment-ops.ts`).
 - **Аудит** (#110) — only a link, «Все события по пользователю →»: the audit log filtered by
   `entityType=user&entityId=<id>`. The card does not read `audit_log`.
 
-The card is six `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
-the two counters, the recent ledger rows, the recent deposits: an account linked, an intent created,
-a ledger row written or a deposit recorded in between may or may not show, and each answer was true
-at its moment — the balance in «Токены» and the rows of «Движения токенов» can disagree by such a
+The card is seven `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
+the two counters, the recent ledger rows, the recent deposits, the recent Stars payments: an account
+linked, an intent created, a ledger row written, a deposit or a Stars payment recorded in between
+may or may not show, and each answer was true at its moment — the balance in «Токены» and the rows of «Движения токенов» can disagree by such a
 row, and so can «Движения токенов» and «Депозиты». The sections are part of the
 card's read: they write no row of their own (the one `user_viewed` row stays as it was).
 
@@ -453,6 +461,38 @@ audit row is `asStaff`'s (below); `setH1Mark` writes none of its own, the CLI wr
 `system`. Tests: `admin/routes.db.test.ts` H1-A1–A5, `app.test.ts` H1-W1–W5,
 `backend-client.test.ts` C3.
 
+### Возврат Stars — `POST /admin/star-payments/:id/refund` (#510)
+
+«Вернуть Stars» on a `paid` or `held` payment of the user card's «Оплаты Stars» and of «Возвраты
+Stars» posts `reason` and `return=<the page>`. `web` checks the id against `UUID_PATTERN` (404 «Оплата
+не найдена», no backend call) and the reason against `starRefundReasonSchema` — trimmed, 1–200
+characters without control characters, the CLI's `--reason` (400 with the message) — and sends
+`{ reason }`. The backend's order, the Telegram call outside any transaction and the record by the
+CLI's writer are in [stars.md → From the admin](stars.md#from-the-admin-510). The route is the second
+one outside `asStaff` (Boundaries below).
+
+| Backend | `web` |
+|---|---|
+| 200 `refunded` | 303 to `return` with `?notice=refunded`: «Возврат Stars выполнен и записан.» |
+| 200 `already_recorded` | 303 to `return` with `?notice=refundRecorded`: «Оплата уже была возвращена — записано раньше.» |
+| 200 `refused` | 409 «Telegram отказал в возврате: <code> <text>. Ничего не записано.» (the text escaped) |
+| 200 `unknown`, not answered, a 2xx outside the contract, a 5xx | 500 «Результат неизвестен»: the refund may have happened — the card's status shows it once recorded (the reconciler, within 5 minutes); a repeat is safe |
+| 404 `not_found` | 404 «Оплата не найдена» |
+| 401 `session_invalid` | cookie cleared, 302 to login |
+| any other 4xx | 500, our own failure |
+
+`return` is a user card or `/admin/star-refunds`; anything else (another site, `..`, a query) goes
+to `/admin/star-refunds` (`returnPathOf`, no open redirect). Tests: `admin/routes.db.test.ts`
+SR1–SR13, `app.test.ts` SR-W1–SR-W7, `backend-client.test.ts` (the longest body).
+
+### Возвраты Stars — `GET /admin/star-refunds?cursor=` (#510)
+
+The /paysupport requests whose payment is not refunded, oldest first, `ADMIN_PAGE_SIZE` a page
+with «Далее»/«В начало» (keyset on the request's `(requested_at, id)`): the user (a link to the
+card), the payment's columns of the card and «Вернуть Stars». A request for a payment refunded
+since is not listed. One query with `stars requests` (`listOpenStarRefundRequests`), which reads one
+page of 50. A cursor of the wrong shape → 302 without it.
+
 ### Audit log — `GET /admin/audit?action=&entityType=&entityId=&actorId=&from=&to=&cursor=`
 
 `audit_log`, newest first, `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the other
@@ -695,12 +735,18 @@ named and bounded; nothing else is recorded.
 | H1 mark set or asked again (#745) | `broker_account_h1_set` | `broker_account`, the id | `{ path: '/admin/broker-accounts/:id/h1', result, accountId }` — `result` is `marked` or `unchanged` |
 | H1 mark removed, asked again or kept | `broker_account_h1_cleared` | `broker_account`, the id | the same with `result` `unmarked`, `unchanged` or `active_session` |
 | H1 mark, no account | the action of the request | — | `{ path, result: 'not_found', accountId }`; an id that is not a uuid: `{ path, result: 'not_found' }` |
+| Stars refund requests (#510) | `stars_refund_requests_viewed` | — | `{ path: '/admin/star-refunds', cursor? }` — `cursor` only when given |
+| Stars refund, recorded (#510) | `stars_refunded` | `star_payment`, the id | `{ path: '/admin/star-payments/:id/refund', result: 'refunded', sessionId, paymentId, …}` and the CLI's payload (`userId`, `payerTelegramUserId`, `fromStatus`, `packageCode`, `totalAmount`, `tokensTaken`, `tokensNotRecovered`, `via: 'admin'`, `telegramAnswer`, `reason`) — written in the record's transaction |
+| Stars refund, recorded before | `stars_refunded` | `star_payment`, the id | `{ path, result: 'already_recorded', sessionId, paymentId, via, telegramAnswer? }` — `telegramAnswer` only when Telegram was asked |
+| Stars refund, refused or unknown | `stars_refunded` | `star_payment`, the id | `{ path, result, sessionId, paymentId, via, telegramErrorCode? }` — `result` is `refused` (with the code) or `unknown`; nothing else written |
+| Stars refund, no payment | `stars_refunded` | — | `{ path, result: 'not_found', sessionId, paymentId, via }`; an id that is not a uuid: without `paymentId` |
 
 A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a
 uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row, with
 two exceptions: a save or reset that publishes writes its own row in the transaction and
 `bot_profile_published` after the Bot API calls (a row inside could not carry their result), and
-«Опубликовать заново» writes only `bot_profile_published`. A `bot_text_saved` without the
+«Опубликовать заново» writes only `bot_profile_published`, and a Stars refund writes only its
+`stars_refunded` row, after the Telegram call. A `bot_text_saved` without the
 `bot_profile_published` after it means the process stopped between the two; «Опубликовать заново»
 mends the menu.
 
@@ -742,7 +788,10 @@ What `web` refuses before asking the backend, with no row:
   zero, a blank or over-long reason, a control character, no balance) → 400 with the message;
 - a service mark for an account id that is not a uuid → 303 to the service page; a `service` other
   than `on` or `off` → 400; a `return` other than the three pages that carry the form → the service
-  page (no open redirect).
+  page (no open redirect);
+- a Stars refund for a payment id that is not a uuid → 404; a reason outside
+  `starRefundReasonSchema` or a field given twice → 400 with the message; a `return` other than a
+  user card or `/admin/star-refunds` → the requests page (#510).
 
 An empty value (`q=`, `status=` from the form's empty option, a typed `halted=`) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
@@ -752,17 +801,20 @@ session token of the wrong shape (401 `session_invalid`), a list query outside t
 `validation`), a bot text body outside its schema (400 `validation`) or over
 `ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (413), a token adjustment body outside its schema (400
 `validation`) or over 4 KiB (413), a service mark body other than `{ service: boolean }` (400
-`validation`) or over 4 KiB (413). A card id that is not a uuid is checked *inside* the
+`validation`) or over 4 KiB (413), a Stars refund body other than `{ reason }` within
+`starRefundReasonSchema` (400 `validation`) or over 4 KiB (413). A card id that is not a uuid is checked *inside* the
 session, so the attempt leaves a row, without the id; so is a bot text key.
 
 Not enforced by code: a new route in `apps/backend/src/admin/routes.ts` must go through `asStaff`.
 The `Tx` parameter guarantees a transaction, not the audit row; a route opening `db.transaction`
-around these reads directly is caught only in review. The one exception is `POST
-/admin/bot-texts/publish` (#361): it checks the live session with `readLiveStaffContext`
-(`packages/db/src/staff-ops.ts`) — the predicate of `runAsStaff`, without the touch and without a
-row —, calls Telegram and then writes its `bot_profile_published` row: a Bot API call cannot run
-inside the transaction, and the row has to carry the result. Its row is written by the staff member
-who pressed the button even if the session is revoked between the check and the insert.
+around these reads directly is caught only in review. The two exceptions are `POST
+/admin/bot-texts/publish` (#361) and `POST /admin/star-payments/:id/refund` (#510): each checks the
+live session with `readLiveStaffContext` (`packages/db/src/staff-ops.ts`) — the predicate of
+`runAsStaff`, without the touch and without a row —, calls Telegram and then writes its row
+(`bot_profile_published`; the refund's `stars_refunded`, in the record's own transaction): a Bot
+API call cannot run inside the transaction, and the row has to carry the result. The row is written
+by the staff member who pressed the button even if the session is revoked between the check and the
+insert, and the refund does not extend the session's idle window.
 
 ## Limits
 
@@ -780,7 +832,7 @@ who pressed the button even if the session is revoked between the check and the 
   sessions, 1 000 000 ledger rows (two per trade), 100 000 deposits (one or two deliveries each) and 100 000
   broker accounts on the pilot. If `explain analyze` of a list or the overview passes 200 ms at those sizes, add a
   `(created_at, id)` index in its own migration.
-- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most six
+- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most seven
   `SELECT`s (the user card).
 - The password change is one backend call under the same timeout; a timeout shows «Результат
   неизвестен» — the change may have committed.
@@ -790,8 +842,8 @@ who pressed the button even if the session is revoked between the check and the 
   — the short transactions of `createInTransaction`, `rejectIntent`, `settleIntent`,
   `confirmBrokerAccount`, `setNotificationLevel`, `markTelegramBlocked`, milliseconds — with no
   timeout of its own; `BACKEND_REQUEST_TIMEOUT_MS` bounds what `web` waits for, and a timeout is
-  «Результат неизвестен». A refusal reads the card in the same transaction: the card's six `SELECT`s
-  under the lock.
+  «Результат неизвестен». A refusal reads the card in the same transaction: the card's seven
+  `SELECT`s under the lock.
 - The service accounts page and the keeper read every marked account without an index on
   `service_since`: a scan of `broker_accounts`, once a minute for the keeper. If `explain analyze` of
   `listServiceBrokerAccounts` passes 50 ms, add a partial index on `(service_since, id) where
@@ -821,6 +873,13 @@ who pressed the button even if the session is revoked between the check and the 
   may not fit: web then says the outcome is unknown, and the backend finishes it and writes its row.
   Telegram's limits on `setMy*` are not documented; a 429 shows as the method's error, and a repeat
   is by hand.
+
+- A Stars refund (#510) waits for one `refundStarPayment` of at most `STARS_REFUND_BUDGET_MS`
+  (3.5 s), which `apps/web/src/timing.ts` holds below `BACKEND_REQUEST_TIMEOUT_MS` at import; the
+  reads and the record around it are milliseconds. `star_payments` has no index on `user_id` (the
+  card's section) and `star_refund_requests` none on `requested_at` (the requests page): both scan.
+  Assumed: under 10 000 payments on the pilot; if `explain analyze` of either passes 50 ms, add the
+  index in its own migration.
 
 ## Running it locally
 
