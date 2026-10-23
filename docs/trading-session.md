@@ -656,7 +656,8 @@ the session (`listRunnableSessions` skips an account with a non-terminal intent)
 | `queued` | waits; a job delivered after `INTENT_MAX_AGE_MS` (60 s) ends `expired`, which counts towards `rejected_twice` like any `rejected` (R3) |
 | `submitting`, `unknown`, `reconciling`, `reconciling` with the dead worker's claim | waits; a redelivered job never sends again (R1b); the claim is a lease of `RECONCILE_RETRY_MS` (60 s) (R1) |
 | …and the pass finds the trade | the intent goes `accepted`/`settled`, then the next step (R1, H9) |
-| …and the pass finds nothing | `manual_review` and the account halted; the next tick stops the session `manual_review`, the reserve kept (R2; #274 replaces the halt with a release on a proven absence) |
+| …and the pass finds nothing (demo, absence proven twice) | `rejected` (`reconciliation_not_found`) about 2.5-3.5 min after the submit, the reserve released, no halt; the session goes on and the intent counts towards `rejected_twice` (R2, #274) |
+| …and the pass finds nothing (real, or no proof) | `manual_review` and the account halted; the next tick stops the session `manual_review`, the reserve kept (R2r) |
 | `accepted` | waits for `close_trade` on the socket or the settlement catch-up (R4) |
 
 A hold-back is lost with the worker's memory; the new worker asks again and the attempt is
@@ -1168,7 +1169,8 @@ docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for
 - #283 (shipped): the backend routes (start, status, stop — the writer of `user_stopped`, with
   #122's stop of all); #284: the bot ([bot-session.md](bot-session.md)).
 - #131 (shipped): restart recovery, [above](#recovery-after-a-restart-131); a process-level kill
-  in the tests is #105, a release on a proven absence instead of the halt is #274. #135:
+  in the tests is #105; #274 (shipped) releases a demo intent on a proven absence instead of the
+  halt. #135:
   `grant_revoked` as a stop reason; #94: the orchestrator under more than one worker container
   (#93's lease covers the broker sockets only).
 - Real sessions (#327): a session runs only in its user's mode — the start route's pre-check and

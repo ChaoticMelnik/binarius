@@ -30,7 +30,7 @@ bot ──POST /trading/intents──▶ backend ──tx──▶ trade_intents
                               publisher: pending row ──add(jobId = intent id)──▶ BullMQ trading-intents
                               worker: re-read ──CAS queued→submitting──▶ executor.submit ──▶ CAS submitting→accepted|rejected|unknown
 unknown ──outbox──▶ BullMQ trading-reconciliation ──CAS unknown→reconciling──▶ pass (next tick): claim
-        ──token (backend route) + GETs only──▶ CAS reconciling→accepted(→settled) | manual_review(+halt)   (rejected: #274)
+        ──token (backend route) + GETs only──▶ CAS reconciling→accepted(→settled) | manual_review(+halt) | rejected (demo, proven absence)
 bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶ { intent }   (status, lastError, version)
 ```
 
@@ -125,11 +125,11 @@ body). `getTradeIntentView(db, id, telegramUserId)` adds the owner to the join's
 | `planned` → `reserved` → `queued` | backend, creation transaction                                                                                                                                                                                                                                                   | intent and outbox row persisted, token reserved. `queued` is what the API returns                                                                                            |
 | `submitting`                      | worker, `takeIntent` CAS                                                                                                                                                                                                                                                        | the job was taken; `submitted_at` is set on the database clock                                                                                                               |
 | `accepted`                        | worker, an explicit executor result that carries the broker's open trade (`markIntentAccepted`); the reconciliation pass, `concludeReconciled` from `reconciling` with the trade the reconciler found (open → `accepted`; closed → `accepted` and `settled` in one transaction) | the broker confirmed the order and its trade matches the intent; the open `broker_trades` row is written in the same transaction. `socket.emit` or a local `ok` never counts |
-| `rejected`                        | worker (executor said no, the intent expired, the trading switch was closed when the job came, `trading_paused`, or a real intent met a `DEMO_ONLY` worker before the take, `demo_only`, or an H1 session's intent was past its `submit_deadline_at` at the take, `entry_window_missed`, #670), publisher (delivery exhausted); #274: the reconciliation pass on a proven absence | terminal; the token reserve is released in the same transaction                                                                                                              |
+| `rejected`                        | worker (executor said no, the intent expired, the trading switch was closed when the job came, `trading_paused`, or a real intent met a `DEMO_ONLY` worker before the take, `demo_only`, or an H1 session's intent was past its `submit_deadline_at` at the take, `entry_window_missed`, #670), publisher (delivery exhausted), the reconciliation pass on an absence proven twice in demo (`reconciliation_not_found`, #274) | terminal; the token reserve is released in the same transaction                                                                                                              |
 | `unknown`                         | worker (executor timeout, throw, a stale `submitting`, an order sent with no answer, `broker_unavailable`, or an accepted trade that does not match the intent, `trade_mismatch`), sweeper                                                                                     | the order may have reached the broker; reserve kept; a `trading-reconciliation` outbox row is written for reconciliation (#89)                                               |
 | `settled`                         | `settleIntent` from `accepted` (a `close_trade.success` or a REST closed snapshot through `settleClosedTrades`) or from `manual_review` (operator)                                                                                                                              | terminal; the token is debited in the same transaction whatever the trade's profit; `broker_trades` closed                                                                   |
 | `reconciling`                     | worker, `trading-reconciliation` job: `startReconciling` CAS from `unknown`; the pass claims it (`reconcile_claimed_at`, database clock) and asks the `IntentReconciler`                                                                                                        | the outcome is being established; the reserve is kept and the account stays blocked; `unavailable` leaves it here and the pass retries after `RECONCILE_RETRY_MS`            |
-| `manual_review`                   | the reconciliation pass: the reconciler answered `ambiguous` (`reconciliation_ambiguous`), found nothing once the window closed (`reconciliation_not_found`, absence not proven: #274) or offered a trade that does not match (`trade_mismatch`); operator (`manual_review → settled \| rejected`: the ops exist, the tool is a later issue)                                 | the reserve is kept; the same transaction halts the account (`trading_halted`, `halted_reason`) and an `error` line alerts after the commit (#90) |
+| `manual_review`                   | the reconciliation pass: the reconciler answered `ambiguous` (`reconciliation_ambiguous`), found nothing once the window closed (`reconciliation_not_found`, absence not proven: a real intent or no first-page proof, #274) or offered a trade that does not match (`trade_mismatch`); operator (`manual_review → settled \| rejected`: the ops exist, the tool is a later issue)                                 | the reserve is kept; the same transaction halts the account (`trading_halted`, `halted_reason`) and an `error` line alerts after the commit (#90) |
 
 Every transition bumps `version`; every transition is a compare-and-set on `status` (and usually
 `version`), so a duplicate or late writer gets zero rows instead of overwriting newer state. The
@@ -246,7 +246,7 @@ entered twice. What resolves an intent left at each stage:
 | `accepted`                                             | `close_trade.success` → `settleClosedTrades` (the session's writer); the REST catch-up `listOverdueAcceptedIntents` + `listTrades(closed)` + `settleClosedTrades` for a close the session missed or dropped at stop | #101 (socket), #90 (catch-up) |
 | `accepted`, closed before the acceptance was persisted | `settleClosedTrades` answered `not_ours`; the catch-up applies the closed snapshot once the intent is overdue                                                              | #90, #101                                    |
 | `unknown`                                              | the `trading-reconciliation` job (`processReconciliationJob`) → `reconciling`                                                                                              | #89                                          |
-| `reconciling`                                          | the reconciliation pass: first tick at worker start, then every 15 s; a claim is a 60 s lease → `accepted` / `settled` / `manual_review` (`rejected` only through #274)  | #89 (the pass), #90 (the reconciler)         |
+| `reconciling`                                          | the reconciliation pass: first tick at worker start, then every 15 s; a claim is a 60 s lease → `accepted` / `settled` / `manual_review` / `rejected` (demo, absence proven twice, #274)  | #89 (the pass), #90 (the reconciler)         |
 | `manual_review`                                        | the operator: `settleIntent` (with the closed trade from that account's own closed list) or `rejectIntent` (`manual_rejected`)                                             | a later issue (the tool)                     |
 
 With `BROKER_WS_URL` set, `close_trade.success` on the account's session (#101) is the main path
@@ -284,9 +284,23 @@ previous page's last (`seam`) answers `unavailable/broker_contract`; an empty pa
 two or more trades is a `continuity` violation too (the request stood on a trade already read). A
 capped or ignored `limit` shortens the reach, and a cap of 1 fails on the second page
 (`continuity`). `covered` gates `found` and the choice between a retry and manual review; nothing
-is released on it. The trades are merged by `id`, the
-closed form winning (a trade that closed between the two reads). The order is the mock's and
-broker-web's, not yet observed live (docs/broker-rest.md → Trades list).
+is released on it alone (Proof of absence below). The trades are merged by `id`, the
+closed form winning (a trade that closed between the two reads). The order was observed live
+2026-10-23 (docs/broker-rest.md → Observed live (2026-10-23)).
+
+**Proof of absence (#274).** A list's end is proven only on its first page (`offset=0`): the
+reader stopped there (`pagesRead = 1`, covered), and the page is empty, or its ids are distinct,
+its first trade is strictly newer than its last and it reached a trade older than the window;
+every trade on it has the intent's mode. Newest first, a trade inside the window sorts before
+every older one, so ours would be on that page. Nothing is read from a page's length or from a
+later offset (A2 is not a premise); the page being the list's newest prefix (A7) is stated, not
+checked. A proof of both lists counts only in demo and only twice: the first non-aborted attempt
+records its claim in the reconciler's memory and answers `unavailable/absence_unconfirmed`; the
+next attempt on a later claim answers `not_found`. Any other ending of a non-aborted attempt for
+the intent (and a throw) forgets the first proof; an attempt the pass has given up on (deadline,
+`stop()`) answers `timeout` and neither records nor forgets. The two reads are at least
+`RECONCILE_RETRY_MS − RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s) apart, which covers a trade between the
+open and the closed list (A3). A restart forgets every first proof: it only delays a release.
 
 **Answers.**
 
@@ -302,12 +316,15 @@ another amount — the one key the broker may round. It is never `found`.
 | 1 exact                                             | no      | yes                                     | `ambiguous` (a twin beyond the pages cannot be ruled out)       |
 | 0 exact, ≥ 1 near                                   | any     | yes                                     | `ambiguous` → `manual_review` + halt                            |
 | 0 exact, the intent's `last_error = trade_mismatch` | any     | yes                                     | `ambiguous` → `manual_review` + halt                            |
-| 0 exact, nothing near                               | any     | yes                                     | `unresolved` → `manual_review` (`reconciliation_not_found`) + halt |
+| 0 exact, nothing near, real or a list without proof | any     | yes                                     | `unresolved` → `manual_review` (`reconciliation_not_found`) + halt |
+| 0 exact, nothing near, demo, both proven, 1st time  | yes     | yes                                     | `unavailable/absence_unconfirmed`                               |
+| 0 exact, nothing near, demo, both proven, 2nd time  | yes     | yes                                     | `not_found` → `rejected` (`reconciliation_not_found`), reserve released, no halt |
 
-No reconciler in `main` answers `not_found`: an intent with no candidate once the window has
-closed is parked (`manual_review`, `last_error = reconciliation_not_found`) and the account halted,
-in demo as in real; releasing the reserve on a proven absence is #274, after the live probe of the
-trades list. The pass keeps `rejectIntent` on `not_found` as the port's contract (Rule 24). The token
+`not_found` is answered only by the last row (Proof of absence above): the pass releases the
+reserve through `rejectIntent` (Rule 24), runs the balance check (#92) and wakes the session
+orchestrator (#696), whose session goes on and counts the intent as any `rejected`. A real intent,
+or one whose lists prove nothing (a full first page inside the window, one trade, repeated ids,
+equal timestamps, a trade of the other mode), is parked as before. The token
 route refusing (`token_unavailable`) or failing (`backend_unavailable`) and every broker error
 (`rate_limited`, `unauthorized` → `token_unavailable`, `rejected`/`contract_violation` →
 `broker_contract`, `unavailable`, `aborted` → `timeout`) answer `unavailable` with a `warn`;
@@ -328,7 +345,7 @@ source for #69). A lost CAS writes and alerts nothing. Only an operator lifts th
 both columns (the pair CHECK).
 
 **Balance check after an outcome (#92).** After every recorded `accepted`, `settled` and
-`rejected` (the last has no producer until #274), and only while the pass is not stopping, the
+`rejected` (from the reconciler's `not_found`, #274), and only while the pass is not stopping, the
 pass runs `createBalanceCheck` (`intents/balance-check.ts`) for the intent's account under its own
 deadline, `BALANCE_CHECK_TIMEOUT_MS` (20 s: the token, the GET and, on a 401, the report of the
 refused token, `2 × 7 + 5 < 20`). Not after `manual_review`: the account is already halted and
@@ -484,7 +501,7 @@ stored. An executor that throws is logged by the error's name and code only: a c
 message can embed a header or a response body, and key-based redaction cannot scrub a string.
 `trade_mismatch` (the accepted trade does not match the intent) and `manual_rejected` (the
 operator's rejection from `manual_review`) are two of those codes (#17);
-`reconciliation_not_found` (a parked intent in #90, a release in #274) and `reconciliation_ambiguous` are the reconciler's two (#89);
+`reconciliation_not_found` (a parked intent, or a demo release on a proven absence, #274) and `reconciliation_ambiguous` are the reconciler's two (#89);
 `broker_unavailable` is the trade command executor's "sent, no answer says whether it opened"
 (#100), `demo_only` the worker's rejection of a queued real intent under `DEMO_ONLY` before the
 take (#396; `outbox_events.last_error` never receives it, the CHECK carries it because one enum
@@ -543,7 +560,7 @@ spellings) that refuses real intents and sessions in it, read at start
   outcome writes. The port only reads: it never opens a trade.
 - **#90** (shipped): the REST reconciler, the halt and alert on `manual_review`, the settlement
   catch-up and the backend's token route — Reconciliation matching above; it never releases a
-  reserve on absence. **#274**: `not_found` and the release after the live probe. **#91**: no second open
+  reserve on absence. **#274** (shipped): `not_found` and the release on an absence proven twice in demo (Proof of absence above). **#91**: no second open
   after `unknown` (the executor side is proven in #100, [trade-executor.md](trade-executor.md) →
   The two-cases rule). **#92** (shipped): the broker balance check after a reconciliation
   outcome and the session writers' dead letters (above).

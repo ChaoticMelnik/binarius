@@ -214,15 +214,49 @@ strings.
 - The owner's probe of 2026-10-03 (issue #133): `limit=6000` over 10 days gave 4 982 rows across
   exactly 4 999 minutes. The cap is 5 000 rows by `limit`, and the history has gaps.
 
+## Observed live (2026-10-23)
+
+The owner's read-only probe of the trades list for #274 (issue #274, the plan's "Owner step 1"),
+on the pilot, on a **demo** account. P1 reads first pages; P2 watches one new trade from open to
+closed, here a **5-second** trade. The output, verbatim:
+
+```
+P1 ?status=closed&is_demo=true&limit=50&offset=0: HTTP 200 count=50 descending=true strict=true distinct_ids=true ms=true is_demo=[true] older_than_150s=49
+P1 ?status=open&is_demo=true&limit=50&offset=0: HTTP 200 count=0 descending=true strict=false distinct_ids=true ms=true is_demo=[] older_than_150s=0
+P1 ?status=closed&is_demo=false&limit=50&offset=0: HTTP 200 count=0 descending=true strict=false distinct_ids=true ms=true is_demo=[] older_than_150s=0
+P1 ?status=open&is_demo=false&limit=50&offset=0: HTTP 200 count=0 descending=true strict=false distinct_ids=true ms=true is_demo=[] older_than_150s=0
+P1 ?status=closed&limit=50&offset=0: HTTP 200 count=50 descending=true strict=true distinct_ids=true ms=true is_demo=[true] older_than_150s=49
+P1 ?status=closed&is_demo=true&limit=1&offset=0: HTTP 200 count=1 descending=true strict=false distinct_ids=true ms=true is_demo=[true] older_than_150s=0
+P1 ?status=closed&is_demo=true&limit=50: HTTP 200 count=50 descending=true strict=true distinct_ids=true ms=true is_demo=[true] older_than_150s=49
+P1 prefix: the same first closed trade at limit=50, limit=1 and without offset=true
+P2: new trade first seen in open at index 0, 604 ms after its open_timestamp by the broker's Date header (1 s resolution)
+P2: states in order, each run's span between first and last poll: open 3.3s, closed 5.5s
+```
+
+- **A1** confirmed: newest first, strictly, with distinct ids, on every page of two or more trades.
+- **A7** confirmed: `offset=0` is the newest prefix (the same first trade at `limit=50`, `limit=1`
+  and without `offset`), and the new trade was first seen at index 0.
+- **A3** confirmed on the 5-second trade: open, then closed, with no poll that saw it on neither
+  list. The visibility lag was 604 ms.
+- **A4** observed on demo trades only: `is_demo=true` gave `[true]`, and `is_demo=false` gave no
+  rows while the unfiltered list held 50 demo rows, so the filter is neither ignored nor inverted.
+  `[false]` was never seen: the account has no real trades.
+- **A5** confirmed: milliseconds.
+- **A2** and **A6** were not observed (not premises of #274).
+
 ## Trades list: assumptions (#90)
 
 The reconciler and the catch-up (docs/trade-intent-transport.md → Reconciliation matching) rest on
-these, taken from the fixture and broker-web, not from a live run:
+these, taken from the fixture and broker-web; A1, A3, A4, A5 and A7 were then observed live
+(→ Observed live (2026-10-23)):
 
 - **A1 order:** `status=closed` and `status=open` come newest first by `open_timestamp`. The code
-  checks every page and the seam between pages; a violation answers `broker_contract`.
-- **A2 `limit`/`offset`:** honoured, with disjoint pages. Not a safety condition: no reconciler
-  releases a reserve on what the pages show (#274 proves absence after the live probe).
+  checks every page and the seam between pages; a violation answers `broker_contract`. Since #274
+  it is a premise of the release: a first page proves the list's end only when it is empty, or its
+  ids are distinct and its first trade is strictly newer than its last (the reader refuses only
+  growth, so one trade, repeated ids or equal timestamps show no direction).
+- **A2 `limit`/`offset`:** honoured, with disjoint pages. Not a safety condition: the release reads
+  only the first page (#274), never a page's length or a later offset. Not observed.
   `readTradePages` (`apps/trading-worker/src/intents/trade-pages.ts`) takes only an empty first
   page, an empty page after a one-trade page, or a trade older than the window as the list's end;
   every other page must start with a trade already read. What the code gets from a broken A2: a
@@ -232,15 +266,16 @@ these, taken from the fixture and broker-web, not from a live run:
 - **A3 `status`:** filters open from closed, and a trade is on one of the two lists at every
   moment (it leaves `open` no earlier than it appears in `closed`). If the filter is wrong, the
   merge by `id` stays correct; if the move is not atomic, a trade closing during the read is on
-  neither list — in #90 that parks the intent (`unresolved`), it never releases.
-- **A4 `is_demo`:** filters by mode. The local mode check stays either way.
+  neither list. The release covers that gap with two proven attempts whose reads are at least
+  `RECONCILE_RETRY_MS − RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s) apart (#274).
+- **A4 `is_demo`:** filters by mode. The local mode check stays either way, and a first page with
+  a trade of the other mode proves nothing (#274). Only demo intents are released.
 - **A5 `open_timestamp`** is Unix milliseconds (the shapes of 2026-10-03 show it).
-- **A6** the default page size (the fixture's 20) is not used: every call passes `limit`.
-
-Observed live: not yet. The read-only probe in issue #90's plan (6 GETs, shapes only) confirms
-A1–A6 and whether a closing trade is on one of the two lists at every moment (two GETs, open then
-closed, while a 5-second trade closes). Until it runs, no reconciler answers `not_found`: an intent
-without a candidate is parked for the operator and the reserve is held (#274).
+- **A6** the default page size (the fixture's 20) is not used: every call passes `limit`. Not
+  observed, not a safety condition.
+- **A7 `offset=0`** returns the newest prefix of the list: a first page never skips a newer trade.
+  No page can show this; it rests on the probe, and a broker that broke it could release an intent
+  whose trade exists (#274).
 
 ## Open items
 
