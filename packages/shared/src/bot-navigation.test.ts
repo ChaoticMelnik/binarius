@@ -33,16 +33,18 @@ describe('demoAnalysisCallbackData (#484)', () => {
 describe('the session stop button (#536)', () => {
   const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
-  it('carries the id, and `:w` under the waiting message, within 64 bytes', () => {
+  it('carries the id, `:w` under the waiting message and `:c` under the open block, within 64 bytes', () => {
     expect(sessionStopCallbackData(id)).toBe(`session:stop:${id}`);
     expect(sessionStopCallbackData(id, { waiting: true })).toBe(`session:stop:${id}:w`);
+    expect(sessionStopCallbackData(id, { cycle: true })).toBe(`session:stop:${id}:c`);
     expect(new TextEncoder().encode(sessionStopCallbackData(id))).toHaveLength(49);
     expect(new TextEncoder().encode(sessionStopCallbackData(id, { waiting: true }))).toHaveLength(
       51,
     );
+    expect(new TextEncoder().encode(sessionStopCallbackData(id, { cycle: true }))).toHaveLength(51);
   });
 
-  it('matches both forms and says which', () => {
+  it('matches the three forms and says which', () => {
     expect(SESSION_STOP_PATTERN.exec(sessionStopCallbackData(id))?.slice(1)).toEqual([
       id,
       undefined,
@@ -50,14 +52,20 @@ describe('the session stop button (#536)', () => {
     expect(
       SESSION_STOP_PATTERN.exec(sessionStopCallbackData(id, { waiting: true }))?.slice(1),
     ).toEqual([id, 'w']);
+    expect(
+      SESSION_STOP_PATTERN.exec(sessionStopCallbackData(id, { cycle: true }))?.slice(1),
+    ).toEqual([id, 'c']);
   });
 
-  it.each([`session:${id}`, `session:stop:${id}:x`, `session:stop:${id}:`, 'session:stop:nope'])(
-    'does not match %s',
-    (data) => {
-      expect(SESSION_STOP_PATTERN.test(data)).toBe(false);
-    },
-  );
+  it.each([
+    `session:${id}`,
+    `session:stop:${id}:x`,
+    `session:stop:${id}:`,
+    `session:stop:${id}:wc`,
+    'session:stop:nope',
+  ])('does not match %s', (data) => {
+    expect(SESSION_STOP_PATTERN.test(data)).toBe(false);
+  });
 });
 
 describe('the language buttons (#508)', () => {
