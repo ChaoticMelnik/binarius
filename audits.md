@@ -4415,8 +4415,8 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1 (release rests on broker/DB clocks within the window margins, unwritten), m2 («two attempts in a row» is per process), m3 (2.5–3.5 min vs up to ~4 min) | Minor | unverified-claim / single-source | left at the merge | → #764 |
 
 ### Process improvement proposals
-1. A wrapper exits with the check's own code; a trailing `cat`/`echo` turns every verdict into 0 — **внедрено в #DOCSPR: `.claude/skills/implementer/SKILL.md` → Step 5 (the check's exit code)**
-2. A byline or hand-off names the model only from the agent's transcript — **внедрено в #DOCSPR: `.claude/skills/architect/SKILL.md` → How this role runs**
+1. A wrapper exits with the check's own code; a trailing `cat`/`echo` turns every verdict into 0 — **внедрено в #773: `.claude/skills/implementer/SKILL.md` → Step 5 (the check's exit code)**
+2. A byline or hand-off names the model only from the agent's transcript — **внедрено в #773: `.claude/skills/architect/SKILL.md` → How this role runs**
 3. Remaining findings — **вынесено в #764**
 
 ---
@@ -4441,7 +4441,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1 (an intent without its decision row keeps the session waiting: two «⏹» for about a trade), m2 (the open block's «⏹» can outlive its trade), m3 (wording) | Minor | instance-vs-class / single-source | left at the merge | → #765 |
 
 ### Process improvement proposals
-1. Same as #274 proposal 1 — **внедрено в #DOCSPR: `.claude/skills/implementer/SKILL.md` → Step 5**
+1. Same as #274 proposal 1 — **внедрено в #773: `.claude/skills/implementer/SKILL.md` → Step 5**
 2. Remaining findings — **вынесено в #765**
 
 ---
@@ -4496,9 +4496,9 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | m1–m3 (style in `trading-session.ts`) | Minor | other | left at the merge | → #768 |
 
 ### Process improvement proposals
-1. Validation checklist: a reused path names the input forms it accepts, and the test drives the form the new caller produces in production — **внедрено в #DOCSPR: `.claude/skills/architect/SKILL.md` → Validation checklist**
-2. A manager answer that sets a text with variables is checked against what each variable holds — **внедрено в #DOCSPR: `.claude/skills/manager/SKILL.md` → Substitution 1**
-3. Model named only from the transcript — **внедрено в #DOCSPR (see #274 proposal 2)**
+1. Validation checklist: a reused path names the input forms it accepts, and the test drives the form the new caller produces in production — **внедрено в #773: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. A manager answer that sets a text with variables is checked against what each variable holds — **внедрено в #773: `.claude/skills/manager/SKILL.md` → Substitution 1**
+3. Model named only from the transcript — **внедрено в #773 (see #274 proposal 2)**
 4. Remaining findings — **вынесено в #768**
 
 ---
