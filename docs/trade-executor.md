@@ -54,11 +54,13 @@ cut.
 
 After an emit the answer is the socket's or `unknown`. The executor never follows an emit with a
 POST, never sends the order twice and never retries; what happened to an `unknown` order is
-established by reconciliation (#89/#90), which only reads. #90's REST reconciler never answers
-`not_found`: an order it cannot find once the window has closed is parked in `manual_review`
-(`reconciliation_not_found`) with the account halted, and the reserve is kept until an operator
-decides (the release on proven absence is #274). So `broker_unavailable` costs the user nothing
-silently: the trade is found and accepted, or it waits for a human. The four disconnect stages and the
+established by reconciliation (#89/#90), which only reads. An order the REST reconciler cannot
+find once the window has closed is released in demo when its absence is proven on two attempts
+(`rejected`, `reconciliation_not_found`, #274: docs/trade-intent-transport.md → Proof of absence);
+in real, or without that proof, it is parked in `manual_review` (`reconciliation_not_found`) with
+the account halted, and the reserve is kept until an operator decides. So `broker_unavailable`
+costs the user nothing silently: the trade is found and accepted, its absence is proven, or it
+waits for a human. The four disconnect stages and the
 test that proves each (`trade-command-executor.test.ts`):
 
 | Stage | Outcome | Test |
@@ -152,8 +154,9 @@ line below and finds no `SECRET-` sentinel and no broker host.
    default `SUBMIT_ACK_TIMEOUT_MS` of 10 s. The executor does not pass `mayRefresh` (default
    `true`), so the backend may exchange the token on this path (a trade is a user action). When
    the budget runs out the processor writes `executor_timeout`/`unknown` and reconciliation
-   decides; a fetch cut before the POST sent nothing, so the reconciler finds no trade and parks
-   the intent in `manual_review` with the account halted (no `not_found` in `main`, #274). The
+   decides; a fetch cut before the POST sent nothing, so the reconciler finds no trade: in demo
+   the reserve is released once absence is proven on two attempts (#274); in real it parks the
+   intent in `manual_review` with the account halted. The
    report after a REST 401 (#281) is a third fetch that may exchange, but it is not awaited, so it
    never holds the outcome past the deadline. Bounded by the source's 7 s and not awaited by
    shutdown: one cut at exit is reported again on the next 401.

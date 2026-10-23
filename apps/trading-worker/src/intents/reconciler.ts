@@ -19,6 +19,9 @@ export const ReconcileUnavailableReason = {
   WindowOpen: 'window_open',
   // the page cap ran out before the pages reached past the window's start
   WindowNotCovered: 'window_not_covered',
+  // no candidate and both first pages prove the lists' end; one more non-aborted attempt on a
+  // later claim must agree before not_found (#274)
+  AbsenceUnconfirmed: 'absence_unconfirmed',
 } as const;
 export type ReconcileUnavailableReason =
   (typeof ReconcileUnavailableReason)[keyof typeof ReconcileUnavailableReason];
@@ -26,10 +29,11 @@ export type ReconcileUnavailableReason =
 export type ReconcileResult =
   // the broker's own record of this intent's trade, open or closed, as parsed by shared
   | { outcome: 'found'; trade: BrokerTrade }
-  // confidently absent: this releases the token. No reconciler in main answers it; proving
-  // absence at the broker is #274
+  // proven absent (demo only, two attempts, the first-page proof of rest-reconciler.ts): this
+  // releases the token
   | { outcome: 'not_found' }
-  // no candidate once the window closed, absence not proven: parked for the operator (#90)
+  // no candidate once the window closed and absence not proven, or a real intent: parked for the
+  // operator (#90)
   | { outcome: 'unresolved' }
   // more than one candidate trade
   | { outcome: 'ambiguous' }

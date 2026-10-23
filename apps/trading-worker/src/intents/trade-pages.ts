@@ -7,7 +7,8 @@ import type { BrokerTrade } from '@binarius/shared';
 // requested at the previous offset plus the page's length minus one, so it must start with a trade
 // already read; anything else is a contract violation, never a short list (docs/broker-rest.md ->
 // Trades list: assumptions). `covered` is reach: it gates `found` and the choice between a retry
-// and manual review; no reserve is released on it (proving absence is #274).
+// and manual review; the release reads only a first page this reader stopped on
+// (rest-reconciler.ts, #274).
 
 export const TradePagesViolation = {
   // open_timestamp grows inside a page

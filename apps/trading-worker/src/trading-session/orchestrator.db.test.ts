@@ -1681,17 +1681,20 @@ describe('failures that write no ending (#287)', () => {
 // same database. The crash state is written step by step, not produced by killing a running job.
 // The check after an outcome (#92) never changes it; its own suite is balance-check.db.test.ts.
 const balanceCheck: BalanceCheck = { check: () => Promise.resolve('not_compared') };
-const passOf = () =>
+const restReconcilerOf = () =>
+  createRestReconciler({
+    rest: rest(),
+    tokens,
+    linkedTradeIds: (brokerAccountId, brokerTradeIds) =>
+      listLinkedBrokerTradeIds(tmp.db, { brokerAccountId, brokerTradeIds }),
+    logger,
+    config: { windowBeforeMs: 60_000, windowAfterMs: 90_000, pageSize: 50, maxPages: 2 },
+  });
+// one reconciler is one worker: its count of proven absences lives in its memory (#274)
+const passOf = (reconciler = restReconcilerOf()) =>
   createReconciliationPass({
     db: tmp.db,
-    reconciler: createRestReconciler({
-      rest: rest(),
-      tokens,
-      linkedTradeIds: (brokerAccountId, brokerTradeIds) =>
-        listLinkedBrokerTradeIds(tmp.db, { brokerAccountId, brokerTradeIds }),
-      logger,
-      config: { windowBeforeMs: 60_000, windowAfterMs: 90_000, pageSize: 50, maxPages: 2 },
-    }),
+    reconciler,
     balanceCheck,
     logger,
     config: {
@@ -1741,12 +1744,12 @@ const processNow = (intentId: string) =>
   );
 
 // asked of the broker, not of our rows: "no second trade" is what the broker holds
-async function brokerTradeCount(accessToken: string) {
+async function brokerTradeCount(accessToken: string, isDemo = true) {
   let count = 0;
   for (const status of [TradeListStatus.Open, TradeListStatus.Closed]) {
     const trades = await rest().listTrades(
       { accessToken },
-      { status, isDemo: true, limit: 50, offset: 0 },
+      { status, isDemo, limit: 50, offset: 0 },
     );
     count += trades.length;
   }
@@ -1866,9 +1869,7 @@ describe('restart recovery (#131)', () => {
     expect(await brokerTradeCount(seed.accessToken)).toBe(1);
   });
 
-  // pinned as today (owner's Q3); #274 replaces the halt with a release on a proven absence
-  it('R2 crash in submitting with nothing at the broker: manual_review, halt, the session stops', async () => {
-    const seed = await seedSession();
+  async function crashInSubmitting(seed: Awaited<ReturnType<typeof seedSession>>) {
     const a = orchestratorOf();
     await a.tick();
     const [step1] = await intentsOf(seed.session.id);
@@ -1884,16 +1885,49 @@ describe('restart recovery (#131)', () => {
     expect(await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1!.id })).toBe(
       'reconciling',
     );
+    return step1!;
+  }
+
+  const accountOf = async (id: string) =>
+    (await tmp.db.select().from(brokerAccounts).where(eq(brokerAccounts.id, id)))[0]!;
+
+  // #274: in demo two proven attempts release the reserve; real parks as before (R2r)
+  it('R2 crash in submitting with nothing at the broker (demo): two passes a lease apart release the reserve, no halt, the session goes on', async () => {
+    const seed = await seedSession();
+    const step1 = await crashInSubmitting(seed);
+    const r = restReconcilerOf();
+    await runOnce(passOf(r));
+    expect((await intentRow(step1.id)).status).toBe(TradeIntentStatus.Reconciling);
+    await ageClaim(step1.id, 61);
+    await runOnce(passOf(r));
+    const after = await intentRow(step1.id);
+    expect(after.status).toBe(TradeIntentStatus.Rejected);
+    expect(after.lastError).toBe(TradeIntentFailureReason.ReconciliationNotFound);
+    expect(await reservedOf(seed.userId)).toBe(0n);
+    const account = await accountOf(seed.brokerAccountId);
+    expect(account.tradingHalted).toBe(false);
+    expect(account.haltedReason).toBeNull();
+    expect(await brokerTradeCount(seed.accessToken)).toBe(0);
+
+    const b = orchestratorOf();
+    await b.tick();
+    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
+    const intents = await intentsOf(seed.session.id);
+    expect(intents).toHaveLength(2);
+    expect(intents[1]!.clientRequestId).toBe(`session:${seed.session.id}:2`);
+    await b.stop();
+  });
+
+  it('R2r crash in submitting with nothing at the broker (real): manual_review, halt, the session stops', async () => {
+    const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
+    const step1 = await crashInSubmitting(seed);
     await runOnce(passOf());
-    const after = await intentRow(step1!.id);
+    const after = await intentRow(step1.id);
     expect(after.status).toBe(TradeIntentStatus.ManualReview);
     expect(after.lastError).toBe(TradeIntentFailureReason.ReconciliationNotFound);
-    const [account] = await tmp.db
-      .select()
-      .from(brokerAccounts)
-      .where(eq(brokerAccounts.id, seed.brokerAccountId));
-    expect(account!.tradingHalted).toBe(true);
-    expect(account!.haltedReason).toBe(AccountHaltReason.ReconciliationNotFound);
+    const account = await accountOf(seed.brokerAccountId);
+    expect(account.tradingHalted).toBe(true);
+    expect(account.haltedReason).toBe(AccountHaltReason.ReconciliationNotFound);
 
     const b = orchestratorOf();
     await b.tick();
@@ -1902,7 +1936,7 @@ describe('restart recovery (#131)', () => {
     expect(session.stopReason).toBe(TradingSessionStopReason.ManualReview);
     expect(await intentsOf(seed.session.id)).toHaveLength(1);
     expect(await reservedOf(seed.userId)).toBe(1n);
-    expect(await brokerTradeCount(seed.accessToken)).toBe(0);
+    expect(await brokerTradeCount(seed.accessToken, false)).toBe(0);
     await b.stop();
   });
 

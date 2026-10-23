@@ -468,7 +468,7 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
   row lock, Rule 12), #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
-  (docs/trade-intent-transport.md). #274 (`not_found`), #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
+  (docs/trade-intent-transport.md). #274 shipped (`not_found` on a proven absence, demo). #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
   keeps its account in work between trades through `touchBalanceRequested`, so its socket stays open.
 - The worker's sessions do not read `price.update`; the backend's data socket does (#404), and the
   signal feed reads its candles (#405). E2 proves the subscription pipe only.
