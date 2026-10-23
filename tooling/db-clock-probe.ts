@@ -2,10 +2,11 @@ import { appendFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import pg from 'pg';
 
-// Watches the test database's clock against this process's. The time-order CHECKs
-// (`*_after_created`, `code_sent_at >= created_at`) compare one transaction's now() with a later
-// one's and fail on a step back; tests that compare a column with Date.now() fail when the two
-// clocks disagree. A Postgres in the Colima VM did both: the Lima agent stepped its clock back
+// Watches the test database's clock against this process's. The seven `>= created_at` stamp
+// CHECKs (`*_after_created`, `*_sent`) compare a row's created_at - its transaction's now() - with
+// a later statement's clock_timestamp() and fail on a step back (the four `expires_at >
+// created_at` compare two values written by the same INSERT); tests that compare a column with
+// Date.now() fail when the two clocks disagree. A Postgres in the Colima VM did both: the Lima agent stepped its clock back
 // ~100 ms every 10 s, and after a Mac sleep it lagged by tens of minutes (#166, README → Test
 // database).
 //

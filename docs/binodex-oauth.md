@@ -61,7 +61,9 @@ The page that receives the code runs in a browser and cannot hold the internal A
 single-use state is what authorizes the call: 32 random bytes, stored only as a SHA-256 hash,
 consumed by one `UPDATE … WHERE used_at IS NULL AND expires_at > now() RETURNING`. Two parallel
 callbacks with one state therefore produce exactly one exchange, and a forged, expired or
-replayed state never reaches the broker at all.
+replayed state never reaches the broker at all. `used_at` takes the statement clock
+(`statementNow()`), as does every column a CHECK orders against `created_at` (`docs/staff-login.md`
+→ the paragraph «Every update of a column a CHECK orders…»; #158).
 
 The state names the login; it does not say who finished it. That is what `initData` is for
 (#113): the page runs as a Telegram Mini App of the public bot and sends `Telegram.WebApp.initData`
