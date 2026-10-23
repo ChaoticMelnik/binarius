@@ -1,0 +1,747 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+// The Architecture Rules (#770): the index lives in .claude/skills/architect/SKILL.md ->
+// "Architecture Rules to Enforce in Every Plan", the rules themselves in
+// .claude/skills/architect/rules/<area>.md, one `### Rule N` heading per rule. This prints the
+// rules a list of files touches; tooling/rules-for.test.ts holds every path, symbol and test id
+// the rules cite to the repository with the same grammar.
+//
+//   node tooling/rules-for.ts <file ...>     per file: the rules citing it and the rules of its
+//                                            directory, then the text of every rule found
+//   node tooling/rules-for.ts --list <file ...>   the per-file lines only
+//   node tooling/rules-for.ts --files <file ...>  the rule files to read (core.md when a file
+//                                                 has no rule)
+//   node tooling/rules-for.ts --map          the index's "path -> rules" block
+//   node tooling/rules-for.ts --dump         every rule by number, body as is
+//   node tooling/rules-for.ts --split <ref>  rewrite the rule files from the old one-section
+//                                            SKILL.md at <ref>, each rule to the area its index
+//                                            line names; prints the sha256 of both sides
+//
+// Input from a diff: `gh pr diff <N> --name-only | xargs node tooling/rules-for.ts`. Paths are
+// relative to the repository root; run from inside the repository. --split exists so that a
+// rebase onto a main whose rules changed regenerates the files instead of merging them by hand;
+// the independent proof of the move is the awk/diff in the PR of #770, not this hash.
+//
+// Exit codes: 0 done; 1 --split wrote files whose dump differs from the source; 2 bad usage or a
+// rule file / index that does not parse (one line on stderr).
+
+export const SKILL_FILE = '.claude/skills/architect/SKILL.md';
+export const RULES_DIR = '.claude/skills/architect/rules';
+export const AREAS = ['core', 'trading', 'signal-h1', 'bot-ui', 'payments', 'auth'] as const;
+export type Area = (typeof AREAS)[number];
+
+export const MAP_START = '<!-- generated: node tooling/rules-for.ts --map -->';
+export const MAP_END = '<!-- /generated -->';
+
+const SECTION_HEADING = '## Architecture Rules to Enforce in Every Plan';
+const SECTION_END = '## Forbidden Actions';
+
+export class RulesError extends Error {}
+
+export interface Rule {
+  number: number;
+  area: Area;
+  body: string;
+}
+
+const isArea = (value: string): value is Area => (AREAS as readonly string[]).includes(value);
+
+export function ruleFilePath(area: Area): string {
+  return `${RULES_DIR}/${area}.md`;
+}
+
+export function parseRuleFile(area: Area, text: string): Rule[] {
+  const rules: Rule[] = [];
+  let current: { number: number; lines: string[] } | undefined;
+  const close = (): void => {
+    if (current === undefined) return;
+    const lines = [...current.lines];
+    while (lines.length > 0 && lines.at(-1) === '') lines.pop();
+    const body = lines.join('\n');
+    if (!body.startsWith(`${current.number}. `))
+      throw new RulesError(
+        `${ruleFilePath(area)}: the body under "### Rule ${current.number}" does not start with "${current.number}. "`,
+      );
+    rules.push({ number: current.number, area, body });
+  };
+  for (const line of text.split('\n')) {
+    if (line.startsWith('### ')) {
+      close();
+      const heading = /^### Rule (\d+)$/.exec(line);
+      if (heading === null)
+        throw new RulesError(`${ruleFilePath(area)}: unexpected heading "${line}"`);
+      current = { number: Number(heading[1]), lines: [] };
+    } else if (current !== undefined) {
+      current.lines.push(line);
+    }
+  }
+  close();
+  return rules;
+}
+
+export function mergeRules(perFile: Rule[][]): Rule[] {
+  const seen = new Map<number, Area>();
+  const all: Rule[] = [];
+  for (const rule of perFile.flat()) {
+    const earlier = seen.get(rule.number);
+    if (earlier !== undefined)
+      throw new RulesError(
+        `Rule ${rule.number} is in both ${ruleFilePath(earlier)} and ${ruleFilePath(rule.area)}`,
+      );
+    seen.set(rule.number, rule.area);
+    all.push(rule);
+  }
+  return all.sort((a, b) => a.number - b.number);
+}
+
+export function loadRules(root: string): Rule[] {
+  return mergeRules(
+    AREAS.map((area) => {
+      const file = path.join(root, ruleFilePath(area));
+      if (!existsSync(file)) throw new RulesError(`${ruleFilePath(area)} is missing`);
+      return parseRuleFile(area, readFileSync(file, 'utf8'));
+    }),
+  );
+}
+
+export function renderDump(rules: readonly Rule[]): string {
+  return rules.map((rule) => `${rule.body}\n`).join('');
+}
+
+// --- the index -----------------------------------------------------------------------------
+
+const INDEX_LINE = /^(\d+)\. \*\*[^*]+\*\* — .+ → `rules\/([a-z0-9-]+)\.md`$/;
+
+export function parseIndex(skillText: string): Map<number, string> {
+  const lines = skillText.split('\n');
+  const start = lines.indexOf('### Index');
+  if (start === -1) throw new RulesError(`${SKILL_FILE}: no "### Index" heading`);
+  const index = new Map<number, string>();
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith('#')) break;
+    if (line === '') continue;
+    const match = INDEX_LINE.exec(line);
+    if (match === null) throw new RulesError(`${SKILL_FILE}: index line does not parse: ${line}`);
+    const number = Number(match[1]);
+    if (index.has(number))
+      throw new RulesError(`${SKILL_FILE}: Rule ${number} has two index lines`);
+    index.set(number, match[2]);
+  }
+  return index;
+}
+
+export function checkIndex(index: Map<number, string>, rules: readonly Rule[]): string[] {
+  const errors: string[] = [];
+  const byNumber = new Map(rules.map((rule) => [rule.number, rule]));
+  for (const rule of rules) {
+    const area = index.get(rule.number);
+    if (area === undefined) errors.push(`index: no line for Rule ${rule.number}`);
+    else if (area !== rule.area)
+      errors.push(
+        `index: Rule ${rule.number} points to rules/${area}.md, it is in rules/${rule.area}.md`,
+      );
+  }
+  for (const number of index.keys())
+    if (!byNumber.has(number)) errors.push(`index: Rule ${number} has a line but no rule`);
+  return errors;
+}
+
+export function checkNumbering(rules: readonly Rule[]): string[] {
+  const numbers = new Set(rules.map((rule) => rule.number));
+  const max = Math.max(0, ...numbers);
+  const errors: string[] = [];
+  for (let n = 1; n <= max; n += 1)
+    if (!numbers.has(n)) errors.push(`numbering: Rule ${n} is missing`);
+  return errors;
+}
+
+// --- tokens --------------------------------------------------------------------------------
+
+export type TokenClass = 'expression' | 'path' | 'identifier' | 'literal' | 'short';
+
+const EXPRESSION_CHARS = /[<>=×≤≥(){}|[\]"'«»]/;
+const PATH_EXTENSION = /\.(ts|md|sql|json|yaml|yml|js|sh)$/;
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+export function tokensOf(body: string): string[] {
+  return [...body.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
+}
+
+export function isExpression(token: string): boolean {
+  return (
+    /\s/.test(token) ||
+    EXPRESSION_CHARS.test(token) ||
+    token.includes('::') ||
+    /^[0-9a-f]{7,40}$/.test(token)
+  );
+}
+
+export function isPathShaped(token: string): boolean {
+  if (/^(\/|@|GET |POST )/.test(token)) return false;
+  return token.includes('/') || PATH_EXTENSION.test(token);
+}
+
+export function classifyToken(token: string): TokenClass {
+  if (isExpression(token)) return 'expression';
+  if (isPathShaped(token)) return 'path';
+  if (identifierShape(token) !== undefined) return 'identifier';
+  return token.length >= 3 ? 'literal' : 'short';
+}
+
+function globRegExp(glob: string): RegExp {
+  let source = '';
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i];
+    if (char === '*' && glob[i + 1] === '*') {
+      source += '.*';
+      i += 1;
+    } else if (char === '*') source += '[^/]*';
+    else if (char === '?') source += '[^/]';
+    else source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^(?:.*/)?${source}$`);
+}
+
+export type PathKind = 'glob' | 'exact' | 'directory' | 'suffix';
+
+// The gate's resolution against `git ls-files`: which entries the token names, and how.
+export function resolvePath(
+  token: string,
+  entries: readonly string[],
+): { kind: PathKind; matches: string[] } | undefined {
+  if (/[*?]/.test(token)) {
+    const pattern = globRegExp(token);
+    const matches = entries.filter((entry) => pattern.test(entry));
+    return matches.length > 0 ? { kind: 'glob', matches } : undefined;
+  }
+  const bare = token.replace(/\/$/, '');
+  const exact = entries.filter((entry) => entry === bare);
+  if (exact.length > 0) return { kind: 'exact', matches: exact };
+  const directory = entries.filter((entry) => entry.startsWith(bare + '/'));
+  if (directory.length > 0) return { kind: 'directory', matches: directory };
+  const suffix = entries.filter((entry) => entry.endsWith('/' + bare));
+  if (suffix.length > 0) return { kind: 'suffix', matches: suffix };
+  return undefined;
+}
+
+// rulesFor's match of one input file, which may not exist yet (a file a plan adds), against a
+// path the rule cites.
+export function citesPath(token: string, file: string): boolean {
+  if (/[*?]/.test(token)) return globRegExp(token).test(file);
+  const bare = token.replace(/\/$/, '');
+  if (file === bare) return true;
+  if (file.startsWith(bare + '/')) return true;
+  return file.endsWith('/' + bare);
+}
+
+type IdentifierShape =
+  | { kind: 'plain'; name: string }
+  | { kind: 'tail'; tail: string }
+  | { kind: 'prefix'; prefix: string };
+
+function identifierShape(token: string): IdentifierShape | undefined {
+  const tail = /^(?:…|\*)([\w$]+)$/.exec(token);
+  if (tail !== null) return { kind: 'tail', tail: tail[1] };
+  const prefix = /^([A-Za-z_$][\w$]*)\*$/.exec(token);
+  if (prefix !== null) return { kind: 'prefix', prefix: prefix[1] };
+  if (IDENTIFIER.test(token)) return { kind: 'plain', name: token };
+  const compound = /^([A-Za-z_$][\w$]*)[.:\-…*]\S*$/.exec(token);
+  if (compound !== null) return { kind: 'plain', name: compound[1] };
+  return undefined;
+}
+
+export interface Corpus {
+  identifiers: Set<string>;
+  text: string;
+}
+
+export function buildCorpus(texts: readonly string[]): Corpus {
+  const text = texts.join('\n');
+  return { identifiers: new Set(text.match(/[A-Za-z_$][\w$]*/g) ?? []), text };
+}
+
+export function identifierFound(token: string, corpus: Corpus): boolean {
+  const shape = identifierShape(token);
+  if (shape === undefined) return false;
+  if (shape.kind === 'plain') return corpus.identifiers.has(shape.name);
+  for (const name of corpus.identifiers) {
+    if (shape.kind === 'tail' ? name.endsWith(shape.tail) : name.startsWith(shape.prefix))
+      return true;
+  }
+  return false;
+}
+
+// --- test ids ------------------------------------------------------------------------------
+
+export function normalisePrime(text: string): string {
+  return text.replaceAll('′', "'");
+}
+
+// both primes, so an id whose ′ was not normalised fails the lookup instead of ending the list
+const ID = String.raw`[A-Z][A-Za-z]*(?:-[A-Za-z]+)*\d*[a-z]?['′]?`;
+const ID_SEGMENT = new RegExp(`^${ID}$`);
+const RANGE = /^([A-Z][A-Za-z]*(?:-[A-Za-z]+)*)(\d+)([a-z]?)–(?:\1)?(\d+)([a-z]?)$/;
+
+// The ids a test-file citation lists: the text after it up to ". ", "; ", the next backtick or
+// the end of the line, split on ",", "/" and " и "; an empty segment is skipped, and the first
+// segment that is neither an id nor a range of ids ends the list, as does a closing ")" or ".".
+export function idsAfter(rest: string): string[] {
+  const stop = /\. |; |`|\n/.exec(rest);
+  const text = normalisePrime(stop === null ? rest : rest.slice(0, stop.index));
+  const ids: string[] = [];
+  for (const raw of text.split(/,|\/| и /)) {
+    let segment = raw.trim();
+    const closed = /[).]+$/.test(segment);
+    segment = segment.replace(/[).]+$/, '');
+    if (segment === '') {
+      if (closed) break;
+      continue;
+    }
+    const expanded = expandSegment(segment);
+    if (expanded === undefined) break;
+    ids.push(...expanded);
+    if (closed) break;
+  }
+  return ids;
+}
+
+function expandSegment(segment: string): string[] | undefined {
+  if (ID_SEGMENT.test(segment)) return [segment];
+  const range = RANGE.exec(segment);
+  if (range === null) return undefined;
+  const [, prefix, from, fromLetter, to, toLetter] = range;
+  if (from === to && fromLetter !== '' && toLetter !== '') {
+    const ids: string[] = [];
+    for (let c = fromLetter.charCodeAt(0); c <= toLetter.charCodeAt(0); c += 1)
+      ids.push(`${prefix}${from}${String.fromCharCode(c)}`);
+    return ids;
+  }
+  const ids: string[] = [];
+  for (let n = Number(from); n <= Number(to); n += 1) ids.push(`${prefix}${n}`);
+  return ids;
+}
+
+// `normalisedText` has been through normalisePrime: tests write D5', rules D5′.
+export function idFound(id: string, normalisedText: string): boolean {
+  const escaped = normalisePrime(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9-])${escaped}(?!\\d)`).test(normalisedText);
+}
+
+const TEST_FILE = /\.(test|typecheck)\.ts$/;
+
+// --- the gate ------------------------------------------------------------------------------
+
+export interface Repo {
+  entries: string[];
+  corpus: Corpus;
+  read: (entry: string) => string;
+}
+
+export interface GateResult {
+  errors: string[];
+  counts: Record<TokenClass, number>;
+  ids: number;
+}
+
+// Every token found in the corpus text, in one pass of the text; the alternation can skip a
+// match that overlaps an earlier one, so a token the pass missed is looked up again on its own.
+export function literalsFound(tokens: Iterable<string>, text: string): Set<string> {
+  const unique = [...new Set(tokens)].sort((a, b) => b.length - a.length);
+  const found = new Set<string>();
+  if (unique.length === 0) return found;
+  const pattern = new RegExp(
+    unique.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+    'g',
+  );
+  for (const match of text.matchAll(pattern)) found.add(match[0]);
+  for (const token of unique) if (!found.has(token) && text.includes(token)) found.add(token);
+  return found;
+}
+
+export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
+  const errors: string[] = [];
+  const counts: Record<TokenClass, number> = {
+    expression: 0,
+    path: 0,
+    identifier: 0,
+    literal: 0,
+    short: 0,
+  };
+  const pending: { where: string; kind: TokenClass; token: string }[] = [];
+  const normalised = new Map<string, string>();
+  const testText = (file: string): string => {
+    const cached = normalised.get(file);
+    if (cached !== undefined) return cached;
+    const text = normalisePrime(repo.read(file));
+    normalised.set(file, text);
+    return text;
+  };
+  let ids = 0;
+  for (const rule of rules) {
+    const where = `rules/${rule.area}.md Rule ${rule.number}`;
+    const testFiles = new Set<string>();
+    for (const token of tokensOf(rule.body)) {
+      const kind = classifyToken(token);
+      counts[kind] += 1;
+      if (kind === 'path') {
+        const resolved = resolvePath(token, repo.entries);
+        if (resolved === undefined) pending.push({ where, kind, token });
+        else if (TEST_FILE.test(token) && resolved.kind !== 'glob')
+          for (const match of resolved.matches) testFiles.add(match);
+      } else if (kind === 'identifier') {
+        if (!identifierFound(token, repo.corpus)) pending.push({ where, kind, token });
+      } else if (kind === 'literal') {
+        pending.push({ where, kind, token });
+      }
+    }
+    const texts = [...testFiles].map(testText);
+    for (const match of rule.body.matchAll(/`([^`\n]+\.(?:test|typecheck)\.ts)`/g)) {
+      const listed = idsAfter(rule.body.slice((match.index ?? 0) + match[0].length));
+      for (const id of listed) {
+        ids += 1;
+        if (!texts.some((text) => idFound(id, text)))
+          errors.push(`${where}: test id ${id} (after ${match[1]})`);
+      }
+    }
+  }
+  const found = literalsFound(
+    pending.map(({ token }) => token),
+    repo.corpus.text,
+  );
+  for (const { where, kind, token } of pending)
+    if (!found.has(token)) errors.push(`${where}: ${kind} ${token}`);
+  return { errors, counts, ids };
+}
+
+const CORPUS_ROOTS = ['apps/', 'packages/', 'tooling/', 'scripts/', '.github/'];
+const CORPUS_ROOT_FILES = [
+  /^README\.md$/,
+  /^compose.*\.yaml$/,
+  /^eslint\.config\.js$/,
+  /^package\.json$/,
+  /^\.env\.example$/,
+  /^vitest\.config\.ts$/,
+  /^tsconfig.*\.json$/,
+  /^pnpm-workspace\.yaml$/,
+];
+const BINARY = /\.(png|jpe?g|gif|ico|webp|svg|woff2?|ttf|otf|pdf|zip|gz|mp4|webm)$/i;
+// The gate's own fixtures would satisfy any token. drizzle-kit's snapshots repeat the schema
+// sources and are two thirds of the corpus by bytes.
+const NOT_CORPUS =
+  /^(tooling\/rules-for(\.test)?\.ts|packages\/db\/drizzle\/meta\/\d+_snapshot\.json)$/;
+
+export function lsFiles(root: string): string[] {
+  return execFileSync('git', ['ls-files', '-z'], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 1 << 26,
+  })
+    .split('\0')
+    .filter((entry) => entry !== '');
+}
+
+export function loadRepo(root: string): Repo {
+  const entries = lsFiles(root);
+  const read = (entry: string): string => readFileSync(path.join(root, entry), 'utf8');
+  const corpusFiles = entries.filter(
+    (entry) =>
+      (CORPUS_ROOTS.some((prefix) => entry.startsWith(prefix)) ||
+        CORPUS_ROOT_FILES.some((pattern) => pattern.test(entry))) &&
+      !BINARY.test(entry) &&
+      !NOT_CORPUS.test(entry) &&
+      existsSync(path.join(root, entry)),
+  );
+  return { entries, corpus: buildCorpus(corpusFiles.map(read)), read };
+}
+
+// --- the map -------------------------------------------------------------------------------
+
+export function mapKey(file: string, directories: ReadonlySet<string>): string {
+  const parts = file.replace(/\/$/, '').split('/');
+  if ((parts[0] === 'apps' || parts[0] === 'packages') && parts.length >= 3) {
+    if (parts[2] === 'src') {
+      const sub = parts.slice(0, 4).join('/');
+      if (parts.length >= 4 && directories.has(sub)) return sub;
+      return parts.slice(0, 3).join('/');
+    }
+    if (parts[2] === 'drizzle') return parts.slice(0, 3).join('/');
+    return parts.slice(0, 2).join('/');
+  }
+  return parts[0];
+}
+
+export function directoriesOf(entries: readonly string[]): Set<string> {
+  const directories = new Set<string>();
+  for (const entry of entries) {
+    const parts = entry.split('/');
+    for (let i = 1; i < parts.length; i += 1) directories.add(parts.slice(0, i).join('/'));
+  }
+  return directories;
+}
+
+// The map keys a rule's resolved path citations route to.
+export function ruleKeys(
+  rule: Rule,
+  entries: readonly string[],
+  directories: ReadonlySet<string>,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const token of tokensOf(rule.body)) {
+    if (classifyToken(token) !== 'path') continue;
+    const resolved = resolvePath(token, entries);
+    if (resolved === undefined) continue;
+    if (resolved.kind === 'glob') {
+      const prefix = token.slice(0, token.search(/[*?]/));
+      if (prefix === '') continue;
+      // a glob relative to some directory (`circuit-breaker/*.test.ts`) routes by what it matched
+      if (directories.has(prefix.split('/')[0])) keys.add(mapKey(prefix, directories));
+      else for (const match of resolved.matches) keys.add(mapKey(match, directories));
+      continue;
+    }
+    const bare = token.replace(/\/$/, '');
+    for (const match of resolved.matches) {
+      const key = mapKey(match, directories);
+      keys.add(resolved.kind === 'directory' && key.length > bare.length ? bare : key);
+    }
+  }
+  return keys;
+}
+
+export function formatAreas(numbersByArea: ReadonlyMap<Area, readonly number[]>): string {
+  return AREAS.filter((area) => (numbersByArea.get(area) ?? []).length > 0)
+    .map(
+      (area) => `${area} ${[...(numbersByArea.get(area) ?? [])].sort((a, b) => a - b).join(', ')}`,
+    )
+    .join('; ');
+}
+
+function groupByArea(rules: Iterable<Rule>): Map<Area, number[]> {
+  const grouped = new Map<Area, number[]>();
+  for (const rule of rules)
+    grouped.set(rule.area, [...(grouped.get(rule.area) ?? []), rule.number]);
+  return grouped;
+}
+
+export function renderMap(rules: readonly Rule[], entries: readonly string[]): string {
+  const directories = directoriesOf(entries);
+  const byKey = new Map<string, Rule[]>();
+  for (const rule of rules)
+    for (const key of ruleKeys(rule, entries, directories))
+      byKey.set(key, [...(byKey.get(key) ?? []), rule]);
+  const rows = [...byKey.keys()]
+    .sort()
+    .map((key) => `| \`${key}\` | ${formatAreas(groupByArea(byKey.get(key) ?? []))} |`);
+  return ['| Путь | Правила |', '|---|---|', ...rows].join('\n');
+}
+
+export function mapBlock(skillText: string): string {
+  const start = skillText.indexOf(MAP_START);
+  const end = skillText.indexOf(MAP_END);
+  if (start === -1 || end === -1 || end < start)
+    throw new RulesError(`${SKILL_FILE}: no "${MAP_START}" ... "${MAP_END}" block`);
+  return skillText
+    .slice(start + MAP_START.length, end)
+    .replace(/^\n/, '')
+    .replace(/\n$/, '');
+}
+
+// --- rules for files -----------------------------------------------------------------------
+
+export interface FileRules {
+  file: string;
+  direct: Rule[];
+  directory: Rule[];
+  key: string;
+}
+
+export function rulesFor(
+  files: readonly string[],
+  rules: readonly Rule[],
+  entries: readonly string[],
+): { perFile: FileRules[]; rules: Rule[]; areas: Area[] } {
+  const directories = directoriesOf(entries);
+  const keysOf = new Map(rules.map((rule) => [rule.number, ruleKeys(rule, entries, directories)]));
+  const found = new Map<number, Rule>();
+  const perFile: FileRules[] = [];
+  let uncovered = false;
+  for (const file of files) {
+    const key = mapKey(file, directories);
+    const direct = rules.filter((rule) =>
+      tokensOf(rule.body).some(
+        (token) => classifyToken(token) === 'path' && citesPath(token, file),
+      ),
+    );
+    const directory = rules.filter(
+      (rule) => !direct.includes(rule) && (keysOf.get(rule.number) ?? new Set()).has(key),
+    );
+    for (const rule of [...direct, ...directory]) found.set(rule.number, rule);
+    if (direct.length === 0 && directory.length === 0) uncovered = true;
+    perFile.push({ file, direct, directory, key });
+  }
+  const areas = new Set<Area>([...found.values()].map((rule) => rule.area));
+  if (uncovered) areas.add('core');
+  return {
+    perFile,
+    rules: [...found.values()].sort((a, b) => a.number - b.number),
+    areas: AREAS.filter((area) => areas.has(area)),
+  };
+}
+
+export function renderList(perFile: readonly FileRules[]): string {
+  const lines: string[] = [];
+  for (const { file, direct, directory, key } of perFile) {
+    lines.push(file);
+    if (direct.length > 0) lines.push(`  cites: ${formatAreas(groupByArea(direct))}`);
+    if (directory.length > 0)
+      lines.push(`  same directory (${key}): ${formatAreas(groupByArea(directory))}`);
+    if (direct.length === 0 && directory.length === 0)
+      lines.push(`  no rule cites ${file} → read ${ruleFilePath('core')}`);
+  }
+  return lines.join('\n');
+}
+
+// --- --split -------------------------------------------------------------------------------
+
+// The rules of the old one-section SKILL.md, the way the proof of #770 reads them: from the line
+// starting "1. **", blank lines and `---` dropped, a line starting "N. " opening rule N.
+export function extractSectionRules(skillText: string): Map<number, string> {
+  const lines = skillText.split('\n');
+  const start = lines.indexOf(SECTION_HEADING);
+  const end = lines.indexOf(SECTION_END, start);
+  if (start === -1 || end === -1) throw new RulesError('no "Architecture Rules" section');
+  const section = lines.slice(start + 1, end);
+  if (section.includes('### Index'))
+    throw new RulesError('the section is already an index: nothing to split');
+  const first = section.findIndex((line) => line.startsWith('1. **'));
+  if (first === -1) throw new RulesError('the section has no "1. **" line');
+  const rules = new Map<number, string[]>();
+  let current: string[] | undefined;
+  for (const line of section.slice(first)) {
+    if (line === '' || line === '---') continue;
+    const opening = /^(\d+)\. /.exec(line);
+    if (opening !== null) {
+      const number = Number(opening[1]);
+      if (rules.has(number)) throw new RulesError(`Rule ${number} appears twice in the section`);
+      current = [];
+      rules.set(number, current);
+    }
+    if (current === undefined) throw new RulesError(`a line before rule 1: ${line}`);
+    current.push(line);
+  }
+  return new Map([...rules].map(([number, body]) => [number, body.join('\n')]));
+}
+
+export function renderRuleFile(head: string, rules: readonly Rule[]): string {
+  const sections = rules.map((rule) => `### Rule ${rule.number}\n${rule.body}\n`);
+  return `${head}${sections.join('\n')}`;
+}
+
+export function headOf(text: string | undefined, area: Area): string {
+  if (text === undefined) return `# Architecture Rules — ${area}\n\n`;
+  const at = text.search(/^### /m);
+  return at === -1 ? text : text.slice(0, at);
+}
+
+export function splitRules(
+  sectionRules: ReadonlyMap<number, string>,
+  index: ReadonlyMap<number, string>,
+): Rule[] {
+  const missing = [...sectionRules.keys()].filter((number) => !index.has(number));
+  if (missing.length > 0)
+    throw new RulesError(
+      `no index line in ${SKILL_FILE} for Rule ${missing.join(', ')}: add it first`,
+    );
+  return [...sectionRules]
+    .map(([number, body]) => {
+      const area = index.get(number) ?? '';
+      if (!isArea(area))
+        throw new RulesError(`index: Rule ${number} points to unknown area ${area}`);
+      return { number, area, body };
+    })
+    .sort((a, b) => a.number - b.number);
+}
+
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+function split(root: string, ref: string): number {
+  const old = execFileSync('git', ['show', `${ref}:${SKILL_FILE}`], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  const sectionRules = extractSectionRules(old);
+  const rules = splitRules(
+    sectionRules,
+    parseIndex(readFileSync(path.join(root, SKILL_FILE), 'utf8')),
+  );
+  for (const area of AREAS) {
+    const file = path.join(root, ruleFilePath(area));
+    const head = headOf(existsSync(file) ? readFileSync(file, 'utf8') : undefined, area);
+    writeFileSync(
+      file,
+      renderRuleFile(
+        head,
+        rules.filter((rule) => rule.area === area),
+      ),
+    );
+  }
+  const source = [...sectionRules.keys()]
+    .sort((a, b) => a - b)
+    .map((number) => `${sectionRules.get(number)}\n`)
+    .join('');
+  const written = renderDump(loadRules(root));
+  process.stdout.write(
+    `source  sha256 ${sha256(source)}  (${ref}:${SKILL_FILE}, the rules section)\n`,
+  );
+  process.stdout.write(`written sha256 ${sha256(written)}  (--dump of ${RULES_DIR}/*.md)\n`);
+  return source === written ? 0 : 1;
+}
+
+// --- cli -----------------------------------------------------------------------------------
+
+const USAGE =
+  'usage: node tooling/rules-for.ts [--list | --files] <file ...> | --map | --dump | --split <ref>';
+
+function main(argv: readonly string[]): number {
+  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const [first, ...rest] = argv;
+  if (first === '--split') {
+    if (rest.length !== 1) throw new RulesError(USAGE);
+    return split(root, rest[0]);
+  }
+  const rules = loadRules(root);
+  if (first === '--dump' || first === '--map') {
+    if (rest.length > 0) throw new RulesError(USAGE);
+    process.stdout.write(
+      first === '--dump' ? renderDump(rules) : `${renderMap(rules, lsFiles(root))}\n`,
+    );
+    return 0;
+  }
+  const mode = first === '--list' || first === '--files' ? first : 'full';
+  const files = mode === 'full' ? argv : rest;
+  if (files.length === 0 || files.some((file) => file.startsWith('--')))
+    throw new RulesError(USAGE);
+  const result = rulesFor(files, rules, lsFiles(root));
+  if (mode === '--files') {
+    process.stdout.write(result.areas.map((area) => `${ruleFilePath(area)}\n`).join(''));
+    return 0;
+  }
+  const out = [renderList(result.perFile)];
+  if (mode === 'full')
+    for (const rule of result.rules)
+      out.push('', `### Rule ${rule.number} — rules/${rule.area}.md`, rule.body);
+  process.stdout.write(`${out.join('\n')}\n`);
+  return 0;
+}
+
+if (import.meta.main) {
+  try {
+    process.exitCode = main(process.argv.slice(2));
+  } catch (error) {
+    if (!(error instanceof RulesError)) throw error;
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 2;
+  }
+}
