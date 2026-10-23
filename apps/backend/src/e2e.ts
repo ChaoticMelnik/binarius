@@ -10,6 +10,7 @@ export { createBalanceReconciler } from './broker/balance-reconciler';
 export { createBrokerOAuthClient } from './broker/oauth-client';
 export { createBullmqPublisher } from './outbox/bullmq';
 export { OutboxPublisher } from './outbox/publisher';
+export { createSessionNoticeListener } from './trading/session-notice-listener';
 export { createSessionNoticeSender } from './trading/session-notices';
 export type { TradingRoutesDeps } from './trading/routes';
 export { createScanPacer } from './signal/pacer';
@@ -18,6 +19,7 @@ export {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
+  SESSION_NOTICE_TICK_MS,
   signalRestCapacity,
 } from './timing';
 export {
