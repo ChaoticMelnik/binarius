@@ -54,6 +54,9 @@ export const MIN_KEPT_SHARE_PCT = 10;
 // neither era
 export const V2_MERGED_AT = Date.UTC(2026, 9, 9, 16, 13);
 export const V2_FIRST_CLEAN_AT = Date.UTC(2026, 9, 10);
+// #698's merge (PR #720, 2026-10-22 16:20:31 UTC): production trades without the pause since
+// its deploy (the evening of 10-22); the cut is the merge time, as V2_MERGED_AT (risk 11)
+export const PAUSE_REMOVED_AT = Date.UTC(2026, 9, 22, 16, 20, 31);
 // set from one sample: 443/494 on 2026-10-15
 export const CALIBRATE_MIN_OUTCOME_MATCH_PCT = 85;
 export const CALIBRATE_MIN_ERA_TRADES = 30;

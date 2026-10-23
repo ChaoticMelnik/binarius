@@ -15,6 +15,7 @@ import {
   H1_SD_STEP_GRID,
   H1_THRESHOLD_GRID,
   OPEN_DELAY_GRID_MS,
+  PAUSE_REMOVED_AT,
   STAND_ASSET_IDS,
   STAND_CHAIN_HOLDS,
   STAND_DEFAULT_GETS_PER_MINUTE,
@@ -35,10 +36,12 @@ describe('stand config', () => {
     expect(OPEN_DELAY_GRID_MS).toContain(FALLBACK_HEADLINE_DELAY_MS);
   });
 
-  it('K4 28 distinct pairs, and the v2 era starts after the merge', () => {
+  it("K4 28 distinct pairs, the v2 era starts after the merge, v2np at #698's merge", () => {
     expect(new Set(STAND_ASSET_IDS).size).toBe(28);
     expect(STAND_ASSET_IDS).toHaveLength(28);
     expect(V2_MERGED_AT).toBeLessThan(V2_FIRST_CLEAN_AT);
+    expect(V2_FIRST_CLEAN_AT).toBeLessThan(PAUSE_REMOVED_AT);
+    expect(new Date(PAUSE_REMOVED_AT).toISOString()).toBe('2026-10-22T16:20:31.000Z');
   });
 
   it('K5 the H1 grids are the trade plan of shared', () => {

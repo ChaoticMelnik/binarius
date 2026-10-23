@@ -7,6 +7,7 @@ import { appendRows, readSeries, seriesPath } from './cache';
 import {
   bestOf,
   eraCheck,
+  eraOf,
   matchAtDelay,
   outcomeGatePasses,
   runCalibrate,
@@ -14,7 +15,8 @@ import {
 } from './calibrate';
 import { priceIndex } from './price';
 import { calibrationPath } from './run';
-import { decisionContext, type Market } from './simulate';
+import { PAUSE_REMOVED_AT, V2_FIRST_CLEAN_AT, V2_MERGED_AT } from './config';
+import { decisionContext, simulate, type Market } from './simulate';
 import { emptyTally, type Tally } from './stats';
 import {
   aggregate,
@@ -27,21 +29,28 @@ import {
   tempDir,
   writeJson,
 } from './testing';
+import { V2_PRODUCTION_POINT, VARIANTS } from './variants';
 import { seriesAt } from './window';
 
 const STEP = 5_000;
-const seconds = secondsPath(T0, 2 * 3_600);
-const price = priceIndex(seconds);
-const market: Market = {
-  assetId: PAIR.id,
-  digits: PAIR.digits,
-  price,
-  series: {
-    '5s': aggregate(seconds, STEP),
-    '15s': aggregate(seconds, 15_000),
-    '1m': aggregate(seconds, 60_000),
-  },
-};
+// the same price path from any start, so a test moves its trades between eras by the start alone
+function marketAt(start: number) {
+  const seconds = secondsPath(start, 2 * 3_600);
+  const price = priceIndex(seconds);
+  const market: Market = {
+    assetId: PAIR.id,
+    digits: PAIR.digits,
+    price,
+    series: {
+      '5s': aggregate(seconds, STEP),
+      '15s': aggregate(seconds, 15_000),
+      '1m': aggregate(seconds, 60_000),
+    },
+  };
+  return { start, seconds, price, market };
+}
+const atT0 = marketAt(T0);
+const { seconds, price } = atT0;
 
 const profitOf = (action: TradeAction, entry: number, exit: number) =>
   ({ win: '0.90000000', loss: '-1.00000000', tie: '0.00000000' })[
@@ -49,13 +58,13 @@ const profitOf = (action: TradeAction, entry: number, exit: number) =>
   ];
 
 // live trades on the moments v2 signalled, each with the journal line the feed would have logged
-function liveSession(count: number, onlyWins = false) {
+function liveSession(count: number, onlyWins = false, at = atT0) {
   const trades: LiveTrade[] = [];
   const lines: string[] = [];
-  for (let nowMs = T0 + 600_500; trades.length < count; nowMs += STEP) {
-    const decision = decisionContext(market, '5s', nowMs).v2();
+  for (let nowMs = at.start + 600_500; trades.length < count; nowMs += STEP) {
+    const decision = decisionContext(at.market, '5s', nowMs).v2();
     if (decision.kind !== SignalKind.Signal) continue;
-    const series = seriesAt(market.series['5s']!, STEP, nowMs).map(toJournalCandle);
+    const series = seriesAt(at.market.series['5s']!, STEP, nowMs).map(toJournalCandle);
     // the forming candle was not final when the feed logged it
     const [ts, o, h, l, c] = series[series.length - 1];
     series[series.length - 1] = [ts, o, h + 0.0001, l, c + 0.0001];
@@ -77,7 +86,7 @@ function liveSession(count: number, onlyWins = false) {
     if (series.at(-1)![0] + STEP <= nowMs) continue;
     const open = nowMs + 900;
     const close = open + 5_000;
-    const profit = profitOf(decision.action, price(open)!, price(close)!);
+    const profit = profitOf(decision.action, at.price(open)!, at.price(close)!);
     if (onlyWins && profit !== '0.90000000') continue;
     lines.push(JSON.stringify({ level: 30, time: nowMs, signal, msg: 'signal decision' }));
     trades.push({
@@ -87,9 +96,9 @@ function liveSession(count: number, onlyWins = false) {
       duration_sec: 5,
       created_at_ms: nowMs + 500,
       open_timestamp_ms: open,
-      open_price: price(open)!,
+      open_price: at.price(open)!,
       close_timestamp_ms: close,
-      close_price: price(close)!,
+      close_price: at.price(close)!,
       profit,
     });
     nowMs += 10_000;
@@ -493,5 +502,76 @@ describe('calibrate', () => {
     expect(counter('h1_shadow')).toBe(1);
     expect(counter('unsupported_version')).toBe(0);
     expect(counter('replayed')).toBe(6);
+  });
+
+  // #719: the live trades after #698's merge ran without the pause; their stand runs so too
+  describe('the v2np era', () => {
+    const atT1 = marketAt(Date.UTC(2026, 9, 23, 12));
+    // the session's window reaches the stand's first pause on this path from 110 trades on
+    const COUNT = 120;
+    const standOf = (out: string[], era: string) => {
+      const line = out.find((l) => l.startsWith(`  ${era} 5 s: `));
+      const m = /stand (\d+) trades (\d+)W\/(\d+)L/.exec(line ?? '');
+      return m === null ? undefined : { trades: +m[1]!, wins: +m[2]!, losses: +m[3]! };
+    };
+    const simulated = (
+      at: ReturnType<typeof marketAt>,
+      trades: readonly LiveTrade[],
+      pause: boolean,
+    ) => {
+      const result = simulate(at.market, {
+        variant: VARIANTS.find((v) => v.name === 'v2')!,
+        point: V2_PRODUCTION_POINT,
+        interval: '5s',
+        pause,
+        openDelayMs: 0,
+        from: Math.min(...trades.map((t) => t.created_at_ms)),
+        until: Math.max(...trades.map((t) => t.close_timestamp_ms)),
+      });
+      const priced = result.trades.filter((t) => t.outcome !== 'unpriced');
+      return {
+        trades: priced.length,
+        wins: priced.filter((t) => t.outcome === 'win').length,
+        losses: priced.filter((t) => t.outcome === 'loss').length,
+      };
+    };
+
+    it("C13 a trade after #698's merge is v2np: a v2 line is its version, and the stand runs without the pause", () => {
+      const session = liveSession(COUNT, false, atT1);
+      expect(session.trades[0]!.created_at_ms).toBeGreaterThan(PAUSE_REMOVED_AT);
+      const withPause = simulated(atT1, session.trades, true);
+      const withoutPause = simulated(atT1, session.trades, false);
+      expect(withPause.wins).not.toBe(withoutPause.wins);
+
+      const { code, out, counter } = run({
+        ...session,
+        dir: cacheWith(atT1.seconds),
+        sessionDir: sessionDirOf(atT1.seconds),
+      });
+      expect(code).toBe(0);
+      expect(out.join('\n')).toMatch(/stand at openDelay 0 ms/);
+      expect(counter('version_mismatch')).toBe(0);
+      expect(counter('ambiguous')).toBe(0);
+      expect(standOf(out, 'v2')).toBeUndefined();
+      expect(standOf(out, 'v2np')).toEqual(withoutPause);
+    });
+
+    it("C13 control: the same trades before #698's merge are v2, and the stand runs with the pause", () => {
+      const session = liveSession(COUNT);
+      const { code, out } = run(session);
+      expect(code).toBe(0);
+      expect(out.join('\n')).toMatch(/stand at openDelay 0 ms/);
+      expect(standOf(out, 'v2np')).toBeUndefined();
+      expect(standOf(out, 'v2')).toEqual(simulated(atT0, session.trades, true));
+    });
+
+    it("C14 eraOf's boundaries", () => {
+      expect(eraOf(V2_MERGED_AT - 1)).toBe('v1');
+      expect(eraOf(V2_MERGED_AT)).toBe('ambiguous');
+      expect(eraOf(V2_FIRST_CLEAN_AT - 1)).toBe('ambiguous');
+      expect(eraOf(V2_FIRST_CLEAN_AT)).toBe('v2');
+      expect(eraOf(PAUSE_REMOVED_AT - 1)).toBe('v2');
+      expect(eraOf(PAUSE_REMOVED_AT)).toBe('v2np');
+    });
   });
 });

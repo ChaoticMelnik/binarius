@@ -19,6 +19,7 @@ import {
   CALIBRATE_MIN_ERA_TRADES,
   CALIBRATE_MIN_OUTCOME_MATCH_PCT,
   OPEN_DELAY_GRID_MS,
+  PAUSE_REMOVED_AT,
   PRICE_INTERVAL,
   PRICE_SHIFT_GRID_MS,
   TRADE_INTERVALS,
@@ -32,15 +33,31 @@ import { calibrationPath } from './run';
 import { compareRows, mergedRows, readSessionFiles } from './session-candles';
 import { simulate, type Market } from './simulate';
 import { addTrade, emptyTally, intervalOf, winRatePct, type Tally } from './stats';
-import { V2_PRODUCTION_POINT, VARIANTS } from './variants';
+import { V2_PRODUCTION_POINT, VARIANTS, type GridPoint } from './variants';
 
 // trade-log export --format trades-json (#666, docs/trade-log.md), or the #381 export query's
 // file: the shared schema reads both; money is compared by sign only
 export type LiveTrade = TradeLogTradeJson;
 
-type Era = 'v1' | 'ambiguous' | 'v2';
-const eraOf = (createdAtMs: number): Era =>
-  createdAtMs < V2_MERGED_AT ? 'v1' : createdAtMs < V2_FIRST_CLEAN_AT ? 'ambiguous' : 'v2';
+type Era = 'v1' | 'ambiguous' | 'v2' | 'v2np';
+export const eraOf = (createdAtMs: number): Era =>
+  createdAtMs < V2_MERGED_AT
+    ? 'v1'
+    : createdAtMs < V2_FIRST_CLEAN_AT
+      ? 'ambiguous'
+      : createdAtMs < PAUSE_REMOVED_AT
+        ? 'v2'
+        : 'v2np';
+// what production ran in each era: the journal's version (and the stand's variant), the point and
+// the pause (#379…#698); v2np is v2 without the pause (#719)
+const ERA_RULES = {
+  v1: { version: 'v1', point: {}, pause: false },
+  v2: { version: 'v2', point: V2_PRODUCTION_POINT, pause: true },
+  v2np: { version: 'v2', point: V2_PRODUCTION_POINT, pause: false },
+} as const satisfies Record<
+  Exclude<Era, 'ambiguous'>,
+  { version: 'v1' | 'v2'; point: GridPoint; pause: boolean }
+>;
 
 function liveOutcome(profit: string): TradeOutcome {
   if (/^-?0+(\.0+)?$/.test(profit)) return 'tie';
@@ -318,7 +335,7 @@ export function runCalibrate(options: CalibrateOptions): number {
       if (line === undefined) {
         counters.unmatched++;
       } else {
-        if (line.version !== era) counters.version_mismatch++;
+        if (line.version !== ERA_RULES[era].version) counters.version_mismatch++;
         const replay = replaySignalJournalEntry(line);
         const sameAction =
           line.decision.kind === SignalKind.Signal && line.decision.action === action;
@@ -356,16 +373,16 @@ export function runCalibrate(options: CalibrateOptions): number {
     for (const [key, list] of windows) {
       const [era, duration] = key.split('|');
       const interval = supportedInterval(Number(duration))!;
-      const variant = VARIANTS.find((v) => v.name === era)!;
-      const point = era === 'v2' ? V2_PRODUCTION_POINT : {};
+      const rule = ERA_RULES[era as Exclude<Era, 'ambiguous'>];
+      const variant = VARIANTS.find((v) => v.name === rule.version)!;
       const row = eras.get(`${era}|${duration}`)!;
       for (const delay of OPEN_DELAY_GRID_MS) {
         const result = simulate(market, {
           variant,
-          point,
+          point: rule.point,
           interval,
-          // the rule production ran for those trades (#379…#698); the era after #698's merge — #719
-          pause: era === 'v2',
+          // the rule production ran for those trades (ERA_RULES)
+          pause: rule.pause,
           openDelayMs: delay,
           from: Math.min(...list.map((t) => t.created_at_ms)),
           until: Math.max(...list.map((t) => t.close_timestamp_ms)),
