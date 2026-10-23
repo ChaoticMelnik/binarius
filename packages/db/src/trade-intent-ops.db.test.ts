@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
+import type { PoolClient } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
@@ -27,6 +29,7 @@ import {
   seedUnknownIntent,
   seedUser,
   seedUserWithAccount,
+  type SeededAccount,
   type TempDatabase,
 } from './testing';
 import {
@@ -62,6 +65,7 @@ import {
   type Tx,
 } from './trade-intent-ops';
 import {
+  SESSION_NOTICE_CHANNEL,
   brokerAccounts,
   brokerTrades,
   outboxEvents,
@@ -2207,5 +2211,131 @@ describe('the submit deadline of an H1 session intent (#670)', () => {
     const plain = await sessionIntent();
     expect(await tmp.db.transaction((tx) => late(plain.intent, tx))).toBeUndefined();
     expect(await findTradeIntent(tmp.db, plain.intent.id)).toMatchObject({ status: 'queued' });
+  });
+});
+
+describe('the session notice wake (#723)', () => {
+  // NOTIFY reaches every listener of this temporary database only: no other test file shares it
+  let listener: PoolClient;
+  const received: { channel: string; payload: string | undefined }[] = [];
+  beforeAll(async () => {
+    listener = await tmp.pool.connect();
+    listener.on('notification', (n) => received.push({ channel: n.channel, payload: n.payload }));
+    await listener.query(`LISTEN ${listener.escapeIdentifier(SESSION_NOTICE_CHANNEL)}`);
+  });
+  // destroyed, not returned: a pooled client would keep listening, and pool.end() waits for it
+  afterAll(() => listener.release(true));
+
+  // Notifications reach a listener in commit order, so one of our own committed after the
+  // writes under test arrives after theirs: waiting for it is the positive end of every case
+  const barrier = async (): Promise<{ channel: string; payload: string | undefined }[]> => {
+    const token = `barrier-${randomUUID()}`;
+    await tmp.pool.query('select pg_notify($1, $2)', [SESSION_NOTICE_CHANNEL, token]);
+    await until('the barrier notification', () => received.some((n) => n.payload === token));
+    const seen = received.filter((n) => n.payload !== token);
+    received.length = 0;
+    return seen;
+  };
+  const notified = (sessionId: string) => [{ channel: SESSION_NOTICE_CHANNEL, payload: sessionId }];
+
+  const sessionSubmitting = async (seed?: SeededAccount & { sessionId: string }) => {
+    const s = seed ?? (await seedUserWithAccount(tmp.db));
+    const sessionId = seed?.sessionId ?? (await seedTradingSession(tmp.db, s.brokerAccountId)).id;
+    const { intent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(s.telegramUserId, { brokerAccountId: s.brokerAccountId }),
+      { id: sessionId, decision: null },
+    );
+    return { ...s, sessionId, intent: (await take(intent))! };
+  };
+  const sessionAccepted = async () => {
+    const seed = await sessionSubmitting();
+    const open = openTradeFor(seed.intent);
+    return { ...seed, open, intent: (await accept(seed.intent, open))! };
+  };
+
+  it('N1 an accepted session intent notifies its session once, on the commit', async () => {
+    const { intent, sessionId } = await sessionSubmitting();
+    await barrier();
+    expect(await accept(intent, openTradeFor(intent))).toMatchObject({ status: 'accepted' });
+    expect(await barrier()).toEqual(notified(sessionId));
+  });
+
+  it('N2 a settled session intent notifies its session once', async () => {
+    const { intent, open, sessionId } = await sessionAccepted();
+    await barrier();
+    expect(await settle(intent, closedTradeFor(open))).toMatchObject({ status: 'settled' });
+    expect(await barrier()).toEqual(notified(sessionId));
+  });
+
+  it('N2b a reconciliation that accepts and settles in one transaction notifies once', async () => {
+    const { intent, sessionId } = await sessionSubmitting();
+    const unknown = (await tmp.db.transaction((tx) =>
+      markIntentUnknown(tx, { id: intent.id, reason: TradeIntentFailureReason.StaleSubmitting }),
+    ))!;
+    const reconciling = (await startReconciling(tmp.db, {
+      id: unknown.id,
+      expectedVersion: unknown.version,
+    }))!;
+    await barrier();
+    const concluded = await conclude(reconciling, closedTradeFor(openTradeFor(intent)));
+    expect(concluded).toMatchObject({ status: 'settled' });
+    expect(await barrier()).toEqual(notified(sessionId));
+  });
+
+  it('N3 a rejected session intent does not notify', async () => {
+    const first = await sessionSubmitting();
+    await barrier();
+    const rejected = await tmp.db.transaction((tx) =>
+      rejectIntent(tx, {
+        id: first.intent.id,
+        from: TradeIntentStatus.Submitting,
+        reason: TradeIntentFailureReason.BrokerRejected,
+      }),
+    );
+    expect(rejected).toMatchObject({ status: 'rejected' });
+    const second = await sessionSubmitting(first);
+    expect(await accept(second.intent, openTradeFor(second.intent))).toMatchObject({
+      status: 'accepted',
+    });
+    expect(await barrier()).toEqual(notified(first.sessionId));
+  });
+
+  it('N4 an intent without a session does not notify', async () => {
+    const plain = await submittingIntent();
+    const { intent, sessionId } = await sessionSubmitting();
+    await barrier();
+    expect(await accept(plain.intent, openTradeFor(plain.intent))).toMatchObject({
+      status: 'accepted',
+    });
+    expect(await accept(intent, openTradeFor(intent))).toMatchObject({ status: 'accepted' });
+    expect(await barrier()).toEqual(notified(sessionId));
+  });
+
+  it('N5 a lost CAS does not notify', async () => {
+    const { intent, sessionId } = await sessionSubmitting();
+    await barrier();
+    expect(
+      await accept({ ...intent, version: intent.version - 1 }, openTradeFor(intent)),
+    ).toBeUndefined();
+    expect(await accept(intent, openTradeFor(intent))).toMatchObject({ status: 'accepted' });
+    expect(await barrier()).toEqual(notified(sessionId));
+  });
+
+  it('N6 a rolled back settle does not notify', async () => {
+    const { intent, open, sessionId } = await sessionAccepted();
+    await barrier();
+    const rolledBack = new Error('rolled back on purpose');
+    const thrown = await tmp.db
+      .transaction(async (tx) => {
+        expect(
+          await settleIntent(tx, { id: intent.id, from: 'accepted', trade: closedTradeFor(open) }),
+        ).toMatchObject({ status: 'settled' });
+        throw rolledBack;
+      })
+      .catch((error: unknown) => error);
+    expect(thrown).toBe(rolledBack);
+    expect(await settle(intent, closedTradeFor(open))).toMatchObject({ status: 'settled' });
+    expect(await barrier()).toEqual(notified(sessionId));
   });
 });
