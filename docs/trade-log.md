@@ -1,4 +1,4 @@
-# Trade log (#666, #668)
+# Trade log (#666, #668, #502)
 
 Every decision a trading session acted on is a row of `signal_decisions`, written by the process
 that acted, with its outcome: the journal entry the decision was computed from, the clocks of the
@@ -12,9 +12,13 @@ Part 2 (#668) adds the ticks around each intent decision and around a 1-in-20 sa
 shadow rows ([The ticks around a decision](#the-ticks-around-a-decision)), and the retention of
 decisions without a trade ([Retention](#retention)).
 
+#502 adds the fingerprint of a row's parameters (`params_hash`) and `trade-log report`: win rate,
+95 % CI, break-even and P&L of the closed trades by version × parameters × pair × interval ×
+duration ([The report](#the-report)).
+
 | Piece | Where |
 |---|---|
-| The table | `packages/db/src/schema/signal-decisions.ts`, migrations `0068_signal_decisions`, `0069_decision_session_check` |
+| The table | `packages/db/src/schema/signal-decisions.ts`, migrations `0068_signal_decisions`, `0069_decision_session_check`, `0082_signal_decision_params_hash` (#502) |
 | The writer | `recordSignalDecision(exec, input)`, `signalDecisionInput(record, facts)` in `packages/db/src/signal-decision-ops.ts` |
 | The reads | `readTradeLogPage`, `readSessionTradeSteps`, `journalEntryOf`, `readTradeLogEnd` (same file) |
 | A reader outside the export | the session notices' sender (#722): `waitingForSignalSql` in `packages/db/src/session-notice-ops.ts` reads a session's latest row of `context = session` on `signal_decisions_session_idx` — `no_signal` is «the session waits for a signal», which shows the waiting message ([bot-session.md](bot-session.md#the-waiting-message-536)); a failed write of that row delays the message by a candle |
@@ -24,6 +28,7 @@ decisions without a trade ([Retention](#retention)).
 | The keeper's reads and writes | `listDecisionTicksCandidates`, `insertDecisionTicks`, `sweepSignalDecisions` in `packages/db/src/decision-ticks-ops.ts` |
 | The keeper | `createTradeLogKeeper` in `apps/backend/src/trade-log/keeper.ts` |
 | The export | `apps/backend/src/cli/trade-log.ts` |
+| The report (#502) | `readTradeReportStats` in `packages/db/src/signal-decision-ops.ts`; `apps/backend/src/cli/trade-report.ts`, dispatched from `trade-log.ts`; the window parser and the labels shared with `h1 shadow report` in `apps/backend/src/cli/report.ts` |
 
 ## The table
 
@@ -43,6 +48,7 @@ decisions without a trade ([Retention](#retention)).
 | `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed, and NULL also when the catalog's value is outside the column (`payoutInColumn`, `packages/db/src/schema/columns.ts`, shared with `broker_trades.payout`, #675) | the catalog the writer read |
 | `digits` | the pair's quote precision the decider used, 0..`MAX_PAIR_DIGITS` | |
 | `params`, `decision`, `source`, `series` | the journal entry's fields as the backend answered them (jsonb, objects and an array) | |
+| `params_hash` | the parameters' fingerprint (#502): `text generated always as (md5(params::text)) stored not null`, migration 0082. The database computes it for every row, old rows included; no writer names it (an INSERT or UPDATE naming the column fails `428C9`, and drizzle's insert type has no such key). jsonb's text is canonical, so one parameter set in any key order is one fingerprint; `5` and `5.0` are two (jsonb keeps the number's text; `JSON.stringify` never writes `5.0`). The report groups by it: parameters changed without a new `version` are a row of their own | database |
 | `last_tick` | `{ price, timestamp, receivedAtMs }`, the pair's newest data-socket tick when `POST /trading/signal` answered; NULL without the socket or before the pair's first tick | `timestamp` the broker's, `receivedAtMs` the backend's |
 | `outcome`, `detail` | what the writer did with the decision (below); `detail` the code of a refusal or of the sizer's stop, CHECK by `SIGNAL_DECISION_DETAIL_PATTERN`, present exactly for `refused` and `stake_stop` (`signal_decisions_detail_pair_check`) | |
 | `result` | a shadow row's outcome by the broker's prices, `{ entries: [{ entryDelaySec, entryPrice, exitPrice, outcome }] }` (#669, [h1.md](h1.md#the-row)); NULL on the rows of sessions (jsonb object) | |
@@ -52,7 +58,8 @@ decisions without a trade ([Retention](#retention)).
 Indexes: `signal_decisions_recorded_idx (recorded_at, id)` (the export's range and order),
 `signal_decisions_session_idx (trading_session_id, recorded_at)`,
 `signal_decisions_shadow_recorded_idx (recorded_at) where context = 'shadow'` (the retention
-sweep's shadow band, #668). Every CHECK is exercised on the
+sweep's shadow band, #668), `signal_decisions_version_params_idx (version, params_hash)` (the
+report's grouping, #502). Every CHECK is exercised on the
 rows its writers build and on the NULL and boundary rows next to them (`schema.db.test.ts` →
 signal_decisions).
 
@@ -310,6 +317,10 @@ Decisions no intent names are deleted by age, with their `decision_ticks` row; a
 | every other row without an intent (`no_signal`, `paused`, `refused`, `started`, `session_start`, …) | `SIGNAL_DECISION_RETENTION_DAYS` (30) |
 | a row an intent names | forever |
 
+The series of a traded row is kept with it, so its replay holds for the row's whole life. The
+issue's 30-day clearing of candles (owner 2026-10-15, #502) is superseded by #668 В2/В3: manager's
+decision 2026-10-23 on #502 (В2), the owner confirms it on the PR.
+
 The age is `recorded_at` against the database's `now()`, never the process clock. The keeper's
 sweep runs every `SIGNAL_DECISION_SWEEP_MS` (first one an hour after the start): one statement per
 batch of `SIGNAL_DECISION_SWEEP_BATCH` victims, oldest first, deleting their ticks rows and then
@@ -408,6 +419,81 @@ docker compose exec -T backend pnpm --silent --filter @binarius/backend trade-lo
 STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand calibrate --journal trade-log.jsonl --trades trades.json --session-candles ~/binarius-stand/candles
 ```
 
+## The report
+
+```bash
+pnpm --silent --filter @binarius/backend trade-log report --since <ISO 8601 | Nh | Nd> [--until <ISO 8601>]
+pnpm --silent --filter @binarius/backend trade-log report --since 7d
+```
+
+`DATABASE_URL` as the backend's. The window is `[since, until)` on `trade_intents.created_at` (the
+database's clock), for every trade with or without a decision row. `--since` is an instant with a
+zone, up to milliseconds, or `Nh` / `Nd` (N 1…9999) back from `--until`; without `--until` the end
+is the database's clock at the start, as for the export (`readTradeLogEnd`). The window parser is
+`h1 shadow report`'s (`apps/backend/src/cli/report.ts`).
+
+**What is counted.** One intent of the window is one unit; a **trade** is its closed broker trade.
+Win, loss and tie are `tradeResultSql` (`profit > 0`, `< 0`, else), the result the session
+messages use. An intent without a closed trade (refused, open, queued, on review) is counted in
+`не закрыто` and broken down by status on stderr. Counts, sums and `ROI %` are computed in SQL
+(`readTradeReportStats`: three aggregates, money as `numeric` text, Rule 2); the process lays out
+the groups. The read names its columns (Rule 9): no telegram id, no broker user id, no token, no
+`broker_trades.raw`.
+
+**The rows.** A section per mode with intents, `## demo` first, then `## real`. In a section, the
+groups of trades by a decision row (`origin = signal`): by `version`, fingerprint, interval
+(`SIGNAL_INTERVALS` order, `—` — a version that decides on ticks, as H1 — last) and duration; each
+group's pairs by trades (most first) and asset id, then its `все пары` row, always printed (a group
+of one pair prints the same numbers twice). Then the trades without a decision row, by duration and
+pair, without a pooled row: `разовые сделки (без решения)` — one-off trades (`POST
+/trading/intents`, no session) — and `сессия без записи решения` — a session's intent without a row
+(before 0068, or `record_missing`). A pair is its asset id; `<symbol> (<id>)` where the decision row
+carries `source.symbol` (H1).
+
+| Column | Meaning |
+|---|---|
+| `версия`, `параметры` | the row's `version` and the first 8 characters of `params_hash`; the label of the rows without a decision and `—` |
+| `пара`, `интервал`, `длит., с` | the intent's pair, the decision's interval, the intent's duration |
+| `сделок`, `не закрыто` | closed trades; intents of the group without one |
+| `W`, `L`, `T`, `win %`, `95 % CI` | `win %` = W / (W + L), ties out; Wilson's interval of `packages/shared/src/wilson.ts` |
+| `выплата, средн. (min-max)` | the mean `broker_trades.payout` of the group's closed trades and its range; `-` when none has one (#675) |
+| `безубыточность %`, `вердикт` | `breakEvenPct(mean payout)`; `beats break-even` only when the whole interval is above it (`verdictOf`); `нет сделок` without a decided trade, `нет выплаты` without a payout — neither ever passes |
+| `ставок`, `P&L`, `ROI %` | `sum(trade_intents.amount)`, `sum(broker_trades.profit)` of the closed trades, and `100 × P&L / ставок` rounded to 2 in SQL; `-` for a group without a closed trade |
+
+`### Параметры` closes the report: per version × fingerprint, the closed trades, the first and the
+last trade's `created_at` inside the window (the version's period, to compare versions on like
+spans) and the parameters as stored (jsonb text).
+
+Example (the `cli/trade-report.db.test.ts` RP4 session and an H1 session):
+
+```text
+## demo
+
+| версия | параметры | пара | интервал | длит., с | сделок | не закрыто | W | L | T | win % | 95 % CI | выплата, средн. (min-max) | безубыточность % | вердикт | ставок | P&L | ROI % |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| h1 | 9dfe5704 | EUR/USD (7) | — | 5 | 2 | 0 | 1 | 1 | 0 | 50.00 | 9.45-90.55 | 94.00 (94-94) | 51.55 | inconclusive | $2.00 | -$0.06 | -3.00 |
+| h1 | 9dfe5704 | все пары | — | 5 | 2 | 0 | 1 | 1 | 0 | 50.00 | 9.45-90.55 | 94.00 (94-94) | 51.55 | inconclusive | $2.00 | -$0.06 | -3.00 |
+| v2 | f86ee2d6 | 101 | 15s | 60 | 4 | 2 | 2 | 1 | 1 | 66.67 | 20.77-93.85 | 85.00 (85-85) | 54.05 | inconclusive | $4.00 | +$0.70 | +17.50 |
+| v2 | f86ee2d6 | все пары | 15s | 60 | 4 | 2 | 2 | 1 | 1 | 66.67 | 20.77-93.85 | 85.00 (85-85) | 54.05 | inconclusive | $4.00 | +$0.70 | +17.50 |
+
+### Параметры
+
+| версия | отпечаток | сделок | первая сделка | последняя сделка | params |
+| --- | --- | --- | --- | --- | --- |
+| h1 | 9dfe57045a4f97e9097fb7c9456e81be | 2 | 2003-01-03T00:00:00.000Z | 2003-01-03T00:00:00.000Z | {"set": "session", "sdWindowSec": 60} |
+| v2 | f86ee2d69d5f9944b91e85259950783d | 4 | 2003-01-03T00:00:00.000Z | 2003-01-03T00:00:00.000Z | {"emaFast": 9, …} |
+```
+
+stderr: `intent'ов без закрытой сделки: K (<status>: n, …)` when K > 0, then `сделок: M`.
+
+| Exit | When |
+|---|---|
+| 0 | the report is printed |
+| 1 | no closed trade in the window (`нет закрытых сделок за период`, stdout empty: an empty sample is not a pass), `DATABASE_URL` missing or invalid, or a database failure (name and code) |
+| 2 | not understood, or a `--since` at or after the end; the usage on stderr |
+
+On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/backend trade-log report --since 7d`.
+
 ## Tests
 
 - `packages/shared`: `signal.test.ts` S-rec1–S-rec4 (the request flag, the record, the stored
@@ -421,10 +507,15 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
   savepoint); `schema.db.test.ts` → decision_ticks (#668: every CHECK, the PK, the restrict FK,
   the partial index); `decision-ticks-ops.db.test.ts` K1–K13 (the candidates, the insert, the
   sweep on the database clock, the sample in SQL); `signal-decision-ops.db.test.ts` SD18 (the
-  export's ticks).
+  export's ticks); #502: `schema.db.test.ts` → signal_decisions → params_hash PH1–PH3 (the hash,
+  key order, `428C9` on INSERT and UPDATE, the index), `signal-decision-ops.db.test.ts` TR1–TR8
+  (the report's aggregates: W/L/T, money as SQL text, the fingerprint groups, the origins, the
+  window, the modes, the pooled row, the statuses, no ids).
 - `apps/backend`: `ticks.test.ts` T1–T4 and the window T5–T15, `manager.test.ts` M28, M32 and M32b (the
   holes at both `onDrop` sites, the `buffer` line), `signal-routes.test.ts` R19–R21,
   `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X14,
+  `cli/trade-report.db.test.ts` RP1–RP12 and `cli/report.test.ts` W1–W2 (#502: the report through
+  the entry point, the window parser),
   `trade-log/keeper.test.ts` C1–C15 (one case per ending, the sweep loop),
   `trade-log/keeper.db.test.ts` D1–D4, `timing.test.ts` (the #668 chain).
 - `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
@@ -480,6 +571,17 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
     comes after a drop has no hole mark for that drop.
 18. **Memory**: about 5 MB at the measured stream (556 ticks/s on 144 pairs, 240 s), 35 MB at the
     cap on every pair; not measured on the pilot.
+19. **md5 is a fingerprint, not a key** (#502): two parameter texts with one hash would merge into
+    one group; «Параметры» prints the group's `min(params::text)`. Negligible for a handful of sets.
+20. **The migration 0082 rewrites `signal_decisions` once** (`STORED`), in the `migrate` one-shot
+    before the services start: 30 days of rows without a trade plus the traded ones.
+21. **The report's window is the intent's `created_at`, the export's `recorded_at`**: a decision
+    recorded just before a bound whose intent was created just after falls on different sides of
+    it in the two commands.
+22. **Trades in flight are `не закрыто`**; break-even is on the group's mean payout (a group mixing
+    payouts has one mean, the pooled row most); `ROI %` is per stake dollar, not an EV per trade
+    (under martingale the two differ; `win %` is printed beside it); v2 rows print asset ids (no
+    catalog in the database); no audit row for a report; the window is the only filter.
 
 ## Boundaries
 
@@ -491,5 +593,6 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
   `createSessionIntent` (the type requires it).
 - The sender of the session messages reads the rows (#722), never writes them.
 - One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports:
-  `h1 shadow report` over the shadow rows (#681, [h1.md → The report](h1.md#the-report)); otherwise
-  only the export.
+  `h1 shadow report` over the shadow rows (#681, [h1.md → The report](h1.md#the-report)) and
+  `trade-log report` over the trades (#502, [The report](#the-report)); decisions without a trade
+  are only in the export.

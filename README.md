@@ -5,7 +5,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 ## Structure
 
 - `apps/bot` — Telegram bot (grammY)
-- `apps/backend` — API (Fastify): OAuth, postbacks, auth; the trade log's export (`trade-log export`, docs/trade-log.md); the H1 shadow on the data socket's ticks, on unless `H1_SHADOW=off` (docs/h1.md); the H1 shadow report (`h1 shadow report`); the H1 mark and sessions (`h1 mark|unmark|list`, `h1 session start|stop|status`, #670); the H1 driver that opens an H1 session's trades, sized by `packages/stake`, with `H1_SUBMIT_BUDGET_MS` (#707; a regular session with H1 entries since #775)
+- `apps/backend` — API (Fastify): OAuth, postbacks, auth; the trade log's export and trade report (`trade-log export`, `trade-log report`, docs/trade-log.md); the H1 shadow on the data socket's ticks, on unless `H1_SHADOW=off` (docs/h1.md); the H1 shadow report (`h1 shadow report`); the H1 mark and sessions (`h1 mark|unmark|list`, `h1 session start|stop|status`, #670); the H1 driver that opens an H1 session's trades, sized by `packages/stake`, with `H1_SUBMIT_BUDGET_MS` (#707; a regular session with H1 entries since #775)
 - `apps/web` — web pages (Fastify, server-rendered HTML): staff login and admin (#34), checkout later
 - `apps/trading-worker` — trading loop worker
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
@@ -88,6 +88,7 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand run 
 STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand h1    # the H1 backtest (the reference and R1), docs/signal-stand.md
 STAND_DIR=~/binarius-stand/stand-30d NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @binarius/signal-stand stand h1 --assets 237831086,364060136,759228819,1430524430,1605169136,1775154181,2025372713 --move-sec 3 --sd-step 3,5 --delays 1,2 --expiries 5   # R1's grid (#669), docs/signal-stand.md
 pnpm --silent --filter @binarius/backend trade-log export --from 2026-10-20T00:00:00Z > trade-log.jsonl   # the sessions' decisions (DATABASE_URL), docs/trade-log.md
+pnpm --silent --filter @binarius/backend trade-log report --since 7d   # win rate, CI, break-even and P&L of the closed trades by version, parameters, pair, interval, duration (DATABASE_URL), docs/trade-log.md → The report
 pnpm --silent --filter @binarius/backend h1 shadow report --since 24h   # the H1 shadow's win rate, CI and verdict per set and pair (DATABASE_URL), docs/h1.md
 pnpm --silent --filter @binarius/backend h1 list   # the accounts marked for H1 sessions (DATABASE_URL), docs/h1.md → Sessions
 pnpm --silent --filter @binarius/backend h1 session status --account <accountId>   # the account's last H1 session, its cycles (DATABASE_URL), docs/h1.md → Sessions
