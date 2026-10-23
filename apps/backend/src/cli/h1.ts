@@ -28,6 +28,15 @@ import * as z from 'zod';
 import { runH1MarkCommand, type H1MarkCommand } from './h1-mark';
 import { runH1SessionCommand, type H1SessionCommand, type H1SessionDeps } from './h1-session';
 import { formatFailure } from './kill-switch';
+import {
+  ALL_PAIRS,
+  NO_PAYOUT,
+  NO_TRADES,
+  parseSince,
+  resolveWindow,
+  type Since,
+  type Window,
+} from './report';
 import { parseInstant, UsageError } from './trade-log';
 
 // The H1 shadow report (#681, docs/h1.md → The report): win rate, 95 % CI and verdict per set,
@@ -41,10 +50,6 @@ import { parseInstant, UsageError } from './trade-log';
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
-
-const HOUR_MS = 3_600_000;
-const DAY_MS = 24 * HOUR_MS;
-const RELATIVE_SINCE = /^([1-9]\d{0,3})([hd])$/;
 
 const USAGE = `H1: отчёт теневой торговли (docs/h1.md → The report) и сессии H1 (docs/h1.md → Sessions).
 
@@ -69,26 +74,10 @@ session start — сессия H1 помеченного аккаунта, ка�
 активную сессию H1 аккаунта; session status — последняя сессия H1 аккаунта. Код выхода: 0 —
 сделано, 1 — отказ (строка в stderr), нет сессии или ошибка, 2 — не понято.`;
 
-export type H1Since = { at: Date } | { hours: number } | { days: number };
-
 export interface H1Args {
-  since: H1Since;
+  since: Since;
   // undefined: the database's clock when the report starts, the clock recorded_at is written by
   until: Date | undefined;
-}
-
-function parseSince(raw: string): H1Since {
-  const relative = RELATIVE_SINCE.exec(raw);
-  if (relative !== null) {
-    const n = Number(relative[1]);
-    return relative[2] === 'h' ? { hours: n } : { days: n };
-  }
-  try {
-    return { at: parseInstant(raw, '--since') };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new UsageError(`${message}; или N часов/дней до --until: 24h, 7d (N от 1 до 9999)`);
-  }
 }
 
 export function parseH1Args(argv: readonly string[]): H1Args {
@@ -111,7 +100,7 @@ export function parseH1Args(argv: readonly string[]): H1Args {
   if (subcommand !== 'report') throw new UsageError(`неизвестная команда: shadow ${subcommand}`);
   if (positionals.length > 2) throw new UsageError('лишние аргументы');
   if (values.since === undefined) throw new UsageError('нужен --since');
-  const since = parseSince(values.since);
+  const since = parseSince(values.since, '--since');
   const until = values.until === undefined ? undefined : parseInstant(values.until, '--until');
   if ('at' in since && until !== undefined && until.getTime() <= since.at.getTime()) {
     throw new UsageError('--until должен быть позже --since');
@@ -212,21 +201,6 @@ export function parseH1Command(argv: readonly string[]): H1Command {
   return { kind: 'shadow_report', args: parseH1Args(argv) };
 }
 
-export interface H1Window {
-  since: Date;
-  until: Date;
-}
-
-// a relative --since counts back from until, the database's clock by default: one clock with
-// recorded_at and the export
-export function resolveWindow(args: H1Args, end: Date): H1Window {
-  const until = args.until ?? end;
-  const { since } = args;
-  if ('at' in since) return { since: since.at, until };
-  const back = 'hours' in since ? since.hours * HOUR_MS : since.days * DAY_MS;
-  return { since: new Date(until.getTime() - back), until };
-}
-
 // one row of a set's table: a pair (or all pairs, assetId null) at one entry delay
 export interface H1ReportCell {
   set: string | null;
@@ -248,9 +222,6 @@ export interface H1ReportCell {
   verdict: string;
 }
 
-export const NO_TRADES = 'нет сделок';
-export const NO_PAYOUT = 'нет выплаты';
-export const ALL_PAIRS = 'все пары';
 export const NO_SET = '(без набора)';
 
 const TABLE_HEAD = [
@@ -366,7 +337,7 @@ export interface H1Report {
   warnings: string[];
 }
 
-export function renderH1ShadowReport(stats: H1ShadowStats, window: H1Window): H1Report {
+export function renderH1ShadowReport(stats: H1ShadowStats, window: Window): H1Report {
   const cells: H1ReportCell[] = [];
   const warnings: string[] = [];
   const order = setOrder(stats.sets.map((set) => set.set));
