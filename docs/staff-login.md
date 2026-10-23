@@ -155,17 +155,29 @@ moment earlier cannot still walk through to a session. The CLI prints the three 
 A login already in flight neither slips past that nor breaks it. The two serialize on the
 challenge row `completeLogin` holds until it commits — or the link row `completeLinkLogin` holds:
 either the CLI closes that row first and the login, once it stops waiting, finds it closed under
-it, or the CLI waits there and afterwards sees the session the login committed. The revocation is stamped with
-`clock_timestamp()` rather than `now()` for that second case: `now()` is the transaction's start,
-a session committed by a login that began later carries a `created_at` after it, and
-`staff_sessions_revoked_after_created_check` would reject that, aborting the whole operation and
-leaving the account exactly as it was (#149).
+it, or the CLI waits there and afterwards sees the session the login committed.
+
+Every update of a column a CHECK orders against the row's `created_at` — the sessions'
+`last_seen_at`/`revoked_at`, the challenges' `confirmed_at`/`prompt_sent_at`/`code_sent_at`, the
+login links' `used_at` (#448) and `oauth_states.used_at` — takes the statement clock,
+`statementNow()` (`packages/db/src/schema/columns.ts`), never `now()`; the INSERT defaults (a new
+session's `last_seen_at`) share the row's `created_at` transaction. `now()` is the transaction's
+start, and under READ COMMITTED an UPDATE still reaches rows committed by transactions that began
+after it, whose `created_at` is past that start. For the revocation above that is a session
+committed by a login that began later: with `now()`, `staff_sessions_revoked_after_created_check`
+would reject it, aborting the whole operation and leaving the account exactly as it was (#149).
+For the other writers it would be a caller holding a row's id before the transaction that created
+it commits — nothing does today, and with the statement clock the stamp no longer depends on it
+(#158). `stamp-clock.db.test.ts` opens the transaction before the row exists for each of the nine
+writers; `stamp-clock.test.ts` derives the columns from the schema's CHECKs and holds every write
+of them to `statementNow()` (what it cannot see is listed in Architecture Rules).
 
 Every CHECK that orders a stamp against a `created_at` written by an earlier transaction (the
-sessions' `last_seen`/`revoked`, the challenges' `confirmed`/`prompt_sent`/`code_sent`) also
-assumes the database clock never steps backwards between the two. A production kernel clock does
-not; the Colima VM a Mac runs the compose Postgres in does, which is why the local integration
-tests run against a native Postgres on the host instead (README → Test database, #166).
+sessions' `last_seen_at`/`revoked_at`, the challenges' `confirmed_at`/`prompt_sent_at`/
+`code_sent_at`, the login links' and `oauth_states`' `used_at`) also assumes the database clock
+never steps backwards between the two. A production kernel clock does not; the Colima VM a Mac
+runs the compose Postgres in does, which is why the local integration tests run against a native
+Postgres on the host instead (README → Test database, #166).
 
 ## Changing your own password
 

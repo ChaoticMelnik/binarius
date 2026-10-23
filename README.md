@@ -182,8 +182,10 @@ The scan is regex-based: a deadline built another way is not caught.
 
 ### Test database: native PostgreSQL 18
 
-The tests compare the database's clock with their own (a column against `Date.now()`) and one
-transaction's `now()` with a later one's (the time-order CHECKs). Both hold when Postgres and the
+The tests compare the database's clock with their own (a column against `Date.now()`), and the
+seven `>= created_at` stamp CHECKs compare a row's `created_at` — its transaction's `now()` — with
+a later statement's `clock_timestamp()`; the four `expires_at > created_at` compare two values
+written by the same INSERT. Both clock comparisons hold when Postgres and the
 tests share one clock: on the production host, in CI (a service container on the runner's kernel)
 and with a native Postgres on a Mac. They did not hold with the compose Postgres, which on a Mac
 runs in the Colima VM (#166):
