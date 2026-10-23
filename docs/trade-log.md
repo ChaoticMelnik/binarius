@@ -129,7 +129,8 @@ attempt goes on and its intent names no decision (O7).
 ### The H1 driver (`context = session`, `version = h1` or `h1-repeat`, #707, #775)
 
 The backend's driver ([h1.md → The driver](h1.md#the-driver-707)) writes rows for the signals it
-acts on, for the repeat steps (#775) and for one `no_signal` per waiting period (#775); a skip (a
+acts on, for the repeat steps (#775), for one `no_signal` per waiting period (#775) and for the
+second it stops a session at the no-signal limit (#775, review round 1); a skip (a
 live intent, the limits, the sizer, an ineligible pair) is a counter of its `h1 driver` line.
 `params` of a `version = h1` row is the shadow row's shape with `set = session`, so the export
 prints the row as an entry `replayH1Entry` decides again; `interval` and `ticks_until_ms` are
@@ -147,9 +148,10 @@ the export prints it as stored, the stand reports `unsupported_version`.
 | D5 | `active_intent_exists`, `client_request_id_conflict` | the session kept | `refused` / the code | H1-DR11 |
 | D6 | `TradingSessionNotActiveError`, the history gone | forgotten | none | H1-DR17 |
 | D7 | a skip of `sessionIntentBlock` (the hour, a live intent, the cycles, two rejections) or of the sizer (its stops, no balance, a balance hold) | none: the orchestrator stops it | none | H1-DR4, H1-DR6, H1-DR22–DR24 |
-| D8 | `no_signal` opening a waiting period (not busy, past the cadence, no block, none written since the last intent or notice) | the waiting message is due | `no_signal` / NULL, `version = h1`, the detector's decision and series; refused: `failed`, tried again after `scanMs` | H1-DR29, H1-DR30, H1-DB5 |
+| D8 | `no_signal` opening a waiting period (`below_threshold` or `no_volatility`, not `no_price`; not busy, past the cadence, no block, none written since the last intent or notice); a due repeat writes none: `repeatPending` (H1-DR37) | the waiting message is due | `no_signal` / NULL, `version = h1`, the detector's decision and series; refused: `failed`, tried again after `scanMs` | H1-DR29, H1-DR30, H1-DR37, H1-DB5 |
 | D9 | the repeat step (Шаг 2 after a lost or tied Шаг 1, #775) | the intent without a submit deadline, at the sizer's stake, in the lost trade's direction; a wake | `intent` / NULL (or `refused` / the code), `version = h1-repeat` | H1-DR25–DR28, H1-DR31, H1-DB4 |
 | D10 | any other throw of `createSessionIntent` | `errors`, a `warn` | none: rolled back with the intent | — |
+| D11 | the no-signal limit reached (`noSignalSeconds ≥ 100`, `waitExpired`, the waiting row written, no block, no due repeat; #775, review round 1) | `stopTradingSession` `no_signal_timeout`, forgotten | `no_signal` / NULL of the stopping second, after the stop, best-effort | H1-DR32–DR36, H1-DB6 |
 
 Tests of the shapes: `signal-decision-ops.db.test.ts` SD19, `trade-log.db.test.ts` X17.
 
