@@ -3,7 +3,13 @@ import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
-import { AccountHaltReason, TradeIntentStatus, type DecimalString } from '@binarius/shared';
+import {
+  AccountHaltReason,
+  TradeIntentStatus,
+  TradeMode,
+  type CreateTradeIntentRequest,
+  type DecimalString,
+} from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
   brokerAccounts,
@@ -434,15 +440,15 @@ describe('the reconciliation pass with the REST reconciler (#90)', () => {
   let token = TOKEN;
 
   // each case trades as its own broker user, so the lists hold only that case's trades
-  async function intentWithBroker() {
+  async function intentWithBroker(patch: Partial<CreateTradeIntentRequest> = {}) {
     token = `${TOKEN}-${++brokerUserId}`;
     broker.users.register({ id: brokerUserId, accessToken: token });
-    const seed = await reconcilingIntent101();
+    const seed = await reconcilingIntent101(patch);
     return seed;
   }
 
-  async function reconcilingIntent101() {
-    const seed = await seedUnknownIntent(tmp.db, { assetId: 101 });
+  async function reconcilingIntent101(patch: Partial<CreateTradeIntentRequest> = {}) {
+    const seed = await seedUnknownIntent(tmp.db, { assetId: 101, ...patch });
     const intent = (await startReconciling(tmp.db, {
       id: seed.intent.id,
       expectedVersion: seed.intent.version,
@@ -482,12 +488,51 @@ describe('the reconciliation pass with the REST reconciler (#90)', () => {
     ]);
   });
 
-  it('parks for manual review with reconciliation_not_found and halts the account once the window has closed without a trade', async () => {
-    const { intent, brokerAccountId } = await intentWithBroker();
-    await tmp.db
+  const closeWindow = (id: string) =>
+    tmp.db
       .update(tradeIntents)
       .set({ submittedAt: millisecondsAgo(200_000) })
-      .where(eq(tradeIntents.id, intent.id));
+      .where(eq(tradeIntents.id, id));
+
+  // #274: absence proven on two attempts a lease apart releases the reserve, in demo only
+  it('E1 releases a demo intent with no trade at the broker on the second proven attempt', async () => {
+    const { intent, brokerAccountId, userId } = await intentWithBroker();
+    await closeWindow(intent.id);
+    const log = capture('info');
+    const r = restReconciler();
+    await tickOnce(r, log.logger);
+    expect(await rowOf(intent.id)).toMatchObject({ status: 'reconciling', tokensReserved: 1n });
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: false, reason: null });
+    expect(checkCalls).toEqual([]);
+
+    await ageClaim(intent.id, RETRY_MS + 1_000);
+    await tickOnce(r, log.logger);
+    expect(await rowOf(intent.id)).toMatchObject({
+      status: 'rejected',
+      lastError: 'reconciliation_not_found',
+      tokensReserved: 0n,
+    });
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: false, reason: null });
+    expect(log.line(ALERT)).toBeUndefined();
+    expect(checkCalls).toEqual([brokerAccountId]);
+    expect(await ledgerKinds(intent.id)).toEqual(['reserve', 'release']);
+    expect((await userTokens(userId)).reserved).toBe(0n);
+  });
+
+  it('E3 a restart between the attempts starts the count again', async () => {
+    const { intent, brokerAccountId } = await intentWithBroker();
+    await closeWindow(intent.id);
+    await tickOnce(restReconciler());
+    await ageClaim(intent.id, RETRY_MS + 1_000);
+    await tickOnce(restReconciler());
+    expect(await rowOf(intent.id)).toMatchObject({ status: 'reconciling', tokensReserved: 1n });
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: false, reason: null });
+  });
+
+  // E2: a real intent never reaches the count, so one attempt parks it
+  it('parks for manual review with reconciliation_not_found and halts the account once the window has closed without a trade', async () => {
+    const { intent, brokerAccountId } = await intentWithBroker({ mode: TradeMode.Real });
+    await closeWindow(intent.id);
     const log = capture('info');
     await tickOnce(restReconciler(), log.logger);
     expect(await rowOf(intent.id)).toMatchObject({
