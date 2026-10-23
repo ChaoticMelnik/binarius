@@ -40,9 +40,11 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   (`replansCanceled`, #123), and whether it is important (`important`, #686, Delivery rules);
   `IMPORTANT_NOTIFICATION_KINDS` lists those, from the scenarios alone. A kind with one fact per
   user goes through `oneFact`: its facts are one row, its key reads the user's row only and the
-  claim compares it directly. `weeklyAnchor`, `weeklyRange` and `weeklyKey` (#124) are the weekly
-  summary's week as builders over a moment, exported for the tests.
-- `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
+  claim compares it directly. `weeklyAnchor`, `weeklyRange`, `weeklyKey` and `weeklyTimely` (#124)
+  are the weekly summary's week as builders over a moment, and `weeklySummaryAt` the scenario over a
+  moment (the entry is `weeklySummaryAt(now())`), exported for the tests.
+- `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs` (one `planMailingKind` per
+  kind; a test passes `planMailingKind` a scenario built over a literal moment), `claimMailingJob`,
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
   job's payload and the `MailingContext` (the cashier's URL, the user's mode and language at the
@@ -312,23 +314,41 @@ the sent `tokens_out`, once per user (1 (a)); only facts after the deploy (2 (a)
 engine's rules hold (`reduced`: one mailing a day). The texts show counts only — no money, so rule 2
 is untouched (profit is only compared to 0 in SQL) — and promise no result.
 
-- **The last activity** is `greatest(` the newest `trading_sessions.started_at` and the newest
-  `trade_intents.created_at` on the user's accounts, `broker_balance_snapshots.last_requested_at` of
-  those accounts, `users.last_analysis_at` `)`. `last_requested_at` moves on `/trading/access` (the
-  bot's menu and trading screens), a session start, a deposit credit and every tick of a running
-  session. It is an approximation: a user who only reads `/help` or `/settings` counts as inactive.
+- **The last activity** is `greatest(` the newest `greatest(trading_sessions.started_at, ended_at)`
+  (a session's start or end) and the newest `trade_intents.created_at` on the user's accounts,
+  `broker_balance_snapshots.last_requested_at` of those accounts, `users.last_analysis_at` `)`.
+  `last_requested_at` moves on `/trading/access` (the bot's menu and trading screens), a session
+  start, a deposit credit and every tick of a running session. It is an approximation: a user who only reads `/help` or `/settings` counts as inactive.
+  The session's end counts so that `session_idle_24h` (24 h after the end) is always due before
+  `inactive_3d` (72 h after the activity), even for a session stopped long after its last tick (a
+  worker down for two days; RT2d).
 - **`inactive_3d`** applies while the user is not blocked by the admin, trades demo, has an active
   account and trading is open (`tradingOpenSql`, rule 22), has at least one session, has had no
-  `inactive_3d` sent in the last `INACTIVE_REPEAT_DAYS` (7), and has no `session_idle_24h` or
-  `tokens_out_2d` job pending. The key is `inactive_3d:` and the epoch of the activity: newer
-  activity is a new key, and the old job is canceled at the claim. The pending-job rule has two
-  cases. A specific job pending first (a `reduced` user waiting for the 24-hour window): no
-  `inactive_3d` is planned; it is planned once that job is sent, and the `reduced` window puts it
-  at least a day later. Both planned in the same pass (late planning: the planner walks the kinds
-  in `NotificationKind` order, `inactive_3d` first): the claim sees the pending specific job and
-  cancels `inactive_3d`, its key spent for that inactivity spell, so the user gets the specific
-  push alone (RT10). The rule is not planning-only on purpose: then both jobs would be claimed and
-  sent seconds apart to a `full` user.
+  `inactive_3d` sent in the last `INACTIVE_REPEAT_DAYS` (7), and no specific kind holds it
+  (`specificHolds`). The key is `inactive_3d:` and the epoch of the activity: newer activity is a
+  new key, and the old job is canceled at the claim. One push per inactivity spell (manager
+  2026-10-23, round 2, answer 1 (a)): `session_idle_24h` or `tokens_out_2d` holds `inactive_3d`
+  while it has
+  - a `pending` job (RT5a, RT5b, RT11b);
+  - a job `sent` after the last activity — the spell's specific push already went out (RT5c, RT5d,
+    RT11); one sent before it belongs to an earlier spell and holds nothing (RT5e);
+  - a coming fact: one at or after the kind's `plans_from` that applies and has no job of its key
+    yet, due or not — the planner will plan it (RT10, RT10b, RT12). It is built from the specific
+    scenario's own `facts`, `stillApplies` and `dedupeKey`, so it cannot drift from them; a fact
+    before the cutoff (RT10d), one that no longer applies (RT10c) and a real newest session
+    (no fact, RT13) hold nothing.
+
+  It is read in the statement that plans and in the one that claims. The sent part makes the hold
+  independent of the claim's scan: in a late wave every `session_idle_24h` sorts before every
+  `inactive_3d`, and a pending-only rule let `inactive_3d` through once its specific job was sent in
+  an earlier claim (RT11, `scan: 1`). The coming part makes it independent of the planner's kind
+  order (`inactive_3d` precedes both in `NotificationKind`): a pass where both are due plans only
+  the specific job (RT10), and a job planned before it is canceled at the claim (RT12). So in the
+  normal path, a session and then idle, the user gets `session_idle_24h` on day 1 and no
+  `inactive_3d` for that spell. `inactive_3d` reaches a demo user with a session behind them whose
+  spell had no specific push: one who came back after `session_idle_24h` (any activity starts a new
+  spell) and went idle for 72 h, one whose newest session was a real one (RT13), one whose session
+  ended before the deploy's cutoff (RT10d), one whose specific job was canceled or failed.
 - **`session_idle_24h`**: the fact is the `ended_at` of the user's newest session by
   `started_at desc, id desc` (`newestSessionFrom`), only when that session is a demo one;
   `ended_at` is set exactly when the session is stopped (`trading_sessions_ended_at_pair_check`),
@@ -358,8 +378,14 @@ is untouched (profit is only compared to 0 in SQL) — and promise no result.
   (ISO year: 2025-01-06 sums 2025-W01). Counted: `status = settled` and `mode = demo`, on any of the
   user's accounts, single and session trades alike; no settled trade, no fact. The payload is the
   four counts as the planning saw them. It applies while the user is not blocked by the admin and
-  trades demo. Next Monday's key cancels a job of the week before that is still pending (a `reduced`
-  user). The offset is 0, so it is not in `MAILING_MIN_OFFSET_MS`.
+  trades demo. It is planned and claimed only while its week is still the ISO week before now's:
+  `weeklyTimely` = `(now at time zone 'UTC') < week end + 7 d`. From the next Monday 00:00 UTC until
+  the anchor moves at 10:00 nothing is planned, and a job still pending is canceled at the claim
+  (RW9, RW10, the RW1 probes), so «прошлой недели» is true at every send; after 10:00 the next
+  week's key cancels it anyway (a `reduced` user). The offset is 0, so it is not in
+  `MAILING_MIN_OFFSET_MS`. The planner tests plan at literal moments of 2025 through
+  `planMailingKind(…, weeklySummaryAt(moment))`, so they do not depend on the day they run; RW11
+  pins the entry to `weeklySummaryAt(now())`.
 - **`tokens_out_2d`**: the fact is the `sent_at` of the user's `sent` `tokens_out` job
   (`tokensOutSentAt`; one at most, its key `tokens:100` is constant). It applies while the user is
   not blocked by the admin, `token_balance = 0`, and no `token_ledger` row with `balance_delta <> 0`
@@ -378,23 +404,34 @@ is untouched (profit is only compared to 0 in SQL) — and promise no result.
 comes back from `off`, the bot is unblocked, the user goes back to demo, trading reopens — the kind
 is planned then, not at its offset. So no text names an age, in digits or in words («2 дня»,
 «три дня», «сутки», «вчера», «неделю назад»): a late message stays true (`messages.test.ts` RM5,
-the guard's own samples RM5a).
+the guard's own samples RM5a). The weekly summary is the one kind with a calendar gap: a late plan on
+Monday 00:00–10:00 UTC plans nothing (`weeklyTimely`), so it never summarises the week before last.
 
 ### Accepted risks
 
 - The activity is an approximation (above).
 - Planner load: each kind is one `INSERT … SELECT` per 60 s over all users with correlated
-  subqueries (`trade_intents_user_id_idx`, `notification_jobs_user_id_idx`). Assumed scale: up to
-  10 000 users and 10 000 intents per user keep one pass under 1 s; not measured, no new index here.
-- Two pushes in three days are possible: `session_idle_24h` on day 1 and `inactive_3d` on day 3,
-  both owner-chosen; `reduced` caps them.
+  subqueries (`trade_intents_user_id_idx`, `notification_jobs_user_id_idx`); `inactive_3d`'s also
+  reads the two specific scenarios' facts per user. Assumed scale: up to 10 000 users and 10 000
+  intents per user keep one pass under 1 s; not measured, no new index here.
+- `inactive_3d` is rarer (round 2, answer 1 (a)): after a specific push it waits for the next
+  spell. In the normal path, a session and then idle, the user gets `session_idle_24h` only.
+- The reverse is not held: a `tokens_out_2d` whose `tokens_out` (#123) was sent after `inactive_3d`
+  went out still follows 48 h later. That needs `tokens_out` itself to come after `inactive_3d` (a
+  `reduced` window, a level back from `off`, an unblock). `session_idle_24h` never follows
+  `inactive_3d` in one spell (the session's end counts as activity).
+- The specific kinds are independent of each other and of `weekly_summary`: `session_idle_24h`,
+  `tokens_out_2d` and the weekly summary can each go out in one spell, and the engine's other
+  scenarios (#123, #484, …) can go out next to `inactive_3d` in a late wave, minutes apart, to a
+  `full` user — the engine's rule for different scenarios; `reduced` caps it.
 - The weekly payload is the week as planned: a trade of the week that settles after the planning is
   not counted.
 - `tokens_out_2d` left open: a straddling credit taken back whole by a single row that also
   straddles the claim (a Stars refund racing its own purchase) leaves no row after `sent_at`, and
   the push goes out at a balance of 0 — which is still true.
 
-Tests: `mailing-ops.db.test.ts` RT1–RT10, RS1–RS8 (with RS1b, RS3b, RS8b), RW1–RW8, RZ1–RZ10 (each
+Tests: `mailing-ops.db.test.ts` RT1–RT13 (with RT2d, RT5c–RT5e, RT10b–RT10d, RT11b), RS1–RS8 (with
+RS1b, RS3b, RS8b), RW1–RW11, RZ1–RZ10 (each
 kind's CUT is RT8, RS6, RW7, RZ9), `engine.db.test.ts` E-RT, `messages.test.ts` RM1–RM7 (with RM5a),
 `bot-navigation.test.ts` BD1, the pin in
 `timing.test.ts`.
