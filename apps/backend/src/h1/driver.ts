@@ -49,7 +49,7 @@ import {
 import { assertH1WindowFits, createH1Detector, type H1Detector } from '@binarius/signal';
 import {
   createStakeSizer,
-  sessionTradeOf,
+  sessionStakeInput,
   StakeKind,
   StopReason,
   type StakeSizer,
@@ -531,15 +531,16 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       skippedLimits.balance_unavailable = (skippedLimits.balance_unavailable ?? 0) + 1;
       return;
     }
-    const startedAtMs = session.startedAt.getTime();
-    const stake = state.sizer.next({
-      history: history.intents.map(sessionTradeOf),
-      payout,
-      minTradeAmount: balance.minTradeAmount,
-      available: balance.available,
-      sessionStartedAtMs: startedAtMs,
-      nowMs: Math.max(now(), startedAtMs),
-    });
+    const stake = state.sizer.next(
+      sessionStakeInput({
+        intents: history.intents,
+        payout,
+        minTradeAmount: balance.minTradeAmount,
+        available: balance.available,
+        sessionStartedAtMs: session.startedAt.getTime(),
+        nowMs: now(),
+      }),
+    );
     if (stake.kind === StakeKind.Stop) {
       // #696: the payout of the settlement is not in the balance yet; the orchestrator holds too
       if (stake.reason === StopReason.InsufficientBalance && balance.awaitsBalance) {
