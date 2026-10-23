@@ -86,16 +86,18 @@ export const HANDLER_CALLS = {
   // readSignals ∥ readPairs — the reads counted as sequential, as in confirm — then sendMessage
   demo: { backend: 2, telegram: 2 },
   // the list in place (#320, #685: `demo:sig`, and `demo:sig:<sec>` of an old button): the same
-  // reads, then editMessageText refused as gone → sendMessage
+  // reads, then editMessageText refused as gone → sendMessage; under the summary card (a photo)
+  // no edit is tried, shorter (#761)
   demoSignals: { backend: 2, telegram: 3 },
   // a pair of the list (#320) and every demo door of a cycle (#476): answerCallbackQuery ∥
   // readPairs ∥ readTradingAccess ∥ readSignals (the signals list, #664) — counted the same way —
-  // then editMessageText refused as gone → sendMessage; a door under a trade or a session sends
-  // at once, shorter
+  // then editMessageText refused as gone → sendMessage; a door under a trade or a session, and
+  // the session row under the analysis card (a photo, #761), sends at once, shorter
   demoLaunch: { backend: 3, telegram: 3 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair's summary, also by
   // `demo:d:<id>:5` of an old button): answerCallbackQuery ∥ readPairs, then editMessageText
-  // refused as gone → sendMessage
+  // refused as gone → sendMessage; under the analysis card (a photo) no edit is tried, shorter
+  // (#761)
   demoGroups: { backend: 1, telegram: 3 },
   demoPage: { backend: 1, telegram: 3 },
   demoAsset: { backend: 1, telegram: 3 },
@@ -125,7 +127,8 @@ export const HANDLER_CALLS = {
   // the stake picker (#297, stake-picker.ts) opened, a preset and the reset: answerCallbackQuery
   // ∥ readTradingAccess or setStake — counted as sequential — then, after a save opened from
   // a launch screen, readPairs for its symbol (#320) ∥ readTradingAccess for the mode (#121) —
-  // counted the same way — then editMessageText refused as gone → sendMessage
+  // counted the same way — then editMessageText refused as gone → sendMessage; opened under the
+  // analysis card (a photo) no edit is tried, shorter (#761)
   stakePickerOpen: { backend: 1, telegram: 3 },
   stakePreset: { backend: 3, telegram: 3 },
   stakeReset: { backend: 3, telegram: 3 },
@@ -153,9 +156,12 @@ export const HANDLER_CALLS = {
   // readPairs — counted as sequential, as in confirm — then startSession in one attempt (its retry
   // would make it 4 / 4 = 52 s, past SHUTDOWN_BUDGET_MS), sendMessage or sendPhoto (#568), then the
   // screen's deleteMessage refused as forbidden and editMessageReplyMarkup (#418); a refused photo
-  // sends its text and keeps the screen, 3 / 3. 47 s, equal to sessionStart.
+  // sends its text and keeps the screen, 3 / 3. A 409 no_signal under the analysis card (#761):
+  // the wait's sendMessage, then the card's deleteMessage refused as forbidden and
+  // editMessageReplyMarkup, the same 3 / 4. 47 s, equal to sessionStart.
   cycleStakePreset: { backend: 3, telegram: 4 },
-  // its «✏️ Ввести»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
+  // its «✏️ Ввести»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage;
+  // under the analysis card (a photo) no edit is tried, shorter (#761)
   cycleStakeCustom: { backend: 0, telegram: 3 },
   // a text on that step: setStake ∥ readPairs — counted as sequential — then startSession and its
   // one retry on an unknown outcome, then sendMessage, or sendPhoto and, refused, sendMessage

@@ -72,6 +72,7 @@ import {
   demoPageCallbackData,
   sessionStartCallbackData,
   stakeCallbackData,
+  stakeMenuCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
 import { shareQuery } from './session-share';
@@ -953,9 +954,22 @@ const DEMO_ASSET = demoScreenBranches(
   'demo:a:0',
   pairBranches([unsupported]),
 );
-DEMO_ASSET.branches.push({
-  label: 'an old summary button, `demo:d:<id>:5`',
-  update: callbackUpdate(`demo:d:${String(PAIR_EURUSD.id)}:5`),
+DEMO_ASSET.branches.push(
+  {
+    label: 'an old summary button, `demo:d:<id>:5`',
+    update: callbackUpdate(`demo:d:${String(PAIR_EURUSD.id)}:5`),
+    expected: { backend: 1, telegram: 2 },
+  },
+  // #761: under the analysis card no edit is tried, shorter than the edit
+  {
+    label: 'under the analysis card (a photo) the screen is sent at once',
+    update: photoCallbackUpdate(demoAssetCallbackData(PAIR_EURUSD.id)),
+    expected: { backend: 1, telegram: 2 },
+  },
+);
+DEMO_GROUPS.branches.push({
+  label: 'under the analysis card (a photo) the screen is sent at once (#761)',
+  update: photoCallbackUpdate(DEMO_GROUPS_CALLBACK_DATA),
   expected: { backend: 1, telegram: 2 },
 });
 // the signals list in place (#320, #685)
@@ -965,11 +979,19 @@ const DEMO_SIGNALS = demoScreenBranches(
   signalsBranches(() => callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA), 2),
   2,
 );
-DEMO_SIGNALS.branches.push({
-  label: 'an old `demo:sig:15` button',
-  update: callbackUpdate('demo:sig:15'),
-  expected: { backend: 2, telegram: 2 },
-});
+DEMO_SIGNALS.branches.push(
+  {
+    label: 'an old `demo:sig:15` button',
+    update: callbackUpdate('demo:sig:15'),
+    expected: { backend: 2, telegram: 2 },
+  },
+  // #761: under the session's summary card (#318) no edit is tried
+  {
+    label: 'under the summary card (a photo) the list is sent at once',
+    update: photoCallbackUpdate(DEMO_SIGNALS_CALLBACK_DATA),
+    expected: { backend: 2, telegram: 2 },
+  },
+);
 // the launch screen (#320): the pair checked at the data's duration, the amount from access; since
 // #664 the signals list read beside them (#509 read the pair's signal), three reads in parallel
 // counted as sequential; evaluateSignal is no call of it
@@ -1010,11 +1032,19 @@ const DEMO_LAUNCH = demoScreenBranches(
   3,
 );
 // #476: a door under a trade or a session sends the screen at once, shorter than the edit
-DEMO_LAUNCH.branches.push({
-  label: 'a door under a trade or a session sends the screen as a new message',
-  update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
-  expected: { backend: 3, telegram: 2 },
-});
+DEMO_LAUNCH.branches.push(
+  {
+    label: 'a door under a trade or a session sends the screen as a new message',
+    update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
+    expected: { backend: 3, telegram: 2 },
+  },
+  // #761: the analysis card's session row tries no edit under the photo
+  {
+    label: 'the session row under the analysis card (a photo) sends the screen at once',
+    update: photoCallbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a')),
+    expected: { backend: 3, telegram: 2 },
+  },
+);
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary — or sent at once under a
 // photo (#482) — the signal, then a text result in place of «⏳» or the card as a photo with «⏳»
 // deleted after it. Its edits are two, so the shared screen branches do not describe it.
@@ -3050,6 +3080,14 @@ const STAKE_OPEN = pickerBranches('stk:o:r:s', 1, {
       'the edit is refused as not modified',
       { apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]] },
     ],
+    // #761: «💵 Сумма» under the analysis card's «➕ Ещё» tries no edit
+    [
+      'under the analysis card (a photo) the picker is sent at once',
+      {
+        update: photoCallbackUpdate(stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5)),
+        expected: { backend: 1, telegram: 2 },
+      },
+    ],
   ],
 });
 // A save opened from a launch screen (#320) reads the catalog and the user's mode (#121) for the
@@ -3118,6 +3156,8 @@ const STAKE_TEXT_BRANCHES: readonly Branch[] = [
 // the amount screen's presses (#476, cycle-stake.ts)
 const cyclePressUpdate = (chatType?: string) =>
   callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'l'), chatType);
+const cycleCardPressUpdate = () =>
+  photoCallbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'a'));
 const CYCLE_STAKE_PRESET_WORST_CASE: Branch = {
   label: 'the cycle starts, the status is sent, the screen cannot be deleted and is stripped',
   update: cyclePressUpdate(),
@@ -3179,10 +3219,41 @@ const CYCLE_STAKE_PRESET_BRANCHES: readonly Branch[] = [
     apiErrors: [['sendPhoto', SESSION_PHOTO_REFUSED]],
     expected: { backend: 3, telegram: 3 },
   },
+  // #664: no signal since the screen was drawn, the wait in its place
+  {
+    label: 'the start is refused for want of a signal: the wait in place of the screen',
+    update: cyclePressUpdate(),
+    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
+    expected: { backend: 3, telegram: 2 },
+  },
+  // #761: under the analysis card the wait goes at once, then the card is deleted as after a start
+  {
+    label: 'no signal under the analysis card: the wait is sent and the card deleted',
+    update: cycleCardPressUpdate(),
+    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
+    expected: { backend: 3, telegram: 3 },
+  },
+  {
+    label: 'no signal under the analysis card: the card cannot be deleted and is stripped',
+    update: cycleCardPressUpdate(),
+    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
+    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+    expected: { backend: 3, telegram: 4 },
+  },
   CYCLE_STAKE_PRESET_WORST_CASE,
 ];
 const CYCLE_STAKE_CUSTOM = pickerBranches(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'), 0, {
   forged: 'demo:sc:0:5:a',
+  extra: [
+    // #761: «✏️ Ввести» under the analysis card tries no edit
+    [
+      'under the analysis card (a photo) the prompt is sent at once',
+      {
+        update: photoCallbackUpdate(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a')),
+        expected: { backend: 0, telegram: 2 },
+      },
+    ],
+  ],
 });
 const ON_CYCLE_STEP: LoginDialogState = {
   step: 'cycleStake',

@@ -224,12 +224,6 @@ const EDIT_GONE: ApiError = {
   error_code: 400,
   description: 'Bad Request: message to edit not found',
 };
-// a message whose text is a caption: a photo, the session's summary card (#318)
-const NO_TEXT: ApiError = {
-  ok: false,
-  error_code: 400,
-  description: 'Bad Request: there is no text in the message to edit',
-};
 const EDIT_NOT_MODIFIED: ApiError = {
   ok: false,
   error_code: 400,
@@ -2768,9 +2762,9 @@ describe('the demo and the email dialog', () => {
   });
 });
 
-// #318: the summary card is a photo, so a button under it that edits the pressed message is
-// refused with «there is no text in the message to edit»; the screen then goes as a new message.
-// «📊 Анализ» tries no edit (#482): the press carries the photo, and «⏳» goes at once.
+// #318: the summary card is a photo, so a button under it that would edit the pressed message
+// tries no edit: the press carries the photo, and the screen goes as a new message at once (#761),
+// as «⏳» under «📊 Анализ» does (#482).
 describe('a press under the session card (a photo)', () => {
   // the card's buttons that edit the pressed message: «🔁 Ещё сессия» replies (K7 in
   // trading-session.test.ts; in demo its amount screen, `:n`, #476) and «🏠 В меню» replies too
@@ -2790,9 +2784,8 @@ describe('a press under the session card (a photo)', () => {
       );
   const pressOnPhoto = async (data: string, options: Parameters<typeof setup>[0] = {}) => {
     const scene = setup(options);
-    scene.apiErrors.set('editMessageText', NO_TEXT);
-    await scene.press(data);
-    expect(scene.logger.warn.mock.calls.map((call) => call[1])).toContain(
+    await scene.pressOnPhoto(data);
+    expect(scene.logger.warn.mock.calls.map((call) => call[1])).not.toContain(
       'the demo screen was not edited, sending it anew',
     );
     expect(scene.logger.error).not.toHaveBeenCalled();
@@ -2809,9 +2802,9 @@ describe('a press under the session card (a photo)', () => {
     }
   });
 
-  it('C1 «📡 Сигналы» sends the signals list as a new message', async () => {
-    const { calls, logger, signalWaiter } = await pressOnPhoto(DEMO_SIGNALS_CALLBACK_DATA);
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+  it('C1 «📡 Сигналы» sends the signals list as a new message, no edit tried', async () => {
+    const { calls, signalWaiter } = await pressOnPhoto(DEMO_SIGNALS_CALLBACK_DATA);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     // #664: the list's 30 s run on the new message
     expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({
       messageId: TEXT_CARD_MESSAGE_ID,
@@ -2820,11 +2813,6 @@ describe('a press under the session card (a photo)', () => {
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(TEXTS.demoSignalsHeader({ label: '⏱ 5 с' }).value);
     expect(rowsOf(sent).slice(-1)).toEqual(LIST_FOOTER);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
-      method: 'editMessageText',
-      telegramErrorCode: 400,
-    });
   });
 
   it('C2 a legacy button under the card sends the list as a new message, no edit tried', async () => {
@@ -2919,17 +2907,145 @@ describe('a press under the session card (a photo)', () => {
     ]);
   });
 
-  it('C4 «📊 Анализ» with the catalog unreadable sends the failure screen anew', async () => {
+  it('C4 «📊 Анализ» with the catalog unreadable sends the failure screen anew, no edit tried', async () => {
+    const options = {
+      readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    };
     const { calls, evaluateSignal } = await pressOnPhoto(
       demoAnalysisCallbackData(PAIR_EURUSD.id, 5),
-      { readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)) },
+      options,
     );
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
-    const edited = payloadOf(calls, 'editMessageText');
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    // the same screen a text message gets in place
+    const inText = setup(options);
+    await inText.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+    const edited = payloadOf(inText.calls, 'editMessageText');
     const sent = payloadOf(calls, 'sendMessage');
+    expect(edited).toBeDefined();
     expect(sent?.text).toBe(edited?.text);
     expect(sent?.reply_markup).toEqual(edited?.reply_markup);
     expect(evaluateSignal).not.toHaveBeenCalled();
+  });
+});
+
+// #761: the analysis card (#482) is a photo too, so its buttons that would edit the pressed
+// message send their screen as a new message at once, with no edit tried and no warn
+describe('a press under the analysis card (a photo, #761)', () => {
+  const ANALYSIS = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
+  const MORE = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Demo);
+  const callbackData = (payload: Record<string, unknown> | undefined) =>
+    rowsOf(payload)
+      .flat()
+      .map((key) => key.callback_data)
+      .filter((data): data is string => data !== undefined);
+  // «🔄 Заново» tries no edit already (#482), «➕ Ещё» edits only the keyboard, an amount's wait
+  // is cycle-stake.test.ts's, a trade answers and a session starts as new messages
+  const editing = (data: readonly string[]) =>
+    data.filter(
+      (datum) =>
+        !['demo:an:', 'demo:more:', 'demo:sa:', 'demo:stake:', 'real:stake:'].some((prefix) =>
+          datum.startsWith(prefix),
+        ) &&
+        !datum.startsWith('demo:sess:') &&
+        !datum.startsWith('real:sess:'),
+    );
+  const cardData = async (options: Parameters<typeof setup>[0] = {}) => {
+    const scene = setup(options);
+    await scene.press(ANALYSIS);
+    const card = callbackData(payloadOf(scene.calls, 'sendPhoto'));
+    const before = scene.calls.length;
+    await scene.pressOnPhoto(MORE);
+    const expanded = callbackData(payloadOf(scene.calls.slice(before), 'editMessageReplyMarkup'));
+    return { card, expanded };
+  };
+  const pressBoth = async (data: string, options: Parameters<typeof setup>[0] = {}) => {
+    const photo = setup(options);
+    await photo.pressOnPhoto(data);
+    const text = setup(options);
+    await text.press(data);
+    return { photo, text };
+  };
+
+  it('P-pin pins the buttons this covers; a button added to the card needs its press here', async () => {
+    const withAmounts = await cardData();
+    expect(new Set(editing([...withAmounts.card, ...withAmounts.expanded]))).toEqual(
+      new Set([
+        cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a'),
+        demoAssetCallbackData(PAIR_EURUSD.id),
+        DEMO_GROUPS_CALLBACK_DATA,
+        stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
+      ]),
+    );
+    // no snapshot to draw the amounts from: the session row opens the amount screen
+    const withoutAmounts = await cardData({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ broker: null, brokerUnavailable: 'refreshing' })),
+    });
+    expect(new Set(editing([...withoutAmounts.card, ...withoutAmounts.expanded]))).toEqual(
+      new Set([
+        demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'),
+        demoAssetCallbackData(PAIR_EURUSD.id),
+        DEMO_GROUPS_CALLBACK_DATA,
+        stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
+      ]),
+    );
+  });
+
+  it('P-door the session row with the pair out of the list sends the wait as a new message and registers it there', async () => {
+    const { pressOnPhoto, calls, signalWaiter, logger } = setup({
+      readSignals: () => Promise.resolve(signalsOf()),
+    });
+    await pressOnPhoto(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+      TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value,
+    );
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
+    expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+      messageId: TEXT_CARD_MESSAGE_ID,
+      back: 'a',
+      origin: 'door',
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('P-door the session row with the pair in the list sends the amount screen as a new message', async () => {
+    const { photo, text } = await pressBoth(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
+    expect(methods(photo.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(photo.calls, 'sendMessage');
+    const edited = payloadOf(text.calls, 'editMessageText');
+    expect(sent?.text).toContain('Выбери сумму сделки 👇');
+    expect(sent?.text).toBe(edited?.text);
+    expect(sent?.reply_markup).toEqual(edited?.reply_markup);
+    expect(photo.signalWaiter.waitPair).not.toHaveBeenCalled();
+    expect(photo.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['P-asset «↩️ К паре»', demoAssetCallbackData(PAIR_EURUSD.id)],
+    ['P-groups «↩️ Типы»', DEMO_GROUPS_CALLBACK_DATA],
+  ])('%s sends the screen a text message gets in place as a new message', async (_name, data) => {
+    const { photo, text } = await pressBoth(data);
+    expect(methods(photo.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(photo.calls, 'sendMessage');
+    const edited = payloadOf(text.calls, 'editMessageText');
+    expect(edited).toBeDefined();
+    expect(sent?.text).toBe(edited?.text);
+    expect(sent?.reply_markup).toEqual(edited?.reply_markup);
+    expect(photo.logger.warn).not.toHaveBeenCalled();
+    expect(photo.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('P-text-unchanged the same buttons under a text message edit it in place', async () => {
+    for (const data of [
+      demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'),
+      demoAssetCallbackData(PAIR_EURUSD.id),
+      DEMO_GROUPS_CALLBACK_DATA,
+    ]) {
+      const { press, calls } = setup();
+      await press(data);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    }
   });
 });
 
