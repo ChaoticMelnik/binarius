@@ -874,7 +874,7 @@ describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
     expect(h.creates[0]!.decision).toMatchObject({ version: 'h1' });
   });
 
-  it('H1-DR29: a waiting period writes one no_signal row; a notice opens the next period', async () => {
+  it('H1-DR29: a waiting period writes one no_signal row; an intent or a notice opens the next one', async () => {
     const h = await harness();
     await h.feedSettled(A, T, flat(303));
     await flush();
@@ -906,12 +906,19 @@ describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
       decision: row.decision,
     });
     expect(replayH1Entry(entry)).toEqual(row.decision);
+    // an intent opens the next period: a signal at F + 3 s, then the level holds; F + 4 s … F + 9 s
+    // are held by the cadence, F + 10 s waits again
+    await h.feedSettled(A, F + 3_000, [1.1001, ...flat(7, 1.1001)]);
+    await flush();
+    expect(h.creates.map((one) => one.decision!.decidedAtMs)).toEqual([F + 3_000]);
+    expect(h.records.map((one) => one.decidedAtMs)).toEqual([F, F + 10_000]);
+    // so does a notice
     h.driver.notice('s1');
     await flush();
-    await h.feedSettled(A, F + 3_000, flat(2));
+    await h.feedSettled(A, F + 11_000, flat(2, 1.1001));
     await flush();
-    expect(h.records.map((one) => one.decidedAtMs)).toEqual([F, F + 3_000]);
-    expect(h.line()).toMatchObject({ waitingRows: 2 });
+    expect(h.records.map((one) => one.decidedAtMs)).toEqual([F, F + 10_000, F + 11_000]);
+    expect(h.line()).toMatchObject({ waitingRows: 3 });
   });
 
   it('H1-DR30: no waiting row while the cadence holds or an intent is live; a refused row is retried after scanMs', async () => {
