@@ -2465,20 +2465,26 @@ describe('an H1 session (#670, #775)', () => {
     await orchestrator.stop();
   });
 
-  it('H1-O5′ no intent within the no-signal limit stops it with no_signal_timeout (В5)', async () => {
+  it("H1-O5″ no intent within the no-signal limit on an open pair holds it: the stop is the driver's", async () => {
     const seed = await seedSession({ settings: h1Settings(), startedAt: pastNoSignalLimit() });
-    const fresh = await seedSession({ settings: h1Settings() });
     const { signals, orchestrator } = h1Orchestrator();
     await orchestrator.tick();
     expect(signals.calls).toEqual([]);
-    expect(await stopOf(seed.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.NoSignalTimeout,
-    });
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ reason: 'no_signal_timeout', waited: 'no_signal' }),
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(linesOf(seed.session.id)).not.toContainEqual(
+      expect.objectContaining({ reason: 'no_signal_timeout' }),
     );
-    expect(await stopOf(fresh.session.id)).toEqual(ACTIVE);
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ msg: 'trading session waits for the H1 driver' }),
+    );
+    // the hold of h1CheckMs: a tick inside it does not attempt the session again
+    advance(CONFIG.h1CheckMs - 1);
+    await orchestrator.tick();
+    expect(
+      linesOf(seed.session.id).filter(
+        (line) => line.msg === 'trading session waits for the H1 driver',
+      ),
+    ).toHaveLength(1);
     await orchestrator.stop();
   });
 

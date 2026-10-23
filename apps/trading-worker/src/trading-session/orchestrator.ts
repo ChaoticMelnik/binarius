@@ -207,7 +207,7 @@ export function createSessionOrchestrator({
 
     // an H1 session (#775, settings v5; a read-only v4 row of #670): its driver opens the trades
     // (#707); the attempt never asks the signal, it stops the session or holds it - the sizer's
-    // stops and, as for any session, no_signal_timeout
+    // stops and, as for any session, a pair closed past the no-signal limit
     const h1 = isH1Settings(settings);
     const noSignalTimeoutMs = sessionNoSignalTimeoutMs(
       settings.durationSec,
@@ -333,8 +333,8 @@ export function createSessionOrchestrator({
           fields: { stopReason: decision.reason, detail: decision.detail },
         };
       }
-      // no intent change within the no-signal limit: the driver found no H1 signal (#775, В5)
-      if (history.waitExpired) return noSignalStop('no_signal');
+      // the no-signal stop of an H1 session is the driver's, on the seconds it decided no_signal
+      // (#775, review round 1): this attempt has no evidence that H1 was asked at all
       logger.debug(ids, 'trading session waits for the H1 driver');
       return { kind: 'hold', ms: config.h1CheckMs };
     }
