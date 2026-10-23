@@ -2429,6 +2429,72 @@ describe('signal_decisions (#666)', () => {
       expect(rows[0]?.indexdef).toMatch(/\(recorded_at\) WHERE \(context = 'shadow'::text\)$/);
     });
   });
+
+  // #502: the report's fingerprint of the parameters is the database's
+  describe('params_hash', () => {
+    const hashOf = async (tx: Tx, id: string) => {
+      const [row] = await tx
+        .select({ hash: signalDecisions.paramsHash })
+        .from(signalDecisions)
+        .where(eq(signalDecisions.id, id));
+      return row!.hash;
+    };
+    type Seed = { accountId: string; sessionId: string };
+    const insertWith = async (tx: Tx, seed: Seed, params: Record<string, unknown>) => {
+      const [row] = await tx
+        .insert(signalDecisions)
+        .values(decisionRow(seed, { params }))
+        .returning({ id: signalDecisions.id });
+      return row!.id;
+    };
+
+    it('PH1: is md5 of the canonical params text, one per set in any key order', async () => {
+      await rolledBack(async (tx) => {
+        const seed = await seedSession(tx);
+        const first = await insertWith(tx, seed, { emaFast: 9, emaSlow: 21, rsiBand: 5 });
+        const reordered = await insertWith(tx, seed, { rsiBand: 5, emaSlow: 21, emaFast: 9 });
+        const changed = await insertWith(tx, seed, { emaFast: 9, emaSlow: 21, rsiBand: 6 });
+        const expected = await tx.execute<{ hash: string }>(
+          sql`select md5(${JSON.stringify({ emaFast: 9, emaSlow: 21, rsiBand: 5 })}::jsonb::text) as hash`,
+        );
+        const hash = await hashOf(tx, first);
+        expect(hash).toBe(expected.rows[0]!.hash);
+        expect(hash).toMatch(/^[0-9a-f]{32}$/);
+        expect(await hashOf(tx, reordered)).toBe(hash);
+        expect(await hashOf(tx, changed)).not.toBe(hash);
+      });
+    });
+
+    it.each<[string, (seed: Seed, id: string) => ReturnType<typeof sql>]>([
+      [
+        'an INSERT naming it',
+        (seed) =>
+          sql`insert into signal_decisions (context, trading_session_id, broker_account_id, step, asset_id, interval, version, decided_at_ms, taken_at_ms, kind, action, params, decision, source, series, outcome, params_hash) values ('session', ${seed.sessionId}, ${seed.accountId}, 1, 101, '15s', 'v2', 1, 1, 'signal', 'up', '{}', '{}', '{}', '[]', 'intent', 'forged')`,
+      ],
+      [
+        'an UPDATE setting it',
+        (_seed, id) => sql`update signal_decisions set params_hash = 'forged' where id = ${id}`,
+      ],
+    ])('PH2: refuses %s (428C9)', async (_label, statement) => {
+      await rolledBack(async (tx) => {
+        const seed = await seedSession(tx);
+        const id = await insertWith(tx, seed, { emaFast: 9 });
+        const error = await tx.execute(statement(seed, id)).then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+        expect(error, 'expected a generated-column refusal').toBeDefined();
+        expect(caught(error)).toMatchObject({ code: '428C9' });
+      });
+    });
+
+    it('PH3: has the version x params_hash index', async () => {
+      const { rows } = await pool.query<{ indexdef: string }>(
+        `select indexdef from pg_indexes where indexname = 'signal_decisions_version_params_idx'`,
+      );
+      expect(rows[0]?.indexdef).toMatch(/USING btree \(version, params_hash\)$/);
+    });
+  });
 });
 // Every simple FK the migrations declare. The ones below can be violated on their own: the
 // composite FK sharing the table is either absent or skipped under MATCH SIMPLE because one of

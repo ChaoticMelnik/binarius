@@ -59,6 +59,11 @@ export const signalDecisions = pgTable(
     payout: payout('payout'),
     digits: integer('digits'),
     params: jsonb('params').$type<Record<string, unknown>>().notNull(),
+    // the report's fingerprint of the parameters (#502): computed by the database over jsonb's
+    // canonical text, so no writer can store a stale hash and key order never splits a group
+    paramsHash: text('params_hash')
+      .notNull()
+      .generatedAlwaysAs(sql`md5(${sql.identifier('params')}::text)`),
     decision: jsonb('decision').$type<Record<string, unknown>>().notNull(),
     source: jsonb('source').$type<Record<string, unknown>>().notNull(),
     series: jsonb('series').$type<unknown[]>().notNull(),
@@ -143,6 +148,8 @@ export const signalDecisions = pgTable(
     // the export's range scan and order
     index('signal_decisions_recorded_idx').on(t.recordedAt, t.id),
     index('signal_decisions_session_idx').on(t.tradingSessionId, t.recordedAt),
+    // the report's grouping by version and parameters (#502)
+    index('signal_decisions_version_params_idx').on(t.version, t.paramsHash),
     // the retention sweep's shadow band (#668): 7 days of shadow rows against 30 of the rest
     index('signal_decisions_shadow_recorded_idx')
       .on(t.recordedAt)

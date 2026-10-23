@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   H1ShadowEntryOutcome,
@@ -7,22 +7,34 @@ import {
   SignalDecisionContext,
   SignalDecisionOutcome,
   TradeAction,
+  TradeIntentFailureReason,
+  TradeIntentStatus,
   TradeMode,
   TradingSessionStopReason,
   decimalStringSchema,
   h1ShadowEntrySchema,
   type DecimalString,
+  type SignalRecord,
   type TradingSessionSettings,
 } from '@binarius/shared';
-import { brokerAccounts, brokerTrades, decisionTicks, signalDecisions } from './schema/index';
+import {
+  brokerAccounts,
+  brokerTrades,
+  decisionTicks,
+  signalDecisions,
+  tradeIntents,
+} from './schema/index';
 import {
   journalEntryOf,
   readH1ShadowStats,
   readSessionTradeSteps,
   readTradeLogPage,
+  readTradeReportStats,
   recordSignalDecision,
   signalDecisionInput,
+  TradeReportOrigin,
   type TradeLogRow,
+  type TradeReportStats,
 } from './signal-decision-ops';
 import {
   createTempDatabase,
@@ -30,6 +42,7 @@ import {
   R1_SHADOW_PARAMS_FIXTURE,
   SHADOW_FIXTURE_DECIDED_AT_MS,
   seedBrokerTradeFor,
+  seedQueuedIntent,
   seedTradingSession,
   seedUserWithAccount,
   sessionSettings,
@@ -38,6 +51,7 @@ import {
   type TempDatabase,
 } from './testing';
 import type { SignalDecisionInput } from './signal-decision-ops';
+import { rejectIntent } from './trade-intent-ops';
 import { createSessionIntent, stopTradingSession } from './trading-session-ops';
 
 // The trade log's writer and the export's reads (#666, docs/trade-log.md), on a temporary
@@ -753,5 +767,307 @@ describe('readH1ShadowStats (#681)', () => {
     expect(cells['r1/1/1']).toMatchObject({ records: 1, wins: 1 });
     expect(cells['null/1/1']).toMatchObject({ records: 1, wins: 1 });
     expect(byKey(stats.sets)['null//']).toMatchObject({ decisions: 1 });
+  });
+});
+
+// --- The trade report's read (#502) ---------------------------------------------------------------
+
+describe('readTradeReportStats (#502)', () => {
+  // every case moves its intents into an hour of its own, a day apart: TR4 places a row at its
+  // window's end, which must stay out of every other case's window
+  let days = 0;
+  const ownWindow = () => {
+    const from = new Date(Date.UTC(2001, 0, 1) + ++days * 86_400_000);
+    return { from, to: new Date(from.getTime() + 3_600_000) };
+  };
+  const placeAt = (ids: readonly string[], at: Date) =>
+    tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: at })
+      .where(inArray(tradeIntents.id, [...ids]));
+
+  const withParams = (patch: Record<string, unknown>): SignalRecord => {
+    const record = signalRecordFixture();
+    return { ...record, entry: { ...record.entry, params: { ...record.entry.params, ...patch } } };
+  };
+
+  type Outcome = { profit: string; payout?: number } | 'rejected' | 'open' | 'queued';
+  interface StepSpec {
+    outcome: Outcome;
+    assetId?: number;
+    record?: SignalRecord | null;
+  }
+
+  // a session's steps in order: each intent created from its decision row (record null: none),
+  // then settled, rejected, left open at the broker or queued; the intent ids by step
+  async function sessionSteps(
+    steps: readonly StepSpec[],
+    { mode = TradeMode.Demo }: { mode?: TradeMode } = {},
+  ): Promise<{ session: Session; ids: string[] }> {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 50n, tradingMode: mode });
+    const row = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode });
+    const session = { ...seed, sessionId: row.id };
+    const ids: string[] = [];
+    for (const [index, spec] of steps.entries()) {
+      const step = index + 1;
+      const record = spec.record === undefined ? signalRecordFixture() : spec.record;
+      const { intent } = await createSessionIntent(tmp.db, {
+        sessionId: session.sessionId,
+        step,
+        telegramUserId: session.telegramUserId,
+        brokerAccountId: session.brokerAccountId,
+        mode,
+        assetId: spec.assetId ?? 101,
+        amount: decimalStringSchema.parse('1'),
+        action: TradeAction.Up,
+        durationSec: 60,
+        decision: record === null ? null : decisionFixture(session, { step }, record),
+      });
+      ids.push(intent.id);
+      const { outcome } = spec;
+      if (outcome === 'rejected') {
+        await tmp.db.transaction((tx) =>
+          rejectIntent(tx, {
+            id: intent.id,
+            from: TradeIntentStatus.Queued,
+            expectedVersion: intent.version,
+            reason: TradeIntentFailureReason.BrokerRejected,
+          }),
+        );
+      } else if (outcome === 'open') {
+        await seedBrokerTradeFor(tmp.db, intent);
+      } else if (outcome !== 'queued') {
+        await seedBrokerTradeFor(tmp.db, intent, {
+          profit: outcome.profit as DecimalString,
+          ...(outcome.payout === undefined ? {} : { payout: outcome.payout }),
+        });
+      }
+    }
+    return { session, ids };
+  }
+
+  const win = { profit: '0.85' };
+  const loss = { profit: '-1' };
+  const tie = { profit: '0' };
+
+  const pairCells = (stats: TradeReportStats) => stats.cells.filter((cell) => !cell.pooled);
+  const pooledCells = (stats: TradeReportStats) => stats.cells.filter((cell) => cell.pooled);
+
+  it('TR1 counts a session: W/L/T of closed trades, money as SQL text, the pooled row', async () => {
+    const window = ownWindow();
+    const { ids } = await sessionSteps([
+      { outcome: win },
+      { outcome: win },
+      { outcome: loss },
+      { outcome: tie },
+      { outcome: 'rejected' },
+      { outcome: 'open' },
+    ]);
+    await placeAt(ids.slice(0, 1), window.from);
+    await placeAt(ids.slice(1), new Date(window.from.getTime() + 60_000));
+    const stats = await readTradeReportStats(tmp.db, window);
+    expect(stats).toMatchObject({ intents: 6, trades: 4 });
+    const [cell] = pairCells(stats);
+    expect(pairCells(stats)).toHaveLength(1);
+    const expected = {
+      mode: TradeMode.Demo,
+      origin: TradeReportOrigin.Signal,
+      version: 'v2',
+      interval: '15s',
+      durationSec: 60,
+      symbol: null,
+      intents: 6,
+      trades: 4,
+      notClosed: 2,
+      wins: 2,
+      losses: 1,
+      ties: 1,
+      priced: 4,
+      payoutMean: 85,
+      payoutMin: 85,
+      payoutMax: 85,
+      staked: '4.00000000',
+      pnl: '0.70000000',
+      roiPct: '17.50',
+      firstAt: window.from.toISOString(),
+      lastAt: new Date(window.from.getTime() + 60_000).toISOString(),
+    };
+    expect(cell).toMatchObject({ ...expected, assetId: 101, pooled: false });
+    expect(cell!.paramsHash).toMatch(/^[0-9a-f]{32}$/);
+    expect(pooledCells(stats)).toEqual([{ ...cell, assetId: null, pooled: true }]);
+  });
+
+  it('TR2 groups by the params fingerprint: a changed value splits, another key order joins', async () => {
+    const window = ownWindow();
+    const base = signalRecordFixture();
+    const reordered = Object.fromEntries(
+      Object.entries(base.entry.params).reverse(),
+    ) as typeof base.entry.params;
+    const { ids } = await sessionSteps([
+      { outcome: win },
+      { outcome: loss, record: withParams({ rsiExtremeBand: 20 }) },
+      { outcome: win, record: { ...base, entry: { ...base.entry, params: reordered } } },
+    ]);
+    await placeAt(ids, window.from);
+    const stats = await readTradeReportStats(tmp.db, window);
+    const cells = pairCells(stats);
+    expect(cells).toHaveLength(2);
+    expect(cells.map((cell) => [cell.wins, cell.losses]).sort()).toEqual([
+      [0, 1],
+      [2, 0],
+    ]);
+    expect(new Set(cells.map((cell) => cell.paramsHash)).size).toBe(2);
+    expect(stats.versions).toHaveLength(2);
+    const joined = stats.versions.find((row) => row.trades === 2)!;
+    expect(joined).toMatchObject({ version: 'v2', firstAt: window.from.toISOString() });
+    expect(JSON.parse(joined.params)).toEqual(base.entry.params);
+    const changed = stats.versions.find((row) => row.trades === 1)!;
+    expect(JSON.parse(changed.params)).toMatchObject({ rsiExtremeBand: 20 });
+    expect(changed.paramsHash).not.toBe(joined.paramsHash);
+  });
+
+  it('TR3 tells a one-off intent (manual) and a session intent without a decision (unlinked)', async () => {
+    const window = ownWindow();
+    const linked = await sessionSteps([{ outcome: win }, { outcome: loss, record: null }]);
+    const oneOff = await seedQueuedIntent(tmp.db);
+    await seedBrokerTradeFor(tmp.db, oneOff.intent, { profit: '0.85' as DecimalString });
+    await placeAt([...linked.ids, oneOff.intent.id], window.from);
+    const stats = await readTradeReportStats(tmp.db, window);
+    const byOrigin = Object.fromEntries(pairCells(stats).map((cell) => [cell.origin, cell]));
+    expect(Object.keys(byOrigin).sort()).toEqual(['manual', 'signal', 'unlinked']);
+    expect(byOrigin.signal).toMatchObject({ version: 'v2', wins: 1, losses: 0 });
+    expect(byOrigin.unlinked).toMatchObject({
+      version: null,
+      paramsHash: null,
+      interval: null,
+      wins: 0,
+      losses: 1,
+    });
+    expect(byOrigin.manual).toMatchObject({
+      version: null,
+      paramsHash: null,
+      assetId: 91,
+      wins: 1,
+      losses: 0,
+    });
+    expect(stats.versions).toHaveLength(1);
+  });
+
+  it('TR4 the window is [from, to) on trade_intents.created_at', async () => {
+    const window = ownWindow();
+    const { ids } = await sessionSteps([
+      { outcome: win },
+      { outcome: win },
+      { outcome: win },
+      { outcome: win },
+    ]);
+    const ms = (base: Date, delta: number) => new Date(base.getTime() + delta);
+    await placeAt([ids[0]!], ms(window.from, -1));
+    await placeAt([ids[1]!], window.from);
+    await placeAt([ids[2]!], ms(window.to, -1));
+    await placeAt([ids[3]!], window.to);
+    const stats = await readTradeReportStats(tmp.db, window);
+    expect(stats).toMatchObject({ intents: 2, trades: 2 });
+    expect(pairCells(stats)[0]).toMatchObject({
+      firstAt: window.from.toISOString(),
+      lastAt: ms(window.to, -1).toISOString(),
+    });
+  });
+
+  it('TR5 demo and real intents are cells of their own mode', async () => {
+    const window = ownWindow();
+    const demo = await sessionSteps([{ outcome: win }]);
+    const real = await sessionSteps([{ outcome: loss }], { mode: TradeMode.Real });
+    await placeAt([...demo.ids, ...real.ids], window.from);
+    const stats = await readTradeReportStats(tmp.db, window);
+    const byMode = Object.fromEntries(pairCells(stats).map((cell) => [cell.mode, cell]));
+    expect(byMode.demo).toMatchObject({ wins: 1, losses: 0 });
+    expect(byMode.real).toMatchObject({ wins: 0, losses: 1 });
+    expect(
+      pooledCells(stats)
+        .map((cell) => cell.mode)
+        .sort(),
+    ).toEqual(['demo', 'real']);
+  });
+
+  it('TR6 the pooled row sums two pairs of one group, money as SQL text', async () => {
+    const window = ownWindow();
+    const { ids } = await sessionSteps([
+      { outcome: win, assetId: 101 },
+      { outcome: { profit: '-1', payout: 90 }, assetId: 102 },
+      { outcome: { profit: '0.9', payout: 90 }, assetId: 102 },
+    ]);
+    await placeAt(ids, window.from);
+    const stats = await readTradeReportStats(tmp.db, window);
+    expect(
+      pairCells(stats)
+        .map((cell) => [cell.assetId, cell.trades])
+        .sort(),
+    ).toEqual([
+      [101, 1],
+      [102, 2],
+    ]);
+    expect(pooledCells(stats)).toEqual([
+      expect.objectContaining({
+        assetId: null,
+        pooled: true,
+        trades: 3,
+        wins: 2,
+        losses: 1,
+        priced: 3,
+        payoutMin: 85,
+        payoutMax: 90,
+        staked: '3.00000000',
+        pnl: '0.75000000',
+        roiPct: '25.00',
+      }),
+    ]);
+    expect(pooledCells(stats)[0]!.payoutMean).toBeCloseTo(88.333, 3);
+  });
+
+  it('TR7 the intents without a closed trade, by status', async () => {
+    const window = ownWindow();
+    const first = await sessionSteps([{ outcome: 'rejected' }, { outcome: 'open' }]);
+    const second = await sessionSteps([{ outcome: 'queued' }]);
+    await placeAt([...first.ids, ...second.ids], window.from);
+    const stats = await readTradeReportStats(tmp.db, window);
+    expect(stats).toMatchObject({ intents: 3, trades: 0 });
+    expect([...stats.notClosed].sort((a, b) => a.status.localeCompare(b.status))).toEqual([
+      { status: TradeIntentStatus.Accepted, count: 1 },
+      { status: TradeIntentStatus.Queued, count: 1 },
+      { status: TradeIntentStatus.Rejected, count: 1 },
+    ]);
+    expect(pairCells(stats)[0]).toMatchObject({
+      trades: 0,
+      notClosed: 3,
+      staked: null,
+      pnl: null,
+      roiPct: null,
+      payoutMean: null,
+      firstAt: null,
+    });
+    expect(stats.versions).toEqual([]);
+  });
+
+  it('TR8 the stats carry no telegram id, broker user id, token or raw trade', async () => {
+    const window = ownWindow();
+    const sentinel = 'SENTINEL-TR8';
+    const { session, ids } = await sessionSteps([{ outcome: win }]);
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ brokerUserId: `${sentinel}-broker` })
+      .where(eq(brokerAccounts.id, session.brokerAccountId));
+    await tmp.db
+      .update(brokerTrades)
+      .set({ raw: { sentinel } })
+      .where(eq(brokerTrades.intentId, ids[0]!));
+    await placeAt(ids, window.from);
+    const text = JSON.stringify(await readTradeReportStats(tmp.db, window));
+    expect(text).toContain('"trades":1');
+    expect(text).not.toContain(sentinel);
+    expect(text).not.toContain(session.telegramUserId);
+    expect(text).not.toContain(session.sessionId);
+    expect(text).not.toContain(ids[0]!);
+    expect(text).not.toContain('accessToken');
   });
 });

@@ -575,6 +575,13 @@
       "when": 1792829000695,
       "tag": "0081_stars_refund_requests_viewed",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1792831448376,
+      "tag": "0082_signal_decision_params_hash",
+      "breakpoints": true
     }
   ]
 }
