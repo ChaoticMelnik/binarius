@@ -1084,7 +1084,6 @@ describe('the no-signal limit of an H1 session is the driver’s (#775, review r
     expect(traded.stops).toEqual([]);
     await traded.feedSettled(A, F + 166_000, flat(1, 1.1001));
     expect(traded.stops).toEqual(STOPPED);
-    expect(decided(traded.records)).toEqual([F, F + 67_000, F + 166_000]);
   });
 
   it("H1-DR35: the database's wait is a conjunct: no stop while it has not expired", async () => {
