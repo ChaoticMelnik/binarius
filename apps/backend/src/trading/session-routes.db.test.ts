@@ -3,10 +3,10 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
-  H1_BOT_SESSION_TRADES,
   H1_EXPIRY_SEC,
   H1_MIN_PAYOUT_PCT,
   H1_R1_PARAMS,
+  martingaleLimitsFor,
   SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
@@ -2274,9 +2274,10 @@ describe('the recovery routes (#567)', () => {
   });
 });
 
-// #745: an H1-marked account's start from the bot writes settings v4 (docs/h1.md -> From the bot)
-describe('POST /trading/sessions on an H1-marked account (#745)', () => {
-  // a pair H1 trades: it accepts the 5 s expiry and pays above H1_MIN_PAYOUT_PCT
+// #745, #775: an H1-marked account's start from the bot writes settings v5 (docs/h1.md -> From the
+// bot): a regular session with the H1 signal
+describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
+  // a pair H1 trades: it accepts the 5 s expiry
   const h1Pair: BinaryPair = { ...pair, minTimeframe: 5, payout: 95 };
   const h1App = (options: Parameters<typeof appWith>[0] = {}, pairs: BinaryPair[] = [h1Pair]) =>
     appWith({ catalog: freshCatalog(pairs), ...options });
@@ -2295,7 +2296,7 @@ describe('POST /trading/sessions on an H1-marked account (#745)', () => {
       .from(signalDecisions)
       .where(eq(signalDecisions.brokerAccountId, brokerAccountId));
 
-  it('H1-R1 writes v4: the plan of trades, the saved stake fixed, the loss ceiling, the R1 signal', async () => {
+  it("H1-R1′ writes v5: the request's cycles, the process's strategy, the saved stake, the R1 signal", async () => {
     const seed = await markedReady();
     await setStake(
       tmp.db,
@@ -2306,14 +2307,19 @@ describe('POST /trading/sessions on an H1-marked account (#745)', () => {
     const response = await start(h1App(), h1Body(seed));
     expect(response.statusCode).toBe(201);
     const session = sessionOf(response);
+    const baseStake = decimalStringSchema.parse('2.5');
     expect(session.settings).toEqual({
-      version: 4,
+      version: 5,
       assetId: ASSET,
       durationSec: H1_EXPIRY_SEC,
-      trades: H1_BOT_SESSION_TRADES,
-      stake: { strategy: 'fixed', baseStake: '2.5', stakeScale: 2 },
+      cycles: 5,
+      stake: {
+        strategy: 'martingale',
+        baseStake,
+        stakeScale: 2,
+        limits: martingaleLimitsFor(baseStake),
+      },
       signal: { kind: 'h1', params: H1_R1_PARAMS, entryDelaySec: 1, expirySec: H1_EXPIRY_SEC },
-      maxLoss: '50',
     });
     const [row] = await tmp.db
       .select()
@@ -2342,19 +2348,14 @@ describe('POST /trading/sessions on an H1-marked account (#745)', () => {
     });
   });
 
-  it('H1-R3 a pair paying under the floor is 409 h1_payout_too_low before the signal; the floor itself starts', async () => {
+  it('H1-R3′ no payout floor: a pair paying under 94 % starts (#775, В2)', async () => {
     const seed = await markedReady();
-    const before = await sessionCount();
-    const under = await start(
-      h1App({}, [{ ...h1Pair, payout: H1_MIN_PAYOUT_PCT - 0.01 }]),
+    const response = await start(
+      h1App({}, [{ ...h1Pair, payout: H1_MIN_PAYOUT_PCT - 4 }]),
       h1Body(seed),
     );
-    await expectRefusal(under, 409, 'h1_payout_too_low', before);
-    expect(signalCalls).toEqual([]);
-    expect(await startRows(seed.brokerAccountId)).toEqual([]);
-
-    const at = await start(h1App({}, [{ ...h1Pair, payout: H1_MIN_PAYOUT_PCT }]), h1Body(seed));
-    expect(at.statusCode).toBe(201);
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).settings?.version).toBe(5);
   });
 
   it("H1-R4 a duration other than H1's is 409 h1_duration_unsupported before the signal", async () => {
@@ -2367,24 +2368,29 @@ describe('POST /trading/sessions on an H1-marked account (#745)', () => {
     expect(await startRows(seed.brokerAccountId)).toEqual([]);
   });
 
-  it('H1-R5 the order: the pair before the payout, the payout before the signal', async () => {
+  it('H1-R5′ the order: the pair, then the duration, then the signal', async () => {
     const seed = await markedReady();
     const before = await sessionCount();
-    // the pair refuses the 5 s expiry and pays 93: pair_unavailable
+    const noSignal = { signal: sessionSignalEvaluation('no_signal') };
+    // the pair refuses the 5 s expiry: pair_unavailable
     await expectRefusal(
-      await start(h1App({}, [{ ...pair, payout: 93 }]), h1Body(seed)),
+      await start(h1App(noSignal, [{ ...pair, payout: 93 }]), h1Body(seed)),
       409,
       'pair_unavailable',
       before,
     );
-    // pays 93, no signal: the payout answers
+    // the pair takes 60 s, the request asks 60 s: the duration answers before the signal
     await expectRefusal(
-      await start(
-        h1App({ signal: sessionSignalEvaluation('no_signal') }, [{ ...h1Pair, payout: 93 }]),
-        h1Body(seed),
-      ),
+      await start(h1App(noSignal, [{ ...pair, payout: 93 }]), bodyFor(seed)),
       409,
-      'h1_payout_too_low',
+      'h1_duration_unsupported',
+      before,
+    );
+    // 5 s on a pair paying 93, no signal: the signal answers
+    await expectRefusal(
+      await start(h1App(noSignal, [{ ...h1Pair, payout: 93 }]), h1Body(seed)),
+      409,
+      'no_signal',
       before,
     );
   });
@@ -2405,7 +2411,7 @@ describe('POST /trading/sessions on an H1-marked account (#745)', () => {
     expect(sessionOf(next).settings?.version).toBe(3);
   });
 
-  it("H1-R7 the request's cycles do not change the plan of trades", async () => {
+  it("H1-R7′ the request's cycles apply; too many for the hour is session_too_long", async () => {
     const seed = await markedReady();
     const response = await start(
       h1App({ stakeStrategy: SessionStakeStrategy.Fixed }),
@@ -2413,9 +2419,18 @@ describe('POST /trading/sessions on an H1-marked account (#745)', () => {
     );
     expect(response.statusCode).toBe(201);
     expect(sessionOf(response).settings).toMatchObject({
-      version: 4,
-      trades: H1_BOT_SESSION_TRADES,
+      version: 5,
+      cycles: 20,
+      stake: { strategy: 'fixed' },
     });
+    const other = await markedReady();
+    const before = await sessionCount();
+    await expectRefusal(
+      await start(h1App(), h1Body(other, { cycles: 8 })),
+      409,
+      'session_too_long',
+      before,
+    );
   });
 
   it('H1-R8 DEMO_ONLY: a real H1 start is 409 demo_only, past the fence', async () => {

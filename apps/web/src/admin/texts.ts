@@ -462,8 +462,8 @@ const pluralRu = (count: number, one: string, few: string, many: string): string
   return many;
 };
 
-// A session's length as its row stores it (#552): v3 in cycles, v1/v2 in trades
+// A session's length as its row stores it (#552): v3 and v5 (#775) in cycles, v1/v2/v4 in trades
 export const sessionLengthLabel = (settings: TradingSessionSettings): string =>
-  settings.version === 3
+  settings.version === 3 || settings.version === 5
     ? `${String(settings.cycles)} ${pluralRu(settings.cycles, 'цикл', 'цикла', 'циклов')}`
     : `${String(settings.trades)} ${pluralRu(settings.trades, 'сделка', 'сделки', 'сделок')}`;

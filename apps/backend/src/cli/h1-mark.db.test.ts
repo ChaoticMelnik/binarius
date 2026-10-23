@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AuditAction, buildH1SessionSettings, decimalStringSchema } from '@binarius/shared';
+import {
+  AuditAction,
+  buildH1SessionSettings,
+  decimalStringSchema,
+  SessionStakeStrategy,
+} from '@binarius/shared';
 import { auditLog } from '@binarius/db';
 import {
   brokerAccountRow,
@@ -40,9 +45,9 @@ async function run(argv: string[], env: NodeJS.ProcessEnv = { DATABASE_URL: tmp.
 const h1Settings = () => {
   const built = buildH1SessionSettings({
     assetId: 101,
-    trades: 10,
+    cycles: 5,
     stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
-    maxLossMultiplier: 20,
+    strategy: SessionStakeStrategy.Martingale,
   });
   if (!built.success) throw new Error('H1 fixture settings do not parse');
   return built.data;

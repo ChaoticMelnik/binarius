@@ -489,7 +489,6 @@ describe('contract coverage (issue #6)', () => {
       | 'not_found'
       | 'session_not_active'
       // #745: the H1 fence of the start and the mark removed under the account's lock
-      | 'h1_payout_too_low'
       | 'h1_duration_unsupported'
       | 'account_not_h1'
       | 'stake_precision'

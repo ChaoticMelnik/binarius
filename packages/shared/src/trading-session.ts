@@ -34,7 +34,8 @@ import {
 // not at write: a row written by hand is a boundary too. Version 3 is the only one the start route
 // and the worker's CLI write (#552): its length is in cycles. A version 1 or 2 row keeps its length
 // in trades (sessionProgress); a version 1 row reads as the fixed strategy (sessionStakeParams).
-// Version 4 is an H1 session (#670), written only by buildH1SessionSettings.
+// Version 5 is an H1 session (#775): a v3 session whose entries come from the H1 signal, written
+// only by buildH1SessionSettings. Version 4 (#670) is read-only since #775: the rows on the pilot.
 export const TRADING_SESSION_SETTINGS_VERSION = 3;
 export const MAX_SESSION_CYCLES = 20;
 // the CLI's and the start route's default; the schema itself requires the field
@@ -113,12 +114,11 @@ const settingsV3Schema = z.strictObject({
   stake: strategyStakeSchema,
 });
 
-// An H1 session (#670, docs/trading-session.md -> Settings v4): a fixed stake, its length in
-// trades, a loss ceiling, and the H1 signal its driver decides with. Written only by
-// buildH1SessionSettings (the h1 CLI of apps/backend); TRADING_SESSION_SETTINGS_VERSION stays 3.
-export const H1_SESSION_SETTINGS_VERSION = 4;
+// An H1 session of #670 (docs/trading-session.md -> Settings v4): a fixed stake, its length in
+// trades, a loss ceiling. Read-only since #775: nothing writes it, its maxLoss is no longer
+// enforced, and the driver and the orchestrator run it as an H1 session with a fixed stake.
 const settingsV4Schema = z.strictObject({
-  version: z.literal(H1_SESSION_SETTINGS_VERSION),
+  version: z.literal(4),
   assetId: createTradeIntentRequestSchema.shape.assetId,
   // a number, not a literal type: every version's durationSec reads as one type
   durationSec: z.int().min(H1_EXPIRY_SEC).max(H1_EXPIRY_SEC),
@@ -128,18 +128,33 @@ const settingsV4Schema = z.strictObject({
   maxLoss: tradeAmountSchema,
 });
 
+// An H1 session (#775, docs/trading-session.md -> Settings v5): a v3 session - cycles, the
+// stake strategy of the process - whose entries come from the H1 signal its driver decides with.
+// Written only by buildH1SessionSettings (the start route on a marked account, the h1 CLI of
+// apps/backend); TRADING_SESSION_SETTINGS_VERSION stays 3.
+export const H1_SESSION_SETTINGS_VERSION = 5;
+const settingsV5Schema = z.strictObject({
+  version: z.literal(H1_SESSION_SETTINGS_VERSION),
+  assetId: createTradeIntentRequestSchema.shape.assetId,
+  durationSec: z.int().min(H1_EXPIRY_SEC).max(H1_EXPIRY_SEC),
+  cycles: sessionCyclesField,
+  stake: strategyStakeSchema,
+  signal: h1SessionSignalSchema,
+});
+
 export const tradingSessionSettingsSchema = z.discriminatedUnion('version', [
   settingsV1Schema,
   settingsV2Schema,
   settingsV3Schema,
   settingsV4Schema,
+  settingsV5Schema,
 ]);
 export type TradingSessionSettings = z.infer<typeof tradingSessionSettingsSchema>;
-export type H1SessionSettings = z.infer<typeof settingsV4Schema>;
+export type H1SessionSettings = z.infer<typeof settingsV4Schema> | z.infer<typeof settingsV5Schema>;
 
-// the one guard of an H1 session's settings: the orchestrator, the summary and the driver (#707)
+// the one guard of an H1 session's settings, v4 or v5: the orchestrator and the driver (#707)
 export const isH1Settings = (settings: TradingSessionSettings): settings is H1SessionSettings =>
-  settings.version === H1_SESSION_SETTINGS_VERSION;
+  settings.version === 4 || settings.version === H1_SESSION_SETTINGS_VERSION;
 
 // The session's stake strategy and its parameters, frozen in its row at the start: v1 is fixed.
 // The worker's sizer takes this shape (StakeParams); every reader of the strategy goes through it.
@@ -151,7 +166,7 @@ export function sessionStakeParams(settings: TradingSessionSettings): SessionSta
 
 // The session's length and how much of it is done (#552; docs/trading-session.md -> The
 // attempt): the session completes when done reaches planned. A v1/v2 row counts settled trades
-// against settings.trades, as it did. A v3 row counts cycles: under fixed every settled trade is
+// against settings.trades, as it did, and so does a v4 row (#670). A v3 or v5 row counts cycles: under fixed every settled trade is
 // a cycle; under martingale only a win closes one (readHistory in packages/stake/src/size.ts,
 // sessionTradeSteps), so a loss or a tie never ends the session mid-series.
 export function sessionProgress(
@@ -159,7 +174,9 @@ export function sessionProgress(
   counts: { settled: number; won: number },
 ): { planned: number; done: number } {
   // v1, v2 and v4 (#670): every settled trade counts, a tie and a loss included
-  if (settings.version !== 3) return { planned: settings.trades, done: counts.settled };
+  if (settings.version !== 3 && settings.version !== H1_SESSION_SETTINGS_VERSION) {
+    return { planned: settings.trades, done: counts.settled };
+  }
   const done =
     settings.stake.strategy === SessionStakeStrategy.Martingale ? counts.won : counts.settled;
   return { planned: settings.cycles, done };
@@ -290,8 +307,6 @@ export const SessionIntentBlockReason = {
   Live: 'live',
   // sessionProgress reached its plan
   Completed: 'completed',
-  // the next stake would take the loss past maxLoss (an H1 session's lossLimit)
-  MaxLoss: 'max_loss',
   // the session's last two intents are rejected (an entry_window_missed among them)
   RejectedTwice: 'rejected_twice',
 } as const;
@@ -300,7 +315,6 @@ export type SessionIntentBlockReason =
 
 export interface SessionIntentBlockHistory {
   expired: boolean;
-  lossLimitReached: boolean;
   intents: readonly { status: TradeIntentStatus; profit: string | null }[];
 }
 
@@ -312,13 +326,12 @@ export type SessionIntentBlock =
 
 // a profit above zero; numeric(20,8) text is always a plain decimal, so no parse is needed
 const POSITIVE_DECIMAL = /^\d+(\.\d+)?$/;
-const isWin = (profit: string | null) =>
+export const isWin = (profit: string | null) =>
   profit !== null && POSITIVE_DECIMAL.test(profit) && /[1-9]/.test(profit);
 
 // Why a session may not create its next intent now, in the order its creators check it (#707):
 // the orchestrator's attempt turns a reason into its stop or reschedule, the H1 driver into a skip.
-// A settled intent without a profit is no win. lossLimitReached is only ever true when the reader
-// passed a lossLimit (an H1 session's).
+// A settled intent without a profit is no win.
 export function sessionIntentBlock(
   history: SessionIntentBlockHistory,
   settings: TradingSessionSettings,
@@ -334,7 +347,6 @@ export function sessionIntentBlock(
   if (progress.done >= progress.planned) {
     return { reason: SessionIntentBlockReason.Completed, settled, done: progress.done };
   }
-  if (history.lossLimitReached) return { reason: SessionIntentBlockReason.MaxLoss };
   const lastTwo = history.intents.slice(-2);
   if (lastTwo.length === 2 && lastTwo.every((i) => i.status === TradeIntentStatus.Rejected)) {
     return { reason: SessionIntentBlockReason.RejectedTwice };
@@ -405,30 +417,32 @@ export function buildSessionSettings(input: {
   });
 }
 
-// The settings of an H1 session (#670): R1's parameters, the entry window's first second, the
-// expiry, and maxLoss = k × baseStake in bigint (Rule 2). A stake the schema refuses (a zero
-// minimum, a ceiling outside numeric(20,8)) is the caller's refusal.
-export const MAX_H1_LOSS_MULTIPLIER = 1000;
+// The settings of an H1 session (#775): a v3 session's - the cycles, the strategy of the process
+// and, for martingale, the default limits - plus R1's parameters, the entry window's first second
+// and the expiry. A stake the schema refuses (a zero minimum, a limit outside numeric(20,8)) is
+// the caller's refusal.
 export function buildH1SessionSettings(input: {
   assetId: number;
-  trades: number;
+  cycles: number;
   stake: { baseStake: DecimalString; stakeScale: number };
-  maxLossMultiplier: number;
+  strategy: SessionStakeStrategy;
 }) {
-  const { stake } = input;
+  const { strategy, stake } = input;
   return tradingSessionSettingsSchema.safeParse({
     version: H1_SESSION_SETTINGS_VERSION,
     assetId: input.assetId,
     durationSec: H1_EXPIRY_SEC,
-    trades: input.trades,
-    stake: { strategy: SessionStakeStrategy.Fixed, ...stake },
+    cycles: input.cycles,
+    stake:
+      strategy === SessionStakeStrategy.Martingale
+        ? { strategy, ...stake, limits: martingaleLimitsFor(stake.baseStake) }
+        : { strategy, ...stake },
     signal: {
       kind: H1_SESSION_SIGNAL_KIND,
       params: { ...H1_R1_PARAMS },
       entryDelaySec: H1_ENTRY_WINDOW_SEC.from,
       expirySec: H1_EXPIRY_SEC,
     },
-    maxLoss: multiplyDecimal(stake.baseStake, BigInt(input.maxLossMultiplier)),
   });
 }
 
@@ -504,10 +518,8 @@ export const TradingSessionErrorCode = {
   SignalUnavailable: 'signal_unavailable',
   NotFound: 'not_found',
   SessionNotActive: 'session_not_active',
-  // an H1 session from the bot (#745): the start's fence on a marked account, after the pair's
-  // check and before the signal's read - the pair pays less than H1_MIN_PAYOUT_PCT, or the request's
-  // duration is not H1_EXPIRY_SEC
-  H1PayoutTooLow: 'h1_payout_too_low',
+  // an H1 session (#745): the start's fence on a marked account, after the pair's check and before
+  // the signal's read - the request's duration is not H1_EXPIRY_SEC (no payout floor since #775)
   H1DurationUnsupported: 'h1_duration_unsupported',
   // the string of TradingSessionDbErrorCode.AccountNotH1 (#707): createTradingSession found the H1
   // mark removed under the account's lock

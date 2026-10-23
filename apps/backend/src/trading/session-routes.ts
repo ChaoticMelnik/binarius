@@ -14,10 +14,7 @@ import {
   type TradeAction,
   TradingSessionStopReason,
   UserStatus,
-  H1_BOT_MAX_LOSS_MULTIPLIER,
-  H1_BOT_SESSION_TRADES,
   H1_EXPIRY_SEC,
-  H1_MIN_PAYOUT_PCT,
   buildH1SessionSettings,
   buildSessionSettings,
   errorLogFields,
@@ -116,7 +113,6 @@ const STATUS_OF = {
   stake_below_minimum: 409,
   insufficient_balance: 409,
   no_signal: 409,
-  h1_payout_too_low: 409,
   h1_duration_unsupported: 409,
   account_not_h1: 409,
   catalog_unavailable: 503,
@@ -125,7 +121,7 @@ const STATUS_OF = {
 
 // createTradingSession's refusals under its locks; a db code added without a wire code fails the
 // typecheck. account_not_h1 (#707): the H1 mark removed between the start's check and the lock of
-// a settings v4 start (#745)
+// a settings v5 start (#745, #775)
 const DB_CODE_TO_WIRE = {
   account_not_found: TradingSessionErrorCode.BrokerAccountNotFound,
   account_revoked: TradingSessionErrorCode.AccountRevoked,
@@ -222,15 +218,12 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     if (pair === undefined || !isPairOpen(pair, now()) || !pairAcceptsDuration(pair, durationSec)) {
       return refuse(reply, TradingSessionErrorCode.PairUnavailable);
     }
-    // An H1-marked account (#745, docs/h1.md -> From the bot): its session is H1's, so its trade
-    // plan's expiry and payout floor, checked before the signal is read - no decision row. The
-    // payout is read at the start only (owner 2026-10-19).
+    // An H1-marked account (#745, #775, docs/h1.md -> From the bot): its session is H1's, so its
+    // trade plan's expiry, checked before the signal is read - no decision row. No payout floor
+    // (#775, В2).
     const h1 = eligible.h1Since !== null;
     if (h1 && durationSec !== H1_EXPIRY_SEC) {
       return refuse(reply, TradingSessionErrorCode.H1DurationUnsupported);
-    }
-    if (h1 && pair.payout < H1_MIN_PAYOUT_PCT) {
-      return refuse(reply, TradingSessionErrorCode.H1PayoutTooLow);
     }
 
     // The pair's signal on the current candle (#509): no session starts on a pair without one. A
@@ -344,17 +337,11 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
 
     // a stored min_trade_amount of 0 is valid and gives baseStake '0', which the settings refuse:
     // the snapshot offers no stake to trade with, the same answer as no snapshot; so does a stake
-    // whose martingale limits would leave numeric(20,8) (#450). An H1 session (#745) takes the
-    // same stake, fixed, H1_BOT_SESSION_TRADES trades and a ceiling of H1_BOT_MAX_LOSS_MULTIPLIER
-    // stakes; the request's cycles are martingale cycles and do not apply.
+    // whose martingale limits would leave numeric(20,8) (#450). An H1 session (#775) is a regular
+    // one - the same stake, cycles and strategy - with the H1 signal.
     const stake = stakeSettingsFrom(savedStake, snapshot.minTradeAmount);
     const stakeSettings = h1
-      ? buildH1SessionSettings({
-          assetId,
-          trades: H1_BOT_SESSION_TRADES,
-          stake,
-          maxLossMultiplier: H1_BOT_MAX_LOSS_MULTIPLIER,
-        })
+      ? buildH1SessionSettings({ assetId, cycles, stake, strategy: stakeStrategy })
       : buildSessionSettings({ assetId, durationSec, cycles, stake, strategy: stakeStrategy });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');

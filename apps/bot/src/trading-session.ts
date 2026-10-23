@@ -8,7 +8,6 @@ import {
   keyboardOf,
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
-  isH1Settings,
   pairLabel,
   SESSION_STOP_PATTERN,
   TradeMode,
@@ -81,7 +80,6 @@ import {
   NO_NEXT_STEP_REASONS,
   replyHtml,
   replyHtmlWithoutNextStep,
-  replyWithPhotoHtml,
   replyWithPhotoHtmlWithoutNextStep,
   sendHtmlById,
   sendPhotoByIdHtml,
@@ -109,7 +107,7 @@ import {
 
 // The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
 // buttons start one through POST /trading/sessions, one session message without buttons follows it
-// (session-tracker.ts; an H1 session's carries its «⏹», #745), and the «⏹» under the backend's
+// (session-tracker.ts; an H1 session's too, #775), and the «⏹» under the backend's
 // waiting message stops it (#536), its reply
 // drawn in place of that message (#587), or the one under the open trade's block (#722), its reply
 // a new message. The trades
@@ -200,8 +198,6 @@ interface Refusal {
   wait?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
-  // «🔀 Выбрать другую пару» and the menu: a refusal of the pair itself (#745: H1's payout floor)
-  otherPair?: true;
 }
 
 // Every refusal of POST /trading/sessions, by its code. Each is answered before a row is
@@ -238,9 +234,8 @@ export const START_REFUSALS = {
   // answers of the read and stop routes, not of the start
   [TradingSessionErrorCode.NotFound]: { text: 'unavailable', log: true },
   [TradingSessionErrorCode.SessionNotActive]: { text: 'unavailable', log: true },
-  // an H1-marked account's start (#745): a pair that pays under H1's floor; a duration other than
-  // H1's, which this bot never sends (DEMO_DURATION_SEC); the mark removed during the start
-  [TradingSessionErrorCode.H1PayoutTooLow]: { text: 'sessionH1PayoutTooLow', otherPair: true },
+  // an H1-marked account's start (#745): a duration other than H1's, which this bot never sends
+  // (DEMO_DURATION_SEC); the mark removed during the start. No payout floor since #775
   [TradingSessionErrorCode.H1DurationUnsupported]: { text: 'sessionPairUnavailable', log: true },
   [TradingSessionErrorCode.AccountNotH1]: { text: 'sessionAccountChanged' },
   // the saved stake against the account's snapshot (#297): the texts of the stake press, but the
@@ -396,30 +391,23 @@ export function createTradingSessionComposer<C extends Context>({
   }
 
   // The session message, without a keyboard (#536): the backend's waiting message under it, or its
-  // open trade's block (#722), carries the «⏹». An H1 session's has neither (#722), so its own
-  // message carries the «⏹» (#745, the drawing's keyboard). With a signal's direction it is that
-  // direction's picture with the text as its caption (#568); a refused photo (a stale file_id among
-  // others) forgets its file_id and sends the same text as a message, the keyboard kept. A
+  // open trade's block (#722), carries the «⏹» - an H1 session's too (#775). With a signal's
+  // direction it is that direction's picture with the text as its caption (#568); a refused photo
+  // (a stale file_id among others) forgets its file_id and sends the same text as a message. A
   // transport failure is thrown, as a text's is: a second message after an unknown delivery could
   // be a duplicate (#126).
   async function sendSessionMessage(
     ctx: Context,
-    { text, picture: signalAction, keyboard }: SessionDrawing,
+    { text, picture: signalAction }: SessionDrawing,
   ): Promise<{ sent: { chat: { id: number }; message_id: number }; photoRefused: boolean }> {
     const reason = NO_NEXT_STEP_REASONS.SessionStatus;
-    const replyText = () =>
-      keyboard === null
-        ? replyHtmlWithoutNextStep(ctx, text, reason)
-        : replyHtml(ctx, text, { reply_markup: keyboard });
+    const replyText = () => replyHtmlWithoutNextStep(ctx, text, reason);
     if (signalAction === null) {
       return { sent: await replyText(), photoRefused: false };
     }
     const photo = setupCardPhotos.photo(signalAction);
     try {
-      const sent =
-        keyboard === null
-          ? await replyWithPhotoHtmlWithoutNextStep(ctx, photo, text, reason)
-          : await replyWithPhotoHtml(ctx, photo, text, { reply_markup: keyboard });
+      const sent = await replyWithPhotoHtmlWithoutNextStep(ctx, photo, text, reason);
       setupCardPhotos.remember(signalAction, sent);
       return { sent, photoRefused: false };
     } catch (error) {
@@ -471,9 +459,7 @@ export function createTradingSessionComposer<C extends Context>({
   // #722) the reply goes as a new message, as /stop's for one session, and the pressed block only
   // loses its keyboard: the cycle's blocks are the backend's, and its result's edit follows; a
   // failure is a new message too, the «⏹» left for another press. Under an old status message (no
-  // suffix) the reply is drawn in its place, as before #536, and tracked. Under an H1 session's own
-  // message (no suffix, #745), usually a photo, the stopped drawing goes in its place by the
-  // tracker's edit (stopH1InPlace), without the «⏹», and tracking moves onto it.
+  // suffix) the reply is drawn in its place, as before #536, and tracked.
   composer.callbackQuery(SESSION_STOP_PATTERN, async (ctx) => {
     const sessionId = ctx.match[1] ?? '';
     const under = ctx.match[2];
@@ -519,10 +505,6 @@ export function createTradingSessionComposer<C extends Context>({
         sessionCardKeyboard(view, cashierUrl),
         'the pressed message was already gone',
       );
-      return;
-    }
-    if (view.settings !== null && isH1Settings(view.settings)) {
-      await stopH1InPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
       return;
     }
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
@@ -665,9 +647,7 @@ export function createTradingSessionComposer<C extends Context>({
               ])
             : refusal.buy === true
               ? withBuy([backToAnalysisButton(assetId, durationSec), menuButton()], cashierUrl)
-              : refusal.otherPair === true
-                ? appendEndOfPath([], assetId, [], { otherPair: true })
-                : backToAnalysisKeyboard(assetId, durationSec);
+              : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
     await replyHtml(ctx, textOf(text), { reply_markup });
@@ -805,55 +785,8 @@ export function createTradingSessionComposer<C extends Context>({
     }
   }
 
-  // An H1 session message's «⏹» (#745, docs/bot-session.md → Stop): the stopped session's drawing
-  // in its place by the tracker's own edit, so a photo stays a photo and loses its «⏹»; drawn or
-  // «not modified», tracking moves onto it with that drawing as rendered, and its poll sends the
-  // summary. Refused as gone, the stop's reply as a new message under the end of the path and no
-  // tracking: the old entry's next edit is refused as gone too and forgets the message, so the
-  // backend's fallback summary goes. Any other refusal is logged and nothing more: the entry still
-  // holds the running drawing, so its next poll draws the stop.
-  async function stopH1InPlace(
-    ctx: Context,
-    telegramUserId: string,
-    symbol: PairLabel | null,
-    view: TradingSessionView,
-  ): Promise<void> {
-    const chatId = ctx.chat?.id;
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    if (chatId === undefined || messageId === undefined) return;
-    const drawing = sessionDrawing(symbol, view);
-    try {
-      await editSessionMessage(ctx.api, chatId, messageId, drawing);
-    } catch (error) {
-      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
-      if (refusal === 'gone') {
-        logger.info(
-          { ...telegramErrorFields(error, sessionEditMethod(drawing.picture)) },
-          'the pressed message was already gone',
-        );
-        await replyHtml(ctx, sessionStopReplyText(view), {
-          reply_markup: sessionCardKeyboard(view, cashierUrl),
-        });
-        return;
-      }
-      if (refusal !== 'shown') {
-        if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
-        logger.warn(
-          {
-            ...errorLogFields(error),
-            ...telegramErrorFields(error, sessionEditMethod(drawing.picture)),
-          },
-          'trading session message not edited',
-        );
-        return;
-      }
-    }
-    track(ctx, telegramUserId, symbol, view, chatId, messageId);
-  }
-
-  // An old status message's «⏹» (before #536; only those texts, an H1 session's is
-  // stopH1InPlace's): the session message in its place, under the stopped session's end of the
-  // path, then tracking on whichever message shows it: its first poll records the message (#567),
+  // An old status message's «⏹» (before #536): the session message in its place, under the
+  // stopped session's end of the path, then tracking on whichever message shows it: its first poll records the message (#567),
   // the newest id winning (#587); a done session's entry sends its
   // summary once and ends (#318, #537). It is the view's drawing cut down to its text, with the
   // keyboard: the tracker redraws it at the next change of the drawing (#568, risk 68).
@@ -962,29 +895,20 @@ export function createTradingSessionComposer<C extends Context>({
     });
   };
 
-  // The session message drawn as the tracker draws it, by the tracker and by an H1 session's «⏹»
-  // (#745): no keyboard (#536), so an edit strips an old status message's buttons too; a session
-  // gone leaves only the menu (#350). An active H1 session's keeps its «⏹» (#745), a stopped one's
-  // drops it. Its kind follows the drawing's picture (#568, sessionEditMethod).
+  // The session message drawn as the tracker draws it: no keyboard (#536), so an edit strips an
+  // old status message's buttons too; a session gone leaves only the menu (#350). Its kind follows
+  // the drawing's picture (#568, sessionEditMethod).
   function editSessionMessage(
     api: Api,
     chatId: number,
     messageId: number,
-    { text, picture: drawn, keyboard }: SessionDrawing,
+    { text, picture: drawn }: SessionDrawing,
     end?: 'not_found',
   ): Promise<unknown> {
     const picture = sessionEditMethod(drawn) === 'editMessageMedia' ? drawn : null;
     const reason = NO_NEXT_STEP_REASONS.SessionStatus;
     if (end === 'not_found') {
       const extra = { reply_markup: menuKeyboard() };
-      return picture === null
-        ? editMessageTextByIdHtml(api, chatId, messageId, text, extra)
-        : editSessionPhoto(picture, (photo) =>
-            editMessagePhotoByIdHtml(api, chatId, messageId, photo, text, extra),
-          );
-    }
-    if (keyboard !== null) {
-      const extra = { reply_markup: keyboard };
       return picture === null
         ? editMessageTextByIdHtml(api, chatId, messageId, text, extra)
         : editSessionPhoto(picture, (photo) =>

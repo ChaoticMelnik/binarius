@@ -6,10 +6,10 @@ import {
   DATABASE_URL_RULES,
   H1_MIN_PAYOUT_PCT,
   H1ShadowSet,
+  DEFAULT_SESSION_CYCLES,
   INT4_MAX,
   markdownTable,
-  MAX_H1_LOSS_MULTIPLIER,
-  MAX_SESSION_SUMMARY_TRADES,
+  MAX_SESSION_CYCLES,
   parseUrlEnv,
   readEnv,
   verdictOf,
@@ -52,7 +52,7 @@ const USAGE = `H1: отчёт теневой торговли (docs/h1.md → Th
   h1 mark <accountId>
   h1 unmark <accountId>
   h1 list
-  h1 session start --account <accountId> --asset <id> --trades <N> --max-loss <k>
+  h1 session start --account <accountId> --asset <id> [--cycles <N>]
   h1 session stop --account <accountId>
   h1 session status --account <accountId>
 
@@ -63,9 +63,9 @@ const USAGE = `H1: отчёт теневой торговли (docs/h1.md → Th
 mark / unmark — пометить аккаунт брокера (uuid) для сессий H1 или снять метку; снять нельзя, пока у
 аккаунта активная сессия H1. list — помеченные аккаунты (stdout, по строке на аккаунт). Код выхода:
 0 — сделано или уже так, 1 — аккаунт не найден, метку не снять или ошибка, 2 — не понято.
-session start — сессия H1 помеченного аккаунта: пара --asset (открыта, берёт 5 с, выплата не ниже
-94 %), --trades сделок (1…720), потолок потерь --max-loss × ставка (k 1…1000); ставка — сохранённая
-ставка режима пользователя или минимум брокера. В stdout — id сессии. session stop — остановить
+session start — сессия H1 помеченного аккаунта, как обычная сессия: пара --asset (открыта, берёт
+5 с), --cycles циклов (1…20, по умолчанию 5), стратегия ставки процесса (SESSION_STAKE_STRATEGY);
+ставка — сохранённая ставка режима пользователя или минимум брокера. В stdout — id сессии. session stop — остановить
 активную сессию H1 аккаунта; session status — последняя сессия H1 аккаунта. Код выхода: 0 —
 сделано, 1 — отказ (строка в stderr), нет сессии или ошибка, 2 — не понято.`;
 
@@ -152,7 +152,7 @@ function parseBoundedInt(raw: string | undefined, flag: string, max: number): nu
 }
 
 function parseSessionCommand(argv: readonly string[]): H1SessionCommand {
-  let values: { account?: string; asset?: string; trades?: string; 'max-loss'?: string };
+  let values: { account?: string; asset?: string; cycles?: string };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
@@ -162,8 +162,7 @@ function parseSessionCommand(argv: readonly string[]): H1SessionCommand {
       options: {
         account: { type: 'string' },
         asset: { type: 'string' },
-        trades: { type: 'string' },
-        'max-loss': { type: 'string' },
+        cycles: { type: 'string' },
       },
     }));
   } catch (error) {
@@ -176,8 +175,10 @@ function parseSessionCommand(argv: readonly string[]): H1SessionCommand {
       kind: 'session_start',
       accountId: parseAccountId(values.account),
       assetId: parseBoundedInt(values.asset, '--asset', INT4_MAX),
-      trades: parseBoundedInt(values.trades, '--trades', MAX_SESSION_SUMMARY_TRADES),
-      maxLossMultiplier: parseBoundedInt(values['max-loss'], '--max-loss', MAX_H1_LOSS_MULTIPLIER),
+      cycles:
+        values.cycles === undefined
+          ? DEFAULT_SESSION_CYCLES
+          : parseBoundedInt(values.cycles, '--cycles', MAX_SESSION_CYCLES),
     };
   }
   if (subcommand !== 'stop' && subcommand !== 'status') {
@@ -187,11 +188,7 @@ function parseSessionCommand(argv: readonly string[]): H1SessionCommand {
         : `неизвестная команда: session ${subcommand}`,
     );
   }
-  if (
-    values.asset !== undefined ||
-    values.trades !== undefined ||
-    values['max-loss'] !== undefined
-  ) {
+  if (values.asset !== undefined || values.cycles !== undefined) {
     throw new UsageError(`session ${subcommand} принимает только --account`);
   }
   return {

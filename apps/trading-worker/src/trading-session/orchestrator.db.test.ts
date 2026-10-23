@@ -12,7 +12,9 @@ import {
   CANDLE_CLOSE_SLACK_MS,
   buildSessionSettings,
   decimalStringSchema,
+  H1_R1_PARAMS,
   isClosedTrade,
+  safeParseTradingSessionSettings,
   SessionStakeStrategy,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
@@ -2291,22 +2293,40 @@ describe('martingale (#450)', () => {
   });
 });
 
-// #670: an H1 session (settings v4) is held between checks; its trades come from the driver (#707),
-// here from createSessionIntent directly
-describe('an H1 session (#670)', () => {
+// #670, #775: an H1 session (settings v5) is held between checks; its trades come from the driver
+// (#707), here from createSessionIntent directly
+describe('an H1 session (#670, #775)', () => {
   // the mock's AAPL takes 5 s trades
   const h1Pair = (patch: Parameters<typeof eurUsd>[0] = {}) =>
     eurUsd({ id: 202, symbol: 'AAPL', minTimeframe: 5, payout: 94, ...patch });
-  const h1Settings = (trades = 10, k = 20) => {
+  const h1Settings = (
+    cycles = 10,
+    strategy: SessionStakeStrategy = SessionStakeStrategy.Martingale,
+  ) => {
     const built = buildH1SessionSettings({
       assetId: 202,
-      trades,
+      cycles,
       stake: { baseStake: decimalStringSchema.parse('1.00'), stakeScale: 2 },
-      maxLossMultiplier: k,
+      strategy,
     });
     if (!built.success) throw new Error('H1 fixture settings do not parse');
     return built.data;
   };
+  // a v4 row of #670, read-only since #775: a fixed stake, trades and a loss ceiling
+  const v4Settings = (maxLoss: string) => {
+    const parsed = safeParseTradingSessionSettings({
+      version: 4,
+      assetId: 202,
+      durationSec: 5,
+      trades: 10,
+      stake: { strategy: 'fixed', baseStake: '1.00', stakeScale: 2 },
+      signal: { kind: 'h1', params: { ...H1_R1_PARAMS }, entryDelaySec: 1, expirySec: 5 },
+      maxLoss,
+    });
+    if (!parsed.success) throw new Error('v4 fixture settings do not parse');
+    return parsed.data;
+  };
+  const pastNoSignalLimit = () => new Date(Date.now() - sessionNoSignalTimeoutMs(5) * 3);
   // a signal source that must not be asked
   const noSignals = () => {
     const source = signalsOf(() => {
@@ -2366,13 +2386,17 @@ describe('an H1 session (#670)', () => {
     await orchestrator.stop();
   });
 
-  it('H1-O2 completes after N settled trades, a loss counted', async () => {
+  it('H1-O2 completes by cycles: under martingale only a win closes one', async () => {
     const seed = await seedSession({ settings: h1Settings(2) });
     await driverTrade(seed, 1, MockTradeOutcome.Win);
     const { orchestrator } = h1Orchestrator();
     await orchestrator.tick();
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     await driverTrade(seed, 2, MockTradeOutcome.Loss);
+    advance(CONFIG.h1CheckMs);
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    await driverTrade(seed, 3, MockTradeOutcome.Win);
     advance(CONFIG.h1CheckMs);
     await orchestrator.tick();
     expect(await stopOf(seed.session.id)).toEqual({
@@ -2382,12 +2406,23 @@ describe('an H1 session (#670)', () => {
     await orchestrator.stop();
   });
 
-  it('H1-O3 stops with max_session_loss_exceeded when the next stake would pass maxLoss', async () => {
-    // k = 2: after one loss of 1, -1 - 1 = -2 is not below -2, the session goes on
-    const within = await seedSession({ settings: h1Settings(10, 2) });
+  it("H1-O3′ the sizer's martingale limit stops it: max_session_loss_exceeded", async () => {
+    const within = await seedSession({ settings: h1Settings() });
     await driverTrade(within, 1, MockTradeOutcome.Loss);
-    // k = 1: -1 - 1 = -2 is below -1
-    const past = await seedSession({ settings: h1Settings(10, 1) });
+    // a ceiling of 2: the raise after a loss of 1 takes the loss past it
+    const tight = h1Settings();
+    if (tight.version !== 5 || tight.stake.strategy !== SessionStakeStrategy.Martingale) {
+      throw new Error('fixture: martingale v5');
+    }
+    const past = await seedSession({
+      settings: {
+        ...tight,
+        stake: {
+          ...tight.stake,
+          limits: { ...tight.stake.limits, maxSessionLoss: decimalStringSchema.parse('2.00') },
+        },
+      },
+    });
     await driverTrade(past, 1, MockTradeOutcome.Loss);
     const { orchestrator } = h1Orchestrator();
     await orchestrator.tick();
@@ -2397,7 +2432,7 @@ describe('an H1 session (#670)', () => {
       stopReason: TradingSessionStopReason.MaxSessionLossExceeded,
     });
     expect(linesOf(past.session.id)).toContainEqual(
-      expect.objectContaining({ reason: 'max_session_loss_exceeded', maxLoss: '1' }),
+      expect.objectContaining({ stopReason: 'max_session_loss_exceeded' }),
     );
     await orchestrator.stop();
   });
@@ -2430,29 +2465,56 @@ describe('an H1 session (#670)', () => {
     await orchestrator.stop();
   });
 
-  it('H1-O6 a pair closed past the no-signal limit holds it: no no_signal_timeout', async () => {
-    const seed = await seedSession({
-      settings: h1Settings(),
-      startedAt: new Date(Date.now() - sessionNoSignalTimeoutMs(5) * 3),
+  it('H1-O5′ no intent within the no-signal limit stops it with no_signal_timeout (В5)', async () => {
+    const seed = await seedSession({ settings: h1Settings(), startedAt: pastNoSignalLimit() });
+    const fresh = await seedSession({ settings: h1Settings() });
+    const { signals, orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(signals.calls).toEqual([]);
+    expect(await stopOf(seed.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.NoSignalTimeout,
     });
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ reason: 'no_signal_timeout', waited: 'no_signal' }),
+    );
+    expect(await stopOf(fresh.session.id)).toEqual(ACTIVE);
+    await orchestrator.stop();
+  });
+
+  it('H1-O6′ a pair closed past the no-signal limit stops it with no_signal_timeout', async () => {
+    const seed = await seedSession({ settings: h1Settings(), startedAt: pastNoSignalLimit() });
     const { signals, orchestrator } = h1Orchestrator(
       pairsOf(fresh([h1Pair({ scheduledUntil: clock + 30_000 })])),
     );
     await orchestrator.tick();
     expect(signals.calls).toEqual([]);
-    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
-    expect(msgsOf(seed.session.id)).toContain('trading session waits for the pair to open');
+    expect(await stopOf(seed.session.id)).toEqual({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.NoSignalTimeout,
+    });
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ reason: 'no_signal_timeout', waited: 'pair_closed' }),
+    );
     await orchestrator.stop();
   });
 
-  it('H1-O7 an open pair past the no-signal limit with a payout below 94 still holds', async () => {
-    const seed = await seedSession({
-      settings: h1Settings(),
-      startedAt: new Date(Date.now() - sessionNoSignalTimeoutMs(5) * 3),
-    });
+  it('H1-O7 an open pair with a payout below 94 still holds: the payout is not read', async () => {
+    const seed = await seedSession({ settings: h1Settings() });
     const { orchestrator } = h1Orchestrator(pairsOf(fresh([h1Pair({ payout: 50 })])));
     await orchestrator.tick();
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    await orchestrator.stop();
+  });
+
+  it('H1-O10 a v4 row runs with its fixed stake; its maxLoss is no longer a stop (#775)', async () => {
+    const seed = await seedSession({ settings: v4Settings('1') });
+    await driverTrade(seed, 1, MockTradeOutcome.Loss);
+    const { signals, orchestrator } = h1Orchestrator();
+    await orchestrator.tick();
+    expect(signals.calls).toEqual([]);
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(seed.session.id)).toContain('trading session waits for the H1 driver');
     await orchestrator.stop();
   });
 

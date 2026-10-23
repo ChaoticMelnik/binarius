@@ -16,6 +16,7 @@ import {
   buildH1SessionSettings,
   decimalStringSchema,
   type DecimalString,
+  SessionStakeStrategy,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { tradingSessions, users } from './schema/index';
@@ -23,7 +24,6 @@ import {
   claimSessionFinalNotice,
   claimSessionOpenNotice,
   claimSessionTradeNotice,
-  claimSessionTradeNotices,
   claimSessionWaiting,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
@@ -35,7 +35,6 @@ import {
   releaseSummaryFallback,
   releaseSessionOpenNotice,
   releaseSessionTradeNotice,
-  releaseSessionTradeNotices,
   releaseSessionWaiting,
 } from './session-notice-ops';
 import { recordSignalDecision } from './signal-decision-ops';
@@ -287,67 +286,6 @@ describe('claimSessionTradeNotice', () => {
   });
 });
 
-describe('claimSessionTradeNotices (#707, the H1 summary)', () => {
-  const claimBatch = (session: { id: string }, from: number, to: number) =>
-    claimSessionTradeNotices(tmp.db, { sessionId: session.id, from, to });
-
-  it('N24 claims up to the settled count, never past it', async () => {
-    const target = await seedSession();
-    for (const profit of ['4.6', '-5', '4.6']) await settled(target, profit);
-    expect(await claimBatch(target.session, 0, 4)).toBeUndefined();
-    expect((await rowOf(target.session)).notifiedTrades).toBe(0);
-    expect(await claimBatch(target.session, 0, 3)).toEqual({
-      totals: { won: 2, lost: 1, tied: 0, result: '4.20000000' },
-      cycleMessage: null,
-    });
-    expect((await rowOf(target.session)).notifiedTrades).toBe(3);
-  });
-
-  it('N25 a batch claims from the cursor only: a stale from loses', async () => {
-    const target = await seedSession();
-    for (const profit of ['4.6', '-5', '0']) await settled(target, profit);
-    expect(await claimBatch(target.session, 0, 2)).toBeDefined();
-    expect(await claimBatch(target.session, 0, 3)).toBeUndefined();
-    expect((await rowOf(target.session)).notifiedTrades).toBe(2);
-    expect((await claimBatch(target.session, 2, 3))?.totals).toEqual({
-      won: 1,
-      lost: 1,
-      tied: 1,
-      result: '-0.40000000',
-    });
-  });
-
-  it('N26 the totals are of the first `to` settled trades in order; a rejected step is none', async () => {
-    const target = await seedSession();
-    await settled(target, '4.6');
-    await rejected(target);
-    await settled(target, '-5');
-    await settled(target, '4.6');
-    expect((await claimBatch(target.session, 0, 2))?.totals).toEqual({
-      won: 1,
-      lost: 1,
-      tied: 0,
-      result: '-0.40000000',
-    });
-  });
-
-  it('N27 a release puts the batch back once; the closed notices refuse a claim', async () => {
-    const target = await seedSession();
-    for (const profit of ['4.6', '4.6']) await settled(target, profit);
-    await claimBatch(target.session, 0, 2);
-    const release = () =>
-      releaseSessionTradeNotices(tmp.db, { sessionId: target.session.id, from: 0, to: 2 });
-    expect(await release()).toBe(true);
-    expect((await rowOf(target.session)).notifiedTrades).toBe(0);
-    expect(await release()).toBe(false);
-    expect(await claimBatch(target.session, 0, 2)).toBeDefined();
-    await stop(target.session);
-    expect(await finalClaim(target.session)).toBe(true);
-    expect(await release()).toBe(false);
-    expect((await rowOf(target.session)).notifiedTrades).toBe(2);
-  });
-});
-
 describe('the cycle message (#551)', () => {
   const record = (session: { id: string }, claimed: number, messageId: number, from: number) =>
     recordSessionCycleMessage(tmp.db, {
@@ -586,17 +524,17 @@ describe("the open trade's block (#700)", () => {
     expect(await pendingOf(target.session)).toBeUndefined();
   });
 
-  it("N32 an H1 session's open trade is not listed (#670)", async () => {
+  it("N32 an H1 session's open trade is listed as any (#775)", async () => {
     const built = buildH1SessionSettings({
       assetId: 101,
-      trades: 10,
+      cycles: 5,
       stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
-      maxLossMultiplier: 10,
+      strategy: SessionStakeStrategy.Martingale,
     });
     if (!built.success) throw new Error('fixture settings do not parse');
     const target = await seedSession(built.data);
-    await opened(target);
-    expect(await pendingOf(target.session)).toBeUndefined();
+    const { intent } = await opened(target);
+    expect(await pendingOf(target.session)).toMatchObject({ openIntentId: intent.id });
   });
 });
 
@@ -1071,20 +1009,23 @@ describe('the waiting message (#536)', () => {
     expect(await waitingClaim(target.session)).toEqual({ slot: 7 });
   });
 
-  it("N43 an H1 session's intents are no wait (#722, #670)", async () => {
+  it("N43 an H1 session's no_signal row waits; its next intent's row ends the wait (#775)", async () => {
     const built = buildH1SessionSettings({
       assetId: 101,
-      trades: 10,
+      cycles: 5,
       stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
-      maxLossMultiplier: 10,
+      strategy: SessionStakeStrategy.Martingale,
     });
     if (!built.success) throw new Error('fixture settings do not parse');
-    const target = await seedSession(built.data);
-    await statusMessage(target.session, 7);
-    await settled(target, '-1');
-    await claim(target.session, 0);
-    expect(await waitingClaim(target.session)).toBeUndefined();
-    expect(await pendingOf(target.session)).toBeUndefined();
+    const waiting = await seedSession(built.data);
+    await statusMessage(waiting.session, 7);
+    await noSignal(waiting);
+    expect(await waitingClaim(waiting.session)).toEqual({ slot: 7 });
+    const traded = await seedSession(built.data);
+    await statusMessage(traded.session, 7);
+    await noSignal(traded);
+    await opened(traded);
+    expect(await waitingClaim(traded.session)).toBeUndefined();
   });
 
   it('N13 two claims of the same slot at once: exactly one wins', async () => {

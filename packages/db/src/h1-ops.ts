@@ -16,7 +16,8 @@ import type { DbExecutor, Tx } from './trade-intent-ops';
 // (apps/backend/src/cli/h1-mark.ts, h1-session.ts). The mark gates `h1 session start`, and makes a
 // session the bot starts on the account an H1 one (#745, checkTradingSessionStart).
 
-// a session of settings v4 (settingsV4Schema): the kind is a bound parameter, not a literal in SQL
+// an H1 session, settings v5 or a read-only v4 row (#775): both carry signal.kind; the kind is
+// a bound parameter, not a literal in SQL
 export const h1SessionSql: SQL = sql`(${tradingSessions.settings} #>> '{signal,kind}') = ${H1_SESSION_SIGNAL_KIND}`;
 
 const activeH1SessionOfAccountSql: SQL = sql`exists (
@@ -180,7 +181,7 @@ export interface ActiveH1Session {
   startedAt: Date;
 }
 
-// The driver's list (#707): every active H1 session on a marked account, oldest start first. A v4
+// The driver's list (#707): every active H1 session on a marked account, oldest start first. An H1
 // session on an unmarked account (only by hand since createTradingSession re-reads the mark under
 // the account's lock) is not traded; the orchestrator holds it until its hour.
 export async function listActiveH1Sessions(db: Db): Promise<ActiveH1Session[]> {

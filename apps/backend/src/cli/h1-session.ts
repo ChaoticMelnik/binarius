@@ -22,33 +22,30 @@ import {
   buildH1SessionSettings,
   checkStake,
   H1_EXPIRY_SEC,
-  H1_MIN_PAYOUT_PCT,
   HTTPS_ONLY_RULES,
   isPairOpen,
   pairAcceptsDuration,
   parseDemoOnlyEnv,
+  parseSessionStakeStrategyEnv,
   parseUrlEnv,
   readEnv,
+  sessionFitsDeadline,
   stakeSettingsFrom,
   StakeRefusal,
   TradeMode,
   TradingSessionErrorCode,
   TradingSessionStopReason,
   type PairsCatalogView,
+  type SessionStakeStrategy,
 } from '@binarius/shared';
 import { formatFailure } from './kill-switch';
 
-// `h1 session start|stop|status` (#670, docs/h1.md → Sessions): an H1 session (settings v4) of a
-// marked account. The checks of `start` run in a fixed order, each its own line and exit 1, before
-// any write; its trades come from the driver (#707), the orchestrator stops it.
+// `h1 session start|stop|status` (#670, #775, docs/h1.md → Sessions): an H1 session (settings v5)
+// of a marked account - a regular session whose entries come from H1. The checks of `start` run in
+// a fixed order, each its own line and exit 1, before any write; its trades come from the driver
+// (#707), the orchestrator stops it.
 export type H1SessionCommand =
-  | {
-      kind: 'session_start';
-      accountId: string;
-      assetId: number;
-      trades: number;
-      maxLossMultiplier: number;
-    }
+  | { kind: 'session_start'; accountId: string; assetId: number; cycles: number }
   | { kind: 'session_stop'; accountId: string }
   | { kind: 'session_status'; accountId: string };
 
@@ -125,11 +122,14 @@ async function start(
   err: (line: string) => void,
   deps: H1SessionDeps,
 ): Promise<number> {
-  const { accountId, assetId } = command;
+  const { accountId, assetId, cycles } = command;
   let demoOnly: boolean;
+  let strategy: SessionStakeStrategy;
   let readCatalog: () => Promise<PairsCatalogView | undefined>;
   try {
     demoOnly = parseDemoOnlyEnv(source);
+    // the backend's strategy of new sessions (Rule 14), read as its env.ts does
+    strategy = parseSessionStakeStrategyEnv(source);
     readCatalog = deps.catalog ?? catalogFromEnv(source);
   } catch (error) {
     // our own env messages name the variable, never its value
@@ -166,9 +166,9 @@ async function start(
     );
     return EXIT_FAILED;
   }
-  // only at the start (owner 2026-10-19): a payout that falls during the session is not checked
-  if (pair.payout < H1_MIN_PAYOUT_PCT) {
-    err(`выплата пары ${pair.payout} % ниже ${H1_MIN_PAYOUT_PCT} %`);
+  // no payout floor (#775, В2); the session's worst case fits its hour, as the start route's
+  if (!sessionFitsDeadline(cycles, H1_EXPIRY_SEC, strategy)) {
+    err('сессия не укладывается в час: уменьшите --cycles');
     return EXIT_FAILED;
   }
 
@@ -200,15 +200,15 @@ async function start(
     err(STAKE_LINES[stakeRefusal]);
     return EXIT_FAILED;
   }
-  // a minimum of 0 gives a stake of 0, and a ceiling outside numeric(20,8) fails the schema
+  // a minimum of 0 gives a stake of 0, and a limit outside numeric(20,8) fails the schema
   const settings = buildH1SessionSettings({
     assetId,
-    trades: command.trades,
+    cycles,
     stake: stakeSettingsFrom(savedStake, snapshot.minTradeAmount),
-    maxLossMultiplier: command.maxLossMultiplier,
+    strategy,
   });
   if (!settings.success) {
-    err('ставка или потолок потерь не укладываются в настройки сессии');
+    err('ставка или её лимиты не укладываются в настройки сессии');
     return EXIT_FAILED;
   }
 
@@ -290,7 +290,7 @@ async function status(
     [
       `сессия ${view.id}`,
       `статус ${view.status}${view.stopReason === null ? '' : ` (${view.stopReason})`}, режим ${view.mode}`,
-      `сделок ${trades.settled} из ${planned}: выигрышей ${trades.won}, проигрышей ${trades.lost}, ничьих ${trades.tied}, отклонено ${trades.rejected}`,
+      `циклов ${view.cycles.closed} из ${planned}, сделок ${trades.settled}: выигрышей ${trades.won}, проигрышей ${trades.lost}, ничьих ${trades.tied}, отклонено ${trades.rejected}`,
       `прибыль ${trades.profit}`,
       `начало ${view.startedAt}, конец ${view.endedAt ?? '-'}`,
     ].join('\n') + '\n',

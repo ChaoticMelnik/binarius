@@ -100,6 +100,7 @@ export const SESSION_START_REFUSALS = {
     'Пользователь в реальном режиме: CLI создаёт только demo-сессии — запустите сессию из бота или верните пользователя в demo',
   // unreachable while the CLI passes demo; the flag is read so a future real mode meets the guard
   [TradingSessionDbErrorCode.DemoOnly]: 'Стенд запущен с DEMO_ONLY=true — real-сессии отключены',
-  // unreachable: the CLI writes no H1 session (settings v4 come only from `h1 session start`, #670)
+  // unreachable: the CLI writes no H1 session (settings v5 come only from the start route on a
+  // marked account and `h1 session start`, #775)
   [TradingSessionDbErrorCode.AccountNotH1]: 'Аккаунт не помечен для H1 — сессия не создана',
 } as const satisfies Record<TradingSessionDbErrorCode, string>;

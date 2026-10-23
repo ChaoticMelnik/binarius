@@ -4,14 +4,11 @@ import {
   deleteRefusal,
   editRefusal,
   errorLogFields,
-  H1_NOTICE_EVERY_TRADES,
-  isH1Settings,
   safeParseTradingSessionSettings,
   SESSION_SUMMARY_FALLBACK_MS,
   TradingSessionStatus,
   TradingSessionStopReason,
   type BotKeyboard,
-  type H1SessionSettings,
   type TelegramHtml,
   type TradingSessionSettings,
   telegramErrorFields,
@@ -20,7 +17,6 @@ import {
   claimSessionFinalNotice,
   claimSessionOpenNotice,
   claimSessionTradeNotice,
-  claimSessionTradeNotices,
   claimSessionWaiting,
   claimSummaryFallback,
   clearSessionWaitingMessage,
@@ -31,7 +27,6 @@ import {
   recordSessionWaitingMessage,
   releaseSessionOpenNotice,
   releaseSessionTradeNotice,
-  releaseSessionTradeNotices,
   releaseSessionWaiting,
   releaseSummaryFallback,
   type Db,
@@ -56,7 +51,6 @@ import {
   pairOf,
   sessionCycleMessage,
   sessionCycleStopKeyboard,
-  sessionH1ProgressMessage,
   sessionSummaryMessage,
   sessionWaitingMessage,
   type SessionCycleNotice,
@@ -85,7 +79,7 @@ import { readFinishedSessionView } from './session-view';
 // endings docs risk 35 names (a new message whose outcome was unknown, a second sender). A trade
 // open at the broker shows first as its block without a result (#700), claimed the same way
 // (open_notice_intent_id) below every settled trade's block; its settlement edits it into the
-// result. H1 sessions get no open block.
+// result. An H1 session's messages are any session's (#775).
 // One chat gets at most one step of the sender within the gap (#660, docs → Rate and timing): a
 // send or an edit marks the chat, delivered or not; a step whose chat is cooling ends the turn
 // before its pace and its claim, and goes on a later tick. The calls inside one step go one after
@@ -168,10 +162,9 @@ type Removal =
 
 // The memory's mirror of waitingDueSql once a step freed the slot or left it behind; the SQL
 // decides, so a wrong hint costs one refused claim or one tick.
-// A claimed notice's delivery: the trade's message (#551), the open trade's block (#700) or an H1
-// session's summary (#707)
+// A claimed notice's delivery: the trade's message (#551) or the open trade's block (#700)
 interface Delivery {
-  label: 'session trade notice' | 'session h1 notice' | 'session open notice';
+  label: 'session trade notice' | 'session open notice';
   key: string;
   fields: Record<string, unknown>;
   // where the claim left the cursor, and the open block's intent (#700): the record's CAS
@@ -288,53 +281,6 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       fields,
       cursor: claimed + 1,
       release: () => releaseSessionTradeNotice(db, { sessionId: session.sessionId, claimed }),
-    });
-  }
-
-  // An H1 session's summary after `due` settled trades (#707, docs/bot-session.md → An H1
-  // session): the trades from the cursor to `due` claimed at once, then the summary sent as the
-  // session's one message, or its edit. `due` is a multiple of H1_NOTICE_EVERY_TRADES, or the
-  // settled count of a finished session, so the final mark follows.
-  async function sendH1Progress(
-    session: PendingSessionNotice,
-    settings: H1SessionSettings,
-    due: number,
-  ): Promise<Step> {
-    const from = session.notifiedTrades;
-    const fields = { sessionId: session.sessionId, from, to: due };
-    if (!session.telegramBlocked) {
-      if (cooling(session.telegramUserId)) return 'skip';
-      await pace();
-    }
-    if (stopped) return 'skip';
-    const claim = await claimSessionTradeNotices(db, {
-      sessionId: session.sessionId,
-      from,
-      to: due,
-    });
-    if (claim === undefined) return 'skip';
-    session.notifiedTrades = due;
-    // nothing can be delivered (Rule 19): the trades count as sent
-    if (session.telegramBlocked) return 'next';
-    let notice: SessionCycleNotice;
-    try {
-      notice = sessionH1ProgressMessage(
-        claim,
-        settings,
-        pairOf(catalog.read(), settings.assetId).label,
-        due,
-      );
-    } catch (error) {
-      logger.error({ ...fields, ...errorLogFields(error) }, 'session h1 notice not built');
-      return 'skip';
-    }
-    return deliver(session, notice, {
-      label: 'session h1 notice',
-      key: `${session.sessionId}:h1:${String(due)}`,
-      fields,
-      cursor: due,
-      release: () =>
-        releaseSessionTradeNotices(db, { sessionId: session.sessionId, from, to: due }),
     });
   }
 
@@ -762,7 +708,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   }
 
-  // every trade past the cursor in order (an H1 session: its summary, when due), then the stale
+  // every trade past the cursor in order, then the stale
   // waiting message's delete, then the open trade's block (#700), then the final mark of a
   // finished session or the waiting message due; the first step that does not go ends the
   // session's turn, so its later trades never overtake it and the waiting message is the last
@@ -771,31 +717,16 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   async function serve(session: PendingSessionNotice): Promise<Step> {
     const parsed = safeParseTradingSessionSettings(session.settings);
     const settings = parsed.success ? parsed.data : null;
-    if (settings !== null && isH1Settings(settings)) {
-      // every H1_NOTICE_EVERY_TRADES settled trades, and at the finish the rest (#707)
-      const due = session.finished
-        ? session.settled
-        : Math.floor(session.settled / H1_NOTICE_EVERY_TRADES) * H1_NOTICE_EVERY_TRADES;
-      if (due > session.notifiedTrades) {
-        const step = await sendH1Progress(session, settings, due);
-        if (step !== 'next') return step;
-      }
-    } else {
-      for (let claimed = session.notifiedTrades; claimed < session.settled; claimed += 1) {
-        const step = await sendTrade(session, settings, claimed);
-        if (step !== 'next') return step;
-      }
+    for (let claimed = session.notifiedTrades; claimed < session.settled; claimed += 1) {
+      const step = await sendTrade(session, settings, claimed);
+      if (step !== 'next') return step;
     }
     if (session.waitingStale && session.waitingMessageId !== null) {
       const step = await deleteStaleWaiting(session);
       if (step !== 'next') return step;
     }
     const { openIntentId } = session;
-    if (
-      openIntentId !== null &&
-      openIntentId !== session.openNoticeIntentId &&
-      !(settings !== null && isH1Settings(settings))
-    ) {
+    if (openIntentId !== null && openIntentId !== session.openNoticeIntentId) {
       const step = await sendOpen(session, settings, openIntentId);
       if (step !== 'next') return step;
     }

@@ -11,7 +11,10 @@ import {
 import { brokerAccounts, openTrading, setH1Mark, setStake, tradingSessions } from '@binarius/db';
 import {
   AccountHaltReason,
+  DEFAULT_SESSION_CYCLES,
   decimalStringSchema,
+  H1_R1_PARAMS,
+  martingaleLimitsFor,
   safeParseTradingSessionSettings,
   TradeMode,
   type PairsCatalogView,
@@ -90,10 +93,6 @@ const startArgs = (accountId: string, ...extra: string[]) => [
   accountId,
   '--asset',
   '202',
-  '--trades',
-  '50',
-  '--max-loss',
-  '20',
   ...extra,
 ];
 const sessionOf = async (id: string) =>
@@ -101,8 +100,8 @@ const sessionOf = async (id: string) =>
 const sessionsOfAccount = (accountId: string) =>
   tmp.db.select().from(tradingSessions).where(eq(tradingSessions.brokerAccountId, accountId));
 
-describe('h1 session start (#670)', () => {
-  it('H1-R2 refuses an unmarked account; the payout floor is 94 at the start, 94 itself passes', async () => {
+describe('h1 session start (#670, #775)', () => {
+  it('H1-R2′ refuses an unmarked account; no payout floor: a pair at 90 % starts', async () => {
     const plain = await seedUserWithAccount(tmp.db);
     await seedBalanceSnapshot(tmp.db, plain.brokerAccountId);
     expect(await run(startArgs(plain.brokerAccountId))).toEqual({
@@ -112,15 +111,12 @@ describe('h1 session start (#670)', () => {
     });
 
     const low = await marked();
-    expect(
-      await run(startArgs(low.brokerAccountId), catalogOf([pair({ payout: 93 })]).deps),
-    ).toEqual({ code: 1, out: '', err: ['выплата пары 93 % ниже 94 %'] });
-    expect(await sessionsOfAccount(low.brokerAccountId)).toEqual([]);
-    const at = await run(startArgs(low.brokerAccountId), catalogOf([pair({ payout: 94 })]).deps);
-    expect(at.code).toBe(0);
+    const at = await run(startArgs(low.brokerAccountId), catalogOf([pair({ payout: 90 })]).deps);
+    expect(at).toMatchObject({ code: 0, err: [] });
+    expect(await sessionsOfAccount(low.brokerAccountId)).toHaveLength(1);
   });
 
-  it('H1-R3 creates a v4 session: R1, the minimum as the stake, maxLoss = k × stake, the user mode', async () => {
+  it("H1-R3′ creates a v5 session: R1, the cycles, the process's strategy, the minimum as the stake, the user mode", async () => {
     const seed = await marked();
     const started = await run(startArgs(seed.brokerAccountId));
     expect(started.code).toBe(0);
@@ -132,14 +128,18 @@ describe('h1 session start (#670)', () => {
       brokerAccountId: seed.brokerAccountId,
     });
     const settings = safeParseTradingSessionSettings(row.settings);
-    expect(settings.success && settings.data).toMatchObject({
-      version: 4,
+    expect(settings.success && settings.data).toEqual({
+      version: 5,
       assetId: 202,
       durationSec: 5,
-      trades: 50,
-      stake: { strategy: 'fixed', baseStake: '1' },
-      signal: { kind: 'h1', params: { moveSec: 3 }, entryDelaySec: 1, expirySec: 5 },
-      maxLoss: '20',
+      cycles: DEFAULT_SESSION_CYCLES,
+      stake: {
+        strategy: 'martingale',
+        baseStake: '1',
+        stakeScale: 0,
+        limits: martingaleLimitsFor(decimalStringSchema.parse('1')),
+      },
+      signal: { kind: 'h1', params: H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
     });
 
     // the saved stake of the mode wins over the minimum
@@ -150,11 +150,14 @@ describe('h1 session start (#670)', () => {
       TradeMode.Demo,
       decimalStringSchema.parse('2.5'),
     );
-    const second = await run(startArgs(saver.brokerAccountId));
+    const second = await run(startArgs(saver.brokerAccountId, '--cycles', '3'), undefined, {
+      DATABASE_URL: tmp.url,
+      SESSION_STAKE_STRATEGY: 'fixed',
+    });
     const saved = safeParseTradingSessionSettings((await sessionOf(second.out.trim())).settings);
     expect(saved.success && saved.data).toMatchObject({
-      stake: { baseStake: '2.5' },
-      maxLoss: '50',
+      cycles: 3,
+      stake: { strategy: 'fixed', baseStake: '2.5' },
     });
 
     // a second start names the running session and writes nothing
@@ -231,6 +234,12 @@ describe('h1 session start (#670)', () => {
       decimalStringSchema.parse('20000'),
     );
     await refusal(catalogOf([pair()]).deps, 'на балансе режима меньше ставки');
+    // H1-R8: the worst case of 8 martingale cycles of 5 s does not fit the hour
+    await refusal(
+      catalogOf([pair()]).deps,
+      'сессия не укладывается в час: уменьшите --cycles',
+      startArgs(blind.brokerAccountId, '--cycles', '8'),
+    );
     expect(await sessionsOfAccount(id)).toEqual([]);
     expect(await sessionsOfAccount(blind.brokerAccountId)).toEqual([]);
 
@@ -263,7 +272,7 @@ describe('h1 session start: the mark under the account lock (#707)', () => {
 });
 
 describe('h1 session stop and status (#670)', () => {
-  it('H1-R4 stops only an H1 session; status shows the last H1 session; none is exit 1', async () => {
+  it('H1-R4′ stops only an H1 session; status shows the last H1 session in cycles; none is exit 1', async () => {
     const seed = await marked();
     const id = seed.brokerAccountId;
     const account = ['--account', id];
@@ -295,7 +304,7 @@ describe('h1 session stop and status (#670)', () => {
     expect(live.out.split('\n').slice(0, 4)).toEqual([
       `сессия ${sessionId}`,
       'статус active, режим demo',
-      'сделок 0 из 50: выигрышей 0, проигрышей 0, ничьих 0, отклонено 0',
+      'циклов 0 из 5, сделок 0: выигрышей 0, проигрышей 0, ничьих 0, отклонено 0',
       'прибыль 0.00000000',
     ]);
 

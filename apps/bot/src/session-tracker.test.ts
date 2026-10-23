@@ -1,7 +1,6 @@
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildH1SessionSettings,
   defaultBotTextSource,
   pairLabel,
   resolveBotTextOverrides,
@@ -18,10 +17,7 @@ import { currentLanguage, missingLanguageReads } from './language';
 import {
   createSessionTracker,
   SESSION_NOT_FOUND,
-  sessionDrawing,
-  sessionRenderKey,
   sessionTrackingDone,
-  type SessionDrawing,
   type SessionTrackRequest,
 } from './session-tracker';
 import {
@@ -249,7 +245,6 @@ describe('the session tracker', () => {
     expect(edit.mock.calls[0]?.[0]).toEqual({
       text: sessionStatusText(LABEL, stoppedClosed),
       picture: stoppedClosed.signalAction,
-      keyboard: null,
     });
   });
 
@@ -805,7 +800,7 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
       expect(edit.mock.calls).toEqual([
-        [{ text: TEXTS.sessionStatusUnavailable, picture: null, keyboard: null }, 'not_found'],
+        [{ text: TEXTS.sessionStatusUnavailable, picture: null }, 'not_found'],
       ]);
       expect(tracker.size()).toBe(0);
     });
@@ -825,7 +820,7 @@ describe('the session tracker', () => {
       tracker.track(request({ view: up, edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(edit.mock.calls).toEqual([
-        [{ text: TEXTS.sessionStatusUnavailable, picture: 'up', keyboard: null }, 'not_found'],
+        [{ text: TEXTS.sessionStatusUnavailable, picture: 'up' }, 'not_found'],
       ]);
     });
 
@@ -905,10 +900,7 @@ describe('the session tracker', () => {
       await vi.advanceTimersByTimeAsync(POLL);
       expect(texts(edits)).toEqual([shown(stoppedClosed)]);
       expect(edit.mock.calls).toEqual([
-        [
-          { text: sessionStatusText(LABEL, stoppedClosed), picture: null, keyboard: null },
-          undefined,
-        ],
+        [{ text: sessionStatusText(LABEL, stoppedClosed), picture: null }, undefined],
       ]);
     });
 
@@ -1183,53 +1175,6 @@ describe('the session tracker', () => {
       tracker.track(request({ ...recovered, label: null, edit: third.edit }));
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(texts(third.edits)).toEqual([sessionStatusText(null, stoppedClosed).value]);
-    });
-  });
-
-  // #745: an H1 session's message carries its «⏹» while the session runs
-  describe('the «⏹» of an H1 session (#745)', () => {
-    const builtH1 = buildH1SessionSettings({
-      assetId: 101,
-      trades: 50,
-      stake: { baseStake: '1.00' as DecimalString, stakeScale: 2 },
-      maxLossMultiplier: 20,
-    });
-    if (!builtH1.success) throw new Error('fixture: H1 settings');
-    const h1Active = sessionView({ settings: builtH1.data });
-    const h1Stopped = sessionView({
-      settings: builtH1.data,
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.UserStopped,
-      endedAt: '2026-10-23T10:00:00.000Z',
-    });
-    const stopData = (drawing: SessionDrawing) =>
-      drawing.keyboard?.inline_keyboard
-        .flat()
-        .map((button) => ('callback_data' in button ? button.callback_data : null)) ?? null;
-
-    it('H1-Q1 the render key covers the keyboard: equal text and picture, with and without', () => {
-      const drawn = sessionDrawing(LABEL, h1Active);
-      expect(drawn.keyboard).not.toBeNull();
-      expect(sessionRenderKey(drawn)).not.toBe(sessionRenderKey({ ...drawn, keyboard: null }));
-    });
-
-    it('H1-Q2 only an active H1 session draws the «⏹», with no suffix', () => {
-      expect(stopData(sessionDrawing(LABEL, h1Active))).toEqual([`session:stop:${SESSION_ID}`]);
-      expect(stopData(sessionDrawing(LABEL, h1Stopped))).toBeNull();
-      expect(stopData(sessionDrawing(LABEL, SESSION_VIEW))).toBeNull();
-      expect(stopData(sessionDrawing(LABEL, sessionView({ settings: null })))).toBeNull();
-    });
-
-    it('H1-Q3 a restored entry of a running H1 session does not edit; its stop is drawn without the «⏹»', async () => {
-      const { tracker, request, target } = setup({ script: [h1Active, h1Stopped] });
-      const { edits, edit } = target();
-      tracker.track(request({ view: null, record: false, edit }));
-      await vi.advanceTimersByTimeAsync(FIRST);
-      expect(edits).toEqual([]);
-      await vi.advanceTimersByTimeAsync(POLL);
-      expect(edit.mock.calls).toEqual([
-        [{ text: sessionStatusText(LABEL, h1Stopped), picture: null, keyboard: null }, undefined],
-      ]);
     });
   });
 });

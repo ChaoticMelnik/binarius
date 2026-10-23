@@ -250,6 +250,60 @@ describe('recordSignalDecision (#666)', () => {
       ).toBe('signal_decisions_ticks_until_check');
     }
   });
+  // the H1 driver's two new row shapes (#775, apps/backend/src/h1/driver.ts): the waiting period's
+  // no_signal row and the repeat step's row
+  it("SD19 an H1 session's no_signal row and repeat row pass the CHECKs and come back as written", async () => {
+    const session = await seedSession();
+    const facts = {
+      context: SignalDecisionContext.Session,
+      tradingSessionId: session.sessionId,
+      brokerAccountId: session.brokerAccountId,
+      step: 2,
+      ticksUntilMs: null,
+    };
+    const waiting = shadowDecisionFixture({
+      ...facts,
+      kind: 'no_signal',
+      action: null,
+      outcome: SignalDecisionOutcome.NoSignal,
+      decision: {
+        kind: 'no_signal',
+        version: 'h1',
+        reason: 'no_volatility',
+        detail: { moves: 300 },
+      },
+      params: { ...R1_SHADOW_PARAMS_FIXTURE, set: 'session' },
+    });
+    const repeat: SignalDecisionInput = {
+      ...facts,
+      assetId: 101,
+      interval: null,
+      version: 'h1-repeat',
+      decidedAtMs: SHADOW_FIXTURE_DECIDED_AT_MS,
+      takenAtMs: SHADOW_FIXTURE_DECIDED_AT_MS,
+      kind: 'signal',
+      action: TradeAction.Down,
+      payout: 92,
+      digits: null,
+      params: { rule: 'repeat_step_2', strategy: SessionStakeStrategy.Martingale },
+      decision: {
+        kind: 'signal',
+        version: 'h1-repeat',
+        action: TradeAction.Down,
+        after: { intentId: '00000000-0000-4000-8000-000000000001', action: 'down', profit: '-1' },
+      },
+      source: { kind: 'settlement', trigger: 'notice' },
+      series: [],
+      lastTick: null,
+      outcome: SignalDecisionOutcome.Intent,
+      detail: null,
+    };
+    for (const input of [waiting, repeat]) {
+      const { id } = await recordSignalDecision(tmp.db, input);
+      const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
+      expect(row).toMatchObject({ ...input, series: [...input.series] });
+    }
+  });
 });
 
 describe('readTradeLogPage (#666)', () => {

@@ -23,6 +23,7 @@ import {
   listActiveH1Sessions,
   listBotTextOverrides,
   listServiceBrokerAccounts,
+  readSessionBalance,
   readSessionHistory,
   recordSignalDecision,
   SESSION_NOTICE_CHANNEL,
@@ -510,6 +511,7 @@ function createMarketData(
     sessions: {
       list: () => listActiveH1Sessions(db),
       history: (id, options) => readSessionHistory(db, id, options),
+      balance: (id, options) => readSessionBalance(db, id, options),
       createIntent: (input) => createSessionIntent(db, input, { demoOnly: env.demoOnly }),
       stop: (id, reason) => stopTradingSession(db, { id, reason }),
       record: (input) => recordSignalDecision(db, input),
@@ -538,12 +540,16 @@ const sessionNotices = createSessionNoticeSender({
   balance: balanceReconciler,
   logger: app.log,
 });
-// a trade opened or settled wakes the sender (#723): one client of the pool LISTENs for the whole
-// run; started with the other loops after listen(), stopped in phase 1 before the sender
+// a trade opened or settled wakes the sender (#723) and tells the H1 driver its repeat step may be
+// due (#775): one client of the pool LISTENs for the whole run; started with the other loops after
+// listen(), stopped in phase 1 before the sender
 const sessionNoticeListener = createSessionNoticeListener({
   pool,
   channel: SESSION_NOTICE_CHANNEL,
-  onNotification: () => sessionNotices.wake(),
+  onNotification: (sessionId) => {
+    sessionNotices.wake();
+    marketData?.h1Driver.notice(sessionId);
+  },
   logger: app.log,
 });
 
