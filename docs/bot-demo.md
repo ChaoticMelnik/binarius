@@ -97,13 +97,16 @@ demo:sig[:<sec>]          («🔄 Обновить», «↩️ К списку»
 demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount; an alternative under a wait, #664)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade(<sec>) ∥ POST /trading/access
          ∥ GET /trading/signals (#664; #509 to #664 read POST /trading/signal)
-  bot  → editMessageText (sendMessage for :n): the pair in the list → the amount screen in demo,
+  bot  → editMessageText (sendMessage for :n, and under a photo — the analysis card — sendMessage
+         at once, #761): the pair in the list → the amount screen in demo,
          the launch screen in real; not in it → «⏳ Проверяю сигнал по {пара}…» with the other
          pairs that have a signal now, «🧭» / «🏠», and the wait (#664)
 demo:sa:<assetId>:<sec>:<amount>:<l|a>  (an amount of the amount screen, #476)
   bot  → answerCallbackQuery ∥ POST /trading/stake (demo, <amount>) ∥ GET /trading/pairs
   bot  → on a save: POST /trading/sessions, one attempt → the session's status; the amount screen deleted
-demo:sc:<assetId>:<sec>:<l|a>  («✏️ Ввести», #476) → the prompt in place; the typed amount saves and starts the same way
+  bot  → 409 no_signal: the wait in place of the amount screen; under a photo — the analysis card —
+         sendMessage at once, then the card deleted as after a start (#761)
+demo:sc:<assetId>:<sec>:<l|a>  («✏️ Ввести», #476) → the prompt in place (under a photo sendMessage at once, #761); the typed amount saves and starts the same way
 demo:g                    («🧭 Вручную», «↩️ Типы»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs
   bot  → editMessageText: the types present, each «💱 Валюты · 46» with its count of open pairs
@@ -134,7 +137,9 @@ stk:… without a mode (#326), stk:…:p:<assetId> from before #382 → the keyb
 
 Each press answers the query and reads the catalog at the same time, then edits the message the
 button is under. `demo` is the exception: the card is a photo, whose caption cannot be turned into
-another screen, so it sends a new message; so does an old duration button (below). The duration is
+another screen, so it sends a new message; so does an old duration button (below). A button under
+a photo — the analysis card (#482), the session's summary card (#318) — sends its screen as a new
+message at once, with no edit tried (#761, Edits below). The duration is
 one, 5 s, and it still rides in the data (`:5`), not in the bot's state (owner, #382). The bot keeps no state for the
 demo but the wait for a signal (#664, in memory): what the user chose travels in the callback data,
 so a restart, an old message and a second device lead to the same screen.
@@ -247,7 +252,8 @@ missing or stale snapshot itself.
 assetId, 5, now)` on the catalog read at this press (at any payout since #631), and the user's mode, the demo stake and the
 broker snapshot. In demo it draws the amount screen (`cycleStakeScreen`), in real the launch screen
 ([below](#the-launch-screen-in-real-mode-327)). Four doors open it in demo: a pair of the signals
-list (no token, edited in place), the analysis's session row (`:a`, edited in place, #360), the
+list (no token, edited in place), the analysis's session row (`:a`, edited in place, #360; under
+the analysis card, a photo, sent as a new message at once and the card stays, #761), the
 row under a finished demo trade and «🔁 Ещё сессия» of a stopped demo session (`:n`, sent as a new
 message, so the trade's or the session's message stays). The way back is «↩️ К списку»
 (`demo:sig`) from the list and «↩️ К анализу» (`demo:an:<assetId>:5`) otherwise;
@@ -311,7 +317,10 @@ the session button's path ([bot-session.md](bot-session.md#the-button)) with one
 unknown outcome says `sessionOutcomeUnknown` and keeps the screen, and pressing again is safe (the
 save is idempotent, the start answers 409 with the session if the first committed). Once the
 session's status is sent the screen is deleted as the launch screen is
-([bot-session.md](bot-session.md#the-launch-screen-after-the-start-418)). A second press while the
+([bot-session.md](bot-session.md#the-launch-screen-after-the-start-418)). A 409 `no_signal` draws
+the wait for the pair's signal in place of the screen; under the analysis card (a photo) the wait
+goes as a new message at once, its entry on it, and then the card is deleted by the same table
+(#761), so the card's amounts do not stay live above the wait. A second press while the
 cycle runs saves its amount and shows the running session: the session keeps the amount it started
 with (`trading_sessions.settings`, Rule 28).
 
@@ -440,8 +449,9 @@ not a fresh catalog.
   (`analysisChooseAmount`). Otherwise — no snapshot, a balance below the minimum, a failed read —
   the session row as before, whose press opens the amount screen and says why there. An amount's
   press is #476's: the save, the start, the card deleted after the status (`deleteMessage` takes a
-  photo as it takes a text); «✏️ Ввести» and «💵 Сумма» edit the pressed message, refused as a
-  caption, and their screen goes as a new message.
+  photo as it takes a text), or after the wait on a 409 `no_signal` (#761); «✏️ Ввести», «💵
+  Сумма», «↩️ К паре», «↩️ Типы» and the session row try no edit under the photo, and their screen
+  goes as a new message at once (#761).
 - **Analysis expanded by «➕ Ещё» (#360).** The session row (where `sessionFits`) — in demo
   the card's amounts in its place, by the same conditions read at this press (#482) — then «🚀
   Открыть сделку: ⬆️ Вверх · $5.00» (or «⬇️ Вниз»: green or red, #475) on its own row, then «💵
@@ -642,10 +652,13 @@ failed expansion changes nothing on screen.
 `editOrReply` edits the message the pressed button is under, and classifies every refusal
 (`telegram-refusals.ts`):
 
+- under a photo (the analysis card #482, the session's summary card #318; `pressedUnderPhoto`,
+  `demo.ts`) — no edit is tried: the screen goes as a new message with the same keyboard at once,
+  no log (#761). The copies in `cycle-stake.ts` and `stake-picker.ts` do the same.
 - «message is not modified» (the same screen pressed twice) — done; `info`
   `the demo screen already shows this`.
 - «message to edit not found» / «message can't be edited» / «there is no text in the message to
-  edit» (a photo, e.g. the session's summary card, #318) — the screen is sent anew with the same
+  edit» (a caption the check above does not see) — the screen is sent anew with the same
   keyboard; `warn` `the demo screen was not edited, sending it anew`.
 - any other refusal — to `bot.catch`, nothing sent; the keyboard on screen is the retry.
 - a transport failure — the edit is unknown, nothing more is sent; `error`
@@ -660,11 +673,12 @@ failed expansion changes nothing on screen.
 Bot API calls (the answer, then the list as a new message, #685): 26 s; `.demoSignals` (`demo:sig`,
 the list in place) is two backend calls and up to three Bot API calls: 34 s (#320); `.demoLaunch`
 is three backend calls (the catalog, access and the signals list, #664; the pair's signal from
-#509 to #664) and up to three Bot API calls: 39 s, the wait included. The wait's polls and edits
+#509 to #664) and up to three Bot API calls: 39 s, the wait included; under a photo two, the
+screen sent at once (#761). The wait's polls and edits
 run between updates, like the trackers, so they are no handler path
 ([The wait for a signal](#the-wait-for-a-signal-664)). Each of `.demoGroups`, `.demoPage` and `.demoAsset` (the summary, also by
 `demo:d:<id>:5`) is one backend call and up to three Bot API calls (the edit refused as gone,
-then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
+then the message sent anew; under a photo two, #761): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
 (the catalog and the access read beside the answer, then the signal) and up to four Bot API calls:
 3 × 5 000 + 4 × 8 000 = 47 s. Its four-call paths (#482): the answer, «⏳» edited or sent under a
 photo, the card's photo, «⏳» deleted; the answer, «⏳», the photo refused, «⏳» edited into the
