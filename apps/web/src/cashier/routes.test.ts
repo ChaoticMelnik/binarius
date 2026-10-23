@@ -64,6 +64,7 @@ beforeEach(() => {
     brokerAccounts: unused,
     serviceAccounts: unused,
     setServiceMark: unused,
+    setH1Mark: unused,
     audit: unused,
     changePassword: unused,
     botTexts: unused,

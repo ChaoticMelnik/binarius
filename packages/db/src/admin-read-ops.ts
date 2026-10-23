@@ -143,6 +143,7 @@ export type AdminBrokerAccountRow = Pick<
   | 'createdAt'
   | 'updatedAt'
   | 'serviceSince'
+  | 'h1Since'
 >;
 
 // The one place that says which broker_accounts columns the admin reads: the ciphertexts, the key
@@ -161,6 +162,7 @@ export const adminBrokerAccountColumns = {
   createdAt: brokerAccounts.createdAt,
   updatedAt: brokerAccounts.updatedAt,
   serviceSince: brokerAccounts.serviceSince,
+  h1Since: brokerAccounts.h1Since,
 };
 
 export interface AdminUserCard {
@@ -342,6 +344,7 @@ export function toAdminBrokerAccountView(row: AdminBrokerAccountRow): AdminBroke
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     serviceSince: isoOrNull(row.serviceSince),
+    h1Since: isoOrNull(row.h1Since),
   };
 }
 

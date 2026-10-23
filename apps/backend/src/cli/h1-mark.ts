@@ -1,7 +1,15 @@
-import { listH1Accounts, setH1Mark, type Db, type H1MarkResult } from '@binarius/db';
+import { AuditAction, AuditActorType, AuditEntityType } from '@binarius/shared';
+import {
+  listH1Accounts,
+  setH1Mark,
+  writeAuditEntry,
+  type Db,
+  type H1MarkResult,
+} from '@binarius/db';
 
 // `h1 mark|unmark|list` (#670, docs/h1.md → Sessions): the account's H1 mark, without which
-// `h1 session start` creates nothing. setH1Mark is the one writer; the audit row is its own.
+// `h1 session start` creates nothing. setH1Mark is the one writer; the audit row of a change is the
+// CLI's, as system, in the same transaction (#745: the admin route writes its own as the staff).
 export type H1MarkCommand =
   { kind: 'mark'; accountId: string } | { kind: 'unmark'; accountId: string } | { kind: 'list' };
 
@@ -49,9 +57,20 @@ export async function runH1MarkCommand(
     return EXIT_OK;
   }
   const { accountId } = command;
-  const result = await db.transaction((tx) =>
-    setH1Mark(tx, { accountId, h1: command.kind === 'mark' }),
-  );
+  const result = await db.transaction(async (tx) => {
+    const marked = await setH1Mark(tx, { accountId, h1: command.kind === 'mark' });
+    if (marked === 'marked' || marked === 'unmarked') {
+      await writeAuditEntry(tx, {
+        action:
+          marked === 'marked' ? AuditAction.BrokerAccountH1Set : AuditAction.BrokerAccountH1Cleared,
+        actorType: AuditActorType.System,
+        entityType: AuditEntityType.BrokerAccount,
+        entityId: accountId,
+        payload: { accountId, result: marked },
+      });
+    }
+    return marked;
+  });
   const [code, line] = MARK_LINES[result];
   err(line.replace('<accountId>', accountId));
   return code;

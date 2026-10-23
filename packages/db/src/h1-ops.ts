@@ -1,8 +1,5 @@
 import { and, asc, desc, eq, isNotNull, sql, type SQL } from 'drizzle-orm';
 import {
-  AuditAction,
-  AuditActorType,
-  AuditEntityType,
   H1_SESSION_SIGNAL_KIND,
   TradingSessionStatus,
   type BrokerAccountStatus,
@@ -13,7 +10,6 @@ import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
-import { writeAuditEntry } from './staff-ops';
 import type { DbExecutor, Tx } from './trade-intent-ops';
 
 // H1 sessions (#670, docs/h1.md -> Sessions): the account's mark and the reads of the h1 CLI
@@ -35,7 +31,9 @@ export type H1MarkResult = 'marked' | 'unmarked' | 'unchanged' | 'not_found' | '
 // keeps the first date. An unmark also needs no active H1 session of the account, in the same
 // predicate; the row is locked first, so the predicate's snapshot is taken after any session start
 // that held the row (createTradingSession locks it) has committed. Nothing else on the row changes:
-// a revocation or a re-login keeps the mark. The audit row goes in the same transaction.
+// a revocation or a re-login keeps the mark. It writes no audit row: each caller writes its own in
+// the same transaction (#745) - the CLI `h1 mark|unmark` as system, the admin route by asStaff as
+// the staff member; a new caller writes one too.
 export async function setH1Mark(
   tx: Tx,
   { accountId, h1 }: { accountId: string; h1: boolean },
@@ -61,15 +59,7 @@ export async function setH1Mark(
     if (h1 || locked.h1Since === null) return 'unchanged';
     return 'active_session';
   }
-  const result = h1 ? 'marked' : 'unmarked';
-  await writeAuditEntry(tx, {
-    action: h1 ? AuditAction.BrokerAccountH1Set : AuditAction.BrokerAccountH1Cleared,
-    actorType: AuditActorType.System,
-    entityType: AuditEntityType.BrokerAccount,
-    entityId: accountId,
-    payload: { accountId, result },
-  });
-  return result;
+  return h1 ? 'marked' : 'unmarked';
 }
 
 export interface H1Account {

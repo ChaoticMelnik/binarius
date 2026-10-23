@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { and, asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildH1SessionSettings, decimalStringSchema } from '@binarius/shared';
+import { AuditAction, buildH1SessionSettings, decimalStringSchema } from '@binarius/shared';
+import { auditLog } from '@binarius/db';
 import {
   brokerAccountRow,
   createTempDatabase,
@@ -46,6 +48,14 @@ const h1Settings = () => {
   return built.data;
 };
 
+// the CLI's audit rows (#745): setH1Mark writes none, the command writes one per change
+const auditRows = (accountId: string) =>
+  tmp.db
+    .select({ action: auditLog.action, payload: auditLog.payload, actorType: auditLog.actorType })
+    .from(auditLog)
+    .where(and(eq(auditLog.entityType, 'broker_account'), eq(auditLog.entityId, accountId)))
+    .orderBy(asc(auditLog.createdAt));
+
 describe('h1 mark, unmark, list (#670)', () => {
   it('H1-R1 marks, lists, keeps the mark under an active H1 session, unmarks', async () => {
     expect(await run(['list'])).toEqual({ code: 0, out: '', err: ['помеченных аккаунтов нет'] });
@@ -80,6 +90,19 @@ describe('h1 mark, unmark, list (#670)', () => {
     expect((await run(['unmark', id])).err).toEqual(['метка H1 снята']);
     expect((await brokerAccountRow(tmp.db, id)).h1Since).toBeNull();
     expect((await run(['unmark', id])).code).toBe(0);
+    // one row per change, none for a re-mark, the refused unmark or a second unmark
+    expect(await auditRows(id)).toEqual([
+      {
+        action: AuditAction.BrokerAccountH1Set,
+        payload: { accountId: id, result: 'marked' },
+        actorType: 'system',
+      },
+      {
+        action: AuditAction.BrokerAccountH1Cleared,
+        payload: { accountId: id, result: 'unmarked' },
+        actorType: 'system',
+      },
+    ]);
 
     expect(await run(['mark', randomUUID()])).toEqual({
       code: 1,

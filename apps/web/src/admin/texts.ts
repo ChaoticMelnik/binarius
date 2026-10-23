@@ -275,6 +275,17 @@ export const TEXTS = {
   serviceMarkBadForm: 'Форма не подходит: отметка — только «Сделать служебным» или «Снять».',
   serviceMarkOutcomeUnknown:
     'Отметка могла измениться — откройте «Служебные аккаунты» (/admin/service-accounts): там видно, как есть. Повторное нажатие ничего не испортит.',
+  // the H1 mark (#745, docs/admin-pages.md -> Marking H1)
+  columnH1: 'H1',
+  h1Mark: 'Включить H1',
+  h1Unmark: 'Снять H1',
+  h1MarkTitle: 'Метка H1',
+  h1MarkBadForm: 'Форма не подходит: метка H1 — только «Включить H1» или «Снять H1».',
+  h1MarkActiveSessionTitle: 'Метка H1 не снята',
+  h1MarkActiveSessionBody:
+    'У аккаунта активная H1-сессия — остановите её (⏹ в боте, /stop или h1 session stop) и повторите.',
+  h1MarkOutcomeUnknown:
+    'Метка могла измениться — откройте карточку пользователя или список брокерских аккаунтов: там видно, как есть. Повторное нажатие ничего не испортит.',
 
   auditTitle: 'Журнал аудита',
   auditHeading: 'Журнал аудита',
