@@ -10,14 +10,14 @@ model: inherit
 
 The owner's decisions and the exceptions this role has from the day pipeline live in one place: `.claude/CLAUDE.md` → «Режим manager — ночная автономная сессия». This skill holds the procedure and the operational numbers; for each decision it points at that section's bullet instead of restating it.
 
-The manager runs **tech-lead Mode 2, Phases 0–4** (`.claude/skills/tech-lead/SKILL.md`): Phase 0 once per night, inside the manager's own Phase 0, and Phases 1–4 per task. Tech-lead's text applies as written, including "Phases run as spawned agents" (models, spawn prompt), "Failed or stalled phase" and Step 7 (worktrees, scratch dirs, own test databases, the shared-resource guard, phase concurrency limits). There are exactly six substitutions, numbered in § Substitutions:
+The manager runs **tech-lead Mode 2, Phases 0–5** (`.claude/skills/tech-lead/SKILL.md`): Phase 0 once per night, inside the manager's own Phase 0, Phases 1–4 per task, and Phase 5 once at the end of the night in its night form (substitution 5). Tech-lead's text applies as written, including "Phases run as spawned agents" (models, spawn prompt), "Failed or stalled phase" and Step 7 (worktrees, scratch dirs, own test databases, the shared-resource guard, phase concurrency limits). There are exactly six substitutions, numbered in § Substitutions:
 
 1. **Clarify relay** → the manager answers.
 2. **Merge relay** → stop at In Review; no Codex on any round.
 3. **Phase 4 at the end of a task's cycle or of the session** with an open Blocker/Major → In Review with an open-findings comment.
 4. **Model limits** → Fable falls back to Opus; an Opus limit ends the session.
-5. **Phase 5 is not run** — there is no merge; the audit entry and docs PR happen in the morning, after the owner merges.
-6. **A stacked PR is reviewed tonight** — its PR targets the base branch, so its diff is the delta (tech-lead Phase 3 step 3 waits for the base's merge).
+5. **Phase 5 at the end of the night** — the manager writes the session's `audits.md` entry itself and opens its docs PR; there is no merge, the morning session merges it.
+6. **A stacked PR is reviewed tonight** — its PR targets the base branch, so its diff is the delta (tech-lead Phase 3 waits for the base's merge).
 
 Tasks run **one at a time**. The manager never asks the owner anything, never calls `AskUserQuestion`, never merges, and never runs tests in its own context — phases run them (tech-lead → «The main context runs no tests», #511). **No stand tonight**: no phase starts `backend`, `trading-worker`, `bot` or `web` (`.claude/CLAUDE.md` → Режим manager → Запрещено ночью; night stands are #421) — the manager detects a breach and stops the task, and stops nothing itself.
 
@@ -45,7 +45,7 @@ The manager does not switch the main checkout's branch. Phases work in `.claude/
 ## State
 
 `ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")` is the main checkout from any worktree. Directory `M=$ROOT/.claude/worktrees/manager` (ignored by git, the same path for every session):
-- `state.json` — `{session, pid, start, deadline, ended, launch, report:{path,url}, main_sha_start, tasks:[{issue,status,branch,pr,phase,round,started,ended,plan_model,decisions,open_findings,watchdog_task,baseline}], skipped:[{issue,reason}], created:[], stops:[]}`; times as Unix seconds. `pid` is this session's `claude` process: `$PPID` of a `Bash` call from the main context (its parent is the `claude` binary). Written right after Phase 0 step 1 and rewritten on every transition (claim, spawn, `SendMessage`, phase result, status change, report publish).
+- `state.json` — `{session, pid, start, deadline, ended, launch, report:{path,url}, audit_pr, main_sha_start, tasks:[{issue,status,branch,pr,phase,round,started,ended,plan_model,decisions,open_findings,watchdog_task,baseline}], skipped:[{issue,reason}], created:[], stops:[]}`; times as Unix seconds. `pid` is this session's `claude` process: `$PPID` of a `Bash` call from the main context (its parent is the `claude` binary). Written right after Phase 0 step 1 and rewritten on every transition (claim, spawn, `SendMessage`, phase result, status change, report publish).
 - `prs.json` — the PR list of the last check block (§ Task selection).
 - `report-<YYYY-MM-DD>.html` — the report's local file.
 - `state-<start>.json` — an earlier session's file, archived by Phase 0 step 1.
@@ -156,7 +156,7 @@ Started as a background `Bash` after every spawn **and after every `SendMessage`
 
 ### Substitutions
 
-**1. Clarify relay → the manager answers** (CLAUDE.md → «Вопросы владельцу не задаются» — the only text of the answering rule). Replaces tech-lead "Clarify relay" for every question a phase returns and for every checkpoint question that goes to the owner in the day (the change of approach). A question the phase marks as a plan defect, or one whose text says the plan contradicts itself, goes to the architect for a Plan Update, as in the day (#590). Before answering, post one comment per round on the issue:
+**1. Clarify relay → the manager answers** (CLAUDE.md → «Вопросы владельцу не задаются» — the only text of the answering rule). Replaces tech-lead "Clarify relay" for every question a phase returns and for every checkpoint question that goes to the owner in the day (the change of approach). A question the phase marks as a plan defect, or one whose text says the plan contradicts itself, goes to the architect for a Plan Update, as in the day (#590). A phase with no question writes «развилок нет» in its hand-off and continues on its own (`.claude/CLAUDE.md` → «Вопросы `/clarify`»): no comment, nothing to record. Before answering, post one comment per round on the issue:
 ```
 ## Решение менеджера (сессия <YYYY-MM-DD>, <architect|implementer> clarify, раунд <k>)
 1. <вопрос> — варианты: (a) …; (b) …; (c) … → **(a)** — рекомендуемый вариант | постоянный ответ «<тема>»
@@ -170,7 +170,7 @@ Then `SendMessage` to the same agent with the answers (a fresh spawn with the an
 
 **4. Model limits** (CLAUDE.md → «Лимит Fable»). An architect spawn (plan or Plan Update) that dies on a usage-limit / 429 API error (its notice is `failed`, or its transcript's last model is `<synthetic>`) **before posting anything** (checked on GitHub, "Failed or stalled phase") is re-spawned once with `model: "opus"` and the same prompt plus: "Open the plan with the line «план на Opus (лимит Fable <HH:MM>)»." The task's `plan_model` becomes `Opus (лимит Fable HH:MM)`; a plan already posted on Opus is not redone when Fable comes back. After the first such 429 of the session, every later architect spawn goes straight to `model: "opus"` until the session ends, with the same opening line keeping the time of that first 429; the report records the switch once (owner's decision 2026-10-10). An API 403 «Request not allowed» is not a limit: the same agent gets one continuation attempt («Failed or stalled phase»), and only after a second 403 is the spawn re-created once with `model: "opus"`, opening with «план на Opus (403 Fable <HH:MM>)»; it does not switch later architect spawns, and `plan_model` becomes `Opus (403 Fable HH:MM)` (#341 on 2026-10-09 and #709 on 2026-10-22: one continuation succeeded both times). An Opus spawn dying on a limit → **early finish**: `TaskStop` every running phase and watchdog, compare the services snapshot, record each task's state, finalize the report, write `ended`.
 
-**5. No Phase 5.** The morning's tech-lead runs it after each merge (§ Morning).
+**5. Phase 5 at the end of the night** (CLAUDE.md → Режим manager → «Запись аудита за ночь»). After the last task and before the final report — also at the early finish, with what the night has: one `audits.md` entry for the session in tech-lead Phase 5's format (header «## Сессия <YYYY-MM-DD> — manager: …»; deviations, review findings, proposals), written in an own worktree on a branch off `origin/main` — `git worktree add .claude/worktrees/audit-<YYYY-MM-DD> -b docs/audit-<YYYY-MM-DD> origin/main` (left in place like the others) — touching only `audits.md`: no `.claude/` edits at night (Запрещено ночью), so a proposal's status is `открыто (<YYYY-MM-DD>, владелец)` or `вынесено в #N` (Backlog, via `/github`). Then `git push -u origin docs/audit-<date>` and `gh pr create` with the title «audit: сессия <date> (#N1, #N2 …)» and `Refs #N1, #N2 …`; the PR number goes into `state.json` (`audit_pr`) and the report's «Порядок мержа» as the last item. The morning tech-lead merges it with the usual merge question (tech-lead → «A PR left In Review by a manager session») and does not re-audit the night. A night that ends on a model limit before this step leaves it to the morning session (tech-lead Phase 0 item 5).
 
 **6. A stacked PR is reviewed tonight** — § Task selection → Stacking.
 
@@ -193,7 +193,7 @@ A task's detail block is found and updated by its task id (`#<N>`), never by pos
 
 1. Open the pinned report: the tasks, behaviour changes, merge order, owner steps (services to stop by hand, «Проверка владельца» lines, outside content).
 2. Read the «Решение менеджера» comments of each issue; a wrong decision → a review comment or a Plan Update round.
-3. In a day session, `/tech-lead` per PR in the report's merge order: tech-lead Mode 2 → "A PR left In Review by a manager session" (merges, stacked rebases, open Blocker/Major, worktree clean-up per Step 7).
+3. In a day session, `/tech-lead` per PR in the report's merge order: tech-lead Mode 2 → "A PR left In Review by a manager session" (merges, stacked rebases, open Blocker/Major, worktree clean-up per Step 7), and the night's audit docs PR last.
 4. Issues skipped for outside content: read that content, then decide whether the issue goes to a night.
 
 ## Forbidden
