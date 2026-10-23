@@ -105,7 +105,8 @@ tree, never an ignored build output. The other scripts are for running one step 
 from the one-section SKILL.md of an older commit; the index is `.claude/skills/architect/SKILL.md` →
 Architecture Rules, the rules are in `.claude/skills/architect/rules/*.md`), for example
 `gh pr diff <N> --name-only | xargs node tooling/rules-for.ts --list`;
-`tooling/rules-for.test.ts` holds every path, symbol and test id the rules cite to the repository.
+`tooling/rules-for.test.ts` checks every path, identifier and literal the rules cite, and every
+test id after a test-file citation (the grammar and what it does not read — the head of the test).
 
 ## Docker dev environment
 
