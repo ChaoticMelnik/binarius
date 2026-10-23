@@ -28,7 +28,11 @@ import { brokerAccounts } from './schema/broker-accounts';
 import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { brokerTrades } from './schema/broker-trades';
 import { depositEvents } from './schema/deposit-events';
-import { NotificationJobStatus, notificationJobs } from './schema/notification-jobs';
+import {
+  NotificationJobStatus,
+  notificationJobs,
+  notificationKinds,
+} from './schema/notification-jobs';
 import { tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
@@ -233,10 +237,12 @@ const commonRetention = sql`(${users.status} = ${literal(UserStatus.Active)}
   and ${tradingOpenSql})`;
 
 // The user's last activity, an approximation (docs/mailing.md → Retention): the newest session
-// start and trade on any of their accounts, the newest balance request of those accounts (the
-// bot's menu and trading screens, a session's ticks) and the last analysis. greatest() skips NULLs.
+// start or end and trade on any of their accounts, the newest balance request of those accounts
+// (the bot's menu and trading screens, a session's ticks) and the last analysis. greatest() skips
+// NULLs. The end counts so that inactive_3d (72 h after it) is never due before session_idle_24h
+// (24 h after it), even for a session stopped long after its last tick (#124 round 2).
 const lastActivityAt = sql`greatest(
-    (select max(${tradingSessions.startedAt}) from ${tradingSessions}
+    (select max(greatest(${tradingSessions.startedAt}, ${tradingSessions.endedAt})) from ${tradingSessions}
       join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
       where ${brokerAccounts.userId} = ${users.id}),
     (select max(${tradeIntents.createdAt}) from ${tradeIntents}
@@ -290,6 +296,28 @@ export const weeklyRange = (now: SQL, column: SQL | Column) =>
     and ${column} < ${weekEnd(now)} at time zone 'UTC')`;
 export const weeklyKey = (now: SQL) =>
   sql`('weekly_summary:' || to_char(${weekStart(now)}, 'IYYY-"W"IW'))`;
+// the summarised week is still the ISO week before `now`'s: false from the next Monday 00:00 UTC
+// until the anchor moves at 10:00, when it is the week before last (#124 round 2, m4)
+export const weeklyTimely = (now: SQL) =>
+  sql`((${now}) at time zone 'UTC' < ${weekEnd(now)} + interval '7 days')`;
+
+// Scenario 3 (#124) over a moment, so a test can plan and claim at a literal one: the previous ISO
+// week's settled demo trades on any of the user's accounts, as the planning saw them; no settled
+// trade, no fact. From the next Monday 00:00 UTC the week is no longer the previous one: nothing is
+// planned until the anchor moves, and a job still pending is cancelled at the claim.
+export const weeklySummaryAt = (now: SQL): MailingScenario => ({
+  facts: sql`(select ${weeklyAnchor(now)} at time zone 'UTC' as at, week.*
+    from ${settledScore(sql`${tradeIntents.userId} = ${users.id}
+      and ${tradeIntents.mode} = ${literal(TradeMode.Demo)}
+      and ${weeklyRange(now, tradeIntents.createdAt)}`)} week
+    where week.settled > 0 and ${weeklyTimely(now)})`,
+  afterMs: 0,
+  dedupeKey: weeklyKey(now),
+  payload: sql`jsonb_build_object(${scorePayload('fact')})`,
+  stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
+    and ${users.tradingMode} = ${literal(TradeMode.Demo)})`,
+  keyApplies: sql`(${notificationJobs.dedupeKey} = ${weeklyKey(now)} and ${weeklyTimely(now)})`,
+});
 
 // The moment the user's tokens_out was sent (#123): at most one row, the key tokens:100 being
 // constant; max() keeps the subquery scalar whatever matches. The fact of tokens_out_2d and the
@@ -298,6 +326,68 @@ const tokensOutSentAt = sql`(select max(sent_out.sent_at) from ${notificationJob
   where sent_out.user_id = ${users.id}
     and sent_out.kind = ${literal(NotificationKind.TokensOut)}
     and sent_out.status = ${literal(NotificationJobStatus.Sent)})`;
+
+// Scenario 2 (#124): the newest session stopped (ended_at is set exactly when it is stopped,
+// trading_sessions_ended_at_pair_check) and none started since; a newer session is a new key.
+// The payload: the pair and duration from the settings when they are numbers, and the score.
+// The fact is the newest session's ended_at when it is a demo one (#124 round 1): a real one,
+// left by a switch to demo mid-session, has no fact and still counts as a session since.
+const sessionIdle24h: MailingScenario = {
+  facts: sql`(select case when ${tradingSessions.mode} = ${literal(TradeMode.Demo)}
+        then ${tradingSessions.endedAt} end as at, ${tradingSessions.id} as session_id,
+      ${tradingSessions.settings} as settings
+    ${newestSessionFrom})`,
+  afterMs: SESSION_IDLE_AFTER_MS,
+  dedupeKey: sql`('session_idle:' || fact.session_id::text)`,
+  payload: sql`(select jsonb_build_object(
+      'assetId', case when jsonb_typeof(fact.settings->'assetId') = 'number'
+        then fact.settings->'assetId' end,
+      'durationSec', case when jsonb_typeof(fact.settings->'durationSec') = 'number'
+        then fact.settings->'durationSec' end,
+      ${scorePayload('score')})
+    from ${settledScore(sql`${tradeIntents.tradingSessionId} = fact.session_id`)} score)`,
+  stillApplies: commonRetention,
+  keyApplies: sql`${notificationJobs.dedupeKey} = 'session_idle:' || (select ${tradingSessions.id}
+    ${newestSessionFrom})::text`,
+};
+
+// Scenario 4 (#124, manager 2026-10-23, answer 1 (a)): TOKENS_OUT_REPEAT_AFTER after the sent
+// tokens_out, once per user, while the balance has not moved since. `<> 0`, not `> 0`: at 0
+// nothing lowers the balance, so a row after the send is a credit or the spend of a credit that
+// straddled the claim (docs/mailing.md → Retention). Any refill closes it for good: no
+// replansCanceled, and the key is constant. trading_mode is not read, as for tokens_out.
+const tokensOut2d = oneFact({
+  factAt: tokensOutSentAt,
+  afterMs: TOKENS_OUT_REPEAT_AFTER_MS,
+  dedupeKey: sql`${'tokens_out_2d'}`,
+  stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
+    and ${users.tokenBalance} = 0
+    and not exists (select 1 from ${tokenLedger}
+      where ${tokenLedger.userId} = ${users.id}
+        and ${tokenLedger.balanceDelta} <> 0
+        and ${tokenLedger.createdAt} > ${tokensOutSentAt}))`,
+});
+
+// The specific retention kinds inactive_3d gives way to (manager 2026-10-23, round 2, answer 1 (a)):
+// one push per inactivity spell. A kind holds inactive_3d while it has a pending job, a job sent
+// after the last activity, or a fact the planner will plan once due (after its cutoff, applying, no
+// job of its key yet). All of it is read in the one statement that plans or claims, so neither the
+// claim's scan nor the planner's kind order matters.
+const comingSpecific = (kind: NotificationKind, scenario: MailingScenario) =>
+  sql`exists (select 1 from ${scenario.facts} fact
+    join ${notificationKinds} coming_kind on coming_kind.kind = ${literal(kind)}
+    where fact.at >= coming_kind.plans_from
+      and ${scenario.stillApplies}
+      and not exists (select 1 from ${notificationJobs} planned
+        where planned.user_id = ${users.id} and planned.dedupe_key = ${scenario.dedupeKey}))`;
+const specificHolds = sql`(exists (select 1 from ${notificationJobs} specific
+    where specific.user_id = ${users.id}
+      and specific.kind in (${literal(NotificationKind.SessionIdle24h)}, ${literal(NotificationKind.TokensOut2d)})
+      and (specific.status = ${literal(NotificationJobStatus.Pending)}
+        or (specific.status = ${literal(NotificationJobStatus.Sent)}
+          and specific.sent_at > ${lastActivityAt})))
+  or ${comingSpecific(NotificationKind.SessionIdle24h, sessionIdle24h)}
+  or ${comingSpecific(NotificationKind.TokensOut2d, tokensOut2d)})`;
 
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
@@ -347,9 +437,8 @@ export const MAILING_SCENARIOS = {
   },
   // Scenario 1 (#124): a demo user with a session behind them, inactive since the fact. Newer
   // activity is a new key, so the old job is cancelled at the claim; at most one sent in
-  // INACTIVE_REPEAT_DAYS; while a more specific retention job is pending it is not planned, and
-  // a planned one is cancelled at the claim, its key spent for that spell (docs/mailing.md →
-  // Retention).
+  // INACTIVE_REPEAT_DAYS; not planned, and cancelled at the claim, while specificHolds: one push
+  // per inactivity spell (docs/mailing.md → Retention).
   [NotificationKind.Inactive3d]: oneFact({
     factAt: lastActivityAt,
     afterMs: INACTIVE_AFTER_MS,
@@ -364,66 +453,11 @@ export const MAILING_SCENARIOS = {
           and recent.kind = ${literal(NotificationKind.Inactive3d)}
           and recent.status = ${literal(NotificationJobStatus.Sent)}
           and recent.sent_at > now() - make_interval(days => ${INACTIVE_REPEAT_DAYS}))
-      and not exists (select 1 from ${notificationJobs} pending_job
-        where pending_job.user_id = ${users.id}
-          and pending_job.status = ${literal(NotificationJobStatus.Pending)}
-          and pending_job.kind in (${literal(NotificationKind.SessionIdle24h)}, ${literal(NotificationKind.TokensOut2d)})))`,
+      and not ${specificHolds})`,
   }),
-  // Scenario 2 (#124): the newest session stopped (ended_at is set exactly when it is stopped,
-  // trading_sessions_ended_at_pair_check) and none started since; a newer session is a new key.
-  // The payload: the pair and duration from the settings when they are numbers, and the score.
-  // The fact is the newest session's ended_at when it is a demo one (#124 round 1): a real one,
-  // left by a switch to demo mid-session, has no fact and still counts as a session since.
-  [NotificationKind.SessionIdle24h]: {
-    facts: sql`(select case when ${tradingSessions.mode} = ${literal(TradeMode.Demo)}
-          then ${tradingSessions.endedAt} end as at, ${tradingSessions.id} as session_id,
-        ${tradingSessions.settings} as settings
-      ${newestSessionFrom})`,
-    afterMs: SESSION_IDLE_AFTER_MS,
-    dedupeKey: sql`('session_idle:' || fact.session_id::text)`,
-    payload: sql`(select jsonb_build_object(
-        'assetId', case when jsonb_typeof(fact.settings->'assetId') = 'number'
-          then fact.settings->'assetId' end,
-        'durationSec', case when jsonb_typeof(fact.settings->'durationSec') = 'number'
-          then fact.settings->'durationSec' end,
-        ${scorePayload('score')})
-      from ${settledScore(sql`${tradeIntents.tradingSessionId} = fact.session_id`)} score)`,
-    stillApplies: commonRetention,
-    keyApplies: sql`${notificationJobs.dedupeKey} = 'session_idle:' || (select ${tradingSessions.id}
-      ${newestSessionFrom})::text`,
-  },
-  // Scenario 3 (#124): the previous ISO week's settled demo trades on any of the user's accounts,
-  // as the planning saw them; no settled trade, no fact. Next Monday's key cancels a job of the
-  // week before that is still pending.
-  [NotificationKind.WeeklySummary]: {
-    facts: sql`(select ${weeklyAnchor(sql`now()`)} at time zone 'UTC' as at, week.*
-      from ${settledScore(sql`${tradeIntents.userId} = ${users.id}
-        and ${tradeIntents.mode} = ${literal(TradeMode.Demo)}
-        and ${weeklyRange(sql`now()`, tradeIntents.createdAt)}`)} week
-      where week.settled > 0)`,
-    afterMs: 0,
-    dedupeKey: weeklyKey(sql`now()`),
-    payload: sql`jsonb_build_object(${scorePayload('fact')})`,
-    stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
-      and ${users.tradingMode} = ${literal(TradeMode.Demo)})`,
-    keyApplies: sql`${notificationJobs.dedupeKey} = ${weeklyKey(sql`now()`)}`,
-  },
-  // Scenario 4 (#124, manager 2026-10-23, answer 1 (a)): TOKENS_OUT_REPEAT_AFTER after the sent
-  // tokens_out, once per user, while the balance has not moved since. `<> 0`, not `> 0`: at 0
-  // nothing lowers the balance, so a row after the send is a credit or the spend of a credit that
-  // straddled the claim (docs/mailing.md → Retention). Any refill closes it for good: no
-  // replansCanceled, and the key is constant. trading_mode is not read, as for tokens_out.
-  [NotificationKind.TokensOut2d]: oneFact({
-    factAt: tokensOutSentAt,
-    afterMs: TOKENS_OUT_REPEAT_AFTER_MS,
-    dedupeKey: sql`${'tokens_out_2d'}`,
-    stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
-      and ${users.tokenBalance} = 0
-      and not exists (select 1 from ${tokenLedger}
-        where ${tokenLedger.userId} = ${users.id}
-          and ${tokenLedger.balanceDelta} <> 0
-          and ${tokenLedger.createdAt} > ${tokensOutSentAt}))`,
-  }),
+  [NotificationKind.SessionIdle24h]: sessionIdle24h,
+  [NotificationKind.WeeklySummary]: weeklySummaryAt(sql`now()`),
+  [NotificationKind.TokensOut2d]: tokensOut2d,
 } as const satisfies Record<NotificationKind, MailingScenario>;
 
 // The important kinds (MailingScenario.important), from the scenarios alone.

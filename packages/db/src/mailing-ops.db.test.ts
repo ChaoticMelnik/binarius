@@ -53,7 +53,16 @@ import {
   tradingSwitch,
   users,
 } from './schema/index';
-import { weeklyAnchor, weeklyKey, weeklyRange } from './mailing-scenarios';
+import {
+  MAILING_SCENARIOS,
+  weeklyAnchor,
+  weeklyKey,
+  weeklyRange,
+  weeklySummaryAt,
+  weeklyTimely,
+  type MailingScenario,
+} from './mailing-scenarios';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { createTradeIntent } from './trade-intent-ops';
 import { markTelegramBlocked, markTelegramReachable, setNotificationLevel } from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
@@ -69,6 +78,7 @@ import {
   claimMailingJob,
   MAILING_OUTCOME_UNKNOWN,
   planMailingJobs,
+  planMailingKind,
   settleMailingJob,
 } from './mailing-ops';
 
@@ -1932,21 +1942,41 @@ describe('retention: inactive_3d', () => {
     return { ...user, session };
   }
 
+  // the same at a balance of 0, so tokens_out_2d can apply
+  async function inactiveUserAt0() {
+    const user = await retained({ balance: 0n });
+    const session = await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) - 1 });
+    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${session.id}`, {
+      status: NotificationJobStatus.Canceled,
+    });
+    return { ...user, session };
+  }
+
   it('RT1 plans one job 72 h after the last activity, keyed by its moment, and nothing at 71 h', async () => {
-    const due = await inactiveUser(hours(72) + 1);
+    const due = await inactiveUser(hours(72) + 2);
     const early = await inactiveUser(hours(71));
     await planMailingJobs(tmp.db);
 
     const jobs = await kindJobsOf(due.userId, KIND);
     const epoch = await tmp.db.execute<{ epoch: string }>(
-      sql`select extract(epoch from ${tradingSessions.startedAt})::text as epoch
+      sql`select extract(epoch from ${tradingSessions.endedAt})::text as epoch
         from ${tradingSessions} where ${tradingSessions.id} = ${due.session.id}`,
     );
     expect(jobs.map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
       [NotificationJobStatus.Pending, `inactive_3d:${epoch.rows[0]!.epoch}`, {}],
     ]);
-    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.session.startedAt.getTime() + 72 * 3_600_000);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.session.endedAt!.getTime() + 72 * 3_600_000);
     expect(await kindJobsOf(early.userId, KIND)).toEqual([]);
+  });
+
+  it('RT2d counts the newest session’s end as activity', async () => {
+    const user = await retained();
+    const session = await stoppedSession(user.accountId, { started: hours(100), ended: hours(10) });
+    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${session.id}`, {
+      status: NotificationJobStatus.Canceled,
+    });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
   });
 
   it('RT2a counts a trade as activity', async () => {
@@ -2005,7 +2035,7 @@ describe('retention: inactive_3d', () => {
 
   it('RT4c is not held by another kind sent within the 7 days', async () => {
     const user = await inactiveUser();
-    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${randomUUID()}`, {
+    await insertJob(user.userId, NotificationKind.AnalysisUnused, 'analysis_unused:earlier', {
       status: NotificationJobStatus.Sent,
       minutes: hours(48),
     });
@@ -2021,6 +2051,26 @@ describe('retention: inactive_3d', () => {
     await insertJob(user.userId, kind, key, { status: NotificationJobStatus.Pending });
     await planMailingJobs(tmp.db);
     expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it.each([
+    ['RT5c', NotificationKind.SessionIdle24h, `session_idle:${randomUUID()}`],
+    ['RT5d', NotificationKind.TokensOut2d, 'tokens_out_2d'],
+  ] as const)('%s plans nothing once a %s job was sent after the last activity', async (_id, kind, key) => {
+    const user = await inactiveUser();
+    await insertJob(user.userId, kind, key, { status: NotificationJobStatus.Sent, minutes: hours(76) });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT5e is not held by a specific job sent before the last activity, an earlier spell', async () => {
+    const user = await inactiveUser();
+    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${randomUUID()}`, {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(110),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await pendingOf(user.userId, KIND)).toHaveLength(1);
   });
 
   it('RT6a plans nothing for a user in real mode', async () => {
@@ -2078,14 +2128,111 @@ describe('retention: inactive_3d', () => {
     }
   });
 
-  it('RT10 cancels at the claim the job planned in the same pass as a specific one, and plans it no more', async () => {
+  it('RT10 plans only the specific job in a pass where both are due, and nothing after it is sent', async () => {
     const user = await retained();
     await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) - 1 });
     await planMailingJobs(tmp.db);
-    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status]).sort()).toEqual([
-      [KIND, NotificationJobStatus.Pending],
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
       [NotificationKind.SessionIdle24h, NotificationJobStatus.Pending],
     ]);
+    const [specific] = await jobsOf(user.userId);
+    const { job } = await claimOnly(specific!.id);
+    await settleMailingJob(tmp.db, job!.id, { kind: 'delivered' });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  // a sent tokens_out (#123) `sent` minutes ago at a balance of 0, so tokens_out_2d is coming
+  const tokensOutSent = (userId: string, sent: number) =>
+    insertJob(userId, NotificationKind.TokensOut, 'tokens:100', {
+      status: NotificationJobStatus.Sent,
+      minutes: sent,
+    });
+
+  it('RT10b plans nothing while a tokens_out_2d is coming, before it is due', async () => {
+    const user = await inactiveUserAt0();
+    await tokensOutSent(user.userId, hours(47));
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RT10c plans once the coming tokens_out_2d no longer applies (a refill)', async () => {
+    const user = await inactiveUserAt0();
+    await tokensOutSent(user.userId, hours(47));
+    await tmp.db.insert(tokenLedger).values({
+      userId: user.userId,
+      kind: TokenLedgerKind.Adjustment,
+      balanceDelta: 5n,
+      note: 'retention test',
+      createdAt: minutesAgo(hours(40)),
+    });
+    await planMailingJobs(tmp.db);
+    expect(await pendingOf(user.userId, KIND)).toHaveLength(1);
+  });
+
+  it('RT10d is not held by a session_idle_24h its cutoff never plans', async () => {
+    await plansFromMinutesAgo(hours(90), NotificationKind.SessionIdle24h);
+    try {
+      const user = await retained();
+      await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) - 1 });
+      await planMailingJobs(tmp.db);
+      expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+        [KIND, NotificationJobStatus.Pending],
+      ]);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  // a job of the current spell written past the planner, as one planned before a specific one; its
+  // session starts and stops at one moment, so the key is the same whether the activity counts the
+  // session's start or its end
+  async function insertInactiveJob(userId: string, sessionId: string): Promise<string> {
+    const [job] = await tmp.db
+      .insert(notificationJobs)
+      .values({
+        userId,
+        kind: KIND,
+        dedupeKey: sql`(select 'inactive_3d:' || extract(epoch from ${tradingSessions.endedAt})::text
+          from ${tradingSessions} where ${tradingSessions.id} = ${sessionId})`,
+        scheduledAt: minutesAgo(hours(28)),
+      })
+      .returning({ id: notificationJobs.id });
+    return job!.id;
+  }
+
+  it('RT11 cancels a planned job once the specific one was sent in an earlier claim', async () => {
+    const user = await retained();
+    const session = await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) });
+    const inactive = await insertInactiveJob(user.userId, session.id);
+    const specific = await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${session.id}`, {
+      status: NotificationJobStatus.Pending,
+      minutes: hours(76),
+    });
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Failed })
+      .where(
+        and(
+          eq(notificationJobs.status, NotificationJobStatus.Pending),
+          ne(notificationJobs.userId, user.userId),
+        ),
+      );
+    const first = await claimMailingJob(tmp.db, { scan: 1 });
+    expect([first.job?.id, first.canceled]).toEqual([specific.id, 0]);
+    await settleMailingJob(tmp.db, specific.id, { kind: 'delivered' });
+    expect(await claimMailingJob(tmp.db, { scan: 1 })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(inactive)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RT11b cancels a planned job in the scan that claims the pending specific one', async () => {
+    const user = await retained();
+    const session = await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) });
+    const inactive = await insertInactiveJob(user.userId, session.id);
+    await insertJob(user.userId, NotificationKind.SessionIdle24h, `session_idle:${session.id}`, {
+      status: NotificationJobStatus.Pending,
+      minutes: hours(76),
+    });
     await tmp.db
       .update(notificationJobs)
       .set({ status: NotificationJobStatus.Failed })
@@ -2097,10 +2244,26 @@ describe('retention: inactive_3d', () => {
       );
     const { job, canceled } = await claimMailingJob(tmp.db, { scan: SCAN });
     expect([job?.kind, canceled]).toEqual([NotificationKind.SessionIdle24h, 1]);
-    await settleMailingJob(tmp.db, job!.id, { kind: 'delivered' });
+    expect((await jobRow(inactive)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RT12 cancels a planned job at the claim while a specific one is coming', async () => {
+    const user = await retained();
+    const session = await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) });
+    const inactive = await insertInactiveJob(user.userId, session.id);
+    expect(await claimOnly(inactive)).toEqual({ job: undefined, canceled: 1 });
+  });
+
+  it('RT13 is not held by a newest session that was a real one: it has no session_idle_24h', async () => {
+    const user = await retained();
+    await stoppedSession(user.accountId, {
+      started: hours(100),
+      ended: hours(100) - 1,
+      mode: TradeMode.Real,
+    });
     await planMailingJobs(tmp.db);
-    expect((await kindJobsOf(user.userId, KIND)).map((row) => row.status)).toEqual([
-      NotificationJobStatus.Canceled,
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+      [KIND, NotificationJobStatus.Pending],
     ]);
   });
 
@@ -2281,28 +2444,55 @@ describe('retention: weekly_summary', () => {
   const moment = (text: string) => sql`${text}::timestamptz`;
   const utcEpoch = (iso: string) => String(Date.parse(iso) / 1000);
 
-  // the anchor's instant and the key at `now`, under the session's time zone `zone`
+  // The planner and the claim at a literal moment: the scenario built over it (weeklySummaryAt),
+  // through the planner's own statement. A Wednesday of 2025, whose week no real clock sees as the
+  // previous one, so a real-clock pass of another test plans nothing for these users.
+  const NOW = '2025-10-22 12:00:00+00';
+  const planWeekly = (now = NOW) => planMailingKind(tmp.db, KIND, weeklySummaryAt(moment(now)));
+  // the claim's test of the job (appliesByKind) at `now`, under UTC: the zones are RW2's
+  const appliesAt = (jobId: string, now: string) =>
+    tmp.db.transaction(async (tx) => {
+      await tx.execute(sql`set local time zone 'UTC'`);
+      const scenario = weeklySummaryAt(moment(now));
+      const result = await tx.execute<{ applies: boolean }>(
+        sql`select coalesce(${scenario.stillApplies} and ${scenario.keyApplies}, false) as applies
+          from ${notificationJobs} join ${users} on ${users.id} = ${notificationJobs.userId}
+          where ${notificationJobs.id} = ${jobId}`,
+      );
+      return result.rows[0]!.applies;
+    });
+  const weeklyPlansFrom = (at: string) =>
+    tmp.db
+      .update(notificationKinds)
+      .set({ plansFrom: sql`${at}::timestamptz` })
+      .where(eq(notificationKinds.kind, KIND));
+  beforeAll(() => weeklyPlansFrom('2025-01-01 00:00:00+00'));
+
+  // the anchor's instant, the key and whether the week is still the previous one at `now`, under
+  // the session's time zone `zone`
   const weekOf = (zone: string, now: string) =>
     tmp.db.transaction(async (tx) => {
       await tx.execute(sql.raw(`set local time zone '${zone}'`));
-      const result = await tx.execute<{ at: string; key: string }>(
+      const result = await tx.execute<{ at: string; key: string; timely: boolean }>(
         sql`select extract(epoch from ${weeklyAnchor(moment(now))} at time zone 'UTC')::bigint::text
-            as at, ${weeklyKey(moment(now))} as key`,
+            as at, ${weeklyKey(moment(now))} as key, ${weeklyTimely(moment(now))} as timely`,
       );
       return result.rows[0]!;
     });
 
   const PROBES = [
-    ['2026-10-25 23:59:59+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42'],
-    ['2026-10-26 09:59:59+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42'],
-    ['2026-10-26 10:00:00+00', '2026-10-26T10:00:00Z', 'weekly_summary:2026-W43'],
-    ['2027-01-04 10:00:00+00', '2027-01-04T10:00:00Z', 'weekly_summary:2026-W53'],
-    ['2025-01-06 10:00:00+00', '2025-01-06T10:00:00Z', 'weekly_summary:2025-W01'],
+    ['2026-10-25 23:59:59+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42', true],
+    ['2026-10-26 00:00:00+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42', false],
+    ['2026-10-26 05:00:00+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42', false],
+    ['2026-10-26 09:59:59+00', '2026-10-19T10:00:00Z', 'weekly_summary:2026-W42', false],
+    ['2026-10-26 10:00:00+00', '2026-10-26T10:00:00Z', 'weekly_summary:2026-W43', true],
+    ['2027-01-04 10:00:00+00', '2027-01-04T10:00:00Z', 'weekly_summary:2026-W53', true],
+    ['2025-01-06 10:00:00+00', '2025-01-06T10:00:00Z', 'weekly_summary:2025-W01', true],
   ] as const;
 
-  it('RW1 anchors on the latest passed Monday 10:00 UTC and keys the ISO week before it', async () => {
-    for (const [now, at, key] of PROBES) {
-      expect(await weekOf('UTC', now)).toEqual({ at: utcEpoch(at), key });
+  it('RW1 anchors on the latest passed Monday 10:00 UTC, keys the ISO week before it, and holds it until the next Monday 00:00', async () => {
+    for (const [now, at, key, timely] of PROBES) {
+      expect(await weekOf('UTC', now)).toEqual({ at: utcEpoch(at), key, timely });
     }
   });
 
@@ -2323,17 +2513,17 @@ describe('retention: weekly_summary', () => {
   });
 
   it.each(['Europe/Moscow', 'America/Los_Angeles'])(
-    'RW2 gives the same anchor and key on both sides of Monday 10:00 UTC under %s',
+    'RW2 gives the same anchor, key and timeliness around Monday 00:00 and 10:00 UTC under %s',
     async (zone) => {
-      for (const [now, at, key] of PROBES.slice(1, 3)) {
-        expect(await weekOf(zone, now)).toEqual({ at: utcEpoch(at), key });
+      for (const [now, at, key, timely] of PROBES.slice(0, 5)) {
+        expect(await weekOf(zone, now)).toEqual({ at: utcEpoch(at), key, timely });
       }
     },
   );
 
-  // a moment `minutes` after the summarised week's start, through the scenario's own anchor
-  const inWeek = (minutes: number) =>
-    sql`(${weeklyAnchor(sql`now()`)} - make_interval(hours => ${WEEKLY_SUMMARY_HOUR_UTC})
+  // a moment `minutes` after the start of the week summarised at `now`, through the anchor
+  const inWeek = (minutes: number, now = NOW) =>
+    sql`(${weeklyAnchor(moment(now))} - make_interval(hours => ${WEEKLY_SUMMARY_HOUR_UTC})
       - interval '7 days' + make_interval(mins => ${minutes})) at time zone 'UTC'`;
 
   it('RW3 plans one job with the week’s settled demo trades, under the week’s key', async () => {
@@ -2344,27 +2534,29 @@ describe('retention: weekly_summary', () => {
     await trade(user, { createdAt: inWeek(hours(24)), status: TradeIntentStatus.Rejected });
     await trade(user, { createdAt: inWeek(hours(24)), mode: TradeMode.Real });
     await trade(user, { createdAt: inWeek(-hours(24)) });
-    await planMailingJobs(tmp.db);
+    await planWeekly();
 
-    const key = await tmp.db.execute<{ key: string }>(sql`select ${weeklyKey(sql`now()`)} as key`);
-    expect(
-      (await kindJobsOf(user.userId, KIND)).map((job) => [job.status, job.dedupeKey, job.payload]),
-    ).toEqual([
-      [NotificationJobStatus.Pending, key.rows[0]!.key, { settled: 4, won: 2, lost: 1, tied: 1 }],
+    const jobs = await kindJobsOf(user.userId, KIND);
+    expect(jobs.map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
+      [NotificationJobStatus.Pending, 'weekly_summary:2025-W42', { settled: 4, won: 2, lost: 1, tied: 1 }],
     ]);
+    const anchor = await tmp.db.execute<{ at: Date }>(
+      sql`select ${weeklyAnchor(moment(NOW))} at time zone 'UTC' as at`,
+    );
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(new Date(anchor.rows[0]!.at).getTime());
   });
 
   it('RW4 plans nothing without a settled demo trade in the week', async () => {
     const user = await retained();
     await trade(user, { createdAt: inWeek(-hours(24)) });
-    await planMailingJobs(tmp.db);
+    await planWeekly();
     expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
   });
 
   it('RW4b plans for one settled trade in the week', async () => {
     const user = await retained();
     await trade(user, { createdAt: inWeek(hours(24)), profit: '-1' });
-    await planMailingJobs(tmp.db);
+    await planWeekly();
     expect((await kindJobsOf(user.userId, KIND)).map((job) => job.payload)).toEqual([
       { settled: 1, won: 0, lost: 1, tied: 0 },
     ]);
@@ -2373,7 +2565,7 @@ describe('retention: weekly_summary', () => {
   it('RW5a plans nothing for a user in real mode', async () => {
     const user = await retained({ tradingMode: TradeMode.Real });
     await trade(user, { createdAt: inWeek(hours(24)) });
-    await planMailingJobs(tmp.db);
+    await planWeekly();
     expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
   });
 
@@ -2381,7 +2573,7 @@ describe('retention: weekly_summary', () => {
     const user = await retained();
     await trade(user, { createdAt: inWeek(hours(24)) });
     await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, user.userId));
-    await planMailingJobs(tmp.db);
+    await planWeekly();
     expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
   });
 
@@ -2395,14 +2587,14 @@ describe('retention: weekly_summary', () => {
   });
 
   it('RW7 CUT plans nothing for a week anchored before the kind’s plans_from', async () => {
-    await plansFromMinutesAgo(0, KIND);
+    await weeklyPlansFrom('2025-10-20 10:00:01+00');
     try {
       const user = await retained();
       await trade(user, { createdAt: inWeek(hours(24)) });
-      await planMailingJobs(tmp.db);
+      await planWeekly();
       expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
     } finally {
-      await plansFromMinutesAgo(hours(200));
+      await weeklyPlansFrom('2025-01-01 00:00:00+00');
     }
   });
 
@@ -2411,8 +2603,42 @@ describe('retention: weekly_summary', () => {
     const user = await retained();
     await trade(user, { createdAt: inWeek(hours(24)) });
     await trade(user, { createdAt: inWeek(hours(25)) });
-    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    await Promise.all([planWeekly(), planWeekly()]);
     expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+
+  it('RW9 plans nothing on Monday before 10:00 UTC, and the week just ended at 10:00', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: inWeek(hours(24)) });
+    await trade(user, { createdAt: inWeek(hours(24) + 7 * hours(24)) });
+    await trade(user, { createdAt: inWeek(hours(25) + 7 * hours(24)), profit: '-1' });
+    await planWeekly('2025-10-27 05:00:00+00');
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+    await planWeekly('2025-10-27 10:00:00+00');
+    expect((await kindJobsOf(user.userId, KIND)).map((job) => [job.dedupeKey, job.payload])).toEqual([
+      ['weekly_summary:2025-W43', { settled: 2, won: 1, lost: 1, tied: 0 }],
+    ]);
+  });
+
+  // two trades: one is RW4b's boundary
+  it('RW10 cancels at the claim from the next Monday 00:00 UTC a job still pending', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: inWeek(hours(24)) });
+    await trade(user, { createdAt: inWeek(hours(25)) });
+    await planWeekly();
+    const [job] = await kindJobsOf(user.userId, KIND);
+    expect(await appliesAt(job!.id, '2025-10-26 23:59:59+00')).toBe(true);
+    expect(await appliesAt(job!.id, '2025-10-27 00:00:00+00')).toBe(false);
+    expect(await appliesAt(job!.id, '2025-10-27 05:00:00+00')).toBe(false);
+  });
+
+  it('RW11 the engine plans and claims the scenario over now()', () => {
+    const dialect = new PgDialect();
+    const render = (scenario: MailingScenario) =>
+      [scenario.facts, scenario.dedupeKey, scenario.payload!, scenario.stillApplies, scenario.keyApplies].map(
+        (part) => dialect.sqlToQuery(part),
+      );
+    expect(render(MAILING_SCENARIOS[KIND])).toEqual(render(weeklySummaryAt(sql`now()`)));
   });
 });
 
