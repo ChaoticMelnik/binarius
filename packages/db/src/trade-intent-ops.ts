@@ -29,7 +29,7 @@ import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { tokenLedger } from './schema/token-ledger';
 import { moneyInColumn, payoutInColumn, sqlLiteralList } from './schema/columns';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
-import { tradingSessions } from './schema/trading-sessions';
+import { SESSION_NOTICE_CHANNEL, tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 import { recordSignalDecision, type SignalDecisionInput } from './signal-decision-ops';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
@@ -420,6 +420,11 @@ export interface IntentPatch {
   tokensReserved?: bigint;
 }
 
+const SESSION_NOTICE_WAKE_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
+  TradeIntentStatus.Accepted,
+  TradeIntentStatus.Settled,
+]);
+
 export interface TransitionOptions {
   id: string;
   from: TradeIntentStatus;
@@ -433,7 +438,9 @@ export interface TransitionOptions {
 // The one CAS every status change goes through: `status = from`, optionally `version = expected`
 // and an extra predicate, all in the UPDATE itself, so a duplicate or late caller gets zero rows
 // instead of overwriting a newer state. updated_at is the database's clock, not the column's
-// $onUpdate: a session's no-signal limit counts from it (#509, readSessionHistory).
+// $onUpdate: a session's no-signal limit counts from it (#509, readSessionHistory). A session's
+// intent that becomes accepted or settled notifies SESSION_NOTICE_CHANNEL in the same transaction,
+// so the backend's notice sender wakes on the commit and never on a rollback (#723).
 export async function transitionIntent(
   exec: DbExecutor,
   { id, from, to, expectedVersion, patch, where }: TransitionOptions,
@@ -456,6 +463,9 @@ export async function transitionIntent(
       ),
     )
     .returning();
+  if (row !== undefined && row.tradingSessionId !== null && SESSION_NOTICE_WAKE_STATUSES.has(to)) {
+    await exec.execute(sql`select pg_notify(${SESSION_NOTICE_CHANNEL}, ${row.tradingSessionId})`);
+  }
   return row;
 }
 
