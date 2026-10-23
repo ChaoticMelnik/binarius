@@ -45,7 +45,7 @@ import {
 import type { Logger } from '../intents/processor';
 import {
   createStakeSizer,
-  sessionTradeOf,
+  sessionStakeInput,
   StakeKind,
   StopReason,
   type StakeDecision,
@@ -312,15 +312,16 @@ export function createSessionOrchestrator({
     // either (#775, В2)
 
     if (h1) {
-      const startedAtMs = session.startedAt.getTime();
-      const decision = sizer.next({
-        history: history.intents.map(sessionTradeOf),
-        payout: pair.payout,
-        minTradeAmount: snapshot.minTradeAmount,
-        available,
-        sessionStartedAtMs: startedAtMs,
-        nowMs: Math.max(now(), startedAtMs),
-      });
+      const decision = sizer.next(
+        sessionStakeInput({
+          intents: history.intents,
+          payout: pair.payout,
+          minTradeAmount: snapshot.minTradeAmount,
+          available,
+          sessionStartedAtMs: session.startedAt.getTime(),
+          nowMs: now(),
+        }),
+      );
       if (waitsForBalance(decision)) {
         logger.info({ ...ids, step }, 'trading session waits for the balance');
         return { kind: 'hold', ms: config.tickMs };
@@ -402,16 +403,16 @@ export function createSessionOrchestrator({
     }
     const action: TradeAction = response.decision.action;
 
-    const startedAtMs = session.startedAt.getTime();
-    const decision = sizer.next({
-      history: history.intents.map(sessionTradeOf),
-      payout: pair.payout,
-      minTradeAmount: snapshot.minTradeAmount,
-      available,
-      sessionStartedAtMs: startedAtMs,
-      // started_at is the database's clock: a worker clock behind it would make the sizer throw
-      nowMs: Math.max(now(), startedAtMs),
-    });
+    const decision = sizer.next(
+      sessionStakeInput({
+        intents: history.intents,
+        payout: pair.payout,
+        minTradeAmount: snapshot.minTradeAmount,
+        available,
+        sessionStartedAtMs: session.startedAt.getTime(),
+        nowMs: now(),
+      }),
+    );
     if (waitsForBalance(decision)) {
       logger.info({ ...ids, step }, 'trading session waits for the balance');
       return { kind: 'hold', ms: config.tickMs };
