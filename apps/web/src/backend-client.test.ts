@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  AdminH1MarkOutcome,
   AdminServiceMarkOutcome,
   SERVICE_ACCOUNTS_MIN,
   ServiceAccountNotWorkingReason,
@@ -39,6 +40,7 @@ import {
   safeParseAdminBotTextsResponse,
   safeParseAdminBrokerAccountsResponse,
   safeParseAdminServiceAccountsResponse,
+  safeParseAdminH1MarkResponse,
   safeParseAdminServiceMarkResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminDepositsResponse,
@@ -81,6 +83,7 @@ import {
   SAMPLE_BROKER_ACCOUNTS,
   SAMPLE_SERVICE_ACCOUNTS,
   SAMPLE_SERVICE_MARKED,
+  SAMPLE_H1_MARKED,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSITS,
   SAMPLE_INTENT,
@@ -767,6 +770,21 @@ describe('the service accounts calls (#391)', () => {
     expect(odd.captured.url).toBe('/api/admin/broker-accounts/a%2Fb%3Fc/service');
   });
 
+  it('C3 posts { h1 } to the account H1 path, the id encoded (#745)', async () => {
+    const { client, captured } = await prefixed(200, SAMPLE_H1_MARKED);
+    expect(await client.setH1Mark(SESSION, ACCOUNT, { h1: true })).toEqual(SAMPLE_H1_MARKED);
+    expect([captured.method, captured.url]).toEqual([
+      'POST',
+      `/api/admin/broker-accounts/${ACCOUNT}/h1`,
+    ]);
+    expect(JSON.parse(captured.body ?? '')).toEqual({ h1: true });
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+
+    const odd = await prefixed(200, SAMPLE_H1_MARKED);
+    await odd.client.setH1Mark(SESSION, 'a/b?c', { h1: false });
+    expect(odd.captured.url).toBe('/api/admin/broker-accounts/a%2Fb%3Fc/h1');
+  });
+
   it('C2 carries a 404 as its status and code', async () => {
     const { client } = await prefixed(404, { error: 'not_found' });
     const error = await rejectionOf(client.setServiceMark(SESSION, ACCOUNT, { service: true }));
@@ -1132,6 +1150,7 @@ describe('body size', () => {
       createdAt: AT,
       updatedAt: AT,
       serviceSince: AT,
+      h1Since: AT,
     };
     const intent = {
       id: UUID,
@@ -1419,6 +1438,10 @@ describe('body size', () => {
       setServiceMark: {
         parse: safeParseAdminServiceMarkResponse,
         sample: { me: ME, outcome: longest(AdminServiceMarkOutcome), account: brokerAccount },
+      },
+      setH1Mark: {
+        parse: safeParseAdminH1MarkResponse,
+        sample: { me: ME, outcome: longest(AdminH1MarkOutcome), account: brokerAccount },
       },
       audit: {
         parse: safeParseAdminAuditResponse,

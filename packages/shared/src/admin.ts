@@ -288,6 +288,8 @@ export const adminBrokerAccountViewSchema = z.strictObject({
   updatedAt: isoDateTime,
   // null = not a service account (#391)
   serviceSince: isoDateTime.nullable(),
+  // null = not marked for H1 (#670, #745)
+  h1Since: isoDateTime.nullable(),
 });
 export type AdminBrokerAccountView = z.infer<typeof adminBrokerAccountViewSchema>;
 
@@ -667,6 +669,26 @@ export const adminServiceMarkResponseSchema = z.strictObject({
 });
 export type AdminServiceMarkResponse = z.infer<typeof adminServiceMarkResponseSchema>;
 
+// The H1 mark (#745, docs/admin-pages.md -> Marking H1): the service mark's shape, plus
+// `active_session` - an unmark refused while the account has an active H1 session, the mark kept.
+export const adminH1MarkRequestSchema = z.strictObject({ h1: z.boolean() });
+export type AdminH1MarkRequest = z.infer<typeof adminH1MarkRequestSchema>;
+
+export const AdminH1MarkOutcome = {
+  Marked: 'marked',
+  Unmarked: 'unmarked',
+  Unchanged: 'unchanged',
+  ActiveSession: 'active_session',
+} as const;
+export type AdminH1MarkOutcome = (typeof AdminH1MarkOutcome)[keyof typeof AdminH1MarkOutcome];
+
+export const adminH1MarkResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  outcome: z.enum(AdminH1MarkOutcome),
+  account: adminBrokerAccountViewSchema,
+});
+export type AdminH1MarkResponse = z.infer<typeof adminH1MarkResponseSchema>;
+
 // --- Token adjustment (#246) --------------------------------------------------------------------
 
 // A signed whole number of tokens, never 0, within TOKEN_ADJUSTMENT_MAX_TOKENS. zod 4 runs the
@@ -781,3 +803,7 @@ export const safeParseAdminServiceMarkRequest = (input: unknown) =>
   adminServiceMarkRequestSchema.safeParse(input);
 export const safeParseAdminServiceMarkResponse = (input: unknown) =>
   adminServiceMarkResponseSchema.safeParse(input);
+export const safeParseAdminH1MarkRequest = (input: unknown) =>
+  adminH1MarkRequestSchema.safeParse(input);
+export const safeParseAdminH1MarkResponse = (input: unknown) =>
+  adminH1MarkResponseSchema.safeParse(input);

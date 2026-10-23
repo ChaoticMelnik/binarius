@@ -41,6 +41,7 @@ import {
   safeParseAdminLinkCompleteRequest,
   safeParseAdminLinkInspectRequest,
   safeParseAdminLoginRequest,
+  safeParseAdminH1MarkRequest,
   safeParseAdminServiceMarkRequest,
   safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
@@ -50,6 +51,7 @@ import {
   SERVICE_ACCOUNTS_MIN,
   STAFF_SESSION_TOKEN_PATTERN,
   UUID_PATTERN,
+  type AdminH1MarkResponse,
   type AdminServiceMarkResponse,
   type AdminTokenAdjustmentResponse,
   type StaffSessionView,
@@ -97,6 +99,7 @@ import {
   registerPasswordFailure,
   revokeStaffSession,
   runAsStaff,
+  setH1Mark,
   setServiceMark,
   StaffLoginChallengeStatus,
   StaffStatus,
@@ -1550,6 +1553,53 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
           const row = await readBrokerAccountForAdmin(tx, accountId);
           // the UPDATE or the SELECT just saw it inside this transaction, and nothing deletes it
           if (row === undefined) throw new Error('the marked broker account disappeared');
+          return {
+            result: { me: meOf(ctx), outcome, account: toAdminBrokerAccountView(row) },
+            audit,
+          };
+        },
+      );
+      if (answer === undefined) return reply;
+      if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
+      return reply.send(answer);
+    },
+  );
+
+  // The H1 mark (#745, docs/admin-pages.md -> Marking H1): the service mark's shape and lock
+  // order; setH1Mark writes no audit row, so asStaff's is the one. active_session is a 200: the
+  // writer's own refusal of an unmark, the mark kept.
+  app.post(
+    '/admin/broker-accounts/:id/h1',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const parsed = safeParseAdminH1MarkRequest(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { h1 } = parsed.data;
+      const accountId = (request.params as { id?: unknown }).id;
+      const path = '/admin/broker-accounts/:id/h1';
+      const action = h1 ? AuditAction.BrokerAccountH1Set : AuditAction.BrokerAccountH1Cleared;
+      const answer = await asStaff(
+        request,
+        reply,
+        async (tx, ctx): Promise<StaffActionResult<AdminH1MarkResponse | null>> => {
+          if (typeof accountId !== 'string' || !UUID_PATTERN.test(accountId)) {
+            return { result: null, audit: { action, payload: { path, result: 'not_found' } } };
+          }
+          const outcome = await setH1Mark(tx, { accountId, h1 });
+          const audit = {
+            action,
+            entity: { type: AuditEntityType.BrokerAccount, id: accountId },
+            payload: { path, result: outcome, accountId },
+          };
+          if (outcome === 'not_found') {
+            return { result: null, audit: { action, payload: audit.payload } };
+          }
+          const row = await readBrokerAccountForAdmin(tx, accountId);
+          if (row === undefined) throw new Error('the H1-marked broker account disappeared');
           return {
             result: { me: meOf(ctx), outcome, account: toAdminBrokerAccountView(row) },
             audit,

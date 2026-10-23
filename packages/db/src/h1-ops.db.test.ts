@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  AuditAction,
   BrokerAccountStatus,
   buildH1SessionSettings,
   decimalStringSchema,
@@ -74,20 +73,15 @@ const auditRows = (accountId: string) =>
     .where(and(eq(auditLog.entityType, 'broker_account'), eq(auditLog.entityId, accountId)));
 
 describe('setH1Mark (#670)', () => {
-  it('H1-M1 marks once: a re-mark keeps the first date and writes no second audit row', async () => {
+  // the audit rows are the callers' (#745): the CLI's in h1-mark.db.test.ts, the admin route's
+  it('H1-M1 marks once: a re-mark keeps the first date; setH1Mark itself writes no audit row', async () => {
     const { brokerAccountId } = await seedUserWithAccount(tmp.db);
     expect(await mark(brokerAccountId, true)).toBe('marked');
     const first = (await brokerAccountRow(tmp.db, brokerAccountId)).h1Since;
     expect(first).toBeInstanceOf(Date);
     expect(await mark(brokerAccountId, true)).toBe('unchanged');
     expect((await brokerAccountRow(tmp.db, brokerAccountId)).h1Since).toEqual(first);
-    expect(await auditRows(brokerAccountId)).toEqual([
-      {
-        action: AuditAction.BrokerAccountH1Set,
-        payload: { accountId: brokerAccountId, result: 'marked' },
-        actorType: 'system',
-      },
-    ]);
+    expect(await auditRows(brokerAccountId)).toEqual([]);
   });
 
   it('H1-M2 unmarks a marked account without a session; a second unmark is unchanged', async () => {
@@ -96,10 +90,7 @@ describe('setH1Mark (#670)', () => {
     expect(await mark(brokerAccountId, false)).toBe('unmarked');
     expect((await brokerAccountRow(tmp.db, brokerAccountId)).h1Since).toBeNull();
     expect(await mark(brokerAccountId, false)).toBe('unchanged');
-    expect((await auditRows(brokerAccountId)).map((row) => row.action)).toEqual([
-      AuditAction.BrokerAccountH1Set,
-      AuditAction.BrokerAccountH1Cleared,
-    ]);
+    expect(await auditRows(brokerAccountId)).toEqual([]);
   });
 
   it('H1-M3 answers not_found for an unknown account, both ways, and writes nothing', async () => {
@@ -115,9 +106,6 @@ describe('setH1Mark (#670)', () => {
     await seedTradingSession(tmp.db, h1.brokerAccountId, { settings: h1Settings() });
     expect(await mark(h1.brokerAccountId, false)).toBe('active_session');
     expect((await brokerAccountRow(tmp.db, h1.brokerAccountId)).h1Since).toBeInstanceOf(Date);
-    expect((await auditRows(h1.brokerAccountId)).map((row) => row.action)).toEqual([
-      AuditAction.BrokerAccountH1Set,
-    ]);
 
     const bot = await seedUserWithAccount(tmp.db);
     await mark(bot.brokerAccountId, true);
