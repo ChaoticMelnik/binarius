@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -37,6 +39,15 @@ import {
   splitRules,
   tokensOf,
 } from './rules-for';
+
+// The gate (G1–G3) holds each backticked token of a rule by its class: a path resolves to a
+// `git ls-files` entry (`PATH_SHAPED_LITERALS` excepted), an identifier is an identifier of the
+// corpus, a literal a substring of it; an expression is skipped. Test ids: after each test-file
+// citation, up to ". ", "; ", the end of the line or the next test-file citation (other backtick
+// spans are cut out), every word shaped as an id with a digit or a hyphen — `D1–D3`, `M7b–M7d`,
+// `H1-DR1–DR20`, `W-door1–3`, `U-dep 11`, `K5′` — must be in a test file the rule cites. Not read
+// (accepted): labels without a digit or hyphen (`CUT`, `JL`, `P`), a bare number after an id
+// (`U-dep 9, 10` — the 10), and ids outside a test-file citation's window.
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 
@@ -395,6 +406,55 @@ describe('--split', () => {
         '## Architecture Rules to Enforce in Every Plan\n\n### Index\n\n## Forbidden Actions\n',
       ),
     ).toThrow(RulesError);
+  });
+});
+
+describe('the command line', () => {
+  const run = (args: string[], cwd = repoRoot) =>
+    spawnSync(process.execPath, [path.join(repoRoot, 'tooling/rules-for.ts'), ...args], {
+      cwd,
+      encoding: 'utf8',
+    });
+
+  let fromRoot: string;
+  beforeAll(() => {
+    const result = run(['--list', 'apps/backend/src/app.ts']);
+    expect(result.status).toBe(0);
+    fromRoot = result.stdout;
+  });
+
+  it.each([
+    ['./apps/backend/src/app.ts', './apps/backend/src/app.ts', repoRoot],
+    ['an absolute path', path.join(repoRoot, 'apps/backend/src/app.ts'), repoRoot],
+    ['src/app.ts from apps/backend', 'src/app.ts', path.join(repoRoot, 'apps/backend')],
+  ])('C6 --list %s prints as the path from the root', (_label, file, cwd) => {
+    expect(fromRoot).toMatch(/^apps\/backend\/src\/app\.ts\n {2}cites: /);
+    expect(run(['--list', file], cwd).stdout).toBe(fromRoot);
+  });
+
+  it('E1 --split of a ref git cannot show exits 2 with one line and writes nothing', () => {
+    const rulesDir = path.join(repoRoot, '.claude/skills/architect/rules');
+    const before = ['core', 'trading'].map((area) =>
+      readFileSync(path.join(rulesDir, `${area}.md`), 'utf8'),
+    );
+    const result = run(['--split', 'no-such-ref']);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/^git show: [^\n]+\n$/);
+    expect(
+      ['core', 'trading'].map((area) => readFileSync(path.join(rulesDir, `${area}.md`), 'utf8')),
+    ).toEqual(before);
+  });
+
+  it('E2 outside a repository: exit 2, one line from git rev-parse', () => {
+    const result = run(['--map'], os.tmpdir());
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/^git rev-parse: [^\n]+\n$/);
+  });
+
+  it('E3 --list without files: exit 2 and the usage', () => {
+    const result = run(['--list']);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/^usage:\n/);
   });
 });
 

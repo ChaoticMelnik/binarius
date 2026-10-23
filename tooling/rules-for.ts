@@ -3,38 +3,29 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-// The Architecture Rules (#770): the index lives in .claude/skills/architect/SKILL.md ->
-// "Architecture Rules to Enforce in Every Plan", the rules themselves in
-// .claude/skills/architect/rules/<area>.md, one `### Rule N` heading per rule. This prints the
-// rules a list of files touches; tooling/rules-for.test.ts holds every path, symbol and test id
-// the rules cite to the repository with the same grammar.
+// The Architecture Rules (#770): the index lives in .claude/skills/architect/SKILL.md, the rules
+// in .claude/skills/architect/rules/<area>.md, one `### Rule N` heading per rule. This prints the
+// rules a list of files touches (the flags are in USAGE); tooling/rules-for.test.ts is the gate
+// that holds the rules' citations to the repository.
 //
-//   node tooling/rules-for.ts <file ...>     per file: the rules citing it and the rules of its
-//                                            directory, then the text of every rule found
-//   node tooling/rules-for.ts --list <file ...>   the per-file lines only
-//   node tooling/rules-for.ts --files <file ...>  the rule files to read (core.md when a file
-//                                                 has no rule)
-//   node tooling/rules-for.ts --map          the index's "path -> rules" block
-//   node tooling/rules-for.ts --dump         every rule by number, body as is
-//   node tooling/rules-for.ts --split <ref>  rewrite the rule files from the old one-section
-//                                            SKILL.md at <ref>, each rule to the area its index
-//                                            line names; prints the sha256 of both sides
+// Input from a diff: `gh pr diff <N> --name-only | xargs node tooling/rules-for.ts`. A path may be
+// relative to the working directory or absolute; run from inside the repository.
 //
-// Input from a diff: `gh pr diff <N> --name-only | xargs node tooling/rules-for.ts`. Paths are
-// relative to the repository root; run from inside the repository. --split exists so that a
-// rebase onto a main whose rules changed regenerates the files instead of merging them by hand;
-// the independent proof of the move is the awk/diff in the PR of #770, not this hash.
+// --split <ref> exists so that a rebase onto a main whose rules changed regenerates the rule files
+// from the old one-section SKILL.md at <ref> instead of merging them by hand; the independent
+// proof of the move is the awk/diff in the PR of #770, not the hash it prints.
 //
-// Exit codes: 0 done; 1 --split wrote files whose dump differs from the source; 2 bad usage or a
-// rule file / index that does not parse (one line on stderr).
+// Exit codes: 0 done; 1 --split wrote files whose dump differs from the source; 2 anything else
+// that stopped the script: usage, a rule file or the index that does not parse, a git command that
+// failed (one line on stderr; a stack for an error of the script itself).
 
 export const SKILL_FILE = '.claude/skills/architect/SKILL.md';
-export const RULES_DIR = '.claude/skills/architect/rules';
-export const AREAS = ['core', 'trading', 'signal-h1', 'bot-ui', 'payments', 'auth'] as const;
-export type Area = (typeof AREAS)[number];
+const RULES_DIR = '.claude/skills/architect/rules';
+const AREAS = ['core', 'trading', 'signal-h1', 'bot-ui', 'payments', 'auth'] as const;
+type Area = (typeof AREAS)[number];
 
-export const MAP_START = '<!-- generated: node tooling/rules-for.ts --map -->';
-export const MAP_END = '<!-- /generated -->';
+const MAP_START = '<!-- generated: node tooling/rules-for.ts --map -->';
+const MAP_END = '<!-- /generated -->';
 
 const SECTION_HEADING = '## Architecture Rules to Enforce in Every Plan';
 const SECTION_END = '## Forbidden Actions';
@@ -47,9 +38,11 @@ export interface Rule {
   body: string;
 }
 
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const isArea = (value: string): value is Area => (AREAS as readonly string[]).includes(value);
 
-export function ruleFilePath(area: Area): string {
+function ruleFilePath(area: Area): string {
   return `${RULES_DIR}/${area}.md`;
 }
 
@@ -160,7 +153,7 @@ export function checkNumbering(rules: readonly Rule[]): string[] {
 
 // --- tokens --------------------------------------------------------------------------------
 
-export type TokenClass = 'expression' | 'path' | 'identifier' | 'literal' | 'short';
+type TokenClass = 'expression' | 'path' | 'identifier' | 'literal' | 'short';
 
 const EXPRESSION_CHARS = /[<>=×≤≥(){}|[\]"'«»]/;
 const PATH_EXTENSION = /\.(ts|md|sql|json|yaml|yml|js|sh)$/;
@@ -170,7 +163,7 @@ export function tokensOf(body: string): string[] {
   return [...body.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
 }
 
-export function isExpression(token: string): boolean {
+function isExpression(token: string): boolean {
   return (
     /\s/.test(token) ||
     EXPRESSION_CHARS.test(token) ||
@@ -179,7 +172,7 @@ export function isExpression(token: string): boolean {
   );
 }
 
-export function isPathShaped(token: string): boolean {
+function isPathShaped(token: string): boolean {
   if (/^(\/|@|GET |POST )/.test(token)) return false;
   return token.includes('/') || PATH_EXTENSION.test(token);
 }
@@ -205,20 +198,20 @@ function globRegExp(token: string): RegExp {
       i += 1;
     } else if (char === '*') source += '[^/]*';
     else if (char === '?') source += '[^/]';
-    else source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    else source += escapeRegExp(char);
   }
   const pattern = new RegExp(`^(?:.*/)?${source}(?:/.*)?$`);
   globCache.set(token, pattern);
   return pattern;
 }
 
-export type PathKind = 'glob' | 'exact' | 'directory' | 'suffix' | 'segment';
+type PathKind = 'glob' | 'exact' | 'directory' | 'suffix' | 'segment';
 
 const PATH_KINDS: readonly PathKind[] = ['glob', 'exact', 'directory', 'suffix', 'segment'];
 
 // The one matcher of a cited path against a file, which may not exist yet (a file a plan adds).
 // `segment` tests `file`, not `'/' + file`: a leading directory is `directory`'s.
-export function pathKind(token: string, file: string): PathKind | undefined {
+function pathKind(token: string, file: string): PathKind | undefined {
   if (/[*?]/.test(token)) return globRegExp(token).test(file) ? 'glob' : undefined;
   const bare = token.replace(/\/$/, '');
   if (file === bare) return 'exact';
@@ -232,11 +225,19 @@ export function citesPath(token: string, file: string): boolean {
   return pathKind(token, file) !== undefined;
 }
 
+type Resolution = { kind: PathKind; matches: string[] } | undefined;
+
+// The gate, the map and rulesFor resolve the same tokens against the same entries.
+const resolutions = new WeakMap<readonly string[], Map<string, Resolution>>();
+
 // The gate's resolution against `git ls-files`: the entries of the first kind that has any.
-export function resolvePath(
-  token: string,
-  entries: readonly string[],
-): { kind: PathKind; matches: string[] } | undefined {
+export function resolvePath(token: string, entries: readonly string[]): Resolution {
+  let cache = resolutions.get(entries);
+  if (cache === undefined) {
+    cache = new Map();
+    resolutions.set(entries, cache);
+  }
+  if (cache.has(token)) return cache.get(token);
   const byKind = new Map<PathKind, string[]>();
   for (const entry of entries) {
     const kind = pathKind(token, entry);
@@ -245,11 +246,10 @@ export function resolvePath(
     if (matches === undefined) byKind.set(kind, [entry]);
     else matches.push(entry);
   }
-  for (const kind of PATH_KINDS) {
-    const matches = byKind.get(kind);
-    if (matches !== undefined) return { kind, matches };
-  }
-  return undefined;
+  const kind = PATH_KINDS.find((k) => byKind.has(k));
+  const resolution = kind === undefined ? undefined : { kind, matches: byKind.get(kind) ?? [] };
+  cache.set(token, resolution);
+  return resolution;
 }
 
 // Path-shaped tokens that name no file: an ESLint rule id and a URL prefix.
@@ -271,7 +271,7 @@ function identifierShape(token: string): IdentifierShape | undefined {
   return undefined;
 }
 
-export interface Corpus {
+interface Corpus {
   identifiers: Set<string>;
   text: string;
 }
@@ -357,7 +357,7 @@ function expandRange(first: string, last: string): string[] | undefined {
 
 // `normalisedText` has been through normalisePrime: tests write D5', rules D5′.
 export function idFound(id: string, normalisedText: string): boolean {
-  const escaped = normalisePrime(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(normalisePrime(id));
   return new RegExp(`(?<![A-Za-z0-9-])${escaped}(?!\\d)`).test(normalisedText);
 }
 
@@ -384,10 +384,7 @@ export function literalsFound(tokens: Iterable<string>, text: string): Set<strin
   const unique = [...new Set(tokens)].sort((a, b) => b.length - a.length);
   const found = new Set<string>();
   if (unique.length === 0) return found;
-  const pattern = new RegExp(
-    unique.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
-    'g',
-  );
+  const pattern = new RegExp(unique.map(escapeRegExp).join('|'), 'g');
   for (const match of text.matchAll(pattern)) found.add(match[0]);
   for (const token of unique) if (!found.has(token) && text.includes(token)) found.add(token);
   return found;
@@ -469,12 +466,22 @@ const BINARY = /\.(png|jpe?g|gif|ico|webp|svg|woff2?|ttf|otf|pdf|zip|gz|mp4|webm
 const NOT_CORPUS =
   /^(tooling\/rules-for(\.test)?\.ts|packages\/db\/drizzle\/meta\/\d+_snapshot\.json)$/;
 
-export function lsFiles(root: string): string[] {
-  return execFileSync('git', ['ls-files', '-z'], {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 1 << 26,
-  })
+function git(cwd: string, args: readonly string[]): string {
+  try {
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: 1 << 26,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
+    throw new RulesError(`git ${args[0]}: ${stderr.split('\n')[0] || String(error)}`);
+  }
+}
+
+function lsFiles(root: string): string[] {
+  return git(root, ['ls-files', '-z'])
     .split('\0')
     .filter((entry) => entry !== '');
 }
@@ -519,7 +526,7 @@ export function directoriesOf(entries: readonly string[]): Set<string> {
 }
 
 // The map keys a rule's resolved path citations route to.
-export function ruleKeys(
+function ruleKeys(
   rule: Rule,
   entries: readonly string[],
   directories: ReadonlySet<string>,
@@ -551,7 +558,7 @@ export function ruleKeys(
   return keys;
 }
 
-export function formatAreas(numbersByArea: ReadonlyMap<Area, readonly number[]>): string {
+function formatAreas(numbersByArea: ReadonlyMap<Area, readonly number[]>): string {
   return AREAS.filter((area) => (numbersByArea.get(area) ?? []).length > 0)
     .map(
       (area) => `${area} ${[...(numbersByArea.get(area) ?? [])].sort((a, b) => a - b).join(', ')}`,
@@ -591,7 +598,7 @@ export function mapBlock(skillText: string): string {
 
 // --- rules for files -----------------------------------------------------------------------
 
-export interface FileRules {
+interface FileRules {
   file: string;
   direct: Rule[];
   directory: Rule[];
@@ -684,7 +691,7 @@ export function renderRuleFile(head: string, rules: readonly Rule[]): string {
   return `${head}${sections.join('\n')}`;
 }
 
-export function headOf(text: string | undefined, area: Area): string {
+function headOf(text: string | undefined, area: Area): string {
   if (text === undefined) return `# Architecture Rules — ${area}\n\n`;
   const at = text.search(/^### /m);
   return at === -1 ? text : text.slice(0, at);
@@ -712,10 +719,7 @@ export function splitRules(
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 function split(root: string, ref: string): number {
-  const old = execFileSync('git', ['show', `${ref}:${SKILL_FILE}`], {
-    cwd: root,
-    encoding: 'utf8',
-  });
+  const old = git(root, ['show', `${ref}:${SKILL_FILE}`]);
   const sectionRules = extractSectionRules(old);
   const rules = splitRules(
     sectionRules,
@@ -746,11 +750,19 @@ function split(root: string, ref: string): number {
 
 // --- cli -----------------------------------------------------------------------------------
 
-const USAGE =
-  'usage: node tooling/rules-for.ts [--list | --files] <file ...> | --map | --dump | --split <ref>';
+const USAGE = `usage:
+  node tooling/rules-for.ts <file ...>          per file: the rules citing it and the rules of
+                                                its directory, then the text of every rule found
+  node tooling/rules-for.ts --list <file ...>   the per-file lines only
+  node tooling/rules-for.ts --files <file ...>  the rule files to read (core.md when a file has
+                                                no rule)
+  node tooling/rules-for.ts --map               the index's "path -> rules" block
+  node tooling/rules-for.ts --dump              every rule by number, body as is
+  node tooling/rules-for.ts --split <ref>       rewrite the rule files from the old one-section
+                                                SKILL.md at <ref>; prints the sha256 of both sides`;
 
 function main(argv: readonly string[]): number {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const root = git(process.cwd(), ['rev-parse', '--show-toplevel']).trim();
   const [first, ...rest] = argv;
   if (first === '--split') {
     if (rest.length !== 1) throw new RulesError(USAGE);
@@ -768,7 +780,11 @@ function main(argv: readonly string[]): number {
   const files = mode === 'full' ? argv : rest;
   if (files.length === 0 || files.some((file) => file.startsWith('--')))
     throw new RulesError(USAGE);
-  const result = rulesFor(files, rules, lsFiles(root));
+  const result = rulesFor(
+    files.map((file) => path.relative(root, path.resolve(file))),
+    rules,
+    lsFiles(root),
+  );
   if (mode === '--files') {
     process.stdout.write(result.areas.map((area) => `${ruleFilePath(area)}\n`).join(''));
     return 0;
@@ -785,8 +801,9 @@ if (import.meta.main) {
   try {
     process.exitCode = main(process.argv.slice(2));
   } catch (error) {
-    if (!(error instanceof RulesError)) throw error;
-    process.stderr.write(`${error.message}\n`);
+    process.stderr.write(
+      `${error instanceof RulesError ? error.message : ((error as Error).stack ?? String(error))}\n`,
+    );
     process.exitCode = 2;
   }
 }
