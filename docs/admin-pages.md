@@ -162,7 +162,8 @@ The `users` row and its `broker_accounts`, newest first. Sections:
 - **Брокерские аккаунты** — the account id (the uuid the ledger's «Основание» and the intent card
   print), broker id, address (a blank one is shown as «—»), partner client, status, revocation
   reason, halt and its reason, token expiry and rotation, «Служебный» (#391: the mark's date and
-  «Снять», or «Сделать служебным»), created and updated: the same table as the broker accounts list
+  «Снять», or «Сделать служебным»), «H1» (#745: the mark's date and «Снять H1», or «Включить H1»),
+  created and updated: the same table as the broker accounts list
   (#342), without its owner column. The ciphertexts, the key id and the
   refresh-token hash are never selected.
 
@@ -376,7 +377,7 @@ owner's Telegram id (`listBrokerAccountsForAdmin`, `packages/db/src/admin-read-o
 the owner's Telegram id (a link to the user card), the account id, then the columns of the user
 card's section — broker id, address, partner client, status (its Russian label, as on the card),
 revocation reason, halt and its reason (both codes), token expiry and rotation, «Служебный» (#391),
-created and updated.
+«H1» (#745), created and updated.
 An empty value is shown as «—»; the times are the ISO instants the backend sent, the token expiry
 included — the page computes nothing against the clock. There is no account page.
 
@@ -399,8 +400,8 @@ links, the redirect and the request to the backend go through `adminBrokerAccoun
 What the page shows on production: an account linked by the bot's e-mail code login is `active` at
 once; one linked through the OAuth callback is `pending` until the user confirms it in the bot (Rule
 12); `revoked` with its reason after a refresh failure; halted with its reason by reconciliation
-(#90). The list's one action is the service mark (#391, below); lifting a halt or revoking an
-account is not here.
+(#90). The list's actions are the service mark (#391, below) and the H1 mark (#745, below);
+lifting a halt or revoking an account is not here.
 
 ### Service accounts — `GET /admin/service-accounts`, `POST /admin/broker-accounts/:id/service`
 
@@ -431,6 +432,26 @@ pressing again is harmless.
 The mark survives a revocation and a re-login (owner's answer Q5): a re-login makes the account
 `active` again and it counts as working on the keeper's next tick. A service account may trade, in
 demo and real alike (Q1).
+
+### Marking H1 (#745)
+
+The account's H1 mark ([h1.md → Sessions](h1.md#sessions-670); with it, a session from the bot is an
+H1 session — [h1.md → From the bot](h1.md#from-the-bot-745)) without SSH: the «H1» column of the
+user card and of the broker accounts list (not the service page) shows «Включить H1», or the mark's
+date and «Снять H1». The form posts `h1=on|off` and `return=<the page>` to
+`POST /admin/broker-accounts/<id>/h1`, checked in `web` as the service mark's (a non-uuid id → 303
+to the broker accounts list, no backend call; another value → 400; `return` by `returnPathOf`). The
+backend's `{ h1: boolean }` is parsed before the session (400 `validation`, no row); inside
+`asStaff` the one writer `setH1Mark` (`packages/db/src/h1-ops.ts`) locks the account's row
+`FOR NO KEY UPDATE` after the caller's staff session (Rule 5, as the service mark) and runs its
+conditional `UPDATE`. The answer is `{ me, outcome, account }` with `outcome` `marked`, `unmarked`,
+`unchanged` or `active_session` — an unmark refused while the account has an active H1 session, the
+mark kept; `web` shows it as a 409 notice «У аккаунта активная H1-сессия — остановите её (⏹ в боте,
+/stop или h1 session stop) и повторите.». An unknown account is 404. Not answered or a 5xx in `web`:
+«Результат неизвестен», the card or the list shows how it is, and pressing again is harmless. The
+audit row is `asStaff`'s (below); `setH1Mark` writes none of its own, the CLI writes its own as
+`system`. Tests: `admin/routes.db.test.ts` H1-A1–A5, `app.test.ts` H1-W1–W5,
+`backend-client.test.ts` C3.
 
 ### Audit log — `GET /admin/audit?action=&entityType=&entityId=&actorId=&from=&to=&cursor=`
 
@@ -671,6 +692,9 @@ named and bounded; nothing else is recorded.
 | service mark set or asked again | `broker_account_service_set` | `broker_account`, the id | `{ path: '/admin/broker-accounts/:id/service', result, accountId }` — `result` is `marked` or `unchanged` |
 | service mark removed or asked again | `broker_account_service_cleared` | `broker_account`, the id | the same with `result` `unmarked` or `unchanged` |
 | service mark, no account | the action of the request | — | `{ path, result: 'not_found', accountId }`; an id that is not a uuid (direct backend call): `{ path, result: 'not_found' }` |
+| H1 mark set or asked again (#745) | `broker_account_h1_set` | `broker_account`, the id | `{ path: '/admin/broker-accounts/:id/h1', result, accountId }` — `result` is `marked` or `unchanged` |
+| H1 mark removed, asked again or kept | `broker_account_h1_cleared` | `broker_account`, the id | the same with `result` `unmarked`, `unchanged` or `active_session` |
+| H1 mark, no account | the action of the request | — | `{ path, result: 'not_found', accountId }`; an id that is not a uuid: `{ path, result: 'not_found' }` |
 
 A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a
 uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row, with

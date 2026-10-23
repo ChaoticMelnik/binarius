@@ -284,6 +284,9 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `no_signal` | the same (#509): the pair has no signal on the current candle — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | the wait for the signal (#664, [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)): «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + «🧭 Вручную» and «🏠 В меню», in place of the launch or the amount screen (`removeScreen`; gone → a new message), as a new message for any other press and a typed amount; the other pairs with a signal from the first poll; the signal there: the amount screen (demo, its way back kept) or the launch (real) in the same message (`trading-session.test.ts` W-start1–3) |
 | 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
+| 409 `h1_payout_too_low` | an H1-marked account (#745, [h1.md → From the bot](h1.md#from-the-bot-745)): the pair pays under `H1_MIN_PAYOUT_PCT`, before the signal is read | «⚡ Для H1 нужна пара с выплатой не ниже 94 %. Выбери другую пару 👇» (`sessionH1PayoutTooLow`) + «🔀 Выбрать другую пару» and «🏠 В меню», no log |
+| 409 `h1_duration_unsupported` | an H1-marked account: a duration other than 5 s, which this bot never sends | `sessionPairUnavailable`; `warn` `trading session not started` |
+| 409 `account_not_h1` | the H1 mark was removed during the start (`createTradingSession` under the account's lock) | «⚙️ Настройки аккаунта изменились — открой анализ заново.» (`sessionAccountChanged`) + the way back to the analysis, no log; the next press starts an ordinary session |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
 | any other 5xx, no answer, a broken body (a 409 `active_session_exists` whose body is not the contract's included) | unknown: the session may have been committed | one more `startSession` with the same request. A committed first attempt answers 409 with its session; otherwise the session is created once. Still unknown → «⚠️ Не удалось узнать, запущена ли сессия…» and `warn` `trading session not started` |
 
@@ -398,7 +401,10 @@ direction) and after the stop.
 
 Once the session stopped, the last line is its end line (`sessionEndLine`,
 `packages/shared/src/session-texts.ts`): «🏁 Сессия завершена: 5 циклов, 5 сделок — 3 в плюс, 2 в
-минус» for a completed one (#552: the closed cycles, then the trades and the score by trade),
+минус» for a completed one (#552: the closed cycles, then the trades and the score by trade); an
+H1 session's (#745, settings v4) plans trades, not cycles: «🏁 H1-сессия завершена: 50 сделок — 30 в
+плюс, 20 в минус» (`sessionCompletedH1`, chosen by `isH1Settings`, in the status, the reply to the
+stop, the bot's summary and the backend's fallback alike);
 otherwise the reason's line below, «⚠️ Статус сессии недоступен.» with no reason (the CHECKs refuse
 that, the view's schema allows it). Nothing else: no trade number, no
 score, no trade line, no «🔎 Ждём сигнал…» (the waiting message is the backend's, [The waiting
@@ -445,7 +451,15 @@ the map from the view's `settings`.
 `replyHtmlWithoutNextStep` and edited by `editMessagePhotoByIdHtmlWithoutNextStep` or
 `editMessageTextByIdHtmlWithoutNextStep` (#568) with the reason `session_status`
 ([bot-navigation.md](bot-navigation.md) → Exceptions): the next step of a running session is the
-waiting message's «⏹», of a stopped one the summary's (#537). An edit without
+waiting message's «⏹», of a stopped one the summary's (#537). **An H1 session's** (#745) has no
+waiting message and no open block (#722), so while it is `active` its own message carries
+«⏹ Остановить сессию» (`h1SessionStopKeyboard`, `session:stop:<id>` with no suffix): the drawing's
+`keyboard` (`sessionDrawing`), sent by `replyWithPhotoHtml` / `replyHtml` (the text after a refused
+photo keeps it) and kept by every tracker's edit through `editMessagePhotoByIdHtml` /
+`editMessageTextByIdHtml`; the stop's edit draws without it. The render key carries whether the
+keyboard is there (`sessionRenderKey`), so an edit that only adds or drops it is never skipped. A
+restored entry (#567) draws only a stopped session, so after a bot restart the «⏹» stays until the
+stop's edit; pressed meanwhile it works. An edit without
 `reply_markup` removes the inline keyboard on screen, so an old status message sent before #536
 loses its «🔄 Обновить» and «⏹» on the tracker's edit at the stop. A 404 while tracking draws
 «⚠️ Статус сессии недоступен.» under «🏠 В меню», as the caption of the picture when the last view
@@ -495,7 +509,7 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   | 200, or 409 and the read | the reply above | the end of the path | — |
   | 404 `not_found` (the stop, or the read after a 409) | «⚠️ Статус сессии недоступен.» | «🏠 В меню» | — |
   | 409 and the read failed | `unavailable` | «🏠 В меню» | `warn` `trading session status not read` |
-  | any other failure (5xx, transport, contract, an unexpected 4xx): the stop did not happen or its outcome is unknown | `unavailable` | the same «⏹» again (`waitingStopKeyboard`, the only «⏹» the bot draws) | `warn` `trading session not stopped` |
+  | any other failure (5xx, transport, contract, an unexpected 4xx): the stop did not happen or its outcome is unknown | `unavailable` | the same «⏹» again (`waitingStopKeyboard`; the bot draws «⏹» only here and on an H1 session's message, #745) | `warn` `trading session not stopped` |
 
   | The edit | Then | Log |
   | --- | --- | --- |
@@ -531,7 +545,8 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   `sendMessage`, `editMessageReplyMarkup`) — inside `HANDLER_CALLS.sessionStop` (3 / 3, whose worst
   path stays the old status message's).
 - **«⏹» under an old status message** (`session:stop:<id>`, sent before #536; the owner's answer
-  5, decision В4) is answered as before: the catalog read beside the stop, 409 → the read, and the
+  5, decision В4) — and, the same data, **the «⏹» of an H1 session's message** (#745) — is answered
+  as before: the catalog read beside the stop, 409 → the read, and the
   session message drawn in place of the pressed one (`editMessageText`), under the end of the path;
   gone → a new message, recorded by its newer id (#567, #587). The session is tracked on that
   message, so its summary comes as before. A stale edit of the old entry can land after the

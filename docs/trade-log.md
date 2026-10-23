@@ -153,18 +153,20 @@ row of the same pair and second.
 
 | # | Path (`session-routes.ts`) | Answer | Row: `outcome` / `detail` | Test |
 |---|---|---|---|---|
-| S0 | `session_too_long`, the eligibility refusals (`active_session_exists` included), `catalog_unavailable`, `pair_unavailable` | 4xx/503 | none: before the signal read | R42 |
+| S0 | `session_too_long`, the eligibility refusals (`active_session_exists` included), `catalog_unavailable`, `pair_unavailable`, the H1 fence (`h1_duration_unsupported`, `h1_payout_too_low`, #745) | 4xx/503 | none: before the signal read | R42, H1-R3, H1-R4 |
 | S1 | `fetch_failed` or a throw of the feed | 503 `signal_unavailable` | none: no entry | R42 |
 | S2 | `no_signal` | 409 | `no_signal` / NULL, no session | R37 |
 | S3 | a signal, no balance snapshot | 409 `balance_unavailable` | `refused` / `balance_unavailable` | R38 |
 | S4 | `checkStake` refuses | 409 | `refused` / `stake_precision`, `stake_below_minimum` or `insufficient_balance` | R38 |
 | S5 | `buildSessionSettings` fails (a zero minimum) | 409 `balance_unavailable` | `refused` / `balance_unavailable` | R38 |
-| S6 | `createTradingSession` refuses | 409 | `refused` / the wire code (`active_session_exists` included) | R38 (`demo_only`; the others are races with the eligibility check and go through the same line) |
+| S6 | `createTradingSession` refuses | 409 | `refused` / the wire code (`active_session_exists` included) | R38 (`demo_only`; the others are races with the eligibility check and go through the same line), H1-R6 (`account_not_h1`) |
 | S7 | `createTradingSession` returns | 201 | `started` / NULL, with the new session, written before the view's read | R36 |
 | S8 | a throw of the snapshot read, the stakes read or the creation (not a `TradingSessionError`) | 500 | none | — |
 
 `broker_account_id` is the eligible account, `payout` the catalog's, `taken_at_ms` the route's
-clock after its reads. The write is best-effort: a throw is `warn` `session start decision not
+clock after its reads. An H1 session from the bot (#745) starts with this `session_start` row (the
+candle check, version v2) before the driver's `version = h1` rows; the export replays each by its
+version. The write is best-effort: a throw is `warn` `session start decision not
 recorded` (account, asset, name and code), the answer unchanged (R39).
 
 ## The record of POST /trading/signal
