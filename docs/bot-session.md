@@ -24,9 +24,12 @@ edited when the session stops, to its end line, and when a trade of the session 
 way, to that direction's picture (#568). The trades themselves are opened by the worker's orchestrator (#287): the bot only
 starts, reads and stops the session. Every settled trade then shows in a message without sound — a
 martingale cycle in one message, each step added to it by an edit (#551), sent by the backend
-([Trade messages and the summary](#trade-messages-and-the-summary-464)). Under them, always the
-last of the session's messages while it runs, the backend keeps the waiting message «🔎 Ждём сигнал
-для следующей сделки…» with «⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)).
+([Trade messages and the summary](#trade-messages-and-the-summary-464)). While the session waits
+for a signal — its latest decision was «no signal» (#722) — the backend keeps under them, as the
+last of the session's messages, the waiting message «🔎 Ждём сигнал для следующей сделки…» with
+«⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)); while a trade is open,
+its block in the cycle message carries the «⏹» instead
+([The stop and the old buttons](#the-stop-and-the-old-buttons-536)).
 When the session is over, its summary comes in one message with sound, sent by the bot after every
 message of the backend (#537): the picture of its trades with the whole summary as the caption —
 the pair, the end line, the total, the result, the balance and its age, no referral link since #709
@@ -61,9 +64,10 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `sessionOutcomeUnknown`. `sendSummary` (#537) is the tracker's last step of a done session: the
   summary in one message ([The summary message](#the-summary-message-537-the-card-of-318)). `bot.ts` mounts it under its
   private-chat filter, right after the demo trade's composer.
-- `packages/shared/src/bot-navigation.ts` — `sessionStopCallbackData(id, { waiting? })` and
-  `SESSION_STOP_PATTERN` (#536): the stop button's data, `session:stop:<id>` under an old status
-  message, `session:stop:<id>:w` under the waiting message the backend sends (49 / 51 bytes).
+- `packages/shared/src/bot-navigation.ts` — `sessionStopCallbackData(id, { waiting? } | { cycle? })`
+  and `SESSION_STOP_PATTERN` (#536): the stop button's data, `session:stop:<id>` under an old
+  status message, `session:stop:<id>:w` under the waiting message the backend sends,
+  `session:stop:<id>:c` under its open trade's block (#722) (49 / 51 / 51 bytes).
 - `apps/bot/src/session-tracker.ts` — `createSessionTracker({ backend, logger, firstPollMs,
   pollMs, deadlineMs, resumeGapMs, maxEntries?, now? })` → `{ track, stop, size, has }`,
   `sessionEditMethod(drawing.picture)` (#568: the one choice of the message's kind,
@@ -161,11 +165,14 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
            → editMessageMedia of that message (the picture and its caption, #568), or
            editMessageText without a direction, without a keyboard, when its drawing changes:
            when the session stops (#536) or its signal's direction turns (#568)
-  backend's sender, its next tick once the message is recorded (#536):
+  backend's sender, its next tick once the message is recorded and the session's latest decision
+        is no_signal (#536, #722):
         sendMessage: «🔎 Ждём сигнал для следующей сделки…», without sound, with
         «⏹ Остановить сессию» (session:stop:<id>:w); deleted before each new message of the session
-        (a cycle message, a relaunch's status message, #587) and sent again under it, deleted once
-        the session stopped, before the final mark - unless its «⏹» stopped it (below)
+        (a cycle message, a relaunch's status message, #587) and sent again under it while the
+        session waits, deleted once a later decision ends the wait - before the open trade's
+        block, which carries «⏹» (session:stop:<id>:c) until its result's edit - or once the
+        session stopped, before the final mark - unless its «⏹» stopped it (below)
   backend's sender, once the session is finished, every trade's message sent and the waiting
         message gone: the final mark (final_notice_sent_at), no message (#537)
   tracker, once the session is done, its final text is on screen and the final mark is set:
@@ -199,6 +206,11 @@ session:stop:<id>:w                («⏹ Остановить сессию» un
         by its status (The stop), and the end of the path; refused as gone → sendMessage with the
         same
   backend's sender, its next tick: no delete, the final mark; the bot's summary under the reply
+session:stop:<id>:c                («⏹ Остановить сессию» under the open trade's block, #722)
+  bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop { telegramUserId }
+        (409 session_not_active → GET /trading/sessions/<id>)
+  bot → sendMessage: the end line, the last trade's line by its status, and the end of the path
+  bot → editMessageReplyMarkup of the pressed cycle message: its keyboard off, its blocks as they are
 session:stop:<id>                  (an old status message's «⏹», before #536)
   bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop ∥ GET /trading/pairs
         (409 session_not_active → GET /trading/sessions/<id>)
@@ -489,6 +501,29 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   A stop whose outcome is unknown and did commit leaves `unavailable` and «⏹» above the summary
   until the next press, which answers 409 → the final text in place ([risk
   80](#accepted-risks)).
+- **«⏹» under the open trade's block** (`session:stop:<id>:c`, #722; the backend puts it on the
+  cycle message while the block of an open trade is its last block,
+  [Trade messages](#trade-messages-and-the-summary-464)) stops at once as well, with no
+  confirmation: `answerCallbackQuery` ∥ `stopSession(id, user)` — no pressed message: the cycle
+  message is the backend's, not a waiting message to hand over. 409 `session_not_active` reads the
+  session and answers how it ended. The reply goes as **a new message**, as `/stop`'s for one
+  session ([/stop](#stop-122)): `sessionStopReplyText(view)` under the end of the path
+  (`sessionCardKeyboard`) — «⏳ Открытая сделка доиграет до конца.» for the open trade; then the
+  pressed message only loses its keyboard (`stripKeyboard` of `demo.ts`:
+  `editMessageReplyMarkup`), so its blocks stay as the backend drew them and the result's edit
+  follows. No catalog read, no `track()`.
+
+  | The press ended | A new message | Keyboard | The pressed block | Log |
+  | --- | --- | --- | --- | --- |
+  | 200, or 409 and the read | the reply above | the end of the path | keyboard taken off | — |
+  | 404 `not_found` (the stop, or the read after a 409) | «⚠️ Статус сессии недоступен.» | «🏠 В меню» | kept | — |
+  | 409 and the read failed | `unavailable` | «🏠 В меню» | kept | `warn` `trading session status not read` |
+  | any other failure (5xx, transport, contract, an unexpected 4xx) | `unavailable` | «🏠 В меню» | kept: pressed again, it stops or reads how it ended (409) | `warn` `trading session not stopped` |
+  | the keyboard's removal refused or failed (gone, not modified, transport) | — | — | as it is | `info` `the keyboard of a pressed button was not removed` |
+
+  Calls: backend ≤ 2 (the stop, the read after a 409), Telegram ≤ 3 (`answerCallbackQuery`,
+  `sendMessage`, `editMessageReplyMarkup`) — inside `HANDLER_CALLS.sessionStop` (3 / 3, whose worst
+  path stays the old status message's).
 - **«⏹» under an old status message** (`session:stop:<id>`, sent before #536; the owner's answer
   5, decision В4) is answered as before: the catalog read beside the stop, 409 → the read, and the
   session message drawn in place of the pressed one (`editMessageText`), under the end of the path;
@@ -687,7 +722,9 @@ One entry per session id, in process memory, like the intent tracker
 - `HANDLER_CALLS.sessionStop` = 3 / 3: an old status message's «⏹» — `stopSession` beside
   `readPairs` (counted as sequential), the read after a 409, the edit refused as gone and sent
   anew: 39 s. Under the waiting message (#536) it is 2 / 3: `stopSession`, the read after a 409,
-  the answer, the edit in place refused as gone and sent anew (#587).
+  the answer, the edit in place refused as gone and sent anew (#587). Under the open trade's block
+  (`:c`, #722) it is 2 / 3: `stopSession`, the read after a 409, the answer, the new message and
+  the removal of the pressed block's keyboard.
 - `HANDLER_CALLS.stop` = 2 / 2 (#122, #473, #536): `stopSessions`, then `setTradingMode`, then the
   mode line and the message: 26 s.
 - `HANDLER_CALLS.sessionShare` = 1 / 2 (#321, #538): `readSessionShare`, then `sendPhoto` to the
@@ -746,6 +783,10 @@ id or the symbol.
 - `the launch screen was already gone` (#418, `info`): the delete found no message
 - `the pressed message was already gone` (`info`, #587): the reply to «⏹» under the waiting
   message found its message gone and went as a new message
+- `the keyboard of a pressed button was not removed` (`info`, #722): after the reply to «⏹» under
+  the open trade's block, `editMessageReplyMarkup` of the pressed message was refused (gone, not
+  modified) or failed in transport (`method: editMessageReplyMarkup`, `callbackData`); the block
+  keeps its «⏹» until the result's edit, and a press of it answers 409 → how it ended
 - `trading session stop reply not drawn` (#587): the edit of the pressed waiting message failed
   other than gone or «not modified» (`method: editMessageText`, `telegramErrorCode` or
   `transportError`); nothing more is drawn
@@ -784,12 +825,13 @@ id or the symbol.
 ## Trade messages and the summary (#464)
 
 Every settled trade of a session shows in a message **without sound**
-(`disable_notification: true`) and without buttons, in the trades' order; once the session is
+(`disable_notification: true`) and without buttons — but an open trade's block, which carries
+«⏹ Остановить сессию» (#722, below) — in the trades' order; once the session is
 finished and every trade's message went, the sender sets the session's **final mark** and the
 bot's summary follows in one message **with sound** (#537,
 [The summary message](#the-summary-message-537-the-card-of-318)); the backend sends a text summary
-only as [the fallback](#the-fallback). Under them stands the waiting message with «⏹ Остановить
-сессию» ([The waiting message](#the-waiting-message-536)). The backend sends the trades' messages
+only as [the fallback](#the-fallback). Under them, while the session waits for a signal, stands
+the waiting message with «⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)). The backend sends the trades' messages
 and the waiting message, not the bot: a restart of either repeats no send by a retry — a block can show twice only by
 the endings [risk 35](#accepted-risks) names — and skips nothing but what the endings below lose.
 
@@ -810,9 +852,16 @@ open block's cycle and step are the ones the trade settles at (`sessionNextStep`
 position depends only on the results before it), and the adaptive line stands between step 1
 and step 2 as with a settled step 2: under a lost step 1 at once, above step 2 after a tie (#718).
 A trade after its open only settles (`accepted → settled` is the only edge out of `accepted`),
-so the block has no third state. H1 sessions (#670, settings v4) get no open block. The waiting message and its «⏹» do not change in this part: still the last
-message of the session, deleted before the open block's new message and sent again under it
-(#722 moves «⏹» under the open block).
+so the block has no third state. H1 sessions (#670, settings v4) get no open block.
+**The open block's «⏹»** (#722): its send, its edit and a new message after a gone edit carry one
+button, «⏹ Остановить сессию» (`ButtonRole.Danger`, `session:stop:<id>:c`,
+`sessionCycleStopKeyboard`, through `sendSessionTrade`/`editSessionTrade`'s `reply_markup`); the
+result's edit goes without `reply_markup`, which takes it off (Bot API). A session the list read
+stopped gets its open block without it (decision В2: no dead button; a stop after the read meets
+the bot's 409 path). The waiting message, if one stands, is deleted before the open block — as its
+own step before an edit, first inside a new message — and is not sent under it: the intent's row
+ended the wait ([The waiting message](#the-waiting-message-536)). A press is the bot's
+([The stop and the old buttons](#the-stop-and-the-old-buttons-536)).
 
 ```text
 ⚡ Цикл 2 Шаг 3
@@ -1109,12 +1158,24 @@ a session's sends read Σ ≤ 406 rows at ≤ 28 settled trades (Rule 28), ≤ 2
 «🔎 Ждём сигнал для следующей сделки…» (`sessionWaitingSignal`) without sound, with one button,
 «⏹ Остановить сессию» (`sessionStopButton`, `session:stop:<id>:w`), built when sent
 (`sessionWaitingMessage`, `session-notice-messages.ts`, Rule 30) and sent by
-`sendSessionWaiting`, deleted by `deleteSessionWaiting` (`client-push.ts`). It is always the last
-message of a running session (the owner's decision 2026-10-15): deleted before each new message
-of the session — a cycle message, or a relaunch's status message (#587) — and sent again under it;
-an edit of a step leaves it where it is (#551); deleted once the session stopped — any reason — on
-the next tick, before the final mark; never sent again after. A stop by its own «⏹» hands it to the
-bot instead (#587): the bot draws its reply in place of it, and the sender does not delete it.
+`sendSessionWaiting`, deleted by `deleteSessionWaiting` (`client-push.ts`). It stands **only while
+the session waits for a signal** (#722, the owner's decisions of 2026-10-21 in #700): the
+session's latest decision of the trading loop — its last `signal_decisions` row with `context =
+session`, by `recorded_at` then `id` (`signal_decisions_session_idx`,
+[trade-log.md](trade-log.md)) — is `no_signal` (#666). The intent's row, written in the
+transaction that creates the intent, ends the wait, and so does every other outcome (`refused`,
+`replayed`, `stake_stop`); a session with no row yet (just started, before its first decision) does
+not wait; an H1 session (#670) asks no signal and writes no `no_signal`, so it never gets one. A
+signal at once after a settlement shows no waiting message at all; a failed write of the
+decision's row (`warn`, the hold stays) delays it by one candle ([risk
+100](#accepted-risks)). While the session waits, the waiting message is the last message of the
+session: deleted before each new message of the session — a cycle message, or a relaunch's status
+message (#587) — and sent again under it; an edit of a step leaves it where it is (#551). Once the
+session no longer waits it is deleted — **before** the open trade's block, which carries the
+session's «⏹» itself (`:c`, [The stop and the old buttons](#the-stop-and-the-old-buttons-536)), so
+two «⏹» never stand together; once the session stopped — any reason — it is deleted on the next
+tick, before the final mark; never sent again after. A stop by its own «⏹» hands it to the bot
+instead (#587): the bot draws its reply in place of it, and the sender does not delete it.
 
 **The state** (migration 0061): `trading_sessions.waiting_message_id`, Telegram's
 `message_id` of the live waiting message, NULL when there is none; and `waiting_after_message`,
@@ -1125,19 +1186,28 @@ chat, [risk 79](#accepted-risks)), 0 before either — NULL while none is claime
 freed). A positive id, a slot from 0, an id only on a claimed slot (three CHECKs). Two SQL
 predicates in `session-notice-ops.ts` alone decide:
 
-- **due**: the session is active, no live waiting message, its slot is not the session's latest
-  message (`is distinct from`), the session has a message to stand under — the bot's recorded
-  status message (#567) or a claimed trade (`notified_trades > 0`: a trade's message goes only
-  after the session message, recorded or not) — and the user has not blocked the bot;
-- **stale**: a live waiting message, and the session stopped, or a newer message of the session
-  left its slot behind and the user can be reached (`telegram_blocked_at is null`, #587: a blocked
-  user's running session keeps the id unlisted until the user is reachable again).
+- **waits for a signal** (`waitingForSignalSql`, #722): `coalesce((the latest row's outcome) =
+  'no_signal', false)` — no row is `false`, not NULL;
+- **due**: the session is active and waits for a signal, no live waiting message, its slot is not
+  the session's latest message (`is distinct from`), the session has a message to stand under — the
+  bot's recorded status message (#567), a claimed trade (`notified_trades > 0`: a trade's message
+  goes only after the session message, recorded or not) or the cycle message of an open trade's
+  block (`cycle_message_id`, #722) — and the user has not blocked the bot;
+- **stale**: a live waiting message, and the session stopped, or — the user reachable
+  (`telegram_blocked_at is null`, #587: a blocked user's running session keeps the id unlisted
+  until the user is reachable again) — a newer message of the session left its slot behind or the
+  session no longer waits for a signal (#722).
 
 `listPendingSessionNotices` lists a session with either (both inside `final_notice_sent_at is
-null`, so the index is the same). The writers, each one CAS UPDATE of the session's row:
+null`, so the index is the same), and returns `waitingForSignal` as the sender's hint: after its own
+delete or a new cycle message it marks the waiting message due only while the session waits; the
+claim decides by the SQL. The writers, each one CAS UPDATE of the session's row:
 `claimSessionWaiting` (the slot, before the send: only with no live id and on a slot not claimed
-on the session's latest message (cycle or status), so at most one waiting message of unknown fate),
-`recordSessionWaitingMessage` (the id, on its own slot, while the session is active),
+on the session's latest message (cycle or status), so at most one waiting message of unknown fate;
+an intent's row between the list and the claim refuses it),
+`recordSessionWaitingMessage` (the id, on its own slot, while the session is active — not checked
+against the decision log: a row that came between the claim and the record leaves a waiting message
+for one tick, deleted then as stale, [risk 101](#accepted-risks)),
 `releaseSessionWaiting` (the slot freed after a certain refusal), `clearSessionWaitingMessage`
 (the id dropped and the slot freed after the delete, so an active session is due again whatever
 becomes of the cycle message sent next). Since #587 the stop route writes them too, on purpose:
@@ -1154,10 +1224,13 @@ at its pace ([risk 54](#accepted-risks), [At the deploy and at a
 restart](#at-the-deploy-and-at-a-restart-536)).
 
 **One `serve` of a session** does, in this order: the trades past the cursor (a new cycle message
-deletes the waiting message first, above); then a stale waiting message's delete; then the summary
-of a finished session, or the waiting message due — while the session is active and the user
-reachable as this `serve` left them (a 403 in a step before it sends nothing more). Each step of
-the waiting message starts with its pace and a check of `stop()`.
+deletes the waiting message first, above); then a stale waiting message's delete; then the open
+trade's block (#700) — after the delete since #722: the block carries the «⏹», and its edit of the
+cycle message under a live waiting message would show two for a moment; the gap without a «⏹» is
+one pace and Telegram's answer — then the summary of a finished session, or the waiting message due
+— while the session is active and the user reachable as this `serve` left them (a 403 in a step
+before it sends nothing more). Each step of the waiting message starts with its pace and a check of
+`stop()`.
 
 | A send of the waiting message | Columns | Listed after? | Then |
 | --- | --- | --- | --- |
@@ -1189,8 +1262,8 @@ the waiting message starts with its pace and a check of `stop()`.
 
 | A new cycle message after the delete (the id dropped, the slot freed) | The waiting message after it |
 | --- | --- |
-| 2xx, `recordSessionCycleMessage` recorded it | due under it: sent by the same `serve` |
-| 2xx, the record's CAS refused (another sender); 2xx without a positive `message_id`; 5xx, a timeout, the transport; another 4xx the third time (`… dropped`) | due all the same (the slot is free): sent by the same `serve`, under whatever went out |
+| 2xx, `recordSessionCycleMessage` recorded it | due under it while the session waits for a signal: sent by the same `serve`; not after an open trade's block or a decision other than `no_signal` (#722) |
+| 2xx, the record's CAS refused (another sender); 2xx without a positive `message_id`; 5xx, a timeout, the transport; another 4xx the third time (`… dropped`) | due all the same while the session waits (the slot is free): sent by the same `serve`, under whatever went out |
 | another 4xx, the first or second time | the trade put back, the session skipped; the next tick sends the trade (no delete: no id), then the waiting message |
 | 429 | the trade put back, the sender pauses; after it the trade, then the waiting message |
 | 403 | the user marked unreachable, nothing more; due again after `markTelegramReachable` |
@@ -1225,6 +1298,17 @@ no tick; once the user is reachable, the next new message of the session, or a l
 deletes it first — never a second «⏹» beside it.
 
 #### At the deploy and at a restart (#536)
+
+- **At the deploy of #722**: an active session whose live waiting message no longer has a reason —
+  its latest decision is an intent or another outcome, or it has no row — is stale on the first
+  tick: one delete, at the sender's pace; one whose latest decision is `no_signal` keeps it; an
+  active session without one and with its latest `no_signal` is due as before. An H1 session's
+  waiting message is deleted the same way and never sent again. An open trade's block claimed after
+  the deploy carries the «⏹» (`:c`); one already shown keeps no keyboard until its result's edit.
+  The order: **the bot first** (`docker compose up -d --no-deps bot`), then the backend
+  (`binarius-deploy`) — an old bot does not match `:c` (its pattern is `(?::(w))?$`), and a press
+  of a new backend's «⏹» on it would get no answer until the bot is updated; a new bot on the old
+  backend sees no `:c` yet, and `:w` is as before.
 
 - **Volume.** At the backend's start every active session with a recorded status message or a
   claimed trade and a reachable user is due (no backfill, the owner's decision 2026-10-17). The
@@ -1655,7 +1739,9 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     (risk 51). A second sender between the delete and the trade's message could claim a waiting
     message above it — the backend runs one sender (stated). Falsifiable: a waiting message above a
     cycle message with one sender and no `session waiting message outcome unknown`, `… not
-    recorded: no message id` or `… delete dropped`.
+    recorded: no message id` or `… delete dropped`. «Never two «⏹»» (#722) holds the same way, by
+    the order, not by state: the stale waiting message's delete goes before the open block's step,
+    a new message deletes it first; the same endings leave two «⏹» standing.
 53. **The stop route hands the waiting message to the bot** (#587, reversing #536's choice on
     purpose, the manager's answer В1): the sender is no longer the waiting columns' one writer;
     the sender and the stop route both clear only by `(id, waiting_message_id)`, and the sender
@@ -1881,6 +1967,25 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     gap (the Bot API FAQ speaks of messages), and the bot's own replies and edits to the same chat
     are outside the sender's gap — stated, not measured. Falsifiable: a 429 on `deleteMessage`, or a
     chat's 429 while the sender sends it one step a second, in the logs.
+100. **The waiting message one candle late when the decision's row is not written** (#722): the
+    orchestrator's `no_signal` row is best effort (`warn`, the hold stays); without it the session
+    does not wait by the log, so no waiting message comes until the next candle's row. Falsifiable:
+    the orchestrator's `trading session decision not recorded` warn beside a session without its waiting
+    message.
+101. **A waiting message for one tick after the intent** (#722, decision В4): an intent's row
+    between the claim and the record leaves the message recorded; the next tick deletes it as stale.
+    The same tick can show it beside the open block's «⏹» only when the block went in between —
+    the delete goes first in that `serve`. Falsifiable: a `deleteMessage` of a waiting message
+    within 3 s of its send in the logs, more than rarely.
+102. **No «⏹» for a moment** (#722): between the result's edit (which takes the block's «⏹» off)
+    and the next open block or waiting message (≈0,5–5 s), in the first seconds after the start,
+    and after a `rejected` trade until the next decision; `/stop` always works. An intent created
+    without its decision's row (`decision: null`: the backend answered no record,
+    [trade-log.md](trade-log.md)) after a `no_signal` leaves the waiting message under the open
+    block — two «⏹» until the next decision (stated: only an old backend answers no record).
+103. **Three subqueries of the latest decision per listed session** (#722): due and stale in the
+    list's filter, `waitingForSignal` in its select list — each a backward scan of
+    `signal_decisions_session_idx` of two rows (probed, not measured on the pilot's volume).
 
 ## Running it locally
 
@@ -1892,7 +1997,8 @@ That a started session trades and its counters move needs #287's orchestrator in
 The steps in Telegram — «🎮 Демо-торговля», «🧭 Вручную», a pair, «📊 Анализ»,
 «🚀 Сессия из 5 циклов» first, with or without a signal, then an amount of the amount screen
 (#476; or a pair of «Сигналы сейчас» and an amount), the session message, the waiting message under
-the cycle messages, «⏹ Остановить сессию» under it (#536); on a
+the cycle messages after a «no signal» decision, «⏹ Остановить сессию» under it (#536), and under
+an open trade's block (#722); on a
 signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5 циклов» under the trade's result
 (#360) — need a bot token of its own, which no runtime check of this issue used.
 

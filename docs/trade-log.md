@@ -17,6 +17,7 @@ decisions without a trade ([Retention](#retention)).
 | The table | `packages/db/src/schema/signal-decisions.ts`, migrations `0068_signal_decisions`, `0069_decision_session_check` |
 | The writer | `recordSignalDecision(exec, input)`, `signalDecisionInput(record, facts)` in `packages/db/src/signal-decision-ops.ts` |
 | The reads | `readTradeLogPage`, `readSessionTradeSteps`, `journalEntryOf`, `readTradeLogEnd` (same file) |
+| A reader outside the export | the session notices' sender (#722): `waitingForSignalSql` in `packages/db/src/session-notice-ops.ts` reads a session's latest row of `context = session` on `signal_decisions_session_idx` — `no_signal` is «the session waits for a signal», which shows the waiting message ([bot-session.md](bot-session.md#the-waiting-message-536)); a failed write of that row delays the message by a candle |
 | The constants and the line shapes | `packages/shared/src/trade-log.ts`; the entry and the record in `packages/shared/src/signal.ts` |
 | The last tick and the tick window | `createTickStore` in `apps/backend/src/market-data/ticks.ts` |
 | The ticks table | `packages/db/src/schema/decision-ticks.ts`, migration `0071_decision_ticks` |
@@ -477,6 +478,7 @@ STAND_DIR=~/binarius-stand/stand pnpm --filter @binarius/signal-stand stand cali
 - #669: the H1 shadow's rows (`context: shadow`, `version: h1`, `result`, `ticks_until_ms`),
   [h1.md](h1.md). #670's creators of session intents must pass `decision` to
   `createSessionIntent` (the type requires it).
+- The sender of the session messages reads the rows (#722), never writes them.
 - One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports:
   `h1 shadow report` over the shadow rows (#681, [h1.md → The report](h1.md#the-report)); otherwise
   only the export.

@@ -1470,7 +1470,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionWaitingSignal: html(
     g.Session,
-    'Сессия: сообщение ожидания под сообщениями сессии, с кнопкой остановки; шлёт backend.',
+    'Сессия: сообщение ожидания под сообщениями сессии, с кнопкой остановки, только пока сессия ждёт сигнал (последнее решение — «сигнала нет»); шлёт backend.',
     `🔎 Ждём сигнал для следующей сделки…`,
   ),
   sessionCompleted: html(
@@ -1718,12 +1718,12 @@ export const BOT_TEXT_CATALOG = {
   ),
 
   // Sent by the backend only (#464, #551, #700, docs/bot-session.md → Trade messages): a message
-  // per cycle of a session, its steps added by editing it - each trade's block when it opens, then
-  // edited into its result - without sound and without buttons, and the summary once it is
-  // finished.
+  // per cycle of a session, its steps added by editing it - each trade's block when it opens, with
+  // the session's «⏹» (#722), then edited into its result, which takes the «⏹» off - without
+  // sound, and the summary once it is finished.
   sessionTradeWon: html(
     g.Session,
-    'Блок сделки в сообщении цикла сессии, выигрыш: цикл и шаг, ставка → ставка + прибыль, цены. Заменяет блок открытой сделки; шаги цикла дописываются в то же сообщение. Без звука и без кнопок.',
+    'Блок сделки в сообщении цикла сессии, выигрыш: цикл и шаг, ставка → ставка + прибыль, цены. Заменяет блок открытой сделки, снимая «⏹»; шаги цикла — в том же сообщении. Без звука.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>🟢 Ставка: {stake} → {outcome}
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1731,7 +1731,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionTradeLost: html(
     g.Session,
-    'Блок сделки в сообщении цикла сессии, проигрыш: ставка → потеря со знаком минус.',
+    'Блок сделки в сообщении цикла сессии, проигрыш: ставка → потеря со знаком минус. Снимает кнопку «⏹» блока открытой сделки.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>🔴 Ставка: {stake} → {outcome}
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1739,7 +1739,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionTradeTied: html(
     g.Session,
-    'Блок сделки в сообщении цикла сессии, ничья: ставка → $0.00, ставка вернулась; следующая сделка — следующий шаг того же цикла.',
+    'Блок сделки в сообщении цикла сессии, ничья: ставка → $0.00, ставка вернулась; следующая сделка — следующий шаг того же цикла. Снимает кнопку «⏹» блока открытой сделки.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>⚪ Ставка: {stake} → {outcome}, ставка вернулась
 📊 Цена: {openPrice} → {closePrice}</pre>`,
@@ -1747,7 +1747,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionTradeOpen: html(
     g.Session,
-    'Блок открытой сделки в сообщении цикла сессии (#700): цикл и шаг, ставка, направление, цена открытия, без итога. При расчёте тот же блок правится в выигрыш, проигрыш или ничью.',
+    'Блок открытой сделки в сообщении цикла (#700): цикл и шаг, ставка, направление, цена открытия; под ним «⏹ Остановить сессию» (#722). При расчёте правится в итог, кнопка снимается.',
     `⚡ Цикл {cycle} Шаг {step}
 <pre>⏳ Ставка: {stake} · {action} · сделка открыта
 📊 Цена: {openPrice} → …</pre>`,
@@ -1995,7 +1995,7 @@ export const BOT_TEXT_CATALOG = {
   supportButton: plain(g.Buttons, '/support: кнопка чата с поддержкой.', '💬 Поддержка'),
   sessionStopButton: plain(
     g.Buttons,
-    'Сессия: кнопка остановки под сообщением ожидания; шлёт backend.',
+    'Сессия: кнопка остановки под сообщением ожидания и под блоком открытой сделки; шлёт backend.',
     '⏹ Остановить сессию',
   ),
   stakeMenuButton: plain(
