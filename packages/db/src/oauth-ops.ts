@@ -21,6 +21,7 @@ import {
 } from './referral-reward-ops';
 import { attachDepositsToAccount } from './postback-ops';
 import { brokerAccounts } from './schema/broker-accounts';
+import { statementNow } from './schema/columns';
 import { oauthStates } from './schema/oauth-states';
 import { users } from './schema/users';
 import { millisecondsFromNow, type Tx } from './trade-intent-ops';
@@ -82,7 +83,7 @@ export async function consumeOAuthState(
 ): Promise<ConsumedOAuthState | undefined> {
   const [row] = await db
     .update(oauthStates)
-    .set({ usedAt: sql`now()` })
+    .set({ usedAt: statementNow() })
     .where(
       and(
         eq(oauthStates.stateHash, hashToken(state)),

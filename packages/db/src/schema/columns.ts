@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import {
   bigint,
   check,
@@ -20,6 +20,18 @@ export const updatedAt = () =>
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date());
+
+// The stamp for a column a CHECK orders against created_at (`*_after_created_check`,
+// `*_sent_check`): the statement clock, never now(). now() is the transaction's start, and under
+// READ COMMITTED an UPDATE still reaches rows committed by transactions that began after it, whose
+// created_at is past that start. clock_timestamp() is computed by the UPDATE itself, after its
+// snapshot; created_at is always the inserting transaction's now() (the createdAt() default, never
+// set explicitly or updated by any writer) and does not change when the UPDATE re-reads a row
+// version after a wait, so every row the UPDATE touches has created_at < clock_timestamp() (#149,
+// #158). A function, not a shared SQL object: mapWith() and inlineParams() mutate the instance.
+// stamp-clock.test.ts holds every writer of such a column to this function; stamp-clock.db.test.ts
+// opens the transaction before the row exists for each of them.
+export const statementNow = (): SQL => sql`clock_timestamp()`;
 
 // drizzle-kit serializes snapshots with JSON.stringify, which throws on a BigInt default,
 // so the zero has to reach it as SQL rather than as 0n
