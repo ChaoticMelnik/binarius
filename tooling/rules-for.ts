@@ -191,7 +191,12 @@ export function classifyToken(token: string): TokenClass {
   return token.length >= 3 ? 'literal' : 'short';
 }
 
-function globRegExp(glob: string): RegExp {
+// Matches the path itself and every path under it: `apps/*/src` holds `apps/bot/src/x.ts`.
+const globCache = new Map<string, RegExp>();
+function globRegExp(token: string): RegExp {
+  const cached = globCache.get(token);
+  if (cached !== undefined) return cached;
+  const glob = token.replace(/\/$/, '');
   let source = '';
   for (let i = 0; i < glob.length; i += 1) {
     const char = glob[i];
@@ -202,40 +207,53 @@ function globRegExp(glob: string): RegExp {
     else if (char === '?') source += '[^/]';
     else source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   }
-  return new RegExp(`^(?:.*/)?${source}$`);
+  const pattern = new RegExp(`^(?:.*/)?${source}(?:/.*)?$`);
+  globCache.set(token, pattern);
+  return pattern;
 }
 
-export type PathKind = 'glob' | 'exact' | 'directory' | 'suffix';
+export type PathKind = 'glob' | 'exact' | 'directory' | 'suffix' | 'segment';
 
-// The gate's resolution against `git ls-files`: which entries the token names, and how.
+const PATH_KINDS: readonly PathKind[] = ['glob', 'exact', 'directory', 'suffix', 'segment'];
+
+// The one matcher of a cited path against a file, which may not exist yet (a file a plan adds).
+// `segment` tests `file`, not `'/' + file`: a leading directory is `directory`'s.
+export function pathKind(token: string, file: string): PathKind | undefined {
+  if (/[*?]/.test(token)) return globRegExp(token).test(file) ? 'glob' : undefined;
+  const bare = token.replace(/\/$/, '');
+  if (file === bare) return 'exact';
+  if (file.startsWith(bare + '/')) return 'directory';
+  if (file.endsWith('/' + bare)) return 'suffix';
+  if (file.includes('/' + bare + '/')) return 'segment';
+  return undefined;
+}
+
+export function citesPath(token: string, file: string): boolean {
+  return pathKind(token, file) !== undefined;
+}
+
+// The gate's resolution against `git ls-files`: the entries of the first kind that has any.
 export function resolvePath(
   token: string,
   entries: readonly string[],
 ): { kind: PathKind; matches: string[] } | undefined {
-  if (/[*?]/.test(token)) {
-    const pattern = globRegExp(token);
-    const matches = entries.filter((entry) => pattern.test(entry));
-    return matches.length > 0 ? { kind: 'glob', matches } : undefined;
+  const byKind = new Map<PathKind, string[]>();
+  for (const entry of entries) {
+    const kind = pathKind(token, entry);
+    if (kind === undefined) continue;
+    const matches = byKind.get(kind);
+    if (matches === undefined) byKind.set(kind, [entry]);
+    else matches.push(entry);
   }
-  const bare = token.replace(/\/$/, '');
-  const exact = entries.filter((entry) => entry === bare);
-  if (exact.length > 0) return { kind: 'exact', matches: exact };
-  const directory = entries.filter((entry) => entry.startsWith(bare + '/'));
-  if (directory.length > 0) return { kind: 'directory', matches: directory };
-  const suffix = entries.filter((entry) => entry.endsWith('/' + bare));
-  if (suffix.length > 0) return { kind: 'suffix', matches: suffix };
+  for (const kind of PATH_KINDS) {
+    const matches = byKind.get(kind);
+    if (matches !== undefined) return { kind, matches };
+  }
   return undefined;
 }
 
-// rulesFor's match of one input file, which may not exist yet (a file a plan adds), against a
-// path the rule cites.
-export function citesPath(token: string, file: string): boolean {
-  if (/[*?]/.test(token)) return globRegExp(token).test(file);
-  const bare = token.replace(/\/$/, '');
-  if (file === bare) return true;
-  if (file.startsWith(bare + '/')) return true;
-  return file.endsWith('/' + bare);
-}
+// Path-shaped tokens that name no file: an ESLint rule id and a URL prefix.
+export const PATH_SHAPED_LITERALS: readonly string[] = ['local/no-status-literal', 't.me/'];
 
 type IdentifierShape =
   | { kind: 'plain'; name: string }
@@ -280,47 +298,60 @@ export function normalisePrime(text: string): string {
   return text.replaceAll('′', "'");
 }
 
-// both primes, so an id whose ′ was not normalised fails the lookup instead of ending the list
-const ID = String.raw`[A-Z][A-Za-z]*(?:-[A-Za-z]+)*\d*[a-z]?['′]?`;
-const ID_SEGMENT = new RegExp(`^${ID}$`);
-const RANGE = /^([A-Z][A-Za-z]*(?:-[A-Za-z]+)*)(\d+)([a-z]?)–(?:\1)?(\d+)([a-z]?)$/;
+const TEST_CITATION = /`([^`\n]+\.(?:test|typecheck)\.ts)`/g;
 
-// The ids a test-file citation lists: the text after it up to ". ", "; ", the next backtick or
-// the end of the line, split on ",", "/" and " и "; an empty segment is skipped, and the first
-// segment that is neither an id nor a range of ids ends the list, as does a closing ")" or ".".
+// The window of a test-file citation: the text after it up to ". ", "; ", the end of the line or
+// the next test-file citation; any other backtick span is cut out of it, not an end.
+function idWindow(rest: string): string {
+  let window = '';
+  let at = 0;
+  for (const match of rest.matchAll(/`([^`\n]*)`|\. |; |\n/g)) {
+    window += rest.slice(at, match.index);
+    at = match.index + match[0].length;
+    if (match[1] === undefined || TEST_FILE.test(match[1])) return window;
+  }
+  return window + rest.slice(at);
+}
+
+// both primes, so an id whose ′ was not normalised fails the lookup instead of losing its prime
+const ID = String.raw`(?:[A-Z]-[a-z]+ \d+[a-z]?|[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)['′]?`;
+const ID_END = String.raw`(?:[A-Z]-[a-z]+ )?[A-Za-z0-9-]*\d[a-z]?['′]?`;
+const ID_WORD = new RegExp(String.raw`(?<![\w'′-])(${ID})(?:–(${ID_END}))?(?![\w'′-])`, 'g');
+const ID_PARTS = /^(.*?)(\d+)([a-z]?)(['′]?)$/;
+
+// The ids a test-file citation lists: every word of its window shaped as an id that has a digit
+// or a hyphen (`CUT`, `e2e`, `429` are not ids). A range expands; one that does not (another
+// prefix, a descending range) is returned whole, so the lookup fails instead of a silent skip.
 export function idsAfter(rest: string): string[] {
-  const stop = /\. |; |`|\n/.exec(rest);
-  const text = normalisePrime(stop === null ? rest : rest.slice(0, stop.index));
   const ids: string[] = [];
-  for (const raw of text.split(/,|\/| и /)) {
-    let segment = raw.trim();
-    const closed = /[).]+$/.test(segment);
-    segment = segment.replace(/[).]+$/, '');
-    if (segment === '') {
-      if (closed) break;
-      continue;
-    }
-    const expanded = expandSegment(segment);
-    if (expanded === undefined) break;
-    ids.push(...expanded);
-    if (closed) break;
+  for (const match of normalisePrime(idWindow(rest)).matchAll(ID_WORD)) {
+    if (!/[\d-]/.test(match[0])) continue;
+    if (match[2] === undefined) ids.push(match[1]);
+    else ids.push(...(expandRange(match[1], match[2]) ?? [match[0]]));
   }
   return ids;
 }
 
-function expandSegment(segment: string): string[] | undefined {
-  if (ID_SEGMENT.test(segment)) return [segment];
-  const range = RANGE.exec(segment);
-  if (range === null) return undefined;
-  const [, prefix, from, fromLetter, to, toLetter] = range;
-  if (from === to && fromLetter !== '' && toLetter !== '') {
+function expandRange(first: string, last: string): string[] | undefined {
+  const from = ID_PARTS.exec(first);
+  const to = ID_PARTS.exec(last);
+  if (from === null || to === null) return undefined;
+  const [, prefix, fromNumber, fromLetter] = from;
+  const [, endPrefix, toNumber, toLetter] = to;
+  if (!prefix.endsWith(endPrefix)) return undefined;
+  const n = Number(fromNumber);
+  const m = Number(toNumber);
+  if (n === m && fromLetter !== '' && toLetter !== '') {
+    if (toLetter < fromLetter) return undefined;
     const ids: string[] = [];
     for (let c = fromLetter.charCodeAt(0); c <= toLetter.charCodeAt(0); c += 1)
-      ids.push(`${prefix}${from}${String.fromCharCode(c)}`);
+      ids.push(`${prefix}${n}${String.fromCharCode(c)}`);
     return ids;
   }
-  const ids: string[] = [];
-  for (let n = Number(from); n <= Number(to); n += 1) ids.push(`${prefix}${n}`);
+  if (m < n) return undefined;
+  const ids = [first];
+  for (let k = n + 1; k < m; k += 1) ids.push(`${prefix}${k}`);
+  ids.push(`${prefix}${last.slice(endPrefix.length)}`);
   return ids;
 }
 
@@ -344,6 +375,7 @@ export interface GateResult {
   errors: string[];
   counts: Record<TokenClass, number>;
   ids: number;
+  citationsWithoutIds: number;
 }
 
 // Every token found in the corpus text, in one pass of the text; the alternation can skip a
@@ -370,7 +402,7 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
     literal: 0,
     short: 0,
   };
-  const pending: { where: string; kind: TokenClass; token: string }[] = [];
+  const pending: { where: string; token: string }[] = [];
   const normalised = new Map<string, string>();
   const testText = (file: string): string => {
     const cached = normalised.get(file);
@@ -380,6 +412,7 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
     return text;
   };
   let ids = 0;
+  let citationsWithoutIds = 0;
   for (const rule of rules) {
     const where = `rules/${rule.area}.md Rule ${rule.number}`;
     const testFiles = new Set<string>();
@@ -388,18 +421,21 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
       counts[kind] += 1;
       if (kind === 'path') {
         const resolved = resolvePath(token, repo.entries);
-        if (resolved === undefined) pending.push({ where, kind, token });
-        else if (TEST_FILE.test(token) && resolved.kind !== 'glob')
-          for (const match of resolved.matches) testFiles.add(match);
+        if (resolved !== undefined) {
+          if (TEST_FILE.test(token) && resolved.kind !== 'glob')
+            for (const match of resolved.matches) testFiles.add(match);
+        } else if (PATH_SHAPED_LITERALS.includes(token)) pending.push({ where, token });
+        else errors.push(`${where}: path ${token} (no file)`);
       } else if (kind === 'identifier') {
-        if (!identifierFound(token, repo.corpus)) pending.push({ where, kind, token });
+        if (!identifierFound(token, repo.corpus)) errors.push(`${where}: identifier ${token}`);
       } else if (kind === 'literal') {
-        pending.push({ where, kind, token });
+        pending.push({ where, token });
       }
     }
     const texts = [...testFiles].map(testText);
-    for (const match of rule.body.matchAll(/`([^`\n]+\.(?:test|typecheck)\.ts)`/g)) {
-      const listed = idsAfter(rule.body.slice((match.index ?? 0) + match[0].length));
+    for (const match of rule.body.matchAll(TEST_CITATION)) {
+      const listed = idsAfter(rule.body.slice(match.index + match[0].length));
+      if (listed.length === 0) citationsWithoutIds += 1;
       for (const id of listed) {
         ids += 1;
         if (!texts.some((text) => idFound(id, text)))
@@ -411,9 +447,9 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
     pending.map(({ token }) => token),
     repo.corpus.text,
   );
-  for (const { where, kind, token } of pending)
-    if (!found.has(token)) errors.push(`${where}: ${kind} ${token}`);
-  return { errors, counts, ids };
+  for (const { where, token } of pending)
+    if (!found.has(token)) errors.push(`${where}: literal ${token}`);
+  return { errors, counts, ids, citationsWithoutIds };
 }
 
 const CORPUS_ROOTS = ['apps/', 'packages/', 'tooling/', 'scripts/', '.github/'];
@@ -503,6 +539,11 @@ export function ruleKeys(
     }
     const bare = token.replace(/\/$/, '');
     for (const match of resolved.matches) {
+      if (resolved.kind === 'segment') {
+        const at = match.indexOf('/' + bare + '/');
+        keys.add(mapKey(match.slice(0, at + bare.length + 2), directories));
+        continue;
+      }
       const key = mapKey(match, directories);
       keys.add(resolved.kind === 'directory' && key.length > bare.length ? bare : key);
     }
@@ -564,15 +605,19 @@ export function rulesFor(
 ): { perFile: FileRules[]; rules: Rule[]; areas: Area[] } {
   const directories = directoriesOf(entries);
   const keysOf = new Map(rules.map((rule) => [rule.number, ruleKeys(rule, entries, directories)]));
+  const pathsOf = new Map(
+    rules.map((rule) => [
+      rule.number,
+      tokensOf(rule.body).filter((token) => classifyToken(token) === 'path'),
+    ]),
+  );
   const found = new Map<number, Rule>();
   const perFile: FileRules[] = [];
   let uncovered = false;
   for (const file of files) {
     const key = mapKey(file, directories);
     const direct = rules.filter((rule) =>
-      tokensOf(rule.body).some(
-        (token) => classifyToken(token) === 'path' && citesPath(token, file),
-      ),
+      (pathsOf.get(rule.number) ?? []).some((token) => citesPath(token, file)),
     );
     const directory = rules.filter(
       (rule) => !direct.includes(rule) && (keysOf.get(rule.number) ?? new Set()).has(key),

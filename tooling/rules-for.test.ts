@@ -5,6 +5,7 @@ import {
   type GateResult,
   type Repo,
   type Rule,
+  PATH_SHAPED_LITERALS,
   RulesError,
   SKILL_FILE,
   buildCorpus,
@@ -34,6 +35,7 @@ import {
   resolvePath,
   rulesFor,
   splitRules,
+  tokensOf,
 } from './rules-for';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -89,21 +91,28 @@ describe('test ids', () => {
     expect(idFound('R33', text)).toBe(false);
   });
 
-  it('U7 ranges expand by number or letter, and a segment that is not an id ends the list', () => {
-    expect(idsAfter(' D1–D3, M7b–M7d, K1–K8b, W-door1–3; then')).toEqual([
-      'D1',
-      'D2',
-      'D3',
-      'M7b',
-      'M7c',
-      'M7d',
-      ...['K1', 'K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8'],
-      'W-door1',
-      'W-door2',
-      'W-door3',
-    ]);
-    expect(idsAfter(', A1, гонка CLI и сверки — B2.')).toEqual(['A1']);
-    expect(idsAfter(' P1–P2). Next C9')).toEqual(['P1', 'P2']);
+  it.each([
+    [' D1–D3, M7b–M7d, K1–K3b; X9', ['D1', 'D2', 'D3', 'M7b', 'M7c', 'M7d', 'K1', 'K2', 'K3b']],
+    [' W-door1–3', ['W-door1', 'W-door2', 'W-door3']],
+    [
+      ' H1-M1–M3, H1-DR1–DR3, H-D1–H-D2',
+      ['H1-M1', 'H1-M2', 'H1-M3', 'H1-DR1', 'H1-DR2', 'H1-DR3', 'H-D1', 'H-D2'],
+    ],
+    [' U-dep 1–2, U-mode 6', ['U-dep 1', 'U-dep 2', 'U-mode 6']],
+    [" K3–K5′, G9′–G11, D5'", ['K3', 'K4', "K5'", "G9'", 'G10', 'G11', "D5'"]],
+    [' U9–U9c', ['U9', 'U9c']],
+    [' M1 (только захват, фильтр выключен), перехват — M2. M3', ['M1', 'M2']],
+    [' R27: пользователь, оставшийся в real', ['R27']],
+    [' M1–M2 (с M5b, M7b–M7c)', ['M1', 'M2', 'M5b', 'M7b', 'M7c']],
+    [' K2′ (с #709 — без `t.me/` в подписи), K3–K4', ["K2'", 'K3', 'K4']],
+    [' X1, `other.test.ts` Y1', ['X1']],
+    [' X1; Y1', ['X1']],
+    [' H1-BW, A-win, T-clock', ['H1-BW', 'A-win', 'T-clock']],
+    [' X1–Y3', ['X1–Y3']],
+    [' CUT, #709, e2e, 429, 5xx', []],
+    [' → the lock order staff → sessions', []],
+  ])('U7 the ids after a test-file citation:%s', (rest, ids) => {
+    expect(idsAfter(rest)).toEqual(ids);
   });
 });
 
@@ -115,7 +124,7 @@ describe('tokens', () => {
     'apps/backend/src/admin/routes.ts',
   ];
 
-  it('U8 a path resolves exactly, as a directory, as a suffix or as a glob; else it is no path', () => {
+  it('U8 a path resolves exactly, as a directory, a suffix, a segment or a glob; else it is no path', () => {
     expect(resolvePath('packages/db/src/schema/columns.ts', entries)?.kind).toBe('exact');
     expect(resolvePath('apps/trading-worker/src/stake/', entries)).toEqual({
       kind: 'directory',
@@ -126,6 +135,18 @@ describe('tokens', () => {
     expect(resolvePath('*.db.test.ts', entries)?.matches).toEqual([
       'packages/db/src/user-ops.db.test.ts',
     ]);
+    expect(resolvePath('admin/', entries)).toEqual({
+      kind: 'segment',
+      matches: ['apps/backend/src/admin/routes.ts'],
+    });
+    expect(resolvePath('apps/*/src', entries)?.matches).toEqual([
+      'apps/trading-worker/src/stake/size.ts',
+      'apps/backend/src/admin/routes.ts',
+    ]);
+    expect(resolvePath('README.md', ['docs/README.md', 'README.md'])).toEqual({
+      kind: 'exact',
+      matches: ['README.md'],
+    });
     expect(resolvePath('payments/', entries)).toBeUndefined();
     expect(classifyToken('@binarius/shared')).toBe('literal');
     expect(classifyToken('columns.ts')).toBe('path');
@@ -162,6 +183,23 @@ describe('tokens', () => {
       [...literalsFound(['abcd', 'bcx', '.env', 'gone'], 'xabcdx; bcx; .env.example')].sort(),
     ).toEqual(['.env', 'abcd', 'bcx']);
     expect(literalsFound(['cde'], 'abcdef')).toEqual(new Set(['cde']));
+  });
+
+  it('U15 each class has its own check: no literal fallback for an identifier or a path', () => {
+    const repo: Repo = {
+      entries: ['apps/backend/src/postback/routes.ts'],
+      corpus: buildCorpus(['recordPostbackFailure(); "/paysupport"; https://t.me/x']),
+      read: () => '',
+    };
+    const result = checkRules(
+      [rule(35, 'payments', '`recordPostback`, `gone/dir/`, `t.me/`, `/paysupport`, `/nowhere`')],
+      repo,
+    );
+    expect(result.errors).toEqual([
+      'rules/payments.md Rule 35: identifier recordPostback',
+      'rules/payments.md Rule 35: path gone/dir/ (no file)',
+      'rules/payments.md Rule 35: literal /nowhere',
+    ]);
   });
 });
 
@@ -263,12 +301,47 @@ describe('rulesFor', () => {
     expect(renderList(result.perFile)).toContain('no rule cites apps/x/src/new.ts → read');
   });
 
-  it('C4 a path a plan adds is matched by the directory a rule cites', () => {
-    expect(
-      citesPath('apps/trading-worker/src/stake/', 'apps/trading-worker/src/stake/new.ts'),
-    ).toBe(true);
-    expect(citesPath('apps/*/src', 'apps/bot/src')).toBe(true);
-    expect(citesPath('columns.ts', 'packages/db/src/schema/not-columns.ts')).toBe(false);
+  it.each([
+    [
+      'packages/db/src/schema/columns.ts',
+      'packages/db/src/schema/columns.ts',
+      'packages/db/src/schema/columns.tsx',
+    ],
+    ['columns.ts', 'packages/db/src/schema/columns.ts', 'packages/db/src/schema/not-columns.ts'],
+    [
+      'intents/config.test.ts',
+      'apps/trading-worker/src/intents/config.test.ts',
+      'apps/trading-worker/src/my-intents/config.test.ts',
+    ],
+    [
+      'apps/trading-worker/src/stake/',
+      'apps/trading-worker/src/stake/new.ts',
+      'apps/trading-worker/src/stakes/new.ts',
+    ],
+    [
+      'apps/trading-worker/src/stake',
+      'apps/trading-worker/src/stake/new.ts',
+      'apps/trading-worker/src/stakes/new.ts',
+    ],
+    ['payments/', 'apps/backend/src/payments/new.ts', 'apps/backend/src/payments-old/new.ts'],
+    ['apps/*/src', 'apps/bot/src/new.ts', 'apps/bot/scripts/new.ts'],
+    ['apps/*', 'apps/web/src/admin/new.ts', 'packages/web/src/new.ts'],
+    ['*.test.ts', 'apps/bot/src/new.test.ts', 'apps/bot/src/new.ts'],
+    [
+      'circuit-breaker/*.test.ts',
+      'apps/trading-worker/src/circuit-breaker/new.test.ts',
+      'apps/trading-worker/src/circuit-breakers/new.test.ts',
+    ],
+    [
+      'packages/db/drizzle/*.sql',
+      'packages/db/drizzle/0099_new.sql',
+      'packages/db/drizzle-old/0099_new.sql',
+    ],
+    ['packages/**/schema/*.ts', 'packages/db/src/schema/new.ts', 'packages/db/src/schemas/new.ts'],
+    ['apps/?ot/src', 'apps/bot/src/new.ts', 'apps/boot/src/new.ts'],
+  ])('C4 a file a plan adds, which may not exist: %s holds %s, not %s', (token, inside, beside) => {
+    expect(citesPath(token, inside)).toBe(true);
+    expect(citesPath(token, beside)).toBe(false);
   });
 });
 
@@ -338,11 +411,60 @@ describe('the rules in this repository', () => {
     skill = readFileSync(path.join(repoRoot, SKILL_FILE), 'utf8');
   });
 
-  it('every citation of the rules resolves: G1 paths, G2 expressions skipped, G3 test ids', () => {
+  it('every path, identifier and literal the rules cite resolves; every test id the grammar reads after a test-file citation is in a cited test file (G1–G3)', () => {
+    const summary = `token classes ${JSON.stringify(gate.counts)}, ${gate.ids} test ids checked, ${gate.citationsWithoutIds} test-file citations without ids`;
     expect(rules.length).toBeGreaterThan(0);
     expect(repo.corpus.identifiers.size).toBeGreaterThan(1000);
-    expect(gate.ids).toBeGreaterThan(0);
-    expect(gate.errors, `token classes ${JSON.stringify(gate.counts)}`).toEqual([]);
+    expect(gate.ids, summary).toBeGreaterThan(1200);
+    expect(gate.errors, summary).toEqual([]);
+  });
+
+  it('G6 every path-shaped literal is cited by a rule and names no file', () => {
+    const cited = new Set(rules.flatMap((r) => tokensOf(r.body)));
+    for (const token of PATH_SHAPED_LITERALS) {
+      expect(cited.has(token), token).toBe(true);
+      expect(resolvePath(token, repo.entries), token).toBeUndefined();
+    }
+  });
+
+  it('G7 every resolved path a rule cites routes that rule to the files it names', () => {
+    const cases = rules.flatMap((r) =>
+      tokensOf(r.body)
+        .filter((token) => classifyToken(token) === 'path')
+        .flatMap((token) => {
+          const resolved = resolvePath(token, repo.entries);
+          return resolved === undefined
+            ? []
+            : [{ number: r.number, token, file: resolved.matches[0] }];
+        }),
+    );
+    const { perFile } = rulesFor(
+      cases.map(({ file }) => file),
+      rules,
+      repo.entries,
+    );
+    const missed = cases
+      .filter(({ number }, i) => !perFile[i].direct.some((r) => r.number === number))
+      .map(({ number, token, file }) => `Rule ${number} ${token} -> ${file}`);
+    expect(missed).toEqual([]);
+  });
+
+  it('C5 a new file under a directory glob or a relative directory gets the rule', () => {
+    const { perFile } = rulesFor(
+      [
+        'apps/trading-worker/src/new-writer.ts',
+        'packages/shared/src/new.ts',
+        'apps/backend/src/payments/new.ts',
+      ],
+      rules,
+      repo.entries,
+    );
+    const [writer, shared, payments] = perFile.map(({ direct, directory }) =>
+      [...direct, ...directory].map((r) => r.number),
+    );
+    expect(writer).toEqual(expect.arrayContaining([18, 20, 43, 51]));
+    expect(shared).toEqual(expect.arrayContaining([18, 51]));
+    expect(payments).toContain(33);
   });
 
   it('G4 rule numbers run 1..max without a gap', () => {
