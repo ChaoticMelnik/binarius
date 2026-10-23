@@ -43,6 +43,7 @@ import {
   pairWaitingText,
   placeOf,
   pressedPlace,
+  pressedUnderPhoto,
   removeLegacyKeyboard,
   stripKeyboard,
   SESSION_START_PATTERN,
@@ -386,7 +387,7 @@ export function createTradingSessionComposer<C extends Context>({
     // the text after a refused photo took the delete's call (HANDLER_CALLS.sessionStart): the
     // screen stays, and its button pressed again answers 409 with this session
     if (removeScreen && !photoRefused) {
-      await removeLaunchScreen(ctx);
+      await removeLaunchScreen(ctx, 'the launch screen');
     }
   }
 
@@ -656,6 +657,9 @@ export function createTradingSessionComposer<C extends Context>({
   // A start refused for want of a signal (409 no_signal, #509) waits for one (#664): the wait in
   // place of a launch or an amount screen, as a new message elsewhere; its alternatives come with
   // the first poll. The session itself starts only on the next press, once the signal is there.
+  // Under the analysis card (a photo, #482) the wait goes as a new message at once, its entry on
+  // it, and then the card is deleted as a launch screen after a start (#418, #761): the wait
+  // never waits for the delete, and the entry stands whatever the delete's outcome.
   async function waitForSignal(
     ctx: Context,
     { assetId, back }: SessionStartData,
@@ -669,8 +673,9 @@ export function createTradingSessionComposer<C extends Context>({
       : undefined;
     const base = pairWaitingText(pair === undefined ? null : pairLabel(pair), assetId);
     const screen = pairWaitingScreen(base, []);
+    const card = removeScreen && pressedUnderPhoto(ctx);
     let place: Place | undefined;
-    if (removeScreen) {
+    if (removeScreen && !card) {
       const drawn = await drawInPlace(ctx, screen.text, screen.keyboard);
       if (drawn.in === 'refused') {
         logger.warn(
@@ -700,6 +705,7 @@ export function createTradingSessionComposer<C extends Context>({
       base,
       alternatives: 'pending',
     });
+    if (card) await removeLaunchScreen(ctx, 'the analysis card');
   }
 
   // A missing or foreign id is told as such; anything else is logged. The stop is a write and is
@@ -820,14 +826,14 @@ export function createTradingSessionComposer<C extends Context>({
   }
 
   // The launch screen after the session message was sent (#418, docs/bot-session.md → The launch
-  // screen after the start), after it so a slow or refused delete never withholds it.
+  // screen after the start), after it so a slow or refused delete never withholds it; the analysis
+  // card under the wait after a 409 no_signal the same way (#761), `what` naming it in the logs.
   //   deleted                                   → nothing more
   //   400 «message to delete not found»         → nothing, info
   //   400 «…can't be deleted…» (48 h)          → its keyboard stripped, the text stays
   //   any other GrammyError or HttpError        → nothing, warn
   //   anything else                             → a bug, rethrown to bot.catch
-  async function removeLaunchScreen(ctx: Context): Promise<void> {
-    const what = 'the launch screen';
+  async function removeLaunchScreen(ctx: Context, what: string): Promise<void> {
     try {
       await ctx.deleteMessage();
       return;

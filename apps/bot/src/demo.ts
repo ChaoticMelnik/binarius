@@ -1403,7 +1403,7 @@ export function createDemoComposer<C extends Context>({
   // unknown and sends nothing more; any other refusal goes to bot.catch.
   async function showWaiting(ctx: Context, text: TelegramHtml): Promise<Waiting | 'unknown'> {
     const pressed = ctx.callbackQuery?.message;
-    if (pressed !== undefined && 'photo' in pressed && pressed.photo !== undefined) {
+    if (pressedUnderPhoto(ctx)) {
       try {
         const sent = await replyHtmlWithoutNextStep(ctx, text, NO_NEXT_STEP_REASONS.InProgress);
         return { pressed: false, chatId: sent.chat.id, messageId: sent.message_id };
@@ -1702,6 +1702,8 @@ export function createDemoComposer<C extends Context>({
   // gets the screen anew; any other refusal goes to bot.catch with nothing sent, the keyboard on
   // screen being the retry. A transport failure leaves the edit unknown and sends nothing more;
   // anything else is a bug.
+  // Under a photo (the analysis card #482, the summary card #318) no edit is tried: a caption
+  // cannot become this text, so the screen goes as a new message at once (#761).
   // Where the screen landed, for the wait (#664): the pressed message or the new one; undefined
   // after a transport failure.
   async function editOrReply(
@@ -1709,6 +1711,9 @@ export function createDemoComposer<C extends Context>({
     text: TelegramHtml,
     keyboard: BotKeyboard,
   ): Promise<Place | undefined> {
+    if (pressedUnderPhoto(ctx)) {
+      return placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
+    }
     try {
       await editMessageTextHtml(ctx, text, { reply_markup: keyboard });
       return pressedPlace(ctx);
@@ -1907,6 +1912,11 @@ export const pressedPlace = (ctx: Context): Place | undefined => {
   const chatId = ctx.chat?.id;
   const messageId = ctx.callbackQuery?.message?.message_id;
   return chatId === undefined || messageId === undefined ? undefined : { chatId, messageId };
+};
+// The pressed message is a photo, so its text is a caption that editMessageText cannot edit
+export const pressedUnderPhoto = (ctx: Context): boolean => {
+  const pressed = ctx.callbackQuery?.message;
+  return pressed !== undefined && 'photo' in pressed && pressed.photo !== undefined;
 };
 
 // Where the analysis's «⏳» is: the pressed message, or a new one under a photo; null when the

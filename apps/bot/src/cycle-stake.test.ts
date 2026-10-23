@@ -1,4 +1,5 @@
-import type { Update } from 'grammy/types';
+import { BotError, HttpError } from 'grammy';
+import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   pairLabel,
@@ -19,6 +20,7 @@ import { createBot } from './bot';
 import {
   CYCLE_STAKE_PATTERN,
   cycleCustomCallbackData,
+  DEMO_GROUPS_CALLBACK_DATA,
   cycleStakeCallbackData,
   demoLaunchCallbackData,
   SESSION_START_PATTERN,
@@ -34,6 +36,7 @@ import {
   callbackUpdate,
   photoCallbackUpdate,
   captureApi,
+  rejectionOf,
   fakeBackend,
   fakeLogger,
   messageAnswer,
@@ -345,6 +348,95 @@ describe('an amount of the amount screen', () => {
   });
 });
 
+// #761: under the analysis card (a photo, #482) the wait after a 409 no_signal goes as a new
+// message at once, its entry on it, and then the card is deleted as a launch screen after a
+// start (#418)
+describe('the wait under the analysis card (#761)', () => {
+  const refusal = (error_code: number, description: string): ApiError => ({
+    ok: false,
+    error_code,
+    description,
+  });
+  const DELETE_FORBIDDEN = refusal(400, "Bad Request: message can't be deleted");
+  const DELETE_GONE = refusal(400, 'Bad Request: message to delete not found');
+  const TRANSPORT = new HttpError(
+    "Network request for 'sendMessage' failed!",
+    new Error('The operation was aborted due to timeout'),
+  );
+  const WAIT_TEXT = TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value;
+  const pressOnCard = async (errors: readonly (readonly [string, ApiError | HttpError])[] = []) => {
+    const scene = setup({
+      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.NoSignal)),
+    });
+    for (const [method, error] of errors) scene.apiErrors.set(method, error);
+    const update = photoCallbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '2', 'a'));
+    const pressed = (update.callback_query?.message as { message_id: number }).message_id;
+    const thrown = await rejectionOf(scene.pressUpdate(update));
+    return { ...scene, pressed, thrown };
+  };
+
+  it('C-wait-photo-1 sends the wait as a new message, registers it there, then deletes the card', async () => {
+    const { calls, pressed, thrown, signalWaiter, setStake, sessionTracker, logger } =
+      await pressOnCard();
+    expect(thrown).toBeUndefined();
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(WAIT_TEXT);
+    expect(rowsOf(sent)).toEqual([
+      [
+        { text: LABELS.demoManualButton, callback_data: DEMO_GROUPS_CALLBACK_DATA },
+        { text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA },
+      ],
+    ]);
+    expect(payloadOf(calls, 'deleteMessage')).toEqual({ chat_id: USER.id, message_id: pressed });
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
+    expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+      messageId: TEXT_CARD_MESSAGE_ID,
+      assetId: PAIR_EURUSD.id,
+      origin: 'start',
+      back: 'a',
+      alternatives: 'pending',
+    });
+    expect(setStake).toHaveBeenCalledTimes(1);
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+    expect(logger.warn.mock.calls.map((call) => call[1])).not.toContain(
+      'trading session not started',
+    );
+  });
+
+  it('C-wait-photo-2 strips the card’s keyboard when it is too old to delete', async () => {
+    const { calls, signalWaiter } = await pressOnCard([['deleteMessage', DELETE_FORBIDDEN]]);
+    expect(methods(calls)).toEqual([
+      'answerCallbackQuery',
+      'sendMessage',
+      'deleteMessage',
+      'editMessageReplyMarkup',
+    ]);
+    expect(payloadOf(calls, 'editMessageReplyMarkup')?.reply_markup).toBeUndefined();
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
+  });
+
+  it('C-wait-photo-3 tells a card already gone as info, the wait registered all the same', async () => {
+    const { logger, signalWaiter } = await pressOnCard([['deleteMessage', DELETE_GONE]]);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'deleteMessage' }),
+      'the analysis card was already gone',
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
+  });
+
+  it('C-wait-photo-4 leaves the card and registers nothing when the wait fails in transport', async () => {
+    const { calls, thrown, signalWaiter, logger } = await pressOnCard([['sendMessage', TRANSPORT]]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(signalWaiter.waitPair).not.toHaveBeenCalled();
+    // to bot.catch, as the wait's new message after a refused edit and the `:n` door
+    expect(thrown).toBeInstanceOf(BotError);
+    expect((thrown as BotError).error).toBe(TRANSPORT);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('«✏️ Ввести» of the amount screen', () => {
   it.each(['l', 'a'] as const)(
     'asks for the amount in place, the way back to the screen (%s)',
@@ -365,6 +457,24 @@ describe('«✏️ Ввести» of the amount screen', () => {
       ]);
     },
   );
+
+  // #761: «✏️ Ввести» under the analysis card (a photo) tries no edit
+  it('C-custom-photo sends the prompt as a new message under the analysis card', async () => {
+    const { pressUpdate, calls, loginDialog } = setup();
+    await pressUpdate(photoCallbackUpdate(cycleCustomCallbackData(PAIR_EURUSD.id, 5, 'a')));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.stakeInputPrompt.value);
+    expect(rowsOf(sent)).toEqual([
+      [
+        {
+          text: LABELS.stakeBackButton,
+          callback_data: demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'),
+        },
+      ],
+    ]);
+    expect(loginDialog.get(USER.id)).toEqual({ ...ON_STEP, back: 'a' });
+  });
 
   it('replaces a login the user had open, and a login replaces it (T-replace)', async () => {
     const { press, loginDialog } = setup({ dialog: { step: 'email' } });

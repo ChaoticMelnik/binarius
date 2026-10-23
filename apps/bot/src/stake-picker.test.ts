@@ -48,6 +48,7 @@ import {
   accessView,
   brokerBalance,
   callbackUpdate,
+  photoCallbackUpdate,
   captureApi,
   fakeBackend,
   fakeLogger,
@@ -128,9 +129,11 @@ function setup(
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   const press = (data: string) => bot.handleUpdate(callbackUpdate(data));
+  const pressOnPhoto = (data: string) => bot.handleUpdate(photoCallbackUpdate(data));
   const type = (text: string) => bot.handleUpdate(textUpdate(text));
   return {
     press,
+    pressOnPhoto,
     type,
     logger,
     loginDialog,
@@ -142,6 +145,8 @@ function setup(
   };
 }
 
+const payloadOf = (calls: readonly ApiCall[], method: string) =>
+  calls.find((call) => call.method === method)?.payload;
 const lastPayload = (calls: readonly ApiCall[]) =>
   calls.filter((call) => ['editMessageText', 'sendMessage'].includes(call.method)).at(-1)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
@@ -395,6 +400,22 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     Promise.resolve(accessView({ demoStake }));
   const amount = (value: string, label: string, durationSec: 5 = 5) =>
     button(label, cycleStakeCallbackData(PAIR_EURUSD.id, durationSec, value, 'l'));
+
+  // #761: «💵 Сумма» under the analysis card's «➕ Ещё» (a photo, #482) tries no edit
+  it('P-open-photo sends the picker as a new message under the analysis card', async () => {
+    const data = stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
+    const photo = setup();
+    await photo.pressOnPhoto(data);
+    expect(photo.calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const text = setup();
+    await text.press(data);
+    const edited = payloadOf(text.calls, 'editMessageText');
+    const sent = payloadOf(photo.calls, 'sendMessage');
+    expect(edited).toBeDefined();
+    expect(sent?.text).toBe(edited?.text);
+    expect(sent?.reply_markup).toEqual(edited?.reply_markup);
+    expect(photo.logger.warn).not.toHaveBeenCalled();
+  });
 
   it('leads back to the launch screen', async () => {
     const { press, calls } = setup();
