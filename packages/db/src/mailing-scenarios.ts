@@ -347,7 +347,9 @@ export const MAILING_SCENARIOS = {
   },
   // Scenario 1 (#124): a demo user with a session behind them, inactive since the fact. Newer
   // activity is a new key, so the old job is cancelled at the claim; at most one sent in
-  // INACTIVE_REPEAT_DAYS; it waits while a more specific retention job is pending.
+  // INACTIVE_REPEAT_DAYS; while a more specific retention job is pending it is not planned, and
+  // a planned one is cancelled at the claim, its key spent for that spell (docs/mailing.md →
+  // Retention).
   [NotificationKind.Inactive3d]: oneFact({
     factAt: lastActivityAt,
     afterMs: INACTIVE_AFTER_MS,
@@ -370,8 +372,11 @@ export const MAILING_SCENARIOS = {
   // Scenario 2 (#124): the newest session stopped (ended_at is set exactly when it is stopped,
   // trading_sessions_ended_at_pair_check) and none started since; a newer session is a new key.
   // The payload: the pair and duration from the settings when they are numbers, and the score.
+  // The fact is the newest session's ended_at when it is a demo one (#124 round 1): a real one,
+  // left by a switch to demo mid-session, has no fact and still counts as a session since.
   [NotificationKind.SessionIdle24h]: {
-    facts: sql`(select ${tradingSessions.endedAt} as at, ${tradingSessions.id} as session_id,
+    facts: sql`(select case when ${tradingSessions.mode} = ${literal(TradeMode.Demo)}
+          then ${tradingSessions.endedAt} end as at, ${tradingSessions.id} as session_id,
         ${tradingSessions.settings} as settings
       ${newestSessionFrom})`,
     afterMs: SESSION_IDLE_AFTER_MS,

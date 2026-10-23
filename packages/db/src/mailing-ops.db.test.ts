@@ -1809,13 +1809,18 @@ async function retained({
 
 const stoppedSession = async (
   accountId: string,
-  { started, ended, settings }: { started: number; ended: number; settings?: unknown },
+  {
+    started,
+    ended,
+    settings,
+    mode = TradeMode.Demo,
+  }: { started: number; ended: number; settings?: unknown; mode?: TradeMode },
 ) => {
   const [row] = await tmp.db
     .insert(tradingSessions)
     .values({
       brokerAccountId: accountId,
-      mode: TradeMode.Demo,
+      mode,
       settings: (settings ?? sessionSettings({ durationSec: 5 })) as TradingSessionSettings,
       status: TradingSessionStatus.Stopped,
       stopReason: TradingSessionStopReason.Completed,
@@ -2011,7 +2016,7 @@ describe('retention: inactive_3d', () => {
   it.each([
     ['RT5a', NotificationKind.SessionIdle24h, `session_idle:${randomUUID()}`],
     ['RT5b', NotificationKind.TokensOut2d, 'tokens_out_2d'],
-  ] as const)('%s waits while a %s job is pending', async (_id, kind, key) => {
+  ] as const)('%s plans nothing while a %s job is pending', async (_id, kind, key) => {
     const user = await inactiveUser();
     await insertJob(user.userId, kind, key, { status: NotificationJobStatus.Pending });
     await planMailingJobs(tmp.db);
@@ -2071,6 +2076,32 @@ describe('retention: inactive_3d', () => {
     } finally {
       await plansFromMinutesAgo(hours(200));
     }
+  });
+
+  it('RT10 cancels at the claim the job planned in the same pass as a specific one, and plans it no more', async () => {
+    const user = await retained();
+    await stoppedSession(user.accountId, { started: hours(100), ended: hours(100) - 1 });
+    await planMailingJobs(tmp.db);
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status]).sort()).toEqual([
+      [KIND, NotificationJobStatus.Pending],
+      [NotificationKind.SessionIdle24h, NotificationJobStatus.Pending],
+    ]);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Failed })
+      .where(
+        and(
+          eq(notificationJobs.status, NotificationJobStatus.Pending),
+          ne(notificationJobs.userId, user.userId),
+        ),
+      );
+    const { job, canceled } = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect([job?.kind, canceled]).toEqual([NotificationKind.SessionIdle24h, 1]);
+    await settleMailingJob(tmp.db, job!.id, { kind: 'delivered' });
+    await planMailingJobs(tmp.db);
+    expect((await kindJobsOf(user.userId, KIND)).map((row) => row.status)).toEqual([
+      NotificationJobStatus.Canceled,
+    ]);
   });
 
   it('RT9 plans one job when two planners run at the same time', async () => {
@@ -2146,6 +2177,38 @@ describe('retention: session_idle_24h', () => {
     await seedTradingSession(tmp.db, user.accountId);
     expect(await claimOnly(planned!.id)).toEqual({ job: undefined, canceled: 1 });
     expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('RS3b cancels at the claim a job whose user started a real session after it was planned', async () => {
+    const user = await idleUser();
+    await planMailingJobs(tmp.db);
+    const [planned] = await kindJobsOf(user.userId, KIND);
+    await stoppedSession(user.accountId, { started: 10, ended: 5, mode: TradeMode.Real });
+    expect(await claimOnly(planned!.id)).toEqual({ job: undefined, canceled: 1 });
+  });
+
+  it('RS8 plans nothing for a demo user whose newest session, stopped 24 h ago, was a real one', async () => {
+    const user = await retained();
+    const real = await stoppedSession(user.accountId, {
+      started: hours(24) + 31,
+      ended: hours(24) + 1,
+      mode: TradeMode.Real,
+    });
+    await trade(user, { createdAt: sql`now()`, sessionId: real.id, mode: TradeMode.Real });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+  });
+
+  it('RS8b plans nothing for an older demo session when a real one started since', async () => {
+    const user = await retained();
+    await stoppedSession(user.accountId, { started: hours(31), ended: hours(30) });
+    await stoppedSession(user.accountId, {
+      started: hours(26),
+      ended: hours(25),
+      mode: TradeMode.Real,
+    });
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
   });
 
   it('RS4 carries no pair when the session’s settings do not name it', async () => {
