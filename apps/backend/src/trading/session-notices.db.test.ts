@@ -4,6 +4,7 @@ import type { ApiError } from 'grammy/types';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  SignalDecisionOutcome,
   TradeAction,
   TradeIntentStatus,
   TradingSessionStopReason,
@@ -31,6 +32,7 @@ import {
   markTelegramReachable,
   recordSessionCycleMessage,
   recordSessionStatusMessage,
+  recordSignalDecision,
   settleIntent,
   stopTradingSession,
   takeIntent,
@@ -42,6 +44,8 @@ import {
 } from '@binarius/db';
 import {
   createTempDatabase,
+  decisionFixture,
+  noSignalDecisionFixture,
   seedTradingSession,
   seedUserWithAccount,
   sessionSettings,
@@ -181,9 +185,33 @@ async function nextIntent(target: Target): Promise<TradeIntentRow> {
       amount: decimalStringSchema.parse('5'),
       action: TradeAction.Up,
       durationSec: 60,
-      decision: null,
+      // the intent's row of the decision log, in its transaction, as the orchestrator writes it:
+      // it ends the session's wait for a signal (#722)
+      decision: decisionFixture(
+        { sessionId: target.session.id, brokerAccountId: target.seed.brokerAccountId },
+        { step: target.step },
+      ),
     })
   ).intent;
+}
+
+// the orchestrator's decision of the session's next step (#722): `no_signal` makes the session
+// wait for a signal, and the waiting message is due; any other outcome ends the wait
+const decide = (target: Target, outcome: SignalDecisionOutcome, detail: string | null = null) => {
+  const session = { sessionId: target.session.id, brokerAccountId: target.seed.brokerAccountId };
+  const facts = { step: target.step + 1, outcome, detail };
+  return recordSignalDecision(
+    tmp.db,
+    outcome === SignalDecisionOutcome.NoSignal
+      ? noSignalDecisionFixture(session, facts)
+      : decisionFixture(session, facts),
+  );
+};
+const noSignal = (target: Target) => decide(target, SignalDecisionOutcome.NoSignal);
+// the next step settled, then no signal for the one after: the session waits again (#722)
+async function settledWaiting(target: Target, profit: string): Promise<void> {
+  await settled(target, profit);
+  await noSignal(target);
 }
 
 // the next step open at the broker, at step/10 (#700)
@@ -285,11 +313,16 @@ const answered = new WeakMap<object, number>();
 // the edits Telegram applied (a refused one is recorded as a call too)
 const edited = new WeakSet<object>();
 
-// the waiting message (#536) carries the one keyboard of the sender's silent messages
+// the waiting message (#536): its «⏹» by its data, `:w` - the open block's has the same label
+// and `:c` (#722)
 const isWaiting = (call: ApiCall) =>
   inlineButtons(call.payload).some((button) =>
-    (button.callback_data ?? '').startsWith('session:stop:'),
+    /^session:stop:[0-9a-f-]{36}:w$/.test(button.callback_data ?? ''),
   );
+// the open block's «⏹» (#722)
+const CYCLE_STOP = (target: Target) => [
+  { text: CLIENT_LABELS.sessionStopButton, callback_data: `session:stop:${target.session.id}:c` },
+];
 // the trades' messages and the summary; the waiting messages are waitingTo's
 const sendsTo = (calls: readonly ApiCall[], target: Target) =>
   callsTo(calls, 'sendMessage').filter(
@@ -482,9 +515,9 @@ describe('the session notices (#464)', () => {
   it("D6 each session's notices go to its owner only", async () => {
     const first = await seedSession();
     const second = await seedSession();
-    await settled(first, '4.6');
+    await settledWaiting(first, '4.6');
     await settled(second, '-5');
-    await settled(second, '-5');
+    await settledWaiting(second, '-5');
     const { notices, captured } = sender();
     await notices.tick();
     expect(textsTo(captured.calls, first)).toHaveLength(1);
@@ -1451,6 +1484,9 @@ describe('the final mark and the fallback summary (#537)', () => {
 // The waiting message (#536, docs/bot-session.md → The waiting message): «🔎 Ждём сигнал…» with
 // its «⏹» under the session's messages, always the last of them.
 describe('the waiting message (#536)', () => {
+  // every trade here is followed by a no_signal decision, so the session waits under it (#722);
+  // the #722 describe below takes the other decisions
+  const settled = settledWaiting;
   const STOP = (target: Target) => ({
     text: CLIENT_LABELS.sessionStopButton,
     callback_data: `session:stop:${target.session.id}:w`,
@@ -1486,6 +1522,7 @@ describe('the waiting message (#536)', () => {
   async function waiting() {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const run = sender();
     await run.notices.tick();
     const [sent] = waitingTo(run.captured.calls, target);
@@ -1496,6 +1533,7 @@ describe('the waiting message (#536)', () => {
   it('W1 under a recorded status message: one silent waiting message with its «⏹», once', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured } = sender();
     await notices.tick();
     const sent = waitingTo(captured.calls, target);
@@ -1528,6 +1566,7 @@ describe('the waiting message (#536)', () => {
   it('W2 a trade settled before the first waiting message: the trade first, the waiting message under it', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     await settled(target, '4.6');
     const { notices, captured } = sender();
     await notices.tick();
@@ -1634,6 +1673,7 @@ describe('the waiting message (#536)', () => {
     const clock = { now: 1_000_000 };
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured } = sender({}, clock);
     await notices.tick();
     await settled(target, '4.6');
@@ -1711,6 +1751,7 @@ describe('the waiting message (#536)', () => {
     async (_name, failure) => {
       const target = await seedSession();
       await statusMessage(target);
+      await noSignal(target);
       const { notices, captured, logs } = sender();
       failNext(captured, { sendMessage: [failure()] });
       await notices.tick();
@@ -1728,6 +1769,7 @@ describe('the waiting message (#536)', () => {
   it('W9 another 4xx on the send: tried again on later ticks, then its slot is left', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured, logs } = sender({ config: { maxAttempts: 3 } });
     failNext(captured, {
       sendMessage: [telegramError(400), telegramError(400), telegramError(400)],
@@ -1746,6 +1788,7 @@ describe('the waiting message (#536)', () => {
     const clock = { now: 1_000_000 };
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured } = sender({}, clock);
     failNext(captured, { sendMessage: [telegramError(429, 5)] });
     await notices.tick();
@@ -1760,6 +1803,7 @@ describe('the waiting message (#536)', () => {
   it('W10 a 403 on the send: the user is marked unreachable and the slot freed; once reachable, one waiting message', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured, logs } = sender();
     failNext(captured, { sendMessage: [telegramError(403)] });
     await notices.tick();
@@ -1780,6 +1824,7 @@ describe('the waiting message (#536)', () => {
   it('W11 a session stopped between the send and its record: the message just sent is deleted', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured, logs } = sender();
     const answer = captured.answers.get('sendMessage')!;
     captured.answers.set('sendMessage', async (payload) => {
@@ -1819,6 +1864,7 @@ describe('the waiting message (#536)', () => {
   it('W13 stop() during the pace before the claim: nothing is claimed or sent', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     let release: () => void = () => {};
     let sleeping = false;
     const { notices, captured } = sender({
@@ -1833,6 +1879,7 @@ describe('the waiting message (#536)', () => {
     // the pacer's first call does not sleep: the first session's send goes, the second's waits
     const other = await seedSession();
     await statusMessage(other);
+    await noSignal(other);
     const ticking = notices.tick();
     while (!sleeping) await new Promise((resolve) => setImmediate(resolve));
     const stopping = notices.stop();
@@ -1849,6 +1896,7 @@ describe('the waiting message (#536)', () => {
   it('W14 a user who blocked the bot: none sent; a live one is dropped without a call', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     await blocked(target);
     const { notices, captured } = sender();
     await notices.tick();
@@ -1891,6 +1939,7 @@ describe('the waiting message (#536)', () => {
   it('W16 two senders at once: one waiting message on the slot', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const first = sender();
     const second = sender();
     await Promise.all([first.notices.tick(), second.notices.tick()]);
@@ -2153,6 +2202,7 @@ describe('the waiting message (#536)', () => {
       ...b,
       arm: async () => {
         await statusMessage(a);
+        await noSignal(a);
         const answer = b.run.captured.answers.get('sendMessage')!;
         let done = false;
         b.run.captured.answers.set('sendMessage', async (payload) => {
@@ -2239,6 +2289,7 @@ describe('the waiting message (#536)', () => {
   it('W23 a waiting send answered without a usable message_id: logged, the slot claimed with no id, nothing more until a new message of the session', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured, logs } = sender();
     const answer = captured.answers.get('sendMessage')!;
     captured.answers.set('sendMessage', (payload) =>
@@ -2261,6 +2312,7 @@ describe('the waiting message (#536)', () => {
   it('W24 a refused record whose clean-up delete fails: logged, the message stays, the summary still goes', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured, logs } = sender();
     const answer = captured.answers.get('sendMessage')!;
     captured.answers.set('sendMessage', async (payload) => {
@@ -2287,6 +2339,7 @@ describe('the waiting message (#536)', () => {
     for (let i = 0; i < 3; i += 1) {
       const target = await seedSession();
       await statusMessage(target);
+      await noSignal(target);
       await settled(target, '4.6');
       // what the backend before #536 left: the trade claimed and sent in a cycle message
       await claimSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 0 });
@@ -2384,7 +2437,7 @@ describe('an H1 session: one summary, edited every 10 trades (#707)', () => {
     expect((await rowOf(target)).notifiedTrades).toBe(0);
   });
 
-  it('H1-N2 the tenth trade sends the summary once, the waiting message under it; the twentieth edits it', async () => {
+  it('H1-N2 the tenth trade sends the summary once, no waiting message under it (#722); the twentieth edits it', async () => {
     const target = await seedSession(H1);
     await settledMany(target, TEN);
     const { notices, captured } = sender();
@@ -2392,7 +2445,8 @@ describe('an H1 session: one summary, edited every 10 trades (#707)', () => {
     expect(textsTo(captured.calls, target)).toEqual([
       summaryOf(10, '6 в плюс, 4 в минус', '+$7.60'),
     ]);
-    expect(waitingTo(captured.calls, target)).toHaveLength(1);
+    // an H1 session asks no signal: no no_signal row, no wait
+    expect(waitingTo(captured.calls, target)).toEqual([]);
     const first = sendsTo(captured.calls, target)[0]!;
     expect(first.payload.disable_notification).toBe(true);
     expect(first.payload.reply_markup).toBeUndefined();
@@ -2408,7 +2462,7 @@ describe('an H1 session: one summary, edited every 10 trades (#707)', () => {
     await settled(target, '-5');
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
-    expect(waitingTo(captured.calls, target)).toHaveLength(1);
+    expect(waitingTo(captured.calls, target)).toEqual([]);
     expect(chatOf(captured.calls, target)).toEqual([
       summaryOf(20, '12 в плюс, 7 в минус, 1 в ноль', '+$20.20'),
     ]);
@@ -2557,7 +2611,7 @@ describe("the open trade's block (#700)", () => {
       .where(eq(users.id, target.seed.userId));
   }
 
-  it('O1 open: one silent message with the block without a result, no keyboard; settled: the same message edited into the result', async () => {
+  it('O1 open: one silent message with the block without a result and its «⏹» (#722); settled: the same message edited into the result, the «⏹» off', async () => {
     const target = await seedSession();
     const { notices, captured } = sender();
     const trade = await opened(target);
@@ -2566,7 +2620,7 @@ describe("the open trade's block (#700)", () => {
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
     expect(pushedText(sent!.payload)).toBe(openBlock(1));
     expect(sent!.payload).toMatchObject({ disable_notification: true, parse_mode: 'HTML' });
-    expect(sent!.payload.reply_markup).toBeUndefined();
+    expect(inlineButtons(sent!.payload)).toEqual(CYCLE_STOP(target));
     expect(await rowOf(target)).toMatchObject({
       openNoticeIntentId: trade.intent.id,
       cycleMessageId: answered.get(sent!.payload),
@@ -2581,6 +2635,8 @@ describe("the open trade's block (#700)", () => {
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
     const [edit] = editsTo(captured.calls, target);
     expect(edit?.payload.message_id).toBe(answered.get(sent!.payload));
+    // an edit without reply_markup takes the keyboard off (Bot API)
+    expect(edit?.payload.reply_markup).toBeUndefined();
     expect(chatOf(captured.calls, target)).toEqual([loss(1)]);
   });
 
@@ -2590,18 +2646,21 @@ describe("the open trade's block (#700)", () => {
     await settled(target, '-5');
     const second = await opened(target);
     await notices.tick();
-    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'editMessageText', 'waiting']);
+    // the next step's intent ended the wait (#722): no waiting message, the «⏹» on the open block
+    expect(sequenceOf(captured.calls, target)).toEqual(['trade', 'editMessageText']);
     expect(chatOf(captured.calls, target)).toEqual([
       [loss(1), ADAPTIVE, openBlock(2)].join('\n\n'),
     ]);
+    expect(inlineButtons(sendsTo(captured.calls, target)[0]!.payload)).toEqual([]);
+    expect(inlineButtons(editsTo(captured.calls, target)[0]!.payload)).toEqual(CYCLE_STOP(target));
     await settle(second, '-5');
     await notices.tick();
     expect(sequenceOf(captured.calls, target)).toEqual([
       'trade',
       'editMessageText',
-      'waiting',
       'editMessageText',
     ]);
+    expect(editsTo(captured.calls, target)[1]!.payload.reply_markup).toBeUndefined();
     expect(chatOf(captured.calls, target)).toEqual([[loss(1), ADAPTIVE, loss(2)].join('\n\n')]);
   });
 
@@ -2763,6 +2822,8 @@ describe("the open trade's block (#700)", () => {
     );
     const anew = sendsTo(captured.calls, target)[1]!;
     expect(pushedText(anew.payload)).toBe([loss(1), ADAPTIVE, openBlock(2)].join('\n\n'));
+    // the gone edit's new message carries the open block's «⏹» too (#722)
+    expect(inlineButtons(anew.payload)).toEqual(CYCLE_STOP(target));
     expect(await rowOf(target)).toMatchObject({
       cycleMessageId: answered.get(anew.payload),
       cycleMessageFrom: 0,
@@ -2783,48 +2844,51 @@ describe("the open trade's block (#700)", () => {
     });
     if (!built.success) throw new Error('fixture settings do not parse');
     const target = await seedSession(built.data);
-    // the status message lists it for its waiting message
+    // with its status message: before #722 that listed it for its waiting message, which an H1
+    // session no longer gets (no no_signal row)
     await statusMessage(target);
     await opened(target);
     const { notices, captured } = sender();
     await notices.tick();
     await notices.tick();
     expect(openCallsTo(captured.calls, target)).toEqual([]);
-    expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
+    expect(sequenceOf(captured.calls, target)).toEqual([]);
     expect(await markOf(target)).toBeNull();
   });
 
-  it('O13 the waiting message: deleted before the open block’s new message, sent again under it; the result’s edit leaves it', async () => {
+  it('O13 the waiting message: deleted before the open block’s new message, not sent under it (#722); the result’s edit takes the «⏹» off, the next no_signal brings the waiting message back', async () => {
     const target = await seedSession();
     await statusMessage(target);
+    await noSignal(target);
     const { notices, captured } = sender();
     await notices.tick();
     const trade = await opened(target);
     await notices.tick();
-    expect(sequenceOf(captured.calls, target)).toEqual([
-      'waiting',
-      'deleteMessage',
-      'open',
-      'waiting',
-    ]);
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'open']);
+    expect(inlineButtons(sendsTo(captured.calls, target)[0]!.payload)).toEqual(CYCLE_STOP(target));
     await settle(trade, '-5');
+    await notices.tick();
+    expect(editsTo(captured.calls, target)[0]!.payload.reply_markup).toBeUndefined();
+    await noSignal(target);
     await notices.tick();
     expect(sequenceOf(captured.calls, target)).toEqual([
       'waiting',
       'deleteMessage',
       'open',
-      'waiting',
       'editMessageText',
+      'waiting',
     ]);
   });
 
-  it('O14 a session stopped with its trade open: the open block, the result, then the final mark', async () => {
+  it('O14 a session stopped with its trade open: the open block without a «⏹» (#722), the result, then the final mark', async () => {
     const target = await seedSession();
     const trade = await opened(target);
     await stop(target, TradingSessionStopReason.UserStopped);
     const { notices, captured } = sender();
     await notices.tick();
     expect(sequenceOf(captured.calls, target)).toEqual(['open']);
+    // the list read the session stopped: no dead button (#722, В2)
+    expect(sendsTo(captured.calls, target)[0]!.payload.reply_markup).toBeUndefined();
     expect((await rowOf(target)).finalNoticeSentAt).toBeNull();
     await settle(trade, '-5');
     await notices.tick();
@@ -2915,7 +2979,243 @@ describe("the open trade's block (#700)", () => {
   });
 });
 
+// #722 (docs/bot-session.md → The waiting message): the waiting message only while the session
+// waits for a signal - its latest decision is no_signal - and the «⏹» under the open trade's block
+describe('the waiting message by the decision log, «⏹» under the open block (#722)', () => {
+  const OPEN_MARK = 'сделка открыта';
+  const STATUS_ID = 1;
+  const statusMessage = (target: Target) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: STATUS_ID })
+      .where(eq(tradingSessions.id, target.session.id));
+  // a live waiting message on the status message's slot, as #536 left it at the deploy
+  const liveWaiting = (target: Target, messageId = 900) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ waitingMessageId: messageId, waitingAfterMessage: STATUS_ID })
+      .where(eq(tradingSessions.id, target.session.id));
+  const waitingIdOf = async (target: Target) => (await rowOf(target)).waitingMessageId;
+  const sequenceOf = (calls: readonly ApiCall[], target: Target) =>
+    calls
+      .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
+      .map((call) =>
+        call.method === 'sendMessage'
+          ? isWaiting(call)
+            ? 'waiting'
+            : pushedText(call.payload).includes(OPEN_MARK)
+              ? 'open'
+              : 'trade'
+          : call.method === 'editMessageText' && pushedText(call.payload).includes(OPEN_MARK)
+            ? 'edit-open'
+            : call.method,
+      );
+  const block = (target: Target) =>
+    tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.id, target.seed.userId));
+
+  it('X1 a started session without a decision: nothing; after no_signal one waiting message; an open trade without one: none', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([]);
+    await noSignal(target);
+    await notices.tick();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
+
+    const opening = await seedSession();
+    await statusMessage(opening);
+    await opened(opening);
+    await notices.tick();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, opening)).toEqual(['open']);
+  });
+
+  it('X2 the intent row ends the wait: at step 1 the delete, then the open block in a new message; at step 2 the delete, then the edit (В1)', async () => {
+    const target = await seedSession(MARTINGALE);
+    await statusMessage(target);
+    await noSignal(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await opened(target).then((trade) => settle(trade, '-5'));
+    await noSignal(target);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+    ]);
+    await opened(target);
+    await notices.tick();
+    // never two «⏹»: the waiting message goes before the edit that puts the block's on
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'waiting',
+      'deleteMessage',
+      'trade',
+      'waiting',
+      'deleteMessage',
+      'edit-open',
+    ]);
+    expect(inlineButtons(editsTo(captured.calls, target)[0]!.payload)).toEqual(CYCLE_STOP(target));
+    expect(await waitingIdOf(target)).toBeNull();
+  });
+
+  it('X2 at step 1: the waiting message deleted before the open block’s new message, which carries the «⏹»', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    await noSignal(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    await opened(target);
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage', 'open']);
+    expect(inlineButtons(sendsTo(captured.calls, target)[0]!.payload)).toEqual(CYCLE_STOP(target));
+  });
+
+  it('X5 a signal right after every settlement: five trades, no waiting message at all', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    const { notices, captured } = sender();
+    for (let step = 0; step < 5; step += 1) {
+      const trade = await opened(target);
+      await notices.tick();
+      await settle(trade, '4.6');
+      await notices.tick();
+    }
+    expect(waitingTo(captured.calls, target)).toEqual([]);
+    expect(sequenceOf(captured.calls, target).filter((kind) => kind === 'open')).toHaveLength(5);
+  });
+
+  it('X6 two senders at once: one waiting message, then one open block', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    await noSignal(target);
+    const first = sender();
+    const second = sender();
+    await Promise.all([first.notices.tick(), second.notices.tick()]);
+    const calls = () => [...first.captured.calls, ...second.captured.calls];
+    expect(waitingTo(calls(), target)).toHaveLength(1);
+    await opened(target);
+    await Promise.all([first.notices.tick(), second.notices.tick()]);
+    expect(
+      sendsTo(calls(), target).filter((call) => pushedText(call.payload).includes(OPEN_MARK)),
+    ).toHaveLength(1);
+    expect(waitingTo(calls(), target)).toHaveLength(1);
+  });
+
+  it.each([
+    ['its latest decision an intent', SignalDecisionOutcome.Intent],
+    ['no decision at all', undefined],
+  ] as const)(
+    'X8 the deploy: a live waiting message with %s is deleted once on the first tick, then nothing',
+    async (_, outcome) => {
+      const target = await seedSession();
+      await statusMessage(target);
+      if (outcome !== undefined) await decide(target, outcome);
+      await liveWaiting(target);
+      const { notices, captured } = sender();
+      await notices.tick();
+      await notices.tick();
+      expect(sequenceOf(captured.calls, target)).toEqual(['deleteMessage']);
+      expect(deletesTo(captured.calls, target)).toEqual([900]);
+      expect(await waitingIdOf(target)).toBeNull();
+    },
+  );
+
+  it('X8 the deploy: a live waiting message of a session that waits is left as it is', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    await noSignal(target);
+    await liveWaiting(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([]);
+    expect(await waitingIdOf(target)).toBe(900);
+  });
+
+  it('X9 a blocked user: the live waiting message of a session that no longer waits keeps its id without a call; once reachable, deleted first', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    await liveWaiting(target);
+    await decide(target, SignalDecisionOutcome.Intent);
+    await block(target);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([]);
+    expect(await waitingIdOf(target)).toBe(900);
+    await markTelegramReachable(tmp.db, BigInt(target.seed.telegramUserId));
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['deleteMessage']);
+  });
+
+  it.each([
+    ['refused', SignalDecisionOutcome.Refused, 'fixture_refusal'],
+    ['a stake stop', SignalDecisionOutcome.StakeStop, 'fixture_stop'],
+    ['replayed', SignalDecisionOutcome.Replayed, null],
+  ] as const)(
+    'X10 a decision %s after no_signal: the live waiting message deleted, none sent',
+    async (_, outcome, detail) => {
+      const target = await seedSession();
+      await statusMessage(target);
+      await noSignal(target);
+      const { notices, captured } = sender();
+      await notices.tick();
+      await decide(target, outcome, detail);
+      await notices.tick();
+      await notices.tick();
+      expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
+      expect(await waitingIdOf(target)).toBeNull();
+    },
+  );
+
+  it('X11 the intent row between the claim and the record (В4): recorded, deleted as stale on the next tick, not sent again', async () => {
+    const target = await seedSession();
+    await statusMessage(target);
+    await noSignal(target);
+    const { notices, captured } = sender();
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', async (payload) => {
+      if (isWaiting({ method: 'sendMessage', payload } as ApiCall)) {
+        await decide(target, SignalDecisionOutcome.Intent);
+      }
+      return answer(payload);
+    });
+    await notices.tick();
+    const [sent] = waitingTo(captured.calls, target);
+    expect(await waitingIdOf(target)).toBe(answered.get(sent!.payload));
+    await notices.tick();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual(['waiting', 'deleteMessage']);
+    expect(deletesTo(captured.calls, target)).toEqual([answered.get(sent!.payload)]);
+    expect(await waitingIdOf(target)).toBeNull();
+  });
+
+  it('X12 a martingale step settled and the next one decided without no_signal: the edit of the result, then the stale delete, then no waiting message', async () => {
+    const target = await seedSession(MARTINGALE);
+    await statusMessage(target);
+    const { notices, captured } = sender();
+    await settledWaiting(target, '-5');
+    await notices.tick();
+    await settled(target, '-5');
+    await notices.tick();
+    await notices.tick();
+    expect(sequenceOf(captured.calls, target)).toEqual([
+      'trade',
+      'waiting',
+      'editMessageText',
+      'deleteMessage',
+    ]);
+  });
+});
+
 describe('the gap per chat (#660)', () => {
+  // each trade followed by a no_signal decision: the session waits under it (#722)
+  const settled = settledWaiting;
   const GAP = SESSION_NOTICE_CHAT_GAP_MS;
   const gapOn = { config: { chatGapMs: GAP } };
   const markStatus = (target: Target) =>
@@ -2971,6 +3271,7 @@ describe('the gap per chat (#660)', () => {
     const clock = { now: 1_000_000 };
     const target = await seedSession();
     await markStatus(target);
+    await noSignal(target);
     const { notices, captured } = sender(gapOn, clock);
     await notices.tick();
     expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);
@@ -3020,6 +3321,7 @@ describe('the gap per chat (#660)', () => {
     const clock = { now: 1_000_000 };
     const target = await seedSession();
     await markStatus(target);
+    await noSignal(target);
     const run = sender(
       {
         ...gapOn,
@@ -3114,6 +3416,7 @@ describe('the gap per chat (#660)', () => {
     const clock = { now: 1_000_000 };
     const target = await seedSession();
     await markStatus(target);
+    await noSignal(target);
     const { notices, captured } = sender(gapOn, clock);
     await notices.tick();
     expect(sequenceOf(captured.calls, target)).toEqual(['waiting']);

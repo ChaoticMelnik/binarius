@@ -1,4 +1,5 @@
-import { asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { SignalDecisionOutcome } from '@binarius/shared';
 import {
   brokerAccounts,
   brokerTrades,
@@ -6,6 +7,7 @@ import {
   postbackDeliveries,
   referralCodes,
   referrals,
+  signalDecisions,
   tokenLedger,
   tradeIntents,
   tradingSessions,
@@ -59,6 +61,19 @@ export function e2eReads(db: Db) {
         .from(tradingSessions)
         .where(eq(tradingSessions.brokerAccountId, brokerAccountId));
       return row;
+    },
+    // the session's no_signal decisions (#722): the only rows a waiting message may follow
+    async noSignalCountOf(sessionId: string) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(signalDecisions)
+        .where(
+          and(
+            eq(signalDecisions.tradingSessionId, sessionId),
+            eq(signalDecisions.outcome, SignalDecisionOutcome.NoSignal),
+          ),
+        );
+      return row?.n ?? 0;
     },
     intentsOf: (sessionId: string) =>
       db
