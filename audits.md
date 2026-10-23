@@ -4326,8 +4326,9 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 | Minor 1 («the deferred step runs on the next tick» in `timing.ts`/docs/Rule 10 is stronger than the code), Minor 2 (G6 cannot turn red) | Minor | unverified-claim | left at the merge | → #752 |
 
 ### Process improvement proposals
-1. Mutation list rows checked for a test that executes the mutated text — **внедрено в #756: `.claude/skills/architect/SKILL.md` → Validation checklist** (proposal 1 of #675)
-2. Flaky K9 — **вынесено в #753**; remaining findings — **вынесено в #752**
+1. Mutation list rows checked for a test that executes the mutated text (same as proposal 1 of #675) — **внедрено в #756: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. Flaky K9 — **вынесено в #753**
+3. Remaining findings — **вынесено в #752**
 
 ---
 
