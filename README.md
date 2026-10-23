@@ -100,6 +100,13 @@ a source that no longer exists stays behind), so the tests run before anything i
 and `tooling/manifest-targets.test.ts` checks that every manifest entry point names a file in the
 tree, never an ignored build output. The other scripts are for running one step on its own.
 
+`node tooling/rules-for.ts <files>` prints the Architecture Rules that cite the given paths
+(`--list`, `--files`, `--map`, `--dump`, and `--split <ref>`, which regenerates the rule files
+from the one-section SKILL.md of an older commit; the index is `.claude/skills/architect/SKILL.md` →
+Architecture Rules, the rules are in `.claude/skills/architect/rules/*.md`), for example
+`gh pr diff <N> --name-only | xargs node tooling/rules-for.ts --list`;
+`tooling/rules-for.test.ts` holds every path, symbol and test id the rules cite to the repository.
+
 ## Docker dev environment
 
 Postgres, Redis, and the four apps run in containers; the apps hot-reload from your working tree.
