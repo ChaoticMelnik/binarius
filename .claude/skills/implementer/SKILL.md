@@ -36,20 +36,15 @@ This step is what carries the `/clarify` gate (`~/.claude/CLAUDE.md`; its floor 
 
 ### Step 2: Set up the branch
 
+The spawn prompt names the branch and its base — `origin/main`, or the base PR's branch when tech-lead (Mode 1 Step 3) or the manager (Stacking) declared a stack; the implementer never decides stacking itself. Create your own worktree (tech-lead Step 7) and never check a branch out in the main checkout:
+
 ```bash
-gh pr list --repo ChaoticMelnik/binarius --state open --json number,headRefName --limit 1
+git fetch origin
+git worktree add .claude/worktrees/impl-<N> -b <branch> <base> && git worktree lock .claude/worktrees/impl-<N>
+cd .claude/worktrees/impl-<N> && pnpm install --offline --frozen-lockfile
 ```
 
-- **No open PRs** → branch from `main`:
-  ```bash
-  git fetch origin
-  git checkout -b feat/<N>-short-description origin/main
-  ```
-- **Open PR exists** and this issue shares files with it (per `/tech-lead`'s merge-chain rule) → branch from that PR's head instead:
-  ```bash
-  git fetch origin
-  git checkout -b feat/<N>-short-description origin/<headRefName-of-that-PR>
-  ```
+`TEST_DATABASE_URL` and `REDIS_URL` come from the spawn prompt (a worktree has neither). Invoked directly by the owner: the same worktree from `origin/main`, `feat/<N>-short-description`.
 
 Branch naming: `feat/<N>-description`, `fix/<N>-description`, `refactor/description`. Select the project's Node before anything else: `eval "$(fnm env)" && fnm use` (`.node-version`; the machine's default Node is older and `pnpm lint` fails under it).
 

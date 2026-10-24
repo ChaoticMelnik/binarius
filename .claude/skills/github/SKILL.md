@@ -1,6 +1,6 @@
 ---
 name: github
-description: Token-efficient GitHub Issues + Projects operations for the agent pipeline. Reads use `gh issue` and `gh api graphql` with --jq filtering to return only the needed fields — no isolated Agent subagent needed by default, since gh (unlike the Linear MCP tool) lets you filter server-side before the result reaches context. Writes (status changes, comments) use the same templates. Use this skill whenever another skill needs to read or write a GitHub issue or its Project board status.
+description: Token-efficient GitHub Issues + Projects operations for the agent pipeline. Reads use `gh issue` and `gh api graphql` with --jq filtering to return only the needed fields — no isolated Agent subagent needed by default, since gh filters server-side before the result reaches context. Writes (status changes, comments) use the same templates. Use this skill whenever another skill needs to read or write a GitHub issue or its Project board status.
 ---
 
 # GitHub Skill
@@ -25,7 +25,7 @@ Status option ids:
   Canceled     e78329c7
 ```
 
-Stable for the life of the project. Filled in once during bootstrap (Step 2). Never call `gh project field-list`/`item-list` again just to look these up.
+Stable for the life of the project. Filled in once at the pipeline's bootstrap (2026-09-21). Never call `gh project field-list`/`item-list` again just to look these up.
 
 ### Why the status templates use GraphQL, not `gh project item-list`
 
@@ -35,7 +35,7 @@ Stable for the life of the project. Filled in once during bootstrap (Step 2). Ne
 
 ## Core rule: filter before it reaches context
 
-`gh issue`/`gh pr`/`gh project` all support `--json <fields>` plus `-q/--jq <expr>`, and `gh api graphql` takes `--jq`. Always request only the fields a template needs and shape them with `--jq` — the unfiltered JSON never has to enter the main context, so (unlike Linear's MCP tool, which always returns the full object regardless of what you ask for) there is no structural need to wrap these calls in an isolated Agent subagent. Run them directly.
+`gh issue`/`gh pr`/`gh project` all support `--json <fields>` plus `-q/--jq <expr>`, and `gh api graphql` takes `--jq`. Always request only the fields a template needs and shape them with `--jq` — the unfiltered JSON never has to enter the main context, so there is no structural need to wrap these calls in an isolated Agent subagent. Run them directly.
 
 **Exception:** a call whose `--jq` output is still bulky (a wide `gh issue list` with no `--limit`, or batch-processing many issues in one pass) — route that one through an isolated `Agent`, same principle as elsewhere in the pipeline: nothing bulky lands in the main context. The mechanism (inline `--jq` vs. isolation) is whichever is cheaper for that specific call shape.
 
