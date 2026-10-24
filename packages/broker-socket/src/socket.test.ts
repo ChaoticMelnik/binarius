@@ -25,6 +25,7 @@ import {
   BrokerSocketState,
   createBrokerSocketClient,
   IGNORED_BROKER_EVENTS,
+  isTerminalBrokerSocketState,
   type BrokerSocket,
   type BrokerSocketClient,
   type BrokerSocketClientOptions,
@@ -88,6 +89,15 @@ function recordEmits() {
     return socket;
   };
   return { sockets, openSocket };
+}
+
+// the openSocket seam wrapping io(): every socket the client opened, in order
+function keepSockets(opened: BrokerSocket[]) {
+  return (url: string, options: BrokerSocketOptions): BrokerSocket => {
+    const socket: BrokerSocket = io(url, options);
+    opened.push(socket);
+    return socket;
+  };
 }
 
 let broker: MockBroker;
@@ -744,6 +754,68 @@ describe('openSocket seam', () => {
     h.client.start(CREDENTIALS);
     await until('authenticating again', () => h.client.state === BrokerSocketState.Authenticating);
   });
+
+  it('a start() re-entered from disconnect() of a terminal session is refused, and the next start() gets one socket', async () => {
+    const ref: { client?: BrokerSocketClient } = {};
+    let reentered = false;
+    const h = harness({
+      openSocket: (url, options) => {
+        const socket: BrokerSocket = io(url, options);
+        const disconnect = socket.disconnect.bind(socket);
+        vi.spyOn(socket, 'disconnect').mockImplementation(() => {
+          disconnect();
+          const client = ref.client;
+          if (!reentered && client !== undefined && isTerminalBrokerSocketState(client.state)) {
+            reentered = true;
+            client.start(CREDENTIALS);
+          }
+          return socket;
+        });
+        return socket;
+      },
+    });
+    ref.client = h.client;
+    h.client.start({ brokerUserId: '1', accessToken: 'SECRET-WRONG-TOKEN' });
+    await until('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
+    await until('the socket gone', () => broker.socket.sockets().length === 0);
+    expect(() => h.client.start(CREDENTIALS)).toThrow('broker socket client already started');
+    expect(h.client.state).toBe(BrokerSocketState.AuthFailed);
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    await quiet();
+    expect(broker.socket.sockets()).toHaveLength(1);
+    expect(bySocket()).toHaveLength(2);
+  });
+
+  it('a stop() whose disconnect() re-enters start() throws and still ends idle', async () => {
+    const ref: { client?: BrokerSocketClient } = {};
+    let reentered = false;
+    const h = harness({
+      openSocket: (url, options) => {
+        const socket: BrokerSocket = io(url, options);
+        const disconnect = socket.disconnect.bind(socket);
+        vi.spyOn(socket, 'disconnect').mockImplementation(() => {
+          disconnect();
+          const client = ref.client;
+          if (!reentered && client !== undefined) {
+            reentered = true;
+            client.start(CREDENTIALS);
+          }
+          return socket;
+        });
+        return socket;
+      },
+    });
+    ref.client = h.client;
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    expect(() => h.client.stop()).toThrow('broker socket client already started');
+    expect(h.client.state).toBe(BrokerSocketState.Idle);
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    await quiet();
+    expect(broker.socket.sockets()).toHaveLength(1);
+  });
 });
 
 describe('listeners that end the session', () => {
@@ -906,6 +978,53 @@ describe('events and problems', () => {
         err: { name: 'Error' },
       }),
     ]);
+  });
+
+  it('warns once for an event delivered after its connection closed: two listeners throwing on auth_error', async () => {
+    const h = harness();
+    for (let i = 0; i < 2; i += 1) {
+      h.client.onEvent((event) => {
+        if (event.type === BrokerEventType.AuthError) throw new Error('SECRET-listener');
+      });
+    }
+    h.client.start({ brokerUserId: '1', accessToken: 'SECRET-WRONG-TOKEN' });
+    await until('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
+    await until('the auth_error delivered', () => h.events.length === 1);
+    await quiet();
+    expect(h.logs('broker event listener threw')).toEqual([
+      expect.objectContaining({ level: LEVEL.warn, type: BrokerEventType.AuthError }),
+    ]);
+  });
+});
+
+// the socket's state goes out as sessionState: `state` is a redact path (LOG_REDACT_PATHS)
+describe('out-of-state lines (#279)', () => {
+  const expectUnredacted = (line: LogEntry | undefined) => {
+    expect(line).toEqual(
+      expect.objectContaining({ level: LEVEL.debug, sessionState: BrokerSocketState.Ready }),
+    );
+    expect(line?.state).toBeUndefined();
+    expect(JSON.stringify(line)).not.toContain('[Redacted]');
+  };
+
+  it('a connect out of state logs sessionState unredacted', async () => {
+    const opened: BrokerSocket[] = [];
+    const h = harness({ openSocket: keepSockets(opened) });
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    expect(opened).toHaveLength(1);
+    for (const listener of opened[0]?.listeners('connect') ?? []) (listener as () => void)();
+    await until('the line', () => h.logs('broker socket connect out of state').length === 1);
+    expectUnredacted(h.logs('broker socket connect out of state')[0]);
+  });
+
+  it('a user.auth.success out of state logs sessionState unredacted', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    expect(broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.UserAuthSuccess, null)).toBe(1);
+    await until('the line', () => h.logs('broker socket auth success out of state').length === 1);
+    expectUnredacted(h.logs('broker socket auth success out of state')[0]);
   });
 });
 
@@ -1319,7 +1438,8 @@ describe('openTrade', () => {
 
 describe('logs', () => {
   it('never carry the token, a payload value or the URL, and name every path they cover', async () => {
-    const h = harness();
+    const opened: BrokerSocket[] = [];
+    const h = harness({ openSocket: keepSockets(opened) });
     h.client.onEvent(() => {
       throw new Error(`listener saw ${TOKEN}`);
     });
@@ -1329,6 +1449,8 @@ describe('logs', () => {
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
     await ready(h);
+    broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.UserAuthSuccess, null);
+    for (const listener of opened[0]?.listeners('connect') ?? []) (listener as () => void)();
     expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
       expect.objectContaining({ outcome: 'success' }),
     );
@@ -1405,6 +1527,8 @@ describe('logs', () => {
       'broker socket open_trade sent',
       'broker socket open_trade answer mismatch',
       'broker socket connection tainted',
+      'broker socket connect out of state',
+      'broker socket auth success out of state',
     ]) {
       expect(messages, msg).toContain(msg);
     }

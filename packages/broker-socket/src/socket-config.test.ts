@@ -19,7 +19,7 @@ describe('broker socket timing', () => {
     );
     expect(BROKER_SOCKET_AUTH_TIMEOUT_MS).toBeLessThanOrEqual(BROKER_SOCKET_CONNECT_TIMEOUT_MS);
     expect(BROKER_SOCKET_RECONNECT_JITTER).toBeGreaterThanOrEqual(0);
-    expect(BROKER_SOCKET_RECONNECT_JITTER).toBeLessThanOrEqual(1);
+    expect(BROKER_SOCKET_RECONNECT_JITTER).toBeLessThan(1);
   });
 
   it('fills an override from the defaults and accepts each link at equality', () => {

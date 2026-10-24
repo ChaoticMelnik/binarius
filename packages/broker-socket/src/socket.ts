@@ -107,7 +107,9 @@ export interface BrokerSocketClientOptions {
   // default io(); a seam for tests. The returned socket is a socket.io-client Socket or a wrapper
   // that keeps its timing: connect() and emit() return before any event is delivered, disconnect()
   // raises `disconnect` synchronously. A wrapper that re-enters the client from inside these
-  // calls is refused (start()) or ended (stop()) without an orphan socket; nothing more is promised
+  // calls is refused (start()) or ended (stop()) without an orphan socket; nothing more is promised.
+  // A stop() from inside openSocket itself comes before the session it would end: the returned
+  // socket starts as if that stop() had come before start()
   openSocket?: (url: string, options: BrokerSocketOptions) => BrokerSocket;
 }
 
@@ -260,13 +262,18 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       return;
     }
     const { session: owner, event } = item;
+    // an event delivered after its connection closed (auth_error, token_expired): the warn-once
+    // set then lives for this delivery, so N throwing listeners still write one line
+    const warned = owner.connection?.warned ?? new Set<string>();
     for (const listener of [...eventListeners]) {
       // a listener before this one stopped or restarted the client: the event's session is gone
       if (sessionEnded(owner)) return;
       try {
         listener(event);
       } catch (error) {
-        if (firstOnConnection(owner, `listener:${event.type}`)) {
+        const key = `listener:${event.type}`;
+        if (!warned.has(key)) {
+          warned.add(key);
           logger.warn(
             { type: event.type, ...errorLogFields(error) },
             'broker event listener threw',
@@ -330,22 +337,18 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     current.socket.disconnect();
   }
 
-  function detach(current: Session) {
+  function endSession(current: Session) {
+    closeSocket(current);
     clearAuthTimer(current);
     current.socket.offAny();
     current.socket.removeAllListeners();
     current.socket.io.removeAllListeners();
   }
 
-  function endSession(current: Session) {
-    closeSocket(current);
-    detach(current);
-  }
-
   function onConnect(current: Session) {
     if (sessionEnded(current)) return;
     if (state !== BrokerSocketState.Connecting && state !== BrokerSocketState.Reconnecting) {
-      logger.debug({ state }, 'broker socket connect out of state');
+      logger.debug({ sessionState: state }, 'broker socket connect out of state');
       return;
     }
     current.connectionCount += 1;
@@ -428,7 +431,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
 
   function onAuthSuccess(current: Session) {
     if (state !== BrokerSocketState.Authenticating) {
-      logger.debug({ state }, 'broker socket auth success out of state');
+      logger.debug({ sessionState: state }, 'broker socket auth success out of state');
       return;
     }
     clearAuthTimer(current);
@@ -549,10 +552,6 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     owner.socket.io.engine.close();
   }
 
-  function dispatch(current: Session, event: BrokerEvent) {
-    queue.push({ kind: 'event', session: current, event });
-  }
-
   function onAnyEvent(current: Session, name: string, args: unknown[]) {
     if (sessionEnded(current)) return;
     const counters = current.connection?.counters;
@@ -590,10 +589,8 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       case BrokerEventType.TokenExpired:
         onTerminalEvent(current, BrokerSocketState.TokenExpired);
         break;
-      default:
-        break;
     }
-    dispatch(current, event);
+    queue.push({ kind: 'event', session: current, event });
   }
 
   function start(credentials: BrokerCredentials) {
@@ -607,9 +604,10 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     });
     // the zod error is not passed on: its issues may quote the input
     if (!auth.success) throw new TypeError('broker socket credentials are invalid');
-    if (session !== undefined) endSession(session);
+    // `starting` before endSession: a wrapper's disconnect() that calls start() is refused too
     starting = true;
     try {
+      if (session !== undefined) endSession(session);
       open(auth.data);
     } finally {
       starting = false;
@@ -659,8 +657,11 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     current.stopped = true;
     // socket.io emits `disconnect` before disconnect() returns, so the summary line is written
     // while the listeners are still attached
-    endSession(current);
-    transition(BrokerSocketState.Idle, 'stop');
+    try {
+      endSession(current);
+    } finally {
+      transition(BrokerSocketState.Idle, 'stop');
+    }
   }
 
   return {
