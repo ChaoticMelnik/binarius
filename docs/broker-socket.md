@@ -51,9 +51,10 @@ name that is not in the map (for example the client→server `user.demo.open_tra
 `mode` comes from the event name, and so does a trade's `isDemo` (#354): the live socket trade
 carries no `is_demo` (Observed live), so `socketOpenTradeWireSchema` and
 `socketClosedTradeWireSchema` (`packages/shared/src/socket.ts`) are the REST forms without it, and
-one the broker may still send is dropped unchecked. REST keeps `is_demo` required. `type` and a problem's `kind` are `as const` constants
-(`BrokerEventType`, `BrokerEventProblemKind`). Outside `events.ts` and tests, compare against
-the constant, not a bare string; `local/no-status-literal` catches part of the bare literals.
+one the broker may still send is dropped unchecked. REST keeps `is_demo` required. `type` and a
+problem's `kind` are `as const` constants (`BrokerEventType`, `BrokerEventProblemKind`). Outside
+`events.ts` and tests, compare against the constant, not a bare string; `local/no-status-literal`
+catches part of the bare literals.
 
 ## `extraArgs`
 
@@ -133,12 +134,12 @@ event, the auth timer, `start()`, `stop()`) has finished, through one queue in t
 happened, each to every listener registered when its delivery begins, in registration order. A
 listener may call `stop()`, `start()` or `subscribe()`: the effect is immediate, and the
 notifications it causes follow the one being delivered, so every listener sees every change in
-causal order and, once the deliveries are done, the last change it saw is the client's state. A `subscribe()` on `ready` sends
-only the ids the pass did not. An event is delivered only while its session is current: when a
-listener stops or restarts the client, the delivery of that session's event ends for the
-remaining listeners, and an event whose session ended before its delivery began is not delivered
-at all. `state` and `connections` are current values at read time, which a listener holding an
-older change must expect.
+causal order and, once the deliveries are done, the last change it saw is the client's state. A
+`subscribe()` on `ready` sends only the ids the pass did not. An event is delivered only while its
+session is current: when a listener stops or restarts the client, the delivery of that session's
+event ends for the remaining listeners, and an event whose session ended before its delivery began
+is not delivered at all. `state` and `connections` are current values at read time, which a
+listener holding an older change must expect.
 
 ### States
 
@@ -215,11 +216,12 @@ socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `pric
   while its connection is alive — the caller's signal aborted while waiting, the processor's
   deadline included, or the client's own command timer — leaves an answer that may still come on
   that connection, and a late `fail` cannot be told from the next command's own by content. So
-  the abort or the timer marks the connection `tainted`, the client writes `broker socket connection tainted` (`connection`) and
-  drops it with `socket.io.engine.close()`, the transport-loss mechanism of the auth timeout:
-  `reconnecting` (`forced close`) → `authenticating` → `ready` on a new connection, whose answers
-  a late answer of the old one can no longer reach. Until that `ready`, `openTrade()` answers
-  `not_sent`/`not_ready` — the executor's REST case. engine.io closes at once when its write
+  the abort or the timer marks the connection `tainted`, the client writes
+  `broker socket connection tainted` (`connection`) and drops it with `socket.io.engine.close()`,
+  the transport-loss mechanism of the auth timeout: `reconnecting` (`forced close`) →
+  `authenticating` → `ready` on a new connection, whose answers a late answer of the old one can
+  no longer reach. Until that `ready`, `openTrade()` answers `not_sent`/`not_ready` — the
+  executor's REST case. engine.io closes at once when its write
   buffer is empty and after draining it otherwise; the flag covers the window before
   `disconnect` either way. `socket.test.ts` proves it twice: with the real drop (two connections,
   one `user.auth` each, the next command answered by its own event) and with `engine.close`
@@ -245,6 +247,15 @@ or accepts and never answers `user.auth`, is retried about every `BROKER_SOCKET_
 (plus the auth timeout for a hung handshake), never at the maximum. It is not escalated: nothing
 of the kind has been observed.
 
+The backoff is never capped in attempts (`reconnectionAttempts: Infinity`), and its exponent
+overflows: after about 1015 consecutive failed attempts — about 3 h of a broker refusing every
+attempt at the 10 s maximum — socket.io's wait becomes `Infinity` before the jitter, and about
+half of the waits after that are 0 (checked against `socket.io-client` 4.8.4's backoff: the first
+0 at attempt 1016). Such an outage is then retried about twice per 10 s instead of once.
+Accepted: any successful connect resets the count, and a finite `reconnectionAttempts` would add a
+terminal state to the client. It shows as `broker socket connect error` debug lines more often
+than every 10 s on one client after hours of refusals.
+
 | Constant (`socket-config.ts`) | Bounds | socket.io option |
 |---|---|---|
 | `BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000` | the engine open of one attempt (the WebSocket upgrade and the engine.io handshake); the namespace CONNECT after it is not bounded | `timeout` |
@@ -256,10 +267,11 @@ of the kind has been observed.
 
 The chain (every `*_MS` an integer in `[1, MAX_TIMER_MS]` — `2^31 - 1`, Node's `setTimeout`
 limit, past which a delay fires after 1 ms — first wait ≤ longest wait, auth timeout ≤ connect
-timeout, 0 ≤ jitter < 1, since at 1 a wait could shrink to 0) is checked at import for the
-defaults and by `resolveBrokerSocketTiming` at construction for a `timing` override; the command
-timeout is a separate operation, not ordered against the others. Its links to the worker are in
-`intents/config.ts`: `BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`
+timeout, 0 ≤ jitter < 1, since at 1 a wait could shrink to 0 — up to the overflow above) is
+checked at import for the defaults and by `resolveBrokerSocketTiming` at construction for a
+`timing` override; the command timeout is a separate operation, not ordered against the others.
+Its links to the worker are in `intents/config.ts`:
+`BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`
 ([broker-session.md → Constants](broker-session.md#constants)) and
 `BROKER_SOCKET_COMMAND_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS` (6 000, the floor of the submit
 deadline, #96): a broker that leaves the command unanswered ends it as `unknown`/`timeout` before
@@ -271,9 +283,12 @@ would race `Manager.open`'s own); it has not been seen live. It shows as a `star
 
 ### Logs
 
-The worker's pino from `logOptions`. No line carries a payload value, the URL or the token;
-client-library errors go through `errorLogFields` only. Counters and the warn-once keys are per
-connection and reset on `connect`.
+The worker's pino from `logOptions`. No line carries the URL or the token, and no line carries a
+payload value but one: `broker socket auth failed` writes the broker's `user.auth.error` text as
+`detail`, cut to `MAX_DETAIL_LENGTH`. Client-library errors go through `errorLogFields` only. The
+client's own state is logged as `sessionState`: `state` is a redact path (`LOG_REDACT_PATHS`, it
+hides the OAuth state). Counters and the warn-once keys are per connection and reset on
+`connect`.
 
 | `msg` | Level | When | Fields |
 |---|---|---|---|
@@ -287,9 +302,11 @@ connection and reset on `connect`.
 | `broker event problem` | warn once per (event, kind) per connection, then counted | a problem for a name not in `IGNORED_BROKER_EVENTS` | `problem`, `extraArgs`; a `schema` problem carries `shape` (#354): the refused payload's keys and types, never a value — arrays by length and first element, objects by sorted keys, depth ≤ 3, ≤ 20 keys an object, key names cut to 40, at most 600 characters (`describeShape`, `events.ts`) |
 | `broker event with extra arguments` | warn once per event name per connection | a valid event with `extraArgs > 0` | `event`, `extraArgs` |
 | `broker event ignored` | debug | a name in `IGNORED_BROKER_EVENTS` (the live extras under Observed live) | `event` |
-| `broker event listener threw` | warn once per event type per connection | an `onEvent` listener throws; the others still run | `type`, `err` |
+| `broker event listener threw` | warn once per event type per connection; for an event delivered after its connection closed (`auth_error`, `token_expired`), once per delivery | an `onEvent` listener throws; the others still run | `type`, `err` |
 | `broker socket state listener threw` | warn | an `onState` listener throws; the others still run | `to`, `err` |
 | `broker socket state` | debug | every state change | `from`, `to`, `reason` |
+| `broker socket connect out of state` | debug | `connect` while neither `connecting` nor `reconnecting` | `sessionState` |
+| `broker socket auth success out of state` | debug | `user.auth.success` while not `authenticating` (a second one on a connection) | `sessionState` |
 | `broker socket open_trade sent` | debug | each command emitted | `mode`, `connection` |
 | `broker socket connection tainted` | warn | a command ended without its answer on a live connection (the caller's abort or the command timer); the client drops it | `connection` |
 | `broker socket open_trade answer mismatch` | warn | a success of the command's mode whose terms are not the command's | `connection`, `mode`, `field` (`asset`, `action`, `amount`) |
@@ -313,10 +330,13 @@ delivered, `disconnect()` raises `disconnect` synchronously, and `onAny`/`on`/`i
 socket.io-client's. A wrapper that re-enters the client from inside these calls is refused (a
 `start()` from inside `openSocket` throws `already started`) or ended (a `stop()` from inside an
 `emit` ends the session without an orphan socket or a stray timer); that is all the client
-promises for it. The client is `connecting` when it calls `connect()`, and re-checks its session
-after every call into the socket. The seam's tests wrap `io()` to record the emits, to observe
-the state at `connect()`, and to re-enter the client. The command at the top of this file runs
-them.
+promises for it. The client is `starting` before it ends the previous session, so a `start()` from
+the wrapper's `disconnect()` is refused too, and a `stop()` whose `disconnect()` throws still ends
+`idle` before the error reaches its caller. A `stop()` from inside `openSocket` itself comes before
+the session it would end: the returned socket starts as if that `stop()` had come before
+`start()`. The client is `connecting` when it calls `connect()`, and re-checks its session after
+every call into the socket. The seam's tests wrap `io()` to record the emits, to observe the state
+at `connect()`, and to re-enter the client. The command at the top of this file runs them.
 
 ## Payload forms
 
@@ -422,7 +442,11 @@ socket hears is counted into the phase in progress:
 All are DEMO, on the first pair with `scheduledUntil` 0 and a payout, at its `minTimeframe`. The
 `0.01` commands are sent only when `min_trade_amount` is strictly above `0.01` by an exact
 decimal comparison; otherwise they are `skipped` and the run is inconclusive. A command waits 10 s
-for its answer. A run takes about 80 s, at most about 120 s.
+for its answer. A run takes about 80 s, at most about 140 s: 15 s for the wait, 4 × (10 s for a
+command + its 15 s window), 10 s for the REST order + its 15 s window, plus the database read and
+the token. A `success` to a `0.01` command ends the order phases after its window: the phases
+after it are `not_run` and the run is inconclusive, so a broker that unexpectedly accepts the
+below-minimum order costs no more demo trades than the run announces.
 
 **The safe verdict needs every one of:**
 
@@ -431,8 +455,8 @@ for its answer. A run takes about 80 s, at most about 120 s.
    `b_min`, `open_trade_fail` in `a_below` and `b_below`);
 3. every `user.data` on both sockets carried the account's id, and each socket had one before
    command 1;
-4. both sockets stayed on one `ready` connection from the end of the wait to the verdict: `ready`
-   at the verdict, `connections` unchanged, no transition out of `ready` recorded;
+4. both sockets stayed on one `ready` connection: no transition out of `ready` from `start()` to
+   the verdict, `connections` unchanged since the end of the wait, and `ready` at the verdict;
 5. in each phase no socket other than the sender heard any `open_trade_*` — in `rest_min`
    neither socket;
 6. every phase's window completed.
@@ -471,7 +495,8 @@ makes it `broadcast`.
 - A demo answer's routing stands for real: every probe order is DEMO, while the worker with
   `BROKER_WS_URL` set also sends `user.real.open_trade`.
 
-**What it leaves behind.** Up to three demo trades of `min_trade_amount`, opened outside the
+**What it leaves behind.** Up to three demo trades of `min_trade_amount` (one of them of `0.01`
+when the broker accepts a below-minimum order, after which the run stops), opened outside the
 intent pipeline and the trading switch: `not_ours` for the catch-up and the reconciler. The
 account's demo balance changes.
 
