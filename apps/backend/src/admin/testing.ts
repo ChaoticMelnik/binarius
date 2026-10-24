@@ -1,5 +1,7 @@
-// Test-only fixtures and harness for the staff-login suites. Compiled by `tsc -b` alongside
-// the *.test.ts files next to it and imported by no runtime module.
+// Test-only fixtures and harness shared by the backend suites that drive the staff bot, the client
+// push and the admin routes (`admin/*`, `auth/*`, `deposit/*`, `mailing/*`, `payments/*`,
+// `postbacks/*`, `trading/*`, `users/*`, `app.test.ts`, `e2e.ts`). Compiled by `tsc -b` alongside
+// the *.test.ts files and imported by no runtime module.
 
 import type { Api, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';

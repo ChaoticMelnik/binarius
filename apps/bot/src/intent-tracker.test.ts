@@ -50,6 +50,18 @@ const FORBIDDEN = () =>
     'editMessageText',
     {},
   );
+const RATE_LIMITED = () =>
+  new GrammyError(
+    `Call to 'editMessageText' failed!`,
+    {
+      ok: false,
+      error_code: 429,
+      description: 'Too Many Requests: retry after 5',
+      parameters: { retry_after: 5 },
+    },
+    'editMessageText',
+    {},
+  );
 const editTimedOut = () =>
   new HttpError("Network request for 'editMessageText' failed!", new Error('aborted'));
 
@@ -338,7 +350,8 @@ describe('the intent tracker', () => {
     const { tracker, edit, readIntent, logger, request } = setup({ script: [rejected] });
     edit.mockImplementation(() => Promise.reject(FORBIDDEN()));
     tracker.track(request());
-    await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
+    // the attempt past the deadline fails its own edit, so the final edit comes one poll later
+    await vi.advanceTimersByTimeAsync(DEADLINE + 2 * POLL);
     expect(tracker.size()).toBe(0);
     const polls = readIntent.mock.calls.length;
     expect(polls).toBeGreaterThan(DEADLINE / POLL - 2);
@@ -358,6 +371,108 @@ describe('the intent tracker', () => {
     );
     await vi.advanceTimersByTimeAsync(DEADLINE);
     expect(readIntent).toHaveBeenCalledTimes(polls);
+  });
+
+  describe('an edit refused in the last window (#293 n1)', () => {
+    const rejected = intentView({
+      status: TradeIntentStatus.Rejected,
+      lastError: TradeIntentFailureReason.ExecutorNotConfigured,
+    });
+
+    it('a stop status: the failed edit is not retried in the same attempt, the final edit comes one poll later', async () => {
+      let skew = 0;
+      const { tracker, edit, readIntent, request } = setup({
+        script: [rejected],
+        now: () => Date.now() + skew,
+      });
+      edit.mockRejectedValueOnce(RATE_LIMITED());
+      tracker.track(request());
+      skew = DEADLINE;
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(edit).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(1);
+      expect(readIntent).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(POLL - 1);
+      expect(edit).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(edit.mock.calls.map(([text]) => text.value)).toEqual([
+        shown(rejected, 'offer'),
+        shown(rejected, 'offer'),
+      ]);
+      expect(edit.mock.calls.at(-1)?.[2]).toBeUndefined();
+      expect(tracker.size()).toBe(0);
+      expect(readIntent).toHaveBeenCalledTimes(1);
+    });
+
+    it('a live status: the hint comes one poll after the failed status edit, not at once', async () => {
+      let skew = 0;
+      const { tracker, edit, readIntent, request } = setup({
+        script: [unknown],
+        now: () => Date.now() + skew,
+      });
+      edit.mockRejectedValueOnce(RATE_LIMITED());
+      tracker.track(request());
+      skew = DEADLINE;
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(edit.mock.calls.map(([text]) => text.value)).toEqual([shown(unknown)]);
+      await vi.advanceTimersByTimeAsync(POLL - 1);
+      expect(edit).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(edit.mock.calls.map(([text]) => text.value)).toEqual([
+        shown(unknown),
+        shown(unknown, 'deadline'),
+      ]);
+      expect(edit.mock.calls.at(-1)?.[2]).toBe('deadline');
+      expect(tracker.size()).toBe(0);
+      expect(readIntent).toHaveBeenCalledTimes(1);
+    });
+
+    it('stop() drops a final edit armed past the deadline', async () => {
+      let skew = 0;
+      const { tracker, edit, request } = setup({
+        script: [rejected],
+        now: () => Date.now() + skew,
+      });
+      edit.mockRejectedValueOnce(RATE_LIMITED());
+      tracker.track(request());
+      skew = DEADLINE;
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(edit).toHaveBeenCalledTimes(1);
+      await tracker.stop();
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(edit).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('a 404 for an entry evicted while its read was in flight renders nothing', async () => {
+    const { tracker, readIntent, edit, edits, logger, request } = setup({
+      script: [submitting],
+      maxEntries: 1,
+    });
+    let fail: (error: Error) => void = () => {};
+    readIntent.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = reject;
+        }),
+    );
+    const editA = vi.fn<IntentTrackRequest['edit']>(() => Promise.resolve(true));
+    tracker.track(request({ edit: editA }));
+    await vi.advanceTimersByTimeAsync(FIRST);
+    const idB = INTENT_ID.slice(0, -1) + 'e';
+    tracker.track(request({ intentId: idB }));
+    fail(notFound());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(editA).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ intentId: INTENT_ID, backendStatus: 404 }),
+      'trade intent status not read',
+    );
+    expect(tracker.size()).toBe(1);
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edits.map((text) => text.value)).toEqual([shown(submitting)]);
   });
 
   it('warns about a message that is gone even after an earlier edit failure', async () => {

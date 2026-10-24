@@ -113,7 +113,7 @@ push after an OAuth login (#128): the same button, handled the same way
          paid (not a partner account, or the pack was already paid); or the refusal
 ```
 
-A waiting link comes before "welcome back" on purpose: a user with an active account who finds
+A waiting link comes before the status card of a returning user on purpose: a user with an active account who finds
 a new link they did not make has to see it, not a greeting (binodex-oauth.md → Why a new account
 starts pending). The button reads `✅ Подтвердить: <email>`, or `✅ Подтвердить привязку` when the
 broker sent no email or a blank one (`addressOrNull`, [bot-account.md → An empty

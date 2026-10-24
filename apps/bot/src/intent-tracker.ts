@@ -54,7 +54,7 @@ export const sessionOfferOf = (
     : undefined;
 
 // the login dialog's bound: the oldest entry goes first, its message keeping the refresh button
-export const INTENT_TRACKER_MAX_ENTRIES = 10_000;
+const INTENT_TRACKER_MAX_ENTRIES = 10_000;
 
 // Why the tracker's last edit is not a status (#350): the intent is gone (nothing left to read, so
 // only the menu), or the deadline passed on a status that can still move (its refresh and the
@@ -131,12 +131,16 @@ export function createIntentTracker({
     if (entries.get(entry.intentId) === entry) entries.delete(entry.intentId);
   };
 
-  const arm = (entry: Entry, delayMs: number): void => {
+  const arm = (
+    entry: Entry,
+    delayMs: number,
+    step: (entry: Entry) => Promise<void> = attempt,
+  ): void => {
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
       // the row «anything thrown → error, stop» holds for the whole attempt, not only around the
       // read and the edit, so a run always resolves and stop() always drains
-      const run = runWithLanguage(entry.language, () => attempt(entry))
+      const run = runWithLanguage(entry.language, () => step(entry))
         .catch((error: unknown) => {
           logger.error(
             { ...errorLogFields(error), intentId: entry.intentId },
@@ -222,20 +226,23 @@ export function createIntentTracker({
       if (notFound) {
         // not retried: polling cannot fix a missing or foreign id; a failed edit leaves the last
         // real status on screen, and the refresh button answers the same on its own
-        await editTo(entry, TEXTS.intentStatusUnavailable, INTENT_NOT_FOUND, 'not_found');
+        if (live(entry) || stopping) {
+          await editTo(entry, TEXTS.intentStatusUnavailable, INTENT_NOT_FOUND, 'not_found');
+        }
         finish(entry);
         return;
       }
       await next(entry);
       return;
     }
-    // An entry evicted or finished while its read was in flight renders nothing. During stop()
-    // the attempt in flight still renders what it read: stop() waits for exactly that, so the
-    // message does not lag behind the poll that was paid for.
+    // An entry evicted or finished while its read was in flight renders nothing — here and in the
+    // 404 branch above. During stop() the attempt in flight still renders what it read: stop()
+    // waits for exactly that, so the message does not lag behind the poll that was paid for.
     if (!live(entry) && !stopping) return;
     entry.view = view;
     const key = renderKey(view);
-    if (key !== entry.rendered) {
+    const edited = key !== entry.rendered;
+    if (edited) {
       const goOn = await editTo(
         entry,
         intentStatusText(entry.label, view, {
@@ -247,23 +254,35 @@ export function createIntentTracker({
     }
     // a stop status ends the entry only once its edit has landed; otherwise the next poll
     // edits it again
-    if (TRACKER_STOP_STATUSES.has(view.status) && entry.rendered === key) {
+    const landed = entry.rendered === key;
+    if (TRACKER_STOP_STATUSES.has(view.status) && landed) {
       finish(entry);
       return;
     }
-    await next(entry);
+    await next(entry, edited && !landed);
   }
 
   // Re-arm, or past the deadline one last edit and stop. The deadline is the bound that ends
   // every entry, landed or not — an edit the chat always refuses (a 403 once the user blocked the
   // bot) would otherwise be retried for ever — so this edit is the one not retried: the hint for
   // a live status, the status itself for a stop status whose edit never landed.
-  async function next(entry: Entry): Promise<void> {
+  // An edit is never retried inside the attempt whose edit just failed: a refusal (a 429 —
+  // retry_after is not read, the owner's rule) one tick later has a chance the same tick has not.
+  async function next(entry: Entry, editFailedNow = false): Promise<void> {
     if (!live(entry)) return;
     if (now() - entry.startedAt < deadlineMs) {
       arm(entry, pollMs);
       return;
     }
+    if (editFailedNow) {
+      arm(entry, pollMs, finalEdit);
+      return;
+    }
+    await finalEdit(entry);
+  }
+
+  async function finalEdit(entry: Entry): Promise<void> {
+    if (!live(entry)) return;
     const stopped = TRACKER_STOP_STATUSES.has(entry.view.status);
     await editTo(
       entry,

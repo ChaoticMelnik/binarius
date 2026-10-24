@@ -67,6 +67,21 @@ describe('captureApi', () => {
     expect(await rejectionOf(bot.api.sendMessage(USER.id, HI))).toBe(failure);
   });
 
+  it('holds a programmed refusal for every call until it is removed', async () => {
+    const { bot, api } = captured();
+    api.apiErrors.set('sendMessage', REFUSED);
+    api.answers.set('sendMessage', () => SENT);
+
+    for (let call = 0; call < 2; call += 1) {
+      expect(await rejectionOf(bot.api.sendMessage(USER.id, HI))).toMatchObject({
+        error_code: 429,
+      });
+    }
+    api.apiErrors.delete('sendMessage');
+
+    expect(await bot.api.sendMessage(USER.id, HI)).toEqual(SENT);
+  });
+
   it('returns what the answer returned, as the result of an ok response', async () => {
     const { bot, api } = captured();
     api.answers.set('sendMessage', (payload) => ({ ...SENT, text: payload.text }));

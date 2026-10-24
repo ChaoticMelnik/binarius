@@ -1186,6 +1186,28 @@ describe('the welcome video', () => {
     ]);
   });
 
+  it('lets a refused text reach bot.catch after a refused video', async () => {
+    const { bot, calls, logger, apiErrors } = setup({ welcomeVideoFileId: 'not-a-file-id' });
+    apiErrors.set('sendVideo', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: wrong file identifier/HTTP URL specified',
+    });
+    apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: chat not found',
+    });
+
+    const thrown = await rejectionOf(bot.handleUpdate(startUpdate('/start')));
+    expect(thrown).toBeInstanceOf(BotError);
+    expect(calls.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'the welcome video was refused, sending the text instead',
+    ]);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it('lets anything that is neither a refusal nor the transport reach bot.catch', async () => {
     const { bot, calls, logger, answers } = setup({ welcomeVideoFileId: 'BAACAgIAAxkB' });
     // not through apiErrors: its type no longer admits a failure the transport cannot produce,
@@ -1311,6 +1333,20 @@ describe('the confirm button', () => {
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(text);
     expect(logger.warn).not.toHaveBeenCalled();
   });
+
+  // #293: the refusal table is a plain object, so an inherited key must read as an unknown code
+  it.each(['__proto__', 'constructor'])(
+    'answers a reason %s as any unknown code, with the menu and a warning',
+    async (reason) => {
+      const { bot, calls, logger } = setup({ confirmLogin: refused(409, reason) });
+      await bot.handleUpdate(update());
+      const message = sentPayload(calls, 'sendMessage');
+      expect(message?.text).toBe(TEXTS.unavailable.value);
+      expect(inlineButtons(message)).toEqual(MENU_BUTTONS);
+      expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['login not confirmed']);
+      expect(logger.error).not.toHaveBeenCalled();
+    },
+  );
 
   it('shows the generic text and warns for any other backend failure', async () => {
     const { bot, calls, logger } = setup({
@@ -2106,6 +2142,18 @@ describe('the code step', () => {
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['email login failed']);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ backendStatus: 500 });
+  });
+
+  // #293: an inherited key of the refusal table is an unknown code, so the recheck runs
+  it('treats a login refused with reason constructor as an unknown code and rechecks', async () => {
+    const { bot, backend, calls, logger } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(400, 'constructor'),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.recordStart).toHaveBeenCalledTimes(1);
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable.value]);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['email login failed']);
   });
 
   // without the state, "wrong code" would be a guess

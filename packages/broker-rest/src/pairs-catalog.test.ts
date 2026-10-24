@@ -25,6 +25,8 @@ const START_CLOCK = 1_790_000_000_000;
 let broker: MockBroker;
 let client: BrokerRestClient;
 let clock: number;
+// how far the wall clock (now) is from the age clock; 0 unless a test moves the wall clock alone
+let wallOffset: number;
 let lines: string[];
 let catalogs: PairsCatalog[];
 
@@ -35,7 +37,8 @@ function catalogOf(overrides: Partial<PairsCatalogDeps> = {}): PairsCatalog {
     client,
     ttlMs: DEFAULT_BROKER_PAIRS_TTL_MS,
     logger: logger(),
-    now: () => clock,
+    now: () => clock + wallOffset,
+    ageClock: () => clock,
     ...overrides,
   });
   catalogs.push(catalog);
@@ -50,6 +53,7 @@ beforeEach(async () => {
   broker = await startMockBroker();
   client = createBrokerRestClient({ baseUrl: broker.url });
   clock = START_CLOCK;
+  wallOffset = 0;
   lines = [];
   catalogs = [];
 });
@@ -117,11 +121,68 @@ describe('refresh and read', () => {
     expect(catalog.read()?.fresh).toBe(false);
   });
 
-  it('reports age 0 when the clock went back', async () => {
+  it('measures the age on the monotonic clock, not the wall clock', async () => {
     const catalog = catalogOf();
     await catalog.refresh();
-    clock -= 10_000;
-    expect(catalog.read()?.ageMs).toBe(0);
+    wallOffset = -3_600_000;
+    expect(catalog.read()).toMatchObject({ fetchedAt: START_CLOCK, ageMs: 0, fresh: true });
+    clock += BROKER_PAIRS_MAX_STALE_MS + 1;
+    expect(catalog.read()).toBeUndefined();
+  });
+
+  it('stamps fetchedAt on the wall clock and grows ageMs with the age clock only', async () => {
+    wallOffset = 5_000;
+    const catalog = catalogOf();
+    await catalog.refresh();
+    expect(catalog.read()).toMatchObject({ fetchedAt: START_CLOCK + 5_000, ageMs: 0 });
+    wallOffset = 60_000;
+    expect(catalog.read()).toMatchObject({ fetchedAt: START_CLOCK + 5_000, ageMs: 0 });
+    clock += 1_200;
+    expect(catalog.read()).toMatchObject({ fetchedAt: START_CLOCK + 5_000, ageMs: 1_200 });
+  });
+
+  it('measures ages in whole milliseconds on its default clock', async () => {
+    const catalog = createPairsCatalog({
+      client,
+      ttlMs: DEFAULT_BROKER_PAIRS_TTL_MS,
+      logger: logger(),
+    });
+    catalogs.push(catalog);
+    await catalog.refresh();
+    await until('the age clock moved', () => (catalog.read()?.ageMs ?? 0) > 0);
+    expect(Number.isInteger(catalog.read()?.ageMs)).toBe(true);
+  });
+});
+
+describe('pair ids', () => {
+  const answering = (ids: number[]): Pick<BrokerRestClient, 'listPairs'> => {
+    const [template] = brokerPairs();
+    if (template === undefined) throw new Error('the mock broker has no pairs');
+    return {
+      listPairs: () =>
+        Promise.resolve(ids.map((id, index) => ({ ...template, id, symbol: `P${index}` }))),
+    };
+  };
+  const linesWith = (msg: string) =>
+    lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((l) => l.msg === msg);
+
+  it('drops a non-positive, non-int4 or repeated id with one warn, keeping the first pair', async () => {
+    const catalog = catalogOf({ client: answering([7, 0, -1, 7, 2147483648, 2.5, 9]) });
+    expect(await catalog.refresh()).toBe(true);
+    expect(catalog.read()?.pairs.map((pair) => [pair.id, pair.symbol])).toEqual([
+      [7, 'P0'],
+      [9, 'P6'],
+    ]);
+    expect(linesWith('pairs catalog dropped pairs with an unusable id')).toEqual([
+      expect.objectContaining({ dropped: 5, ids: [0, -1, 7, 2147483648, 2.5] }),
+    ]);
+  });
+
+  it('serves an answer whose every pair is dropped as an empty snapshot, not a failure', async () => {
+    const catalog = catalogOf({ client: answering([0, -3]) });
+    expect(await catalog.refresh()).toBe(true);
+    expect(catalog.read()).toMatchObject({ pairs: [], fresh: true });
+    expect(linesWith('pairs catalog refresh failed')).toEqual([]);
   });
 });
 
@@ -249,7 +310,7 @@ describe('the timer', () => {
         return client.listPairs(options);
       },
     };
-    const catalog = catalogOf({ client: counting, ttlMs: 20, now: Date.now });
+    const catalog = catalogOf({ client: counting, ttlMs: 20, now: Date.now, ageClock: Date.now });
     catalog.start();
     await until('three refreshes', () => pairsRequests().length >= 3);
     const [first] = broker.pairs.list();
@@ -449,7 +510,13 @@ describe('a broker fetch that never settles', () => {
       return new Promise<Response>(() => undefined);
     });
     const stuck = createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 20 });
-    const catalog = catalogOf({ client: stuck, ttlMs: 50, now: Date.now, logger: seamLogger() });
+    const catalog = catalogOf({
+      client: stuck,
+      ttlMs: 50,
+      now: Date.now,
+      ageClock: Date.now,
+      logger: seamLogger(),
+    });
     catalog.start();
     await until('a second request', () => fetches >= 2);
     expect(fetches).toBeGreaterThanOrEqual(2);

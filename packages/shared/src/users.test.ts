@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { START_PAYLOAD_CORPUS } from './testing';
 import {
-  LANGUAGE_CODE_PATTERN,
   NotificationLevel,
-  START_PAYLOAD_PATTERN,
   TelegramChatMemberStatus,
   UserStatus,
   languageCodeSchema,
@@ -54,7 +52,6 @@ describe('startPayloadSchema', () => {
   // the same corpus the live CHECK is run against in packages/db/src/user-ops.db.test.ts
   it.each(START_PAYLOAD_CORPUS)('$label → $valid', ({ value, valid }) => {
     expect(startPayloadSchema.safeParse(value).success).toBe(valid);
-    expect(START_PAYLOAD_PATTERN.test(value)).toBe(valid);
   });
 });
 
@@ -62,10 +59,13 @@ describe('startPayloadSchema', () => {
 // this pattern is an approximation of an IETF tag, so x- and i- tags are dropped and a lone
 // singleton is kept. Narrowing it later has to change that comment, the docs and these rows.
 describe('languageCodeSchema', () => {
-  it.each(['ru', 'en-US', 'zh-Hant-TW', 'ast', 'en-a'])('accepts %s', (value) => {
-    expect(languageCodeSchema.safeParse(value).success).toBe(true);
-    expect(LANGUAGE_CODE_PATTERN.test(value)).toBe(true);
-  });
+  // the last one is 35 characters, the .max(35) boundary
+  it.each(['ru', 'en-US', 'zh-Hant-TW', 'ast', 'en-a', 'en-abcdefgh-abcdefgh-abcdefgh-abcde'])(
+    'accepts %s',
+    (value) => {
+      expect(languageCodeSchema.safeParse(value).success).toBe(true);
+    },
+  );
 
   it.each([
     'r',
@@ -76,7 +76,10 @@ describe('languageCodeSchema', () => {
     'en-',
     'x-private',
     'i-klingon',
-    `en-${'a'.repeat(34)}`,
+    // a subtag over 8 letters: the pattern's bound
+    'en-abcdefghi',
+    // 38 characters, every subtag within the pattern: only .max(35) refuses it
+    'en-abcdefgh-abcdefgh-abcdefgh-abcdefgh',
   ])('rejects %j', (value) => {
     expect(languageCodeSchema.safeParse(value).success).toBe(false);
   });

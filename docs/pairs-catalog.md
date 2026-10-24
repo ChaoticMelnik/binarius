@@ -25,7 +25,7 @@ pnpm test --project unit packages/broker-rest packages/shared/src/catalog.test.t
 ## The module
 
 ```ts
-const catalog = createPairsCatalog({ client, ttlMs, logger, now, abandoned });
+const catalog = createPairsCatalog({ client, ttlMs, logger, now, ageClock, abandoned });
 catalog.read();     // PairsCatalogView | undefined
 catalog.refresh();  // Promise<boolean>
 catalog.start();
@@ -36,10 +36,17 @@ catalog.stop();
   `true` when the snapshot was replaced and `false` otherwise; it never rejects. While a call is
   in flight, every `refresh()` returns that same promise, the timer's tick included, so there is
   never more than one request.
-- `fetchedAt` is `now()` taken after the answer was parsed: the age measures the data, not the
-  attempt. `read()` gives `ageMs = max(0, now() - fetchedAt)`, both on the process clock. A clock
-  that went back reads as age 0; one that jumped forward makes the snapshot look older until the
-  next tick.
+- `fetchedAt` is `now()` (the wall clock) taken after the answer was parsed: the age measures the
+  data, not the attempt. `ageMs` is measured on a monotonic clock (`performance.now()` floored to
+  whole milliseconds, as the wire's integer `ageMs` needs, unless `ageClock` is given) from the same
+  moment, so a wall clock that steps back or forward changes
+  neither `ageMs` nor `fresh`, and a stale snapshot is dropped after `BROKER_PAIRS_MAX_STALE_MS` of
+  real time (#293). `fetchedAt` is never compared with the age clock.
+- A pair whose `id` is not an integer in `[1, INT4_MAX]`, or repeats an id already kept, is
+  dropped from the snapshot: the bot's buttons and trade intents carry the id as a positive int4,
+  and a repeated id resolves to its first pair (first occurrence wins). An answer with any dropped
+  pair writes one `warn` line (see Logging); an answer whose every pair is dropped is an empty
+  snapshot, not a failure.
 - `read()` is `undefined` before the first success and once the snapshot is older than
   `BROKER_PAIRS_MAX_STALE_MS`. An empty array from the broker is a valid snapshot, not a failure.
 - `read()` also gives `fresh = ageMs <= ttlMs + BROKER_REST_TIMEOUT_MS`: the oldest a snapshot
@@ -152,6 +159,13 @@ when the error has them. The line holds neither the base URL nor any of the resp
 `detail`.
 `pairs-catalog.test.ts` reads these lines back through a pino logger built with `logOptions`.
 
+One line per refresh that dropped pairs with an unusable id, at `warn`; `ids` holds at most the
+first 10 dropped ids:
+
+```json
+{ "dropped": 2, "ids": [0, 7], "msg": "pairs catalog dropped pairs with an unusable id" }
+```
+
 A catalog that stopped refreshing is an `error` (#481), written by the tick when the catalog is
 stale: `read()` is `undefined` (no snapshot, including after a failed warm-up, or one older than
 `BROKER_PAIRS_MAX_STALE_MS`) or not `fresh`:
@@ -161,8 +175,8 @@ stale: `read()` is `undefined` (no snapshot, including after a failed warm-up, o
 ```
 
 - Once at the first stale tick of a streak, then again at the first stale tick at least
-  `BROKER_PAIRS_MAX_STALE_MS` after the previous line, measured from that line's `now()`.
-- `ageMs` is the snapshot's age from its `fetchedAt` on the catalog's `now()`, `null` with no
+  `BROKER_PAIRS_MAX_STALE_MS` after the previous line, measured on the age clock.
+- `ageMs` is the snapshot's age on the age clock (see The module), `null` with no
   snapshot at all. `failedRefreshes` counts the requests that failed since the last success; one
   cut by `stop()` is not counted. `abandoned` is the process-wide count above: greater than 0 means
   `fetch` ignored its own abort somewhere in the process.

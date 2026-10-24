@@ -1,4 +1,4 @@
-import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import {
   addressOrNull,
   AuditAction,
@@ -57,12 +57,12 @@ export interface RecordedUserStart {
   referred: boolean;
 }
 
-// What /users/start writes (/start and /settings): one upsert, no read-before-write, so two such
-// updates racing on a new user produce one row rather than a unique violation. The lock order is
-// the one every other writer here uses — the UPDATE takes the users row, broker_accounts is read
-// after it and only for information. `status` is deliberately absent from the SET: a blocked user
-// does not become active by sending /start or /settings, the same line upsertUser (oauth-ops.ts)
-// holds.
+// What /users/start writes (/start, /menu, /settings and the bot's recheck after an email login):
+// one upsert, no read-before-write, so two such updates racing on a new user produce one row
+// rather than a unique violation. The lock order is the one every other writer here uses — the
+// UPDATE takes the users row, broker_accounts is read after it and only for information. `status`
+// is deliberately absent from the SET: a blocked user does not become active by sending /start or
+// /settings, the same line upsertUser (oauth-ops.ts) holds.
 export async function recordUserStart(
   db: Db,
   { telegramUserId, displayName, languageCode, startPayload }: RecordUserStartInput,
@@ -136,31 +136,25 @@ export async function recordUserStart(
           .returning({ id: referrals.id })
       ).length > 0;
 
-    const [account] = await tx
-      .select({ id: brokerAccounts.id })
+    const accounts = await tx
+      .select({ id: brokerAccounts.id, email: brokerAccounts.email, status: brokerAccounts.status })
       .from(brokerAccounts)
       .where(
         and(
           eq(brokerAccounts.userId, user.id),
-          eq(brokerAccounts.status, BrokerAccountStatus.Active),
-        ),
-      )
-      .limit(1);
-    // what the bot offers to confirm; built key by key, like the view below
-    const pending = await tx
-      .select({ id: brokerAccounts.id, email: brokerAccounts.email })
-      .from(brokerAccounts)
-      .where(
-        and(
-          eq(brokerAccounts.userId, user.id),
-          eq(brokerAccounts.status, BrokerAccountStatus.Pending),
+          inArray(brokerAccounts.status, [BrokerAccountStatus.Active, BrokerAccountStatus.Pending]),
         ),
       )
       .orderBy(desc(brokerAccounts.createdAt), desc(brokerAccounts.id));
     return {
       row: user,
-      hasActiveBrokerAccount: account !== undefined,
-      pendingBrokerAccounts: pending.map(({ id, email }) => ({ id, email })),
+      hasActiveBrokerAccount: accounts.some(
+        (account) => account.status === BrokerAccountStatus.Active,
+      ),
+      // what the bot offers to confirm; built key by key, like the view below
+      pendingBrokerAccounts: accounts
+        .filter((account) => account.status === BrokerAccountStatus.Pending)
+        .map(({ id, email }) => ({ id, email })),
       referred,
     };
   });
