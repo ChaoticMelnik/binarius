@@ -59,9 +59,10 @@ export const tradingSessions = pgTable(
     endedAt: timestamp('ended_at', { withTimezone: true }),
     // the order key of the runnable scan; NULL until the first attempt reached an ending
     lastDecisionAt: timestamp('last_decision_at', { withTimezone: true }),
-    // the direction of the signal the start route checked (#568): the bot's session picture until
-    // the session's first trade. Written only by createTradingSession from POST /trading/sessions,
-    // never updated; NULL on rows before #568 and on the CLI's session-start, which checks no signal
+    // the direction of the signal the start route checked (#568; v2, or H1 on a marked account,
+    // #796): the bot's session picture until the session's first trade. Written only by
+    // createTradingSession from POST /trading/sessions, never updated; NULL on rows before #568, on
+    // the CLI's session-start, which checks no signal, and on an H1 start without an H1 signal
     startSignalAction: text('start_signal_action').$type<TradeAction>(),
     // «the summary step is closed» (#318, #537, docs/bot-session.md → The state): one CAS of three
     // writers wins on NULL - the bot's claimSessionSummary, claimSessionFinalNotice closing a

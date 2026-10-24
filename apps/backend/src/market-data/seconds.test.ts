@@ -280,4 +280,32 @@ describe('the second series (#669)', () => {
     expect(s.counters()).toMatchObject({ pairs: 1, ahead: 3, late: 0 });
     expect(s.close(B, T + 1_000)).toBeNaN();
   });
+
+  it('H-W16: lastClosed is the newest held second with how and when it closed (#796)', () => {
+    const { s, tick } = series(5);
+    expect(s.lastClosed(A)).toBeUndefined();
+    tick(A, T + 300, 1.1);
+    expect(s.lastClosed(A)).toBeUndefined();
+    tick(A, T + 1_200, 1.2, T + 1_270);
+    expect(s.lastClosed(A)).toEqual({
+      assetId: A,
+      second: T + 1_000,
+      closedBy: 'tick',
+      closedAtMs: T + 1_270,
+    });
+    s.advance(T + 3_000 + MARGIN + 30);
+    expect(s.lastClosed(A)).toEqual({
+      assetId: A,
+      second: T + 3_000,
+      closedBy: 'clock',
+      closedAtMs: T + 3_000 + MARGIN + 30,
+    });
+    expect(s.lastClosed(B)).toBeUndefined();
+    // a jump past the capacity empties the pair: nothing is held until the next close
+    s.advance(T + 10_000 + MARGIN);
+    expect(s.counters().resets).toBe(1);
+    expect(s.lastClosed(A)).toBeUndefined();
+    s.advance(T + 11_000 + MARGIN);
+    expect(s.lastClosed(A)).toMatchObject({ second: T + 11_000, closedBy: 'clock' });
+  });
 });

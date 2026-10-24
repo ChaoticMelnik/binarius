@@ -40,6 +40,7 @@ const F = T + 300_000;
 const A = 101;
 const B = 202;
 const BUDGET_MS = 700;
+const MAX_AGE_MS = 1_600;
 
 const pairOf = (id: number, patch: Partial<BinaryPair> = {}): BinaryPair => ({
   ...toBinaryPair({
@@ -82,6 +83,7 @@ const clock = { now: T };
 function scriptedSeries(digits: { value: number | undefined }) {
   const prices = new Map<number, Map<number, number>>();
   const closedUntil = new Map<number, number>();
+  const closedAt = new Map<number, number>();
   const firstHeld = new Map<number, number>();
   const listeners = new Set<(closed: ClosedSecond) => void>();
   const advanced: number[] = [];
@@ -110,6 +112,12 @@ function scriptedSeries(digits: { value: number | undefined }) {
       return Number.isNaN(price) ? undefined : { price, timestamp: f - 100, receivedAtMs: f - 60 };
     },
     digitsOf: () => digits.value,
+    lastClosed(assetId) {
+      const second = closedUntil.get(assetId);
+      return second === undefined
+        ? undefined
+        : { assetId, second, closedBy: 'tick', closedAtMs: closedAt.get(assetId)! };
+    },
   };
   return {
     api,
@@ -121,6 +129,7 @@ function scriptedSeries(digits: { value: number | undefined }) {
       prices.set(assetId, own);
       closedUntil.set(assetId, second);
       const closedAtMs = second + 300;
+      closedAt.set(assetId, closedAtMs);
       clock.now = closedAtMs + 20;
       for (const listener of listeners) {
         listener({ assetId, second, closedBy: 'tick', closedAtMs });
@@ -166,6 +175,8 @@ interface Harness {
   // the next sessions.stop answers: undefined (another writer stopped it first) or a throw
   stopAnswers: (() => Promise<unknown>)[];
   historyReads: { n: number };
+  // the next sessions.list answers, before the listed sessions
+  listAnswers: (() => Promise<ActiveH1Session[]>)[];
   feed(assetId: number, from: number, prices: readonly number[]): void;
   // as feed, letting each second from F on finish its trade before the next one closes
   feedSettled(assetId: number, from: number, prices: readonly number[]): Promise<void>;
@@ -201,6 +212,7 @@ async function harness(
   const recordFailures = { n: 0 };
   const stopAnswers: (() => Promise<unknown>)[] = [];
   const historyReads = { n: 0 };
+  const listAnswers: (() => Promise<ActiveH1Session[]>)[] = [];
   const balance: { read: SessionBalanceRead | undefined } = {
     read: {
       available: decimalStringSchema.parse('1000'),
@@ -234,6 +246,7 @@ async function harness(
     digits,
     stopAnswers,
     historyReads,
+    listAnswers,
     feed(assetId, from, prices) {
       prices.forEach((price, i) => series.closeSecond(assetId, from + i * 1_000, price));
     },
@@ -261,7 +274,7 @@ async function harness(
     catalog: { read: () => catalog.view },
     streaming: () => streaming.on,
     sessions: {
-      list: () => Promise.resolve([...h.listed]),
+      list: () => listAnswers.shift()?.() ?? Promise.resolve([...h.listed]),
       history: (id) => {
         historyReads.n += 1;
         return Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory());
@@ -290,7 +303,13 @@ async function harness(
     wake: () => void (wakes.n += 1),
     logger,
     now: () => clock.now,
-    config: { scanMs: 5_000, tickMs: 100, logMs: 60_000, submitBudgetMs: BUDGET_MS },
+    config: {
+      scanMs: 5_000,
+      tickMs: 100,
+      logMs: 60_000,
+      submitBudgetMs: BUDGET_MS,
+      startMaxAgeMs: MAX_AGE_MS,
+    },
   });
   drivers.push(h.driver);
   if (options.start !== false) {
@@ -1177,5 +1196,189 @@ describe('the no-signal limit of an H1 session is the driver’s (#775, review r
       source: { kind: 'settlement', trigger: 'tick' },
     });
     expect(h.line()).toMatchObject({ decisions: 0, repeatPending: 1 });
+  });
+});
+
+describe("the H1 start's reading and hand-over (#796)", () => {
+  const readingAt = (h: Harness, settings = h1Settings()) => {
+    const reading = h.driver.current(A, settings);
+    if (reading.kind !== 'decision') throw new Error(`no reading: ${reading.reason}`);
+    return reading.facts;
+  };
+  const startOf = (h: Harness) => ({ facts: readingAt(h), pair: { payout: 96, symbol: `P${A}` } });
+
+  it('H1-DR39: current() decides on the newest closed second while it is current; otherwise it says why not', async () => {
+    const h = await harness({ sessions: [] });
+    expect(h.driver.current(A, h1Settings())).toEqual({ kind: 'unavailable', reason: 'no_series' });
+    h.feed(A, T, flat(300));
+    expect(h.driver.current(A, h1Settings())).toEqual({ kind: 'unavailable', reason: 'warming' });
+    h.series.closeSecond(A, F, 1.1001);
+    const closes = [...flat(300), 1.1001];
+    expect(h.driver.current(A, h1Settings())).toEqual({
+      kind: 'decision',
+      facts: {
+        assetId: A,
+        f: F,
+        takenAtMs: F + 320,
+        decision: createH1Detector(H1_R1_PARAMS).decide({ closes, at: 300 }),
+        digits: 5,
+        closedBy: 'tick',
+        closedAtMs: F + 300,
+        series: closes,
+        lastTick: { price: 1.1001, timestamp: F - 100, receivedAtMs: F - 60 },
+      },
+    });
+    expect(readingAt(h).decision).toMatchObject({ kind: 'signal', action: 'up' });
+    expect(h.driver.current(B, h1Settings())).toEqual({ kind: 'unavailable', reason: 'no_series' });
+    clock.now = F + MAX_AGE_MS;
+    expect(h.driver.current(A, h1Settings()).kind).toBe('decision');
+    clock.now = F + MAX_AGE_MS + 1;
+    expect(h.driver.current(A, h1Settings())).toEqual({ kind: 'unavailable', reason: 'stale' });
+    clock.now = F + 320;
+    h.digits.value = undefined;
+    expect(h.driver.current(A, h1Settings())).toEqual({ kind: 'unavailable', reason: 'no_digits' });
+    h.digits.value = 5;
+    h.streaming.on = false;
+    expect(h.driver.current(A, h1Settings())).toEqual({
+      kind: 'unavailable',
+      reason: 'source_down',
+    });
+    // a reading touches no session and no counter
+    expect(h.line()).toMatchObject({ sessions: 0, decisions: 0, signals: 0 });
+  });
+
+  it('H1-DR40: adopt with a signal creates Шаг 1 at once on the reading: its deadline, its row, a wake', async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, ramp(1));
+    const start = startOf(h);
+    h.driver.adopt(sessionOf('s1'), start);
+    // the clock moves between the reading and the intent's write: the deadline is the reading's
+    clock.now += 300;
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      sessionId: 's1',
+      step: 1,
+      action: 'up',
+      amount: '1.50',
+      submitDeadlineAt: new Date(start.facts.takenAtMs + BUDGET_MS),
+    });
+    expect(h.creates[0]!.decision).toEqual({
+      context: 'session',
+      tradingSessionId: 's1',
+      brokerAccountId: 'acc-s1',
+      step: 1,
+      assetId: A,
+      interval: null,
+      version: 'h1',
+      decidedAtMs: F,
+      takenAtMs: start.facts.takenAtMs,
+      kind: 'signal',
+      action: 'up',
+      payout: 96,
+      digits: 5,
+      params: { set: 'session', ...H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
+      decision: start.facts.decision,
+      source: { kind: 'ticks', symbol: `P${A}`, closedBy: 'tick', closedAtMs: F + 300 },
+      series: start.facts.series,
+      lastTick: start.facts.lastTick,
+      outcome: 'intent',
+      detail: null,
+      ticksUntilMs: null,
+    });
+    expect(h.wakes.n).toBe(1);
+    expect(h.line()).toMatchObject({ sessions: 1, decisions: 1, signals: 1, intents: 1 });
+  });
+
+  it('H1-DR40b: a scan whose list predates the hand-over keeps the adopted session', async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, ramp(1));
+    let resolve!: (list: ActiveH1Session[]) => void;
+    h.listAnswers.push(() => new Promise((done) => (resolve = done)));
+    const scanning = h.driver.scan();
+    h.driver.adopt(sessionOf('s1'), startOf(h));
+    resolve([]);
+    await scanning;
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    h.series.closeSecond(A, F + 1_000, 1.1002);
+    await flush();
+    expect(h.line()).toMatchObject({ sessions: 1, held: 1 });
+    // a later scan that does not list it drops it, as any session
+    await h.driver.scan();
+    expect(h.line()).toMatchObject({ sessions: 0 });
+  });
+
+  it('H1-DR41: adopt with a no-signal reading writes the waiting row at once and counts the second', async () => {
+    const h = await harness({ sessions: [] });
+    h.histories.set('s1', expiredHistory());
+    h.feed(A, T, flat(301));
+    const start = startOf(h);
+    expect(start.facts.decision).toMatchObject({ kind: 'no_signal', reason: 'no_volatility' });
+    h.driver.adopt(sessionOf('s1'), start);
+    await flush();
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]).toMatchObject({
+      context: 'session',
+      step: 1,
+      outcome: 'no_signal',
+      decidedAtMs: F,
+    });
+    await h.feedSettled(A, F + 1_000, flat(98));
+    expect(h.stops).toEqual([]);
+    await h.feedSettled(A, F + 99_000, flat(1));
+    expect(h.stops).toEqual(STOPPED);
+  });
+
+  it('H1-DR42: adopt without a reading tracks the session at once: the next closed second decides', async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, flat(300));
+    h.driver.adopt(sessionOf('s1'));
+    await flush();
+    expect(h.creates).toEqual([]);
+    h.series.closeSecond(A, F, 1.1001);
+    await flush();
+    expect(h.creates.map((input) => input.decision!.decidedAtMs)).toEqual([F]);
+    expect(h.line()).toMatchObject({ sessions: 1, decisions: 1 });
+  });
+
+  it('H1-DR43: adopt of a session a scan already tracks reuses its state: the cadence and a run in flight hold', async () => {
+    const decided = await harness();
+    decided.feed(A, T, ramp(1));
+    await flush();
+    expect(decided.creates).toHaveLength(1);
+    decided.driver.adopt(sessionOf('s1'), startOf(decided));
+    await flush();
+    expect(decided.creates).toHaveLength(1);
+    expect(decided.line()).toMatchObject({ sessions: 1, held: 1, decisions: 1 });
+
+    const busy = await harness();
+    let resolve!: (result: CreateTradeIntentResult) => void;
+    busy.answers.push(() => new Promise((done) => (resolve = done)));
+    busy.feed(A, T, ramp(1));
+    await flush();
+    busy.driver.adopt(sessionOf('s1'), startOf(busy));
+    await flush();
+    expect(busy.creates).toHaveLength(1);
+    expect(busy.line()).toMatchObject({ skippedLive: 1, decisions: 1 });
+    resolve(created());
+    await flush();
+  });
+
+  it('H1-DR44: invalid settings are warned and not traded; a stopped driver adopts nothing', async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, ramp(1));
+    const start = startOf(h);
+    h.driver.adopt(sessionOf('bad', { version: 5 }), start);
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.logs('h1 driver session skipped')).toEqual([
+      expect.objectContaining({ sessionId: 'bad', reason: 'invalidSettings' }),
+    ]);
+    await h.driver.stop();
+    h.driver.adopt(sessionOf('s1'), start);
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.logs('h1 driver session skipped')).toHaveLength(1);
   });
 });

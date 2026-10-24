@@ -70,6 +70,7 @@ import {
   DEFAULT_H1_SUBMIT_BUDGET_MS,
   H1_DRIVER_LOG_MS,
   H1_DRIVER_SCAN_MS,
+  H1_START_SECOND_MAX_AGE_MS,
   MAX_H1_SUBMIT_BUDGET_MS,
   MIN_H1_SUBMIT_BUDGET_MS,
   BALANCE_STALLED_RETRY_MS,
@@ -485,6 +486,14 @@ describe('broker balance timing', () => {
     expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_DRIVER_SCAN_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThanOrEqual(H1_DRIVER_LOG_MS);
+  });
+
+  it("bounds the H1 start's reading age by a quiet second's close and the entry window (#796)", () => {
+    expect(H1_START_SECOND_MAX_AGE_MS).toBe(1_600);
+    expect(1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SHADOW_TICK_MS).toBeLessThanOrEqual(
+      H1_START_SECOND_MAX_AGE_MS,
+    );
+    expect(H1_START_SECOND_MAX_AGE_MS).toBeLessThan(H1_ENTRY_WINDOW_SEC.to * 1_000);
   });
 
   it('keeps a window inside the tick buffer at its latest capture and the sweep outside the capture horizon (#668)', () => {

@@ -19,6 +19,7 @@ import {
   buildSessionSettings,
   errorLogFields,
   intervalForDuration,
+  isH1Settings,
   isPairOpen,
   pairAcceptsDuration,
   safeParseCreateTradingSessionRequest,
@@ -35,6 +36,7 @@ import {
   SignalKind,
   checkStake,
   stakeSettingsFrom,
+  type H1SessionSettings,
   type SessionStakeStrategy,
   type SignalJournalEntryWire,
   type TradingSessionErrorCode as ErrorCode,
@@ -67,6 +69,12 @@ import type { CachedSignalFeed } from '@binarius/signal';
 import { internalBearerAuth } from '../auth/internal';
 import { ACCESS_SKEW_MS } from '../auth/token-service';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
+import {
+  H1ReadingUnavailable,
+  h1StartDecisionInput,
+  type H1Driver,
+  type H1SecondFacts,
+} from '../h1/driver';
 import type { TickStore } from '../market-data/ticks';
 import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
 import { readFinishedSessionView } from './session-view';
@@ -87,6 +95,9 @@ export interface TradingSessionRoutesDeps {
   // the pair's newest tick (undefined without the data socket)
   decisions: { record(input: SignalDecisionInput): Promise<unknown> };
   ticks: Pick<TickStore, 'last'> | undefined;
+  // the H1 start's reading and hand-over (#796); undefined without the data socket: an H1 session
+  // then starts waiting and is traded by no one until its hour
+  h1Driver: Pick<H1Driver, 'current' | 'adopt'> | undefined;
   now?: () => number;
 }
 
@@ -156,6 +167,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     stakeStrategy,
     decisions,
     ticks,
+    h1Driver,
     now = Date.now,
   },
 ) => {
@@ -220,15 +232,15 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     }
     // An H1-marked account (#745, #775, docs/h1.md -> From the bot): its session is H1's, so its
     // trade plan's expiry, checked before the signal is read - no decision row. No payout floor
-    // (#775, В2).
+    // (#775, В2). Its start reads H1's signal, not the candles' (#796, below).
     const h1 = eligible.h1Since !== null;
     if (h1 && durationSec !== H1_EXPIRY_SEC) {
       return refuse(reply, TradingSessionErrorCode.H1DurationUnsupported);
     }
 
-    // The pair's signal on the current candle (#509): no session starts on a pair without one. A
-    // broker failure or a throw is a refusal too, never a start on a signal nobody read. Its
-    // direction is the session's first picture in the bot (#568).
+    // The pair's signal on the current candle (#509), for a v3 session only: no such session starts
+    // on a pair without one. A broker failure or a throw is a refusal too, never a start on a
+    // signal nobody read. Its direction is the session's first picture in the bot (#568).
     const readSignal = async (): Promise<
       | { refusal: typeof TradingSessionErrorCode.SignalUnavailable }
       | { refusal: typeof TradingSessionErrorCode.NoSignal; entry: SignalJournalEntryWire }
@@ -277,34 +289,14 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     };
     // in parallel, so the start's budget holds the longer of the two, not their sum; the signal's
     // refusal answers first
-    const [signal, snapshot] = await Promise.all([readSignal(), readSnapshot()]);
+    const [signal, snapshot] = await Promise.all([h1 ? undefined : readSignal(), readSnapshot()]);
     const takenAtMs = now();
     // The start's decision in the trade log (#666, docs/trade-log.md → The writers and their
-    // outcomes): one row per answer after a decision was read, best-effort, the answer unchanged
-    const recordStart = async (
-      entry: SignalJournalEntryWire,
-      ending:
-        | { outcome: typeof SignalDecisionOutcome.NoSignal }
-        | { outcome: typeof SignalDecisionOutcome.Started; sessionId: string }
-        | { outcome: typeof SignalDecisionOutcome.Refused; detail: ErrorCode },
-    ) => {
+    // outcomes): one row per answer after a decision was read, best-effort, the answer unchanged.
+    // An H1 start's row is the driver's shape, version h1 (#796)
+    const recordDecision = async (input: () => SignalDecisionInput) => {
       try {
-        await decisions.record(
-          signalDecisionInput(
-            { entry, lastTick: ticks?.last(assetId) ?? null },
-            {
-              context: SignalDecisionContext.SessionStart,
-              tradingSessionId:
-                ending.outcome === SignalDecisionOutcome.Started ? ending.sessionId : null,
-              brokerAccountId,
-              step: null,
-              payout: pair.payout,
-              takenAtMs,
-              outcome: ending.outcome,
-              detail: ending.outcome === SignalDecisionOutcome.Refused ? ending.detail : null,
-            },
-          ),
-        );
+        await decisions.record(input());
       } catch (error) {
         request.log.warn(
           { accountId: brokerAccountId, assetId, ...errorLogFields(error) },
@@ -312,14 +304,51 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
         );
       }
     };
-    if ('refusal' in signal) {
+    const recordStart = (
+      entry: SignalJournalEntryWire,
+      ending:
+        | { outcome: typeof SignalDecisionOutcome.NoSignal }
+        | { outcome: typeof SignalDecisionOutcome.Started; sessionId: string }
+        | { outcome: typeof SignalDecisionOutcome.Refused; detail: ErrorCode },
+    ) =>
+      recordDecision(() =>
+        signalDecisionInput(
+          { entry, lastTick: ticks?.last(assetId) ?? null },
+          {
+            context: SignalDecisionContext.SessionStart,
+            tradingSessionId:
+              ending.outcome === SignalDecisionOutcome.Started ? ending.sessionId : null,
+            brokerAccountId,
+            step: null,
+            payout: pair.payout,
+            takenAtMs,
+            outcome: ending.outcome,
+            detail: ending.outcome === SignalDecisionOutcome.Refused ? ending.detail : null,
+          },
+        ),
+      );
+    const recordH1Start = (
+      facts: H1SecondFacts,
+      settings: H1SessionSettings,
+      ending: { sessionId: string } | { refusal: ErrorCode },
+    ) =>
+      recordDecision(() =>
+        h1StartDecisionInput(
+          { ...facts, brokerAccountId, settings, payout: pair.payout, symbol: pair.symbol },
+          ending,
+        ),
+      );
+    if (signal !== undefined && 'refusal' in signal) {
       if ('entry' in signal) {
         await recordStart(signal.entry, { outcome: SignalDecisionOutcome.NoSignal });
       }
       return refuse(reply, signal.refusal);
     }
+    // an H1 start's refusals before its reading come before any decision: no row
     const refuseDecided = async (code: Exclude<ErrorCode, 'active_session_exists'>) => {
-      await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
+      if (signal !== undefined) {
+        await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
+      }
       return refuse(reply, code);
     };
     if (snapshot === undefined) return refuseDecided(TradingSessionErrorCode.BalanceUnavailable);
@@ -349,27 +378,82 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     }
     const settings = stakeSettings.data;
 
+    // An H1 start (#796, docs/h1.md -> The start): the detector on the pair's newest closed second,
+    // read last, right before the insert, since its signal lives one second. Without a signal the
+    // session starts and waits (owner 2026-10-24); without a reading it waits for the next second
+    const reading =
+      h1 && isH1Settings(settings)
+        ? {
+            settings,
+            read: h1Driver?.current(assetId, settings) ?? {
+              kind: 'unavailable' as const,
+              reason: H1ReadingUnavailable.SourceDown,
+            },
+          }
+        : undefined;
+    const h1Facts = reading?.read.kind === 'decision' ? reading.read.facts : undefined;
+    if (reading !== undefined && reading.read.kind === 'unavailable') {
+      request.log.info(
+        { accountId: brokerAccountId, assetId, reason: reading.read.reason },
+        'h1 start without a reading',
+      );
+    }
+    const startSignalAction =
+      signal !== undefined
+        ? signal.action
+        : h1Facts?.decision.kind === SignalKind.Signal
+          ? h1Facts.decision.action
+          : undefined;
+
     let created;
     try {
       created = await createTradingSession(
         db,
-        { telegramUserId, brokerAccountId, mode, settings, startSignalAction: signal.action },
+        {
+          telegramUserId,
+          brokerAccountId,
+          mode,
+          settings,
+          ...(startSignalAction === undefined ? {} : { startSignalAction }),
+        },
         { demoOnly },
       );
     } catch (error) {
       if (!(error instanceof TradingSessionError)) throw error;
       const code = DB_CODE_TO_WIRE[error.code];
-      await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
+      if (signal !== undefined) {
+        await recordStart(signal.entry, { outcome: SignalDecisionOutcome.Refused, detail: code });
+      } else if (reading !== undefined && h1Facts !== undefined) {
+        await recordH1Start(h1Facts, reading.settings, { refusal: code });
+      }
       if (code === TradingSessionErrorCode.ActiveSessionExists) {
         return activeSessionExists(reply, brokerAccountId, telegramUserId);
       }
       return refuse(reply, code);
     }
+    if (reading !== undefined) {
+      // fire-and-forget: the driver trades the start's signal on its own path (Rule 48)
+      h1Driver?.adopt(
+        {
+          id: created.id,
+          brokerAccountId: created.brokerAccountId,
+          mode: created.mode,
+          telegramUserId,
+          settings: created.settings,
+          startedAt: created.startedAt,
+        },
+        h1Facts === undefined ? undefined : { facts: h1Facts, pair },
+      );
+    }
     // before the view's read, so a throw there does not lose it
-    await recordStart(signal.entry, {
-      outcome: SignalDecisionOutcome.Started,
-      sessionId: created.id,
-    });
+    if (signal !== undefined) {
+      await recordStart(signal.entry, {
+        outcome: SignalDecisionOutcome.Started,
+        sessionId: created.id,
+      });
+    } else if (reading !== undefined && h1Facts !== undefined) {
+      await recordH1Start(h1Facts, reading.settings, { sessionId: created.id });
+    }
     const session = await readTradingSessionView(db, created.id, telegramUserId);
     return reply.code(201).send({ session });
   });

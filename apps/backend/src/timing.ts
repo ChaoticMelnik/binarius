@@ -261,6 +261,10 @@ export const MAX_H1_SUBMIT_BUDGET_MS = 5_000;
 export const H1_DRIVER_SCAN_MS = 5_000;
 // the `h1 driver` line
 export const H1_DRIVER_LOG_MS = 60_000;
+// the start of an H1 session trades on the pair's newest closed second f only while now - f is at
+// most this (#796): a second plus the clock close's margin and one tick, the latest a quiet pair's
+// next second closes; an older f means the series fell behind and the start waits
+export const H1_START_SECOND_MAX_AGE_MS = 1_600;
 
 // --- The ticks around a decision and the trade log's retention (#668, docs/trade-log.md) ----------
 // the window's start before decided_at_ms (owner, #668 В4)
@@ -592,6 +596,10 @@ const TIMING_CHAIN_HOLDS =
   H1_SHADOW_TICK_MS <= H1_DRIVER_SCAN_MS &&
   H1_DRIVER_SCAN_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   H1_DRIVER_SCAN_MS <= H1_DRIVER_LOG_MS &&
+  // the H1 start's reading (#796): a healthy series always has a current second, and a current
+  // reading plus the driver's path opens inside the backtest's entry window
+  1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SHADOW_TICK_MS <= H1_START_SECOND_MAX_AGE_MS &&
+  H1_START_SECOND_MAX_AGE_MS < H1_ENTRY_WINDOW_SEC.to * 1_000 &&
   // the ticks around a decision (#668): at the latest capture (decided + max wait, closed by the
   // clock rule, seen a scan later) the pair's watermark, at most the receipt clock + the clamp, has
   // not pruned the window's start; a watermark close precedes the clock close by at most the

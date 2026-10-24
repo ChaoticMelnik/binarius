@@ -37,6 +37,7 @@ import {
   type SessionStakeStrategy as StakeStrategy,
   type TradingSessionView,
   BotLanguage,
+  logOptions,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
@@ -55,6 +56,9 @@ import {
   createTradeIntent,
   markIntentAccepted,
   openTrading,
+  listActiveH1Sessions,
+  readSessionBalance,
+  readSessionHistory,
   readTradingSessionView,
   recordSignalDecision,
   referralCodes,
@@ -85,6 +89,7 @@ import type { TradingSessionRoutesDeps } from './session-routes';
 import { createTickStore } from '../market-data/ticks';
 import {
   PAIRS_TEST_TOKEN,
+  fakeH1Driver,
   fakeSignalFeed,
   sessionSignalEvaluation,
   unusedAccessTokenDeps,
@@ -94,7 +99,15 @@ import {
   unusedSignalsDeps,
 } from './testing';
 import { unusedDepositDeps } from '../deposit/testing';
-import { createCachedSignalFeed, createSignalFeed, type SignalEvaluation } from '@binarius/signal';
+import {
+  createCachedSignalFeed,
+  createH1Detector,
+  createSignalFeed,
+  type SignalEvaluation,
+} from '@binarius/signal';
+import pino from 'pino';
+import { createH1Driver, type H1Reading, type H1SecondFacts } from '../h1/driver';
+import { createSecondSeries } from '../market-data/seconds';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -179,6 +192,8 @@ function appWith(
     // the trade log's writer (#666); recordSignalDecision on the suite's database by default
     decisions?: TradingSessionRoutesDeps['decisions'];
     ticks?: TradingSessionRoutesDeps['ticks'];
+    // the H1 start's reading and hand-over (#796); none by default
+    h1Driver?: TradingSessionRoutesDeps['h1Driver'];
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
@@ -222,6 +237,7 @@ function appWith(
         record: (input) => recordSignalDecision(tmp.db, input),
       },
       ticks: options.ticks,
+      h1Driver: options.h1Driver,
       now: () => NOW,
     },
     signal: unusedSignalDeps(),
@@ -2279,8 +2295,37 @@ describe('the recovery routes (#567)', () => {
 describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   // a pair H1 trades: it accepts the 5 s expiry
   const h1Pair: BinaryPair = { ...pair, minTimeframe: 5, payout: 95 };
-  const h1App = (options: Parameters<typeof appWith>[0] = {}, pairs: BinaryPair[] = [h1Pair]) =>
-    appWith({ catalog: freshCatalog(pairs), ...options });
+  // the start's reading (#796): f the second before NOW, the R1 detector on `closes`
+  const F = NOW - 1_000;
+  const factsOf = (closes: readonly number[]): H1SecondFacts => ({
+    assetId: ASSET,
+    f: F,
+    takenAtMs: NOW - 400,
+    decision: createH1Detector(H1_R1_PARAMS).decide({ closes: Float64Array.from(closes), at: 300 }),
+    digits: 5,
+    closedBy: 'tick',
+    closedAtMs: F + 300,
+    series: [...closes],
+    lastTick: { price: closes.at(-1)!, timestamp: F - 100, receivedAtMs: F - 60 },
+  });
+  const RAMP = [...Array<number>(300).fill(1.1), 1.1001];
+  // a window with movement whose last close equals the one 3 s before: the current move 0
+  const QUIET = Array.from(
+    { length: 301 },
+    (_, i) => 1.1 + (((i === 300 ? 297 : i) * 7) % 11) * 0.0001,
+  );
+  const signalReading: H1Reading = { kind: 'decision', facts: factsOf(RAMP) };
+  const quietReading: H1Reading = { kind: 'decision', facts: factsOf(QUIET) };
+  let driverCalls: ReturnType<typeof fakeH1Driver> = fakeH1Driver(signalReading);
+  // the v2 feed answers a signal, which an H1 start never asks (signalCalls stays empty)
+  const h1App = (
+    options: Parameters<typeof appWith>[0] = {},
+    pairs: BinaryPair[] = [h1Pair],
+    reading: H1Reading = signalReading,
+  ) => {
+    driverCalls = fakeH1Driver(reading);
+    return appWith({ catalog: freshCatalog(pairs), h1Driver: driverCalls.h1Driver, ...options });
+  };
   const mark = (accountId: string, h1: boolean) =>
     tmp.db.transaction((tx) => setH1Mark(tx, { accountId, h1 }));
   const markedReady = async () => {
@@ -2331,9 +2376,11 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       context: 'session_start',
+      version: 'h1',
       outcome: 'started',
       tradingSessionId: session.id,
     });
+    expect(signalCalls).toEqual([]);
   });
 
   it('H1-R2 the same request on an unmarked account writes v3, as before', async () => {
@@ -2365,47 +2412,57 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
     const response = await start(h1App({}, [{ ...pair, payout: 95 }]), bodyFor(seed));
     await expectRefusal(response, 409, 'h1_duration_unsupported', before);
     expect(signalCalls).toEqual([]);
+    expect(driverCalls.currentCalls).toEqual([]);
     expect(await startRows(seed.brokerAccountId)).toEqual([]);
   });
 
-  it('H1-R5′ the order: the pair, then the duration, then the signal', async () => {
+  it('H1-R5′ the order: the pair, then the duration; no signal starts waiting (#796)', async () => {
     const seed = await markedReady();
     const before = await sessionCount();
-    const noSignal = { signal: sessionSignalEvaluation('no_signal') };
     // the pair refuses the 5 s expiry: pair_unavailable
     await expectRefusal(
-      await start(h1App(noSignal, [{ ...pair, payout: 93 }]), h1Body(seed)),
+      await start(h1App({}, [{ ...pair, payout: 93 }], quietReading), h1Body(seed)),
       409,
       'pair_unavailable',
       before,
     );
-    // the pair takes 60 s, the request asks 60 s: the duration answers before the signal
+    // the pair takes 60 s, the request asks 60 s: the duration answers before the reading
     await expectRefusal(
-      await start(h1App(noSignal, [{ ...pair, payout: 93 }]), bodyFor(seed)),
+      await start(h1App({}, [{ ...pair, payout: 93 }], quietReading), bodyFor(seed)),
       409,
       'h1_duration_unsupported',
       before,
     );
-    // 5 s on a pair paying 93, no signal: the signal answers
-    await expectRefusal(
-      await start(h1App(noSignal, [{ ...h1Pair, payout: 93 }]), h1Body(seed)),
-      409,
-      'no_signal',
-      before,
+    expect(driverCalls.currentCalls).toEqual([]);
+    // 5 s on a pair paying 93, no H1 signal: the session starts and waits
+    const response = await start(
+      h1App({}, [{ ...h1Pair, payout: 93 }], quietReading),
+      h1Body(seed),
     );
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).signalAction).toBeNull();
   });
 
-  it('H1-R6 the mark removed during the start is 409 account_not_h1, recorded refused', async () => {
-    const seed = await markedReady();
+  // the mark removed between the start's check and the insert: the balance refresh the start
+  // awaits (no snapshot yet) removes it, then writes the snapshot
+  const unmarkedDuringStart = async (reading: H1Reading) => {
+    const seed = await seedUserWithAccount(tmp.db);
+    expect(await mark(seed.brokerAccountId, true)).toBe('marked');
     const before = await sessionCount();
     const unmarkFirst = async () => {
       expect(await mark(seed.brokerAccountId, false)).toBe('unmarked');
-      return sessionSignalEvaluation('signal');
+      await snapshotFor(seed.brokerAccountId);
     };
-    const response = await start(h1App({ signal: unmarkFirst }), h1Body(seed));
+    const response = await start(h1App({ refresh: unmarkFirst }, [h1Pair], reading), h1Body(seed));
     await expectRefusal(response, 409, 'account_not_h1', before);
-    const rows = await startRows(seed.brokerAccountId);
-    expect(rows.map((row) => [row.outcome, row.detail])).toEqual([['refused', 'account_not_h1']]);
+    return { seed, rows: await startRows(seed.brokerAccountId) };
+  };
+
+  it('H1-R6 the mark removed during the start is 409 account_not_h1, recorded refused', async () => {
+    const { seed, rows } = await unmarkedDuringStart(signalReading);
+    expect(rows.map((row) => [row.version, row.outcome, row.detail])).toEqual([
+      ['h1', 'refused', 'account_not_h1'],
+    ]);
     // the next press starts an ordinary session
     const next = await start(h1App(), h1Body(seed));
     expect(sessionOf(next).settings?.version).toBe(3);
@@ -2439,5 +2496,205 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
     const before = await sessionCount();
     const response = await start(h1App({ demoOnly: true }), h1Body(seed, { mode: TradeMode.Real }));
     await expectRefusal(response, 409, 'demo_only', before);
+  });
+
+  it('H1-R9 an H1 signal at the start: 201 with its direction, the h1 row, the session handed to the driver (#796)', async () => {
+    const seed = await markedReady();
+    const response = await start(h1App(), h1Body(seed));
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.signalAction).toBe('up');
+    expect(signalCalls).toEqual([]);
+    const [row] = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    expect(row?.startSignalAction).toBe('up');
+    const facts = factsOf(RAMP);
+    expect(driverCalls.currentCalls).toEqual([[ASSET, session.settings]]);
+    expect(driverCalls.adoptCalls).toEqual([
+      [
+        {
+          id: session.id,
+          brokerAccountId: seed.brokerAccountId,
+          mode: 'demo',
+          telegramUserId: seed.telegramUserId,
+          settings: session.settings,
+          startedAt: row!.startedAt,
+        },
+        { facts, pair: h1Pair },
+      ],
+    ]);
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      context: 'session_start',
+      tradingSessionId: session.id,
+      step: null,
+      interval: null,
+      version: 'h1',
+      outcome: 'started',
+      detail: null,
+      kind: 'signal',
+      action: 'up',
+      decidedAtMs: F,
+      takenAtMs: facts.takenAtMs,
+      payout: h1Pair.payout,
+      digits: 5,
+      params: { set: 'session', ...H1_R1_PARAMS, entryDelaySec: 1, expirySec: H1_EXPIRY_SEC },
+      source: { kind: 'ticks', symbol: h1Pair.symbol, closedBy: 'tick', closedAtMs: F + 300 },
+      series: RAMP,
+      ticksUntilMs: null,
+    });
+  });
+
+  it('H1-R9b no H1 signal at the start: 201 waiting, start_signal_action NULL, a no_signal row with the session (#796)', async () => {
+    const seed = await markedReady();
+    expect(quietReading.kind === 'decision' && quietReading.facts.decision).toMatchObject({
+      kind: 'no_signal',
+      reason: 'below_threshold',
+    });
+    const response = await start(h1App({}, [h1Pair], quietReading), h1Body(seed));
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.signalAction).toBeNull();
+    const [row] = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    expect(row?.startSignalAction).toBeNull();
+    expect(driverCalls.adoptCalls).toHaveLength(1);
+    expect(driverCalls.adoptCalls[0]![1]).toEqual({ facts: factsOf(QUIET), pair: h1Pair });
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows.map((one) => [one.version, one.outcome, one.kind, one.tradingSessionId])).toEqual([
+      ['h1', 'no_signal', 'no_signal', session.id],
+    ]);
+  });
+
+  it("H1-R10 the real driver trades the start's signal at once: Шаг 1 on the start's reading (#796)", async () => {
+    const seed = await markedReady();
+    const BUDGET_MS = 5_000;
+    const T = F - 300_000;
+    const series = createSecondSeries({ capacitySec: 320, closeMarginMs: 500 });
+    RAMP.forEach((price, i) => {
+      const second = T + i * 1_000;
+      series.push(ASSET, 5, { price, timestamp: second - 500 }, second - 460);
+    });
+    series.advance(F + 500);
+    const wakes = { n: 0 };
+    const driver = createH1Driver({
+      series,
+      catalog: { read: () => freshCatalog([h1Pair]) },
+      streaming: () => true,
+      sessions: {
+        list: () => listActiveH1Sessions(tmp.db),
+        history: (id, options) => readSessionHistory(tmp.db, id, options),
+        balance: (id, options) => readSessionBalance(tmp.db, id, options),
+        createIntent: (input) => createSessionIntent(tmp.db, input, { demoOnly: false }),
+        stop: (id, reason) => stopTradingSession(tmp.db, { id, reason }),
+        record: (input) => recordSignalDecision(tmp.db, input),
+      },
+      wake: () => void (wakes.n += 1),
+      logger: pino(logOptions('silent')),
+      now: () => F + 600,
+      config: {
+        scanMs: 60_000,
+        tickMs: 60_000,
+        logMs: 60_000,
+        submitBudgetMs: BUDGET_MS,
+        startMaxAgeMs: 1_600,
+      },
+    });
+    try {
+      const response = await start(
+        appWith({ catalog: freshCatalog([h1Pair]), h1Driver: driver }),
+        h1Body(seed),
+      );
+      expect(response.statusCode).toBe(201);
+      const session = sessionOf(response);
+      expect(session.signalAction).toBe('up');
+      await until('the driver to wake the publisher', () => Promise.resolve(wakes.n === 1));
+      const intents = await tmp.db
+        .select()
+        .from(tradeIntents)
+        .where(eq(tradeIntents.tradingSessionId, session.id));
+      expect(intents).toHaveLength(1);
+      const rows = await tmp.db
+        .select()
+        .from(signalDecisions)
+        .where(eq(signalDecisions.tradingSessionId, session.id));
+      const startRow = rows.find((one) => one.context === 'session_start')!;
+      const intentRow = rows.find((one) => one.context === 'session')!;
+      expect(startRow).toMatchObject({ outcome: 'started', decidedAtMs: F, takenAtMs: F + 600 });
+      expect(intentRow).toMatchObject({ outcome: 'intent', step: 1, decidedAtMs: F, action: 'up' });
+      expect(intents[0]).toMatchObject({
+        action: 'up',
+        signalDecisionId: intentRow.id,
+        submitDeadlineAt: new Date(startRow.takenAtMs + BUDGET_MS),
+      });
+    } finally {
+      await driver.stop();
+    }
+  });
+
+  it.each([
+    ['no driver (no data socket)', undefined, 'source_down'],
+    ['the source down', 'source_down', 'source_down'],
+    ['no series', 'no_series', 'no_series'],
+    ['a stale second', 'stale', 'stale'],
+    ['unknown digits', 'no_digits', 'no_digits'],
+    ['a window still warming', 'warming', 'warming'],
+  ] as const)(
+    'H1-R11 %s: 201 waiting, no row, no hand-over of a reading, one info line (#796)',
+    async (_name, reason, logged) => {
+      const seed = await markedReady();
+      const app =
+        reason === undefined
+          ? appWith({ catalog: freshCatalog([h1Pair]) })
+          : h1App({}, [h1Pair], { kind: 'unavailable', reason });
+      const response = await start(app, h1Body(seed));
+      expect(response.statusCode).toBe(201);
+      const session = sessionOf(response);
+      expect(session.signalAction).toBeNull();
+      expect(signalCalls).toEqual([]);
+      expect(await startRows(seed.brokerAccountId)).toEqual([]);
+      if (reason !== undefined) {
+        expect(driverCalls.adoptCalls).toHaveLength(1);
+        expect(driverCalls.adoptCalls[0]![1]).toBeUndefined();
+      }
+      const infos = lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((entry) => entry.msg === 'h1 start without a reading');
+      expect(infos).toEqual([
+        expect.objectContaining({
+          accountId: seed.brokerAccountId,
+          assetId: ASSET,
+          reason: logged,
+        }),
+      ]);
+    },
+  );
+
+  it('H1-R12 a refusal at the insert after a no-signal reading: no_signal without a session, no hand-over (#796)', async () => {
+    const { rows } = await unmarkedDuringStart(quietReading);
+    expect(rows.map((row) => [row.version, row.outcome, row.detail, row.tradingSessionId])).toEqual(
+      [['h1', 'no_signal', null, null]],
+    );
+    expect(driverCalls.adoptCalls).toEqual([]);
+  });
+
+  it('H1-R13 a stake refusal of an H1 start writes no row and reads no H1 signal (#796)', async () => {
+    const seed = await markedReady();
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Demo,
+      decimalStringSchema.parse('0.5'),
+    );
+    const before = await sessionCount();
+    await expectRefusal(await start(h1App(), h1Body(seed)), 409, 'stake_below_minimum', before);
+    expect(await startRows(seed.brokerAccountId)).toEqual([]);
+    expect(driverCalls.currentCalls).toEqual([]);
+    expect(driverCalls.adoptCalls).toEqual([]);
   });
 });

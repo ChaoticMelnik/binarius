@@ -475,11 +475,16 @@ const sessionStopLines = [
   'sessionStopNoSignalTimeout',
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
-// the session picture's direction line (#568), absent while the session has none
-const sessionSignal = oneOf([], ['\n', anyOf('sessionSignalUp', 'sessionSignalDown')]);
+// the session picture's direction line (#568); without one, the wait for a signal while the
+// session runs (#796) and nothing once it stopped
+const sessionSignal = oneOf(
+  [],
+  ['\n', anyOf('sessionSignalUp', 'sessionSignalDown', 'sessionSignalWaiting')],
+);
+const stoppedSessionSignal = oneOf([], ['\n', anyOf('sessionSignalUp', 'sessionSignalDown')]);
 // the session message's head (#536, texts.ts → sessionStatusText): the mode's header, the pair,
 // the stake, the expiry, the signal's direction
-const sessionHead = [
+const sessionHeadWith = (signal: BotTextSegment) => [
   anyOf('sessionHeader', 'sessionHeaderReal'),
   '\n',
   k('sessionPair'),
@@ -487,7 +492,7 @@ const sessionHead = [
   k('sessionStake'),
   '\n',
   k('sessionExpiry'),
-  sessionSignal,
+  signal,
 ];
 // a finished session's result and the balance after it, by mode, with the age when it predates
 // the last trade (#337, texts.ts → outcomeLines)
@@ -733,19 +738,23 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionRunning',
     title: 'Сессия идёт',
     limit: TELEGRAM_CAPTION_LIMIT,
-    body: [...sessionHead, '\n\n', k('sessionRunning')],
+    body: [...sessionHeadWith(sessionSignal), '\n\n', k('sessionRunning')],
   },
   {
     id: 'sessionCompleted',
     title: 'Сессия завершена',
     limit: TELEGRAM_CAPTION_LIMIT,
-    body: [...sessionHead, '\n\n', k('sessionCompleted')],
+    body: [...sessionHeadWith(stoppedSessionSignal), '\n\n', k('sessionCompleted')],
   },
   {
     id: 'sessionStopped',
     title: 'Сессия остановлена',
     limit: TELEGRAM_CAPTION_LIMIT,
-    body: [...sessionHead, '\n\n', anyOf(...sessionStopLines, 'sessionStatusUnavailable')],
+    body: [
+      ...sessionHeadWith(stoppedSessionSignal),
+      '\n\n',
+      anyOf(...sessionStopLines, 'sessionStatusUnavailable'),
+    ],
   },
   {
     // the reply to «⏹» and to /stop of one session (#536, texts.ts → sessionStopReplyText): the

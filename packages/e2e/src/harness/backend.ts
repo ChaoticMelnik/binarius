@@ -151,6 +151,8 @@ export async function startE2eBackend(deps: {
       // the trade log as in production (#666); no data socket in the run, so no tick
       decisions: { record: (input) => recordSignalDecision(db, input) },
       ticks: undefined,
+      // no data socket, no H1 driver: the run marks no account H1 (#796)
+      h1Driver: undefined,
     },
     signal: {
       feed: signalFeed,

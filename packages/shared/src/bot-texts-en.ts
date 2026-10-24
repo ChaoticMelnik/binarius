@@ -158,6 +158,8 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
 
   // ---- an H1 session from the bot (#745): translated ahead of the Session group ---------------
   sessionAccountChanged: `⚙️ The account settings changed — open the analysis again.`,
+  // the session message's wait for a signal (#796)
+  sessionSignalWaiting: `📡 Waiting for a signal…`,
 
   // ---- the switch to real after a deposit (#686): translated ahead of the Mailing group --------
   realModeByDeposit: `💳 <b>Deposit received — real mode is on</b>
@@ -262,6 +264,7 @@ export const TRANSLATED_BEFORE_633 = [
   'analysisWaiting',
   'realModeByDeposit',
   'sessionAccountChanged',
+  'sessionSignalWaiting',
 ] as const satisfies readonly BotTextKey[];
 
 export const UNTRANSLATED_BOT_TEXT_KEYS: readonly BotTextKey[] = (

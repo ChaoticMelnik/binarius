@@ -98,6 +98,10 @@ function scriptedSeries() {
       return Number.isNaN(price) ? undefined : { price, timestamp: f - 100, receivedAtMs: f - 60 };
     },
     digitsOf: () => 5,
+    lastClosed: (assetId) =>
+      last === -Infinity
+        ? undefined
+        : { assetId, second: last, closedBy: 'tick', closedAtMs: last + 300 },
   };
   return {
     api,
@@ -176,7 +180,13 @@ function driverOn(series: ReturnType<typeof scriptedSeries>) {
     },
     wake: () => void (wakes.n += 1),
     logger: pino(logOptions('silent')),
-    config: { scanMs: 60_000, tickMs: 60_000, logMs: 60_000, submitBudgetMs: BUDGET_MS },
+    config: {
+      scanMs: 60_000,
+      tickMs: 60_000,
+      logMs: 60_000,
+      submitBudgetMs: BUDGET_MS,
+      startMaxAgeMs: 1_600,
+    },
   });
   return { driver, wakes };
 }

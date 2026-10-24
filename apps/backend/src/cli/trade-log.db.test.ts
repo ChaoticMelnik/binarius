@@ -57,7 +57,12 @@ import {
   toJournalCandle,
   type SignalJournalEntry,
 } from '@binarius/signal';
-import { h1DriverDecisionInput, h1RepeatDecisionInput, H1RepeatTrigger } from '../h1/driver';
+import {
+  h1DriverDecisionInput,
+  h1RepeatDecisionInput,
+  H1RepeatTrigger,
+  h1StartDecisionInput,
+} from '../h1/driver';
 import { parseTradeLogArgs, runTradeLogCli, TRADE_LOG_PAGE_ROWS } from './trade-log';
 
 // The trade log's export (#666, docs/trade-log.md → The export) through runTradeLogCli on a
@@ -953,6 +958,72 @@ describe('trade-log export (#666)', () => {
       params: { rule: 'repeat_step_2', strategy: 'martingale' },
       source: { kind: 'settlement', trigger: 'notice' },
     });
+  });
+
+  it("X18 an H1 start's session_start row (#796): exported with its session, an entry replayH1Entry decides again", async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      cycles: 5,
+      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
+      strategy: SessionStakeStrategy.Martingale,
+    });
+    if (!built.success || !isH1Settings(built.data)) throw new Error('fixture: H1 settings');
+    const settings = built.data;
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { settings });
+    const closes = new Float64Array(H1_R1_PARAMS.sdWindowSec + 1).fill(1.1);
+    closes[H1_R1_PARAMS.sdWindowSec] = 1.1001;
+    const f = 1_170_000_100_000;
+    const started = await recordSignalDecision(
+      tmp.db,
+      h1StartDecisionInput(
+        {
+          brokerAccountId: seed.brokerAccountId,
+          settings,
+          assetId: 101,
+          f,
+          takenAtMs: f + 640,
+          decision: createH1Detector(H1_R1_PARAMS).decide({
+            closes,
+            at: H1_R1_PARAMS.sdWindowSec,
+          }),
+          payout: 92,
+          digits: 5,
+          symbol: 'EUR/USD',
+          closedBy: 'clock',
+          closedAtMs: f + 500,
+          series: Array.from(closes),
+          lastTick: null,
+        },
+        { sessionId: session.id },
+      ),
+    );
+    await tmp.db.execute(
+      sql`update ${signalDecisions} set recorded_at = '2007-02-01T00:00:01Z'::timestamptz where id = ${started.id}::uuid`,
+    );
+    const { code, out, err } = await run(
+      'export',
+      '--from',
+      '2007-02-01T00:00:00Z',
+      '--to',
+      '2007-02-02T00:00:00Z',
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual(['строк: 1']);
+    const [line] = linesOf(out);
+    expect(line?.decision).toMatchObject({
+      context: 'session_start',
+      version: 'h1',
+      kind: 'signal',
+      action: 'up',
+      outcome: 'started',
+      step: null,
+      decidedAtMs: f,
+    });
+    expect(line?.session).toMatchObject({ id: session.id });
+    const entry = h1ShadowEntrySchema.parse(line!.signal);
+    expect(entry.params.set).toBe('session');
+    expect(replayH1Entry(entry)).toEqual(entry.decision);
   });
 
   describe('the ticks around a decision (#668)', () => {
