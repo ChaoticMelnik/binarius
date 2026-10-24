@@ -30,7 +30,7 @@ PostgreSQL + Drizzle ORM; схема — `packages/db`, общая для `apps/
 
 ### Git
 
-- Ветка на задачу от `main`: `feat/<N>-описание`, `fix/<N>-описание`, `refactor/описание`; `docs/audit-<YYYY-MM-DD>` — аудит сессии (`Refs` вместо `Closes`, tech-lead Phase 5). Коммит — `#<N>: описание`. Перед началом — `git pull --rebase origin main`.
+- Ветка на задачу — от `origin/main` или ветки базы стека (implementer Step 2): `feat/<N>-описание`, `fix/<N>-описание`, `refactor/описание`; `docs/audit-<YYYY-MM-DD>` — аудит сессии (`Refs` вместо `Closes`, tech-lead Phase 5). Коммит — `#<N>: описание`. Перед началом — `git pull --rebase origin main`.
 - `main` защищена от push и force-push без исключений. Переписывается только непушенная история (implementer Step 5); запушенную ветку переписывает только ребейз — задача rebase-only, push `--force-with-lease` (tech-lead → «A rebase of a pushed branch»).
 - Размер PR — до ~2 000 добавленных строк, потолок 3 000 (architect Step 4a).
 
@@ -64,5 +64,5 @@ PostgreSQL + Drizzle ORM; схема — `packages/db`, общая для `apps/
 
 ### CodeGraph
 
-- Структурные вопросы — сначала codegraph (`codegraph_context` → один `codegraph_explore`); grep — для буквального текста и двух форм, которые codegraph теряет (`obj.method()`, функция по ссылке): ноль callers не доказывает отсутствие вызовов (проверено на `trade_intents`).
-- Индекс — дерево основной копии `/Users/user/Documents/Binarius`: изменения своей ветки в него не попадают, их читают из worktree.
+- Структурные вопросы — сначала codegraph (`codegraph_context` → один `codegraph_explore`); grep — для буквального текста и двух форм, которые codegraph теряет (`obj.method()`, функция по ссылке): ноль callers не доказывает отсутствие вызовов (проверено на `trade_intents`); цепочка grep + Read вместо codegraph на структурный вопрос — отклонение.
+- Индекс — дерево основной копии `/Users/user/Documents/Binarius`: изменения своей ветки в него не попадают, их читают из worktree. Перед опорой на индекс: `codegraph_status` отвечает, а `git -C <основная копия> status` и `rev-parse` показывают `main` без изменений; иначе codegraph — карта, факты — по `origin/main` (`git show`) или файлам своего worktree.
