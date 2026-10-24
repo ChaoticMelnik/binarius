@@ -14,8 +14,8 @@ import { parseArgs, stripVTControlCharacters } from 'node:util';
 
 // Mutation evidence in one call (decision of the owner 2026-10-15, #511): apply each mutation of
 // a list, run its test files, record a table row, put the files back. Hand-made tables and
-// mutations run one at a time are a process deviation (.claude/CLAUDE.md -> Постоянные ответы
-// владельца -> «Доказательства мутаций»).
+// mutations run one at a time are a process deviation (.claude/skills/implementer/SKILL.md ->
+// Step 5 -> Mutation evidence).
 //
 //   node tooling/mutations.ts <list.json> --out <dir> [--only M1,M2]
 //
