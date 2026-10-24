@@ -183,6 +183,9 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeRun> {
     records[phase].windowCompleted = deps.now() - answeredAt >= timing.windowMs;
   }
 
+  // a success to the 0.01 command is already inconclusive: the later phases would only open more
+  // demo trades than the preconditions announce
+  let acceptedBelow = false;
   for (const phase of PROBE_PHASES) {
     const sender = PHASE_SENDER[phase];
     row = phase;
@@ -229,8 +232,16 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeRun> {
           : {}),
       };
       say(`${label}: ${describeResult(result)}`);
+      if (below && result.outcome === 'success') acceptedBelow = true;
     }
     await listen(phase);
+    if (acceptedBelow) {
+      say(`the broker accepted a below-minimum order: the phases after ${phase} are not run`);
+      break;
+    }
+  }
+  for (const phase of PROBE_PHASES) {
+    records[phase] ??= { command: 'not_run', windowCompleted: false };
   }
 
   const answers = (phase: Phase, socket: ProbeSocket): HeardAnswers => {
