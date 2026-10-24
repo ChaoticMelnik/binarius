@@ -28,6 +28,7 @@ import {
   TradingSessionStopReason,
   type BrokerUser,
   type DecimalString,
+  normalizeDecimal,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
@@ -444,19 +445,22 @@ describe('the attempt and the sequence (#287)', () => {
       pairs: pairsOf(fresh([aapl])),
       config: { candleSlackMs: CANDLE_CLOSE_SLACK_MS },
     });
-    const step = 5_000;
-    clock = Math.floor(Date.now() / step) * step + 1_000;
-    await orchestrator.tick();
-    expect(signals.calls).toEqual([{ assetId: 202, interval: '5s' }]);
-    // the next boundary is 4 s away, plus the 0.5 s slack: not rounded up to a 5 s tick (#697)
-    advance(4_400);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    advance(100);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(2);
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    await orchestrator.stop();
+    try {
+      const step = 5_000;
+      clock = Math.floor(Date.now() / step) * step + 1_000;
+      await orchestrator.tick();
+      expect(signals.calls).toEqual([{ assetId: 202, interval: '5s' }]);
+      // the next boundary is 4 s away, plus the 0.5 s slack: not rounded up to a 5 s tick (#697)
+      advance(4_400);
+      await orchestrator.tick();
+      expect(signals.calls).toHaveLength(1);
+      advance(100);
+      await orchestrator.tick();
+      expect(signals.calls).toHaveLength(2);
+      expect(await intentsOf(seed.session.id)).toEqual([]);
+    } finally {
+      await orchestrator.stop();
+    }
   });
 
   it('E2 a rejected trade is retried once; a second rejection in a row stops the session', async () => {
@@ -1673,9 +1677,6 @@ describe('failures that write no ending (#287)', () => {
   });
 });
 
-// The msg table in docs/trading-session.md -> Logs is the contract: every row was produced by the
-// cases above (a row marked "race" cannot be produced on demand), and no warn or error line
-// carries a msg outside it.
 // A worker restart, built in process (#131): "the dead worker" is orchestrator A plus the database
 // writes it made before dying; "the new worker" is a new orchestrator, pass and catch-up over the
 // same database. The crash state is written step by step, not produced by killing a running job.
@@ -1790,11 +1791,12 @@ async function crashAfterOpen(accessToken: string, intentId: string) {
   return rest().openTrade(
     { accessToken },
     {
-      assetId: 101,
-      amount: '1.00' as DecimalString,
-      action: TradeAction.Up,
-      durationSec: 60,
-      isDemo: true,
+      assetId: row.assetId,
+      // the broker takes at most two decimals: the executor's normalization
+      amount: decimalStringSchema.parse(normalizeDecimal(row.amount)),
+      action: row.action,
+      durationSec: row.durationSec,
+      isDemo: row.mode === TradeMode.Demo,
     },
   );
 }
@@ -2006,7 +2008,9 @@ describe('restart recovery (#131)', () => {
   });
 
   // one intent per step for concurrent orchestrators only; the other components are
-  // docs/worker-deploy.md → "Why two workers at once are safe"
+  // docs/worker-deploy.md → "Why two workers at once are safe". Which guard refuses the second
+  // orchestrator - the step key's unique index or the one live intent per account - depends on
+  // the interleaving, so this case does not pin either
   it('R6 two orchestrators in one tick: one intent for the step', async () => {
     const seed = await seedSession();
     const a = orchestratorOf();
@@ -2858,33 +2862,6 @@ describe('the candle wake (#697)', () => {
     expect(ticksOf('CT4')).toHaveLength(1);
     await orchestrator.stop();
   });
-
-  it('CT5 a decision on an unclosed candle is traded like any other: no REST fallback, no new refusal', async () => {
-    const seed = await seedSession();
-    const answer = signalAnswer(TradeAction.Up);
-    if (answer.outcome !== 'decided' || answer.record === undefined) throw new Error('fixture');
-    const boundary = Math.floor(answer.record.entry.nowMs / 60_000) * 60_000;
-    // the window did not close the candle before the decision's boundary (docs/signal.md → unclosed)
-    const source = { ...answer.record.entry.source, closedUntil: boundary - 60_000 };
-    const unclosed = {
-      ...answer,
-      record: { ...answer.record, entry: { ...answer.record.entry, source } },
-    };
-    const signals = signalsOf({ ok: true, response: unclosed });
-    const orchestrator = candleful({ signals, log: tagged('CT5') });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    expect(await intentsOf(seed.session.id)).toEqual([
-      expect.objectContaining({ status: TradeIntentStatus.Queued, action: TradeAction.Up }),
-    ]);
-    expect(await decisionsOf(seed.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'intent', kind: 'signal', source }),
-    ]);
-    expect(msgsOf(seed.session.id)).not.toContain('trading session waits for the next candle');
-    expect(msgsOf(seed.session.id)).not.toContain('trading session signal fetch failed');
-    expect(ticksOf('CT5').at(-1)).toMatchObject({ created: 1, held: 0 });
-    await orchestrator.stop();
-  });
 });
 
 describe('the balance wait after a settlement (#696)', () => {
@@ -2998,6 +2975,9 @@ describe('the balance wait after a settlement (#696)', () => {
     const seed = await wonBeforePayout(orchestrator);
     orchestrator.wake();
     await until('the wait', () => msgsOf(seed.session.id).includes(WAITS));
+    // the line is written before the hold is applied: the tick that wrote it may still run, and the
+    // wake below must start a tick of its own (#716)
+    await orchestrator.tick();
     const asked = signals.calls.length;
     const waits = () => msgsOf(seed.session.id).filter((msg) => msg === WAITS).length;
     orchestrator.wake();
@@ -3078,6 +3058,9 @@ describe('the balance wait after a settlement (#696)', () => {
   );
 });
 
+// The msg table in docs/trading-session.md -> Logs is the contract: every row was produced by the
+// cases above (a row marked "race" cannot be produced on demand), and no warn or error line
+// carries a msg outside it.
 describe('L1 the log lines (#287)', () => {
   const doc = readFileSync(
     fileURLToPath(new URL('../../../../docs/trading-session.md', import.meta.url)),

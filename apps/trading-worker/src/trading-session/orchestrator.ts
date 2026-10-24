@@ -150,8 +150,9 @@ export function createSessionOrchestrator({
   const candleHeld = new Set<string>();
   let candleTimer: ReturnType<typeof setTimeout> | undefined;
   let candleWakeAt: number | undefined;
-  // a timer that fired before now() reached its target (its clock against Date.now) leaves the
-  // session to the interval: targets at or before the last firing are not armed again
+  // targets at or before the last firing are not armed again, so a hold the woken tick left in
+  // place does not refire at once; a timer that fired before now() reached its target (its clock
+  // against Date.now) is armed again for the rest of the wait
   let lastFiredAt = Number.NEGATIVE_INFINITY;
 
   function logStop(

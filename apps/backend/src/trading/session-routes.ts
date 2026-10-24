@@ -152,9 +152,9 @@ const refuse = (reply: FastifyReply, code: Exclude<ErrorCode, 'active_session_ex
   reply.code(STATUS_OF[code]).send({ error: code });
 
 // Registered as an encapsulated plugin so the auth hook covers exactly these routes
-// (docs/trading-session.md -> Routes). Every refusal of the start comes before
-// createTradingSession, so a 4xx leaves no trading_sessions row; a balance refresh it ran on the
-// way may have written the account's snapshot.
+// (docs/trading-session.md -> Routes). A refused start leaves no trading_sessions row: the
+// pre-check's refusals come before createTradingSession, whose own refusals roll its transaction
+// back; a balance refresh the start ran on the way may have written the account's snapshot.
 export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> = async (
   app,
   {
@@ -209,14 +209,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     });
     if (!eligible.ok) {
       if (eligible.code === TradingSessionErrorCode.ActiveSessionExists) {
-        return reply.code(STATUS_OF.active_session_exists).send({
-          error: eligible.code,
-          session:
-            eligible.activeSessionId === undefined
-              ? null
-              : ((await readTradingSessionView(db, eligible.activeSessionId, telegramUserId)) ??
-                null),
-        });
+        return activeSessionExists(reply, eligible.brokerAccountId, telegramUserId);
       }
       return refuse(reply, eligible.code);
     }
@@ -247,7 +240,9 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       | { action: TradeAction; entry: SignalJournalEntryWire }
     > => {
       try {
-        // the start's decision gets its own journal line (#509, #405)
+        // journal: true writes the decision's journal line unless the cache already wrote it for
+        // this decision object (packages/signal/src/cache.ts): a held decision the bot's analysis
+        // already got is not journalled twice (#509, #405)
         const evaluation = await signals.evaluate(
           { assetId, interval: intervalForDuration(durationSec), digits: pair.digits },
           { journal: true },

@@ -5,8 +5,8 @@ import { brokerAccounts } from './broker-accounts';
 // Which worker process may hold the broker socket of an account (#93, docs/broker-session.md →
 // The lease). One row per account, ever: a dead owner's row is overwritten by the next acquire,
 // and only its owner deletes it. Written only by session-lease-ops.ts, each operation one
-// autocommit statement outside the users → broker_accounts → trade_intents lock chain; the
-// times are the database clock.
+// autocommit statement outside the users → broker_accounts → trading_sessions → trade_intents
+// lock chain; the times are the database clock.
 export const brokerSessionLeases = pgTable(
   'broker_session_leases',
   {

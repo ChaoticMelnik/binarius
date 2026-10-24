@@ -48,6 +48,11 @@ interface CliEnv {
 }
 
 export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
+  // the count of trades became CYCLES (#552): a stand script still setting TRADES would otherwise
+  // start the default number of cycles without a word (#580 m6)
+  if (source.TRADES !== undefined) {
+    throw new Error('Env TRADES is not read since #552: set CYCLES');
+  }
   const telegramUserId = readEnv(source, 'TELEGRAM_USER_ID');
   if (!telegramUserIdSchema.safeParse(telegramUserId).success) {
     throw new Error('Env TELEGRAM_USER_ID must be a positive integer');

@@ -26,8 +26,8 @@ export const LEVEL_RANK_SCALE = 4;
 export const LEVEL_CODE_MAX_LENGTH = 64;
 
 // The broker's balance for one account, as last seen. Written only by balance-snapshot-ops.ts,
-// each operation one autocommit statement outside the users → broker_accounts → trade_intents
-// lock chain. Amounts are stored as the broker sent them: total = available + held is not
+// each operation one autocommit statement outside the users → broker_accounts →
+// trading_sessions → trade_intents lock chain. Amounts are stored as the broker sent them: total = available + held is not
 // checked, because that is a rule of the mock's fixtures, not something observed live.
 // *_observed_at / *_event_at are the database clock at the write.
 export const brokerBalanceSnapshots = pgTable(

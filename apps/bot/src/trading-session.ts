@@ -259,16 +259,16 @@ const isHttpError = (error: unknown, reason: string): boolean =>
   error.reason === reason;
 
 // A 5xx, no answer, or a body that is not the contract's: the session may have been committed and
-// the answer lost. Any 4xx, and the 503s catalog_unavailable and signal_unavailable (#509), the
-// start route answers before createTradingSession.
-const KNOWN_503: ReadonlySet<string> = new Set([
-  TradingSessionErrorCode.CatalogUnavailable,
-  TradingSessionErrorCode.SignalUnavailable,
-]);
+// the answer lost. Any 4xx, and the 503s catalog_unavailable and signal_unavailable (#509), are
+// refusals of the start route, which leave no session row.
 export const sessionOutcomeUnknown = (error: unknown): boolean =>
   error instanceof BackendError &&
   (error.code !== BackendErrorCode.HttpStatus || (error.status ?? 0) >= 500) &&
-  !(error.status === 503 && error.reason !== undefined && KNOWN_503.has(error.reason));
+  !(
+    error.status === 503 &&
+    (error.reason === TradingSessionErrorCode.CatalogUnavailable ||
+      error.reason === TradingSessionErrorCode.SignalUnavailable)
+  );
 
 type StartOutcome =
   { ok: true; result: StartSessionResult } | { ok: false; unknown: boolean; error: unknown };

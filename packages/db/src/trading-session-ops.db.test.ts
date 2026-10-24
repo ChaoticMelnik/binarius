@@ -61,6 +61,7 @@ import {
   listRunnableSessions,
   listTrackedSessions,
   markSessionDecision,
+  readActiveTradingSessionView,
   readSessionHistory,
   recordSessionStatusMessage,
   stopExpiredSessions,
@@ -160,6 +161,35 @@ function holdLock(
     await released;
   });
   return { lockTaken, release, done };
+}
+
+// holdLock that also reports its backend's pid, read before it takes the lock
+function holdLockWithPid(
+  lock: (tx: Parameters<Parameters<TempDatabase['db']['transaction']>[0]>[0]) => Promise<unknown>,
+) {
+  let pid: number | undefined;
+  const holder = holdLock(async (tx) => {
+    const { rows } = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+    pid = rows[0]?.pid;
+    await lock(tx);
+  });
+  return { ...holder, pid: () => pid };
+}
+
+// the pids the one lock waiter of this database waits on; undefined unless exactly one waits
+const blockersOfWaiter = async (): Promise<number[] | undefined> => {
+  const { rows } = await tmp.db.execute<{ blockers: number[] }>(
+    sql`select pg_blocking_pids(pid) as blockers from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+  );
+  return rows.length === 1 ? rows[0]?.blockers : undefined;
+};
+
+// Waits until the one lock waiter waits on exactly this holder (Rule 5: the lock order)
+async function waitsOn(holder: { pid: () => number | undefined }, what: string): Promise<void> {
+  await until(`the caller to wait on ${what}`, async () => {
+    const blockers = await blockersOfWaiter();
+    return blockers?.length === 1 && blockers[0] === holder.pid();
+  });
 }
 
 // the process's flag off: these cases are about the session, not DEMO_ONLY (#396)
@@ -506,6 +536,34 @@ describe('createTradingSession', () => {
     expect(queued).toBe(true);
     const error = await creating;
     expect((error as TradingSessionError).code).toBe(TradingSessionDbErrorCode.AccountHalted);
+  });
+
+  it('C10 locks the user before the account', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const user = holdLockWithPid((tx) =>
+      tx.select().from(users).where(eq(users.id, seed.userId)).for('no key update'),
+    );
+    const account = holdLockWithPid((tx) =>
+      tx
+        .select()
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, seed.brokerAccountId))
+        .for('no key update'),
+    );
+    await Promise.all([user.lockTaken, account.lockTaken]);
+    const creating = createSessionRow({
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      settings: sessionSettings(),
+    });
+    await waitsOn(user, 'the users row');
+    user.release();
+    await user.done;
+    await waitsOn(account, 'the broker_accounts row');
+    account.release();
+    await account.done;
+    expect((await creating).status).toBe('active');
   });
 });
 
@@ -1016,6 +1074,31 @@ describe('readSessionHistory: waitExpired (#509)', () => {
   });
 });
 
+describe('readActiveTradingSessionView (#283 m3)', () => {
+  it('V1 a stopped session is not the active one: undefined', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const stopped = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await stopTradingSession(tmp.db, { id: stopped.id, reason: 'user_stopped' });
+    expect(
+      await readActiveTradingSessionView(tmp.db, seed.brokerAccountId, seed.telegramUserId),
+    ).toBeUndefined();
+  });
+
+  it('V2 with a stopped and an active session, the active one; V2b another user reads undefined', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const stopped = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await stopTradingSession(tmp.db, { id: stopped.id, reason: 'user_stopped' });
+    const active = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    expect(
+      await readActiveTradingSessionView(tmp.db, seed.brokerAccountId, seed.telegramUserId),
+    ).toMatchObject({ id: active.id, status: 'active' });
+    const other = await seedUser(tmp.db);
+    expect(
+      await readActiveTradingSessionView(tmp.db, seed.brokerAccountId, other.telegramUserId),
+    ).toBeUndefined();
+  });
+});
+
 describe('stopTradingSession and markSessionDecision', () => {
   it('T1 stops an active session once; a second stop keeps the first reason', async () => {
     const seed = await seedSessionAccount();
@@ -1183,6 +1266,39 @@ describe('createSessionIntent', () => {
     holder.release();
     await holder.done;
     expect(queued).toBe(true);
+    expect((await creating).created).toBe(true);
+  });
+
+  it('I7 locks users, then the account, then the session row', async () => {
+    const seed = await seedSessionAccount();
+    const user = holdLockWithPid((tx) =>
+      tx.select().from(users).where(eq(users.id, seed.userId)).for('no key update'),
+    );
+    const account = holdLockWithPid((tx) =>
+      tx
+        .select()
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, seed.brokerAccountId))
+        .for('no key update'),
+    );
+    const session = holdLockWithPid((tx) =>
+      tx
+        .select()
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, seed.session.id))
+        .for('no key update'),
+    );
+    await Promise.all([user.lockTaken, account.lockTaken, session.lockTaken]);
+    const creating = createSessionIntent(tmp.db, intentInput(seed));
+    await waitsOn(user, 'the users row');
+    user.release();
+    await user.done;
+    await waitsOn(account, 'the broker_accounts row');
+    account.release();
+    await account.done;
+    await waitsOn(session, 'the trading_sessions row');
+    session.release();
+    await session.done;
     expect((await creating).created).toBe(true);
   });
 
