@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { Resvg } from '@resvg/resvg-js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOT_TEXT_CATALOG,
@@ -14,7 +16,8 @@ import {
   BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
 import { botTextSourcesWith } from '@binarius/shared/testing';
-import { renderSessionCard } from './session-card';
+import { PROMO_LOGO_PATH } from './assets';
+import { fitSize, renderSessionCard } from './session-card';
 import {
   promoDirection,
   SESSION_PROMO_HEIGHT,
@@ -64,6 +67,17 @@ const textsOf = (svg: string): string[] =>
   [...svg.matchAll(/<text [^>]*>([^<]*)<\/text>/g)].map((match) => match[1] ?? '');
 const badgeOf = (svg: string) =>
   /<rect data-badge="(\w+)"[^>]*width="([\d.]+)"[^>]*fill="([^"]+)"/.exec(svg);
+const LOGO =
+  /<image x="64" y="994" width="112" height="112" href="data:image\/png;base64,([A-Za-z0-9+/]+=*)"\/>/;
+// the file's base64 contains "NaN" (checked on bot-logo.png): the coordinate checks look past it
+const withoutLogo = (svg: string) => svg.replace(LOGO, '');
+const BACKGROUND = [14, 17, 23]; // #0E1117
+const pixelAt = (svg: string, x: number, y: number): number[] => {
+  // no fonts: the image element does not depend on them, and no PNG decoder is in the deps
+  const image = new Resvg(svg, { font: { loadSystemFonts: false } }).render();
+  const i = (y * image.width + x) * 4;
+  return [...image.pixels.subarray(i, i + 3)];
+};
 
 afterEach(() => {
   setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
@@ -214,14 +228,37 @@ describe('sessionPromoSvg', () => {
     );
     const svg = sessionPromoSvg(sessionPromoModel({ ...MIXED, trades: many }, viewOf('0'), 42));
     expect(pointsOf(svg)).toHaveLength(2 * MAX_SESSION_SUMMARY_TRADES);
-    expect(svg).not.toMatch(/NaN|Infinity/);
+    expect(withoutLogo(svg)).not.toMatch(/NaN|Infinity/);
   });
 
   it('P5 equal prices put the line in the middle', () => {
     const flat = [trade(Up, '0', 1.5, 1.5), trade(Up, '0', 1.5, 1.5)];
     const svg = sessionPromoSvg(sessionPromoModel({ ...MIXED, trades: flat }, viewOf('0'), 42));
     expect([...new Set(pointsOf(svg).map(([, y]) => y))]).toEqual([(470 + 880) / 2]);
-    expect(svg).not.toMatch(/NaN|Infinity/);
+    expect(withoutLogo(svg)).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('P6 the logo is the asset file as a data URI, the brand to its right, no drawn mark', () => {
+    const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
+    expect(LOGO.exec(svg)?.[1]).toBe(readFileSync(PROMO_LOGO_PATH).toString('base64'));
+    expect(svg).toMatch(
+      /<text x="200" y="1068" font-size="52" font-weight="700" fill="#F2F4F8">Binarius<\/text>/,
+    );
+    expect(svg).not.toContain('#3B5BDB');
+    expect(textsOf(svg)).not.toContain('B');
+  });
+
+  it('P7 a long brand override shrinks to the slot right of the logo', () => {
+    const brand = 'B'.repeat(40);
+    const overrides: Partial<Record<BotTextKey, string>> = { sessionPromoBrand: brand };
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source,
+      }),
+    );
+    const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
+    const size = new RegExp(`<text [^>]*font-size="(\\d+)"[^>]*>${brand}</text>`).exec(svg)?.[1];
+    expect(size).toBe(String(fitSize(brand, 952 - 136, 52, true)));
   });
 });
 
@@ -248,5 +285,19 @@ describe('rendering the promo card', () => {
     const withoutFonts = renderSessionCard(svg, []);
     expect(withoutFonts.equals(withFonts)).toBe(false);
     expect(withoutFonts.length).toBeLessThan(withFonts.length);
+  });
+
+  it('R3 the logo is drawn: without its element the PNG differs and is smaller', () => {
+    const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
+    const withLogo = renderSessionCard(svg);
+    const without = renderSessionCard(withoutLogo(svg));
+    expect(without.equals(withLogo)).toBe(false);
+    expect(withLogo.length).toBeGreaterThan(without.length);
+  });
+
+  it("R4 the logo's pixels: its centre is not the card's background", () => {
+    const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
+    const centre = pixelAt(svg, 120, 1050);
+    expect(centre.some((channel, i) => Math.abs(channel - (BACKGROUND[i] ?? 0)) > 64)).toBe(true);
   });
 });

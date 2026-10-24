@@ -15,3 +15,7 @@ export const SETUP_CARD_PHOTO_PATHS = {
   up: botFile('src', 'assets', 'setup-bull.png'),
   down: botFile('src', 'assets', 'setup-bear.png'),
 } as const satisfies Record<TradeAction, string>;
+
+// The bot's logo on the promo card (#594), drawn into the SVG as a data URI (session-promo.ts):
+// a file replaced in place changes the card without a code change. assets.test.ts gates the file.
+export const PROMO_LOGO_PATH = botFile('src', 'assets', 'bot-logo.png');
