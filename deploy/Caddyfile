@@ -1,0 +1,25 @@
+# The pilot's host proxy (#146, docs/deploy.md -> HTTPS). Caddy runs on the host, outside
+# Compose: the host is shared with other services, and Compose publishes the stack on loopback
+# only (web 127.0.0.1:3001, backend 127.0.0.1:3000). Caddy obtains and renews the Let's Encrypt
+# certificate itself and needs ports 80 and 443 on the host.
+#
+# This file is an example that repeats the live /etc/caddy/Caddyfile; the live file is the
+# source, and a change there is copied here. To apply an edit on the host:
+#   sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
+#     && sudo systemctl reload caddy
+#
+# Only web is public. The one backend route behind the proxy is the broker's postback
+# (docs/postbacks.md -> The Caddy route): the matcher reads the raw request URI, so an encoded
+# traversal through /admin/... never reaches the backend.
+binarius.salescreativesads.com {
+	@postback {
+		method GET
+		expression `{http.request.orig_uri}.matches("^/postbacks/binodex/[A-Za-z0-9_-]+([?].*)?$")`
+	}
+	handle @postback {
+		reverse_proxy 127.0.0.1:3000
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3001
+	}
+}

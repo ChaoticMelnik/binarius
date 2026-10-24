@@ -46,14 +46,17 @@ current directory:
    dies of SIGPIPE, which `pipefail` turns into a miss.
    - Which check holds what: the leftover refusal (step 1) and the appeared-id check (step 2) keep a
      stale container from becoming "new"; `--since` keeps readiness to the current lifetime, so a
-     container in a restart loop never passes on a line of a lifetime that died (once the command
-     exits on a crash, #146; under the current `tsx watch` command a crash does not exit, below).
+     container in a restart loop never passes on a line of a lifetime that died (under the prod
+     profile a crash exits, docs/deploy.md; under the dev `tsx watch` command it does not, below).
    - Not seen in time, or the new container is no longer running → **rollback**: its last 20 log
      lines, `docker stop -t 40` and `docker rm` of the **new** container, exit 1. The old one
      never got a signal.
-   - Under the compose command (`pnpm … dev`, `tsx watch`) a worker that throws at start does not
-     exit: `tsx` keeps watching, the container stays `running`, and the rollback comes from the
-     timeout (seen locally, below). `restart: unless-stopped` would also restart an exited one.
+   - Under the prod profile (`node apps/trading-worker/dist/index.js`, docs/deploy.md) a worker
+     that throws at start exits: the script sees the container not running (rollback at once) or,
+     once `restart: unless-stopped` started it again, a lifetime without the ready line (rollback
+     at the timeout). Under the dev command (`pnpm … dev`, `tsx watch`) it does not exit: `tsx` keeps
+     watching, the container stays `running`, and the rollback comes from the timeout (seen
+     locally, below).
 4. **The old container stops.** `docker stop -t 40 <old>` (40 = `stop_grace_period`): SIGTERM and
    the worker's own two-phase shutdown. Phase 1 drains the consumers (the jobs in flight finish,
    the new process takes everything else), then stops the broker sessions and releases their
@@ -176,7 +179,7 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
    `docker inspect -f '{{.State.OOMKilled}}' <id>` true for either container (owner step 2).
 3. **Readiness is a log line**, not a health endpoint: it proves the consumers were built, not that
    Postgres or the broker answer. A database unreachable at start fails the schema check before
-   the ready line (exit 1, rollback); one lost after the start still lets the old worker stop. Until #65/#67 the deploy's own checks after `up --wait` are the backstop.
+   the ready line (exit 1, rollback); one lost after the start still lets the old worker stop. Until #65/#67 the deploy's own checks after `up --wait` are the backstop (the prod profile makes a crashed process visible as `exited`/`Restarting`, not as `unhealthy`).
 4. **The script is not run in CI**: it needs a Docker daemon. Its evidence is the local run below
    and the owner's pilot steps.
 5. **The overlap is not bounded by code** (above).

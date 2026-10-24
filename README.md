@@ -143,6 +143,15 @@ Replacing the trading worker of a running stack without a gap in job processing:
 [docs/worker-deploy.md](docs/worker-deploy.md)). One image serves every app service and `migrate`,
 so building the worker rebuilds the migrations too.
 
+Production runs the same `compose.yaml` with the override `compose.prod.yaml`: each app is one
+`node apps/<app>/dist/index.js` process on the bundle `pnpm build` (`tooling/build.ts`) writes into
+the image — no pnpm, no `tsx watch` — every service's log rotates at 10m x 3, and postgres and
+redis get a restart policy. The server selects it with
+`COMPOSE_FILE=compose.yaml:compose.prod.yaml` in its `.env`; locally and in CI it is
+`docker compose -f compose.yaml -f compose.prod.yaml …`. HTTPS is Caddy on the host
+([deploy/Caddyfile](deploy/Caddyfile)). Everything else — what the bundle holds, the server's
+switch, rollback — is [docs/deploy.md](docs/deploy.md).
+
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
@@ -279,8 +288,9 @@ starts `backend` or `trading-worker` runs it first, and both wait for its exit 0
 (`service_completed_successfully`) — a failed migration stops them in `created`, and `up --wait`
 exits 1. On an already-migrated volume it prints `nothing to apply` and applies nothing. Both
 processes also check the schema themselves at start: a database behind their journal makes them
-exit 1 (`database schema is behind this image, run the migrations first`; the `dev` command's
-`tsx watch` keeps the container up after that, #65), one ahead of it is a warning. To apply by hand: `docker compose run --rm migrate` (`--build` when the migration was
+exit 1 (`database schema is behind this image, run the migrations first`; under the prod profile
+that exit ends the container, while the dev command's `tsx watch` keeps it up, #65), one ahead of
+it is a warning. To apply by hand: `docker compose run --rm migrate` (`--build` when the migration was
 generated after the image was built). Under `--watch` a generated migration is synced into the
 containers but never applied on its own (it is read first, it can DROP), so the next restart of
 either process refuses until it is. A deployment runs the migration as its own step before `up`:

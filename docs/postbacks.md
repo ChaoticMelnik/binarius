@@ -223,7 +223,8 @@ curl -s -o /dev/null -w '%{http_code}\n' https://binarius.salescreativesads.com/
 # web's 404
 ```
 
-When `deploy/Caddyfile` exists (#146), the same block goes there.
+The same block is in [`deploy/Caddyfile`](../deploy/Caddyfile), the example of the whole site
+the live file repeats (docs/deploy.md -> HTTPS).
 
 ### The cabinet setup (owner's step)
 
@@ -280,5 +281,5 @@ one payment, and the HTTP method if the cabinet shows it.
 - Authenticity of a postback (signature or another server mechanism) — #142; until then automatic
   crediting stays off.
 - Reconciliation of deposits with the broker — #140; end-to-end duplicate scenarios — #106.
-- A Caddyfile in the repository — #146.
+- The Caddyfile in the repository — [`deploy/Caddyfile`](../deploy/Caddyfile) (#146).
 - A CLI for the journal — #443.
