@@ -41,6 +41,7 @@ import {
   createTradeIntent,
   listLinkedBrokerTradeIds,
   markIntentUnknown,
+  millisecondsAgo,
   openTrading,
   readSessionHistory,
   readTradingSessionView,
@@ -1757,21 +1758,20 @@ async function brokerTradeCount(accessToken: string, isDemo = true) {
   return count;
 }
 
-const secondsAgo = (seconds: number) => sql`now() - make_interval(secs => ${seconds})`;
 const ageSubmitted = (id: string, seconds: number) =>
   tmp.db
     .update(tradeIntents)
-    .set({ submittedAt: secondsAgo(seconds) })
+    .set({ submittedAt: millisecondsAgo(seconds * 1000) })
     .where(eq(tradeIntents.id, id));
 const ageCreated = (id: string, seconds: number) =>
   tmp.db
     .update(tradeIntents)
-    .set({ createdAt: secondsAgo(seconds) })
+    .set({ createdAt: millisecondsAgo(seconds * 1000) })
     .where(eq(tradeIntents.id, id));
 const ageClaim = (id: string, seconds: number) =>
   tmp.db
     .update(tradeIntents)
-    .set({ reconcileClaimedAt: secondsAgo(seconds) })
+    .set({ reconcileClaimedAt: millisecondsAgo(seconds * 1000) })
     .where(eq(tradeIntents.id, id));
 // as settlement-catchup.db.test.ts does: the trade's expiry an hour behind the database clock
 const overdueTrade = (intentId: string) =>

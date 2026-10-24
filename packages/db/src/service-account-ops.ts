@@ -9,7 +9,8 @@ import {
 } from './admin-read-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { users } from './schema/users';
-import { millisecondsAgo, millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
+import { millisecondsAgo, millisecondsFromNow } from './sql-time';
+import type { DbExecutor, Tx } from './trade-intent-ops';
 
 // Service accounts (#391, docs/service-accounts.md). The fragments below are the one definition of
 // which service accounts count: the price stream (#404) reads "in service", the backend's keeper

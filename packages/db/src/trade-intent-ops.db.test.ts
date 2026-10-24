@@ -48,7 +48,6 @@ import {
   listStaleSubmittingIntents,
   markIntentAccepted,
   markIntentManualReview,
-  millisecondsAgo,
   markIntentUnknown,
   readHeldExposure,
   rejectExpiredIntent,
@@ -64,6 +63,7 @@ import {
   type TradeIntentRow,
   type Tx,
 } from './trade-intent-ops';
+import { millisecondsAgo } from './sql-time';
 import {
   SESSION_NOTICE_CHANNEL,
   brokerAccounts,

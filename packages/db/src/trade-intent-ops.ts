@@ -32,6 +32,7 @@ import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-int
 import { SESSION_NOTICE_CHANNEL, tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 import { recordSignalDecision, type SignalDecisionInput } from './signal-decision-ops';
+import { millisecondsAgo } from './sql-time';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -468,13 +469,6 @@ export async function transitionIntent(
   }
   return row;
 }
-
-// database-clock arithmetic shared by every age predicate (worker, publisher, sweeper): the
-// app clock never enters a CAS
-export const millisecondsAgo = (ms: number): SQL =>
-  sql`now() - (${ms}::int * interval '1 millisecond')`;
-export const millisecondsFromNow = (ms: number): SQL =>
-  sql`now() + (${ms}::int * interval '1 millisecond')`;
 
 export interface TakeIntentOptions {
   id: string;
