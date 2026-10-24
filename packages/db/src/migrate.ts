@@ -1,15 +1,16 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import type { Pool } from 'pg';
 import { errorLogFields } from '@binarius/shared';
 import { createDb } from './client';
 
-// resolved from the package root so it works from src/ (tsx) and dist/ (tsc -b) alike
-const migrationsFolder = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
+// from the package's root, not import.meta.url: the runner reads it under tsx, the startup schema
+// check inside an app's bundle, where import.meta.url is the bundle's (docs/deploy.md -> Files a
+// package reads)
+const migrationsFolder = path.join(
+  path.dirname(createRequire(import.meta.url).resolve('@binarius/db/package.json')),
   'drizzle',
 );
 

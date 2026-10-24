@@ -29,3 +29,6 @@ COPY --chown=node:node packages/stake/package.json packages/stake/
 RUN pnpm install --frozen-lockfile --offline
 
 COPY --chown=node:node . .
+# the prod profile's bundles (tooling/build.ts, compose.prod.yaml): .dockerignore keeps the host's
+# dist/ out, so the image runs only what it built itself
+RUN pnpm build

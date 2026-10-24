@@ -125,6 +125,10 @@ jobs:
     env:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
       COMPOSE_RESTART: 'no'
+      # The prod profile (#146, docs/deploy.md): every `docker compose` below runs the pair the
+      # server runs, the bundles under one node process each. An explicit -f overrides it, which
+      # is how the dev file alone is still checked.
+      COMPOSE_FILE: compose.yaml:compose.prod.yaml
       # compose refuses to start without these, and none of them has a default a deployment
       # could inherit, so CI supplies its own throwaway values — these eight assignments are
       # fixtures for this job, not configuration anyone ships. TOKEN_ENCRYPTION_KEY_ID and
@@ -132,7 +136,8 @@ jobs:
       # also because the all-zero key is only valid paired with it, and the partner code is one
       # the backend's startup check accepts. TELEGRAM_BOT_TOKEN is required too: the backend reads it
       # (the push after the OAuth callback, #128, never called here) and refuses to start when it
-      # equals ADMIN_BOT_TOKEN; the `bot` service is never started.
+      # equals ADMIN_BOT_TOKEN; the `bot` service is started only by the last step, where the fake
+      # token is the point.
       # ADMIN_BOT_TOKEN is a fake the staff bot's getMe is refused for: the backend logs that,
       # leaves isPolling() false and keeps serving, which is what this job then checks.
       INTERNAL_API_TOKEN: ci-internal-token-value
@@ -150,6 +155,7 @@ jobs:
       # the runner's version, printed rather than asserted: the local probes behind these steps
       # ran on a newer Compose, and this is what says which one actually enforced them here
       - run: docker compose version
+      - run: docker compose -f compose.yaml config -q
       - run: docker compose config -q
       # The dependency on migrate lives in the x-app anchor; a service-level depends_on replaces
       # the whole mapping (bot and web do exactly that), and a successful `up` is no oracle: migrate
@@ -247,14 +253,48 @@ jobs:
               exit 1
             fi
           done
-      # `bot` is the one service CI never starts, and --wait could not tell us if we did: with
-      # the fake token above the bot fails at getMe (401, which grammY does not retry) and the
-      # process exits 1, but `dev` is `tsx watch`, whose supervisor survives that and keeps the
-      # container running, and `bot` has no healthcheck — so --wait would report success over a
-      # dead bot. That supervisor gap is the same in all four app services and is issue #65.
-      # The list is derived rather than written out, so a service added to compose.yaml later
-      # is started here instead of being silently left behind. It names the one-shot `migrate`
-      # too: --wait accepts it once it exited 0 and fails the step when it exited otherwise.
+      # What the prod pair changes, on the runner's own Compose: every service compose.yaml runs
+      # under `tsx watch` runs its bundle instead (compose.prod.yaml, built by `RUN pnpm build` in
+      # the Dockerfile), every service's log rotates at 10m x 3, and postgres and redis restart
+      # like the app services. The app list comes from the dev file, so a service added there
+      # without a prod command fails here.
+      - name: the prod pair runs the bundles and rotates every log
+        run: |
+          set -u
+          dev="$(docker compose -f compose.yaml config --format json)"
+          prod="$(docker compose config --format json)"
+          apps="$(printf '%s' "$dev" | jq -r '.services | to_entries[] | select(.value.command == ["pnpm", "--filter", "@binarius/\(.key)", "dev"]) | .key')"
+          if [ -z "$apps" ]; then
+            echo '::error::no service of compose.yaml runs `pnpm --filter @binarius/<service> dev`'
+            exit 1
+          fi
+          for s in $apps; do
+            command="$(printf '%s' "$prod" | jq -c --arg s "$s" '.services[$s].command')"
+            if [ "$command" != "[\"node\",\"apps/$s/dist/index.js\"]" ]; then
+              echo "::error::$s runs $command under the prod pair, expected node apps/$s/dist/index.js"
+              exit 1
+            fi
+          done
+          unrotated="$(printf '%s' "$prod" | jq -r '.services | to_entries[] | select(.value.logging.driver != "json-file" or .value.logging.options["max-size"] != "10m" or .value.logging.options["max-file"] != "3") | .key')"
+          if [ -n "$unrotated" ]; then
+            echo "::error::logs not rotated at 10m x 3: $unrotated"
+            exit 1
+          fi
+          app_restart="$(printf '%s' "$prod" | jq -r '.services.backend.restart')"
+          for s in postgres redis; do
+            restart="$(printf '%s' "$prod" | jq -r --arg s "$s" '.services[$s].restart')"
+            if [ "$restart" != "$app_restart" ]; then
+              echo "::error::$s restart = $restart, the app services' = $app_restart"
+              exit 1
+            fi
+          done
+      # `bot` is started by the last step alone, where its exit is the point: with the fake token
+      # above it fails at getMe and exits 1, and `bot` has no healthcheck, so --wait here could
+      # not tell a dead bot from a live one. Under the prod pair this builds the image with its
+      # bundles. The list is derived rather than written out, so a service added to compose.yaml
+      # later is started here instead of being silently left behind. It names the one-shot
+      # `migrate` too: --wait accepts it once it exited 0 and fails the step when it exited
+      # otherwise.
       - name: start every service except bot
         run: |
           services="$(docker compose config --services | grep -v '^bot$' || true)"
@@ -269,12 +309,10 @@ jobs:
           printf 'starting:%s\n' "$(printf ' %s' $services)"
           docker compose up -d --build --wait --wait-timeout 120 $services
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
-      # `web` has no healthcheck (#70), so --wait treats it as ready the moment the container
-      # runs — 0.5 s after `docker compose up`, while `tsx watch` is still compiling. And `dev`
-      # is `tsx watch`, whose supervisor survives the app exiting (#65), so --wait would report
-      # success over a dead `web` too. This step is what makes the difference: it asks for a
+      # `web` has no healthcheck (#65), so --wait treats it as ready the moment the container
+      # runs, before the process listens. This step is what makes the difference: it asks for a
       # page only a listening process can serve, and retries to a deadline rather than racing
-      # the compiler. A `web` that never comes up still fails it, which is the whole point.
+      # the start. A `web` that never comes up still fails it, which is the whole point.
       - name: the admin pages answer
         run: |
           set -u
@@ -287,6 +325,32 @@ jobs:
             fi
             sleep 2
           done
+      # The prod command is one node process under tini (init: true), no pnpm and no tsx: the
+      # pilot's memory is the reason (#146), and it is what makes the process's exit the
+      # container's. Every running service whose resolved command starts with node is asked for
+      # its process list; `ps` is the exec'd one.
+      - name: every app container runs one node process and nothing else
+        run: |
+          set -u
+          config="$(docker compose config --format json)"
+          nodes="$(printf '%s' "$config" | jq -r '.services | to_entries[] | select(.value.command[0]? == "node") | .key')"
+          running="$(docker compose ps --status running --format '{{.Service}}')"
+          checked=0
+          for s in $nodes; do
+            grep -qx "$s" <<<"$running" || continue
+            got="$(docker compose exec -T "$s" ps -o comm= | sort | tr '\n' ' ')"
+            if [ "$got" != 'docker-init node ps ' ]; then
+              echo "::error::$s runs more than one node process under tini: $got"
+              docker compose exec -T "$s" ps -o pid,ppid,comm
+              exit 1
+            fi
+            echo "$s: $got"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo '::error::no running service runs node'
+            exit 1
+          fi
       # The fresh volume this job starts from is what makes `applied` (not `nothing to apply`) the
       # expected line. --wait does not wait for trading-worker (no healthcheck), so its line is
       # polled to a deadline, the same way as the admin pages above. Logs are read into a variable
@@ -315,26 +379,26 @@ jobs:
             fi
             sleep 2
           done
-      # The schema check in each index.ts, by its exit code: `run --no-deps` starts the process
-      # without migrate, against a database nothing migrated, and plain `tsx` (not the `dev`
-      # script's `tsx watch`, whose supervisor survives the exit, #65) leaves with the process's
-      # own code. `timeout` turns a process that never exits into 124 instead of the job's limit.
+      # The schema check in each index.ts, by its exit code: `run --no-deps` starts the service's
+      # own prod command (the bundle, which finds packages/db/drizzle from the package's root,
+      # not from its own URL) without migrate, against a database nothing migrated, and
+      # the one node process leaves with its own code. `timeout` turns a process that never exits
+      # into 124 instead of the job's limit.
       - name: a process refuses a database behind its journal
         run: |
           set -u
           docker compose exec -T postgres createdb -U binarius binarius_empty
           empty=postgres://binarius:binarius@postgres:5432/binarius_empty
-          for pair in "backend @binarius/backend" "trading-worker @binarius/trading-worker"; do
-            set -- $pair
-            out="$(timeout 120 docker compose run --rm --no-deps -T -e DATABASE_URL="$empty" "$1" \
-              pnpm --filter "$2" exec tsx src/index.ts </dev/null 2>&1)" && status=0 || status=$?
+          for svc in backend trading-worker; do
+            out="$(timeout 120 docker compose run --rm --no-deps -T -e DATABASE_URL="$empty" "$svc" \
+              </dev/null 2>&1)" && status=0 || status=$?
             if [ "$status" -ne 1 ]; then
-              echo "::error::$1 on an empty database exited $status, expected 1"
+              echo "::error::$svc on an empty database exited $status, expected 1"
               printf '%s\n' "$out"
               exit 1
             fi
             grep -qF '"msg":"database schema is behind this image, run the migrations first"' <<<"$out" || {
-              echo "::error::$1 exited 1 without the schema line"
+              echo "::error::$svc exited 1 without the schema line"
               printf '%s\n' "$out"
               exit 1
             }
@@ -370,6 +434,34 @@ jobs:
         run: |
           docker compose exec -T backend pnpm --filter @binarius/backend staff create \
             --login ci-staff --telegram-id 1 | grep -q 'Пароль:'
+      # The bot is started here on purpose, with the job's fake token: getMe answers 401, grammY
+      # does not retry it, lifecycle.ts logs the failure and calls exit(1). Under the prod command
+      # that exit is the container's (one node process under tini, no supervisor), and
+      # COMPOSE_RESTART=no leaves it exited instead of restarting. `up --wait` is no oracle for a
+      # service without a healthcheck, so the state is read from docker inspect. The log line is
+      # asserted too: an import-time failure (a picture or a font the bundle cannot find,
+      # apps/bot/src/package-root.ts) also exits 1, but before this line. Under the dev command
+      # (`tsx watch`) the container would stay running and this step would fail at the deadline:
+      # that gap is #65.
+      - name: a dead process ends its container on the prod pair
+        run: |
+          set -u
+          docker compose up -d --no-deps bot
+          id="$(docker compose ps -aq bot)"
+          deadline=$((SECONDS + 60))
+          until [ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$id")" = 'exited 1' ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::the bot container did not exit 1 after a refused getMe: $(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$id")"
+              docker compose logs bot
+              exit 1
+            fi
+            sleep 2
+          done
+          grep -qF 'long polling stopped with an error' <<<"$(docker compose logs --no-log-prefix bot)" || {
+            echo '::error::the bot exited 1 without the long polling line'
+            docker compose logs bot
+            exit 1
+          }
       - if: failure()
         continue-on-error: true
         run: docker compose logs

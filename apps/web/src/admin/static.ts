@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { themeCss } from './theme';
 
 // Stylesheets are served as files rather than inlined: the CSP forbids inline styles, and an
@@ -23,8 +25,16 @@ body[data-widget] h1 { display: none; }
 `;
 
 // The admin design system (#459): the tokens of theme.ts, then the components that read them.
-// The app runs from src (tsx), so the files are read next to this module.
-const COMPONENTS_CSS = readFileSync(new URL('./static/admin.css', import.meta.url), 'utf8');
+// The files are found from the package's root, which holds under tsx and in the bundle
+// (docs/deploy.md -> Files a package reads); they are read at import, so a wrong path stops the
+// process at its start.
+const STATIC_DIR = path.join(
+  path.dirname(createRequire(import.meta.url).resolve('@binarius/web/package.json')),
+  'src',
+  'admin',
+  'static',
+);
+const COMPONENTS_CSS = readFileSync(path.join(STATIC_DIR, 'admin.css'), 'utf8');
 export const ADMIN_CSS = `${themeCss()}\n${COMPONENTS_CSS}`;
 
 export const ADMIN_FONT_FILES = [
@@ -36,10 +46,7 @@ export const ADMIN_FONT_FILES = [
 export type AdminFontFile = (typeof ADMIN_FONT_FILES)[number];
 
 export const ADMIN_FONTS: Readonly<Record<AdminFontFile, Buffer>> = Object.fromEntries(
-  ADMIN_FONT_FILES.map((file) => [
-    file,
-    readFileSync(new URL(`./static/fonts/${file}`, import.meta.url)),
-  ]),
+  ADMIN_FONT_FILES.map((file) => [file, readFileSync(path.join(STATIC_DIR, 'fonts', file))]),
 ) as Record<AdminFontFile, Buffer>;
 
 /** The font a request path names, or undefined: the path segment is outside input (Rule 17). */

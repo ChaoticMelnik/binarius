@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
 import {
   formatSignedUsd,
@@ -12,6 +11,7 @@ import {
   sessionCardLabels,
   sessionCardTradeLabel,
 } from './texts';
+import { botFile } from './package-root';
 
 // The finished session's card (#318, docs/bot-session.md → The summary card): one PNG of the
 // session's trades on a line through their entry and exit prices. The amounts are the backend's
@@ -228,11 +228,13 @@ export function sessionCardSvg(model: SessionCardModel): string {
 }
 
 // The alpine image has no fonts, and resvg drops text it has no font for without a word: the
-// card's own files are the only fonts it may use (docs/bot-session.md → The summary card).
+// card's own files are the only fonts it may use (docs/bot-session.md → The summary card). Found
+// from the package's root, which holds under tsx and in the bundle, and checked at import
+// (package-root.ts).
 export const SESSION_CARD_FONT_FILES: readonly string[] = [
   'Inter-Regular.ttf',
   'Inter-Bold.ttf',
-].map((file) => fileURLToPath(new URL(`../fonts/${file}`, import.meta.url)));
+].map((file) => botFile('fonts', file));
 
 export const renderSessionCard = (
   svg: string,

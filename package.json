@@ -9,6 +9,7 @@
   "scripts": {
     "check": "tsc -b --clean && vitest run && tsc -b && eslint .",
     "typecheck": "tsc -b",
+    "build": "node tooling/build.ts",
     "lint": "eslint .",
     "test": "vitest run",
     "db:generate": "pnpm --filter @binarius/db run db:generate",
@@ -19,6 +20,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.4",
     "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
     "pg": "^8.23.0",
