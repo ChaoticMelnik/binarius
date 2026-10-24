@@ -242,7 +242,8 @@ new bot against an old backend shows `unavailable` on `/invite` until the backen
    while the inviter is blocked, and the reward is paid at the invitee's next partner activation
    after the unblock.
 3. A code is never rotated or revoked: a leaked link keeps attributing to its owner.
-4. The share text and the screen are in Russian only, as the whole bot.
+4. The share text and the screen are in the user's language (#508), the reward notification too
+   (#633).
 5. Two Telegram accounts of one person with two different partner broker accounts earn the reward:
    anti-fraud is by broker account only (owner, 2026-10-08).
 6. A missed reward (rule off, inviter blocked, a non-partner account) is paid only at a later
@@ -251,7 +252,6 @@ new bot against an old backend shows `unavailable` on `/invite` until the backen
 
 ## Boundaries
 
-- **#633** — the English text of the reward notification (#576 sends it in Russian).
 - **#386** — deposit-based bonuses; rewards for an invitee's deposit are not in scope.
 - **#440** — the personal link in the summary's caption: done in #537 (`sessionSummaryLink`, «🤖
   {referralLink}», the code created on the summary's claim, `?start=share` without one); **reversed

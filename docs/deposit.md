@@ -386,13 +386,14 @@ cross-origin POST → 403 — none forwarded.
 ### The push
 
 After `ok` the route reads the snapshot it has just written (`readBalanceSnapshot` →
-`toBrokerBalanceView`) and sends `ClientPush.sendDepositCredited(telegramUserId, { amount:
+`toBrokerBalanceView`) and sends `ClientPush.sendDepositCredited(telegramUserId, language, { amount:
 real.available, fresh })` (`apps/backend/src/auth/client-push.ts`), which builds the catalog's
 `depositCredited` («💳 Пополнение получено / Реальный баланс: {realBalance}», group `deposit`,
-[bot-texts.md](bot-texts.md)) with the «🏠 В меню» button (`MENU_CALLBACK_DATA`). The amount is the
-broker's, formatted by the `realBalance` variable from its `DecimalString` (Rule 2); nothing of the
-request or the widget's event reaches it. If the broker's ledger has not moved yet, the message says
-what the broker reported (owner's decision 2026-10-08).
+[bot-texts.md](bot-texts.md)) with the «🏠 В меню» button (`MENU_CALLBACK_DATA`), in the user's
+language: `users.language`, which `resolveBalanceAccount` reads with the account (#633). The amount
+is the broker's, formatted by the `realBalance` variable from its `DecimalString` (Rule 2); nothing
+of the request or the widget's event reaches it. If the broker's ledger has not moved yet, the
+message says what the broker reported (owner's decision 2026-10-08).
 
 At most one push per Telegram user per `DEPOSIT_PUSH_MIN_INTERVAL_MS` (60 s): a keyed window of 1,
 taken just before the send and never given back, so a failed send does not invite a retry storm

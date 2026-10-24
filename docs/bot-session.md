@@ -114,8 +114,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   the bot's facades leave it out. The button `sessionStopButton` is the backend's too; the bot
   draws it only in place of a pressed waiting message after a stop whose outcome is unknown
   (#587, `waitingStopKeyboard` of `keyboards.ts`).
-- `packages/shared/src/session-texts.ts` (#464) — `createSessionTexts({ html, plain })`: the
-  plural, the score, the result, the asset label, the stop-reason map (`SESSION_STOP_LINES`), the
+- `packages/shared/src/session-texts.ts` (#464) — `createSessionTexts({ html, plain, language })`:
+  the plural by the language's rule (Russian one/few/many, English one for 1 and many otherwise,
+  #633), the score, the result, the asset label, the stop-reason map (`SESSION_STOP_LINES`), the
   stopped session's end line (`sessionEndLine`, #536) and closing lines (`sessionClosingLines`),
   and the cycle message (`sessionCycleText`, #551) and summary builders. The bot's session message
   and the backend's notices print through it, each with its own catalog object, so the line the
@@ -427,7 +428,9 @@ buttons](#the-stop-and-the-old-buttons-536)).
 - The pair's label ([`pairLabel`](pairs-catalog.md#the-pairs-label-428-631), #428, #631): the
   symbol without « OTC», capped at 64 characters; without a catalog «актив #<id>» stands in. The stake is
   `settings.stake.baseStake` through `formatStake`, never a number; the expiry is the settings'
-  seconds and « с».
+  seconds and the unit `ageSecondsUnit` («с», «s», #633).
+- **The language** (#508, #633): the message is in the user's language, the words of the update's
+  views; the tracker edits it in the language of the press until the session ends.
 - **The figures of the summary** (#337) — the result, `trades.profit`, the backend's SQL sum of the
   settled trades' profit, printed by `formatSignedUsd` with every fraction digit it has; the
   balance of the session's mode and its age line — are the summary's lines
@@ -849,6 +852,11 @@ id or the symbol.
   Neither the query nor the file id is logged.
 
 ## Trade messages and the summary (#464)
+
+Every notice of this section — the trades' blocks, the open block's «⏹», the waiting message and
+the fallback summary — is written in the session owner's language, `users.language` read with the
+session by `listPendingSessionNotices` and `listSummaryFallback` on every tick (#633); a switch of
+the language mid-session re-renders the next edit of a cycle message whole in the new language.
 
 Every settled trade of a session shows in a message **without sound**
 (`disable_notification: true`) and without buttons — but an open trade's block, which carries
@@ -1462,7 +1470,8 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   `MAX_SESSION_SUMMARY_TRADES`, 720, the summary's bound since #552: a five-cycle martingale
   session without ties has at most 20 trades, and only many ties make the columns crowd); blue entry markers, exits green,
   red or grey; the legend; the footer «5 сделок · 3 в плюс, 2 в минус», «в ноль» only when a trade
-  tied. Every word is the catalog's (`sessionCard*`), XML-escaped, and shrinks to fit its slot.
+  tied. Every word is the catalog's (`sessionCard*`), in the user's language (#633), XML-escaped,
+  and shrinks to fit its slot.
 - **The caption** is `sessionSummaryText` (`packages/shared/src/session-texts.ts`, #537, #709):
   the summary's lines ([Trade messages and the summary](#trade-messages-and-the-summary-464)) —
   «📈 {pair}», the end line, «📊 Итог», «💰 Результат», the balance and its age — and nothing
@@ -1524,14 +1533,16 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
   fonts and renderer, top to bottom: the pair (`pairLabel`; without the pair in the backend's
   catalog «актив #N») and the direction badge — a pill, green «▲ ВВЕРХ» or red «▼ ВНИЗ», the arrow a
   path since resvg drops a glyph Inter lacks; the badge widens with an override of its label, from
-  the default's width up to half the card; «Мой результат сессии» and the result in large type,
+  the Russian default's width up to half the card — the shorter English «UP» and «DOWN» keep that
+  width (#633); «Мой результат сессии» and the result in large type,
   green, red or grey by its sign (the view's `trades.profit`, the SQL sum; a minus is shown as it
   is); the line through every settled trade's entry and exit price in order, the entries blue, the
   exits by outcome, the first entry price under its point and the last exit price over its point
   (`formatPrice` with the catalog pair's `digits`, Rule 20; no labels without the pair; all prices
   equal → the line in the middle); the mark (a circle with the brand's first letter) and the
   brand; the call «Торгуй со мной в Binarius и получи бесплатные токены!»; the session's end
-  (`ended_at`) in Moscow time, «12.10.2026 21:32 МСК» (`formatPaymentDate`). The direction is the
+  (`ended_at`) in Moscow time, «12.10.2026 21:32 МСК» (`formatPaymentDate`; «… MSK» in English,
+  `sessionPromoWhen`, #633). The direction is the
   majority of the settled trades' (`broker_trades.action`), the last trade's on a tie
   (`promoDirection`). Every text is a catalog entry (`sessionPromo*`, the `session` group),
   escaped into the SVG and shrunk to its slot (`fitSize`).

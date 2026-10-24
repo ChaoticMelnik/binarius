@@ -37,9 +37,10 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   label maps, `setBotTextSource`, `textOf`.
 - `packages/shared/src/bot-commands.ts` — the command menu: `BOT_COMMANDS` (each command's name and
   its description's key), `BOT_COMMAND_SCOPE`, `botCommandsOf(plain)`.
-- `apps/backend/src/auth/texts.ts` — the backend's view: `CLIENT_TEXTS`, `CLIENT_LABELS`,
-  `setBotTextSource`; read by the push (`auth/client-push.ts`) and the mailings
-  (`mailing/messages.ts`).
+- `apps/backend/src/auth/texts.ts` — the backend's view, by the recipient's language (#633):
+  `clientTextsOf`, `clientLabelsOf`, `clientSessionTextsOf`, `setBotTextSource`; read by the pushes
+  (`auth/client-push.ts`, `payments/star-reconciler.ts`), the mailings (`mailing/messages.ts`) and
+  the session notices (`trading/session-notice-messages.ts`).
 - `packages/shared/src/bot-text-overrides.ts` — the resolver, the writer's check, the Russian
   messages, the refresher and the wire schema of `GET /bot-texts`.
 - `packages/shared/src/bot-text-messages.ts` — the assembled messages and their estimate.
@@ -264,7 +265,8 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
   `groupButtonLabel`'s ` · N`;
 - the ` ✅` after the selected level (`currentLevelLabel`);
 - `formatUsd`'s `$` and digit grouping (`bot-text-format.ts`); `formatAge`'s units are keys
-  (`ageSecondsUnit`, `ageMinutesUnit`, #508);
+  (`ageSecondsUnit`, `ageMinutesUnit`, #508), and the session message's expiry «N s» prints the
+  same `ageSecondsUnit` (#633);
 - the ` · ` of the trade line and `analysisSubject`, the indicator names `EMA`/`RSI`/`ATR` and the
   ` — ` of the analysis lines. The page line «Page N of M» is `demoPage` with `{page}` and
   `{pageCount}`, the duration of a trade outside the demo table `demoDurationSeconds` with
@@ -444,8 +446,9 @@ in both processes. `schema.db.test.ts` holds the two sides equal on their bounda
 ## Languages
 
 The bot writes in Russian or English (#508; the owner's decisions of 2026-10-15). Part 2 (#632)
-translated `demo`, `analysis` and `trade`; part 3 (#633) translates `session`, `stars`, `mailing`,
-`deposit` and the backend's pushes; #634 gives the overrides a language.
+translated `demo`, `analysis` and `trade`; part 3 (#633) translated `session`, `stars`, `mailing`,
+`deposit` and the backend's pushes, so every key has an English text; #634 gives the overrides a
+language.
 
 - **The rule.** `botLanguageOf(language_code)` (`packages/shared/src/bot-language.ts`): Russian when
   Telegram sends no tag or one whose first subtag is `ru` in any case (`ru`, `ru-RU`, `RU`),
@@ -479,23 +482,29 @@ translated `demo`, `analysis` and `trade`; part 3 (#633) translates `session`, `
   shown` once per process (`index.ts`): the canary for a new timer-driven sender that forgot it.
 - **The English texts.** `BOT_TEXT_SOURCES_EN` (`packages/shared/src/bot-texts-en.ts`), the same
   keys, placeholders and fragments as the defaults, checked by the same validator and by the
-  assembled messages' estimate (`bot-texts-en.test.ts`). `enBotTextSource` is static: an
-  untranslated key shows the catalog's Russian default, never an override, so every English
-  message is bounded by the test on the defaults. `UNTRANSLATED_BOT_TEXT_KEYS` is pinned by group:
-  exactly the groups of #633, but the keys of `TRANSLATED_BEFORE_633` — the real-mode message
-  after a deposit (`realModeByDeposit`, #686) and the H1 session's lines of #745 and #796, written
-  in both languages from the start, and the cycle words `sessionCycleOne/Few/Many`, which the demo
-  path prints in «Session of 5 cycles» (#632; the plural rule stays Russian until #633) (E4, E7,
-  E9). Every key of `demo`, `analysis` and `trade` has an English text (E8). Until #633, a user in
-  English sees the sessions, Stars and every push of the backend but the real-mode message (#686)
-  in Russian; the rest of the bot — the demo, the analysis and the single trade included — in
-  English.
+  assembled messages' estimate (`bot-texts-en.test.ts`). It is a full `Record<BotTextKey, string>`
+  (#633): a catalog key without an English text does not compile, and E4 holds its keys equal to
+  the catalog's at run time. `enBotTextSource` is static and reads that table only (E6), never an
+  override, so every English message is bounded by the test on the defaults. No English text but
+  the Russian language's own name (`languageRuButton`) has a Cyrillic letter (E10).
+- **Plural forms.** The number words (`sessionTrade*`, `sessionCycle*`, `sessionCandle*`) are
+  chosen by the rule of the text set's language: `createSessionTexts({ html, plain, language })`
+  (`packages/shared/src/session-texts.ts`) takes it once, where the set is built. Russian: one for
+  1, 21, …, few for 2–4, 22–24, …, many otherwise; English: one for 1, many otherwise, so the
+  English few words equal the many words («trades», «cycles», «candles»). `Intl.PluralRules` is not
+  used: a small-icu Node would give Russian the English rules unnoticed.
+- **The backend.** Every push is written in the recipient's language, read with the recipient
+  (#633, Rule 13): the mailing job's claim (`claimMailingJob`), the session notices' list
+  (`listPendingSessionNotices`, `listSummaryFallback`), the deposit's account
+  (`resolveBalanceAccount`), and `readUserLanguage` for the push after the OAuth callback and the
+  Stars reconciler's credit (Russian without a `users` row; a failed read is a push not sent).
+  `apps/backend/src/auth/texts.ts` has no text set without a language.
 - **Proofreading.** `pnpm -s exec tsx tooling/bot-texts-table.ts [group…]` prints «key | group |
   русский | English» for every translated key under `head=` and the count (exit 1 with none); the
   group arguments keep only those groups' keys and are named in the head line (`groups=…`; exit 2
   on a group the catalog does not have, #632). The PR carries it for the owner.
 - **What stays Russian.** The overrides (the CLI, the admin section: Russian only until #634), the
-  backend's pushes (#633), the staff bot, the cashier Mini App and the sign-in pages (`apps/web`).
+  staff bot, the cashier Mini App and the sign-in pages (`apps/web`).
   Numbers and dates print the same in both languages; only the words differ, `formatAge`'s units
   included (`ageSecondsUnit`, `ageMinutesUnit`).
 

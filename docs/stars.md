@@ -32,20 +32,22 @@ between the invoice and the payment is held, not credited (below).
    `replyWithInvoiceStars` (`apps/bot/src/send.ts`): currency `XTR`, no provider token, one price,
    title and description from the catalog (plain, ≤ 32 / ≤ 255 characters), the payload
    `stars:<code>:<users.id>` (≤ 128 bytes, the Bot API's limit; parsed by
-   `parseStarsInvoicePayload` only), the pay button first and «🏠 В меню» after it. No
+   `parseStarsInvoicePayload` only), the pay button first and «🏠 В меню» after it. The title, the
+   description, the price's label and the pay button are in the payer's language, as every answer
+   of the bot (the language middleware, #508, #633). No
    `start_parameter`: a forwarded invoice keeps its Pay button, which is why the credit checks the
    payer.
 3. **Pre-checkout.** Telegram asks before it charges (`pre_checkout_query`, in `ALLOWED_UPDATES`
    since #117). The bot asks `POST /payments/stars/pre-checkout` and answers `ok: true` only on the
    backend's yes; a refusal and any failure of the call (timeout, 5xx, a body outside the contract)
-   answer `ok: false` with `starsPreCheckoutRefused` / `starsPreCheckoutFailed`. A refused purchase
-   is never charged.
+   answer `ok: false` with `starsPreCheckoutRefused` / `starsPreCheckoutFailed`, in the payer's
+   language (#633). A refused purchase is never charged.
 4. **Payment.** `message:successful_payment` → `POST /payments/stars/paid` with the charge ids, the
    payload, the currency, the amount and the message's `date`. The answer:
    `credited` / `already_credited` → «⭐ Начислено N токенов. Баланс: M» with «🏠 В меню»; `held`,
    or a 409 `payload_unknown` → `starsHeld` with the support link; any other failure →
    `starsPending` («токены начислятся в течение нескольких минут»): the reconciler settles it, and
-   the bot never re-reads to guess.
+   the bot never re-reads to guess. Each answer is in the payer's language (#633).
 
 ## Routes (`apps/backend/src/payments/routes.ts`)
 
@@ -135,9 +137,11 @@ reconciler is the only protection against that paid-but-not-credited case.
 - A payload that is not ours, or a payload naming no users row: one `error` line per charge id per
   process, the id and the amount only. Nothing is written.
 - A credit made here is pushed: «⭐ Начислено N токенов. Баланс: M» with «🏠 В меню» through the
-  client push (the bot's own answer never came). The notification level does not apply (a
-  payment's result). A 403 marks the user unreachable (Rule 19); any failed send is logged and not
-  repeated — the tokens are already there. `already_recorded` and `held` push nothing.
+  client push (the bot's own answer never came), in the payer's language: `readUserLanguage`,
+  Russian without a `users` row; a failed read is a push not sent (#633). The notification level
+  does not apply (a payment's result). A 403 marks the user unreachable (Rule 19); any failed send
+  is logged and not repeated — the tokens are already there. `already_recorded` and `held` push
+  nothing.
 
 ## Refunds
 
@@ -237,7 +241,8 @@ Telegram expects a bot that sells in Stars to answer `/paysupport`. The command 
 payer's five newest payments, a line per state (paid, on hold, a request made, refunded), with
 «↩️ Нужен возврат: <date>» (`ps:r:<payment id>`) under each one neither refunded nor requested, the
 support chat and «🏠 В меню». No payment → `paysupportEmpty` with the support chat. A failed read →
-`unavailable` with «🔄 Повторить» (`ps:l`).
+`unavailable` with «🔄 Повторить» (`ps:l`). The list, its buttons and every answer below are in the
+user's language (#633).
 
 «Нужен возврат» is a write (`ps:r:` in `WRITE_CALLBACK_PREFIXES`): `POST
 /payments/stars/refund-request` inserts the request by `INSERT … SELECT` matching the payment id,
