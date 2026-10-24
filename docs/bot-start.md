@@ -783,13 +783,14 @@ value carrying whitespace — a `file_id` with a trailing newline is one Telegra
 `TELEGRAM_BOT_TOKEN` has to be set for **any** compose command, including
 `docker compose up -d postgres redis` (README → Database).
 
-CI never starts the `bot` service, and `--wait` could not tell us if it did. With a fake token
-the bot fails at `getMe` (401, which grammY does not retry) and the process exits 1 — but the
-container's command is `tsx watch`, whose supervisor survives that exit and keeps the container
-running, and `bot` has no healthcheck, so `--wait` would report success over a dead bot. That
-supervisor gap is the same in all four app services and is tracked as #65. The workflow derives
-the service list from `docker compose config --services` minus `bot`, so a service added to
-`compose.yaml` later is started in CI rather than silently left out.
+CI starts the `bot` service on its own, last, and only to see it die: the CI compose job runs
+the prod profile (docs/deploy.md), where the command is one `node` process on the bundle. With a
+fake token the bot fails at `getMe` (401, which grammY does not retry) and the process exits 1,
+which ends the container (`exited 1`, read from `docker inspect`; `bot` has no healthcheck, so
+`--wait` is no oracle). Under the dev command, `tsx watch`, the supervisor survives that exit and
+keeps the container running — that gap is #65. Every other service is started first, from
+`docker compose config --services` minus `bot`, so a service added to `compose.yaml` later is
+started in CI rather than silently left out.
 
 ## Timing and shutdown
 
