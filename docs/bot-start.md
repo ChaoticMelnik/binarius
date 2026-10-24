@@ -550,8 +550,9 @@ Answers: `200 { level }` — the stored level — `400 { error: 'validation', is
 
 Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HTML'`. The texts
 are the bot texts catalog's (`packages/shared/src/bot-texts.ts`, [bot-texts.md](bot-texts.md)):
-the bot reads them as `TEXTS` in `apps/bot/src/texts.ts`, the backend's push as `CLIENT_TEXTS` in
-`apps/backend/src/auth/texts.ts`, both rendered from the same entries when a message is built. The
+the bot reads them as `TEXTS` in `apps/bot/src/texts.ts`, the backend's push as
+`clientTextsOf(language)` in `apps/backend/src/auth/texts.ts` (the recipient's language, #633), both
+rendered from the same entries when a message is built. The
 staff bot (`apps/backend/src/admin`) stays plain text, addressed with «вы» (the owner's decision
 of 2026-10-02).
 
@@ -577,8 +578,8 @@ Bot API method that takes parsed text and every grammY alias of one, derived fro
 `@grammyjs/types` 5.0.0 and grammy 1.46.0 by the two commands in the comment above it.
 
 **Labels are plain.** Button labels and the command descriptions (`LABELS`, the backend's
-`CLIENT_LABELS`) are not parsed by Telegram, so they are plain strings and are never escaped:
-«✅ Подтвердить: <email>» shows the broker's email as it is, `&` included. The same holds for the
+`clientLabelsOf(language)`) are not parsed by Telegram, so they are plain strings and are never
+escaped: «✅ Подтвердить: <email>» shows the broker's email as it is, `&` included. The same holds for the
 bot's description and short description (`PROFILE`, [Bot profile](#bot-profile)): plain, line
 breaks kept as written, their limits held by `texts.test.ts` and the catalog entries' limits.
 

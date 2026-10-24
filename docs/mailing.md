@@ -48,7 +48,7 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
   job's payload and the `MailingContext` (the cashier's URL, the user's mode and language at the
-  claim; only #686's kind reads the language, the others are Russian until #633); the
+  claim; every kind is written in that language, #686, #633); the
   chain's keyboard is the demo button (`demoKeyboard`, `client-push.ts`), the same as the link
   push's re-login, the analysis reminder's a new analysis.
 - `apps/backend/src/mailing/engine.ts` — the two loops, the pacer, the failure policy and
@@ -232,8 +232,7 @@ them: the deposit came, the mode is REAL, trades go on real money, the stake, an
   planning moment's (≤ a tick after the switch); the mode screen shows the current one.
 - **The user's language** (#508): the claim returns `users.language`, and the message is built
   with `clientTextsOf(language)` and `clientLabelsOf(language)` (`auth/texts.ts`; Russian with the
-  staff overrides, English the static source). The English text is in `BOT_TEXT_SOURCES_EN`,
-  listed in `TRANSLATED_BEFORE_633`.
+  staff overrides, English the static source), as every kind's is since #633.
 - **Important** (Delivery rules): planned and claimed at any `notification_level` while the bot can
   reach the user; `off` does not cancel it; a block cancels it, and `replansCanceled` plans it
   again after the unblock while the user is still active and in real.
@@ -292,7 +291,7 @@ tokens for a deposit (#386 is open).
   moment, out of `MAILING_MIN_OFFSET_MS`.
 
 Out of scope: a repeat after a purchase or any later credit (each threshold is once per user,
-owner 2026-10-18); English texts (#633).
+owner 2026-10-18). The texts are in the user's language (#633).
 
 Tests: `mailing-ops.db.test.ts` T1–T16 and its CUT, `engine.db.test.ts` (the 80/100 % sends with
 their keyboard, a jump 51 → 0, cancel → re-plan → one send), `messages.test.ts`, the pin in
