@@ -147,7 +147,9 @@ git commit -m "#N: description"
 
 ### Step 7: Create the PR
 
-Same stop-point check as Step 6, this time for push/PR:
+Same stop-point check as Step 6, this time for push/PR.
+
+**Size** (standing answer, #388 — not asked). Before the push, the PR's added lines: `git diff --numstat <base>...HEAD -- . ':(exclude)packages/db/drizzle/meta/*_snapshot.json' | awk '{a+=$1} END {print a+0}'` (the generated snapshot does not count — architect Step 4a). Above 3000 → split at the plan's fallback split line: this PR keeps the part up to the line, the rest goes into a new issue (`/github` → "Create an issue" + "Add issue to Project #2"; Backlog at night) with `Refs #<N>`, named in the PR body and the hand-off. A plan estimated above 2000 without a fallback line is a plan defect (Step 0).
 
 ```bash
 git push -u origin feat/<N>-short-description

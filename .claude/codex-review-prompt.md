@@ -28,9 +28,10 @@ Check only for:
 - a command added to documentation that does not work as written
 
 Process docs (only when the diff touches `.claude/**` or `audits.md`) — look for contradictions:
-- (a) between the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`): the same status transition, the same step order, the same check command described differently;
+- (a) between the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`, `manager`): the same status transition, the same step order, the same check command described differently;
 - (b) between the skills and `.claude/CLAUDE.md`;
 - (c) between the project `.claude/CLAUDE.md` and the global `~/.claude/CLAUDE.md` inlined below (the sandbox cannot read it). A (c) contradiction is reported as "project section governs" and does not block the merge; it feeds the proposed edit of the global file.
+- (d) every `(= tech-lead → X)` paragraph of `manager/SKILL.md` against its source in `tech-lead/SKILL.md`: the same meaning, the night form differing only by the substitutions it names;
 Example of the class this must catch: `.claude/CLAUDE.md` said a returned issue goes "→ In Progress" while reviewer Step 6a sent it "→ Todo".
 
 <global ~/.claude/CLAUDE.md, inlined — only for a process-docs diff>
