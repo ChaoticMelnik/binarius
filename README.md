@@ -92,6 +92,8 @@ pnpm --silent --filter @binarius/backend h1 shadow report --since 24h   # the H1
 pnpm --silent --filter @binarius/backend h1 list   # the accounts marked for H1 sessions (DATABASE_URL), docs/h1.md → Sessions
 pnpm --silent --filter @binarius/backend h1 session status --account <accountId>   # the account's last H1 session, its cycles (DATABASE_URL), docs/h1.md → Sessions
 pnpm --filter @binarius/web admin:export <dir> [--serve <port>]   # the admin pages as static files, docs/admin-design-system.md
+tooling/model-policy-check.sh <session-id>   # which model each phase spawn ran on (tech-lead Mode 1, on request)
+tooling/audit-gaps.sh   # manager nights and merged PRs no audits.md entry records (tech-lead Phase 0 item 5)
 ```
 
 `pnpm check` runs `tsc -b --clean`, then the tests, then `tsc -b`, then `eslint .`. The order is
