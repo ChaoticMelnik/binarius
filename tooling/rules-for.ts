@@ -163,6 +163,39 @@ export function tokensOf(body: string): string[] {
   return [...body.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
 }
 
+// Markdown emphasis (`**Title.**`) and a closing `.`, `?` or `-` (`docs/h1.md.`, `code?`) are not
+// part of a word; `**/` and `/**` are a glob's.
+function normaliseWord(raw: string): string {
+  let word = raw;
+  for (;;) {
+    const next = word
+      .replace(/^\*\*(?!\/)/, '')
+      .replace(/(?<!\/)\*\*$/, '')
+      .replace(/[.?-]+$/, '');
+    if (next === word) return word;
+    word = next;
+  }
+}
+
+// What a rule can name a path with: every maximal run of path characters of its whole text, in a
+// backtick span, inside a command or in the prose.
+export function wordsOf(body: string): string[] {
+  const words = new Set<string>();
+  for (const match of body.matchAll(/[A-Za-z0-9_.\-/*?]+/g)) {
+    const word = normaliseWord(match[0]);
+    if (word !== '') words.add(word);
+  }
+  return [...words];
+}
+
+const WILDCARD = /[*?]/;
+
+// A glob names something only if a letter or digit is left once its wildcards and the last
+// segment's extension are removed: `*` and `*.ts` name nothing, `*.test.ts` and `apps/*` do.
+function globNames(glob: string): boolean {
+  return /[A-Za-z0-9]/.test(glob.replace(/\.[A-Za-z0-9]+$/, '').replace(/[*?]/g, ''));
+}
+
 function isExpression(token: string): boolean {
   return (
     /\s/.test(token) ||
@@ -177,14 +210,15 @@ function isPathShaped(token: string): boolean {
   return token.includes('/') || PATH_EXTENSION.test(token);
 }
 
-export function classifyToken(token: string): TokenClass {
+export function classifyToken(token: string, entries: readonly string[]): TokenClass {
   if (isExpression(token)) return 'expression';
-  if (isPathShaped(token)) return 'path';
+  if (resolvePath(token, entries) !== undefined || isPathShaped(token)) return 'path';
   if (identifierShape(token) !== undefined) return 'identifier';
   return token.length >= 3 ? 'literal' : 'short';
 }
 
-// Matches the path itself and every path under it: `apps/*/src` holds `apps/bot/src/x.ts`.
+// Matches the path itself and every path under it: `apps/*/src` holds `apps/bot/src/x.ts`; group 1
+// is the part the glob itself matched.
 const globCache = new Map<string, RegExp>();
 function globRegExp(token: string): RegExp {
   const cached = globCache.get(token);
@@ -200,7 +234,7 @@ function globRegExp(token: string): RegExp {
     else if (char === '?') source += '[^/]';
     else source += escapeRegExp(char);
   }
-  const pattern = new RegExp(`^(?:.*/)?${source}(?:/.*)?$`);
+  const pattern = new RegExp(`^((?:.*/)?${source})(?:/.*)?$`);
   globCache.set(token, pattern);
   return pattern;
 }
@@ -210,10 +244,22 @@ type PathKind = 'glob' | 'exact' | 'directory' | 'suffix' | 'segment';
 const PATH_KINDS: readonly PathKind[] = ['glob', 'exact', 'directory', 'suffix', 'segment'];
 
 // The one matcher of a cited path against a file, which may not exist yet (a file a plan adds).
+// A word without `/` names a file only, by its whole path or its basename, never a directory: the
+// bare words equal to a directory name are tables, services and fields (NOT_DIRECTORY_NAMES).
 // `segment` tests `file`, not `'/' + file`: a leading directory is `directory`'s.
 function pathKind(token: string, file: string): PathKind | undefined {
-  if (/[*?]/.test(token)) return globRegExp(token).test(file) ? 'glob' : undefined;
+  if (WILDCARD.test(token)) {
+    if (!globNames(token)) return undefined;
+    const subject = token.includes('/') ? file : file.slice(file.lastIndexOf('/') + 1);
+    return globRegExp(token).test(subject) ? 'glob' : undefined;
+  }
   const bare = token.replace(/\/$/, '');
+  if (bare === '') return undefined;
+  if (!token.includes('/')) {
+    if (file === bare) return 'exact';
+    if (file.endsWith('/' + bare)) return 'suffix';
+    return undefined;
+  }
   if (file === bare) return 'exact';
   if (file.startsWith(bare + '/')) return 'directory';
   if (file.endsWith('/' + bare)) return 'suffix';
@@ -254,6 +300,23 @@ export function resolvePath(token: string, entries: readonly string[]): Resoluti
 
 // Path-shaped tokens that name no file: an ESLint rule id and a URL prefix.
 export const PATH_SHAPED_LITERALS: readonly string[] = ['local/no-status-literal', 't.me/'];
+
+// Bare tokens equal to a directory's name that mean a table, a compose service, a field or an
+// attribute, not the directory; any other such token fails the gate.
+export const NOT_DIRECTORY_NAMES: readonly string[] = [
+  'backend',
+  'bot',
+  'deposit',
+  'h1',
+  'oauth',
+  'signal',
+  'src',
+  'stake',
+  'trading',
+  'trading-worker',
+  'users',
+  'web',
+];
 
 type IdentifierShape =
   | { kind: 'plain'; name: string }
@@ -374,6 +437,7 @@ export interface Repo {
 export interface GateResult {
   errors: string[];
   counts: Record<TokenClass, number>;
+  rootedWords: number;
   ids: number;
   citationsWithoutIds: number;
 }
@@ -391,7 +455,11 @@ export function literalsFound(tokens: Iterable<string>, text: string): Set<strin
 }
 
 export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
-  const errors: string[] = [];
+  const errors = new Set<string>();
+  const directories = directoriesOf(repo.entries);
+  const directoryNames = new Set([...directories].map((d) => d.slice(d.lastIndexOf('/') + 1)));
+  const topDirectories = new Set([...directories].filter((d) => !d.includes('/')));
+  let rootedWords = 0;
   const counts: Record<TokenClass, number> = {
     expression: 0,
     path: 0,
@@ -413,18 +481,39 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
   for (const rule of rules) {
     const where = `rules/${rule.area}.md Rule ${rule.number}`;
     const testFiles = new Set<string>();
+    for (const word of wordsOf(rule.body)) {
+      const slash = word.indexOf('/');
+      if (slash === -1 || !topDirectories.has(word.slice(0, slash))) continue;
+      rootedWords += 1;
+      if (resolvePath(word, repo.entries) === undefined)
+        errors.add(`${where}: path ${word} (no file)`);
+    }
     for (const token of tokensOf(rule.body)) {
-      const kind = classifyToken(token);
+      const kind = classifyToken(token, repo.entries);
       counts[kind] += 1;
+      if (
+        kind !== 'expression' &&
+        !token.includes('/') &&
+        !WILDCARD.test(token) &&
+        directoryNames.has(token) &&
+        resolvePath(token, repo.entries) === undefined &&
+        !NOT_DIRECTORY_NAMES.includes(token)
+      ) {
+        errors.add(
+          `${where}: name ${token} is a directory here: cite it as ${token}/ or by its path, or add it to NOT_DIRECTORY_NAMES`,
+        );
+        continue;
+      }
       if (kind === 'path') {
         const resolved = resolvePath(token, repo.entries);
         if (resolved !== undefined) {
-          if (TEST_FILE.test(token) && resolved.kind !== 'glob')
+          // a glob of test files counts its files only when it names a place (`circuit-breaker/*.test.ts`)
+          if (TEST_FILE.test(token) && (resolved.kind !== 'glob' || token.includes('/')))
             for (const match of resolved.matches) testFiles.add(match);
         } else if (PATH_SHAPED_LITERALS.includes(token)) pending.push({ where, token });
-        else errors.push(`${where}: path ${token} (no file)`);
+        else errors.add(`${where}: path ${token} (no file)`);
       } else if (kind === 'identifier') {
-        if (!identifierFound(token, repo.corpus)) errors.push(`${where}: identifier ${token}`);
+        if (!identifierFound(token, repo.corpus)) errors.add(`${where}: identifier ${token}`);
       } else if (kind === 'literal') {
         pending.push({ where, token });
       }
@@ -436,7 +525,7 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
       for (const id of listed) {
         ids += 1;
         if (!texts.some((text) => idFound(id, text)))
-          errors.push(`${where}: test id ${id} (after ${match[1]})`);
+          errors.add(`${where}: test id ${id} (after ${match[1]})`);
       }
     }
   }
@@ -445,8 +534,8 @@ export function checkRules(rules: readonly Rule[], repo: Repo): GateResult {
     repo.corpus.text,
   );
   for (const { where, token } of pending)
-    if (!found.has(token)) errors.push(`${where}: literal ${token}`);
-  return { errors, counts, ids, citationsWithoutIds };
+    if (!found.has(token)) errors.add(`${where}: literal ${token}`);
+  return { errors: [...errors], counts, rootedWords, ids, citationsWithoutIds };
 }
 
 const CORPUS_ROOTS = ['apps/', 'packages/', 'tooling/', 'scripts/', '.github/'];
@@ -503,6 +592,8 @@ export function loadRepo(root: string): Repo {
 // --- the map -------------------------------------------------------------------------------
 
 export function mapKey(file: string, directories: ReadonlySet<string>): string {
+  // documents are not each other's neighbours
+  if (file.startsWith('docs/')) return file.replace(/\/$/, '');
   const parts = file.replace(/\/$/, '').split('/');
   if ((parts[0] === 'apps' || parts[0] === 'packages') && parts.length >= 3) {
     if (parts[2] === 'src') {
@@ -525,35 +616,49 @@ export function directoriesOf(entries: readonly string[]): Set<string> {
   return directories;
 }
 
-// The map keys a rule's resolved path citations route to.
+// The directory a word names `file` through, if it names it through one.
+function citedDirectory(word: string, file: string, kind: PathKind): string | undefined {
+  const bare = word.replace(/\/$/, '');
+  if (kind === 'directory') return bare;
+  if (kind === 'segment') return file.slice(0, file.indexOf('/' + bare + '/') + 1 + bare.length);
+  if (kind === 'glob') {
+    const matched = globRegExp(word).exec(file)?.[1];
+    return matched === undefined || matched === file ? undefined : matched;
+  }
+  return undefined;
+}
+
+const wordKeys = new WeakMap<readonly string[], Map<string, readonly string[]>>();
+
+// The map keys of a rule: per (word, entry) it names, the entry's key, or the cited directory when
+// that is shorter. A glob without `/` (`*.test.ts`) names a kind of file, not a place: no key.
 function ruleKeys(
-  rule: Rule,
+  words: readonly string[],
   entries: readonly string[],
   directories: ReadonlySet<string>,
 ): Set<string> {
+  let cache = wordKeys.get(entries);
+  if (cache === undefined) {
+    cache = new Map();
+    wordKeys.set(entries, cache);
+  }
   const keys = new Set<string>();
-  for (const token of tokensOf(rule.body)) {
-    if (classifyToken(token) !== 'path') continue;
-    const resolved = resolvePath(token, entries);
-    if (resolved === undefined) continue;
-    if (resolved.kind === 'glob') {
-      const prefix = token.slice(0, token.search(/[*?]/));
-      if (prefix === '') continue;
-      // a glob relative to some directory (`circuit-breaker/*.test.ts`) routes by what it matched
-      if (directories.has(prefix.split('/')[0])) keys.add(mapKey(prefix, directories));
-      else for (const match of resolved.matches) keys.add(mapKey(match, directories));
-      continue;
+  for (const word of words) {
+    let ofWord = cache.get(word);
+    if (ofWord === undefined) {
+      const found = new Set<string>();
+      if (!WILDCARD.test(word) || word.includes('/'))
+        for (const entry of entries) {
+          const kind = pathKind(word, entry);
+          if (kind === undefined) continue;
+          const cited = citedDirectory(word, entry, kind);
+          const key = mapKey(entry, directories);
+          found.add(cited !== undefined && cited.length < key.length ? cited : key);
+        }
+      ofWord = [...found];
+      cache.set(word, ofWord);
     }
-    const bare = token.replace(/\/$/, '');
-    for (const match of resolved.matches) {
-      if (resolved.kind === 'segment') {
-        const at = match.indexOf('/' + bare + '/');
-        keys.add(mapKey(match.slice(0, at + bare.length + 2), directories));
-        continue;
-      }
-      const key = mapKey(match, directories);
-      keys.add(resolved.kind === 'directory' && key.length > bare.length ? bare : key);
-    }
+    for (const key of ofWord) keys.add(key);
   }
   return keys;
 }
@@ -577,7 +682,7 @@ export function renderMap(rules: readonly Rule[], entries: readonly string[]): s
   const directories = directoriesOf(entries);
   const byKey = new Map<string, Rule[]>();
   for (const rule of rules)
-    for (const key of ruleKeys(rule, entries, directories))
+    for (const key of ruleKeys(wordsOf(rule.body), entries, directories))
       byKey.set(key, [...(byKey.get(key) ?? []), rule]);
   const rows = [...byKey.keys()]
     .sort()
@@ -602,8 +707,15 @@ interface FileRules {
   file: string;
   direct: Rule[];
   directory: Rule[];
+  always: Rule[];
   key: string;
 }
+
+// The rules of the short invariant list `.claude/CLAUDE.md` loaded every time before #770, and
+// Rule 11 so that auth.md comes whole: they hold where their text names no file (a new route
+// directory, a new writer).
+const ALWAYS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13];
+const ALWAYS_UNDER: readonly string[] = ['apps/', 'packages/'];
 
 export function rulesFor(
   files: readonly string[],
@@ -611,11 +723,11 @@ export function rulesFor(
   entries: readonly string[],
 ): { perFile: FileRules[]; rules: Rule[]; areas: Area[] } {
   const directories = directoriesOf(entries);
-  const keysOf = new Map(rules.map((rule) => [rule.number, ruleKeys(rule, entries, directories)]));
-  const pathsOf = new Map(
+  const wordsByRule = new Map(rules.map((rule) => [rule.number, wordsOf(rule.body)]));
+  const keysOf = new Map(
     rules.map((rule) => [
       rule.number,
-      tokensOf(rule.body).filter((token) => classifyToken(token) === 'path'),
+      ruleKeys(wordsByRule.get(rule.number) ?? [], entries, directories),
     ]),
   );
   const found = new Map<number, Rule>();
@@ -624,14 +736,20 @@ export function rulesFor(
   for (const file of files) {
     const key = mapKey(file, directories);
     const direct = rules.filter((rule) =>
-      (pathsOf.get(rule.number) ?? []).some((token) => citesPath(token, file)),
+      (wordsByRule.get(rule.number) ?? []).some((word) => citesPath(word, file)),
     );
     const directory = rules.filter(
       (rule) => !direct.includes(rule) && (keysOf.get(rule.number) ?? new Set()).has(key),
     );
-    for (const rule of [...direct, ...directory]) found.set(rule.number, rule);
+    const always = ALWAYS_UNDER.some((prefix) => file.startsWith(prefix))
+      ? rules.filter(
+          (rule) =>
+            ALWAYS.includes(rule.number) && !direct.includes(rule) && !directory.includes(rule),
+        )
+      : [];
+    for (const rule of [...direct, ...directory, ...always]) found.set(rule.number, rule);
     if (direct.length === 0 && directory.length === 0) uncovered = true;
-    perFile.push({ file, direct, directory, key });
+    perFile.push({ file, direct, directory, always, key });
   }
   const areas = new Set<Area>([...found.values()].map((rule) => rule.area));
   if (uncovered) areas.add('core');
@@ -644,11 +762,13 @@ export function rulesFor(
 
 export function renderList(perFile: readonly FileRules[]): string {
   const lines: string[] = [];
-  for (const { file, direct, directory, key } of perFile) {
+  for (const { file, direct, directory, always, key } of perFile) {
     lines.push(file);
     if (direct.length > 0) lines.push(`  cites: ${formatAreas(groupByArea(direct))}`);
     if (directory.length > 0)
       lines.push(`  same directory (${key}): ${formatAreas(groupByArea(directory))}`);
+    if (always.length > 0)
+      lines.push(`  always (${ALWAYS_UNDER.join(', ')}): ${formatAreas(groupByArea(always))}`);
     if (direct.length === 0 && directory.length === 0)
       lines.push(`  no rule cites ${file} → read ${ruleFilePath('core')}`);
   }
@@ -751,8 +871,9 @@ function split(root: string, ref: string): number {
 // --- cli -----------------------------------------------------------------------------------
 
 const USAGE = `usage:
-  node tooling/rules-for.ts <file ...>          per file: the rules citing it and the rules of
-                                                its directory, then the text of every rule found
+  node tooling/rules-for.ts <file ...>          per file: the rules whose text names it, the rules
+                                                of its directory and, under apps/ or packages/,
+                                                the always-on set; then the text of every rule found
   node tooling/rules-for.ts --list <file ...>   the per-file lines only
   node tooling/rules-for.ts --files <file ...>  the rule files to read (core.md when a file has
                                                 no rule)

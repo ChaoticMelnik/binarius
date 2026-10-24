@@ -196,7 +196,7 @@ Implementer picks it up only once this comment exists.
 
 Модульные границы: `apps/bot`, `apps/backend`, `apps/web`, `apps/trading-worker`, `packages/db`, `packages/shared` (стек — `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference). Общий Drizzle-контракт и общие типы в `packages/shared` меняет только их владелец за волну (`.claude/CLAUDE.md` → Несколько параллельных агентов).
 
-Инварианты ниже подтверждены кодом в `main` (2026-09-24). Полный список — этот индекс и файлы `rules/*.md` этого каталога; reviewer, Codex-промпт (`.claude/codex-review-prompt.md`) и `.claude/CLAUDE.md` ссылаются сюда. Как загружать: `node tooling/rules-for.ts <файлы плана>` печатает правила по путям; файл области читается Read целиком, когда план трогает её. Новое правило — следующий свободный номер, файл своей области, строка здесь; со ссылкой на место, где оно enforced, не шире этого места (шаблон и лимит — #776).
+Инварианты ниже подтверждены кодом в `main` (2026-09-24). Полный список — этот индекс и файлы `rules/*.md` этого каталога; reviewer, Codex-промпт (`.claude/codex-review-prompt.md`) и `.claude/CLAUDE.md` ссылаются сюда. Как загружать: `node tooling/rules-for.ts <файлы плана>` печатает правила по путям; файл области читается Read целиком, когда план трогает её. Правило находится по любому слову своего текста, которое называет путь: в обратных кавычках, в команде или в прозе; каталог называется со `/` или путём из двух и более сегментов. Файлу под `apps/` или `packages/` скрипт добавляет постоянный набор `ALWAYS` (правила бывшей памятки `.claude/CLAUDE.md` и `auth.md`). Новое правило — следующий свободный номер, файл своей области, строка здесь; со ссылкой на место, где оно enforced, не шире этого места (шаблон и лимит — #776).
 
 ### Index
 
@@ -257,59 +257,90 @@ Implementer picks it up only once this comment exists.
 <!-- generated: node tooling/rules-for.ts --map -->
 | Путь | Правила |
 |---|---|
+| `.env.example` | trading 27 |
 | `.github` | core 14, 16 |
-| `apps` | core 51; signal-h1 20, 43; bot-ui 18 |
-| `apps/backend/src` | core 9, 10, 14, 16, 17; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
-| `apps/backend/src/admin` | core 3, 5, 7, 8, 10, 14; trading 22, 28, 33, 36; signal-h1 48; bot-ui 18, 19, 29, 30, 31, 46; auth 12, 13 |
-| `apps/backend/src/auth` | core 3, 5, 7; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49; payments 35; auth 12, 13 |
-| `apps/backend/src/bot-texts` | core 3, 5, 7; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
+| `apps/backend` | signal-h1 20, 43 |
+| `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
+| `apps/backend/src/admin` | core 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 48; bot-ui 18, 19, 29, 30, 31, 46; auth 12, 13 |
+| `apps/backend/src/auth` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49; payments 35; auth 12, 13 |
+| `apps/backend/src/bot-texts` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/backend/src/broker` | core 26; trading 21; auth 12 |
 | `apps/backend/src/cli` | core 26; trading 28, 33, 50; signal-h1 42, 44, 45, 48; bot-ui 30; payments 39, 40 |
-| `apps/backend/src/deposit` | core 3, 5, 7; trading 22, 33, 36; bot-ui 19, 29, 30; payments 37; auth 12, 13 |
+| `apps/backend/src/deposit` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 37; auth 12, 13 |
 | `apps/backend/src/h1` | signal-h1 44, 48 |
 | `apps/backend/src/mailing` | bot-ui 19 |
 | `apps/backend/src/market-data` | signal-h1 41, 44, 45 |
 | `apps/backend/src/outbox` | trading 6 |
-| `apps/backend/src/payments` | core 3, 5, 7; trading 22, 33, 36; bot-ui 19, 29, 30; payments 39; auth 12, 13 |
-| `apps/backend/src/postbacks` | core 3, 5, 7, 9; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37; auth 12, 13 |
+| `apps/backend/src/payments` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 39; auth 12, 13 |
+| `apps/backend/src/postbacks` | core 3, 5, 7, 9, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37; auth 12, 13 |
 | `apps/backend/src/signal` | signal-h1 20, 41 |
 | `apps/backend/src/trade-log` | signal-h1 45 |
-| `apps/backend/src/trading` | core 3, 5, 7, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 19, 29, 30, 31, 47; auth 12, 13 |
-| `apps/backend/src/users` | core 3, 5, 7; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
-| `apps/bot` | core 26 |
-| `apps/bot/src` | core 8, 10, 14, 26; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
-| `apps/trading-worker/src` | core 10, 16; trading 22, 23, 27, 28, 32, 33; signal-h1 44, 45 |
+| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 19, 29, 30, 31, 47; auth 12, 13 |
+| `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
+| `apps/bot` | core 26; signal-h1 20, 43 |
+| `apps/bot/src` | core 8, 10, 14, 26, 51; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
+| `apps/trading-worker` | signal-h1 20, 43 |
+| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33; signal-h1 44, 45; bot-ui 18 |
 | `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32; auth 12 |
 | `apps/trading-worker/src/circuit-breaker` | core 10; trading 22, 25, 28; signal-h1 20, 43 |
 | `apps/trading-worker/src/cli` | trading 23, 27, 28 |
 | `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33; signal-h1 43, 48; auth 12 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 33, 36; signal-h1 42, 43, 48 |
-| `apps/web` | core 26; bot-ui 30 |
-| `apps/web/src` | core 9, 10, 14, 17, 26; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48; bot-ui 19, 31, 46, 47; payments 38 |
+| `apps/web` | core 26; signal-h1 20, 43; bot-ui 30 |
+| `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47; payments 38 |
 | `apps/web/src/admin` | bot-ui 30; payments 38 |
 | `apps/web/src/cashier` | payments 38 |
 | `apps/web/src/oauth` | core 26; payments 38 |
 | `compose.yaml` | core 16; bot-ui 47 |
-| `docs` | trading 21, 22, 24, 28; bot-ui 18; payments 37, 38; auth 12, 13 |
+| `docs/binodex-oauth.md` | auth 12 |
+| `docs/bonus-rules.md` | payments 40 |
+| `docs/bot-demo-trade.md` | bot-ui 29 |
+| `docs/bot-demo.md` | bot-ui 46 |
+| `docs/bot-navigation.md` | bot-ui 31, 49 |
+| `docs/bot-session.md` | trading 28; bot-ui 47 |
+| `docs/bot-texts.md` | bot-ui 18, 30 |
+| `docs/broker-balance.md` | trading 21 |
+| `docs/broker-rest.md` | trading 24 |
+| `docs/broker-session.md` | trading 27, 32 |
+| `docs/broker-socket.md` | trading 15, 27 |
+| `docs/deposit.md` | payments 37, 38 |
+| `docs/h1.md` | signal-h1 44, 48 |
+| `docs/kill-switch.md` | trading 22 |
+| `docs/mailing.md` | bot-ui 19 |
+| `docs/market-data.md` | signal-h1 41 |
+| `docs/postbacks.md` | payments 35; auth 13 |
+| `docs/referrals.md` | core 5; payments 34 |
+| `docs/runbook-broker-outage.md` | trading 22 |
+| `docs/service-accounts.md` | auth 12 |
+| `docs/signal-stand.md` | signal-h1 20, 43 |
+| `docs/signal.md` | signal-h1 20 |
+| `docs/staff-login.md` | core 51 |
+| `docs/stake.md` | trading 23 |
+| `docs/stars.md` | core 10; payments 39 |
+| `docs/trade-executor.md` | trading 15 |
+| `docs/trade-intent-transport.md` | trading 50; auth 13 |
+| `docs/trade-log.md` | signal-h1 42, 45 |
+| `docs/trading-mode.md` | trading 36 |
+| `docs/trading-session.md` | trading 28; signal-h1 48; auth 13 |
+| `docs/worker-deploy.md` | core 10, 16; trading 32 |
 | `eslint.config.js` | core 8; bot-ui 18 |
-| `packages` | core 51; bot-ui 18 |
-| `packages/broker-rest/src` | core 10, 26; trading 15, 27, 28, 33; signal-h1 44, 45 |
-| `packages/broker-socket/src` | core 10, 14; trading 15, 27, 28, 33; signal-h1 44, 45 |
+| `packages/broker-rest/src` | core 10, 26, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
+| `packages/broker-socket/src` | core 10, 14, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/db/drizzle` | core 3, 51 |
-| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50; signal-h1 41, 42, 44, 45, 48; bot-ui 19, 29, 30, 47; payments 34, 35, 39, 40; auth 11, 12, 13 |
+| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50; signal-h1 41, 42, 44, 45, 48; bot-ui 18, 19, 29, 30, 47; payments 34, 35, 39, 40; auth 11, 12, 13 |
 | `packages/db/src/cli` | core 16 |
 | `packages/db/src/schema` | core 1, 2, 10, 51; trading 22, 27, 28, 33, 50; signal-h1 42, 44, 45; auth 11, 12 |
-| `packages/e2e/src` | trading 28 |
+| `packages/e2e/src` | core 51; trading 28; bot-ui 18 |
 | `packages/e2e/src/harness` | core 10; trading 22, 28; bot-ui 29, 46 |
-| `packages/mock-broker/src` | core 2, 10; trading 15, 23, 27, 28, 33; signal-h1 44, 45 |
+| `packages/mock-broker/src` | core 2, 10, 51; trading 15, 23, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/shared` | core 10; trading 27; bot-ui 30 |
-| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39, 40; auth 12 |
+| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39, 40; auth 12 |
 | `packages/signal` | signal-h1 43 |
 | `packages/signal-stand` | signal-h1 20 |
-| `packages/signal-stand/src` | core 10; trading 25, 28; signal-h1 20, 41, 43, 44 |
-| `packages/signal/src` | core 10; trading 25, 27, 28, 33; signal-h1 20, 41, 43, 44, 45, 48 |
+| `packages/signal-stand/src` | core 10, 51; trading 25, 28; signal-h1 20, 41, 43, 44; bot-ui 18 |
+| `packages/signal/src` | core 10, 51; trading 25, 27, 28, 33; signal-h1 20, 41, 43, 44, 45, 48; bot-ui 18 |
 | `packages/signal/src/fixtures` | signal-h1 20 |
-| `packages/stake/src` | core 2, 10; trading 23, 25, 27, 28, 33; signal-h1 43, 44, 45, 48 |
+| `packages/stake/src` | core 2, 10, 51; trading 23, 25, 27, 28, 33; signal-h1 43, 44, 45, 48; bot-ui 18 |
 | `scripts` | trading 27, 28; bot-ui 47 |
 | `tooling` | core 1 |
 <!-- /generated -->
