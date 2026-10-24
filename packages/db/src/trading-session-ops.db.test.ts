@@ -557,12 +557,17 @@ describe('createTradingSession', () => {
       mode: TradeMode.Demo,
       settings: sessionSettings(),
     });
-    await waitsOn(user, 'the users row');
-    user.release();
-    await user.done;
-    await waitsOn(account, 'the broker_accounts row');
-    account.release();
-    await account.done;
+    try {
+      await waitsOn(user, 'the users row');
+      user.release();
+      await user.done;
+      await waitsOn(account, 'the broker_accounts row');
+    } finally {
+      // a failed wait leaves no waiter behind for the next lock case
+      user.release();
+      account.release();
+      await Promise.all([user.done, account.done]);
+    }
     expect((await creating).status).toBe('active');
   });
 });
@@ -1290,15 +1295,19 @@ describe('createSessionIntent', () => {
     );
     await Promise.all([user.lockTaken, account.lockTaken, session.lockTaken]);
     const creating = createSessionIntent(tmp.db, intentInput(seed));
-    await waitsOn(user, 'the users row');
-    user.release();
-    await user.done;
-    await waitsOn(account, 'the broker_accounts row');
-    account.release();
-    await account.done;
-    await waitsOn(session, 'the trading_sessions row');
-    session.release();
-    await session.done;
+    try {
+      await waitsOn(user, 'the users row');
+      user.release();
+      await user.done;
+      await waitsOn(account, 'the broker_accounts row');
+      account.release();
+      await account.done;
+      await waitsOn(session, 'the trading_sessions row');
+    } finally {
+      // a failed wait leaves no waiter behind for the next lock case
+      for (const holder of [user, account, session]) holder.release();
+      await Promise.all([user.done, account.done, session.done]);
+    }
     expect((await creating).created).toBe(true);
   });
 
