@@ -16,6 +16,11 @@
 // [0, 1) — at 1 a wait could shrink to 0. The command timeout is a separate operation, not ordered
 // against the others here. The links to the worker's shutdown budget and to the submit deadline's
 // floor are in apps/trading-worker/src/intents/config.ts.
+// The jitter bound holds only while socket.io's backoff is finite: after about 1015 consecutive
+// failed attempts (about 3 h at the longest wait) its exponent overflows to Infinity, and from then
+// on about half of the waits are 0 — some two attempts per longest wait instead of one. Accepted:
+// any successful connect resets the count, and a finite reconnectionAttempts would add a terminal
+// state to the client.
 export const BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 export const BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000;
 export const BROKER_SOCKET_COMMAND_TIMEOUT_MS = 5_000;
@@ -48,7 +53,7 @@ export const MAX_TIMER_MS = 2 ** 31 - 1;
 export const isTimerMs = (value: number) =>
   Number.isSafeInteger(value) && value >= 1 && value <= MAX_TIMER_MS;
 
-export function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {
+function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {
   return (
     isTimerMs(timing.connectTimeoutMs) &&
     isTimerMs(timing.authTimeoutMs) &&
