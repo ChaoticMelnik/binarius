@@ -43,13 +43,14 @@ import {
 // writes what the sessions hear — the balance and the closed trades — once the connection has
 // proven whose it is.
 
-export type SessionLogger = Pick<pino.Logger, 'debug' | 'info' | 'warn' | 'error' | 'child'>;
+type SessionLogger = Pick<pino.Logger, 'debug' | 'info' | 'warn' | 'error' | 'child'>;
 
 export interface SessionWriters {
+  // eventAt: the modes for which this user.data is a balance event
   snapshot(
     accountId: string,
     user: BrokerUser,
-    modes: readonly TradeMode[],
+    eventAt: readonly TradeMode[],
   ): Promise<BalanceSnapshotWrite>;
   balanceEvent(
     accountId: string,
@@ -166,6 +167,15 @@ interface WriteQueue {
   running?: Promise<void>;
 }
 
+// one bounded wait; the late answer of a work that overran is ignored
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), ms);
+  });
+  return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
+}
+
 export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): BrokerSessionManager {
   const { config, logger, tokens, writers, leases } = deps;
   const openClient = deps.openClient ?? createBrokerSocketClient;
@@ -233,30 +243,21 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   // applies to an account that still holds the same lease, whichever entry carries it now.
   async function runRenewal() {
     const sent: [string, Lease][] = [];
+    const ids: string[] = [];
     for (const [accountId, entry] of entries) {
-      if (entry.lease !== undefined) sent.push([accountId, entry.lease]);
+      if (entry.lease === undefined) continue;
+      sent.push([accountId, entry.lease]);
+      ids.push(accountId);
     }
     if (sent.length === 0) return;
     const t0 = now();
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<'timeout'>((resolve) => {
-      timeout = setTimeout(() => resolve('timeout'), config.leaseRenewTimeoutMs);
-    });
     let held: string[] | 'timeout';
     try {
-      held = await Promise.race([
-        leases.renew(
-          sent.map(([accountId]) => accountId),
-          config.leaseTtlMs,
-        ),
-        timedOut,
-      ]);
+      held = await withTimeout(leases.renew(ids, config.leaseTtlMs), config.leaseRenewTimeoutMs);
     } catch (error) {
       // the fence decides: one failed renewal leaves every lease trusted (2 × renew < fence)
       logger.error(errorLogFields(error), 'broker session lease renewal failed');
       return;
-    } finally {
-      clearTimeout(timeout);
     }
     // a statement stuck on the pool must not hold the next renewal back: it counts as one
     // failure, and its late answer is ignored
@@ -523,36 +524,49 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     }
   }
 
+  // The token for a start or a restart; undefined when the caller has nothing left to do: the
+  // manager is stopping, the entry was replaced, the source threw (logged, dropped) or refused
+  // (held back).
+  async function tokenFor(
+    accountId: string,
+    entry: Entry,
+    refusedToken?: string,
+  ): Promise<string | undefined> {
+    let outcome: AccessTokenOutcome;
+    try {
+      outcome = await fetchToken(accountId, refusedToken);
+    } catch (error) {
+      if (stopping.signal.aborted || !isCurrent(accountId, entry)) return undefined;
+      startFailed(accountId, error);
+      return undefined;
+    }
+    if (stopping.signal.aborted || !isCurrent(accountId, entry)) return undefined;
+    if (!outcome.ok) {
+      drop(accountId, holdBackFor(accountId, outcome));
+      return undefined;
+    }
+    return outcome.accessToken;
+  }
+
   async function refresh(entry: RunningEntry, state: BrokerSocketState) {
     const accountId = entry.candidate.id;
     entry.refreshing = true;
-    let outcome: AccessTokenOutcome;
-    try {
-      // the broker refused this token: the backend marks it expired and answers refresh_needed,
-      // or hands out the pair someone already rotated (#281)
-      outcome = await fetchToken(accountId, hashToken(entry.token));
-    } catch (error) {
-      if (stopping.signal.aborted || !isCurrent(accountId, entry)) return;
-      startFailed(accountId, error);
-      return;
-    }
-    if (stopping.signal.aborted || !isCurrent(accountId, entry)) return;
+    // the broker refused this token: the backend marks it expired and answers refresh_needed,
+    // or hands out the pair someone already rotated (#281)
+    const token = await tokenFor(accountId, entry, hashToken(entry.token));
+    if (token === undefined) return;
     entry.refreshing = false;
-    if (!outcome.ok) {
-      drop(accountId, holdBackFor(accountId, outcome));
-      return;
-    }
     // the same token means the backend did not mark the refusal (#281); restarting with it at
     // once would loop user.auth against the broker's per-IP limit
-    if (outcome.accessToken === entry.token) {
+    if (token === entry.token) {
       logger.warn({ accountId, sessionState: state }, 'broker session token unchanged');
       drop(accountId, config.retryMs);
       return;
     }
     if (fencedNow(accountId, entry.lease)) return;
-    entry.token = outcome.accessToken;
+    entry.token = token;
     entry.verified = false;
-    startClient(entry, outcome.accessToken);
+    startClient(entry, token);
   }
 
   // a throw out of a token source or a client's start() is a bug by contract
@@ -576,21 +590,16 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     // the lease before the token: an account another process holds costs no token fetch
     const sentAt = now();
     let acquired: boolean | 'timeout';
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       // bounded like a renewal: the one-failed-renewal guarantee counts on it
-      acquired = await Promise.race([
+      acquired = await withTimeout(
         leases.acquire(accountId, config.leaseTtlMs),
-        new Promise<'timeout'>((resolve) => {
-          timeout = setTimeout(() => resolve('timeout'), config.leaseRenewTimeoutMs);
-        }),
-      ]);
+        config.leaseRenewTimeoutMs,
+      );
     } catch (error) {
       if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
       startFailed(accountId, error);
       return;
-    } finally {
-      clearTimeout(timeout);
     }
     if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
     // a late commit leaves our row, which lapses or which we take again
@@ -606,19 +615,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     }
     starting.lease = { until: sentAt + config.leaseFenceMs };
     armFence();
-    let outcome: AccessTokenOutcome;
-    try {
-      outcome = await fetchToken(accountId);
-    } catch (error) {
-      if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
-      startFailed(accountId, error);
-      return;
-    }
-    if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
-    if (!outcome.ok) {
-      drop(accountId, holdBackFor(accountId, outcome));
-      return;
-    }
+    const token = await tokenFor(accountId, starting);
+    if (token === undefined) return;
     // a stall can deliver the token before the overdue fence timer: no socket past the fence
     if (fencedNow(accountId, starting.lease)) return;
     const entry: RunningEntry = {
@@ -630,7 +628,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         logger: logger.child({ accountId }),
         timing: deps.timing,
       }),
-      token: outcome.accessToken,
+      token,
       verified: false,
       refreshing: false,
       warned: new Set(),
@@ -641,7 +639,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entries.set(accountId, entry);
     entry.client.onEvent((event) => onEvent(entry, event));
     entry.client.onState((change) => onState(entry, change));
-    startClient(entry, outcome.accessToken);
+    startClient(entry, token);
   }
 
   async function worker() {
@@ -803,13 +801,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         }),
       ),
     );
-    let budget: ReturnType<typeof setTimeout> | undefined;
-    const overrun = new Promise<'overrun'>((resolve) => {
-      budget = setTimeout(() => resolve('overrun'), config.stopBudgetMs);
-    });
-    const result = await Promise.race([settled, overrun]);
-    clearTimeout(budget);
-    if (result === 'overrun') logger.warn({ pending }, 'broker session stop budget exceeded');
+    const result = await withTimeout(settled, config.stopBudgetMs);
+    if (result === 'timeout') logger.warn({ pending }, 'broker session stop budget exceeded');
   }
 
   function clientFor(accountId: string): BrokerSocketClient | undefined {

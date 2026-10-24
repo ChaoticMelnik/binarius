@@ -209,13 +209,8 @@ export function createWorker({
             listSessionCandidates(db, { ...options, ownerId: sessionOwnerId }),
           tokens,
           writers: {
-            snapshot: (brokerAccountId, user, modes) =>
-              upsertBalanceSnapshot(db, {
-                brokerAccountId,
-                user,
-                requested: false,
-                eventAt: modes,
-              }),
+            snapshot: (brokerAccountId, user, eventAt) =>
+              upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false, eventAt }),
             balanceEvent: (brokerAccountId, mode, balance) =>
               applyBalanceEvent(db, { brokerAccountId, mode, balance }),
             closedTrades: async (brokerAccountId, trades) => {
