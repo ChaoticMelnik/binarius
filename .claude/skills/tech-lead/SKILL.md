@@ -37,7 +37,7 @@ Spawn prompt — every phase gets these, in this order:
 
 **Clarify relay.** Architect and implementer start with a clarify round only when they have a question (`.claude/CLAUDE.md` → Фазы и вопросы владельцу): the agent returns its questions and stops; with none it writes «развилок нет» in its hand-off and continues on its own. Tech-lead asks them in one `AskUserQuestion` call (at most 4 questions per call — the rest go in a second call, never replaced by the recommended default: #284's fifth question was relayed as a default, 2026-10-07), passing every option through unchanged, then continues the same agent with `SendMessage` carrying the answers (a fresh spawn with the answers in its prompt if the agent is gone). A question the agent marks as a plan defect goes to the architect for a Plan Update, not to the owner — and so does one whose text says the plan contradicts itself, even when the agent offers options (#590: such a question was relayed to the owner as a choice, 2026-10-17). Tech-lead's own clarify questions (Phase 0, merge, change of approach) follow the phases' rule: an option that depends on a tool or API capability is verified by a safe read-only probe before it is asked, and the action it proposes (a merge above all) is never performed before the answer (architect Step 5, implementer Step 0).
 
-**The main context runs no tests** (`.claude/CLAUDE.md` → Проверки, #511). Tech-lead does not run `pnpm check`, `pnpm test`/`typecheck`/`lint`, vitest, `tooling/mutations.ts` or a per-commit check; it reads the phases' hand-offs and `gh pr checks`. Where a rule needs a run (any rebase of a pushed branch — «A rebase of a pushed branch»), it goes to one implementer spawn (`model: "opus"`) with that narrow task. Not test runs, and done here: `pnpm db:migrate` of the shared database after a merge (Step 7), the Codex 6-pre runs and the whole-feature re-hash, and `git range-diff` on doubt about a rebase-only verdict («A rebase of a pushed branch»).
+**The main context runs no tests** (`.claude/CLAUDE.md` → Проверки, #511). Tech-lead does not run `pnpm check`, `pnpm test`/`typecheck`/`lint`, vitest, `tooling/mutations.ts` or a per-commit check; it reads the phases' hand-offs and `gh pr checks`. Where a rule needs a run (any rebase of a pushed branch — «A rebase of a pushed branch»), it goes to one implementer spawn (`model: "opus"`) with that narrow task. Not test runs, and done here: `pnpm db:migrate` of the shared database after a merge (Step 7), the Codex 6-pre runs and the whole-feature check, and `git range-diff` on doubt about a rebase-only verdict («A rebase of a pushed branch»).
 
 **Failed or stalled phase.** When a phase agent fails or stalls (e.g. the stream watchdog), first make sure it has ended — its task notification reports `completed` or `failed`; if it is still running, stop it (`TaskStop`) or continue it, never run a second agent beside it, since a live agent can still post after the check. Then check on GitHub what it already did — issue comments, Pipeline Status, pushed commits, PR state — against what it was supposed to return. Only the missing part is redone: continue the agent, or spawn a fresh one with the done parts named as done. A blind re-spawn duplicates a posted plan or a status change (#56: the architect stalled after posting its Plan Update).
 
@@ -137,28 +137,19 @@ At the end of a session, for its `audits.md` entry (Mode 2 → Phase 5), or when
 The reviewer's final Codex pass (Step 6-pre, `Whole-feature pass` marker) covered exactly the approved diff. A skip line instead of a run (in the review, the ready-to-merge comment, or tech-lead's PR comment from its own 6-pre run; texts in reviewer Step 6-pre item 4), by kind:
 - **Usage limit:** `node "$COMPANION" status <id> --json | jq -r '.job.status, .job.summary, (.job.progressPreview // [] | .[])'` prints `failed` and a summary or a `progressPreview` line matching `hit your usage limit` — the text can sit only in `progressPreview` while the summary holds Codex's first message (#668: job task-mvhvi7oq-7flfqh, 2026-10-21). If `status` answers "No job found" (the job was started from a review worktree that is gone, and jobs are keyed by working directory): `jq -r --arg id <id> '.jobs[]? | select(.id == $id) | .status, .summary' ~/.claude/plugins/data/codex-openai-codex/state/*/state.json`.
 - **The owner's skip** (by day, or after the failures of tech-lead's own 6-pre run): recorded as an owner-approved deviation, not a Major; its source is the `AskUserQuestion` answer in this session.
-- **A PR of a `/manager` session:** the manager line is the rule (`.claude/skills/manager/SKILL.md` → Правила ночи → «Codex ночью не запускается»), not a deviation; no run to re-hash.
+- **A PR of a `/manager` session:** the manager line is the rule (`.claude/skills/manager/SKILL.md` → Правила ночи → «Codex ночью не запускается»), not a deviation; no run to check.
 - **A Phase 5 session audit docs PR** (`docs/audit-*`): no run and no skip line by rule (Overview → Codex, #769); not a deviation.
 
-Anything else is a Major audit finding. Otherwise find the newest completed job with the marker and re-hash:
+Anything else is a Major audit finding. Otherwise check the run by its job id — the one in the reviewer's merge request, or tech-lead's own 6-pre run:
 
 ```bash
-PR=<N>
 COMPANION="$(jq -r '.plugins["codex@openai-codex"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/codex-companion.mjs"
-node "$COMPANION" status --all --json | jq -r --arg pr "$PR" \
-  '[.latestFinished, .recent[]?] | map(select(. != null and .status == "completed"
-      and ((.request.prompt // "") | test("^Whole-feature pass #" + $pr + ":"))))
-   | sort_by(.completedAt) | reverse | .[] | "\(.id) \(.completedAt) \(.request.prompt | split("\n")[0])"'
-# first line = the newest completed final pass: base=<b> head=<h> diff-sha256=<x>
-git fetch origin main
-git fetch origin <h>   # <h> may be an anchor force-pushed away: still fetchable by SHA (probe 2026-10-23, PR #760)
-git merge-base --is-ancestor <b> <h> && git merge-base --is-ancestor <b> origin/main && echo base-ok
-git diff --no-color --no-ext-diff <b> <h> | shasum -a 256        # must equal <x>
-gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid   # must equal <h>, or the last new-head of the chain whose anchor is <h>
-gh pr view $PR --repo ChaoticMelnik/binarius --json body --jq .body | grep -o -E 'range-diff: (только конфликты|изменения сверх конфликтов), [^ ]*'   # every link, oldest first; a «сверх» link ends the walk
+jq -r --arg id <job-id> '.jobs[]? | select(.id == $id) | .status, (.request.prompt | split("\n")[0])' ~/.claude/plugins/data/codex-openai-codex/state/*/state.json
+# completed
+# Whole-feature pass #<PR>: base=<b> head=<h> diff-sha256=<x>
 ```
 
-`<h>` must be the head the LGTM comment approved — at the round limit, the head round 3 reviewed; after tech-lead's own 6-pre run, that run's head — and the one that merged (the last line) — or, after «только конфликты» rebases, the anchor of their chain: each comment's `old-head` equals the previous one's `new-head`, and the last `new-head` merged — and `<b>` a `main` commit that `<h>` descends from. No marker, a different head, or a different hash is a Major audit finding; a broken chain (an `old-head` that is not the previous `new-head`) is one too. `status` lists only this Claude session's jobs and the companion keeps the newest 50 per workspace, so run this check in the session that ran the pipeline. Jobs are also keyed by working directory: a run started from a review worktree is listed only by `status` run from that worktree's path (or its state directory under `~/.claude/plugins/data/codex-openai-codex/state/`), so the reviewer returns the job id and tech-lead re-hashes from the marker (#306, 2026-10-07).
+The query reads every workspace's `state.json`, so it works from any directory and any session (`status <id> --json` answers "No job found" outside the job's working directory). `<h>` is the merged head (`gh pr view <N> --json headRefOid`), or the anchor («A rebase of a pushed branch»). No output, a status other than `completed`, no marker, or another head is a Major audit finding; with the head equal, the diff is the same, so no hash is recomputed.
 
 ### Audit proposals — check
 
@@ -171,36 +162,10 @@ Run only on the owner's request or on a suspicion of a substituted model — a h
 Each phase's spawn requested its policy model and ran on it. Every spawn, at any depth, leaves `subagents/agent-<agentId>.meta.json` (`model` = requested alias, `description`, `spawnDepth`, `toolUseId`, `parentAgentId`). The model the harness assigned (`resolvedModel`) is stored only in the root transcript, on the spawn's `tool_result`, and only for depth 1 once a result came back (`completed` or `async_launched`). The agent's own transcript names the model it actually ran on:
 
 ```bash
-S=~/.claude/projects/-Users-user-Documents-Binarius/<session-id>
-resolved=$(jq -c 'select(.toolUseResult.resolvedModel? != null)
-  | {id: (.message.content[] | select(.type == "tool_result") | .tool_use_id), m: .toolUseResult.resolvedModel}' "$S.jsonl")
-# only message.model is the model the agent ran on; a transcript also carries advisorModel
-# and attachment.model, and a plain grep for "model" reports those as extra ids (#68)
-ran() { jq -r 'select(.message.model != null) | .message.model' "$S/subagents/agent-$1.jsonl" | sort -u | tr '\n' ' '; }
-for m in "$S"/subagents/*.meta.json; do
-  id=$(basename "$m" .meta.json); id=${id#agent-}
-  depth=$(jq -r .spawnDepth "$m"); req=$(jq -r '.model // empty' "$m")
-  tu=$(jq -r '.toolUseId // empty' "$m"); parent=$(jq -r '.parentAgentId // empty' "$m")
-  if [ "$depth" -ge 2 ]; then res="not recorded at depth >= 2"
-  else
-    res=$(printf '%s\n' "$resolved" | jq -r --arg tu "$tu" 'select(.id == $tu) | .m' | head -1)
-    [ -n "$res" ] || res="no result record (continued via SendMessage or still running)"
-  fi
-  [ -n "$req" ] || req="inherited from parent $parent (parent ran $(ran "$parent"))"
-  printf '%s | depth %s | requested %s | resolved %s | ran %s\n' \
-    "$(jq -r '.description // "-"' "$m")" "$depth" "$req" "$res" "$(ran "$id")"
-done
+tooling/model-policy-check.sh <session-id>   # one line per spawn: description | depth | requested | resolved | ran
 ```
 
-Output of #56's own run (abridged):
-
-```
-Architect #56 research + questions | depth 1 | requested fable | resolved claude-fable-5-1 | ran claude-fable-5-1
-Reviewer #56 PR #61 | depth 1 | requested opus | resolved claude-opus-5-5[1m] | ran claude-opus-5-5
-Implementer #56 clarify round | depth 1 | requested opus | resolved no result record (continued via SendMessage or still running) | ran claude-opus-5-5
-Simplify review PR 61 | depth 2 | requested sonnet | resolved not recorded at depth >= 2 | ran claude-sonnet-5
-- | depth 3 | requested inherited from parent a04adae24974857c8 (parent ran claude-opus-5-5 ) | resolved not recorded at depth >= 2 | ran claude-opus-5-5
-```
+Usage, output columns and an example (#56) — the script header.
 
 Per row, comparing ids up to the first `[` (`[1m]` names the context-window variant, not a different model):
 - (a) `requested` is the policy alias for that phase or sub-tool;
@@ -319,38 +284,12 @@ Phase 0 runs once, before the session's first issue (owner's decision 2026-10-23
 3. **Project CLAUDE.md on main** — `git diff origin/main -- .claude/CLAUDE.md` must be empty: the harness loads whatever is checked out, and a waiver living only on an unmerged branch was once acted on for a day.
 4. **Runtimes** — every runtime the acceptance criteria exercise is available locally at CI's version: Node from `.node-version` (`eval "$(fnm env)" && fnm use`), Postgres/Redis (`docker compose ps`), Docker/Compose/buildx if the issue touches images or compose (checked per task, before the implementer spawn); CLI plugins match what CI uses.
 5. **Previous audit** — every proposal of the latest `audits.md` entry has a status (Phase 5 format). An unmarked proposal, or `открыто` without a date and owner, is reported to the owner as a warning before the pipeline starts; it does not stop the pipeline. Two more warnings, reported the same way and stopping nothing; Phase 5 records both (item 2a; owner's answers 2026-10-23, #769):
-   (a) a manager session that ended without its docs PR — its process is over (an archived `state-<start>.json`; or `state.json` with `ended` set, or failing manager Phase 0 step 1's RUNNING test), it started after PR #777 merged, it has no `audit_pr`, and no `## Сессия <its session> — manager` header is in `audits.md` on `origin/main` or in an open `docs/audit-*` PR:
+   (a) a manager session that ended without its docs PR — its process is over (an archived `state-<start>.json`; or `state.json` with `ended` set, or failing manager Phase 0 step 1's RUNNING test), it started after PR #777 merged, it has no `audit_pr`, and no `## Сессия <its session> — manager` header is in `audits.md` on `origin/main` or in an open `docs/audit-*` PR;
+   (b) a PR merged after PR #777, not on a `docs/audit-*` or `docs/<N>-audit` branch, that no `audits.md` on `origin/main` and no open `docs/audit-*` PR names as `#<number>`.
+
+   One run prints both, one line per finding (`LOST NIGHT: <session> (<file>)`, `UNRECORDED PR #<n>`):
    ```bash
-   R=ChaoticMelnik/binarius; T=$(mktemp -d)
-   ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)"); M=$ROOT/.claude/worktrees/manager
-   cut=$(gh pr view 777 --repo $R --json mergedAt --jq '.mergedAt // empty | fromdateiso8601')
-   if [ -z "$cut" ]; then echo "lost-night check skipped: #777 not merged, no cutoff"; else
-   git show origin/main:audits.md > "$T/main.md"
-   gh pr list --repo $R --state open --limit 100 --json number,headRefName --jq '.[] | select(.headRefName | startswith("docs/audit-")) | .number' |
-     while read -r n; do gh pr diff "$n" --repo $R; done > "$T/open.diff"
-   find "$M" -maxdepth 1 -name 'state*.json' 2>/dev/null | while read -r S; do
-     [ "$(jq -r .start "$S")" -gt "$cut" ] && [ -z "$(jq -r '.audit_pr // empty' "$S")" ] || continue
-     pid=$(jq -r .pid "$S"); dl=$(jq -r .deadline "$S"); sess=$(jq -r .session "$S")
-     if [ "$(basename "$S")" = state.json ] && [ -z "$(jq -r '.ended // empty' "$S")" ] \
-        && kill -0 "$pid" 2>/dev/null && ps -o comm= -p "$pid" | grep -q claude \
-        && [ "$(date -u +%s)" -lt $(( dl + (150 + 30) * 60 )) ]; then continue; fi   # still running
-     h="## Сессия $sess — manager"
-     grep -qF "$h" "$T/main.md" || grep -qF "+$h" "$T/open.diff" || echo "LOST NIGHT: $sess ($(basename "$S"))"
-   done
-   echo "lost-night check done (cutoff $cut)"; fi
-   ```
-   (b) a PR merged after PR #777, not on a `docs/audit-*` or `docs/<N>-audit` branch, that no `audits.md` on `origin/main` and no open `docs/audit-*` PR names as `#<number>`:
-   ```bash
-   R=ChaoticMelnik/binarius; T=$(mktemp -d)
-   cut=$(gh pr view 777 --repo $R --json mergedAt --jq '.mergedAt // empty')
-   if [ -z "$cut" ]; then echo "orphan check skipped: #777 not merged, no cutoff"; else
-   git show origin/main:audits.md > "$T/main.md"
-   gh pr list --repo $R --state open --limit 100 --json number,headRefName --jq '.[] | select(.headRefName | startswith("docs/audit-")) | .number' |
-     while read -r n; do gh pr diff "$n" --repo $R; done > "$T/open.diff"
-   gh pr list --repo $R --state merged --limit 100 --json number,headRefName,mergedAt \
-     --jq '.[] | select(.mergedAt > "'"$cut"'") | select(.headRefName | test("^docs/(audit-|[0-9]+-audit)") | not) | .number' |
-     while read -r n; do grep -qE "#$n([^0-9]|$)" "$T/main.md" "$T/open.diff" || echo "UNRECORDED PR #$n"; done
-   echo "orphan check done (cutoff $cut)"; fi
+   tooling/audit-gaps.sh
    ```
 6. **Model limits** (owner's decision 2026-10-14) — before a Fable spawn: если за последние 7 дней в транскриптах проекта был отказ лимита Fable (`find ~/.claude/projects/-Users-user-Documents-Binarius -name '*.jsonl' -mtime -7 -print0 | xargs -0 jq -r 'select(.message.model? == "<synthetic>") | select([.message.content[]? | select(.type == "text") | .text] | join(" ") | test("Fable limit")) | .timestamp' 2>/dev/null | sort | tail -1` печатает время последнего отказа; простой `grep` по тексту отказа совпадает с этой строкой, загруженной в каждую сессию, и печатает что-то всегда — 47 файлов за неделю при последнем отказе 2026-10-10, #511) и владелец не сообщил о сбросе — первичный план сразу на `opus` со строкой «план на Opus (лимит Fable <дата>)», без попытки на Fable и без вопроса (так владелец решал каждый раз: 2026-10-07, 2026-10-10). Не больше трёх Opus-фаз одновременно (Step 7).
 
