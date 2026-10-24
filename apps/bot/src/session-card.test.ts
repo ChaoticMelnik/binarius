@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOT_TEXT_CATALOG,
+  BotLanguage,
   decimalStringSchema,
   defaultBotTextSource,
   MAX_SESSION_SUMMARY_TRADES,
@@ -15,6 +16,7 @@ import {
   sessionCardModel,
   sessionCardSvg,
 } from './session-card';
+import { runWithLanguage } from './language';
 import { setBotTextSource } from './texts';
 
 const d = (value: string) => decimalStringSchema.parse(value);
@@ -184,6 +186,31 @@ const IHDR = (png: Buffer) => ({
   chunk: png.subarray(12, 16).toString('ascii'),
   width: png.readUInt32BE(16),
   height: png.readUInt32BE(20),
+});
+
+describe('the summary card in English (#633)', () => {
+  it('C-en draws every word of the card in English', () => {
+    const svg = runWithLanguage(BotLanguage.En, () =>
+      sessionCardSvg(sessionCardModel(MIXED, LABEL, 42)),
+    );
+    expect(textsOf(svg)).toEqual([
+      'EUR/USD',
+      'SESSION COMPLETED',
+      'RESULT',
+      '-$0.15',
+      'Trade 1',
+      '+$0.85',
+      'Trade 2',
+      '-$1.00',
+      'Trade 3',
+      '$0.00',
+      'Entry',
+      'Win',
+      'Loss',
+      'Tie',
+      '3 trades · 1 won, 1 lost, 1 tied',
+    ]);
+  });
 });
 
 describe('renderSessionCard', () => {

@@ -269,6 +269,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         claim,
         settings,
         pairOf(catalog.read(), claim.trades.at(-1)?.assetId ?? 0).digits,
+        session.language,
       );
     } catch (error) {
       // a bug: the claimed trade is not sent again, the session waits for the next tick
@@ -313,6 +314,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         claim,
         settings,
         pairOf(catalog.read(), claim.open.assetId).digits,
+        session.language,
       );
     } catch (error) {
       // a bug: the block is not sent again, its trade's result comes by the cursor
@@ -328,7 +330,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       release: () => releaseSessionOpenNotice(db, { sessionId: session.sessionId, intentId }),
       // a session the list read stopped gets no «⏹»: a stop after the read reaches the bot's 409
       ...(session.status === TradingSessionStatus.Active
-        ? { keyboard: sessionCycleStopKeyboard(session.sessionId) }
+        ? { keyboard: sessionCycleStopKeyboard(session.sessionId, session.language) }
         : {}),
     });
   }
@@ -595,7 +597,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     try {
       messageId = await push.sendSessionWaiting(
         session.telegramUserId,
-        sessionWaitingMessage(session.sessionId),
+        sessionWaitingMessage(session.sessionId, session.language),
       );
       messaged(session.telegramUserId);
     } catch (error) {
@@ -677,7 +679,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     let message: ClientPushMessage;
     try {
       const assetId = view.settings?.assetId ?? view.lastIntent?.assetId ?? 0;
-      message = sessionSummaryMessage(view, pairOf(catalog.read(), assetId).label);
+      message = sessionSummaryMessage(
+        view,
+        pairOf(catalog.read(), assetId).label,
+        session.language,
+      );
     } catch (error) {
       logger.error({ ...fields, ...errorLogFields(error) }, 'session summary not built');
       await claimSummaryFallback(db, { sessionId });

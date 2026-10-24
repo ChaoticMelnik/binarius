@@ -4,6 +4,7 @@ import {
   createWindow,
   type RateWindow,
   BrokerAccountStatus,
+  DEFAULT_BOT_LANGUAGE,
   errorIdentity,
   errorLogFields,
   LinkBonusSkipReason,
@@ -22,6 +23,7 @@ import {
   hashToken,
   isUserBlocked,
   linkBrokerAccount,
+  readUserLanguage,
   toBrokerAccountView,
   toLinkBonusGrantView,
   type BrokerAccountRow,
@@ -87,14 +89,16 @@ export interface AuthRoutesDeps {
 export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) => {
   // One attempt, after the link has committed and outside any transaction. Its outcome never
   // changes the response: a push that never arrives is made up for by the confirm button on the
-  // user's next /start (#10). A 403 writes one fact, the Telegram block (#119).
+  // user's next /start (#10). A 403 writes one fact, the Telegram block (#119). The push is in the
+  // user's language (#633), Russian without a users row; a failed read is a push not sent.
   const push = async (
     log: FastifyBaseLogger,
     telegramUserId: bigint,
     outcome: LinkPushOutcome,
   ): Promise<void> => {
     try {
-      await deps.clientPush.sendLink(telegramUserId, outcome);
+      const language = (await readUserLanguage(deps.db, telegramUserId)) ?? DEFAULT_BOT_LANGUAGE;
+      await deps.clientPush.sendLink(telegramUserId, language, outcome);
     } catch (error) {
       // identity only: grammY's HttpError wraps a message with the token in its URL, and the
       // payload holds the email on the button

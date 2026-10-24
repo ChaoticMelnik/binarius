@@ -3,7 +3,9 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import {
+  BotLanguage,
   AccountHaltReason,
+  BOT_TEXT_SOURCES_EN,
   confirmLoginResponseSchema,
   emailLoginResponseSchema,
   INIT_DATA_MAX_LENGTH,
@@ -52,7 +54,7 @@ import { createClientPush } from './client-push';
 import { INIT_DATA_MAX_AGE_MS, OAUTH_STATE_TTL_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
-import { CLIENT_LABELS, CLIENT_TEXTS } from './texts';
+import { clientLabelsOf, clientTextsOf } from './texts';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -62,6 +64,10 @@ import {
   unusedSignalsDeps,
 } from '../trading/testing';
 import { unusedDepositDeps } from '../deposit/testing';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -637,7 +643,7 @@ describe('the Telegram proof on the callback', () => {
     expect(stub.tokenRequests).toBe(before);
     expect(await accountsOf(`broker-${owner}`)).toEqual([]);
     expect(pushesTo(owner).map((push) => [pushedText(push), inlineButtons(push)])).toEqual([
-      [CLIENT_TEXTS.oauthLoginFailed.value, CONNECT_AGAIN],
+      [RU_TEXTS.oauthLoginFailed.value, CONNECT_AGAIN],
     ]);
     expect(pushesTo(other)).toEqual([]);
   });
@@ -883,8 +889,8 @@ describe('secrecy', () => {
 
 // #350: a failed login's push offers connecting again and the menu
 const CONNECT_AGAIN = [
-  { text: CLIENT_LABELS.connectButton, callback_data: 'connect' },
-  { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+  { text: RU_LABELS.connectButton, callback_data: 'connect' },
+  { text: RU_LABELS.menuButton, callback_data: 'menu' },
 ];
 
 const pushesTo = (telegramUserId: string, captured = pushApi) =>
@@ -901,7 +907,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(1);
-    expect(pushedText(pushes[0])).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(pushes[0])).toBe(RU_TEXTS.confirmPrompt.value);
     expect(pushes[0]?.parse_mode).toBe('HTML');
     expect(inlineButtons(pushes[0])).toEqual([
       {
@@ -937,7 +943,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(2);
-    expect(pushedText(pushes[1])).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(pushes[1])).toBe(RU_TEXTS.confirmPrompt.value);
     expect(inlineButtons(pushes[1])).toHaveLength(1);
   });
 
@@ -954,12 +960,43 @@ describe('the push after the callback', () => {
       const pushes = pushesTo(telegram);
       expect(pushes).toHaveLength(2);
       const { email } = (again.response.json() as { account: { email: string | null } }).account;
-      expect(pushedText(pushes[1])).toBe(CLIENT_TEXTS.linkedActive({ email }).value);
+      expect(pushedText(pushes[1])).toBe(RU_TEXTS.linkedActive({ email }).value);
       expect(inlineButtons(pushes[1])).toEqual([
-        { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+        { text: RU_LABELS.demoButton, callback_data: 'demo' },
       ]);
     },
   );
+
+  // #633: the push is in the user's language, read with the user at the push
+  it('A-lang pushes in English to a user whose language is English', async () => {
+    const telegram = telegramId();
+    const first = await login(telegram, `broker-${telegram}`);
+    expect(pushedText(pushesTo(telegram)[0])).toBe(RU_TEXTS.confirmPrompt.value);
+    await tmp.db
+      .update(users)
+      .set({ language: BotLanguage.En })
+      .where(eq(users.telegramUserId, BigInt(telegram)));
+
+    await login(telegram, `broker-${telegram}`);
+    const pending = pushesTo(telegram)[1];
+    expect(pushedText(pending)).toBe(BOT_TEXT_SOURCES_EN.confirmPrompt);
+    expect(inlineButtons(pending)[0]?.text).toBe(
+      `✅ Confirm: broker-${telegram}@example.test`,
+    );
+
+    const accountId = (first.response.json() as { account: { id: string } }).account.id;
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: 'active' })
+      .where(eq(brokerAccounts.id, accountId));
+    const again = await login(telegram, `broker-${telegram}`);
+    const { email } = (again.response.json() as { account: { email: string | null } }).account;
+    const active = pushesTo(telegram)[2];
+    expect(pushedText(active)).toBe(clientTextsOf(BotLanguage.En).linkedActive({ email }).value);
+    expect(inlineButtons(active)).toEqual([
+      { text: BOT_TEXT_SOURCES_EN.demoButton, callback_data: 'demo' },
+    ]);
+  });
 
   it('tells the user who started the login, not the owner, that the account is taken', async () => {
     const owner = telegramId();
@@ -970,7 +1007,7 @@ describe('the push after the callback', () => {
     expect(response.statusCode).toBe(409);
 
     expect(pushesTo(intruder).map((push) => [pushedText(push), inlineButtons(push)])).toEqual([
-      [CLIENT_TEXTS.accountTaken.value, CONNECT_AGAIN],
+      [RU_TEXTS.accountTaken.value, CONNECT_AGAIN],
     ]);
     // the owner heard only about their own login
     expect(pushesTo(owner)).toHaveLength(1);
@@ -990,7 +1027,7 @@ describe('the push after the callback', () => {
     });
     expect(response.statusCode).toBe(409);
     expect(pushesTo(seeded.telegramUserId).map((push) => pushedText(push))).toEqual([
-      CLIENT_TEXTS.blocked.value,
+      RU_TEXTS.blocked.value,
     ]);
   });
 
@@ -1001,7 +1038,7 @@ describe('the push after the callback', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'invalid_code' });
     expect(pushesTo(telegram).map((push) => pushedText(push))).toEqual([
-      CLIENT_TEXTS.oauthLoginFailed.value,
+      RU_TEXTS.oauthLoginFailed.value,
     ]);
   });
 
@@ -1021,7 +1058,7 @@ describe('the push after the callback', () => {
       await instance.close();
     }
     expect(pushesTo(telegram).map((push) => pushedText(push))).toEqual([
-      CLIENT_TEXTS.oauthLoginFailed.value,
+      RU_TEXTS.oauthLoginFailed.value,
     ]);
   });
 
@@ -1812,7 +1849,7 @@ describe('the inviter’s reward', () => {
     expect(body).toMatchObject({ account: { id: accountId, status: 'active' } });
     const { email } = (body as { account: { email: string | null } }).account;
     expect(pushedText(pushesTo(inviteeTelegram).at(-1))).toBe(
-      CLIENT_TEXTS.linkedActive({ email }).value,
+      RU_TEXTS.linkedActive({ email }).value,
     );
     expect(referralLines(logs)).toEqual([rewarded(referralId, inviterId)]);
     expect(

@@ -3380,7 +3380,7 @@ ${BOT_TEXT_SOURCES_EN.cycleStakeChoose}`,
       ),
     );
     expect(plainTextOf(card?.caption as string)).toContain(
-      BOT_TEXT_SOURCES_EN.analysisCardUp?.replace(/<\/?b>/g, ''),
+      BOT_TEXT_SOURCES_EN.analysisCardUp.replace(/<\/?b>/g, ''),
     );
 
     await press(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Demo));

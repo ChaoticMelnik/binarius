@@ -4,6 +4,7 @@ import {
   TradeMode,
   UserStatus,
   isBalanceFresh,
+  type BotLanguage,
   type BrokerBalance,
   type BrokerBalanceView,
   type BrokerUser,
@@ -418,6 +419,8 @@ export interface BalanceAccount {
   brokerUserId: string;
   accessTokenExpiresAt: Date;
   userStatus: UserStatus;
+  // the user's language, for a push about this account (#633)
+  language: BotLanguage;
 }
 
 export type BalanceAccountResolution =
@@ -443,6 +446,7 @@ export async function resolveBalanceAccount(
   const rows = await db
     .select({
       userStatus: users.status,
+      language: users.language,
       id: brokerAccounts.id,
       status: brokerAccounts.status,
       brokerUserId: brokerAccounts.brokerUserId,
@@ -456,12 +460,12 @@ export async function resolveBalanceAccount(
   const [first, second] = rows;
   if (first === undefined) return { kind: 'no_user' };
   if (second !== undefined) return { kind: 'ambiguous' };
-  const { id, status, brokerUserId, accessTokenExpiresAt, userStatus } = first;
+  const { id, status, brokerUserId, accessTokenExpiresAt, userStatus, language } = first;
   if (id === null || status === null || brokerUserId === null || accessTokenExpiresAt === null) {
     return { kind: brokerAccountId === undefined ? 'no_account' : 'not_found' };
   }
   return {
     kind: 'account',
-    account: { id, status, brokerUserId, accessTokenExpiresAt, userStatus },
+    account: { id, status, brokerUserId, accessTokenExpiresAt, userStatus, language },
   };
 }

@@ -1,3 +1,4 @@
+import { BotLanguage } from './bot-language';
 import { formatPrice, formatUsd } from './bot-text-format';
 import type { PairLabel } from './catalog';
 import type { BotHtmlTexts, BotPlainTexts, BotStaticHtmlKey } from './bot-texts';
@@ -98,22 +99,37 @@ export interface SessionOpenNotice {
   adaptiveLine: AdaptiveLineSlot | null;
 }
 
-// The Russian plural form after a number: one for 1, 21, …; few for 2-4, 22-24, …; many
-// otherwise. A form, not its text: only the text printed is read from the catalog (Rule 30).
+// The plural form after a number, by the language of the texts (#633). Russian: one for 1, 21, …;
+// few for 2-4, 22-24, …; many otherwise. English: one for 1, many otherwise - its few words equal
+// its many words in the catalog, so few is never chosen. A form, not its text: only the text
+// printed is read from the catalog (Rule 30). No Intl.PluralRules: a small-icu Node would fall back
+// to the English rules for Russian unnoticed.
 const PluralForm = { One: 0, Few: 1, Many: 2 } as const;
 type PluralForm = (typeof PluralForm)[keyof typeof PluralForm];
-function pluralFormOf(count: number): PluralForm {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return PluralForm.One;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return PluralForm.Few;
-  return PluralForm.Many;
-}
+const PLURAL_RULES: Record<BotLanguage, (count: number) => PluralForm> = {
+  [BotLanguage.Ru]: (count) => {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return PluralForm.One;
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return PluralForm.Few;
+    return PluralForm.Many;
+  },
+  [BotLanguage.En]: (count) => (count === 1 ? PluralForm.One : PluralForm.Many),
+};
 
 const priceOf = (value: number, digits: number | null): string =>
   digits === null ? String(value) : formatPrice(value, digits);
 
-export function createSessionTexts({ html, plain }: { html: BotHtmlTexts; plain: BotPlainTexts }) {
+export function createSessionTexts({
+  html,
+  plain,
+  language,
+}: {
+  html: BotHtmlTexts;
+  plain: BotPlainTexts;
+  language: BotLanguage;
+}) {
+  const pluralFormOf = PLURAL_RULES[language];
   // «сделка», «сделки» or «сделок» after the number
   const pluralTrades = (count: number): string => {
     const form = pluralFormOf(count);

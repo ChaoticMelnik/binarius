@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOT_TEXT_CATALOG,
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   decimalStringSchema,
   defaultBotTextSource,
   formatPaymentDate,
@@ -19,6 +21,7 @@ import {
   sessionPromoModel,
   sessionPromoSvg,
 } from './session-promo';
+import { runWithLanguage } from './language';
 import { setBotTextSource } from './texts';
 
 const { Up, Down } = TradeAction;
@@ -108,6 +111,22 @@ describe('sessionPromoModel', () => {
   });
 });
 
+describe('the promo card in English (#633)', () => {
+  it('P-en1 the English badge, labels and the end time in MSK', () => {
+    const model = runWithLanguage(BotLanguage.En, () =>
+      sessionPromoModel(MIXED, viewOf('-0.15000000'), 42),
+    );
+    expect(model).toMatchObject({
+      directionLabel: 'UP',
+      resultLabel: BOT_TEXT_SOURCES_EN.sessionPromoResult,
+      call: BOT_TEXT_SOURCES_EN.sessionPromoCall,
+      when: '12.10.2026 21:32 MSK',
+    });
+    const svg = runWithLanguage(BotLanguage.En, () => sessionPromoSvg(model));
+    for (const text of textsOf(svg)) expect(text).not.toMatch(/[А-Яа-яЁё]/u);
+  });
+});
+
 describe('sessionPromoSvg', () => {
   it('P3 the line through every entry and exit, markers by outcome, the badge and the texts', () => {
     const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('-0.15000000'), 42));
@@ -153,6 +172,19 @@ describe('sessionPromoSvg', () => {
     expect(width()).toBeGreaterThan(base);
     overrides.sessionPromoUp = 'В';
     expect(width()).toBe(base);
+  });
+
+  // #633: the English words are shorter than the Russian default the badge is sized on
+  it('P3d an English badge keeps the width of the Russian default, up and down alike', () => {
+    const widthOf = (trades: SessionShareTrade[]) =>
+      Number(
+        badgeOf(sessionPromoSvg(sessionPromoModel({ ...MIXED, trades }, viewOf('1'), 42)))?.[2],
+      );
+    const base = widthOf(MIXED.trades);
+    runWithLanguage(BotLanguage.En, () => {
+      expect(widthOf(MIXED.trades)).toBe(base);
+      expect(widthOf([trade(Down, '1')])).toBe(base);
+    });
   });
 
   it('P3c an override with markup is escaped, not drawn as SVG', () => {

@@ -25,7 +25,12 @@ import {
   type BalanceSnapshotRead,
 } from './balance-snapshot-ops';
 import type { Db } from './client';
-import { BalanceRefreshError, brokerAccounts, brokerBalanceSnapshots } from './schema/index';
+import {
+  BalanceRefreshError,
+  brokerAccounts,
+  brokerBalanceSnapshots,
+  users,
+} from './schema/index';
 import {
   createTempDatabase,
   seedBrokerAccount,
@@ -745,8 +750,17 @@ describe('resolveBalanceAccount', () => {
         brokerUserId: 'broker-resolve-1',
         accessTokenExpiresAt: expiresAt,
         userStatus: 'blocked',
+        language: 'ru',
       },
     });
+  });
+
+  it('carries the user’s language for a push about the account (#633)', async () => {
+    const user = await seedUser(tmp.db);
+    await seedBrokerAccount(tmp.db, user.userId);
+    await tmp.db.update(users).set({ language: 'en' }).where(eq(users.id, user.userId));
+    const resolved = await resolve(user.telegramUserId);
+    expect(resolved.kind === 'account' ? resolved.account.language : undefined).toBe('en');
   });
 
   it('refuses to guess between two active accounts', async () => {

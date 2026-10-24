@@ -5,9 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BotLanguage,
   BOT_MESSAGE_SPACER,
   ButtonRole,
+  BOT_TEXT_SOURCES_EN,
   callbackButton,
+  confirmButtonLabel,
   defaultBotTextSource,
   keyboardOf,
   formatUsd,
@@ -35,7 +38,11 @@ import {
   sessionCycleStopKeyboard,
   sessionWaitingMessage,
 } from '../trading/session-notice-messages';
-import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from './texts';
+import { clientLabelsOf, clientTextsOf, setBotTextSource } from './texts';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const TOKEN = '123456:AA-link-push-token';
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
@@ -65,9 +72,61 @@ describe('the text source', () => {
       sourceOf: (key) =>
         key === 'blocked' ? '<b>ЗАГЛУШКА blocked</b>' : defaultBotTextSource.sourceOf(key),
     });
-    expect(linkPushMessage({ kind: LinkPushKind.Blocked }).text.value).toBe(
+    expect(linkPushMessage({ kind: LinkPushKind.Blocked }, BotLanguage.Ru).text.value).toBe(
       '<b>ЗАГЛУШКА blocked</b>',
     );
+  });
+});
+
+// #633: every push of this seam in the recipient's language
+describe('the pushes in English (#633)', () => {
+  const En = BotLanguage.En;
+  const EN_TEXTS = clientTextsOf(En);
+  const EN_LABELS = clientLabelsOf(En);
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const labelsOf = (message: { reply_markup: unknown }) =>
+    inlineButtons({ reply_markup: message.reply_markup }).map((button) => button.text);
+  const OUTCOMES: LinkPushOutcome[] = [
+    { kind: LinkPushKind.Pending, account: { id: ACCOUNT_ID, email: 'ada@example.test' } },
+    { kind: LinkPushKind.Active, email: 'ada@example.test' },
+    { kind: LinkPushKind.Blocked },
+    { kind: LinkPushKind.Taken },
+    { kind: LinkPushKind.ExchangeFailed },
+    { kind: LinkPushKind.Mismatch },
+  ];
+
+  it.each(OUTCOMES.map((outcome) => [outcome.kind, outcome] as const))(
+    'C-lang1 the link push %s: the English text and labels',
+    (_kind, outcome) => {
+      const message = linkPushMessage(outcome, En);
+      expect(message.text.value).not.toMatch(CYRILLIC);
+      for (const label of labelsOf(message)) expect(label).not.toMatch(CYRILLIC);
+    },
+  );
+
+  it('C-lang1 the pending push asks in English with the English confirm label', () => {
+    const message = linkPushMessage(OUTCOMES[0]!, En);
+    expect(message.text.value).toBe(BOT_TEXT_SOURCES_EN.confirmPrompt);
+    expect(labelsOf(message)).toEqual([confirmButtonLabel(EN_LABELS, 'ada@example.test')]);
+    expect(linkPushMessage({ kind: LinkPushKind.Taken }, En).text).toBe(EN_TEXTS.accountTaken);
+    expect(labelsOf(linkPushMessage({ kind: LinkPushKind.Taken }, En))).toEqual([
+      EN_LABELS.connectButton,
+      EN_LABELS.menuButton,
+    ]);
+  });
+
+  it('C-lang2 the deposit push: the English text and the English menu label', () => {
+    const message = depositCreditedMessage(null, En);
+    expect(message.text.value).toBe(EN_TEXTS.depositCredited({ realBalance: null }).value);
+    expect(message.text.value).not.toMatch(CYRILLIC);
+    expect(labelsOf(message)).toEqual([BOT_TEXT_SOURCES_EN.menuButton]);
+  });
+
+  it('C-lang3 sendLink sends the English confirm prompt', async () => {
+    const notifier = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(notifier);
+    await notifier.sendLink(TELEGRAM_USER_ID, En, OUTCOMES[0]!);
+    expect(pushedText(sentPayload(calls, 'sendMessage'))).toBe(BOT_TEXT_SOURCES_EN.confirmPrompt);
   });
 });
 
@@ -75,7 +134,7 @@ describe('the link push message', () => {
   const sent = async (outcome: LinkPushOutcome) => {
     const notifier = createClientPush({ token: TOKEN });
     const { calls } = captureApi(notifier);
-    await notifier.sendLink(TELEGRAM_USER_ID, outcome);
+    await notifier.sendLink(TELEGRAM_USER_ID, BotLanguage.Ru, outcome);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.chat_id).toBe('9007199254740993');
@@ -88,7 +147,7 @@ describe('the link push message', () => {
       kind: LinkPushKind.Pending,
       account: { id: ACCOUNT_ID, email: 'ada@example.test' },
     });
-    expect(pushedText(payload)).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(payload)).toBe(RU_TEXTS.confirmPrompt.value);
     expect(inlineButtons(payload)).toEqual([
       { text: '✅ Подтвердить: ada@example.test', callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
@@ -112,22 +171,18 @@ describe('the link push message', () => {
     expect(inlineButtons(payload)).toEqual([
       { text: `✅ Подтвердить: ${email}`, callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
-    expect(pushedText(payload)).toBe(CLIENT_TEXTS.confirmPrompt.value);
+    expect(pushedText(payload)).toBe(RU_TEXTS.confirmPrompt.value);
   });
 
   // #350: every push has its next step, the bot's own buttons
   const CONNECT_AGAIN = [
-    { text: CLIENT_LABELS.connectButton, callback_data: 'connect' },
-    { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+    { text: RU_LABELS.connectButton, callback_data: 'connect' },
+    { text: RU_LABELS.menuButton, callback_data: 'menu' },
   ];
   it('sends active with the account address in its text, and the demo button', async () => {
     const payload = await sent({ kind: LinkPushKind.Active, email: 'ada@example.test' });
-    expect(pushedText(payload)).toBe(
-      CLIENT_TEXTS.linkedActive({ email: 'ada@example.test' }).value,
-    );
-    expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
-    ]);
+    expect(pushedText(payload)).toBe(RU_TEXTS.linkedActive({ email: 'ada@example.test' }).value);
+    expect(inlineButtons(payload)).toEqual([{ text: RU_LABELS.demoButton, callback_data: 'demo' }]);
   });
 
   // #358 P1: the address an overridden text holds, or its stand-in
@@ -149,12 +204,12 @@ describe('the link push message', () => {
   it.each([
     [
       LinkPushKind.Blocked,
-      CLIENT_TEXTS.blocked,
-      [{ text: CLIENT_LABELS.supportButton, url: 'https://t.me/dimmelya' }],
+      RU_TEXTS.blocked,
+      [{ text: RU_LABELS.supportButton, url: 'https://t.me/dimmelya' }],
     ],
-    [LinkPushKind.Taken, CLIENT_TEXTS.accountTaken, CONNECT_AGAIN],
-    [LinkPushKind.ExchangeFailed, CLIENT_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
-    [LinkPushKind.Mismatch, CLIENT_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
+    [LinkPushKind.Taken, RU_TEXTS.accountTaken, CONNECT_AGAIN],
+    [LinkPushKind.ExchangeFailed, RU_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
+    [LinkPushKind.Mismatch, RU_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
   ] as const)('sends %s with its next step', async (kind, text, buttons) => {
     const payload = await sent({ kind });
     expect(pushedText(payload)).toBe(text.value);
@@ -167,7 +222,7 @@ describe('the mailing push', () => {
     const push = createClientPush({ token: TOKEN });
     const { calls } = captureApi(push);
     const reply_markup = keyboardOf([
-      callbackButton(ButtonRole.Forward, CLIENT_LABELS.demoButton, 'demo'),
+      callbackButton(ButtonRole.Forward, RU_LABELS.demoButton, 'demo'),
     ]);
     await push.sendMailing(TELEGRAM_USER_ID, {
       text: telegramHtml`<b>a &amp; b</b>`,
@@ -178,9 +233,7 @@ describe('the mailing push', () => {
     expect(payload?.chat_id).toBe('9007199254740993');
     expect(payload?.parse_mode).toBe('HTML');
     expect(pushedText(payload)).toBe('<b>a &amp; b</b>');
-    expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
-    ]);
+    expect(inlineButtons(payload)).toEqual([{ text: RU_LABELS.demoButton, callback_data: 'demo' }]);
   });
 });
 
@@ -220,12 +273,12 @@ describe('the session notices (#464)', () => {
     const push = createClientPush({ token: TOKEN });
     const { calls, answers } = captureApi(push);
     answers.set('sendMessage', () => ({ message_id: 4242 }));
-    const reply_markup = sessionCycleStopKeyboard(SESSION_ID);
+    const reply_markup = sessionCycleStopKeyboard(SESSION_ID, BotLanguage.Ru);
     await push.sendSessionTrade(TELEGRAM_USER_ID, telegramHtml`<b>open</b>`, reply_markup);
     await push.editSessionTrade(TELEGRAM_USER_ID, 4242, telegramHtml`<b>open</b>`, reply_markup);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage', 'editMessageText']);
     const stop = [
-      { text: CLIENT_LABELS.sessionStopButton, callback_data: `session:stop:${SESSION_ID}:c` },
+      { text: RU_LABELS.sessionStopButton, callback_data: `session:stop:${SESSION_ID}:c` },
     ];
     expect(inlineButtons(sentPayload(calls, 'sendMessage'))).toEqual(stop);
     expect(inlineButtons(sentPayload(calls, 'editMessageText'))).toEqual(stop);
@@ -235,15 +288,11 @@ describe('the session notices (#464)', () => {
   it('sends the summary with its keyboard and with sound', async () => {
     const push = createClientPush({ token: TOKEN });
     const { calls } = captureApi(push);
-    const reply_markup = keyboardOf([
-      callbackButton(ButtonRole.Nav, CLIENT_LABELS.menuButton, 'menu'),
-    ]);
+    const reply_markup = keyboardOf([callbackButton(ButtonRole.Nav, RU_LABELS.menuButton, 'menu')]);
     await push.sendSessionSummary(TELEGRAM_USER_ID, { text: telegramHtml`итог`, reply_markup });
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.disable_notification).toBeUndefined();
-    expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
-    ]);
+    expect(inlineButtons(payload)).toEqual([{ text: RU_LABELS.menuButton, callback_data: 'menu' }]);
   });
 });
 
@@ -253,7 +302,7 @@ describe('the waiting message (#536)', () => {
     const { calls, answers } = captureApi(push);
     answers.set('sendMessage', () => ({ message_id: 4243 }));
     const reply_markup = keyboardOf([
-      callbackButton(ButtonRole.Danger, CLIENT_LABELS.sessionStopButton, 'session:x'),
+      callbackButton(ButtonRole.Danger, RU_LABELS.sessionStopButton, 'session:x'),
     ]);
     expect(
       await push.sendSessionWaiting(TELEGRAM_USER_ID, {
@@ -270,7 +319,7 @@ describe('the waiting message (#536)', () => {
       disable_notification: true,
     });
     expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.sessionStopButton, callback_data: 'session:x' },
+      { text: RU_LABELS.sessionStopButton, callback_data: 'session:x' },
     ]);
   });
 
@@ -288,17 +337,15 @@ describe('the waiting message (#536)', () => {
 
 describe('the deposit push', () => {
   const money = (value: string) => value as DecimalString;
-  const sent = async (balance: Parameters<ClientPush['sendDepositCredited']>[1]) => {
+  const sent = async (balance: Parameters<ClientPush['sendDepositCredited']>[2]) => {
     const push = createClientPush({ token: TOKEN });
     const { calls } = captureApi(push);
-    await push.sendDepositCredited(TELEGRAM_USER_ID, balance);
+    await push.sendDepositCredited(TELEGRAM_USER_ID, BotLanguage.Ru, balance);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.chat_id).toBe('9007199254740993');
     expect(payload?.parse_mode).toBe('HTML');
-    expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
-    ]);
+    expect(inlineButtons(payload)).toEqual([{ text: RU_LABELS.menuButton, callback_data: 'menu' }]);
     return payload;
   };
 
@@ -313,8 +360,7 @@ describe('the deposit push', () => {
   it('says there is no fresh data for a stale or missing snapshot', async () => {
     const stale = await sent({ amount: money('1234.5'), fresh: false });
     expect(pushedText(stale)).toBe(
-      CLIENT_TEXTS.depositCredited({ realBalance: { amount: money('1234.5'), fresh: false } })
-        .value,
+      RU_TEXTS.depositCredited({ realBalance: { amount: money('1234.5'), fresh: false } }).value,
     );
     expect(pushedText(stale)).not.toContain('1234');
     const missing = await sent(null);
@@ -325,9 +371,7 @@ describe('the deposit push', () => {
 // #506: every text of this seam ends with the width spacer, read here as sent
 describe('the width spacer (#506)', () => {
   const SPACED = '<b>x</b>' + BOT_MESSAGE_SPACER;
-  const reply_markup = keyboardOf([
-    callbackButton(ButtonRole.Nav, CLIENT_LABELS.menuButton, 'menu'),
-  ]);
+  const reply_markup = keyboardOf([callbackButton(ButtonRole.Nav, RU_LABELS.menuButton, 'menu')]);
   const pushed = () => {
     const push = createClientPush({ token: TOKEN });
     return { push, ...captureApi(push) };
@@ -378,7 +422,10 @@ describe('the link push transport', () => {
 
     const at = Date.now();
     const error = await rejectionOf(
-      notifier.sendLink(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
+      notifier.sendLink(TELEGRAM_USER_ID, BotLanguage.Ru, {
+        kind: LinkPushKind.Active,
+        email: null,
+      }),
     );
     const elapsed = Date.now() - at;
     expect(error).toBeInstanceOf(HttpError);
@@ -401,7 +448,10 @@ describe('the link push transport', () => {
     const notifier = createClientPush({ token: TOKEN, apiRoot });
 
     const error = await rejectionOf(
-      notifier.sendLink(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
+      notifier.sendLink(TELEGRAM_USER_ID, BotLanguage.Ru, {
+        kind: LinkPushKind.Active,
+        email: null,
+      }),
     );
     expect(error).toBeInstanceOf(GrammyError);
     expect((error as GrammyError).error_code).toBe(403);
@@ -416,19 +466,22 @@ describe('the roles of the pushes (#475)', () => {
   const styles = (message: { reply_markup: unknown }) => inlineStyles({ ...message });
 
   it('C1 pending: the confirm green, its own row', () => {
-    const message = linkPushMessage({ kind: LinkPushKind.Pending, account: ACCOUNT });
+    const message = linkPushMessage(
+      { kind: LinkPushKind.Pending, account: ACCOUNT },
+      BotLanguage.Ru,
+    );
     expect(roles(message)).toEqual([[ButtonRole.Forward]]);
     expect(styles(message)).toEqual([['success']]);
   });
 
   it('C2 active: the demo green', () => {
-    const message = linkPushMessage({ kind: LinkPushKind.Active, email: null });
+    const message = linkPushMessage({ kind: LinkPushKind.Active, email: null }, BotLanguage.Ru);
     expect(roles(message)).toEqual([[ButtonRole.Forward]]);
     expect(styles(message)).toEqual([['success']]);
   });
 
   it('C3 blocked: support, no colour', () => {
-    const message = linkPushMessage({ kind: LinkPushKind.Blocked });
+    const message = linkPushMessage({ kind: LinkPushKind.Blocked }, BotLanguage.Ru);
     expect(roles(message)).toEqual([[ButtonRole.Nav]]);
     expect(styles(message)).toEqual([[null]]);
   });
@@ -436,25 +489,25 @@ describe('the roles of the pushes (#475)', () => {
   it.each([LinkPushKind.Taken, LinkPushKind.ExchangeFailed, LinkPushKind.Mismatch] as const)(
     'C4 %s: connect again green on its own row, then the menu',
     (kind) => {
-      const message = linkPushMessage({ kind });
+      const message = linkPushMessage({ kind }, BotLanguage.Ru);
       expect(roles(message)).toEqual([[ButtonRole.Forward], [ButtonRole.Nav]]);
       expect(styles(message)).toEqual([['success'], [null]]);
     },
   );
 
   it('C5 a credited deposit: the menu, no colour', () => {
-    const message = depositCreditedMessage(null);
+    const message = depositCreditedMessage(null, BotLanguage.Ru);
     expect(roles(message)).toEqual([[ButtonRole.Nav]]);
   });
 
   it('C6 the waiting message: its «⏹» red', () => {
-    const message = sessionWaitingMessage('00000000-0000-4000-8000-000000000000');
+    const message = sessionWaitingMessage('00000000-0000-4000-8000-000000000000', BotLanguage.Ru);
     expect(roles(message)).toEqual([[ButtonRole.Danger]]);
     expect(styles(message)).toEqual([['danger']]);
   });
 
   it("C8 the open block's «⏹» (#722): red, its own row", () => {
-    const message = { reply_markup: sessionCycleStopKeyboard(SESSION_ID) };
+    const message = { reply_markup: sessionCycleStopKeyboard(SESSION_ID, BotLanguage.Ru) };
     expect(roles(message)).toEqual([[ButtonRole.Danger]]);
     expect(styles(message)).toEqual([['danger']]);
   });

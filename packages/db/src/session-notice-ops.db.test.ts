@@ -653,6 +653,7 @@ describe('the fallback summary (#537)', () => {
     expect(await listed(untracked.session)).toEqual({
       sessionId: untracked.session.id,
       telegramUserId: BigInt(untracked.seed.telegramUserId),
+      language: 'ru',
       telegramBlocked: false,
     });
 
@@ -720,6 +721,12 @@ describe('the fallback summary (#537)', () => {
       .set({ telegramBlockedAt: sql`now()` })
       .where(eq(users.id, target.seed.userId));
     expect((await listed(target.session))?.telegramBlocked).toBe(true);
+  });
+
+  it('N45b carries the owner’s language (#633)', async () => {
+    const target = await closedWithTrade();
+    await tmp.db.update(users).set({ language: 'en' }).where(eq(users.id, target.seed.userId));
+    expect((await listed(target.session))?.language).toBe('en');
   });
 
   it('N21 claims once and returns its mark; a row not claimable is undefined', async () => {
@@ -817,6 +824,16 @@ describe('listPendingSessionNotices', () => {
     // claimed: nothing new until the next trade
     await claim(fresh.session, 0);
     expect(await pendingOf(fresh.session)).toBeUndefined();
+  });
+
+  it('N45 carries the owner’s language: Russian by default, English once set (#633)', async () => {
+    const ru = await seedSession();
+    await settled(ru, '4.6');
+    const en = await seedSession();
+    await settled(en, '4.6');
+    await tmp.db.update(users).set({ language: 'en' }).where(eq(users.id, en.seed.userId));
+    expect((await pendingOf(ru.session))?.language).toBe('ru');
+    expect((await pendingOf(en.session))?.language).toBe('en');
   });
 
   it('L1a leaves out only the sessions it is told to exclude (#660)', async () => {

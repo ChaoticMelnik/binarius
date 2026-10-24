@@ -1,6 +1,8 @@
 import { HttpError } from 'grammy';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   BUY_CALLBACK_DATA,
   buyPackageCallbackData,
   CONNECT_CALLBACK_DATA,
@@ -14,6 +16,7 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
+import { runWithLanguage, type UserLanguages } from './language';
 import {
   accountView,
   BOT_INFO,
@@ -35,6 +38,8 @@ import {
   successfulPaymentUpdate,
   textUpdate,
   USER,
+  userLanguagesWith,
+  type ApiCall,
 } from './testing';
 import {
   buyPackageLabel,
@@ -57,7 +62,7 @@ const PACKAGE_ROWS = [
 ];
 const SUPPORT_MENU_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }, ...MENU_ROW]];
 
-function setup(patch: Partial<BackendClient> = {}) {
+function setup(patch: Partial<BackendClient> = {}, languages?: UserLanguages) {
   const logger = fakeLogger();
   const backend = fakeBackend({
     readAccount: vi.fn(() => Promise.resolve(accountView({ accounts: [LINK_ACTIVE] }))),
@@ -77,6 +82,7 @@ function setup(patch: Partial<BackendClient> = {}) {
     backend,
     logger,
     botInfo: BOT_INFO,
+    ...(languages === undefined ? {} : { languages }),
   });
   return { bot, backend, logger, api: captureApi(bot) };
 }
@@ -344,5 +350,70 @@ describe('successful_payment', () => {
     await bot.handleUpdate(successfulPaymentUpdate('group'));
     expect(backend.reportStarsPaid).not.toHaveBeenCalled();
     expect(api.calls).toEqual([]);
+  });
+});
+
+// #633: the purchase of a user whose language is English, through the language middleware
+describe('the purchase in English (#633)', () => {
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const english = (patch: Partial<BackendClient> = {}) =>
+    setup(patch, userLanguagesWith(USER.id, BotLanguage.En));
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const textsOf = (calls: readonly ApiCall[]): string[] =>
+    calls.flatMap((call) => [
+      ...[
+        call.payload.text,
+        call.payload.title,
+        call.payload.description,
+        call.payload.error_message,
+      ].filter((text): text is string => typeof text === 'string'),
+      ...inlineRows(call.payload)
+        .flat()
+        .map((key) => (key as { text: string }).text),
+    ]);
+  const expectEnglish = (calls: readonly ApiCall[]) => {
+    const texts = textsOf(calls);
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text).not.toMatch(CYRILLIC);
+  };
+
+  it('EN-9 /buy, the invoice, a failed pre-checkout and the credit are English', async () => {
+    const screen = english();
+    await screen.bot.handleUpdate(textUpdate('/buy'));
+    const message = sentPayload(screen.api.calls, 'sendMessage');
+    expect(message?.text).toBe(BOT_TEXT_SOURCES_EN.buyScreen);
+    expect(inlineRows(message)[0]).toEqual([
+      {
+        text: en(() => buyPackageLabel(STAR_PACKAGES[0]!)),
+        callback_data: buyPackageCallbackData(STAR_PACKAGES[0]!.code),
+      },
+    ]);
+    expectEnglish(screen.api.calls);
+
+    const pack = english();
+    await pack.bot.handleUpdate(callbackUpdate(buyPackageCallbackData('p150')));
+    const invoice = sentPayload(pack.api.calls, 'sendInvoice');
+    expect(invoice).toMatchObject({
+      title: BOT_TEXT_SOURCES_EN.starsInvoiceTitle,
+      description: '150 tokens for auto-trading in Binarius',
+      prices: [{ label: BOT_TEXT_SOURCES_EN.starsInvoiceTitle, amount: 250 }],
+    });
+    expect(inlineRows(invoice)[0]).toEqual([{ text: '⭐ Pay 250', pay: true }]);
+    expectEnglish(pack.api.calls);
+
+    const failed = english({ checkStarsPreCheckout: vi.fn(unreachable) });
+    await failed.bot.handleUpdate(preCheckoutUpdate());
+    expect(sentPayload(failed.api.calls, 'answerPreCheckoutQuery')).toMatchObject({
+      ok: false,
+      error_message: BOT_TEXT_SOURCES_EN.starsPreCheckoutFailed,
+    });
+    expectEnglish(failed.api.calls);
+
+    const paid = english();
+    await paid.bot.handleUpdate(successfulPaymentUpdate());
+    expect(sentPayload(paid.api.calls, 'sendMessage')?.text).toBe(
+      '⭐ Tokens credited: 150. Balance: 162',
+    );
+    expectEnglish(paid.api.calls);
   });
 });

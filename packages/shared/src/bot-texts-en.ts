@@ -1,11 +1,11 @@
 import type { BotTextSource } from './bot-text-template';
-import { BOT_TEXT_CATALOG, type BotTextKey } from './bot-texts';
+import type { BotTextKey } from './bot-texts';
 
 // The client bot's English texts (#508, docs/bot-texts.md → Languages): the same keys, the same
 // placeholders and fragments as the Russian catalog, checked by the same validator
-// (bot-texts-en.test.ts). Partial until #633: a key not here shows its Russian default to an
-// English user, and UNTRANSLATED_BOT_TEXT_KEYS lists those keys, pinned by the test.
-export const BOT_TEXT_SOURCES_EN: Partial<Record<BotTextKey, string>> = {
+// (bot-texts-en.test.ts). Every key has one (#633): a new catalog key without an English text
+// does not compile.
+export const BOT_TEXT_SOURCES_EN: Record<BotTextKey, string> = {
   // ---- start ---------------------------------------------------------------------------------
   welcome: `🚀 <b>Binarius — trading on Binodex right in Telegram</b>
 
@@ -307,21 +307,190 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   stakeSavedLineReal: `✅ Real stake saved: {stake}`,
   stakeSaveUnknown: `⚠️ Could not save the amount — try again.`,
 
-  // ---- an H1 session from the bot (#745): translated ahead of the Session group ---------------
-  sessionAccountChanged: `⚙️ The account settings changed — open the analysis again.`,
-  // the session message's wait for a signal (#796)
+  // ---- stars ---------------------------------------------------------------------------------
+  buyScreen: `⭐ <b>Buy tokens</b>
+Tokens pay for auto-trading trades. Choose a package — payment in Telegram Stars.`,
+  buyNeedsAccount: `You can buy tokens after connecting a Binodex account — the button is below.`,
+  buyPackageGone: `This package is no longer sold. Choose another one.`,
+  starsCredited: `⭐ Tokens credited: {purchasedTokens}. Balance: {tokenBalance}`,
+  starsHeld: `Payment received, support will check the crediting.`,
+  starsPending: `Payment received, the tokens will be credited within a few minutes.`,
+  starsInvoiceTitle: 'Binarius tokens',
+  starsInvoiceDescription: '{purchasedTokens} tokens for auto-trading in Binarius',
+  buyPackageButton: '🪙 {purchasedTokens} tokens — {stars} ⭐',
+  starsPayButton: '⭐ Pay {stars}',
+  starsPreCheckoutRefused: 'The purchase is unavailable. Open /buy and choose a package again.',
+  starsPreCheckoutFailed: 'Could not check the purchase, please try again.',
+  paysupportScreen: `⭐ <b>Telegram Stars payments</b>
+Your recent payments. Need a refund — tap the button under the payment: a support agent will review the request and return the Stars. Tokens already spent are not returned.`,
+  paysupportLinePaid: `✅ {paymentDate} — {stars} ⭐, paid`,
+  paysupportLineHeld: `⏳ {paymentDate} — {stars} ⭐, under review`,
+  paysupportLineRequested: `📨 {paymentDate} — {stars} ⭐, refund request accepted`,
+  paysupportLineRefunded: `↩️ {paymentDate} — {stars} ⭐, refunded`,
+  paysupportEmpty: `There are no Telegram Stars payments. A question about a payment — contact support.`,
+  paysupportRequested: `📨 The refund request is accepted. A support agent will check the payment and return the Stars — Telegram will notify you of the refund.`,
+  paysupportAlreadyRequested: `A refund request for this payment already exists — a support agent will review it.`,
+  paysupportAlreadyRefunded: `This payment has already been refunded.`,
+  paysupportNotFound: `Payment not found. Open the list again.`,
+  paysupportRefundButton: '↩️ Need a refund: {paymentDate}',
+  paysupportListButton: '↩️ To payments',
+
+  // ---- session -------------------------------------------------------------------------------
+  sessionHeader: `🎮 <b>Demo session</b>`,
+  sessionHeaderReal: `💼 <b>Real session</b>`,
+  sessionPair: `🔹 Trading pair: {symbol}`,
+  sessionStake: `🔹 Trade amount: {stake}`,
+  sessionExpiry: `🔹 Expiry time: {duration}`,
+  sessionSignalUp: `📡 Signal: ⬆️ Up`,
+  sessionSignalDown: `📡 Signal: ⬇️ Down`,
   sessionSignalWaiting: `📡 Waiting for a signal…`,
-  // the cycle words of the demo path's «Session of 5 cycles» (#632); the plural rule is #633's
+  sessionRunning: `The trading session is running…`,
+  sessionWon: '{count} won',
+  sessionLost: '{count} lost',
+  sessionTied: '{count} tied',
+  // English has one form for 1 and another for every other number: the few words are the many ones
+  sessionTradeOne: 'trade',
+  sessionTradeFew: 'trades',
+  sessionTradeMany: 'trades',
   sessionCycleOne: 'cycle',
   sessionCycleFew: 'cycles',
   sessionCycleMany: 'cycles',
+  sessionCandleOne: 'candle',
+  sessionCandleFew: 'candles',
+  sessionCandleMany: 'candles',
+  sessionWaitingSignal: `🔎 Waiting for a signal for the next trade…`,
+  sessionCompleted: `🏁 Session completed: {cycles}, {result}`,
+  sessionTotal: `📊 Total: {result}`,
+  sessionResult: `💰 Result: {profit}`,
+  sessionBalanceDemo: `🧪 Demo balance: {amount}`,
+  sessionBalanceReal: `💵 Real balance: {amount}`,
+  sessionOpenTradePlaysOut: `⏳ The open trade will play out to the end.`,
+  sessionLastTradeChecking: `🔎 The broker is confirming the last trade's result.`,
+  sessionLastTradeOpening: `⏳ The last trade is still opening: if it opens, it will play out to the end.`,
+  sessionSettingsUnavailable: `⚠️ The session settings could not be read — contact support: /support`,
+  sessionStatusUnavailable: `⚠️ The session status is unavailable.`,
+  sessionNoneActive: `There are no active sessions.`,
+  sessionsStopped: `⏹ Sessions stopped: {count}. Open trades will play out to the end.`,
+  sessionJustEnded: `⏳ The previous session has just ended. Tap the button again.`,
+  sessionOutcomeUnknown: `⚠️ Could not find out whether the session started. Tap the session button again — it will not start a second session.`,
+  sessionInsufficientTokens: `🪙 Not enough tokens: each trade of the session needs one token.`,
+  sessionTooLong: `⏱ A session of this duration will not fit into an hour.`,
+  sessionPairUnavailable: `⚠️ The pair is unavailable for a session right now. Open the analysis again.`,
+  sessionAccountChanged: `⚙️ The account settings changed — open the analysis again.`,
+  sessionSignalUnavailable: `⚠️ Could not check the pair's signal — repeat the analysis.`,
+  sessionStopNoSignalTimeout: `⏳ The session stopped: the pair had no signal for {noSignalCandles} of {candleSec} s. Choose another pair.`,
+  sessionStopNoSignalTimeoutNoSettings: `⏳ The session stopped: the pair had no signal for a long time. Choose another pair.`,
+  sessionStopManualReview: `🛠 The session stopped: a manual review is needed — contact support: /support`,
+  sessionStopRejectedTwice: `❌ The session stopped: two trades in a row did not open.`,
+  sessionStopTimeout: `⏱ The session stopped: the session's hour is over.`,
+  sessionStopStakeStop: `⚠️ The session stopped: no stake could be chosen — check the balance in /account.`,
+  sessionStopMaxSteps: `🛑 The session stopped: the losing streak reached the limit of stake raises.`,
+  sessionStopMaxStake: `🛑 The session stopped: the next stake would exceed the stake size limit.`,
+  sessionStopMaxSessionLoss: `🛑 The session stopped: the next trade could exceed the session's loss limit.`,
+  sessionStopSessionDuration: `⏱ The session stopped: the session's hour is over.`,
+  sessionStopAccountUnavailable: `⚠️ The session stopped: a new trade cannot be opened — check the tokens and the account in /account.`,
+  sessionStopPairUnavailable: `⚠️ The session stopped: the pair closed or does not accept this duration.`,
+  sessionStopBalanceUnavailable: `⚠️ The session stopped: the Binodex balance was not received.`,
+  sessionStopInvalidSettings: `⚠️ The session stopped because of a settings error — contact support: /support`,
+  sessionStopUserStopped: `⏹ The session was stopped at your command.`,
+  sessionCardTitle: 'SESSION COMPLETED',
+  sessionCardResult: 'RESULT',
+  sessionCardTrade: 'Trade {count}',
+  sessionCardLegendEntry: 'Entry',
+  sessionCardLegendWin: 'Win',
+  sessionCardLegendLoss: 'Loss',
+  sessionCardLegendTie: 'Tie',
+  sessionCardFooter: '{trades} · {score}',
+  sessionPromoResult: 'My session result',
+  sessionPromoUp: 'UP',
+  sessionPromoDown: 'DOWN',
+  sessionPromoBrand: 'Binarius',
+  sessionPromoCall: 'Trade with me in Binarius and get free tokens!',
+  sessionPromoWhen: '{sessionEnd} MSK',
+  sessionShareCaption: `Join Binarius — get free tokens!
+{referralLink}`,
+  sessionTradeWon: `⚡ Cycle {cycle} Step {step}
+<pre>🟢 Stake: {stake} → {outcome}
+📊 Price: {openPrice} → {closePrice}</pre>`,
+  sessionTradeLost: `⚡ Cycle {cycle} Step {step}
+<pre>🔴 Stake: {stake} → {outcome}
+📊 Price: {openPrice} → {closePrice}</pre>`,
+  sessionTradeTied: `⚡ Cycle {cycle} Step {step}
+<pre>⚪ Stake: {stake} → {outcome}, the stake returned
+📊 Price: {openPrice} → {closePrice}</pre>`,
+  sessionTradeOpen: `⚡ Cycle {cycle} Step {step}
+<pre>⏳ Stake: {stake} · {action} · trade open
+📊 Price: {openPrice} → …</pre>`,
+  sessionAdaptiveStake: `🔄 Adaptive stake is on`,
+  sessionSummarySymbol: `📈 {symbol}`,
 
-  // ---- the switch to real after a deposit (#686): translated ahead of the Mailing group --------
+  // ---- deposit -------------------------------------------------------------------------------
+  depositCredited: `💳 <b>Top-up received</b>
+Real balance: {realBalance}`,
+
+  // ---- mailing -------------------------------------------------------------------------------
+  firstSessionReminder1h: `🤖 <b>The account is connected — now start the demo</b>
+
+🎮 The bot will run a series of demo trades on a signal by itself, and you watch the result.
+💡 It is a demo: no money needed.
+👇 Tap “{demoButton}” to begin.`,
+  firstSessionReminder24h: `⏳ <b>Thinking alone will not move you forward</b>
+
+🎮 In a demo session the bot trades on the demo account by itself, and you watch how it makes decisions.
+💡 No money is needed for it.
+👇 Tap “{demoButton}” — and the bot will start.`,
+  firstSessionReminder72h: `🚦 <b>This step opens everything else</b>
+
+🎮 The first demo session will show how the bot picks trades and runs a series.
+💡 It is a demo: no money needed.
+👇 Tap “{demoButton}” — the bot will do the rest by itself.`,
+  analysisUnusedReminder: `🧠 <b>The analysis is ready but not used yet</b>
+
+📊 The pair's analysis is ready, but the trade amount was never chosen — nothing starts without it.
+🔄 The signal may have changed since then, so the bot will check the pair again.
+👇 Tap “{newAnalysisButton}”.`,
+  referralRewarded: `🎁 <b>A friend connected Binodex</b>
+
+🪙 Tokens credited for the invitation: +{rewardTokens}
+👇 Tap “{inviteMoreButton}” to invite more.`,
+  tokensHalfUsed: `🪙 <b>Your token balance went down</b>
+
+Tokens on the balance: at most {nudgeTokens}. One token — one auto-trading trade.
+👇 Tap the button below to continue.`,
+  tokensLow: `⏳ <b>Few tokens left on the balance</b>
+
+Tokens on the balance: at most {nudgeTokens}. One token — one auto-trading trade.
+👇 “{buyButton}” — token packages.`,
+  tokensOut: `🔋 <b>No tokens left on the balance</b>
+
+Each auto-trading trade needs one token.
+👇 “{buyButton}” — token packages.`,
   realModeByDeposit: `💳 <b>Deposit received — real mode is on</b>
 
 Mode: REAL. Trades and sessions now use real money.
 💵 Trade amount: {stake}
 Back to demo: /settings → “{settingsModeButton}”.`,
+  inactiveReminder: `🌙 <b>The market never sleeps</b>
+
+📡 The bot keeps checking the pairs for signals — you can see what there is now.
+🎮 It is a demo: no money needed, the bot runs the trades by itself.
+👇 Tap “{demoButton}” to continue.`,
+  sessionIdleReminder: `🔁 <b>Your last demo session is over</b>
+
+📊 Its result: {result}.
+🎮 A new session starts in one step.
+👇 Tap the button below.`,
+  weeklySummary: `📅 <b>Last week's demo results</b>
+
+📊 Total: {result}.
+💡 It is a demo: no money takes part in the trades.
+👇 Tap “{demoButton}” to continue.`,
+  tokensOutStill: `🔋 <b>Still no tokens on the balance</b>
+
+Auto-trading does not start without tokens: each trade needs one token.
+👇 “{buyButton}” — token packages.`,
+  sessionRelaunchButton: '🔁 Start again',
+  inviteMoreButton: '👥 Invite more',
 
   // ---- buttons -------------------------------------------------------------------------------
   confirmButton: '✅ Confirm: {email}',
@@ -401,25 +570,8 @@ Back to demo: /settings → “{settingsModeButton}”.`,
     'Auto sessions on Binodex right in Telegram: the bot trades demo on a signal by itself, you watch the result',
 };
 
-// A static source: a key without an English text shows the catalog's Russian default, never an
-// override, which apply to Russian only until #634. So every English message is bounded by the
-// test on the defaults, with no override to widen it at run time.
+// A static source: overrides apply to Russian only until #634, so every English message is
+// bounded by the test on the defaults, with no override to widen it at run time.
 export const enBotTextSource: BotTextSource<BotTextKey> = {
-  sourceOf: (key) => BOT_TEXT_SOURCES_EN[key] ?? BOT_TEXT_CATALOG[key].source,
+  sourceOf: (key) => BOT_TEXT_SOURCES_EN[key],
 };
-
-// The keys of the groups #633 translates that are translated already: the switch to real after a
-// deposit (#686) and the H1 session from the bot (#745, #796) were written in both languages from
-// the start, and the cycle words are printed by the demo path (#632).
-export const TRANSLATED_BEFORE_633 = [
-  'realModeByDeposit',
-  'sessionAccountChanged',
-  'sessionSignalWaiting',
-  'sessionCycleOne',
-  'sessionCycleFew',
-  'sessionCycleMany',
-] as const satisfies readonly BotTextKey[];
-
-export const UNTRANSLATED_BOT_TEXT_KEYS: readonly BotTextKey[] = (
-  Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]
-).filter((key) => BOT_TEXT_SOURCES_EN[key] === undefined);

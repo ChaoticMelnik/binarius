@@ -1,16 +1,19 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { StarTransaction } from 'grammy/types';
 import {
+  DEFAULT_BOT_LANGUAGE,
   errorLogFields,
   keyboardOf,
   parseStarsInvoicePayload,
   STARS_CURRENCY,
   telegramErrorFields,
+  type BotLanguage,
 } from '@binarius/shared';
 import {
   creditStarPayment,
   listKnownStarCharges,
   listStarChargesToRefund,
+  readUserLanguage,
   recordStarRefundBySystem,
   StarsCreditSource,
   StarsRefundEvidence,
@@ -18,7 +21,7 @@ import {
   type Db,
 } from '@binarius/db';
 import { menuButton, type ClientPush, type ClientPushMessage } from '../auth/client-push';
-import { CLIENT_TEXTS } from '../auth/texts';
+import { clientTextsOf } from '../auth/texts';
 import {
   STARS_RECONCILE_MAX_PAGES,
   STARS_RECONCILE_PAGE_SIZE,
@@ -116,13 +119,18 @@ function outgoingToUserOf(transaction: StarTransaction): OutgoingToUser | undefi
 }
 
 // What a credit made here tells the user (answer 3 of the clarify round): the bot's own answer to
-// successful_payment never came, so nothing else says the tokens arrived.
-export const starsCreditedPush = (tokens: bigint, balance: bigint): ClientPushMessage => ({
-  text: CLIENT_TEXTS.starsCredited({
+// successful_payment never came, so nothing else says the tokens arrived. In the payer's language
+// (#633).
+export const starsCreditedPush = (
+  tokens: bigint,
+  balance: bigint,
+  language: BotLanguage,
+): ClientPushMessage => ({
+  text: clientTextsOf(language).starsCredited({
     purchasedTokens: tokens.toString(),
     tokenBalance: balance.toString(),
   }),
-  reply_markup: keyboardOf([menuButton()]),
+  reply_markup: keyboardOf([menuButton(language)]),
 });
 
 export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
@@ -141,10 +149,12 @@ export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
     logger.error({ telegramPaymentChargeId: payment.id, totalAmount: payment.amount }, message);
   }
 
-  // A failed send is logged and not repeated: the tokens are already there.
+  // A failed send is logged and not repeated: the tokens are already there. A failed read of the
+  // payer's language is a push not sent; no users row, Russian.
   async function pushCredit(telegramUserId: bigint, tokens: bigint, balance: bigint) {
     try {
-      await push.sendMailing(telegramUserId, starsCreditedPush(tokens, balance));
+      const language = (await readUserLanguage(db, telegramUserId)) ?? DEFAULT_BOT_LANGUAGE;
+      await push.sendMailing(telegramUserId, starsCreditedPush(tokens, balance, language));
     } catch (error) {
       logger.warn(
         { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage') },

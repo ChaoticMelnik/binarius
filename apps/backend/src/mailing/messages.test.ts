@@ -7,9 +7,13 @@ import {
   TradeMode,
   decimalStringSchema,
 } from '@binarius/shared';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { inlineRows, inlineStyles } from '../admin/testing';
 import { mailingMessage, type MailingContext } from './messages';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const CASHIER_URL = 'https://web.example/cashier';
 const DEMO: MailingContext = {
@@ -35,10 +39,10 @@ describe('the analysis reminder message', () => {
         { assetId: 101, durationSec },
         DEMO,
       );
-      expect(message.text).toBe(CLIENT_TEXTS.analysisUnusedReminder);
-      expect(message.text.value).toContain(`«${CLIENT_LABELS.newAnalysisButton}»`);
+      expect(message.text).toBe(RU_TEXTS.analysisUnusedReminder);
+      expect(message.text.value).toContain(`«${RU_LABELS.newAnalysisButton}»`);
       expect(buttonsOf(message)).toStrictEqual([
-        { text: CLIENT_LABELS.newAnalysisButton, callback_data: data },
+        { text: RU_LABELS.newAnalysisButton, callback_data: data },
       ]);
       // #475: the reminder's step forward, green
       expect(stylesOf(message)).toEqual([['success']]);
@@ -47,7 +51,7 @@ describe('the analysis reminder message', () => {
 
   // the analysis screens' rule (#126): the signal is neither a probability nor an accuracy
   it('promises no result', () => {
-    const text = CLIENT_TEXTS.analysisUnusedReminder.value.toLowerCase();
+    const text = RU_TEXTS.analysisUnusedReminder.value.toLowerCase();
     for (const word of ['вероятност', 'точност', 'гарант', 'прибыл']) {
       expect(text).not.toContain(word);
     }
@@ -67,17 +71,17 @@ describe('the analysis reminder message', () => {
 describe('the referral reward message', () => {
   it('sends the catalog text with the ledger row’s amount and one button: the /invite screen', () => {
     const message = mailingMessage(NotificationKind.ReferralRewarded, { tokens: '75' }, DEMO);
-    expect(message.text).toStrictEqual(CLIENT_TEXTS.referralRewarded({ rewardTokens: '75' }));
+    expect(message.text).toStrictEqual(RU_TEXTS.referralRewarded({ rewardTokens: '75' }));
     expect(message.text.value).toContain('+75');
-    expect(message.text.value).toContain(`«${CLIENT_LABELS.inviteMoreButton}»`);
+    expect(message.text.value).toContain(`«${RU_LABELS.inviteMoreButton}»`);
     expect(buttonsOf(message)).toStrictEqual([
-      { text: CLIENT_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
+      { text: RU_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
     ]);
     expect(stylesOf(message)).toEqual([['primary']]);
   });
 
   it('promises no result', () => {
-    const text = CLIENT_TEXTS.referralRewarded({ rewardTokens: '50' }).value.toLowerCase();
+    const text = RU_TEXTS.referralRewarded({ rewardTokens: '50' }).value.toLowerCase();
     for (const word of ['вероятност', 'точност', 'гарант', 'прибыл']) {
       expect(text).not.toContain(word);
     }
@@ -101,7 +105,7 @@ describe('the first-session chain messages', () => {
     'sends %s with the demo button whatever the payload',
     (kind) => {
       expect(buttonsOf(mailingMessage(kind, {}, DEMO))).toStrictEqual([
-        { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+        { text: RU_LABELS.demoButton, callback_data: 'demo' },
       ]);
     },
   );
@@ -110,15 +114,15 @@ describe('the first-session chain messages', () => {
 // #123
 describe('the low-token nudge messages', () => {
   const [HALF, LOW, OUT] = TOKEN_NUDGES;
-  const demo = { text: CLIENT_LABELS.demoButton, callback_data: 'demo' };
-  const trade = { text: CLIENT_LABELS.tradeButton, callback_data: 'demo' };
-  const deposit = { text: CLIENT_LABELS.depositButton, web_app: { url: CASHIER_URL } };
-  const buy = { text: CLIENT_LABELS.buyButton, callback_data: 'buy' };
+  const demo = { text: RU_LABELS.demoButton, callback_data: 'demo' };
+  const trade = { text: RU_LABELS.tradeButton, callback_data: 'demo' };
+  const deposit = { text: RU_LABELS.depositButton, web_app: { url: CASHIER_URL } };
+  const buy = { text: RU_LABELS.buyButton, callback_data: 'buy' };
   const rowsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message });
   const texts = {
-    [NotificationKind.TokensHalf]: CLIENT_TEXTS.tokensHalfUsed,
-    [NotificationKind.TokensLow]: CLIENT_TEXTS.tokensLow,
-    [NotificationKind.TokensOut]: CLIENT_TEXTS.tokensOut,
+    [NotificationKind.TokensHalf]: RU_TEXTS.tokensHalfUsed,
+    [NotificationKind.TokensLow]: RU_TEXTS.tokensLow,
+    [NotificationKind.TokensOut]: RU_TEXTS.tokensOut,
   };
 
   it.each([
@@ -144,7 +148,7 @@ describe('the low-token nudge messages', () => {
       for (const word of ['вероятност', 'точност', 'обуч', 'учится', 'модел', 'гарант', 'прибыл']) {
         expect(text).not.toContain(word);
       }
-      expect(text).not.toContain(CLIENT_LABELS.depositButton.toLowerCase());
+      expect(text).not.toContain(RU_LABELS.depositButton.toLowerCase());
     },
   );
 
@@ -182,8 +186,8 @@ describe('the low-token nudge messages', () => {
     'names only the purchase, the row that is always there, in %s',
     (kind) => {
       const text = texts[kind]({ nudgeTokens: '20' }).value;
-      expect(text).toContain(`«${CLIENT_LABELS.buyButton}»`);
-      for (const label of [CLIENT_LABELS.demoButton, CLIENT_LABELS.tradeButton]) {
+      expect(text).toContain(`«${RU_LABELS.buyButton}»`);
+      for (const label of [RU_LABELS.demoButton, RU_LABELS.tradeButton]) {
         expect(text).not.toContain(label);
       }
     },
@@ -217,10 +221,10 @@ describe('the real-mode message after a deposit', () => {
     expect(text).toContain('REAL');
     expect(text).toContain('реальные деньги');
     expect(text).toContain('$5.00');
-    expect(text).toContain(`/settings → «${CLIENT_LABELS.settingsModeButton}»`);
+    expect(text).toContain(`/settings → «${RU_LABELS.settingsModeButton}»`);
     expect(buttonsOf(message)).toStrictEqual([
-      { text: CLIENT_LABELS.settingsModeButton, callback_data: 'mode' },
-      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+      { text: RU_LABELS.settingsModeButton, callback_data: 'mode' },
+      { text: RU_LABELS.menuButton, callback_data: 'menu' },
     ]);
     // one row of two navigation buttons, no colour
     expect(stylesOf(message)).toEqual([[null, null]]);
@@ -277,9 +281,9 @@ const namesAnAge = (text: string) => AGES.some((age) => age.test(text.toLowerCas
 
 // #124 (docs/mailing.md → Retention)
 describe('the retention messages', () => {
-  const demo = { text: CLIENT_LABELS.demoButton, callback_data: 'demo' };
-  const deposit = { text: CLIENT_LABELS.depositButton, web_app: { url: CASHIER_URL } };
-  const buy = { text: CLIENT_LABELS.buyButton, callback_data: 'buy' };
+  const demo = { text: RU_LABELS.demoButton, callback_data: 'demo' };
+  const deposit = { text: RU_LABELS.depositButton, web_app: { url: CASHIER_URL } };
+  const buy = { text: RU_LABELS.buyButton, callback_data: 'buy' };
   const rowsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message });
   const score = { settled: 4, won: 2, lost: 1, tied: 1 };
   const idle = { assetId: 101, durationSec: 5, ...score };
@@ -287,7 +291,7 @@ describe('the retention messages', () => {
   it('RM1 sends the last session’s result and «🔁 Запустить снова», the cycle door of its pair', () => {
     const message = mailingMessage(NotificationKind.SessionIdle24h, idle, DEMO);
     expect(message.text).toStrictEqual(
-      CLIENT_TEXTS.sessionIdleReminder({ result: '4 сделки — 2 в плюс, 1 в минус, 1 в ноль' }),
+      RU_TEXTS.sessionIdleReminder({ result: '4 сделки — 2 в плюс, 1 в минус, 1 в ноль' }),
     );
     expect(rowsOf(message)).toStrictEqual([
       [{ text: '🔁 Запустить снова', callback_data: 'demo:l:101:5:n' }],
@@ -302,16 +306,16 @@ describe('the retention messages', () => {
   });
 
   it.each([
-    [NotificationKind.Inactive3d, {}, CLIENT_TEXTS.inactiveReminder],
+    [NotificationKind.Inactive3d, {}, RU_TEXTS.inactiveReminder],
     [
       NotificationKind.WeeklySummary,
       score,
-      CLIENT_TEXTS.weeklySummary({ result: '4 сделки — 2 в плюс, 1 в минус, 1 в ноль' }),
+      RU_TEXTS.weeklySummary({ result: '4 сделки — 2 в плюс, 1 в минус, 1 в ноль' }),
     ],
   ] as const)('RM3 sends %s with the catalog text and the entry', (kind, payload, text) => {
     const message = mailingMessage(kind, payload, DEMO);
     expect(message.text).toStrictEqual(text);
-    expect(message.text.value).toContain(`«${CLIENT_LABELS.demoButton}»`);
+    expect(message.text.value).toContain(`«${RU_LABELS.demoButton}»`);
     expect(rowsOf(message)).toStrictEqual([[demo]]);
     expect(stylesOf(message)).toEqual([['success']]);
   });
@@ -319,8 +323,8 @@ describe('the retention messages', () => {
   it('RM4 gives tokens_out_2d the cashier, then the purchase; the entry in the cashier’s place without https', () => {
     const kind = NotificationKind.TokensOut2d;
     const message = mailingMessage(kind, {}, DEMO);
-    expect(message.text).toStrictEqual(CLIENT_TEXTS.tokensOutStill);
-    expect(message.text.value).toContain(`«${CLIENT_LABELS.buyButton}»`);
+    expect(message.text).toStrictEqual(RU_TEXTS.tokensOutStill);
+    expect(message.text.value).toContain(`«${RU_LABELS.buyButton}»`);
     expect(rowsOf(message)).toStrictEqual([[deposit], [buy]]);
     expect(stylesOf(message)).toEqual([['success'], ['primary']]);
     expect(rowsOf(mailingMessage(kind, {}, { ...DEMO, cashierUrl: undefined }))).toStrictEqual([
@@ -374,4 +378,48 @@ describe('the retention messages', () => {
       expect(() => mailingMessage(kind, payload, DEMO)).toThrow();
     },
   );
+});
+
+// #633: every kind in the user's language, its text and every label of its keyboard
+describe('the mailings in English (#633)', () => {
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const score = { settled: 4, won: 2, lost: 1, tied: 1 };
+  // one valid payload per kind: a kind added without one does not compile
+  const PAYLOADS: Record<NotificationKind, Record<string, unknown>> = {
+    [NotificationKind.FirstSession1h]: {},
+    [NotificationKind.FirstSession24h]: {},
+    [NotificationKind.FirstSession72h]: {},
+    [NotificationKind.AnalysisUnused]: { assetId: 101, durationSec: 5 },
+    [NotificationKind.ReferralRewarded]: { tokens: '75' },
+    [NotificationKind.TokensHalf]: { tokens: '50' },
+    [NotificationKind.TokensLow]: { tokens: '20' },
+    [NotificationKind.TokensOut]: { tokens: '0' },
+    [NotificationKind.RealModeByDeposit]: { stake: '5.00000000' },
+    [NotificationKind.Inactive3d]: {},
+    [NotificationKind.SessionIdle24h]: { assetId: 101, durationSec: 5, ...score },
+    [NotificationKind.WeeklySummary]: score,
+    [NotificationKind.TokensOut2d]: {},
+  };
+  const contexts = Object.values(TradeMode).flatMap((tradingMode) =>
+    [CASHIER_URL, undefined].map(
+      (cashierUrl): MailingContext => ({ cashierUrl, tradingMode, language: BotLanguage.En }),
+    ),
+  );
+
+  it.each(Object.values(NotificationKind))('M-lang %s has no Russian word', (kind) => {
+    for (const context of contexts) {
+      const message = mailingMessage(kind, PAYLOADS[kind], context);
+      const labels = buttonsOf(message).map((button) => button.text);
+      expect(labels.length).toBeGreaterThan(0);
+      for (const text of [message.text.value, ...labels]) expect(text).not.toMatch(CYRILLIC);
+    }
+  });
+
+  it('M-lang the result of a session is counted in English', () => {
+    const message = mailingMessage(NotificationKind.WeeklySummary, score, {
+      ...DEMO,
+      language: BotLanguage.En,
+    });
+    expect(message.text.value).toContain('4 trades — 2 won, 1 lost, 1 tied');
+  });
 });

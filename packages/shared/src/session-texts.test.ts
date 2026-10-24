@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { BotLanguage } from './bot-language';
 import { createBotTexts, defaultBotTextSource } from './bot-texts';
+import { BOT_TEXT_SOURCES_EN, enBotTextSource } from './bot-texts-en';
 import { pairLabel, type PairLabel } from './catalog';
 import type { DecimalString } from './money';
 import { AdaptiveLineSlot, SessionStakeStrategy, SessionTradeResult } from './session-steps';
@@ -14,7 +16,11 @@ import { TradeAction, TradeMode } from './trading';
 import { buildH1SessionSettings, TradingSessionStopReason } from './trading-session';
 
 const texts = createBotTexts(defaultBotTextSource);
-const session = createSessionTexts(texts);
+const session = createSessionTexts({ ...texts, language: BotLanguage.Ru });
+const english = createSessionTexts({
+  ...createBotTexts(enBotTextSource),
+  language: BotLanguage.En,
+});
 const d = (value: string) => value as DecimalString;
 
 const trade = (patch: Partial<SessionTradeNotice> = {}): SessionTradeNotice => ({
@@ -82,6 +88,51 @@ describe('the session words', () => {
   it('scores «в ноль» only when a trade tied', () => {
     expect(session.scoreOf({ won: 3, lost: 2, tied: 0 })).toBe('3 в плюс, 2 в минус');
     expect(session.scoreOf({ won: 3, lost: 2, tied: 1 })).toBe('3 в плюс, 2 в минус, 1 в ноль');
+  });
+});
+
+describe('the English session words (#633)', () => {
+  it.each([
+    [1, 'trade'],
+    [2, 'trades'],
+    [5, 'trades'],
+    [11, 'trades'],
+    [21, 'trades'],
+  ])('W-en1 %i takes «%s»', (count, word) => {
+    expect(english.pluralTrades(count)).toBe(word);
+  });
+
+  it.each([
+    [1, '1 cycle'],
+    [2, '2 cycles'],
+    [21, '21 cycles'],
+  ])('W-en2 %i cycles read «%s»', (count, words) => {
+    expect(english.cyclesCount(count)).toBe(words);
+  });
+
+  it.each([
+    [1, '1 candle'],
+    [2, '2 candles'],
+    [20, '20 candles'],
+    [21, '21 candles'],
+  ])('W-en3 %i candles read «%s»', (count, words) => {
+    expect(english.candlesCount(count)).toBe(words);
+  });
+
+  // the English rule never picks the few form, so its word must be the many one
+  it('W-en4 the English few words equal the many words', () => {
+    expect(BOT_TEXT_SOURCES_EN.sessionTradeFew).toBe(BOT_TEXT_SOURCES_EN.sessionTradeMany);
+    expect(BOT_TEXT_SOURCES_EN.sessionCycleFew).toBe(BOT_TEXT_SOURCES_EN.sessionCycleMany);
+    expect(BOT_TEXT_SOURCES_EN.sessionCandleFew).toBe(BOT_TEXT_SOURCES_EN.sessionCandleMany);
+  });
+
+  it('W-en5 the English summary prints its completed line in English, with no Cyrillic', () => {
+    const summary = english.sessionSummaryText(pairLabel({ symbol: 'EUR/USD' }), 42, view()).value;
+    const completed = BOT_TEXT_SOURCES_EN.sessionCompleted
+      .replace('{cycles}', '5 cycles')
+      .replace('{result}', `5 trades — ${english.scoreOf({ won: 3, lost: 2, tied: 0 })}`);
+    expect(summary.split('\n')[1]).toBe(completed);
+    expect(summary).not.toMatch(/[А-Яа-яЁё]/u);
   });
 });
 

@@ -200,8 +200,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   noSignalCandles: (m) =>
     String(SESSION_NO_SIGNAL_CANDLES).length + 1 + m.length('sessionCandleMany'),
   candleSec: () => w.candleSec,
-  // a session's duration in seconds, an int4 (texts.ts → sessionStatusText), and « с»
-  duration: () => String(INT4_MAX).length + ' с'.length,
+  // a session's duration in seconds, an int4 (texts.ts → sessionStatusText), a space and its unit
+  duration: (m) => String(INT4_MAX).length + 1 + m.length('ageSecondsUnit'),
   label: (m) => m.longest(...durations),
   // durationLabelOf's fallback: an int4 duration
   durationSec: () => String(INT4_MAX).length,
