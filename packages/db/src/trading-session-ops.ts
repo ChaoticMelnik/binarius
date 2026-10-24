@@ -34,7 +34,6 @@ import type { SignalDecisionInput } from './signal-decision-ops';
 import {
   TOKENS_PER_INTENT,
   createTradeIntent,
-  millisecondsAgo,
   resolveTradingAccount,
   toTradeIntentView,
   uniqueViolation,
@@ -42,6 +41,7 @@ import {
   type CreateTradeIntentResult,
   type DbExecutor,
 } from './trade-intent-ops';
+import { millisecondsAgo } from './sql-time';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
 // The session orchestrator's operations (#130; the orchestrator is #287; docs/trading-session.md). Lock order: the creator

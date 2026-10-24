@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { brokerSessionLeases } from './schema/broker-session-leases';
-import { millisecondsFromNow } from './trade-intent-ops';
+import { millisecondsFromNow } from './sql-time';
 
 // The broker session lease (#93, docs/broker-session.md → The lease). Each operation is one
 // autocommit statement on the pool and locks nothing else, so it stays outside the lock chain;

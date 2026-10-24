@@ -21,7 +21,7 @@ import {
 import { brokerSessionLeases } from './schema/broker-session-leases';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { users } from './schema/users';
-import { millisecondsAgo, millisecondsFromNow } from './trade-intent-ops';
+import { millisecondsAgo, millisecondsFromNow } from './sql-time';
 
 // The only writers of broker_balance_snapshots (#235, part 1 of #137).
 //

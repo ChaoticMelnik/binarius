@@ -24,7 +24,8 @@ import { brokerAccounts } from './schema/broker-accounts';
 import { statementNow } from './schema/columns';
 import { oauthStates } from './schema/oauth-states';
 import { users } from './schema/users';
-import { millisecondsFromNow, type Tx } from './trade-intent-ops';
+import { millisecondsFromNow } from './sql-time';
+import type { Tx } from './trade-intent-ops';
 
 export type BrokerAccountRow = typeof brokerAccounts.$inferSelect;
 
