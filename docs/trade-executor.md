@@ -23,7 +23,7 @@ pnpm test --project integration apps/trading-worker/src/intents/processor.db.tes
 | `AccessTokenSource` | `broker/access-token.ts` | the account's broker token for the REST path (#90: `createBackendAccessTokenSource` over the backend's internal route; the backend refreshes when needed). `ok: false` for every expected failure, a refusal or the backend unavailable; a throw is a bug. The body is read up to `MAX_BACKEND_BODY_BYTES` (1 MiB); over it, a 2xx or a refusal status (404/409) answers `contract_violation`, any other status `backend_status` |
 | `BrokerRestClient.openTrade` | `packages/broker-rest` | the REST fallback ([broker-rest.md](broker-rest.md) → Errors) |
 
-The amount goes out in its shortest decimal form (`normalizeDecimal` from `@binarius/db`:
+The amount goes out in its shortest decimal form (`normalizeDecimal` from `@binarius/shared`, `packages/shared/src/money.ts`:
 `'10.00000000'` → `'10'`, `'1.50000000'` → `'1.5'`), never through a float. The live broker
 took `"1.5"` (2026-10-03); eight fraction digits were never sent live and the fixture refuses
 them.

@@ -356,7 +356,11 @@ a saved override of them is an unknown key (`bot-text reset <key>`). #708 remove
 (the language is the `/language` command): a saved override of it is an unknown key
 (`bot-text reset languageButton`). #709 removes `sessionSummaryLink` (the summary ends with its
 last line, no referral link): a saved override of it is an unknown key
-(`bot-text reset sessionSummaryLink`).
+(`bot-text reset sessionSummaryLink`). #637 replaced the variable `noSignalMinutes` of
+`sessionStopNoSignalTimeout` with `{noSignalCandles}` and `{candleSec}`, with no data migration: a
+saved override with the old variable is refused by the loader (the default text shows, with a
+`warn`), and one in its own words with «2 мин» stays valid and names a wrong limit. Either way
+`bot-text reset sessionStopNoSignalTimeout` removes it.
 
 ## Adding a text
 
