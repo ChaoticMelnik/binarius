@@ -671,10 +671,12 @@ the worker's candle hold and the stand since #697) after its boundary (S1). Afte
   own `nowMs`; the feed leaves the unclosed candle out, F26) is counted as `unclosed` (S29, S34); the slack is not raised (2 s would be 40 % of a `5s` candle).
   Measured on the pilot 2026-10-22 (2 h, #697): 1.07 % of the decisions `unclosed`, in 17 events,
   15 of them a whole scan at once (all 122 pairs: the watermark of the whole stream had not passed
-  the boundary at `+ 500`); the watermark lag p50 212 / p95 364 / max 602 ms. Since #697 a
+  the boundary at `+ 500`); the watermark lag p50 212 / p95 364 / max 602 ms. Since #697 a 5 s
   session's next ask after `no_signal` comes at the same moment and reads the same cache, so it
-  trades such a decision as the scanner made it (docs/trading-session.md → The candle wake); the
-  bot's list does not serve it, as before.
+  trades such a decision as it was made — the scanner's, or the session's own when it asked first
+  (docs/trading-session.md → The candle wake); the bot's list does not serve it, as before. The
+  scanner scans `5s` only (`SIGNAL_SCAN_INTERVALS`): a 15 s session (the CLI's) reads the window,
+  and a 1m+ one REST on demand, at `+ 500` too, where nobody measured the share.
 
 **Each pair.** The scan is one synchronous loop over the eligible pairs, `fromSource` for each:
 

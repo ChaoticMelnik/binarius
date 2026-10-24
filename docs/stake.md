@@ -54,7 +54,7 @@ statuses:
 |---|---|---|
 | `settled` | `stake`, `profit` (signed: `< 0` loss, `0` tie, `> 0` win) | `settled`, with `broker_trades.profit` |
 | `rejected` | — | `rejected`: the order certainly never opened |
-| `unresolved` | — | `manual_review`, a `settled` intent without its trade's profit, and any status without a result; a live intent never reaches the sizer, the attempt reschedules first |
+| `unresolved` | — | a `settled` intent without its trade's profit, and any status without a result. A non-terminal intent never reaches the sizer, the attempt reschedules first: a live one, and `manual_review` too (it is not terminal), whose session the next tick's `stopHaltedSessions` stops as `manual_review` |
 
 ## Data policy
 
@@ -112,7 +112,7 @@ this one and above `maxSteps`.
 
 | Code | Source | What the orchestrator (#287) does |
 |---|---|---|
-| `unresolved_trade` | a trade without a result | a live intent never gets here: the attempt reschedules until it is terminal (reconciliation, #89, gives an `unknown` one its result). What reaches the sizer — `manual_review`, a `settled` intent without its profit — stops the session as `stake_stop`; no new stake is issued, which guards against counting a trade twice |
+| `unresolved_trade` | a trade without a result | a live intent never gets here: the attempt reschedules until it is terminal (reconciliation, #89, gives an `unknown` one its result). What reaches the sizer — a `settled` intent without its profit — stops the session as `stake_stop`; a `manual_review` one never does: the attempt reschedules and the next tick's `stopHaltedSessions` stops the session as `manual_review`; no new stake is issued, which guards against counting a trade twice |
 | `invalid_amount`, `invalid_trade`, `invalid_payout` | the data contract (a database row or the pairs catalog) | stops the session and logs a contract problem; the same data gives the same answer |
 | `session_duration_exceeded`, `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded` | a martingale limit | ends the session with the `stop_reason` of the same name (#450) |
 | `below_min_trade_amount` | the account's broker minimum (`GET /broker/user`) | ends the session; the broker would answer 400 `Amount is below the minimum` |

@@ -2,8 +2,10 @@
 
 A trading session is a run of `settings.cycles` cycles on one broker account (#552; a row of
 before it, `settings.trades` trades), one trade at a time, in the session's `mode`. A cycle is the
-stake sizer's series: under martingale it ends with a win, so its trades are one to
-`MARTINGALE_MAX_STEPS`; under fixed every trade is its own cycle. #130 lays the data layer: the `trading_sessions` table with its
+stake sizer's series: under martingale it ends with a win, and its stakes are one to
+`MARTINGALE_MAX_STEPS` steps, but a tie repeats its step and adds a trade (nothing bounds ties:
+[step 2](#post-tradingsessions)) and a stop ends the cycle with no win; under fixed every trade is
+its own cycle. #130 lays the data layer: the `trading_sessions` table with its
 constraints, the `settings` contract and the stop reasons in `packages/shared`, and the database
 operations the session orchestrator calls. #283 adds the backend routes that start, read and stop
 a session ([Routes](#routes)); since #327 a session runs in the user's trading mode, demo or real
@@ -204,9 +206,9 @@ session trades on its signals ([The payout order key](#the-payout-order-key-379-
 | Operation | Statement | Notes |
 |---|---|---|
 | `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings, startSignalAction? }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first, before any read (`demo_only`); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`) and compares the session's mode with `users.trading_mode` in the same statement's row (`mode_not_allowed`, #327: a switch committed before the lock is seen, one after it waits for the creation and then stops the session), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); for H1 settings (v5, a v4 row) the account's `h1_since` read under the same lock (`account_not_h1` when NULL, #707: an `h1 unmark` that committed between `h1 session start`'s check and the insert); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
-| `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
+| `checkTradingSessionStart(db, { telegramUserId, brokerAccountId?, mode })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id and the account), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`, whose `action` is `signalAction`, else the row's `start_signal_action` (#568). `settings` that fail every version read as `null`, with `cycles` `{ planned: 0, closed: 0 }`; otherwise `cycles` is `sessionProgress` over the same counters (#552) |
-| `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
+| `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | `readTradingSessionView`'s three selects, the first by the account and `status = active` | the account's active session as its owner sees it, in one snapshot: `undefined` when it has none, so a session stopped before the read is never returned (#283 m3, `trading-session-ops.db.test.ts` V1, V2) |
 | `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
@@ -214,7 +216,7 @@ session trades on its signals ([The payout order key](#the-payout-order-key-379-
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
 | `stopUserSessions(exec, { telegramUserId })` | one UPDATE | the stop routes pass `db`, `setTradingMode` its transaction (#327); every `active` session whose account belongs to `users.telegram_user_id` → `stopped`/`user_stopped` (#122); the owner is the predicate (a subquery joining `broker_accounts` and `users`, no lock on them), so another user's id stops nothing; `status = active` is the CAS, so a session another writer stopped first keeps its reason and is not returned. No limit: one active session per account |
 | `markSessionDecision(db, { id })` | one UPDATE | `last_decision_at = now()` on an active session |
-| `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
+| `readSessionHistory(db, sessionId, { maxDurationMs, noSignalTimeoutMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read), `waitExpired` ([the no-signal limit](#the-no-signal-limit-509)) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
 | `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
 
 Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; every UPDATE that
@@ -251,8 +253,9 @@ Every route here sits behind the internal bearer (`internalBearerAuth`, an encap
 Body `{ telegramUserId, brokerAccountId?, mode, assetId, durationSec, cycles? }` (strict; `mode`
 is required, `demo` or `real`, the mode the bot's button was drawn in, #327; `cycles` defaults to
 `DEFAULT_SESSION_CYCLES`, 1–20 like the settings, and `trades` is refused since #552;
-`durationSec` is at least `MIN_SESSION_DURATION_SEC`, 5). The steps in order; every refusal
-comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
+`durationSec` is at least `MIN_SESSION_DURATION_SEC`, 5). The steps in order; a refused start
+leaves no `trading_sessions` row: the refusals of steps 1–6b come before `createTradingSession`,
+and step 7's own refusals roll its transaction back:
 
 | # | Step | Refusal |
 |---|---|---|
@@ -274,8 +277,10 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 
 - **The view on `active_session_exists`.** A second start — a double press, or a retry after a
   timeout that fired once the first had committed — gets the account's active session in
-  `session`, so the caller learns what exists from the answer rather than from the code. `null`
-  when that session ended before it was read.
+  `session`, so the caller learns what exists from the answer rather than from the code. Both
+  paths, step 3's and step 7's, read it with `readActiveTradingSessionView`: the account's
+  `active` session in one snapshot, `null` when that session was stopped before it was read
+  (#283 m3).
 - **The race between steps 3 and 7.** The creation transaction re-checks the user, the account
   (status, halt) and the one active session under its locks, and reads the trading switch, so a
   switch closed in between still refuses with `trading_paused`; a close committed after the
@@ -515,7 +520,7 @@ keeps the first reason.
 | | the last two intents are `rejected` | stop `rejected_twice` (E2) |
 | `readSessionBalance` (#696: the amount of the session's mode, `minTradeAmount` and `awaitsBalance` in one statement) | no row | stop `balance_unavailable` |
 | | a row | `available` = the balance of the session's mode (`real.available` for a real session, E9a); `awaitsBalance` — a settle of any intent on the session's account in its mode (this session's, an earlier session's, a bot's one-off trade) is newer than that mode's newest observation and less than the no-signal limit old (`trade_intents.updated_at` of the `settled` row, the database clock); wider than the view's `balance.current`, which counts this session's trades only (SB1–SB9) |
-| `touchBalanceRequested` | — | keeps the account "in work", so the balance refresh and the broker socket stay on it between trades |
+| `touchBalanceRequested` | — | keeps the account "in work", so the balance refresh and the broker socket stay on it between trades while the next attempt comes within `BALANCE_WATCH_WINDOW_MS` (10 min). A `no_signal` hold lasts until the next boundary of `intervalForDuration(durationSec)`: the bot's 5 s sessions and the CLI's martingale ones (`DURATION_SEC` ≤ 780, a candle ≤ 5m) stay inside it; a CLI `fixed` session with `DURATION_SEC` ≥ 900 (a 15m–1h candle) can drop out, and its next stake is sized on the stored snapshot and goes over REST — the broker refuses a stake above the balance (#287 m2, accepted) |
 | `pairs.read` | `catalog_unavailable`, a backend failure, or `fresh: false` | hold back `TRADING_SESSION_RETRY_MS` (E9f) |
 | | the pair absent, or `!pairAcceptsDuration(pair, durationSec)` | stop `pair_unavailable` (E9c, E9d) |
 | | `!isPairOpen(pair, now)` and `waitExpired` | stop `no_signal_timeout`, `waited: pair_closed` (W5); no row: no decision was asked (O11) |
@@ -640,17 +645,23 @@ it does not wake this orchestrator.
 
 **The candle wake (#697).** A candle hold (`no_signal`) is not rounded up to a tick: it ends
 at the next boundary of the session's signal interval + `CANDLE_CLOSE_SLACK_MS` (shared,
-500 ms), the moment the backend's scanner decides that candle, so the session reads the scanner's
-decision from the cache, not one 2–10 s later. One timer per orchestrator (not per session: the 5 s
-sessions share the boundaries) is armed at the end of every tick, its `finally` included, for the
+500 ms), the moment the backend's scanner decides that candle on the intervals it scans
+(`SIGNAL_SCAN_INTERVALS`, `5s` only): a 5 s session reads that decision from the cache, or, when
+it asks before the scanner, its own reading is the candle's decision for both — whichever asks
+first decides. A 15 s session (the CLI's) reads the window at `+ 500` with no scanner, a 1m+ one
+REST on demand (Rule 10), both earlier than the `+ 2000` before #697. One timer per orchestrator
+(not per session: the 5 s sessions share the boundaries) is armed at the end of every tick, its `finally` included, for the
 earliest candle hold that ends after the timer's last firing; it calls `wake()`, so its tick is the
 same tick and counts in `woken`. A tick that ends the holds arms it again for the next (CT2);
-`stop()` clears it and nothing arms it after (CT3); any other hold arms nothing (CT4). The interval
-stays the safety net: a timer that fires before `Date.now()` reaches its target (the two clocks
-drift) leaves the session to the next tick of the interval, ≤ `TRADING_SESSION_TICK_MS` later. A
-decision on a candle the ring had not closed at that moment (`unclosed`, docs/signal.md → The
-scanner) is traded like any other: no REST fallback, no new refusal (CT5). Tests:
-`orchestrator.db.test.ts` CT1–CT5, E4b.
+`stop()` clears it and nothing arms it after (CT3); any other hold arms nothing (CT4). A timer
+that fires before `Date.now()` reaches its target (the two clocks drift) finds the session held,
+and the end of its tick arms the timer again for the rest of the wait: only targets at or before
+the last firing are skipped. The interval is the safety net only. A decision on a candle the ring
+had not closed at that moment (`unclosed`, docs/signal.md → The scanner) is traded like any other:
+the worker never reads `closedUntil`, the rule is the backend's — the feed leaves the unclosed
+candle out (`packages/signal/src/feed.test.ts` F26) and the scanner counts such a decision
+`unclosed` (`apps/backend/src/signal/scanner.test.ts` S29, S34). Tests: `orchestrator.db.test.ts`
+CT1–CT4, E4b.
 
 ## Recovery after a restart (#131)
 
@@ -668,7 +679,7 @@ the session (`listRunnableSessions` skips an account with a non-terminal intent)
 | The intent was left in | The session |
 |---|---|
 | `planned`/`reserved` | cannot happen: created and queued in one transaction |
-| `queued` | waits; a job delivered after `INTENT_MAX_AGE_MS` (60 s) ends `expired`, which counts towards `rejected_twice` like any `rejected` (R3) |
+| `queued` | waits; a job delivered after `INTENT_MAX_AGE_MS` (60 s) ends `rejected` with `last_error = expired` (`rejectExpiredIntent`), which counts towards `rejected_twice` like any `rejected` (R3) |
 | `submitting`, `unknown`, `reconciling`, `reconciling` with the dead worker's claim | waits; a redelivered job never sends again (R1b); the claim is a lease of `RECONCILE_RETRY_MS` (60 s) (R1) |
 | …and the pass finds the trade | the intent goes `accepted`/`settled`, then the next step (R1, H9) |
 | …and the pass finds nothing (demo, absence proven twice) | `rejected` (`reconciliation_not_found`) about 2.5-3.5 min after the submit, the reserve released, no halt; the session goes on and the intent counts towards `rejected_twice` (R2, #274) |
@@ -847,7 +858,7 @@ line is in it with its level.
 |---|---|---|
 | `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed` or `no_signal`, #509 — `paused` until #698; the session's limit in ms, #637) |
 | `trading session stopped for manual review` | error | the halt sweep, or `account_halted` from the attempt (`code`) |
-| `trading session completed` | info | the session's last cycle closed (`sessionProgress`, #552): `settled` and `cycles` (the closed ones) |
+| `trading session completed` | info | the session's last cycle closed (`sessionProgress`, #552): `settled` and `cycles`, the `done` of `sessionProgress` — the closed cycles of a v3/v5 row, the settled trades of a v1/v2/v4 row |
 | `trading session vanished` | warn | a race: the row was gone between the scan and the history |
 | `trading session has a live intent` | info | a race: the history shows a live intent the scan did not |
 | `trading session pairs unavailable` | warn | `catalog_unavailable`, a backend failure (`reason`, `status`), or `reason: 'stale'` |
@@ -891,6 +902,7 @@ with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR
 | `ASSET_ID` | required, 1 – int4 max |
 | `DURATION_SEC` | default 15 (#313; the bot offers 5 s only since #685, the CLI keeps its default), `MIN_SESSION_DURATION_SEC` (5, #552) – int4 max |
 | `CYCLES` | default `DEFAULT_SESSION_CYCLES` (5), 1 – 20 (#552; `TRADES` before it) |
+| `TRADES` | refused: set, even empty, it stops the CLI with `Env TRADES is not read since #552: set CYCLES` before anything is read (#580 m6, CLI-T) |
 | `DEMO_ONLY` | optional, `true` or `false` (default `false`), as the worker reads it (#396); passed to `createTradingSession`. The CLI creates demo sessions only, so the flag refuses nothing; a user in real mode is refused `mode_not_allowed` (#327) |
 | `SESSION_STAKE_STRATEGY` | optional, `martingale` or `fixed` (default `martingale`), the start route's variable (#450); written into the session's settings |
 
@@ -1171,12 +1183,15 @@ docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for
     "`unclosed/decided` < 1 % → 500" gave 1.07 % on the pilot's 2 h window (2026-10-22, 17 events,
     15 of them a whole scan at once: the watermark had not passed the boundary at `+ 500`; the
     watermark lag p50 212 / p95 364 / max 602 ms). The share is the scanner's at `+ 500`, which the
-    sessions read from its cache already; #697 adds none. Falsifiable: `signal scanner` lines over
+    5 s sessions read from its cache already, so on 5 s #697 adds none; the 15 s sessions (the CLI's,
+    the window with no scanner) and 1m+ ones (REST on demand) now read at `+ 500` instead of
+    `+ 2000`, a share nobody measured. Falsifiable: `signal scanner` lines over
     48 h after the deploy with `unclosed/decided` clearly above 1 % — then a re-ask after a late
     close (a task of its own) or a larger shared constant.
 16. **The candle timer and `Date.now()` drift (#697).** A timer that fires before the worker's clock
-    reaches the hold's end finds the session held; the interval's tick takes it, ≤ 5 s later — a
-    delay, never a wrong step.
+    reaches the hold's end finds the session held, and is armed again for the rest of the wait; the
+    interval's tick is the net only. Not tested (it needs control of `setTimeout`). Falsifiable: a
+    candle-held session attempted later than its boundary plus the slack by more than the drift.
 17. **Twice the decisions while a 5 s session waits (#697).** A 5 s session that waits
     (`no_signal`) decides on every candle, about 12 a minute instead of about 6: as many
     `signal_decisions` rows `no_signal` and `waits for …` lines. The no-signal limit counts time

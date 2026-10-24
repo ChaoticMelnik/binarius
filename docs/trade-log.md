@@ -527,7 +527,7 @@ On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/b
   `trade-log/keeper.test.ts` C1–C15 (one case per ending, the sweep loop),
   `trade-log/keeper.db.test.ts` D1–D4, `timing.test.ts` (the #668 chain).
 - `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
-  `orchestrator.db.test.ts` O1–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
+  `orchestrator.db.test.ts` O1–O2, O4–O8, O12–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
 - `packages/signal-stand`: `journal-line.test.ts` JL and `calibrate.test.ts` unchanged; C12 (an
   export reads as the log did).
 
