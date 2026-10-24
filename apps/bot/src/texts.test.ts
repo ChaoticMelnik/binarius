@@ -1125,6 +1125,7 @@ describe('the demo session status', () => {
       '🔹 Торговая пара: EUR/USD',
       '🔹 Сумма сделки: $1.00',
       '🔹 Время экспирации: 5 с',
+      '📡 Ждём сигнал…',
       '',
       'Торговая сессия запущена…',
     ].join('\n');
@@ -1145,8 +1146,28 @@ describe('the demo session status', () => {
     }
   });
 
-  it('T-sig1 prints no signal line without a direction', () => {
-    expect(plainOf(lbl('X'), SESSION_VIEW)).not.toContain('📡');
+  // #796: an H1 session started without a signal waits for one
+  it('T-sig2 prints the wait for a signal fifth without a direction, in both modes, until the session stops', () => {
+    for (const mode of Object.values(TradeMode)) {
+      const lines = plainOf(lbl('X'), sessionView({ mode, signalAction: null })).split('\n');
+      expect(lines[4]).toBe('📡 Ждём сигнал…');
+      expect(lines.slice(5)).toEqual(['', 'Торговая сессия запущена…']);
+    }
+    expect(
+      plainOf(lbl('X'), sessionView({ settings: null, signalAction: null })).split('\n'),
+    ).toEqual([
+      '🎮 Демо-сессия',
+      '📡 Ждём сигнал…',
+      '',
+      plainTextOf(TEXTS.sessionSettingsUnavailable),
+    ]);
+    const stopped = sessionView({
+      signalAction: null,
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.NoSignalTimeout,
+      endedAt: '2026-10-07T10:30:00.000Z',
+    });
+    expect(plainOf(lbl('X'), stopped)).not.toContain('📡');
   });
 
   it('T-sig1 puts the signal under the header when the settings cannot be read', () => {
@@ -1251,6 +1272,7 @@ describe('the demo session status', () => {
     expect(plainOf(lbl('X'), sessionView({ settings: null }))).toBe(
       [
         '🎮 Демо-сессия',
+        '📡 Ждём сигнал…',
         '',
         '⚠️ Настройки сессии не прочитаны — напиши в поддержку: /support',
       ].join('\n'),

@@ -62,6 +62,9 @@ export interface SecondSeries {
   lastTickOf(assetId: number, f: number): LastTick | undefined;
   // the digits the pair's closes are rounded to
   digitsOf(assetId: number): number | undefined;
+  // the pair's newest closed second the series holds, with how and when it closed (#796);
+  // undefined before its first close and after a reset until the next one
+  lastClosed(assetId: number): ClosedSecond | undefined;
   counters(): SecondSeriesCounters;
 }
 
@@ -77,6 +80,8 @@ interface PairState {
   closedUntil: number;
   last: LastTick;
   holePending: boolean;
+  lastClosedBy: H1SecondClosedBy;
+  lastClosedAtMs: number;
 }
 
 export const secondOf = (timestamp: number) => Math.ceil(timestamp / SECOND_MS) * SECOND_MS;
@@ -135,10 +140,15 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
 
   function announce(
     assetId: number,
+    pair: PairState,
     seconds: readonly number[],
     closedBy: H1SecondClosedBy,
     closedAtMs: number,
   ) {
+    if (seconds.length > 0) {
+      pair.lastClosedBy = closedBy;
+      pair.lastClosedAtMs = closedAtMs;
+    }
     for (const second of seconds) {
       for (const listener of listeners) listener({ assetId, second, closedBy, closedAtMs });
     }
@@ -170,6 +180,8 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
             receivedAtMs,
           },
           holePending: false,
+          lastClosedBy: H1SecondClosedBy.Tick,
+          lastClosedAtMs: NaN,
         });
         return;
       }
@@ -190,7 +202,7 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
           receivedAtMs,
         };
       }
-      announce(assetId, closed, H1SecondClosedBy.Tick, receivedAtMs);
+      announce(assetId, pair, closed, H1SecondClosedBy.Tick, receivedAtMs);
     },
     advance(nowMs) {
       for (const [assetId, pair] of pairs) {
@@ -199,6 +211,7 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
         const target = next + Math.floor((nowMs - closeMarginMs - next) / SECOND_MS) * SECOND_MS;
         announce(
           assetId,
+          pair,
           closeThrough(pair, target, H1SecondClosedBy.Clock),
           H1SecondClosedBy.Clock,
           nowMs,
@@ -237,6 +250,16 @@ export function createSecondSeries(options: SecondSeriesOptions): SecondSeries {
       return { price, timestamp: pair.tickTs[slot], receivedAtMs: pair.receivedAt[slot] };
     },
     digitsOf: (assetId) => pairs.get(assetId)?.digits,
+    lastClosed(assetId) {
+      const pair = pairs.get(assetId);
+      if (pair === undefined || !held(pair, pair.closedUntil)) return undefined;
+      return {
+        assetId,
+        second: pair.closedUntil,
+        closedBy: pair.lastClosedBy,
+        closedAtMs: pair.lastClosedAtMs,
+      };
+    },
     counters: () => ({ pairs: pairs.size, ...counts }),
   };
 }

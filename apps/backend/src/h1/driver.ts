@@ -77,6 +77,9 @@ export interface H1DriverConfig {
   logMs: number;
   // submit_deadline_at = taken_at_ms + this (H1_SUBMIT_BUDGET_MS)
   submitBudgetMs: number;
+  // current() reads the newest closed second f only while now - f is at most this
+  // (H1_START_SECOND_MAX_AGE_MS, #796)
+  startMaxAgeMs: number;
 }
 
 export interface H1DriverSessions {
@@ -94,7 +97,10 @@ export interface H1DriverSessions {
 }
 
 export interface H1DriverDeps {
-  series: Pick<SecondSeries, 'onClosed' | 'advance' | 'window' | 'lastTickOf' | 'digitsOf'>;
+  series: Pick<
+    SecondSeries,
+    'onClosed' | 'advance' | 'window' | 'lastTickOf' | 'digitsOf' | 'lastClosed'
+  >;
   catalog: Pick<PairsCatalog, 'read'>;
   // the data socket's active client is ready
   streaming: () => boolean;
@@ -115,25 +121,52 @@ export interface H1Driver {
   notice(sessionId: string): void;
   // the `h1 driver` line, totals since start
   report(): void;
+  // The start's reading (#796, docs/h1.md -> The start): the detector of `settings` on the pair's
+  // newest closed second, if that second is current. Touches no session and no counter
+  current(assetId: number, settings: H1SessionSettings): H1Reading;
+  // The start hands its new session over (#796): tracked at once, not at the next scan; with the
+  // start's reading, that second is decided for it as a closed second would be. Never throws
+  adopt(session: ActiveH1Session, start?: H1StartReading): void;
   stop(): Promise<void>;
 }
 
 // what a decision at f captured for its row: the facts of that second, not of the later write
-export interface H1DriverDecisionFacts {
-  sessionId: string;
-  brokerAccountId: string;
-  settings: H1SessionSettings;
+export interface H1SecondFacts {
   assetId: number;
   f: number;
   takenAtMs: number;
   decision: H1Decision;
-  payout: number;
   digits: number;
-  symbol: string;
   closedBy: H1SecondClosedBy;
   closedAtMs: number;
   series: (number | null)[];
   lastTick: LastTick | null;
+}
+
+export type H1DriverDecisionFacts = H1SecondFacts & {
+  sessionId: string;
+  brokerAccountId: string;
+  settings: H1SessionSettings;
+  payout: number;
+  symbol: string;
+};
+
+export const H1ReadingUnavailable = {
+  SourceDown: 'source_down',
+  NoSeries: 'no_series',
+  Stale: 'stale',
+  NoDigits: 'no_digits',
+  Warming: 'warming',
+} as const;
+export type H1ReadingUnavailable = (typeof H1ReadingUnavailable)[keyof typeof H1ReadingUnavailable];
+
+export type H1Reading =
+  | { kind: 'decision'; facts: H1SecondFacts }
+  | { kind: 'unavailable'; reason: H1ReadingUnavailable };
+
+export interface H1StartReading {
+  facts: H1SecondFacts;
+  pair: Pick<BinaryPair, 'payout' | 'symbol'>;
 }
 
 // the H1 signal's facts: the detector decided to trade
@@ -198,15 +231,9 @@ export function h1DriverParams(settings: H1SessionSettings): H1ShadowParams {
 // as it reads a shadow row; a session's writer leaves ticks_until_ms NULL (the keeper counts the
 // window from the trade's close). A no_signal decision is the waiting period's row (#775): the
 // row waitingForSignalSql reads
-export function h1DriverDecisionInput(
-  facts: H1DriverDecisionFacts,
-  step: number,
-  outcome:
-    | typeof SignalDecisionOutcome.Intent
-    | typeof SignalDecisionOutcome.Refused
-    | typeof SignalDecisionOutcome.NoSignal,
-  detail: string | null,
-): SignalDecisionInput {
+function h1SecondRow(
+  facts: H1SecondFacts & { settings: H1SessionSettings; payout: number; symbol: string },
+) {
   const source: H1ShadowSource = {
     kind: 'ticks',
     symbol: facts.symbol,
@@ -214,10 +241,6 @@ export function h1DriverDecisionInput(
     closedAtMs: facts.closedAtMs,
   };
   return {
-    context: SignalDecisionContext.Session,
-    tradingSessionId: facts.sessionId,
-    brokerAccountId: facts.brokerAccountId,
-    step,
     assetId: facts.assetId,
     interval: null,
     version: H1_VERSION,
@@ -232,9 +255,56 @@ export function h1DriverDecisionInput(
     source,
     series: facts.series,
     lastTick: facts.lastTick,
+    ticksUntilMs: null,
+  };
+}
+
+export function h1DriverDecisionInput(
+  facts: H1DriverDecisionFacts,
+  step: number,
+  outcome:
+    | typeof SignalDecisionOutcome.Intent
+    | typeof SignalDecisionOutcome.Refused
+    | typeof SignalDecisionOutcome.NoSignal,
+  detail: string | null,
+): SignalDecisionInput {
+  return {
+    ...h1SecondRow(facts),
+    context: SignalDecisionContext.Session,
+    tradingSessionId: facts.sessionId,
+    brokerAccountId: facts.brokerAccountId,
+    step,
     outcome,
     detail,
-    ticksUntilMs: null,
+  };
+}
+
+// The start route's row (#796, docs/trade-log.md -> The start route): the driver's row shape for
+// the start's reading, step NULL; a no_signal with the session id is a session that started
+// waiting, without one a no-signal start the insert refused
+export function h1StartDecisionInput(
+  facts: H1SecondFacts & {
+    brokerAccountId: string;
+    settings: H1SessionSettings;
+    payout: number;
+    symbol: string;
+  },
+  ending: { sessionId: string } | { refusal: string },
+): SignalDecisionInput {
+  const sessionId = 'sessionId' in ending ? ending.sessionId : null;
+  const signal = facts.decision.kind === SignalKind.Signal;
+  return {
+    ...h1SecondRow(facts),
+    context: SignalDecisionContext.SessionStart,
+    tradingSessionId: sessionId,
+    brokerAccountId: facts.brokerAccountId,
+    step: null,
+    outcome: !signal
+      ? SignalDecisionOutcome.NoSignal
+      : sessionId === null
+        ? SignalDecisionOutcome.Refused
+        : SignalDecisionOutcome.Started,
+    detail: signal && 'refusal' in ending ? ending.refusal : null,
   };
 }
 
@@ -308,6 +378,9 @@ interface Tracked {
   noSignalSeconds: number;
   // the no-signal limit in those seconds: the orchestrator's limit of the session's duration
   noSignalLimitSec: number;
+  // the scan that was running (or the last one) when the state was made or adopted: a scan whose
+  // list() began before that is no evidence the session is gone (#796)
+  adoptedSeq: number;
 }
 
 const percentile = (sorted: readonly number[], p: number) =>
@@ -356,6 +429,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
   let tickTimer: NodeJS.Timeout | undefined;
   let logTimer: NodeJS.Timeout | undefined;
   let stopped = false;
+  let scanSeq = 0;
 
   function track(job: Promise<void>) {
     inflight.add(job);
@@ -387,6 +461,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         repeatPending: false,
         noSignalSeconds: 0,
         noSignalLimitSec: sessionNoSignalTimeoutMs(parsed.data.durationSec) / SECOND_MS,
+        adoptedSeq: scanSeq,
       });
     } catch (error) {
       invalid.add(session.id);
@@ -398,12 +473,15 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
   }
 
   async function readSessions() {
+    const seq = ++scanSeq;
     const list = await sessions.list();
     if (stopped) return;
     const listed = new Set(list.map((session) => session.id));
     for (const id of gone) if (!listed.has(id)) gone.delete(id);
     for (const id of invalid) if (!listed.has(id)) invalid.delete(id);
-    for (const id of tracked.keys()) if (!listed.has(id)) tracked.delete(id);
+    for (const [id, state] of tracked) {
+      if (!listed.has(id) && state.adoptedSeq < seq) tracked.delete(id);
+    }
     for (const session of list) {
       if (tracked.has(session.id) || gone.has(session.id) || invalid.has(session.id)) continue;
       add(session);
@@ -757,41 +835,122 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         continue;
       }
       const decision = state.detector.decide({ closes, at: length - 1 });
-      const takenAtMs = now();
-      counts.decisions += 1;
-      lags.push(takenAtMs - f);
-      const facts: H1DriverDecisionFacts = {
-        sessionId: state.session.id,
-        brokerAccountId: state.session.brokerAccountId,
-        settings: state.settings,
+      act(
+        state,
+        secondFacts(assetId, f, now(), decision, digits, closedBy, closedAtMs, closes),
+        pair,
+      );
+    }
+  }
+
+  function secondFacts(
+    assetId: number,
+    f: number,
+    takenAtMs: number,
+    decision: H1Decision,
+    digits: number,
+    closedBy: H1SecondClosedBy,
+    closedAtMs: number,
+    closes: Float64Array,
+  ): H1SecondFacts {
+    return {
+      assetId,
+      f,
+      takenAtMs,
+      decision,
+      digits,
+      closedBy,
+      closedAtMs,
+      series: Array.from(closes, (close) => (Number.isNaN(close) ? null : close)),
+      lastTick: series.lastTickOf(assetId, f) ?? null,
+    };
+  }
+
+  // a decision of the session's detector on second f: counted, then the no-signal run or the trade
+  function act(state: Tracked, second: H1SecondFacts, pair: Pick<BinaryPair, 'payout' | 'symbol'>) {
+    const { decision, takenAtMs } = second;
+    counts.decisions += 1;
+    lags.push(takenAtMs - second.f);
+    const facts: H1DriverDecisionFacts = {
+      ...second,
+      sessionId: state.session.id,
+      brokerAccountId: state.session.brokerAccountId,
+      settings: state.settings,
+      payout: pair.payout,
+      symbol: pair.symbol,
+    };
+    if (decision.kind === SignalKind.NoSignal) {
+      noSignal[decision.reason] = (noSignal[decision.reason] ?? 0) + 1;
+      // a missing price is a hole in the data, not a reading of the market: not counted
+      if (decision.reason === H1NoSignalReason.NoPrice) return;
+      state.noSignalSeconds += 1;
+      if (
+        (!state.waitingRecorded && takenAtMs >= state.waitingRetryAt) ||
+        state.noSignalSeconds >= state.noSignalLimitSec
+      ) {
+        launch(state, () => onNoSignal(state, facts));
+      }
+      return;
+    }
+    counts.signals += 1;
+    const signalFacts: H1DriverSignalFacts = { ...facts, decision };
+    launch(state, () => trade(state, signalFacts, H1RepeatTrigger.Signal));
+  }
+
+  function current(assetId: number, settings: H1SessionSettings): H1Reading {
+    const unavailable = (reason: H1ReadingUnavailable): H1Reading => ({
+      kind: 'unavailable',
+      reason,
+    });
+    if (!streaming()) return unavailable(H1ReadingUnavailable.SourceDown);
+    const last = series.lastClosed(assetId);
+    if (last === undefined) return unavailable(H1ReadingUnavailable.NoSeries);
+    const f = last.second;
+    if (now() - f > config.startMaxAgeMs) return unavailable(H1ReadingUnavailable.Stale);
+    const digits = series.digitsOf(assetId);
+    if (digits === undefined) return unavailable(H1ReadingUnavailable.NoDigits);
+    const length = settings.signal.params.sdWindowSec + 1;
+    const { closes, complete } = series.window(assetId, f, length);
+    if (!complete) return unavailable(H1ReadingUnavailable.Warming);
+    const decision = createH1Detector(settings.signal.params).decide({ closes, at: length - 1 });
+    return {
+      kind: 'decision',
+      facts: secondFacts(
         assetId,
         f,
-        takenAtMs,
+        now(),
         decision,
-        payout: pair.payout,
         digits,
-        symbol: pair.symbol,
-        closedBy,
-        closedAtMs,
-        series: Array.from(closes, (close) => (Number.isNaN(close) ? null : close)),
-        lastTick: series.lastTickOf(assetId, f) ?? null,
-      };
-      if (decision.kind === SignalKind.NoSignal) {
-        noSignal[decision.reason] = (noSignal[decision.reason] ?? 0) + 1;
-        // a missing price is a hole in the data, not a reading of the market: not counted
-        if (decision.reason === H1NoSignalReason.NoPrice) continue;
-        state.noSignalSeconds += 1;
-        if (
-          (!state.waitingRecorded && takenAtMs >= state.waitingRetryAt) ||
-          state.noSignalSeconds >= state.noSignalLimitSec
-        ) {
-          launch(state, () => onNoSignal(state, facts));
-        }
-        continue;
+        last.closedBy,
+        last.closedAtMs,
+        closes,
+      ),
+    };
+  }
+
+  function adopt(session: ActiveH1Session, start?: H1StartReading) {
+    if (stopped || gone.has(session.id) || invalid.has(session.id)) return;
+    try {
+      let state = tracked.get(session.id);
+      if (state === undefined) {
+        add(session);
+        state = tracked.get(session.id);
+        if (state === undefined) return;
       }
-      counts.signals += 1;
-      const signalFacts: H1DriverSignalFacts = { ...facts, decision };
-      launch(state, () => trade(state, signalFacts, H1RepeatTrigger.Signal));
+      state.adoptedSeq = scanSeq;
+      if (start === undefined) return;
+      if (state.busy) {
+        counts.skippedLive += 1;
+        return;
+      }
+      if (start.facts.f < state.nextAt) {
+        counts.held += 1;
+        return;
+      }
+      act(state, start.facts, start.pair);
+    } catch (error) {
+      counts.errors += 1;
+      logger.warn({ sessionId: session.id, ...errorLogFields(error) }, 'h1 driver adopt failed');
     }
   }
 
@@ -848,6 +1007,8 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     scan,
     notice,
     report,
+    current,
+    adopt,
     async stop() {
       if (stopped) return;
       stopped = true;

@@ -577,15 +577,18 @@ export const sessionStopReplyText = (
 
 // The session's message (#284, #536, #568, docs/bot-session.md → The session message): the caption
 // of the session's picture, or the text when it has none. The header by mode (#327), the pair, the
-// stake and the expiry, the signal's direction, then «Торговая сессия запущена…» while it runs and
-// its end line once it stopped. Nothing of its trades: they are the backend's messages, and the
+// stake and the expiry, the signal's direction or the wait for one (#796), then «Торговая сессия
+// запущена…» while it runs and its end line once it stopped. Nothing of its trades: they are the backend's messages, and the
 // result and balance its summary's (#464). `symbol` is null when the catalog could not say.
 export function sessionStatusText(symbol: PairLabel | null, view: SessionStatusView): TelegramHtml {
   const { settings } = view;
   const header = view.mode === TradeMode.Real ? TEXTS.sessionHeaderReal : TEXTS.sessionHeader;
+  // a stopped session waits for nothing: no line without a direction
   const signal =
     view.signalAction === null
-      ? []
+      ? view.status === TradingSessionStatus.Stopped
+        ? []
+        : [TEXTS.sessionSignalWaiting]
       : [view.signalAction === TradeAction.Up ? TEXTS.sessionSignalUp : TEXTS.sessionSignalDown];
   if (settings === null) {
     return telegramHtml`${joinLines([header, ...signal])}

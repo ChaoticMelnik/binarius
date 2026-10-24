@@ -10,6 +10,7 @@ import {
   type PairsCatalogView,
 } from '@binarius/shared';
 import type { SignalEvaluation } from '@binarius/signal';
+import type { H1Driver, H1Reading } from '../h1/driver';
 import type { PairsRoutesDeps } from './pairs-routes';
 import type { TradingRoutesDeps } from './routes';
 import type { TradingSessionRoutesDeps } from './session-routes';
@@ -134,4 +135,21 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
     },
   },
   ticks: undefined,
+  h1Driver: undefined,
 });
+
+// an H1 driver port for the start route (#796): answers `reading` and records every call
+export function fakeH1Driver(reading: H1Reading) {
+  const currentCalls: Parameters<H1Driver['current']>[] = [];
+  const adoptCalls: Parameters<H1Driver['adopt']>[] = [];
+  const h1Driver: NonNullable<TradingSessionRoutesDeps['h1Driver']> = {
+    current: (...args) => {
+      currentCalls.push(args);
+      return reading;
+    },
+    adopt: (...args) => {
+      adoptCalls.push(args);
+    },
+  };
+  return { h1Driver, currentCalls, adoptCalls };
+}

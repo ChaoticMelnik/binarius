@@ -2301,4 +2301,16 @@ describe('an H1 session from the bot (#745, #775): drawn as any session', () => 
     expect(rowsOf(sent)).toEqual(BACK_ROWS);
     expect(warnings(changed.logger)).toEqual([]);
   });
+  it('H1-B9 a start without a signal (#796): a text message waiting for one, then the first trade turns it into the picture', async () => {
+    const scene = started(H1);
+    await scene.press(START);
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const sent = payloadOf(scene.calls, 'sendMessage');
+    expect(String(sent?.text).split('\n')[4]).toBe('📡 Ждём сигнал…');
+    await entryOf(scene).edit(sessionDrawing(pairLabel(PAIR_EURUSD), H1_UP));
+    expect(methods(scene.calls).at(-1)).toBe('editMessageMedia');
+    const edit = payloadOf(scene.calls, 'editMessageMedia')?.media as Record<string, unknown>;
+    expect(edit).toMatchObject({ type: 'photo', caption: statusOf(H1_UP), parse_mode: 'HTML' });
+    expect(String(edit.caption).split('\n')[4]).toBe('📡 Сигнал: ⬆️ Вверх');
+  });
 });

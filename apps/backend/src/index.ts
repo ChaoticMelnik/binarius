@@ -54,7 +54,7 @@ import { createMarketDataManager } from './market-data/manager';
 import { createTickStore } from './market-data/ticks';
 import { createSecondSeries } from './market-data/seconds';
 import { createH1Shadow } from './h1/shadow';
-import { createH1Driver } from './h1/driver';
+import { createH1Driver, H1ReadingUnavailable } from './h1/driver';
 import { createTradeLogKeeper } from './trade-log/keeper';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
@@ -78,6 +78,7 @@ import {
   H1_SHADOW_TICK_MS,
   H1_DRIVER_LOG_MS,
   H1_DRIVER_SCAN_MS,
+  H1_START_SECOND_MAX_AGE_MS,
   MARKET_DATA_BACKFILL_POLL_MS,
   MARKET_DATA_BACKFILL_RETRY_MS,
   MARKET_DATA_BACKFILL_SCAN_MS,
@@ -302,6 +303,18 @@ const app = buildApp({
     stakeStrategy: env.sessionStakeStrategy,
     decisions: { record: (input) => recordSignalDecision(db, input) },
     ticks: candleStore?.ticks,
+    // marketData is built after the app: read at the request, as `streaming` above
+    h1Driver:
+      candleStore === undefined
+        ? undefined
+        : {
+            current: (assetId, settings) =>
+              marketData?.h1Driver.current(assetId, settings) ?? {
+                kind: 'unavailable',
+                reason: H1ReadingUnavailable.SourceDown,
+              },
+            adopt: (session, start) => marketData?.h1Driver.adopt(session, start),
+          },
   },
   signal: {
     feed: signalFeed,
@@ -526,6 +539,7 @@ function createMarketData(
       tickMs: H1_SHADOW_TICK_MS,
       logMs: H1_DRIVER_LOG_MS,
       submitBudgetMs: env.h1SubmitBudgetMs,
+      startMaxAgeMs: H1_START_SECOND_MAX_AGE_MS,
     },
   });
   return { manager, backfill, h1Shadow, h1Driver };
@@ -663,7 +677,11 @@ if (!shuttingDown) {
   app.log.info({ enabled: marketData !== undefined }, 'market data source');
   app.log.info({ enabled: marketData?.h1Shadow !== undefined }, 'h1 shadow');
   app.log.info(
-    { enabled: marketData !== undefined, submitBudgetMs: env.h1SubmitBudgetMs },
+    {
+      enabled: marketData !== undefined,
+      submitBudgetMs: env.h1SubmitBudgetMs,
+      startMaxAgeMs: H1_START_SECOND_MAX_AGE_MS,
+    },
     'h1 driver',
   );
   app.log.info({ capture: candleStore !== undefined }, 'trade log keeper');

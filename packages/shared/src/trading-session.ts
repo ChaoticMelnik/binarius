@@ -598,8 +598,8 @@ export const tradingSessionViewSchema = z.strictObject({
   cycles: z.strictObject({ planned: countSchema, closed: countSchema }),
   lastIntent: tradeIntentViewSchema.nullable(),
   // the direction of the bot's session picture (#568): the last intent's, else the signal the
-  // start route checked; null on a session without a trade yet that was started before #568 or by
-  // the CLI session-start, which checks no signal
+  // start route checked; null on a session without a trade yet that was started before #568, by
+  // the CLI session-start, which checks no signal, or without an H1 signal at an H1 start (#796)
   signalAction: tradeActionSchema.nullable(),
   // null while the account has no snapshot
   balance: tradingSessionBalanceSchema.nullable(),
