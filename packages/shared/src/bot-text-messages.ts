@@ -70,8 +70,8 @@ export const BOT_TEXT_WIDTHS = {
   breakEven: 5,
   // a session's signal candle in seconds: the longest of SIGNAL_CHART_INTERVAL_MS, 1h («3600»)
   candleSec: String(Math.max(...Object.values(SIGNAL_CHART_INTERVAL_MS)) / 1000).length,
-  // «999 из 999»
-  page: 10,
+  // «999»
+  page: 3,
   // formatPaymentDate: 'dd.mm.yyyy hh:mm'
   paymentDate: 16,
   // a Stars amount: int4, formatCount over INT4_MAX (star_payments.total_amount)
@@ -94,8 +94,6 @@ export const BOT_TEXT_WIDTHS = {
   // a signal parameter's period, and the count of closed candles
   period: 4,
   candles: 5,
-  // durationLabelOf's fallback on an int4 duration: ⏱ 2147483647 с
-  durationFallback: 14,
   // the /account lines: POST /users/account answers at most this many links
   accountLines: USER_ACCOUNT_LIST_LIMIT,
   // a session's counters: a session holds at most MAX_SESSION_SUMMARY_TRADES (720) trades
@@ -134,7 +132,7 @@ const tradeLine = (m: BotTextMeasure, action: number) =>
   Math.max(w.symbol, m.length('intentAssetFallback')) +
   SEPARATOR +
   action +
-  Math.max(m.longest(...durations), w.durationFallback) +
+  Math.max(m.longest(...durations), m.length('demoDurationSeconds')) +
   SEPARATOR +
   m.length('intentStake');
 const stakeLabel = (m: BotTextMeasure) => Math.max(w.stake, m.length('stakeMinimumLabel'));
@@ -194,6 +192,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   symbol: () => w.symbol,
   group: (m) => m.longest(...groups),
   page: () => w.page,
+  pageCount: () => w.page,
   payout: () => w.payout,
   breakEven: () => w.breakEven,
   // candlesCount of SESSION_NO_SIGNAL_CANDLES: 20 takes the many form («20 свечей»), and the bot
@@ -204,6 +203,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   // a session's duration in seconds, an int4 (texts.ts → sessionStatusText), and « с»
   duration: () => String(INT4_MAX).length + ' с'.length,
   label: (m) => m.longest(...durations),
+  // durationLabelOf's fallback: an int4 duration
+  durationSec: () => String(INT4_MAX).length,
   subject,
   value: (m) =>
     m.longest('trendUp', 'trendDown', 'trendFlat') +

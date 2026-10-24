@@ -131,11 +131,13 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   symbol: text,
   group: text,
   page: text,
+  pageCount: text,
   payout: text,
   breakEven: text,
   noSignalCandles: text,
   candleSec: text,
   label: text,
+  durationSec: text,
   duration: text,
   subject: text,
   value: text,
@@ -1710,5 +1712,63 @@ describe('the widths of the labels of data (#475)', () => {
         buttonLabelWidth(cycleStakeLabel(decimalStringSchema.parse('999.99'), current)),
       ).toBeLessThanOrEqual(BUTTON_LABEL_WIDTHS[2]);
     }
+  });
+});
+
+// #632: the demo, analysis and trade screens in English, the Russian ones beside them unchanged
+describe('the demo, analysis and trade texts in English (#632)', () => {
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+
+  it('T-en1 lays out the pairs screen: the English header with the type, then the page of pages', () => {
+    const header = BOT_TEXT_SOURCES_EN.demoPairsHeader!.replace(
+      '{group}',
+      BOT_TEXT_SOURCES_EN.demoGroupCurrency!,
+    ).replace(/<\/?b>/g, '');
+    expect(en(() => plainTextOf(demoPairsScreen('currency', 1, 4)))).toBe(`${header}
+Page 2 of 4`);
+    expect(plainTextOf(demoPairsScreen('currency', 1, 4))).toMatch(/\nСтраница 2 из 4$/);
+  });
+
+  it('T-en2 prints the duration in English: the demo label and the fallback in seconds', () => {
+    en(() => {
+      expect(DEMO_DURATION_LABELS[5]).toBe('⏱ 5 s');
+      expect(plainTextOf(intentStatusText(lbl('X'), intentView({ durationSec: 45 })))).toContain(
+        ' · ⏱ 45 s · ',
+      );
+      expect(plainTextOf(intentStatusText(lbl('EUR/USD'), intentView())).split('\n')[1]).toBe(
+        '📈 EUR/USD · ⬆️ Up · ⏱ 5 s · stake $1.00',
+      );
+    });
+    expect(plainTextOf(intentStatusText(lbl('X'), intentView({ durationSec: 45 })))).toContain(
+      ' · ⏱ 45 с · ',
+    );
+  });
+
+  it.each(Object.values(BotLanguage))(
+    'T-en3 a type with up to 99 open pairs fits a row of two in %s',
+    (language) => {
+      runWithLanguage(language, () => {
+        for (const group of PAIR_TYPE_GROUPS) {
+          expect(buttonLabelWidth(groupButtonLabel(group, 99)), group).toBeLessThanOrEqual(
+            BUTTON_LABEL_WIDTHS[2],
+          );
+        }
+      });
+    },
+  );
+
+  it('T-en4 offers the session of 5 cycles in English', () => {
+    en(() => {
+      expect(sessionStartButtonLabel(5, TradeMode.Demo)).toBe('🚀 Session of 5 cycles');
+      expect(sessionStartButtonLabel(5, TradeMode.Real)).toBe('🚀 Session of 5 cycles · REAL');
+      const offer = plainTextOf(
+        intentStatusText(lbl('EUR/USD'), intentView({ status: TradeIntentStatus.Settled }), {
+          sessionOffer: true,
+        }),
+      );
+      expect(offer).toContain('5 cycles');
+      expect(offer).not.toMatch(CYRILLIC);
+    });
   });
 });

@@ -2,6 +2,8 @@ import { BotError, GrammyError, HttpError, InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   ButtonRole,
   pairLabel,
   BrokerBalanceUnavailableReason,
@@ -51,6 +53,7 @@ import {
   stakeMenuCallbackData,
 } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
+import { runWithLanguage, type UserLanguages } from './language';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import { sessionCardKeyboard } from './trading-session';
 import {
@@ -97,13 +100,16 @@ import {
   stubSessionTracker,
   stubTracker,
   textUpdate,
+  userLanguagesWith,
   inlineRoles,
   inlineRows,
   inlineStyles,
 } from './testing';
 import {
+  DEMO_DURATION_LABELS,
   demoPairsScreen,
   demoSummary,
+  groupButtonLabel,
   LABELS,
   sessionStartButtonLabel,
   signalButtonLabel,
@@ -129,6 +135,7 @@ function setup(
     readTradingAccess?: BackendClient['readTradingAccess'];
     dialog?: LoginDialogState;
     dialogClock?: { at: number };
+    languages?: UserLanguages;
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -163,6 +170,7 @@ function setup(
     botInfo: BOT_INFO,
     loginDialog,
     now: () => NOW,
+    ...(options.languages === undefined ? {} : { languages: options.languages }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -3252,5 +3260,136 @@ describe('effectiveStake', () => {
     expect(
       effectiveStake(accessView({ tradingMode: TradeMode.Real, ...saved, broker: null })),
     ).toBeNull();
+  });
+});
+
+// #632: the demo path of a user whose language is English, answered through the language
+// middleware as production answers it; every text, caption and button label it sends is English
+describe('the demo path in English (#632)', () => {
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const english = (options: Parameters<typeof setup>[0] = {}) =>
+    setup({ ...options, languages: userLanguagesWith(USER.id, BotLanguage.En) });
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const textsOf = (calls: readonly ApiCall[]): string[] =>
+    calls.flatMap((call) => [
+      ...[call.payload.text, call.payload.caption].filter(
+        (text): text is string => typeof text === 'string',
+      ),
+      ...inlineRows(call.payload)
+        .flat()
+        .map((key) => key.text),
+    ]);
+  const expectEnglish = (calls: readonly ApiCall[]) => {
+    const texts = textsOf(calls);
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text).not.toMatch(CYRILLIC);
+  };
+  // a one-key screen's plain text, from the English catalog
+  const sourceOf = (source: string | undefined, vars: Record<string, string> = {}) =>
+    Object.entries(vars)
+      .reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), source ?? '')
+      .replace(/<\/?b>/g, '');
+
+  it('EN-1 the entry sends the signals screen in English with the English footer', async () => {
+    const { press, calls } = english();
+    await press(DEMO_CALLBACK_DATA);
+
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(
+      en(() => TEXTS.demoSignalsHeader({ label: DEMO_DURATION_LABELS[5] }).value),
+    );
+    expect(plainTextOf(sent?.text as string)).toBe(
+      sourceOf(BOT_TEXT_SOURCES_EN.demoSignalsHeader, { label: '⏱ 5 s' }),
+    );
+    expect(
+      rowsOf(sent)
+        .at(-1)
+        ?.map((key) => key.text),
+    ).toEqual([
+      BOT_TEXT_SOURCES_EN.demoSignalsRefreshButton,
+      BOT_TEXT_SOURCES_EN.demoManualButton,
+      BOT_TEXT_SOURCES_EN.menuButton,
+    ]);
+    expectEnglish(calls);
+  });
+
+  it('EN-2 the types and a page of a type in English: the type words, «Page 1 of 1»', async () => {
+    const { press, calls } = english();
+    await press(DEMO_GROUPS_CALLBACK_DATA);
+    const types = payloadOf(calls, 'editMessageText');
+    expect(types?.text).toBe(BOT_TEXT_SOURCES_EN.demoGroups);
+    expect(rowsOf(types)[0]?.[0]).toEqual(
+      button(
+        en(() => groupButtonLabel('currency', 1)),
+        demoPageCallbackData('currency', 0),
+      ),
+    );
+    expect(rowsOf(types)[0]?.[0]?.text).toBe(`${BOT_TEXT_SOURCES_EN.demoGroupCurrency} · 1`);
+
+    await press(demoPageCallbackData('currency', 0));
+    const page = calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload;
+    expect(page?.text).toBe(en(() => demoPairsScreen('currency', 0, 1).value));
+    expect(plainTextOf(page?.text as string)).toMatch(/\nPage 1 of 1$/);
+    expectEnglish(calls);
+  });
+
+  it("EN-3 a pair's summary in English", async () => {
+    const { press, calls } = english();
+    await press(demoAssetCallbackData(PAIR_EURUSD.id));
+
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(en(() => demoSummary(PAIR_EURUSD, 5).value));
+    expect(plainTextOf(edited?.text as string)).toContain('⏱ Duration: ⏱ 5 s');
+    expectEnglish(calls);
+  });
+
+  it('EN-4 the amount screen in English: the cycle of 5 cycles and the risk mark', async () => {
+    const { press, calls } = english();
+    await press(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
+
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(plainTextOf(edited?.text as string)).toBe(
+      `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 5 s
+🤖 The bot will run 5 cycles in a row and check the signal before each trade. It is a demo: no money needed.
+
+${BOT_TEXT_SOURCES_EN.cycleStakeChoose}`,
+    );
+    const labels = rowsOf(edited)
+      .flat()
+      .map((key) => key.text);
+    expect(labels).toContain('$10.00 · risk');
+    expect(labels).toContain(BOT_TEXT_SOURCES_EN.stakeCustomButton);
+    expectEnglish(calls);
+  });
+
+  it('EN-5 the analysis card and its single trade in English', async () => {
+    const { press, calls } = english();
+    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+
+    const card = payloadOf(calls, 'sendPhoto');
+    expect(card?.caption).toBe(
+      en(
+        () =>
+          analysisScreen({
+            mode: TradeMode.Demo,
+            pair: PAIR_EURUSD,
+            durationSec: 5,
+            response: SIGNAL_DECIDED,
+            chooseAmount: true,
+          }).text.value,
+      ),
+    );
+    expect(plainTextOf(card?.caption as string)).toContain(
+      BOT_TEXT_SOURCES_EN.analysisCardUp?.replace(/<\/?b>/g, ''),
+    );
+
+    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, TradeMode.Demo));
+    const expanded = calls.filter((call) => call.method === 'editMessageReplyMarkup').at(-1);
+    expect(
+      rowsOf(expanded?.payload)
+        .flat()
+        .map((key) => key.text),
+    ).toContain('🚀 Open a trade: ⬆️ Up · $1.00');
+    expectEnglish(calls);
   });
 });

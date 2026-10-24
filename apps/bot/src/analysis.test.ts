@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   BrokerRestErrorCode,
   defaultBotTextSource,
   type BotTextKey,
@@ -38,6 +40,7 @@ import {
   formatRsi,
 } from './analysis';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
+import { runWithLanguage } from './language';
 import {
   PAIR_EURUSD,
   PAIR_EURUSD_REGULAR,
@@ -563,6 +566,51 @@ describe('the text source', () => {
   it('shows the short-data word from the source in place, with its numbers', () => {
     expect(screenWith('indicatorShortData', SIGNAL_DECIDED)).toContain(
       'MA200         ЗАГЛУШКА indicatorShortData 0 200',
+    );
+  });
+});
+
+// #632: the card and the refusal lines in English, every word from the English catalog
+describe('the analysis screen in English (#632)', () => {
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+
+  it('A-en1 lays out a signal as an English card over the amounts', () => {
+    const text = en(() =>
+      plainTextOf(screenOf(SIGNAL_CARD, PAIR_EURUSD, TradeMode.Demo, true).text),
+    );
+    expect(text).toBe(
+      `📊 Analysis: EUR/USD · ⏱ 5 s
+🟢 Strong signal to rise
+
+Pair       EUR/USD
+RSI        neutral 62.3
+MACD       above the signal 0.000023
+MA50       price above 1.08531
+MA200      price below 1.08612
+EMA trend  up
+Volatility normal 0.041%
+Direction  ⬆️ UP 🟢
+💰 Payout: 85% — the size of the win on a correct forecast, not a probability. Break-even: 54.1% of correct forecasts.
+
+${BOT_TEXT_SOURCES_EN.analysisDisclaimer}
+
+${BOT_TEXT_SOURCES_EN.analysisChooseAmount}`,
+    );
+    expect(text).not.toMatch(CYRILLIC);
+  });
+
+  it('A-en2 tells a rule refusal in English: the feature lines and their words', () => {
+    const lines = en(() => linesOf(ruleRefusalOf(NoSignalReason.TrendMomentumDisagree)));
+    expect(lines.join('\n')).not.toMatch(CYRILLIC);
+    expect(lines.find((line) => line.startsWith('📐'))).toMatch(
+      /^📐 EMA trend: up — EMA\d+ [\d.]+ above EMA\d+ [\d.]+$/,
+    );
+    expect(lines.find((line) => line.startsWith('⚡'))).toBe('⚡ RSI momentum: up — RSI10 62.3');
+    expect(lines.find((line) => line.startsWith('🌊'))).toMatch(/^🌊 ATR volatility: normal — /);
+    const tickFloor = en(() => linesOf(ruleRefusalOf(NoSignalReason.VolatilityBelowTickFloor)));
+    expect(tickFloor.find((line) => line.startsWith('🌊'))).toMatch(
+      /: below the threshold in quote steps — ATR12 0\.041% · 44\.7 quote steps$/,
     );
   });
 });
