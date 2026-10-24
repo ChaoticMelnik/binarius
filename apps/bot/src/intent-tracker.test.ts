@@ -439,6 +439,7 @@ describe('the intent tracker', () => {
       await vi.advanceTimersByTimeAsync(FIRST);
       expect(edit).toHaveBeenCalledTimes(1);
       await tracker.stop();
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(POLL);
       expect(edit).toHaveBeenCalledTimes(1);
     });

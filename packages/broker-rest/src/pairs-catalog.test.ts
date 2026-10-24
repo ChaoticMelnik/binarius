@@ -38,7 +38,7 @@ function catalogOf(overrides: Partial<PairsCatalogDeps> = {}): PairsCatalog {
     ttlMs: DEFAULT_BROKER_PAIRS_TTL_MS,
     logger: logger(),
     now: () => clock + wallOffset,
-    ageClock: () => clock,
+    ageClock: () => clock - START_CLOCK,
     ...overrides,
   });
   catalogs.push(catalog);
