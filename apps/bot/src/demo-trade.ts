@@ -187,9 +187,7 @@ const outcomeUnknown = (error: unknown): boolean =>
   (error.code !== BackendErrorCode.HttpStatus || (error.status ?? 0) >= 500);
 
 type CreateOutcome =
-  | { ok: true; intent: TradeIntentView }
-  | { ok: false; unknown: true; error: unknown }
-  | { ok: false; unknown: false; error: unknown };
+  { ok: true; intent: TradeIntentView } | { ok: false; unknown: boolean; error: unknown };
 
 export function createDemoTradeComposer<C extends Context>({
   backend,

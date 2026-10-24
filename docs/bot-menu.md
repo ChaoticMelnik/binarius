@@ -90,8 +90,9 @@ At most one of the three status lines is printed.
   at most `BROKER_BALANCE_SLA_SEC` old at that moment or carries the age line. Nothing is promised
   about a card read later; `/menu` sends a new one.
 
-Every fragment is a `TEXTS` entry and every hole goes through `telegramHtml`. The caption of every
-variant, with every hole at its widest, is valid Telegram HTML inside the 1 024-unit caption limit
+Every fragment is a catalog entry read through `TEXTS`, or the plain label table beside it
+(`MODE_LABELS` in `packages/shared/src/bot-text-vars.ts`, data kept out of the catalog); every hole
+goes through `telegramHtml`. The caption of every variant, with every hole at its widest, is valid Telegram HTML inside the 1 024-unit caption limit
 (`texts.test.ts`).
 
 ## Formatting
@@ -117,7 +118,7 @@ variant, with every hole at its widest, is valid Telegram HTML inside the 1 024-
 | 200 `brokerUnavailable: 'no_account'` (revoked between the two calls) | `TEXTS.accountNone` + the connect button, as `/account` shows |
 | 404 `user_not_found` | `TEXTS.unavailable` + warn: `/users/start` has just upserted the row, so this is not «not connected» |
 | 404 `broker_account_not_found`, 404 `not_found`, 401, 400, any other 4xx | `TEXTS.unavailable` + warn |
-| 5xx, unreachable, timeout, a body the parser refuses | `TEXTS.unavailable` + warn; the route writes only `last_requested_at`, so `/menu` again is a free retry |
+| 5xx, unreachable, timeout, a body the parser refuses | `TEXTS.unavailable` + warn; the route's own write is `last_requested_at`, and the refresh it triggers writes only the balance snapshot — nothing is charged, so `/menu` again is a free retry |
 
 The warn line is `trading access not read` with `errorLogFields` and `backendErrorFields` (the
 status and the bare reason) — no Telegram id and nothing of the answer (`logging.test.ts`).

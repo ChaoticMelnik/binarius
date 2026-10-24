@@ -488,9 +488,7 @@ export function createBot({
   });
 
   privateChats.callbackQuery(LEVEL_CURRENT_CALLBACK_DATA, async (ctx) => {
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logAnswerFailure(error);
-    });
+    await ctx.answerCallbackQuery().catch(logAnswerFailure);
   });
 
   // The personal link (#115, invite.ts)
@@ -599,9 +597,7 @@ export function createBot({
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logAnswerFailure(error);
-    });
+    await ctx.answerCallbackQuery().catch(logAnswerFailure);
     await replyHtml(ctx, TEXTS.emailPrompt({ firstName: ctx.from.first_name }), {
       reply_markup: menuKeyboard(),
     });
@@ -613,9 +609,7 @@ export function createBot({
     const accountId = confirmLoginRequestSchema.shape.accountId.safeParse(ctx.match[1]);
     if (!accountId.success) {
       // the button is ours, so this is a forged or stale query: stop the spinner, say nothing
-      await ctx.answerCallbackQuery().catch((error: unknown) => {
-        logAnswerFailure(error);
-      });
+      await ctx.answerCallbackQuery().catch(logAnswerFailure);
       return;
     }
     // independent: the outcome message matters more than the spinner, so a rejected
@@ -632,7 +626,7 @@ export function createBot({
     }
     const error: unknown = confirmed.reason;
     const refusal =
-      error instanceof BackendError ? CONFIRM_REFUSALS[error.reason ?? ''] : undefined;
+      error instanceof BackendError ? refusalOf(CONFIRM_REFUSALS, error.reason) : undefined;
     if (refusal !== undefined) {
       await replyHtml(ctx, textOf(refusal), { reply_markup: refusalKeyboard(refusal) });
       return;
@@ -645,9 +639,7 @@ export function createBot({
     const id = ctx.from.id;
     const state = loginDialog.get(id);
     if (state?.step !== 'code') {
-      await ctx.answerCallbackQuery().catch((error: unknown) => {
-        logAnswerFailure(error);
-      });
+      await ctx.answerCallbackQuery().catch(logAnswerFailure);
       // no address yet, or no login at all: there is nothing to send a code to
       const text =
         state?.step === 'email'
@@ -761,7 +753,7 @@ export function createBot({
     }
     const error: unknown = sent.reason;
     const refusal =
-      error instanceof BackendError ? SEND_CODE_REFUSALS[step][error.reason ?? ''] : undefined;
+      error instanceof BackendError ? refusalOf(SEND_CODE_REFUSALS[step], error.reason) : undefined;
     if (refusal !== undefined) {
       await replyWithRefusal(ctx, id, refusal);
       return;
@@ -799,7 +791,8 @@ export function createBot({
   // again is then refused as invalid_code. So every failure but a definite refusal is checked
   // against the user's state before the user is told it failed.
   async function replyToFailedLogin(ctx: Context, from: User, error: unknown): Promise<void> {
-    const refusal = error instanceof BackendError ? LOGIN_REFUSALS[error.reason ?? ''] : undefined;
+    const refusal =
+      error instanceof BackendError ? refusalOf(LOGIN_REFUSALS, error.reason) : undefined;
     if (refusal !== undefined) {
       await replyWithRefusal(ctx, from.id, refusal);
       return;
@@ -842,14 +835,9 @@ export function createBot({
     await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
   }
 
-  // A rich message (the welcome video, the account card photo) with its text as the fallback.
-  // A refusal of the rich call means nothing was sent, so the same text goes instead. A
-  // transport failure — of the rich call or of the text — leaves delivery unknown, and a second
-  // copy is worse than none, so nothing more is sent and undefined is returned. It is logged here
-  // rather than in bot.catch because only this place still knows the method: HttpError carries
-  // none. A refused text message goes to bot.catch, as in every one-message handler — a
-  // GrammyError carries its own method there; so does anything that is neither a refusal nor the
-  // transport, a bug that must not be dressed up as a delivery problem.
+  // A refusal of the rich call (the welcome video, the account card photo) sends the text instead.
+  // A transport failure of either call sends nothing more and returns undefined, logged here
+  // because only this place knows the method. A refused text and anything else go to bot.catch.
   async function sendWithTextFallback(
     ctx: Context,
     rich: RichSend,
@@ -1105,6 +1093,15 @@ function confirmButtons(accounts: readonly PendingBrokerAccountView[]): BotButto
       confirmCallbackData(account.id),
     ),
   );
+}
+
+// The tables are plain objects and ERROR_CODE_PATTERN admits __proto__ and constructor; an
+// inherited value must not reach textOf.
+function refusalOf<T>(
+  table: Partial<Record<string, T>>,
+  reason: string | undefined,
+): T | undefined {
+  return reason !== undefined && Object.hasOwn(table, reason) ? table[reason] : undefined;
 }
 
 // the refusals the user can act on; anything else is an outage to them

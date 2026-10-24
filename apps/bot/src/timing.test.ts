@@ -247,6 +247,11 @@ const videoTimedOut = (): HttpError =>
     "Network request for 'sendVideo' failed!",
     new Error('The operation was aborted due to timeout'),
   );
+const textTimedOut = (): HttpError =>
+  new HttpError(
+    "Network request for 'sendMessage' failed!",
+    new Error('The operation was aborted due to timeout'),
+  );
 const PHOTO_REFUSED: ApiError = {
   ok: false,
   error_code: 400,
@@ -688,6 +693,16 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
       update: update(),
       welcomeVideoFileId: 'not-a-file-id',
       apiErrors: [['sendVideo', VIDEO_REFUSED]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'the video is refused and the text fails in transport',
+      update: update(),
+      welcomeVideoFileId: 'not-a-file-id',
+      apiErrors: [
+        ['sendVideo', VIDEO_REFUSED],
+        ['sendMessage', textTimedOut()],
+      ],
       expected: { backend: 1, telegram: 2 },
     },
     {

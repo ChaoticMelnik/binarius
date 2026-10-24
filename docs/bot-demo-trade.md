@@ -19,7 +19,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   filter, right after the demo's composer.
 - `apps/bot/src/intent-tracker.ts` — `createIntentTracker({ backend, logger, firstPollMs, pollMs,
   deadlineMs, maxEntries?, now? })` → `{ track, stop, size }`. Also `TRACKER_STOP_STATUSES`,
-  `sessionOfferOf` (#360), `INTENT_TRACKER_MAX_ENTRIES` and `INTENT_NOT_FOUND`. `index.ts` builds one and hands it to
+  `sessionOfferOf` (#360) and `INTENT_NOT_FOUND`. `index.ts` builds one and hands it to
   `createBot` and to `runBot`.
 - `apps/bot/src/demo.ts` — the stake button's data
   `demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>`, `newStakeNonce`,
@@ -306,8 +306,8 @@ no outgoing edge in `TRADE_INTENT_TRANSITIONS`, plus `accepted`.
 | --- | --- |
 | a changed status | edited; on a stop status the entry ends once the edit has landed, otherwise the edit is retried on every poll until the deadline |
 | the same status | not edited; polls again, or reaches the deadline |
-| past `INTENT_TRACK_DEADLINE_MS` | one last edit, then stops: «⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить» чуть позже.» under a live status, the status text itself for a stop status whose edit never landed. This edit is not retried, because the deadline is what ends every entry, even one whose every edit is refused (a 403 once the user blocked the bot) |
-| 404 `not_found` | «⚠️ Статус сделки недоступен.»; `warn` `trade intent status not read` with `intentId`; stops. That edit is not retried: polling cannot fix a missing or foreign id, and the refresh button gives the same answer |
+| past `INTENT_TRACK_DEADLINE_MS` | one last edit, then stops: «⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить» чуть позже.» under a live status, the status text itself for a stop status whose edit never landed. This edit is not retried, because the deadline is what ends every entry, even one whose every edit is refused (a 403 once the user blocked the bot); when this poll's own edit was refused or failed a moment ago, the last edit is armed one `INTENT_TRACK_POLL_MS` later instead of at once (never two edits in one attempt; `stop()` drops it like a pending poll) |
+| 404 `not_found` | «⚠️ Статус сделки недоступен.»; `warn` `trade intent status not read` with `intentId`; stops. That edit is not retried: polling cannot fix a missing or foreign id, and the refresh button gives the same answer; an entry evicted while the read was in flight renders nothing |
 | any other read failure | `warn` once per entry; polls again until the deadline |
 | the edit refused as «message is not modified» | treated as shown |
 | the edit refused as gone | `warn` `trade intent message not edited` (always); stops |
@@ -355,6 +355,8 @@ gets `warn` and nothing more. This press never starts tracking.
 - `INTENT_TRACK_DRAIN_MS` = 5 s + 8 s, one read and one edit, which is what `runBot`'s
   `intent tracker` drain step can wait for.
 - The chain at import requires first poll < poll < deadline, and drain < `SHUTDOWN_BUDGET_MS`.
+- An entry lives at most `INTENT_TRACK_DEADLINE_MS` + one `INTENT_TRACK_POLL_MS` + the attempt:
+  the last edit waits one poll when the attempt past the deadline has just failed its own edit.
 
 ## Logs
 

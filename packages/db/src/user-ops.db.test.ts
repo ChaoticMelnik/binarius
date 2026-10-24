@@ -8,7 +8,6 @@ import {
   NotificationLevel,
   PostbackSource,
   TradeMode,
-  START_PAYLOAD_PATTERN,
   UserStatus,
   botLanguageOf,
   startPayloadSchema,
@@ -333,7 +332,6 @@ describe('startPayloadSchema and users_acquisition_source_check agree', () => {
   // one corpus, two engines: the zod verdict and the live CHECK are compared row by row
   it.each(START_PAYLOAD_CORPUS)('$label', async ({ value, valid }) => {
     expect(startPayloadSchema.safeParse(value).success).toBe(valid);
-    expect(START_PAYLOAD_PATTERN.test(value)).toBe(valid);
 
     const telegramUserId = nextTelegramUserId();
     const insert = tmp.db

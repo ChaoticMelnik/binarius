@@ -245,10 +245,20 @@ describe('readDemoCatalog', () => {
 
 describe('readDemoTrade', () => {
   it('checks the pair on the clock taken after the read, against that catalog', async () => {
-    const now = vi.fn(() => NOW);
-    expect(
-      await readDemoTrade({ readPairs: () => Promise.resolve(PAIRS_RESPONSE) }, 101, 5, now),
-    ).toEqual({ ok: true, pair: PAIR_EURUSD, durationSec: 5, catalog: PAIRS_RESPONSE });
+    const opening = { ...PAIR_EURUSD, scheduledUntil: NOW + 1_000 };
+    const catalog = pairsResponse({ pairs: [opening] });
+    let at = NOW;
+    const readPairs = () => {
+      at = NOW + 2_000;
+      return Promise.resolve(catalog);
+    };
+    const now = vi.fn(() => at);
+    expect(await readDemoTrade({ readPairs }, opening.id, 5, now)).toEqual({
+      ok: true,
+      pair: opening,
+      durationSec: 5,
+      catalog,
+    });
     expect(now).toHaveBeenCalledTimes(1);
   });
 
