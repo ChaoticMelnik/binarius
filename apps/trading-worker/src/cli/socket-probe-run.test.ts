@@ -559,4 +559,48 @@ describe('runProbe', () => {
       });
     });
   });
+
+  it.each(['a_below', 'b_below'] as const)(
+    'R11 a success to the 0.01 command of %s ends the order phases: the later ones not_run, no REST order',
+    async (accepted) => {
+      const sender = accepted === 'a_below' ? 'A' : 'B';
+      const h = harness({
+        respond: (label, call, harnessed) => {
+          if (label !== sender || call.request.amount !== d('0.01')) {
+            return senderOnly(label, call, harnessed);
+          }
+          const trade = openTrade(`${label}${harnessed.clients[label].calls.length}`, call.request);
+          harnessed.clients[label].hear(successEvent(trade));
+          return { outcome: 'success', trade };
+        },
+      });
+      const input = await ran(h);
+
+      expect(input.phases[accepted]).toEqual(
+        expect.objectContaining({ command: 'success', windowCompleted: true }),
+      );
+      const later = PROBE_PHASES.slice(PROBE_PHASES.indexOf(accepted) + 1);
+      for (const phase of later) {
+        expect(input.phases[phase], phase).toEqual(
+          expect.objectContaining({ command: 'not_run', windowCompleted: false }),
+        );
+      }
+      expect(h.restCalls).toEqual([]);
+      if (accepted === 'a_below') {
+        expect(h.clients.B.calls).toEqual([]);
+        expect(h.lines).toContain('trade ids heard: A [A1, A2], B []');
+      }
+      expect(h.lines).toContain(
+        `the broker accepted a below-minimum order: the phases after ${accepted} are not run`,
+      );
+      const result = verdict(input);
+      expect(result.kind).toBe('inconclusive');
+      expect(result.kind === 'inconclusive' ? result.missing : []).toEqual(
+        expect.arrayContaining([
+          `${accepted}: expected fail, got success`,
+          accepted === 'a_below' ? 'b_min: not run' : 'rest_min: not run',
+        ]),
+      );
+    },
+  );
 });
