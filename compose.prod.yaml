@@ -1,0 +1,39 @@
+# The production profile: an override of compose.yaml, never a file on its own. Selected on
+# the server by COMPOSE_FILE=compose.yaml:compose.prod.yaml in .env (docs/deploy.md); CI and a
+# local prod-shaped run pass both files with -f. It changes three things and nothing else:
+# the app commands (one node process on the bundle tooling/build.ts wrote into the image:
+# no pnpm, no tsx watch, so a process that exits takes its container down and the restart
+# policy brings it back), log rotation on every service (the pilot's disk is ~2 GB; the
+# daemon-level setting is not an option because dockerd must never be restarted there), and a
+# restart policy for postgres and redis, which compose.yaml leaves without one. A service named
+# here must exist in compose.yaml: Compose refuses an override that adds one.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    restart: ${COMPOSE_RESTART:-unless-stopped}
+    logging: *logging
+  redis:
+    restart: ${COMPOSE_RESTART:-unless-stopped}
+    logging: *logging
+  # the one-shot keeps its runner command (Rule 16); only its logs rotate
+  migrate:
+    logging: *logging
+  # One node process under tini per container: the exit code and the SIGTERM drain are the
+  # application's own. The paths are relative to the image's WORKDIR /app.
+  backend:
+    command: node apps/backend/dist/index.js
+    logging: *logging
+  bot:
+    command: node apps/bot/dist/index.js
+    logging: *logging
+  trading-worker:
+    command: node apps/trading-worker/dist/index.js
+    logging: *logging
+  web:
+    command: node apps/web/dist/index.js
+    logging: *logging

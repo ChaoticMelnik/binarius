@@ -12,7 +12,8 @@
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

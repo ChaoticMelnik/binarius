@@ -23,6 +23,7 @@
     "./backend-client": {
       "types": "./src/backend-client.ts",
       "default": "./src/backend-client.ts"
-    }
+    },
+    "./package.json": "./package.json"
   }
 }
