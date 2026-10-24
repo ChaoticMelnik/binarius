@@ -1,4 +1,5 @@
 import {
+  BOT_TEXT_CATALOG,
   formatPrice,
   formatSignedUsd,
   pairLabel,
@@ -96,8 +97,11 @@ const BADGE_GAP = 14;
 const BADGE_SIDE = 28;
 // an upper estimate of bold Inter's advance, as fitSize's
 const BOLD_ADVANCE = 0.68;
-// the badge never gets narrower than its default label, nor wider than half the card
-const BADGE_MIN_TEXT = Math.ceil('ВВЕРХ'.length * BADGE_TEXT_SIZE * BOLD_ADVANCE);
+// the badge never gets narrower than its Russian default label, whatever the language's word (an
+// English «UP» keeps that width), nor wider than half the card
+const BADGE_MIN_TEXT = Math.ceil(
+  BOT_TEXT_CATALOG.sessionPromoUp.source.length * BADGE_TEXT_SIZE * BOLD_ADVANCE,
+);
 const BADGE_MAX_TEXT = INNER / 2 - 2 * BADGE_SIDE - BADGE_ARROW - BADGE_GAP;
 
 interface TextOptions {

@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
+  BotLanguage,
   BrokerAccountStatus,
   DEPOSIT_CREDITED_PATH,
   DEPOSIT_WIDGET_SESSION_PATH,
@@ -39,7 +40,7 @@ import type { AuthRoutesDeps } from '../auth/routes';
 import { DEPOSIT_INIT_DATA_MAX_AGE_MS } from '../auth/oauth-timing';
 import { createInitDataVerifier } from '../auth/telegram-init-data';
 import { signInitData } from '../auth/testing/init-data';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import {
   createBalanceReconciler,
   type BalanceReconciler,
@@ -58,6 +59,10 @@ import {
 } from '../trading/testing';
 import type { DepositRoutesDeps } from './routes';
 import { unusedDepositDeps } from './testing';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -283,14 +288,12 @@ describe('POST /deposit/credited', () => {
     const payload = sentPayload(sends, 'sendMessage');
     expect(payload?.parse_mode).toBe('HTML');
     expect(pushedText(payload)).toBe(
-      CLIENT_TEXTS.depositCredited({
+      RU_TEXTS.depositCredited({
         realBalance: { amount: '1234.50000000' as DecimalString, fresh: true },
       }).value,
     );
     expect(pushedText(payload)).toContain(formatUsd('1234.5'));
-    expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
-    ]);
+    expect(inlineButtons(payload)).toEqual([{ text: RU_LABELS.menuButton, callback_data: 'menu' }]);
   });
 
   it('K1 refuses on a DEMO_ONLY process before the proof, any read, refresh or push (#396)', async () => {
@@ -554,6 +557,23 @@ describe('POST /deposit/credited', () => {
   });
 
   // the push answers the user's own action, as the push after the site login does
+  // #633: the push is in the user's language, read with the account it is about
+  it('K-lang pushes the English balance and menu to a user whose language is English', async () => {
+    const user = await payer('1234.50');
+    await tmp.db.update(users).set({ language: BotLanguage.En }).where(eq(users.id, user.userId));
+    expectOutcome(await creditedFor(user.telegramUserId), 'refreshed');
+    const payload = sentPayload(sendsTo(captured.calls, user.telegramUserId), 'sendMessage');
+    expect(pushedText(payload)).toBe(
+      clientTextsOf(BotLanguage.En).depositCredited({
+        realBalance: { amount: '1234.50000000' as DecimalString, fresh: true },
+      }).value,
+    );
+    expect(pushedText(payload)).not.toMatch(/[А-Яа-яЁё]/u);
+    expect(inlineButtons(payload)).toEqual([
+      { text: clientLabelsOf(BotLanguage.En).menuButton, callback_data: 'menu' },
+    ]);
+  });
+
   it('K11 pushes to a user whose notification level is off', async () => {
     const { push, captured: pushes } = recordedPush();
     const { balance } = stubBalance(() => Promise.resolve('ok'));

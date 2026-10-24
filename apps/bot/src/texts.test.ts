@@ -35,6 +35,7 @@ import {
   type LinkBonusGrantView,
   type LinkedAccountView,
   type TelegramHtml,
+  type StarPaymentView,
   type TradingSessionView,
   DEMO_CALLBACK_DATA,
   SUPPORT_TELEGRAM_USERNAME,
@@ -79,6 +80,17 @@ import {
   levelLabel,
   PROFILE,
   pluralTrades,
+  buyPackageLabel,
+  paysupportListLabel,
+  paysupportRefundLabel,
+  paysupportText,
+  sessionCardFooter,
+  sessionCardLabels,
+  sessionCardTradeLabel,
+  starsInvoiceDescription,
+  starsInvoiceTitle,
+  starsPayLabel,
+  starsPreCheckoutError,
   sessionPromoLabels,
   sessionPromoWhen,
   sessionShareCaption,
@@ -1721,10 +1733,9 @@ describe('the demo, analysis and trade texts in English (#632)', () => {
   const CYRILLIC = /[А-Яа-яЁё]/u;
 
   it('T-en1 lays out the pairs screen: the English header with the type, then the page of pages', () => {
-    const header = BOT_TEXT_SOURCES_EN.demoPairsHeader!.replace(
-      '{group}',
-      BOT_TEXT_SOURCES_EN.demoGroupCurrency!,
-    ).replace(/<\/?b>/g, '');
+    const header = BOT_TEXT_SOURCES_EN.demoPairsHeader
+      .replace('{group}', BOT_TEXT_SOURCES_EN.demoGroupCurrency)
+      .replace(/<\/?b>/g, '');
     expect(en(() => plainTextOf(demoPairsScreen('currency', 1, 4)))).toBe(`${header}
 Page 2 of 4`);
     expect(plainTextOf(demoPairsScreen('currency', 1, 4))).toMatch(/\nСтраница 2 из 4$/);
@@ -1769,6 +1780,114 @@ Page 2 of 4`);
       );
       expect(offer).toContain('5 cycles');
       expect(offer).not.toMatch(CYRILLIC);
+    });
+  });
+});
+
+describe('the session, Stars and card texts in English (#633)', () => {
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  // an English source with its placeholders filled, as plain text
+  const filled = (source: string, vars: Record<string, string> = {}) =>
+    Object.entries(vars)
+      .reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), source)
+      .replace(/<\/?b>/g, '');
+  const EN = BOT_TEXT_SOURCES_EN;
+
+  it('T-en5 prints the session message in English, its expiry unit from the catalog', () => {
+    const stopped = sessionView({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+    });
+    en(() => {
+      const live = plainTextOf(sessionStatusText(pairLabel(PAIR_EURUSD), SESSION_VIEW)).split('\n');
+      expect(live[3]).toBe(filled(EN.sessionExpiry, { duration: `5 ${EN.ageSecondsUnit}` }));
+      expect(live.join('\n')).not.toMatch(CYRILLIC);
+      const ended = plainTextOf(sessionStatusText(pairLabel(PAIR_EURUSD), stopped));
+      expect(ended.split('\n').at(-1)).toBe(EN.sessionStopUserStopped);
+      expect(ended).not.toMatch(CYRILLIC);
+    });
+  });
+
+  it.each(Object.values(TradeIntentStatus))(
+    'T-en6 answers the stop of a session with a %s last trade in English',
+    (status) => {
+      const view = sessionView({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.UserStopped,
+        lastIntent: intentView({ status }),
+      });
+      const reply = en(() => plainTextOf(sessionStopReplyText(view)));
+      expect(reply.split('\n')[0]).toBe(EN.sessionStopUserStopped);
+      expect(reply).not.toMatch(CYRILLIC);
+    },
+  );
+
+  it('T-en7 writes the Stars purchase and /paysupport in English', () => {
+    const paidAt = 1_790_000_000;
+    const payment = (patch: Partial<StarPaymentView>): StarPaymentView => ({
+      id: '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10',
+      paidAt,
+      packageCode: 'p50',
+      totalAmount: 100,
+      status: 'paid',
+      requested: false,
+      ...patch,
+    });
+    en(() => {
+      expect(starsInvoiceTitle()).toBe(EN.starsInvoiceTitle);
+      expect(starsInvoiceDescription('50')).toBe(
+        filled(EN.starsInvoiceDescription, { purchasedTokens: '50' }),
+      );
+      expect(starsPayLabel(100)).toBe(filled(EN.starsPayButton, { stars: '100' }));
+      expect(starsPreCheckoutError(true)).toBe(EN.starsPreCheckoutFailed);
+      expect(starsPreCheckoutError(false)).toBe(EN.starsPreCheckoutRefused);
+      expect(buyPackageLabel({ tokens: 50n, stars: 100 })).toBe(
+        filled(EN.buyPackageButton, { purchasedTokens: '50', stars: '100' }),
+      );
+      const list = plainTextOf(
+        paysupportText([
+          payment({}),
+          payment({ status: 'held' }),
+          payment({ requested: true }),
+          payment({ status: 'refunded', requested: true }),
+        ]),
+      );
+      expect(
+        list
+          .split('\n')
+          .slice(-4)
+          .map((line) => line.split(', ').at(-1)),
+      ).toEqual(['paid', 'under review', 'refund request accepted', 'refunded']);
+      expect(list).not.toMatch(CYRILLIC);
+      expect(paysupportRefundLabel(paidAt)).toMatch(/^↩️ Need a refund: /u);
+      expect(paysupportListLabel()).toBe(EN.paysupportListButton);
+      for (const label of [paysupportRefundLabel(paidAt), starsInvoiceTitle()]) {
+        expect(label).not.toMatch(CYRILLIC);
+      }
+    });
+  });
+
+  it('T-en8 labels the summary card and the promo card in English', () => {
+    en(() => {
+      expect(sessionCardLabels()).toEqual({
+        title: EN.sessionCardTitle,
+        result: EN.sessionCardResult,
+        legendEntry: EN.sessionCardLegendEntry,
+        legendWin: EN.sessionCardLegendWin,
+        legendLoss: EN.sessionCardLegendLoss,
+        legendTie: EN.sessionCardLegendTie,
+      });
+      expect(sessionCardTradeLabel(3)).toBe('Trade 3');
+      expect(sessionCardFooter(5, { won: 3, lost: 2, tied: 0 })).toBe('5 trades · 3 won, 2 lost');
+      expect(sessionPromoLabels()).toEqual({
+        result: EN.sessionPromoResult,
+        up: 'UP',
+        down: 'DOWN',
+        brand: EN.sessionPromoBrand,
+        call: EN.sessionPromoCall,
+      });
+      expect(sessionPromoWhen(Date.UTC(2026, 9, 12, 18, 32) / 1000)).toBe('12.10.2026 21:32 MSK');
     });
   });
 });

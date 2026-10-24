@@ -39,9 +39,13 @@ import {
 } from '@binarius/db/testing';
 import { captureApi, callsTo, inlineButtons, inlineRows, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS, clientTextsOf } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { MAILING_SEND_PER_SECOND } from '../timing';
 import { createMailingEngine, type MailingConfig } from './engine';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -138,21 +142,43 @@ describe('the first-session chain through the engine', () => {
       expect(sends).toHaveLength(1);
       const payload = sends[0]!.payload;
       const texts = {
-        [NotificationKind.FirstSession1h]: CLIENT_TEXTS.firstSessionReminder1h,
-        [NotificationKind.FirstSession24h]: CLIENT_TEXTS.firstSessionReminder24h,
-        [NotificationKind.FirstSession72h]: CLIENT_TEXTS.firstSessionReminder72h,
+        [NotificationKind.FirstSession1h]: RU_TEXTS.firstSessionReminder1h,
+        [NotificationKind.FirstSession24h]: RU_TEXTS.firstSessionReminder24h,
+        [NotificationKind.FirstSession72h]: RU_TEXTS.firstSessionReminder72h,
       };
       expect(pushedText(payload)).toBe(texts[kind].value);
-      expect(pushedText(payload)).toContain(`«${CLIENT_LABELS.demoButton}»`);
+      expect(pushedText(payload)).toContain(`«${RU_LABELS.demoButton}»`);
       expect(payload.parse_mode).toBe('HTML');
       expect(inlineButtons(payload)).toEqual([
-        { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+        { text: RU_LABELS.demoButton, callback_data: 'demo' },
       ]);
       const [job] = await jobsOf(user.userId);
       expect(job).toMatchObject({ kind, status: NotificationJobStatus.Sent, lastError: null });
       await mailing.stop();
     },
   );
+
+  // #633: the reminder in the user's language, read with the claim
+  it('M-lang-e2e sends first_session_1h in English with the English demo button', async () => {
+    const user = await linked(61);
+    await tmp.db.update(users).set({ language: BotLanguage.En }).where(eq(users.id, user.userId));
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.sendTick();
+
+    const sends = sendsTo(captured.calls, user.telegramUserId);
+    expect(sends).toHaveLength(1);
+    const payload = sends[0]!.payload;
+    expect(pushedText(payload)).toBe(
+      clientTextsOf(BotLanguage.En).firstSessionReminder1h.value,
+    );
+    expect(pushedText(payload)).not.toMatch(/[А-Яа-яЁё]/u);
+    expect(inlineButtons(payload)).toEqual([
+      { text: clientLabelsOf(BotLanguage.En).demoButton, callback_data: 'demo' },
+    ]);
+    await mailing.stop();
+  });
 
   it('sends nothing to a user who started a session after the step was planned', async () => {
     const user = await dueUser();
@@ -195,11 +221,11 @@ describe('the analysis reminder through the engine', () => {
     const sends = sendsTo(captured.calls, user.telegramUserId);
     expect(sends).toHaveLength(1);
     const payload = sends[0]!.payload;
-    expect(pushedText(payload)).toBe(CLIENT_TEXTS.analysisUnusedReminder.value);
+    expect(pushedText(payload)).toBe(RU_TEXTS.analysisUnusedReminder.value);
     expect(payload.parse_mode).toBe('HTML');
     expect(payload).not.toHaveProperty('disable_notification');
     expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.newAnalysisButton, callback_data: 'demo:an:202:5' },
+      { text: RU_LABELS.newAnalysisButton, callback_data: 'demo:an:202:5' },
     ]);
     const [job] = await jobsOf(user.userId);
     expect(job).toMatchObject({
@@ -273,13 +299,13 @@ describe('the referral reward notification through the engine', () => {
     const sends = sendsTo(captured.calls, inviter.telegramUserId);
     expect(sends).toHaveLength(1);
     const payload = sends[0]!.payload;
-    expect(pushedText(payload)).toBe(CLIENT_TEXTS.referralRewarded({ rewardTokens: '75' }).value);
+    expect(pushedText(payload)).toBe(RU_TEXTS.referralRewarded({ rewardTokens: '75' }).value);
     expect(pushedText(payload)).toContain('+75');
-    expect(pushedText(payload)).toContain(`«${CLIENT_LABELS.inviteMoreButton}»`);
+    expect(pushedText(payload)).toContain(`«${RU_LABELS.inviteMoreButton}»`);
     expect(payload.parse_mode).toBe('HTML');
     expect(payload).not.toHaveProperty('disable_notification');
     expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
+      { text: RU_LABELS.inviteMoreButton, callback_data: 'cmd:invite' },
     ]);
     const [job] = await jobsOf(inviter.userId);
     expect(job).toMatchObject({
@@ -722,13 +748,13 @@ describe('the low-token nudge through the engine', () => {
   });
 
   const cashierRows = [
-    [{ text: CLIENT_LABELS.depositButton, web_app: { url: CASHIER_URL } }],
-    [{ text: CLIENT_LABELS.buyButton, callback_data: 'buy' }],
+    [{ text: RU_LABELS.depositButton, web_app: { url: CASHIER_URL } }],
+    [{ text: RU_LABELS.buyButton, callback_data: 'buy' }],
   ];
 
   it.each([
-    [LOW.kind, 20n, CLIENT_TEXTS.tokensLow({ nudgeTokens: '20' })],
-    [OUT.kind, 0n, CLIENT_TEXTS.tokensOut({ nudgeTokens: '0' })],
+    [LOW.kind, 20n, RU_TEXTS.tokensLow({ nudgeTokens: '20' })],
+    [OUT.kind, 0n, RU_TEXTS.tokensOut({ nudgeTokens: '0' })],
   ] as const)('sends %s once, with the cashier and the purchase', async (kind, balance, text) => {
     const user = await nudged(balance);
     const { mailing, captured } = engine();
@@ -761,7 +787,7 @@ describe('the low-token nudge through the engine', () => {
 
     const sends = sendsTo(captured.calls, user.telegramUserId);
     expect(sends.map((send) => pushedText(send.payload))).toEqual([
-      CLIENT_TEXTS.tokensOut({ nudgeTokens: '0' }).value,
+      RU_TEXTS.tokensOut({ nudgeTokens: '0' }).value,
     ]);
     expect((await jobsOf(user.userId)).map((job) => job.kind)).toEqual([OUT.kind]);
     await mailing.stop();
@@ -875,7 +901,7 @@ describe('the retention messages through the engine', () => {
     expect(sends).toHaveLength(1);
     const payload = sends[0]!.payload;
     expect(pushedText(payload)).toBe(
-      CLIENT_TEXTS.sessionIdleReminder({ result: '0 сделок — 0 в плюс, 0 в минус' }).value,
+      RU_TEXTS.sessionIdleReminder({ result: '0 сделок — 0 в плюс, 0 в минус' }).value,
     );
     expect(payload.parse_mode).toBe('HTML');
     expect(inlineRows(payload)).toEqual([

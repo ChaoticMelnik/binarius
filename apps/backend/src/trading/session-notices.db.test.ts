@@ -4,6 +4,7 @@ import type { ApiError } from 'grammy/types';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  BotLanguage,
   SignalDecisionOutcome,
   TradeAction,
   TradeIntentStatus,
@@ -65,7 +66,7 @@ import {
   type CapturedApi,
 } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf, setBotTextSource } from '../auth/texts';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import {
   SESSION_NOTICE_CHAT_GAP_MS,
@@ -82,6 +83,10 @@ import {
   type SessionNoticeSenderDeps,
 } from './session-notices';
 import { readFinishedSessionView } from './session-view';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 // The session notices' sender (#464, docs/bot-session.md → Trade messages) against a temporary
 // migrated database and an intercepted Telegram API. A session the bot tracks no status message of
@@ -337,7 +342,7 @@ const isWaiting = (call: ApiCall) =>
   );
 // the open block's «⏹» (#722)
 const CYCLE_STOP = (target: Target) => [
-  { text: CLIENT_LABELS.sessionStopButton, callback_data: `session:stop:${target.session.id}:c` },
+  { text: RU_LABELS.sessionStopButton, callback_data: `session:stop:${target.session.id}:c` },
 ];
 // the trades' messages and the summary; the waiting messages are waitingTo's
 const sendsTo = (calls: readonly ApiCall[], target: Target) =>
@@ -451,7 +456,7 @@ describe('the session notices (#464)', () => {
     const summary = sends[5]!;
     expect(summary.payload.disable_notification).toBeUndefined();
     expect(inlineButtons(summary.payload)).toEqual([
-      { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+      { text: RU_LABELS.menuButton, callback_data: 'menu' },
     ]);
     expect(pushedText(summary.payload).split('\n')).toEqual([
       '📈 EUR/USD',
@@ -590,7 +595,7 @@ describe('the session notices (#464)', () => {
     expect(texts[2]).toBe(
       [
         '📈 EUR/USD',
-        CLIENT_TEXTS.sessionStopManualReview.value,
+        RU_TEXTS.sessionStopManualReview.value,
         '📊 Итог: 2 сделки — 1 в плюс, 1 в минус',
         '💰 Результат: -$0.40',
       ].join('\n'),
@@ -627,6 +632,60 @@ describe('the session notices (#464)', () => {
     expect(refreshCalls[0]![1]).not.toHaveProperty('requested');
     // the refresh did not answer 'ok': the stored balance with its age
     expect(textsTo(captured.calls, target).at(-1)).toMatch(/🧪 Демобаланс: .*\n🕒/);
+  });
+});
+
+// #633: every notice in the owner's language, read with the session each tick
+describe('the session notices in English (#633)', () => {
+  it('D-lang the open block and its «⏹», the settled block, the waiting message and the fallback summary', async () => {
+    const target = await seedSession();
+    await tmp.db
+      .update(users)
+      .set({ language: BotLanguage.En })
+      .where(eq(users.id, target.seed.userId));
+    const EN_LABELS = clientLabelsOf(BotLanguage.En);
+    const CYRILLIC = /[А-Яа-яЁё]/u;
+    const { notices, captured } = sender();
+
+    const trade = await opened(target);
+    await notices.tick();
+    const [open] = sendsTo(captured.calls, target);
+    expect(pushedText(open!.payload)).toContain('⚡ Cycle 1 Step 1\n<pre>⏳ Stake: $5.00 · ');
+    expect(inlineButtons(open!.payload)).toEqual([
+      { text: EN_LABELS.sessionStopButton, callback_data: `session:stop:${target.session.id}:c` },
+    ]);
+
+    await settle(trade, '4.6');
+    await noSignal(target);
+    await notices.tick();
+    expect(pushedText(editsTo(captured.calls, target)[0]!.payload)).toContain(
+      '<pre>🟢 Stake: $5.00 → +$9.60',
+    );
+    const [waiting] = waitingTo(captured.calls, target);
+    expect(pushedText(waiting!.payload)).toBe(
+      clientTextsOf(BotLanguage.En).sessionWaitingSignal.value,
+    );
+    expect(inlineButtons(waiting!.payload)[0]?.text).toBe(EN_LABELS.sessionStopButton);
+
+    await stop(target);
+    await snapshot(target);
+    await notices.tick();
+    await notices.tick();
+    const summary = sendsTo(captured.calls, target).at(-1)!;
+    expect(pushedText(summary.payload).split('\n').slice(0, 2)).toEqual([
+      '📈 EUR/USD',
+      '🏁 Session completed: 1 cycle, 1 trade — 1 won, 0 lost',
+    ]);
+    expect(inlineButtons(summary.payload)).toEqual([
+      { text: EN_LABELS.menuButton, callback_data: 'menu' },
+    ]);
+    for (const call of [
+      ...callsTo(captured.calls, 'sendMessage'),
+      ...editsTo(captured.calls, target),
+    ]) {
+      if (call.payload.chat_id !== target.seed.telegramUserId) continue;
+      expect(pushedText(call.payload)).not.toMatch(CYRILLIC);
+    }
   });
 });
 
@@ -1203,10 +1262,10 @@ describe('a martingale cycle is one message (#551)', () => {
 // #509: a session the no-signal limit stopped tells why, trades or not
 describe('the summary of a no_signal_timeout stop (#509)', () => {
   const OTHER_PAIR = (data: string) => ({
-    text: CLIENT_LABELS.otherPairButton,
+    text: RU_LABELS.otherPairButton,
     callback_data: data,
   });
-  const MENU = { text: CLIENT_LABELS.menuButton, callback_data: 'menu' };
+  const MENU = { text: RU_LABELS.menuButton, callback_data: 'menu' };
   // #637: 20 candles of the session's signal interval, the candle in seconds
   const stopLine = (candleSec: number) =>
     `⏳ Сессия остановлена: по паре не было сигнала 20 свечей по ${String(candleSec)} с. Выбери другую пару.`;
@@ -1270,7 +1329,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
 // #537 (docs/bot-session.md → The summary in one message, The fallback): the sender closes a
 // finished session's notices; the summary is the bot's, the backend's text only its fallback
 describe('the final mark and the fallback summary (#537)', () => {
-  const MENU = { text: CLIENT_LABELS.menuButton, callback_data: 'menu' };
+  const MENU = { text: RU_LABELS.menuButton, callback_data: 'menu' };
   const tracked = (target: Target) =>
     tmp.db
       .update(tradingSessions)
@@ -1504,7 +1563,7 @@ describe('the waiting message (#536)', () => {
   // the #722 describe below takes the other decisions
   const settled = settledWaiting;
   const STOP = (target: Target) => ({
-    text: CLIENT_LABELS.sessionStopButton,
+    text: RU_LABELS.sessionStopButton,
     callback_data: `session:stop:${target.session.id}:w`,
   });
   // the bot recorded its status message (#567); id 1, below every id the harness answers a send
@@ -1555,7 +1614,7 @@ describe('the waiting message (#536)', () => {
     const sent = waitingTo(captured.calls, target);
     expect(sent).toHaveLength(1);
     expect({ ...sent[0]!.payload, text: pushedText(sent[0]!.payload) }).toMatchObject({
-      text: CLIENT_TEXTS.sessionWaitingSignal.value,
+      text: RU_TEXTS.sessionWaitingSignal.value,
       parse_mode: 'HTML',
       disable_notification: true,
     });
@@ -2499,7 +2558,7 @@ describe('an H1 session is messaged as any session (#775)', () => {
     expect(pushedText(open!.payload)).toContain('сделка открыта');
     expect(inlineButtons(open!.payload)).toEqual([
       {
-        text: CLIENT_LABELS.sessionStopButton,
+        text: RU_LABELS.sessionStopButton,
         callback_data: `session:stop:${target.session.id}:c`,
       },
     ]);
@@ -2516,7 +2575,7 @@ describe('an H1 session is messaged as any session (#775)', () => {
     expect(waiting).toBeDefined();
     expect(inlineButtons(waiting!.payload)).toEqual([
       {
-        text: CLIENT_LABELS.sessionStopButton,
+        text: RU_LABELS.sessionStopButton,
         callback_data: `session:stop:${target.session.id}:w`,
       },
     ]);

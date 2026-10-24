@@ -39,6 +39,7 @@ import {
   type BotTextKeyOfGroup,
   type BotTextSource,
   type SessionScore,
+  type SessionTexts,
   type BrokerBalanceView,
   type DecimalString,
   type LinkBonusGrantView,
@@ -67,10 +68,15 @@ export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
   active = source;
 };
 // One set of views per language (#508): Russian over the active source, overrides included;
-// English over the static enBotTextSource, whose untranslated keys show the Russian defaults.
+// English over the static enBotTextSource. Each carries the session's words built on its own
+// views, with its language's plural rule (#633).
+const viewsOf = (language: BotLanguage, source: BotTextSource<BotTextKey>) => {
+  const { html, plain } = createBotTexts(source);
+  return { html, plain, session: createSessionTexts({ html, plain, language }) };
+};
 const VIEWS = {
-  [BotLanguage.Ru]: createBotTexts({ sourceOf: (key) => active.sourceOf(key) }),
-  [BotLanguage.En]: createBotTexts(enBotTextSource),
+  [BotLanguage.Ru]: viewsOf(BotLanguage.Ru, { sourceOf: (key) => active.sourceOf(key) }),
+  [BotLanguage.En]: viewsOf(BotLanguage.En, enBotTextSource),
 } as const;
 type Views = (typeof VIEWS)[BotLanguage];
 // `html` and `plain` read the views of the language of the update at hand (language.ts) on every
@@ -86,10 +92,17 @@ const plain = inCurrentLanguage((views) => views.plain);
 export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
 
 // The session's words shared with the backend's session notices (#464, session-texts.ts in
-// packages/shared), printed with this bot's catalog.
-export const sessionTexts = createSessionTexts({ html, plain });
-export const { pluralTrades, sessionAssetLabel, sessionEndLine } = sessionTexts;
-const { tradesCount, cyclesCount, scoreOf } = sessionTexts;
+// packages/shared), printed with this bot's catalog in the update's language. Read at call time:
+// a function taken from it at load would be the Russian set's forever.
+export const sessionTexts: SessionTexts = inCurrentLanguage((views) => views.session);
+export const pluralTrades = (count: number): string => sessionTexts.pluralTrades(count);
+export const sessionAssetLabel: SessionTexts['sessionAssetLabel'] = (label, assetId) =>
+  sessionTexts.sessionAssetLabel(label, assetId);
+export const sessionEndLine: SessionTexts['sessionEndLine'] = (view) =>
+  sessionTexts.sessionEndLine(view);
+const tradesCount = (count: number): string => sessionTexts.tradesCount(count);
+const cyclesCount = (count: number): string => sessionTexts.cyclesCount(count);
+const scoreOf: SessionTexts['scoreOf'] = (score) => sessionTexts.scoreOf(score);
 const joinLines = joinHtmlLines;
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
@@ -599,7 +612,7 @@ ${TEXTS.sessionSettingsUnavailable}`;
     header,
     TEXTS.sessionPair({ symbol: sessionAssetLabel(symbol, settings.assetId) }),
     TEXTS.sessionStake({ stake: settings.stake.baseStake }),
-    TEXTS.sessionExpiry({ duration: `${String(settings.durationSec)} с` }),
+    TEXTS.sessionExpiry({ duration: `${String(settings.durationSec)} ${plain.ageSecondsUnit}` }),
     ...signal,
   ]);
   const state =

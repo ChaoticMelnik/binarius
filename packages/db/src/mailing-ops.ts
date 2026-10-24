@@ -78,7 +78,7 @@ export interface ClaimedMailingJob {
   telegramUserId: bigint;
   // the user's mode at the claim, for a button whose label follows it (#123)
   tradingMode: TradeMode;
-  // the user's language at the claim; only real_mode_by_deposit reads it so far (#686, #633)
+  // the user's language at the claim: every kind is written in it (#686, #633)
   language: BotLanguage;
 }
 

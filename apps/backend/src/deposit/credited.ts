@@ -9,6 +9,7 @@ import {
   assertExhausted,
   errorLogFields,
   safeParseDepositCreditedRequest,
+  type BotLanguage,
   type BotTextBalance,
   telegramErrorFields,
 } from '@binarius/shared';
@@ -158,7 +159,7 @@ export function registerDepositCredited(app: FastifyInstance, deps: DepositCredi
       }
 
       if (!pushes.take(String(telegramUserId))) {
-        await pushBalance(deps, request.log, telegramUserId, accountId);
+        await pushBalance(deps, request.log, telegramUserId, accountId, resolved.account.language);
       }
       return reply.send({ outcome: answer.outcome });
     },
@@ -171,6 +172,7 @@ async function pushBalance(
   log: FastifyBaseLogger,
   telegramUserId: bigint,
   accountId: string,
+  language: BotLanguage,
 ): Promise<void> {
   const stored = await readBalanceSnapshot(deps.db, accountId);
   let balance: BotTextBalance = null;
@@ -179,7 +181,7 @@ async function pushBalance(
     balance = { amount: view.real.available, fresh: view.fresh };
   }
   try {
-    await deps.clientPush.sendDepositCredited(telegramUserId, balance);
+    await deps.clientPush.sendDepositCredited(telegramUserId, language, balance);
   } catch (error) {
     // identity only: grammY's HttpError wraps a message with the token in its URL
     log.warn(

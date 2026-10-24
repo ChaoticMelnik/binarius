@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BotLanguage,
   pairLabel,
   TradeIntentStatus,
   TradeMode,
@@ -8,13 +9,14 @@ import {
   type DecimalString,
   type TradingSessionView,
 } from '@binarius/shared';
+import { runWithLanguage } from './language';
 import { intentView, PAIR_EURUSD, sessionView } from './testing';
 import { sessionStatusText, sessionTexts } from './texts';
 
 // The summary the backend sends at a session's end (#464) opens, under its pair, on the line the
 // session message ends on (#536): both are built by session-texts.ts in packages/shared, and this
 // holds the two equal, so neither side can change that line alone without a red test. The result
-// and the balance are the summary's only (#536).
+// and the balance are the summary's only (#536). Both languages hold it (#633).
 
 const BALANCES: TradingSessionView['balance'][] = [
   null,
@@ -54,11 +56,14 @@ describe('the summary and the status message of a finished session (#464)', () =
     ),
   );
 
-  it.each(cases.map((view) => [view.stopReason, view.mode, view]))(
-    'end the session message on the summary’s first line: %s, %s',
-    (_reason, _mode, view) => {
+  it.each(
+    Object.values(BotLanguage).flatMap((language) =>
+      cases.map((view) => [language, view.stopReason, view.mode, view] as const),
+    ),
+  )('end the session message on the summary’s first line: %s, %s, %s', (language, _r, _m, view) => {
+    runWithLanguage(language, () => {
       expect(summaryFirst(view)).toBeDefined();
       expect(summaryFirst(view)).toBe(statusEnd(view));
-    },
-  );
+    });
+  });
 });

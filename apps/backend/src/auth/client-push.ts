@@ -12,11 +12,12 @@ import {
   supportUrl,
   urlButton,
   type BotKeyboard,
+  type BotLanguage,
   type BotTextBalance,
   type TelegramHtml,
 } from '@binarius/shared';
 import { CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
-import { CLIENT_LABELS, CLIENT_TEXTS } from './texts';
+import { clientLabelsOf, clientTextsOf } from './texts';
 
 // What the push after POST /auth/binodex/callback tells the Telegram user who started the login.
 export const LinkPushKind = {
@@ -40,60 +41,71 @@ export type LinkPushOutcome =
       kind: Exclude<LinkPushKind, typeof LinkPushKind.Pending | typeof LinkPushKind.Active>;
     };
 
-// The buttons by role, as the bot's (#475, docs/bot-navigation.md → Roles, colours and rows)
-export const menuButton = () =>
-  callbackButton(ButtonRole.Nav, CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA);
-export const demoButton = () =>
-  callbackButton(ButtonRole.Forward, CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA);
+// The buttons by role, as the bot's (#475, docs/bot-navigation.md → Roles, colours and rows), in
+// the recipient's language (#633)
+export const menuButton = (language: BotLanguage) =>
+  callbackButton(ButtonRole.Nav, clientLabelsOf(language).menuButton, MENU_CALLBACK_DATA);
+export const demoButton = (language: BotLanguage) =>
+  callbackButton(ButtonRole.Forward, clientLabelsOf(language).demoButton, DEMO_CALLBACK_DATA);
 
 // the demo (#320's entry): the next step of a re-login and of every first-session reminder
-export const demoKeyboard = () => keyboardOf([demoButton()]);
+export const demoKeyboard = (language: BotLanguage) => keyboardOf([demoButton(language)]);
 
 // a failed login: connect again on its own row, then the menu
-const connectAgain = () =>
+const connectAgain = (language: BotLanguage) =>
   keyboardOf([
-    callbackButton(ButtonRole.Forward, CLIENT_LABELS.connectButton, CONNECT_CALLBACK_DATA),
-    menuButton(),
+    callbackButton(
+      ButtonRole.Forward,
+      clientLabelsOf(language).connectButton,
+      CONNECT_CALLBACK_DATA,
+    ),
+    menuButton(language),
   ]);
 
-export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
+export function linkPushMessage(
+  outcome: LinkPushOutcome,
+  language: BotLanguage,
+): ClientPushMessage {
+  const texts = clientTextsOf(language);
+  const labels = clientLabelsOf(language);
   switch (outcome.kind) {
     case LinkPushKind.Pending:
       return {
-        text: CLIENT_TEXTS.confirmPrompt,
+        text: texts.confirmPrompt,
         reply_markup: keyboardOf([
           callbackButton(
             ButtonRole.Forward,
-            confirmButtonLabel(CLIENT_LABELS, outcome.account.email),
+            confirmButtonLabel(labels, outcome.account.email),
             confirmCallbackData(outcome.account.id),
           ),
         ]),
       };
     case LinkPushKind.Active:
       return {
-        text: CLIENT_TEXTS.linkedActive({ email: outcome.email }),
-        reply_markup: demoKeyboard(),
+        text: texts.linkedActive({ email: outcome.email }),
+        reply_markup: demoKeyboard(language),
       };
     case LinkPushKind.Blocked:
       return {
-        text: CLIENT_TEXTS.blocked,
-        reply_markup: keyboardOf([
-          urlButton(ButtonRole.Nav, CLIENT_LABELS.supportButton, supportUrl()),
-        ]),
+        text: texts.blocked,
+        reply_markup: keyboardOf([urlButton(ButtonRole.Nav, labels.supportButton, supportUrl())]),
       };
     case LinkPushKind.Taken:
-      return { text: CLIENT_TEXTS.accountTaken, reply_markup: connectAgain() };
+      return { text: texts.accountTaken, reply_markup: connectAgain(language) };
     case LinkPushKind.ExchangeFailed:
     case LinkPushKind.Mismatch:
-      return { text: CLIENT_TEXTS.oauthLoginFailed, reply_markup: connectAgain() };
+      return { text: texts.oauthLoginFailed, reply_markup: connectAgain(language) };
   }
 }
 
 // After the cashier's credited event (#112, docs/deposit.md -> After a deposit): the real balance
 // from the snapshot the route has just written, never an amount from the widget, and the menu.
-export const depositCreditedMessage = (balance: BotTextBalance): ClientPushMessage => ({
-  text: CLIENT_TEXTS.depositCredited({ realBalance: balance }),
-  reply_markup: keyboardOf([menuButton()]),
+export const depositCreditedMessage = (
+  balance: BotTextBalance,
+  language: BotLanguage,
+): ClientPushMessage => ({
+  text: clientTextsOf(language).depositCredited({ realBalance: balance }),
+  reply_markup: keyboardOf([menuButton(language)]),
 });
 
 // A message the backend sends a Telegram user on its own: a link push, or a mailing
@@ -109,9 +121,14 @@ export interface ClientPush {
   // the transport, exposed so tests can intercept it the way they do the staff bot's
   readonly api: Api;
   // Each throws when Telegram refuses (GrammyError) or the transport fails or times out (HttpError).
-  sendLink(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
+  // the link and deposit pushes are written in the recipient's language, read with the recipient
+  sendLink(telegramUserId: bigint, language: BotLanguage, outcome: LinkPushOutcome): Promise<void>;
   sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
-  sendDepositCredited(telegramUserId: bigint, balance: BotTextBalance): Promise<void>;
+  sendDepositCredited(
+    telegramUserId: bigint,
+    language: BotLanguage,
+    balance: BotTextBalance,
+  ): Promise<void>;
   // A session's cycle message (#464, #551, docs/bot-session.md → Trade messages): without sound.
   // Without an open trade's block it has no keyboard, the one exception of this seam
   // (docs/bot-navigation.md → Exceptions, `session_trade`); with one it carries the block's «⏹»
@@ -207,10 +224,11 @@ export function createClientPush({
   };
   return {
     api,
-    sendLink: (telegramUserId, outcome) => send(telegramUserId, linkPushMessage(outcome)),
+    sendLink: (telegramUserId, language, outcome) =>
+      send(telegramUserId, linkPushMessage(outcome, language)),
     sendMailing: send,
-    sendDepositCredited: (telegramUserId, balance) =>
-      send(telegramUserId, depositCreditedMessage(balance)),
+    sendDepositCredited: (telegramUserId, language, balance) =>
+      send(telegramUserId, depositCreditedMessage(balance, language)),
     sendSessionTrade,
     editSessionTrade,
     sendSessionSummary: send,

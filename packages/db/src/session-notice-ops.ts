@@ -7,6 +7,7 @@ import {
   type TradeAction,
   TradingSessionStatus,
   TradingSessionStopReason,
+  type BotLanguage,
   type DecimalString,
   type TradeMode,
 } from '@binarius/shared';
@@ -156,6 +157,8 @@ export interface PendingSessionNotice {
   finished: boolean;
   // the owner's, by the session's account: no id comes from outside (Rule 13)
   telegramUserId: bigint;
+  // the owner's language: every notice is written in it (#633)
+  language: BotLanguage;
   // users.telegram_blocked_at is set: nothing can be delivered (Rule 19)
   telegramBlocked: boolean;
   // the live waiting message's id, NULL when there is none
@@ -187,6 +190,7 @@ export async function listPendingSessionNotices(
       openNoticeIntentId: tradingSessions.openNoticeIntentId,
       finished: finishedSql,
       telegramUserId: users.telegramUserId,
+      language: users.language,
       telegramBlocked: sql<boolean>`${users.telegramBlockedAt} is not null`,
       status: tradingSessions.status,
       stopReason: tradingSessions.stopReason,
@@ -501,6 +505,8 @@ export interface SummaryFallbackSession {
   sessionId: string;
   // the owner's, by the session's account: no id comes from outside (Rule 13)
   telegramUserId: bigint;
+  // the owner's language: the summary is written in it (#633)
+  language: BotLanguage;
   // users.telegram_blocked_at is set: nothing can be delivered (Rule 19)
   telegramBlocked: boolean;
 }
@@ -518,6 +524,7 @@ export async function listSummaryFallback(
     .select({
       sessionId: tradingSessions.id,
       telegramUserId: users.telegramUserId,
+      language: users.language,
       telegramBlocked: sql<boolean>`${users.telegramBlockedAt} is not null`,
     })
     .from(tradingSessions)

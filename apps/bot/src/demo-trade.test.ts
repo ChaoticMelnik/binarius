@@ -1083,7 +1083,7 @@ describe('the single trade in English (#632)', () => {
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(en(() => intentStatusText(pairLabel(PAIR_EURUSD), INTENT_VIEW).value));
     expect(sent?.text).toContain('⬆️ Up · ⏱ 5 s · stake $1.00');
-    expect(rowsOf(sent)).toEqual([[button(BOT_TEXT_SOURCES_EN.refreshIntentButton!, REFRESH)]]);
+    expect(rowsOf(sent)).toEqual([[button(BOT_TEXT_SOURCES_EN.refreshIntentButton, REFRESH)]]);
     expect(intentTracker.track.mock.calls[0]?.[0]).toMatchObject({ language: BotLanguage.En });
     expectEnglish(calls);
   });

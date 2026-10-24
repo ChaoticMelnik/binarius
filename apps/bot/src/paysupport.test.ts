@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   MENU_CALLBACK_DATA,
   PAYSUPPORT_LIST_CALLBACK,
   paysupportRefundCallbackData,
@@ -9,6 +11,7 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
+import { runWithLanguage, type UserLanguages } from './language';
 import {
   BOT_INFO,
   callbackUpdate,
@@ -24,6 +27,8 @@ import {
   stubTracker,
   textUpdate,
   USER,
+  userLanguagesWith,
+  type ApiCall,
 } from './testing';
 import { LABELS, paysupportListLabel, paysupportRefundLabel, paysupportText, TEXTS } from './texts';
 
@@ -51,7 +56,7 @@ const PAYMENTS = [
   payment(3, { status: 'refunded', requested: true }),
 ];
 
-function setup(patch: Partial<BackendClient> = {}) {
+function setup(patch: Partial<BackendClient> = {}, languages?: UserLanguages) {
   const logger = fakeLogger();
   const backend = fakeBackend({
     listStarsPayments: vi.fn(() => Promise.resolve(PAYMENTS)),
@@ -67,6 +72,7 @@ function setup(patch: Partial<BackendClient> = {}) {
     backend,
     logger,
     botInfo: BOT_INFO,
+    ...(languages === undefined ? {} : { languages }),
   });
   return { bot, backend, logger, api: captureApi(bot) };
 }
@@ -217,5 +223,41 @@ describe('«Нужен возврат»', () => {
     await bot.handleUpdate(callbackUpdate(paysupportRefundCallbackData(PAYMENTS[0]!.id), 'group'));
     expect(backend.requestStarsRefund).not.toHaveBeenCalled();
     expect(api.calls).toEqual([]);
+  });
+});
+
+// #633: /paysupport of a user whose language is English, through the language middleware
+describe('/paysupport in English (#633)', () => {
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const english = () => setup({}, userLanguagesWith(USER.id, BotLanguage.En));
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const textsOf = (calls: readonly ApiCall[]): string[] =>
+    calls.flatMap((call) => [
+      ...[call.payload.text].filter((text): text is string => typeof text === 'string'),
+      ...inlineRows(call.payload)
+        .flat()
+        .map((key) => (key as { text: string }).text),
+    ]);
+
+  it('EN-10 the list, the refund and list buttons and the request answer are English', async () => {
+    const list = english();
+    await list.bot.handleUpdate(textUpdate('/paysupport'));
+    const message = sentPayload(list.api.calls, 'sendMessage');
+    expect(message?.text).toBe(en(() => paysupportText(PAYMENTS).value));
+    expect(inlineRows(message)[0]?.[0]).toMatchObject({
+      text: en(() => paysupportRefundLabel(PAYMENTS[0]!.paidAt)),
+    });
+
+    const refund = english();
+    await refund.bot.handleUpdate(callbackUpdate(paysupportRefundCallbackData(PAYMENTS[0]!.id)));
+    const answer = sentPayload(refund.api.calls, 'sendMessage');
+    expect(answer?.text).toBe(BOT_TEXT_SOURCES_EN.paysupportRequested);
+    expect(inlineRows(answer)[0]?.[0]).toMatchObject({
+      text: BOT_TEXT_SOURCES_EN.paysupportListButton,
+    });
+
+    const texts = textsOf([...list.api.calls, ...refund.api.calls]);
+    expect(texts.length).toBeGreaterThan(4);
+    for (const text of texts) expect(text).not.toMatch(CYRILLIC);
   });
 });

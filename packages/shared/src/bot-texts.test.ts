@@ -310,7 +310,7 @@ describe('button label widths (#475)', () => {
     const en = BOT_TEXT_SOURCES_EN[key as BotTextKey];
     return [
       { key, language: 'ru', row, text: ru },
-      ...(en === undefined ? [] : [{ key, language: 'en', row, text: en }]),
+      { key, language: 'en', row, text: en },
     ];
   });
 

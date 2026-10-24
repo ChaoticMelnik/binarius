@@ -31,6 +31,7 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
+import { runWithLanguage, type UserLanguages } from './language';
 import {
   cycleStakeCallbackData,
   DEMO_GROUPS_CALLBACK_DATA,
@@ -65,6 +66,7 @@ import {
   stubSessionTracker,
   stubTracker,
   textUpdate,
+  userLanguagesWith,
   type ApiCall,
   inlineRows,
   inlineStyles,
@@ -134,6 +136,7 @@ function setup(
     shareOff?: true;
     // the summary's wait after a 429 (#537)
     sleep?: (ms: number) => Promise<void>;
+    languages?: UserLanguages;
   } = {},
 ) {
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
@@ -196,6 +199,7 @@ function setup(
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    ...(options.languages === undefined ? {} : { languages: options.languages }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -2312,5 +2316,51 @@ describe('an H1 session from the bot (#745, #775): drawn as any session', () => 
     const edit = payloadOf(scene.calls, 'editMessageMedia')?.media as Record<string, unknown>;
     expect(edit).toMatchObject({ type: 'photo', caption: statusOf(H1_UP), parse_mode: 'HTML' });
     expect(String(edit.caption).split('\n')[4]).toBe('📡 Сигнал: ⬆️ Вверх');
+  });
+});
+
+// #633: the session of a user whose language is English, through the language middleware as
+// production answers it; the tracker's summary runs in its entry's language (#508)
+describe('the session in English (#633)', () => {
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const english = () => setup({ languages: userLanguagesWith(USER.id, BotLanguage.En) });
+  const labelsOf = (payload: Record<string, unknown> | undefined) =>
+    rowsOf(payload)
+      .flat()
+      .map((key) => key.text);
+  const DONE = sessionView({
+    ...STOPPED,
+    trades: { ...STOPPED.trades, settled: 2, won: 1, lost: 1, profit: SUMMARY.result },
+    lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+  });
+
+  it('EN-8 starts, stops and sums up the session in English, «⏹» included', async () => {
+    const scene = english();
+    await scene.press(START);
+    const started = payloadOf(scene.calls, 'sendMessage');
+    expect(started?.text).toBe(en(() => statusOf(SESSION_VIEW)));
+    expect(started?.text).not.toMatch(CYRILLIC);
+    const entry = scene.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
+    expect(entry.language).toBe(BotLanguage.En);
+
+    const stopped = english();
+    await stopped.press(CYCLE_STOP);
+    const reply = payloadOf(stopped.calls, 'sendMessage');
+    expect(reply?.text).toBe(en(() => replyOf(STOPPED)));
+    for (const text of [String(reply?.text), ...labelsOf(reply)]) {
+      expect(text).not.toMatch(CYRILLIC);
+    }
+    expect(labelsOf(reply)).toContain(en(() => LABELS.sessionAgainButton));
+
+    const before = scene.calls.length;
+    await runWithLanguage(entry.language, () => entry.summary(DONE));
+    const photo = scene.calls.slice(before).find((call) => call.method === 'sendPhoto')?.payload;
+    expect(photo?.caption).toBe(
+      en(() => sessionTexts.sessionSummaryText(pairLabel(PAIR_EURUSD), PAIR_EURUSD.id, DONE).value),
+    );
+    const labels = scene.calls.slice(before).flatMap((call) => labelsOf(call.payload));
+    expect(labels).toContain(en(() => LABELS.menuButton));
+    for (const text of [String(photo?.caption), ...labels]) expect(text).not.toMatch(CYRILLIC);
   });
 });

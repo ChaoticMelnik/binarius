@@ -6,9 +6,7 @@ import { botTextsReviewTable } from './bot-texts-table';
 describe('botTextsReviewTable (#508)', () => {
   it('T1 lists every translated key once, in the catalog order, under the head line', () => {
     const { markdown, count } = botTextsReviewTable(BOT_TEXT_SOURCES_EN, 'abc123');
-    const translated = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
-      (key) => BOT_TEXT_SOURCES_EN[key] !== undefined,
-    );
+    const translated = Object.keys(BOT_TEXT_CATALOG) as BotTextKey[];
     expect(count).toBe(translated.length);
     const lines = markdown.split('\n');
     expect(lines[0]).toBe(`head=abc123 keys=${String(translated.length)}`);
@@ -35,9 +33,8 @@ describe('botTextsReviewTable (#508)', () => {
   it('T4 keeps only the keys of the named groups, in the catalog order, and names them in the head line (#632)', () => {
     const groups: readonly BotTextGroup[] = [BotTextGroup.Demo, BotTextGroup.Trade];
     const { markdown, count } = botTextsReviewTable(BOT_TEXT_SOURCES_EN, 'h', groups);
-    const expected = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
-      (key) =>
-        BOT_TEXT_SOURCES_EN[key] !== undefined && groups.includes(BOT_TEXT_CATALOG[key].group),
+    const expected = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter((key) =>
+      groups.includes(BOT_TEXT_CATALOG[key].group),
     );
     const lines = markdown.split('\n');
     expect(lines[0]).toBe(`head=h keys=${String(expected.length)} groups=demo,trade`);
@@ -45,6 +42,7 @@ describe('botTextsReviewTable (#508)', () => {
     expect(rows.map((row) => row?.[1])).toEqual(expected);
     expect(new Set(rows.map((row) => row?.[2]))).toEqual(new Set(['demo', 'trade']));
     expect(count).toBe(expected.length);
-    expect(botTextsReviewTable(BOT_TEXT_SOURCES_EN, 'h', [BotTextGroup.Deposit]).count).toBe(0);
+    // the group filter drops a translated key of another group, whatever is translated (#800 m1)
+    expect(botTextsReviewTable({ demoGroups: 'x' }, 'h', [BotTextGroup.Deposit]).count).toBe(0);
   });
 });

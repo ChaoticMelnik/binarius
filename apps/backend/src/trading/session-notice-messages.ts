@@ -2,7 +2,6 @@ import {
   BOT_TEXT_LIMIT,
   ButtonRole,
   callbackButton,
-  createSessionTexts,
   DEMO_SIGNALS_CALLBACK_DATA,
   keyboardOf,
   pairLabel,
@@ -23,15 +22,16 @@ import {
   type TradingSessionSettings,
   type TradingSessionView,
   type BotKeyboard,
+  type BotLanguage,
 } from '@binarius/shared';
 import type { ClaimedSessionTrade, SessionOpenNoticeRow } from '@binarius/db';
 import { menuButton, type ClientPushMessage } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { clientLabelsOf, clientSessionTextsOf, clientTextsOf } from '../auth/texts';
 
 // What the session notices say (#464, docs/bot-session.md → Trade messages), in the client bot's
-// voice through the catalog (Rule 30): the shared builders of session-texts.ts, so the summary's
-// lines are the bot's status message's own. Built when sent, so an override reaches them.
-const notices = createSessionTexts({ html: CLIENT_TEXTS, plain: CLIENT_LABELS });
+// voice through the catalog (Rule 30) and in the session owner's language (#633): the shared
+// builders of session-texts.ts, so the summary's lines are the bot's status message's own. Built
+// when sent, so an override reaches them.
 
 // the pair's label (pairLabel, #428, #631) and digits from the catalog the routes read; null each when
 // it cannot say
@@ -73,7 +73,9 @@ export function sessionCycleMessage(
   }: Pick<ClaimedSessionTrade, 'trades' | 'cycleMessage'> & { open?: SessionOpenNoticeRow },
   settings: TradingSessionSettings | null,
   digits: number | null,
+  language: BotLanguage,
 ): SessionCycleNotice {
+  const notices = clientSessionTextsOf(language);
   const strategy =
     settings === null ? SessionStakeStrategy.Fixed : sessionStakeParams(settings).strategy;
   const results = trades.map((row) => row.result);
@@ -145,6 +147,7 @@ export function sessionCycleMessage(
 export function sessionSummaryMessage(
   view: TradingSessionView,
   label: PairLabel | null,
+  language: BotLanguage,
 ): ClientPushMessage {
   const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
   if (assetId === undefined) throw new Error('a summarized session names no asset');
@@ -153,36 +156,39 @@ export function sessionSummaryMessage(
       ? [
           callbackButton(
             ButtonRole.Forward,
-            CLIENT_LABELS.otherPairButton,
+            clientLabelsOf(language).otherPairButton,
             DEMO_SIGNALS_CALLBACK_DATA,
           ),
         ]
       : [];
   return {
-    text: notices.sessionSummaryText(label, assetId, view),
-    reply_markup: keyboardOf([...otherPair, menuButton()]),
+    text: clientSessionTextsOf(language).sessionSummaryText(label, assetId, view),
+    reply_markup: keyboardOf([...otherPair, menuButton(language)]),
   };
 }
 
 // The open trade's block carries the session's «⏹» (#722, docs/bot-session.md → Trade messages):
 // `:c` tells the bot to answer with a new message and leave the cycle's blocks alone.
-export const sessionCycleStopKeyboard = (sessionId: string): BotKeyboard =>
+export const sessionCycleStopKeyboard = (sessionId: string, language: BotLanguage): BotKeyboard =>
   keyboardOf([
     callbackButton(
       ButtonRole.Danger,
-      CLIENT_LABELS.sessionStopButton,
+      clientLabelsOf(language).sessionStopButton,
       sessionStopCallbackData(sessionId, { cycle: true }),
     ),
   ]);
 
 // The waiting message (#536, docs/bot-session.md → The waiting message): the wait for the next
 // signal, with the one button that stops the session; `:w` tells the bot to delete it on a press.
-export const sessionWaitingMessage = (sessionId: string): ClientPushMessage => ({
-  text: CLIENT_TEXTS.sessionWaitingSignal,
+export const sessionWaitingMessage = (
+  sessionId: string,
+  language: BotLanguage,
+): ClientPushMessage => ({
+  text: clientTextsOf(language).sessionWaitingSignal,
   reply_markup: keyboardOf([
     callbackButton(
       ButtonRole.Danger,
-      CLIENT_LABELS.sessionStopButton,
+      clientLabelsOf(language).sessionStopButton,
       sessionStopCallbackData(sessionId, { waiting: true }),
     ),
   ]),

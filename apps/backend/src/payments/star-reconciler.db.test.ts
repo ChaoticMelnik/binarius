@@ -3,6 +3,7 @@ import type { StarTransaction } from 'grammy/types';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  BotLanguage,
   logOptions,
   MENU_CALLBACK_DATA,
   StarPaymentStatus,
@@ -17,8 +18,12 @@ import {
 } from '@binarius/db/testing';
 import { captureApi, callsTo, inlineButtons, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { createStarReconciler, type StarReconcilerConfig } from './star-reconciler';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -191,10 +196,26 @@ describe('the Stars reconciler', () => {
     expect(payload.chat_id).toBe(seed.telegramUserId);
     expect(payload.parse_mode).toBe('HTML');
     expect(pushedText(payload)).toBe(
-      CLIENT_TEXTS.starsCredited({ purchasedTokens: '50', tokenBalance: '57' }).value,
+      RU_TEXTS.starsCredited({ purchasedTokens: '50', tokenBalance: '57' }).value,
     );
     expect(inlineButtons(payload)).toEqual([
-      { text: CLIENT_LABELS.menuButton, callback_data: MENU_CALLBACK_DATA },
+      { text: RU_LABELS.menuButton, callback_data: MENU_CALLBACK_DATA },
+    ]);
+  });
+
+  // #633: the payer's language, read with the payer at the push
+  it('S-lang pushes the credit in English to a payer whose language is English', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 7n });
+    await tmp.db.update(users).set({ language: BotLanguage.En }).where(eq(users.id, seed.userId));
+    const { subject, captured } = reconciler([purchase(seed)]);
+    await subject.tick();
+    const payload = callsTo(captured.calls, 'sendMessage')[0]?.payload;
+    expect(pushedText(payload)).toBe(
+      clientTextsOf(BotLanguage.En).starsCredited({ purchasedTokens: '50', tokenBalance: '57' })
+        .value,
+    );
+    expect(inlineButtons(payload)).toEqual([
+      { text: clientLabelsOf(BotLanguage.En).menuButton, callback_data: MENU_CALLBACK_DATA },
     ]);
   });
 

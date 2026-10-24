@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  BotLanguage,
   AuditAction,
   DepositModeSwitch,
   logOptions,
@@ -30,9 +31,13 @@ import {
 } from '@binarius/db/testing';
 import { captureApi, callsTo, inlineRows, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { createMailingEngine, type MailingEngine } from '../mailing/engine';
 import { createDepositModeSwitcher } from './deposit-mode-switch';
+
+// the Russian texts, the language of every user these tests make (#633)
+const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
+const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 // #686: a deposit's postback to the message about the switch, through the real operations, the
 // mailing engine and the captured Telegram API. No timers: each case drives the ticks itself.
@@ -156,13 +161,11 @@ describe('the switch to real after a deposit, end to end (#686)', () => {
     await sendAfterSwitch(mailing, user.userId, captured);
     const sends = sendsTo(captured.calls, user.telegramUserId);
     expect(sends).toHaveLength(1);
-    expect(pushedText(sends[0]!.payload)).toBe(
-      CLIENT_TEXTS.realModeByDeposit({ stake: null }).value,
-    );
+    expect(pushedText(sends[0]!.payload)).toBe(RU_TEXTS.realModeByDeposit({ stake: null }).value);
     expect(inlineRows(sends[0]!.payload)).toEqual([
       [
-        { text: CLIENT_LABELS.settingsModeButton, callback_data: 'mode' },
-        { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+        { text: RU_LABELS.settingsModeButton, callback_data: 'mode' },
+        { text: RU_LABELS.menuButton, callback_data: 'menu' },
       ],
     ]);
 
