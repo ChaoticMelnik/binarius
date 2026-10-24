@@ -27,7 +27,7 @@ Use the `/github` skill's "Read Issue + Comments" template — one filtered `gh 
 
 ### Step 2: Explore the codebase
 
-CodeGraph first, always (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»): `codegraph_context` for the issue's area, then one `codegraph_explore` for the symbols it surfaces; `codegraph_search`/`codegraph_files` for the rest. grep/Read only for literal text, the two shapes codegraph loses, and code outside the indexed tree. The plan names the codegraph calls it rested on.
+CodeGraph first, always (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»): `codegraph_context` for the issue's area, then one `codegraph_explore` for the symbols it surfaces; `codegraph_search`/`codegraph_files` for the rest. grep/Read only for literal text, the two shapes codegraph loses, and code outside the indexed tree. The plan names the codegraph calls it rested on. The index is the main checkout's tree: before resting on it, `codegraph_status` answers and `git -C <main checkout> status` and `rev-parse` show `main` with no changes; otherwise codegraph is a map, and facts are checked against `origin/main` (`git show`) or your own worktree's files.
 
 Then `node tooling/rules-for.ts <files the issue names>` and Read every rule file it names (`.claude/skills/architect/rules/*.md`, the index is in this file → Architecture Rules); the plan quotes the script's `--list` output for its own file list.
 

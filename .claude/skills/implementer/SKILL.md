@@ -61,6 +61,15 @@ Never assume file contents — Read first. For anything structural — signature
 
 Follow the plan's steps in order. When the plan says to create issues (follow-ups, splits), use `/github` → "Create an issue" and then "Add issue to Project #2" — `gh issue create` alone leaves the issue off the board. Stack conventions (`.claude/CLAUDE.md` → Конвенции кода / `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference): TypeScript everywhere, pnpm workspaces, Drizzle for schema/migrations (use the `drizzle-orm-patterns` skill when touching `packages/db`), Vitest for unit/integration tests (use the `vitest-testing` skill), русские пользовательские строки / английский код. Comments: only when WHY is non-obvious — never describe WHAT the code does.
 
+**Schema changes (`packages/db`)** — forward-only (`.claude/CLAUDE.md` → База данных), in this order:
+1. Change the Drizzle schema in `packages/db`.
+2. Generate the migration: `pnpm db:generate`.
+3. Read the generated SQL: drizzle sometimes generates destructive statements (`DROP` and the like), and none goes in without a conscious decision.
+4. Apply it to your own database: `DATABASE_URL=$TEST_DATABASE_URL pnpm db:migrate` on a database of your own (tech-lead Step 7 → unmerged migrations), or `docker compose run --rm --build migrate` on a stand.
+5. Commit the migration file and its meta/snapshot with the schema change, in the same commit; never edit meta/snapshot files by hand — `drizzle-kit` keeps them.
+
+CI requires a generated migration for a schema change (`pnpm db:generate` and a clean `git status` on `packages/db/drizzle`), fails on an edited committed migration, and applies them to its test database (`pnpm db:migrate`) before `pnpm check`.
+
 `prettier --write` only on files you create, never the whole repo: the tree is not prettier-clean, and a repo-wide pass in #107 reflowed untouched code in `apps/backend` and `apps/web`, which took a separate revert commit. A file that already existed is formatted by hand; `prettier --write` formats the whole file, and one run on `schema.db.test.ts` in #551 reflowed unrelated tests and took fix-up commit `abaf9e4`. Before `git add` of such a file, read `git diff -- <file>`; a reflow the formatter made in lines you did not write is undone with Edit before the commit (`git checkout -p` is interactive and not available to an agent). A hunk that was already there before your change is someone else's work: leave it, do not stage it, and report it.
 
 ### Step 5: Test runs — targeted while working, the full check once at the head
@@ -136,6 +145,8 @@ git status                     # verify current branch
 git add <specific files>       # never git add . or git add -A
 git commit -m "#N: description"
 ```
+
+**Commit split** (standing answer, owner 2026-10-09, #388 — not asked): the implementer decides — by the plan's steps, a small PR as «code» and «docs»; the PR lists the split.
 
 **Rebase:** run `git -c core.commentChar=';' rebase …` and `git -c core.commentChar=';' rebase --continue`. With the default comment char `#`, the commit message after a conflict loses its `#N: …` subject as a comment line, leaving only the trailer (#185, #138). Probed on git 2.32: the plain `--continue` dropped the subject; with `;` it was kept.
 
