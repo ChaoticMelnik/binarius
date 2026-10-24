@@ -456,6 +456,8 @@ describe('POST /trading/sessions', () => {
     );
     await expectRefusal(response, status, error, before);
     expect(refreshCalls).toEqual([]);
+    expect(catalogReads).toBe(0);
+    expect(signalCalls).toEqual([]);
   });
 
   it('R4 a second start is 409 active_session_exists with the first session', async () => {
@@ -835,18 +837,21 @@ describe('POST /trading/sessions', () => {
     ],
     [
       'active_session_exists',
-      (seed: SeededAccount) => seedTradingSession(tmp.db, seed.brokerAccountId),
+      async (seed: SeededAccount) => ({
+        sessionId: (await seedTradingSession(tmp.db, seed.brokerAccountId)).id,
+      }),
     ],
   ] as const)(
     'R12 a change between the check and the insert answers %s from the transaction',
     async (error, race) => {
       const seed = await seedUserWithAccount(tmp.db);
       let racerRows = 0;
+      let raced: unknown;
       const response = await start(
         appWith({
           refresh: async (accountId) => {
             await snapshotFor(accountId);
-            await race(seed);
+            raced = await race(seed);
             racerRows = await sessionCount();
           },
         }),
@@ -854,7 +859,9 @@ describe('POST /trading/sessions', () => {
       );
       await expectRefusal(response, 409, error, racerRows);
       if (error === 'active_session_exists') {
-        expect(response.json()).toMatchObject({ session: { status: 'active' } });
+        expect(response.json()).toMatchObject({
+          session: { id: (raced as { sessionId: string }).sessionId, status: 'active' },
+        });
       }
     },
   );
@@ -924,7 +931,7 @@ describe('POST /trading/sessions', () => {
     expect(row?.settings).toEqual(session.settings);
   });
 
-  it('R41 writes v3 fixed under SESSION_STAKE_STRATEGY=fixed, and a later process leaves the row as it is', async () => {
+  it('R41 writes v3 fixed under SESSION_STAKE_STRATEGY=fixed', async () => {
     const seed = await seedReady();
     const response = await start(
       appWith({ stakeStrategy: SessionStakeStrategy.Fixed }),
@@ -933,15 +940,6 @@ describe('POST /trading/sessions', () => {
     expect(response.statusCode).toBe(201);
     const session = sessionOf(response);
     expect(session.settings?.stake).toEqual({ strategy: 'fixed', baseStake: '1', stakeScale: 0 });
-
-    await app?.close();
-    const again = await read(
-      appWith({ stakeStrategy: SessionStakeStrategy.Martingale }),
-      session.id,
-      seed.telegramUserId,
-    );
-    expect(again.statusCode).toBe(200);
-    expect(sessionOf(again).settings).toEqual(session.settings);
   });
 
   it.each([

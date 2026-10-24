@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   isH1Settings,
@@ -530,9 +531,24 @@ export type TradingSessionStartRefusal =
 export type TradingSessionStartCheck =
   // h1Since: the account's H1 mark (#745), the start route's choice of settings v5 (#775)
   | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date; h1Since: Date | null }
-  | { ok: false; code: TradingSessionStartRefusal; activeSessionId?: string };
+  // the account rides on active_session_exists: its 409 reads the account's active session
+  // again, in one snapshot (readActiveTradingSessionView, #283 m3)
+  | {
+      ok: false;
+      code: typeof TradingSessionErrorCode.ActiveSessionExists;
+      activeSessionId: string;
+      brokerAccountId: string;
+    }
+  | {
+      ok: false;
+      code: Exclude<TradingSessionStartRefusal, typeof TradingSessionErrorCode.ActiveSessionExists>;
+      activeSessionId?: undefined;
+      brokerAccountId?: undefined;
+    };
 
-const refused = (code: TradingSessionStartRefusal): TradingSessionStartCheck => ({
+const refused = (
+  code: Exclude<TradingSessionStartRefusal, typeof TradingSessionErrorCode.ActiveSessionExists>,
+): TradingSessionStartCheck => ({
   ok: false,
   code,
 });
@@ -593,7 +609,12 @@ export async function checkTradingSessionStart(
 
   const activeSessionId = await activeSessionOf(db, resolved.brokerAccountId);
   if (activeSessionId !== undefined) {
-    return { ok: false, code: TradingSessionErrorCode.ActiveSessionExists, activeSessionId };
+    return {
+      ok: false,
+      code: TradingSessionErrorCode.ActiveSessionExists,
+      activeSessionId,
+      brokerAccountId: resolved.brokerAccountId,
+    };
   }
 
   if (user.balance - user.reserved < TOKENS_PER_INTENT) {
@@ -699,6 +720,33 @@ export async function readTradingSessionView(
   id: string,
   telegramUserId: string,
 ): Promise<TradingSessionView | undefined> {
+  return readSessionViewWhere(db, [eq(tradingSessions.id, id)], telegramUserId);
+}
+
+// The account's active session as its owner sees it, or undefined when it has none (#283 m3): the
+// status is in the same snapshot's first select, so a session stopped before it is never returned.
+// At most one active row per account (trading_sessions_active_account_idx).
+export async function readActiveTradingSessionView(
+  db: Db,
+  brokerAccountId: string,
+  telegramUserId: string,
+): Promise<TradingSessionView | undefined> {
+  return readSessionViewWhere(
+    db,
+    [
+      eq(tradingSessions.brokerAccountId, brokerAccountId),
+      eq(tradingSessions.status, TradingSessionStatus.Active),
+    ],
+    telegramUserId,
+  );
+}
+
+// never without a predicate on the session: an empty one would read any session of the owner
+async function readSessionViewWhere(
+  db: Db,
+  where: [SQL, ...SQL[]],
+  telegramUserId: string,
+): Promise<TradingSessionView | undefined> {
   return db.transaction(
     async (tx) => {
       const [session] = await tx
@@ -723,7 +771,7 @@ export async function readTradingSessionView(
           brokerBalanceSnapshots,
           eq(brokerBalanceSnapshots.brokerAccountId, tradingSessions.brokerAccountId),
         )
-        .where(and(eq(tradingSessions.id, id), eq(users.telegramUserId, BigInt(telegramUserId))));
+        .where(and(...where, eq(users.telegramUserId, BigInt(telegramUserId))));
       if (session === undefined) return undefined;
 
       // a settled intent always has its broker trade (settleIntent writes both); one without it
@@ -739,12 +787,12 @@ export async function readTradingSessionView(
         })
         .from(tradeIntents)
         .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
-        .where(eq(tradeIntents.tradingSessionId, id));
+        .where(eq(tradeIntents.tradingSessionId, session.id));
 
       const [last] = await tx
         .select()
         .from(tradeIntents)
-        .where(eq(tradeIntents.tradingSessionId, id))
+        .where(eq(tradeIntents.tradingSessionId, session.id))
         .orderBy(desc(tradeIntents.createdAt), desc(tradeIntents.id))
         .limit(1);
 
@@ -920,17 +968,6 @@ export async function readTradingSessionAccount(
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
     .where(and(eq(tradingSessions.id, id), eq(users.telegramUserId, BigInt(telegramUserId))));
   return row;
-}
-
-// the account's active session as its owner sees it; undefined when none, or when it ended
-// between the two reads
-export async function readActiveTradingSessionView(
-  db: Db,
-  brokerAccountId: string,
-  telegramUserId: string,
-): Promise<TradingSessionView | undefined> {
-  const id = await activeSessionOf(db, brokerAccountId);
-  return id === undefined ? undefined : readTradingSessionView(db, id, telegramUserId);
 }
 
 // Records the bot's status message of the session (#567, docs/bot-session.md → Recovery after a

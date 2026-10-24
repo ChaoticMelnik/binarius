@@ -100,7 +100,7 @@ describe('session-start (#287)', () => {
     });
   });
 
-  it('takes SESSION_STAKE_STRATEGY=fixed and refuses an unknown strategy before any read (#450)', async () => {
+  it('takes SESSION_STAKE_STRATEGY=fixed and refuses an unknown strategy before writing anything (#450)', async () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await account(user.userId);
     const unknown = await run({
@@ -249,6 +249,17 @@ describe('session-start (#287)', () => {
       expect(result.err).toHaveLength(1);
       expect(result.err[0]).toMatch(/^Env (TELEGRAM_USER_ID|ACCOUNT_ID|CYCLES|DURATION_SEC) /);
     }
+  });
+
+  it('CLI-T refuses the old TRADES variable instead of starting the default cycles (#580 m6)', async () => {
+    const user = await seedUser(tmp.db);
+    const brokerAccountId = await account(user.userId);
+    expect(await run({ TELEGRAM_USER_ID: user.telegramUserId, TRADES: '5' })).toMatchObject({
+      code: 1,
+      out: [],
+      err: ['Env TRADES is not read since #552: set CYCLES'],
+    });
+    expect(await sessionsOf(brokerAccountId)).toEqual([]);
   });
 
   it('starts a demo session with DEMO_ONLY=true (#396)', async () => {

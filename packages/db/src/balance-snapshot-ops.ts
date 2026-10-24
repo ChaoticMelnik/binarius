@@ -26,8 +26,8 @@ import { millisecondsAgo, millisecondsFromNow } from './trade-intent-ops';
 // The only writers of broker_balance_snapshots (#235, part 1 of #137).
 //
 // Every operation takes Db, not a transaction, and is one autocommit statement: the snapshot row
-// is never locked while users, broker_accounts or trade_intents are (lock order users →
-// broker_accounts → trade_intents is unaffected). Times are the database clock at the statement.
+// is never locked while users, broker_accounts, trading_sessions or trade_intents are (lock order
+// users → broker_accounts → trading_sessions → trade_intents is unaffected). Times are the database clock at the statement.
 //
 // The writers. The REST refresh (#137) and the socket's user.data (the worker's session manager,
 // #101) both write the full snapshot through upsertBalanceSnapshot; user.data passes both modes

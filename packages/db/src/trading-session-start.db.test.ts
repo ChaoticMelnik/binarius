@@ -276,7 +276,7 @@ describe('checkTradingSessionStart', () => {
     expect((await check(withAccount.telegramUserId)).ok).toBe(true);
   });
 
-  it('E6 an active session refuses with its id; a stopped one does not', async () => {
+  it('E6 an active session refuses with its id and the account; a stopped one does not', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const stopped = await seedTradingSession(tmp.db, seed.brokerAccountId);
     await stopTradingSession(tmp.db, {
@@ -289,6 +289,7 @@ describe('checkTradingSessionStart', () => {
       ok: false,
       code: TradingSessionErrorCode.ActiveSessionExists,
       activeSessionId: active.id,
+      brokerAccountId: seed.brokerAccountId,
     });
   });
 
