@@ -434,7 +434,7 @@ export type IntentStatusView = Pick<
 const durationLabelOf = (durationSec: number): string =>
   durationSec in DEMO_DURATION_LABELS
     ? DEMO_DURATION_LABELS[durationSec as DemoDurationSec]
-    : `⏱ ${String(durationSec)} с`;
+    : plain.demoDurationSeconds({ durationSec: String(durationSec) });
 
 const statusLineOfIntent = ({ status, lastError }: IntentStatusView): TelegramHtml =>
   status === TradeIntentStatus.Rejected
@@ -721,7 +721,7 @@ export const demoPairsScreen = (
   pageCount: number,
 ): TelegramHtml =>
   telegramHtml`${TEXTS.demoPairsHeader({ group: DEMO_GROUP_LABELS[group] })}
-${TEXTS.demoPage({ page: `${page + 1} из ${pageCount}` })}`;
+${TEXTS.demoPage({ page: String(page + 1), pageCount: String(pageCount) })}`;
 
 // The share of right forecasts at which a fixed stake breaks even, one decimal (#379); a dash
 // where the payout gives none. At most «100.0» (BOT_TEXT_WIDTHS.breakEven).

@@ -55,15 +55,12 @@ describe('the English texts (#508)', () => {
     expect(names(source)).toEqual(names(BOT_TEXT_CATALOG[key].source));
   });
 
-  // the groups of #632 and #633 show their Russian defaults until those parts translate them, but
-  // the keys translated ahead of them (#664, #686)
-  it('E4 leaves untranslated exactly the groups of the later parts, but the keys translated before #633', () => {
+  // the groups of #633 show their Russian defaults until it translates them, but the keys
+  // translated ahead of it (#686, #745, #796, #632)
+  it('E4 leaves untranslated exactly the groups of #633, but the keys translated before it', () => {
     const translated: readonly BotTextKey[] = TRANSLATED_BEFORE_633;
     expect([...UNTRANSLATED_BOT_TEXT_KEYS].sort()).toEqual(
       botTextKeysOf(
-        BotTextGroup.Demo,
-        BotTextGroup.Analysis,
-        BotTextGroup.Trade,
         BotTextGroup.Session,
         BotTextGroup.Stars,
         BotTextGroup.Mailing,
@@ -74,11 +71,8 @@ describe('the English texts (#508)', () => {
     );
   });
 
-  it('E7 the keys translated before #633 are exactly those of the later groups with an English text', () => {
+  it('E7 the keys translated before #633 are exactly those of its groups with an English text', () => {
     const later = botTextKeysOf(
-      BotTextGroup.Demo,
-      BotTextGroup.Analysis,
-      BotTextGroup.Trade,
       BotTextGroup.Session,
       BotTextGroup.Stars,
       BotTextGroup.Mailing,
@@ -87,6 +81,20 @@ describe('the English texts (#508)', () => {
     expect([...TRANSLATED_BEFORE_633].sort()).toEqual(
       later.filter((key) => BOT_TEXT_SOURCES_EN[key] !== undefined).sort(),
     );
+  });
+
+  it('E8 gives every key of the demo, analysis and trade groups an English text (#632)', () => {
+    const keys = botTextKeysOf(BotTextGroup.Demo, BotTextGroup.Analysis, BotTextGroup.Trade);
+    expect(keys.filter((key) => BOT_TEXT_SOURCES_EN[key] === undefined)).toEqual([]);
+  });
+
+  // the demo path prints «5 cycles» through cyclesCount; the plural rule stays Russian until #633
+  it('E9 translates the cycle words ahead of #633, the few form as the many one', () => {
+    expect(TRANSLATED_BEFORE_633).toEqual(
+      expect.arrayContaining(['sessionCycleOne', 'sessionCycleFew', 'sessionCycleMany']),
+    );
+    expect(BOT_TEXT_SOURCES_EN.sessionCycleFew).toBe('cycles');
+    expect(BOT_TEXT_SOURCES_EN.sessionCycleMany).toBe(BOT_TEXT_SOURCES_EN.sessionCycleFew);
   });
 
   it('E6 falls back to the Russian default for an untranslated key, the English text otherwise', () => {

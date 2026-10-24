@@ -2,6 +2,8 @@ import { HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   pairLabel,
   BrokerBalanceUnavailableReason,
   PairsCatalogErrorCode,
@@ -38,6 +40,7 @@ import {
 } from './demo';
 import { intentCallbackData, intentKeyboard } from './demo-trade';
 import type { IntentTrackRequest } from './intent-tracker';
+import { runWithLanguage, type UserLanguages } from './language';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
@@ -67,6 +70,7 @@ import {
   stubSessionTracker,
   stubTracker,
   type ApiCall,
+  userLanguagesWith,
   inlineRows,
   inlineStyles,
   keyboardRows,
@@ -92,6 +96,7 @@ function setup(
     dialog?: LoginDialogState;
     // null: a bot whose origin is not https, so no «💳 Пополнить» (#27)
     cashierUrl?: string | null;
+    languages?: UserLanguages;
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -120,6 +125,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
+    ...(options.languages === undefined ? {} : { languages: options.languages }),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
@@ -1049,5 +1055,52 @@ describe('intentKeyboard', () => {
     expect(keyboardRows(intentKeyboard(real))[0]).toEqual([
       button('🚀 Сессия из 5 циклов · REAL', sessionStartCallbackData(TradeMode.Real, 77, 5)),
     ]);
+  });
+});
+
+// #632: the single trade of a user whose language is English, answered through the language
+// middleware as production answers it; every text and button label it sends is English
+describe('the single trade in English (#632)', () => {
+  const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+  const english = (options: Parameters<typeof setup>[0] = {}) =>
+    setup({ ...options, languages: userLanguagesWith(USER.id, BotLanguage.En) });
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const expectEnglish = (calls: readonly ApiCall[]) => {
+    const texts = calls.flatMap((call) => [
+      ...(typeof call.payload.text === 'string' ? [call.payload.text] : []),
+      ...rowsOf(call.payload)
+        .flat()
+        .map((key) => key.text),
+    ]);
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text).not.toMatch(CYRILLIC);
+  };
+
+  it('EN-6 the stake button sends the status in English and tracks it in English', async () => {
+    const { press, calls, intentTracker } = english();
+    await press(STAKE);
+
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(en(() => intentStatusText(pairLabel(PAIR_EURUSD), INTENT_VIEW).value));
+    expect(sent?.text).toContain('⬆️ Up · ⏱ 5 s · stake $1.00');
+    expect(rowsOf(sent)).toEqual([[button(BOT_TEXT_SOURCES_EN.refreshIntentButton!, REFRESH)]]);
+    expect(intentTracker.track.mock.calls[0]?.[0]).toMatchObject({ language: BotLanguage.En });
+    expectEnglish(calls);
+  });
+
+  it('EN-7 the refresh of a settled trade offers the session of 5 cycles in English', async () => {
+    const settled = intentView({ status: TradeIntentStatus.Settled });
+    const { press, calls } = english({ readIntent: () => Promise.resolve(settled) });
+    await press(REFRESH);
+
+    const edit = payloadOf(calls, 'editMessageText');
+    expect(edit?.text).toBe(
+      en(() => intentStatusText(pairLabel(PAIR_EURUSD), settled, { sessionOffer: true }).value),
+    );
+    expect(edit?.text).toContain('a session of 5 cycles on this pair');
+    expect(rowsOf(edit)[0]).toEqual([
+      button('🚀 Session of 5 cycles', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
+    ]);
+    expectEnglish(calls);
   });
 });
