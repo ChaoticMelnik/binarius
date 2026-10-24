@@ -3,7 +3,6 @@ import {
   BOT_TEXT_SOURCES_EN,
   BotLanguage,
   BrokerRestErrorCode,
-  defaultBotTextSource,
   type BotTextKey,
   CandleProblem,
   DATA_REFUSAL_REASONS,
@@ -29,8 +28,9 @@ import {
   type TradingSignalResponse,
   formatPrice,
   tradingSignalResponseSchema,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
-import { telegramTextProblems } from '@binarius/shared/testing';
+import { telegramTextProblems, botTextSourcesWith } from '@binarius/shared/testing';
 import {
   analysisScreen,
   analysisUnavailableScreen,
@@ -56,7 +56,7 @@ import {
   stubText,
   stubTextSource,
 } from './testing';
-import { formatBreakEven, setBotTextSource, TEXTS } from './texts';
+import { formatBreakEven, setBotTextSources, TEXTS } from './texts';
 
 const head = { version: SIGNAL_ALGORITHM_VERSION } as const;
 const signalOf = (action: TradeAction, features = SIGNAL_FEATURES) =>
@@ -532,10 +532,10 @@ MA200         цена ниже 1.08612
 // Every word map and the headlines are read when a screen is built, so a source swapped after the
 // module loaded reaches them: one test per map that used to hold the words themselves (#240).
 describe('the text source', () => {
-  afterEach(() => setBotTextSource(defaultBotTextSource));
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
   const screenWith = (key: BotTextKey, response: TradingSignalResponse) => {
-    setBotTextSource(stubTextSource(key));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource(key)));
     return analysisScreen({
       mode: TradeMode.Demo,
       pair: PAIR_EURUSD,

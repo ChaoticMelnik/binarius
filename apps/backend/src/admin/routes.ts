@@ -13,7 +13,9 @@ import {
   botTextChangeProblems,
   isBotTextKey,
   renderBotTextPreview,
+  adminBotTextLanguageQuerySchema,
   resolveBotTextOverrides,
+  resolveBotTextOverridesOf,
   safeParseAdminBotTextPreviewRequest,
   safeParseAdminBotTextResetRequest,
   safeParseAdminBotTextSaveRequest,
@@ -25,6 +27,7 @@ import {
   type AdminBotTextResponse,
   type AdminBotTextSaveResponse,
   type BotProfileMethod,
+  type BotLanguage,
   type BotTextKey,
   ADMIN_PAGE_SIZE,
   AdminErrorCode,
@@ -1098,19 +1101,20 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     const rows = await listBotTextOverridesForAdmin(tx);
     return { rows, resolved: resolveBotTextOverrides(rows) };
   };
-  const textViewOf = async (tx: Tx, key: BotTextKey) => {
+  const textViewOf = async (tx: Tx, language: BotLanguage, key: BotTextKey) => {
     const { rows, resolved } = await readTexts(tx);
-    return toAdminBotTextView(key, rows, resolved);
+    return toAdminBotTextView(key, rows, resolved[language]);
   };
   const textAudit = (
     action: AuditAction,
     path: string,
+    language: BotLanguage,
     key: string | undefined,
     result: string,
   ): StaffAuditDescription => ({
     action,
     entity: textEntity,
-    payload: { path, ...(key === undefined ? {} : { key }), result },
+    payload: { path, language, ...(key === undefined ? {} : { key }), result },
   });
   const badTextBody = (reply: FastifyReply, issues: unknown) =>
     reply.code(400).send({ error: AdminErrorCode.Validation, issues });
@@ -1139,7 +1143,9 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       staffId: string;
       path: string;
       trigger: 'save' | 'reset' | 'republish';
+      // a save or reset publishes its key's language only; a republish, every language
       key?: BotTextKey;
+      language?: BotLanguage;
       methods: readonly BotProfileMethod[];
     },
   ): Promise<AdminBotProfileMethodResult[]> =>
@@ -1148,17 +1154,19 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         deps.botProfileApi,
         await readBotProfileSource(deps.db),
         input.methods,
+        ...(input.language === undefined ? [] : [[input.language]]),
       );
       for (const result of results) {
         if (!result.ok) request.log.warn({ ...result }, 'bot profile not published');
       }
       const published = results.map(toWirePublishResult);
-      const { staffId, path, trigger, key } = input;
+      const { staffId, path, trigger, key, language } = input;
       await recordBotProfilePublish(deps.db, {
         staffId,
         path,
         trigger,
         ...(key === undefined ? {} : { key }),
+        ...(language === undefined ? {} : { language }),
         methods: published,
       });
       return published;
@@ -1171,7 +1179,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         result: {
           me: meOf(ctx),
           overrides: rows.map((row) =>
-            toAdminBotTextOverrideView(row, resolved.rejected.get(row.key)),
+            toAdminBotTextOverrideView(row, resolved[row.language].rejected.get(row.key)),
           ),
         },
         audit: { action: AuditAction.BotTextsViewed, payload: { path: '/admin/bot-texts' } },
@@ -1182,6 +1190,9 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   });
 
   app.get('/admin/bot-texts/:key', async (request, reply) => {
+    const query = adminBotTextLanguageQuerySchema.safeParse(request.query);
+    if (!query.success) return badTextBody(reply, query.error.issues);
+    const { language } = query.data;
     const { key, known } = textKeyOf(request);
     const path = '/admin/bot-texts/:key';
     const answer = await asStaff(
@@ -1189,12 +1200,17 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       reply,
       async (tx, ctx): Promise<StaffActionResult<AdminBotTextResponse | null>> => {
         if (known === undefined) {
-          const payload = { path, result: 'not_found', ...(key === undefined ? {} : { key }) };
+          const payload = {
+            path,
+            language,
+            result: 'not_found',
+            ...(key === undefined ? {} : { key }),
+          };
           return { result: null, audit: { action: AuditAction.BotTextViewed, payload } };
         }
         return {
-          result: { me: meOf(ctx), text: await textViewOf(tx, known) },
-          audit: textAudit(AuditAction.BotTextViewed, path, known, 'found'),
+          result: { me: meOf(ctx), text: await textViewOf(tx, language, known) },
+          audit: textAudit(AuditAction.BotTextViewed, path, language, known, 'found'),
         };
       },
     );
@@ -1207,7 +1223,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   app.post('/admin/bot-texts/:key/preview', textBody, async (request, reply) => {
     const parsed = safeParseAdminBotTextPreviewRequest(request.body);
     if (!parsed.success) return badTextBody(reply, parsed.error.issues);
-    const { source } = parsed.data;
+    const { language, source } = parsed.data;
     const { key, known } = textKeyOf(request);
     const path = '/admin/bot-texts/:key/preview';
     const answer = await asStaff(
@@ -1215,20 +1231,20 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       reply,
       async (tx, ctx): Promise<StaffActionResult<AdminBotTextPreviewResponse | null>> => {
         const audit = (result: AdminBotTextPreviewResponse['outcome'] | 'not_found') =>
-          textAudit(AuditAction.BotTextPreviewed, path, key, result);
+          textAudit(AuditAction.BotTextPreviewed, path, language, key, result);
         if (known === undefined) return { result: null, audit: audit('not_found') };
         const { rows, resolved } = await readTexts(tx);
-        const base = { me: meOf(ctx), text: toAdminBotTextView(known, rows, resolved) };
-        const problems = botTextChangeProblems(known, source, rows);
+        const base = { me: meOf(ctx), text: toAdminBotTextView(known, rows, resolved[language]) };
+        const problems = botTextChangeProblems(language, known, source, rows);
         if (problems.length > 0) {
           return {
             result: { ...base, outcome: 'refused', problems: adminBotTextProblems(problems) },
             audit: audit('refused'),
           };
         }
-        const after = resolveBotTextOverrides([
-          ...rows.filter((row) => row.key !== known),
-          { key: known, source },
+        const after = resolveBotTextOverridesOf(language, [
+          ...rows.filter((row) => row.language !== language || row.key !== known),
+          { language, key: known, source },
         ]);
         return {
           result: {
@@ -1248,7 +1264,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   app.post('/admin/bot-texts/:key/save', textBody, async (request, reply) => {
     const parsed = safeParseAdminBotTextSaveRequest(request.body);
     if (!parsed.success) return badTextBody(reply, parsed.error.issues);
-    const { source, expectedVersion } = parsed.data;
+    const { language, source, expectedVersion } = parsed.data;
     const { key, known } = textKeyOf(request);
     const path = '/admin/bot-texts/:key/save';
     const answer = await asStaff(
@@ -1256,16 +1272,17 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       reply,
       async (tx, ctx): Promise<StaffActionResult<Unpublished<AdminBotTextSaveResponse> | null>> => {
         const audit = (result: AdminBotTextSaveResponse['outcome'] | 'not_found') =>
-          textAudit(AuditAction.BotTextSaved, path, key, result);
+          textAudit(AuditAction.BotTextSaved, path, language, key, result);
         if (known === undefined) return { result: null, audit: audit('not_found') };
         const applied = await applyBotTextSave(tx, {
+          language,
           key: known,
           source,
           expectedVersion,
           staffId: ctx.staffId,
         });
         // after the write: the same transaction reads its own row
-        const base = { me: meOf(ctx), text: await textViewOf(tx, known) };
+        const base = { me: meOf(ctx), text: await textViewOf(tx, language, known) };
         if (applied.ok) {
           return {
             result: { ...base, outcome: 'saved', version: applied.version },
@@ -1311,6 +1328,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             path,
             trigger: 'save',
             key: known,
+            language,
             methods,
           });
     return reply.send({ ...answer, published } satisfies AdminBotTextSaveResponse);
@@ -1320,7 +1338,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   app.post('/admin/bot-texts/:key/reset', textBody, async (request, reply) => {
     const parsed = safeParseAdminBotTextResetRequest(request.body);
     if (!parsed.success) return badTextBody(reply, parsed.error.issues);
-    const { expectedVersion } = parsed.data;
+    const { language, expectedVersion } = parsed.data;
     const { key, known } = textKeyOf(request);
     const path = '/admin/bot-texts/:key/reset';
     const answer = await asStaff(
@@ -1331,10 +1349,10 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         ctx,
       ): Promise<StaffActionResult<Unpublished<AdminBotTextResetResponse> | null>> => {
         const audit = (result: AdminBotTextResetResponse['outcome'] | 'not_found') =>
-          textAudit(AuditAction.BotTextReset, path, key, result);
+          textAudit(AuditAction.BotTextReset, path, language, key, result);
         if (key === undefined) return { result: null, audit: audit('not_found') };
-        const viewNow = () => (known === undefined ? null : textViewOf(tx, known));
-        const applied = await applyBotTextReset(tx, { key, expectedVersion });
+        const viewNow = () => (known === undefined ? null : textViewOf(tx, language, known));
+        const applied = await applyBotTextReset(tx, { language, key, expectedVersion });
         const base = { me: meOf(ctx), text: await viewNow() };
         if (applied.ok) {
           return {
@@ -1384,6 +1402,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             path,
             trigger: 'reset',
             key: known,
+            language,
             methods,
           });
     return reply.send({ ...answer, published } satisfies AdminBotTextResetResponse);

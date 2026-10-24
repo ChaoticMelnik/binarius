@@ -873,7 +873,12 @@ describe('readTradingAccess', () => {
 });
 
 describe('readBotTexts (#299)', () => {
-  const OVERRIDES = { overrides: [{ key: 'welcome', source: 'Привет', version: 3 }] };
+  const OVERRIDES = {
+    overrides: [
+      { language: 'ru', key: 'welcome', source: 'Привет', version: 3 },
+      { language: 'en', key: 'welcome', source: 'Hello', version: 4 },
+    ],
+  };
 
   it('C1 sends a GET to /bot-texts under the bearer and returns the rows', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {
@@ -892,7 +897,16 @@ describe('readBotTexts (#299)', () => {
       'a field the allowlist does not have',
       { overrides: [{ ...OVERRIDES.overrides[0], updatedAt: 'x' }] },
     ],
-    ['a malformed key', { overrides: [{ key: 'Welcome', source: 'x', version: 1 }] }],
+    [
+      'a malformed key',
+      { overrides: [{ language: 'ru', key: 'Welcome', source: 'x', version: 1 }] },
+    ],
+    // C2-lang (#634): a row without a language, or of a language the bot has not
+    ['a row without a language', { overrides: [{ key: 'welcome', source: 'x', version: 1 }] }],
+    [
+      'a language outside BotLanguage',
+      { overrides: [{ language: 'de', key: 'welcome', source: 'x', version: 1 }] },
+    ],
     ['no list', {}],
   ])('C2 reports %s as a contract violation', async (_label, body) => {
     const { baseUrl } = await serve((_request, reply) => {
@@ -1798,7 +1812,12 @@ describe('body size', () => {
     pump();
   };
 
-  const OVERRIDES = { overrides: [{ key: 'welcome', source: 'Привет', version: 3 }] };
+  const OVERRIDES = {
+    overrides: [
+      { language: 'ru', key: 'welcome', source: 'Привет', version: 3 },
+      { language: 'en', key: 'welcome', source: 'Hello', version: 4 },
+    ],
+  };
 
   it('(a) refuses a 2xx longer than the ceiling as a contract violation with no cause', async () => {
     const baseUrl = await hold((response) => {
@@ -2257,16 +2276,19 @@ describe('body size', () => {
         parse: (input) => starsRefundResponseSchema.safeParse(input),
         sample: { outcome: longest(Object.values(StarsRefundRequestOutcome)) },
       },
-      // Reds when the catalog grows to about 500 keys: then the ceiling is revisited, not the
-      // assumption.
+      // every key of the catalog in every language (#634). Reds when the catalog grows to about
+      // 500 keys: then the ceiling is revisited, not the assumption.
       readBotTexts: {
         parse: (input) => botTextOverridesResponseSchema.safeParse(input),
         sample: {
-          overrides: Object.keys(BOT_TEXT_CATALOG).map((key) => ({
-            key,
-            source: bytesLong(ASSUMED_LONGEST_BOT_TEXT_BYTES),
-            version: NONNEGATIVE_INT,
-          })),
+          overrides: Object.values(BotLanguage).flatMap((language) =>
+            Object.keys(BOT_TEXT_CATALOG).map((key) => ({
+              language,
+              key,
+              source: bytesLong(ASSUMED_LONGEST_BOT_TEXT_BYTES),
+              version: NONNEGATIVE_INT,
+            })),
+          ),
         },
         limit: MAX_BOT_TEXTS_BODY_BYTES,
       },

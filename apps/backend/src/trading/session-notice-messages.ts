@@ -30,8 +30,9 @@ import { clientLabelsOf, clientSessionTextsOf, clientTextsOf } from '../auth/tex
 
 // What the session notices say (#464, docs/bot-session.md → Trade messages), in the client bot's
 // voice through the catalog (Rule 30) and in the session owner's language (#633): the shared
-// builders of session-texts.ts, so the summary's lines are the bot's status message's own. Built
-// when sent, so an override reaches them.
+// builders of session-texts.ts, so the summary's lines are the bot's status message's own. The
+// sets are built once a language and read their source when a message is assembled, so the
+// overrides of either language reach them (#634).
 
 // the pair's label (pairLabel, #428, #631) and digits from the catalog the routes read; null each when
 // it cannot say

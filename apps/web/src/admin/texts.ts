@@ -400,8 +400,8 @@ export const TEXTS = {
 
   botTextsTitle: 'Тексты бота',
   botTextsHeading: 'Тексты клиентского бота',
-  botTextsLanguagesNote:
-    'Переопределения действуют для русских текстов; английские показываются из каталога (#634).',
+  // the language whose texts the list and the editor show (#634), named by botLanguage
+  botTextLanguage: 'Язык текстов:',
   columnBotTextKey: 'Ключ',
   columnBotTextDescription: 'Где показывается',
   columnBotTextState: 'Состояние',

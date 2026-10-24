@@ -1,5 +1,6 @@
+import type { BotLanguage } from './bot-language';
 import type { BotTextSource } from './bot-text-template';
-import type { BotTextKey } from './bot-texts';
+import { defaultBotTextSource, type BotTextKey } from './bot-texts';
 
 // The client bot's English texts (#508, docs/bot-texts.md → Languages): the same keys, the same
 // placeholders and fragments as the Russian catalog, checked by the same validator
@@ -570,8 +571,13 @@ Auto-trading does not start without tokens: each trade needs one token.
     'Auto sessions on Binodex right in Telegram: the bot trades demo on a signal by itself, you watch the result',
 };
 
-// A static source: overrides apply to Russian only until #634, so every English message is
-// bounded by the test on the defaults, with no override to widen it at run time.
+// The static table source; the loaders read the language's resolved set (#634).
 export const enBotTextSource: BotTextSource<BotTextKey> = {
   sourceOf: (key) => BOT_TEXT_SOURCES_EN[key],
+};
+
+// each language's defaults, which its overrides replace key by key (#634)
+export const BOT_TEXT_DEFAULT_SOURCES: Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>> = {
+  ru: defaultBotTextSource,
+  en: enBotTextSource,
 };

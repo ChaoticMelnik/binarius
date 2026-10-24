@@ -1,7 +1,12 @@
 import { sql } from 'drizzle-orm';
 import { GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BOT_TEXT_CATALOG, BOT_TEXT_SOURCES_EN, type BotProfileMethod } from '@binarius/shared';
+import {
+  BOT_TEXT_CATALOG,
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
+  type BotProfileMethod,
+} from '@binarius/shared';
 import { auditLog, botTextOverrides, listBotTextOverrides } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import {
@@ -71,12 +76,14 @@ describe('parseBotTextArgs', () => {
   it('P takes stdin, a version, and a reset of a key the catalog no longer has', () => {
     expect(parseBotTextArgs(['set', 'welcome', '--file', '-', '--version', '7'])).toEqual({
       command: 'set',
+      language: 'ru',
       key: 'welcome',
       file: '-',
       version: 7,
     });
     expect(parseBotTextArgs(['reset', 'renamedKey'])).toEqual({
       command: 'reset',
+      language: 'ru',
       key: 'renamedKey',
     });
   });
@@ -84,14 +91,44 @@ describe('parseBotTextArgs', () => {
   it("P takes the commands' and the profile's keys, and publish (#301)", () => {
     expect(parseBotTextArgs(['set', 'startCommand', '--file', 'a'])).toEqual({
       command: 'set',
+      language: 'ru',
       key: 'startCommand',
       file: 'a',
     });
     expect(parseBotTextArgs(['reset', 'profileDescription'])).toEqual({
       command: 'reset',
+      language: 'ru',
       key: 'profileDescription',
     });
     expect(parseBotTextArgs(['publish'])).toEqual({ command: 'publish' });
+  });
+
+  // #634: the language of the text, Russian unless named
+  it('P-L takes --lang ru|en on list, show, set and reset, and Russian without it', () => {
+    expect(parseBotTextArgs(['show', 'welcome', '--lang', 'en'])).toEqual({
+      command: 'show',
+      language: 'en',
+      key: 'welcome',
+    });
+    expect(parseBotTextArgs(['show', 'welcome'])).toEqual({
+      command: 'show',
+      language: 'ru',
+      key: 'welcome',
+    });
+    expect(parseBotTextArgs(['list', '--lang=en'])).toEqual({ command: 'list', language: 'en' });
+    expect(parseBotTextArgs(['list'])).toEqual({ command: 'list', language: 'ru' });
+    expect(parseBotTextArgs(['reset', 'welcome', '--lang', 'en', '--version', '3'])).toEqual({
+      command: 'reset',
+      language: 'en',
+      key: 'welcome',
+      version: 3,
+    });
+    expect(() => parseBotTextArgs(['show', 'welcome', '--lang', 'de'])).toThrow(
+      '--lang: ru или en',
+    );
+    expect(() => parseBotTextArgs(['publish', '--lang', 'en'])).toThrow(
+      'publish не принимает аргументов',
+    );
   });
 
   it('answers a usage error with exit 2 and the usage', async () => {
@@ -194,7 +231,7 @@ describe('bot-text on a database', () => {
       '-': utf8('Привет, <b>мир</b>\n'),
     });
     expect(code).toBe(0);
-    expect(out[0]).toMatch(/^Сохранено: welcome, версия \d+\. .* в течение 35 с\.$/);
+    expect(out[0]).toMatch(/^Сохранено: welcome \(ru\), версия \d+\. .* в течение 35 с\.$/);
     expect((await run(['show', 'welcome'])).out).toEqual(['Привет, <b>мир</b>']);
   });
 
@@ -255,7 +292,7 @@ describe('bot-text on a database', () => {
   });
 
   it('L9 resets to the default, then reports it is the default already', async () => {
-    expect((await run(['reset', 'welcome'])).out[0]).toMatch(/^Сброшено: welcome\./);
+    expect((await run(['reset', 'welcome'])).out[0]).toMatch(/^Сброшено: welcome \(ru\)\./);
     expect(await run(['reset', 'welcome'])).toMatchObject({
       code: 0,
       out: ['Уже исходный текст.'],
@@ -276,6 +313,7 @@ describe('bot-text on a database', () => {
       ['bot_text_reset', 'renamedKey'],
     ]);
     expect(rows[2]?.payload).toMatchObject({
+      language: 'ru',
       oldText: 'Привет, <b>мир</b>',
       newText: BOT_TEXT_CATALOG.welcome.source,
     });
@@ -374,9 +412,10 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
     );
     expect(code).toBe(0);
     expect(err).toEqual([]);
-    expect(out[0]).toMatch(/^Сохранено: startCommand, версия \d+\./);
+    expect(out[0]).toMatch(/^Сохранено: startCommand \(ru\), версия \d+\./);
     expect(out.slice(1)).toEqual(['setMyCommands: опубликовано']);
     expect(fake.created).toEqual([{ token: TOKEN }]);
+    // the key's language only (#634)
     expect(fake.calls).toEqual([
       {
         method: 'setMyCommands',
@@ -385,7 +424,6 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
           { ...SCOPE, ...RU },
         ],
       },
-      { method: 'setMyCommands', args: [EN_MENU, SCOPE] },
     ]);
   });
 
@@ -416,16 +454,12 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
       fake.deps,
     );
     expect(code).toBe(0);
-    expect(out[0]).toMatch(/^Сброшено: profileShortDescription\./);
+    expect(out[0]).toMatch(/^Сброшено: profileShortDescription \(ru\)\./);
     expect(out.slice(1)).toEqual(['setMyShortDescription: опубликовано']);
     expect(fake.calls).toEqual([
       {
         method: 'setMyShortDescription',
         args: [BOT_TEXT_CATALOG.profileShortDescription.source, RU],
-      },
-      {
-        method: 'setMyShortDescription',
-        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
       },
     ]);
   });
@@ -514,5 +548,82 @@ describe('bot-text publishing the menu and the profile (#301)', () => {
       err: [],
     });
     expect(fake.calls).toEqual([]);
+  });
+});
+
+// #634: one key of one language
+describe('bot-text --lang', () => {
+  const withToken = () => ({ DATABASE_URL: tmp.url, TELEGRAM_BOT_TOKEN: TOKEN });
+  beforeEach(async () => {
+    await tmp.db.delete(botTextOverrides);
+  });
+
+  it('L-L1 saves an English text, shows it in English, and leaves the Russian one', async () => {
+    const saved = await run(['set', 'welcome', '--lang', 'en', '--file', '-'], {
+      '-': utf8('Hello, <b>world</b>'),
+    });
+    expect(saved.code).toBe(0);
+    expect(saved.out[0]).toMatch(/^Сохранено: welcome \(en\), версия \d+\./);
+    expect((await run(['show', 'welcome', '--lang', 'en'])).out).toEqual(['Hello, <b>world</b>']);
+    expect((await run(['show', 'welcome'])).out).toEqual([BOT_TEXT_CATALOG.welcome.source]);
+    // the same text as the English default is said to be the default's
+    const same = await run(['set', 'connectButton', '--lang', 'en', '--file', 'f'], {
+      f: utf8(BOT_TEXT_SOURCES_EN.connectButton),
+    });
+    expect(same.out).toEqual(['Текст не изменился.']);
+  });
+
+  it("L-L2 lists one language's state, and only its rejected rows", async () => {
+    await tmp.db.insert(botTextOverrides).values([
+      { language: BotLanguage.Ru, key: 'renamedKey', source: 'x' },
+      { language: BotLanguage.En, key: 'welcome', source: 'Hello' },
+      { language: BotLanguage.En, key: 'otherKey', source: 'y' },
+    ]);
+    const en = await run(['list', '--lang', 'en']);
+    expect(en.out.find((line) => line.startsWith('welcome\t'))).toMatch(
+      /^welcome\tstart\tизменён, версия \d+, /,
+    );
+    expect(en.out.at(-1)).toBe('otherKey: не действует — Неизвестный ключ — игнорируется');
+    expect(en.out.some((line) => line.startsWith('renamedKey'))).toBe(false);
+    const ru = await run(['list']);
+    expect(ru.out.find((line) => line.startsWith('welcome\t'))).toBe('welcome\tstart\tисходный');
+    expect(ru.out.at(-1)).toBe('renamedKey: не действует — Неизвестный ключ — игнорируется');
+  });
+
+  it("L-L3 publishes a commands or profile key in the key's language only", async () => {
+    const saved = fakeProfileApi();
+    expect(
+      (
+        await run(
+          ['set', 'startCommand', '--lang', 'en', '--file', 'f'],
+          { f: utf8('Go') },
+          withToken(),
+          saved.deps,
+        )
+      ).code,
+    ).toBe(0);
+    expect(saved.calls).toEqual([
+      {
+        method: 'setMyCommands',
+        args: [[{ command: 'start', description: 'Go' }, ...EN_MENU.slice(1)], SCOPE],
+      },
+    ]);
+    await tmp.db
+      .insert(botTextOverrides)
+      .values({ language: BotLanguage.En, key: 'profileShortDescription', source: 'Short' });
+    const reset = fakeProfileApi();
+    expect(
+      (await run(['reset', 'profileShortDescription', '--lang', 'en'], {}, withToken(), reset.deps))
+        .out,
+    ).toEqual([
+      expect.stringMatching(/^Сброшено: profileShortDescription \(en\)\./),
+      'setMyShortDescription: опубликовано',
+    ]);
+    expect(reset.calls).toEqual([
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
+      },
+    ]);
   });
 });

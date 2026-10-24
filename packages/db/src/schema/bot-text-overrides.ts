@@ -1,11 +1,25 @@
 import { sql } from 'drizzle-orm';
-import { bigint, check, pgSequence, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { BOT_TEXT_KEY_PATTERN, BOT_TEXT_SOURCE_MAX } from '@binarius/shared';
-import { sqlTextLiteral } from './columns';
+import {
+  bigint,
+  check,
+  pgSequence,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import {
+  BOT_TEXT_KEY_PATTERN,
+  BOT_TEXT_SOURCE_MAX,
+  BotLanguage,
+  DEFAULT_BOT_LANGUAGE,
+} from '@binarius/shared';
+import { inList, sqlTextLiteral } from './columns';
 import { staff } from './staff';
 
-// One row per overridden client bot text (#299, docs/bot-texts.md → Overrides); a key with no row
-// shows the catalog's default. Whether a key is in the catalog is the writer's check, not the
+// One row per overridden client bot text of one language (#299, #634, docs/bot-texts.md →
+// Overrides); a (language, key) with no row shows that language's default. Whether a key is in the catalog is the writer's check, not the
 // table's: the loaders ignore an unknown one.
 
 // A version from a sequence rather than +1: a reset deletes the row, and +1 would hand the next
@@ -18,7 +32,10 @@ export const botTextOverrideVersionSeq = pgSequence('bot_text_override_version_s
 export const botTextOverrides = pgTable(
   'bot_text_overrides',
   {
-    key: text('key').primaryKey(),
+    // The writers always name the language; the default is what migration 0083 gave the rows
+    // that predate it.
+    language: text('language').$type<BotLanguage>().notNull().default(DEFAULT_BOT_LANGUAGE),
+    key: text('key').notNull(),
     source: text('source').notNull(),
     version: bigint('version', { mode: 'number' })
       .notNull()
@@ -30,6 +47,8 @@ export const botTextOverrides = pgTable(
     }),
   },
   (t) => [
+    primaryKey({ name: 'bot_text_overrides_pkey', columns: [t.language, t.key] }),
+    inList('bot_text_overrides_language_check', t.language, BotLanguage),
     check(
       'bot_text_overrides_key_check',
       sql`${t.key} ~ ${sqlTextLiteral(BOT_TEXT_KEY_PATTERN.source, 'BOT_TEXT_KEY_PATTERN')}`,

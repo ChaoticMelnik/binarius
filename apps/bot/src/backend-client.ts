@@ -90,9 +90,9 @@ import {
 
 // bounds one internal-API response body (Architecture Rule 26)
 export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
-// GET /bot-texts - every override of the catalog; sized for every catalog key at Telegram's
-// message limit in 4-byte characters (#234)
-export const MAX_BOT_TEXTS_BODY_BYTES = 8 * 1024 * 1024;
+// GET /bot-texts - every override of the catalog in every language; sized for every catalog key
+// of each language at Telegram's message limit in 4-byte characters (#234, #634)
+export const MAX_BOT_TEXTS_BODY_BYTES = 16 * 1024 * 1024;
 // GET /trading/sessions/tracked (#567) - TRACKED_SESSIONS_MAX rows of ~200 bytes at their longest,
 // the owner's language included (#508; backend-client.test.ts → the samples table), a quarter of
 // it at most

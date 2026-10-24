@@ -6,12 +6,26 @@ import type { DecimalString } from './money';
 import { TradeMode, type TradeAction } from './trading';
 import { BOT_MESSAGE_SPACER, BOT_TEXT_LIMIT } from './bot-message-width';
 import { plainTextOf, telegramHtmlProblems, type TelegramHtml } from './telegram-html';
+import type { BotLanguage } from './bot-language';
+import type { BotTextSource } from './bot-text-template';
+import type { BotTextKey } from './bot-texts';
+import { BOT_TEXT_DEFAULT_SOURCES } from './bot-texts-en';
 import {
   BUTTON_LABEL_WIDTHS,
   buttonLabelWidth,
   FULL_WIDTH_ROLES,
   isBotKeyboard,
 } from './bot-keyboard';
+
+// --- Bot texts (#634) -------------------------------------------------------------------------
+// every language on its defaults but `language`, which reads `source`
+export const botTextSourcesWith = (
+  language: BotLanguage,
+  source: BotTextSource<BotTextKey>,
+): Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>> => ({
+  ...BOT_TEXT_DEFAULT_SOURCES,
+  [language]: source,
+});
 
 // --- Waiting in tests (#205) ------------------------------------------------------------------
 // One ceiling per vitest project, each below that project's test budget so a wait that never ends

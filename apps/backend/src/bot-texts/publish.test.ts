@@ -222,6 +222,33 @@ describe('publishBotProfile', () => {
     expect(received.map((call) => call.method)).toEqual(['setMyCommands', 'setMyCommands']);
   });
 
+  // a save or a reset publishes its key's language only (#634)
+  it('U8 sends only the languages asked for', async () => {
+    const { apiRoot, received } = await telegram();
+    const api = createBotProfileApi({ token: TOKEN, apiRoot });
+
+    const en = await publishBotProfile(api, sourcesOf(), ['setMyCommands'], [BotLanguage.En]);
+    expect(en).toEqual([{ method: 'setMyCommands', ok: true }]);
+    expect(received).toEqual([
+      {
+        method: 'setMyCommands',
+        payload: { commands: EN_MENU, scope: { type: 'all_private_chats' } },
+      },
+    ]);
+
+    received.length = 0;
+    await publishBotProfile(api, sourcesOf(), ['setMyShortDescription'], [BotLanguage.Ru]);
+    expect(received).toEqual([
+      {
+        method: 'setMyShortDescription',
+        payload: {
+          short_description: BOT_TEXT_CATALOG.profileShortDescription.source,
+          language_code: 'ru',
+        },
+      },
+    ]);
+  });
+
   // a slot a method: its two languages run side by side under one client timeout (#508)
   it('U7 makes as many slots as the timing chain counts', () => {
     expect(BOT_PROFILE_METHODS).toHaveLength(BOT_PROFILE_PUBLISH_CALLS);

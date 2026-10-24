@@ -28,9 +28,10 @@ import {
   BUY_CALLBACK_DATA,
   BotLanguage,
   BOT_TEXT_SOURCES_EN,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
 import { runWithLanguage, type UserLanguages } from './language';
-import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
+import { UNIT_WAIT_CEILING_MS, botTextSourcesWith } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
@@ -94,7 +95,7 @@ import {
   helpText,
   LABELS,
   levelLabel,
-  setBotTextSource,
+  setBotTextSources,
   settingsText,
   statusCard,
   TEXTS,
@@ -2928,17 +2929,17 @@ describe('the Bot API timeout', () => {
 // Every text is read when it is sent, so a source swapped after the bot module loaded reaches
 // each of these: one test per place that used to hold a text in a module constant (#240).
 describe('the text source', () => {
-  afterEach(() => setBotTextSource(defaultBotTextSource));
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
   it('answers /help from the source in place', async () => {
-    setBotTextSource(stubTextSource('helpAbout'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('helpAbout')));
     const { bot, calls } = setup({ recordStart: unreachable(), readAccount: unreachable() });
     await bot.handleUpdate(textUpdate('/help'));
     expect(sentPayload(calls, 'sendMessage')?.text).toContain(stubText('helpAbout'));
   });
 
   it('H1 lists the command descriptions of the source in place (#301)', async () => {
-    setBotTextSource(stubTextSource('startCommand'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('startCommand')));
     const { bot, calls } = setup({ recordStart: unreachable(), readAccount: unreachable() });
     await bot.handleUpdate(textUpdate('/help'));
     const lines = plainTextOf(String(sentPayload(calls, 'sendMessage')?.text)).split('\n');
@@ -2947,14 +2948,14 @@ describe('the text source', () => {
   });
 
   it('refuses a confirmation with the source in place', async () => {
-    setBotTextSource(stubTextSource('confirmAlreadyDone'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('confirmAlreadyDone')));
     const { bot, calls } = setup({ confirmLogin: refused(409, OAuthErrorCode.AccountNotPending) });
     await bot.handleUpdate(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)));
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(stubText('confirmAlreadyDone'));
   });
 
   it('refuses an address with the source in place', async () => {
-    setBotTextSource(stubTextSource('emailRefused'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('emailRefused')));
     const { bot, calls } = setup({
       dialog: { step: 'email' },
       sendEmailCode: refused(400, OAuthErrorCode.InvalidEmail),
@@ -2964,7 +2965,7 @@ describe('the text source', () => {
   });
 
   it('refuses a code with the source in place', async () => {
-    setBotTextSource(stubTextSource('tooManyCodeAttempts'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('tooManyCodeAttempts')));
     const { bot, calls } = setup({
       dialog: ON_CODE_STEP,
       emailLogin: refused(429, OAuthErrorCode.TooManyAttempts),
@@ -2974,7 +2975,7 @@ describe('the text source', () => {
   });
 
   it('labels the /start buttons from the source in place', async () => {
-    setBotTextSource(stubTextSource('connectButton'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('connectButton')));
     const { bot, calls } = setup();
     await bot.handleUpdate(startUpdate('/start'));
     expect(inlineButtons(sentPayload(calls, 'sendMessage'))[0]?.text).toBe(
@@ -2986,9 +2987,13 @@ describe('the text source', () => {
 // #358: a text with several variables prints the user's values the handler already holds, and
 // reads nothing more for them
 describe('the variables of a text', () => {
-  afterEach(() => setBotTextSource(defaultBotTextSource));
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
   const withTexts = (texts: Partial<Record<BotTextKey, string>>) => {
-    setBotTextSource({ sourceOf: (key) => texts[key] ?? defaultBotTextSource.sourceOf(key) });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) => texts[key] ?? defaultBotTextSource.sourceOf(key),
+      }),
+    );
   };
   const backendCalls = (backend: BackendClient) =>
     Object.entries(backend)

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BotTextProblemCode } from './bot-text-template';
+import { BotLanguage } from './bot-language';
+import { BotTextProblemCode, type BotTextSource } from './bot-text-template';
 import {
   BOT_PROFILE_METHODS,
   BotTextRejectionCode,
@@ -10,22 +11,39 @@ import {
   botTextRejectionMessage,
   createBotTextRefresher,
   resolveBotTextOverrides,
+  resolveBotTextOverridesOf,
   type BotTextOverrideRow,
   type BotTextRejection,
 } from './bot-text-overrides';
 import { BOT_TEXT_MESSAGES, estimateBotTextMessage } from './bot-text-messages';
-import { BOT_TEXT_CATALOG, BotTextGroup, botTextKeysOf, type BotTextKey } from './bot-texts';
+import {
+  BOT_TEXT_CATALOG,
+  BotTextGroup,
+  botTextKeysOf,
+  botTextProblems,
+  defaultBotTextSource,
+  type BotTextKey,
+} from './bot-texts';
+import { BOT_TEXT_SOURCES_EN, enBotTextSource } from './bot-texts-en';
 
+const { Ru, En } = BotLanguage;
+// a Russian row: the cases from before #634 are Russian's
 const row = (key: string, source: string, version = 1): BotTextOverrideRow => ({
+  language: Ru,
   key,
   source,
   version,
 });
+const enRow = (key: string, source: string, version = 1): BotTextOverrideRow => ({
+  ...row(key, source, version),
+  language: En,
+});
+const resolveRu = (rows: readonly BotTextOverrideRow[]) => resolveBotTextOverridesOf(Ru, rows);
 const codes = (rows: BotTextOverrideRow[]) =>
   Object.fromEntries(
-    [...resolveBotTextOverrides(rows).rejected].map(([key, rejection]) => [key, rejection.code]),
+    [...resolveRu(rows).rejected].map(([key, rejection]) => [key, rejection.code]),
   );
-const accepted = (rows: BotTextOverrideRow[]) => [...resolveBotTextOverrides(rows).texts.keys()];
+const accepted = (rows: BotTextOverrideRow[]) => [...resolveRu(rows).texts.keys()];
 const longer = (key: BotTextKey, extra: number) =>
   `${BOT_TEXT_CATALOG[key].source}\n${'я'.repeat(extra)}`;
 
@@ -34,9 +52,9 @@ const tightWelcome = `${'я'.repeat(1022)} {connectButton}`;
 // alone within /help's own limit, with the rest of /help over the message limit
 const longHelpAbout = 'я'.repeat(3900);
 
-describe('resolveBotTextOverrides', () => {
+describe('resolveBotTextOverridesOf', () => {
   it('V1 applies a valid override', () => {
-    const { source, texts } = resolveBotTextOverrides([row('welcome', 'Привет')]);
+    const { source, texts } = resolveRu([row('welcome', 'Привет')]);
     expect(source.sourceOf('welcome')).toBe('Привет');
     expect(source.sourceOf('support')).toBe(BOT_TEXT_CATALOG.support.source);
     expect([...texts]).toEqual([['welcome', 'Привет']]);
@@ -47,12 +65,10 @@ describe('resolveBotTextOverrides', () => {
       renamedKey: BotTextRejectionCode.UnknownKey,
     });
     expect(accepted([row('renamedKey', 'x'), row('welcome', 'Привет')])).toEqual(['welcome']);
-    expect(resolveBotTextOverrides([row('renamedKey', 'x', 7)]).rejected.get('renamedKey')).toEqual(
-      {
-        code: BotTextRejectionCode.UnknownKey,
-        version: 7,
-      },
-    );
+    expect(resolveRu([row('renamedKey', 'x', 7)]).rejected.get('renamedKey')).toEqual({
+      code: BotTextRejectionCode.UnknownKey,
+      version: 7,
+    });
   });
 
   it('V3 applies the commands and the profile within their limits (#301)', () => {
@@ -64,7 +80,7 @@ describe('resolveBotTextOverrides', () => {
       ]),
     ).toEqual(['startCommand', 'profileDescription', 'profileShortDescription']);
     const problemsOf = (key: string, source: string) => {
-      const rejection = resolveBotTextOverrides([row(key, source)]).rejected.get(key);
+      const rejection = resolveRu([row(key, source)]).rejected.get(key);
       return rejection?.code === BotTextRejectionCode.Invalid
         ? rejection.problems.map((problem) => problem.code)
         : rejection?.code;
@@ -84,7 +100,7 @@ describe('resolveBotTextOverrides', () => {
     ['Привет, {x}', BotTextProblemCode.UnknownPlaceholder],
     ['я'.repeat(1025), BotTextProblemCode.TooLong],
   ])('V4 rejects the invalid welcome %#', (source, code) => {
-    const rejection = resolveBotTextOverrides([row('welcome', source)]).rejected.get('welcome');
+    const rejection = resolveRu([row('welcome', source)]).rejected.get('welcome');
     expect(rejection?.code).toBe(BotTextRejectionCode.Invalid);
     expect(rejection?.code === 'invalid' && rejection.problems.map((p) => p.code)).toContain(code);
   });
@@ -99,7 +115,7 @@ describe('resolveBotTextOverrides', () => {
       'statusTokens',
     ]);
     expect(
-      resolveBotTextOverrides([row('statusTokens', '🪙 {count}')]).rejected.get('statusTokens'),
+      resolveRu([row('statusTokens', '🪙 {count}')]).rejected.get('statusTokens'),
     ).toMatchObject({
       code: BotTextRejectionCode.Invalid,
       problems: [{ code: BotTextProblemCode.UnknownPlaceholder, detail: 'count' }],
@@ -107,18 +123,18 @@ describe('resolveBotTextOverrides', () => {
   });
 
   it('O1 names the refused variable and what the key may hold', () => {
-    const [problem] = botTextChangeProblems('codeSent', 'Код на {realBalance}', []);
+    const [problem] = botTextChangeProblems(Ru, 'codeSent', 'Код на {realBalance}', []);
     expect(problem && botTextRejectionMessage(problem.rejection, problem.key)).toBe(
       'Переменная {realBalance} недоступна в этом тексте. Доступны: {email}, {firstName}',
     );
-    const [welcome] = botTextChangeProblems('welcome', 'Привет, {firstName}', []);
+    const [welcome] = botTextChangeProblems(Ru, 'welcome', 'Привет, {firstName}', []);
     expect(welcome && botTextRejectionMessage(welcome.rejection, welcome.key)).toBe(
       'Переменная {firstName} недоступна в этом тексте. Переменных у этого текста нет; фрагменты: {connectButton}',
     );
   });
 
   it('V5 rejects a fragment that breaks a host on its default', () => {
-    const rejection = resolveBotTextOverrides([row('featureLines', 'я'.repeat(950))]).rejected.get(
+    const rejection = resolveRu([row('featureLines', 'я'.repeat(950))]).rejected.get(
       'featureLines',
     );
     expect(rejection).toMatchObject({ code: BotTextRejectionCode.BreaksHost, host: 'cardBody' });
@@ -138,7 +154,7 @@ describe('resolveBotTextOverrides', () => {
     const bonus = row('cardBonusAlready', longer('cardBonusAlready', 250));
     expect(accepted([body])).toEqual(['cardBody']);
     expect(accepted([bonus])).toEqual(['cardBonusAlready']);
-    const { rejected } = resolveBotTextOverrides([body, bonus]);
+    const { rejected } = resolveRu([body, bonus]);
     expect(rejected.get('cardBody')).toMatchObject({
       code: BotTextRejectionCode.MessageOverflow,
       message: { id: 'accountCard', limit: 1024 },
@@ -166,7 +182,7 @@ describe('resolveBotTextOverrides', () => {
 
   it('V13 counts a plain label with markup at the length it is shown', () => {
     const intent = BOT_TEXT_MESSAGES.find((m) => m.id === 'intentStatus')!;
-    const base = estimateBotTextMessage(intent, resolveBotTextOverrides([]).source);
+    const base = estimateBotTextMessage(intent, resolveRu([]).source);
     // 30 characters below the limit on its own (the offer is the wider of the message's two
     // tails, #360); the label adds 63 shown characters
     const filler = 'я'.repeat(intent.limit - 30 - base - 1);
@@ -181,11 +197,11 @@ describe('resolveBotTextOverrides', () => {
       intentSessionOffer: BotTextRejectionCode.MessageOverflow,
       actionUp: BotTextRejectionCode.MessageOverflow,
     });
-    expect(botTextChangeProblems('actionUp', action.source, [offer])).not.toEqual([]);
+    expect(botTextChangeProblems(Ru, 'actionUp', action.source, [offer])).not.toEqual([]);
   });
 
   it('V9 rejects nothing with no overrides', () => {
-    expect(resolveBotTextOverrides([]).rejected.size).toBe(0);
+    expect(resolveRu([]).rejected.size).toBe(0);
   });
 
   it('V10 gives the same result whatever the order of the rows', () => {
@@ -196,10 +212,113 @@ describe('resolveBotTextOverrides', () => {
       row('aaa', 'x'),
       row('helpAbout', longHelpAbout),
     ];
-    const forward = resolveBotTextOverrides(rows);
-    const backward = resolveBotTextOverrides([...rows].reverse());
+    const forward = resolveRu(rows);
+    const backward = resolveRu([...rows].reverse());
     expect([...backward.rejected]).toEqual([...forward.rejected]);
     expect([...backward.texts]).toEqual([...forward.texts]);
+  });
+});
+
+// #634: a set per language, over that language's defaults
+describe('the sets of the two languages', () => {
+  // `defaults` with `texts` over them, as the resolver reads a language's set
+  const over = (
+    defaults: BotTextSource<BotTextKey>,
+    texts: Partial<Record<BotTextKey, string>>,
+  ): BotTextSource<BotTextKey> => ({
+    sourceOf: (key) => texts[key] ?? defaults.sourceOf(key),
+  });
+  const catalogKeys = Object.keys(BOT_TEXT_CATALOG) as BotTextKey[];
+
+  it('V-L1 resolves English over the English defaults, and an English row in English only', () => {
+    const empty = resolveBotTextOverridesOf(En, []);
+    expect(empty.language).toBe(En);
+    expect(catalogKeys.filter((k) => empty.source.sourceOf(k) !== BOT_TEXT_SOURCES_EN[k])).toEqual(
+      [],
+    );
+    expect(empty.texts.size).toBe(0);
+    const both = resolveBotTextOverrides([enRow('startCommand', 'Begin')]);
+    expect(both.en.source.sourceOf('startCommand')).toBe('Begin');
+    expect([...both.en.texts.keys()]).toEqual(['startCommand']);
+    expect(both.ru.source.sourceOf('startCommand')).toBe(BOT_TEXT_CATALOG.startCommand.source);
+    expect(both.ru.texts.size).toBe(0);
+  });
+
+  it('V-L2 checks an English fragment against the English host', () => {
+    const lines = 'я'.repeat(950);
+    const rejection = resolveBotTextOverridesOf(En, [enRow('featureLines', lines)]).rejected.get(
+      'featureLines',
+    );
+    const enProblems = botTextProblems(
+      'cardBody',
+      BOT_TEXT_SOURCES_EN.cardBody,
+      over(enBotTextSource, { featureLines: lines }),
+    );
+    const ruProblems = botTextProblems(
+      'cardBody',
+      BOT_TEXT_CATALOG.cardBody.source,
+      over(defaultBotTextSource, { featureLines: lines }),
+    );
+    expect(enProblems).not.toEqual([]);
+    expect(enProblems).not.toEqual(ruProblems);
+    expect(rejection).toEqual({
+      code: BotTextRejectionCode.BreaksHost,
+      host: 'cardBody',
+      problems: enProblems,
+      version: 1,
+    });
+  });
+
+  it('V-L3 measures an English message with the English texts', () => {
+    const help = BOT_TEXT_MESSAGES.find((m) => m.id === 'help')!;
+    const rejection = resolveBotTextOverridesOf(En, [
+      enRow('helpAbout', longHelpAbout),
+    ]).rejected.get('helpAbout');
+    const enLength = estimateBotTextMessage(
+      help,
+      over(enBotTextSource, { helpAbout: longHelpAbout }),
+    );
+    const ruLength = estimateBotTextMessage(
+      help,
+      over(defaultBotTextSource, { helpAbout: longHelpAbout }),
+    );
+    expect(enLength).not.toBe(ruLength);
+    expect(rejection).toMatchObject({
+      code: BotTextRejectionCode.MessageOverflow,
+      message: { id: 'help' },
+      length: enLength,
+    });
+  });
+
+  it("V-L4 keeps one key's two languages apart, rejections included", () => {
+    const rows = [row('welcome', 'Привет'), enRow('welcome', 'Hello'), enRow('renamedKey', 'x')];
+    const { ru, en } = resolveBotTextOverrides(rows);
+    expect([...ru.texts]).toEqual([['welcome', 'Привет']]);
+    expect([...en.texts]).toEqual([['welcome', 'Hello']]);
+    expect(ru.source.sourceOf('welcome')).toBe('Привет');
+    expect(en.source.sourceOf('welcome')).toBe('Hello');
+    expect([...ru.rejected.keys()]).toEqual([]);
+    expect([...en.rejected.keys()]).toEqual(['renamedKey']);
+  });
+
+  it("W-L1 checks a change against its own language's set only", () => {
+    const lines = 'я'.repeat(950);
+    const [en] = botTextChangeProblems(En, 'featureLines', lines, []);
+    const [ru] = botTextChangeProblems(Ru, 'featureLines', lines, []);
+    expect(en?.rejection).toEqual({
+      code: BotTextRejectionCode.BreaksHost,
+      host: 'cardBody',
+      problems: botTextProblems(
+        'cardBody',
+        BOT_TEXT_SOURCES_EN.cardBody,
+        over(enBotTextSource, { featureLines: lines }),
+      ),
+    });
+    expect(ru?.rejection).not.toEqual(en?.rejection);
+    // Russian rows a Russian reset would break do not hold up an English change of the key
+    const ruRows = [row('connectButton', 'A'), row('welcome', tightWelcome)];
+    expect(botTextChangeProblems(Ru, 'connectButton', null, ruRows)).not.toEqual([]);
+    expect(botTextChangeProblems(En, 'connectButton', 'Connect now', ruRows)).toEqual([]);
   });
 });
 
@@ -207,11 +326,11 @@ describe('botTextChangeProblems', () => {
   const keysOf = (problems: { key: string }[]) => problems.map((p) => p.key);
 
   it('W1 lets a valid text through', () => {
-    expect(botTextChangeProblems('welcome', 'Привет', [])).toEqual([]);
+    expect(botTextChangeProblems(Ru, 'welcome', 'Привет', [])).toEqual([]);
   });
 
   it('W2 names the host a fragment breaks', () => {
-    const [problem] = botTextChangeProblems('featureLines', 'я'.repeat(950), []);
+    const [problem] = botTextChangeProblems(Ru, 'featureLines', 'я'.repeat(950), []);
     expect(problem).toMatchObject({
       key: 'featureLines',
       rejection: { code: BotTextRejectionCode.BreaksHost, host: 'cardBody' },
@@ -219,35 +338,38 @@ describe('botTextChangeProblems', () => {
   });
 
   it('W3 names the message a text overflows', () => {
-    const problems = botTextChangeProblems('cardBonusAlready', longer('cardBonusAlready', 250), [
-      row('cardBody', longer('cardBody', 250)),
-    ]);
+    const problems = botTextChangeProblems(
+      Ru,
+      'cardBonusAlready',
+      longer('cardBonusAlready', 250),
+      [row('cardBody', longer('cardBody', 250))],
+    );
     expect(keysOf(problems)).toEqual(['cardBonusAlready', 'cardBody']);
     expect(problems[0]?.rejection).toMatchObject({ message: { id: 'accountCard' } });
   });
 
   it('W4 refuses a reset that breaks an overridden host', () => {
     const rows = [row('connectButton', 'A'), row('welcome', tightWelcome)];
-    const problems = botTextChangeProblems('connectButton', null, rows);
+    const problems = botTextChangeProblems(Ru, 'connectButton', null, rows);
     expect(problems).toMatchObject([{ key: 'welcome', rejection: { code: 'invalid' } }]);
   });
 
   it('W5 is not blocked by an override rejected already', () => {
     const rows = [row('featureLines', 'я'.repeat(950))];
-    expect(botTextChangeProblems('welcome', 'Привет', rows)).toEqual([]);
-    expect(botTextChangeProblems('featureLines', null, rows)).toEqual([]);
+    expect(botTextChangeProblems(Ru, 'welcome', 'Привет', rows)).toEqual([]);
+    expect(botTextChangeProblems(Ru, 'featureLines', null, rows)).toEqual([]);
   });
 
   it('W6 takes a command description and a profile text (#301)', () => {
-    expect(botTextChangeProblems('startCommand', 'Старт', [])).toEqual([]);
-    expect(botTextChangeProblems('profileShortDescription', 'Коротко', [])).toEqual([]);
+    expect(botTextChangeProblems(Ru, 'startCommand', 'Старт', [])).toEqual([]);
+    expect(botTextChangeProblems(Ru, 'profileShortDescription', 'Коротко', [])).toEqual([]);
   });
 
   it('W7 refuses an unknown key, and lets its reset through', () => {
-    expect(botTextChangeProblems('renamedKey', 'x', [])).toMatchObject([
+    expect(botTextChangeProblems(Ru, 'renamedKey', 'x', [])).toMatchObject([
       { key: 'renamedKey', rejection: { code: BotTextRejectionCode.UnknownKey } },
     ]);
-    expect(botTextChangeProblems('renamedKey', null, [row('renamedKey', 'x')])).toEqual([]);
+    expect(botTextChangeProblems(Ru, 'renamedKey', null, [row('renamedKey', 'x')])).toEqual([]);
   });
 
   it('W8 words every problem and every rejection in Russian', () => {
@@ -259,12 +381,12 @@ describe('botTextChangeProblems', () => {
       'Текст welcome — 1100 символов при лимите 1024',
     );
     const rejected = [
-      ...resolveBotTextOverrides([
+      ...resolveRu([
         row('zzz', 'x'),
         row('codeSent', 'нет {tokens}'),
         row('featureLines', 'я'.repeat(950)),
       ]).rejected,
-      ...resolveBotTextOverrides([
+      ...resolveRu([
         row('cardBody', longer('cardBody', 250)),
         row('cardBonusAlready', longer('cardBonusAlready', 250)),
       ]).rejected,
@@ -317,15 +439,27 @@ describe('botProfileMethodsOf', () => {
 describe('botTextOverridesResponseSchema', () => {
   it('takes a key outside the catalog and refuses a malformed one', () => {
     const parse = (key: string) =>
-      botTextOverridesResponseSchema.safeParse({ overrides: [{ key, source: 'x', version: 1 }] })
-        .success;
+      botTextOverridesResponseSchema.safeParse({
+        overrides: [{ language: Ru, key, source: 'x', version: 1 }],
+      }).success;
     expect(parse('renamedKey')).toBe(true);
     expect(parse('Renamed')).toBe(false);
     expect(
       botTextOverridesResponseSchema.safeParse({
-        overrides: [{ key: 'a', source: 'x', version: 0 }],
+        overrides: [{ language: Ru, key: 'a', source: 'x', version: 0 }],
       }).success,
     ).toBe(false);
+  });
+
+  it('takes a row of each language and refuses one without a language or of another (#634)', () => {
+    const parse = (language: unknown) =>
+      botTextOverridesResponseSchema.safeParse({
+        overrides: [{ language, key: 'welcome', source: 'x', version: 1 }],
+      }).success;
+    expect(parse('ru')).toBe(true);
+    expect(parse('en')).toBe(true);
+    expect(parse('de')).toBe(false);
+    expect(parse(undefined)).toBe(false);
   });
 });
 
@@ -356,7 +490,7 @@ describe('createBotTextRefresher', () => {
       },
       intervalMs: INTERVAL,
       budgetMs: BUDGET,
-      apply: (source) => applied.push(source.sourceOf('welcome')),
+      apply: (sources) => applied.push(sources.ru.sourceOf('welcome')),
       logger: {
         warn: (fields, message) =>
           warns.push({ fields: fields as Record<string, unknown>, message }),
@@ -440,11 +574,39 @@ describe('createBotTextRefresher', () => {
     await vi.advanceTimersByTimeAsync(INTERVAL * 2);
     expect(loads).toHaveLength(3);
     expect(warns.map((w) => w.fields)).toEqual([
-      { botTextKey: 'zzz', botTextVersion: 4, rejection: 'unknown_key' },
+      { botTextLanguage: 'ru', botTextKey: 'zzz', botTextVersion: 4, rejection: 'unknown_key' },
     ]);
     next = () => Promise.resolve([row('zzz', 'x', 5)]);
     await vi.advanceTimersByTimeAsync(INTERVAL);
     expect(warns).toHaveLength(2);
+    await r.stop();
+  });
+
+  it("F-L1 applies both languages' sets from one load, and reports a rejection by language", async () => {
+    const sets: Record<string, string>[] = [];
+    const r = createBotTextRefresher({
+      load: () => next(),
+      intervalMs: INTERVAL,
+      budgetMs: BUDGET,
+      apply: (sources) =>
+        sets.push({ ru: sources.ru.sourceOf('welcome'), en: sources.en.sourceOf('welcome') }),
+      logger: {
+        warn: (fields, message) =>
+          warns.push({ fields: fields as Record<string, unknown>, message }),
+      },
+    });
+    next = () =>
+      Promise.resolve([row('welcome', 'Привет'), enRow('welcome', 'Hello'), row('zzz', 'x', 4)]);
+    r.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sets).toEqual([{ ru: 'Привет', en: 'Hello' }]);
+    // the same key and version in the other language is another set
+    next = () => Promise.resolve([enRow('zzz', 'x', 4)]);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(warns.map((w) => w.fields)).toEqual([
+      { botTextLanguage: 'ru', botTextKey: 'zzz', botTextVersion: 4, rejection: 'unknown_key' },
+      { botTextLanguage: 'en', botTextKey: 'zzz', botTextVersion: 4, rejection: 'unknown_key' },
+    ]);
     await r.stop();
   });
 

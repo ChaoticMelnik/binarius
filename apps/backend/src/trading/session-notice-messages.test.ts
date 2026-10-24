@@ -21,14 +21,16 @@ import {
   type H1SessionSettings,
   type TradingSessionSettings,
   type TradingSessionView,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import type { ClaimedSessionTrade } from '@binarius/db';
 import { inlineButtons } from '../admin/testing';
 import {
   clientLabelsOf,
   clientSessionTextsOf,
   clientTextsOf,
-  setBotTextSource,
+  setBotTextSources,
 } from '../auth/texts';
 import {
   pairOf,
@@ -209,14 +211,14 @@ describe('sessionCycleMessage (#551)', () => {
           ? `${PAD}\n${defaultBotTextSource.sourceOf(key)}`
           : defaultBotTextSource.sourceOf(key),
     };
-    afterEach(() => setBotTextSource(defaultBotTextSource));
+    afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
     it('B6 the override passes the registry: a lost step 1 with the line under it fits', () => {
       expect(botTextMessageOverflows(source)).toEqual([]);
     });
 
     it('a block that does not fit opens a new message from the claimed trade', () => {
-      setBotTextSource(source);
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, source));
       const losses = Array.from({ length: 9 }, () => L);
       const edit = sessionCycleMessage(
         claimed(losses.slice(0, 8), { messageId: 9, from: 0 }),
@@ -389,10 +391,10 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
           ? `${PAD}\n${defaultBotTextSource.sourceOf(key)}`
           : defaultBotTextSource.sourceOf(key),
     };
-    afterEach(() => setBotTextSource(defaultBotTextSource));
+    afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
     it('an open block that does not fit opens a new message of its own', () => {
-      setBotTextSource(source);
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, source));
       const losses = Array.from({ length: 8 }, () => L);
       const split = sessionCycleMessage(
         withOpen(losses, { messageId: 9, from: 0 }),
@@ -681,5 +683,26 @@ describe('pairOf', () => {
     expect(pairOf(catalog, 101)).toEqual({ label: 'EUR/USD', digits: 5 });
     expect(pairOf(catalog, 7)).toEqual({ label: null, digits: null });
     expect(pairOf(undefined, 101)).toEqual({ label: null, digits: null });
+  });
+});
+
+// #634: each language's notices read that language's overrides when they are built
+describe('the overrides of each language', () => {
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
+
+  it("S-L1 builds an English trade block from the English source, and a Russian one from Russian's", () => {
+    const stub = '⚡ STUB {cycle}/{step}';
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.En, {
+        sourceOf: (key) =>
+          key === 'sessionTradeLost' ? stub : BOT_TEXT_DEFAULT_SOURCES.en.sourceOf(key),
+      }),
+    );
+    expect(textOf(sessionCycleMessage(claimed([L]), null, null, BotLanguage.En))).toContain(
+      '⚡ STUB 1/1',
+    );
+    expect(textOf(sessionCycleMessage(claimed([L]), null, null, BotLanguage.Ru))).not.toContain(
+      'STUB',
+    );
   });
 });

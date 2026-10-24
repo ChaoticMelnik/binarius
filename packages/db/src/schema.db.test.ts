@@ -40,6 +40,7 @@ import {
 } from './schema/index';
 import {
   AccountHaltReason,
+  BotLanguage,
   TradingSessionStopReason,
   botTextOverrideSchema,
   type DecimalString,
@@ -4045,6 +4046,29 @@ describe('bot_text_overrides (#299)', () => {
     });
   });
 
+  // #634: a row is one key of one language
+  it.each(['de', '', 'RU'])('refuses the language %j', async (language) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        save(tx, { language: language as BotLanguage }),
+        '23514',
+        'bot_text_overrides_language_check',
+      );
+    });
+  });
+
+  it('takes a key once in each language, and refuses it twice in one', async () => {
+    await rolledBack(async (tx) => {
+      const [ru] = await save(tx, { language: BotLanguage.Ru });
+      await expect(save(tx, { language: BotLanguage.En, key: ru!.key })).resolves.toHaveLength(1);
+      await rejectsWith(
+        save(tx, { language: BotLanguage.Ru, key: ru!.key }),
+        '23505',
+        'bot_text_overrides_pkey',
+      );
+    });
+  });
+
   it('refuses an editor that does not exist', async () => {
     await rolledBack(async (tx) => {
       await rejectsWith(
@@ -4079,15 +4103,24 @@ describe('bot_text_overrides (#299)', () => {
     ['version 2^53', { version: Number.MAX_SAFE_INTEGER + 1 }],
     ['version 1', { version: 1 }],
     ['version 2^53 - 1', { version: Number.MAX_SAFE_INTEGER }],
+    ['language en', { language: 'en' }],
+    ['language de', { language: 'de' }],
+    ['an empty language', { language: '' }],
   ])('agrees with the bot wire schema on %s', async (_label, patch) => {
-    const row = { key: `p${randomUUID().slice(0, 8)}`, source: 'x', version: 1, ...patch };
+    const row = {
+      language: 'ru',
+      key: `p${randomUUID().slice(0, 8)}`,
+      source: 'x',
+      version: 1,
+      ...patch,
+    };
     const schemaTakes = botTextOverrideSchema.safeParse(row).success;
     let refusedBy: string | undefined;
     await rolledBack(async (tx) => {
       // as text: 2^53 is exact as a JS number, but the driver is not asked to say so
       await tx
         .execute(
-          sql`insert into bot_text_overrides (key, source, version) values (${row.key}, ${row.source}, ${String(row.version)}::bigint)`,
+          sql`insert into bot_text_overrides (language, key, source, version) values (${row.language}, ${row.key}, ${row.source}, ${String(row.version)}::bigint)`,
         )
         .catch((error: unknown) => {
           const { code, constraint } = caught(error) as { code?: string; constraint?: string };

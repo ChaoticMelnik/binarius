@@ -84,7 +84,7 @@ describe('telegramPreview (#300)', () => {
   });
 
   it('shows the welcome with the connect button fragment in effect', () => {
-    const { source } = resolveBotTextOverrides([]);
+    const { source } = resolveBotTextOverrides([]).ru;
     const rendered = renderBotTextPreview('welcome', source);
     if (rendered.kind !== 'html') throw new Error('welcome rendered plain');
     expect(preview(rendered.telegramHtml)).toContain('Нажми «🔗 Подключить аккаунт Binodex»');

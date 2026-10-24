@@ -1,14 +1,15 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
-  BOT_TEXT_CATALOG,
-  BOT_TEXT_OVERRIDES_MAX,
+  BOT_TEXT_DEFAULT_SOURCES,
+  BOT_TEXT_OVERRIDE_ROWS_MAX,
   BOT_TEXT_SOURCE_MAX,
   BotTextProblemCode,
   BotTextRejectionCode,
   botTextChangeProblems,
   isBotTextKey,
-  resolveBotTextOverrides,
+  resolveBotTextOverridesOf,
   type AdminBotProfileMethodResult,
+  type BotLanguage,
   type BotTextChangeProblem,
   type BotTextKey,
   type BotTextRejection,
@@ -28,11 +29,15 @@ import type { DbExecutor, Tx } from './trade-intent-ops';
 
 export type BotTextOverrideRecord = typeof botTextOverrides.$inferSelect;
 
-// The first BOT_TEXT_OVERRIDES_MAX by key: the bot's wire schema takes no more, so the route and
-// the backend's loader read the same rows. The writer cannot get near it (one row per catalog key);
-// only rows inserted by hand can.
+// The first BOT_TEXT_OVERRIDE_ROWS_MAX by (language, key): the bot's wire schema takes no more, so
+// the route and the backend's loader read the same rows. The writer cannot get near it (one row per
+// catalog key and language); only rows inserted by hand can.
 export const listBotTextOverrides = (db: DbExecutor): Promise<BotTextOverrideRecord[]> =>
-  db.select().from(botTextOverrides).orderBy(botTextOverrides.key).limit(BOT_TEXT_OVERRIDES_MAX);
+  db
+    .select()
+    .from(botTextOverrides)
+    .orderBy(botTextOverrides.language, botTextOverrides.key)
+    .limit(BOT_TEXT_OVERRIDE_ROWS_MAX);
 
 export interface BotTextActor {
   type: AuditActorType;
@@ -47,6 +52,7 @@ export type BotTextWriteResult =
   | { ok: false; reason: 'refused'; problems: BotTextChangeProblem[] };
 
 export interface SaveBotTextInput {
+  language: BotLanguage;
   key: string;
   source: string;
   // 0 for a key with no override; absent writes over whatever is there
@@ -55,12 +61,14 @@ export interface SaveBotTextInput {
 }
 
 export interface ResetBotTextInput {
+  language: BotLanguage;
   key: string;
   expectedVersion?: number;
   actor: BotTextActor;
 }
 
 export interface BotTextAuditPayload {
+  language: BotLanguage;
   key: string;
   action: 'save' | 'reset';
   oldText: string | null;
@@ -80,6 +88,7 @@ export type BotTextApplyResult =
   | { ok: false; reason: 'refused'; problems: BotTextChangeProblem[] };
 
 export interface ApplyBotTextSaveInput {
+  language: BotLanguage;
   key: string;
   source: string;
   expectedVersion?: number;
@@ -87,13 +96,23 @@ export interface ApplyBotTextSaveInput {
 }
 
 export interface ApplyBotTextResetInput {
+  language: BotLanguage;
   key: string;
   expectedVersion?: number;
 }
 
-// what the key shows with `rows`: its override in effect, or the default
-const effectiveText = (key: string, rows: readonly BotTextOverrideRecord[]): string | null =>
-  isBotTextKey(key) ? resolveBotTextOverrides(rows).source.sourceOf(key) : null;
+// what the key shows in `language` with `rows`: its override in effect, or the language's default
+const effectiveText = (
+  language: BotLanguage,
+  key: string,
+  rows: readonly BotTextOverrideRecord[],
+): string | null =>
+  isBotTextKey(key) ? resolveBotTextOverridesOf(language, rows).source.sourceOf(key) : null;
+
+const isRowOf =
+  (language: BotLanguage, key: string) =>
+  (row: BotTextOverrideRecord): boolean =>
+    row.language === language && row.key === key;
 
 const refused = (key: string, rejection: BotTextRejection): BotTextApplyResult => ({
   ok: false,
@@ -103,7 +122,7 @@ const refused = (key: string, rejection: BotTextRejection): BotTextApplyResult =
 
 export async function applyBotTextSave(
   tx: Tx,
-  { key, source, expectedVersion, staffId }: ApplyBotTextSaveInput,
+  { language, key, source, expectedVersion, staffId }: ApplyBotTextSaveInput,
 ): Promise<BotTextApplyResult> {
   if (!isBotTextKey(key)) return refused(key, { code: BotTextRejectionCode.UnknownKey });
   // before the statement: the CHECK would refuse it as a database error
@@ -112,22 +131,22 @@ export async function applyBotTextSave(
     return refused(key, { code: BotTextRejectionCode.Invalid, problems: [tooLong] });
   }
   const rows = await lockedRows(tx);
-  const current = rows.find((row) => row.key === key);
+  const current = rows.find(isRowOf(language, key));
   const currentVersion = current?.version ?? 0;
-  const currentSource = current?.source ?? BOT_TEXT_CATALOG[key].source;
+  const currentSource = current?.source ?? BOT_TEXT_DEFAULT_SOURCES[language].sourceOf(key);
   if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
     return { ok: false, reason: 'version_conflict', currentVersion, currentSource };
   }
   // against the row, not the text in effect: re-saving an override the loaders reject changes
   // nothing either
   if (currentSource === source) return { ok: false, reason: 'unchanged' };
-  const problems = botTextChangeProblems(key, source, rows);
+  const problems = botTextChangeProblems(language, key, source, rows);
   if (problems.length > 0) return { ok: false, reason: 'refused', problems };
   const [written] = await tx
     .insert(botTextOverrides)
-    .values({ key, source, updatedByStaffId: staffId })
+    .values({ language, key, source, updatedByStaffId: staffId })
     .onConflictDoUpdate({
-      target: botTextOverrides.key,
+      target: [botTextOverrides.language, botTextOverrides.key],
       set: {
         source,
         version: sql`nextval('bot_text_override_version_seq')`,
@@ -141,10 +160,14 @@ export async function applyBotTextSave(
     ok: true,
     version,
     audit: {
+      language,
       key,
       action: 'save',
-      oldText: effectiveText(key, rows),
-      newText: effectiveText(key, [...rows.filter((row) => row.key !== key), written!]),
+      oldText: effectiveText(language, key, rows),
+      newText: effectiveText(language, key, [
+        ...rows.filter((row) => !isRowOf(language, key)(row)),
+        written!,
+      ]),
       oldVersion: currentVersion,
       newVersion: version,
     },
@@ -154,10 +177,10 @@ export async function applyBotTextSave(
 // A key outside the catalog can be reset: a renamed key's row has to be removable.
 export async function applyBotTextReset(
   tx: Tx,
-  { key, expectedVersion }: ApplyBotTextResetInput,
+  { language, key, expectedVersion }: ApplyBotTextResetInput,
 ): Promise<BotTextApplyResult> {
   const rows = await lockedRows(tx);
-  const current = rows.find((row) => row.key === key);
+  const current = rows.find(isRowOf(language, key));
   if (current === undefined) return { ok: false, reason: 'already_default' };
   if (expectedVersion !== undefined && expectedVersion !== current.version) {
     return {
@@ -167,18 +190,21 @@ export async function applyBotTextReset(
       currentSource: current.source,
     };
   }
-  const problems = botTextChangeProblems(key, null, rows);
+  const problems = botTextChangeProblems(language, key, null, rows);
   if (problems.length > 0) return { ok: false, reason: 'refused', problems };
-  await tx.delete(botTextOverrides).where(sql`${botTextOverrides.key} = ${key}`);
+  await tx
+    .delete(botTextOverrides)
+    .where(and(eq(botTextOverrides.language, language), eq(botTextOverrides.key, key)));
   return {
     ok: true,
     version: 0,
     audit: {
+      language,
       key,
       action: 'reset',
       // a key outside the catalog shows nothing: the row's text is the only copy the audit keeps
-      oldText: isBotTextKey(key) ? effectiveText(key, rows) : current.source,
-      newText: effectiveText(key, []),
+      oldText: isBotTextKey(key) ? effectiveText(language, key, rows) : current.source,
+      newText: effectiveText(language, key, []),
       oldVersion: current.version,
       newVersion: 0,
     },
@@ -188,28 +214,34 @@ export async function applyBotTextReset(
 // The CLI's writers: the change and its audit row in a transaction of their own.
 export function saveBotTextOverride(
   db: Db,
-  { key, source, expectedVersion, actor }: SaveBotTextInput,
+  { language, key, source, expectedVersion, actor }: SaveBotTextInput,
 ): Promise<BotTextWriteResult> {
   return db.transaction(async (tx) =>
     recorded(
       tx,
       AuditAction.BotTextSaved,
       actor,
-      await applyBotTextSave(tx, { key, source, expectedVersion, staffId: actor.staffId }),
+      await applyBotTextSave(tx, {
+        language,
+        key,
+        source,
+        expectedVersion,
+        staffId: actor.staffId,
+      }),
     ),
   );
 }
 
 export function resetBotTextOverride(
   db: Db,
-  { key, expectedVersion, actor }: ResetBotTextInput,
+  { language, key, expectedVersion, actor }: ResetBotTextInput,
 ): Promise<BotTextWriteResult> {
   return db.transaction(async (tx) =>
     recorded(
       tx,
       AuditAction.BotTextReset,
       actor,
-      await applyBotTextReset(tx, { key, expectedVersion }),
+      await applyBotTextReset(tx, { language, key, expectedVersion }),
     ),
   );
 }
@@ -240,8 +272,10 @@ export interface BotProfilePublishRecord {
   staffId: string;
   path: string;
   trigger: 'save' | 'reset' | 'republish';
-  // the key whose save or reset published; none for a republish
+  // the key whose save or reset published, and the one language it published; none for a
+  // republish, which publishes every language
   key?: BotTextKey;
+  language?: BotLanguage;
   methods: readonly AdminBotProfileMethodResult[];
 }
 
@@ -252,14 +286,20 @@ export interface BotProfilePublishRecord {
  */
 export async function recordBotProfilePublish(
   db: DbExecutor,
-  { staffId, path, trigger, key, methods }: BotProfilePublishRecord,
+  { staffId, path, trigger, key, language, methods }: BotProfilePublishRecord,
 ): Promise<void> {
   await db.insert(auditLog).values({
     actorType: AuditActorType.Admin,
     actorId: staffId,
     action: AuditAction.BotProfilePublished,
     entityType: AuditEntityType.BotText,
-    payload: { path, trigger, ...(key === undefined ? {} : { key }), methods },
+    payload: {
+      path,
+      trigger,
+      ...(key === undefined ? {} : { key }),
+      ...(language === undefined ? {} : { language }),
+      methods,
+    },
   });
 }
 

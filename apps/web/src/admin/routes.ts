@@ -7,6 +7,7 @@ import {
   BOT_TEXT_KEY_PATTERN,
   botProfileMethodsOf,
   isBotTextKey,
+  BotLanguage,
   safeParseAdminBotTextResetRequest,
   safeParseAdminBotTextSaveRequest,
   UnexpectedBotTextOutcome,
@@ -172,13 +173,20 @@ const noticeOf = <K extends string>(query: unknown, notices: Record<K, string>):
 // browser sends a textarea with CRLF line breaks; one trailing line feed goes, as the CLI drops it
 // from a file (docs/bot-texts.md → The CLI).
 const VERSION_FIELD = z.string().regex(/^\d{1,16}$/);
-const botTextForm = z.object({ source: z.string(), version: VERSION_FIELD });
-const resetForm = z.object({ version: VERSION_FIELD });
+const LANGUAGE_FIELD = z.enum(BotLanguage);
+const botTextForm = z.object({
+  language: LANGUAGE_FIELD,
+  source: z.string(),
+  version: VERSION_FIELD,
+});
+const resetForm = z.object({ language: LANGUAGE_FIELD, version: VERSION_FIELD });
+const publishForm = z.object({ language: LANGUAGE_FIELD });
 
 const botTextFormOf = (body: unknown) => {
   const form = botTextForm.safeParse(body);
   if (!form.success) return undefined;
   const parsed = safeParseAdminBotTextSaveRequest({
+    language: form.data.language,
     source: form.data.source.replace(/\r\n/g, '\n').replace(/\n$/, ''),
     expectedVersion: Number(form.data.version),
   });
@@ -188,7 +196,19 @@ const botTextFormOf = (body: unknown) => {
 const resetFormOf = (body: unknown) => {
   const form = resetForm.safeParse(body);
   if (!form.success) return undefined;
-  const parsed = safeParseAdminBotTextResetRequest({ expectedVersion: Number(form.data.version) });
+  const parsed = safeParseAdminBotTextResetRequest({
+    language: form.data.language,
+    expectedVersion: Number(form.data.version),
+  });
+  return parsed.success ? parsed.data : undefined;
+};
+
+// `?lang=` of a bot texts page: none is Russian (the URLs from before #634); a value outside
+// BotLanguage, or `lang` twice, is no page
+const pageLanguageOf = (query: unknown): BotLanguage | undefined => {
+  const value = (query as { lang?: unknown } | undefined)?.lang;
+  if (value === undefined) return BotLanguage.Ru;
+  const parsed = LANGUAGE_FIELD.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 };
 
@@ -906,26 +926,36 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
 
   app.get(BOT_TEXTS_PATH, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
+      const language = pageLanguageOf(request.query);
+      if (language === undefined) return textBadRequest(reply);
       const { me, overrides } = await backend.botTexts(token);
       const { notice, published } = noticeWithResult(request.query, TEXTS.botTextsNotice);
-      return sendHtml(reply, 200, botTextsPage(overrides, { login: me.login, notice, published }));
+      return sendHtml(
+        reply,
+        200,
+        botTextsPage(overrides, { language, login: me.login, notice, published }),
+      );
     }),
   );
 
   app.post(`${BOT_TEXTS_PATH}/publish`, async (request, reply) =>
-    withStaffSession(request, reply, async (token) =>
-      publishBotProfile(request, reply, token, (published) =>
-        botTextsHref('republished', published),
-      ),
-    ),
+    withStaffSession(request, reply, async (token) => {
+      const form = publishForm.safeParse(request.body);
+      if (!form.success) return textBadRequest(reply);
+      return publishBotProfile(request, reply, token, (published) =>
+        botTextsHref(form.data.language, 'republished', published),
+      );
+    }),
   );
 
   app.get(`${BOT_TEXTS_PATH}/:key`, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
       const key = keyParamOf(request);
       if (!isBotTextKey(key)) return textNotFound(reply);
+      const language = pageLanguageOf(request.query);
+      if (language === undefined) return textBadRequest(reply);
       try {
-        const { me, text } = await backend.botText(token, key);
+        const { me, text } = await backend.botText(token, key, language);
         const { notice, published } = noticeWithResult(request.query, TEXTS.botTextNotice);
         return sendHtml(reply, 200, botTextPage(text, { login: me.login, notice, published }));
       } catch (error) {
@@ -944,7 +974,10 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (form === undefined) return textBadRequest(reply);
       let answer;
       try {
-        answer = await backend.previewBotText(token, key, { source: form.source });
+        answer = await backend.previewBotText(token, key, {
+          language: form.language,
+          source: form.source,
+        });
       } catch (error) {
         if (isNotFound(error)) return textNotFound(reply);
         throw error;
@@ -977,8 +1010,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         case 'saved':
           return reply.redirect(
             answer.published.length > 0
-              ? botTextHref(key, 'published', answer.published)
-              : botTextHref(key, 'saved'),
+              ? botTextHref(form.language, key, 'published', answer.published)
+              : botTextHref(form.language, key, 'saved'),
             303,
           );
         case 'unchanged':
@@ -1014,11 +1047,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (!isBotTextKey(key)) {
         switch (answer.outcome) {
           case 'reset':
-            return reply.redirect(botTextsHref('removed'), 303);
+            return reply.redirect(botTextsHref(form.language, 'removed'), 303);
           case 'already_default':
-            return reply.redirect(botTextsHref('gone'), 303);
+            return reply.redirect(botTextsHref(form.language, 'gone'), 303);
           case 'version_conflict':
-            return reply.redirect(botTextsHref('changed'), 303);
+            return reply.redirect(botTextsHref(form.language, 'changed'), 303);
           // a key outside the catalog takes no effect and is in no group
           case 'refused':
             throw new UnexpectedBotTextOutcome();
@@ -1031,12 +1064,12 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         case 'reset':
           return reply.redirect(
             answer.published.length > 0
-              ? botTextHref(key, 'reset_published', answer.published)
-              : botTextHref(key, 'reset'),
+              ? botTextHref(form.language, key, 'reset_published', answer.published)
+              : botTextHref(form.language, key, 'reset'),
             303,
           );
         case 'already_default':
-          return reply.redirect(botTextHref(key, 'already_default'), 303);
+          return reply.redirect(botTextHref(form.language, key, 'already_default'), 303);
         case 'version_conflict':
           return editorAfterPost(reply, editor, form, 409, {
             conflict: {
@@ -1050,13 +1083,16 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     }),
   );
 
-  // only on the editor of a key whose write publishes; the backend publishes all three
+  // only on the editor of a key whose write publishes; the backend publishes all three in every
+  // language, and the form's language is the editor's to come back to
   app.post(`${BOT_TEXTS_PATH}/:key/publish`, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
       const key = keyParamOf(request);
       if (!isBotTextKey(key) || botProfileMethodsOf(key).length === 0) return textNotFound(reply);
+      const form = publishForm.safeParse(request.body);
+      if (!form.success) return textBadRequest(reply);
       return publishBotProfile(request, reply, token, (published) =>
-        botTextHref(key, 'republished', published),
+        botTextHref(form.data.language, key, 'republished', published),
       );
     }),
   );

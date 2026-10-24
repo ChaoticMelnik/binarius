@@ -13,7 +13,6 @@ import {
   TradeIntentStatus,
   TradeMode,
   decimalStringSchema,
-  defaultBotTextSource,
   UserStatus,
   type PairsCatalogResponse,
   type TelegramHtml,
@@ -25,7 +24,9 @@ import {
   BUY_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import { telegramHtml } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -75,7 +76,7 @@ import {
   inlineStyles,
   keyboardRows,
 } from './testing';
-import { intentStatusText, LABELS, setBotTextSource, TEXTS } from './texts';
+import { intentStatusText, LABELS, setBotTextSources, TEXTS } from './texts';
 
 const NOW = 1_790_000_000_000;
 const STAKE = stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT);
@@ -608,10 +609,12 @@ describe('the stake button', () => {
 
   // the refusal names its text by key and reads it when it answers (#240)
   describe('with another text source', () => {
-    afterEach(() => setBotTextSource(defaultBotTextSource));
+    afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
     it('answers a refusal from the source in place', async () => {
-      setBotTextSource(stubTextSource('stakeInsufficientTokens'));
+      setBotTextSources(
+        botTextSourcesWith(BotLanguage.Ru, stubTextSource('stakeInsufficientTokens')),
+      );
       const { press, calls } = setup({
         createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.InsufficientTokens)),
       });

@@ -2,6 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AuditActorType,
   BOT_TEXT_CATALOG,
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
   adminBotTextOverrideViewSchema,
   adminBotTextViewSchema,
   resolveBotTextOverrides,
@@ -32,8 +34,14 @@ beforeEach(async () => {
 });
 
 const rows = () => tmp.db.transaction((tx) => listBotTextOverridesForAdmin(tx));
-const save = (key: string, source: string, staffId: string | null) =>
+const save = (
+  key: string,
+  source: string,
+  staffId: string | null,
+  language: BotLanguage = BotLanguage.Ru,
+) =>
   saveBotTextOverride(tmp.db, {
+    language,
     key,
     source,
     actor: { type: staffId === null ? AuditActorType.System : AuditActorType.Admin, staffId },
@@ -54,8 +62,9 @@ describe('the admin bot texts reads (#300)', () => {
     await tmp.db.insert(botTextOverrides).values({ key: 'zzz', source: 'x' });
     const [row] = await rows();
     const resolved = resolveBotTextOverrides(await rows());
-    const view = toAdminBotTextOverrideView(row!, resolved.rejected.get('zzz'));
+    const view = toAdminBotTextOverrideView(row!, resolved.ru.rejected.get('zzz'));
     expect(adminBotTextOverrideViewSchema.parse(view)).toMatchObject({
+      language: 'ru',
       key: 'zzz',
       rejection: 'Неизвестный ключ — игнорируется',
     });
@@ -64,7 +73,7 @@ describe('the admin bot texts reads (#300)', () => {
   it('A3 gives a fragment the text in effect and whether it is overridden', async () => {
     const fragmentOf = async () => {
       const current = await rows();
-      return toAdminBotTextView('welcome', current, resolveBotTextOverrides(current)).fragments;
+      return toAdminBotTextView('welcome', current, resolveBotTextOverrides(current).ru).fragments;
     };
     expect(await fragmentOf()).toEqual([
       {
@@ -90,7 +99,7 @@ describe('the admin bot texts reads (#300)', () => {
     const current = await rows();
     const resolved = resolveBotTextOverrides(current);
     const view = (key: 'startCommand' | 'welcome' | 'profileShortDescription') =>
-      adminBotTextViewSchema.parse(toAdminBotTextView(key, current, resolved));
+      adminBotTextViewSchema.parse(toAdminBotTextView(key, current, resolved.ru));
     expect(view('startCommand')).toMatchObject({
       override: { source: 'Старт\nещё', updatedByLogin: null },
       rejection: 'Перенос строки в однострочном тексте',
@@ -100,5 +109,42 @@ describe('the admin bot texts reads (#300)', () => {
       override: { source: 'Коротко' },
       rejection: null,
     });
+  });
+
+  it("A-L1 lists each row with its language, and shows a key in a language from that language's texts (#634)", async () => {
+    await save('welcome', 'Привет', null);
+    await save('connectButton', 'Жми', null);
+    const current = await rows();
+    expect(current.map(({ language, key }) => [language, key])).toEqual([
+      ['ru', 'connectButton'],
+      ['ru', 'welcome'],
+    ]);
+    const resolved = resolveBotTextOverrides(current);
+    expect(
+      adminBotTextViewSchema.parse(toAdminBotTextView('welcome', current, resolved.en)),
+    ).toEqual({
+      language: 'en',
+      key: 'welcome',
+      override: null,
+      rejection: null,
+      fragments: [
+        {
+          placeholder: 'connectButton',
+          key: 'connectButton',
+          source: BOT_TEXT_SOURCES_EN.connectButton,
+          overridden: false,
+        },
+      ],
+    });
+    await save('connectButton', 'Tap', null, BotLanguage.En);
+    const after = await rows();
+    expect(after.map(({ language, key }) => [language, key])).toEqual([
+      ['en', 'connectButton'],
+      ['ru', 'connectButton'],
+      ['ru', 'welcome'],
+    ]);
+    expect(
+      toAdminBotTextView('connectButton', after, resolveBotTextOverrides(after).en).override,
+    ).toMatchObject({ source: 'Tap' });
   });
 });

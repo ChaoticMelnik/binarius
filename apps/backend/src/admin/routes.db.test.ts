@@ -2958,11 +2958,14 @@ describe('the audit log page (#110)', () => {
 });
 
 describe('the bot texts pages (#300)', () => {
-  const textUrl = (key: string, action = '') =>
-    `/admin/bot-texts/${encodeURIComponent(key)}${action === '' ? '' : `/${action}`}`;
-  const botTextRows = () => tmp.db.select().from(botTextOverrides).orderBy(botTextOverrides.key);
-  const cliSave = (key: string, source: string) =>
+  // the editor's GET names its language (#634); the writes carry it in the body
+  const textUrl = (key: string, action = '', language: BotLanguage = BotLanguage.Ru) =>
+    `/admin/bot-texts/${encodeURIComponent(key)}${action === '' ? `?language=${language}` : `/${action}`}`;
+  const botTextRows = () =>
+    tmp.db.select().from(botTextOverrides).orderBy(botTextOverrides.language, botTextOverrides.key);
+  const cliSave = (key: string, source: string, language: BotLanguage = BotLanguage.Ru) =>
     saveBotTextOverride(tmp.db, {
+      language,
       key,
       source,
       actor: { type: AuditActorType.System, staffId: null },
@@ -2971,8 +2974,9 @@ describe('the bot texts pages (#300)', () => {
     const seeded = await seedStaff(tmp.db);
     return { seeded, token: await openSession(seeded) };
   };
+  // the Russian editor's request unless the body names a language
   const post = async (token: string, url: string, body: Record<string, unknown>) => {
-    const response = await postAsStaff(url, token, body);
+    const response = await postAsStaff(url, token, { language: BotLanguage.Ru, ...body });
     return { status: response.statusCode, body: response.json<Record<string, unknown>>() };
   };
 
@@ -2982,10 +2986,10 @@ describe('the bot texts pages (#300)', () => {
 
   it.each([
     ['GET', '/admin/bot-texts', undefined],
-    ['GET', '/admin/bot-texts/welcome', undefined],
-    ['POST', '/admin/bot-texts/welcome/preview', { source: 'x' }],
-    ['POST', '/admin/bot-texts/welcome/save', { source: 'x', expectedVersion: 0 }],
-    ['POST', '/admin/bot-texts/welcome/reset', { expectedVersion: 0 }],
+    ['GET', '/admin/bot-texts/welcome?language=ru', undefined],
+    ['POST', '/admin/bot-texts/welcome/preview', { language: 'ru', source: 'x' }],
+    ['POST', '/admin/bot-texts/welcome/save', { language: 'ru', source: 'x', expectedVersion: 0 }],
+    ['POST', '/admin/bot-texts/welcome/reset', { language: 'ru', expectedVersion: 0 }],
     ['POST', '/admin/bot-texts/publish', undefined],
   ] as const)(
     'T1 refuses %s %s without a live session and writes nothing',
@@ -3020,9 +3024,9 @@ describe('the bot texts pages (#300)', () => {
       Object.keys(adminBotTextOverrideViewSchema.shape).sort(),
     );
     expect(body.overrides).toMatchObject([
-      { key: 'connectButton', updatedByLogin: null, rejection: null },
-      { key: 'startCommand', rejection: 'Перенос строки в однострочном тексте' },
-      { key: 'welcome', updatedByLogin: seeded.login, rejection: null },
+      { language: 'ru', key: 'connectButton', updatedByLogin: null, rejection: null },
+      { language: 'ru', key: 'startCommand', rejection: 'Перенос строки в однострочном тексте' },
+      { language: 'ru', key: 'welcome', updatedByLogin: seeded.login, rejection: null },
     ]);
     expect(await lastEntry(seeded.staffId)).toMatchObject({
       action: AuditAction.BotTextsViewed,
@@ -3036,6 +3040,7 @@ describe('the bot texts pages (#300)', () => {
     await cliSave('connectButton', 'Жми');
     const response = await readOnce(seeded.staffId, textUrl('welcome'), token);
     expect(adminBotTextResponseSchema.parse(response.json()).text).toMatchObject({
+      language: 'ru',
       key: 'welcome',
       override: null,
       rejection: null,
@@ -3046,12 +3051,12 @@ describe('the bot texts pages (#300)', () => {
       actorType: AuditActorType.Admin,
       entityType: AuditEntityType.BotText,
       entityId: null,
-      payload: { path: '/admin/bot-texts/:key', key: 'welcome', result: 'found' },
+      payload: { path: '/admin/bot-texts/:key', language: 'ru', key: 'welcome', result: 'found' },
     });
 
     for (const [key, payload] of [
-      ['not a key', { path: '/admin/bot-texts/:key', result: 'not_found' }],
-      ['zzz', { path: '/admin/bot-texts/:key', result: 'not_found', key: 'zzz' }],
+      ['not a key', { path: '/admin/bot-texts/:key', language: 'ru', result: 'not_found' }],
+      ['zzz', { path: '/admin/bot-texts/:key', language: 'ru', result: 'not_found', key: 'zzz' }],
     ] as const) {
       const missing = await readOnce(seeded.staffId, textUrl(key), token);
       expect([missing.statusCode, missing.json()]).toEqual([
@@ -3080,7 +3085,12 @@ describe('the bot texts pages (#300)', () => {
     expect(codeSent.entry).toMatchObject({
       action: AuditAction.BotTextPreviewed,
       entityType: AuditEntityType.BotText,
-      payload: { path: '/admin/bot-texts/:key/preview', key: 'codeSent', result: 'rendered' },
+      payload: {
+        path: '/admin/bot-texts/:key/preview',
+        language: 'ru',
+        key: 'codeSent',
+        result: 'rendered',
+      },
     });
     expect(JSON.stringify((await preview('welcome', 'Нажми «{connectButton}»')).parsed)).toContain(
       'Нажми «Жми»',
@@ -3143,6 +3153,7 @@ describe('the bot texts pages (#300)', () => {
     expect(entry?.payload).toEqual({
       path: '/admin/bot-texts/:key/save',
       result: 'saved',
+      language: 'ru',
       key: 'welcome',
       action: 'save',
       oldText: BOT_TEXT_CATALOG.welcome.source,
@@ -3168,6 +3179,7 @@ describe('the bot texts pages (#300)', () => {
     expect(await botTextRows()).toMatchObject([{ source: 'Чужой', version: theirs.version }]);
     expect((await lastEntry(seeded.staffId))?.payload).toEqual({
       path: '/admin/bot-texts/:key/save',
+      language: 'ru',
       key: 'welcome',
       result: 'version_conflict',
     });
@@ -3192,6 +3204,7 @@ describe('the bot texts pages (#300)', () => {
     });
     expect((await lastEntry(seeded.staffId))?.payload).toEqual({
       path: '/admin/bot-texts/:key/save',
+      language: 'ru',
       key: 'connectButton',
       result: 'refused',
     });
@@ -3266,13 +3279,13 @@ describe('the bot texts pages (#300)', () => {
       published: [{ method: 'setMyCommands', ok: true }],
     });
     expect(await botTextRows()).toMatchObject([{ key: 'startCommand', source: 'Старт' }]);
-    expect(seenByTelegram).toEqual([['Старт'], ['Старт']]);
+    expect(seenByTelegram).toEqual([['Старт']]);
+    // the key's language only (#634)
     expect(fake.calls).toEqual([
       {
         method: 'setMyCommands',
         args: [menuWithStart('Старт'), { scope: BOT_COMMAND_SCOPE, ...RU }],
       },
-      EN_MENU_CALL,
     ]);
     const added = (await entriesFor(seeded.staffId)).slice(before);
     expect(added.map((row) => row.action)).toEqual([
@@ -3288,6 +3301,7 @@ describe('the bot texts pages (#300)', () => {
         path: '/admin/bot-texts/:key/save',
         trigger: 'save',
         key: 'startCommand',
+        language: 'ru',
         methods: [{ method: 'setMyCommands', ok: true }],
       },
     });
@@ -3313,6 +3327,7 @@ describe('the bot texts pages (#300)', () => {
     expect((await lastEntry(seeded.staffId))?.payload).toEqual({
       path: '/admin/bot-texts/:key/reset',
       result: 'reset',
+      language: 'ru',
       key: 'welcome',
       action: 'reset',
       oldText: 'Привет',
@@ -3371,6 +3386,7 @@ describe('the bot texts pages (#300)', () => {
     expect([status, body]).toEqual([404, { error: AdminErrorCode.NotFound }]);
     expect((await lastEntry(seeded.staffId))?.payload).toEqual({
       path: '/admin/bot-texts/:key/save',
+      language: 'ru',
       key: 'zzz',
       result: 'not_found',
     });
@@ -3409,10 +3425,11 @@ describe('the bot texts pages (#300)', () => {
     const { seeded, token } = await signedIn();
 
     const response = await postAsStaff(textUrl('menuCommand', 'save'), token, {
+      language: BotLanguage.Ru,
       source: 'Меню',
       expectedVersion: 0,
     });
-    // both languages refused: the first, Russian, is the one reported
+    // the key's language, Russian, refused
     const failed = {
       method: 'setMyCommands',
       ok: false,
@@ -3431,6 +3448,7 @@ describe('the bot texts pages (#300)', () => {
         path: '/admin/bot-texts/:key/save',
         trigger: 'save',
         key: 'menuCommand',
+        language: 'ru',
         methods: [failed],
       },
     ]);
@@ -3466,16 +3484,13 @@ describe('the bot texts pages (#300)', () => {
         method: 'setMyShortDescription',
         args: [BOT_TEXT_CATALOG.profileShortDescription.source, RU],
       },
-      {
-        method: 'setMyShortDescription',
-        args: [BOT_TEXT_SOURCES_EN.profileShortDescription, {}],
-      },
     ]);
     expect((await publishRows(seeded.staffId)).map((row) => row.payload)).toEqual([
       {
         path: '/admin/bot-texts/:key/reset',
         trigger: 'reset',
         key: 'profileShortDescription',
+        language: 'ru',
         methods: [{ method: 'setMyShortDescription', ok: true }],
       },
     ]);
@@ -3489,7 +3504,7 @@ describe('the bot texts pages (#300)', () => {
       expectedVersion: orphan!.version,
     });
     expect(removed.body).toMatchObject({ outcome: 'reset', text: null, published: [] });
-    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls).toHaveLength(1);
     expect(await publishRows(seeded.staffId)).toHaveLength(1);
   });
 
@@ -3653,8 +3668,8 @@ describe('the bot texts pages (#300)', () => {
     });
     const later = await second!;
 
-    // the first publish's two languages, and nothing of the second
-    expect(callsWhileHeld).toBe(2);
+    // the first publish, and nothing of the second
+    expect(callsWhileHeld).toBe(1);
     for (const answer of [first, later]) {
       expect(answer.body).toMatchObject({
         outcome: 'saved',
@@ -3670,13 +3685,165 @@ describe('the bot texts pages (#300)', () => {
         method: 'setMyCommands',
         args: [withMenu('Главное меню'), { scope: BOT_COMMAND_SCOPE, ...RU }],
       },
-      EN_MENU_CALL,
       { method: 'setMyCommands', args: [withMenu('Меню'), { scope: BOT_COMMAND_SCOPE, ...RU }] },
-      EN_MENU_CALL,
     ]);
     expect(
       (await publishRows(signed.seeded.staffId)).map((row) => (row.payload as { key: string }).key),
     ).toEqual(['startCommand', 'menuCommand']);
+  });
+  // #634: a row is one key of one language
+  it('T-L1 lists the rows of both languages, each with its language', async () => {
+    const { seeded, token } = await signedIn();
+    await cliSave('welcome', 'Привет');
+    await cliSave('welcome', 'Hello', BotLanguage.En);
+    const response = await readOnce(seeded.staffId, '/admin/bot-texts', token);
+    expect(
+      adminBotTextsResponseSchema
+        .parse(response.json())
+        .overrides.map(({ language, key }) => [language, key]),
+    ).toEqual([
+      ['en', 'welcome'],
+      ['ru', 'welcome'],
+    ]);
+  });
+
+  it("T-L2 answers the editor in the language asked, from that language's texts; no language is a 400", async () => {
+    const { seeded, token } = await signedIn();
+    await cliSave('welcome', 'Привет');
+    await cliSave('connectButton', 'Жми');
+    const response = await readOnce(seeded.staffId, textUrl('welcome', '', BotLanguage.En), token);
+    expect(adminBotTextResponseSchema.parse(response.json()).text).toEqual({
+      language: 'en',
+      key: 'welcome',
+      override: null,
+      rejection: null,
+      fragments: [
+        {
+          placeholder: 'connectButton',
+          key: 'connectButton',
+          source: BOT_TEXT_SOURCES_EN.connectButton,
+          overridden: false,
+        },
+      ],
+    });
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/bot-texts/:key',
+      language: 'en',
+      key: 'welcome',
+      result: 'found',
+    });
+    const before = await auditCount();
+    for (const url of ['/admin/bot-texts/welcome', '/admin/bot-texts/welcome?language=de']) {
+      const refused = await withSession('GET', url, token);
+      expect([refused.statusCode, refused.json<{ error: string }>().error]).toEqual([
+        400,
+        AdminErrorCode.Validation,
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('T-L3 saves an English text beside the Russian one and audits it as English', async () => {
+    const { seeded, token } = await signedIn();
+    const ru = await cliSave('welcome', 'Привет');
+    if (!ru.ok) throw new Error('the seed save failed');
+    const saved = adminBotTextSaveResponseSchema.parse(
+      (
+        await post(token, textUrl('welcome', 'save'), {
+          language: BotLanguage.En,
+          source: 'Hello',
+          expectedVersion: 0,
+        })
+      ).body,
+    );
+    if (saved.outcome !== 'saved') throw new Error(`expected saved, got ${saved.outcome}`);
+    expect(saved.text).toMatchObject({ language: 'en', override: { source: 'Hello' } });
+    expect(
+      (await botTextRows()).map(({ language, key, source, version }) => ({
+        language,
+        key,
+        source,
+        version,
+      })),
+    ).toEqual([
+      { language: 'en', key: 'welcome', source: 'Hello', version: saved.version },
+      { language: 'ru', key: 'welcome', source: 'Привет', version: ru.version },
+    ]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/bot-texts/:key/save',
+      result: 'saved',
+      language: 'en',
+      key: 'welcome',
+      action: 'save',
+      oldText: BOT_TEXT_SOURCES_EN.welcome,
+      newText: 'Hello',
+      oldVersion: 0,
+      newVersion: saved.version,
+    });
+  });
+
+  it('T-L4 previews an English text with the English fragments', async () => {
+    const { token } = await signedIn();
+    await cliSave('connectButton', 'Жми');
+    const { body } = await post(token, textUrl('welcome', 'preview'), {
+      language: BotLanguage.En,
+      source: 'Tap «{connectButton}»',
+    });
+    expect(adminBotTextPreviewResponseSchema.parse(body)).toMatchObject({
+      outcome: 'rendered',
+      text: { language: 'en' },
+      rendered: { kind: 'html', telegramHtml: `Tap «${BOT_TEXT_SOURCES_EN.connectButton}»` },
+    });
+  });
+
+  it('T-L5 resets the English text only', async () => {
+    const { token } = await signedIn();
+    const ru = await cliSave('welcome', 'Привет');
+    const en = await cliSave('welcome', 'Hello', BotLanguage.En);
+    if (!ru.ok || !en.ok) throw new Error('the seed save failed');
+    const { body } = await post(token, textUrl('welcome', 'reset'), {
+      language: BotLanguage.En,
+      expectedVersion: en.version,
+    });
+    expect(adminBotTextResetResponseSchema.parse(body)).toMatchObject({
+      outcome: 'reset',
+      text: { language: 'en', override: null },
+    });
+    expect(
+      (await botTextRows()).map(({ language, key, version }) => [language, key, version]),
+    ).toEqual([['ru', 'welcome', ru.version]]);
+  });
+
+  it("T-L6 publishes an English commands key in English only, and records the key's language", async () => {
+    const fake = await withProfileApi();
+    const { seeded, token } = await signedIn();
+    const { body } = await post(token, textUrl('startCommand', 'save'), {
+      language: BotLanguage.En,
+      source: 'Go',
+      expectedVersion: 0,
+    });
+    expect(body).toMatchObject({
+      outcome: 'saved',
+      published: [{ method: 'setMyCommands', ok: true }],
+    });
+    expect(fake.calls).toEqual([
+      {
+        method: 'setMyCommands',
+        args: [
+          [{ command: 'start', description: 'Go' }, ...EN_MENU.slice(1)],
+          { scope: BOT_COMMAND_SCOPE },
+        ],
+      },
+    ]);
+    expect((await publishRows(seeded.staffId)).map((row) => row.payload)).toEqual([
+      {
+        path: '/admin/bot-texts/:key/save',
+        trigger: 'save',
+        key: 'startCommand',
+        language: 'en',
+        methods: [{ method: 'setMyCommands', ok: true }],
+      },
+    ]);
   });
 });
 

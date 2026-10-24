@@ -42,7 +42,7 @@ import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
 import { createSessionNoticeListener } from './trading/session-notice-listener';
 import { createSessionNoticeSender } from './trading/session-notices';
 import { createStarReconciler } from './payments/star-reconciler';
-import { setBotTextSource } from './auth/texts';
+import { setBotTextSources } from './auth/texts';
 import { DEPOSIT_INIT_DATA_MAX_AGE_MS, INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
 import { ensureFreshAccessToken } from './auth/token-service';
@@ -588,7 +588,7 @@ const botTexts = createBotTextRefresher({
   load: () => listBotTextOverrides(db),
   intervalMs: BOT_TEXTS_REFRESH_MS,
   budgetMs: BOT_TEXTS_LOAD_BUDGET_MS,
-  apply: setBotTextSource,
+  apply: setBotTextSources,
   logger: app.log,
 });
 

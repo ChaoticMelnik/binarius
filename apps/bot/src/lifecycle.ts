@@ -88,8 +88,8 @@ export function runBot({
   // a failed one costs that part of the profile in that language and nothing else — the other
   // calls are still made, no update is lost and Telegram keeps the last value that did register —
   // while a throw out of onStart would reject start() and exit 1. The next start registers again.
-  // The values are the texts in effect — the overrides of the first load, or the defaults when it
-  // failed (#301); the English ones are the catalog's.
+  // The values are the texts in effect in each language — that language's overrides of the first
+  // load, or its defaults when it failed (#301, #634).
   const registrations = [
     {
       method: 'setMyCommands',
