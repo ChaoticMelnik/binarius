@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   BOT_TEXT_CATALOG,
   formatPrice,
@@ -7,6 +8,7 @@ import {
   type SessionShare,
   type TradingSessionView,
 } from '@binarius/shared';
+import { PROMO_LOGO_PATH } from './assets';
 import { COLOR, escapeXml, fitSize, round, toneOf, type SessionCardTone } from './session-card';
 import { sessionAssetLabel, sessionPromoLabels, sessionPromoWhen } from './texts';
 
@@ -88,7 +90,6 @@ const INNER = SESSION_PROMO_WIDTH - 2 * PAD;
 const CHART_TOP = 470;
 const CHART_BOTTOM = 880;
 const MARKER_RADIUS = 9;
-const BRAND_FILL = '#3B5BDB';
 const BADGE_TOP = 70;
 const BADGE_HEIGHT = 68;
 const BADGE_TEXT_SIZE = 32;
@@ -103,6 +104,13 @@ const BADGE_MIN_TEXT = Math.ceil(
   BOT_TEXT_CATALOG.sessionPromoUp.source.length * BADGE_TEXT_SIZE * BOLD_ADVANCE,
 );
 const BADGE_MAX_TEXT = INNER / 2 - 2 * BADGE_SIDE - BADGE_ARROW - BADGE_GAP;
+// The bot's logo (#594, docs/bot-session.md → Sharing the card): the owner's PNG, drawn into
+// the SVG as a data URI and read once at import, so a missing file stops the bot at its start,
+// not the first share. resvg takes `href` only: the card declares no xlink namespace.
+const LOGO_SIZE = 112;
+const LOGO_GAP = 24;
+const BRAND_CENTER_Y = 1050;
+const LOGO_HREF = `data:image/png;base64,${readFileSync(PROMO_LOGO_PATH).toString('base64')}`;
 
 interface TextOptions {
   x: number;
@@ -236,22 +244,12 @@ export function sessionPromoSvg(model: SessionPromoModel): string {
     }
   }
 
-  const mark = { x: PAD + 44, y: 1050 };
   parts.push(
-    `<circle cx="${String(mark.x)}" cy="${String(mark.y)}" r="44" fill="${BRAND_FILL}"/>`,
-    text(Array.from(model.brand)[0] ?? '', {
-      x: mark.x,
-      y: mark.y + 17,
-      width: 60,
-      size: 48,
-      bold: true,
-      fill: COLOR.text,
-      anchor: 'middle',
-    }),
+    `<image x="${String(PAD)}" y="${String(BRAND_CENTER_Y - LOGO_SIZE / 2)}" width="${String(LOGO_SIZE)}" height="${String(LOGO_SIZE)}" href="${LOGO_HREF}"/>`,
     text(model.brand, {
-      x: PAD + 112,
-      y: mark.y + 18,
-      width: INNER - 112,
+      x: PAD + LOGO_SIZE + LOGO_GAP,
+      y: BRAND_CENTER_Y + 18,
+      width: INNER - LOGO_SIZE - LOGO_GAP,
       size: 52,
       bold: true,
       fill: COLOR.text,

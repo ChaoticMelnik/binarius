@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ACCOUNT_CARD_PHOTO_PATH, SETUP_CARD_PHOTO_PATHS } from './assets';
+import { ACCOUNT_CARD_PHOTO_PATH, PROMO_LOGO_PATH, SETUP_CARD_PHOTO_PATHS } from './assets';
 
 // The account card goes out as sendPhoto with this file, so a missing or out-of-limits picture
 // would cost every new user their success message; here it costs a red `pnpm check` instead. The
@@ -94,4 +94,27 @@ it('draws the bull and the bear from two different files', () => {
     readFileSync(path),
   );
   expect(up?.equals(down ?? Buffer.alloc(0))).toBe(false);
+});
+
+// The promo card's logo (#594): the issue's minimum side, and a bound on the bytes, since the data
+// URI (4/3 of the file) is built into every promo SVG.
+const LOGO_MIN_SIDE = 256;
+const LOGO_MAX_BYTES = 512 * 1024;
+
+describe('the promo logo (#594)', () => {
+  const bytes = readFileSync(PROMO_LOGO_PATH);
+
+  it('A1 is bot-logo.png, a PNG', () => {
+    expect(PROMO_LOGO_PATH).toMatch(/bot-logo\.png$/);
+    expect([...bytes.subarray(0, 8)]).toEqual(PNG_SIGNATURE);
+  });
+
+  it('A2 is a square of at least the minimum side, within the byte bound', () => {
+    const size = pngSize(bytes);
+    expect(size).toBeDefined();
+    const { width, height } = size ?? { width: 0, height: 0 };
+    expect(width).toBe(height);
+    expect(width).toBeGreaterThanOrEqual(LOGO_MIN_SIDE);
+    expect(statSync(PROMO_LOGO_PATH).size).toBeLessThanOrEqual(LOGO_MAX_BYTES);
+  });
 });
