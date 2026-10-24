@@ -1,15 +1,15 @@
 name: CI
 
-# Process text and the audit log only: no test, script or CI step reads them, so a change of these
-# alone runs nothing (#646), except the architect skill: tooling/rules-for.test.ts reads its index
-# and rule files (#770). docs/ is not here - tests compare code with it. A pattern after a negated
-# one includes its paths again.
+# Process text, the audit log and docs/process-decisions.md only: no test, script or CI step reads
+# them, so a change of these alone runs nothing (#646, #771), except the architect skill:
+# tooling/rules-for.test.ts reads its index and rule files (#770). The rest of docs/ is not here -
+# tests compare code with it. A pattern after a negated one includes its paths again.
 on:
   push:
     branches: [main]
-    paths: ['**', '!.claude/**', '!audits.md', '.claude/skills/architect/**']
+    paths: ['**', '!.claude/**', '!audits.md', '!docs/process-decisions.md', '.claude/skills/architect/**']
   pull_request:
-    paths: ['**', '!.claude/**', '!audits.md', '.claude/skills/architect/**']
+    paths: ['**', '!.claude/**', '!audits.md', '!docs/process-decisions.md', '.claude/skills/architect/**']
 
 permissions:
   contents: read
