@@ -46,7 +46,9 @@ describe('B2 the bundle of each app', () => {
     expect(inputs.filter((input) => input.includes('node_modules/'))).toEqual([]);
     // (c) no CLI, testing or test module
     expect(
-      inputs.filter((input) => /\/cli\/|export-pages\.ts$|testing\.ts$|\.test\.ts$/.test(input)),
+      inputs.filter((input) =>
+        /\/cli\/|\/cli\.ts$|export-pages\.ts$|testing\.ts$|\.test\.ts$/.test(input),
+      ),
     ).toEqual([]);
     // (d) every external package is one the app declares in dependencies
     const manifest = JSON.parse(
@@ -81,6 +83,12 @@ describe('B5 refuses a bundle with a forbidden input', () => {
   it('a CLI module', () => {
     expect(() => {
       checkInputs('backend', { 'apps/backend/src/cli/staff.ts': {} });
+    }).toThrow(BuildError);
+  });
+
+  it('a top-level cli.ts', () => {
+    expect(() => {
+      checkInputs('backend', { 'packages/signal-stand/src/cli.ts': {} });
     }).toThrow(BuildError);
   });
 
