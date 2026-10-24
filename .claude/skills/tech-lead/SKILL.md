@@ -411,12 +411,12 @@ A night's entry is written by the manager itself (manager → Substitution 5); t
 | Backend API | TypeScript + Fastify (OAuth, постбэки, авторизация, состояния) | `apps/backend` |
 | Веб-страницы | Fastify + серверный HTML (вход сотрудников, касса, минимальная админка); решение владельца 2026-09-29 (#68, #34) | `apps/web` |
 | Торговый worker | Отдельный Node.js-процесс + Socket.IO-клиент | `apps/trading-worker` |
-| БД | PostgreSQL + Drizzle ORM, forward-only миграции (`drizzle-kit`) | `packages/db` |
+| БД | PostgreSQL + Drizzle ORM, forward-only миграции: `pnpm db:generate` / `pnpm db:migrate`, сервис `migrate` (#75) | `packages/db` |
 | Фоновые задачи | Redis + BullMQ (уведомления, сверка, обработка событий) | использует `packages/db` |
 | Общие типы/контракты | TypeScript, без раннего разделения на микросервисы | `packages/shared` |
-| Тесты | Vitest (unit/integration) + Playwright (E2E) | во всех пакетах |
+| Тесты | Vitest (unit/integration); `packages/e2e` — демо-цикл поверх настоящих процессов, тоже Vitest (`pnpm test packages/e2e`, `docs/e2e-demo-cycle.md`) | во всех пакетах |
 | Пакетный менеджер | pnpm workspaces, единый monorepo | корень репозитория |
-| Развёртывание | Docker Compose + HTTPS reverse proxy | пилот — VPS (Hetzner, EU), оценка ресурсов и регион уточняются нагрузочным тестом, не решены здесь |
+| Развёртывание | Docker Compose + HTTPS reverse proxy (Caddy на хосте — `docs/postbacks.md` → The Caddy route) на пилотном VPS (адрес — `docs/binodex-oauth.md` → проверка с IP пилота) | backend и bot — `binarius-deploy` на хосте (`docs/bot-session.md`), worker — `scripts/deploy-worker.sh` (`docs/worker-deploy.md`) |
 
 Доменные инварианты, подтверждённые кодом, — индекс `.claude/skills/architect/SKILL.md` → Architecture Rules to Enforce и файлы `.claude/skills/architect/rules/*.md` (единственный полный список; по файлам задачи — `node tooling/rules-for.ts <files>`). Точный контракт Binodex Broker/Partner API, бонусная сетка, лимиты сессии и параметры хостинга здесь не зафиксированы: архитектор проектирует и проверяет их для конкретного issue, а не переносит из чернового плана.
 

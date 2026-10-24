@@ -26,7 +26,7 @@ Issue/PR named → Task Review. "Review the project" / "review the codebase" wit
 
 ### Step 1: Find issues in review
 
-`/github` skill: "List issues by status" with `In Review`.
+Spawned: the PR, the round and the Codex preflight line come from the spawn prompt (tech-lead → Phases run as spawned agents, item 7) — no board query. Invoked directly: `/github` → "List issues by status" with `In Review`.
 
 ### Step 2: Read context
 
@@ -79,7 +79,7 @@ Merge the agents' results, collapse duplicates. Discard findings that just resta
 - Re-run, in one call, only the mutations that carry a finding or a doubt: `node tooling/mutations.ts "$SCRATCH/mutations.json" --out "$SCRATCH/mut" --only <ids> > "$SCRATCH/mut.log" 2>&1; echo "exit=$?"; cat "$SCRATCH/mut.log"`, from the review worktree at the PR head (the runner's root is the git toplevel of the current directory). Before the first local run in that worktree — this re-run, or the test files for a finding under Runtime check — run `pnpm install --offline --frozen-lockfile > "$SCRATCH/install.log" 2>&1; echo "exit=$?"` once: a worktree has no `node_modules`, so every row would be `no-report` or `not-run`.
 - A table without the script's header, no list, or mutations run one at a time by hand → a Minor process deviation in the review report.
 
-**Runtime check** — CI, not a local `pnpm check` (`.claude/CLAUDE.md` → Проверки). One Bash call with `timeout: 600000`: `gh pr checks <N> --watch > "$SCRATCH/ci.log" 2>&1; echo "exit=$?"` (it reports the checks of the PR's current head; exit 0 only when they all passed). Red, or no checks at the current head (not started, a conflict that blocks the `pull_request` merge ref, still missing) → **Blocker**, named with the failing checks and the run link; no rerun. The one exception: a PR whose `gh pr diff <N> --name-only` lists only `.claude/**` and `audits.md` has no CI by design (#646) — unless it touches `.claude/skills/architect/**`, which CI runs on (#770) — no checks there is not a Blocker; the report says «CI не запускается: только .claude/** и audits.md». Locally the reviewer runs only the test files needed to verify a specific finding — quiet, one call, after the one-time install in the review worktree (Quoted evidence above). State explicitly if Playwright E2E could not be run.
+**Runtime check** — CI, not a local `pnpm check` (`.claude/CLAUDE.md` → Проверки). One Bash call with `timeout: 600000`: `gh pr checks <N> --watch > "$SCRATCH/ci.log" 2>&1; echo "exit=$?"` (it reports the checks of the PR's current head; exit 0 only when they all passed). Red, or no checks at the current head (not started, a conflict that blocks the `pull_request` merge ref, still missing) → **Blocker**, named with the failing checks and the run link; no rerun. The one exception: a PR whose `gh pr diff <N> --name-only` lists only `.claude/**` and `audits.md` has no CI by design (#646) — unless it touches `.claude/skills/architect/**`, which CI runs on (#770) — no checks there is not a Blocker; the report says «CI не запускается: только .claude/** и audits.md». Locally the reviewer runs only the test files needed to verify a specific finding — quiet, one call, after the one-time install in the review worktree (Quoted evidence above).
 
 ### Step 6-pre: Final Codex pass (before any LGTM)
 
@@ -141,9 +141,9 @@ Spawned, and the permission classifier refuses this comment: do not retry. Retur
 **Never attempt to approve the PR review yourself** (GitHub blocks self-approval regardless). Merging is a separate action from approving. Whether an agent may run the merge at all is recorded only in `.claude/CLAUDE.md` → Переопределения глобального `~/.claude/CLAUDE.md`; when it may, it is always after a per-merge `AskUserQuestion`:
 
 - **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the round, the PR number, the head SHA approved, the id of the 6-pre Codex job (or its skip line), the posted ready-to-merge comment URL (or the classifier's refusal with the body), `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
-- **Invoked directly by the owner:** ask via `AskUserQuestion` immediately before this specific merge — a yes on an earlier PR never carries over. On an explicit yes: `gh pr merge <N>` with the chosen allowed method — never `--admin` or any other bypass flag. If it fails (conflicts, red checks, branch protection): report the failure and stop.
+- **Invoked directly by the owner:** ask via `AskUserQuestion` immediately before this specific merge — a yes on an earlier PR never carries over. On an explicit yes: `gh pr merge <N>` with the standing method (tech-lead → Merge relay → Merge method) — never `--admin` or any other bypass flag. If it fails (conflicts, red checks, branch protection): report the failure and stop.
 
-Either way: before moving to Done, confirm the merge actually happened — `gh pr view <N> --json state,mergedAt`, proceed only once `state` is `"MERGED"`. Then move the issue to **Done** via `/github` skill.
+Invoked directly: before moving to Done, `gh pr view <N> --json state,mergedAt` shows `MERGED`, then Done via `/github`. Spawned: Done is tech-lead's step after its own merge confirmation (tech-lead → Phase 4) — the reviewer never moves it.
 
 ---
 
