@@ -100,7 +100,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js` and the fonts in
   `apps/bot/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them).
 - `apps/bot/src/session-promo.ts` (#538) — `promoDirection`, `sessionPromoModel`,
-  `sessionPromoSvg`: the promo card of «📤 Поделиться», rendered by the same `renderSessionCard`.
+  `sessionPromoSvg`: the promo card of «📤 Поделиться», rendered by the same `renderSessionCard`;
+  the bot's logo from `assets.ts` (`PROMO_LOGO_PATH`, #594).
 - `apps/bot/src/send.ts` — `sendPhotoToStorage` (#538): the promo card's post to the storage
   channel, without a caption or a keyboard by type; `sendPhotoByIdHtml` and `sendHtmlById` (#537):
   the summary's photo and its text, by chat id, each with its inline keyboard by type.
@@ -1539,10 +1540,14 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
   is); the line through every settled trade's entry and exit price in order, the entries blue, the
   exits by outcome, the first entry price under its point and the last exit price over its point
   (`formatPrice` with the catalog pair's `digits`, Rule 20; no labels without the pair; all prices
-  equal → the line in the middle); the mark (a circle with the brand's first letter) and the
-  brand; the call «Торгуй со мной в Binarius и получи бесплатные токены!»; the session's end
-  (`ended_at`) in Moscow time, «12.10.2026 21:32 МСК» (`formatPaymentDate`; «… MSK» in English,
-  `sessionPromoWhen`, #633). The direction is the
+  equal → the line in the middle); the bot's logo (#594: `apps/bot/src/assets/bot-logo.png`, the
+  owner's 512 × 512 PNG with transparent corners, `PROMO_LOGO_PATH`; drawn 112 px square at the
+  left as an `<image>` whose `href` is a `data:image/png;base64` URI — resvg takes `href`, not
+  `xlink:href`, and needs no file beside the SVG; read once at the bot's start, so a file replaced
+  in place changes the card after a restart; `assets.test.ts` holds it a square PNG of at least
+  256 px a side) and the brand to its right; the call «Торгуй со мной в Binarius и получи
+  бесплатные токены!»; the session's end (`ended_at`) in Moscow time, «12.10.2026 21:32 МСК»
+  (`formatPaymentDate`; «… MSK» in English, `sessionPromoWhen`, #633). The direction is the
   majority of the settled trades' (`broker_trades.action`), the last trade's on a tie
   (`promoDirection`). Every text is a catalog entry (`sessionPromo*`, the `session` group),
   escaped into the SVG and shrunk to its slot (`fitSize`).
@@ -2070,6 +2075,11 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     «chat not found») leaves the card with its live amounts above the wait (`warn` `the analysis
     card was not deleted`); pressing one again is safe. Falsifiable: the owner asks for the card's
     figures back, or that `warn` in the logs.
+108. **The logo is read at the bot's start and drawn as resvg decodes it** (#594): a file replaced
+    in place reaches the card after a restart; a PNG resvg cannot decode is drawn as nothing,
+    without a word (a broken data URI renders the card without the logo and without an error) —
+    `assets.test.ts` and `session-promo.test.ts` R4 gate the committed file, nothing gates one
+    replaced on the server. Falsifiable: a promo card without the logo.
 
 ## Running it locally
 
@@ -2099,7 +2109,7 @@ signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5
   since **#509** on a signal only, and every door's press or start checks the pair's signal.
 - **#321** — «📤 Поделиться» under the summary card ([Sharing the card](#sharing-the-card-321));
   **#538** answers it with the promo card and the sender's referral link.
-- **#594** — the owner's PNG logo on the promo card in place of the drawn mark.
+- **#594** — the bot's PNG logo (`bot-logo.png`) on the promo card in place of the drawn mark.
 - **#121**, **#327** — real mode and real sessions ([trading-mode.md](trading-mode.md)); **#473**
   (shipped) extends `/stop` with the switch back to demo, **#474**'s mode screen tells the sessions
   a switch stopped.
