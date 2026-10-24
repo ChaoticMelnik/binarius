@@ -13,7 +13,7 @@ import {
   enBotTextSource,
   estimateBotTextMessage,
   botTextChangeProblems,
-  resolveBotTextOverrides,
+  resolveBotTextOverridesOf,
   INT4_MAX,
   LinkBonusSkipReason,
   MAX_PAIR_DIGITS,
@@ -50,7 +50,9 @@ import {
   type TelegramHtml,
   type TradingSessionView,
   type TradingSignalResponse,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { pairWaitingText, waitingText } from './demo';
 import { runWithLanguage } from './language';
@@ -77,7 +79,7 @@ import {
   sessionStatusText,
   sessionStopReplyText,
   sessionTexts as notices,
-  setBotTextSource,
+  setBotTextSources,
   settingsText,
   stakePickerText,
   statusCard,
@@ -694,7 +696,7 @@ const recording = (texts: Partial<Record<BotTextKey, string>> = {}) => {
 };
 
 afterEach(() => {
-  setBotTextSource(defaultBotTextSource);
+  setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
 });
 
 describe('the assembled messages, against the real assembly', () => {
@@ -724,7 +726,7 @@ describe('the assembled messages, against the real assembly', () => {
 
   it.each(ASSEMBLED)('M2 reads exactly the keys of $id', (message) => {
     const { read, source } = recording();
-    setBotTextSource(source);
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, source));
     REAL[message.id]!();
     expect([...read].sort()).toEqual([...botTextMessageKeys(message)].sort());
   });
@@ -737,11 +739,11 @@ describe('the assembled messages, against the real assembly', () => {
       settingsStakeReal: '{level}: {stake}, {firstName}',
     };
     const message = ASSEMBLED.find((m) => m.id === 'settings')!;
-    setBotTextSource(recording(texts).source);
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, recording(texts).source));
     const real = Math.max(...REAL.settings!().map(lengthOf));
     expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
     const { read, source } = recording(texts);
-    setBotTextSource(source);
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, source));
     REAL.settings!();
     expect([...read].sort()).toEqual([...botTextMessageKeys(message)].sort());
   });
@@ -751,7 +753,7 @@ describe('the assembled messages, against the real assembly', () => {
     (id) => {
       const texts = { actionUp: '<b></b>'.repeat(9), actionDown: '&amp;'.repeat(12) };
       const message = ASSEMBLED.find((m) => m.id === id)!;
-      setBotTextSource(recording(texts).source);
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, recording(texts).source));
       const real = Math.max(...REAL[id]!().map(lengthOf));
       expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
     },
@@ -776,22 +778,31 @@ describe('the assembled messages, against the real assembly', () => {
     ],
   ])('%s estimates analysisCard exactly with %s', (_id, _case, texts) => {
     const message = ASSEMBLED.find((m) => m.id === 'analysisCard')!;
-    setBotTextSource(recording(texts).source);
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, recording(texts).source));
     const real = Math.max(...REAL.analysisCard!().map(lengthOf));
     expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
   });
 
   // two overrides, each valid on its own, must not break /account for an unknown address
   it('V11 renders an overridden account line with an overridden unknown address', () => {
-    const line = { key: 'accountLineActive', source: '✅ Подключён: <code>{email}</code>' };
-    const unknown = { key: 'accountUnknownAddress', source: '<b>адрес неизвестен</b>' };
-    const resolved = resolveBotTextOverrides([line, unknown]);
+    const ru = BotLanguage.Ru;
+    const line = {
+      language: ru,
+      key: 'accountLineActive',
+      source: '✅ Подключён: <code>{email}</code>',
+    };
+    const unknown = {
+      language: ru,
+      key: 'accountUnknownAddress',
+      source: '<b>адрес неизвестен</b>',
+    };
+    const resolved = resolveBotTextOverridesOf(ru, [line, unknown]);
     expect([...resolved.texts.keys()].sort()).toEqual([
       'accountLineActive',
       'accountUnknownAddress',
     ]);
-    expect(botTextChangeProblems(unknown.key, unknown.source, [line])).toEqual([]);
-    setBotTextSource(resolved.source);
+    expect(botTextChangeProblems(ru, unknown.key, unknown.source, [line])).toEqual([]);
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, resolved.source));
     expect(TEXTS.accountLineActive({ email: null }).value).toBe(
       '✅ Подключён: <code>&lt;b&gt;адрес неизвестен&lt;/b&gt;</code>',
     );
@@ -806,7 +817,7 @@ describe('the assembled messages, against the real assembly', () => {
         sessionStopNoSignalTimeout: '⏳ ' + 'я'.repeat(90) + ' {noSignalCandles} по {candleSec} с',
       };
       const message = ASSEMBLED.find((m) => m.id === id)!;
-      setBotTextSource(recording(texts).source);
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, recording(texts).source));
       const real = Math.max(...REAL[id]!().map(lengthOf));
       expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
     },
@@ -817,7 +828,7 @@ describe('the assembled messages, against the real assembly', () => {
     (id) => {
       const texts = { actionUp: 'я'.repeat(64), demoDuration5: 'я'.repeat(64) };
       const message = ASSEMBLED.find((m) => m.id === id)!;
-      setBotTextSource(recording(texts).source);
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, recording(texts).source));
       const real = Math.max(...REAL[id]!().map(lengthOf));
       expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
     },

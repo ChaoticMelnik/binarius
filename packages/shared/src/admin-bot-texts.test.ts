@@ -15,7 +15,7 @@ import {
   renderBotTextPreview,
 } from './admin-bot-texts';
 import { BotTextProblemCode } from './bot-text-template';
-import { BotTextRejectionCode, resolveBotTextOverrides } from './bot-text-overrides';
+import { BotTextRejectionCode, resolveBotTextOverridesOf } from './bot-text-overrides';
 import { BOT_TEXT_CATALOG, defaultBotTextSource, type BotTextKey } from './bot-texts';
 
 const keys = Object.keys(BOT_TEXT_CATALOG) as BotTextKey[];
@@ -24,7 +24,7 @@ const me = {
   login: 'ada',
   sessionId: '00000000-0000-4000-8000-000000000002',
 };
-const text = { key: 'welcome', override: null, rejection: null, fragments: [] };
+const text = { language: 'ru', key: 'welcome', override: null, rejection: null, fragments: [] };
 
 describe('adminBotTextReason', () => {
   it('cuts a long reason to the wire limit and leaves a short one alone', () => {
@@ -77,14 +77,16 @@ describe('the wire schemas', () => {
     [1.5, false],
     [0, true],
   ])('takes expectedVersion %s: %s', (expectedVersion, ok) => {
-    expect(adminBotTextSaveRequestSchema.safeParse({ source: 'a', expectedVersion }).success).toBe(
-      ok,
-    );
+    expect(
+      adminBotTextSaveRequestSchema.safeParse({ language: 'ru', source: 'a', expectedVersion })
+        .success,
+    ).toBe(ok);
   });
 
   it('counts the source in code points, as the table CHECK', () => {
     const save = (source: string) =>
-      adminBotTextSaveRequestSchema.safeParse({ source, expectedVersion: 0 }).success;
+      adminBotTextSaveRequestSchema.safeParse({ language: 'ru', source, expectedVersion: 0 })
+        .success;
     expect(save('😀'.repeat(16384))).toBe(true);
     expect(save('😀'.repeat(16385))).toBe(false);
   });
@@ -189,7 +191,9 @@ describe('renderBotTextPreview', () => {
     const codeSent = renderBotTextPreview('codeSent', defaultBotTextSource);
     expect(codeSent).toMatchObject({ kind: 'html' });
     expect(JSON.stringify(codeSent)).toContain('ada@example.com');
-    const { source } = resolveBotTextOverrides([{ key: 'connectButton', source: 'Жми' }]);
+    const { source } = resolveBotTextOverridesOf('ru', [
+      { language: 'ru', key: 'connectButton', source: 'Жми' },
+    ]);
     expect(JSON.stringify(renderBotTextPreview('welcome', source))).toContain('«Жми»');
     expect(renderBotTextPreview('connectButton', source)).toEqual({ kind: 'plain', text: 'Жми' });
   });

@@ -4,7 +4,6 @@ import {
   BOT_TEXT_SOURCES_EN,
   BotLanguage,
   decimalStringSchema,
-  defaultBotTextSource,
   formatPaymentDate,
   MAX_SESSION_SUMMARY_TRADES,
   TradeAction,
@@ -12,7 +11,9 @@ import {
   type SessionShare,
   type SessionShareTrade,
   type TradingSessionView,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import { renderSessionCard } from './session-card';
 import {
   promoDirection,
@@ -22,7 +23,7 @@ import {
   sessionPromoSvg,
 } from './session-promo';
 import { runWithLanguage } from './language';
-import { setBotTextSource } from './texts';
+import { setBotTextSources } from './texts';
 
 const { Up, Down } = TradeAction;
 const d = (value: string) => decimalStringSchema.parse(value);
@@ -65,7 +66,7 @@ const badgeOf = (svg: string) =>
   /<rect data-badge="(\w+)"[^>]*width="([\d.]+)"[^>]*fill="([^"]+)"/.exec(svg);
 
 afterEach(() => {
-  setBotTextSource(defaultBotTextSource);
+  setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
 });
 
 describe('promoDirection', () => {
@@ -168,7 +169,11 @@ describe('sessionPromoSvg', () => {
       Number(badgeOf(sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42)))?.[2]);
     const base = width();
     const overrides: Partial<Record<BotTextKey, string>> = { sessionPromoUp: 'ВВЕРХ ВВЕРХ!' };
-    setBotTextSource({ sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source,
+      }),
+    );
     expect(width()).toBeGreaterThan(base);
     overrides.sessionPromoUp = 'В';
     expect(width()).toBe(base);
@@ -192,7 +197,11 @@ describe('sessionPromoSvg', () => {
       sessionPromoCall: '<b>&amp</b>',
       sessionPromoBrand: '"x"',
     };
-    setBotTextSource({ sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source,
+      }),
+    );
     const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
     expect(svg).not.toContain('<b>');
     expect(svg).toContain('&#60;b&#62;&#38;amp&#60;/b&#62;');

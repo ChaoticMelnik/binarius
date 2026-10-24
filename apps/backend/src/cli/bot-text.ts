@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { Pool } from 'pg';
 import {
   BOT_TEXT_CATALOG,
+  BOT_TEXT_DEFAULT_SOURCES,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
   BOT_TEXT_VARS,
@@ -14,7 +15,8 @@ import {
   parseNoWhitespaceEnv,
   parseUrlEnv,
   readEnv,
-  resolveBotTextOverrides,
+  resolveBotTextOverridesOf,
+  BotLanguage,
   type BotTextKey,
   type BotTextVarName,
   AuditActorType,
@@ -49,12 +51,13 @@ const EXIT_USAGE = 2;
 
 const USAGE = `Тексты клиентского бота.
 
-  bot-text list                                     все ключи: изменён или исходный
-  bot-text show <ключ>                              действующий текст (в stdout)
-  bot-text set <ключ> --file <путь|-> [--version N] сохранить текст из файла или stdin
-  bot-text reset <ключ> [--version N]               вернуть исходный текст
-  bot-text publish                                  опубликовать меню команд и профиль в Telegram
+  bot-text list [--lang ru|en]                                     все ключи: изменён или исходный
+  bot-text show <ключ> [--lang ru|en]                              действующий текст (в stdout)
+  bot-text set <ключ> --file <путь|-> [--version N] [--lang ru|en] сохранить текст из файла или stdin
+  bot-text reset <ключ> [--version N] [--lang ru|en]               вернуть исходный текст
+  bot-text publish                                                 опубликовать меню команд и профиль в Telegram
 
+--lang — язык текста, по умолчанию ru.
 --version — версия из show: при несовпадении сохранение отклоняется.
 set и reset ключа команд или профиля сразу публикуют его в Telegram (нужен TELEGRAM_BOT_TOKEN).`;
 
@@ -70,9 +73,13 @@ export interface BotTextIo {
 }
 
 type Parsed =
-  | { command: 'list' | 'publish' }
-  | { command: 'show' | 'reset'; key: string; version?: number }
-  | { command: 'set'; key: string; file: string; version?: number };
+  | { command: 'publish' }
+  | { command: 'list'; language: BotLanguage }
+  | { command: 'show' | 'reset'; language: BotLanguage; key: string; version?: number }
+  | { command: 'set'; language: BotLanguage; key: string; file: string; version?: number };
+
+const isBotLanguage = (value: string): value is BotLanguage =>
+  (Object.values(BotLanguage) as string[]).includes(value);
 
 export class UsageError extends Error {
   override readonly name = 'UsageError';
@@ -83,14 +90,14 @@ export class BotTextFileError extends Error {
 }
 
 export function parseBotTextArgs(argv: readonly string[]): Parsed {
-  let values: { file?: string; version?: string };
+  let values: { file?: string; version?: string; lang?: string };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
       args: [...argv],
       allowPositionals: true,
       strict: true,
-      options: { file: { type: 'string' }, version: { type: 'string' } },
+      options: { file: { type: 'string' }, version: { type: 'string' }, lang: { type: 'string' } },
     }));
   } catch (error) {
     throw new UsageError(error instanceof Error ? error.message : String(error));
@@ -101,11 +108,26 @@ export function parseBotTextArgs(argv: readonly string[]): Parsed {
     throw new UsageError('--version: целое число из show');
   }
   const version = values.version === undefined ? undefined : Number(values.version);
-  if (command === 'list' || command === 'publish') {
-    if (key !== undefined || values.file !== undefined || version !== undefined) {
+  if (values.lang !== undefined && !isBotLanguage(values.lang)) {
+    throw new UsageError('--lang: ru или en');
+  }
+  const language = values.lang ?? BotLanguage.Ru;
+  if (command === 'publish') {
+    if (
+      key !== undefined ||
+      values.file !== undefined ||
+      version !== undefined ||
+      values.lang !== undefined
+    ) {
       throw new UsageError(`${command} не принимает аргументов`);
     }
     return { command };
+  }
+  if (command === 'list') {
+    if (key !== undefined || values.file !== undefined || version !== undefined) {
+      throw new UsageError('list принимает только --lang');
+    }
+    return { command, language };
   }
   if (command !== 'show' && command !== 'set' && command !== 'reset') {
     throw new UsageError(command === undefined ? 'нет команды' : `неизвестная команда: ${command}`);
@@ -115,16 +137,22 @@ export function parseBotTextArgs(argv: readonly string[]): Parsed {
   if (!isBotTextKey(key) && command !== 'reset') throw new UsageError(`неизвестный ключ: ${key}`);
   if (command === 'show') {
     if (values.file !== undefined || version !== undefined) {
-      throw new UsageError('show принимает только ключ');
+      throw new UsageError('show принимает только ключ и --lang');
     }
-    return { command, key };
+    return { command, language, key };
   }
   if (command === 'reset') {
     if (values.file !== undefined) throw new UsageError('--file не нужен для reset');
-    return { command, key, ...(version === undefined ? {} : { version }) };
+    return { command, language, key, ...(version === undefined ? {} : { version }) };
   }
   if (values.file === undefined) throw new UsageError('нужен --file <путь> или --file -');
-  return { command, key, file: values.file, ...(version === undefined ? {} : { version }) };
+  return {
+    command,
+    language,
+    key,
+    file: values.file,
+    ...(version === undefined ? {} : { version }),
+  };
 }
 
 // A path like /dev/zero or a pipe with no end is read only as far as the cap needs.
@@ -176,9 +204,11 @@ export function decodeBotTextFile(bytes: Uint8Array): string {
 const stamp = (row: BotTextOverrideRecord | undefined) =>
   row === undefined ? 'исходный' : `изменён, версия ${row.version}, ${row.updatedAt.toISOString()}`;
 
-function list(rows: BotTextOverrideRecord[], io: BotTextIo): void {
-  const byKey = new Map(rows.map((row) => [row.key, row]));
-  const { rejected } = resolveBotTextOverrides(rows);
+function list(language: BotLanguage, rows: BotTextOverrideRecord[], io: BotTextIo): void {
+  const byKey = new Map(
+    rows.filter((row) => row.language === language).map((row) => [row.key, row]),
+  );
+  const { rejected } = resolveBotTextOverridesOf(language, rows);
   for (const key of Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]) {
     io.out(`${key}\t${BOT_TEXT_CATALOG[key].group}\t${stamp(byKey.get(key))}`);
   }
@@ -201,10 +231,15 @@ function placeholdersLine(key: BotTextKey): string {
   ].join('; ');
 }
 
-function show(key: BotTextKey, rows: BotTextOverrideRecord[], io: BotTextIo): void {
+function show(
+  language: BotLanguage,
+  key: BotTextKey,
+  rows: BotTextOverrideRecord[],
+  io: BotTextIo,
+): void {
   const entry = BOT_TEXT_CATALOG[key];
-  const row = rows.find((r) => r.key === key);
-  const resolved = resolveBotTextOverrides(rows);
+  const row = rows.find((r) => r.language === language && r.key === key);
+  const resolved = resolveBotTextOverridesOf(language, rows);
   const rejection = resolved.rejected.get(key);
   io.err(`${key} · ${BOT_TEXT_GROUP_TITLES[entry.group]} · ${entry.description}`);
   io.err(placeholdersLine(key));
@@ -215,14 +250,20 @@ function show(key: BotTextKey, rows: BotTextOverrideRecord[], io: BotTextIo): vo
   io.out(resolved.source.sourceOf(key));
 }
 
-function report(key: string, result: BotTextWriteResult, io: BotTextIo, saved?: string): number {
+function report(
+  language: BotLanguage,
+  key: string,
+  result: BotTextWriteResult,
+  io: BotTextIo,
+  saved?: string,
+): number {
   if (result.ok) {
     io.out(
       result.version === 0
-        ? `Сброшено: ${key}. Бот и push backend'а вернут исходный текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`
-        : `Сохранено: ${key}, версия ${result.version}. Бот и push backend'а применят текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`,
+        ? `Сброшено: ${key} (${language}). Бот и push backend'а вернут исходный текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`
+        : `Сохранено: ${key} (${language}), версия ${result.version}. Бот и push backend'а применят текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`,
     );
-    if (isBotTextKey(key) && saved === BOT_TEXT_CATALOG[key].source) {
+    if (isBotTextKey(key) && saved === BOT_TEXT_DEFAULT_SOURCES[language].sourceOf(key)) {
       io.err('Текст совпадает с исходным: чтобы вернуть исходный, есть reset.');
     }
     return EXIT_OK;
@@ -259,16 +300,18 @@ function publishLine(result: BotProfileMethodResult): string {
 
 const PUBLISH_HINT = 'Публикация не удалась: после восстановления выполните bot-text publish.';
 
-// After the commit, from the rows as they are now: whether every method was published.
+// After the commit, from the rows as they are now: whether every method was published in every
+// one of `languages`.
 async function publish(
   db: ReturnType<typeof createDb>,
   api: BotProfileApi,
   methods: readonly BotProfileMethod[],
+  languages: readonly BotLanguage[],
   io: BotTextIo,
 ): Promise<boolean> {
   let results: BotProfileMethodResult[];
   try {
-    results = await publishBotProfile(api, await readBotProfileSource(db), methods);
+    results = await publishBotProfile(api, await readBotProfileSource(db), methods, languages);
   } catch (error) {
     io.err(`Не удалось прочитать тексты для публикации: ${formatFailure(error)}.`);
     io.err(PUBLISH_HINT);
@@ -339,38 +382,57 @@ export async function runBotTextCli(
   const pool = new Pool({ connectionString: databaseUrl });
   const db = createDb(pool);
   const actor = { type: AuditActorType.System, staffId: null };
-  // awaited where it is returned: `finally` ends the pool, and the publish reads through it
-  const publishAfter = async (code: number, written: boolean): Promise<number> => {
-    if (written && methods.length > 0) await publish(db, deps.createApi({ token }), methods, io);
+  // awaited where it is returned: `finally` ends the pool, and the publish reads through it; a
+  // save or reset publishes its key's language only
+  const publishAfter = async (
+    language: BotLanguage,
+    code: number,
+    written: boolean,
+  ): Promise<number> => {
+    if (written && methods.length > 0) {
+      await publish(db, deps.createApi({ token }), methods, [language], io);
+    }
     // saved is saved, whatever Telegram answered (#240, В6)
     return code;
   };
   try {
     switch (parsed.command) {
       case 'list':
-        list(await listBotTextOverrides(db), io);
+        list(parsed.language, await listBotTextOverrides(db), io);
         return EXIT_OK;
       case 'show':
-        show(parsed.key as BotTextKey, await listBotTextOverrides(db), io);
+        show(parsed.language, parsed.key as BotTextKey, await listBotTextOverrides(db), io);
         return EXIT_OK;
       case 'publish':
-        return (await publish(db, deps.createApi({ token }), methods, io)) ? EXIT_OK : EXIT_FAILED;
+        return (await publish(
+          db,
+          deps.createApi({ token }),
+          methods,
+          Object.values(BotLanguage),
+          io,
+        ))
+          ? EXIT_OK
+          : EXIT_FAILED;
       case 'set': {
+        const { language, key } = parsed;
         const result = await saveBotTextOverride(db, {
-          key: parsed.key,
+          language,
+          key,
           source: fileText,
           expectedVersion: parsed.version,
           actor,
         });
-        return await publishAfter(report(parsed.key, result, io, fileText), result.ok);
+        return await publishAfter(language, report(language, key, result, io, fileText), result.ok);
       }
       case 'reset': {
+        const { language, key } = parsed;
         const result = await resetBotTextOverride(db, {
-          key: parsed.key,
+          language,
+          key,
           expectedVersion: parsed.version,
           actor,
         });
-        return await publishAfter(report(parsed.key, result, io), result.ok);
+        return await publishAfter(language, report(language, key, result, io), result.ok);
       }
     }
   } catch (error) {

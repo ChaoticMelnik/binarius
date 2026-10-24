@@ -41,8 +41,9 @@ import {
   SUPPORT_TELEGRAM_USERNAME,
   supportUrl,
   demoAnalysisCallbackData,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
-import { telegramTextProblems } from '@binarius/shared/testing';
+import { telegramTextProblems, botTextSourcesWith } from '@binarius/shared/testing';
 import {
   ACCESS_VIEW,
   LINK_ACTIVE,
@@ -100,7 +101,7 @@ import {
   sessionEndLine,
   sessionStatusText,
   sessionStopReplyText,
-  setBotTextSource,
+  setBotTextSources,
   settingsText,
   stakeButtonLabel,
   statusCard,
@@ -524,14 +525,14 @@ describe('texts', () => {
     });
 
     it('reads the command descriptions from the source in place (#301)', () => {
-      setBotTextSource(stubTextSource('supportCommand'));
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('supportCommand')));
       try {
         expect(botCommands().find((entry) => entry.command === 'support')).toEqual({
           command: 'support',
           description: stubText('supportCommand'),
         });
       } finally {
-        setBotTextSource(defaultBotTextSource);
+        setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
       }
     });
 
@@ -597,9 +598,13 @@ describe('texts', () => {
 
 // #358: the registry's variables, filled from what the handler holds
 describe('the variables of the texts', () => {
-  afterEach(() => setBotTextSource(defaultBotTextSource));
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
   const withTexts = (texts: Partial<Record<BotTextKey, string>>) => {
-    setBotTextSource({ sourceOf: (key) => texts[key] ?? defaultBotTextSource.sourceOf(key) });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) => texts[key] ?? defaultBotTextSource.sourceOf(key),
+      }),
+    );
   };
   const card = (broker: StatusCardInput['broker']) =>
     plainTextOf(
@@ -1587,17 +1592,19 @@ describe('the facades over the catalog', () => {
 // Every map from a value to its text is read when a text is built, so a source swapped after the
 // module loaded reaches it: one test per map that used to hold the texts themselves (#240).
 describe('the text source', () => {
-  afterEach(() => setBotTextSource(defaultBotTextSource));
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
   // Plan Update 4 (Minor 3): `{stake}` is the amount a trade stakes in the user's mode; #326: the
   // saved real stake in real mode, the minimum without one
   it('gives the card {stake} as the real stake in real mode and the demo stake in demo', () => {
-    setBotTextSource({
-      sourceOf: (key) =>
-        key === 'statusHint' || key === 'statusHintReal'
-          ? 'ставка {stake}'
-          : defaultBotTextSource.sourceOf(key),
-    });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) =>
+          key === 'statusHint' || key === 'statusHintReal'
+            ? 'ставка {stake}'
+            : defaultBotTextSource.sourceOf(key),
+      }),
+    );
     const card = (mode: TradeMode, realStake: DecimalString | null = null) =>
       plainTextOf(
         statusCard({
@@ -1616,13 +1623,13 @@ describe('the text source', () => {
   });
 
   it('shows a live status line from the source in place', () => {
-    setBotTextSource(stubTextSource('intentAccepted'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('intentAccepted')));
     const text = intentStatusText(lbl('X'), intentView({ status: TradeIntentStatus.Accepted }));
     expect(text.value).toContain(stubText('intentAccepted'));
   });
 
   it('shows a rejection line from the source in place', () => {
-    setBotTextSource(stubTextSource('intentRejectedByBroker'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('intentRejectedByBroker')));
     const text = intentStatusText(
       lbl('X'),
       intentView({
@@ -1634,7 +1641,7 @@ describe('the text source', () => {
   });
 
   it('shows a session stop line from the source in place', () => {
-    setBotTextSource(stubTextSource('sessionStopTimeout'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('sessionStopTimeout')));
     const text = sessionStatusText(
       lbl('X'),
       sessionView({
@@ -1647,27 +1654,32 @@ describe('the text source', () => {
   });
 
   it('labels a level from the source in place', () => {
-    setBotTextSource(stubTextSource('levelAll'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('levelAll')));
     expect(levelLabel(NotificationLevel.All)).toBe(stubText('levelAll'));
   });
 
   it('labels a direction from the source in place', () => {
-    setBotTextSource(stubTextSource('actionUp'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('actionUp')));
     expect(ACTION_LABELS[TradeAction.Up]).toBe(stubText('actionUp'));
   });
 
   it('labels an asset type from the source in place', () => {
-    setBotTextSource(stubTextSource('demoGroupCurrency'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('demoGroupCurrency')));
     expect(DEMO_GROUP_LABELS.currency).toBe(stubText('demoGroupCurrency'));
   });
 
   it('labels a duration from the source in place', () => {
-    setBotTextSource(stubTextSource('demoDuration5'));
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('demoDuration5')));
     expect(DEMO_DURATION_LABELS[5]).toBe(stubText('demoDuration5'));
   });
 
   it('reads the profile from the source in place', () => {
-    setBotTextSource(stubTextSource('profileDescription', 'profileShortDescription'));
+    setBotTextSources(
+      botTextSourcesWith(
+        BotLanguage.Ru,
+        stubTextSource('profileDescription', 'profileShortDescription'),
+      ),
+    );
     expect(PROFILE).toEqual({
       description: stubText('profileDescription'),
       shortDescription: stubText('profileShortDescription'),
@@ -1888,6 +1900,35 @@ describe('the session, Stars and card texts in English (#633)', () => {
         call: EN.sessionPromoCall,
       });
       expect(sessionPromoWhen(Date.UTC(2026, 9, 12, 18, 32) / 1000)).toBe('12.10.2026 21:32 MSK');
+    });
+  });
+});
+
+// #634: English over its own defaults with its own overrides, read where it is used
+describe('the overrides of each language', () => {
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
+
+  it('T-L1 shows an English override in English and leaves Russian on its own source', () => {
+    const russian = runWithLanguage(BotLanguage.Ru, () => TEXTS.helpAbout.value);
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.En, {
+        sourceOf: (key) =>
+          key === 'helpAbout' || key === 'startCommand'
+            ? stubText(key)
+            : BOT_TEXT_DEFAULT_SOURCES.en.sourceOf(key),
+      }),
+    );
+    expect(runWithLanguage(BotLanguage.En, () => TEXTS.helpAbout.value)).toBe(
+      stubText('helpAbout'),
+    );
+    expect(runWithLanguage(BotLanguage.Ru, () => TEXTS.helpAbout.value)).toBe(russian);
+    expect(runWithLanguage(BotLanguage.En, () => botCommands()[0])).toEqual({
+      command: 'start',
+      description: stubText('startCommand'),
+    });
+    expect(runWithLanguage(BotLanguage.En, () => botCommands()[1])).toEqual({
+      command: 'menu',
+      description: BOT_TEXT_SOURCES_EN.menuCommand,
     });
   });
 });

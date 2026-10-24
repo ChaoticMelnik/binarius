@@ -13,7 +13,7 @@ import { runBot } from './lifecycle';
 import { createSessionResumer } from './session-resume';
 import { createSessionTracker } from './session-tracker';
 import { createSignalWaiter } from './signal-wait';
-import { setBotTextSource } from './texts';
+import { setBotTextSources } from './texts';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
   INTENT_TRACK_DEADLINE_MS,
@@ -100,7 +100,7 @@ const botTexts = createBotTextRefresher({
   load: () => backend.readBotTexts(),
   intervalMs: BOT_TEXTS_REFRESH_MS,
   budgetMs: BACKEND_REQUEST_TIMEOUT_MS,
-  apply: setBotTextSource,
+  apply: setBotTextSources,
   logger,
   failureFields: backendErrorFields,
 });

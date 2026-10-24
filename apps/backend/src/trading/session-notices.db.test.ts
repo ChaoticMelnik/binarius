@@ -25,8 +25,9 @@ import {
   type PairsCatalogView,
   type TradingSessionSettings,
   SessionStakeStrategy,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
-import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until, botTextSourcesWith } from '@binarius/shared/testing';
 import { createH1Detector } from '@binarius/signal';
 import {
   claimSessionTradeNotice,
@@ -66,7 +67,7 @@ import {
   type CapturedApi,
 } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
-import { clientLabelsOf, clientTextsOf, setBotTextSource } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf, setBotTextSources } from '../auth/texts';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import {
   SESSION_NOTICE_CHAT_GAP_MS,
@@ -1067,11 +1068,11 @@ describe('a martingale cycle is one message (#551)', () => {
           ? `${PAD}\n${defaultBotTextSource.sourceOf(key)}`
           : defaultBotTextSource.sourceOf(key),
     };
-    afterEach(() => setBotTextSource(defaultBotTextSource));
+    afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
     it('splits a cycle only between blocks: no block lost, each message within the limit', async () => {
       expect(botTextMessageOverflows(source)).toEqual([]);
-      setBotTextSource(source);
+      setBotTextSources(botTextSourcesWith(BotLanguage.Ru, source));
       const target = await seedSession(MARTINGALE);
       const { notices, captured, logs } = sender();
       for (let step = 0; step < 12; step += 1) {

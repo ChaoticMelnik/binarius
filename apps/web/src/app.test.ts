@@ -6,9 +6,11 @@ import {
   ADMIN_USER_RECENT_LEDGER,
   AdminErrorCode,
   BOT_TEXT_CATALOG,
+  BotLanguage,
   BOT_TEXT_VARS,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
+  BOT_TEXT_SOURCES_EN,
   BotTextGroup,
   AuditAction,
   AuditEntityType,
@@ -38,6 +40,7 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import { buildWebApp } from './app';
+import { escapeHtml } from './html';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
 import {
@@ -297,8 +300,8 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
       calls.botTexts.push(token);
       return SAMPLE_BOT_TEXTS;
     },
-    botText: async (token, key) => {
-      calls.botText.push([token, key]);
+    botText: async (token, key, language) => {
+      calls.botText.push([token, key, language]);
       return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT };
     },
     previewBotText: async (token, key, request) => {
@@ -3212,7 +3215,11 @@ describe('the password page (#79)', () => {
 
 describe('the bot texts pages (#300)', () => {
   const withCookie = { [SESSION_COOKIE]: TOKEN };
-  const form = (version = '7', source = 'Привет') => ({ source, version });
+  const form = (version = '7', source = 'Привет', language = 'ru') => ({
+    language,
+    source,
+    version,
+  });
   const rebuild = async (backend: Partial<BackendClient>) => {
     await app.close();
     app = build(backend);
@@ -3245,8 +3252,12 @@ describe('the bot texts pages (#300)', () => {
     expect(body).toContain(TEXTS.botTextChanged(3, null));
     expect(body).toContain(TEXTS.botTextRejected('Пустой текст'));
     expect(body).not.toContain('Только чтение');
-    // #508: the overrides are Russian's; the page says so once
-    expect(body.split(TEXTS.botTextsLanguagesNote)).toHaveLength(2);
+    // #634: the Russian rows only, and a switch to the English ones
+    expect(body).not.toContain(TEXTS.botTextChanged(11, 'ada'));
+    expect(body).not.toContain('yyy');
+    expect(body).toMatch(
+      /Язык текстов:\s*<b>✅ русский<\/b>\s*·\s*<a href="\/admin\/bot-texts\?lang=en">английский<\/a>/,
+    );
     // #361: one hint and one «Опубликовать заново», right above the command descriptions
     const republish = '<form method="post" action="/admin/bot-texts/publish">';
     expect(body.split(republish)).toHaveLength(2);
@@ -3261,7 +3272,7 @@ describe('the bot texts pages (#300)', () => {
     expect(body).not.toContain('class="publish"');
     expect(body).toContain(TEXTS.botTextOrphansHeading);
     expect(body).toMatch(
-      /<form method="post" action="\/admin\/bot-texts\/zzz\/reset">\s*<input type="hidden" name="version" value="9" \/>/,
+      /<form method="post" action="\/admin\/bot-texts\/zzz\/reset">\s*<input type="hidden" name="language" value="ru" \/>\s*<input type="hidden" name="version" value="9" \/>/,
     );
     const removed = await get('/admin/bot-texts?notice=removed', withCookie);
     expect(removed.body).toContain(TEXTS.botTextsNotice.removed);
@@ -3297,7 +3308,7 @@ describe('the bot texts pages (#300)', () => {
     const response = await get('/admin/bot-texts/welcome?notice=saved', withCookie);
     const { body } = response;
     expect(response.statusCode).toBe(200);
-    expect(calls.botText).toEqual([[TOKEN, 'welcome']]);
+    expect(calls.botText).toEqual([[TOKEN, 'welcome', 'ru']]);
     expect(textareaOf(body)).toBe('\nПривет, &lt;b&gt;друг&lt;/b&gt;');
     expect(body).toContain(`maxlength="${BOT_TEXT_SOURCE_MAX}"`);
     expect(versionsOf(body)).toEqual(['7', '7']);
@@ -3313,7 +3324,13 @@ describe('the bot texts pages (#300)', () => {
     await rebuild({
       botText: async () => ({
         me: SAMPLE_ME,
-        text: { key: 'codeSent', override: null, rejection: null, fragments: [] },
+        text: {
+          language: BotLanguage.Ru,
+          key: 'codeSent',
+          override: null,
+          rejection: null,
+          fragments: [],
+        },
       }),
     });
     const fresh = await get('/admin/bot-texts/codeSent', withCookie);
@@ -3330,7 +3347,13 @@ describe('the bot texts pages (#300)', () => {
     await rebuild({
       botText: async () => ({
         me: SAMPLE_ME,
-        text: { key: 'connectButton', override: null, rejection: null, fragments: [] },
+        text: {
+          language: BotLanguage.Ru,
+          key: 'connectButton',
+          override: null,
+          rejection: null,
+          fragments: [],
+        },
       }),
     });
     const fragment = await get('/admin/bot-texts/connectButton', withCookie);
@@ -3342,9 +3365,12 @@ describe('the bot texts pages (#300)', () => {
   it('W3 edits a commands or a profile key with «Опубликовать заново», and 404s a key outside the catalog', async () => {
     const editorOf = async (key: string) => {
       await rebuild({
-        botText: async (token, asked) => {
-          calls.botText.push([token, asked]);
-          return { me: SAMPLE_ME, text: { key, override: null, rejection: null, fragments: [] } };
+        botText: async (token, asked, language) => {
+          calls.botText.push([token, asked, language]);
+          return {
+            me: SAMPLE_ME,
+            text: { language, key, override: null, rejection: null, fragments: [] },
+          };
         },
       });
       return (await get(`/admin/bot-texts/${key}`, withCookie)).body;
@@ -3385,7 +3411,7 @@ describe('the bot texts pages (#300)', () => {
     const missing = await get('/admin/bot-texts/zzz', withCookie);
     expect(missing.statusCode).toBe(404);
     expect(missing.body).toContain(TEXTS.botTextNotFoundTitle);
-    expect(calls.botText).toEqual(Array.from({ length: 6 }, () => [TOKEN, 'welcome']));
+    expect(calls.botText).toEqual(Array.from({ length: 6 }, () => [TOKEN, 'welcome', 'ru']));
   });
 
   it('W4 previews: CRLF normalized, the bubble converted, the draft kept, no inline style or script', async () => {
@@ -3395,7 +3421,7 @@ describe('the bot texts pages (#300)', () => {
       withCookie,
     );
     expect(response.statusCode).toBe(200);
-    expect(calls.previewBotText).toEqual([[TOKEN, 'welcome', { source: 'a\nb' }]]);
+    expect(calls.previewBotText).toEqual([[TOKEN, 'welcome', { language: 'ru', source: 'a\nb' }]]);
     expect(response.body).toContain('<div class="tg-bubble"><b>Привет</b> тут</div>');
     expect(response.body).not.toContain('javascript:');
     expect(textareaOf(response.body)).toBe('\na\nb');
@@ -3479,7 +3505,7 @@ describe('the bot texts pages (#300)', () => {
       '/admin/bot-texts/welcome?notice=saved',
     ]);
     expect(calls.saveBotText).toEqual([
-      [TOKEN, 'welcome', { source: 'Привет', expectedVersion: 7 }],
+      [TOKEN, 'welcome', { language: 'ru', source: 'Привет', expectedVersion: 7 }],
     ]);
 
     for (const [published, publish] of [
@@ -3533,12 +3559,18 @@ describe('the bot texts pages (#300)', () => {
   });
 
   it('W6 resets: 303 with the notice, the current text on a conflict, an orphan back to the list', async () => {
-    const reset = await post('/admin/bot-texts/welcome/reset', { version: '7' }, withCookie);
+    const reset = await post(
+      '/admin/bot-texts/welcome/reset',
+      { language: 'ru', version: '7' },
+      withCookie,
+    );
     expect([reset.statusCode, reset.headers.location]).toEqual([
       303,
       '/admin/bot-texts/welcome?notice=reset',
     ]);
-    expect(calls.resetBotText).toEqual([[TOKEN, 'welcome', { expectedVersion: 7 }]]);
+    expect(calls.resetBotText).toEqual([
+      [TOKEN, 'welcome', { language: 'ru', expectedVersion: 7 }],
+    ]);
 
     await rebuild({
       resetBotText: async () =>
@@ -3549,7 +3581,7 @@ describe('the bot texts pages (#300)', () => {
     });
     const published = await post(
       '/admin/bot-texts/profileShortDescription/reset',
-      { version: '7' },
+      { language: 'ru', version: '7' },
       withCookie,
     );
     expect([published.statusCode, published.headers.location]).toEqual([
@@ -3561,7 +3593,11 @@ describe('the bot texts pages (#300)', () => {
       resetBotText: async () =>
         answering({ outcome: 'version_conflict', currentVersion: 12, currentSource: 'Чужой' }),
     });
-    const conflict = await post('/admin/bot-texts/welcome/reset', { version: '7' }, withCookie);
+    const conflict = await post(
+      '/admin/bot-texts/welcome/reset',
+      { language: 'ru', version: '7' },
+      withCookie,
+    );
     expect(conflict.statusCode).toBe(409);
     expect(conflict.body).toContain('<pre>Чужой</pre>');
 
@@ -3583,16 +3619,24 @@ describe('the bot texts pages (#300)', () => {
           } as never;
         },
       });
-      const orphan = await post('/admin/bot-texts/zzz/reset', { version: '9' }, withCookie);
+      const orphan = await post(
+        '/admin/bot-texts/zzz/reset',
+        { language: 'ru', version: '9' },
+        withCookie,
+      );
       expect([orphan.statusCode, orphan.headers.location]).toEqual([
         303,
         `/admin/bot-texts?notice=${notice}`,
       ]);
-      expect(calls.resetBotText).toEqual([['zzz', { expectedVersion: 9 }]]);
+      expect(calls.resetBotText).toEqual([['zzz', { language: 'ru', expectedVersion: 9 }]]);
     }
 
     await rebuild({});
-    const bad = await post('/admin/bot-texts/not-a-key/reset', { version: '9' }, withCookie);
+    const bad = await post(
+      '/admin/bot-texts/not-a-key/reset',
+      { language: 'ru', version: '9' },
+      withCookie,
+    );
     expect(bad.statusCode).toBe(404);
     expect(calls.resetBotText).toEqual([]);
   });
@@ -3607,9 +3651,13 @@ describe('the bot texts pages (#300)', () => {
         cookies: withCookie,
       });
     for (const payload of [
-      'source=a&version=abc',
-      'source=a&source=b&version=1',
+      'language=ru&source=a&version=abc',
+      'language=ru&source=a&source=b&version=1',
+      // #634: a form without its language, or with one the bot has not
+      'source=a&version=1',
+      'language=de&source=a&version=1',
       new URLSearchParams({
+        language: 'ru',
         source: '😀'.repeat(BOT_TEXT_SOURCE_MAX + 1),
         version: '1',
       }).toString(),
@@ -3617,7 +3665,10 @@ describe('the bot texts pages (#300)', () => {
       const response = await raw('/admin/bot-texts/welcome/save', payload);
       expect([response.statusCode, response.body.includes(TEXTS.badRequest)]).toEqual([400, true]);
     }
-    expect((await raw('/admin/bot-texts/welcome/reset', 'version=-1')).statusCode).toBe(400);
+    expect((await raw('/admin/bot-texts/welcome/reset', 'language=ru&version=-1')).statusCode).toBe(
+      400,
+    );
+    expect((await raw('/admin/bot-texts/welcome/reset', 'version=1')).statusCode).toBe(400);
     expect(calls.saveBotText).toEqual([]);
     expect(calls.resetBotText).toEqual([]);
   });
@@ -3656,12 +3707,16 @@ describe('the bot texts pages (#300)', () => {
   });
 
   it('W10 republishes from the list and from an editor, back to the same page with the result', async () => {
-    const fromList = await post('/admin/bot-texts/publish', {}, withCookie);
+    const fromList = await post('/admin/bot-texts/publish', { language: 'ru' }, withCookie);
     expect([fromList.statusCode, fromList.headers.location]).toEqual([
       303,
       `/admin/bot-texts?notice=republished&publish=${SAMPLE_PUBLISHED_QUERY}`,
     ]);
-    const fromEditor = await post('/admin/bot-texts/profileDescription/publish', {}, withCookie);
+    const fromEditor = await post(
+      '/admin/bot-texts/profileDescription/publish',
+      { language: 'ru' },
+      withCookie,
+    );
     expect([fromEditor.statusCode, fromEditor.headers.location]).toEqual([
       303,
       `/admin/bot-texts/profileDescription?notice=republished&publish=${SAMPLE_PUBLISHED_QUERY}`,
@@ -3679,7 +3734,7 @@ describe('the bot texts pages (#300)', () => {
 
     for (const failure of [new BackendError(BackendErrorCode.Unreachable), httpFailure(500)]) {
       await rebuild({ publishBotProfile: async () => Promise.reject(failure) });
-      const unknown = await post('/admin/bot-texts/publish', {}, withCookie);
+      const unknown = await post('/admin/bot-texts/publish', { language: 'ru' }, withCookie);
       expect(unknown.statusCode).toBe(500);
       expect(unknown.body).toContain(TEXTS.botProfileOutcomeUnknown);
     }
@@ -3689,8 +3744,91 @@ describe('the bot texts pages (#300)', () => {
       publishBotProfile: async () =>
         Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
     });
-    const gone = await post('/admin/bot-texts/publish', {}, withCookie);
+    const gone = await post('/admin/bot-texts/publish', { language: 'ru' }, withCookie);
     expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+  });
+
+  // #634: the English texts behind ?lang=en, the Russian URLs as they were
+  it('W-L1 lists, edits and saves the English texts, and keeps the language through each step', async () => {
+    const list = (await get('/admin/bot-texts?lang=en', withCookie)).body;
+    expect(list).toContain(TEXTS.botTextChanged(11, 'ada'));
+    expect(list).not.toContain(TEXTS.botTextChanged(7, 'ada'));
+    expect(list).toContain('<a href="/admin/bot-texts/welcome?lang=en">welcome</a>');
+    expect(list).toMatch(
+      /Язык текстов:\s*<a href="\/admin\/bot-texts">русский<\/a>\s*·\s*<b>✅ английский<\/b>/,
+    );
+    expect(list).toMatch(
+      /<form method="post" action="\/admin\/bot-texts\/yyy\/reset">\s*<input type="hidden" name="language" value="en" \/>/,
+    );
+    expect(list).not.toContain('zzz');
+
+    await rebuild({
+      botText: async (token, key, language) => {
+        calls.botText.push([token, key, language]);
+        return {
+          me: SAMPLE_ME,
+          text: {
+            language,
+            key,
+            override: null,
+            rejection: null,
+            fragments: [
+              {
+                placeholder: 'connectButton',
+                key: 'connectButton',
+                source: BOT_TEXT_SOURCES_EN.connectButton,
+                overridden: false,
+              },
+            ],
+          },
+        };
+      },
+    });
+    const editor = (await get('/admin/bot-texts/welcome?lang=en', withCookie)).body;
+    expect(calls.botText).toEqual([[TOKEN, 'welcome', 'en']]);
+    expect(textareaOf(editor)).toBe(`\n${escapeHtml(BOT_TEXT_SOURCES_EN.welcome)}`);
+    expect(editor.split('<input type="hidden" name="language" value="en" />')).toHaveLength(2);
+    expect(editor).toContain('<a href="/admin/bot-texts/connectButton?lang=en">connectButton</a>');
+    expect(editor).toContain('action="/admin/bot-texts/welcome/save"');
+
+    const saved = await post('/admin/bot-texts/welcome/save', form('0', 'Hello', 'en'), withCookie);
+    expect([saved.statusCode, saved.headers.location]).toEqual([
+      303,
+      '/admin/bot-texts/welcome?lang=en&notice=saved',
+    ]);
+    expect(calls.saveBotText).toEqual([
+      [TOKEN, 'welcome', { language: 'en', source: 'Hello', expectedVersion: 0 }],
+    ]);
+
+    // `lang=ru` is the Russian page, as no `lang` is
+    const ruList = await get('/admin/bot-texts?lang=ru', withCookie);
+    expect(ruList.statusCode).toBe(200);
+    expect(ruList.body).toContain(TEXTS.botTextChanged(7, 'ada'));
+    expect(ruList.body).not.toContain(TEXTS.botTextChanged(11, 'ada'));
+    const ruEditor = await get('/admin/bot-texts/welcome?lang=ru', withCookie);
+    expect(ruEditor.statusCode).toBe(200);
+    expect(ruEditor.body).toContain('<input type="hidden" name="language" value="ru" />');
+    expect(calls.botText.at(-1)).toEqual([TOKEN, 'welcome', 'ru']);
+    calls.botText.length = 1;
+
+    // «Опубликовать заново» from the list returns to the list of its language; no language is a 400
+    const republished = await post('/admin/bot-texts/publish', { language: 'en' }, withCookie);
+    expect([republished.statusCode, republished.headers.location]).toEqual([
+      303,
+      `/admin/bot-texts?lang=en&notice=republished&publish=${SAMPLE_PUBLISHED_QUERY}`,
+    ]);
+    const noLanguage = await post('/admin/bot-texts/publish', {}, withCookie);
+    expect([noLanguage.statusCode, noLanguage.body.includes(TEXTS.badRequest)]).toEqual([
+      400,
+      true,
+    ]);
+    expect(calls.publishBotProfile).toEqual([TOKEN]);
+
+    for (const url of ['/admin/bot-texts?lang=de', '/admin/bot-texts/welcome?lang=de']) {
+      const refused = await get(url, withCookie);
+      expect([refused.statusCode, refused.body.includes(TEXTS.badRequest)]).toEqual([400, true]);
+    }
+    expect(calls.botText).toHaveLength(1);
   });
 });
 

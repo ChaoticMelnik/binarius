@@ -16,7 +16,10 @@ import {
   demoAnalysisCallbackData,
   MENU_CALLBACK_DATA,
   StakeRefusal,
+  BOT_TEXT_DEFAULT_SOURCES,
+  BotLanguage,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
@@ -70,7 +73,7 @@ import {
 } from './testing';
 import {
   LABELS,
-  setBotTextSource,
+  setBotTextSources,
   settingsText,
   stakePickerText,
   TEXTS,
@@ -530,10 +533,12 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   // Plan Update 4 (Major 2): `{stake}` of the real launch is the real stake in force (here the
   // minimum), not the saved demo stake
   it('gives an overridden launch header the minimum as {stake} in real mode', async () => {
-    setBotTextSource({
-      sourceOf: (key) =>
-        key === 'launchHeader' ? '🎯 {subject} {stake}' : defaultBotTextSource.sourceOf(key),
-    });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) =>
+          key === 'launchHeader' ? '🎯 {subject} {stake}' : defaultBotTextSource.sourceOf(key),
+      }),
+    );
     try {
       const { press, calls } = setup({
         readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
@@ -543,7 +548,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
         `🎯 ${pairLabel(PAIR_EURUSD)} · ⏱ 5 с $1.00`,
       );
     } finally {
-      setBotTextSource(defaultBotTextSource);
+      setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
     }
   });
 

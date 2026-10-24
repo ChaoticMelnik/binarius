@@ -11,13 +11,15 @@ import {
   BOT_TEXT_SOURCES_EN,
   callbackButton,
   confirmButtonLabel,
+  createBotTexts,
   defaultBotTextSource,
   keyboardOf,
   formatUsd,
   telegramHtml,
   type DecimalString,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
-import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
+import { UNIT_WAIT_CEILING_MS, botTextSourcesWith } from '@binarius/shared/testing';
 import {
   captureApi,
   inlineButtons,
@@ -38,7 +40,7 @@ import {
   sessionCycleStopKeyboard,
   sessionWaitingMessage,
 } from '../trading/session-notice-messages';
-import { clientLabelsOf, clientTextsOf, setBotTextSource } from './texts';
+import { clientLabelsOf, clientTextsOf, setBotTextSources } from './texts';
 
 // the Russian texts, the language of every user these tests make (#633)
 const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
@@ -65,15 +67,32 @@ async function listen(server: Server): Promise<string> {
 // The texts are the catalog's (bot-texts.test.ts checks every default); what is checked here is
 // that a push reads the source when it is built, so an override source reaches it.
 describe('the text source', () => {
-  afterEach(() => setBotTextSource(defaultBotTextSource));
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
 
   it('builds a push from the source in place at the moment it is built', () => {
-    setBotTextSource({
-      sourceOf: (key) =>
-        key === 'blocked' ? '<b>ЗАГЛУШКА blocked</b>' : defaultBotTextSource.sourceOf(key),
-    });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) =>
+          key === 'blocked' ? '<b>ЗАГЛУШКА blocked</b>' : defaultBotTextSource.sourceOf(key),
+      }),
+    );
     expect(linkPushMessage({ kind: LinkPushKind.Blocked }, BotLanguage.Ru).text.value).toBe(
       '<b>ЗАГЛУШКА blocked</b>',
+    );
+  });
+  // #634: English reads its own overrides, and Russian does not see them
+  it('P-L1 builds an English push from the English source in place', () => {
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.En, {
+        sourceOf: (key) =>
+          key === 'blocked' ? '<b>STUB blocked</b>' : BOT_TEXT_DEFAULT_SOURCES.en.sourceOf(key),
+      }),
+    );
+    expect(linkPushMessage({ kind: LinkPushKind.Blocked }, BotLanguage.En).text.value).toBe(
+      '<b>STUB blocked</b>',
+    );
+    expect(linkPushMessage({ kind: LinkPushKind.Blocked }, BotLanguage.Ru).text.value).toBe(
+      createBotTexts(defaultBotTextSource).html.blocked.value,
     );
   });
 });
@@ -187,17 +206,19 @@ describe('the link push message', () => {
 
   // #358 P1: the address an overridden text holds, or its stand-in
   it('puts the address into an overridden linkedActive, escaped, or says it is unknown', async () => {
-    setBotTextSource({
-      sourceOf: (key) =>
-        key === 'linkedActive' ? '✅ {email} подключён' : defaultBotTextSource.sourceOf(key),
-    });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) =>
+          key === 'linkedActive' ? '✅ {email} подключён' : defaultBotTextSource.sourceOf(key),
+      }),
+    );
     try {
       const known = await sent({ kind: LinkPushKind.Active, email: 'a&b@example.test' });
       expect(pushedText(known)).toBe('✅ a&amp;b@example.test подключён');
       const unknown = await sent({ kind: LinkPushKind.Active, email: null });
       expect(pushedText(unknown)).toBe('✅ адрес неизвестен подключён');
     } finally {
-      setBotTextSource(defaultBotTextSource);
+      setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
     }
   });
 

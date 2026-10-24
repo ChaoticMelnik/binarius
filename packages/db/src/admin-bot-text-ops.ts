@@ -1,10 +1,11 @@
 import { eq } from 'drizzle-orm';
 import {
   BOT_TEXT_CATALOG,
-  BOT_TEXT_OVERRIDES_MAX,
+  BOT_TEXT_OVERRIDE_ROWS_MAX,
   adminBotTextReason,
   type AdminBotTextOverrideView,
   type AdminBotTextView,
+  type BotLanguage,
   type BotTextKey,
   type BotTextRejection,
   type ResolvedBotTexts,
@@ -17,6 +18,7 @@ import type { Tx } from './trade-intent-ops';
 // read, with who wrote them. Locks nothing; the writes go through applyBotTextSave/Reset.
 
 export interface AdminBotTextOverrideRow {
+  language: BotLanguage;
   key: string;
   source: string;
   version: number;
@@ -25,10 +27,11 @@ export interface AdminBotTextOverrideRow {
   updatedByLogin: string | null;
 }
 
-// the same rows as listBotTextOverrides: the first BOT_TEXT_OVERRIDES_MAX by key
+// the same rows as listBotTextOverrides: the first BOT_TEXT_OVERRIDE_ROWS_MAX by (language, key)
 export const listBotTextOverridesForAdmin = (tx: Tx): Promise<AdminBotTextOverrideRow[]> =>
   tx
     .select({
+      language: botTextOverrides.language,
       key: botTextOverrides.key,
       source: botTextOverrides.source,
       version: botTextOverrides.version,
@@ -37,8 +40,8 @@ export const listBotTextOverridesForAdmin = (tx: Tx): Promise<AdminBotTextOverri
     })
     .from(botTextOverrides)
     .leftJoin(staff, eq(staff.id, botTextOverrides.updatedByStaffId))
-    .orderBy(botTextOverrides.key)
-    .limit(BOT_TEXT_OVERRIDES_MAX);
+    .orderBy(botTextOverrides.language, botTextOverrides.key)
+    .limit(BOT_TEXT_OVERRIDE_ROWS_MAX);
 
 const reasonOf = (rejection: BotTextRejection | undefined, key: string): string | null =>
   rejection === undefined ? null : adminBotTextReason(rejection, key);
@@ -47,6 +50,7 @@ export const toAdminBotTextOverrideView = (
   row: AdminBotTextOverrideRow,
   rejection: BotTextRejection | undefined,
 ): AdminBotTextOverrideView => ({
+  language: row.language,
   key: row.key,
   version: row.version,
   updatedAt: row.updatedAt.toISOString(),
@@ -54,13 +58,17 @@ export const toAdminBotTextOverrideView = (
   rejection: reasonOf(rejection, row.key),
 });
 
+// The key in the language `resolved` was resolved for: its row, its rejection and its fragments'
+// texts are that language's.
 export function toAdminBotTextView(
   key: BotTextKey,
   rows: readonly AdminBotTextOverrideRow[],
   resolved: ResolvedBotTexts,
 ): AdminBotTextView {
-  const row = rows.find((candidate) => candidate.key === key);
+  const { language } = resolved;
+  const row = rows.find((candidate) => candidate.language === language && candidate.key === key);
   return {
+    language,
     key,
     override:
       row === undefined

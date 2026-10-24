@@ -2,13 +2,13 @@ import { EventEmitter } from 'node:events';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { BOT_TEXT_SOURCES_EN, BotLanguage, defaultBotTextSource } from '@binarius/shared';
+import { BOT_TEXT_DEFAULT_SOURCES, BOT_TEXT_SOURCES_EN, BotLanguage } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import { runWithLanguage } from './language';
-import { PROFILE, setBotTextSource } from './texts';
+import { PROFILE, setBotTextSources } from './texts';
 import { STARTUP_CALLS } from './timing';
 import {
   BOT_INFO,
@@ -224,7 +224,14 @@ describe('runBot', () => {
       expect(fake.api.setMyCommands).not.toHaveBeenCalled();
       expect(fake.api.setMyDescription).not.toHaveBeenCalled();
 
-      setBotTextSource(stubTextSource('startCommand', 'profileDescription'));
+      // #634: each language with overrides of its own
+      setBotTextSources({
+        [BotLanguage.Ru]: stubTextSource('startCommand', 'profileDescription'),
+        [BotLanguage.En]: {
+          sourceOf: (key) =>
+            key === 'startCommand' ? 'Go' : BOT_TEXT_DEFAULT_SOURCES.en.sourceOf(key),
+        },
+      });
       held.settle();
       await onStart;
       expect(fake.api.setMyCommands.mock.calls[0]?.[0][0]).toEqual({
@@ -235,13 +242,17 @@ describe('runBot', () => {
         command: 'menu',
         description: 'Главное меню',
       });
-      // the overrides are Russian's only (#508): the English description is the catalog's
+      // the English call carries the English overrides of the first load (#634)
+      expect(fake.api.setMyCommands.mock.calls[1]?.[0][0]).toEqual({
+        command: 'start',
+        description: 'Go',
+      });
       expect(fake.api.setMyDescription.mock.calls).toEqual([
         [stubText('profileDescription'), { language_code: 'ru' }],
         [BOT_TEXT_SOURCES_EN.profileDescription, {}],
       ]);
     } finally {
-      setBotTextSource(defaultBotTextSource);
+      setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
       fake.resolveStart();
     }
   });

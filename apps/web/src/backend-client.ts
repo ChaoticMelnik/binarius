@@ -7,6 +7,7 @@ import {
   safeParseAdminBotTextsResponse,
   type AdminBotProfilePublishResponse,
   type AdminBotTextPreviewRequest,
+  type BotLanguage,
   type AdminBotTextPreviewResponse,
   type AdminBotTextResetRequest,
   type AdminBotTextResetResponse,
@@ -104,9 +105,10 @@ import {
 
 // bounds one backend response body (Architecture Rule 26)
 export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
-// the five "Тексты бота" reads and writes under /admin/bot-texts (publish excluded): a version
-// conflict carries 16 fragments and the current source at the schema bound (#234)
-export const MAX_BOT_TEXTS_BODY_BYTES = 8 * 1024 * 1024;
+// the five "Тексты бота" reads and writes under /admin/bot-texts (publish excluded): the list
+// carries every row of both languages (BOT_TEXT_OVERRIDE_ROWS_MAX), a version conflict 16
+// fragments and the current source at the schema bound (#234, #634)
+export const MAX_BOT_TEXTS_BODY_BYTES = 16 * 1024 * 1024;
 
 export const BackendErrorCode = {
   /** the request never produced a response: network failure, timeout, or an aborted socket */
@@ -206,7 +208,7 @@ export interface BackendClient {
     request: AdminChangePasswordRequest,
   ): Promise<ChangePasswordResponse>;
   botTexts(token: string): Promise<AdminBotTextsResponse>;
-  botText(token: string, key: string): Promise<AdminBotTextResponse>;
+  botText(token: string, key: string, language: BotLanguage): Promise<AdminBotTextResponse>;
   previewBotText(
     token: string,
     key: string,
@@ -478,10 +480,13 @@ export function createBackendClient({
         await call('GET', 'admin/bot-texts', { session, maxBytes: MAX_BOT_TEXTS_BODY_BYTES }),
       );
     },
-    async botText(session, key) {
+    async botText(session, key, language) {
       return parsed(
         safeParseAdminBotTextResponse,
-        await call('GET', botTextPath(key), { session, maxBytes: MAX_BOT_TEXTS_BODY_BYTES }),
+        await call('GET', `${botTextPath(key)}?${new URLSearchParams({ language })}`, {
+          session,
+          maxBytes: MAX_BOT_TEXTS_BODY_BYTES,
+        }),
       );
     },
     async previewBotText(session, key, request) {

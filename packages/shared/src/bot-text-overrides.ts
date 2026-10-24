@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { BotLanguage, botLanguageSchema } from './bot-language';
 import { BotTextProblemCode, type BotTextProblem, type BotTextSource } from './bot-text-template';
 import {
   BOT_TEXT_MESSAGES,
@@ -13,18 +14,23 @@ import {
   type BotTextKey,
   type BotTextKeyOfGroup,
 } from './bot-texts';
+import { BOT_TEXT_DEFAULT_SOURCES } from './bot-texts-en';
 import { errorLogFields } from './logging';
 
 // Overrides of the client bot's texts (docs/bot-texts.md → Overrides): stored by @binarius/db,
 // read by the bot over GET /bot-texts and by the backend from the database, edited by the CLI and
-// the admin section (#300). One resolver decides which of them take effect, for the loaders and
-// the writer alike.
+// the admin section (#300). An override belongs to one language (#634); one resolver decides,
+// language by language over that language's defaults, which of them take effect, for the loaders
+// and the writer alike.
 
 // one source for the catalog's test, the wire schema and the table's CHECK
 export const BOT_TEXT_KEY_PATTERN = /^[a-z][a-zA-Z0-9]{0,63}$/;
 // UTF-16 units; the CHECK counts code points, never more, so what the writer takes the table takes
 export const BOT_TEXT_SOURCE_MAX = 16384;
+// per language; the wire and the readers cap the rows of all languages together
 export const BOT_TEXT_OVERRIDES_MAX = 1000;
+export const BOT_TEXT_OVERRIDE_ROWS_MAX =
+  BOT_TEXT_OVERRIDES_MAX * Object.values(BotLanguage).length;
 // how often the bot and the backend reload the overrides
 export const BOT_TEXTS_REFRESH_MS = 30_000;
 // what the CLI and the admin section promise: a refresh plus a load's budget (apps/bot timing.test)
@@ -65,6 +71,7 @@ export const isBotTextKey = (key: string): key is BotTextKey =>
 // A key outside this build's catalog passes: the bot and the backend can run different catalogs,
 // and the resolver ignores what it does not know.
 export const botTextOverrideSchema = z.strictObject({
+  language: botLanguageSchema,
   key: z.string().regex(BOT_TEXT_KEY_PATTERN),
   source: z.string().min(1).max(BOT_TEXT_SOURCE_MAX),
   version: z.int().positive(),
@@ -72,11 +79,12 @@ export const botTextOverrideSchema = z.strictObject({
 export type BotTextOverride = z.infer<typeof botTextOverrideSchema>;
 
 export const botTextOverridesResponseSchema = z.strictObject({
-  overrides: z.array(botTextOverrideSchema).max(BOT_TEXT_OVERRIDES_MAX),
+  overrides: z.array(botTextOverrideSchema).max(BOT_TEXT_OVERRIDE_ROWS_MAX),
 });
 export type BotTextOverridesResponse = z.infer<typeof botTextOverridesResponseSchema>;
 
 export interface BotTextOverrideRow {
+  language: BotLanguage;
   key: string;
   source: string;
   version?: number;
@@ -102,6 +110,7 @@ type Rejection =
 export type BotTextRejection = Rejection & { version?: number };
 
 export interface ResolvedBotTexts {
+  language: BotLanguage;
   source: BotTextSource<BotTextKey>;
   // the overrides in effect
   texts: ReadonlyMap<BotTextKey, string>;
@@ -116,15 +125,20 @@ const MESSAGE_KEYS = new Map(
   BOT_TEXT_MESSAGES.map((message) => [message, botTextMessageKeys(message)]),
 );
 
-const sourceWith = (texts: ReadonlyMap<BotTextKey, string>): BotTextSource<BotTextKey> => ({
-  sourceOf: (key) => texts.get(key) ?? BOT_TEXT_CATALOG[key].source,
+const sourceWith = (
+  defaults: BotTextSource<BotTextKey>,
+  texts: ReadonlyMap<BotTextKey, string>,
+): BotTextSource<BotTextKey> => ({
+  sourceOf: (key) => texts.get(key) ?? defaults.sourceOf(key),
 });
 
-// The first thing wrong with the accepted candidates, as the candidates it takes out.
+// The first thing wrong with the accepted candidates, as the candidates it takes out. The hosts,
+// fragments and message keys are the catalog's in every language; the texts are the language's.
 function firstFailure(
+  defaults: BotTextSource<BotTextKey>,
   texts: ReadonlyMap<BotTextKey, string>,
 ): [BotTextKey, Rejection][] | undefined {
-  const lookup = sourceWith(texts);
+  const lookup = sourceWith(defaults, texts);
   for (const [key, source] of texts) {
     const problems = botTextProblems(key, source, lookup);
     if (problems.length > 0) return [[key, { code: BotTextRejectionCode.Invalid, problems }]];
@@ -132,7 +146,7 @@ function firstFailure(
   // a fragment is checked against every host still on its default (#299, m3)
   for (const host of HOSTS) {
     if (texts.has(host)) continue;
-    const problems = botTextProblems(host, BOT_TEXT_CATALOG[host].source, lookup);
+    const problems = botTextProblems(host, defaults.sourceOf(host), lookup);
     const culprits = fragmentsOf(host).filter((key) => texts.has(key));
     if (problems.length > 0 && culprits.length > 0) {
       return culprits.map((key) => [
@@ -155,12 +169,19 @@ function firstFailure(
 }
 
 /**
- * Which of `rows` take effect. Each failing step only takes candidates out, and the defaults pass
- * every step, so the loop ends; on its last pass every accepted override is valid with the others,
- * every host on its default renders, and every assembled message fits.
+ * Which of `rows` of `language` take effect over that language's defaults; the other languages'
+ * rows are not looked at. Each failing step only takes candidates out, and the defaults pass every
+ * step, so the loop ends; on its last pass every accepted override is valid with the others, every
+ * host on its default renders, and every assembled message fits.
  */
-export function resolveBotTextOverrides(rows: readonly BotTextOverrideRow[]): ResolvedBotTexts {
-  const byKey = new Map(rows.map((row) => [row.key, row]));
+export function resolveBotTextOverridesOf(
+  language: BotLanguage,
+  rows: readonly BotTextOverrideRow[],
+): ResolvedBotTexts {
+  const defaults = BOT_TEXT_DEFAULT_SOURCES[language];
+  const byKey = new Map(
+    rows.filter((row) => row.language === language).map((row) => [row.key, row]),
+  );
   const rejected = new Map<string, BotTextRejection>();
   const reject = (key: string, rejection: Rejection) => {
     const version = byKey.get(key)?.version;
@@ -174,13 +195,29 @@ export function resolveBotTextOverrides(rows: readonly BotTextOverrideRow[]): Re
     const row = byKey.get(key);
     if (row !== undefined) texts.set(key, row.source);
   }
-  for (let failure = firstFailure(texts); failure !== undefined; failure = firstFailure(texts)) {
+  for (
+    let failure = firstFailure(defaults, texts);
+    failure !== undefined;
+    failure = firstFailure(defaults, texts)
+  ) {
     for (const [key, rejection] of failure) {
       texts.delete(key);
       reject(key, rejection);
     }
   }
-  return { source: sourceWith(texts), texts, rejected };
+  return { language, source: sourceWith(defaults, texts), texts, rejected };
+}
+
+/** Every language's set from one load of the rows. */
+export function resolveBotTextOverrides(
+  rows: readonly BotTextOverrideRow[],
+): Readonly<Record<BotLanguage, ResolvedBotTexts>> {
+  return Object.fromEntries(
+    Object.values(BotLanguage).map((language) => [
+      language,
+      resolveBotTextOverridesOf(language, rows),
+    ]),
+  ) as Record<BotLanguage, ResolvedBotTexts>;
 }
 
 export interface BotTextChangeProblem {
@@ -189,19 +226,21 @@ export interface BotTextChangeProblem {
 }
 
 /**
- * Why setting `key` to `next` (null: back to the default) cannot be saved: the key itself would be
- * rejected, or an override in effect now would stop being. An override rejected already does not
- * block a change of another key.
+ * Why setting `key` of `language` to `next` (null: back to the default) cannot be saved: the key
+ * itself would be rejected, or an override of that language in effect now would stop being. An
+ * override rejected already does not block a change of another key, and another language's set
+ * has its own defaults, so the change cannot touch it.
  */
 export function botTextChangeProblems(
+  language: BotLanguage,
   key: string,
   next: string | null,
   rows: readonly BotTextOverrideRow[],
 ): BotTextChangeProblem[] {
-  const before = resolveBotTextOverrides(rows);
-  const after = resolveBotTextOverrides([
-    ...rows.filter((row) => row.key !== key),
-    ...(next === null ? [] : [{ key, source: next }]),
+  const before = resolveBotTextOverridesOf(language, rows);
+  const after = resolveBotTextOverridesOf(language, [
+    ...rows.filter((row) => row.language !== language || row.key !== key),
+    ...(next === null ? [] : [{ language, key, source: next }]),
   ]);
   const problems: BotTextChangeProblem[] = [];
   const own = after.rejected.get(key);
@@ -272,7 +311,7 @@ export interface BotTextRefresherOptions {
   intervalMs: number;
   // a load that takes longer counts as failed
   budgetMs: number;
-  apply(source: BotTextSource<BotTextKey>): void;
+  apply(sources: Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>>): void;
   logger: { warn(fields: object, message: string): void };
   // more identity of a failure than errorLogFields gives, by the caller's error types
   failureFields?(error: unknown): object;
@@ -310,15 +349,19 @@ export function createBotTextRefresher(options: BotTextRefresherOptions): BotTex
   };
 
   // reported once per change of the set, not on every load
-  function report(rejected: ReadonlyMap<string, BotTextRejection>): void {
+  function report(resolved: Readonly<Record<BotLanguage, ResolvedBotTexts>>): void {
+    const all = Object.values(resolved).flatMap(({ language, rejected }) =>
+      [...rejected].map(([key, rejection]) => ({ language, key, rejection })),
+    );
     const signature = JSON.stringify(
-      [...rejected].map(([key, rejection]) => [key, rejection.code, rejection.version]),
+      all.map(({ language, key, rejection }) => [language, key, rejection.code, rejection.version]),
     );
     if (signature === reported) return;
     reported = signature;
-    for (const [key, rejection] of rejected) {
+    for (const { language, key, rejection } of all) {
       options.logger.warn(
         {
+          botTextLanguage: language,
           botTextKey: key,
           botTextVersion: rejection.version,
           rejection: rejection.code,
@@ -334,9 +377,9 @@ export function createBotTextRefresher(options: BotTextRefresherOptions): BotTex
 
   async function load(): Promise<void> {
     try {
-      const { source, rejected } = resolveBotTextOverrides(await withinBudget(options.load()));
-      options.apply(source);
-      report(rejected);
+      const resolved = resolveBotTextOverrides(await withinBudget(options.load()));
+      options.apply({ ru: resolved.ru.source, en: resolved.en.source });
+      report(resolved);
     } catch (error) {
       options.logger.warn(
         { ...errorLogFields(error), ...options.failureFields?.(error) },

@@ -480,20 +480,53 @@ export const SAMPLE_H1_MARKED: AdminH1MarkResponse = {
 };
 
 // The bot texts section (#300): welcome overridden by a staff member, its connectButton fragment by
-// the CLI, a commands key the loaders reject, an orphan row from a renamed key.
+// the CLI, a commands key the loaders reject, an orphan row from a renamed key; in English (#634),
+// welcome and an orphan of its own.
 export const SAMPLE_BOT_TEXTS: AdminBotTextsResponse = {
   me: SAMPLE_ME,
   overrides: [
-    { key: 'connectButton', version: 3, updatedAt: AT, updatedByLogin: null, rejection: null },
     {
+      language: BotLanguage.En,
+      key: 'welcome',
+      version: 11,
+      updatedAt: AT,
+      updatedByLogin: 'ada',
+      rejection: null,
+    },
+    {
+      language: BotLanguage.En,
+      key: 'yyy',
+      version: 12,
+      updatedAt: AT,
+      updatedByLogin: null,
+      rejection: 'Неизвестный ключ — игнорируется',
+    },
+    {
+      language: BotLanguage.Ru,
+      key: 'connectButton',
+      version: 3,
+      updatedAt: AT,
+      updatedByLogin: null,
+      rejection: null,
+    },
+    {
+      language: BotLanguage.Ru,
       key: 'startCommand',
       version: 4,
       updatedAt: AT,
       updatedByLogin: null,
       rejection: 'Пустой текст',
     },
-    { key: 'welcome', version: 7, updatedAt: AT, updatedByLogin: 'ada', rejection: null },
     {
+      language: BotLanguage.Ru,
+      key: 'welcome',
+      version: 7,
+      updatedAt: AT,
+      updatedByLogin: 'ada',
+      rejection: null,
+    },
+    {
+      language: BotLanguage.Ru,
       key: 'zzz',
       version: 9,
       updatedAt: AT,
@@ -521,6 +554,7 @@ export const SAMPLE_PUBLISHED_QUERY =
   'setMyCommands%3Aok%2CsetMyDescription%3AGrammyError%3A400%40en%2CsetMyShortDescription%3Aok';
 
 export const SAMPLE_BOT_TEXT: AdminBotTextView = {
+  language: BotLanguage.Ru,
   key: 'welcome',
   override: { source: 'Привет, <b>друг</b>', version: 7, updatedAt: AT, updatedByLogin: 'ada' },
   rejection: null,

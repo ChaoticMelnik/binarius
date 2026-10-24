@@ -3,12 +3,13 @@ import {
   BOT_TEXT_CATALOG,
   BotLanguage,
   decimalStringSchema,
-  defaultBotTextSource,
   MAX_SESSION_SUMMARY_TRADES,
   pairLabel,
   type BotTextKey,
   type SessionSummary,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import {
   renderSessionCard,
   SESSION_CARD_HEIGHT,
@@ -17,7 +18,7 @@ import {
   sessionCardSvg,
 } from './session-card';
 import { runWithLanguage } from './language';
-import { setBotTextSource } from './texts';
+import { setBotTextSources } from './texts';
 
 const d = (value: string) => decimalStringSchema.parse(value);
 const trade = (profit: string, openPrice = 1.1, closePrice = 1.2) => ({
@@ -54,7 +55,7 @@ const textsOf = (svg: string): string[] =>
 const LABEL = pairLabel({ symbol: 'EUR/USD' });
 
 afterEach(() => {
-  setBotTextSource(defaultBotTextSource);
+  setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
 });
 
 describe('sessionCardModel', () => {
@@ -169,7 +170,11 @@ describe('sessionCardSvg', () => {
       sessionCardTitle: '<b>&amp</b>',
       sessionCardLegendWin: '"x"',
     };
-    setBotTextSource({ sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source });
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) => overrides[key] ?? BOT_TEXT_CATALOG[key].source,
+      }),
+    );
     const svg = sessionCardSvg(
       sessionCardModel(MIXED, pairLabel({ symbol: `A<svg onload="x">&'` }), 42),
     );

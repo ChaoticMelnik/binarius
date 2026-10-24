@@ -1,9 +1,11 @@
 import {
   ServiceAccountNotWorkingReason,
   BOT_TEXT_CATALOG,
+  BOT_TEXT_DEFAULT_SOURCES,
   BOT_TEXT_VARS,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
+  BotLanguage,
   BotTextGroup,
   BotTextKind,
   botProfileMethodsOf,
@@ -1634,26 +1636,53 @@ export const BOT_TEXTS_PATH = '/admin/bot-texts';
 export type BotTextsNotice = keyof typeof TEXTS.botTextsNotice;
 export type BotTextNotice = keyof typeof TEXTS.botTextNotice;
 
+// Russian is the page without `lang`, so the URLs from before #634 stay the Russian pages.
 const withQuery = (
   path: string,
+  language: BotLanguage,
   notice: string | undefined,
   published: readonly AdminBotProfileMethodResult[] | undefined,
 ): string => {
-  if (notice === undefined) return path;
-  const query = new URLSearchParams({ notice });
-  if (published !== undefined) query.set('publish', encodePublishResults(published));
-  return `${path}?${query}`;
+  const query = new URLSearchParams();
+  if (language !== BotLanguage.Ru) query.set('lang', language);
+  if (notice !== undefined) query.set('notice', notice);
+  if (notice !== undefined && published !== undefined) {
+    query.set('publish', encodePublishResults(published));
+  }
+  const search = query.toString();
+  return search === '' ? path : `${path}?${search}`;
 };
 export const botTextsHref = (
+  language: BotLanguage,
   notice?: BotTextsNotice,
   published?: readonly AdminBotProfileMethodResult[],
-): string => withQuery(BOT_TEXTS_PATH, notice, published);
+): string => withQuery(BOT_TEXTS_PATH, language, notice, published);
 // the key is a catalog key or matches BOT_TEXT_KEY_PATTERN: [a-zA-Z0-9] only, nothing to encode
+const botTextPath = (key: string): string => `${BOT_TEXTS_PATH}/${key}`;
 export const botTextHref = (
+  language: BotLanguage,
   key: string,
   notice?: BotTextNotice,
   published?: readonly AdminBotProfileMethodResult[],
-): string => withQuery(`${BOT_TEXTS_PATH}/${key}`, notice, published);
+): string => withQuery(botTextPath(key), language, notice, published);
+
+// the language of a form's text, as a hidden field: the action URLs carry no query
+const languageField = (language: BotLanguage): SafeHtml =>
+  html`<input type="hidden" name="language" value="${language}" />`;
+
+// both languages, the one shown without a link
+const languageSwitch = (language: BotLanguage, hrefOf: (other: BotLanguage) => string) =>
+  html`<p class="hint">
+    ${TEXTS.botTextLanguage}
+    ${Object.values(BotLanguage).map(
+      (other, index) =>
+        html`${index === 0 ? '' : ' · '}${
+          other === language
+            ? html`<b>✅ ${TEXTS.botLanguage[other]}</b>`
+            : html`<a href="${hrefOf(other)}">${TEXTS.botLanguage[other]}</a>`
+        }`,
+    )}
+  </p>`;
 
 const publishesProfile = (key: BotTextKey): boolean => botProfileMethodsOf(key).length > 0;
 
@@ -1685,8 +1714,9 @@ const publishBlock = (published: readonly AdminBotProfileMethodResult[] | undefi
             : ''
         }`;
 
-const republishForm = (action: string): SafeHtml =>
+const republishForm = (action: string, language: BotLanguage): SafeHtml =>
   html`<form method="post" action="${action}">
+    ${languageField(language)}
     <button type="submit">${TEXTS.botProfileRepublish}</button>
   </form>`;
 
@@ -1710,27 +1740,32 @@ const orphanRow = (row: AdminBotTextOverrideView): SafeHtml =>
     <td>${when(row.updatedAt)}</td>
     <td>${row.updatedByLogin ?? 'CLI'}</td>
     <td>
-      <form method="post" action="${BOT_TEXTS_PATH}/${row.key}/reset">
+      <form method="post" action="${botTextPath(row.key)}/reset">
+        ${languageField(row.language)}
         <input type="hidden" name="version" value="${row.version}" />
         <button type="submit">${TEXTS.botTextDelete}</button>
       </form>
     </td>
   </tr>`;
 
+// the state of `language`'s texts; the other language's rows are not shown
 export const botTextsPage = (
   overrides: readonly AdminBotTextOverrideView[],
   {
+    language,
     login,
     notice: shown,
     published,
   }: {
+    language: BotLanguage;
     login: string;
     notice?: BotTextsNotice;
     published?: readonly AdminBotProfileMethodResult[];
   },
 ): SafeHtml => {
-  const byKey = new Map(overrides.map((row) => [row.key, row]));
-  const orphans = overrides.filter((row) => !Object.hasOwn(BOT_TEXT_CATALOG, row.key));
+  const rows = overrides.filter((row) => row.language === language);
+  const byKey = new Map(rows.map((row) => [row.key, row]));
+  const orphans = rows.filter((row) => !Object.hasOwn(BOT_TEXT_CATALOG, row.key));
   // the hint and the button once, above the first group whose texts are published
   const firstPublished = Object.values(BotTextGroup).find((group) =>
     botTextKeysOf(group).some(publishesProfile),
@@ -1740,7 +1775,7 @@ export const botTextsPage = (
     active: 'botTexts',
     login,
     body: html`<h1>${TEXTS.botTextsHeading}</h1>
-      <p class="hint">${TEXTS.botTextsLanguagesNote}</p>
+      ${languageSwitch(language, (other) => botTextsHref(other))}
       ${notice(shown === undefined ? undefined : TEXTS.botTextsNotice[shown])}
       ${publishBlock(published)}
       ${Object.values(BotTextGroup).map(
@@ -1748,7 +1783,7 @@ export const botTextsPage = (
           html`${
               group === firstPublished
                 ? html`<p class="hint">${TEXTS.botProfileHint}</p>
-                    ${republishForm(`${BOT_TEXTS_PATH}/publish`)}`
+                    ${republishForm(`${BOT_TEXTS_PATH}/publish`, language)}`
                 : ''
             }
             <h2>${BOT_TEXT_GROUP_TITLES[group]}</h2>
@@ -1764,7 +1799,7 @@ export const botTextsPage = (
                 ${botTextKeysOf(group).map((key) => {
                   const row = byKey.get(key);
                   return html`<tr>
-                    <td><a href="${botTextHref(key)}">${key}</a></td>
+                    <td><a href="${botTextHref(language, key)}">${key}</a></td>
                     <td>${BOT_TEXT_CATALOG[key].description}</td>
                     <td>
                       ${row === undefined ? TEXTS.botTextDefault : changedState(row)}
@@ -1820,8 +1855,8 @@ export const placeholderHints = (text: AdminBotTextView): SafeHtml => {
       (fragment) =>
         html`<li>
           ${`{${fragment.placeholder}}`} —
-          <a href="${botTextHref(fragment.key)}">${fragment.key}</a>: ${code(fragment.source)}
-          ${fragment.overridden ? TEXTS.botTextFragmentChanged : ''}
+          <a href="${botTextHref(text.language, fragment.key)}">${fragment.key}</a>:
+          ${code(fragment.source)} ${fragment.overridden ? TEXTS.botTextFragmentChanged : ''}
         </li>`,
     ),
   ];
@@ -1839,7 +1874,7 @@ export const placeholderHints = (text: AdminBotTextView): SafeHtml => {
         ? ''
         : html`<p class="hint">
             ${TEXTS.botTextUsedIn}
-            ${hosts.map((host, index) => html`${index === 0 ? '' : ', '}<a href="${botTextHref(host)}">${host}</a>`)}
+            ${hosts.map((host, index) => html`${index === 0 ? '' : ', '}<a href="${botTextHref(text.language, host)}">${host}</a>`)}
           </p>`
     }`;
 };
@@ -1872,19 +1907,21 @@ export interface BotTextPageOptions {
 export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions): SafeHtml => {
   const key = text.key as BotTextKey;
   const entry = BOT_TEXT_CATALOG[key];
-  const { override } = text;
+  const { language, override } = text;
+  const defaultSource = BOT_TEXT_DEFAULT_SOURCES[language].sourceOf(key);
   const publishes = publishesProfile(key);
   // A page after a POST belongs to the editing session opened on the submitted version; the
   // fresher one the backend read for it would void the optimistic check (#373 M1). Only the 409
   // page moves to the current version, on purpose.
   const version = options.conflict?.currentVersion ?? options.version ?? override?.version ?? 0;
-  const value = options.draft ?? override?.source ?? entry.source;
+  const value = options.draft ?? override?.source ?? defaultSource;
   return adminShell({
     title: `${TEXTS.botTextsTitle}: ${key}`,
     active: 'botTexts',
     login: options.login,
     body: html`<h1>${key}</h1>
       <p class="hint">${BOT_TEXT_GROUP_TITLES[entry.group]} — ${entry.description}</p>
+      ${languageSwitch(language, (other) => botTextHref(other, key))}
       <p>${override === null ? TEXTS.botTextDefault : changedState(override)}</p>
       ${rejected(text.rejection)}
       ${notice(options.notice === undefined ? undefined : TEXTS.botTextNotice[options.notice])}
@@ -1920,20 +1957,21 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
             </p>`
           : ''
       }
-      <form class="editor" method="post" action="${botTextHref(key)}/save">
+      <form class="editor" method="post" action="${botTextPath(key)}/save">
+        ${languageField(language)}
         <label for="source">${TEXTS.botTextSourceField}</label>
         <textarea id="source" name="source" maxlength="${BOT_TEXT_SOURCE_MAX}" rows="12">
 ${value}</textarea>
         <input type="hidden" name="version" value="${version}" />
         <div class="buttons">
-          <button type="submit" formaction="${botTextHref(key)}/preview">
+          <button type="submit" formaction="${botTextPath(key)}/preview">
             ${TEXTS.botTextPreviewSubmit}
           </button>
           <button type="submit">${TEXTS.botTextSaveSubmit}</button>
         </div>
       </form>
       ${
-        override !== null && override.source === entry.source
+        override !== null && override.source === defaultSource
           ? html`<p class="hint">${TEXTS.botTextSameAsDefault}</p>`
           : ''
       }
@@ -1943,13 +1981,14 @@ ${value}</textarea>
           ? ''
           : html`<details>
                 <summary>${TEXTS.botTextDefaultSource}</summary>
-                <pre>${entry.source}</pre>
+                <pre>${defaultSource}</pre>
               </details>
-              <form method="post" action="${botTextHref(key)}/reset">
+              <form method="post" action="${botTextPath(key)}/reset">
+                ${languageField(language)}
                 <input type="hidden" name="version" value="${version}" />
                 <button type="submit">${TEXTS.botTextResetSubmit}</button>
               </form>`
       }
-      ${publishes ? republishForm(`${botTextHref(key)}/publish`) : ''}`,
+      ${publishes ? republishForm(`${botTextPath(key)}/publish`, language) : ''}`,
   });
 };

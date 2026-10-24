@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BOT_TEXT_CATALOG, enBotTextSource } from '@binarius/shared';
+import { BOT_TEXT_CATALOG, BOT_TEXT_SOURCES_EN, BotLanguage } from '@binarius/shared';
 import { botTextOverrides } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { readBotProfileSource } from './publish';
@@ -18,18 +18,23 @@ beforeAll(async () => {
 afterAll(() => tmp.drop());
 
 describe('readBotProfileSource', () => {
-  it('U6 resolves the rows as the loaders do: a rejected one shows the default', async () => {
+  it("U6 resolves each language's rows as the loaders do: a rejected one shows that language's default", async () => {
+    const { Ru, En } = BotLanguage;
     await tmp.db.insert(botTextOverrides).values([
-      { key: 'startCommand', source: 'Поехали' },
+      { language: Ru, key: 'startCommand', source: 'Поехали' },
+      { language: En, key: 'startCommand', source: 'Go' },
       // a line break in a single-line text: the resolver rejects it
-      { key: 'profileShortDescription', source: 'Один\nДва' },
+      { language: Ru, key: 'profileShortDescription', source: 'Один\nДва' },
+      { language: En, key: 'profileShortDescription', source: 'One\nTwo' },
     ]);
     const sources = await readBotProfileSource(tmp.db);
     expect(sources.ru.sourceOf('startCommand')).toBe('Поехали');
+    expect(sources.en.sourceOf('startCommand')).toBe('Go');
     expect(sources.ru.sourceOf('profileShortDescription')).toBe(
       BOT_TEXT_CATALOG.profileShortDescription.source,
     );
-    // the overrides are Russian's only (#508): English is the catalog's
-    expect(sources.en).toBe(enBotTextSource);
+    expect(sources.en.sourceOf('profileShortDescription')).toBe(
+      BOT_TEXT_SOURCES_EN.profileShortDescription,
+    );
   });
 });

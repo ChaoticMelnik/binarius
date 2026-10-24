@@ -11,8 +11,7 @@ import {
   joinHtmlLines,
   pairLabel,
   DEFAULT_SESSION_CYCLES,
-  defaultBotTextSource,
-  enBotTextSource,
+  BOT_TEXT_DEFAULT_SOURCES,
   BotLanguage,
   formatStake,
   formatUsd,
@@ -61,22 +60,26 @@ import { currentLanguage } from './language';
 // is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had,
 // botCommands() joined them (#301), a key with variables takes their values as one context (#358),
 // and every one of them reads the source at the moment it is used. No text is taken into a module
-// constant at load, so a source swapped by setBotTextSource reaches every message, the command
+// constant at load, so a source swapped by setBotTextSources reaches every message, the command
 // menu and /help's command lines included.
-let active: BotTextSource<BotTextKey> = defaultBotTextSource;
-export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
-  active = source;
+let active: Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>> = BOT_TEXT_DEFAULT_SOURCES;
+export const setBotTextSources = (
+  sources: Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>>,
+): void => {
+  active = sources;
 };
-// One set of views per language (#508): Russian over the active source, overrides included;
-// English over the static enBotTextSource. Each carries the session's words built on its own
-// views, with its language's plural rule (#633).
+// One set of views per language (#508), each over its language's active source, that language's
+// overrides included (#634). Each carries the session's words built on its own views, with its
+// language's plural rule (#633).
 const viewsOf = (language: BotLanguage, source: BotTextSource<BotTextKey>) => {
   const { html, plain } = createBotTexts(source);
   return { html, plain, session: createSessionTexts({ html, plain, language }) };
 };
+const liveViewsOf = (language: BotLanguage) =>
+  viewsOf(language, { sourceOf: (key) => active[language].sourceOf(key) });
 const VIEWS = {
-  [BotLanguage.Ru]: viewsOf(BotLanguage.Ru, { sourceOf: (key) => active.sourceOf(key) }),
-  [BotLanguage.En]: viewsOf(BotLanguage.En, enBotTextSource),
+  [BotLanguage.Ru]: liveViewsOf(BotLanguage.Ru),
+  [BotLanguage.En]: liveViewsOf(BotLanguage.En),
 } as const;
 type Views = (typeof VIEWS)[BotLanguage];
 // `html` and `plain` read the views of the language of the update at hand (language.ts) on every

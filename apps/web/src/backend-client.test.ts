@@ -20,7 +20,7 @@ import {
   AuditEntityType,
   AuthRevokedReason,
   BOT_PROFILE_METHODS,
-  BOT_TEXT_OVERRIDES_MAX,
+  BOT_TEXT_OVERRIDE_ROWS_MAX,
   BOT_TEXT_SOURCE_MAX,
   BrokerAccountStatus,
   DepositCreditedOutcome,
@@ -871,29 +871,44 @@ describe('the bot texts calls (#300)', () => {
 
   it.each([
     ['botTexts', [], 'GET', '/api/admin/bot-texts', undefined, SAMPLE_BOT_TEXTS],
-    ['botText', ['welcome'], 'GET', '/api/admin/bot-texts/welcome', undefined, text],
+    [
+      'botText',
+      ['welcome', 'ru'],
+      'GET',
+      '/api/admin/bot-texts/welcome?language=ru',
+      undefined,
+      text,
+    ],
+    [
+      'botText',
+      ['welcome', 'en'],
+      'GET',
+      '/api/admin/bot-texts/welcome?language=en',
+      undefined,
+      text,
+    ],
     [
       'previewBotText',
-      ['a b', { source: 'x' }],
+      ['a b', { language: 'en', source: 'x' }],
       'POST',
       '/api/admin/bot-texts/a%20b/preview',
-      { source: 'x' },
+      { language: 'en', source: 'x' },
       { ...text, outcome: 'refused', problems: [{ key: 'welcome', reason: 'Пустой текст' }] },
     ],
     [
       'saveBotText',
-      ['welcome', { source: 'x', expectedVersion: 7 }],
+      ['welcome', { language: 'en', source: 'x', expectedVersion: 7 }],
       'POST',
       '/api/admin/bot-texts/welcome/save',
-      { source: 'x', expectedVersion: 7 },
+      { language: 'en', source: 'x', expectedVersion: 7 },
       { ...text, outcome: 'saved', version: 8, published: [] },
     ],
     [
       'resetBotText',
-      ['zzz', { expectedVersion: 9 }],
+      ['zzz', { language: 'en', expectedVersion: 9 }],
       'POST',
       '/api/admin/bot-texts/zzz/reset',
-      { expectedVersion: 9 },
+      { language: 'en', expectedVersion: 9 },
       { me: SAMPLE_ME, text: null, outcome: 'reset', published: [] },
     ],
     [
@@ -922,7 +937,11 @@ describe('the bot texts calls (#300)', () => {
 
   it('refuses a 2xx with a key the contract does not name', async () => {
     const { client } = await prefixed({ ...text, outcome: 'unchanged', extra: 1 });
-    const save = client.saveBotText(SESSION, 'welcome', { source: 'x', expectedVersion: 0 });
+    const save = client.saveBotText(SESSION, 'welcome', {
+      language: 'ru',
+      source: 'x',
+      expectedVersion: 0,
+    });
     expect(await rejectionOf(save)).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 
@@ -953,7 +972,7 @@ describe('the bot texts calls (#300)', () => {
       outcome: 'rendered',
       rendered: { kind: 'html', telegramHtml: 'a < b' },
     });
-    const preview = client.previewBotText(SESSION, 'welcome', { source: 'x' });
+    const preview = client.previewBotText(SESSION, 'welcome', { language: 'ru', source: 'x' });
     expect(await rejectionOf(preview)).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
@@ -1078,7 +1097,7 @@ describe('body size', () => {
     const { baseUrl } = await serve((response) => {
       padded(response, 200, JSON.stringify(answer), 2 * MAX_BACKEND_BODY_BYTES);
     });
-    expect(await clientOf(baseUrl).botText(SESSION, 'welcome')).toEqual(answer);
+    expect(await clientOf(baseUrl).botText(SESSION, 'welcome', 'ru')).toEqual(answer);
   });
 
   it('refuses a bot text longer than its own ceiling', async () => {
@@ -1086,7 +1105,7 @@ describe('body size', () => {
     const { baseUrl } = await serve((response) => {
       padded(response, 200, head, MAX_BOT_TEXTS_BODY_BYTES);
     });
-    const error = await rejectionOf(clientOf(baseUrl).botText(SESSION, 'welcome'));
+    const error = await rejectionOf(clientOf(baseUrl).botText(SESSION, 'welcome', 'ru'));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   }, 2_000);
 
@@ -1255,6 +1274,7 @@ describe('body size', () => {
       starPayments: { recent: times(ADMIN_USER_RECENT_LEDGER, starPayment) },
     };
     const textView = {
+      language: 'ru',
       key: KEY,
       override: {
         source: controls(BOT_TEXT_SOURCE_MAX),
@@ -1513,7 +1533,9 @@ describe('body size', () => {
         parse: safeParseAdminBotTextsResponse,
         sample: {
           me: ME,
-          overrides: times(BOT_TEXT_OVERRIDES_MAX, {
+          // every row of both languages (#634)
+          overrides: times(BOT_TEXT_OVERRIDE_ROWS_MAX, {
+            language: 'ru',
             key: KEY,
             version: COUNT,
             updatedAt: AT,

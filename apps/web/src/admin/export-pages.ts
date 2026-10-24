@@ -3,7 +3,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { StaffSessionView } from '@binarius/shared';
+import { BotLanguage, type StaffSessionView } from '@binarius/shared';
 import type { SafeHtml } from '../html';
 import { ADMIN_CLIENT_JS } from './client';
 import {
@@ -101,7 +101,8 @@ export const EXPORTED_PAGES: Readonly<Record<string, () => SafeHtml>> = {
   'service-accounts': () => serviceAccountsPage(SAMPLE_SERVICE_ACCOUNTS),
   'star-refunds': () =>
     starRefundsPage(SAMPLE_STAR_REFUNDS.requests, { nextCursor: null, login: LOGIN }),
-  'bot-texts': () => botTextsPage(SAMPLE_BOT_TEXTS.overrides, { login: LOGIN }),
+  'bot-texts': () =>
+    botTextsPage(SAMPLE_BOT_TEXTS.overrides, { language: BotLanguage.Ru, login: LOGIN }),
   'bot-text': () => botTextPage(SAMPLE_BOT_TEXT, { login: LOGIN }),
   'not-found': () => adminNoticePage(TEXTS.notFoundTitle, TEXTS.notFoundBody),
 };

@@ -1,6 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AuditActorType, BOT_TEXT_CATALOG } from '@binarius/shared';
+import {
+  AuditActorType,
+  BOT_TEXT_CATALOG,
+  BOT_TEXT_SOURCES_EN,
+  BotLanguage,
+} from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   applyBotTextReset,
@@ -31,10 +36,11 @@ afterAll(() => tmp.drop());
 const actor: BotTextActor = { type: AuditActorType.System, staffId: null };
 const longer = (key: 'cardBody' | 'cardBonusAlready') =>
   `${BOT_TEXT_CATALOG[key].source}\n${'я'.repeat(250)}`;
-const save = (key: string, source: string, expectedVersion?: number) =>
-  saveBotTextOverride(tmp.db, { key, source, expectedVersion, actor });
-const reset = (key: string, expectedVersion?: number) =>
-  resetBotTextOverride(tmp.db, { key, expectedVersion, actor });
+const { Ru, En } = BotLanguage;
+const save = (key: string, source: string, expectedVersion?: number, language: BotLanguage = Ru) =>
+  saveBotTextOverride(tmp.db, { language, key, source, expectedVersion, actor });
+const reset = (key: string, expectedVersion?: number, language: BotLanguage = Ru) =>
+  resetBotTextOverride(tmp.db, { language, key, expectedVersion, actor });
 const versionOf = (result: Awaited<ReturnType<typeof save>>) => {
   if (!result.ok) throw new Error(`expected a write, got ${result.reason}`);
   return result.version;
@@ -68,6 +74,7 @@ describe('saveBotTextOverride', () => {
         action: 'bot_text_saved',
         actorType: 'system',
         payload: {
+          language: 'ru',
           key: 'welcome',
           action: 'save',
           oldText: BOT_TEXT_CATALOG.welcome.source,
@@ -227,6 +234,7 @@ describe('resetBotTextOverride', () => {
       action: 'bot_text_reset',
       actorType: 'system',
       payload: {
+        language: 'ru',
         key: 'welcome',
         action: 'reset',
         oldText: 'Привет',
@@ -268,11 +276,11 @@ describe('resetBotTextOverride', () => {
 describe('applyBotTextSave / applyBotTextReset (#300)', () => {
   it('B14 write inside the caller transaction and leave the audit row to it', async () => {
     const saved = await tmp.db.transaction((tx) =>
-      applyBotTextSave(tx, { key: 'welcome', source: 'Привет', staffId: null }),
+      applyBotTextSave(tx, { language: Ru, key: 'welcome', source: 'Привет', staffId: null }),
     );
     expect(saved).toMatchObject({ ok: true, audit: { action: 'save', newText: 'Привет' } });
     const reset = await tmp.db.transaction((tx) =>
-      applyBotTextReset(tx, { key: 'welcome', expectedVersion: versionOf(saved) }),
+      applyBotTextReset(tx, { language: Ru, key: 'welcome', expectedVersion: versionOf(saved) }),
     );
     expect(reset).toMatchObject({ ok: true, audit: { action: 'reset', oldText: 'Привет' } });
     expect(await audits()).toEqual([]);
@@ -282,7 +290,13 @@ describe('applyBotTextSave / applyBotTextReset (#300)', () => {
     const version = versionOf(await save('welcome', 'Привет'));
     const conflict = (expectedVersion: number) =>
       tmp.db.transaction((tx) =>
-        applyBotTextSave(tx, { key: 'welcome', source: 'Новый', expectedVersion, staffId: null }),
+        applyBotTextSave(tx, {
+          language: Ru,
+          key: 'welcome',
+          source: 'Новый',
+          expectedVersion,
+          staffId: null,
+        }),
       );
     expect(await conflict(version + 1000)).toEqual({
       ok: false,
@@ -292,7 +306,7 @@ describe('applyBotTextSave / applyBotTextReset (#300)', () => {
     });
     expect(
       await tmp.db.transaction((tx) =>
-        applyBotTextReset(tx, { key: 'welcome', expectedVersion: version + 1000 }),
+        applyBotTextReset(tx, { language: Ru, key: 'welcome', expectedVersion: version + 1000 }),
       ),
     ).toMatchObject({ reason: 'version_conflict', currentSource: 'Привет' });
     await reset('welcome');
@@ -300,6 +314,71 @@ describe('applyBotTextSave / applyBotTextReset (#300)', () => {
       currentVersion: 0,
       currentSource: BOT_TEXT_CATALOG.welcome.source,
     });
+  });
+});
+
+// #634: a row is one key of one language
+describe('the two languages of a key', () => {
+  const rows = async () =>
+    (await listBotTextOverrides(tmp.db)).map(({ language, key, source, version }) => ({
+      language,
+      key,
+      source,
+      version,
+    }));
+
+  it('B-L1 saves an English text beside the Russian one, from the English default', async () => {
+    const ru = versionOf(await save('welcome', 'Привет'));
+    const en = versionOf(await save('welcome', 'Hello', 0, En));
+    expect(en).toBeGreaterThan(ru);
+    expect(await rows()).toEqual([
+      { language: 'en', key: 'welcome', source: 'Hello', version: en },
+      { language: 'ru', key: 'welcome', source: 'Привет', version: ru },
+    ]);
+    expect((await audits())[1]?.payload).toEqual({
+      language: 'en',
+      key: 'welcome',
+      action: 'save',
+      oldText: BOT_TEXT_SOURCES_EN.welcome,
+      newText: 'Hello',
+      oldVersion: 0,
+      newVersion: en,
+    });
+  });
+
+  it('B-L2 resets one language and leaves the other', async () => {
+    const ru = versionOf(await save('welcome', 'Привет'));
+    const en = versionOf(await save('welcome', 'Hello', undefined, En));
+    expect(await reset('welcome', en, En)).toEqual({ ok: true, version: 0 });
+    expect(await rows()).toEqual([
+      { language: 'ru', key: 'welcome', source: 'Привет', version: ru },
+    ]);
+    expect((await audits())[2]?.payload).toMatchObject({
+      language: 'en',
+      oldText: 'Hello',
+      newText: BOT_TEXT_SOURCES_EN.welcome,
+    });
+    expect(await reset('welcome', undefined, En)).toEqual({ ok: false, reason: 'already_default' });
+  });
+
+  it("B-L3 checks the version against the language's own row", async () => {
+    const ru = versionOf(await save('welcome', 'Привет'));
+    expect(await save('welcome', 'Hello', ru, En)).toEqual({
+      ok: false,
+      reason: 'version_conflict',
+      currentVersion: 0,
+    });
+    expect(
+      await tmp.db.transaction((tx) =>
+        applyBotTextSave(tx, {
+          language: En,
+          key: 'welcome',
+          source: 'Hello',
+          expectedVersion: ru,
+          staffId: null,
+        }),
+      ),
+    ).toMatchObject({ currentVersion: 0, currentSource: BOT_TEXT_SOURCES_EN.welcome });
   });
 });
 
@@ -320,7 +399,7 @@ describe('recordBotProfilePublish (#361)', () => {
       )
       .orderBy(auditLog.createdAt);
 
-  it('B17 writes one admin row a publish, with the key only for a save or a reset', async () => {
+  it('B17 writes one admin row a publish, with the key and its language only for a save or a reset', async () => {
     const failed = {
       method: 'setMyCommands',
       ok: false,
@@ -332,6 +411,7 @@ describe('recordBotProfilePublish (#361)', () => {
       path: '/admin/bot-texts/:key/save',
       trigger: 'save',
       key: 'startCommand',
+      language: BotLanguage.En,
       methods: [failed],
     });
     await recordBotProfilePublish(tmp.db, {
@@ -349,6 +429,7 @@ describe('recordBotProfilePublish (#361)', () => {
           path: '/admin/bot-texts/:key/save',
           trigger: 'save',
           key: 'startCommand',
+          language: 'en',
           methods: [failed],
         },
       },

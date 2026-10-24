@@ -5,6 +5,7 @@ import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_PROFILE_METHODS,
   BOT_TEXT_KEY_PATTERN,
+  BOT_TEXT_OVERRIDE_ROWS_MAX,
   BOT_TEXT_OVERRIDES_MAX,
   BOT_TEXT_SOURCE_MAX,
   botTextRejectionMessage,
@@ -45,6 +46,7 @@ export const adminBotTextSourceSchema = z.string().max(BOT_TEXT_SOURCE_MAX);
 export const adminBotTextVersionSchema = z.int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 export const adminBotTextOverrideViewSchema = z.strictObject({
+  language: botLanguageSchema,
   key: keySchema,
   version,
   updatedAt: isoDateTime,
@@ -57,7 +59,7 @@ export type AdminBotTextOverrideView = z.infer<typeof adminBotTextOverrideViewSc
 
 export const adminBotTextsResponseSchema = z.strictObject({
   me: strictMe,
-  overrides: z.array(adminBotTextOverrideViewSchema).max(BOT_TEXT_OVERRIDES_MAX),
+  overrides: z.array(adminBotTextOverrideViewSchema).max(BOT_TEXT_OVERRIDE_ROWS_MAX),
 });
 export type AdminBotTextsResponse = z.infer<typeof adminBotTextsResponseSchema>;
 
@@ -71,6 +73,8 @@ export const adminBotTextFragmentViewSchema = z.strictObject({
 export type AdminBotTextFragmentView = z.infer<typeof adminBotTextFragmentViewSchema>;
 
 export const adminBotTextViewSchema = z.strictObject({
+  // the language the key's override, rejection and fragments are of (#634)
+  language: botLanguageSchema,
   key: keySchema,
   override: z
     .strictObject({
@@ -91,20 +95,27 @@ export const adminBotTextResponseSchema = z.strictObject({
 });
 export type AdminBotTextResponse = z.infer<typeof adminBotTextResponseSchema>;
 
+// GET /admin/bot-texts/:key?language=
+export const adminBotTextLanguageQuerySchema = z.strictObject({ language: botLanguageSchema });
+
 export const adminBotTextPreviewRequestSchema = z.strictObject({
+  language: botLanguageSchema,
   source: adminBotTextSourceSchema,
 });
 export type AdminBotTextPreviewRequest = z.infer<typeof adminBotTextPreviewRequestSchema>;
 export const adminBotTextSaveRequestSchema = z.strictObject({
+  language: botLanguageSchema,
   source: adminBotTextSourceSchema,
   expectedVersion: adminBotTextVersionSchema,
 });
 export type AdminBotTextSaveRequest = z.infer<typeof adminBotTextSaveRequestSchema>;
 export const adminBotTextResetRequestSchema = z.strictObject({
+  language: botLanguageSchema,
   expectedVersion: adminBotTextVersionSchema,
 });
 export type AdminBotTextResetRequest = z.infer<typeof adminBotTextResetRequestSchema>;
 
+// the problems of one language's set
 const problemsSchema = z
   .array(z.strictObject({ key: keySchema, reason }))
   .min(1)

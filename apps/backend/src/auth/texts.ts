@@ -1,9 +1,8 @@
 import {
+  BOT_TEXT_DEFAULT_SOURCES,
   BotLanguage,
   createBotTexts,
   createSessionTexts,
-  defaultBotTextSource,
-  enBotTextSource,
   type BotHtmlTexts,
   type BotPlainTexts,
   type BotTextKey,
@@ -15,12 +14,14 @@ import {
 // the OAuth callback, the deposit and Stars pushes, the mailings and the session notices
 // (client-push.ts, mailing/messages.ts, trading/session-notice-messages.ts). The texts are the bot
 // texts catalog's (docs/bot-texts.md), in the recipient's language (#508, #633): there is no set
-// without a language, so no text can go out in Russian to everyone unnoticed. Russian is the
-// catalog read through `active` at the moment a message is built, staff overrides included;
-// English is the static source, which overrides do not reach (Rule 30).
-let active: BotTextSource<BotTextKey> = defaultBotTextSource;
-export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
-  active = source;
+// without a language, so no text can go out in Russian to everyone unnoticed. Each language is
+// read through `active` at the moment a message is built, that language's staff overrides
+// included (#634, Rule 30).
+let active: Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>> = BOT_TEXT_DEFAULT_SOURCES;
+export const setBotTextSources = (
+  sources: Readonly<Record<BotLanguage, BotTextSource<BotTextKey>>>,
+): void => {
+  active = sources;
 };
 
 // annotated: the inferred type of the whole catalog is past what tsc serializes into a .d.ts
@@ -33,9 +34,11 @@ const textsOf = (language: BotLanguage, source: BotTextSource<BotTextKey>): Clie
   const { html, plain } = createBotTexts(source);
   return { html, plain, session: createSessionTexts({ html, plain, language }) };
 };
+const liveTextsOf = (language: BotLanguage): ClientTexts =>
+  textsOf(language, { sourceOf: (key) => active[language].sourceOf(key) });
 const TEXTS: Record<BotLanguage, ClientTexts> = {
-  [BotLanguage.Ru]: textsOf(BotLanguage.Ru, { sourceOf: (key) => active.sourceOf(key) }),
-  [BotLanguage.En]: textsOf(BotLanguage.En, enBotTextSource),
+  [BotLanguage.Ru]: liveTextsOf(BotLanguage.Ru),
+  [BotLanguage.En]: liveTextsOf(BotLanguage.En),
 };
 
 export const clientTextsOf = (language: BotLanguage): BotHtmlTexts => TEXTS[language].html;

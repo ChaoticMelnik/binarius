@@ -1,9 +1,8 @@
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  defaultBotTextSource,
   pairLabel,
-  resolveBotTextOverrides,
+  resolveBotTextOverridesOf,
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -11,7 +10,9 @@ import {
   type TelegramHtml,
   type TradingSessionView,
   BotLanguage,
+  BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { currentLanguage, missingLanguageReads } from './language';
 import {
@@ -29,7 +30,7 @@ import {
   sessionView,
   USER,
 } from './testing';
-import { sessionStatusText, setBotTextSource, TEXTS } from './texts';
+import { sessionStatusText, setBotTextSources, TEXTS } from './texts';
 import {
   SESSION_RESUME_GAP_MS,
   SESSION_TRACK_DEADLINE_MS,
@@ -828,17 +829,17 @@ describe('the session tracker', () => {
     // turn of direction, so only the picture in the render key makes the turn drawn
     describe('Q1 the two signal lines overridden alike', () => {
       afterEach(() => {
-        setBotTextSource(defaultBotTextSource);
+        setBotTextSources(BOT_TEXT_DEFAULT_SOURCES);
       });
 
       it('a turn of direction is still drawn, once', async () => {
         const same = '📡 Сигнал получен';
-        const resolved = resolveBotTextOverrides([
-          { key: 'sessionSignalUp', source: same },
-          { key: 'sessionSignalDown', source: same },
+        const resolved = resolveBotTextOverridesOf(BotLanguage.Ru, [
+          { language: BotLanguage.Ru, key: 'sessionSignalUp', source: same },
+          { language: BotLanguage.Ru, key: 'sessionSignalDown', source: same },
         ]);
         expect([...resolved.texts.keys()].sort()).toEqual(['sessionSignalDown', 'sessionSignalUp']);
-        setBotTextSource(resolved.source);
+        setBotTextSources(botTextSourcesWith(BotLanguage.Ru, resolved.source));
         const down = sessionView({ signalAction: 'down' });
         expect(sessionStatusText(LABEL, down).value).toBe(sessionStatusText(LABEL, up).value);
         const { tracker, request, target } = setup({ script: [down] });
