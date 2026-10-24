@@ -368,7 +368,9 @@ reference bot); the header is «💼 Реальная сессия» (`sessionHe
 🔹 Торговая пара: EUR/USD             (sessionPair)
 🔹 Сумма сделки: $10.00               (sessionStake: the base stake, formatStake)
 🔹 Время экспирации: 5 с              (sessionExpiry: settings.durationSec)
-📡 Сигнал: ⬆️ Вверх                   (sessionSignalUp / sessionSignalDown: view.signalAction, #568)
+📡 Сигнал: ⬆️ Вверх                   (sessionSignalUp / sessionSignalDown: view.signalAction, #568;
+                                       sessionSignalWaiting «📡 Ждём сигнал…» while it is null and
+                                       the session runs, #796)
 
 Торговая сессия запущена…             (sessionRunning, while the session is not stopped)
 ```
@@ -379,11 +381,13 @@ the caption of the picture of `view.signalAction` — `setup-bull.png` («BULLIS
 [bot-demo.md](bot-demo.md#the-analysis)) through the same cache (`setup-card.ts`): each uploaded
 per process and direction until an answer brings its `file_id`, then sent by it. `signalAction` is the backend's
 ([trading-session.md](trading-session.md#routes)): the last intent's direction, else the
-signal the start route checked; null on a session without a trade yet that was started before #568
-or by the CLI `session-start`, which checks no signal
-([trading-session.md](trading-session.md#the-table)); its message stays a text. The line
-«📡 Сигнал: …» is the fifth line of the head (under the header when the settings cannot be read)
-and is absent without a direction. No figure of the
+signal the start route checked; null on a session without a trade yet that was started before #568,
+by the CLI `session-start`, which checks no signal, or on an H1-marked account without an H1 signal
+at the start (#796, [h1.md → The start](h1.md#the-start-796))
+([trading-session.md](trading-session.md#the-table)); its message stays a text until the first
+trade's edit turns it into the picture. The line «📡 Сигнал: …» is the fifth line of the head (under
+the header when the settings cannot be read); without a direction it is «📡 Ждём сигнал…»
+(`sessionSignalWaiting`, #796) while the session runs, and absent once it stopped. No figure of the
 analysis is printed: the features of a session trade's signal are stored nowhere. The caption's
 budget is `TELEGRAM_CAPTION_LIMIT` (1024, `BOT_TEXT_MESSAGES` → `sessionRunning`,
 `sessionCompleted`, `sessionStopped`, `sessionNoSettings`).

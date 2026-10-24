@@ -178,11 +178,19 @@ row of the same pair and second.
 | S6 | `createTradingSession` refuses | 409 | `refused` / the wire code (`active_session_exists` included) | R38 (`demo_only`; the others are races with the eligibility check and go through the same line), H1-R6 (`account_not_h1`) |
 | S7 | `createTradingSession` returns | 201 | `started` / NULL, with the new session, written before the view's read | R36 |
 | S8 | a throw of the snapshot read, the stakes read or the creation (not a `TradingSessionError`) | 500 | none | — |
+| S1′ | an H1 start (#796): no H1 reading (no data socket, the source down, no series, a stale second, unknown digits, a warming window) | 201, waiting | none: no decision; `info` `h1 start without a reading` | H1-R11 |
+| S2′ | an H1 start, a no-signal H1 reading | 201, waiting | `no_signal` / NULL, with the new session | H1-R9b |
+| S3′–S5′ | an H1 start refused by the balance, the stake or the settings | 409 | none: before the reading | H1-R13 |
+| S6′ | an H1 start, `createTradingSession` refuses | 409 | after a signal `refused` / the wire code; after a no-signal reading `no_signal` / NULL without a session | H1-R6, H1-R12 |
+| S7′ | an H1 start, a signal, `createTradingSession` returns | 201 | `started` / NULL, with the new session, after the hand-over to the driver | H1-R9, H1-R10 |
 
 `broker_account_id` is the eligible account, `payout` the catalog's, `taken_at_ms` the route's
-clock after its reads. An H1 session from the bot (#745) starts with this `session_start` row (the
-candle check, version v2) before the driver's `version = h1` and `h1-repeat` rows; the export
-replays each by its version. The write is best-effort: a throw is `warn` `session start decision not
+clock after its reads. An H1 session from the bot (#745) starts with this `session_start` row of
+version `h1` since #796 (the H1 reading, [h1.md → The start](h1.md#the-start-796)): the driver's
+row shape with `step` NULL, `decided_at_ms` the reading's second `f`, `taken_at_ms` the reading's
+clock, so `taken_at_ms − decided_at_ms` is the reading's age; then the driver's `version = h1` and
+`h1-repeat` rows (with a signal, the driver's step-1 `intent` row carries the same `decided_at_ms`:
+two writers' answers to one decision, Rule 42). The export replays each by its version (X18). The write is best-effort: a throw is `warn` `session start decision not
 recorded` (account, asset, name and code), the answer unchanged (R39).
 
 ## The record of POST /trading/signal

@@ -269,13 +269,13 @@ Implementer picks it up only once this comment exists.
 | `apps/backend/src/deposit` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 37; auth 12, 13 |
 | `apps/backend/src/h1` | signal-h1 44, 48 |
 | `apps/backend/src/mailing` | bot-ui 19 |
-| `apps/backend/src/market-data` | signal-h1 41, 44, 45 |
+| `apps/backend/src/market-data` | signal-h1 41, 44, 45, 48 |
 | `apps/backend/src/outbox` | trading 6 |
 | `apps/backend/src/payments` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 39; auth 12, 13 |
 | `apps/backend/src/postbacks` | core 3, 5, 7, 9, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37; auth 12, 13 |
 | `apps/backend/src/signal` | signal-h1 20, 41 |
 | `apps/backend/src/trade-log` | signal-h1 45 |
-| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 19, 29, 30, 31, 47; auth 12, 13 |
+| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 19, 29, 30, 31, 46, 47; auth 12, 13 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26; signal-h1 20, 43 |
 | `apps/bot/src` | core 8, 10, 14, 26, 51; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
