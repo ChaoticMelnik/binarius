@@ -65,19 +65,41 @@ refuses (and with it `docker build`) when:
 
 - a bundle imports a package its app does not declare in `dependencies`;
 - a bundle took in a file from `node_modules`;
-- a bundle took in a CLI (`/cli/`), `export-pages.ts`, a `testing.ts` or a test file — a CLI's
-  `import.meta.main` guard would be true inside the bundle and run its `main()` in the service.
+- a bundle took in a CLI (`/cli/` or a `cli.ts`), `export-pages.ts`, a `testing.ts` or a test
+  file — a CLI's guard (`import.meta.url === pathToFileURL(entrypoint).href`) would be true inside
+  the bundle, and `packages/signal-stand/src/cli.ts` has none, so its `main()` would run in the
+  service.
 
 `tooling/build.test.ts` (B1-B5) builds the four bundles into a temporary directory on every
 `pnpm check`. Locally `apps/*/dist/` is shared with `tsc -b`, whose `--clean` removes the bundle
 and whose output overwrites it: a bundle on the host is a throwaway; only the image's runs.
 
-Stack traces name the bundle's lines; function names are kept (no minification). To read a trace
-against the sources, run the service once with source maps:
+Stack traces name the bundle's lines, `…/apps/<app>/dist/index.js:<line>:<column>`; function
+names are kept (no minification). The logs carry no stacks (Rule 8): a trace comes from a crash,
+on the container's stderr. To map a position to the sources, read the source map the image built
+beside the bundle. The command after the service name replaces the service's own, so no second
+instance of the app starts; on the server, run it after `ssh deploy@185.249.152.35` and
+`cd /opt/binarius`:
 
 ```bash
-docker compose run --rm --no-deps backend node --enable-source-maps apps/backend/dist/index.js
+docker compose run --rm --no-deps -T backend node -e 'const { SourceMap } = require("node:module"); const fs = require("node:fs"); const path = require("node:path"); const [map, ...at] = process.argv.slice(1); const m = new SourceMap(JSON.parse(fs.readFileSync(map, "utf8"))); for (const p of at) { const [l, c] = p.split(":").map(Number); const o = m.findOrigin(l, c); console.log(p, o.fileName === undefined ? "no mapping" : `${path.relative(".", path.resolve(path.dirname(map), o.fileName))}:${o.lineNumber}:${o.columnNumber}`); }' apps/backend/dist/index.js.map 11592:17
 ```
+
+It prints `<line>:<column> <source file>:<line>:<column>` for each position given, e.g.
+`11592:17 packages/db/src/migrate.ts:139:17`. Another app: its name in the service and in the
+map's path. The trace and the map must come from the same image: a map of another build answers
+with a wrong line, not an error.
+
+**Never `docker compose run` an app service on the server with its own command** — no command
+after the service name, or `node apps/<app>/dist/index.js` with any flags. That starts a second
+full instance beside the live one, with the same database, Redis and tokens: a second backend
+polls `ADMIN_BOT_TOKEN` too (Telegram answers 409, grammY does not retry it, and if the live
+backend loses, its staff bot stays dead and every admin login answers 503 until a restart — see
+[staff-login.md](staff-login.md)), and runs its H1 driver, mailing and publisher twice; a second
+worker consumes jobs; a second bot polls the live bot's token. `run` there takes a command of its
+own (this map, `pnpm db:migrate`). The one exception is step 6 of the switch below: a bot whose
+`getMe` is refused exits before it polls, and until then it only reads the bot texts from the
+backend.
 
 ## Files a package reads
 
@@ -108,8 +130,10 @@ cannot tell a wrong `import.meta.url` path from a right one.
   the checkout — `binarius-deploy`, `scripts/deploy-worker.sh`, `exec`, `logs`, `run` — takes the
   pair without flags. A `COMPOSE_FILE` exported in the shell overrides `.env`: never export it on
   the server. With `COMPOSE_FILE` set, a `compose.override.yaml` is no longer loaded.
-- **Locally and in CI**: `docker compose -f compose.yaml -f compose.prod.yaml …`; the CI compose job
-  sets `COMPOSE_FILE` in its environment. An explicit `-f` overrides `COMPOSE_FILE`.
+- **Locally**: `docker compose -f compose.yaml -f compose.prod.yaml …`.
+- **In CI**: the compose job sets `COMPOSE_FILE: compose.yaml:compose.prod.yaml` in its
+  environment. An explicit `-f` overrides `COMPOSE_FILE` (the job's `-f compose.yaml` steps check
+  the dev file alone).
 - Without either, `docker compose up` is the dev stack.
 
 The merged configuration, without starting anything:
@@ -193,11 +217,11 @@ The agent does not run these; each is an SSH command from the owner's machine.
      && docker compose config -q \
      && docker compose stop bot \
      && docker compose up -d --wait \
-     && docker compose ps --format "{{.Service}} {{.Command}} {{.Status}}"'
+     && docker compose ps -a --no-trunc --format "{{.Service}} {{.Command}} {{.Status}}"'
    ```
 
-   Expected: four `node apps/<app>/dist/index.js` lines `Up`, the backend `(healthy)`, `migrate`
-   `Exited (0)`.
+   Expected: four app lines `"docker-entrypoint.sh node apps/<app>/dist/index.js"` with `Up`, the
+   backend's `(healthy)`, and `migrate` `"docker-entrypoint.sh pnpm db:migrate"` `Exited (0)`.
 4. **Checks**:
 
    ```bash
@@ -216,7 +240,8 @@ The agent does not run these; each is an SSH command from the owner's machine.
    service is left; the goal is a pilot out of swap at idle. The result goes into #146 as a
    comment.
 6. **A dead process ends its container**, without touching the live bot (a `run` container has no
-   restart and is removed; a refused `getMe` never polls, so no 409):
+   restart and is removed; a refused `getMe` never polls, so no 409, and until then it only reads
+   the bot texts from the backend):
 
    ```bash
    ssh deploy@185.249.152.35 'cd /opt/binarius && docker compose run --rm --no-deps -e TELEGRAM_BOT_TOKEN=bad bot; echo "exit=$?"'
@@ -239,8 +264,11 @@ The owner's check, not part of any automated step:
 
 ```bash
 docker compose -f compose.yaml -f compose.prod.yaml up -d --build --wait
-docker compose -f compose.yaml -f compose.prod.yaml ps --format '{{.Service}} {{.Command}} {{.Status}}'
+docker compose -f compose.yaml -f compose.prod.yaml ps -a --no-trunc --format '{{.Service}} {{.Command}} {{.Status}}'
 docker compose -f compose.yaml -f compose.prod.yaml down
 ```
+
+Expected from `ps`: four app lines `"docker-entrypoint.sh node apps/<app>/dist/index.js"` with
+`Up`, the backend's `(healthy)`, and `migrate` `"docker-entrypoint.sh pnpm db:migrate"` `Exited (0)`.
 
 Without `-v` the volumes are kept; the dev stack started afterwards uses the same ones.

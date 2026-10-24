@@ -47,9 +47,11 @@ export function undeclaredExternals(
   return [...names].filter((name) => !Object.hasOwn(dependencies, name)).sort();
 }
 
-// A CLI's `import.meta.main` guard is true for every module of a bundle, so a CLI pulled in by
-// accident would run its main() inside the service; test-only modules have no place there either.
-const FORBIDDEN_INPUT = /\/cli\/|export-pages\.ts$|testing\.ts$|\.test\.ts$/;
+// A CLI's guard, `import.meta.url === pathToFileURL(entrypoint).href`
+// (apps/backend/src/cli/staff.ts), is true for every module of a bundle run as the entrypoint, and
+// packages/signal-stand/src/cli.ts calls main() with no guard at all: a CLI pulled in by accident
+// would run inside the service. Test-only modules have no place there either.
+const FORBIDDEN_INPUT = /\/cli\/|\/cli\.ts$|export-pages\.ts$|testing\.ts$|\.test\.ts$/;
 
 /** Refuses a bundle that took in a node_modules file or a CLI, testing or test module. */
 export function checkInputs(app: string, inputs: Readonly<Record<string, unknown>>): void {

@@ -1,6 +1,7 @@
 # The production profile: an override of compose.yaml, never a file on its own. Selected on
-# the server by COMPOSE_FILE=compose.yaml:compose.prod.yaml in .env (docs/deploy.md); CI and a
-# local prod-shaped run pass both files with -f. It changes three things and nothing else:
+# the server by COMPOSE_FILE=compose.yaml:compose.prod.yaml in .env (docs/deploy.md), in CI by
+# the same COMPOSE_FILE in the compose job's env, and in a local prod-shaped run by passing both
+# files with -f. It changes three things and nothing else:
 # the app commands (one node process on the bundle tooling/build.ts wrote into the image:
 # no pnpm, no tsx watch, so a process that exits takes its container down and the restart
 # policy brings it back), log rotation on every service (the pilot's disk is ~2 GB; the

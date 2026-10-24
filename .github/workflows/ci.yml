@@ -327,17 +327,26 @@ jobs:
           done
       # The prod command is one node process under tini (init: true), no pnpm and no tsx: the
       # pilot's memory is the reason (#146), and it is what makes the process's exit the
-      # container's. Every running service whose resolved command starts with node is asked for
-      # its process list; `ps` is the exec'd one.
+      # container's. Every service whose resolved command starts with node must be running
+      # here, bot aside (the dead-process step below starts it, as the start step says), and is
+      # asked for its process list; `ps` is the exec'd one. A service that is not running fails
+      # the step: a worker that logged its schema line and then died would pass otherwise.
       - name: every app container runs one node process and nothing else
         run: |
           set -u
           config="$(docker compose config --format json)"
-          nodes="$(printf '%s' "$config" | jq -r '.services | to_entries[] | select(.value.command[0]? == "node") | .key')"
+          nodes="$(printf '%s' "$config" | jq -r '.services | to_entries[] | select(.value.command[0]? == "node") | .key' | grep -vx bot || true)"
+          if [ -z "$nodes" ]; then
+            echo '::error::no service but bot resolves to a node command'
+            exit 1
+          fi
           running="$(docker compose ps --status running --format '{{.Service}}')"
-          checked=0
           for s in $nodes; do
-            grep -qx "$s" <<<"$running" || continue
+            if ! grep -qx "$s" <<<"$running"; then
+              echo "::error::$s is not running: $(docker compose ps -a --format '{{.Status}}' "$s")"
+              docker compose logs "$s"
+              exit 1
+            fi
             got="$(docker compose exec -T "$s" ps -o comm= | sort | tr '\n' ' ')"
             if [ "$got" != 'docker-init node ps ' ]; then
               echo "::error::$s runs more than one node process under tini: $got"
@@ -345,12 +354,7 @@ jobs:
               exit 1
             fi
             echo "$s: $got"
-            checked=$((checked + 1))
           done
-          if [ "$checked" -eq 0 ]; then
-            echo '::error::no running service runs node'
-            exit 1
-          fi
       # The fresh volume this job starts from is what makes `applied` (not `nothing to apply`) the
       # expected line. --wait does not wait for trading-worker (no healthcheck), so its line is
       # polled to a deadline, the same way as the admin pages above. Logs are read into a variable

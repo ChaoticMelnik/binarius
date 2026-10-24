@@ -147,8 +147,9 @@ Production runs the same `compose.yaml` with the override `compose.prod.yaml`: e
 `node apps/<app>/dist/index.js` process on the bundle `pnpm build` (`tooling/build.ts`) writes into
 the image — no pnpm, no `tsx watch` — every service's log rotates at 10m x 3, and postgres and
 redis get a restart policy. The server selects it with
-`COMPOSE_FILE=compose.yaml:compose.prod.yaml` in its `.env`; locally and in CI it is
-`docker compose -f compose.yaml -f compose.prod.yaml …`. HTTPS is Caddy on the host
+`COMPOSE_FILE=compose.yaml:compose.prod.yaml` in its `.env`; locally it is
+`docker compose -f compose.yaml -f compose.prod.yaml …`, and the CI compose job sets the same
+`COMPOSE_FILE` in its environment. HTTPS is Caddy on the host
 ([deploy/Caddyfile](deploy/Caddyfile)). Everything else — what the bundle holds, the server's
 switch, rollback — is [docs/deploy.md](docs/deploy.md).
 
