@@ -494,6 +494,14 @@ profit, accuracy or probability is promised (`texts.test.ts` holds the absence o
 «точност» in every analysis entry); the only numbers are the broker's payout, the break-even share
 computed from it, the page count and the signal's own features and display indicators.
 
+The screens are in the user's language (#632, [bot-texts.md](bot-texts.md#languages)): the Russian
+quotes here are the Russian defaults, the English texts are the catalog's `BOT_TEXT_SOURCES_EN`.
+The page line is the key `demoPage` («Страница {page} из {pageCount}»), the type and duration labels
+are keys too, so no word of these screens is in code. A type's button stands in a row of two
+(`groupButtonLabel`, «label · count»), so its English word is at most 9 characters — «Commodity ·
+46» is the row's 14 (`texts.test.ts` T-en3 at 99 open pairs in both languages, the `captureApi`
+gate on every types screen of the English scenes).
+
 ## The analysis
 
 `demo:an` keeps the order «check, then the screen». `readDemoTrade` runs on the catalog read at

@@ -265,6 +265,12 @@ session offer (#360) when the caller asks for one. The callers never ask for bot
 Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that «открыта» appears
 (not as «не открыта») for `accepted` and for no other status.
 
+The table quotes the Russian defaults; a user in English gets the same lines from the English
+catalog (`BOT_TEXT_SOURCES_EN`, #632), and so the trade line's words: the direction (`actionUp`,
+`actionDown`), the duration (`demoDuration5`, or `demoDurationSeconds` — «⏱ 60 s» / «⏱ 60 с» —
+for a trade outside the demo table, from before #313) and the stake (`intentStake`), e.g.
+`EUR/USD · ⬆️ Up · ⏱ 5 s · stake $1.00`. The tracker edits in the language of the press.
+
 **The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить» while the
 status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
 (`TRACKER_STOP_STATUSES`), the session offer (#360) and the end of the path under it —
