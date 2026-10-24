@@ -263,10 +263,12 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
   `pairLabel`'s, the symbol without « OTC», #428, #631) and
   `groupButtonLabel`'s ` · N`;
 - the ` ✅` after the selected level (`currentLevelLabel`);
-- the fallback duration `⏱ N с` (`durationLabelOf`), `formatAge`'s `с`/`мин`, `formatUsd`'s `$`
-  and digit grouping (`bot-text-format.ts`);
-- «N из M» on the demo's page line, the ` · ` of the trade line and `analysisSubject`, the
-  indicator names `EMA`/`RSI`/`ATR` and the ` — ` of the analysis lines;
+- `formatUsd`'s `$` and digit grouping (`bot-text-format.ts`); `formatAge`'s units are keys
+  (`ageSecondsUnit`, `ageMinutesUnit`, #508);
+- the ` · ` of the trade line and `analysisSubject`, the indicator names `EMA`/`RSI`/`ATR` and the
+  ` — ` of the analysis lines. The page line «Page N of M» is `demoPage` with `{page}` and
+  `{pageCount}`, the duration of a trade outside the demo table `demoDurationSeconds` with
+  `{durationSec}` (#632);
 - the `/command — description` line of `/help`.
 
 ## Variables
@@ -441,9 +443,9 @@ in both processes. `schema.db.test.ts` holds the two sides equal on their bounda
 
 ## Languages
 
-The bot writes in Russian or English (#508; the owner's decisions of 2026-10-15). Parts 2 and 3
-translate the rest of the catalog (#632 `demo`, `analysis`, `trade`; #633 `session`, `stars`,
-`mailing`, `deposit` and the backend's pushes); #634 gives the overrides a language.
+The bot writes in Russian or English (#508; the owner's decisions of 2026-10-15). Part 2 (#632)
+translated `demo`, `analysis` and `trade`; part 3 (#633) translates `session`, `stars`, `mailing`,
+`deposit` and the backend's pushes; #634 gives the overrides a language.
 
 - **The rule.** `botLanguageOf(language_code)` (`packages/shared/src/bot-language.ts`): Russian when
   Telegram sends no tag or one whose first subtag is `ru` in any case (`ru`, `ru-RU`, `RU`),
@@ -480,15 +482,18 @@ translate the rest of the catalog (#632 `demo`, `analysis`, `trade`; #633 `sessi
   assembled messages' estimate (`bot-texts-en.test.ts`). `enBotTextSource` is static: an
   untranslated key shows the catalog's Russian default, never an override, so every English
   message is bounded by the test on the defaults. `UNTRANSLATED_BOT_TEXT_KEYS` is pinned by group:
-  exactly the groups of #632 and #633, but the keys of `TRANSLATED_BEFORE_633` — the wait for a
-  signal (#664) and the real-mode message after a deposit (`realModeByDeposit`, #686), written in
-  both languages from the start (E4, E7). Until those parts, a user in English sees the start, the
-  cards, the menu, `/settings`, `/language`, `/help`, `/account`, `/invite`, `/support` and the buttons in
-  English, and the demo, the analysis, the trades, the sessions, Stars and every push of the
-  backend but the real-mode message (#686) in Russian.
-- **Proofreading.** `pnpm -s exec tsx tooling/bot-texts-table.ts` prints «key | group | русский |
-  English» for every translated key under `head=` and the count (exit 1 with none); the PR carries
-  it for the owner.
+  exactly the groups of #633, but the keys of `TRANSLATED_BEFORE_633` — the real-mode message
+  after a deposit (`realModeByDeposit`, #686) and the H1 session's lines of #745 and #796, written
+  in both languages from the start, and the cycle words `sessionCycleOne/Few/Many`, which the demo
+  path prints in «Session of 5 cycles» (#632; the plural rule stays Russian until #633) (E4, E7,
+  E9). Every key of `demo`, `analysis` and `trade` has an English text (E8). Until #633, a user in
+  English sees the sessions, Stars and every push of the backend but the real-mode message (#686)
+  in Russian; the rest of the bot — the demo, the analysis and the single trade included — in
+  English.
+- **Proofreading.** `pnpm -s exec tsx tooling/bot-texts-table.ts [group…]` prints «key | group |
+  русский | English» for every translated key under `head=` and the count (exit 1 with none); the
+  group arguments keep only those groups' keys and are named in the head line (`groups=…`; exit 2
+  on a group the catalog does not have, #632). The PR carries it for the owner.
 - **What stays Russian.** The overrides (the CLI, the admin section: Russian only until #634), the
   backend's pushes (#633), the staff bot, the cashier Mini App and the sign-in pages (`apps/web`).
   Numbers and dates print the same in both languages; only the words differ, `formatAge`'s units
