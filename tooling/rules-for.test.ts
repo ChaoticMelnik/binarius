@@ -7,6 +7,7 @@ import {
   type GateResult,
   type Repo,
   type Rule,
+  NOT_DIRECTORY_NAMES,
   PATH_SHAPED_LITERALS,
   RulesError,
   SKILL_FILE,
@@ -38,11 +39,21 @@ import {
   rulesFor,
   splitRules,
   tokensOf,
+  wordsOf,
 } from './rules-for';
 
-// The gate (G1–G3) holds each backticked token of a rule by its class: a path resolves to a
-// `git ls-files` entry (`PATH_SHAPED_LITERALS` excepted), an identifier is an identifier of the
-// corpus, a literal a substring of it; an expression is skipped. Test ids: after each test-file
+// A rule's words are every maximal run of `[A-Za-z0-9_.\-/*?]` of its whole text — backtick spans,
+// commands and prose — with markdown emphasis `**` and a closing `.`, `?` or `-` removed. A word
+// names a file when it is the file's path or a path suffix of it, or a directory above it; a word
+// without `/` names a file only (whole path or basename), never a directory. rulesFor routes a file
+// directly to every rule with a word naming it; G8 holds that against an oracle of its own over
+// every tracked file and a new file in every directory.
+//
+// The gate (G1–G3) holds each backticked token of a rule by its class: a path names a
+// `git ls-files` entry or is path-shaped and must name one (`PATH_SHAPED_LITERALS` excepted), an
+// identifier is an identifier of the corpus, a literal a substring of it; an expression is
+// skipped. A bare token equal to a directory's name fails unless it is in `NOT_DIRECTORY_NAMES`,
+// and every word that starts with a top-level directory and `/` must name an entry. Test ids: after each test-file
 // citation, up to ". ", "; ", the end of the line or the next test-file citation (other backtick
 // spans are cut out), every word shaped as an id with a digit or a hyphen — `D1–D3`, `M7b–M7d`,
 // `H1-DR1–DR20`, `W-door1–3`, `U-dep 11`, `K5′` — must be in a test file the rule cites. Not read
@@ -159,8 +170,15 @@ describe('tokens', () => {
       matches: ['README.md'],
     });
     expect(resolvePath('payments/', entries)).toBeUndefined();
-    expect(classifyToken('@binarius/shared')).toBe('literal');
-    expect(classifyToken('columns.ts')).toBe('path');
+    expect(classifyToken('@binarius/shared', entries)).toBe('literal');
+    expect(classifyToken('columns.ts', entries)).toBe('path');
+  });
+
+  it('U8 a token that names an entry is a path whatever its shape; a directory name is not', () => {
+    const tracked = ['.env.example', 'apps/bot/Dockerfile', 'apps/backend/src/users/routes.ts'];
+    expect(classifyToken('.env.example', tracked)).toBe('path');
+    expect(classifyToken('Dockerfile', tracked)).toBe('path');
+    expect(classifyToken('users', tracked)).toBe('identifier');
   });
 
   it('U9 an expression is skipped: a space, brackets, quotes, ::, or a commit hash', () => {
@@ -174,9 +192,9 @@ describe('tokens', () => {
       'deadbeef1',
       'a|b',
     ])
-      expect(classifyToken(token), token).toBe('expression');
-    expect(classifyToken('deadbee')).toBe('expression');
-    expect(classifyToken('createStakeSizer')).toBe('identifier');
+      expect(classifyToken(token, []), token).toBe('expression');
+    expect(classifyToken('deadbee', [])).toBe('expression');
+    expect(classifyToken('createStakeSizer', [])).toBe('identifier');
   });
 
   it('U10 a compound identifier is held by its leading segment, a wildcard by its fixed part', () => {
@@ -189,7 +207,7 @@ describe('tokens', () => {
   });
 
   it('U11 a literal is a substring of the corpus, overlapping matches included', () => {
-    expect(classifyToken('.env')).toBe('literal');
+    expect(classifyToken('.env', [])).toBe('literal');
     expect(
       [...literalsFound(['abcd', 'bcx', '.env', 'gone'], 'xabcdx; bcx; .env.example')].sort(),
     ).toEqual(['.env', 'abcd', 'bcx']);
@@ -211,6 +229,73 @@ describe('tokens', () => {
       'rules/payments.md Rule 35: path gone/dir/ (no file)',
       'rules/payments.md Rule 35: literal /nowhere',
     ]);
+  });
+
+  it('U15 a bare directory name, and a word from a top-level directory that names nothing, fail', () => {
+    const repo: Repo = {
+      entries: [
+        'apps/backend/src/market-data/ring.ts',
+        'apps/backend/src/users/routes.ts',
+        'docs/x.md',
+      ],
+      corpus: buildCorpus(['const users = 1;']),
+      read: () => '',
+    };
+    const result = checkRules(
+      [
+        rule(
+          41,
+          'signal-h1',
+          '`market-data`, `users`; see docs/gone.md and `node apps/gone/x.ts`; bot/backend',
+        ),
+      ],
+      repo,
+    );
+    expect(result.errors).toEqual([
+      'rules/signal-h1.md Rule 41: path docs/gone.md (no file)',
+      'rules/signal-h1.md Rule 41: path apps/gone/x.ts (no file)',
+      'rules/signal-h1.md Rule 41: name market-data is a directory here: cite it as market-data/ or by its path, or add it to NOT_DIRECTORY_NAMES',
+    ]);
+    expect(result.rootedWords).toBe(2);
+  });
+
+  it.each([
+    ['`circuit-breaker/*.test.ts` W1', []],
+    ['`circuit-breaker/*.test.ts` W2', ['test id W2 (after circuit-breaker/*.test.ts)']],
+    ['`*.test.ts` X1', ['test id X1 (after *.test.ts)']],
+  ])('U17 a glob test citation with a / searches the files it matches: %s', (text, errors) => {
+    const files: Record<string, string> = {
+      'apps/w/src/circuit-breaker/window.test.ts': "it('W1 opens')",
+      'apps/w/src/other.test.ts': "it('X1')",
+    };
+    const repo: Repo = {
+      entries: Object.keys(files),
+      corpus: buildCorpus([]),
+      read: (entry) => files[entry] ?? '',
+    };
+    expect(checkRules([rule(22, 'trading', text)], repo).errors).toEqual(
+      errors.map((error) => `rules/trading.md Rule 22: ${error}`),
+    );
+  });
+
+  it.each([
+    ['см. docs/h1.md → Sessions.', ['docs/h1.md'], []],
+    ['**Сессии H1 (#670).** x', [], ['**', '*']],
+    [
+      "`grep -rn x apps/trading-worker/src --include='*.ts'`",
+      ['apps/trading-worker/src', '*.ts'],
+      [],
+    ],
+    ['{ code?, cause? }', ['code', 'cause'], ['code?']],
+    ['`.env.example`', ['.env.example'], []],
+    ['(`admin/`)', ['admin/'], []],
+    ['apps/**/x.ts', ['apps/**/x.ts'], ['apps/', 'x.ts']],
+    ['docs/h1.md.', ['docs/h1.md'], ['docs/h1.md.']],
+  ])('U16 the words of %s', (text, present, absent) => {
+    const words = wordsOf(text);
+    expect(words).toEqual(expect.arrayContaining(present));
+    for (const word of absent) expect(words).not.toContain(word);
+    if (text.startsWith('**')) expect(words.filter((word) => word.includes('*'))).toEqual([]);
   });
 });
 
@@ -237,6 +322,7 @@ describe('map', () => {
   const entries = [
     'apps/backend/src/admin/routes.ts',
     'apps/backend/src/app.ts',
+    'apps/bot/src/main.test.ts',
     'packages/db/drizzle/0001_append_only.sql',
     'packages/db/src/schema/columns.ts',
     'docs/stake.md',
@@ -248,21 +334,24 @@ describe('map', () => {
       rule(3, 'core', '`packages/db/drizzle/0001_append_only.sql`, `columns.ts`'),
       rule(18, 'bot-ui', '`apps/backend/src/admin/routes.ts`'),
       rule(12, 'auth', '`apps/backend/src/*/routes.ts`'),
+      rule(1, 'core', '`*.test.ts`'),
+      rule(10, 'core', '`apps/*/src`'),
     ];
     expect(renderMap(rules, entries)).toBe(
       [
         '| Путь | Правила |',
         '|---|---|',
-        '| `apps/backend/src` | auth 12 |',
-        '| `apps/backend/src/admin` | bot-ui 18 |',
-        '| `docs` | core 2 |',
+        '| `apps/backend/src` | core 10 |',
+        '| `apps/backend/src/admin` | bot-ui 18; auth 12 |',
+        '| `apps/bot/src` | core 10 |',
+        '| `docs/stake.md` | core 2 |',
         '| `packages/db/drizzle` | core 3 |',
         '| `packages/db/src/schema` | core 2, 3 |',
       ].join('\n'),
     );
   });
 
-  it('U14 mapKey: a directory under src, src itself, drizzle, a package root, the first segment', () => {
+  it('U14 mapKey: a directory under src, src itself, drizzle, a package root, a document, the first segment', () => {
     const directories = directoriesOf(entries);
     expect(mapKey('apps/backend/src/admin/routes.ts', directories)).toBe('apps/backend/src/admin');
     expect(mapKey('apps/backend/src/app.ts', directories)).toBe('apps/backend/src');
@@ -271,7 +360,10 @@ describe('map', () => {
       'packages/db/drizzle',
     );
     expect(mapKey('apps/bot/package.json', directories)).toBe('apps/bot');
-    expect(mapKey('docs/stake.md', directories)).toBe('docs');
+    expect(mapKey('docs/stake.md', directories)).toBe('docs/stake.md');
+    expect(mapKey('docs/admin/screenshots/a.png', directories)).toBe(
+      'docs/admin/screenshots/a.png',
+    );
     expect(mapKey('compose.yaml', directories)).toBe('compose.yaml');
   });
 });
@@ -290,7 +382,8 @@ describe('rulesFor', () => {
   it('C1 a file a rule cites by its full path', () => {
     const result = rulesFor(['packages/db/src/user-ops.ts'], rules, entries);
     expect(result.perFile[0].direct.map((r) => r.number)).toEqual([34]);
-    expect(result.areas).toEqual(['payments']);
+    expect(result.perFile[0].always.map((r) => r.number)).toEqual([2]);
+    expect(result.areas).toEqual(['core', 'payments']);
   });
 
   it('C2 a file a rule cites by its basename is a direct citation; its directory brings the rest', () => {
@@ -306,10 +399,10 @@ describe('rulesFor', () => {
   });
 
   it('C3 a file no rule cites sends the reader to core', () => {
-    const result = rulesFor(['apps/x/src/new.ts'], rules, entries);
+    const result = rulesFor(['scripts/new.sh'], rules, entries);
     expect(result.rules).toEqual([]);
     expect(result.areas).toEqual(['core']);
-    expect(renderList(result.perFile)).toContain('no rule cites apps/x/src/new.ts → read');
+    expect(renderList(result.perFile)).toContain('no rule cites scripts/new.sh → read');
   });
 
   it.each([
@@ -350,10 +443,23 @@ describe('rulesFor', () => {
     ],
     ['packages/**/schema/*.ts', 'packages/db/src/schema/new.ts', 'packages/db/src/schemas/new.ts'],
     ['apps/?ot/src', 'apps/bot/src/new.ts', 'apps/boot/src/new.ts'],
+    ['.env.example', '.env.example', '.env.example.bak'],
+    ['Dockerfile', 'apps/bot/Dockerfile', 'apps/bot/Dockerfile.dev'],
   ])('C4 a file a plan adds, which may not exist: %s holds %s, not %s', (token, inside, beside) => {
     expect(citesPath(token, inside)).toBe(true);
     expect(citesPath(token, beside)).toBe(false);
   });
+
+  it.each([
+    ['stake', 'apps/trading-worker/src/stake/size.ts'],
+    ['*.ts', 'apps/bot/src/x.ts'],
+    ['*', 'x.ts'],
+  ])(
+    'C4 a word without / never names a directory, a glob of an extension names nothing: %s, %s',
+    (token, file) => {
+      expect(citesPath(token, file)).toBe(false);
+    },
+  );
 });
 
 describe('--split', () => {
@@ -458,6 +564,60 @@ describe('the command line', () => {
   });
 });
 
+// G8's oracle, written apart from tooling/rules-for.ts: from the file's side, every form a rule
+// could write to name it — each path suffix of the file, each run of its directories with `/`, and
+// without `/` only when two or more segments long.
+function oracleWords(body: string): Set<string> {
+  const words = new Set<string>();
+  for (const match of body.matchAll(/[\w.\-/*?]+/g)) {
+    let word = match[0];
+    let before;
+    do {
+      before = word;
+      word = word
+        .replace(/^\*\*(?!\/)/, '')
+        .replace(/(?<!\/)\*\*$/, '')
+        .replace(/[.?-]+$/, '');
+    } while (word !== before);
+    if (word !== '') words.add(word);
+  }
+  return words;
+}
+
+function formsOf(file: string): Set<string> {
+  const parts = file.split('/');
+  const forms = new Set<string>();
+  for (let i = 0; i < parts.length; i += 1) forms.add(parts.slice(i).join('/'));
+  for (let j = 1; j < parts.length; j += 1)
+    for (let i = 0; i < j; i += 1) {
+      const directory = parts.slice(i, j).join('/');
+      forms.add(`${directory}/`);
+      if (j - i >= 2) forms.add(directory);
+    }
+  return forms;
+}
+
+function oracleGlob(word: string, file: string, forms: ReadonlySet<string>): boolean {
+  if (!/[*?]/.test(word)) return false;
+  if (!/[A-Za-z0-9]/.test(word.replace(/\.[A-Za-z0-9]+$/, '').replace(/[*?]/g, ''))) return false;
+  const glob = word.replace(/\/$/, '');
+  const source = glob
+    .split(/(\*\*|\*|\?)/)
+    .map((part) =>
+      part === '**'
+        ? '.*'
+        : part === '*'
+          ? '[^/]*'
+          : part === '?'
+            ? '[^/]'
+            : part.replace(/[.+^${}()|[\]\\]/g, '\\$&'),
+    )
+    .join('');
+  const pattern = new RegExp(`^${source}$`);
+  if (!glob.includes('/')) return pattern.test(file.slice(file.lastIndexOf('/') + 1));
+  return [...forms].some((form) => pattern.test(form.replace(/\/$/, '')));
+}
+
 describe('the rules in this repository', () => {
   let repo: Repo;
   let rules: Rule[];
@@ -472,7 +632,7 @@ describe('the rules in this repository', () => {
   });
 
   it('every path, identifier and literal the rules cite resolves; every test id the grammar reads after a test-file citation is in a cited test file (G1–G3)', () => {
-    const summary = `token classes ${JSON.stringify(gate.counts)}, ${gate.ids} test ids checked, ${gate.citationsWithoutIds} test-file citations without ids`;
+    const summary = `token classes ${JSON.stringify(gate.counts)}, ${gate.rootedWords} rooted words, ${gate.ids} test ids checked, ${gate.citationsWithoutIds} test-file citations without ids`;
     expect(rules.length).toBeGreaterThan(0);
     expect(repo.corpus.identifiers.size).toBeGreaterThan(1000);
     expect(gate.ids, summary).toBeGreaterThan(1200);
@@ -487,26 +647,97 @@ describe('the rules in this repository', () => {
     }
   });
 
-  it('G7 every resolved path a rule cites routes that rule to the files it names', () => {
-    const cases = rules.flatMap((r) =>
-      tokensOf(r.body)
-        .filter((token) => classifyToken(token) === 'path')
-        .flatMap((token) => {
-          const resolved = resolvePath(token, repo.entries);
-          return resolved === undefined
-            ? []
-            : [{ number: r.number, token, file: resolved.matches[0] }];
-        }),
+  it('G6b every name of NOT_DIRECTORY_NAMES is a bare token of a rule, a directory name, and names no file', () => {
+    const tokens = new Set(rules.flatMap((r) => tokensOf(r.body)));
+    const names = new Set(
+      [...directoriesOf(repo.entries)].map((d) => d.slice(d.lastIndexOf('/') + 1)),
     );
-    const { perFile } = rulesFor(
-      cases.map(({ file }) => file),
-      rules,
-      repo.entries,
-    );
-    const missed = cases
-      .filter(({ number }, i) => !perFile[i].direct.some((r) => r.number === number))
-      .map(({ number, token, file }) => `Rule ${number} ${token} -> ${file}`);
+    for (const name of NOT_DIRECTORY_NAMES) {
+      expect(tokens.has(name), name).toBe(true);
+      expect(names.has(name), name).toBe(true);
+      expect(resolvePath(name, repo.entries), name).toBeUndefined();
+    }
+  });
+
+  it('G8 every tracked file and a new file in every directory gets directly exactly the rules whose text names it', () => {
+    const inputs = [
+      ...repo.entries,
+      ...[...directoriesOf(repo.entries)].flatMap((d) => [
+        `${d}/zz-new.ts`,
+        `${d}/zz-new/zz-new.ts`,
+      ]),
+    ];
+    const words = new Map(rules.map((r) => [r.number, oracleWords(r.body)]));
+    const { perFile } = rulesFor(inputs, rules, repo.entries);
+    const diffs: string[] = [];
+    let pairs = 0;
+    perFile.forEach(({ file, direct }) => {
+      const router = new Set(direct.map((r) => r.number));
+      const forms = formsOf(file);
+      const oracle = new Set(
+        rules
+          .filter((r) => {
+            const own = words.get(r.number) ?? new Set<string>();
+            return (
+              [...forms].some((form) => own.has(form)) ||
+              [...own].some((w) => oracleGlob(w, file, forms))
+            );
+          })
+          .map((r) => r.number),
+      );
+      pairs += oracle.size;
+      const routerOnly = [...router].filter((n) => !oracle.has(n));
+      const oracleOnly = [...oracle].filter((n) => !router.has(n));
+      if (routerOnly.length > 0 || oracleOnly.length > 0)
+        diffs.push(
+          `${file}: router-only [${routerOnly.join(', ')}] oracle-only [${oracleOnly.join(', ')}]`,
+        );
+    });
+    expect(inputs.length).toBeGreaterThan(1000);
+    expect(pairs).toBeGreaterThan(500);
+    expect(diffs.slice(0, 20), `${diffs.length} inputs differ`).toEqual([]);
+  });
+
+  it('G9 every piece of a backticked token that names an entry is a word of its rule', () => {
+    let pieces = 0;
+    const missed: string[] = [];
+    for (const r of rules) {
+      const words = new Set(wordsOf(r.body));
+      for (const token of tokensOf(r.body))
+        for (const piece of token.split(/\s+/)) {
+          if (piece === '' || resolvePath(piece, repo.entries) === undefined) continue;
+          pieces += 1;
+          if (!words.has(piece)) missed.push(`Rule ${r.number} ${piece}`);
+        }
+    }
+    expect(pieces).toBeGreaterThan(500);
     expect(missed).toEqual([]);
+  });
+
+  it.each([
+    ['docs/h1.md', [44, 48]],
+    ['docs/trading-session.md', [48]],
+    ['.env.example', [27]],
+    ['apps/trading-worker/src/new.ts', [33]],
+  ])("C7 %s is named in a rule's prose, a command or as a dotfile: direct %j", (file, numbers) => {
+    const { perFile } = rulesFor([file], rules, repo.entries);
+    expect(perFile[0].direct.map((r) => r.number)).toEqual(expect.arrayContaining(numbers));
+  });
+
+  it.each([
+    'apps/backend/src/sessions-api/routes.ts',
+    'apps/web/src/admin/new.ts',
+    'packages/db/drizzle/0099_new.sql',
+  ])('C8 %s under apps/ or packages/ gets the always-on set', (file) => {
+    const result = rulesFor([file], rules, repo.entries);
+    const { direct, directory, always } = result.perFile[0];
+    const all = [...direct, ...directory, ...always].map((r) => r.number);
+    expect(all).toEqual(expect.arrayContaining([1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13]));
+    expect(result.areas).toContain('auth');
+  });
+
+  it('C8 a document outside apps/ and packages/ gets no always-on set', () => {
+    expect(rulesFor(['docs/new.md'], rules, repo.entries).perFile[0].always).toEqual([]);
   });
 
   it('C5 a new file under a directory glob or a relative directory gets the rule', () => {
