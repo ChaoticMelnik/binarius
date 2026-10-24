@@ -229,7 +229,7 @@ Implementer picks it up only once this comment exists.
 27. **Менеджер сессий брокера** — создаётся только при `BROKER_WS_URL` и safe-вердикте `socket-probe` → `rules/trading.md`
 28. **Торговая сессия** — одна `active`-сессия на аккаунт, владелец по `telegramUserId`, оркестратор и настройки сессии → `rules/trading.md`
 29. **Ставка пользователя по режимам** — `users.demo_stake`/`users.real_stake` nullable `money()`, NULL — минимальная ставка → `rules/bot-ui.md`
-30. **Переопределения текстов бота** — строка `bot_text_overrides` — только переопределение, ключ и длина — CHECK → `rules/bot-ui.md`
+30. **Переопределения текстов бота** — строка `bot_text_overrides` — только переопределение одного ключа на одном языке, PK `(language, key)`, язык, ключ и длина — CHECK → `rules/bot-ui.md`
 31. **Следующий шаг под каждым сообщением** — seam'ы `apps/bot/src/send.ts` требуют inline-клавиатуру; без неё — только `…WithoutNextStep` с причиной → `rules/bot-ui.md`
 32. **Lease сокета брокера** — одна строка на аккаунт в `broker_session_leases`, каждая операция — один statement по часам БД → `rules/trading.md`
 33. **Предохранитель DEMO_ONLY** — процесс с `DEMO_ONLY=true` не отправляет брокеру операцию с реальными деньгами → `rules/trading.md`
@@ -275,7 +275,7 @@ Implementer picks it up only once this comment exists.
 | `apps/backend/src/postbacks` | core 3, 5, 7, 9, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37; auth 12, 13 |
 | `apps/backend/src/signal` | signal-h1 20, 41 |
 | `apps/backend/src/trade-log` | signal-h1 45 |
-| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 19, 29, 30, 31, 46, 47; auth 12, 13 |
+| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 18, 19, 29, 30, 31, 46, 47; auth 12, 13 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26; signal-h1 20, 43 |
 | `apps/bot/src` | core 8, 10, 14, 26, 51; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |

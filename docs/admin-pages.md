@@ -590,17 +590,26 @@ logs no request body: no password reaches the HTML or the log of `web`.
 
 The client bot's texts ([bot-texts.md](bot-texts.md)). The wire shapes are in
 `packages/shared/src/admin-bot-texts.ts`, the reads in `packages/db/src/admin-bot-text-ops.ts`.
-web reads the five text routes' answers up to `MAX_BOT_TEXTS_BODY_BYTES` (8 MiB), every other
+web reads the five text routes' answers up to `MAX_BOT_TEXTS_BODY_BYTES` (16 MiB), every other
 backend answer up to `MAX_BACKEND_BODY_BYTES` (1 MiB); `publish` is on the latter (Rule 26).
+
+**The language (#634).** Each language has its own overrides. The list and the editor show one
+language: `?lang=en` the English texts, no `lang` or `lang=ru` the Russian ones (the URLs from
+before #634 are the Russian pages), any other value (or `lang` twice) a 400 page. Under the heading, «Язык текстов: ✅ русский ·
+английский» switches between them, the shown one without a link. Every form carries the page's
+language as a hidden `language` field (a form without one, or with another value, is a 400), the
+backend's routes take it in the body (`language` of the preview, save and reset requests) and the
+editor's read as `GET /admin/bot-texts/:key?language=ru|en` (required: a 400 `validation`
+otherwise, before the session is checked); the list's read answers the rows of both languages, each
+with its `language`, and web shows the page's. A redirect after a POST keeps the language.
 
 **The list** shows every catalog key under its group (`BOT_TEXT_GROUP_TITLES`, in catalog order):
 the key (a link to the editor), where the text is shown, and its state — «исходный», or «изменён:
 версия N, login,» and the time (`CLI` for a row the CLI wrote). A row the loaders reject carries
 the reason and «Показан исходный текст». At the end, «Строки без ключа в каталоге»: rows whose key
 this build's catalog does not have (a renamed key), each with «Удалить» — a `POST …/reset` with the
-row's version. The section is absent when there are none. Under the heading, one line: the overrides
-apply to the Russian texts, the English ones come from the catalog (#508; per language: #634). `?notice=removed|gone|changed` reports
-the result of a delete; any other value shows nothing.
+row's version and language. The section is absent when there are none. `?notice=removed|gone|changed`
+reports the result of a delete; any other value shows nothing.
 
 **The editor** shows the key, its group and description, the state as on the list, and
 «Плейсхолдеры» (`placeholderHints`, the one place that reads the entry's `vars`, `fragments` and
@@ -609,9 +618,10 @@ Variables) — «{tokens} — Доступные токены автоторго
 required —, each fragment with a link to its key, the text in effect and «(изменён)», the limit,
 «одна строка» for a
 single-line key, and «Используется в:» — the keys that quote this one as a fragment. The form has
-the text (the override, or the default), a hidden version (0 without an override) and two buttons:
+the text (the override, or the language's default), a hidden version (0 without an override), the
+hidden language, and two buttons:
 «Предпросмотр» (`formaction` to `…/preview`) and «Сохранить». With an override, «Исходный текст»
-shows the default and «Вернуть исходный» posts `…/reset`. `?notice=saved|reset|already_default`
+shows the language's default and «Вернуть исходный» posts `…/reset`. `?notice=saved|reset|already_default`
 reports the result of a write («Сохранено. Бот применит текст в течение 35 с» —
 `BOT_TEXTS_APPLIED_WITHIN_S`, which `apps/bot/src/timing.test.ts` holds at least the refresh plus
 the load timeout).
@@ -622,7 +632,8 @@ transaction committed — never inside it: a Bot API call of up to `BOT_PROFILE_
 would hold the session row past the pool's `query_timeout` for the next request of the same
 session. Only the key's own method is sent (`botProfileMethodsOf`, `packages/shared`: a command
 description → `setMyCommands`, `profileDescription` → `setMyDescription`, `profileShortDescription`
-→ `setMyShortDescription`), from the rows as the loaders resolve them after the commit, one attempt
+→ `setMyShortDescription`), only in the key's language (#634), from the rows as the loaders resolve
+them after the commit, one attempt
 (`publishBotProfile`, [bot-texts.md](bot-texts.md) → Publishing). The admin's publishes are one queue
 a backend process (`publishAfterCommit`): each reads the rows after the previous one was sent, so the
 last publish of a burst carries every admin save or reset committed before its read; the CLI, the
@@ -635,7 +646,8 @@ profile not published`) with the identity as it was, and holds the one in the an
 the wire: an empty name becomes `Error`, a name or code is cut to 128 characters, a Telegram code
 outside 100–599 is left out. «Опубликовать заново» — one button above «Команды: описания» on the list
 and one in the editor of each key of the two groups — is `POST /admin/bot-texts/publish`: all three
-methods from the rows, whatever their state; it is shown always (no state of the last publish is
+methods in both languages from the rows, whatever their state (the form's language only picks the
+page web returns to); it is shown always (no state of the last publish is
 kept). The list says «Меню команд и профиль бота публикуются в Telegram при сохранении и сбросе»; the
 editor of such a key says what its save publishes.
 
@@ -643,7 +655,7 @@ The page after a publish learns the result from the redirect (`?notice=published
 republished&publish=…`): one segment a method, `method:ok` or
 `method:Name[.code][:telegramErrorCode][@language]`, joined by `,`
 (`apps/web/src/admin/publish-result.ts`); the language is the one whose call failed first, since a
-method is published in Russian and in English (#508). It shows one line a method — «Меню команд
+republish sends a method in Russian and in English (#508). It shows one line a method — «Меню команд
 (setMyCommands): опубликовано», «Описание бота (setMyDescription): ошибка (en) — GrammyError,
 Telegram 400» — and, after a failure, «Текст сохранён, но Telegram не принял публикацию. После восстановления
 нажмите «Опубликовать заново».». A value outside the grammar — an unknown or repeated method, a
@@ -653,9 +665,9 @@ has none, is not shown. A result shows only under a publish notice. A name or co
 not take is sent as `Error` or left out. F5 on that page sends nothing.
 
 **The preview** renders the draft as the bot would: the backend checks it with
-`botTextChangeProblems` (as a save would), then renders it through the bot's own views with the
-draft in place, every variable at the registry's sample and the fragments with their texts in
-effect. A variable the key does not have is refused as a save would refuse it: «Переменная
+`botTextChangeProblems` (as a save would, in the draft's language), then renders it through the
+bot's own views with the draft in place, every variable at the registry's sample and the fragments
+with their texts in effect in that language. A variable the key does not have is refused as a save would refuse it: «Переменная
 {realBalance} недоступна в этом тексте. Доступны: {email}, {firstName}». Nothing is written or locked; a save in between is caught by the version on «Сохранить».
 `web` checks the rendered text against `telegramHtmlProblems` (its contract) and converts it
 (`apps/web/src/admin/telegram-preview.ts`): every tag is rebuilt from the Telegram allowlist as a
@@ -665,8 +677,8 @@ shows as its text. `telegramHtmlProblems` does not check link schemes, so a save
 carry a `javascript:` link; what Telegram does with one is not checked here. A plain key shows as
 a button label. The draft stays in the field.
 
-**Saving and resetting.** `web` takes the form only as two strings (`source`, `version` of up to 16
-digits; a field given twice is an array), turns CRLF into LF and drops one trailing line feed, as
+**Saving and resetting.** `web` takes the form only as strings (`language`, `source`, `version` of up
+to 16 digits; a field given twice is an array), turns CRLF into LF and drops one trailing line feed, as
 the CLI does with a file, then checks the shared schema (`source` at most `BOT_TEXT_SOURCE_MAX`
 code points). The backend calls `applyBotTextSave`/`applyBotTextReset` inside the `runAsStaff`
 transaction: the session touch, then the table lock and the write, then the one audit row. No
@@ -718,13 +730,13 @@ named and bounded; nothing else is recorded.
 | password page, `GET` | `staff_sessions_viewed` | — | `{ path: '/admin/sessions', sessionId }` — the backend's sessions read, as on the sessions page |
 | password change, `POST` | `staff_password_changed` / `staff_password_change_failed` | `staff`, the caller | staff-login.md → What is written down (#78) |
 | bot texts list | `bot_texts_viewed` | — | `{ path: '/admin/bot-texts' }` |
-| bot text editor, found | `bot_text_viewed` | `bot_text`, no id | `{ path: '/admin/bot-texts/:key', key, result: 'found' }` |
-| bot text editor, a key not in the catalog | `bot_text_viewed` | — | `{ path, result: 'not_found', key? }` — `key` only when it matches `BOT_TEXT_KEY_PATTERN` |
-| bot text preview | `bot_text_previewed` | `bot_text` | `{ path, key?, result }` — `rendered`, `refused` or `not_found`; no text |
-| bot text save, written | `bot_text_saved` | `bot_text` | `{ path, result: 'saved', key, action, oldText, newText, oldVersion, newVersion }` — the CLI's payload plus `path` and `result` |
+| bot text editor, found | `bot_text_viewed` | `bot_text`, no id | `{ path: '/admin/bot-texts/:key', language, key, result: 'found' }` |
+| bot text editor, a key not in the catalog | `bot_text_viewed` | — | `{ path, language, result: 'not_found', key? }` — `key` only when it matches `BOT_TEXT_KEY_PATTERN` |
+| bot text preview | `bot_text_previewed` | `bot_text` | `{ path, language, key?, result }` — `rendered`, `refused` or `not_found`; no text |
+| bot text save, written | `bot_text_saved` | `bot_text` | `{ path, result: 'saved', language, key, action, oldText, newText, oldVersion, newVersion }` — the CLI's payload plus `path` and `result` |
 | bot text reset, written | `bot_text_reset` | `bot_text` | the same with `result: 'reset'`; an orphan's `oldText` is the row's text and its `newText` is `null`, as from the CLI |
-| bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused` or `not_found`; no text |
-| the command menu or the profile published (#361) | `bot_profile_published` | `bot_text` | `{ path, trigger, key?, methods }` — `trigger` is `save`, `reset` or `republish`; `key` only for a save or reset; `methods` is the `published` of the answer |
+| bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, language, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused` or `not_found`; no text |
+| the command menu or the profile published (#361) | `bot_profile_published` | `bot_text` | `{ path, trigger, key?, language?, methods }` — `trigger` is `save`, `reset` or `republish`; `key` and `language` (the one language published, #634) only for a save or reset; `methods` is the `published` of the answer |
 | token adjustment, applied (#246) | `token_adjusted` | `user`, the id | `{ path: '/admin/users/:id/tokens', result: 'adjusted', userId, ledgerEntryId, delta, note, balanceBefore, balanceAfter, reserved }` — the amounts as decimal strings |
 | token adjustment, refused | `token_adjusted` | `user`, the id | `{ path, result, userId, delta, expectedBalance, balance, reserved }` — `result` is `insufficient_available` or `balance_changed`; no `note`: it was written nowhere |
 | token adjustment, no user | `token_adjusted` | — | `{ path, result: 'not_found', userId }`; an id that is not a uuid (direct backend call): `{ path, result: 'not_found' }` |

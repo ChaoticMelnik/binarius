@@ -384,8 +384,12 @@ docker compose exec -T backend pnpm -s --filter @binarius/backend bot-text show 
 docker compose exec -T backend pnpm --filter @binarius/backend bot-text set welcome --file - < welcome.txt
 docker compose exec backend pnpm --filter @binarius/backend bot-text reset welcome
 docker compose exec backend pnpm --filter @binarius/backend bot-text list
+docker compose exec backend pnpm --filter @binarius/backend bot-text show startCommand --lang en
 docker compose exec backend pnpm --filter @binarius/backend bot-text publish
 ```
+
+Each language has its own overrides: `list`, `show`, `set` and `reset` take `--lang ru|en`
+(Russian without it), and the admin switches between «русский» and «английский» on the page.
 
 The command descriptions and the bot's profile live in Telegram: a save or reset of one of them, in
 the admin or with the CLI `set`/`reset`, publishes it at once and shows the result per method, and

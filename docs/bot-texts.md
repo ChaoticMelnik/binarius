@@ -34,11 +34,11 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - `packages/shared/src/telegram-html.ts` — `telegramHtmlTemplate`, the constructor the views use
   ([Safety](#safety)).
 - `apps/bot/src/texts.ts` — the bot's view: `TEXTS`, `LABELS`, `PROFILE`, `botCommands()`, the
-  label maps, `setBotTextSource`, `textOf`.
+  label maps, `setBotTextSources`, `textOf`.
 - `packages/shared/src/bot-commands.ts` — the command menu: `BOT_COMMANDS` (each command's name and
   its description's key), `BOT_COMMAND_SCOPE`, `botCommandsOf(plain)`.
 - `apps/backend/src/auth/texts.ts` — the backend's view, by the recipient's language (#633):
-  `clientTextsOf`, `clientLabelsOf`, `clientSessionTextsOf`, `setBotTextSource`; read by the pushes
+  `clientTextsOf`, `clientLabelsOf`, `clientSessionTextsOf`, `setBotTextSources`; read by the pushes
   (`auth/client-push.ts`, `payments/star-reconciler.ts`), the mailings (`mailing/messages.ts`) and
   the session notices (`trading/session-notice-messages.ts`).
 - `packages/shared/src/bot-text-overrides.ts` — the resolver, the writer's check, the Russian
@@ -233,9 +233,10 @@ the validator's view; `renderWith` fills each placeholder with a given string, f
 key's text and its fragments' texts are unchanged — the suites compare texts with `toBe` — and
 renders again as soon as any of them changes.
 
-The bot's `texts.ts` and the backend's `auth/texts.ts` each hold a source, the catalog's defaults
-until `setBotTextSource` replaces it (the refresher does, every 30 s: [Loading](#loading)), and
-build their views over it.
+The bot's `texts.ts` and the backend's `auth/texts.ts` each hold a source per language, that
+language's defaults (`BOT_TEXT_DEFAULT_SOURCES`: the catalog for Russian, `BOT_TEXT_SOURCES_EN` for
+English) until `setBotTextSources` replaces both (the refresher does, every 30 s:
+[Loading](#loading)), and build each language's views over its own.
 The bot's views keep the names they had before the catalog: `TEXTS` is every html key but
 `cardGreetingNoName`, `featureLines`, `oauthLoginFailed` and `depositCredited`, with `cardGreeting` falling back to
 `cardGreetingNoName` for a blank name; `LABELS` is the `buttons` and `commands` groups but
@@ -387,13 +388,16 @@ preview renders `samples` (`renderBotTextPreview`).
 
 ## Overrides
 
-`bot_text_overrides` holds one row per overridden key: `key`, `source`, `version`, `updated_at`,
-`updated_by_staff_id` (null from the CLI). A key with no row shows its default; a reset deletes
-the row. The table's CHECKs hold the key's spelling and a length of 1-16384
-(`BOT_TEXT_SOURCE_MAX`); whether the key is in the catalog is the writer's check, and a row that
-skips it is ignored by the loaders. A version comes from `bot_text_override_version_seq` on every
-write, so a key reset and saved again never gets back a version a stale form still holds. A key
-with no row is version 0.
+`bot_text_overrides` holds one row per overridden key of one language (#634): `language`, `key`,
+`source`, `version`, `updated_at`, `updated_by_staff_id` (null from the CLI); the primary key is
+`(language, key)`. A key with no row in a language shows that language's default; a reset deletes
+the row of its language only. The table's CHECKs hold the language (`ru` | `en`, from
+`BotLanguage`), the key's spelling and a length of 1-16384 (`BOT_TEXT_SOURCE_MAX`); whether the key
+is in the catalog is the writer's check, and a row that skips it is ignored by the loaders. A
+version comes from `bot_text_override_version_seq` on every write, so a key reset and saved again
+never gets back a version a stale form still holds; one key's two languages have versions of their
+own from the same sequence. A key with no row in a language is version 0 there. Migration 0083 gave
+the rows before it `ru`.
 
 The writer (`applyBotTextSave`, `applyBotTextReset`) locks the table in `SHARE ROW EXCLUSIVE`
 mode, which serializes writers and leaves the loaders' SELECT alone, and reads every row. It runs
@@ -402,17 +406,19 @@ and write the audit row; the admin section calls it inside `runAsStaff`, which w
 refuses:
 
 - a key outside the catalog (a reset of one is allowed);
-- an expected version other than the current one: «Текст уже изменил другой сотрудник»; the
-  answer carries the current version and text (the default when there is no row);
-- a change `botTextChangeProblems` objects to: the key itself would be rejected by the resolver
-  below, or an override in effect now would stop being — a fragment that breaks a host, a reset
-  that puts back a longer default, two texts that overflow a card together. An override the
-  loaders reject already does not block a change of another key.
+- an expected version other than the current one of the key in that language: «Текст уже изменил
+  другой сотрудник»; the answer carries the current version and text (the language's default when
+  there is no row);
+- a change `botTextChangeProblems(language, …)` objects to: the key itself would be rejected by the
+  resolver below, or an override of that language in effect now would stop being — a fragment that
+  breaks a host, a reset that puts back a longer default, two texts that overflow a card together.
+  An override the loaders reject already does not block a change of another key, and the other
+  language's set, over defaults of its own, is not looked at.
 
 A save that changes nothing answers «unchanged», a reset of a default «already default»; neither
 writes. Every save and reset writes `audit_log` in the same transaction: `bot_text_saved` or
-`bot_text_reset`, payload `{ key, action, oldText, newText, oldVersion, newVersion }`, the texts
-in effect before and after; a reset of a key outside the catalog records the row's text as
+`bot_text_reset`, payload `{ language, key, action, oldText, newText, oldVersion, newVersion }`, the
+texts in effect in that language before and after; a reset of a key outside the catalog records the row's text as
 `oldText`, the only copy there is. The admin's row adds `path` and `result`, and a refused admin
 request writes the same action with `result` and no texts (admin-pages.md → Audit actions). The
 admin publishes the command menu and the profile after a save or reset of their keys, as the CLI
@@ -421,29 +427,34 @@ Publishing).
 
 ## Loading
 
-The overrides apply to the Russian texts only (#508; per language: #634). `resolveBotTextOverrides(rows)` decides which rows take effect, for the loaders and the writer
-alike. A row is rejected, and its key shows the default, when its key is unknown,
+Each language has its own overrides over its own defaults (#634). `resolveBotTextOverridesOf(language,
+rows)` decides which rows of that language take effect, for the loaders and the writer alike;
+`resolveBotTextOverrides(rows)` gives every language's set from one load. The hosts, fragments and
+assembled messages are the catalog's in both languages; the texts checked against them are the
+language's. A row is rejected, and its key shows the language's default, when its key is unknown,
 when `botTextProblems` refuses it against the other accepted texts, when it is a fragment that
 breaks a host still on its default, or when it is a part of an assembled message that would
 overflow (every overridden part of that message goes). Rejecting only takes candidates out and the
 defaults pass, so the loop ends.
 
 `createBotTextRefresher` loads at start and then every `BOT_TEXTS_REFRESH_MS` (30 s) from the
-start of the previous load: the bot over `GET /bot-texts` (internal bearer, `{ key, source,
-version }` only) within `BACKEND_REQUEST_TIMEOUT_MS` and up to `MAX_BOT_TEXTS_BODY_BYTES` (8 MiB) of
-body, a longer one being a failed load, the backend from the database within
-`BOT_TEXTS_LOAD_BUDGET_MS`. A saved text reaches new messages within 35 s in the bot and 33 s in
+start of the previous load: the bot over `GET /bot-texts` (internal bearer, `{ language, key,
+source, version }` only, the rows of both languages) within `BACKEND_REQUEST_TIMEOUT_MS` and up to
+`MAX_BOT_TEXTS_BODY_BYTES` (16 MiB) of body, a longer one being a failed load, the backend from the
+database within `BOT_TEXTS_LOAD_BUDGET_MS`. One load applies both languages' sets. A saved text reaches new messages within 35 s in the bot and 33 s in
 the backend's push, without a restart; the CLI and the admin promise
 `BOT_TEXTS_APPLIED_WITHIN_S` (35), which `apps/bot/src/timing.test.ts` holds at least the refresh
 plus `BACKEND_REQUEST_TIMEOUT_MS`. A failed load keeps the last applied set — the defaults
 until the first success — and logs a `warn` by error identity; a rejected row is logged once per
-change of the rejected set, by key, version and reason, never with its text. Both processes stop
+change of the rejected set, by language (`botTextLanguage`), key, version and reason, never with
+its text. A row without a `language` (a bot newer than its backend) fails the wire schema: the load
+fails and the last applied texts stay. Both processes stop
 the refresher on shutdown.
 
-The table's CHECKs are the bot's wire schema bounds, field for field: the key's pattern, the
-source's length in code points (as zod's `max` counts a string, and as `char_length` does), the
-version 1..2^53−1, and 1000 rows through the read's `limit` (`listBotTextOverrides`, first by
-key). So no row in the table, hand-inserted SQL included, fails the bot's parse of
+The table's CHECKs are the bot's wire schema bounds, field for field: the language, the key's
+pattern, the source's length in code points (as zod's `max` counts a string, and as `char_length`
+does), the version 1..2^53−1, and 2000 rows (`BOT_TEXT_OVERRIDE_ROWS_MAX`, 1000 a language) through
+the read's `limit` (`listBotTextOverrides`, first by language and key). So no row in the table, hand-inserted SQL included, fails the bot's parse of
 `GET /bot-texts`; a row that passes them and fails the resolver is rejected and shows the default
 in both processes. `schema.db.test.ts` holds the two sides equal on their boundary rows.
 
@@ -452,7 +463,7 @@ in both processes. `schema.db.test.ts` holds the two sides equal on their bounda
 The bot writes in Russian or English (#508; the owner's decisions of 2026-10-15). Part 2 (#632)
 translated `demo`, `analysis` and `trade`; part 3 (#633) translated `session`, `stars`, `mailing`,
 `deposit` and the backend's pushes, so every key has an English text; #634 gives the overrides a
-language.
+language: an English override changes the English text only, and a Russian one the Russian.
 
 - **The rule.** `botLanguageOf(language_code)` (`packages/shared/src/bot-language.ts`): Russian when
   Telegram sends no tag or one whose first subtag is `ru` in any case (`ru`, `ru-RU`, `RU`),
@@ -507,8 +518,9 @@ language.
   русский | English» for every translated key under `head=` and the count (exit 1 with none); the
   group arguments keep only those groups' keys and are named in the head line (`groups=…`; exit 2
   on a group the catalog does not have, #632). The PR carries it for the owner.
-- **What stays Russian.** The overrides (the CLI, the admin section: Russian only until #634), the
-  staff bot, the cashier Mini App and the sign-in pages (`apps/web`).
+- **What stays Russian.** The CLI's and the admin section's own words (they edit the texts of
+  both languages, `--lang` and the language switch: [The CLI](#the-cli), admin-pages.md → Bot
+  texts), the staff bot, the cashier Mini App and the sign-in pages (`apps/web`).
   Numbers and dates print the same in both languages; only the words differ, `formatAge`'s units
   included (`ageSecondsUnit`, `ageMinutesUnit`).
 
@@ -522,7 +534,12 @@ docker compose exec -T backend pnpm -s --filter @binarius/backend bot-text show 
 docker compose exec -T backend pnpm --filter @binarius/backend bot-text set welcome --file - < welcome.txt
 docker compose exec backend pnpm --filter @binarius/backend bot-text reset welcome
 docker compose exec backend pnpm --filter @binarius/backend bot-text list
+docker compose exec backend pnpm --filter @binarius/backend bot-text show startCommand --lang en
 ```
+
+`list`, `show`, `set` and `reset` take `--lang ru|en` (#634), Russian without it; any other value is
+a usage error. `list` prints one language's state and rejected rows; `set` and `reset` say the
+language they wrote (`Сохранено: welcome (en), версия …`).
 
 `show` prints the text alone on stdout and the rest (group, description, the key's variables with
 their descriptions and samples, its fragments, the version) on stderr.
@@ -536,9 +553,9 @@ also publish to Telegram ([Publishing](#publishing)).
 
 Telegram keeps the command menu (`setMyCommands`, scope `all_private_chats`), the description and
 the short description on its side, so a change of one of those texts reaches users only once it is
-published. Each is published in both languages (#508): the Russian texts, overrides included, under
-`language_code: 'ru'`, the English ones (the catalog's) with no `language_code`, the default
-Telegram shows every other client. Telegram picks them by the client's interface language, not by
+published. Each is published in both languages (#508): the Russian texts under
+`language_code: 'ru'`, the English ones with no `language_code`, the default Telegram shows every
+other client, each language with its own overrides (#634). Telegram picks them by the client's interface language, not by
 the language chosen in the bot (a per-chat list would override the general one for good). Three places publish, each from the rows as the loaders resolve them, never from the
 text of a request:
 
@@ -547,12 +564,14 @@ text of a request:
   load publishes the defaults. The refresher's later loads apply new texts to messages and `/help`,
   but do not publish: the menu and the profile change at the next start or `publish`.
 - **The CLI after a save or a reset** of a `commands` key (`setMyCommands`) or a `profile` key
-  (`setMyDescription` or `setMyShortDescription`): after the commit, only the method of that key.
+  (`setMyDescription` or `setMyShortDescription`): after the commit, only the method of that key,
+  and only in the key's language (#634).
   A save or reset that writes nothing publishes nothing.
-- **`bot-text publish`**: all three, for a failed publish or a row written by hand.
+- **`bot-text publish`**: all three in both languages, for a failed publish or a row written by
+  hand.
 - **The admin section (#361)**, the same two ways: after the commit of a save or reset of a key of
-  the two groups, only that key's method; «Опубликовать заново» (`POST /admin/bot-texts/publish`),
-  all three. Each writes `bot_profile_published` with the result by method (admin-pages.md → Bot
+  the two groups, only that key's method in the key's language; «Опубликовать заново»
+  (`POST /admin/bot-texts/publish`), all three in both languages. Each writes `bot_profile_published` with the result by method (admin-pages.md → Bot
   texts → Publishing).
 
 ```bash
@@ -569,9 +588,9 @@ override is kept (#240, В6). `publish` exits 1 when any method failed. These ru
 saved — and other keys never need it.
 
 `publishBotProfile` (`apps/backend/src/bot-texts/publish.ts`) does the backend's publishing: one
-attempt per call, the methods one after another and a method's two languages side by side, each
-call caught on its own, one result per method sent — `ok` when both languages were, else the first
-failure with its `language`. It
+attempt per call, the methods one after another and a method's languages (both, or the one a save
+or reset names) side by side, each call caught on its own, one result per method sent — `ok` when
+every language sent was, else the first failure with its `language`. It
 uses a bare grammY `Api` on the public bot's token, which polls nothing. Each call is bounded by
 `BOT_PROFILE_PUBLISH_TIMEOUT_MS` (2 s) and the three methods by `BOT_PROFILE_PUBLISH_BUDGET_MS` (6 s,
 `packages/shared`), the bound web's request timeout sits above, since the admin routes publish
