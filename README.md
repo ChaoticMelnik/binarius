@@ -100,13 +100,17 @@ a source that no longer exists stays behind), so the tests run before anything i
 and `tooling/manifest-targets.test.ts` checks that every manifest entry point names a file in the
 tree, never an ignored build output. The other scripts are for running one step on its own.
 
-`node tooling/rules-for.ts <files>` prints the Architecture Rules that cite the given paths
-(`--list`, `--files`, `--map`, `--dump`, and `--split <ref>`, which regenerates the rule files
-from the one-section SKILL.md of an older commit; the index is `.claude/skills/architect/SKILL.md` →
-Architecture Rules, the rules are in `.claude/skills/architect/rules/*.md`), for example
+`node tooling/rules-for.ts <files>` prints the Architecture Rules whose text names the given paths
+(in backticks, inside a command or in the prose) and, for a file under `apps/` or `packages/`, the
+always-on set `ALWAYS` (`--list`, `--files`, `--map`, `--dump`, and `--split <ref>`, which
+regenerates the rule files from the one-section SKILL.md of an older commit; the index is
+`.claude/skills/architect/SKILL.md` → Architecture Rules, the rules are in
+`.claude/skills/architect/rules/*.md`), for example
 `gh pr diff <N> --name-only | xargs node tooling/rules-for.ts --list`;
-`tooling/rules-for.test.ts` checks every path, identifier and literal the rules cite, and every
-test id after a test-file citation (the grammar and what it does not read — the head of the test).
+`tooling/rules-for.test.ts` checks every path, identifier and literal the rules cite, every test id
+after a test-file citation, and that every tracked file, and a new file in every directory, gets
+directly exactly the rules whose text names it (the grammar and what it does not read — the head
+of the test).
 
 ## Docker dev environment
 
