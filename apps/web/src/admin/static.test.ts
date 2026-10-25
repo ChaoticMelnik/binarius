@@ -40,4 +40,12 @@ describe('the admin stylesheet (#459)', () => {
       expect(adminFont(name)).toBeUndefined();
     }
   });
+
+  // #656: the row card reads each cell's label from its data-label, and the stop-gap rule of #459
+  // holds only the tables not yet on the component
+  it('S7 labels the row card from data-label and keeps the old-table rule off the component', () => {
+    expect(ADMIN_CSS).toMatch(/\.table td::before\s*\{[^}]*content:\s*attr\(data-label\)/);
+    expect(ADMIN_CSS).toContain('main table:not(.table) {');
+    expect(ADMIN_CSS).not.toMatch(/main table\s*\{/);
+  });
 });

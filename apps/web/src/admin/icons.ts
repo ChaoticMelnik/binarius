@@ -22,6 +22,8 @@ export const ICON_NAMES = [
   'moon',
   'monitor',
   'log-out',
+  'copy',
+  'check',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -47,6 +49,8 @@ export const ICONS: Readonly<Record<IconName, SafeHtml>> = {
   moon: html`<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />`,
   monitor: html`<rect width="20" height="14" x="2" y="3" rx="2" /><line x1="8" x2="16" y1="21" y2="21" /><line x1="12" x2="12" y1="17" y2="21" />`,
   'log-out': html`<path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />`,
+  copy: html`<rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />`,
+  check: html`<path d="M20 6 9 17l-5-5" />`,
 };
 
 /** The hidden sprite, once per page; `icon` refers into it. */

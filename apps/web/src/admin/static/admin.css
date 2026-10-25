@@ -537,6 +537,21 @@ form.search input {
   min-width: 0;
 }
 
+/* a filter row is a column on a phone: every field and the button the full width, for a finger */
+@media (max-width: 30rem) {
+  form.search,
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  form.search label,
+  form.search button {
+    flex: none;
+    width: 100%;
+  }
+}
+
 form.editor {
   display: grid;
   gap: var(--space-3);
@@ -672,13 +687,139 @@ tr.current > td {
   margin: 0;
 }
 
-/* Until #656 turns rows into cards: an old table is as wide as its content and scrolls inside
-   itself when that is wider than the page, so the page itself never scrolls sideways. */
-main table {
+/* A table not yet on the component (the audit log and the service accounts until #817, the bot
+   texts until #657) is as wide as its content and scrolls inside itself when that is wider than
+   the page, so the page itself never scrolls sideways. #657 removes this with the last one. */
+main table:not(.table) {
   display: block;
   width: max-content;
   max-width: 100%;
   overflow-x: auto;
+}
+
+/* Table and row card (#656, docs/admin-design-system.md). The header is not sticky: .table-wrap is
+   the scroll container a wide table needs, and a sticky <thead> inside it has nothing to stick to. */
+.table th,
+.table td {
+  padding: var(--space-1) var(--space-3);
+}
+
+.table td {
+  line-height: 1.5;
+}
+
+/* At full width a row stays one line: a table wider than the column scrolls in .table-wrap rather
+   than breaking ids and times; only free text (a note, a user agent) wraps, up to its max-width. */
+@media (min-width: 64rem) {
+  .table {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .table td {
+    white-space: nowrap;
+  }
+
+  .table td.wrap {
+    min-width: 12rem;
+    max-width: 22rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+.copy {
+  vertical-align: middle;
+  margin-left: var(--space-1);
+}
+
+/* below the 40 px of the other buttons on purpose: an extra over a selectable id, inside a row */
+.table .copy {
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  padding: 0.125rem;
+}
+
+.copy .icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.badge > code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+@media (max-width: 63.99rem) {
+  .table {
+    --card-label-w: 7rem;
+  }
+
+  .table,
+  .table tbody,
+  .table tr {
+    display: block;
+  }
+
+  .table {
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tr {
+    margin-bottom: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    background: var(--color-surface);
+  }
+
+  /* The label floats in the cell's left padding (its negative margin cancels its width), so the
+     content keeps one column of its own, however many inline pieces it has, and the cell still
+     grows to a label that wraps to two lines. */
+  .table td {
+    display: flow-root;
+    padding: var(--space-1) 0 var(--space-1) calc(var(--card-label-w) + var(--space-3));
+    border-bottom: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    float: left;
+    width: var(--card-label-w);
+    margin-left: calc(-1 * (var(--card-label-w) + var(--space-3)));
+    color: var(--color-fg-muted);
+    font-size: var(--text-sm);
+    line-height: 1.5rem;
+  }
+
+  .table td:not([data-label]) {
+    padding: var(--space-2) 0 var(--space-1);
+  }
+
+  .table time {
+    font-size: var(--text-sm);
+    white-space: normal;
+  }
+
+  .table td.num {
+    text-align: left;
+  }
+
+  .table td.agent {
+    max-width: none;
+  }
+
+  .table tbody tr:hover > td {
+    background: none;
+  }
 }
 
 /* ---- description lists, cards ---- */
@@ -711,6 +852,7 @@ dd {
 }
 
 .props {
+  align-items: baseline;
   padding: var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -832,6 +974,24 @@ dd {
   flex-wrap: wrap;
   gap: var(--space-3);
   margin: var(--space-3) 0 var(--space-4);
+}
+
+/* the links stay plain <a href> (the pages' tests read them so); they look like .btn-secondary */
+.pager > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-fg);
+  font-weight: 500;
+}
+
+.pager > a:hover {
+  border-color: var(--color-fg-muted);
+  text-decoration: none;
 }
 
 /* ---- details, quotes, the bot text preview ---- */

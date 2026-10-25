@@ -4,6 +4,10 @@
 // switch is hidden and the system theme applies. It holds no user-facing text — the switch's
 // labels come from its own data-label-* attributes.
 //
+// The copy button next to an id (#656) is the one other behaviour: a click writes its data-copy
+// value to the clipboard and shows «copied» for a moment. Without navigator.clipboard (plain http,
+// an old browser) the buttons are hidden; a refused write changes nothing.
+//
 // The switch cycles system → dark → light → system; "system" is no attribute and no stored key.
 // Storage may be missing or throw (a private window, blocked site data): every access is guarded
 // and a failure leaves the system theme.
@@ -53,7 +57,43 @@ export const ADMIN_CLIENT_JS = `(function () {
   var current = read();
   apply(current);
 
+  var COPIED_MS = 1500;
+  var clipboard = window.navigator ? window.navigator.clipboard : undefined;
+  var canCopy = !!clipboard && typeof clipboard.writeText === 'function';
+
+  function showCopied(button, copied) {
+    var label = button.getAttribute(copied ? 'data-label-copied' : 'data-label-copy');
+    if (label) button.setAttribute('aria-label', label);
+    var name = copied ? 'check' : 'copy';
+    var icons = button.querySelectorAll('[data-copy-icon]');
+    for (var i = 0; i < icons.length; i += 1) {
+      if (icons[i].getAttribute('data-copy-icon') === name) icons[i].removeAttribute('hidden');
+      else icons[i].setAttribute('hidden', '');
+    }
+  }
+
+  doc.addEventListener('click', function (event) {
+    var target = event.target;
+    var button = target && target.closest ? target.closest('[data-copy]') : null;
+    if (!button || !canCopy) return;
+    clipboard.writeText(button.getAttribute('data-copy')).then(
+      function () {
+        showCopied(button, true);
+        window.setTimeout(function () {
+          showCopied(button, false);
+        }, COPIED_MS);
+      },
+      function () {
+        // nothing was copied; the id is still there to select
+      }
+    );
+  });
+
   doc.addEventListener('DOMContentLoaded', function () {
+    if (!canCopy) {
+      var copies = doc.querySelectorAll('[data-copy]');
+      for (var c = 0; c < copies.length; c += 1) copies[c].setAttribute('hidden', '');
+    }
     var buttons = doc.querySelectorAll('[data-theme-toggle]');
     for (var i = 0; i < buttons.length; i += 1) show(buttons[i], current);
     for (var j = 0; j < buttons.length; j += 1) {
