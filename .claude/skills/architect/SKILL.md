@@ -252,6 +252,7 @@ Implementer picks it up only once this comment exists.
 50. **Домен строки broker_trades** — значение брокера, которое колонка не вмещает, не отклоняет запись принятой сделки → `rules/trading.md`
 51. **Отметки против created_at** — колонка, упорядоченная CHECK'ом относительно `created_at`, пишется через `statementNow` → `rules/core.md`
 52. **Prod-профиль Compose** — `compose.prod.yaml` только override (command/logging/restart), app-сервис — один `node` на бандле `tooling/build.ts`, файлы пакета — от корня пакета → `rules/core.md`
+53. **Реестр процессов worker'а** — сокеты брокера держит только процесс, которого rendezvous по живым `worker_processes` называет владельцем аккаунта → `rules/trading.md`
 
 ### Map: path → rules
 
@@ -283,12 +284,12 @@ Implementer picks it up only once this comment exists.
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
 | `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
-| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33; signal-h1 44, 45; bot-ui 18 |
-| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32; auth 12 |
+| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53; signal-h1 44, 45; bot-ui 18 |
+| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53; auth 12 |
 | `apps/trading-worker/src/circuit-breaker` | core 10; trading 22, 25, 28; signal-h1 20, 43 |
 | `apps/trading-worker/src/cli` | trading 23, 27, 28 |
-| `apps/trading-worker/src/fleet` | core 10; trading 25, 28; signal-h1 43 |
-| `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33; signal-h1 43, 48; auth 12 |
+| `apps/trading-worker/src/fleet` | core 10; trading 25, 28, 53; signal-h1 43 |
+| `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53; signal-h1 43, 48; auth 12 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 33, 36; signal-h1 42, 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
 | `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47; payments 38 |
@@ -296,7 +297,7 @@ Implementer picks it up only once this comment exists.
 | `apps/web/src/cashier` | payments 38 |
 | `apps/web/src/oauth` | core 26; payments 38 |
 | `compose.prod.yaml` | core 52 |
-| `compose.yaml` | core 16, 52; bot-ui 47 |
+| `compose.yaml` | core 16, 52; trading 27; bot-ui 47 |
 | `docs/binodex-oauth.md` | auth 12 |
 | `docs/bonus-rules.md` | payments 40 |
 | `docs/bot-demo-trade.md` | bot-ui 29 |
@@ -327,13 +328,14 @@ Implementer picks it up only once this comment exists.
 | `docs/trade-log.md` | signal-h1 42, 45 |
 | `docs/trading-mode.md` | trading 36 |
 | `docs/trading-session.md` | trading 28; signal-h1 48; auth 13 |
+| `docs/worker-capacity.md` | trading 53 |
 | `docs/worker-deploy.md` | core 10, 16; trading 32 |
 | `eslint.config.js` | core 8; bot-ui 18 |
 | `packages/broker-rest/src` | core 10, 26, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/broker-socket/src` | core 10, 14, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/db` | core 52 |
 | `packages/db/drizzle` | core 3, 51 |
-| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51, 52; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50; signal-h1 41, 42, 44, 45, 48; bot-ui 18, 19, 29, 30, 47; payments 34, 35, 39, 40; auth 11, 12, 13 |
+| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51, 52; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50, 53; signal-h1 41, 42, 44, 45, 48; bot-ui 18, 19, 29, 30, 47; payments 34, 35, 39, 40; auth 11, 12, 13 |
 | `packages/db/src/cli` | core 16 |
 | `packages/db/src/schema` | core 1, 2, 10, 51; trading 22, 27, 28, 33, 50; signal-h1 42, 44, 45; auth 11, 12 |
 | `packages/e2e/src` | core 51; trading 28; bot-ui 18 |

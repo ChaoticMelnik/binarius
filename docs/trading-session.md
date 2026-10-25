@@ -600,8 +600,8 @@ right after the history.
   one attempt at most, which `intents/config.ts` keeps inside the shutdown's phase 1. An attempt cut
   by the stop writes nothing (E10).
 - **Hold-backs live in memory**, keyed by session id, in one worker container (two during a
-  deploy's overlap or until an operator resolves an interrupted run, #95, worker-deploy.md; #94:
-  several processes; #93's lease covers the broker sockets only);
+  deploy's overlap or until an operator resolves an interrupted run, #95, worker-deploy.md; #815:
+  several processes; #93's lease and #94's registry cover the broker sockets only);
   a restart drops them, and the next attempt is idempotent
   ([Recovery after a restart](#recovery-after-a-restart-131)).
 
@@ -1111,8 +1111,8 @@ docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for
    second trade on the step. Two workers run for the deploy's overlap, the readiness wait (up to
    `READY_TIMEOUT_S`, 120 s) plus the drain (≤ 40 s), or until an operator resolves an interrupted
    run ([worker-deploy.md](worker-deploy.md) → The overlap's length, #95, `worker.handoff.db.test.ts`
-   H4; an old worker dying dirty mid-step: H9); several workers are #94 (#93's lease covers the
-   broker sockets only).
+   H4; an old worker dying dirty mid-step: H9); several workers are #815 (#93's lease and #94's
+   registry partition the broker sockets only, [worker-capacity.md](worker-capacity.md)).
 5. **An intent past the deadline.** The scan and the history read guard the deadline on the
    database clock; a deadline that passes during the attempt's backend calls lets that attempt
    create its intent. The creation starts at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late;
@@ -1209,8 +1209,8 @@ docker compose logs --no-log-prefix --since 48h trading-worker | grep 'waits for
 - #131 (shipped): restart recovery, [above](#recovery-after-a-restart-131); a process-level kill
   in the tests is #105; #274 (shipped) releases a demo intent on a proven absence instead of the
   halt. #135:
-  `grant_revoked` as a stop reason; #94: the orchestrator under more than one worker container
-  (#93's lease covers the broker sockets only).
+  `grant_revoked` as a stop reason; #815: the orchestrator under more than one worker container
+  (#93's lease and #94's registry cover the broker sockets only).
 - Real sessions (#327): a session runs only in its user's mode — the start route's pre-check and
   `createTradingSession` under the users lock refuse another (`mode_not_allowed`), and a switch of
   the mode stops the user's active sessions in its transaction ([trading-mode.md](trading-mode.md)).
