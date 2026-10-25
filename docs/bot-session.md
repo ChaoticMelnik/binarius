@@ -283,14 +283,14 @@ session:<id>                       (an old status message's «🔄 Обнови�
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
-| 409 `no_signal` | the same (#509): the pair has no signal on the current candle — a door drawn without reading it («🔁 Ещё сессия», the offer under a single trade, the real launch screen after a saved stake, an old message) | the wait for the signal (#664, [bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)): «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + «🧭 Вручную» and «🏠 В меню», in place of the launch or the amount screen (`removeScreen`; gone → a new message; under the analysis card, a photo, as a new message at once and the card deleted as after a start, #761, `cycle-stake.test.ts` C-wait-photo), as a new message for any other press and a typed amount; the other pairs with a signal from the first poll; the signal there: the amount screen (demo, its way back kept) or the launch (real) in the same message (`trading-session.test.ts` W-start1–3) |
-| 503 `signal_unavailable` | the same (#509): the signal could not be read — a broker failure, `rate_limited`, a throw | «⚠️ Не удалось проверить сигнал пары — повтори анализ.» (`sessionSignalUnavailable`) + the way back to the analysis, **no retry**: a known refusal, not an unknown outcome (`sessionOutcomeUnknown`) |
 | 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
-| 409 `h1_duration_unsupported` | an H1-marked account (#745, [h1.md → From the bot](h1.md#from-the-bot-745); no payout floor since #775): a duration other than 5 s, which this bot never sends | `sessionPairUnavailable`; `warn` `trading session not started` |
-| 409 `account_not_h1` | the H1 mark was removed during the start (`createTradingSession` under the account's lock) | «⚙️ Настройки аккаунта изменились — открой анализ заново.» (`sessionAccountChanged`) + the way back to the analysis, no log; the next press starts an ordinary session |
+| 409 `h1_duration_unsupported` | every start is H1's (#745, #828, [h1.md → From the bot](h1.md#from-the-bot-745-every-session-since-828); no payout floor since #775): a duration other than 5 s, which this bot never sends | `sessionPairUnavailable`; `warn` `trading session not started` |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
 | any other 5xx, no answer, a broken body (a 409 `active_session_exists` whose body is not the contract's included) | unknown: the session may have been committed | one more `startSession` with the same request. A committed first attempt answers 409 with its session; otherwise the session is created once. Still unknown → «⚠️ Не удалось узнать, запущена ли сессия…» and `warn` `trading session not started` |
 
+The start answers no `no_signal`, `signal_unavailable` or `account_not_h1` since #828 (the wait
+of a 409 `no_signal`, #664, and its texts `sessionSignalUnavailable`, `sessionAccountChanged` are
+gone): a start on a second without an H1 signal begins the session waiting.
 `START_REFUSALS` is `satisfies Record<TradingSessionErrorCode, …>`, so a code added to the
 contract fails `tsc` in `trading-session.ts`; the lookup is `Object.hasOwn`, so `__proto__` as a
 reason is `unavailable`. `sessionOutcomeUnknown` is `demo-trade.ts`'s rule minus the 503
@@ -315,13 +315,8 @@ row under a finished trade and «🔁 Ещё сессия» keep their messages 
 their session buttons in real carry the plain datum, their demo doors open the amount screen in
 place of the analysis or as a new message.
 
-An amount pressed under the analysis card (a photo, #482) whose start answers 409 `no_signal`
-(#761): the wait goes as a new message at once (no edit of the photo is tried), its entry is
-registered on it, and then the card is deleted by the table below, the lines naming it
-(`the analysis card was already gone`, `… was not deleted`, `… keyboard was not removed`;
-`removeLaunchScreen(ctx, what)`). The delete comes last, so a slow or refused one never withholds
-the wait, and the entry stands whatever its outcome; a wait that fails in transport sends nothing
-more and deletes nothing — the card stays with its amounts, and pressing one again is safe.
+An amount pressed under the analysis card (a photo, #482) starts the session as any amount does;
+the wait it drew on a 409 `no_signal` (#761) is gone with the code (#828).
 
 | `deleteMessage` | Class (`deleteRefusal`, `telegram-refusals.ts`) | Then | Log |
 | --- | --- | --- | --- |
@@ -383,9 +378,9 @@ the caption of the picture of `view.signalAction` — `setup-bull.png` («BULLIS
 [bot-demo.md](bot-demo.md#the-analysis)) through the same cache (`setup-card.ts`): each uploaded
 per process and direction until an answer brings its `file_id`, then sent by it. `signalAction` is the backend's
 ([trading-session.md](trading-session.md#routes)): the last intent's direction, else the
-signal the start route checked; null on a session without a trade yet that was started before #568,
-by the CLI `session-start`, which checks no signal, or on an H1-marked account without an H1 signal
-at the start (#796, [h1.md → The start](h1.md#the-start-796))
+H1 signal of the second the start read (every start since #828); null on a session without a trade
+yet that was started before #568, by the CLI `session-start`, which checks no signal, or without an
+H1 signal at the start (#796, [h1.md → The start](h1.md#the-start-796))
 ([trading-session.md](trading-session.md#the-table)); its message stays a text until the first
 trade's edit turns it into the picture. The line «📡 Сигнал: …» is the fifth line of the head (under
 the header when the settings cannot be read); without a direction it is «📡 Ждём сигнал…»
@@ -808,9 +803,6 @@ id or the symbol.
 - `the launch screen keyboard was not removed` (#418): the strip after a forbidden delete failed
   (`method: editMessageReplyMarkup`, `updateId`)
 - `the launch screen was already gone` (#418, `info`): the delete found no message
-- `the analysis card was not deleted`, `the analysis card keyboard was not removed`, `the analysis
-  card was already gone` (#761): the same three for the analysis card deleted after the wait on a
-  409 `no_signal`
 - `the pressed message was already gone` (`info`, #587): the reply to «⏹» under the waiting
   message found its message gone and went as a new message
 - `the keyboard of a pressed button was not removed` (`info`, #722): after the reply to «⏹» under

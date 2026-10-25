@@ -408,7 +408,7 @@ read; a page that settled any trade wakes the session orchestrator (#696). Each 
 | `stop()` during the attempt, the token fetch included              | no                          |
 
 **Budget.** The broker allows 600 requests a minute per IP. The backend's balance refresh and
-its signal scanner take up to 100 each by default (the shares are in
+its signal REST (the scanner's share until #828) take up to 100 each by default (the shares are in
 `packages/shared/src/broker-budget.ts`, docs/signal.md → The budget). The worker's worst case is 16 × (2 lists × 2 pages + 1 balance
 GET, #92) × 4 ticks + 3 × 2 pages × 12 ticks = 392 GETs a minute, at most `WORKER_BROKER_GETS_PER_MINUTE` (400; checked at
 import, with a whole number of ticks a minute for both loops), per worker process: a deploy's

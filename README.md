@@ -12,7 +12,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
 - `packages/broker-rest` — the Binodex Broker REST client and the pairs catalog cache, shared by `apps/backend` and `apps/trading-worker`
 - `packages/broker-socket` — the Binodex Broker Socket.IO client and its event normalizer, shared by `apps/backend` (the market data source, #404) and `apps/trading-worker`
-- `packages/signal` — Signal module v2 (the decider, the chart feed, its journal and cache, and the tick-to-candle builder (#392)), shared by `apps/backend` (`POST /trading/signal`, the background scanner behind `GET /trading/signals`) and `apps/trading-worker`
+- `packages/signal` — Signal module v2 (the decider, the chart feed, its journal and cache, and the tick-to-candle builder (#392)), shared by `apps/backend` (`POST /trading/signal`) and `apps/trading-worker`
 - `packages/stake` — the session stake sizer (fixed and Martingale), shared by `apps/backend` (the H1 driver) and `apps/trading-worker` (the orchestrator) ([docs/stake.md](docs/stake.md))
 - `packages/signal-stand` — the Signal backtest stand (#381): a CLI over cached broker candles, imported by no app ([docs/signal-stand.md](docs/signal-stand.md))
 - `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
@@ -48,9 +48,9 @@ button starts a session of five cycles in the user's mode, follows it in one mes
 client bot text is written, the registry of variables a text can print, how its template and
 validator work and what stays in code is in [docs/bot-texts.md](docs/bot-texts.md);
 how the signal package fetches candles, turns them into a direction or into a reason for none,
-and journals each decision, how the backend serves it on `POST /trading/signal`, and how its
-scanner keeps the signals of every eligible pair from the data socket's candles for `GET /trading/signals` (#405),
-is in [docs/signal.md](docs/signal.md); how the worker sizes the next
+and journals each decision, and how the backend serves it on `POST /trading/signal`, is in
+[docs/signal.md](docs/signal.md); the H1 scanner behind `GET /trading/signals` and the analysis's
+direction (#828) is in [docs/h1.md](docs/h1.md); how the worker sizes the next
 stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a
 user's token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md);
 how a user switches between demo and real, and what real mode changes, is in

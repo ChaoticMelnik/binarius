@@ -167,25 +167,22 @@ row of the same pair and second.
 
 ### The start route (`context = session_start`, no `step`)
 
+Since #828 every start is an H1 start (rows S0, S1′–S8 below); the v2 rows of the candle start
+(S1–S7 until #828: `no_signal` without a session, `refused` after a candle signal, `started` with
+the candle entry) have no writer and stay readable.
+
 | # | Path (`session-routes.ts`) | Answer | Row: `outcome` / `detail` | Test |
 |---|---|---|---|---|
-| S0 | `session_too_long`, the eligibility refusals (`active_session_exists` included), `catalog_unavailable`, `pair_unavailable`, the H1 fence (`h1_duration_unsupported`, #745; no payout floor since #775) | 4xx/503 | none: before the signal read | R42, H1-R4, H1-R5′ |
-| S1 | `fetch_failed` or a throw of the feed | 503 `signal_unavailable` | none: no entry | R42 |
-| S2 | `no_signal` | 409 | `no_signal` / NULL, no session | R37 |
-| S3 | a signal, no balance snapshot | 409 `balance_unavailable` | `refused` / `balance_unavailable` | R38 |
-| S4 | `checkStake` refuses | 409 | `refused` / `stake_precision`, `stake_below_minimum` or `insufficient_balance` | R38 |
-| S5 | `buildSessionSettings` fails (a zero minimum) | 409 `balance_unavailable` | `refused` / `balance_unavailable` | R38 |
-| S6 | `createTradingSession` refuses | 409 | `refused` / the wire code (`active_session_exists` included) | R38 (`demo_only`; the others are races with the eligibility check and go through the same line), H1-R6 (`account_not_h1`) |
-| S7 | `createTradingSession` returns | 201 | `started` / NULL, with the new session, written before the view's read | R36 |
+| S0 | `session_too_long`, the eligibility refusals (`active_session_exists` included), `catalog_unavailable`, `pair_unavailable`, the H1 fence (`h1_duration_unsupported`, every start since #828; no payout floor since #775) | 4xx/503 | none: before the reading | R42, H1-R4, H1-R5′, H1-R15 |
 | S8 | a throw of the snapshot read, the stakes read or the creation (not a `TradingSessionError`) | 500 | none | — |
-| S1′ | an H1 start (#796): no H1 reading (no data socket, the source down, no series, a stale second, unknown digits, a warming window) | 201, waiting | none: no decision; `info` `h1 start without a reading` | H1-R11 |
-| S2′ | an H1 start, a no-signal H1 reading | 201, waiting | `no_signal` / NULL, with the new session | H1-R9b |
-| S3′–S5′ | an H1 start refused by the balance, the stake or the settings | 409 | none: before the reading | H1-R13 |
-| S6′ | an H1 start, `createTradingSession` refuses | 409 | after a signal `refused` / the wire code; after a no-signal reading `no_signal` / NULL without a session | H1-R6, H1-R12 |
-| S7′ | an H1 start, a signal, `createTradingSession` returns | 201 | `started` / NULL, with the new session, after the hand-over to the driver | H1-R9, H1-R10 |
+| S1′ | no H1 reading (no data socket, the source down, no series, a stale second, unknown digits, a warming window) | 201, waiting | none: no decision; `info` `h1 start without a reading` | H1-R11 |
+| S2′ | a no-signal H1 reading | 201, waiting | `no_signal` / NULL, with the new session | H1-R9b |
+| S3′–S5′ | refused by the balance, the stake or the settings | 409 | none: before the reading | H1-R13 |
+| S6′ | `createTradingSession` refuses | 409 | after a signal `refused` / the wire code; after a no-signal reading `no_signal` / NULL without a session | H1-R6′, H1-R12 |
+| S7′ | a signal, `createTradingSession` returns | 201 | `started` / NULL, with the new session, after the hand-over to the driver (a catalog payout the column cannot hold: `payout` NULL, R43) | H1-R9, H1-R10, R43 |
 
 `broker_account_id` is the eligible account, `payout` the catalog's, `taken_at_ms` the route's
-clock after its reads. An H1 session from the bot (#745) starts with this `session_start` row of
+clock after its reads. Every session from the bot (#745, #828) starts with this `session_start` row of
 version `h1` since #796 (the H1 reading, [h1.md → The start](h1.md#the-start-796)): the driver's
 row shape with `step` NULL, `decided_at_ms` the reading's second `f`, `taken_at_ms` the reading's
 clock, so `taken_at_ms − decided_at_ms` is the reading's age; then the driver's `version = h1` and
@@ -521,7 +518,7 @@ On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/b
   window, the modes, the pooled row, the statuses, no ids).
 - `apps/backend`: `ticks.test.ts` T1–T4 and the window T5–T15, `manager.test.ts` M28, M32 and M32b (the
   holes at both `onDrop` sites, the `buffer` line), `signal-routes.test.ts` R19–R21,
-  `session-routes.db.test.ts` R36–R39, R42 and R43, `cli/trade-log.db.test.ts` X1–X14,
+  `session-routes.db.test.ts` R39, R42, R43, H1-R6′, `cli/trade-log.db.test.ts` X1–X14,
   `cli/trade-report.db.test.ts` RP1–RP12 and `cli/report.test.ts` W1–W2 (#502: the report through
   the entry point, the window parser),
   `trade-log/keeper.test.ts` C1–C15 (one case per ending, the sweep loop),

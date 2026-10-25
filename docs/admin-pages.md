@@ -457,8 +457,10 @@ demo and real alike (Q1).
 
 ### Marking H1 (#745)
 
-The account's H1 mark ([h1.md → Sessions](h1.md#sessions-670); with it, a session from the bot is an
-H1 session — [h1.md → From the bot](h1.md#from-the-bot-745)) without SSH: the «H1» column of the
+The account's H1 mark ([h1.md → Sessions](h1.md#sessions-670); from #745 to #828 it made a session
+from the bot an H1 session, since #828 every session from the bot is one and only the CLI
+`h1 session start` reads the mark — [h1.md → From the bot](h1.md#from-the-bot-745-every-session-since-828);
+#830 removes it) without SSH: the «H1» column of the
 user card and of the broker accounts list (not the service page) shows «Включить H1», or the mark's
 date and «Снять H1». The form posts `h1=on|off` and `return=<the page>` to
 `POST /admin/broker-accounts/<id>/h1`, checked in `web` as the service mark's (a non-uuid id → 303

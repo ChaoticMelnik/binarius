@@ -4,8 +4,10 @@ The backend keeps a candle ring for every pair of the catalog on the `5s` interv
 (`SIGNAL_SCAN_INTERVALS`; `15s` too until #685), built
 from the broker's `price.update` ticks on a data socket of its own. That socket runs on a service
 account ([service-accounts.md](service-accounts.md), #391). A REST backfill (#590, [Backfill](#backfill-590))
-closes the gaps of a cold start and of a hole on the signal pacer's overflow. The signal feed and
-the scanners read it (#405, [signal.md](signal.md#feed-and-journal-133)).
+closes the gaps of a cold start and of a hole on the signal pacer's overflow. The signal feed
+reads it (#405, [signal.md](signal.md#feed-and-journal-133)), on demand: the candle scanner that
+read it every 5 s was removed by #828 (the shown signal is H1's, on the second series of the same
+socket, [h1.md](h1.md)), so the feed is the ring's one consumer.
 
 ```bash
 pnpm test --project unit apps/backend/src/market-data   # mock broker and fake clients, no database
@@ -140,7 +142,7 @@ A drop makes the pair's seconds NaN until its next tick. The REST backfill does 
 ## Subscriptions
 
 The ids come from the fresh REST catalog (`pairsCatalog.read()`, `fresh`), so the source uses the
-same list and `digits` as the scanner and the bot. The socket's `common.assets_list` is not read.
+same list and `digits` as the H1 scanner and the bot. The socket's `common.assets_list` is not read.
 
 - A stale catalog: the active authenticates without subscribing, `market data catalog not fresh` is
   logged once per streak, and the first fresh tick subscribes.
@@ -184,8 +186,8 @@ ring by REST. An **element** is a (pair, interval).
 
 **Which elements.**
 
-- **Proactive set:** the pairs of the last fresh catalog with valid `digits` that the scanner would
-  take (`eligiblePairs`: open by the schedule, accepting the interval's duration, at any payout
+- **Proactive set:** the pairs of the last fresh catalog with valid `digits` that the candle
+  scanner took until #828 (`eligiblePairs`, now in `backfill.ts`: open by the schedule, accepting the interval's duration, at any payout
   since #631), on the scanned interval. It applies only while `MarketDataManager.streaming()` is true
   (the active socket is `ready`). A closed pair is warmed only on request (B14; a pair paying less
   than 80 % without one, B14b). The set grew with #631 by the pairs below 80 %: the warm-up after a
@@ -369,11 +371,10 @@ The links:
    Falsifiable: `lateClose.clock` or `lateClose.watermark` > 0 in the line. Since #683 the
    watermark rule's early close is bounded by `2 × MARKET_DATA_SKEW_MARGIN_MS`: a tick further ahead
    of its receipt is dropped (`ahead`).
-4. **A quiet pair's boundary candle may still be open at the scan** (#405). The scanner fires
-   `CANDLE_CLOSE_SLACK_MS` after the boundary, before the clock rule's margin; a pair with no tick
-   past the boundary yet is decided on the candle before, which is not served. The scanner counts
-   these as `unclosed` ([signal.md → The scanner](signal.md#the-scanner-343)). Falsifiable:
-   `unclosed / decided` above 5 % in trading hours.
+4. **A quiet pair's boundary candle may still be open at a read** (#405). An analysis or a v3
+   step `CANDLE_CLOSE_SLACK_MS` after the boundary, before the clock rule's margin, decides a pair
+   with no tick past the boundary yet on the candle before (the feed leaves the open one out, F26);
+   the candle scanner counted these as `unclosed` until #828.
 5. **The subscription limit of one socket is unmeasured** (#555). 144 ids worked on one socket for
    30 minutes.
 6. **A pair that left the catalog stays subscribed** until a restart.
@@ -395,15 +396,15 @@ The links:
 14. **A bucket the watermark closed just before a backfill GET may come partial.** A bucket closed
     less than about 150 ms (the broker's publication delay, #392 spike) before the request, while the
     process clock runs behind the broker's by more than `CANDLE_CLOSE_SLACK_MS` minus 150 ms, can be
-    answered before the broker has published it: the same assumption as the scanner's slack
-    ([signal.md](signal.md)).
+    answered before the broker has published it: the same assumption as the candle slack
+    ([signal.md](signal.md)) of the reads at the boundary.
 15. **A bucket the ring had not closed when a GET was built waits for the hold-back** (≤ 15 s, one
     more GET), as in a quiet stream within the first `MARKET_DATA_SKEW_MARGIN_MS` of a candle.
     Falsifiable: `backfill.fetched` grows faster than the number of elements per period while
     `filled` stays near 0.
 16. **A broker clock ahead of the process by more than `MARKET_DATA_SKEW_MARGIN_MS` minus the receipt
     delay** drops every tick for the ring (#683): no tick candles, the feed sees gaps and asks the
-    backfill, the scanner refuses with `candle_gap` until REST fills the closed buckets; the second
+    backfill, the analysis refuses with `candle_gap` until REST fills the closed buckets; the second
     series has the same shape at 500 ms ([h1.md → Accepted risks 8](h1.md#accepted-risks)).
     Falsifiable: `ahead` close to `ticks` in the line.
 
@@ -425,8 +426,8 @@ The links:
    `reserve: { accountId, socketState: 'ready' }`.
 4. The backfill (#590), after the first night:
    `docker compose logs --since 12h backend | grep -E '"market data"' | tail -3`. In `backfill`,
-   `fetched > 0` and `filled > 0`, and `queued` has fallen to 0; `spare` grows with `queued`, and the
-   `signal scanner` lines show `source: "live"`.
+   `fetched > 0` and `filled > 0`, and `queued` has fallen to 0; `spare` grows with `queued` (the
+   `signal scanner` line is gone since #828; the `h1 scanner` line shows `signals` growing).
 5. After any `market data failover`, `queued` rises and is back to 0 within minutes, in the day too.
 6. After the deploy of #683: `docker compose logs --since 1h backend | grep -E '"market data"' | tail -3`:
    `ahead` is 0 in trading hours; a line with `ahead > 0` means the broker stamped a tick more than
@@ -434,8 +435,9 @@ The links:
 
 ## Boundaries
 
-- The feed and the scanner reading the source, one pacer instead of two, and the end of the budget
-  split of #382 shipped in #405 ([signal.md → The budget](signal.md#the-budget)).
+- The feed and the candle scanner reading the source, one pacer instead of two, and the end of the
+  budget split of #382 shipped in #405 ([signal.md → The budget](signal.md#the-budget)); the
+  candle scanner was removed by #828.
 - No trade command is sent on a data socket: the manager never calls `openTrade`, and the backfill
   calls only `getChart`.
 - The tick window keeps the last 240 s of ticks per pair in memory only; what is kept of it is the
