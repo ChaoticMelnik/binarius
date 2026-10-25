@@ -140,8 +140,11 @@ its 5 s timeout first) and releases each lease, and the new one opens them on it
 rest move at the old one's stop, as above. An old image without the registry is not in
 `worker_processes`: the new process owns everything and takes the accounts at the old one's
 release — the handoff before #94. `worker.handoff.db.test.ts` H1/H2 run under the registry, H14
-checks the split. The stopping process moves the jobs left in its own intent queue to the shared
-one as `intent-direct` jobs, which the new one processes without forwarding them back (#347, H17).
+checks the split. The stopping process drains its own intent queue to the shared one as
+`intent-direct` jobs, which the new one processes without forwarding them back, until 9 s after
+its deregister: the new one names it until its next heartbeat after that, and every intent it
+forwards meanwhile is taken within a poll (250 ms), not at the 20 s insurance (#347, H17, H18).
+The old process's stop takes about 9-13 s then.
 Deploy #94 and #347 together: a process with #347 next to one without it forwards to a queue
 nobody consumes, and each such intent waits the 20 s insurance.
 
