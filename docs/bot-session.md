@@ -161,7 +161,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ```text
 <mode>:sess:<assetId>:<sec>[:l]    (in real «🚀 Сессия из 5 циклов · REAL» under the analysis or a finished trade, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия · REAL», #327; demo buttons sent before #476; the longest, real:sess:2147483647:15:l, 25 bytes)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
-  bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
+  bot → POST /trading/sessions { telegramUserId, mode, assetId, durationSec, cycles: 5,
+        shownSignal? }   (#829: the direction the bot showed for the pair, taken once)
   bot → sendPhoto: the session message, the picture of view.signalAction with the text as its
         caption, without a keyboard (#536, #568); without a direction sendMessage; the photo
         refused → sendMessage of the same text, and the launch screen is then not deleted
@@ -242,8 +243,13 @@ session:<id>                       (an old status message's «🔄 Обнови�
   a real session never starts from a button that looks like a demo one (#327).
 - The mode in the data is the mode the screen was drawn in; the handler sends it as `mode` and the
   backend compares it with the user's `trading_mode` (`mode_not_allowed` on a mismatch, below).
-- The session's trades do not follow this screen's direction: the orchestrator asks for a signal
-  before each trade (#130 decision 2). The button sits on its own row for that reason.
+- The session's trades after the first do not follow this screen's direction: the H1 driver
+  decides each (#130 decision 2, Rule 48). The first one does (#829): the start takes the bot's
+  record of the direction it showed for the pair — the list's button or the analysis card,
+  [bot-demo.md](bot-demo.md#the-signals-screen-320) — and sends it as `shownSignal`; the backend
+  opens Шаг 1 in it. Without a record (the `n` door without an earlier draw, an old button, a bot
+  restart) the start goes by its own H1 reading. A refused start has taken the record: the next
+  press goes by the reading. The button sits on its own row for that reason.
 - The data carries no nonce (owner's decision). After a session has ended, an old button starts a
   new one, like a fresh press. While one is active, the backend answers 409 `active_session_exists`
   with it, and the bot shows it.
@@ -378,7 +384,9 @@ the caption of the picture of `view.signalAction` — `setup-bull.png` («BULLIS
 [bot-demo.md](bot-demo.md#the-analysis)) through the same cache (`setup-card.ts`): each uploaded
 per process and direction until an answer brings its `file_id`, then sent by it. `signalAction` is the backend's
 ([trading-session.md](trading-session.md#routes)): the last intent's direction, else the
-H1 signal of the second the start read (every start since #828); null on a session without a trade
+direction the bot showed for the pair (#829, `start_signal_action` of a start with `shownSignal`),
+else the H1 signal of the second the start read (every start since #828); so the first picture is
+the arrow the user chose on, and the first trade goes the same way; null on a session without a trade
 yet that was started before #568, by the CLI `session-start`, which checks no signal, or without an
 H1 signal at the start (#796, [h1.md → The start](h1.md#the-start-796))
 ([trading-session.md](trading-session.md#the-table)); its message stays a text until the first
@@ -2072,6 +2080,13 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     without a word (a broken data URI renders the card without the logo and without an error) —
     `assets.test.ts` and `session-promo.test.ts` R4 gate the committed file, nothing gates one
     replaced on the server. Falsifiable: a promo card without the logo.
+109. **The shown direction is in the bot's memory** (#829): the record of a direction the bot drew
+    (`shown-signals.ts`, at most 32 pairs a user and 10 000 users) is lost by a restart, a second
+    bot process or the bounds, and such a start goes by the start's H1 reading (about three in
+    four then begin «📡 Ждём сигнал…»). A record has no age cap (decision 5): a pair drawn minutes
+    ago and started through the `n` door is traded in the drawn direction. Falsifiable: after a
+    quiet hour, `start_signal_action` NULL on more than 15 % of the sessions started from the list
+    or the card ([h1.md → Owner's steps](h1.md#owners-steps-after-the-merge), step 8).
 
 ## Running it locally
 

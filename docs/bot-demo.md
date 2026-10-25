@@ -225,9 +225,20 @@ number is odd (#419), each green on a ⬆️ signal and red on a ⬇️ one (#47
 The list is a snapshot of one second (#828): «Сигнал H1 живёт секунду, поэтому список меняется
 каждую секунду, а сделки идут по свежему сигналу», and a refresh shows a different quarter of the
 pairs. The press does not read the list again ([The amount screen](#the-amount-screen-476)): the
-pair was chosen on a shown signal, and a 1 s signal would miss a re-read three times in four; the
-session starts on the start's own H1 reading, or waits inside the session, and the driver decides
-every next trade (Rule 48). The button's arrow is the scanner's at `asOf`; the amount screen shows
+pair was chosen on a shown signal, and a 1 s signal would miss a re-read three times in four.
+**The record of the shown directions (#829).** Once the list is on its way (`replyHtml` sent it,
+or `editOrReply` gave it a place), the bot writes each drawn pair's direction to
+`apps/bot/src/shown-signals.ts` (`createShownSignals`): `(telegramUserId, assetId) → { action,
+second, decidedAt, source: list, shownAtMs }`, `action`/`second`/`decidedAt` the list item's as the
+backend answered, `shownAtMs` the bot's clock, one write for the screen. The three list handlers
+(`demo`, `demo:sig…`, a legacy duration datum) write it; a refused list (the reads, no `5s` list, a
+stale catalog) and a send that failed write nothing; an empty list writes nothing. The newest record
+of a pair wins; a start of the pair takes it once and sends it, so the session's first trade and
+its picture are the arrow the user pressed, even when the pair has left the list by the press
+(owner's decisions 4 and 5 of #828; no age cap). The store is in the bot's memory, at most 32
+pairs a user and 10 000 users (LRU): a restart, a second bot process or the bounds lose records,
+and such a start goes by the start's own H1 reading ([h1.md → The start](h1.md#the-start-796)),
+or waits inside the session; the driver decides every next trade (Rule 48). The button's arrow is the scanner's at `asOf`; the amount screen shows
 no direction, since the session decides it per trade. A list with pairs lives `SIGNALS_LIST_TTL_MS`
 (30 s, owner 2026-10-21): then the same message becomes «🚀 Начать торговлю» (`signalsExpired`)
 with «📡 Показать сигналы» (`demo:sig`) · «🧭 Вручную» and «🏠 В меню»
@@ -278,8 +289,11 @@ in order:
 `:n` answers with a new message, as for every screen of this node (W-door4); no screen of the door
 says «нет сигнала» (W-door5). The start route never refuses for want of a signal since #828
 ([trading-session.md](trading-session.md#post-tradingsessions)): a forged `demo:l:<X>:5` on an
-unshown pair reaches the same start, whose direction is always the backend's reading, never the
-client's. While the data socket is down the list is empty and the door `:n` waits.
+unshown pair reaches the same start, whose direction is always the backend's — the record of a
+direction the bot drew from the backend's answer (#829), else the start's reading — never the
+client's: the callback data carry no direction. A door records nothing; the start takes the
+pair's record ([The signals screen](#the-signals-screen-320)). While the data socket is down the
+list is empty and the door `:n` waits.
 
 Text: «🎯 {symbol} · ⏱ 5 с», «🤖 Бот проведёт 5 циклов подряд…», then «Выбери сумму сделки 👇»
 (`cycleStakeChoose`). Keyboard:
@@ -502,6 +516,12 @@ are keys too, so no word of these screens is in code. A type's button stands in 
 gate on every types screen of the English scenes).
 
 ## The analysis
+
+The card records its direction for the start (#829, [the record](#the-signals-screen-320)): once
+`sendCard` sent the photo, or its caption as text in place of «⏳» (or as a new message where «⏳»
+is gone), the bot writes `{ action, second, decidedAt }` of the answer's `h1` with `source:
+analysis`; a photo failed in transport, a text edit of «⏳» refused, and the analysis that waits
+(`h1` null) write nothing.
 
 `demo:an` keeps the order «check, then the screen». `readDemoTrade` runs on the catalog read at
 this press; any refusal is the table in [The check](#the-check), with no «⏳» and no signal asked
@@ -824,6 +844,12 @@ flight is skipped. Push from the backend would need an inbound server on the bot
 | the analysis | the analysis header, «⏳ Проверяю сигнал…» (`analysisWaiting`), the candle feature lines when the decision has them + [🧭] / [🏠]; the alternatives from the first poll | the pair in the list: `POST /trading/signal` with `analysis` (#484) and access, then the card in the same message by `editMessageMedia` when the answer carries `h1` (a refused photo: its caption as text); `h1` null by that read (a second boundary crossed between the two reads): the entry stays, its pending alternatives drawn without the pair; a `fetch_failed` or a throw adds one `warn` (a `fetch_failed` with `h1` still draws the card) |
 | any | — | the pair closed, gone or not taking 5 s by the fresh catalog: its refusal (`demoPairClosed` …), the entry ends; past `SIGNAL_WAIT_MAX_MS` (1 h, a technical bound below Telegram's 48 h, not a product limit) or at the stop: `signalsExpired`, the entry ends |
 
+What the wait draws is recorded for the start (#829) once its edit is on screen (done, «message is
+not modified» or a render key equal to the drawn one), from the answers it read: the list's pairs
+and the alternatives' buttons as `list`, the card's `h1` as `analysis` (the photo, or its caption
+as text); a refused or paused edit records nothing. The door `:n` records the alternatives it drew
+at its press the same way. A door itself (`l`, `a`, `n`) records nothing: the record is the draw's.
+
 The alternatives are a snapshot: drawn once (by the door at its press, by the first poll for the
 analysis, which has no call left in its budget for the read), taken away after
 30 s by one edit; a first poll with no other pair leaves the wait alone with the pair for good. A
@@ -868,12 +894,16 @@ window leaves every message «⏳…» — the launched ones awaited
 (`lifecycle.ts`); the chain holds `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
 SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
 
-Enforced by `signal-wait.test.ts` W1–W18, W6f, `demo.test.ts` → the wait for signals, W-door1–5,
-W-door3′ and W-an1, `timing.test.ts` → the wait's bounds, `lifecycle.test.ts`.
+Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), `demo.test.ts` → the
+wait for signals, W-door1–5, W-door3′, W-an1 and W-shown1–6 (#829), `shown-signals.test.ts`
+SS1–SS7, `timing.test.ts` → the wait's bounds, `lifecycle.test.ts`.
 
 ## Boundaries
 
 - **#258** — `POST /trading/signal`, its cache and the decider ([signal.md](signal.md)).
+- **#829** — the start sends the recorded direction (`shownSignal`) and the backend trades it as
+  Шаг 1 ([h1.md → The shown direction](h1.md#the-shown-direction-829),
+  [bot-session.md](bot-session.md)); this page writes the records.
 - **#343, #828** — `GET /trading/signals` and the scanner behind it (the H1 scanner since #828,
   [h1.md](h1.md#the-scanner-and-the-signals-list-828)); the bot only reads and joins it.
 - **#360** — part 2 of #320, shipped: the session first on the analysis, the single trade behind

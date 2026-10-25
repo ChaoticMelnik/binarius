@@ -133,7 +133,7 @@ attempt, with `reason: 'record_missing'` (a backend before #666), `'record_inval
 failed its schema) or `'record_mismatch'` (it is not the answer's decision, pair or interval); the
 attempt goes on and its intent names no decision (O7).
 
-### The H1 driver (`context = session`, `version = h1` or `h1-repeat`, #707, #775)
+### The H1 driver (`context = session`, `version = h1`, `h1-repeat` or `h1-start`, #707, #775, #829)
 
 The backend's driver ([h1.md → The driver](h1.md#the-driver-707)) writes rows for the signals it
 acts on, for the repeat steps (#775), for one `no_signal` per waiting period (#775) and for the
@@ -144,7 +144,12 @@ prints the row as an entry `replayH1Entry` decides again; `interval` and `ticks_
 NULL, `source` is the series' (`kind: ticks`). A repeat row (`version = h1-repeat`) is decided by
 the rule, not the detector: `params = { rule: repeat_step_2, strategy }`, `decision.after` the
 settled trade it repeats, `source = { kind: settlement, trigger }`, `series = []`, `digits` NULL;
-the export prints it as stored, the stand reports `unsupported_version`.
+the export prints it as stored, the stand reports `unsupported_version`. A shown start's Шаг 1
+(`version = h1-start`, #829) is decided by the scanner when the bot drew the screen:
+`decided_at_ms` the shown second, `params = { rule: shown_signal, …H1_SCANNER_PARAMS }`,
+`decision.shown = { second, decidedAt, source }`, `source = { kind: shown, source, shownAtMs }`,
+`series = []`, `digits` NULL ([h1.md → The shown direction](h1.md#the-shown-direction-829)); the
+export prints it as stored, the stand reports `unsupported_version`.
 
 | # | Path (`apps/backend/src/h1/driver.ts`) | Ending | Row: `outcome` / `detail` | Test |
 |---|---|---|---|---|
@@ -159,8 +164,10 @@ the export prints it as stored, the stand reports `unsupported_version`.
 | D9 | the repeat step (Шаг 2 after a lost or tied Шаг 1, #775) | the intent without a submit deadline, at the sizer's stake, in the lost trade's direction; a wake | `intent` / NULL (or `refused` / the code), `version = h1-repeat` | H1-DR25–DR28, H1-DR31, H1-DB4 |
 | D10 | any other throw of `createSessionIntent` | `errors`, a `warn` | none: rolled back with the intent | — |
 | D11 | the no-signal limit reached (`noSignalSeconds ≥ 100`, `waitExpired`, the waiting row written, no block, no due repeat; #775, review round 1) | `stopTradingSession` `no_signal_timeout`, forgotten | `no_signal` / NULL of the stopping second, after the stop, best-effort | H1-DR32–DR36, H1-DB6 |
+| D12 | a shown start's Шаг 1 (`adopt` with `{ shown, pair }`, #829; not busy, past the cadence, no due repeat) | the intent without a submit deadline, at the sizer's stake, in the shown direction; the next decision at its creation + 6 s; a wake | `intent` / NULL (or `refused` / the code), `version = h1-start` | H1-DR45–DR49, H1-DB8, H1-R22 |
 
-Tests of the shapes: `signal-decision-ops.db.test.ts` SD19, `trade-log.db.test.ts` X17.
+Tests of the shapes: `signal-decision-ops.db.test.ts` SD19, `driver.db.test.ts` SD20 (the three
+`h1-start` rows), `trade-log.db.test.ts` X17, X19.
 
 `docs/h1.md` → Comparing with the shadow joins these rows with their trades and the shadow's R1
 row of the same pair and second.
@@ -180,6 +187,8 @@ the candle entry) have no writer and stay readable.
 | S3′–S5′ | refused by the balance, the stake or the settings | 409 | none: before the reading | H1-R13 |
 | S6′ | `createTradingSession` refuses | 409 | after a signal `refused` / the wire code; after a no-signal reading `no_signal` / NULL without a session | H1-R6′, H1-R12 |
 | S7′ | a signal, `createTradingSession` returns | 201 | `started` / NULL, with the new session, after the hand-over to the driver (a catalog payout the column cannot hold: `payout` NULL, R43) | H1-R9, H1-R10, R43 |
+| S9 | a shown signal (`shownSignal`, #829), `createTradingSession` returns | 201 | `started` / NULL, `version = h1-start`, with the new session, after the hand-over; no reading | H1-R17, H1-R18, H1-R22 |
+| S10 | a shown signal, `createTradingSession` refuses | 409 | `refused` / the wire code, `version = h1-start`, without a session | H1-R19 |
 
 `broker_account_id` is the eligible account, `payout` the catalog's, `taken_at_ms` the route's
 clock after its reads. Every session from the bot (#745, #828) starts with this `session_start` row of
@@ -187,7 +196,12 @@ version `h1` since #796 (the H1 reading, [h1.md → The start](h1.md#the-start-7
 row shape with `step` NULL, `decided_at_ms` the reading's second `f`, `taken_at_ms` the reading's
 clock, so `taken_at_ms − decided_at_ms` is the reading's age; then the driver's `version = h1` and
 `h1-repeat` rows (with a signal, the driver's step-1 `intent` row carries the same `decided_at_ms`:
-two writers' answers to one decision, Rule 42). The export replays each by its version (X18). The write is best-effort: a throw is `warn` `session start decision not
+two writers' answers to one decision, Rule 42). The export replays each by its version (X18). A
+start with a shown direction (#829) writes the `session_start` row of version `h1-start` instead
+(S9, S10): no reading, `decided_at_ms` the shown second, `taken_at_ms` the route's clock — so
+`taken_at_ms − decided_at_ms` is the shown direction's age at the start — and `source.shownAtMs`
+the bot's clock when the screen went out; the driver's step-1 `intent` row (D12) carries the same
+`decided_at_ms`. The write is best-effort: a throw is `warn` `session start decision not
 recorded` (account, asset, name and code), the answer unchanged (R39).
 
 ## The record of POST /trading/signal
@@ -518,7 +532,8 @@ On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/b
   window, the modes, the pooled row, the statuses, no ids).
 - `apps/backend`: `ticks.test.ts` T1–T4 and the window T5–T15, `manager.test.ts` M28, M32 and M32b (the
   holes at both `onDrop` sites, the `buffer` line), `signal-routes.test.ts` R19–R21,
-  `session-routes.db.test.ts` R39, R42, R43, H1-R6′, `cli/trade-log.db.test.ts` X1–X14,
+  `session-routes.db.test.ts` R39, R42, R43, H1-R6′, H1-R17–R22 (#829), `cli/trade-log.db.test.ts`
+  X1–X14, X19 (#829), `h1/driver.db.test.ts` SD20 (#829),
   `cli/trade-report.db.test.ts` RP1–RP12 and `cli/report.test.ts` W1–W2 (#502: the report through
   the entry point, the window parser),
   `trade-log/keeper.test.ts` C1–C15 (one case per ending, the sweep loop),
@@ -526,7 +541,7 @@ On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/b
 - `apps/trading-worker`: `backend.test.ts` B1 (the flag), B7 (the record read apart) and S4,
   `orchestrator.db.test.ts` O1–O2, O4–O8, O12–O14, L1 (the `warn` row of [trading-session.md → Logs](trading-session.md#logs)).
 - `packages/signal-stand`: `journal-line.test.ts` JL and `calibrate.test.ts` unchanged; C12 (an
-  export reads as the log did).
+  export reads as the log did); JL-h1start (#829: an `h1-start` line is `unsupported_version`).
 
 ## Accepted risks
 
