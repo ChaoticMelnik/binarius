@@ -24,6 +24,9 @@ export interface FleetRegistry {
   start(): void;
   // single-flight, bounded by heartbeatTimeoutMs; never rejects
   heartbeat(): Promise<void>;
+  // the live process rendezvous names for the account; undefined without a trustworthy view
+  // (before the first answer, past the fence, after stop())
+  ownerOf(accountId: string): string | undefined;
   owns(accountId: string): boolean;
   // the live set of the last answer, sorted; [] before the first answer and after stop()
   live(): readonly string[];
@@ -89,6 +92,10 @@ export function createFleetRegistry(deps: FleetRegistryDeps): FleetRegistry {
     apply(answer, sentAt);
   }
 
+  function ownerInView(accountId: string): string | undefined {
+    return now() < liveUntil ? ownerOf(accountId, live) : undefined;
+  }
+
   function heartbeat(): Promise<void> {
     if (stopped) return Promise.resolve();
     beating ??= run()
@@ -108,9 +115,8 @@ export function createFleetRegistry(deps: FleetRegistryDeps): FleetRegistry {
       timer = setInterval(() => void heartbeat(), config.heartbeatMs);
     },
     heartbeat,
-    owns(accountId) {
-      return live.length > 0 && now() < liveUntil && ownerOf(accountId, live) === ownerId;
-    },
+    ownerOf: ownerInView,
+    owns: (accountId) => ownerInView(accountId) === ownerId,
     live: () => live,
     get liveView() {
       return view;

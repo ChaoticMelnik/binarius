@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Queue } from 'bullmq';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
@@ -14,6 +14,8 @@ import {
   createDb,
   createSessionIntent,
   createTradeIntent,
+  deregisterWorkerProcess,
+  heartbeatWorkerProcess,
   markIntentUnknown,
   setTradingMode,
   takeIntent,
@@ -55,6 +57,7 @@ import {
 import { until } from '@binarius/shared/testing';
 import type { Env } from './env';
 import { ownerOf } from './fleet/rendezvous';
+import { INTENT_DIRECT_JOB, ownIntentQueueName } from './intents/router';
 import { TEST_WORKER_TUNING, watchSockets } from './testing';
 import { eurUsd, signalAnswer } from './trading-session/testing';
 import { createWorker, type ShutdownResult, type TradingWorker, type WorkerTuning } from './worker';
@@ -88,6 +91,16 @@ let tmp: TempDatabase;
 let broker: MockBroker;
 let publisher: Redis;
 const queues = new Map<OutboxTopic, Queue>();
+// the per-process intent queues a case looked into (#347): obliterated with the others
+const ownQueues = new Map<string, Queue>();
+const ownQueueOf = (ownerId: string) => {
+  let queue = ownQueues.get(ownerId);
+  if (queue === undefined) {
+    queue = new Queue(ownIntentQueueName(ownerId), { connection: publisher, prefix });
+    ownQueues.set(ownerId, queue);
+  }
+  return queue;
+};
 const accessTokens = new Map<string, string>();
 let brokerUserSeq = 70_000;
 
@@ -109,6 +122,7 @@ interface Running {
   result?: ShutdownResult;
 }
 const running: Running[] = [];
+const everStarted: Running[] = [];
 
 // a worker that a case left running (a failed assertion) is shut down before the next case
 afterEach(async () => {
@@ -118,10 +132,16 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  for (const queue of queues.values()) await queue.obliterate({ force: true });
+  // every process this file started: a dirty stop leaves its own queue behind
+  for (const w of everStarted) ownQueueOf(idOf(w));
+  for (const queue of [...queues.values(), ...ownQueues.values()]) {
+    await queue.obliterate({ force: true });
+  }
   const deadLetters = new Queue('trading-intents-dead-letter', { connection: publisher, prefix });
   await deadLetters.obliterate({ force: true });
-  await Promise.all([...queues.values(), deadLetters].map((queue) => queue.close()));
+  await Promise.all(
+    [...queues.values(), ...ownQueues.values(), deadLetters].map((queue) => queue.close()),
+  );
   await publisher.quit();
   await broker.close();
   await tmp.drop();
@@ -194,6 +214,7 @@ function startWorker(
   });
   const entry: Running = { name, worker, pool, redis, lines };
   running.push(entry);
+  everStarted.push(entry);
   worker.start();
   return entry;
 }
@@ -204,13 +225,14 @@ async function shutdown(w: Running, signal = 'SIGTERM'): Promise<ShutdownResult>
 }
 
 const logsOf = (w: Running, msg: string) => w.lines.filter((line) => line.msg === msg);
+const idOf = (w: Running) => logsOf(w, 'trading-worker started')[0]!.ownerId as string;
 const recordedBy = (w: Running) =>
   new Set(logsOf(w, 'intent outcome recorded').map((line) => line.intentId as string));
 
 // the backend's outbox publisher, by hand: every pending row becomes the job it would add
 // (apps/backend/src/outbox/bullmq.ts: the intent id as job id, one attempt); `only` keeps a case
 // to its own rows, so a failed case's leftovers cannot change the next one's count
-async function publishPending(only?: readonly string[]): Promise<number> {
+async function publishPending(only?: readonly string[], name = 'intent'): Promise<number> {
   const pending = eq(outboxEvents.status, OutboxStatus.Pending);
   const rows = await tmp.db
     .select({ id: outboxEvents.id, intentId: outboxEvents.intentId, topic: outboxEvents.topic })
@@ -220,7 +242,7 @@ async function publishPending(only?: readonly string[]): Promise<number> {
     await queues
       .get(row.topic)!
       .add(
-        'intent',
+        name,
         { intentId: row.intentId },
         { jobId: row.intentId, attempts: 1, removeOnComplete: true, removeOnFail: true },
       );
@@ -897,7 +919,6 @@ describe('the fleet across processes (#94)', () => {
   it('H14 a second worker takes the sockets rendezvous names it for; one socket per account throughout', async () => {
     const watch = watchSockets(broker);
     const a = startWorker('A', { sockets: true });
-    const idOf = (w: Running) => logsOf(w, 'trading-worker started')[0]!.ownerId as string;
     const leaseOwners = async (accounts: readonly Account[]) =>
       new Map(
         (
@@ -956,5 +977,129 @@ describe('the fleet across processes (#94)', () => {
     const { worst, polls } = watch.stop();
     expect(polls).toBeGreaterThan(0);
     expect(worst).toBe(1);
+  });
+});
+
+describe('intent routing to the owner (#347)', () => {
+  const capacityOf = (w: Running) => logsOf(w, 'worker capacity').at(-1);
+
+  it("H15 with two live workers every intent of B's accounts goes over B's socket", async () => {
+    const watch = watchSockets(broker);
+    const a = startWorker('A', { sockets: true });
+    const b = startWorker('B', { sockets: true });
+    await until('both see the two of them', () => [a, b].every((w) => capacityOf(w)?.live === 2));
+    const live = [idOf(a), idOf(b)];
+    const mine: Account[] = [];
+    for (let n = 0; n < 16 && mine.length < 4; n += 1) {
+      const account = await seedAccount({ snapshot: true, requested: true });
+      if (ownerOf(account.brokerAccountId, live) === idOf(b)) mine.push(account);
+    }
+    expect(mine).toHaveLength(4);
+    await until("B's sockets for its accounts", async () => {
+      const owners = new Map(
+        (
+          await tmp.db
+            .select({ id: brokerSessionLeases.brokerAccountId, owner: brokerSessionLeases.ownerId })
+            .from(brokerSessionLeases)
+            .where(
+              inArray(
+                brokerSessionLeases.brokerAccountId,
+                mine.map((account) => account.brokerAccountId),
+              ),
+            )
+        ).map((row) => [row.id, row.owner]),
+      );
+      return mine.every(
+        (account) =>
+          owners.get(account.brokerAccountId) === idOf(b) &&
+          socketsOf(account.brokerUserId).length === 1,
+      );
+    });
+
+    const ids: string[] = [];
+    for (const account of mine) ids.push(await newIntent(account));
+    expect(await publishPending(ids)).toBe(4);
+    await until('every intent accepted', () => allIn(ids, OPEN_OR_SETTLED));
+    for (const row of await intentRows(ids)) expect(row.transport).toBe(TradeTransport.Socket);
+    for (const id of ids) expect(recordedBy(b).has(id)).toBe(true);
+    for (const id of ids) expect(recordedBy(a).has(id)).toBe(false);
+    // A's insurance for what it forwarded finds the intent done
+    const forwarded = logsOf(a, 'intent forwarded').map((line) => line.intentId as string);
+    for (const line of logsOf(a, 'intent forwarded')) expect(line.owner).toBe(idOf(b));
+    await until("A's insurance is a no-op", () =>
+      forwarded.every((id) =>
+        logsOf(a, 'intent job is a no-op').some((line) => line.intentId === id),
+      ),
+    );
+    for (const account of mine) {
+      expect(broker.trades.list(account.brokerUserId)).toHaveLength(1);
+    }
+
+    expect(await shutdown(a)).toBe('clean');
+    expect(await shutdown(b)).toBe('clean');
+    const { worst } = watch.stop();
+    expect(worst).toBe(1);
+  });
+
+  it('H16 a forward to a process that died: the forwarder takes the intent itself, once; a direct job is never forwarded', async () => {
+    const a = startWorker('A', { sockets: false });
+    // a crashed process: its row has not lapsed, nothing consumes its queue
+    const dead = randomUUID();
+    await heartbeatWorkerProcess(tmp.db, { ownerId: dead, ttlMs: 60_000, pruneAfterMs: 3_600_000 });
+    try {
+      await until('A sees the dead process', () => capacityOf(a)?.live === 2);
+      const live = [idOf(a), dead];
+      const deads: Account[] = [];
+      for (let n = 0; n < 20 && deads.length < 2; n += 1) {
+        const account = await seedAccount();
+        if (ownerOf(account.brokerAccountId, live) === dead) deads.push(account);
+      }
+      expect(deads).toHaveLength(2);
+      const [first, second] = deads as [Account, Account];
+
+      const id = await newIntent(first);
+      expect(await publishPending([id])).toBe(1);
+      await until('A forwards it to the dead process', () =>
+        logsOf(a, 'intent forwarded').some((line) => line.intentId === id && line.owner === dead),
+      );
+      expect(await statusOf(id)).toBe(TradeIntentStatus.Queued);
+      expect(await (await ownQueueOf(dead).getJob(id))?.getState()).toBe('waiting');
+
+      await until('the insurance took it', () => allIn([id], OPEN_OR_SETTLED));
+      expect((await intentRows([id]))[0]!.transport).toBe(TradeTransport.RestFallback);
+      expect(recordedBy(a).has(id)).toBe(true);
+      expect(broker.trades.list(first.brokerUserId)).toHaveLength(1);
+      // nobody consumed the dead queue
+      expect(await (await ownQueueOf(dead).getJob(id))?.getState()).toBe('waiting');
+
+      const direct = await newIntent(second);
+      expect(await publishPending([direct], INTENT_DIRECT_JOB)).toBe(1);
+      await until('the direct job is processed here', () => allIn([direct], OPEN_OR_SETTLED));
+      expect(logsOf(a, 'intent forwarded').some((line) => line.intentId === direct)).toBe(false);
+      expect(await ownQueueOf(dead).getJob(direct)).toBeUndefined();
+      expect(broker.trades.list(second.brokerUserId)).toHaveLength(1);
+    } finally {
+      await deregisterWorkerProcess(tmp.db, { ownerId: dead });
+    }
+    expect(await shutdown(a)).toBe('clean');
+  });
+
+  it('H17 a clean stop requeues its own queue to the shared one as direct jobs and deletes it', async () => {
+    const a = startWorker('A', { sockets: false });
+    const account = await seedAccount();
+    const intentId = await newIntent(account);
+    // an insurance A will not reach before its stop
+    await ownQueueOf(idOf(a)).add(
+      'intent',
+      { intentId },
+      { jobId: intentId, attempts: 1, removeOnComplete: true, removeOnFail: true, delay: 60_000 },
+    );
+    expect(await shutdown(a)).toBe('clean');
+    const requeued = (await queues.get(OutboxTopic.TradingIntents)!.getJob(intentId))!;
+    expect(requeued.name).toBe(INTENT_DIRECT_JOB);
+    expect(await requeued.getState()).toBe('waiting');
+    const counts = await ownQueueOf(idOf(a)).getJobCounts();
+    expect(Object.values(counts).every((n) => n === 0)).toBe(true);
+    await requeued.remove();
   });
 });

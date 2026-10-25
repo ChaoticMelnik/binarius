@@ -4,6 +4,7 @@ import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import {
   BROKER_SOCKET_COMMAND_TIMEOUT_MS,
   BROKER_SOCKET_CONNECT_TIMEOUT_MS,
+  isTimerMs,
 } from '@binarius/broker-socket';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
 import { WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
@@ -70,6 +71,13 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 // The trading session orchestrator (#287, trading-session/config.ts) adds one:
 //   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — phase 1 waits for its stop()
 //     alongside the other steps: one attempt at most
+// The intent router (#347, intents/router.ts) adds these:
+//   MAX_SUBMIT_ACK_TIMEOUT_MS + INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the own
+//     queue's consumer waits out a submit, then the router requeues and closes, in one step
+//   INTENT_RECOVERY_DELAY_MS and INTENT_ROUTER_STOP_BUDGET_MS are timer delays (BullMQ's delay, a
+//     timer)
+//   INTENT_RECOVERY_DELAY_MS < the backend publisher's staleQueuedMs (30 s) and < INTENT_MAX_AGE_MS's
+//     default (60 s) — stated across processes, pinned by literal in intents/config.test.ts
 export const MIN_SUBMIT_ACK_TIMEOUT_MS = 6_000;
 export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
@@ -79,6 +87,12 @@ export const LOCK_DURATION_MS = 60_000;
 export const STALLED_INTERVAL_MS = 30_000;
 export const MAX_STALLED_COUNT = 1;
 export const STALE_SUBMITTING_MS = 60_000;
+
+// how long a forwarded intent may wait in its owner's queue before the forwarder takes it itself
+// (#347, the insurance job in the forwarder's own queue)
+export const INTENT_RECOVERY_DELAY_MS = 20_000;
+// bounds router.stop(): the requeue of the own queue, its obliterate and the queues' close
+export const INTENT_ROUTER_STOP_BUDGET_MS = 2_000;
 
 export const SWEEP_INTERVAL_MS = 15_000;
 export const SWEEP_BATCH_SIZE = 50;
@@ -165,7 +179,10 @@ const TIMING_CHAIN_HOLDS =
   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  MAX_SUBMIT_ACK_TIMEOUT_MS + INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  isTimerMs(INTENT_RECOVERY_DELAY_MS) &&
+  isTimerMs(INTENT_ROUTER_STOP_BUDGET_MS);
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('trading-worker timing constants are out of order (see intents/config.ts)');
 }

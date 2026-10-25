@@ -25,6 +25,8 @@ import {
   CATCHUP_STALLED_RETRY_MS,
   CATCHUP_TICK_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
+  INTENT_RECOVERY_DELAY_MS,
+  INTENT_ROUTER_STOP_BUDGET_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,
   MIN_SUBMIT_ACK_TIMEOUT_MS,
@@ -163,6 +165,22 @@ describe('the session manager in the shutdown budget (#101)', () => {
 
   it('keep the trading session attempt inside phase 1 (#287)', () => {
     expect(TRADING_SESSION_ATTEMPT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+});
+
+describe('the intent router (#347)', () => {
+  it('stops inside phase 1 after the own queue drained', () => {
+    expect(MAX_SUBMIT_ACK_TIMEOUT_MS + INTENT_ROUTER_STOP_BUDGET_MS).toBeLessThan(
+      SHUTDOWN_PHASE1_BUDGET_MS,
+    );
+  });
+
+  it('takes a forwarded intent back before the backend sweep and before the age limit', () => {
+    // apps/backend/src/outbox/publisher.ts DEFAULT_PUBLISHER_CONFIG.staleQueuedMs: another
+    // process's constant, so a literal
+    expect(INTENT_RECOVERY_DELAY_MS).toBeLessThan(30_000);
+    // INTENT_MAX_AGE_MS's default (env.ts)
+    expect(INTENT_RECOVERY_DELAY_MS).toBeLessThan(60_000);
   });
 });
 

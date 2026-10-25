@@ -41,6 +41,8 @@ import {
   CATCHUP_STALLED_RETRY_MS,
   CATCHUP_TICK_MS,
   CATCHUP_TRADES_PAGE_SIZE,
+  INTENT_RECOVERY_DELAY_MS,
+  INTENT_ROUTER_STOP_BUDGET_MS,
   RECONCILE_ATTEMPT_TIMEOUT_MS,
   RECONCILE_BATCH_SIZE,
   RECONCILE_MAX_TRADE_PAGES,
@@ -58,9 +60,15 @@ import {
 import { createBalanceCheck } from './intents/balance-check';
 import type { DeadLetter } from './dead-letter';
 import { startIntentConsumer } from './intents/consumer';
-import { processIntentJob, type ProcessOutcome } from './intents/processor';
+import { processIntentJob, type ProcessOutcome, type ProcessorDeps } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
 import { createRestReconciler } from './intents/rest-reconciler';
+import {
+  createIntentRouter,
+  INTENT_DIRECT_JOB,
+  ownIntentQueueName,
+  type IntentRouterConfig,
+} from './intents/router';
 import { createSettlementCatchup } from './intents/settlement-catchup';
 import { startSweeper } from './intents/sweeper';
 import { createTradeCommandExecutor } from './intents/trade-command-executor';
@@ -84,6 +92,7 @@ const JOB_OUTCOME_ENDS_INTENT = {
   unknown: false,
   expired: true,
   stale_unknown: false,
+  forwarded: false,
   noop: false,
 } as const satisfies Record<ProcessOutcome, boolean>;
 
@@ -104,6 +113,7 @@ export interface WorkerTuning {
   // production: SESSION_MANAGER_CONFIG with maxSessions from env MAX_SESSIONS_PER_WORKER
   sessions: SessionManagerConfig;
   fleet: FleetConfig;
+  intentRouter: IntentRouterConfig;
   socketTiming?: Partial<BrokerSocketTiming>;
   orchestrator: SessionOrchestratorConfig;
   staleSubmittingMs: number;
@@ -118,6 +128,10 @@ export interface WorkerTuning {
 
 const PRODUCTION_TUNING: Omit<WorkerTuning, 'sessions'> = {
   fleet: FLEET_CONFIG,
+  intentRouter: {
+    recoveryDelayMs: INTENT_RECOVERY_DELAY_MS,
+    stopBudgetMs: INTENT_ROUTER_STOP_BUDGET_MS,
+  },
   orchestrator: TRADING_SESSION_CONFIG,
   staleSubmittingMs: STALE_SUBMITTING_MS,
   sweepIntervalMs: SWEEP_INTERVAL_MS,
@@ -262,13 +276,19 @@ export function createWorker({
     breaker,
   );
 
-  const consumer = startIntentConsumer({
-    topic: OutboxTopic.TradingIntents,
+  // a shared job of an account another live process owns goes to that process's own queue
+  // before the take (#347, docs/trade-intent-transport.md → Routing to the owner)
+  const router = createIntentRouter({
+    ownerId,
+    registry,
     connection: redis,
-    logger,
-    concurrency: env.workerConcurrency,
     ...prefix,
-    processor: async (payload) => {
+    logger,
+    config: tuning.intentRouter,
+  });
+  const intentProcessor =
+    (forward: ProcessorDeps['forward']) =>
+    async (payload: unknown): Promise<ProcessOutcome> => {
       const outcome = await processIntentJob(
         {
           db,
@@ -280,12 +300,34 @@ export function createWorker({
             staleSubmittingMs: tuning.staleSubmittingMs,
             demoOnly: env.demoOnly,
           },
+          ...(forward === undefined ? {} : { forward }),
         },
         payload,
       );
       if (JOB_OUTCOME_ENDS_INTENT[outcome]) tradingSessions.wake();
       return outcome;
-    },
+    };
+  const forwarding = intentProcessor((intent) => router.forward(intent));
+  const local = intentProcessor(undefined);
+  const consumer = startIntentConsumer({
+    topic: OutboxTopic.TradingIntents,
+    connection: redis,
+    logger,
+    concurrency: env.workerConcurrency,
+    ...prefix,
+    // a job requeued by a stopping process is processed where it lands
+    processor: (payload, name) =>
+      name === INTENT_DIRECT_JOB ? local(payload) : forwarding(payload),
+  });
+  // our own queue: jobs forwarded to us and our insurance jobs. Never forwarded again: one hop
+  const ownConsumer = startIntentConsumer({
+    topic: OutboxTopic.TradingIntents,
+    queueName: ownIntentQueueName(ownerId),
+    connection: redis,
+    logger,
+    concurrency: env.workerConcurrency,
+    ...prefix,
+    processor: (payload) => local(payload),
   });
 
   const pass = createReconciliationPass({
@@ -377,12 +419,17 @@ export function createWorker({
     const drained = await closeAll(
       [
         () =>
-          consumer.worker
-            .close()
-            .then(() => consumer.drainDeadLetters())
+          Promise.all([consumer.worker.close(), ownConsumer.worker.close()])
+            .then(() => Promise.all([consumer.drainDeadLetters(), ownConsumer.drainDeadLetters()]))
             .then(() => sessions?.stop())
             // after our leases went back: a successor that takes our accounts meets no lease busy
             .then(() => registry.stop()),
+        // the same closes (BullMQ returns the close in flight): no job of ours forwards or runs
+        // while our own queue is requeued as direct jobs, still under our live row
+        () =>
+          Promise.all([consumer.worker.close(), ownConsumer.worker.close()]).then(() =>
+            router.stop(),
+          ),
         () =>
           reconciliationConsumer.worker
             .close()
@@ -404,6 +451,7 @@ export function createWorker({
     const cleaned = await closeAll(
       [
         () => consumer.dlq.close(),
+        () => ownConsumer.dlq.close(),
         () => reconciliationConsumer.dlq.close(),
         () => sessionDeadLetters.close(),
         () => redis.quit(),

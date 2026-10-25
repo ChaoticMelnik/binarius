@@ -203,6 +203,52 @@ describe('startIntentConsumer', () => {
   });
 });
 
+describe("startIntentConsumer on a process's own queue (#347)", () => {
+  it('Q1 consumes the named queue, hands the job name over, dead-letters under the topic', async () => {
+    const ownQueue = new Queue('trading-intents-q1', { connection: redis, prefix });
+    const seen: [unknown, string][] = [];
+    const okId = await newIntent();
+    const failId = await newIntent();
+    const consumer = startIntentConsumer({
+      topic: OutboxTopic.TradingIntents,
+      queueName: 'trading-intents-q1',
+      connection: redis,
+      processor: async (payload, name) => {
+        seen.push([payload, name]);
+        if ((payload as { intentId: string }).intentId === failId) throw new Error('boom');
+        return 'noop';
+      },
+      logger,
+      concurrency: 1,
+      prefix,
+    });
+    try {
+      await consumer.worker.waitUntilReady();
+      const ok = settled(consumer, okId);
+      const failed = settled(consumer, failId);
+      const opts = { attempts: 1, removeOnComplete: true, removeOnFail: true };
+      await ownQueue.add('intent', { intentId: okId }, { ...opts, jobId: okId });
+      await ownQueue.add('intent', { intentId: failId }, { ...opts, jobId: failId });
+      expect(await ok).toBe('completed');
+      expect(await failed).toBe('failed');
+      await consumer.worker.close();
+      await consumer.drainDeadLetters();
+    } finally {
+      await consumer.worker.close();
+      await consumer.dlq.close();
+    }
+    expect(seen).toEqual([
+      [{ intentId: okId }, 'intent'],
+      [{ intentId: failId }, 'intent'],
+    ]);
+    expect((await dlqEntries()).filter((entry) => entry.intentId === failId)).toEqual([
+      expect.objectContaining({ source: 'intent_job', topic: 'trading-intents' }),
+    ]);
+    await ownQueue.obliterate({ force: true });
+    await ownQueue.close();
+  });
+});
+
 describe('startIntentConsumer on trading-reconciliation (#89)', () => {
   const jobOptions = (jobId: string) => ({
     jobId,

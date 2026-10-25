@@ -37,6 +37,9 @@ export interface ProcessorDeps {
   executor: TradeExecutor;
   logger: Logger;
   config: ProcessorConfig;
+  // hands a queued intent to its owner's queue before the take (#347, intents/router.ts); true
+  // when it did. Absent on a process's own queue: one hop at most
+  forward?: (intent: TradeIntentRow) => Promise<boolean>;
 }
 
 export type ProcessOutcome =
@@ -45,6 +48,8 @@ export type ProcessOutcome =
   | 'unknown'
   | 'expired'
   | 'stale_unknown'
+  // handed to the owner's queue before the take: nothing was sent (Rule 15)
+  | 'forwarded'
   // duplicate delivery, terminal intent, or an outcome the sweeper beat us to
   | 'noop';
 
@@ -100,6 +105,7 @@ async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promis
     logger.warn({ intentId: intent.id }, 'intent rejected: demo only');
     return 'rejected';
   }
+  if (deps.forward !== undefined && (await deps.forward(intent))) return 'forwarded';
   const taken = await takeIntent(db, {
     id: intent.id,
     expectedVersion: intent.version,
