@@ -32,6 +32,7 @@ import {
   textUpdate,
   userLanguagesWith,
   userView,
+  stubShownSignals,
 } from './testing';
 
 const EN_USER: User = { ...USER, language_code: 'en' };
@@ -54,6 +55,7 @@ const setup = (
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     languages,
   });
   const api = captureApi(bot);

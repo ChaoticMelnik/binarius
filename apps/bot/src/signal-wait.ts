@@ -3,6 +3,7 @@ import {
   editRefusal,
   errorLogFields,
   intervalForDuration,
+  ShownSignalSource,
   SignalFeedOutcome,
   telegramErrorFields,
   type BotKeyboard,
@@ -22,11 +23,12 @@ import {
   readDemoCatalog,
   type DemoTradeCheck,
 } from './demo-catalog';
-import type { CycleBack, DemoScreen, ShownSignal } from './demo';
+import { shownRecordsOf, type CycleBack, type DemoScreen, type ShownSignal } from './demo';
 import { runWithLanguage } from './language';
 import type { Logger } from './logging';
 import { editMessagePhotoByIdHtml, editMessageTextByIdHtml } from './send';
 import type { SetupCardPhotos } from './setup-card';
+import type { ShownSignalRecord, ShownSignals } from './shown-signals';
 
 // The wait for a signal (#664, docs/bot-demo.md → The wait for a signal). After the user chose a
 // pair the bot never says «сигнала нет»: the screen waits, and the bot edits the same message once
@@ -37,6 +39,8 @@ import type { SetupCardPhotos } from './setup-card';
 // — the one definition of the list, the door `n` and the waits. The buttons of pairs stand listTtlMs (30 s),
 // an entry at most maxMs; the edits go at the pace of editGapMs, and a 429 pauses them for its
 // retry_after. stop() turns the waiting messages into the start of trading inside its window.
+// A list, the other pairs' buttons or a card the wait drew records its directions for the start
+// once the edit is on screen (#829), from the answers it read.
 
 type WaitApi = Pick<Api, 'editMessageText' | 'editMessageMedia'>;
 
@@ -77,12 +81,12 @@ export interface PairWaitRequest extends WaitTarget {
 // What the waits draw, demo.ts's screens (createSignalWaitScreens). Every call runs in the entry's
 // language.
 export interface SignalWaitScreens {
-  // the signals screen, and how many pairs it lists; undefined without the demo's list
+  // the signals screen, how many pairs it lists and their buttons; undefined without the demo's list
   list(
     signals: TradingSignalsResponse,
     catalog: PairsCatalogResponse,
     nowMs: number,
-  ): { screen: DemoScreen; listed: number } | undefined;
+  ): { screen: DemoScreen; listed: number; shown: ShownSignal[] } | undefined;
   // the start of trading: the list expired, the bound, the stop
   expired(): DemoScreen;
   // the wait for a pair, with the other pairs' buttons when there are some
@@ -134,6 +138,8 @@ export interface SignalWaiterOptions {
     'readSignals' | 'readPairs' | 'readTradingAccess' | 'evaluateSignal'
   >;
   logger: Logger;
+  // the directions the wait drew (#829), taken by the start
+  shownSignals: Pick<ShownSignals, 'remember'>;
   pollMs: number;
   pollOffsetMs: number;
   listTtlMs: number;
@@ -182,6 +188,7 @@ type EditOutcome = 'drawn' | 'ended' | 'paused' | 'kept';
 export function createSignalWaiter({
   backend,
   logger,
+  shownSignals,
   pollMs,
   pollOffsetMs,
   listTtlMs,
@@ -335,7 +342,10 @@ export function createSignalWaiter({
       const drawn = screens.list(signals, catalog, nowMs);
       if (drawn === undefined || drawn.listed === 0) return 'kept';
       const outcome = await edit(entry, drawn.screen);
-      if (outcome === 'drawn') entry.shownAt = now();
+      if (outcome === 'drawn') {
+        entry.shownAt = now();
+        remember(entry, ShownSignalSource.List, shownRecordsOf(drawn.shown));
+      }
       return outcome;
     }
     const { pair } = entry;
@@ -357,7 +367,10 @@ export function createSignalWaiter({
           return 'kept';
         }
         const outcome = await edit(entry, screens.waiting(pair.base, alternatives));
-        if (outcome === 'drawn') pair.alternatives = { shownAt: now() };
+        if (outcome === 'drawn') {
+          pair.alternatives = { shownAt: now() };
+          remember(entry, ShownSignalSource.List, shownRecordsOf(alternatives));
+        }
         return outcome;
       }
     }
@@ -408,11 +421,27 @@ export function createSignalWaiter({
     if (response.outcome === SignalFeedOutcome.FetchFailed) {
       warnOnce(entry, 'signal wait analysis not evaluated', { signalCode: response.code });
     }
-    if (response.h1 === null) return undefined;
+    const { h1 } = response;
+    if (h1 === null) return undefined;
     const access = await readAccess(telegramUserId);
     const card = screens.card(pairView, response, access);
     if (card === undefined || !live(entry)) return undefined;
-    return drawCard(entry, card);
+    const outcome = await drawCard(entry, card);
+    // the card's direction is the answer's h1, as the analysis draws it
+    if (outcome === 'drawn') {
+      remember(entry, ShownSignalSource.Analysis, [
+        { assetId: pair.assetId, action: h1.action, second: h1.second, decidedAt: h1.decidedAt },
+      ]);
+    }
+    return outcome;
+  }
+
+  function remember(
+    entry: Entry,
+    source: ShownSignalSource,
+    records: readonly ShownSignalRecord[],
+  ): void {
+    shownSignals.remember(entry.telegramUserId, source, now(), records);
   }
 
   async function readAccess(telegramUserId: string): Promise<TradingAccessResponse | null> {

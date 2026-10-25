@@ -87,6 +87,7 @@ import {
   type SessionTracker,
 } from './session-tracker';
 import type { SetupCardPhotos } from './setup-card';
+import type { ShownSignals } from './shown-signals';
 import { SESSION_SUMMARY_RETRY_WAIT_MS } from './timing';
 import {
   LABELS,
@@ -172,6 +173,8 @@ export interface TradingSessionDeps {
   shareEnabled: boolean;
   // the wait before the summary's photo again after a 429 (#537); setTimeout's by default
   sleep?: (ms: number) => Promise<void>;
+  // the directions the bot showed (#829): the start takes the pair's and sends it
+  shownSignals: Pick<ShownSignals, 'take'>;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -299,6 +302,7 @@ export function createTradingSessionComposer<C extends Context>({
   setupCardPhotos,
   shareEnabled,
   sleep = defaultSleep,
+  shownSignals,
 }: TradingSessionDeps): {
   composer: Composer<C>;
   startSession: StartSession;
@@ -317,7 +321,8 @@ export function createTradingSessionComposer<C extends Context>({
   });
 
   // The one start path: the session button, and the amount screen's press and typed amount
-  // (cycle-stake.ts, #476).
+  // (cycle-stake.ts, #476). The direction the bot showed for the pair goes with the request, taken
+  // once before the asks (#829): the backend trades it as Шаг 1 and the session's picture is it.
   async function startSession(
     ctx: Context,
     data: SessionStartData,
@@ -335,6 +340,8 @@ export function createTradingSessionComposer<C extends Context>({
       durationSec: data.durationSec,
       cycles: DEFAULT_SESSION_CYCLES,
     };
+    const shownSignal = shownSignals.take(from.id, data.assetId);
+    if (shownSignal !== undefined) request.shownSignal = shownSignal;
     // One more ask on an unknown outcome: a committed first attempt answers 409 with its session,
     // otherwise the session is created once. The amount press asks once (#476): its delete of the
     // screen leaves no room for a second ask in HANDLER_CALLS, and pressing it again is safe.

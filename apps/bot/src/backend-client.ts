@@ -173,7 +173,7 @@ export interface BackendClient {
   readIntent(id: string, telegramUserId: string): Promise<TradeIntentView>;
   // a new session, or the account's active one: the 409 active_session_exists carries it, so a
   // retry after a lost answer learns what the first request created (#283); null when that
-  // session ended before the backend read it
+  // session ended before the backend read it. The request's shownSignal (#829) is sent as given
   startSession(request: CreateTradingSessionRequest): Promise<StartSessionResult>;
   // both scoped by the owner like readIntent
   readSession(id: string, telegramUserId: string): Promise<TradingSessionView>;

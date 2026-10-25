@@ -134,6 +134,7 @@ import {
   stubSessionTracker,
   stubTracker,
   userLanguagesWith,
+  stubShownSignals,
 } from './testing';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
@@ -504,6 +505,7 @@ async function observe(branch: Branch): Promise<Calls> {
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),

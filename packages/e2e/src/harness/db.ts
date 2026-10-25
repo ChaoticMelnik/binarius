@@ -75,6 +75,13 @@ export function e2eReads(db: Db) {
         );
       return row?.n ?? 0;
     },
+    // the session's decision rows in the order they were written (#829)
+    decisionsOf: (sessionId: string) =>
+      db
+        .select()
+        .from(signalDecisions)
+        .where(eq(signalDecisions.tradingSessionId, sessionId))
+        .orderBy(asc(signalDecisions.recordedAt), asc(signalDecisions.id)),
     intentsOf: (sessionId: string) =>
       db
         .select()

@@ -12,6 +12,7 @@ import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
 import { createSessionResumer } from './session-resume';
 import { createSessionTracker } from './session-tracker';
+import { createShownSignals } from './shown-signals';
 import { createSignalWaiter } from './signal-wait';
 import { setBotTextSources } from './texts';
 import {
@@ -82,10 +83,14 @@ const sessionResumer = createSessionResumer({
   intervalMs: SESSION_RESUME_INTERVAL_MS,
 });
 
+// the directions the bot showed (#829): written by the screens and the wait, taken by the start
+const shownSignals = createShownSignals();
+
 // the wait for a signal (#664); createBot hands it the demo's screens
 const signalWaiter = createSignalWaiter({
   backend,
   logger,
+  shownSignals,
   pollMs: SIGNAL_WAIT_POLL_MS,
   pollOffsetMs: SIGNAL_WAIT_POLL_OFFSET_MS,
   listTtlMs: SIGNALS_LIST_TTL_MS,
@@ -117,6 +122,7 @@ const bot = createBot({
   sessionTracker,
   sessionResumer,
   signalWaiter,
+  shownSignals,
 });
 
 runBot({

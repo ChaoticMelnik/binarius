@@ -23,6 +23,7 @@ import {
   stubSessionTracker,
   stubTracker,
   type ApiCall,
+  stubShownSignals,
 } from './testing';
 import { sessionShareCaption } from './texts';
 
@@ -50,6 +51,7 @@ function setup(
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     ...(options.storageOff === true ? {} : { shareStorageChatId: STORAGE_CHAT_ID }),
   });
   const api = captureApi(bot);

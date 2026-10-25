@@ -6,6 +6,7 @@ export { createBot, type CreateBotOptions } from './bot';
 export { createIntentTracker } from './intent-tracker';
 export { createSessionResumer } from './session-resume';
 export { createSessionTracker } from './session-tracker';
+export { createShownSignals } from './shown-signals';
 export { createSignalWaiter } from './signal-wait';
 export {
   cycleStakeLabel,

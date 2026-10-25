@@ -40,6 +40,7 @@ import {
   USER,
   userLanguagesWith,
   type ApiCall,
+  stubShownSignals,
 } from './testing';
 import {
   buyPackageLabel,
@@ -78,6 +79,7 @@ function setup(patch: Partial<BackendClient> = {}, languages?: UserLanguages) {
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     token: '123456:AA-bot-token',
     backend,
     logger,

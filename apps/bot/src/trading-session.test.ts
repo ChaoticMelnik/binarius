@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import {
   buildH1SessionSettings,
+  DEFAULT_SESSION_CYCLES,
   pairLabel,
   TradeAction,
   TradeIntentStatus,
@@ -45,6 +46,7 @@ import {
   CARD_MESSAGE_ID,
   CASHIER_URL,
   PAIR_EURUSD,
+  PAIR_SHORT,
   PAIRS_RESPONSE,
   SESSION_ID,
   SIGNAL_DECIDED,
@@ -70,6 +72,7 @@ import {
   inlineRows,
   inlineStyles,
   keyboardRows,
+  stubShownSignals,
 } from './testing';
 import {
   sessionStatusText,
@@ -83,6 +86,7 @@ import { sessionCardKeyboard, sessionOutcomeUnknown, START_REFUSALS } from './tr
 import { INVITE_CALLBACK_DATA } from './keyboards';
 import { MODE_DEMO_CALLBACK_DATA, MODE_REAL_CALLBACK_DATA } from './trading-mode';
 import { shareQuery } from './session-share';
+import { createShownSignals, type ShownSignals } from './shown-signals';
 
 const START = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
 const REAL_START = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5);
@@ -136,6 +140,8 @@ function setup(
     // the summary's wait after a 429 (#537)
     sleep?: (ms: number) => Promise<void>;
     languages?: UserLanguages;
+    // the record of the shown directions (#829): a stub that takes none by default
+    shownSignals?: ShownSignals;
   } = {},
 ) {
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
@@ -195,6 +201,7 @@ function setup(
     sessionTracker,
     sessionResumer,
     signalWaiter,
+    shownSignals: options.shownSignals ?? stubShownSignals(),
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
@@ -2285,5 +2292,75 @@ describe('the session in English (#633)', () => {
     const labels = scene.calls.slice(before).flatMap((call) => labelsOf(call.payload));
     expect(labels).toContain(en(() => LABELS.menuButton));
     for (const text of [String(photo?.caption), ...labels]) expect(text).not.toMatch(CYRILLIC);
+  });
+});
+
+// #829: the start takes the direction the bot showed for the pair and sends it, once
+describe('the shown direction at the start (#829)', () => {
+  const remembered = (assetId: number, action: 'up' | 'down') => {
+    const shownSignals = createShownSignals();
+    shownSignals.remember(USER.id, 'analysis', 1_790_000_003_000, [
+      { assetId, action, second: 1_790_000_000_000, decidedAt: 1_790_000_000_400 },
+    ]);
+    return shownSignals;
+  };
+
+  it('S-shown1 a record for the pressed pair goes with the request, every field, and is gone after', async () => {
+    const shownSignals = remembered(PAIR_EURUSD.id, 'down');
+    const { press, calls, startSession } = setup({
+      shownSignals,
+      startSession: () => Promise.resolve({ started: sessionView({ signalAction: 'down' }) }),
+    });
+    await press(START);
+    expect(startSession.mock.calls[0]?.[0]).toEqual({
+      telegramUserId: String(USER.id),
+      mode: TradeMode.Demo,
+      assetId: PAIR_EURUSD.id,
+      durationSec: 5,
+      cycles: DEFAULT_SESSION_CYCLES,
+      shownSignal: {
+        action: 'down',
+        second: 1_790_000_000_000,
+        decidedAt: 1_790_000_000_400,
+        shownAtMs: 1_790_000_003_000,
+        source: 'analysis',
+      },
+    });
+    expect(shownSignals.size()).toBe(0);
+    expect(String(payloadOf(calls, 'sendPhoto')?.caption).split('\n')[4]).toBe(
+      '📡 Сигнал: ⬇️ Вниз',
+    );
+  });
+
+  it('S-shown2 the ask again on an unknown outcome sends the same shown direction, taken once', async () => {
+    const shownSignals = remembered(PAIR_EURUSD.id, 'up');
+    const take = vi.spyOn(shownSignals, 'take');
+    const answers = [
+      () => Promise.reject(httpError(500)),
+      () => Promise.resolve({ started: SESSION_VIEW }),
+    ];
+    const { press, startSession } = setup({
+      shownSignals,
+      startSession: () => (answers.shift() ?? answers[0]!)(),
+    });
+    await press(START);
+    expect(startSession).toHaveBeenCalledTimes(2);
+    expect(startSession.mock.calls[1]).toEqual(startSession.mock.calls[0]);
+    expect(startSession.mock.calls[0]?.[0]).toMatchObject({ shownSignal: { action: 'up' } });
+    expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it("S-shown3 another pair's record stays out of the request; a second start without a new draw carries none", async () => {
+    const shownSignals = remembered(PAIR_SHORT.id, 'down');
+    const { press, startSession } = setup({ shownSignals });
+    await press(START);
+    expect(startSession.mock.calls[0]?.[0]).not.toHaveProperty('shownSignal');
+    expect(shownSignals.size()).toBe(1);
+    const again = remembered(PAIR_EURUSD.id, 'down');
+    const twice = setup({ shownSignals: again });
+    await twice.press(START);
+    await twice.press(START);
+    expect(twice.startSession.mock.calls[0]?.[0]).toHaveProperty('shownSignal');
+    expect(twice.startSession.mock.calls[1]?.[0]).not.toHaveProperty('shownSignal');
   });
 });

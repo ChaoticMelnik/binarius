@@ -362,6 +362,24 @@ describe('createTradingSessionRequestSchema', () => {
     expect(refusedRequest({ ...request, telegramUserId: 42 })).toBe(true);
   });
 
+  it('carries the shown signal (#829) when given and refuses a malformed one', () => {
+    const shownSignal = {
+      action: 'down',
+      second: 1_700_000_000_000,
+      decidedAt: 1_700_000_000_400,
+      shownAtMs: 1_700_000_003_000,
+      source: 'list',
+    };
+    const parsed = safeParseCreateTradingSessionRequest({ ...request, shownSignal });
+    expect(parsed.success && parsed.data.shownSignal).toEqual(shownSignal);
+    const without = safeParseCreateTradingSessionRequest(request);
+    expect(without.success && without.data.shownSignal).toBeUndefined();
+    expect(
+      safeParseCreateTradingSessionRequest({ ...request, shownSignal: { ...shownSignal, x: 1 } })
+        .success,
+    ).toBe(false);
+  });
+
   it('reads the query and the stop body', () => {
     expect(safeParseReadTradingSessionQuery({ telegramUserId: '42' }).success).toBe(true);
     expect(safeParseReadTradingSessionQuery({}).success).toBe(false);

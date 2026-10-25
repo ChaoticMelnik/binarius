@@ -24,6 +24,7 @@ import {
   stubTracker,
   textUpdate,
   USER,
+  stubShownSignals,
 } from './testing';
 import { inviteShareText, LABELS, TEXTS } from './texts';
 
@@ -39,6 +40,7 @@ function setup(readReferral: BackendClient['readReferral']) {
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     token: '123456:AA-bot-token',
     backend,
     logger,

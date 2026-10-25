@@ -83,6 +83,7 @@ import {
 import type { Logger } from './logging';
 import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
+import type { ShownSignals } from './shown-signals';
 import type { SignalWaiter } from './signal-wait';
 import { createStakePicker, SETTINGS_CALLBACK_DATA, stakeOpenCallbackData } from './stake-picker';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
@@ -156,6 +157,9 @@ export interface CreateBotOptions {
   // the wait for a signal (#664): handed the demo's screens; required, so no test arms timers
   // unasked
   signalWaiter: Pick<SignalWaiter, 'attach' | 'waitList' | 'waitPair' | 'leave'>;
+  // the directions the bot showed (#829): one store for the screens that draw them and the start
+  // that takes them; the waiter is handed the same one by the caller
+  shownSignals: ShownSignals;
   // each user's language of the texts (#508, language.ts); a test hands one already holding its user
   languages?: UserLanguages;
   // the wait before the summary's photo again after a 429 (#537); a test records it
@@ -178,6 +182,7 @@ export function createBot({
   sessionTracker,
   sessionResumer,
   signalWaiter,
+  shownSignals,
   languages = createUserLanguages(),
   sleep,
 }: CreateBotOptions): Bot {
@@ -530,6 +535,7 @@ export function createBot({
       connectButtons,
       setupCardPhotos,
       signalWaiter,
+      shownSignals,
     }),
   );
 
@@ -564,6 +570,7 @@ export function createBot({
     cashierUrl,
     setupCardPhotos,
     shareEnabled: shareStorageChatId !== undefined,
+    shownSignals,
     ...(sleep === undefined ? {} : { sleep }),
   });
   sessionResumer.attach(tradingSession.resume);

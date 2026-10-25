@@ -74,6 +74,7 @@ import {
   stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
+  stubShownSignals,
 } from './testing';
 import { settingsText, TEXTS } from './texts';
 import {
@@ -175,6 +176,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     token: TOKEN,
     backend,
     logger,

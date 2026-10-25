@@ -4,6 +4,7 @@ import {
   H1_EXPIRY_SEC,
   H1_REPEAT_VERSION,
   H1_SESSION_DECISION_SET,
+  H1_START_VERSION,
   H1_VERSION,
   H1NoSignalReason,
   isH1Settings,
@@ -33,6 +34,7 @@ import {
   type H1ShadowParams,
   type H1ShadowSource,
   type LastTick,
+  type ShownSignalStart,
   type TradeAction,
 } from '@binarius/shared';
 import type { PairsCatalog } from '@binarius/broker-rest';
@@ -56,6 +58,7 @@ import {
   type StakeSizer,
 } from '@binarius/stake';
 import type { ClosedSecond, SecondSeries } from '../market-data/seconds';
+import { H1_SCANNER_PARAMS } from './scanner';
 
 // The H1 driver (#707, #775, docs/h1.md -> The driver, Rule 48): an H1 session is a regular
 // session whose entries come from H1; every session the bot starts is one since #828. On every
@@ -69,6 +72,9 @@ import type { ClosedSecond, SecondSeries } from '../market-data/seconds';
 // and at the no-signal limit, counted on the seconds the detector decided no_signal (#775, review
 // round 1): the attempt never asks H1, so only the driver has that evidence. The other limits'
 // stops are the orchestrator's.
+// The shown start (#829, docs/h1.md -> The shown direction): a start the bot made on a direction it
+// showed hands that direction over by adopt(); Шаг 1 is created at once in it, without a window
+// (as the repeat step: the window protects the entry of a live reading), its row of version h1-start.
 
 export interface H1DriverConfig {
   // how often the active H1 sessions are read
@@ -126,8 +132,9 @@ export interface H1Driver {
   // newest closed second, if that second is current. Touches no session and no counter
   current(assetId: number, settings: H1SessionSettings): H1Reading;
   // The start hands its new session over (#796): tracked at once, not at the next scan; with the
-  // start's reading, that second is decided for it as a closed second would be. Never throws
-  adopt(session: ActiveH1Session, start?: H1StartReading): void;
+  // start's reading, that second is decided for it as a closed second would be; with a shown
+  // direction (#829), Шаг 1 is created in it. Never throws
+  adopt(session: ActiveH1Session, start?: H1Start): void;
   stop(): Promise<void>;
 }
 
@@ -169,6 +176,20 @@ export interface H1StartReading {
   facts: H1SecondFacts;
   pair: Pick<BinaryPair, 'payout' | 'symbol'>;
 }
+
+// the direction the bot showed (#829): no reading, the pair as the start read it
+export interface H1StartShown {
+  shown: ShownSignalStart;
+  pair: Pick<BinaryPair, 'payout' | 'symbol'>;
+}
+
+export type H1Start = H1StartReading | H1StartShown;
+
+// what a step is created from, besides the repeat rule: the H1 signal of a closed second or the
+// direction a start was shown; null on a notice and on the pending repeat's retry
+type H1TradePlan =
+  | { kind: 'signal'; signal: H1DriverSignalFacts }
+  | { kind: 'shown'; shown: ShownSignalStart; pair: Pick<BinaryPair, 'payout'> };
 
 // the H1 signal's facts: the detector decided to trade
 export type H1DriverSignalFacts = H1DriverDecisionFacts & {
@@ -309,6 +330,77 @@ export function h1StartDecisionInput(
   };
 }
 
+// The shown start's row (#829, docs/trade-log.md): decided by the scanner when the bot drew the
+// screen, not at this write - the shown second as decided_at_ms, no series, no tick, the screen in
+// `source`. params are the scanner's detector, the one the shown direction was decided with
+function h1ShownRow(facts: {
+  assetId: number;
+  shown: ShownSignalStart;
+  takenAtMs: number;
+  payout: number;
+}) {
+  const { shown } = facts;
+  return {
+    assetId: facts.assetId,
+    interval: null,
+    version: H1_START_VERSION,
+    decidedAtMs: shown.second,
+    takenAtMs: facts.takenAtMs,
+    kind: SignalKind.Signal,
+    action: shown.action,
+    payout: facts.payout,
+    digits: null,
+    params: { rule: 'shown_signal', ...H1_SCANNER_PARAMS },
+    decision: {
+      kind: SignalKind.Signal,
+      version: H1_START_VERSION,
+      action: shown.action,
+      shown: { second: shown.second, decidedAt: shown.decidedAt, source: shown.source },
+    },
+    source: { kind: 'shown', source: shown.source, shownAtMs: shown.shownAtMs },
+    series: [],
+    lastTick: null,
+    ticksUntilMs: null,
+  };
+}
+
+export type H1ShownFacts = Parameters<typeof h1ShownRow>[0] & { brokerAccountId: string };
+
+// the start route's row of a shown start: started with the session, refused without one
+export function h1ShownStartDecisionInput(
+  facts: H1ShownFacts,
+  ending: { sessionId: string } | { refusal: string },
+): SignalDecisionInput {
+  const sessionId = 'sessionId' in ending ? ending.sessionId : null;
+  return {
+    ...h1ShownRow(facts),
+    context: SignalDecisionContext.SessionStart,
+    tradingSessionId: sessionId,
+    brokerAccountId: facts.brokerAccountId,
+    step: null,
+    outcome: sessionId === null ? SignalDecisionOutcome.Refused : SignalDecisionOutcome.Started,
+    detail: 'refusal' in ending ? ending.refusal : null,
+  };
+}
+
+// the driver's row of the shown Шаг 1
+export function h1ShownDecisionInput(
+  facts: H1ShownFacts & { sessionId: string },
+  step: number,
+  outcome: typeof SignalDecisionOutcome.Intent | typeof SignalDecisionOutcome.Refused,
+  detail: string | null,
+): SignalDecisionInput {
+  return {
+    ...h1ShownRow(facts),
+    context: SignalDecisionContext.Session,
+    tradingSessionId: facts.sessionId,
+    brokerAccountId: facts.brokerAccountId,
+    step,
+    outcome,
+    detail,
+  };
+}
+
 // The repeat step's row (#775, docs/trade-log.md -> The H1 driver): decided by the rule, not the
 // detector - no series, no tick, the settled trade it repeats in `decision.after`
 export function h1RepeatDecisionInput(input: {
@@ -403,6 +495,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     intents: 0,
     replayed: 0,
     repeats: 0,
+    shown: 0,
     waitingRows: 0,
     noticeIdle: 0,
     heldBalance: 0,
@@ -579,14 +672,10 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       noSignalTimeoutMs: sessionNoSignalTimeoutMs(state.settings.durationSec),
     });
 
-  // One step of the session (#707, #775): the repeat step when it is due, else the H1 signal's
-  // step; with neither (a notice after a win, a lost Шаг 2) nothing. `signal` is null on a notice
-  // and on the pending repeat's retry.
-  async function trade(
-    state: Tracked,
-    signal: H1DriverSignalFacts | null,
-    trigger: H1RepeatTrigger,
-  ) {
+  // One step of the session (#707, #775, #829): the repeat step when it is due, else the plan's
+  // step (the H1 signal's or the shown direction's); with neither (a notice after a win, a lost
+  // Шаг 2) nothing.
+  async function trade(state: Tracked, plan: H1TradePlan | null, trigger: H1RepeatTrigger) {
     const { session, settings } = state;
     const ids = { sessionId: session.id, brokerAccountId: session.brokerAccountId };
     // the orchestrator's reading of the same history (Rule 48): the driver skips where it stops
@@ -607,7 +696,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     const repeat = repeatDue(history, settings);
     if (repeat === null) {
       state.repeatPending = false;
-      if (signal === null) {
+      if (plan === null) {
         counts.noticeIdle += 1;
         return;
       }
@@ -619,7 +708,8 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       counts.repeatPending += 1;
       return;
     }
-    const payout = pair?.payout ?? signal!.payout;
+    const payout =
+      pair?.payout ?? (plan!.kind === 'signal' ? plan!.signal.payout : plan!.pair.payout);
     const balance = await sessions.balance(session.id, {
       waitMs: sessionNoSignalTimeoutMs(settings.durationSec),
     });
@@ -659,9 +749,8 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       outcome: typeof SignalDecisionOutcome.Intent | typeof SignalDecisionOutcome.Refused,
       detail: string | null,
     ) =>
-      repeat === null
-        ? h1DriverDecisionInput(signal!, step, outcome, detail)
-        : h1RepeatDecisionInput({
+      repeat !== null
+        ? h1RepeatDecisionInput({
             sessionId: session.id,
             brokerAccountId: session.brokerAccountId,
             assetId: settings.assetId,
@@ -673,7 +762,23 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
             trigger,
             outcome,
             detail,
-          });
+          })
+        : plan!.kind === 'signal'
+          ? h1DriverDecisionInput(plan!.signal, step, outcome, detail)
+          : h1ShownDecisionInput(
+              {
+                sessionId: session.id,
+                brokerAccountId: session.brokerAccountId,
+                assetId: settings.assetId,
+                shown: plan!.shown,
+                takenAtMs,
+                payout,
+              },
+              step,
+              outcome,
+              detail,
+            );
+    const signal = repeat === null && plan!.kind === 'signal' ? plan!.signal : null;
     let created: CreateTradeIntentResult;
     try {
       created = await sessions.createIntent({
@@ -684,12 +789,18 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         mode: session.mode,
         assetId: settings.assetId,
         amount: stake.amount,
-        action: repeat === null ? signal!.decision.action : repeat.action,
+        action:
+          repeat !== null
+            ? repeat.action
+            : signal !== null
+              ? signal.decision.action
+              : (plan as Extract<H1TradePlan, { kind: 'shown' }>).shown.action,
         durationSec: settings.durationSec,
         decision: row(SignalDecisionOutcome.Intent, null),
-        // the entry window is the H1 signal's; the repeat, as a regular session's Шаг 2, has none
-        ...(repeat === null
-          ? { submitDeadlineAt: new Date(signal!.takenAtMs + config.submitBudgetMs) }
+        // the entry window is the H1 signal's; the repeat, as a regular session's Шаг 2, and the
+        // shown direction, which has no live entry to protect, have none
+        ...(signal !== null
+          ? { submitDeadlineAt: new Date(signal.takenAtMs + config.submitBudgetMs) }
           : {}),
       });
     } catch (error) {
@@ -709,11 +820,11 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     state.repeatPending = false;
     state.waitingRecorded = false;
     state.noSignalSeconds = 0;
-    // one trade at a time: the signal's from its second (entry + expiry + 1 s), the repeat's from
-    // its creation on the process clock (expiry + 1 s)
+    // one trade at a time: the signal's from its second (entry + expiry + 1 s), the repeat's and
+    // the shown step's from their creation on the process clock (expiry + 1 s)
     state.nextAt =
-      repeat === null
-        ? signal!.f + (settings.signal.entryDelaySec + settings.signal.expirySec + 1) * SECOND_MS
+      signal !== null
+        ? signal.f + (settings.signal.entryDelaySec + settings.signal.expirySec + 1) * SECOND_MS
         : takenAtMs + (settings.signal.expirySec + 1) * SECOND_MS;
     if (!created.created) {
       counts.replayed += 1;
@@ -722,6 +833,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     }
     counts.intents += 1;
     if (repeat !== null) counts.repeats += 1;
+    else if (signal === null) counts.shown += 1;
     if (created.decisionError !== undefined) {
       logger.warn(
         { ...ids, step, reason: 'insert_refused', ...errorLogFields(created.decisionError) },
@@ -895,7 +1007,9 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     }
     counts.signals += 1;
     const signalFacts: H1DriverSignalFacts = { ...facts, decision };
-    launch(state, () => trade(state, signalFacts, H1RepeatTrigger.Signal));
+    launch(state, () =>
+      trade(state, { kind: 'signal', signal: signalFacts }, H1RepeatTrigger.Signal),
+    );
   }
 
   function current(assetId: number, settings: H1SessionSettings): H1Reading {
@@ -929,7 +1043,7 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     };
   }
 
-  function adopt(session: ActiveH1Session, start?: H1StartReading) {
+  function adopt(session: ActiveH1Session, start?: H1Start) {
     if (stopped || gone.has(session.id) || invalid.has(session.id)) return;
     try {
       let state = tracked.get(session.id);
@@ -942,6 +1056,15 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
       if (start === undefined) return;
       if (state.busy) {
         counts.skippedLive += 1;
+        return;
+      }
+      if ('shown' in start) {
+        if (now() < state.nextAt) {
+          counts.held += 1;
+          return;
+        }
+        const plan: H1TradePlan = { kind: 'shown', shown: start.shown, pair: start.pair };
+        launch(state, () => trade(state, plan, H1RepeatTrigger.Signal));
         return;
       }
       if (start.facts.f < state.nextAt) {

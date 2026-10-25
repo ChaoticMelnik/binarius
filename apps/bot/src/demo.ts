@@ -20,6 +20,7 @@ import {
   pairPayoutAccepted,
   PAIR_TYPE_GROUPS,
   pairTypeGroupOf,
+  ShownSignalSource,
   SignalFeedOutcome,
   stakePresets,
   telegramHtml,
@@ -42,6 +43,7 @@ import {
   type PairView,
   type TelegramHtml,
   type TradingAccessResponse,
+  type TradingSignalResponse,
   type TradingSignalsResponse,
   DEMO_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
@@ -82,6 +84,7 @@ import {
   replyWithPhotoHtml,
 } from './send';
 import type { SetupCardPhotos } from './setup-card';
+import type { ShownSignalRecord, ShownSignals } from './shown-signals';
 import type { SignalWaiter, SignalWaitScreens } from './signal-wait';
 import { currentLanguage } from './language';
 import { stakeAccess } from './stake-access';
@@ -490,10 +493,23 @@ export const SIGNALS_PER_GROUP = 2;
 export const SIGNALS_LIST_SIZE = SIGNALS_PER_GROUP * PAIR_TYPE_GROUPS.length;
 export const SIGNALS_MIN_SIZE = 5;
 
+// a pair's button with its H1 signal as the backend listed it: the second and its decision time
+// go into the bot's record of the shown direction (#829)
 export interface ShownSignal {
   pair: PairView;
   action: TradeAction;
+  second: number;
+  decidedAt: number;
 }
+
+// the records of shown-signals.ts for the buttons a screen drew
+export const shownRecordsOf = (shown: readonly ShownSignal[]): ShownSignalRecord[] =>
+  shown.map(({ pair, action, second, decidedAt }) => ({
+    assetId: pair.id,
+    action,
+    second,
+    decidedAt,
+  }));
 
 // The list of the signals screen (docs/bot-demo.md -> The signals screen): a pair the catalog does
 // not list, that is closed now or that does not take the 5 s takes no place, since the launch
@@ -505,14 +521,14 @@ export interface ShownSignal {
 // while there are no more than SIGNALS_LIST_SIZE, so a tail stands only under fewer than five
 // pairs at or above the key.
 export function signalsShown(
-  signals: readonly { assetId: number; action: TradeAction }[],
+  signals: readonly { assetId: number; action: TradeAction; second: number; decidedAt: number }[],
   catalog: PairsCatalogResponse,
   nowMs: number,
 ): ShownSignal[] {
   const checked: ShownSignal[] = [];
-  for (const signal of signals) {
-    const check = checkDemoTrade(catalog, signal.assetId, DEMO_DURATION_SEC, nowMs);
-    if (check.ok) checked.push({ pair: check.pair, action: signal.action });
+  for (const { assetId, action, second, decidedAt } of signals) {
+    const check = checkDemoTrade(catalog, assetId, DEMO_DURATION_SEC, nowMs);
+    if (check.ok) checked.push({ pair: check.pair, action, second, decidedAt });
   }
   const byPayout = (a: ShownSignal, b: ShownSignal) => comparePairsByPayout(a.pair, b.pair);
   checked.sort(byPayout);
@@ -544,12 +560,13 @@ export function signalsShown(
 // footer under the list (#419). No pair: the wait for the signals (#664), with the footer and no
 // refresh — the bot edits the list into it once a pair has a signal. The list is a snapshot; the
 // cycle checks the signal again before each trade. Undefined when the body has no list for the
-// duration: a backend scanning other intervals.
+// duration: a backend scanning other intervals. `shown` is the drawn buttons, for the bot's record
+// once the screen went out (#829).
 export function signalsScreen(
   signals: TradingSignalsResponse,
   catalog: PairsCatalogResponse,
   nowMs: number,
-): { screen: DemoScreen; listed: number } | undefined {
+): { screen: DemoScreen; listed: number; shown: ShownSignal[] } | undefined {
   const interval = intervalForDuration(DEMO_DURATION_SEC);
   const list = signals.lists.find((candidate) => candidate.interval === interval);
   if (list === undefined) return undefined;
@@ -563,6 +580,7 @@ export function signalsScreen(
         keyboard: signalsFooter([]),
       },
       listed,
+      shown,
     };
   }
   return {
@@ -580,6 +598,7 @@ export function signalsScreen(
       ),
     },
     listed,
+    shown,
   };
 }
 
@@ -1087,6 +1106,8 @@ export interface DemoComposerDeps {
   setupCardPhotos: SetupCardPhotos;
   // the wait for a signal (#664): the list without pairs, the list's 30 s, the pair without one
   signalWaiter: Pick<SignalWaiter, 'waitList' | 'waitPair'>;
+  // the directions this composer's screens showed (#829), taken by the start
+  shownSignals: Pick<ShownSignals, 'remember'>;
 }
 
 export function createDemoComposer<C extends Context>({
@@ -1096,6 +1117,7 @@ export function createDemoComposer<C extends Context>({
   connectButtons,
   setupCardPhotos,
   signalWaiter,
+  shownSignals,
 }: DemoComposerDeps): Composer<C> {
   const composer = new Composer<C>();
 
@@ -1104,42 +1126,40 @@ export function createDemoComposer<C extends Context>({
   // Its refusals retry with `demo:sig`: the pressed datum can be a write (a stake, a session).
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, async (ctx) => {
     logger.info({ callbackData: ctx.callbackQuery.data }, 'legacy duration button');
-    const { screen, listed } = await answerAnd(
-      ctx,
-      readSignalsScreen(ctx, DEMO_SIGNALS_CALLBACK_DATA),
-    );
-    const sent = await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
-    waitList(ctx, placeOf(sent), screen, listed);
+    const drawn = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_SIGNALS_CALLBACK_DATA));
+    const sent = await replyHtml(ctx, drawn.screen.text, { reply_markup: drawn.screen.keyboard });
+    waitList(ctx, placeOf(sent), drawn);
   });
 
   // the card's button is under a photo: the list goes as a new message
   composer.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
-    const { screen, listed } = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_CALLBACK_DATA));
-    const sent = await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
-    waitList(ctx, placeOf(sent), screen, listed);
+    const drawn = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_CALLBACK_DATA));
+    const sent = await replyHtml(ctx, drawn.screen.text, { reply_markup: drawn.screen.keyboard });
+    waitList(ctx, placeOf(sent), drawn);
   });
 
   composer.callbackQuery(DEMO_SIGNALS_PATTERN, async (ctx) => {
-    const { screen, listed } = await answerAnd(ctx, readSignalsScreen(ctx, ctx.callbackQuery.data));
-    waitList(ctx, await editOrReply(ctx, screen.text, screen.keyboard), screen, listed);
+    const drawn = await answerAnd(ctx, readSignalsScreen(ctx, ctx.callbackQuery.data));
+    waitList(ctx, await editOrReply(ctx, drawn.screen.text, drawn.screen.keyboard), drawn);
   });
 
   // A list drawn with its pairs expires after SIGNALS_LIST_TTL_MS, one without pairs waits for
-  // them (#664); a refusal of the reads, with its «🔄 Повторить», is not a wait.
+  // them (#664); a refusal of the reads, with its «🔄 Повторить», is not a wait. A list on screen
+  // records its pairs' directions for the start (#829).
   function waitList(
     ctx: Context,
     place: Place | undefined,
-    drawn: DemoScreen,
-    listed: number | undefined,
+    { screen, listed, shown }: Awaited<ReturnType<typeof readSignalsScreen>>,
   ): void {
     const from = ctx.from;
     if (place === undefined || listed === undefined || from === undefined) return;
+    shownSignals.remember(from.id, ShownSignalSource.List, now(), shownRecordsOf(shown));
     signalWaiter.waitList({
       api: ctx.api,
       ...place,
       telegramUserId: from.id,
       language: currentLanguage(),
-      drawn,
+      drawn: screen,
       shown: listed > 0,
     });
   }
@@ -1148,10 +1168,11 @@ export function createDemoComposer<C extends Context>({
   // launch screen in real (#327). The pair is checked against the catalog read at this press, never
   // the one the list was drawn from. The doors of the list (`l`) and of the analysis card (`a`)
   // were drawn on a shown H1 signal and open the next step without reading the list again (#828): a
-  // signal lives a second, a re-read would miss it three times in four, and the session starts on
-  // the start's own H1 reading or waits inside it (Rule 46). The door drawn without a signal (`n`:
-  // «🔁 Ещё сессия», the offer under a single trade) checks the H1 list (#664): a pair not in it
-  // waits for one, with the other pairs that have a signal now.
+  // signal lives a second, a re-read would miss it three times in four; the start trades the
+  // direction the draw recorded (#829) or, without a record, its own H1 reading (Rule 46). A door
+  // records nothing. The door drawn without a signal (`n`: «🔁 Ещё сессия», the offer under a
+  // single trade) checks the H1 list (#664): a pair not in it waits for one, with the other pairs
+  // that have a signal now, whose buttons are recorded as a list's.
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -1194,6 +1215,12 @@ export function createDemoComposer<C extends Context>({
         ? placeOf(await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard }))
         : await editOrReply(ctx, screen.text, screen.keyboard);
     if (wait === undefined || place === undefined) return;
+    shownSignals.remember(
+      ctx.from.id,
+      ShownSignalSource.List,
+      now(),
+      shownRecordsOf(wait.alternatives),
+    );
     signalWaiter.waitPair({
       api: ctx.api,
       ...place,
@@ -1309,7 +1336,7 @@ export function createDemoComposer<C extends Context>({
     );
     if (waiting === 'unknown') return;
     const amounts = cardAmountsOf(stake.access, durationSec, connectButtons);
-    const screen = await evaluate(
+    const { screen, response } = await evaluate(
       ctx.from.id,
       read.pair,
       durationSec,
@@ -1337,8 +1364,26 @@ export function createDemoComposer<C extends Context>({
       return;
     }
     const keyboard = analysisKeyboard(assetId, durationSec, screen, stake.mode, amounts);
-    if (screen.photo === null) await showResult(ctx, waiting, screen.text, keyboard);
-    else await sendCard(ctx, waiting, screen.photo, screen.text, keyboard, read.pair, durationSec);
+    if (screen.photo === null) {
+      await showResult(ctx, waiting, screen.text, keyboard);
+      return;
+    }
+    const sent = await sendCard(
+      ctx,
+      waiting,
+      screen.photo,
+      screen.text,
+      keyboard,
+      read.pair,
+      durationSec,
+    );
+    // the card's direction is the answer's h1 (#828): recorded once the card is on its way
+    const h1 = response?.h1;
+    if (sent && h1 !== undefined && h1 !== null) {
+      shownSignals.remember(ctx.from.id, ShownSignalSource.Analysis, now(), [
+        { assetId, action: h1.action, second: h1.second, decidedAt: h1.decidedAt },
+      ]);
+    }
   });
 
   // «➕ Ещё» (#360): only the keyboard of the pressed analysis changes. The amount is read at this
@@ -1371,13 +1416,14 @@ export function createDemoComposer<C extends Context>({
   // A thrown call (unreachable, a non-2xx, a broken body) and every fetch_failed but
   // rate_limited are logged: rate_limited is the broker's ordinary answer, told to the user. The
   // request names the user's analysis, which the backend records for the analysis reminder (#484).
+  // The answer comes back with the screen, undefined where the call threw.
   async function evaluate(
     telegramUserId: number,
     pair: PairView,
     durationSec: DemoDurationSec,
     mode: TradeMode,
     chooseAmount: boolean,
-  ): Promise<AnalysisScreen> {
+  ): Promise<{ screen: AnalysisScreen; response: TradingSignalResponse | undefined }> {
     let response;
     try {
       response = await backend.evaluateSignal(pair.id, intervalForDuration(durationSec), {
@@ -1389,7 +1435,7 @@ export function createDemoComposer<C extends Context>({
         { ...errorLogFields(error), ...backendErrorFields(error) },
         'signal not evaluated',
       );
-      return analysisUnavailableScreen(pair, durationSec);
+      return { screen: analysisUnavailableScreen(pair, durationSec), response: undefined };
     }
     if (
       response.outcome === SignalFeedOutcome.FetchFailed &&
@@ -1397,7 +1443,10 @@ export function createDemoComposer<C extends Context>({
     ) {
       logger.warn({ signalCode: response.code }, 'signal not evaluated');
     }
-    return analysisScreen({ pair, durationSec, response, mode, chooseAmount });
+    return {
+      screen: analysisScreen({ pair, durationSec, response, mode, chooseAmount }),
+      response,
+    };
   }
 
   // «⏳» before the signal is asked for. Under a photo (the analysis card, the session's summary
@@ -1510,7 +1559,8 @@ export function createDemoComposer<C extends Context>({
   // stale file_id among them — forgets the id, and the same caption and keyboard go as text in
   // place of «⏳» (or new, where «⏳» is gone); the next press uploads the file. A transport failure
   // leaves the card unknown: «⏳» says the analysis is unavailable, with its repeat. Neither edit
-  // is followed by anything: the budget has no call left (timing.ts).
+  // is followed by anything: the budget has no call left (timing.ts). True when the card went, as
+  // the photo or as its text (#829: its direction is then on screen).
   async function sendCard(
     ctx: Context,
     waiting: Waiting,
@@ -1519,7 +1569,7 @@ export function createDemoComposer<C extends Context>({
     keyboard: BotKeyboard,
     pair: PairView,
     durationSec: DemoDurationSec,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const photo = setupCardPhotos.photo(action);
     let sent;
     try {
@@ -1535,8 +1585,9 @@ export function createDemoComposer<C extends Context>({
           },
           'the analysis card photo was refused, sending its text',
         );
-        if (waiting === null) await replyHtml(ctx, text, { reply_markup: keyboard });
-        else await editWaiting(ctx, waiting, text, keyboard);
+        if (waiting !== null) return editWaiting(ctx, waiting, text, keyboard);
+        await replyHtml(ctx, text, { reply_markup: keyboard });
+        return true;
       } else if (error instanceof HttpError) {
         logger.error(
           {
@@ -1554,24 +1605,26 @@ export function createDemoComposer<C extends Context>({
             analysisTailKeyboard(pair.id, durationSec),
           );
         }
-      } else {
-        throw error;
+        return false;
       }
-      return;
+      throw error;
     }
     setupCardPhotos.remember(action, sent);
     if (waiting !== null) await deleteWaiting(ctx, waiting);
+    return true;
   }
 
-  // «⏳» edited after the card could not go: any refusal or failure is logged, nothing more
+  // «⏳» edited after the card could not go: any refusal or failure is logged, nothing more; true
+  // when the text is on screen
   async function editWaiting(
     ctx: Context,
     { chatId, messageId }: Exclude<Waiting, null>,
     text: TelegramHtml,
     keyboard: BotKeyboard,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
+      return true;
     } catch (error) {
       if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
       logger.warn(
@@ -1582,6 +1635,7 @@ export function createDemoComposer<C extends Context>({
         },
         'the analysis «⏳» was not edited after the card',
       );
+      return false;
     }
   }
 
@@ -1615,15 +1669,16 @@ export function createDemoComposer<C extends Context>({
   // pressed data, or `demo:sig` under a legacy write datum) and the list's footer. A failed catalog
   // reads as the catalog's own failure. A body without the duration's list is a deploy mismatch,
   // not «no signals»: the same retry, and one warn.
-  // `listed` is undefined on a refusal: it is not a list to wait on.
+  // `listed` is undefined on a refusal: it is not a list to wait on; it shows no pair.
   async function readSignalsScreen(
     ctx: Context,
     retryData: string,
-  ): Promise<{ screen: DemoScreen; listed: number | undefined }> {
+  ): Promise<{ screen: DemoScreen; listed: number | undefined; shown: ShownSignal[] }> {
     const [signals, read] = await Promise.all([readSignals(), readDemoCatalog(backend)]);
     const refusal = (text: TelegramHtml) => ({
       screen: { text, keyboard: signalsFooter([retryButton(retryData)]) },
       listed: undefined,
+      shown: [],
     });
     if (!read.ok) return refusal(catalogFailure(read, retryData).text);
     const retry = () => refusal(TEXTS.unavailable);

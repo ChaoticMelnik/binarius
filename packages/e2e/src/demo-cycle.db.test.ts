@@ -203,9 +203,10 @@ it('runs /start → the email login → a demo session → its result', async ()
     lastAnalysisDurationSec: 5,
   });
 
-  // S5 the amount starts the session. The analysis's access read put the account in work: the
-  // worker's socket is up before the press, as a user's pause gives it in production, so the H1
-  // driver's first trade at the start (#796, #828) goes over the socket, not REST
+  // S5 the amount starts the session on the direction the card showed (#829). The analysis's access
+  // read put the account in work: the worker's socket is up before the press, as a user's pause
+  // gives it in production, so the H1 driver's first trade at the start goes over the socket, not
+  // REST
   await until("the worker's socket of the account", () =>
     broker.socket.sockets().some((socket) => socket.userId === E2E_BROKER_USER_ID),
   );
@@ -236,6 +237,32 @@ it('runs /start → the email login → a demo session → its result', async ()
     },
   });
   expect(Number((await reads.userRow(telegramUserId))?.demoStake)).toBe(1);
+  // the start took the card's record: the h1-start rows, the start's and Шаг 1's, on its second
+  expect(bot.shownTaken).toEqual([expect.objectContaining({ action: 'up', source: 'analysis' })]);
+  const shown = bot.shownTaken[0]!;
+  await until('the first intent', async () => (await reads.intentsOf(started.id)).length > 0);
+  const [firstIntent] = await reads.intentsOf(started.id);
+  expect(firstIntent).toMatchObject({ action: 'up', submitDeadlineAt: null });
+  // the route's row and the driver's are written concurrently (adopt is fire-and-forget)
+  const decisions = await reads.decisionsOf(started.id);
+  const firstTwo = decisions.slice(0, 2).sort((a, b) => a.context.localeCompare(b.context));
+  expect(firstTwo).toEqual([
+    expect.objectContaining({
+      context: 'session',
+      step: 1,
+      outcome: 'intent',
+      version: 'h1-start',
+      decidedAtMs: shown.second,
+      id: firstIntent?.signalDecisionId,
+    }),
+    expect.objectContaining({
+      context: 'session_start',
+      outcome: 'started',
+      version: 'h1-start',
+      decidedAtMs: shown.second,
+      source: { kind: 'shown', source: 'analysis', shownAtMs: shown.shownAtMs },
+    }),
+  ]);
   await until(
     'the status message id is stored',
     async () =>
@@ -246,8 +273,8 @@ it('runs /start → the email login → a demo session → its result', async ()
 
   // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it - the
   // first two once the backend showed their open block (#700): step 1 a new message, step 2 its edit.
-  // The H1 driver makes them (#828): step 1 on the start's reading, step 2 the repeat at the loss's
-  // notice, then one a signal at most every 7 s (f + entry + expiry + 1 s).
+  // The H1 driver makes them (#828): step 1 on the direction the card showed (#829), step 2 the
+  // repeat at the loss's notice, then one a signal at most every 7 s (f + entry + expiry + 1 s).
   // The sender ticks every 3 s as in production: the open blocks and step 2's result come within
   // a second only because the accept and the settle wake it (#723)
   const resultShown = (call: ApiCall) =>

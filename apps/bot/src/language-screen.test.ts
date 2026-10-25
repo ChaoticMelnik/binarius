@@ -26,6 +26,7 @@ import {
   stubTracker,
   textUpdate,
   type ApiCall,
+  stubShownSignals,
 } from './testing';
 import { LABELS, TEXTS } from './texts';
 
@@ -60,6 +61,7 @@ function setup({
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     languages,
   });
   const api = captureApi(bot);
