@@ -181,9 +181,8 @@ export interface ActiveH1Session {
   startedAt: Date;
 }
 
-// The driver's list (#707): every active H1 session on a marked account, oldest start first. An H1
-// session on an unmarked account (only by hand since createTradingSession re-reads the mark under
-// the account's lock) is not traded; the orchestrator holds it until its hour.
+// The driver's list (#707): every active H1 session (settings v4/v5), oldest start first. The
+// account's H1 mark is not read since #828: every session the bot starts is H1's.
 export async function listActiveH1Sessions(db: Db): Promise<ActiveH1Session[]> {
   const rows = await db
     .select({
@@ -197,13 +196,7 @@ export async function listActiveH1Sessions(db: Db): Promise<ActiveH1Session[]> {
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
-    .where(
-      and(
-        eq(tradingSessions.status, TradingSessionStatus.Active),
-        h1SessionSql,
-        isNotNull(brokerAccounts.h1Since),
-      ),
-    )
+    .where(and(eq(tradingSessions.status, TradingSessionStatus.Active), h1SessionSql))
     .orderBy(asc(tradingSessions.startedAt), asc(tradingSessions.id));
   return rows.map((row) => ({ ...row, telegramUserId: row.telegramUserId.toString() }));
 }

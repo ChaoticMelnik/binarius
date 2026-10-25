@@ -386,8 +386,15 @@ describe('contract coverage (issue #6)', () => {
       Extract<TradingSignalResponse, { outcome: 'decided' }>['params']
     >().toEqualTypeOf<SignalParams>();
     expectTypeOf<keyof Extract<TradingSignalResponse, { outcome: 'decided' }>>().toEqualTypeOf<
-      'outcome' | 'params' | 'decision' | 'indicators' | 'record'
+      'outcome' | 'params' | 'decision' | 'indicators' | 'record' | 'h1'
     >();
+    // the pair's H1 signal at the answer, on both outcomes (#828)
+    expectTypeOf<TradingSignalResponse['h1']>().toEqualTypeOf<{
+      action: 'up' | 'down';
+      second: number;
+      decidedAt: number;
+      ageMs: number;
+    } | null>();
     // the session's decision record (#666)
     expectTypeOf<
       keyof NonNullable<Extract<TradingSignalResponse, { outcome: 'decided' }>['record']>
@@ -396,7 +403,7 @@ describe('contract coverage (issue #6)', () => {
       keyof NonNullable<Extract<TradingSignalResponse, { outcome: 'decided' }>['indicators']>
     >().toEqualTypeOf<'macd' | 'ma50' | 'ma200'>();
     expectTypeOf<keyof Extract<TradingSignalResponse, { outcome: 'fetch_failed' }>>().toEqualTypeOf<
-      'outcome' | 'code' | 'retryAfterSec'
+      'outcome' | 'code' | 'retryAfterSec' | 'h1'
     >();
     expectTypeOf<
       Extract<TradingSignalResponse, { outcome: 'fetch_failed' }>['code']
@@ -412,13 +419,13 @@ describe('contract coverage (issue #6)', () => {
     expectTypeOf<TradingSignalErrorCode>().toEqualTypeOf<'pair_unknown' | 'catalog_unavailable'>();
   });
 
-  it('Trading signals list (issue #343)', () => {
+  it('Trading signals list (issue #343, H1 since #828)', () => {
     expectTypeOf<keyof TradingSignalsResponse>().toEqualTypeOf<'asOf' | 'lists'>();
     expectTypeOf<keyof TradingSignalsResponse['lists'][number]>().toEqualTypeOf<
       'interval' | 'scanned' | 'signals'
     >();
     expectTypeOf<keyof TradingSignalsResponse['lists'][number]['signals'][number]>().toEqualTypeOf<
-      'assetId' | 'action' | 'lastCandleTimestamp' | 'decidedAt' | 'ageMs'
+      'assetId' | 'action' | 'second' | 'decidedAt' | 'ageMs'
     >();
     // any interval, wider than the scanner's (#685)
     expectTypeOf<
@@ -484,13 +491,10 @@ describe('contract coverage (issue #6)', () => {
       | 'balance_unavailable'
       | 'pair_unavailable'
       | 'catalog_unavailable'
-      | 'no_signal'
-      | 'signal_unavailable'
       | 'not_found'
       | 'session_not_active'
-      // #745: the H1 fence of the start and the mark removed under the account's lock
+      // #745: the H1 fence of the start, every start's since #828
       | 'h1_duration_unsupported'
-      | 'account_not_h1'
       | 'stake_precision'
       | 'stake_below_minimum'
       | 'insufficient_balance'

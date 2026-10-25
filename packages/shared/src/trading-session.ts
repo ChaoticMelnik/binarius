@@ -512,18 +512,11 @@ export const TradingSessionErrorCode = {
   PairUnavailable: 'pair_unavailable',
   // the string of PairsCatalogErrorCode.Unavailable: the same cache answers both routes
   CatalogUnavailable: 'catalog_unavailable',
-  // the pair's signal on the current candle is no_signal (#509): no session starts on it
-  NoSignal: 'no_signal',
-  // the signal could not be read (broker failure, rate limit): the start refuses, never opens
-  SignalUnavailable: 'signal_unavailable',
   NotFound: 'not_found',
   SessionNotActive: 'session_not_active',
-  // an H1 session (#745): the start's fence on a marked account, after the pair's check and before
-  // the signal's read - the request's duration is not H1_EXPIRY_SEC (no payout floor since #775)
+  // every start is an H1 session (#828): the start's fence after the pair's check and before the
+  // signal's read - the request's duration is not H1_EXPIRY_SEC (no payout floor since #775)
   H1DurationUnsupported: 'h1_duration_unsupported',
-  // the string of TradingSessionDbErrorCode.AccountNotH1 (#707): createTradingSession found the H1
-  // mark removed under the account's lock
-  AccountNotH1: 'account_not_h1',
   // the session's stake against the account's snapshot (#297, checkStake)
   StakePrecision: StakeRefusal.Precision,
   StakeBelowMinimum: StakeRefusal.BelowMinimum,

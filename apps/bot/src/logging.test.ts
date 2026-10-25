@@ -911,6 +911,7 @@ describe('what the bot writes about the demo', () => {
         Promise.resolve({
           outcome: SignalFeedOutcome.FetchFailed,
           code: BrokerRestErrorCode.Unauthorized,
+          h1: null,
         }),
     });
     const line = lineWith(lines, 'signal not evaluated');

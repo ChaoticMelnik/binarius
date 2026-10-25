@@ -160,13 +160,13 @@ Choose another asset type.`,
   demoDurationLine: `⏱ Duration: {label}`,
   demoNext: `Next — the candle analysis: the bot will show the signal and what you can do with it.`,
   demoSignalsHeader: `📡 <b>Signals now</b> · {label}
-Choose a pair. A signal lasts one candle ({label}), so the bot checks it again before the trade.`,
+Choose a pair. An H1 signal lives a second, so the list changes every second and the trades follow the fresh signal.`,
   signalsWaiting: `🔎 <b>Analysing the signals</b> · {label}
-I check the pairs on every candle. As soon as a signal appears, the list opens here.`,
+I check the pairs every second. As soon as a signal appears, the list opens here.`,
   signalsExpired: `🚀 <b>Start trading</b>
-A signal lasts one candle ({label}), so this list is out of date. Open the fresh signals or pick a pair by hand.`,
+A signal lives a second, so this list is out of date. Open the fresh signals or pick a pair by hand.`,
   pairWaiting: `⏳ <b>Checking the signal on {symbol}</b>
-I look on every candle ({label}). As soon as the signal appears, we continue here.`,
+I look every second ({label}). As soon as the signal appears, we continue here.`,
   pairWaitingAlternatives: `Other pairs have a signal already — pick one below instead of waiting 👇`,
   launchHeader: `🎯 <b>{subject}</b>`,
   launchStake: `💵 Stake: {stake}`,
@@ -204,7 +204,6 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   analysisLastPrice: `💲 Last price: {price}`,
   analysisDisclaimer: `⚠️ A signal is not a forecast of the result and not a guarantee. It is a demo: no money needed.`,
   analysisDisclaimerReal: `⚠️ A signal is not a forecast of the result and not a guarantee. Real mode: the trade uses real money.`,
-  analysisRateLimited: `⚠️ The broker limited requests. Try again in {seconds} s.`,
   analysisUnavailable: `⚠️ Could not get the candles from the broker. Try again.`,
   actionUp: '⬆️ Up',
   actionDown: '⬇️ Down',
@@ -246,6 +245,7 @@ I look on every candle ({label}). As soon as the signal appears, we continue her
   cardDirectionUp: '⬆️ UP 🟢',
   cardDirectionDown: '⬇️ DOWN 🔴',
   indicatorShortData: 'not enough data ({count} of {required})',
+  cardNoData: 'no data',
 
   // ---- trade ---------------------------------------------------------------------------------
   intentHeader: `🎮 <b>Demo trade</b>`,
@@ -377,8 +377,6 @@ Your recent payments. Need a refund — tap the button under the payment: a supp
   sessionInsufficientTokens: `🪙 Not enough tokens: each trade of the session needs one token.`,
   sessionTooLong: `⏱ A session of this duration will not fit into an hour.`,
   sessionPairUnavailable: `⚠️ The pair is unavailable for a session right now. Open the analysis again.`,
-  sessionAccountChanged: `⚙️ The account settings changed — open the analysis again.`,
-  sessionSignalUnavailable: `⚠️ Could not check the pair's signal — repeat the analysis.`,
   sessionStopNoSignalTimeout: `⏳ The session stopped: the pair had no signal for {noSignalCandles} of {candleSec} s. Choose another pair.`,
   sessionStopNoSignalTimeoutNoSettings: `⏳ The session stopped: the pair had no signal for a long time. Choose another pair.`,
   sessionStopManualReview: `🛠 The session stopped: a manual review is needed — contact support: /support`,

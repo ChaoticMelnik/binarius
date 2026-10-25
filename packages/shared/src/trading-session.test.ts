@@ -604,16 +604,20 @@ describe('tradingSessionRefusalSchema', () => {
     expect(safeParseTradingSessionRefusal({ error: 'validation' }).success).toBe(false);
   });
 
-  it('parses the H1 refusals of the start (#745); account_not_h1 is the db code', () => {
+  it('parses the H1 fence of the start (#745); the candle and mark refusals are gone (#828)', () => {
+    expect(
+      safeParseTradingSessionRefusal({ error: TradingSessionErrorCode.H1DurationUnsupported })
+        .success,
+    ).toBe(true);
+    // no payout floor at the start since #775 (В2); every start is H1 since #828
     for (const error of [
-      TradingSessionErrorCode.H1DurationUnsupported,
-      TradingSessionErrorCode.AccountNotH1,
+      'h1_payout_too_low',
+      'no_signal',
+      'signal_unavailable',
+      'account_not_h1',
     ]) {
-      expect(safeParseTradingSessionRefusal({ error }).success).toBe(true);
+      expect(safeParseTradingSessionRefusal({ error }).success).toBe(false);
     }
-    expect(TradingSessionErrorCode.AccountNotH1).toBe('account_not_h1');
-    // no payout floor at the start since #775 (В2)
-    expect(safeParseTradingSessionRefusal({ error: 'h1_payout_too_low' }).success).toBe(false);
   });
 
   it('spells catalog_unavailable as the pairs route does', () => {

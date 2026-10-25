@@ -27,6 +27,8 @@ import {
   ANALYSIS_UNUSED_UNTIL_MS,
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
+  H1_SECOND_CLOSE_MARGIN_MS,
+  H1_START_SECOND_MAX_AGE_MS,
   MAILING_MIN_OFFSET_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
@@ -240,8 +242,9 @@ export const MARKET_DATA_BACKFILL_POLL_MS = 250;
 export const MARKET_DATA_BACKFILL_CONCURRENCY = 2;
 
 // --- The H1 shadow (#669, docs/h1.md) -------------------------------------------------------------
-// a quiet pair's second closes by the process clock this long after its end
-export const H1_SECOND_CLOSE_MARGIN_MS = 500;
+// H1_SECOND_CLOSE_MARGIN_MS and H1_START_SECOND_MAX_AGE_MS live in packages/shared (h1.ts) since
+// #828: the bot's wait polls on them. Re-exported for this process's readers.
+export { H1_SECOND_CLOSE_MARGIN_MS, H1_START_SECOND_MAX_AGE_MS };
 // the period of the series' clock rule and of the shadow's sweep: a clock close lags at most this
 export const H1_SHADOW_TICK_MS = 100;
 // the `h1 shadow` line
@@ -261,10 +264,8 @@ export const MAX_H1_SUBMIT_BUDGET_MS = 5_000;
 export const H1_DRIVER_SCAN_MS = 5_000;
 // the `h1 driver` line
 export const H1_DRIVER_LOG_MS = 60_000;
-// the start of an H1 session trades on the pair's newest closed second f only while now - f is at
-// most this (#796): a second plus the clock close's margin and one tick, the latest a quiet pair's
-// next second closes; an older f means the series fell behind and the start waits
-export const H1_START_SECOND_MAX_AGE_MS = 1_600;
+// the `h1 scanner` line (#828, docs/h1.md -> The scanner and the signals list)
+export const H1_SCANNER_LOG_MS = 60_000;
 
 // --- The ticks around a decision and the trade log's retention (#668, docs/trade-log.md) ----------
 // the window's start before decided_at_ms (owner, #668 В4)
@@ -362,16 +363,13 @@ export const SIGNAL_FETCH_BUDGET_MS = 3_000;
 // the 5s and 15s candles (#313; the bot offers 5 s since #685) the candle's end binds first.
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
-// --- The signal scanner (#343) and the signal REST (#405) -----------------------------------
-// docs/signal.md -> The scanner. One scanner per interval of SIGNAL_SCAN_INTERVALS (`5s` only
-// since #685), one scan a candle, CANDLE_CLOSE_SLACK_MS (shared, #697) after its boundary. The
-// scan decides from the data socket's window and takes no token (#405).
+// --- The signal REST (#405) -----------------------------------------------------------------
+// The candle scanner (#343) was removed by #828; the names below keep its SIGNAL_SCAN_ prefix
+// because SIGNAL_SCAN_MAX_PER_MINUTE is an operator's env variable.
 // the signal pacer's pause after a 429 without Retry-After: doubles from the first to the second;
 // a Retry-After is held to the same bounds
 export const SIGNAL_SCAN_BACKOFF_MIN_MS = 15_000;
 export const SIGNAL_SCAN_BACKOFF_MAX_MS = 120_000;
-// the period of the scanner's `signal scanner` log line
-export const SIGNAL_SCAN_LOG_MS = 60_000;
 // docs/signal.md -> The budget. The one pacer of the signal chart GETs (SIGNAL_SCAN_MAX_PER_MINUTE a
 // minute): its bucket holds one 5 s candle's batch of on-demand GETs - the steps of every session
 // on 5s decide at one boundary - plus a spare token, so a fire a few ms earlier relative to its
@@ -453,11 +451,10 @@ const TIMING_CHAIN_HOLDS =
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
-  // per scanned interval: a scan starts inside its candle, and an on-demand GET asked at the
-  // boundary by a session step, bounded by the cache, ends inside it too
+  // per interval the ring builds: an on-demand GET asked at the boundary by a v3 session's step,
+  // bounded by the cache, ends inside its candle
   SIGNAL_SCAN_INTERVALS.every(
     (interval) =>
-      CANDLE_CLOSE_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
       SIGNAL_FETCH_BUDGET_MS + CANDLE_CLOSE_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval],
   ) &&
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
@@ -600,6 +597,8 @@ const TIMING_CHAIN_HOLDS =
   // reading plus the driver's path opens inside the backtest's entry window
   1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SHADOW_TICK_MS <= H1_START_SECOND_MAX_AGE_MS &&
   H1_START_SECOND_MAX_AGE_MS < H1_ENTRY_WINDOW_SEC.to * 1_000 &&
+  // the H1 scanner (#828): its line spans the series' clock ticks
+  H1_SHADOW_TICK_MS <= H1_SCANNER_LOG_MS &&
   // the ticks around a decision (#668): at the latest capture (decided + max wait, closed by the
   // clock rule, seen a scan later) the pair's watermark, at most the receipt clock + the clamp, has
   // not pruned the window's start; a watermark close precedes the clock close by at most the

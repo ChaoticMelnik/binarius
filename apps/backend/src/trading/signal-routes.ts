@@ -4,14 +4,15 @@ import {
   errorLogFields,
   safeParseTradingSignalRequest,
   SignalFeedOutcome,
-  SignalKind,
   TRADING_SIGNAL_PATH,
   TradingSignalErrorCode,
+  type H1SignalWire,
   type LastTick,
   type TradingSignalResponse,
 } from '@binarius/shared';
 import type { CachedSignalFeed, SignalEvaluation } from '@binarius/signal';
 import { internalBearerAuth } from '../auth/internal';
+import type { H1Scanner } from '../h1/scanner';
 import type { TickStore } from '../market-data/ticks';
 
 export interface SignalRoutesDeps {
@@ -28,6 +29,9 @@ export interface SignalRoutesDeps {
   };
   // the newest tick per pair (#666); undefined without the data socket (no BROKER_WS_URL)
   ticks: Pick<TickStore, 'last'> | undefined;
+  // the pair's H1 signal (#828); undefined without the data socket: `h1` is then always null
+  h1: Pick<H1Scanner, 'current'> | undefined;
+  now?: () => number;
 }
 
 // Named fields only: the evaluation also carries the journal series and the request facts, which
@@ -35,6 +39,7 @@ export interface SignalRoutesDeps {
 // then the whole entry and the pair's last tick.
 export function toTradingSignalResponse(
   evaluation: SignalEvaluation,
+  h1: H1SignalWire | null,
   record?: { lastTick: LastTick | null },
 ): TradingSignalResponse {
   if (evaluation.outcome === SignalFeedOutcome.Decided) {
@@ -46,27 +51,31 @@ export function toTradingSignalResponse(
       ...(record === undefined
         ? {}
         : { record: { entry: evaluation.entry, lastTick: record.lastTick } }),
+      h1,
     };
   }
   return {
     outcome: SignalFeedOutcome.FetchFailed,
     code: evaluation.code,
     ...(evaluation.retryAfterSec === undefined ? {} : { retryAfterSec: evaluation.retryAfterSec }),
+    h1,
   };
 }
 
 // An encapsulated plugin so the auth hook covers exactly this route. A broker failure is a 200
 // with an outcome (docs/signal.md -> POST /trading/signal); a throw is the app's opaque 500. The
 // pair is looked up in the pairs cache before any chart GET, for its digits; whether it is open or
-// accepts a duration is the caller's check (an analysis of a closed pair stays allowed). With
-// `analysis` (the bot's analysis card, #484) a decision is recorded as the user's last analysis: a
-// signal with its pair and duration, no signal as none; a fetch failure records nothing. The
-// record is best-effort: its failure is logged and the decision is answered all the same. With
-// `record: true` (a session's worker, #666) a decision is answered with its record: the entry and
-// the pair's newest data-socket tick at the answer.
+// accepts a duration is the caller's check (an analysis of a closed pair stays allowed). Every
+// answer carries `h1`, the pair's H1 signal read right after the feed answered (#828): an H1
+// signal lives a second and the feed may take up to SIGNAL_FETCH_BUDGET_MS. With `analysis` (the
+// bot's analysis card, #484) the answer is recorded as the user's last analysis by `h1`, on both
+// outcomes: an H1 signal with its pair and duration, none as none - the card the bot draws is the
+// H1 one. The record is best-effort: its failure is logged and the decision is answered all the
+// same. With `record: true` (a session's worker, #666) a decision is answered with its record: the
+// entry and the pair's newest data-socket tick at the answer.
 export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
   app,
-  { feed, catalog, internalApiToken, lastAnalysis, ticks },
+  { feed, catalog, internalApiToken, lastAnalysis, ticks, h1: scanner, now = Date.now },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -88,14 +97,13 @@ export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
       { assetId: parsed.data.assetId, interval: parsed.data.interval, digits: pair.digits },
       { journal: true },
     );
+    const h1 = scanner?.current(parsed.data.assetId, now()) ?? null;
     const { analysis } = parsed.data;
-    if (analysis !== undefined && evaluation.outcome === SignalFeedOutcome.Decided) {
+    if (analysis !== undefined) {
       try {
         await lastAnalysis.set(
           BigInt(analysis.telegramUserId),
-          evaluation.entry.decision.kind === SignalKind.Signal
-            ? { assetId: parsed.data.assetId, durationSec: analysis.durationSec }
-            : null,
+          h1 === null ? null : { assetId: parsed.data.assetId, durationSec: analysis.durationSec },
         );
       } catch (error) {
         request.log.warn(errorLogFields(error), 'last analysis not recorded');
@@ -104,6 +112,7 @@ export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
     return reply.send(
       toTradingSignalResponse(
         evaluation,
+        h1,
         parsed.data.record === true
           ? { lastTick: ticks?.last(parsed.data.assetId) ?? null }
           : undefined,

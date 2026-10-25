@@ -44,11 +44,15 @@ import { runWithLanguage } from './language';
 import {
   PAIR_EURUSD,
   PAIR_EURUSD_REGULAR,
+  h1Signal,
+  SIGNAL_CANDLE_ONLY,
   SIGNAL_CARD,
   SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
   SIGNAL_FEATURES,
   SIGNAL_FETCH_FAILED,
+  SIGNAL_FETCH_FAILED_H1,
+  SIGNAL_H1_ONLY,
   SIGNAL_INDICATORS,
   SIGNAL_NO_SIGNAL,
   SIGNAL_PARAMS,
@@ -190,7 +194,11 @@ MA200         цена ниже 1.08612
     expect(rowOf(regular, 'Пара')).toBe('EUR/USD');
     expect(screenOf(SIGNAL_CARD).photo).toBe(TradeAction.Up);
     const down = screenOf(
-      tradingSignalResponseSchema.parse({ ...SIGNAL_CARD, decision: SIGNAL_DECISION_DOWN }),
+      tradingSignalResponseSchema.parse({
+        ...SIGNAL_CARD,
+        decision: SIGNAL_DECISION_DOWN,
+        h1: h1Signal(TradeAction.Down),
+      }),
     );
     expect(down.photo).toBe(TradeAction.Down);
     const downLines = plainTextOf(down.text).split('\n');
@@ -405,25 +413,95 @@ MA200         цена ниже 1.08612
     expect(screenOf(dataRefusalOf(reason)).wait).toBe(true);
   });
 
-  it('waits on no screen but a refusal', () => {
+  it('waits whenever the answer has no H1 signal (#828); an unread answer does not', () => {
     expect(screenOf(SIGNAL_DECIDED).wait).toBe(false);
-    expect(screenOf(SIGNAL_FETCH_FAILED).wait).toBe(false);
+    expect(screenOf(SIGNAL_FETCH_FAILED_H1).wait).toBe(false);
+    expect(screenOf(SIGNAL_FETCH_FAILED).wait).toBe(true);
+    expect(screenOf(SIGNAL_CANDLE_ONLY).wait).toBe(true);
     expect(analysisUnavailableScreen(PAIR_EURUSD, 5).wait).toBe(false);
   });
 
-  // A5
-  it('asks to wait the countdown on rate_limited, and says unavailable without one', () => {
-    expect(linesOf(SIGNAL_FETCH_FAILED)[1]).toBe(
-      '⚠️ Брокер ограничил запросы. Попробуй через 7 с.',
-    );
-    const withoutCountdown: TradingSignalResponse = {
-      outcome: SignalFeedOutcome.FetchFailed,
-      code: BrokerRestErrorCode.RateLimited,
-    };
-    expect(linesOf(withoutCountdown)[1]).toBe(plainTextOf(TEXTS.analysisUnavailable));
-    expect(
-      linesOf({ outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.Unavailable })[1],
-    ).toBe(plainTextOf(TEXTS.analysisUnavailable));
+  // A-h1-4, A-h1-5 (#828): a failed candle fetch without an H1 signal is the wait's base text, the
+  // countdown of rate_limited included
+  it.each([
+    ['rate_limited with a countdown', SIGNAL_FETCH_FAILED],
+    [
+      'rate_limited without one',
+      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.RateLimited, h1: null },
+    ],
+    [
+      'unavailable',
+      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.Unavailable, h1: null },
+    ],
+  ] satisfies [string, TradingSignalResponse][])(
+    'A-h1-4 waits on fetch_failed %s without an H1 signal, the base text alone',
+    (_name, response) => {
+      const screen = screenOf(response);
+      expect(screen).toMatchObject({ wait: true, photo: null, stake: null, session: false });
+      const lines = linesOf(response);
+      expect(lines).toEqual([lines[0], plainTextOf(TEXTS.analysisWaiting)]);
+    },
+  );
+
+  // A-h1-1 (#828): the direction, the title, the picture and the stake are H1's; the rows print the
+  // candle refusal's features
+  it('A-h1-1 draws the card on an H1 signal down over a candle no_signal, the rows from its features', () => {
+    const screen = screenOf(SIGNAL_H1_ONLY);
+    expect(screen).toMatchObject({
+      wait: false,
+      photo: TradeAction.Down,
+      stake: TradeAction.Down,
+      session: true,
+    });
+    const lines = plainTextOf(screen.text).split('\n');
+    expect(lines[1]).toBe('🔴 Сильный сигнал на падение');
+    expect(rowOf(lines, 'RSI')).toBe('нейтрально 52.1');
+    expect(rowOf(lines, 'Тренд EMA')).toBe('вверх');
+    expect(rowOf(lines, 'Волатильность')).toBe('в норме 0.041%');
+    expect(rowOf(lines, 'Направление')).toBe('⬇️ ВНИЗ 🔴');
+  });
+
+  it('A-h1-1 follows h1 against a candle signal the other way: title, picture, stake and the direction row', () => {
+    const disagree = tradingSignalResponseSchema.parse({
+      ...SIGNAL_CARD,
+      h1: h1Signal(TradeAction.Down),
+    });
+    const screen = screenOf(disagree);
+    expect(screen).toMatchObject({ photo: TradeAction.Down, stake: TradeAction.Down });
+    const lines = plainTextOf(screen.text).split('\n');
+    expect(lines[1]).toBe('🔴 Сильный сигнал на падение');
+    expect(rowOf(lines, 'Направление')).toBe('⬇️ ВНИЗ 🔴');
+  });
+
+  it('A-h1-1 names the volatility of a candle refusal by volatility on the H1 card', () => {
+    const low = tradingSignalResponseSchema.parse({
+      ...ruleRefusalOf(NoSignalReason.VolatilityTooLow),
+      h1: h1Signal(TradeAction.Up),
+    });
+    expect(rowOf(linesOf(low), 'Волатильность')).toBe('слишком низкая 0.041%');
+  });
+
+  // A-h1-2 (#828): a candle signal without an H1 one is the wait with the candle's lines
+  it('A-h1-2 waits on a candle signal without an H1 signal: no picture, no session, the feature lines', () => {
+    const screen = screenOf(SIGNAL_CANDLE_ONLY);
+    expect(screen).toMatchObject({ wait: true, photo: null, stake: null, session: false });
+    const lines = linesOf(SIGNAL_CANDLE_ONLY);
+    expect(lines[1]).toBe(plainTextOf(TEXTS.analysisWaiting));
+    expect(hasFeatureLines(lines)).toBe(true);
+  });
+
+  // A-h1-3 (#828): the candle fetch failed, H1 has a signal: the card, its candle rows without data
+  it('A-h1-3 draws the card on fetch_failed with an H1 signal, the candle rows «нет данных»', () => {
+    const screen = screenOf(SIGNAL_FETCH_FAILED_H1);
+    expect(screen).toMatchObject({ wait: false, photo: TradeAction.Up, stake: TradeAction.Up });
+    const lines = plainTextOf(screen.text).split('\n');
+    expect(lines[1]).toBe('🟢 Сильный сигнал на рост');
+    for (const label of ['RSI', 'Тренд EMA', 'Волатильность']) {
+      expect(rowOf(lines, label)).toBe('нет данных');
+    }
+    expect(rowOf(lines, 'MACD')).toBe('данных мало (0 из 35)');
+    expect(rowOf(lines, 'MA50')).toBe('данных мало (0 из 50)');
+    expect(rowOf(lines, 'MA200')).toBe('данных мало (0 из 200)');
   });
 
   // A6
@@ -456,8 +534,8 @@ MA200         цена ниже 1.08612
     }
     for (const response of [
       SIGNAL_FETCH_FAILED,
-      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.RateLimited },
-      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.Unavailable },
+      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.RateLimited, h1: null },
+      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.Unavailable, h1: null },
     ] satisfies TradingSignalResponse[]) {
       expect(screenOf(response).session).toBe(false);
     }

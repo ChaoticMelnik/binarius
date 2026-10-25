@@ -81,6 +81,8 @@ export const signalAnswer = (
     params: DEFAULT_SIGNAL_PARAMS,
     decision,
     ...(record ? { record: signalRecordOf(decision) } : {}),
+    // the H1 field (#828): the worker's v3 step reads the candle decision only
+    h1: null,
   };
 };
 
@@ -98,6 +100,7 @@ export const noSignalAnswer = ({
     params: DEFAULT_SIGNAL_PARAMS,
     decision,
     ...(record ? { record: signalRecordOf(decision) } : {}),
+    h1: null,
   };
 };
 
@@ -105,6 +108,7 @@ export const fetchFailedAnswer = (retryAfterSec?: number): TradingSignalResponse
   outcome: SignalFeedOutcome.FetchFailed,
   code: BrokerRestErrorCode.RateLimited,
   ...(retryAfterSec === undefined ? {} : { retryAfterSec }),
+  h1: null,
 });
 
 // the mock broker's EUR/USD as GET /trading/pairs shows it

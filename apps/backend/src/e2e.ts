@@ -14,7 +14,15 @@ export { createSessionNoticeListener } from './trading/session-notice-listener';
 export { createSessionNoticeSender } from './trading/session-notices';
 export type { TradingRoutesDeps } from './trading/routes';
 export { createScanPacer } from './signal/pacer';
+export { createSecondSeries, type SecondSeries } from './market-data/seconds';
+export { createH1Driver } from './h1/driver';
+export { createH1Scanner } from './h1/scanner';
 export {
+  H1_SCANNER_LOG_MS,
+  H1_SECOND_CLOSE_MARGIN_MS,
+  H1_SERIES_CAPACITY_SEC,
+  H1_SHADOW_TICK_MS,
+  H1_START_SECOND_MAX_AGE_MS,
   SIGNAL_CACHE_MAX_TTL_MS,
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
@@ -29,4 +37,3 @@ export {
   type CapturedApi as CapturedPushApi,
 } from './admin/testing';
 export { unusedDepositDeps } from './deposit/testing';
-export { unusedSignalsDeps } from './trading/testing';

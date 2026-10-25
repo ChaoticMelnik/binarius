@@ -4,7 +4,6 @@ import {
   errorLogFields,
   intervalForDuration,
   SignalFeedOutcome,
-  SignalKind,
   telegramErrorFields,
   type BotKeyboard,
   type BotLanguage,
@@ -33,17 +32,17 @@ import type { SetupCardPhotos } from './setup-card';
 // pair the bot never says «сигнала нет»: the screen waits, and the bot edits the same message once
 // a signal comes. One entry per user, in this process's memory; any button and any command end it
 // (bot.ts, beside endInputStep). One poll of GET /trading/signals and GET /trading/pairs serves
-// every entry, once a candle of the demo's duration (timing.ts → SIGNAL_WAIT_POLL_MS), and a pair
-// has a signal now when it is in the scanner's fresh list and the catalog takes the trade — the
-// one definition of the list, the doors and the waits. The buttons of pairs stand listTtlMs (30 s),
+// every entry, once a second (timing.ts → SIGNAL_WAIT_POLL_MS: an H1 signal lives a second, #828),
+// and a pair has a signal now when it is in the H1 scanner's list and the catalog takes the trade
+// — the one definition of the list, the door `n` and the waits. The buttons of pairs stand listTtlMs (30 s),
 // an entry at most maxMs; the edits go at the pace of editGapMs, and a 429 pauses them for its
 // retry_after. stop() turns the waiting messages into the start of trading inside its window.
 
 type WaitApi = Pick<Api, 'editMessageText' | 'editMessageMedia'>;
 
-// where the wait for a pair started: the pair's door (`demo:l`), the analysis without a signal, a
-// session start refused for want of one (409 no_signal)
-export type WaitOrigin = 'door' | 'analysis' | 'start';
+// where the wait for a pair started: the pair's door drawn without a signal (`demo:l…:n`), the
+// analysis without an H1 signal
+export type WaitOrigin = 'door' | 'analysis';
 
 // the other pairs' buttons under the wait for a pair: to be drawn by the first poll, standing since
 // a time, or gone for good
@@ -107,7 +106,7 @@ export interface SignalWaitScreens {
     catalog: PairsCatalogResponse,
     nowMs: number,
   ): DemoScreen;
-  // the analysis's card on a signal (#482); undefined without one
+  // the analysis's card on an H1 signal (#482, #828); undefined without one
   card(
     pair: PairView,
     response: TradingSignalResponse,
@@ -372,7 +371,8 @@ export function createSignalWaiter({
   }
 
   // The chosen pair has a signal: the next step by a fresh access read, or for the analysis its
-  // card. undefined when the analysis found no signal after all: the entry stays.
+  // card. undefined when the analysis's answer has no H1 signal after all (a second boundary
+  // crossed between the two reads): the entry stays.
   async function resolve(
     entry: Extract<Entry, { kind: 'pair' }>,
     pairView: PairView,
@@ -407,9 +407,8 @@ export function createSignalWaiter({
     }
     if (response.outcome === SignalFeedOutcome.FetchFailed) {
       warnOnce(entry, 'signal wait analysis not evaluated', { signalCode: response.code });
-      return undefined;
     }
-    if (response.decision.kind !== SignalKind.Signal) return undefined;
+    if (response.h1 === null) return undefined;
     const access = await readAccess(telegramUserId);
     const card = screens.card(pairView, response, access);
     if (card === undefined || !live(entry)) return undefined;

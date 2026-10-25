@@ -55,6 +55,7 @@ import { createTickStore } from './market-data/ticks';
 import { createSecondSeries } from './market-data/seconds';
 import { createH1Shadow } from './h1/shadow';
 import { createH1Driver, H1ReadingUnavailable } from './h1/driver';
+import { createH1Scanner } from './h1/scanner';
 import { createTradeLogKeeper } from './trade-log/keeper';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
@@ -62,7 +63,6 @@ import { createCandleBackfill } from './market-data/backfill';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
 import { createScanPacer, type SpareTokenSource } from './signal/pacer';
-import { createSignalScanner } from './signal/scanner';
 import {
   BOT_TEXTS_LOAD_BUDGET_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
@@ -79,6 +79,7 @@ import {
   H1_DRIVER_LOG_MS,
   H1_DRIVER_SCAN_MS,
   H1_START_SECOND_MAX_AGE_MS,
+  H1_SCANNER_LOG_MS,
   MARKET_DATA_BACKFILL_POLL_MS,
   MARKET_DATA_BACKFILL_RETRY_MS,
   MARKET_DATA_BACKFILL_SCAN_MS,
@@ -100,7 +101,6 @@ import {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
-  SIGNAL_SCAN_LOG_MS,
   signalRestCapacity,
   STARS_TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
@@ -188,7 +188,7 @@ const candleStore =
           maxPerPair: TRADE_TICKS_MAX_PER_PAIR,
           aheadMs: TRADE_TICKS_AHEAD_MS,
         }),
-        // the 1s closes the H1 shadow decides on (#669, docs/h1.md)
+        // the 1s closes the H1 shadow, driver and scanner decide on (#669, #707, #828, docs/h1.md)
         seconds: createSecondSeries({
           capacitySec: H1_SERIES_CAPACITY_SEC,
           closeMarginMs: H1_SECOND_CLOSE_MARGIN_MS,
@@ -205,7 +205,7 @@ const signalPacer = createScanPacer({
   now: Date.now,
 });
 // built only with BROKER_WS_URL; its streaming reads marketData, declared below: the feed reads the
-// source on requests and the scanners on scans, both only after listen()
+// source on requests, only after listen()
 const marketDataSource =
   candleStore === undefined
     ? undefined
@@ -230,27 +230,6 @@ const signalFeed = createCachedSignalFeed(
     },
   }),
   { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
-);
-
-// The background scan of every eligible pair from the data socket's window (docs/signal.md ->
-// The scanner, #405), one scanner per interval, through the same cache, so a manual analysis of a
-// scanned pair in that candle is a hit. Without a streaming source it keeps no entry. Started with
-// the other loops after listen(), stopped in phase 1.
-const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) =>
-  createSignalScanner({
-    interval,
-    feed: signalFeed,
-    catalog: pairsCatalog,
-    streaming: () => marketData?.manager.streaming() ?? false,
-    // the app's logger does not exist yet, and this one is first used by the first scan
-    logger: {
-      info: (object, message) => app.log.info(object, message),
-      warn: (object, message) => app.log.warn(object, message),
-    },
-    now: Date.now,
-    slackMs: CANDLE_CLOSE_SLACK_MS,
-    logEveryMs: SIGNAL_SCAN_LOG_MS,
-  }),
 );
 
 // created before the app so the routes can hold it; polling starts after listen()
@@ -297,12 +276,10 @@ const app = buildApp({
     db,
     catalog: pairsCatalog,
     balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
-    signals: signalFeed,
     internalApiToken: env.internalApiToken,
     demoOnly: env.demoOnly,
     stakeStrategy: env.sessionStakeStrategy,
     decisions: { record: (input) => recordSignalDecision(db, input) },
-    ticks: candleStore?.ticks,
     // marketData is built after the app: read at the request, as `streaming` above
     h1Driver:
       candleStore === undefined
@@ -324,9 +301,19 @@ const app = buildApp({
       set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
     },
     ticks: candleStore?.ticks,
+    // marketData is built after the app: read at the request (#828)
+    h1:
+      candleStore === undefined
+        ? undefined
+        : { current: (assetId, nowMs) => marketData?.h1Scanner.current(assetId, nowMs) ?? null },
   },
   signals: {
-    scanners: signalScanners,
+    scanner:
+      candleStore === undefined
+        ? undefined
+        : {
+            fresh: (nowMs) => marketData?.h1Scanner.fresh(nowMs) ?? { scanned: 0, signals: [] },
+          },
     internalApiToken: env.internalApiToken,
   },
   auth: {
@@ -456,8 +443,8 @@ const serviceAccounts = createServiceAccountKeeper({
 });
 
 // docs/market-data.md: the data socket on a service account that builds the candle store's ring
-// (#404) and its REST backfill (#590), read by the signal feed and the scanners (#405). Started with
-// the other loops after listen(), stopped in phase 1.
+// (#404) and its REST backfill (#590), read by the signal feed (#405), and the second series of the
+// H1 parts (docs/h1.md). Started with the other loops after listen(), stopped in phase 1.
 function createMarketData(
   { brokerWsUrl, ring, requests, ticks, seconds }: NonNullable<typeof candleStore>,
   pacer: SpareTokenSource,
@@ -542,7 +529,16 @@ function createMarketData(
       startMaxAgeMs: H1_START_SECOND_MAX_AGE_MS,
     },
   });
-  return { manager, backfill, h1Shadow, h1Driver };
+  // docs/h1.md -> The scanner and the signals list (#828): the R1 decision of every eligible pair's
+  // closed second, in memory, for GET /trading/signals and the analysis's `h1`; no timer but its line
+  const h1Scanner = createH1Scanner({
+    series: seconds,
+    catalog: pairsCatalog,
+    streaming: () => manager.streaming(),
+    logger: app.log,
+    config: { logMs: H1_SCANNER_LOG_MS, maxAgeMs: H1_START_SECOND_MAX_AGE_MS },
+  });
+  return { manager, backfill, h1Shadow, h1Driver, h1Scanner };
 }
 const marketData =
   candleStore === undefined ? undefined : createMarketData(candleStore, signalPacer);
@@ -615,7 +611,6 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => publisher.stop(),
       () => adminBot.stop(),
       () => Promise.resolve(pairsCatalog.stop()),
-      () => Promise.all(signalScanners.map((scanner) => scanner.stop())),
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
       async () => {
@@ -630,6 +625,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => serviceAccounts.stop(),
       () => tradeLogKeeper.stop(),
       async () => {
+        marketData?.h1Scanner.stop();
         await marketData?.h1Driver.stop();
         await marketData?.h1Shadow?.stop();
         await marketData?.backfill.stop();
@@ -684,13 +680,16 @@ if (!shuttingDown) {
     },
     'h1 driver',
   );
+  app.log.info(
+    { enabled: marketData !== undefined, maxAgeMs: H1_START_SECOND_MAX_AGE_MS },
+    'h1 scanner',
+  );
   app.log.info({ capture: candleStore !== undefined }, 'trade log keeper');
   app.log.info({ demoOnly: env.demoOnly }, 'deposit mode switch');
 }
 if (!shuttingDown) {
   publisher.start();
   balanceReconciler.start();
-  for (const scanner of signalScanners) scanner.start();
   botTexts.start();
   mailing.start();
   depositModeSwitcher.start();
@@ -702,6 +701,7 @@ if (!shuttingDown) {
   marketData?.backfill.start();
   marketData?.h1Shadow?.start();
   marketData?.h1Driver.start();
+  marketData?.h1Scanner.start();
   tradeLogKeeper.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.

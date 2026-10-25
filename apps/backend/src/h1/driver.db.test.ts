@@ -28,7 +28,6 @@ import {
   readTradeLogPage,
   recordSignalDecision,
   SESSION_NOTICE_CHANNEL,
-  setH1Mark,
   settleIntent,
   signalDecisions,
   stopTradingSession,
@@ -52,7 +51,7 @@ import type { ClosedSecond } from '../market-data/seconds';
 import { createH1Driver, type H1Driver, type H1DriverDeps } from './driver';
 
 // The driver against the real operations (#707, docs/h1.md -> The driver) on a temporary migrated
-// database: a marked account's v5 session, a scripted series whose ramp from F signals up.
+// database: an unmarked account's v5 session (#828), a scripted series whose ramp from F signals up.
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
   throw new Error(
@@ -139,9 +138,9 @@ const catalog: PairsCatalogView = {
   fresh: true,
 };
 
-async function markedSession() {
+// an unmarked account's v5 session: the bot's start since #828
+async function botSession() {
   const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
-  await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
   // the sizer's balance (#775)
   await seedBalanceSnapshot(tmp.db, seed.brokerAccountId);
   const built = buildH1SessionSettings({
@@ -195,7 +194,7 @@ function driverOn(series: ReturnType<typeof scriptedSeries>) {
 const RAMP = [...Array<number>(300).fill(1.1), 1.1001];
 
 async function tradeOnce() {
-  const { seed, session } = await markedSession();
+  const { seed, session } = await botSession();
   const series = scriptedSeries();
   const { driver, wakes } = driverOn(series);
   driver.start();
@@ -318,12 +317,11 @@ describe('the H1 driver on the database (#707)', () => {
   });
 });
 
-// #745, #775: the start route writes the same v5; the driver lists such a session while its account
-// is marked, whoever created it
-describe("the driver's list and a session of the bot's settings (#745)", () => {
-  it('H1-DB3: listed with its owner while marked; not listed once the mark is gone', async () => {
+// #745, #775, #828: the start route writes the same v5 for every account; the driver lists such a
+// session whatever the account's H1 mark says
+describe("the driver's list and a session of the bot's settings (#745, #828)", () => {
+  it('H1-DB3′: listed with its owner on an unmarked account, and still once marked', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
-    await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
     const built = buildH1SessionSettings({
       assetId: ASSET,
       cycles: 5,
@@ -344,11 +342,10 @@ describe("the driver's list and a session of the bot's settings (#745)", () => {
     );
     const listed = (await listActiveH1Sessions(tmp.db)).find((row) => row.id === session.id);
     expect(listed).toMatchObject({ telegramUserId: seed.telegramUserId, settings: built.data });
-    // the mark cleared by hand under an active session (setH1Mark refuses it), as risk 3 of #707
     await tmp.db.execute(
-      sql`update broker_accounts set h1_since = null where id = ${seed.brokerAccountId}`,
+      sql`update broker_accounts set h1_since = now() where id = ${seed.brokerAccountId}`,
     );
-    expect((await listActiveH1Sessions(tmp.db)).map((row) => row.id)).not.toContain(session.id);
+    expect((await listActiveH1Sessions(tmp.db)).map((row) => row.id)).toContain(session.id);
   });
 });
 
@@ -397,7 +394,7 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
       .orderBy(tradeIntents.createdAt);
 
   it('H1-DB4: a lost Шаг 1 settled -> the LISTEN round trip -> Шаг 2 in its direction, no deadline', async () => {
-    const { session } = await markedSession();
+    const { session } = await botSession();
     const series = scriptedSeries();
     const { driver, wakes } = driverOn(series);
     const lines: string[] = [];
@@ -456,7 +453,7 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
   });
 
   it("H1-DB5: the driver's no_signal row makes the session wait: the sender lists it waitingDue", async () => {
-    const { session } = await markedSession();
+    const { session } = await botSession();
     await tmp.db
       .update(tradingSessions)
       .set({ statusMessageId: 7 })
@@ -491,7 +488,7 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
   });
 
   it('H1-DB6: the 100th decided second of a session past the limit stops it no_signal_timeout, after its waiting row', async () => {
-    const { session } = await markedSession();
+    const { session } = await botSession();
     await tmp.db.execute(
       sql`update trading_sessions set started_at = now() - interval '10 minutes' where id = ${session.id}`,
     );

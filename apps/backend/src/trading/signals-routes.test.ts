@@ -1,16 +1,20 @@
+import pino from 'pino';
 import {
   safeParseTradingSignalsResponse,
-  SIGNAL_CHART_INTERVAL_MS,
+  toBinaryPair,
   TRADING_SIGNALS_PATH,
+  type PairsCatalogView,
 } from '@binarius/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
 import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
-import type { ScanEntry, ScanSnapshot } from '../signal/scanner';
+import { createH1Scanner, type H1Scanner } from '../h1/scanner';
+import type { ClosedSecond } from '../market-data/seconds';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
+import type { SignalsRoutesDeps } from './signals-routes';
 import {
   PAIRS_TEST_TOKEN,
   unusedAccessTokenDeps,
@@ -21,28 +25,82 @@ import {
 } from './testing';
 import { unusedDepositDeps } from '../deposit/testing';
 
-// a 5 s boundary; the candle before it opened at CLOSED
-const B = 1_760_000_010_000;
-const CLOSED = B - SIGNAL_CHART_INTERVAL_MS['5s'];
-const NOW = B + 2_000;
+// The H1 scanner's list (#828): a real scanner on a scripted series. T is the first second, F the
+// first one with a full window; a ramp signals on F, a flat tail after noise is a no_signal.
+const T = 1_760_000_000_000;
+const F = T + 300_000;
+const MAX_AGE_MS = 1_600;
 
-const signal = (lastCandleTimestamp: number): ScanEntry => ({
-  kind: 'signal',
-  action: 'down',
-  lastCandleTimestamp,
-  decidedAtMs: B + 500,
-});
+const pairOf = (id: number) =>
+  toBinaryPair({
+    id,
+    symbol: `P${id}`,
+    is_otc: false,
+    type: 'currency',
+    digits: 5,
+    payout: 90,
+    max_payout: 90,
+    min_timeframe: 5,
+    max_timeframe: 3600,
+    scheduled_until: 0,
+  });
+
+const flat = (n: number, price = 1.1) => Array<number>(n).fill(price);
+const up = [...flat(300), 1.1001];
+const down = [...flat(300), 1.0999];
+const quiet = [...Array.from({ length: 297 }, (_, i) => (i % 2 === 0 ? 1.1 : 1.1002)), ...flat(4)];
+
+function scripted(pairs: number[]) {
+  const prices = new Map<number, Map<number, number>>();
+  const listeners = new Set<(closed: ClosedSecond) => void>();
+  const clock = { now: T };
+  const view: PairsCatalogView = { pairs: pairs.map(pairOf), fetchedAt: T, ageMs: 0, fresh: true };
+  const scanner = createH1Scanner({
+    series: {
+      onClosed(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      window(assetId, f, lengthSec) {
+        const own = prices.get(assetId);
+        const closes = new Float64Array(lengthSec);
+        let complete = true;
+        for (let i = 0; i < lengthSec; i++) {
+          const price = own?.get(f - (lengthSec - 1 - i) * 1_000);
+          closes[i] = price ?? NaN;
+          if (price === undefined) complete = false;
+        }
+        return { closes, complete };
+      },
+    },
+    catalog: { read: () => view },
+    streaming: () => true,
+    logger: pino({ level: 'silent' }),
+    now: () => clock.now,
+    config: { logMs: 60_000, maxAgeMs: MAX_AGE_MS },
+  });
+  scanner.start();
+  return {
+    scanner,
+    feed(assetId: number, list: readonly number[]) {
+      const own = prices.get(assetId) ?? new Map<number, number>();
+      prices.set(assetId, own);
+      list.forEach((price, i) => {
+        const second = T + i * 1_000;
+        own.set(second, price);
+        clock.now = second + 300;
+        for (const listener of listeners) {
+          listener({ assetId, second, closedBy: 'tick', closedAtMs: second + 300 });
+        }
+      });
+    },
+  };
+}
 
 let app: FastifyInstance | undefined;
+const scanners: H1Scanner[] = [];
 
-const of5s = (scanned: number[], entries: [number, ScanEntry][]): ScanSnapshot => ({
-  interval: '5s',
-  scanned,
-  entries: new Map(entries),
-});
-
-function appWith(snapshots: ScanSnapshot[], now = NOW): FastifyInstance {
-  let read = 0;
+function appWith(scanner: SignalsRoutesDeps['scanner'], now: number): FastifyInstance {
   app = buildApp({
     deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
@@ -60,22 +118,12 @@ function appWith(snapshots: ScanSnapshot[], now = NOW): FastifyInstance {
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
-    signals: {
-      scanners: snapshots.map((snapshot) => ({
-        snapshot: () => {
-          read += 1;
-          return snapshot;
-        },
-      })),
-      internalApiToken: PAIRS_TEST_TOKEN,
-      now: () => now,
-    },
+    signals: { scanner, internalApiToken: PAIRS_TEST_TOKEN, now: () => now },
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),
     payments: unusedPaymentsDeps(),
   });
-  Object.defineProperty(app, 'snapshotReads', { get: () => read });
   return app;
 }
 
@@ -90,74 +138,90 @@ const get = (target: FastifyInstance, token: string | null = PAIRS_TEST_TOKEN) =
 afterEach(async () => {
   await app?.close();
   app = undefined;
+  for (const scanner of scanners.splice(0)) scanner.stop();
 });
 
-describe('GET /trading/signals', () => {
-  it.each([null, 'wrong-token'])(
-    'R1 refuses bearer %s with 401 before the snapshot',
-    async (token) => {
-      const target = appWith([of5s([1], [[1, signal(CLOSED)]])]);
-      const response = await get(target, token);
-      expect(response.statusCode).toBe(401);
-      expect(response.json()).toEqual({ error: 'unauthorized' });
-      expect((target as unknown as { snapshotReads: number }).snapshotReads).toBe(0);
-    },
-  );
+const fed = (feeds: [number, readonly number[]][]) => {
+  const s = scripted(feeds.map(([assetId]) => assetId));
+  scanners.push(s.scanner);
+  for (const [assetId, list] of feeds) s.feed(assetId, list);
+  return s.scanner;
+};
 
-  // one list per interval of SIGNAL_SCAN_INTERVALS, the one scanner of `5s` since #685
-  it('R2 serves one list per interval in SIGNAL_SCAN_INTERVALS, fresh on its own candle, and the answer parses (R4)', async () => {
+describe('GET /trading/signals (#828: the H1 scanner)', () => {
+  it.each([null, 'wrong-token'])('R1 refuses bearer %s with 401 before the list', async (token) => {
+    let reads = 0;
+    const target = appWith(
+      {
+        fresh: () => {
+          reads += 1;
+          return { scanned: 0, signals: [] };
+        },
+      },
+      F + 500,
+    );
+    const response = await get(target, token);
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'unauthorized' });
+    expect(reads).toBe(0);
+  });
+
+  it("R2 serves the one list of the H1 trade's interval, and the answer parses (R4)", async () => {
     const response = await get(
-      appWith([
-        of5s(
-          [1, 2, 3],
-          [
-            [1, signal(CLOSED)],
-            [2, signal(CLOSED)],
-            // the candle before the last closed one is not served
-            [3, signal(CLOSED - SIGNAL_CHART_INTERVAL_MS['5s'])],
-          ],
-        ),
-      ]),
+      appWith(
+        fed([
+          [1, up],
+          [2, down],
+          [3, quiet],
+        ]),
+        F + 900,
+      ),
     );
     expect(response.statusCode).toBe(200);
     const body: unknown = response.json();
     expect(safeParseTradingSignalsResponse(body).success).toBe(true);
-    const item = (assetId: number, lastCandleTimestamp: number) => ({
-      assetId,
-      action: 'down',
-      lastCandleTimestamp,
-      decidedAt: B + 500,
-      ageMs: 2_000,
-    });
     expect(body).toEqual({
-      asOf: NOW,
-      lists: [{ interval: '5s', scanned: 3, signals: [item(1, CLOSED), item(2, CLOSED)] }],
+      asOf: F + 900,
+      lists: [
+        {
+          interval: '5s',
+          scanned: 3,
+          signals: [
+            { assetId: 1, action: 'up', second: F, decidedAt: F + 300, ageMs: 900 },
+            { assetId: 2, action: 'down', second: F, decidedAt: F + 300, ageMs: 900 },
+          ],
+        },
+      ],
     });
   });
 
-  it('R3 a signal on the candle before the last closed one is not served', async () => {
-    const response = await get(
-      appWith([of5s([1], [[1, signal(CLOSED)]])], B + SIGNAL_CHART_INTERVAL_MS['5s'] + 100),
-    );
-    expect(response.json()).toMatchObject({ lists: [{ scanned: 1, signals: [] }] });
+  it('R3 a second older than the bound is not served; at the bound it is', async () => {
+    const scanner = fed([[1, up]]);
+    expect((await get(appWith(scanner, F + MAX_AGE_MS))).json()).toMatchObject({
+      lists: [{ scanned: 1, signals: [{ assetId: 1, ageMs: MAX_AGE_MS }] }],
+    });
+    await app?.close();
+    expect((await get(appWith(scanner, F + MAX_AGE_MS + 1))).json()).toMatchObject({
+      lists: [{ scanned: 0, signals: [] }],
+    });
   });
 
-  it('R5 a no_signal and a pair without an entry (a failed fetch) never appear', async () => {
-    const response = await get(
-      appWith([
-        of5s(
-          [1, 2, 3],
-          [
-            [1, { kind: 'no_signal', lastCandleTimestamp: CLOSED, decidedAtMs: B + 500 }],
-            [3, signal(CLOSED)],
-          ],
-        ),
-      ]),
-    );
-    const { lists } = response.json() as { lists: { scanned: number; signals: unknown[] }[] };
-    expect(lists).toMatchObject([
-      { scanned: 3, signals: [expect.objectContaining({ assetId: 3 })] },
+  it('R5 a no_signal and a pair without an entry never appear', async () => {
+    // pair 4 is in the catalog, but its series never filled a window
+    const scanner = fed([
+      [3, quiet],
+      [4, flat(10)],
     ]);
-    expect(lists[0]?.signals).toHaveLength(1);
+    expect((await get(appWith(scanner, F + 500))).json()).toEqual({
+      asOf: F + 500,
+      lists: [{ interval: '5s', scanned: 1, signals: [] }],
+    });
+  });
+
+  it('R6 without the data socket (no scanner) the list is empty', async () => {
+    expect((await get(appWith(undefined, F))).json()).toEqual({
+      asOf: F,
+      lists: [{ interval: '5s', scanned: 0, signals: [] }],
+    });
   });
 });

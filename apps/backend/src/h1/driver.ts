@@ -58,10 +58,11 @@ import {
 import type { ClosedSecond, SecondSeries } from '../market-data/seconds';
 
 // The H1 driver (#707, #775, docs/h1.md -> The driver, Rule 48): an H1 session is a regular
-// session whose entries come from H1. On every closed second of the pair of an active H1 session
-// on a marked account, the session's detector decides on the series' window; a signal of a session
-// with no live intent and inside its limits becomes an intent of the session's sizer's stake with
-// a submit deadline, its signal_decisions row in the intent's transaction, then a publisher wake.
+// session whose entries come from H1; every session the bot starts is one since #828. On every
+// closed second of the pair of an active H1 session, the session's detector decides on the series'
+// window; a signal of a session with no live intent and inside its limits becomes an intent of the
+// session's sizer's stake with a submit deadline, its signal_decisions row in the intent's
+// transaction, then a publisher wake.
 // Шаг 2 after a lost or tied Шаг 1 is the repeat step: created at the settlement's notice, in that
 // trade's direction, without a window. A no_signal second opens a waiting period, recorded once.
 // It never reads the payout as a gate and stops a session on a stop refusal of createSessionIntent

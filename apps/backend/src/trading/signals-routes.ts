@@ -1,61 +1,54 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
-  SIGNAL_SCAN_INTERVALS,
+  H1_EXPIRY_SEC,
+  intervalForDuration,
   TRADING_SIGNALS_PATH,
   type TradingSignalsResponse,
 } from '@binarius/shared';
 import { internalBearerAuth } from '../auth/internal';
-import { freshSignals, type ScanSnapshot, type SignalScanner } from '../signal/scanner';
+import type { H1Scanner } from '../h1/scanner';
 
 export interface SignalsRoutesDeps {
-  // one per interval of SIGNAL_SCAN_INTERVALS (#382)
-  scanners: readonly Pick<SignalScanner, 'snapshot'>[];
+  // the H1 scanner (#828); undefined without the data socket (no BROKER_WS_URL): an empty list
+  scanner: Pick<H1Scanner, 'fresh'> | undefined;
   internalApiToken: string;
   now?: () => number;
 }
 
-// Named fields only (Rule 9): the snapshot also carries no_signal entries, which stay inside. The
-// lists follow SIGNAL_SCAN_INTERVALS, whatever order the scanners came in.
+// Named fields only (Rule 9). One list, keyed by the H1 trade's interval, which is the list the
+// bot reads for its one duration (#685).
 function toTradingSignalsResponse(
-  snapshots: readonly ScanSnapshot[],
+  scanner: SignalsRoutesDeps['scanner'],
   nowMs: number,
 ): TradingSignalsResponse {
+  const list = scanner?.fresh(nowMs) ?? { scanned: 0, signals: [] };
   return {
     asOf: nowMs,
-    lists: SIGNAL_SCAN_INTERVALS.flatMap((interval) =>
-      snapshots
-        .filter((snapshot) => snapshot.interval === interval)
-        .map((snapshot) => ({
-          interval,
-          scanned: snapshot.scanned.length,
-          signals: freshSignals(snapshot, nowMs).map(
-            ({ assetId, action, lastCandleTimestamp, decidedAt, ageMs }) => ({
-              assetId,
-              action,
-              lastCandleTimestamp,
-              decidedAt,
-              ageMs,
-            }),
-          ),
+    lists: [
+      {
+        interval: intervalForDuration(H1_EXPIRY_SEC),
+        scanned: list.scanned,
+        signals: list.signals.map(({ assetId, action, second, decidedAt, ageMs }) => ({
+          assetId,
+          action,
+          second,
+          decidedAt,
+          ageMs,
         })),
-    ),
+      },
+    ],
   };
 }
 
-// docs/signal.md -> GET /trading/signals. An encapsulated plugin so the auth hook covers exactly
-// this route.
+// docs/signal.md -> GET /trading/signals, docs/h1.md -> The scanner and the signals list. An
+// encapsulated plugin so the auth hook covers exactly this route.
 export const signalsRoutes: FastifyPluginAsync<SignalsRoutesDeps> = async (
   app,
-  { scanners, internalApiToken, now = Date.now },
+  { scanner, internalApiToken, now = Date.now },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
   app.get(TRADING_SIGNALS_PATH, async (_request, reply) =>
-    reply.send(
-      toTradingSignalsResponse(
-        scanners.map((scanner) => scanner.snapshot()),
-        now(),
-      ),
-    ),
+    reply.send(toTradingSignalsResponse(scanner, now())),
   );
 };

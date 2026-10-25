@@ -172,11 +172,17 @@ const accountLists = (): TelegramHtml[] =>
     ),
   );
 
-const decided = (decision: Record<string, unknown>): TradingSignalResponse =>
+// the pair's H1 signal (#828): the card's direction; none for a wait
+const h1Of = (action: TradeAction) => ({ action, second: 1, decidedAt: 1, ageMs: 1 });
+const decided = (
+  decision: Record<string, unknown>,
+  h1: ReturnType<typeof h1Of> | null = null,
+): TradingSignalResponse =>
   tradingSignalResponseSchema.parse({
     outcome: SignalFeedOutcome.Decided,
     params: { ...SIGNAL_PARAMS, emaFast: 9999, emaSlow: 9999, rsiPeriod: 9999, atrPeriod: 9999 },
     decision: { version: SIGNAL_ALGORITHM_VERSION, ...decision } as SignalDecision,
+    h1,
   });
 const widePair: PairView = { ...pair, digits: 10 };
 const featuresOf = (trend: string, momentum: string, emaSlow = -999_999_999.5) => ({
@@ -246,18 +252,36 @@ const INDICATORS = [
 const cardFeatures = Object.values(TrendDirection).flatMap((trend) =>
   [100, 0, 50].map((rsi) => ({ ...featuresOf(trend, MomentumDirection.Up), rsi })),
 );
+// the volatility row's words on an H1 card (#828): the candle's signal says «в норме», a candle
+// refusal by volatility names its own
+const VOLATILITY_REFUSALS = [
+  NoSignalReason.VolatilityTooLow,
+  NoSignalReason.VolatilityTooHigh,
+  NoSignalReason.VolatilityBelowTickFloor,
+];
 const cards = () =>
   screens(
-    Object.values(TradeAction).flatMap((action) =>
-      cardFeatures.flatMap((features) =>
-        INDICATORS.map((indicators) =>
-          tradingSignalResponseSchema.parse({
-            ...decided({ kind: SignalKind.Signal, action, features }),
-            ...(indicators === undefined ? {} : { indicators }),
-          }),
+    Object.values(TradeAction).flatMap((action) => [
+      ...cardFeatures.flatMap((features) =>
+        [
+          { kind: SignalKind.Signal, action, features },
+          ...VOLATILITY_REFUSALS.map((reason) => ({ kind: SignalKind.NoSignal, reason, features })),
+        ].flatMap((decision) =>
+          INDICATORS.map((indicators) =>
+            tradingSignalResponseSchema.parse({
+              ...decided(decision, h1Of(action)),
+              ...(indicators === undefined ? {} : { indicators }),
+            }),
+          ),
         ),
       ),
-    ),
+      // the candle fetch failed: RSI, the trend and the volatility say «нет данных»
+      tradingSignalResponseSchema.parse({
+        outcome: SignalFeedOutcome.FetchFailed,
+        code: BrokerRestErrorCode.Unavailable,
+        h1: h1Of(action),
+      }),
+    ]),
   );
 const DATA_DETAILS = {
   [NoSignalReason.InsufficientCandles]: { detail: { closedCandles: 1, required: 2 } },
@@ -408,34 +432,37 @@ const REAL: Record<string, () => TelegramHtml[]> = {
         })),
       ),
     ),
-  analysisFailed: () => [
-    ...screens([
-      tradingSignalResponseSchema.parse({
-        outcome: SignalFeedOutcome.FetchFailed,
-        code: BrokerRestErrorCode.RateLimited,
-        retryAfterSec: 99_999,
-      }),
-    ]),
-    ...DEMO_DURATIONS_SEC.map(
-      (durationSec) => analysisUnavailableScreen(widePair, durationSec).text,
-    ),
-  ],
+  analysisFailed: () =>
+    DEMO_DURATIONS_SEC.map((durationSec) => analysisUnavailableScreen(widePair, durationSec).text),
   analysisCard: cards,
   // the waits for a signal (#664): with and without the other pairs' line
   analysisWaitingData: () =>
     withAlternatives(
-      screens(
-        DATA_REFUSAL_REASONS.map((reason) =>
+      screens([
+        ...DATA_REFUSAL_REASONS.map((reason) =>
           decided({ kind: SignalKind.NoSignal, reason, ...DATA_DETAILS[reason] }),
         ),
-      ),
+        // a failed candle fetch without an H1 signal waits the same (#828)
+        tradingSignalResponseSchema.parse({
+          outcome: SignalFeedOutcome.FetchFailed,
+          code: BrokerRestErrorCode.RateLimited,
+          retryAfterSec: 99_999,
+          h1: null,
+        }),
+      ]),
     ),
+  // a candle refusal by a rule, and since #828 a candle signal, without an H1 signal
   analysisWaiting: () =>
     withAlternatives(
       screens(
-        RULE_REFUSAL_REASONS.flatMap((reason) =>
-          allFeatures.map((features) => decided({ kind: SignalKind.NoSignal, reason, features })),
-        ),
+        allFeatures.flatMap((features) => [
+          ...RULE_REFUSAL_REASONS.map((reason) =>
+            decided({ kind: SignalKind.NoSignal, reason, features }),
+          ),
+          ...Object.values(TradeAction).map((action) =>
+            decided({ kind: SignalKind.Signal, action, features }),
+          ),
+        ]),
       ),
     ),
   pairWaiting: () => withAlternatives([pairWaitingText(pairLabel(pair), pair.id)]),

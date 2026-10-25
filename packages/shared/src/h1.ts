@@ -100,6 +100,17 @@ export const H1_EXPIRY_SEC = 5;
 // break-even 51.5 %: the forex pairs the backtest found the effect on (#667)
 export const H1_MIN_PAYOUT_PCT = 94;
 
+// The second series' clock and the freshness of an H1 reading (#669, #796, #828), shared because
+// the bot's wait polls on them (apps/bot/src/timing.ts) and the backend's chain holds them
+// (apps/backend/src/timing.ts). A quiet pair's second closes by the process clock this long after
+// its end label f.
+export const H1_SECOND_CLOSE_MARGIN_MS = 500;
+// An H1 reading rests on the pair's newest closed second f only while now - f is at most this: a
+// second plus the clock close's margin and one tick of the series' clock, the latest a quiet
+// pair's next second closes; an older f means the series fell behind. The start (#796), the H1
+// scanner's list and the analysis's `h1` (#828) serve by the same bound.
+export const H1_START_SECOND_MAX_AGE_MS = 1_600;
+
 // --- H1 sessions (#670, docs/h1.md -> Sessions) ---------------------------------------------------
 
 // settings.signal.kind of an H1 trading session (version 5, read-only 4): a jsonb key of the row, not a status

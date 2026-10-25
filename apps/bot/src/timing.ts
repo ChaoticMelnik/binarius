@@ -1,9 +1,9 @@
 import {
   BOT_TEXTS_REFRESH_MS,
-  CANDLE_CLOSE_SLACK_MS,
+  H1_SECOND_CLOSE_MARGIN_MS,
+  H1_START_SECOND_MAX_AGE_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_SUMMARY_FALLBACK_MS,
-  SIGNAL_SHORTEST_INTERVAL_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
@@ -89,11 +89,14 @@ export const HANDLER_CALLS = {
   // reads, then editMessageText refused as gone → sendMessage; under the summary card (a photo)
   // no edit is tried, shorter (#761)
   demoSignals: { backend: 2, telegram: 3 },
-  // a pair of the list (#320) and every demo door of a cycle (#476): answerCallbackQuery ∥
-  // readPairs ∥ readTradingAccess ∥ readSignals (the signals list, #664) — counted the same way —
-  // then editMessageText refused as gone → sendMessage; a door under a trade or a session, and
-  // the session row under the analysis card (a photo, #761), sends at once, shorter
-  demoLaunch: { backend: 3, telegram: 3 },
+  // a pair of the list (#320) and the analysis card's door (#476): answerCallbackQuery ∥ readPairs
+  // ∥ readTradingAccess — counted the same way; no signals list since #828 — then editMessageText
+  // refused as gone → sendMessage; the session row under the analysis card (a photo, #761) sends
+  // at once, shorter
+  demoLaunch: { backend: 2, telegram: 3 },
+  // the door drawn without a signal (`n`: «🔁 Ещё сессия», the offer under a single trade, #476):
+  // the reads of demoLaunch ∥ readSignals (the H1 list, #664, #828), then sendMessage at once
+  demoLaunchCheck: { backend: 3, telegram: 2 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair's summary, also by
   // `demo:d:<id>:5` of an old button): answerCallbackQuery ∥ readPairs, then editMessageText
   // refused as gone → sendMessage; under the analysis card (a photo) no edit is tried, shorter
@@ -339,13 +342,13 @@ export const SESSION_RESUME_PER_SECOND = 4;
 export const SESSION_RESUME_GAP_MS = 1000 / SESSION_RESUME_PER_SECOND;
 
 // The wait for a signal (#664, signal-wait.ts, docs/bot-demo.md → The wait for a signal): one
-// poll of GET /trading/signals and GET /trading/pairs for every waiting user, once a candle of the
-// demo's one duration, between updates like the trackers, so not in HANDLER_CALLS. The poll comes
-// POLL_OFFSET after the candle's boundary: the backend's scanner decides at the boundary plus
-// CANDLE_CLOSE_SLACK_MS (500 ms, shared since #697), so the poll comes after the scan
-// (signalWaitBoundsHold).
-export const SIGNAL_WAIT_POLL_MS = SIGNAL_SHORTEST_INTERVAL_MS;
-export const SIGNAL_WAIT_POLL_OFFSET_MS = 1_000;
+// poll of GET /trading/signals and GET /trading/pairs for every waiting user, once a second (#828:
+// an H1 signal lives a second), between updates like the trackers, so not in HANDLER_CALLS. The
+// reference point is f, the end label of a closed second: the poll comes POLL_OFFSET after it, past
+// the series' clock close (H1_SECOND_CLOSE_MARGIN_MS), and the next poll still finds the second
+// current (H1_START_SECOND_MAX_AGE_MS), so no second's decision is missed (signalWaitBoundsHold).
+export const SIGNAL_WAIT_POLL_MS = 1_000;
+export const SIGNAL_WAIT_POLL_OFFSET_MS = 600;
 // how long the buttons of pairs with a signal stand, the list's and the alternatives' (owner's
 // decision 2026-10-21)
 export const SIGNALS_LIST_TTL_MS = 30_000;
@@ -373,7 +376,8 @@ export const SIGNAL_WAIT_INFLIGHT_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELE
 
 // The wait's links of the chain, a function so a test can show which value breaks them.
 export const signalWaitBoundsHold = ({
-  slackMs = CANDLE_CLOSE_SLACK_MS,
+  closeMarginMs = H1_SECOND_CLOSE_MARGIN_MS,
+  maxAgeMs = H1_START_SECOND_MAX_AGE_MS,
   pollOffsetMs = SIGNAL_WAIT_POLL_OFFSET_MS,
   pollMs = SIGNAL_WAIT_POLL_MS,
   listTtlMs = SIGNALS_LIST_TTL_MS,
@@ -381,7 +385,8 @@ export const signalWaitBoundsHold = ({
   inflightMs = SIGNAL_WAIT_INFLIGHT_MS,
   shutdownBudgetMs = SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
 }: {
-  slackMs?: number;
+  closeMarginMs?: number;
+  maxAgeMs?: number;
   pollOffsetMs?: number;
   pollMs?: number;
   listTtlMs?: number;
@@ -390,9 +395,11 @@ export const signalWaitBoundsHold = ({
   shutdownBudgetMs?: number;
 } = {}): boolean =>
   0 < pollOffsetMs &&
-  // the list read after the scanner's scan of the candle
-  slackMs < pollOffsetMs &&
+  // the list read after the clock rule closed the second at the latest
+  closeMarginMs < pollOffsetMs &&
   pollOffsetMs < pollMs &&
+  // a second closed at the latest by the clock rule is still served at the next poll
+  pollMs <= maxAgeMs - closeMarginMs &&
   pollMs < listTtlMs &&
   listTtlMs < maxMs &&
   maxMs < TELEGRAM_EDIT_WINDOW_MS &&

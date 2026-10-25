@@ -5,7 +5,7 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
-  CANDLE_CLOSE_SLACK_MS,
+  H1_SECOND_CLOSE_MARGIN_MS,
   confirmCallbackData,
   NotificationLevel,
   OAuthErrorCode,
@@ -1007,59 +1007,71 @@ DEMO_SIGNALS.branches.push(
     expected: { backend: 2, telegram: 2 },
   },
 );
-// the launch screen (#320): the pair checked at the data's duration, the amount from access; since
-// #664 the signals list read beside them (#509 read the pair's signal), three reads in parallel
-// counted as sequential; evaluateSignal is no call of it
+// the launch screen (#320): the pair checked at the data's duration, the amount from access, two
+// reads in parallel counted as sequential; the doors of the list and of the analysis card read no
+// signals list since #828; evaluateSignal is no call of it
 const DEMO_LAUNCH = demoScreenBranches(
   demoLaunchCallbackData(PAIR_EURUSD.id, 5),
   'demo:l:0:5',
   pairBranches(
     [
-      { ...unsupported, expected: { backend: 3, telegram: 2 } },
+      { ...unsupported, expected: { backend: 2, telegram: 2 } },
       {
         label: 'access is not read',
         readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-        expected: { backend: 3, telegram: 2 },
+        expected: { backend: 2, telegram: 2 },
       },
       {
         label: 'a user in real mode gets the launch screen',
         readTradingAccess: () => Promise.resolve({ ...ACCESS_VIEW, tradingMode: TradeMode.Real }),
-        expected: { backend: 3, telegram: 2 },
+        expected: { backend: 2, telegram: 2 },
       },
       {
-        label: 'the pair has no signal now: the wait (#664)',
-        readSignals: () =>
-          Promise.resolve(
-            signalsResponse(1_790_000_000_000, { '5s': [[PAIR_SHORT.id, TradeAction.Up]] }),
-          ),
+        label: 'the pair is out of the signals list: the next step all the same (#828)',
+        readSignals: () => Promise.reject(new Error('the l door reads no list (#828)')),
         evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
-        expected: { backend: 3, telegram: 2 },
-      },
-      {
-        label: 'the signals are not read: the wait (#664)',
-        readSignals: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-        evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
-        expected: { backend: 3, telegram: 2 },
+        expected: { backend: 2, telegram: 2 },
       },
     ],
-    3,
+    2,
   ),
-  3,
+  2,
 );
-// #476: a door under a trade or a session sends the screen at once, shorter than the edit
-DEMO_LAUNCH.branches.push(
+// #761: the analysis card's session row tries no edit under the photo
+DEMO_LAUNCH.branches.push({
+  label: 'the session row under the analysis card (a photo) sends the screen at once',
+  update: photoCallbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a')),
+  readSignals: () => Promise.reject(new Error('the a door reads no list (#828)')),
+  expected: { backend: 2, telegram: 2 },
+});
+// #476, #664: the door under a trade or a session, drawn without a signal, sends the screen at
+// once, after its check of the H1 list
+const doorN = () => callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'));
+const DEMO_LAUNCH_CHECK_WORST: Branch = {
+  label: 'the pair is in the list: the next step as a new message',
+  update: doorN(),
+  expected: { backend: 3, telegram: 2 },
+};
+const DEMO_LAUNCH_CHECK: Branch[] = [
+  DEMO_LAUNCH_CHECK_WORST,
   {
-    label: 'a door under a trade or a session sends the screen as a new message',
-    update: callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')),
+    label: 'the pair has no signal now: the wait (#664)',
+    update: doorN(),
+    readSignals: () =>
+      Promise.resolve(
+        signalsResponse(1_790_000_000_000, { '5s': [[PAIR_SHORT.id, TradeAction.Up]] }),
+      ),
+    evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
     expected: { backend: 3, telegram: 2 },
   },
-  // #761: the analysis card's session row tries no edit under the photo
   {
-    label: 'the session row under the analysis card (a photo) sends the screen at once',
-    update: photoCallbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a')),
+    label: 'the signals are not read: the wait (#664)',
+    update: doorN(),
+    readSignals: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
     expected: { backend: 3, telegram: 2 },
   },
-);
+];
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary — or sent at once under a
 // photo (#482) — the signal, then a text result in place of «⏳» or the card as a photo with «⏳»
 // deleted after it. Its edits are two, so the shared screen branches do not describe it.
@@ -1552,20 +1564,6 @@ const SESSION_START_BRANCHES: readonly Branch[] = [
     startSession: () =>
       Promise.reject(sessionHttpError(503, TradingSessionErrorCode.CatalogUnavailable)),
     expected: { backend: 2, telegram: 2 },
-  },
-  // #664: no signal at the start waits for it, in place of a launch screen
-  {
-    label: 'no signal at the start: the wait as a new message',
-    update: sessionStartUpdate(),
-    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
-    expected: { backend: 2, telegram: 2 },
-  },
-  {
-    label: 'no signal at the start: the wait in place of the launch screen, refused as gone',
-    update: launchStartUpdate(),
-    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
-    apiErrors: [['editMessageText', EDIT_GONE]],
-    expected: { backend: 2, telegram: 3 },
   },
   SESSION_START_WORST_CASE,
   {
@@ -3171,8 +3169,6 @@ const STAKE_TEXT_BRANCHES: readonly Branch[] = [
 // the amount screen's presses (#476, cycle-stake.ts)
 const cyclePressUpdate = (chatType?: string) =>
   callbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'l'), chatType);
-const cycleCardPressUpdate = () =>
-  photoCallbackUpdate(cycleStakeCallbackData(PAIR_EURUSD.id, 5, '5', 'a'));
 const CYCLE_STAKE_PRESET_WORST_CASE: Branch = {
   label: 'the cycle starts, the status is sent, the screen cannot be deleted and is stripped',
   update: cyclePressUpdate(),
@@ -3233,27 +3229,6 @@ const CYCLE_STAKE_PRESET_BRANCHES: readonly Branch[] = [
     startSession: startedPictured,
     apiErrors: [['sendPhoto', SESSION_PHOTO_REFUSED]],
     expected: { backend: 3, telegram: 3 },
-  },
-  // #664: no signal since the screen was drawn, the wait in its place
-  {
-    label: 'the start is refused for want of a signal: the wait in place of the screen',
-    update: cyclePressUpdate(),
-    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
-    expected: { backend: 3, telegram: 2 },
-  },
-  // #761: under the analysis card the wait goes at once, then the card is deleted as after a start
-  {
-    label: 'no signal under the analysis card: the wait is sent and the card deleted',
-    update: cycleCardPressUpdate(),
-    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
-    expected: { backend: 3, telegram: 3 },
-  },
-  {
-    label: 'no signal under the analysis card: the card cannot be deleted and is stripped',
-    update: cycleCardPressUpdate(),
-    startSession: () => Promise.reject(sessionHttpError(409, TradingSessionErrorCode.NoSignal)),
-    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
-    expected: { backend: 3, telegram: 4 },
   },
   CYCLE_STAKE_PRESET_WORST_CASE,
 ];
@@ -3650,6 +3625,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
+  it('the door drawn without a signal checks the H1 list (#664, #828)', async () => {
+    await checkHandler(
+      'demoLaunchCheck',
+      DEMO_LAUNCH_CHECK,
+      DEMO_LAUNCH_CHECK_WORST,
+      HANDLER_CALLS.demoLaunchCheck,
+    );
+  });
+
   it('the demo types', async () => {
     await checkHandler(
       'demoGroups',
@@ -3961,9 +3945,10 @@ describe("the demo session tracker's bounds", () => {
 
 // #664: the wait for a signal polls between updates, like the trackers
 describe("the wait for a signal's bounds (#664)", () => {
-  it('polls once a candle of the demo, a second after its boundary', () => {
-    expect(SIGNAL_WAIT_POLL_MS).toBe(5_000);
-    expect(SIGNAL_WAIT_POLL_OFFSET_MS).toBe(1_000);
+  // #828: an H1 signal lives a second
+  it('polls once a second, 600 ms after the second', () => {
+    expect(SIGNAL_WAIT_POLL_MS).toBe(1_000);
+    expect(SIGNAL_WAIT_POLL_OFFSET_MS).toBe(600);
   });
 
   it('keeps the buttons of pairs 30 s and an entry at most an hour, inside Telegram’s 48 h', () => {
@@ -3995,12 +3980,15 @@ describe("the wait for a signal's bounds (#664)", () => {
     expect(signalWaitBoundsHold({ shutdownBudgetMs: 41_999 })).toBe(true);
   });
 
-  it('the chain fails on a poll offset outside the candle or before the scan, a TTL under a candle or a bound past 48 h', () => {
+  it('the chain fails on a poll offset outside the second or before its clock close, a poll past the served age, a TTL under a poll or a bound past 48 h', () => {
     expect(signalWaitBoundsHold({ pollOffsetMs: 0 })).toBe(false);
-    expect(signalWaitBoundsHold({ pollOffsetMs: CANDLE_CLOSE_SLACK_MS })).toBe(false);
-    expect(signalWaitBoundsHold({ pollOffsetMs: CANDLE_CLOSE_SLACK_MS + 1 })).toBe(true);
-    expect(signalWaitBoundsHold({ pollOffsetMs: 5_000 })).toBe(false);
-    expect(signalWaitBoundsHold({ listTtlMs: 5_000 })).toBe(false);
+    expect(signalWaitBoundsHold({ pollOffsetMs: H1_SECOND_CLOSE_MARGIN_MS })).toBe(false);
+    expect(signalWaitBoundsHold({ pollOffsetMs: H1_SECOND_CLOSE_MARGIN_MS + 1 })).toBe(true);
+    expect(signalWaitBoundsHold({ pollOffsetMs: 1_000 })).toBe(false);
+    // a second closed at the latest is served 1 100 ms more: a poll each 1 100 ms still sees it
+    expect(signalWaitBoundsHold({ pollMs: 1_100, pollOffsetMs: 600 })).toBe(true);
+    expect(signalWaitBoundsHold({ pollMs: 1_101, pollOffsetMs: 600 })).toBe(false);
+    expect(signalWaitBoundsHold({ listTtlMs: 1_000 })).toBe(false);
     expect(signalWaitBoundsHold({ maxMs: 48 * 3_600_000 })).toBe(false);
     expect(signalWaitBoundsHold({ inflightMs: SHUTDOWN_BUDGET_MS })).toBe(false);
   });

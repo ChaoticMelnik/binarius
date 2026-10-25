@@ -217,30 +217,33 @@ describe('the H1 reads (#670)', () => {
     expect(await readLastH1Session(tmp.db, brokerAccountId)).toBe(live.id);
   });
 
-  it("H1-M8 the driver's list (#707): active H1 sessions on marked accounts only, with the owner and settings", async () => {
+  it("H1-M8′ the driver's list (#707, #828): every active H1 session, marked or not, with the owner and settings", async () => {
     const marked = await seedUserWithAccount(tmp.db);
     const unmarked = await seedUserWithAccount(tmp.db);
     const other = await seedUserWithAccount(tmp.db);
     expect(await mark(marked.brokerAccountId, true)).toBe('marked');
     expect(await mark(other.brokerAccountId, true)).toBe('marked');
-    const live = await seedTradingSession(tmp.db, marked.brokerAccountId, {
+    const first = await seedTradingSession(tmp.db, marked.brokerAccountId, {
       settings: h1Settings(),
     });
-    // a v4 row on an unmarked account: only by hand after #707's lock
-    await seedTradingSession(tmp.db, unmarked.brokerAccountId, { settings: h1Settings() });
+    // H1-DB7: an H1 session on an unmarked account is listed (#828: the mark is read by nobody)
+    const second = await seedTradingSession(tmp.db, unmarked.brokerAccountId, {
+      settings: h1Settings(),
+    });
     // not an H1 session on a marked account
     await seedTradingSession(tmp.db, other.brokerAccountId);
 
     const list = await listActiveH1Sessions(tmp.db);
-    expect(list).toEqual([
-      {
-        id: live.id,
-        brokerAccountId: marked.brokerAccountId,
-        mode: 'demo',
-        telegramUserId: marked.telegramUserId,
-        settings: h1Settings(),
-        startedAt: expect.any(Date),
-      },
-    ]);
+    const row = (id: string, seed: { brokerAccountId: string; telegramUserId: string }) => ({
+      id,
+      brokerAccountId: seed.brokerAccountId,
+      mode: 'demo',
+      telegramUserId: seed.telegramUserId,
+      settings: h1Settings(),
+      startedAt: expect.any(Date),
+    });
+    expect([...list].sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      [row(first.id, marked), row(second.id, unmarked)].sort((a, b) => a.id.localeCompare(b.id)),
+    );
   });
 });

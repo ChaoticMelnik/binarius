@@ -309,6 +309,10 @@ it('repeats the cycle events: /start, the login texts, the amount press, the pos
   await bot.press(groupButtonLabel('currency', 1));
   await bot.press(pairButtonLabel(pairLabel({ symbol: E2E_PAIR.symbol }), E2E_PAIR.payout));
   await bot.press(LABELS.demoAnalysisButton);
+  // the worker's socket is up before the press (demo-cycle.db.test.ts S5, #828)
+  await until("the worker's socket of the account", () =>
+    broker.socket.sockets().some((socket) => socket.userId === E2E_BROKER_USER_ID),
+  );
   const stake = await bot.press(cycleStakeLabel(MIN_STAKE, true));
   expect(String(lastIn(USER.id, 'sendPhoto')?.payload.caption)).toMatch(/(?<!\d)5 с/);
   const [started, ...others] = await reads.sessionsOf(account.id);

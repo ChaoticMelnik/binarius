@@ -123,15 +123,11 @@ const SCENES: Scene[] = [
   press('the launch at a 70 % payout', demoLaunchCallbackData(LOW_PAYOUT.id, 5), {
     signals: WITH_SIGNALS,
   }),
-  // #664: the launch on a pair without a signal now waits for it, with the other pairs
-  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 5), {
+  // #664, #828: the door drawn without a signal (`n`) on a pair without one waits for it, with the
+  // other pairs
+  press('the launch, no signal', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'), {
     signals: signalsResponse(NOW, { '5s': [[LOW_PAYOUT.id, TradeAction.Up]] }),
   }),
-  press(
-    'a real session refused for no signal',
-    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
-    { startSession: sessionRefusal(TradingSessionErrorCode.NoSignal) },
-  ),
   press(
     'a save from the launch',
     stakePresetCallbackData('5', TradeMode.Demo, {
@@ -292,7 +288,6 @@ describe('the real path (#121)', () => {
     ['the launch', '🚀 Запустить цикл · REAL'],
     ['the launch, no signal', 'Проверяю сигнал по EUR/USD'],
     ['the launch, no signal', 'Сигнал уже есть по другим парам'],
-    ['a real session refused for no signal', 'Проверяю сигнал по EUR/USD'],
     ['the analysis, a rule refusal', 'Проверяю сигнал…'],
     ['the analysis, a signal', '🚀 Сессия из 5 циклов · REAL'],
     ['«➕ Ещё»', '🚀 Сессия из 5 циклов · REAL'],

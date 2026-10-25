@@ -155,12 +155,12 @@ describe('checkTradingSessionStart', () => {
     expect(result.ok && result.accessTokenExpiresAt).toBeInstanceOf(Date);
   });
 
-  it("H1-H6 returns the account's H1 mark (#745): null, then the mark's date", async () => {
+  it('H1-H6′ returns no H1 mark (#828): the start reads none, marked or not', async () => {
     const seed = await seedUserWithAccount(tmp.db);
-    expect(await check(seed.telegramUserId)).toMatchObject({ ok: true, h1Since: null });
     await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
     const result = await check(seed.telegramUserId);
-    expect(result.ok && result.h1Since).toBeInstanceOf(Date);
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty('h1Since');
   });
 
   it('E0 a closed trading switch refuses first, before the user and the account', async () => {

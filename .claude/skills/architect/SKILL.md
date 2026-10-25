@@ -247,13 +247,14 @@ Implementer picks it up only once this comment exists.
 45. **Тики вокруг решения и срок хранения** — строка `decision_ticks` одна на решение, пишется один раз после закрытия окна; срок хранения журнала → `rules/signal-h1.md`
 46. **Ожидание сигнала в боте** — после выбора пары бот не показывает «нет сигнала», а ждёт сигнал → `rules/bot-ui.md`
 47. **Итог сессии одним сообщением** — итог завершённой сессии — одно сообщение бота со звуком; запасной текст — у backend'а → `rules/bot-ui.md`
-48. **Сессии H1** — `broker_accounts.h1_since` пишет только `setH1Mark`; H1-сессия — обычная сессия только на помеченном аккаунте, настройки v5 пишет только `buildH1SessionSettings` → `rules/signal-h1.md`
+48. **Сессии H1** — `broker_accounts.h1_since` пишет только `setH1Mark`; каждая сессия из бота — H1 (#828), настройки v5 пишет только `buildH1SessionSettings`, intent'ы — только драйвер → `rules/signal-h1.md`
 49. **Роли кнопок** — каждая inline-кнопка строится с ролью из `ButtonRole`, цвет и ширина — только из таблиц ролей → `rules/bot-ui.md`
 50. **Домен строки broker_trades** — значение брокера, которое колонка не вмещает, не отклоняет запись принятой сделки → `rules/trading.md`
 51. **Отметки против created_at** — колонка, упорядоченная CHECK'ом относительно `created_at`, пишется через `statementNow` → `rules/core.md`
 52. **Prod-профиль Compose** — `compose.prod.yaml` только override (command/logging/restart), app-сервис — один `node` на бандле `tooling/build.ts`, файлы пакета — от корня пакета → `rules/core.md`
 53. **Реестр процессов worker'а** — сокеты брокера держит только процесс, которого rendezvous по живым `worker_processes` называет владельцем аккаунта → `rules/trading.md`
 54. **Маршрутизация заявки к владельцу** — `queued` заявка чужого живого владельца перекладывается в его очередь один раз и до `takeIntent`; страховка в очереди перекладчика → `rules/trading.md`
+55. **Сканер H1 и показанный сигнал** — список сигналов и `h1` анализа — из новейшего решения R1 пары на текущей секунде, в памяти; направление в боте — только из `h1` → `rules/signal-h1.md`
 
 ### Map: path → rules
 
@@ -265,25 +266,25 @@ Implementer picks it up only once this comment exists.
 | `Dockerfile` | core 52 |
 | `apps` | core 52 |
 | `apps/backend` | signal-h1 20, 43 |
-| `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
-| `apps/backend/src/admin` | core 2, 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 48; bot-ui 18, 19, 29, 30, 31, 46; payments 39; auth 12, 13 |
+| `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
+| `apps/backend/src/admin` | core 2, 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 48, 55; bot-ui 18, 19, 29, 30, 31, 46; payments 39; auth 12, 13 |
 | `apps/backend/src/auth` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49; payments 35; auth 12, 13 |
 | `apps/backend/src/bot-texts` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/backend/src/broker` | core 26; trading 21; auth 12 |
 | `apps/backend/src/cli` | core 26; trading 28, 33, 50; signal-h1 42, 44, 45, 48; bot-ui 30; payments 39, 40 |
 | `apps/backend/src/deposit` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 37; auth 12, 13 |
-| `apps/backend/src/h1` | signal-h1 44, 48 |
+| `apps/backend/src/h1` | signal-h1 44, 48, 55 |
 | `apps/backend/src/mailing` | bot-ui 19 |
 | `apps/backend/src/market-data` | signal-h1 41, 44, 45, 48 |
 | `apps/backend/src/outbox` | trading 6 |
 | `apps/backend/src/payments` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 39; auth 12, 13 |
 | `apps/backend/src/postbacks` | core 3, 5, 7, 9, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37; auth 12, 13 |
-| `apps/backend/src/signal` | signal-h1 20, 41 |
+| `apps/backend/src/signal` | signal-h1 41 |
 | `apps/backend/src/trade-log` | signal-h1 45 |
-| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48; bot-ui 18, 19, 29, 30, 31, 46, 47; auth 12, 13 |
+| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47; auth 12, 13 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
-| `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
+| `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
 | `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54; signal-h1 44, 45; bot-ui 18 |
 | `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53; auth 12 |
@@ -293,7 +294,7 @@ Implementer picks it up only once this comment exists.
 | `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48; auth 12 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 33, 36; signal-h1 42, 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
-| `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48; bot-ui 18, 19, 31, 46, 47; payments 38 |
+| `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47; payments 38 |
 | `apps/web/src/admin` | core 52; bot-ui 30; payments 38 |
 | `apps/web/src/cashier` | payments 38 |
 | `apps/web/src/oauth` | core 26; payments 38 |
@@ -311,7 +312,7 @@ Implementer picks it up only once this comment exists.
 | `docs/broker-session.md` | trading 27, 32 |
 | `docs/broker-socket.md` | trading 15, 27 |
 | `docs/deposit.md` | payments 37, 38 |
-| `docs/h1.md` | signal-h1 44, 48 |
+| `docs/h1.md` | signal-h1 44, 48, 55 |
 | `docs/kill-switch.md` | trading 22 |
 | `docs/mailing.md` | bot-ui 19 |
 | `docs/market-data.md` | signal-h1 41 |
@@ -320,7 +321,6 @@ Implementer picks it up only once this comment exists.
 | `docs/runbook-broker-outage.md` | trading 22 |
 | `docs/service-accounts.md` | auth 12 |
 | `docs/signal-stand.md` | signal-h1 20, 43 |
-| `docs/signal.md` | signal-h1 20 |
 | `docs/staff-login.md` | core 51 |
 | `docs/stake.md` | trading 23 |
 | `docs/stars.md` | core 10; payments 39 |
@@ -343,7 +343,7 @@ Implementer picks it up only once this comment exists.
 | `packages/e2e/src/harness` | core 10; trading 22, 28; bot-ui 29, 46 |
 | `packages/mock-broker/src` | core 2, 10, 51; trading 15, 23, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/shared` | core 10, 52; trading 27; bot-ui 30 |
-| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39, 40; auth 12 |
+| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39, 40; auth 12 |
 | `packages/signal` | signal-h1 43 |
 | `packages/signal-stand` | signal-h1 20 |
 | `packages/signal-stand/src` | core 10, 51; trading 25, 28; signal-h1 20, 41, 43, 44; bot-ui 18 |

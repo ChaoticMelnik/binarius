@@ -564,7 +564,6 @@ export function createBot({
     cashierUrl,
     setupCardPhotos,
     shareEnabled: shareStorageChatId !== undefined,
-    signalWaiter,
     ...(sleep === undefined ? {} : { sleep }),
   });
   sessionResumer.attach(tradingSession.resume);
