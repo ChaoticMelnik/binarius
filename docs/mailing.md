@@ -133,10 +133,11 @@ on, as every mailing, and the text promises no result.
   `last_analysis_duration_sec` (CHECK `users_last_analysis_check`: all three or none). One writer,
   `setLastAnalysis` (`packages/db/src/user-ops.ts`), called by `POST /trading/signal` when the
   request carries `analysis` — only the bot's analysis card sends it ([signal.md](signal.md) →
-  POST /trading/signal): a signal writes the pair, the duration and `now()`; no signal clears all
-  three, so the previous analysis' reminder is cancelled ("another analysis" holds for any
-  analysis); a fetch failure or a refusal writes nothing. The cycle's doors (`demo:l`, #509) and the
-  session start read the same feed without the field: they are not an analysis.
+  POST /trading/signal): by the answer's H1 signal (`h1`, #828; the candle decision until then), on
+  a decided and on a failed candle fetch alike — an H1 signal writes the pair, the duration and
+  `now()`; none clears all three, so the previous analysis' reminder is cancelled ("another
+  analysis" holds for any analysis); a refusal of the route writes nothing. The cycle's doors
+  (`demo:l`) send no signal request: they are not an analysis.
 - **It applies** while the user is not blocked by the admin, trades demo (#121), has created no
   `trade_intents` row and started no `trading_sessions` row after the analysis, has no session
   that is not stopped on any account (a cycle started before the analysis and still running), and

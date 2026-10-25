@@ -40,14 +40,14 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 | `createCachedSignalFeed(createSignalFeed(...))` | the same, on production's `SIGNAL_FETCH_BUDGET_MS` and `SIGNAL_CACHE_MAX_TTL_MS`, with the signal pacer `index.ts` builds (#405): the run is the no-source mode, so every chart GET takes a `tryTake` token |
 | `createClientPush` | the same; its `api` goes through the Telegram transformer |
 | `accessToken` (`ensureFreshAccessToken`) | the same |
-| `buildApp` | the same, with the trading, pairs, sessions, signal, auth and users deps. `signals`, `payments` and `admin` take the `unused*Deps` of the suites, so a call there fails the test. `deposit` takes `unusedDepositDeps` with the real init-data verifier. Its logs go to the backend's sink |
+| `buildApp` | the same, with the trading, pairs, sessions (with the H1 driver), signal (with the H1 scanner's `h1`), signals (the H1 scanner), auth and users deps. `payments` and `admin` take the `unused*Deps` of the suites, so a call there fails the test. `deposit` takes `unusedDepositDeps` with the real init-data verifier. Its logs go to the backend's sink |
 | `OutboxPublisher` | the same; `pollMs` 50 (every queued intent wakes it anyway) |
 | `createBalanceReconciler` | built, not started: the routes call `refresh()` themselves |
 | `createSessionNoticeSender` | the same; `tickMs` production's `SESSION_NOTICE_TICK_MS` (3 000, #723: a message within a second is the wake's, not a short tick's), `perSecond` 50, `chatGapMs` 100 (production: `SESSION_NOTICE_SEND_PER_SECOND`, `SESSION_NOTICE_CHAT_GAP_MS`) |
 | `createSessionNoticeListener` | the same (#723): on the harness's pool, `wake()` of the sender; started after it, stopped before it |
-| `signalScanners` | not built: the run takes the manual path, not «Сигналы сейчас» |
+| `createSecondSeries`, `createH1Scanner`, `createH1Driver` (inside `marketData`, #828) | built on a series of their own that the harness's pump fills ([The price path](#the-price-path)): the scanner serves the analysis's `h1` and the signals list, the driver trades every session; the driver's `submitBudgetMs` 5 000 (the run's take is not timed, as `session-routes.db.test.ts` H1-R10) and `scanMs` 1 000; `streaming` always true. The listener's notification reaches `h1Driver.notice` as in `index.ts` (the repeat step). Started after `listen()` before the pump, stopped first |
 | `createAdminBot`, `createMailingEngine`, `createStarReconciler`, `createServiceAccountKeeper` | not built: no staff, mailing, Stars or service account takes part in the cycle |
-| `marketData` | not built: it exists only with the backend's `BROKER_WS_URL`; without it the feed reads REST (#405), as here |
+| `marketData` (the manager, the ring, the backfill, the shadow) | not built: it exists only with the backend's `BROKER_WS_URL`; without it the candle feed reads REST (#405), as here |
 | `createBotTextRefresher` | not built: the texts are the catalog's defaults |
 | `postbacks` | `{ db, secret }` with the harness's secret (`E2E_POSTBACK_SECRET`), as with `POSTBACK_URL_SECRET` set; the demo cycle sends none, the repeat run sends four |
 
@@ -91,9 +91,9 @@ object to `bot.handleUpdate` again: Telegram's re-delivery, with the same `updat
 | S1 | `/start` | a «🔗 Подключить аккаунт Binodex» button; `users` row `active`, 0 tokens, no demo stake |
 | S2 | the press, then the address | the mock sent a code (`oauth.codeFor`); the bot's answer names the address; the journal has one `emailSendCode` with the keys `client_id`, `client_secret`, `email` |
 | S3 | the code | the account card (`sendPhoto`, pinned) with the starter pack of 100 and «🎮 Демо-торговля»; `broker_accounts` `active`, broker user `7001`, `is_partner_client`; `readTokenBalance` 100; one `emailLogin` |
-| S4 | «🎮 Демо-торговля» → «🧭 Вручную» → the type (exactly one: «💱 Валюты · 1») → the pair (its summary at 5 s, #685) → «📊 Анализ» | the analysis card offers `$1.00 ✅` (the broker's minimum), the screen is deleted, the journal has a `chart` request for asset 101 at `5s`, `users.last_analysis_*` = 101 / 5 |
-| S5 | the amount | the status message (`sendPhoto`, «5 с»), the card is deleted; `trading_sessions` `active`, `demo`, start signal `up`, settings v3 `{ durationSec: 5, cycles: 5, martingale, baseStake '1', stakeScale 2, limits { maxSteps 4, maxStake '12', maxSessionLoss '20' } }`; `users.demo_stake` 1; `status_message_id` is the status message's id; no waiting message is awaited: the mock gives a signal on every candle, and «🔎 Ждём сигнал…» goes only after a `no_signal` decision (#722) |
-| S6 | for each of 6 trades: wait for it at the mock and for its intent to be `accepted` — trades 1 and 2 also for their open block in the push (#700: trade 1's a new message, trade 2's an edit) — then settle it (a loss, then 5 wins) and wait for `settled`; the open blocks of trades 1 and 2 within 1 s of `accepted`, trade 2's result within 1 s of `settled` (#723, the sender's wake on production's tick) | stakes `1, 2.18, 1, 1, 1, 1`, all `up`, demo, asset 101; the session `stopped` / `completed`; 6 intents `settled` over `socket`, `client_request_id` `session:<id>:1..6`; `broker_trades` profits `-1, 1.85, 0.85 ×4` and the same at the mock; the mock's demo balance `10004.25`; never more than one socket per broker user |
+| S4 | «🎮 Демо-торговля» → «🧭 Вручную» → the type (exactly one: «💱 Валюты · 1») → the pair (its summary at 5 s, #685) → «📊 Анализ» | the analysis card (it exists because the scanner holds an H1 signal on the pumped series, #828: «Сильный сигнал на рост») offers `$1.00 ✅` (the broker's minimum), the screen is deleted, the journal has a `chart` request for asset 101 at `5s` (the card's rows), `users.last_analysis_*` = 101 / 5 |
+| S5 | wait for the worker's socket of the account (the analysis's access read put it in work; a user's pause gives it in production), then the amount | the status message (`sendPhoto`, «5 с»), the card is deleted; `trading_sessions` `active`, `demo`, start signal `up` (the pressed second's H1 reading), settings v5 `{ durationSec: 5, cycles: 5, martingale, baseStake '1', stakeScale 2, limits { maxSteps 4, maxStake '12', maxSessionLoss '20' }, signal { kind 'h1', R1, entryDelaySec 1, expirySec 5 } }`; `users.demo_stake` 1; `status_message_id` is the status message's id; no waiting message is awaited: the pump gives an H1 signal on every second, and «🔎 Ждём сигнал…» goes only after a `no_signal` decision (#722) |
+| S6 | for each of 6 trades (the H1 driver's: step 1 on the start's reading, step 2 the repeat at the loss's notice, then one a signal at most every 7 s, #828): wait for it at the mock and for its intent to be `accepted` — trades 1 and 2 also for their open block in the push (#700: trade 1's a new message, trade 2's an edit) — then settle it (a loss, then 5 wins) and wait for `settled`; the open blocks of trades 1 and 2 within 1 s of `accepted`, trade 2's result within 1 s of `settled` (#723, the sender's wake on production's tick) | stakes `1, 2.18, 1, 1, 1, 1`, all `up`, demo, asset 101; the session `stopped` / `completed`; 6 intents `settled` over `socket`, `client_request_id` `session:<id>:1..6`; trades 4–6 each at least 6 s after the one before (the driver's cadence, `f + 7 s` less the decision's jitter); `broker_trades` profits `-1, 1.85, 0.85 ×4` and the same at the mock; the mock's demo balance `10004.25`; never more than one socket per broker user |
 | S7 | wait for `final_notice_sent_at` (#537: the backend's last act for the session, no message) | the push: 5 cycle messages, silent, the first opening with trade 1's open block; every send or edit carrying an open block has exactly «⏹ Остановить сессию» `session:stop:<id>:c` (#722), every other one no keyboard (a result's edit takes it off); three edits of the first — trade 1's result with the adaptive line under it (#718), trade 2's open block under the line, trade 2's result (#700), the line once between 🔴 and 🟢; an open block at most once a trade, at least for trades 1 and 2, and none left in the chat at the end; every «🔎 Ждём сигнал…» (by its `:w` data; none when the session has no `no_signal` decision, #722) is deleted after it went out, and before the next message the backend sends when one follows |
 | S8 | wait for the bot's summary photo (`sendPhoto` whose caption starts with «📈»), then both marks set | no text summary in the push (the bot tracks the session, so the fallback sends nothing); the status message edited to its finished form; the summary: with sound (no `disable_notification`), the caption's first line «📈 EUR/USD», `+$4.25`, «🧪 Демобаланс: $10 004.25», no `t.me/` link in the caption and no `referral_codes` row for the user (#709), «🏠 В меню» among its buttons |
 | S9 | | tokens 94, none reserved; the ledger: `bonus` ×1, `reserve` ×6, `settle` ×6, nothing else |
@@ -106,8 +106,8 @@ through the socket. A real 5-second trade never closes that early.
 The «📤 Поделиться» button of the summary card is not asserted: PR #597 sets it only with
 `SHARE_STORAGE_CHAT_ID`, and `session-share.test.ts` covers it.
 
-The mock's path gives a signal at every position, so the session never waits for one and the run
-has no waiting message (#722); the check holds for any number of them, and the sender's own tests
+The pump gives an H1 signal on every second, so the session never waits for one and the run has
+no waiting message (#722); the check holds for any number of them, and the sender's own tests
 (`session-notices.db.test.ts`, the #722 describe) show when one appears and goes.
 
 A stage waits for the observable action it then asserts (a Telegram call, a trade at the mock),
@@ -157,6 +157,15 @@ the text is ignored.
 
 ## The price path
 
+Two series, two jobs (#828). **The second series** (`harness/h1.ts` → `startH1Pump`) is what the
+backend's H1 scanner and driver read: it pushes `H1_PUMP_HISTORY_SEC` (320) seconds of a convex
+ramp `price(t) = 1.1 + 1e-6 × t²` (rounded to the pair's 5 digits) before the run's clock, then one
+tick a second and `advance` every 100 ms. Each 3-second move is the largest of the window behind
+it, so R1 reads `up` on every second; `harness/h1.test.ts` E2E-H1 pins it by running
+`createH1Detector(H1_R1_PARAMS)` over ten minutes of the ramp. The ramp is synthetic: the run proves
+the H1 path, not the detector's edge (the detector's own tests do). It feeds the series only.
+
+**The mock's curve** prices the trades and draws the analysis's candles:
 `harness/broker.ts` → `rampPricePath`: `base × (1 + slope × k + zigzag × (k mod 2))`, where `k` is
 the index of the 5-second candle since the broker started (`candleMs` 5 000 since #685, the demo's
 one duration; 15 000 before). It uses `base` 1.08765, `slope`
@@ -205,7 +214,8 @@ S1–S9, never in their place.
 3. The mock's fixture rules (refusal texts, settlement on demand, an earlier access token still
    valid after a refresh, `is_partner_client` of a new address) may differ from the live broker
    ([mock-broker.md → Observed vs fixture rule](mock-broker.md#observed-vs-fixture-rule)).
-4. Each wait is bounded by `until`'s 15 s, and the whole case by 120 s. If a stage hits its bound
+4. Each wait is bounded by `until`'s 15 s, and the whole case by 120 s (#828: the driver's 7 s
+   cadence brings each case to about 28 s locally). If a stage hits its bound
    on CI, the fix is to split its wait into smaller conditions, not to raise the bound.
 5. The sender's `perSecond` 50 is a test value. Production's chain against the shutdown budget is
    pinned in `apps/backend/src/timing.test.ts`, not here.
@@ -218,7 +228,8 @@ S1–S9, never in their place.
   `/stop` twice, `connect` again, a duplicate `successful_payment` (Stars reconciliation, #117), a
   postback through the proxy header (`postbacks/routes.db.test.ts`), crediting a deposit (#386).
 - Moving the backend's `oauth-stub.ts` suites to the mock: #603.
-- Not covered: the «Сигналы сейчас» path (the scanners), the REST transport and a restart of the
-  bot or the worker in the middle of a session.
+- Not covered: the «Сигналы сейчас» path (the H1 scanner's list is built but not pressed), the
+  REST transport (the first H1 trade goes over it when the worker's socket is not up yet: S5 waits
+  for the socket) and a restart of the bot or the worker in the middle of a session.
 - No Playwright: since #314 the cycle has no browser surface. The login is a dialog in the bot,
   and the cashier (`apps/web`) is not part of the demo cycle.

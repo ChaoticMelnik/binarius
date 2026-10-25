@@ -55,7 +55,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | `open_notice_intent_id` | the open trade's block (#700, migration 0074, [bot-session.md](bot-session.md#the-state)): the intent of the session whose «сделка открыта» block the backend's sender claimed for the cycle message, NULL while none was. FK `trading_sessions_open_notice_intent_fk (open_notice_intent_id, id) → trade_intents (id, trading_session_id)` `on delete restrict` (Rule 4; MATCH SIMPLE: NULL checks nothing). Written only by `claimSessionOpenNotice` (a CAS before the Telegram call: another or no intent marked, notices open, every settled trade claimed, the intent still `accepted` with its broker trade `open`) and cleared only by `releaseSessionOpenNotice` on its own intent after a send Telegram certainly did not deliver. Not in the view (Rule 9). No backfill: NULL at the deploy, so a session with an open trade gets its block on the first tick |
 | `waiting_message_id`, `waiting_after_message` | the waiting message under the session's messages while the session waits for a signal — its latest `signal_decisions` row of `context = session` is `no_signal`, read by the sender's predicates (#722) (#536, migration 0061, [bot-session.md](bot-session.md#the-waiting-message-536)): Telegram's `message_id` of the live «🔎 Ждём сигнал…» with its «⏹», NULL when there is none; and its slot, the session's latest message when it was claimed — `greatest(coalesce(cycle_message_id, 0), coalesce(status_message_id, 0))` (#587) — NULL while none is claimed. CHECKs `trading_sessions_waiting_message_id_check` (`> 0`), `…_waiting_after_message_check` (`>= 0`), `…_waiting_pair_check` (an id only on a claimed slot). Written by the backend's sender, each a CAS on the row: `claimSessionWaiting` (the slot, before the send), `recordSessionWaitingMessage` (the id on its own slot, while active), `releaseSessionWaiting` (the slot freed after a certain refusal), `clearSessionWaitingMessage` (the id dropped and the slot freed after the delete); and by `POST /trading/sessions/:id/stop` (#587): `stopTradingSession` with the pressed `waitingMessageId` drops the id and frees the slot in its own UPDATE when it is the recorded one, `clearSessionWaitingMessage` by that id on a 409. Both writers clear only by `(id, waiting_message_id)`; the sender re-reads the id right before its Telegram delete and leaves a message the route took over ([bot-session.md](bot-session.md#accepted-risks) risk 82 for the call in flight). No backfill: NULL at the deploy, so a running session is due at the backend's start |
 | `status_message_id` | the bot's status message of the session (#567, migration 0055, [bot-session.md](bot-session.md#recovery-after-a-restart-567)): Telegram's `message_id` of the newest status message the bot tracked the session on (#587), NULL until its first poll recorded one, and again once the bot reports it lost; CHECK `trading_sessions_status_message_id_check` (`> 0`). Two writers, both CAS with the owner in the predicate: `recordSessionStatusMessage` on `status_message_id is null or status_message_id < $messageId` (the newest id wins: message ids grow within a chat) and `forgetSessionStatusMessage` on `status_message_id = $messageId` (sets NULL); `trading_sessions_tracked_idx (started_at) where status_message_id is not null and summary_sent_at is null` is the recovery list's scan |
-| `start_signal_action` | `up`/`down` (CHECK `trading_sessions_start_signal_action_check` from `TradeAction`) or NULL (#568): the direction of the signal the start route checked (step 4c, v2; on an H1-marked account step 6b, the H1 reading, #796), written by `createTradingSession` at the INSERT and never updated; NULL on rows before #568, on the CLI's `session-start`, which checks no signal, and on an H1 start without an H1 signal (#796). Read only by the view's `signalAction`; the pause's `last_signal_action` (#379…#698) was dropped by #719, migration 0078 |
+| `start_signal_action` | `up`/`down` (CHECK `trading_sessions_start_signal_action_check` from `TradeAction`) or NULL (#568): the direction of the signal the start route read (step 6b, the H1 reading, #796; every start since #828, the candle signal of step 4c until then), written by `createTradingSession` at the INSERT and never updated; NULL on rows before #568, on the CLI's `session-start`, which checks no signal, and on an H1 start without an H1 signal (#796). Read only by the view's `signalAction`; the pause's `last_signal_action` (#379…#698) was dropped by #719, migration 0078 |
 
 - **One active session per account:** `trading_sessions_active_account_idx`, unique on
   `broker_account_id` where `status = 'active'`. Stopped sessions are unlimited.
@@ -77,8 +77,10 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 
 ## Settings
 
-Version 3 is the one written (#552): the session's length is `cycles`, 1–`MAX_SESSION_CYCLES`
-(20). The stake carries the strategy, and martingale its limits (#450):
+Version 3 (#552) is written since #828 only by the worker's CLI `session-start` (the start route
+writes v5, the H1 settings, for every session: [h1.md → Sessions](h1.md#sessions-670)); the
+session's length is `cycles`, 1–`MAX_SESSION_CYCLES` (20). The stake carries the strategy, and
+martingale its limits (#450):
 
 ```json
 { "version": 3, "assetId": 101, "durationSec": 60, "cycles": 5,
@@ -119,8 +121,8 @@ as null.
 
 **Version 5 is an H1 session (#775, [h1.md](h1.md#sessions-670)): a v3 session whose entries come
 from the H1 signal.** Two writers, both through `buildH1SessionSettings({ assetId, cycles, stake,
-strategy })`: `h1 session start` (the backend's h1 CLI) and the start route on an H1-marked account
-([h1.md → From the bot](h1.md#from-the-bot-745)); `TRADING_SESSION_SETTINGS_VERSION` stays 3, and
+strategy })`: `h1 session start` (the backend's h1 CLI) and the start route for every session since
+#828 ([h1.md → From the bot](h1.md#from-the-bot-745-every-session-since-828)); `TRADING_SESSION_SETTINGS_VERSION` stays 3, and
 `session-start` never writes v5:
 
 ```json
@@ -260,19 +262,18 @@ and step 7's own refusals roll its transaction back:
 | # | Step | Refusal |
 |---|---|---|
 | 1 | the body | 400 `validation` |
-| 2 | `sessionFitsDeadline(cycles, durationSec, strategy)` with the process's `SESSION_STAKE_STRATEGY` (#552): the worst case, `cycles × steps × (durationSec + 120 s)` within `SESSION_MAX_DURATION_MS` (1 h), `steps` `MARTINGALE_MAX_STEPS` (4) under martingale and 1 under fixed; ties add trades nothing bounds, and such a session ends with `timeout` (accepted) | 409 `session_too_long` (5 cycles of 300 s: 201 under fixed, 409 under martingale, R5b) |
+| 2 | `sessionFitsDeadline(cycles, durationSec, strategy)` with the process's `SESSION_STAKE_STRATEGY` (#552): the worst case, `cycles × steps × (durationSec + 120 s)` within `SESSION_MAX_DURATION_MS` (1 h), `steps` `MARTINGALE_MAX_STEPS` (4) under martingale and 1 under fixed; ties add trades nothing bounds, and such a session ends with `timeout` (accepted) | 409 `session_too_long` (5 cycles of 300 s under martingale; under fixed they fit and step 4b refuses them, R5b) |
 | 3 | `checkTradingSessionStart({ mode })` | 409 `trading_paused` first; 404 `user_not_found`; 409 `user_blocked`; 409 `mode_not_allowed` when `mode` is not the user's `trading_mode` (#327, before any account read); 404 `broker_account_not_found`; 409 `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
-| 4b | an H1-marked account (step 3's `h1Since`, #745): `durationSec` is not `H1_EXPIRY_SEC` (5); no payout floor since #775 (H1-R3′) | 409 `h1_duration_unsupported`, before the signal: no decision row (H1-R4, H1-R5′) |
-| 4c | v3 only (an H1-marked account reads H1 at 6b instead, #796): the pair's signal on the current candle (#509): `signals.evaluate({ assetId, interval: intervalForDuration(durationSec), digits })`, the cached feed `POST /trading/signal` reads, in parallel with steps 5–5b; its refusal answers before theirs (R32b); a signal's direction goes to step 7 as `start_signal_action` (#568, R34) | 503 `signal_unavailable` on `fetch_failed` (`rate_limited` included) or a throw (R29); 409 `no_signal` on a `no_signal` decision (R28) |
+| 4b | every start (#745 on a marked account, #828 on any, decision 7): `durationSec` is not `H1_EXPIRY_SEC` (5); no payout floor since #775 (H1-R3′) | 409 `h1_duration_unsupported`, before the signal: no decision row (H1-R4, H1-R5′, H1-R15) |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
 | 6a | `checkStake(savedStake ?? minTradeAmount, { minTradeAmount, available })` on the same snapshot (#297): the saved stake and `available` of the session's mode, `demo_stake`/`demo.available` or `real_stake`/`real.available` (#327) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_balance`; without a saved stake, a minimum above that mode's balance is refused here rather than as `stake_stop` on the first trade |
-| 6 | `buildSessionSettings` with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450): settings v3, for martingale with the limits of that stake. On an H1-marked account (#775) `buildH1SessionSettings` with the same cycles, stake and strategy: settings v5 (H1-R1′, H1-R7′) | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
-| 6b | an H1-marked account (#796, [h1.md → The start](h1.md#the-start-796)): the H1 detector on the pair's newest closed second (`H1Driver.current`), current while `now − f ≤ H1_START_SECOND_MAX_AGE_MS` (1 600 ms); a signal's direction goes to step 7 as `start_signal_action`; no signal or no reading starts the session waiting (H1-R9–H1-R11). Its stake refusals (5a–6) come before it and write no decision row (H1-R13) | — |
-| 7 | `createTradingSession(…, mode, startSignalAction)`; after an H1 start's insert, `H1Driver.adopt` hands the session (and the reading's second) to the driver, which creates the first intent on a signal at once (H1-R10) | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand; on an H1-marked account too, H1-R8); `account_not_h1` (409, #745: the H1 mark removed between step 3 and the account's lock of a v5 start; a mark set in between gives a v3 session, H1-R6) |
+| 6 | `buildH1SessionSettings` with the request's cycles, `stake = stakeSettingsFrom(savedStake, minTradeAmount)` and the process's `SESSION_STAKE_STRATEGY` (#450, #775): settings v5 for every start since #828, for martingale with the limits of that stake (H1-R1′, H1-R7′, H1-R14; v3 until #828 on an unmarked account) | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which the settings refuse) or a martingale limit would leave `numeric(20,8)`, with a `warn` line |
+| 6b | every start (#796, #828, [h1.md → The start](h1.md#the-start-796)): the H1 detector on the pair's newest closed second (`H1Driver.current`), current while `now − f ≤ H1_START_SECOND_MAX_AGE_MS` (1 600 ms); a signal's direction goes to step 7 as `start_signal_action`; no signal or no reading starts the session waiting (H1-R9–H1-R11). Its stake refusals (5a–6) come before it and write no decision row (H1-R13) | — |
+| 7 | `createTradingSession(…, mode, startSignalAction)`; after the insert `H1Driver.adopt` hands the session (and the reading's second) to the driver, which creates the first intent on a signal at once (H1-R10) | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand, H1-R8); a refusal after a signal reading writes the start's `refused` row (H1-R6′); `account_not_h1` is gone since #828 |
 | 8 | 201 `{ session }` | — |
 
 - **The view on `active_session_exists`.** A second start — a double press, or a retry after a
@@ -290,15 +291,15 @@ and step 7's own refusals roll its transaction back:
 - **A refused start may already have written refresh state:** steps 5–5b move
   `last_requested_at` and may write the balance snapshot before step 7 refuses. Both are the
   balance's state, not the session's.
-- **No v3 session without a signal (#509).** Step 4c covers every door of the bot and a direct
-  call alike. A refusal of the signal also leaves steps 5–5b's refresh state, as any later refusal.
-  The CLI `session-start` (an operator's tool, demo only) does not ask for the signal (stated),
-  and writes no `start_signal_action` (#568). An H1 start without an H1 signal is not refused: the
-  session starts and waits (#796, owner 2026-10-24), its trades the driver's.
+- **No candle signal at the start since #828.** Step 4c (#509: the candle signal, refusals
+  `no_signal` and `signal_unavailable`) is gone with its codes: every start is an H1 session, and
+  one without an H1 signal on the pressed second is not refused: the session starts and waits
+  (#796, owner 2026-10-24), its trades the driver's. The CLI `session-start` (an operator's tool,
+  demo only) still writes v3 and asks for no signal (stated), and writes no `start_signal_action`
+  (#568); #830 decides its fate.
 - **Time.** Step 5b dominates: under `TRADING_SESSION_START_BUDGET_MS` (4 s), which is inside the
-  backend's shutdown phase 1 (`apps/backend/src/timing.ts`, asserted at import). Step 4c runs
-  beside it, so the route waits for the longer of the two, and its chart GET is bounded by
-  `SIGNAL_FETCH_BUDGET_MS` (3 s) `< TRADING_SESSION_START_BUDGET_MS` (the backend's chain, #509).
+  backend's shutdown phase 1 (`apps/backend/src/timing.ts`, asserted at import); the H1 reading is
+  a synchronous read of memory.
 
 ### GET /trading/sessions/:id?telegramUserId=
 
@@ -645,11 +646,10 @@ it does not wake this orchestrator.
 
 **The candle wake (#697).** A candle hold (`no_signal`) is not rounded up to a tick: it ends
 at the next boundary of the session's signal interval + `CANDLE_CLOSE_SLACK_MS` (shared,
-500 ms), the moment the backend's scanner decides that candle on the intervals it scans
-(`SIGNAL_SCAN_INTERVALS`, `5s` only): a 5 s session reads that decision from the cache, or, when
-it asks before the scanner, its own reading is the candle's decision for both — whichever asks
-first decides. A 15 s session (the CLI's) reads the window at `+ 500` with no scanner, a 1m+ one
-REST on demand (Rule 10), both earlier than the `+ 2000` before #697. One timer per orchestrator
+500 ms), the moment the backend's candle scanner decided that candle until #828 removed it: a
+5 s session reads the ring's window at that moment through the cache (its own reading is the
+candle's decision). A 15 s session (the CLI's) reads the window at `+ 500` too, a 1m+ one REST on
+demand (Rule 10), both earlier than the `+ 2000` before #697. One timer per orchestrator
 (not per session: the 5 s sessions share the boundaries) is armed at the end of every tick, its `finally` included, for the
 earliest candle hold that ends after the timer's last firing; it calls `wake()`, so its tick is the
 same tick and counts in `woken`. A tick that ends the holds arms it again for the next (CT2);
@@ -657,11 +657,9 @@ same tick and counts in `woken`. A tick that ends the holds arms it again for th
 that fires before `Date.now()` reaches its target (the two clocks drift) finds the session held,
 and the end of its tick arms the timer again for the rest of the wait: only targets at or before
 the last firing are skipped. The interval is the safety net only. A decision on a candle the ring
-had not closed at that moment (`unclosed`, docs/signal.md → The scanner) is traded like any other:
-the worker never reads `closedUntil`, the rule is the backend's — the feed leaves the unclosed
-candle out (`packages/signal/src/feed.test.ts` F26) and the scanner counts such a decision
-`unclosed` (`apps/backend/src/signal/scanner.test.ts` S29, S34). Tests: `orchestrator.db.test.ts`
-CT1–CT4, E4b.
+had not closed at that moment is traded like any other: the worker never reads `closedUntil`, the
+rule is the backend's — the feed leaves the unclosed candle out
+(`packages/signal/src/feed.test.ts` F26). Tests: `orchestrator.db.test.ts` CT1–CT4, E4b.
 
 ## Recovery after a restart (#131)
 
@@ -916,8 +914,7 @@ exit 0. Every refusal goes to stderr with exit 1 and writes nothing: one Russian
 two-accounts refusal (a Russian line, then one `<id> <status>` line per account) and an env error
 (one English line naming the variable, as every env check of the repository prints). A
 `TradingSessionError` is mapped by `SESSION_START_REFUSALS`
-(`satisfies Record<TradingSessionDbErrorCode, string>`; `account_not_h1` is unreachable: this CLI
-writes v3); a user in real mode gets `mode_not_allowed`
+(`satisfies Record<TradingSessionDbErrorCode, string>`); a user in real mode gets `mode_not_allowed`
 from the users lock (#327): «Пользователь в реальном режиме: CLI создаёт только demo-сессии —
 запустите сессию из бота или верните пользователя в demo». Any other failure is the one door:
 `Не удалось создать сессию: <name> <code>`, with the query to re-read the account's sessions,

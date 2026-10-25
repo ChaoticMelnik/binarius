@@ -189,7 +189,7 @@ per tick, at most the tick limit.
 - `MAX_BALANCE_POLL_PER_MINUTE` (500) `< BROKER_RATE_LIMIT_PER_MINUTE` (600). This budgets the
   tick only. GETs triggered by the route (`POST /trading/access` with a stale snapshot, at most
   one in flight per account) come on top and are not capped. The default shares (worker 400,
-  balance 100, signal scanner 100) already sum to the whole 600 (docs/signal.md → The budget), so
+  balance 100, signal REST 100) already sum to the whole 600 (docs/signal.md → The budget), so
   OAuth, token exchanges, the pairs catalog and these route GETs are outside every share; a raised
   ceiling makes the sum larger still.
 - `MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_STALLED_RETRY_MS < BALANCE_WATCH_WINDOW_MS`: a
