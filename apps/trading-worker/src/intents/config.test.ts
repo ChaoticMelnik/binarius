@@ -12,9 +12,10 @@ import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import {
   BROKER_SOCKET_COMMAND_TIMEOUT_MS,
   BROKER_SOCKET_CONNECT_TIMEOUT_MS,
+  isTimerMs,
 } from '@binarius/broker-socket';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
-import { WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
+import { WORKER_HEARTBEAT_MS, WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 import {
   BALANCE_CHECK_TIMEOUT_MS,
@@ -26,6 +27,8 @@ import {
   CATCHUP_TICK_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   INTENT_RECOVERY_DELAY_MS,
+  INTENT_ROUTER_DRAIN_POLL_MS,
+  INTENT_ROUTER_DRAIN_TAIL_MS,
   INTENT_ROUTER_STOP_BUDGET_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,
@@ -169,10 +172,35 @@ describe('the session manager in the shutdown budget (#101)', () => {
 });
 
 describe('the intent router (#347)', () => {
-  it('stops inside phase 1 after the own queue drained', () => {
-    expect(MAX_SUBMIT_ACK_TIMEOUT_MS + INTENT_ROUTER_STOP_BUDGET_MS).toBeLessThan(
+  it('starts its drain before the cut, after a submit at the env maximum', () => {
+    expect(MAX_SUBMIT_ACK_TIMEOUT_MS + 2 * INTENT_ROUTER_STOP_BUDGET_MS).toBeLessThan(
       SHUTDOWN_PHASE1_BUDGET_MS,
     );
+  });
+
+  it('ends its stop inside phase 1 whatever the deregister does', () => {
+    expect(2 * INTENT_ROUTER_STOP_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it("drains past every peer's view of us after the deregister", () => {
+    expect(
+      WORKER_HEARTBEAT_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_POLL_MS,
+    ).toBeLessThan(INTENT_ROUTER_DRAIN_TAIL_MS);
+  });
+
+  it('sleeps a poll shorter than the final pass budget', () => {
+    expect(INTENT_ROUTER_DRAIN_POLL_MS).toBeLessThan(INTENT_ROUTER_STOP_BUDGET_MS);
+    expect(isTimerMs(INTENT_ROUTER_DRAIN_POLL_MS)).toBe(true);
+    expect(isTimerMs(INTENT_ROUTER_DRAIN_TAIL_MS)).toBe(true);
+  });
+
+  it('fits the whole tail before the cut at the default submit deadline', () => {
+    // SUBMIT_ACK_TIMEOUT_MS's default (env.ts): the consumers close, the sessions and the
+    // deregister stop, then the tail, all before notAfter
+    const notAfter = SHUTDOWN_PHASE1_BUDGET_MS - 2 * INTENT_ROUTER_STOP_BUDGET_MS;
+    expect(
+      10_000 + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_TAIL_MS,
+    ).toBeLessThanOrEqual(notAfter);
   });
 
   it('takes a forwarded intent back before the backend sweep and before the age limit', () => {
