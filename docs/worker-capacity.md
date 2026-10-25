@@ -14,8 +14,8 @@ stays the guarantee that no account has two sockets; the registry decides which 
 What this part does not partition: the trading session orchestrator, the settlement catch-up and
 the reconciliation pass run in every process (each safe under several: the step key, idempotent
 settles, the claim lease — [worker-deploy.md](worker-deploy.md) → Why two workers at once are safe)
-and are partitioned in #815; intent jobs go to any consumer and a non-owner sends over REST until
-#347 routes them to the owner. **Until #815, `TRADING_WORKER_REPLICAS` stays 1**: with more, every
+and are partitioned in #815; intent jobs are routed to the account's owner since #347
+([trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner). **Until #815, `TRADING_WORKER_REPLICAS` stays 1**: with more, every
 process runs the loops, and the broker GET budget is per process
 ([trade-intent-transport.md](trade-intent-transport.md) → Budget).
 
@@ -214,7 +214,8 @@ releases nor deregisters: its leases lapse after the lease TTL, its row after 30
    the consumers are unaffected.
 2. **A shed closes a ready socket** of an account that merely moved: its trades go over REST until
    the new owner's socket is ready (Liveness). With one replica nothing is shed.
-3. **Non-owners send over REST** (#347) and **the loops are not partitioned** (#815): with more
-   than one replica the GET budget is per process, hence one replica.
+3. **The loops are not partitioned** (#815): with more than one replica the GET budget is per
+   process, hence one replica. Intent jobs reach the owner since #347; a job processed by a
+   non-owner (no view yet, a failed forward, an `intent-direct` job) still goes over REST.
 4. **`heartbeatAgeMs` and the lag are the process's own view**; a frozen process logs nothing.
 5. **The cap, the ceiling and the envelope are not measured** (#87).

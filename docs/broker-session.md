@@ -221,8 +221,9 @@ resolves an interrupted run (`scripts/deploy-worker.sh`, #95, [worker-deploy.md]
 → The overlap's length): the old process's `stop()` deletes its rows after closing its sockets,
 and the new one, whose scan skipped those accounts while another owner held them, opens
 them on its next tick. Which process tries an account is the fleet registry's (#94,
-[worker-capacity.md](worker-capacity.md)); the loops under several processes are #815, routing
-intent jobs to the owner #347.
+[worker-capacity.md](worker-capacity.md)); the loops under several processes are #815; intent jobs
+are routed to the owner since #347 ([trade-intent-transport.md](trade-intent-transport.md) → Routing
+to the owner).
 
 ## Losses for the circuit breaker (#96)
 
@@ -477,7 +478,8 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
 
 - ARCH-02: #93 the lease (shipped, above), #94 the fleet registry, socket ownership and the cap
   from env ([worker-capacity.md](worker-capacity.md)), #815 the orchestrator, the catch-up and the
-  pass under several processes and the N-replica deploy, #347 intent routing, #95 the deploy's overlap (shipped,
+  pass under several processes and the N-replica deploy, #347 intent routing (shipped,
+  [trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner), #95 the deploy's overlap (shipped,
   [worker-deploy.md](worker-deploy.md); single-flight refresh across processes is the backend's
   row lock, Rule 12), #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
