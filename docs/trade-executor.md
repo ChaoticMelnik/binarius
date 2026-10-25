@@ -52,6 +52,11 @@ cut.
    `not_sent`/`not_ready` (any state but `ready`, or a connection tainted by an aborted command
    until its replacement is `ready`). `transport` is then `rest_fallback`.
 
+Since #347 the intent of an owned account runs in its owner's process
+([trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner); a non-owner runs it
+only without a trustworthy view, after a failed forward or for an `intent-direct` job, and then
+over REST when it holds no ready session for the account (case 2).
+
 After an emit the answer is the socket's or `unknown`. The executor never follows an emit with a
 POST, never sends the order twice and never retries; what happened to an `unknown` order is
 established by reconciliation (#89/#90), which only reads. An order the REST reconciler cannot

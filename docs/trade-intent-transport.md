@@ -14,6 +14,7 @@ delivery channel that can be rebuilt from the database.
 | API            | `apps/backend/src/trading/routes.ts`                              | `POST /trading/intents`, `GET /trading/intents/:id` behind the internal Bearer token                           |
 | Publisher      | `apps/backend/src/outbox/`                                        | turns pending `outbox_events` rows into BullMQ jobs, re-publishes lost ones                                    |
 | Consumer       | `apps/trading-worker/src/intents/`                                | processes `trading-intents` jobs through the `TradeExecutor` port                                              |
+| Router         | `apps/trading-worker/src/intents/router.ts`                       | hands a shared job of an account another live worker process owns to that process's own queue, before the take (#347, [Routing to the owner](#routing-to-the-owner-347)) |
 | Reconciliation | `apps/trading-worker/src/intents/reconciliation.ts`               | `trading-reconciliation` jobs hand `unknown` intents to the pass, which asks the `IntentReconciler` port (#89) |
 | REST reconciler | `apps/trading-worker/src/intents/rest-reconciler.ts`             | the port's implementation: the broker's open and closed lists matched against the intent (#90)                 |
 | Catch-up       | `apps/trading-worker/src/intents/settlement-catchup.ts`           | settles `accepted` intents past their expected close from the closed list (#90)                                |
@@ -28,7 +29,8 @@ bot ──POST /trading/intents──▶ backend ──tx──▶ trade_intents
                                    │  201 { intent }                     │
                                    ◀─────────────────────────────────────┘
                               publisher: pending row ──add(jobId = intent id)──▶ BullMQ trading-intents
-                              worker: re-read ──CAS queued→submitting──▶ executor.submit ──▶ CAS submitting→accepted|rejected|unknown
+                              worker: re-read ──(another live process owns the account: add to trading-intents-<owner>, done; #347)
+                                      ──CAS queued→submitting──▶ executor.submit ──▶ CAS submitting→accepted|rejected|unknown
 unknown ──outbox──▶ BullMQ trading-reconciliation ──CAS unknown→reconciling──▶ pass (next tick): claim
         ──token (backend route) + GETs only──▶ CAS reconciling→accepted(→settled) | manual_review(+halt) | rejected (demo, proven absence)
 bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶ { intent }   (status, lastError, version)
@@ -425,6 +427,64 @@ backend is the refusal `refresh_rate_limited`: nothing is revoked, the caller as
 the IP to 429; the sum with the backend's ceilings raised above their defaults is a `warn` at the
 backend's start, not enforced.
 
+## Routing to the owner (#347)
+
+With several worker processes ([worker-capacity.md](worker-capacity.md)) the account's broker
+socket is held by its owner, the process rendezvous names over the live set. BullMQ hands a job of
+the shared queue `trading-intents` to any consumer, so `intents/router.ts` moves it to the owner:
+
+- **Two queues per process.** Every process consumes the shared `trading-intents` and its own
+  `trading-intents-<ownerId>` (a hyphen: BullMQ refuses `:` in a queue name), both at
+  `WORKER_CONCURRENCY`. The job payload stays `{ intentId }`.
+- **One hop, before the take.** The shared consumer's processor, for a `queued` intent, after the
+  `DEMO_ONLY` refusal and before `takeIntent`, asks the registry for the account's owner
+  (`registry.ownerOf`, fenced like `owns`: no answer before the first heartbeat, past the fence or
+  after `stop()`). Another live process → the job goes to that process's own queue (job id = the
+  intent id, the publisher's options), the shared job completes with the outcome `forwarded`, and
+  the line `intent forwarded` (`intentId`, `accountId`, `owner`) is logged. Nothing was sent, the
+  intent is untouched (Rule 15). The own queue's consumer has no forward: an intent hops once at
+  most. A `submitting` or terminal intent never hops. The owner processes the job with the
+  unchanged processor; its socket opens the trade when its session is ready, REST otherwise.
+- **The insurance.** With the forward, the forwarder adds the same job, delayed
+  `INTENT_RECOVERY_DELAY_MS` (20 s), to its own queue. When the owner processed the intent, the
+  insurance finds it no longer `queued`: `intent job is a no-op`. When the owner died with the job
+  in its queue, the forwarder takes the intent itself (REST without a socket of its own) 20 s
+  after the forward: below `INTENT_MAX_AGE_MS`'s default (60 s) and below the backend's lost-job
+  sweep (30 s), which stays the second net. An operator who sets `INTENT_MAX_AGE_MS` below about
+  25 s makes every recovered intent `expired`.
+- **The dead owner's timeline.** Owner X crashes at D: its row stays live up to D + 30 s
+  (`WORKER_PROCESS_TTL_MS`), so forwards to it go on until the forwarders' next heartbeat after
+  that (about D + 36 s); each such intent is taken by its forwarder at its forward + 20 s, the last
+  one by about D + 56 s, aged about 20 s at the take. An H1 session intent past its
+  `submit_deadline_at` ends `entry_window_missed` then.
+- **The backend's sweep.** A forwarded job completes in the shared queue at once, so for an intent
+  still `queued` 30 s after publication `has()` finds no job and the publisher republishes it
+  (`attempts + 1`, the warning `outbox job missing from the queue, re-pending`). With the insurance
+  at 20 s this happens only when the forwarder died too; the republished job is forwarded again or
+  processed, and every copy converges on the take's CAS. The relation
+  `INTENT_RECOVERY_DELAY_MS < staleQueuedMs` crosses processes: stated, pinned by literal in
+  `intents/config.test.ts`.
+- **A clean stop.** After both intent consumers closed, `router.stop()` moves the own queue's
+  remaining jobs to the shared queue under the job name `intent-direct`, immediate, and deletes the
+  own queue (`obliterate`), bounded by `INTENT_ROUTER_STOP_BUDGET_MS` (2 s; a timeout or a throw is
+  logged, never fails the shutdown). A job named `intent-direct` is processed where it lands, never
+  forwarded: the survivors still see the stopping process in their view for up to a heartbeat and
+  would hand it straight back.
+- **The owner changed meanwhile.** The named owner processes the job anyway: without a ready
+  socket of its own the order goes over REST. A view that says X at P and P at X: X processes. Two
+  copies of one intent (a forward and a republish): one `takeIntent` wins, the other is `noop`.
+- **A dirty stop or a crash** leaves the process's own queue in Redis with its unprocessed jobs
+  (intent ids only); their forwarders' insurance takes them. The per-process queues are listed by
+  `docker compose exec redis redis-cli --scan --pattern 'bull:trading-intents-*:meta'`; a queue
+  whose id is not in `worker_processes` (`select owner_id from worker_processes`) is dead and may
+  be deleted by hand.
+- **One replica** forwards nothing: the live set is the process itself.
+
+Tests: `router.redis.test.ts` R1–R7, `processor.db.test.ts` P1–P4, `fleet/registry.test.ts` F7,
+`consumer.redis.test.ts` Q1, `worker.handoff.db.test.ts` H15 (two workers, every intent of the
+second one's accounts over its socket), H16 (a dead owner: the insurance takes the intent over
+REST, one trade; an `intent-direct` job is not forwarded), H17 (the requeue at a clean stop).
+
 ## Delivery, ACK and timeout semantics
 
 | Stage                                                                                                                                             | Retry policy                                                                                                                                                              | Timeout                                                                                                                                                   | On failure                                                                                                                                                                                                                                                               |
@@ -432,6 +492,8 @@ backend's start, not enforced.
 | Publisher `queue.add`, topic `trading-intents`                                                                                                    | outbox `attempts` with backoff 1 s, 2 s, 4 s, 8 s (cap 16 s), max 5                                                                                                       | 5 s per add (`Promise.race`; a late success is harmless, the job id dedupes)                                                                              | 5th failure: outbox `failed` **and**, in the same transaction, a still-`queued` intent → `rejected` (`publish_failed`) with token release                                                                                                                                |
 | Publisher `queue.add`, topic `trading-reconciliation`                                                                                             | same backoff, **no cap** — the row stays `pending` for as long as it takes; `attempts` keeps counting and every attempt from the 5th on logs a warning                    | 5 s per add                                                                                                                                               | never `failed`: giving up would strand an `unknown` intent with its reserve and no reconciliation                                                                                                                                                                        |
 | Lost job (published row, job absent after 30 s while the intent is still `queued` for `trading-intents` / `unknown` for `trading-reconciliation`) | counted as a failed delivery under the topic's policy                                                                                                                     | sweep every 15 s                                                                                                                                          | row back to `pending`, republished                                                                                                                                                                                                                                       |
+| Forward to the owner (#347)                                                                                                                       | none: an `add` that fails processes the intent here (`intent forward failed, processing here`)                                                                           | —                                                                                                                                                         | a copy that landed in the owner's queue races the local take on the CAS; nothing is sent before the take                                                                                                                                                                |
+| Recovery (the forwarder's own queue, #347)                                                                                                        | one insurance job per forward                                                                                                                                             | `INTENT_RECOVERY_DELAY_MS` 20 s after the forward                                                                                                         | still `queued` → taken by the forwarder; anything else → `noop`                                                                                                                                                                                                          |
 | BullMQ job                                                                                                                                        | `attempts: 1` — the trade command is never retried by the queue                                                                                                           | `lockDuration` 60 s, `stalledInterval` 30 s, `maxStalledCount` 1                                                                                          | a job that throws is dead-lettered; a stalled job is redelivered once                                                                                                                                                                                                    |
 | Worker shutdown                                                                                                                                   | —                                                                                                                                                                         | phase 1 budget 35 s (`SHUTDOWN_PHASE1_BUDGET_MS`) > longest ack timeout 30 s, phase 2 4 s; compose `stop_grace_period` 40 s                               | a job in flight finishes and its dead-letter write is awaited before any connection closes; an overrun exits 1 and the sweeper resolves the intent after the restart                                                                                                     |
 | Backend shutdown                                                                                                                                  | —                                                                                                                                                                         | phase 1 budget 10 s (`SHUTDOWN_PHASE1_BUDGET_MS`, `apps/backend/src/timing.ts`) > publish/has deadline 5 s, phase 2 4 s; compose `stop_grace_period` 20 s | `publisher.stop()` finishes the row in flight and leaves the rest of the batch `pending`; an overrun (a database timing out every statement, a request that hangs) exits 1 with the transaction rolled back and the outbox row replayed                                  |
@@ -452,7 +514,8 @@ lease 60 s`, `attempt 30 s < phase 1 35 s` (phase 1 also waits for `pass.stop()`
 flight plus one outcome write), `tick 15 s ≤ lease 60 s`; #90 adds `token route 7 s + 4 × 5 s <
 attempt 30 s`, `ack cap 30 s < window after 90 s`, `token 7 s + 2 × 5 s < catch-up attempt 20 s <
 phase 1 35 s` (`catchup.stop()` runs alongside `pass.stop()`), `catch-up tick 5 s < hold 30 s`, `BROKER_REST_TIMEOUT_MS 5 s < catch-up grace 10 s`,
-and on the backend `exchange 5 s < token route 7 s < phase 1 10 s`. No live worker can still be inside its ack deadline when a
+and on the backend `exchange 5 s < token route 7 s < phase 1 10 s`; #347 adds `ack cap 30 s +
+router stop 2 s < phase 1 35 s` and states `recovery 20 s < the backend's stale-queued 30 s`. No live worker can still be inside its ack deadline when a
 redelivery or the sweeper calls its intent unknown; a routine deploy never kills a submit or a
 publish mid-flight; and the broker command is never sent twice — a redelivered job only checks
 state. The budgets cover the bounded operations plus ordinary database latency, not a database
@@ -464,7 +527,8 @@ sees `unknown`, not `submitting`) and reconciliation recovers the real result.
 ## Dead-letter queue
 
 `trading-intents-dead-letter` receives one entry per failed job of either topic: `{ source:
-'intent_job', intentId | null, topic, reason, failedAt }` with `reason` from the allowlist
+'intent_job', intentId | null, topic, reason, failedAt }` (a job of a process's own queue, #347,
+carries `topic: 'trading-intents'`) with `reason` from the allowlist
 (`invalid_job` for a malformed payload or a missing intent, `processing_failed` otherwise). A
 broker session write that throws (#92, [broker-session.md](broker-session.md)) leaves
 `{ source: 'user_data' | 'update_balance' | 'close_trade_success', accountId, mode, brokerTradeIds,
@@ -534,7 +598,7 @@ Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
 
 | Variable                | Default | Bounds                                                                                     |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------ |
-| `INTENT_MAX_AGE_MS`     | 60000   | 1000–600000                                                                                |
+| `INTENT_MAX_AGE_MS`     | 60000   | 1000–600000; below about 25000 an intent recovered after a dead owner (20 s, #347) ends `expired` |
 | `SUBMIT_ACK_TIMEOUT_MS` | 10000   | 6000–30000 (`MIN_SUBMIT_ACK_TIMEOUT_MS`: above the socket command's and the REST call's own timeouts, 5 s, #96; `MAX_SUBMIT_ACK_TIMEOUT_MS`: below the shutdown budget and the stale threshold) |
 | `WORKER_CONCURRENCY`    | 5       | 1–100                                                                                      |
 | `BROKER_WS_URL`         | none    | `https://` or `wss://`; unset → no broker sessions, every order over REST; empty → the worker does not start (#101, [broker-session.md](broker-session.md)) |
@@ -543,7 +607,8 @@ Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
 Fixed constants and why they relate the way they do: `apps/trading-worker/src/intents/config.ts`
 — among them the reconciliation pass's `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s),
 `RECONCILE_RETRY_MS` (60 s, the lease), `RECONCILE_TICK_MS` (15 s), `RECONCILE_BATCH_SIZE`
-(16) and the balance check's `BALANCE_CHECK_TIMEOUT_MS` (20 s), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
+(16) and the balance check's `BALANCE_CHECK_TIMEOUT_MS` (20 s), the router's
+`INTENT_RECOVERY_DELAY_MS` (20 s) and `INTENT_ROUTER_STOP_BUDGET_MS` (2 s, #347), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
 `RECONCILE_MAX_TRADE_PAGES`) and the catch-up's `CATCHUP_*`; none has an environment variable.
 
 `REAL_TRADING_ENABLED` (#134) is gone: the one switch for demo and real is the `trading_switch`
@@ -569,6 +634,8 @@ spellings) that refuses real intents and sessions in it, read at start
 - **#101** (shipped): the session manager feeds `close_trade.success` into `settleClosedTrades` and
   takes `noTradeSessions`' place when `BROKER_WS_URL` is set ([broker-session.md](broker-session.md)).
   The operator tool for `manual_review` is a later issue.
+- **#347** (shipped): intent jobs routed to the account's owner (Routing to the owner above);
+  **#815** partitions the loops and the GET budget across processes.
 - Real-mode eligibility: **#144** replaced #134's env flag with the global trading switch, one
   for demo and real ([kill-switch.md](kill-switch.md)); **#135** what a revoked grant does to
   running sessions; **#121** real mode from the bot: a real intent only for a user in real mode,

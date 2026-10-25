@@ -105,6 +105,7 @@ guard that holds it and where that guard is tested:
 | Component | Two processes during the overlap | Guard |
 |---|---|---|
 | Intent jobs | each job goes to one consumer; a second take of the same intent is impossible | BullMQ's job lock; the `queued → submitting` CAS of `takeIntent` (Rule 6, `processor.db.test.ts`) |
+| Intent routing (#347) | a job of an account the other process owns goes to its queue before the take, once; the forwarder's delayed insurance takes the intent if that process dies with it | nothing is sent before the take, and every copy meets the same CAS ([trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner) |
 | A job redelivered across processes | never sends: an intent still `submitting` and younger than `STALE_SUBMITTING_MS` is left alone, an older one goes `unknown` | `handleSubmitting` → `markIntentUnknown` with the age predicate |
 | Broker sockets (`BROKER_WS_URL` set) | the new process opens a socket only for an account whose lease is free; the old one releases its leases after closing its sockets | the lease (#93, Rule 32): `acquireSessionLease`; `stop()` deletes our rows after every client stopped |
 | Orchestrator (demo sessions) | both may attempt the same session; the second is a replay or a conflict, never a second trade | the step key `session:<id>:<step>` (unique `(user_id, client_request_id)`) and one live intent per account (`trade_intents_active_account_idx`) |
@@ -139,7 +140,10 @@ its 5 s timeout first) and releases each lease, and the new one opens them on it
 rest move at the old one's stop, as above. An old image without the registry is not in
 `worker_processes`: the new process owns everything and takes the accounts at the old one's
 release — the handoff before #94. `worker.handoff.db.test.ts` H1/H2 run under the registry, H14
-checks the split.
+checks the split. The stopping process moves the jobs left in its own intent queue to the shared
+one as `intent-direct` jobs, which the new one processes without forwarding them back (#347, H17).
+Deploy #94 and #347 together: a process with #347 next to one without it forwards to a queue
+nobody consumes, and each such intent waits the 20 s insurance.
 
 **The overlap's length.** From the new container's start (its consumers take jobs before the ready
 line) to the old one's exit: the readiness wait, seconds when the worker starts cleanly and at most
