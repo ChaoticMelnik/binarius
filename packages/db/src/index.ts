@@ -18,6 +18,7 @@ export * from './token-adjustment-ops';
 export * from './star-payment-ops';
 export * from './balance-snapshot-ops';
 export * from './session-lease-ops';
+export * from './worker-process-ops';
 export * from './user-ops';
 export * from './deposit-mode-switch-ops';
 export * from './referral-ops';

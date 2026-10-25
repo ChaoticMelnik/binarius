@@ -20,7 +20,11 @@ import {
   MAX_CIRCUIT_BREAKER_MIN_FAILURES,
   MAX_CIRCUIT_BREAKER_WINDOW_MS,
 } from './circuit-breaker/config';
-import { SOCKET_LOSS_GRACE_MS } from './broker/session-config';
+import {
+  MAX_SESSIONS_PER_WORKER,
+  MAX_SESSIONS_PER_WORKER_CEILING,
+  SOCKET_LOSS_GRACE_MS,
+} from './broker/session-config';
 import { MAX_SUBMIT_ACK_TIMEOUT_MS, MIN_SUBMIT_ACK_TIMEOUT_MS } from './intents/config';
 
 const MIN_INTENT_MAX_AGE_MS = 1_000;
@@ -39,6 +43,8 @@ export interface Env {
   intentMaxAgeMs: number;
   submitAckTimeoutMs: number;
   workerConcurrency: number;
+  // the broker sessions one process holds among the accounts it owns (#94, worker-capacity.md)
+  maxSessionsPerWorker: number;
   // the token route (#90): the worker holds no broker credentials of its own
   backendUrl: string;
   internalApiToken: string;
@@ -80,6 +86,12 @@ export function parseEnv(source: EnvSource): Env {
       'WORKER_CONCURRENCY',
       1,
       MAX_WORKER_CONCURRENCY,
+    ),
+    maxSessionsPerWorker: parseBoundedIntegerEnv(
+      readEnv(source, 'MAX_SESSIONS_PER_WORKER', String(MAX_SESSIONS_PER_WORKER)),
+      'MAX_SESSIONS_PER_WORKER',
+      1,
+      MAX_SESSIONS_PER_WORKER_CEILING,
     ),
     backendUrl: parseUrlEnv(readEnv(source, 'BACKEND_URL'), 'BACKEND_URL', BACKEND_URL_RULES),
     internalApiToken: parseInternalTokenEnv(

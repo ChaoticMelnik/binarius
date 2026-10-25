@@ -3,7 +3,9 @@ import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   acquireSessionLease,
+  brokerSessionLeases,
   listSessionCandidates,
+  releaseSessionLease,
   releaseSessionLeases,
   renewSessionLeases,
   upsertBalanceSnapshot,
@@ -18,6 +20,8 @@ import {
 import { MockSocketPayload, startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { logOptions, type DecimalString } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
+import { BrokerSocketState } from '@binarius/broker-socket';
+import { inArray } from 'drizzle-orm';
 import type { SessionManagerConfig } from './session-config';
 import {
   createBrokerSessionManager,
@@ -61,6 +65,7 @@ const CONFIG: SessionManagerConfig = {
   leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
   lossGraceMs: 2_000,
+  shedGraceMs: 1_000,
 };
 
 let tmp: TempDatabase;
@@ -109,6 +114,8 @@ const leasesOf = (db: Db, ownerId: string): SessionLeases => ({
   acquire: (accountId, ttlMs) => acquireSessionLease(db, { accountId, ownerId, ttlMs }),
   renew: (accountIds, ttlMs) => renewSessionLeases(db, { ownerId, accountIds, ttlMs }),
   release: () => releaseSessionLeases(db, { ownerId }),
+  releaseOne: (accountId, acquiredAt) =>
+    releaseSessionLease(db, { accountId, ownerId, acquiredAt }),
 });
 
 // `filtered: false` lists every account in work for both managers, so only the acquire can keep
@@ -116,13 +123,17 @@ const leasesOf = (db: Db, ownerId: string): SessionLeases => ({
 function managerOf(
   name: string,
   config: Partial<SessionManagerConfig> = {},
-  { filtered = true }: { filtered?: boolean } = {},
+  {
+    filtered = true,
+    owns = () => true,
+  }: { filtered?: boolean; owns?: (accountId: string) => boolean } = {},
 ) {
   const ownerId = randomUUID();
   const manager = createBrokerSessionManager({
     url: broker.url,
     deadLetters: { add: () => Promise.resolve() },
     leases: leasesOf(tmp.db, ownerId),
+    owns,
     candidates: (options) =>
       listSessionCandidates(tmp.db, filtered ? { ...options, ownerId } : options),
     tokens: {
@@ -146,7 +157,7 @@ function managerOf(
     timing: TIMING,
   });
   managers.push(manager);
-  return manager;
+  return Object.assign(manager, { ownerId });
 }
 
 describe('the session lease across processes (#93)', () => {
@@ -204,5 +215,59 @@ describe('the session lease across processes (#93)', () => {
     await until('one socket of the account', () => {
       return broker.socket.sockets().filter((sock) => sock.userId === userOfAccount).length === 1;
     });
+  });
+});
+
+describe('ownership across processes (#94)', () => {
+  it('M3 each account has one socket, on its owner, and every socket moves when the views flip', async () => {
+    const accounts = [
+      await accountInWork(),
+      await accountInWork(),
+      await accountInWork(),
+      await accountInWork(),
+    ];
+    const firstHalf = new Set(accounts.slice(0, 2));
+    const secondHalf = accounts.slice(2);
+    // complementary views over this case's accounts; another case's account is nobody's
+    const view = { aOwnsFirstHalf: true };
+    const ownsA = (id: string) =>
+      accounts.includes(id) && firstHalf.has(id) === view.aOwnsFirstHalf;
+    const ownsB = (id: string) =>
+      accounts.includes(id) && firstHalf.has(id) !== view.aOwnsFirstHalf;
+    const a = managerOf('A', { shedGraceMs: 300 }, { owns: ownsA });
+    const b = managerOf('B', { shedGraceMs: 300 }, { owns: ownsB });
+    const brokerUserOf = (id: string) => Number(tokenOfAccount.get(id)!.split('-').at(-1));
+    const socketsOf = (id: string) =>
+      broker.socket.sockets().filter((sock) => sock.userId === brokerUserOf(id)).length;
+    let worst = 0;
+    const onlyOn = (owner: BrokerSessionManager, other: BrokerSessionManager, ids: string[]) =>
+      ids.every(
+        (id) =>
+          owner.clientFor(id)?.state === BrokerSocketState.Ready &&
+          other.clientFor(id) === undefined &&
+          socketsOf(id) === 1,
+      );
+    const round = async () => {
+      await Promise.all([a.tick(), b.tick()]);
+      worst = Math.max(worst, ...accounts.map(socketsOf));
+    };
+
+    await until('every account on its owner', async () => {
+      await round();
+      return onlyOn(a, b, [...firstHalf]) && onlyOn(b, a, secondHalf);
+    });
+    view.aOwnsFirstHalf = false;
+    await until('every socket moved to the new owner', async () => {
+      await round();
+      return onlyOn(b, a, [...firstHalf]) && onlyOn(a, b, secondHalf);
+    });
+    expect(worst).toBe(1);
+    const owners = await tmp.db
+      .select({ id: brokerSessionLeases.brokerAccountId, ownerId: brokerSessionLeases.ownerId })
+      .from(brokerSessionLeases)
+      .where(inArray(brokerSessionLeases.brokerAccountId, accounts));
+    expect(new Map(owners.map((row) => [row.id, row.ownerId]))).toEqual(
+      new Map(accounts.map((id) => [id, firstHalf.has(id) ? b.ownerId : a.ownerId])),
+    );
   });
 });

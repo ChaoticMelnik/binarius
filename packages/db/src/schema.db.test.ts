@@ -37,6 +37,7 @@ import {
   tradingSessions,
   tradingSwitch,
   users,
+  workerProcesses,
 } from './schema/index';
 import {
   AccountHaltReason,
@@ -3561,6 +3562,51 @@ describe('broker_session_leases (#93)', () => {
         '23503',
         'broker_session_leases_account_fk',
       );
+    });
+  });
+});
+
+// --- worker_processes (#94) -----------------------------------------------------------------
+
+describe('worker_processes (#94)', () => {
+  const proc = (heartbeatAt: string, expiresAt: string) => ({
+    ownerId: randomUUID(),
+    heartbeatAt: sql`${heartbeatAt}::timestamptz`,
+    expiresAt: sql`${expiresAt}::timestamptz`,
+  });
+
+  it('G0 refuses a row that expires at its heartbeat, accepts one a microsecond later', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(workerProcesses).values(proc('2026-10-25 10:00:00+00', '2026-10-25 10:00:00+00')),
+        '23514',
+        'worker_processes_expiry_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await tx
+        .insert(workerProcesses)
+        .values(proc('2026-10-25 10:00:00+00', '2026-10-25 10:00:00.000001+00'));
+    });
+  });
+
+  it('G0 refuses a missing expiry and a second row for the process', async () => {
+    await rolledBack(async (tx) => {
+      const error = await tx
+        .execute(
+          sql`insert into worker_processes (owner_id, heartbeat_at, expires_at)
+              values (${randomUUID()}, now(), null)`,
+        )
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'expires_at' });
+    });
+    await rolledBack(async (tx) => {
+      const row = proc('2026-10-25 10:00:00+00', '2026-10-25 10:00:30+00');
+      await tx.insert(workerProcesses).values(row);
+      await rejectsWith(tx.insert(workerProcesses).values(row), '23505', 'worker_processes_pkey');
     });
   });
 });

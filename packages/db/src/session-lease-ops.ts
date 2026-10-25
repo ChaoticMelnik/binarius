@@ -9,11 +9,14 @@ import { millisecondsFromNow } from './sql-time';
 
 // Takes a free or lapsed lease, or moves our own: one statement, the predicate inside
 // `on conflict ... where`. Two acquires of one key serialize on the row, and the second
-// re-evaluates the predicate against the first's committed row, so exactly one wins.
+// re-evaluates the predicate against the first's committed row, so exactly one wins. The
+// returned `acquiredAt` is the CAS token of `releaseSessionLease`, the column's text with its
+// microseconds (a JS Date keeps milliseconds and would never compare equal); a refusal returns
+// undefined.
 export async function acquireSessionLease(
   db: Db,
   { accountId, ownerId, ttlMs }: { accountId: string; ownerId: string; ttlMs: number },
-): Promise<boolean> {
+): Promise<{ acquiredAt: string } | undefined> {
   const l = brokerSessionLeases;
   const rows = await db
     .insert(l)
@@ -29,8 +32,8 @@ export async function acquireSessionLease(
       },
       setWhere: sql`${l.expiresAt} <= now() or ${l.ownerId} = excluded.owner_id`,
     })
-    .returning({ id: l.brokerAccountId });
-  return rows.length === 1;
+    .returning({ acquiredAt: sql<string>`${l.acquiredAt}::text` });
+  return rows[0];
 }
 
 // The ids still held. A lease already lapsed is not renewed even when nobody took it: the
@@ -63,6 +66,25 @@ export async function releaseSessionLeases(
   const rows = await db
     .delete(l)
     .where(sql`${l.ownerId} = ${ownerId}`)
+    .returning({ id: l.brokerAccountId });
+  return rows.length;
+}
+
+// One account, at a shed (#94): only the lease this acquire took. A release that commits late,
+// after the same process re-acquired the account, finds acquired_at moved and deletes nothing —
+// a plain per-account delete would leave the new socket without a lease.
+export async function releaseSessionLease(
+  db: Db,
+  { accountId, ownerId, acquiredAt }: { accountId: string; ownerId: string; acquiredAt: string },
+): Promise<number> {
+  const l = brokerSessionLeases;
+  const rows = await db
+    .delete(l)
+    .where(
+      sql`${l.brokerAccountId} = ${accountId}
+        and ${l.ownerId} = ${ownerId}
+        and ${l.acquiredAt} = ${acquiredAt}::timestamptz`,
+    )
     .returning({ id: l.brokerAccountId });
   return rows.length;
 }

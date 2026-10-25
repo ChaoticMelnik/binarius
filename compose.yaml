@@ -306,12 +306,17 @@ services:
     # above the worker's shutdown budget (35 s), which itself covers the longest submit ack
     # timeout (30 s): a deploy waits for a job in flight instead of killing it mid-write
     stop_grace_period: 40s
+    # the worker processes (#94, docs/worker-capacity.md): 1 until #815 partitions the loops and
+    # scripts/deploy-worker.sh rolls more than one
+    deploy:
+      replicas: ${TRADING_WORKER_REPLICAS:-1}
     environment:
       <<: [*app-environment, *broker-environment]
       # optional tunables, forwarded only when set (code defaults otherwise)
       INTENT_MAX_AGE_MS:
       SUBMIT_ACK_TIMEOUT_MS:
       WORKER_CONCURRENCY:
+      MAX_SESSIONS_PER_WORKER:
       # the circuit breaker's thresholds (#96, docs/runbook-broker-outage.md)
       CIRCUIT_BREAKER_WINDOW_MS:
       CIRCUIT_BREAKER_MIN_FAILURES:

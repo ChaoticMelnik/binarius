@@ -25,3 +25,4 @@ export * from './staff-sessions';
 export * from './bot-text-overrides';
 export * from './broker-session-leases';
 export * from './referrals';
+export * from './worker-processes';

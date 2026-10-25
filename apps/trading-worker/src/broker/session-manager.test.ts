@@ -6,7 +6,14 @@ import {
   type SessionCandidate,
 } from '@binarius/db';
 import { MockSocketPayload, startMockBroker, type MockBroker } from '@binarius/mock-broker';
-import { AccessTokenRefusal, BrokerSocketEvent, logOptions, TradeMode } from '@binarius/shared';
+import {
+  AccessTokenRefusal,
+  BrokerSocketEvent,
+  decimalStringSchema,
+  logOptions,
+  TradeAction,
+  TradeMode,
+} from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   BrokerSocketState,
@@ -58,6 +65,8 @@ const CONFIG: SessionManagerConfig = {
   leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
   lossGraceMs: 2_000,
+  // long enough that no case sheds unless it shortens it
+  shedGraceMs: 30_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING
 const QUIET_MS = 100;
@@ -107,8 +116,11 @@ interface HarnessOptions {
   openClient?: (options: BrokerSocketClientOptions) => BrokerSocketClient;
   deadLetters?: DeadLetterSink;
   leases?: Partial<SessionLeases>;
+  // every account owned unless a case says otherwise (#94)
+  owns?: (accountId: string) => boolean;
   monotonicNow?: () => number;
   lossObserver?: SessionLossObserver;
+  timing?: Partial<typeof TIMING & { commandTimeoutMs: number }>;
 }
 
 function recordingWriters(writes: Write[]): SessionWriters {
@@ -149,11 +161,20 @@ function harness(options: HarnessOptions = {}) {
   const writes: Write[] = [];
   const deadLetters: DeadLetter[] = [];
   // every lease granted and renewed unless a case says otherwise; each call recorded
-  const leaseCalls: { op: 'acquire' | 'renew' | 'release'; ids: string[] }[] = [];
+  const leaseCalls: {
+    op: 'acquire' | 'renew' | 'release' | 'releaseOne';
+    ids: string[];
+    acquiredAt?: string;
+  }[] = [];
+  let acquires = 0;
   const leases: SessionLeases = {
     acquire: (accountId, ttlMs) => {
       leaseCalls.push({ op: 'acquire', ids: [accountId] });
-      return options.leases?.acquire?.(accountId, ttlMs) ?? Promise.resolve(true);
+      acquires += 1;
+      return (
+        options.leases?.acquire?.(accountId, ttlMs) ??
+        Promise.resolve({ acquiredAt: `acquired-${acquires}` })
+      );
     },
     renew: (accountIds, ttlMs) => {
       leaseCalls.push({ op: 'renew', ids: [...accountIds] });
@@ -163,10 +184,16 @@ function harness(options: HarnessOptions = {}) {
       leaseCalls.push({ op: 'release', ids: [] });
       return options.leases?.release?.() ?? Promise.resolve(0);
     },
+    releaseOne: (accountId, acquiredAt) => {
+      leaseCalls.push({ op: 'releaseOne', ids: [accountId], acquiredAt });
+      return options.leases?.releaseOne?.(accountId, acquiredAt) ?? Promise.resolve(1);
+    },
   };
+  const ownership = { owns: options.owns ?? (() => true) };
   const manager = createBrokerSessionManager({
     url: broker.url,
     leases,
+    owns: (accountId) => ownership.owns(accountId),
     ...(options.monotonicNow === undefined ? {} : { monotonicNow: options.monotonicNow }),
     ...(options.lossObserver === undefined ? {} : { lossObserver: options.lossObserver }),
     deadLetters: options.deadLetters ?? {
@@ -191,13 +218,15 @@ function harness(options: HarnessOptions = {}) {
     writers: (options.writers ?? recordingWriters)(writes),
     logger,
     config: { ...CONFIG, ...options.config },
-    timing: TIMING,
+    timing: { ...TIMING, ...options.timing },
     ...(options.openClient === undefined ? {} : { openClient: options.openClient }),
   });
   managers.push(manager);
   return {
     manager,
     state,
+    // a case swaps the view mid-run
+    ownership,
     candidateCalls,
     tokenCalls,
     writes,
@@ -1175,7 +1204,7 @@ describe('the lease (#93)', () => {
 
   it('L1 a busy account costs no token fetch and no client, and is held back', async () => {
     const fakes = fakeClients();
-    const h = harness({ openClient: fakes.openClient, leases: { acquire: async () => false } });
+    const h = harness({ openClient: fakes.openClient, leases: { acquire: async () => undefined } });
     h.state.candidates = [candidate(1)];
     await h.manager.tick();
     await until('the busy line', () => h.logs('broker session lease busy').length === 1);
@@ -1432,17 +1461,19 @@ describe('the lease (#93)', () => {
 
   it('L10 an acquire still in flight is not renewed, and is once it answered', async () => {
     const fakes = fakeClients();
-    let grantLease: (granted: boolean) => void = () => undefined;
+    let grantLease: (granted: { acquiredAt: string }) => void = () => undefined;
     const h = harness({
       openClient: fakes.openClient,
-      leases: { acquire: () => new Promise<boolean>((resolve) => (grantLease = resolve)) },
+      leases: {
+        acquire: () => new Promise<{ acquiredAt: string }>((resolve) => (grantLease = resolve)),
+      },
     });
     h.state.candidates = [candidate(1)];
     await h.manager.tick();
     await until('the acquire in flight', () => leaseOps(h).includes('acquire'));
     await h.manager.renewLeases();
     expect(leaseOps(h)).toEqual(['acquire']);
-    grantLease(true);
+    grantLease({ acquiredAt: 'acquired-1' });
     await until('the client', () => fakes.made.length === 1);
     await h.manager.renewLeases();
     expect(h.leaseCalls.at(-1)).toEqual({ op: 'renew', ids: ['acc-1'] });
@@ -1661,6 +1692,222 @@ describe('the socket loss signal (#96)', () => {
   });
 });
 
+describe('ownership (#94)', () => {
+  // the shed grace on the fake clock: a case moves `offset` instead of waiting
+  const GRACE = { shedGraceMs: 1_000 };
+  const releases = (h: Harness) => h.leaseCalls.filter((call) => call.op === 'releaseOne');
+  async function verifiedSession(h: Harness, fakes: ReturnType<typeof fakeClients>) {
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    const client = fakes.made[0]!;
+    client.hear({ type: 'user_data', user: USER_1 });
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
+    return client;
+  }
+
+  it('O1 an unowned candidate is never started and is not counted against the cap', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      config: { maxSessions: 1 },
+      owns: (id) => id !== 'acc-3',
+    });
+    // the unowned one first: a queue built from every candidate would start it
+    h.state.candidates = [candidate(3), candidate(1), candidate(2)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    await h.manager.tick();
+    expect(h.leaseCalls.filter((call) => call.op === 'acquire')).toEqual([
+      { op: 'acquire', ids: ['acc-1'] },
+    ]);
+    expect(h.manager.clientFor('acc-3')).toBeUndefined();
+    expect(h.logs('broker sessions capped')[0]).toMatchObject({ candidates: 2, cap: 1 });
+  });
+
+  it('O2 a session whose account moved: no command at once, events still written, closed and released after the grace', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      config: GRACE,
+      monotonicNow: () => performance.now() + offset,
+    });
+    const client = await verifiedSession(h, fakes);
+    h.ownership.owns = () => false;
+    await h.manager.tick();
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    expect(client.stops).toBe(0);
+    expect(client.state).toBe(BrokerSocketState.Ready);
+    const writes = h.writes.length;
+    client.hear({ type: 'balance_update', mode: TradeMode.Demo, balance: USER_1.demo });
+    await until('the event written', () => h.writes.length === writes + 1);
+    offset = GRACE.shedGraceMs - 50;
+    await h.manager.tick();
+    expect(client.stops).toBe(0);
+    offset = GRACE.shedGraceMs;
+    await h.manager.tick();
+    expect(client.stops).toBe(1);
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
+    expect(h.logs('broker session shed')).toEqual([
+      expect.objectContaining({ level: LEVEL.info, accountId: 'acc-1', graceMs: 1_000 }),
+    ]);
+    // the token of the acquire that took this lease, not another one
+    expect(releases(h)).toEqual([{ op: 'releaseOne', ids: ['acc-1'], acquiredAt: 'acquired-1' }]);
+    expect(h.manager.stats()).toMatchObject({ running: 0, shed: 1, owned: 0 });
+  });
+
+  it('O3 a command already on the socket at the shed answers over it; the socket closes only after the grace', async () => {
+    // the production shape on a short scale: hold < command timeout < shed grace
+    const h = harness({
+      config: { shedGraceMs: 500 },
+      // above the broker's hold, so the command answers rather than times out
+      timing: { commandTimeoutMs: 400 },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await readyFor(h, 'acc-1');
+    await until('the session verified', () => h.manager.sessionFor('acc-1') !== undefined);
+    const client = h.manager.sessionFor('acc-1')!;
+    broker.socket.failNext('openTrade', { delayMs: 300 });
+    const answer = client.openTrade(
+      TradeMode.Demo,
+      {
+        assetId: 101,
+        amount: decimalStringSchema.parse('1.00'),
+        action: TradeAction.Up,
+        durationSec: 60,
+      },
+      new AbortController().signal,
+    );
+    h.ownership.owns = () => false;
+    await h.manager.tick();
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    // the lease stays ours while the socket lives
+    await h.manager.renewLeases();
+    expect(h.leaseCalls.at(-1)).toEqual({ op: 'renew', ids: ['acc-1'] });
+    await h.manager.tick();
+    expect((await answer).outcome).toBe('success');
+    expect(h.manager.clientFor('acc-1')).toBe(client);
+    await tickUntil(h, 'the shed', () => h.manager.clientFor('acc-1') === undefined);
+    expect(h.logs('broker session shed')).toHaveLength(1);
+  });
+
+  it('O4 a starting session whose account moved: no client; the lease goes back only once acquired', async () => {
+    const fakes = fakeClients();
+    const token = deferred<AccessTokenOutcome>();
+    const h = harness({ openClient: fakes.openClient, tokens: () => token.promise });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the token fetch', () => h.tokenCalls.length === 1);
+    h.ownership.owns = () => false;
+    await h.manager.tick();
+    expect(h.manager.size).toBe(0);
+    expect(releases(h)).toEqual([{ op: 'releaseOne', ids: ['acc-1'], acquiredAt: 'acquired-1' }]);
+    token.resolve({ ok: true, accessToken: tokenOf(1) });
+    await quiet();
+    expect(fakes.made).toEqual([]);
+
+    const lease = deferred<{ acquiredAt: string } | undefined>();
+    const pending = harness({
+      openClient: fakes.openClient,
+      leases: { acquire: () => lease.promise },
+    });
+    pending.state.candidates = [candidate(2)];
+    await pending.manager.tick();
+    await until('the acquire', () => pending.leaseCalls.length === 1);
+    pending.ownership.owns = () => false;
+    await pending.manager.tick();
+    expect(pending.manager.size).toBe(0);
+    lease.resolve({ acquiredAt: 'late' });
+    await quiet();
+    expect(releases(pending)).toEqual([]);
+    expect(pending.tokenCalls).toEqual([]);
+    expect(fakes.made).toEqual([]);
+  });
+
+  it('O5 owned again within the grace: the session stays and takes commands again', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      config: GRACE,
+      monotonicNow: () => performance.now() + offset,
+    });
+    const client = await verifiedSession(h, fakes);
+    h.ownership.owns = () => false;
+    await h.manager.tick();
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    h.ownership.owns = () => true;
+    await h.manager.tick();
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
+    offset = 2 * GRACE.shedGraceMs;
+    await h.manager.tick();
+    expect(client.stops).toBe(0);
+    expect(releases(h)).toEqual([]);
+  });
+
+  it('O6 the cap counts owned accounts only', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      config: { maxSessions: 2 },
+      owns: (id) => ['acc-1', 'acc-2', 'acc-3'].includes(id),
+    });
+    h.state.candidates = [1, 2, 3, 4, 5].map(candidate);
+    await h.manager.tick();
+    await until('two clients', () => fakes.made.length === 2);
+    expect(h.manager.stats()).toEqual({ running: 2, starting: 0, owned: 3, cappedOut: 1, shed: 0 });
+  });
+
+  it('O7 a shed whose release throws or hangs is logged; the entry is gone and the next tick runs', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    let calls = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      config: { ...GRACE, leaseRenewTimeoutMs: 100 },
+      monotonicNow: () => performance.now() + offset,
+      leases: {
+        releaseOne: () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new Error('database down'))
+            : new Promise(() => undefined);
+        },
+      },
+    });
+    await verifiedSession(h, fakes);
+    h.ownership.owns = () => false;
+    await h.manager.tick();
+    offset = GRACE.shedGraceMs;
+    await h.manager.tick();
+    await until(
+      'the failed release',
+      () => h.logs('broker session lease release failed').length === 1,
+    );
+    expect(h.logs('broker session lease release failed')[0]).toMatchObject({
+      level: LEVEL.error,
+      accountId: 'acc-1',
+    });
+    expect(h.manager.size).toBe(0);
+
+    // owned again: the next tick starts it, and the second shed's release hangs
+    h.ownership.owns = () => true;
+    await h.manager.tick();
+    await until('the second client', () => fakes.made.length === 2);
+    fakes.made[1]!.hear({ type: 'user_data', user: USER_1 });
+    h.ownership.owns = () => false;
+    await h.manager.tick();
+    offset = 2 * GRACE.shedGraceMs + 100;
+    await h.manager.tick();
+    await until('the release timed out', () =>
+      h.logs('broker session lease release failed').some((line) => line.timedOut === true),
+    );
+    expect(h.manager.size).toBe(0);
+  });
+});
+
 // last in the file: it reads the lines every case above wrote
 describe('logs', () => {
   it('U14 never carry a token, an amount or the URL, and name every path the cases covered', () => {
@@ -1697,6 +1944,7 @@ describe('logs', () => {
       'broker session lease release failed',
       'broker session lease renewal timed out',
       'broker session lease acquire timed out',
+      'broker session shed',
     ]) {
       expect(messages, msg).toContain(msg);
     }

@@ -10,7 +10,7 @@ const valid = {
 };
 
 describe('parseEnv', () => {
-  it('applies defaults for the optional variables', () => {
+  it('E1 applies defaults for the optional variables', () => {
     expect(parseEnv(valid)).toEqual({
       databaseUrl: valid.DATABASE_URL,
       redisUrl: valid.REDIS_URL,
@@ -18,6 +18,7 @@ describe('parseEnv', () => {
       intentMaxAgeMs: 60_000,
       submitAckTimeoutMs: 10_000,
       workerConcurrency: 5,
+      maxSessionsPerWorker: 500,
       backendUrl: valid.BACKEND_URL,
       internalApiToken: valid.INTERNAL_API_TOKEN,
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
@@ -63,6 +64,13 @@ describe('parseEnv', () => {
     });
   });
 
+  it('E2 reads MAX_SESSIONS_PER_WORKER (#94)', () => {
+    expect(parseEnv({ ...valid, MAX_SESSIONS_PER_WORKER: '1' }).maxSessionsPerWorker).toBe(1);
+    expect(parseEnv({ ...valid, MAX_SESSIONS_PER_WORKER: '10000' }).maxSessionsPerWorker).toBe(
+      10_000,
+    );
+  });
+
   it('refuses DEMO_ONLY=1 (#396)', () => {
     expect(() => parseEnv({ ...valid, DEMO_ONLY: '1' })).toThrow(
       'Env DEMO_ONLY must be one of: true false',
@@ -106,6 +114,10 @@ describe('parseEnv', () => {
     ['SUBMIT_ACK_TIMEOUT_MS', '30001', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 30000'],
     ['WORKER_CONCURRENCY', '0', 'Env WORKER_CONCURRENCY must be between 1 and 100'],
     ['WORKER_CONCURRENCY', 'x', 'Env WORKER_CONCURRENCY must be an integer'],
+    // E3 (#94): the scan assumes fewer than 10 000 accounts in work (broker-session.md, risk 9)
+    ['MAX_SESSIONS_PER_WORKER', '0', 'Env MAX_SESSIONS_PER_WORKER must be between 1 and 10000'],
+    ['MAX_SESSIONS_PER_WORKER', '10001', 'Env MAX_SESSIONS_PER_WORKER must be between 1 and 10000'],
+    ['MAX_SESSIONS_PER_WORKER', '', 'MAX_SESSIONS_PER_WORKER'],
     ['LOG_LEVEL', 'loud', 'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent'],
     // the window must outlast the socket loss grace (45 s)
     ['CIRCUIT_BREAKER_WINDOW_MS', '45000', 'Env CIRCUIT_BREAKER_WINDOW_MS must be between 45001 and 3600000'],

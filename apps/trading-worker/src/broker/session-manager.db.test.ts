@@ -86,6 +86,7 @@ const CONFIG: SessionManagerConfig = {
   leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
   lossGraceMs: 2_000,
+  shedGraceMs: 1_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING
 const QUIET_MS = 100;
@@ -145,10 +146,12 @@ beforeAll(async () => {
     url: broker.url,
     deadLetters: { add: () => Promise.resolve() },
     leases: {
-      acquire: () => Promise.resolve(true),
+      acquire: () => Promise.resolve({ acquiredAt: '2026-10-25 00:00:00+00' }),
       renew: (ids) => Promise.resolve([...ids]),
       release: () => Promise.resolve(0),
+      releaseOne: () => Promise.resolve(0),
     },
+    owns: () => true,
     candidates: (options) => listSessionCandidates(db, options),
     tokens: {
       accessToken: (): Promise<AccessTokenOutcome> => {

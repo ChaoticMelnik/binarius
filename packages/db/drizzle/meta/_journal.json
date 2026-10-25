@@ -589,6 +589,13 @@
       "when": 1792859632976,
       "tag": "0083_bot_text_overrides_language",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1792885659889,
+      "tag": "0084_worker_processes",
+      "breakpoints": true
     }
   ]
 }

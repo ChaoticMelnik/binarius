@@ -22,8 +22,22 @@ export const TEST_WORKER_TUNING: Partial<WorkerTuning> = {
     leaseRenewTimeoutMs: 3_000,
     leaseFenceMs: 25_000,
     lossGraceMs: 2_000,
+    // above the command timeout below, as production's 6 s is above its 5 s
+    shedGraceMs: 1_000,
+  },
+  // the production chain's shape with waits a handoff case can afford (#94): a membership change
+  // reaches the other worker within 1 s, a dirty worker's row lapses in 6 s
+  fleet: {
+    heartbeatMs: 1_000,
+    heartbeatTimeoutMs: 500,
+    liveFenceMs: 5_000,
+    processTtlMs: 6_000,
+    processPruneMs: 60_000,
+    capacityLogMs: 1_000,
   },
   socketTiming: {
+    // above the handoff's held socket submit (HELD_SOCKET_MS 800), below the shed grace
+    commandTimeoutMs: 900,
     connectTimeoutMs: 1_000,
     authTimeoutMs: 500,
     reconnectDelayMs: 20,

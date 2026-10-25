@@ -4,7 +4,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { until } from '@binarius/shared/testing';
 import type { Db } from './client';
 import { brokerSessionLeases } from './schema/index';
-import { acquireSessionLease, releaseSessionLeases, renewSessionLeases } from './session-lease-ops';
+import {
+  acquireSessionLease,
+  releaseSessionLease,
+  releaseSessionLeases,
+  renewSessionLeases,
+} from './session-lease-ops';
 import { createTempDatabase, lockWaiters, seedUserWithAccount, type TempDatabase } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -46,7 +51,7 @@ describe('acquireSessionLease (#93)', () => {
   it('A1 takes a free account, for the TTL by the database clock', async () => {
     const accountId = await account();
     const owner = randomUUID();
-    expect(await acquire(accountId, owner)).toBe(true);
+    expect(await acquire(accountId, owner)).toBeDefined();
     const row = await rowOf(accountId);
     expect(row?.ownerId).toBe(owner);
     expect(row!.expiresAt.getTime() - row!.acquiredAt.getTime()).toBe(TTL);
@@ -58,7 +63,7 @@ describe('acquireSessionLease (#93)', () => {
     await acquire(accountId, owner);
     await expireIn(accountId, '5 seconds');
     const before = await rowOf(accountId);
-    expect(await acquire(accountId, owner)).toBe(true);
+    expect(await acquire(accountId, owner)).toBeDefined();
     expect((await rowOf(accountId))!.expiresAt.getTime()).toBeGreaterThan(
       before!.expiresAt.getTime(),
     );
@@ -69,7 +74,7 @@ describe('acquireSessionLease (#93)', () => {
     const owner = randomUUID();
     await acquire(accountId, owner);
     const before = await rowOf(accountId);
-    expect(await acquire(accountId, randomUUID())).toBe(false);
+    expect(await acquire(accountId, randomUUID())).toBeUndefined();
     expect(await rowOf(accountId)).toEqual(before);
   });
 
@@ -78,13 +83,13 @@ describe('acquireSessionLease (#93)', () => {
     await acquire(lapsed, randomUUID());
     await expireIn(lapsed, '-1 millisecond');
     const taker = randomUUID();
-    expect(await acquire(lapsed, taker)).toBe(true);
+    expect(await acquire(lapsed, taker)).toBeDefined();
     expect((await rowOf(lapsed))?.ownerId).toBe(taker);
 
     const live = await account();
     await acquire(live, randomUUID());
     await expireIn(live, '1 second');
-    expect(await acquire(live, randomUUID())).toBe(false);
+    expect(await acquire(live, randomUUID())).toBeUndefined();
 
     // now() is fixed inside one transaction: expires_at = now() is lapsed (`<=`)
     const edge = await account();
@@ -99,13 +104,14 @@ describe('acquireSessionLease (#93)', () => {
              where broker_account_id = ${edge}`,
         );
         // the operation itself, on the transaction's connection, so now() is the same instant
-        taken = (await acquireSessionLease(tx as unknown as Db, {
-          accountId: edge,
-          ownerId: owner,
-          ttlMs: TTL,
-        }))
-          ? 1
-          : 0;
+        taken =
+          (await acquireSessionLease(tx as unknown as Db, {
+            accountId: edge,
+            ownerId: owner,
+            ttlMs: TTL,
+          })) !== undefined
+            ? 1
+            : 0;
         tx.rollback();
       })
       .catch(() => undefined);
@@ -135,8 +141,24 @@ describe('acquireSessionLease (#93)', () => {
     });
     commit();
     await holder;
-    expect(await second).toBe(false);
+    expect(await second).toBeUndefined();
     expect((await rowOf(accountId))?.ownerId).toBe(first);
+  });
+
+  // the column's own text, microseconds included: the CAS token of releaseSessionLease
+  const acquiredAtText = async (accountId: string) =>
+    (
+      await tmp.db.execute<{ t: string }>(
+        sql`select acquired_at::text as t from broker_session_leases where broker_account_id = ${accountId}`,
+      )
+    ).rows[0]?.t;
+
+  it('A6 returns the row’s acquired_at, and undefined on a refusal (#94)', async () => {
+    const accountId = await account();
+    const owner = randomUUID();
+    const taken = await acquire(accountId, owner);
+    expect(taken?.acquiredAt).toBe(await acquiredAtText(accountId));
+    expect(await acquire(accountId, randomUUID())).toBeUndefined();
   });
 });
 
@@ -189,7 +211,7 @@ describe('renewSessionLeases (#93)', () => {
       await renewSessionLeases(tmp.db, { ownerId: owner, accountIds: [accountId], ttlMs: TTL }),
     ).toEqual([accountId]);
     expect((await rowOf(accountId))!.expiresAt).toEqual(far);
-    expect(await acquire(accountId, owner)).toBe(true);
+    expect(await acquire(accountId, owner)).toBeDefined();
     expect((await rowOf(accountId))!.expiresAt).toEqual(far);
   });
 
@@ -209,5 +231,42 @@ describe('releaseSessionLeases (#93)', () => {
     expect(await releaseSessionLeases(tmp.db, { ownerId: owner })).toBe(1);
     expect(await rowOf(mine)).toBeUndefined();
     expect(await rowOf(theirs)).toBeDefined();
+  });
+});
+
+describe('releaseSessionLease (#94)', () => {
+  it('D2 deletes only the lease its acquire took: own owner, matching acquiredAt', async () => {
+    const accountId = await account();
+    const owner = randomUUID();
+    const first = await acquire(accountId, owner);
+    // the owner re-acquires: acquired_at moves to the new statement's now()
+    await tmp.db.execute(sql`select pg_sleep(0.002)`);
+    const second = await acquire(accountId, owner);
+    expect(second!.acquiredAt).not.toBe(first!.acquiredAt);
+
+    expect(
+      await releaseSessionLease(tmp.db, {
+        accountId,
+        ownerId: owner,
+        acquiredAt: first!.acquiredAt,
+      }),
+    ).toBe(0);
+    expect(
+      await releaseSessionLease(tmp.db, {
+        accountId,
+        ownerId: randomUUID(),
+        acquiredAt: second!.acquiredAt,
+      }),
+    ).toBe(0);
+    expect((await rowOf(accountId))?.ownerId).toBe(owner);
+
+    expect(
+      await releaseSessionLease(tmp.db, {
+        accountId,
+        ownerId: owner,
+        acquiredAt: second!.acquiredAt,
+      }),
+    ).toBe(1);
+    expect(await rowOf(accountId)).toBeUndefined();
   });
 });

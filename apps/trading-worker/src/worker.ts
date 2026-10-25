@@ -8,9 +8,12 @@ import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
   acquireSessionLease,
   applyBalanceEvent,
+  deregisterWorkerProcess,
+  heartbeatWorkerProcess,
   listLinkedBrokerTradeIds,
   listSessionCandidates,
   OutboxTopic,
+  releaseSessionLease,
   releaseSessionLeases,
   renewSessionLeases,
   settleClosedTrades,
@@ -26,6 +29,9 @@ import { noTradeSessions } from './broker/trade-session';
 import { createCircuitBreaker } from './circuit-breaker/breaker';
 import { observeExecutor } from './circuit-breaker/observe-executor';
 import type { Env } from './env';
+import { createCapacityReporter } from './fleet/capacity';
+import { FLEET_CONFIG, type FleetConfig } from './fleet/config';
+import { createFleetRegistry } from './fleet/registry';
 import {
   BALANCE_CHECK_TIMEOUT_MS,
   CATCHUP_ATTEMPT_TIMEOUT_MS,
@@ -95,7 +101,9 @@ export interface TradingWorker {
 // The timers and budgets the production constants set; a test shortens them (two workers in one
 // process, worker.handoff.db.test.ts). Production passes none.
 export interface WorkerTuning {
+  // production: SESSION_MANAGER_CONFIG with maxSessions from env MAX_SESSIONS_PER_WORKER
   sessions: SessionManagerConfig;
+  fleet: FleetConfig;
   socketTiming?: Partial<BrokerSocketTiming>;
   orchestrator: SessionOrchestratorConfig;
   staleSubmittingMs: number;
@@ -108,8 +116,8 @@ export interface WorkerTuning {
   phase2BudgetMs: number;
 }
 
-const PRODUCTION_TUNING: WorkerTuning = {
-  sessions: SESSION_MANAGER_CONFIG,
+const PRODUCTION_TUNING: Omit<WorkerTuning, 'sessions'> = {
+  fleet: FLEET_CONFIG,
   orchestrator: TRADING_SESSION_CONFIG,
   staleSubmittingMs: STALE_SUBMITTING_MS,
   sweepIntervalMs: SWEEP_INTERVAL_MS,
@@ -148,7 +156,11 @@ export function createWorker({
   logger,
   testing = {},
 }: WorkerDeps): TradingWorker {
-  const tuning: WorkerTuning = { ...PRODUCTION_TUNING, ...testing.tuning };
+  const tuning: WorkerTuning = {
+    ...PRODUCTION_TUNING,
+    sessions: { ...SESSION_MANAGER_CONFIG, maxSessions: env.maxSessionsPerWorker },
+    ...testing.tuning,
+  };
   const prefix = testing.queuePrefix === undefined ? {} : { prefix: testing.queuePrefix };
 
   // The broker's REST API for the trade lists and the REST open, and the backend's token route for
@@ -182,9 +194,20 @@ export function createWorker({
     connection: redis,
     ...prefix,
   });
-  // this process's lease owner (#93): a fresh id per start, so a restarted container inherits no
-  // lease it cannot prove it still fences
-  const sessionOwnerId = randomUUID();
+  // this process's id (#93, #94): the owner of its leases and of its worker_processes row, a fresh
+  // one per start, so a restarted container inherits no lease it cannot prove it still fences
+  const ownerId = randomUUID();
+  // which accounts' sockets are ours (docs/worker-capacity.md): rendezvous over the live processes
+  const registry = createFleetRegistry({
+    ownerId,
+    ops: {
+      heartbeat: ({ ttlMs, pruneAfterMs }) =>
+        heartbeatWorkerProcess(db, { ownerId, ttlMs, pruneAfterMs }),
+      deregister: () => deregisterWorkerProcess(db, { ownerId }),
+    },
+    config: tuning.fleet,
+    logger,
+  });
   // the circuit breaker (#96, docs/runbook-broker-outage.md): closes the global switch when the
   // broker stops answering submits or the sessions are lost; never opens it
   const breaker = createCircuitBreaker({
@@ -199,14 +222,14 @@ export function createWorker({
           url: env.brokerWsUrl,
           deadLetters: sessionDeadLetters,
           leases: {
-            acquire: (accountId, ttlMs) =>
-              acquireSessionLease(db, { accountId, ownerId: sessionOwnerId, ttlMs }),
-            renew: (accountIds, ttlMs) =>
-              renewSessionLeases(db, { ownerId: sessionOwnerId, accountIds, ttlMs }),
-            release: () => releaseSessionLeases(db, { ownerId: sessionOwnerId }),
+            acquire: (accountId, ttlMs) => acquireSessionLease(db, { accountId, ownerId, ttlMs }),
+            renew: (accountIds, ttlMs) => renewSessionLeases(db, { ownerId, accountIds, ttlMs }),
+            release: () => releaseSessionLeases(db, { ownerId }),
+            releaseOne: (accountId, acquiredAt) =>
+              releaseSessionLease(db, { accountId, ownerId, acquiredAt }),
           },
-          candidates: (options) =>
-            listSessionCandidates(db, { ...options, ownerId: sessionOwnerId }),
+          owns: (accountId) => registry.owns(accountId),
+          candidates: (options) => listSessionCandidates(db, { ...options, ownerId }),
           tokens,
           writers: {
             snapshot: (brokerAccountId, user, eventAt) =>
@@ -319,6 +342,15 @@ export function createWorker({
     onIntentEnded: () => tradingSessions.wake(),
   });
 
+  const capacity = createCapacityReporter({
+    ownerId,
+    registry,
+    ...(sessions === undefined ? {} : { sessions }),
+    cap: tuning.sessions.maxSessions,
+    logger,
+    intervalMs: tuning.fleet.capacityLogMs,
+  });
+
   const sweeper = startSweeper({
     db,
     logger,
@@ -341,13 +373,16 @@ export function createWorker({
   async function runShutdown(signal: string): Promise<ShutdownResult> {
     logger.info({ signal }, 'shutting down');
     sweeper.stop();
+    capacity.stop();
     const drained = await closeAll(
       [
         () =>
           consumer.worker
             .close()
             .then(() => consumer.drainDeadLetters())
-            .then(() => sessions?.stop()),
+            .then(() => sessions?.stop())
+            // after our leases went back: a successor that takes our accounts meets no lease busy
+            .then(() => registry.stop()),
         () =>
           reconciliationConsumer.worker
             .close()
@@ -388,18 +423,22 @@ export function createWorker({
         {
           concurrency: env.workerConcurrency,
           sessions: sessions !== undefined,
-          ...(sessions === undefined ? {} : { sessionOwnerId }),
+          ownerId,
           // a report of the env the processor and the orchestrator were built with (#396), not a
           // gate: the consumers already take jobs
           demoOnly: env.demoOnly,
         },
         WORKER_READY_MSG,
       );
+      // first: its heartbeat is out before the manager's first tick, which owns nothing until it
+      // answers (one tick's delay for the sockets at start)
+      registry.start();
       // after the consumers: the first tick picks up the reconciling intents a dead process left
       pass.start();
       catchup.start();
       tradingSessions.start();
       sessions?.start();
+      capacity.start();
     },
     shutdown(signal) {
       shutdownRun ??= runShutdown(signal);
