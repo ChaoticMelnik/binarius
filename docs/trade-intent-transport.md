@@ -464,12 +464,24 @@ the shared queue `trading-intents` to any consumer, so `intents/router.ts` moves
   processed, and every copy converges on the take's CAS. The relation
   `INTENT_RECOVERY_DELAY_MS < staleQueuedMs` crosses processes: stated, pinned by literal in
   `intents/config.test.ts`.
-- **A clean stop.** After both intent consumers closed, `router.stop()` moves the own queue's
-  remaining jobs to the shared queue under the job name `intent-direct`, immediate, and deletes the
-  own queue (`obliterate`), bounded by `INTENT_ROUTER_STOP_BUDGET_MS` (2 s; a timeout or a throw is
-  logged, never fails the shutdown). A job named `intent-direct` is processed where it lands, never
-  forwarded: the survivors still see the stopping process in their view for up to a heartbeat and
-  would hand it straight back.
+- **A clean stop.** After both intent consumers closed, `router.stop({ deregistered, notAfter })`
+  drains the own queue: every `INTENT_ROUTER_DRAIN_POLL_MS` (250 ms) a move pass adds each job of
+  the own queue to the shared queue under the job name `intent-direct` and the id
+  `<intentId>-direct`, then removes it from the own queue. The `-direct` id does not collide with
+  the forwarder's shared job of the same intent, which is still active while it forwards. A moved
+  job keeps what is left of its delay, so an insurance stays an insurance. The drain goes on until
+  `INTENT_ROUTER_DRAIN_TAIL_MS` (9 s) after the deregister settled: a peer names the stopping
+  process until its next heartbeat after the deregister (≤ 6 s + 2 s), so every forward it makes
+  meanwhile reaches the shared queue within a poll, not at its insurance. A final pass, then the
+  own queue is deleted (`obliterate`). The drain is cut at `notAfter`, the phase-1 start plus
+  `SHUTDOWN_PHASE1_BUDGET_MS` less `2 × INTENT_ROUTER_STOP_BUDGET_MS` (31 s), with the warning
+  `intent router drain cut by the shutdown budget`; that happens only for `SUBMIT_ACK_TIMEOUT_MS`
+  above 18 s with a submit that waits out nearly its deadline at the stop. The final pass and the
+  close have `INTENT_ROUTER_STOP_BUDGET_MS` (2 s) after it; a timeout or a throw is logged, never
+  fails the shutdown, and a failed final pass leaves the own queue in Redis rather than delete its
+  jobs. A clean stop takes about 9 s longer than before #347. A job named `intent-direct` is
+  processed where it lands, never forwarded: the survivors still see the stopping process in their
+  view for up to a heartbeat and would hand it straight back.
 - **The owner changed meanwhile.** The named owner processes the job anyway: without a ready
   socket of its own the order goes over REST. A view that says X at P and P at X: X processes. Two
   copies of one intent (a forward and a republish): one `takeIntent` wins, the other is `noop`.
@@ -480,10 +492,13 @@ the shared queue `trading-intents` to any consumer, so `intents/router.ts` moves
   be deleted by hand.
 - **One replica** forwards nothing: the live set is the process itself.
 
-Tests: `router.redis.test.ts` R1–R7, `processor.db.test.ts` P1–P4, `fleet/registry.test.ts` F7,
-`consumer.redis.test.ts` Q1, `worker.handoff.db.test.ts` H15 (two workers, every intent of the
-second one's accounts over its socket), H16 (a dead owner: the insurance takes the intent over
-REST, one trade; an `intent-direct` job is not forwarded), H17 (the requeue at a clean stop).
+Tests: `router.redis.test.ts` R1–R11 (R8 the drain and its tail, R9 the cut at `notAfter`, R10
+the remaining delay, R11 the `-direct` id beside the forwarder's job), `processor.db.test.ts`
+P1–P4, `fleet/registry.test.ts` F7, `consumer.redis.test.ts` Q1, `worker.handoff.db.test.ts` H15
+(two workers, every intent of the second one's accounts over its socket), H16 (a dead owner: the
+insurance takes the intent over REST, one trade; an `intent-direct` job is not forwarded), H17 (the
+requeue at a clean stop), H18 (forwards to a stopping process before and after its deregister are
+taken within 3 s, not at the insurance, and its own queue is gone).
 
 ## Delivery, ACK and timeout semantics
 
@@ -608,7 +623,8 @@ Fixed constants and why they relate the way they do: `apps/trading-worker/src/in
 — among them the reconciliation pass's `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s),
 `RECONCILE_RETRY_MS` (60 s, the lease), `RECONCILE_TICK_MS` (15 s), `RECONCILE_BATCH_SIZE`
 (16) and the balance check's `BALANCE_CHECK_TIMEOUT_MS` (20 s), the router's
-`INTENT_RECOVERY_DELAY_MS` (20 s) and `INTENT_ROUTER_STOP_BUDGET_MS` (2 s, #347), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
+`INTENT_RECOVERY_DELAY_MS` (20 s), `INTENT_ROUTER_STOP_BUDGET_MS` (2 s),
+`INTENT_ROUTER_DRAIN_POLL_MS` (250 ms) and `INTENT_ROUTER_DRAIN_TAIL_MS` (9 s, #347), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
 `RECONCILE_MAX_TRADE_PAGES`) and the catch-up's `CATCHUP_*`; none has an environment variable.
 
 `REAL_TRADING_ENABLED` (#134) is gone: the one switch for demo and real is the `trading_switch`
