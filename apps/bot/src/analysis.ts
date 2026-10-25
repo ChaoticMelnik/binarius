@@ -1,5 +1,4 @@
 import {
-  BrokerRestErrorCode,
   DISPLAY_INDICATOR_PARAMS,
   formatPrice,
   MACD_REQUIRED_CANDLES,
@@ -36,9 +35,11 @@ import {
 // The analysis screen (#126, docs/bot-demo.md): pure, from the pair read at the press and the
 // backend's answer. Every number on it is the answer's — a feature, a display indicator, or a
 // period from `params` — or the pair's payout and the break-even share computed from it; nothing
-// is the bot's own. A signal is a card (#482): the picture of its direction, sent by demo.ts, under
-// a caption with a monospaced block. Without a signal the screen waits for one (#664): it never
-// says «сигнала нет», and the wait (signal-wait.ts) turns it into the card when one comes. Which
+// is the bot's own. The direction is the pair's H1 signal (`h1`, #828); the candle decision is
+// information only: its features and indicators print the card's rows, its kind and action decide
+// nothing. An H1 signal is a card (#482): the picture of its direction, sent by demo.ts, under a
+// caption with a monospaced block. Without one the screen waits for it (#664): it never says
+// «сигнала нет», and the wait (signal-wait.ts) turns it into the card when one comes. Which
 // buttons go under it is demo.ts's. The words are catalog keys (bot-texts.ts), read when a screen
 // is built.
 
@@ -94,6 +95,8 @@ const CARD_ROWS = labelsOf({
   trend: 'cardRowTrend',
   volatility: 'cardRowVolatility',
   direction: 'cardRowDirection',
+  // the value of RSI, the trend and the volatility without the candle features (#828)
+  noData: 'cardNoData',
 } as const);
 
 const RSI_WORDS = labelsOf({
@@ -142,13 +145,14 @@ export const analysisSubject = (pair: PairView, durationSec: DemoDurationSec): s
 
 export interface AnalysisScreen {
   text: TelegramHtml;
-  // the direction of the stake button behind «➕ Ещё», set on a signal only
+  // the direction of the stake button behind «➕ Ещё», set on an H1 signal only
   stake: TradeAction | null;
-  // the session row (#360): on a signal only (#509), so no session is offered on a pair without one
+  // the session row (#360): on an H1 signal only (#509, #828), so no session is offered on a pair
+  // without one
   session: boolean;
-  // the card's picture (#482), by the direction of a signal; null on every other screen
+  // the card's picture (#482), by the direction of the H1 signal; null on every other screen
   photo: TradeAction | null;
-  // no signal now: the screen is the wait for one (#664)
+  // no H1 signal now: the screen is the wait for one (#664)
   wait: boolean;
 }
 
@@ -171,26 +175,26 @@ export function analysisScreen({
 }: AnalysisScreenInput): AnalysisScreen {
   const real = mode === TradeMode.Real;
   const header = TEXTS.analysisHeader({ subject: analysisSubject(pair, durationSec) });
-  if (response.outcome === SignalFeedOutcome.FetchFailed) {
-    const body =
-      response.code === BrokerRestErrorCode.RateLimited && response.retryAfterSec !== undefined
-        ? TEXTS.analysisRateLimited({ seconds: String(response.retryAfterSec) })
-        : TEXTS.analysisUnavailable;
-    return {
-      text: telegramHtml`${header}
-${body}`,
-      stake: null,
-      session: false,
-      photo: null,
-      wait: false,
-    };
-  }
-  const { decision, params } = response;
-  if (decision.kind === SignalKind.Signal) {
-    const { action, features } = decision;
-    const block = cardBlock(
-      cardRows(action, features, params, response.indicators ?? NO_INDICATORS, pair),
-    );
+  // the candle decision's features, on a signal and on a refusal by a rule: a refusal for want of
+  // data and a failed fetch have none to show
+  const decided = response.outcome === SignalFeedOutcome.Decided ? response : undefined;
+  const candle =
+    decided !== undefined && 'features' in decided.decision
+      ? {
+          features: decided.decision.features,
+          params: decided.params,
+          volatility:
+            VOLATILITY_WORDS[
+              decided.decision.kind === SignalKind.Signal
+                ? 'normal'
+                : (REFUSAL_VOLATILITY[decided.decision.reason] ?? 'normal')
+            ],
+        }
+      : undefined;
+  const { h1 } = response;
+  if (h1 !== null) {
+    const { action } = h1;
+    const block = cardBlock(cardRows(action, candle, decided?.indicators ?? NO_INDICATORS, pair));
     const choose = chooseAmount
       ? telegramHtml`
 
@@ -210,17 +214,15 @@ ${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}${choose}`,
       wait: false,
     };
   }
-  // the features only on a refusal by a rule: one for want of data has none to show
   const waiting = telegramHtml`${header}
 ${TEXTS.analysisWaiting}`;
-  if (!('features' in decision)) {
+  if (candle === undefined) {
     return { text: waiting, stake: null, session: false, photo: null, wait: true };
   }
-  const volatility = VOLATILITY_WORDS[REFUSAL_VOLATILITY[decision.reason] ?? 'normal'];
   return {
     text: telegramHtml`${waiting}
 
-${featureLines(decision.features, params, pair, volatility)}`,
+${featureLines(candle.features, candle.params, pair, candle.volatility)}`,
     stake: null,
     session: false,
     photo: null,
@@ -242,32 +244,42 @@ ${TEXTS.analysisUnavailable}`,
 });
 
 // The card's block (#482): eight rows, a label and a value, the RSI's word by the bounds of the
-// decision's own rsiExtremeBand (the refusals rsi_overbought / rsi_oversold use the same)
+// decision's own rsiExtremeBand (the refusals rsi_overbought / rsi_oversold use the same). The
+// direction is H1's; without the candle features (#828) RSI, the trend and the volatility say
+// «нет данных».
 function cardRows(
   action: TradeAction,
-  features: SignalFeatures,
-  params: SignalParams,
+  candle: { features: SignalFeatures; params: SignalParams; volatility: string } | undefined,
   indicators: SignalIndicators,
   pair: PairView,
 ): [string, string][] {
-  const rsiWord =
-    features.rsi >= 50 + params.rsiExtremeBand
-      ? RSI_WORDS.overbought
-      : features.rsi <= 50 - params.rsiExtremeBand
-        ? RSI_WORDS.oversold
-        : RSI_WORDS.neutral;
+  const noData = CARD_ROWS.noData;
+  const rsiValue = (features: SignalFeatures, params: SignalParams) => {
+    const word =
+      features.rsi >= 50 + params.rsiExtremeBand
+        ? RSI_WORDS.overbought
+        : features.rsi <= 50 - params.rsiExtremeBand
+          ? RSI_WORDS.oversold
+          : RSI_WORDS.neutral;
+    return `${word} ${formatRsi(features.rsi)}`;
+  };
   const { macd, ma50, ma200 } = indicators;
   const macdValue = macd.ok
     ? `${MACD_WORDS[MACD_CROSS_WORDS[macd.cross] ?? sideOf(macd.histogram, 0)]} ${formatPrice(macd.histogram, pair.digits + 1)}`
     : indicatorShortText(macd.closedCandles, macd.required);
   return [
     [CARD_ROWS.pair, pairLabel(pair)],
-    [CARD_ROWS.rsi, `${rsiWord} ${formatRsi(features.rsi)}`],
+    [CARD_ROWS.rsi, candle === undefined ? noData : rsiValue(candle.features, candle.params)],
     [CARD_ROWS.macd, macdValue],
     [CARD_ROWS.ma50, maValue(ma50, pair)],
     [CARD_ROWS.ma200, maValue(ma200, pair)],
-    [CARD_ROWS.trend, TREND_WORDS[features.trend]],
-    [CARD_ROWS.volatility, `${VOLATILITY_WORDS.normal} ${formatAtrPct(features.atrPct)}%`],
+    [CARD_ROWS.trend, candle === undefined ? noData : TREND_WORDS[candle.features.trend]],
+    [
+      CARD_ROWS.volatility,
+      candle === undefined
+        ? noData
+        : `${candle.volatility} ${formatAtrPct(candle.features.atrPct)}%`,
+    ],
     [CARD_ROWS.direction, CARD_DIRECTIONS[action]],
   ];
 }

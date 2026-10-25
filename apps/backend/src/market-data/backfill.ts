@@ -3,6 +3,8 @@ import {
   BrokerRestErrorCode,
   comparePairsByPayout,
   errorLogFields,
+  isPairOpen,
+  pairAcceptsDuration,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   type BinaryPair,
@@ -12,10 +14,18 @@ import {
 } from '@binarius/shared';
 import { BrokerRestError, type BrokerRestClient, type PairsCatalog } from '@binarius/broker-rest';
 import { assertDigits, chartWindow } from '@binarius/signal';
-import { eligiblePairs } from '../signal/scanner';
 import type { SpareTokenSource } from '../signal/pacer';
 import { floorTo, type CandleRing } from './ring';
 import type { PendingRequests } from './source';
+
+// a candle fits a trade of its own length (#313); the payout is no filter (#631). The candle
+// scanner's set (#343) until #828 removed it; the backfill fills the ring for the same pairs
+export const eligiblePairs = (
+  view: PairsCatalogView,
+  nowMs: number,
+  durationSec: number,
+): BinaryPair[] =>
+  view.pairs.filter((pair) => isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, durationSec));
 
 // The REST backfill of the ring (#590, docs/market-data.md -> Backfill). An element is a
 // (pair, interval). It is due once its hold-back is over and its window has a closed empty bucket
@@ -23,7 +33,7 @@ import type { PendingRequests } from './source';
 // rebuilt every scanMs: the requests in pending() order, then the elements never attempted by
 // the pair's payout, then the rest by the age of their last attempt; on an equal key the order of
 // SIGNAL_SCAN_INTERVALS (one interval since #685, `15s` before `5s` until then). The proactive
-// set is the scanner's eligible pairs of the last fresh catalog with valid digits, and only while
+// set is the eligible pairs (below) of the last fresh catalog with valid digits, and only while
 // the active socket is ready; a request is served for any such pair with valid digits, whatever
 // the socket. Every GET takes a spare token (the signal pacer's overflow, never a token of its
 // bucket, #405).

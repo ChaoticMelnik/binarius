@@ -72,7 +72,9 @@ import {
   SIGNAL_DECIDED,
   SIGNAL_DECISION,
   SIGNAL_FEATURES,
+  SIGNAL_CANDLE_ONLY,
   SIGNAL_FETCH_FAILED,
+  SIGNAL_H1_ONLY,
   SIGNAL_NO_SIGNAL,
   STAKE_FINGERPRINT,
   TEXT_CARD_MESSAGE_ID,
@@ -321,7 +323,7 @@ describe('the signals screen', () => {
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(TEXTS.demoSignalsHeader({ label: '⏱ 5 с' }).value);
     expect(plainTextOf(TEXTS.demoSignalsHeader({ label: '⏱ 5 с' }))).toBe(
-      '📡 Сигналы сейчас · ⏱ 5 с\nВыбери пару. Сигнал держится одну свечу (⏱ 5 с), поэтому перед сделкой бот проверяет его заново.',
+      '📡 Сигналы сейчас · ⏱ 5 с\nВыбери пару. Сигнал H1 живёт секунду, поэтому список меняется каждую секунду, а сделки идут по свежему сигналу.',
     );
     expect(rowsOf(edited)).toEqual(ROWS);
     expect(readSignals).toHaveBeenCalledTimes(1);
@@ -661,7 +663,7 @@ describe('the signals screen', () => {
       const edited = payloadOf(calls, 'editMessageText');
       expect(edited?.text).toBe(TEXTS.signalsWaiting({ label: '⏱ 5 с' }).value);
       expect(plainTextOf(TEXTS.signalsWaiting({ label: '⏱ 5 с' }))).toBe(
-        '🔎 Анализирую сигналы · ⏱ 5 с\nПроверяю пары на каждой свече. Как только появится сигнал, список откроется здесь.',
+        '🔎 Анализирую сигналы · ⏱ 5 с\nПроверяю пары каждую секунду. Как только появится сигнал, список откроется здесь.',
       );
       expect(rowsOf(edited)).toEqual([[MANUAL, MENU]]);
       expect(signalWaiter.waitList).toHaveBeenCalledTimes(1);
@@ -804,26 +806,28 @@ describe('the amount screen (#476)', () => {
     expect(labels).not.toContain(LABELS.launchCycleButton);
     expect(labels).not.toContain(LABELS.stakeChangeButton);
     expect(labels).not.toContain(LABELS.stakeResetButton);
-    // #664: the pair's signal is the scanner's fresh list, read at the press
-    expect(readSignals).toHaveBeenCalledTimes(1);
+    // #828: the list's door was drawn on a shown H1 signal: no list is read again
+    expect(readSignals).not.toHaveBeenCalled();
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
-  // #664: every cycle door reads the signals list at its press; a pair not in it waits for its
-  // signal, with the other pairs that have one now; none opens a session without one (#509)
-  describe("the pair's signal at the press (#509, #664)", () => {
+  // #664, #828: the door drawn without a signal (`n`) reads the H1 list at its press; a pair not in
+  // it waits for its signal, with the other pairs that have one now. The doors of the list and the
+  // analysis card read none
+  describe("the pair's signal at the press (#509, #664, #828)", () => {
+    const DOOR_N = demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n');
     const WAIT_TEXT = TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value;
     const ALTERNATIVES = signalsOf(
       [PAIR_SHORT.id, TradeAction.Down],
       [PAIR_OTHER_TYPE.id, TradeAction.Up],
     );
 
-    it('W-door1 a pair absent from the fresh list waits: the other pairs two a row, manual and menu; no evaluateSignal', async () => {
+    it('W-door1 the door n on a pair absent from the list waits: the other pairs two a row, manual and menu; no evaluateSignal', async () => {
       const { press, calls, evaluateSignal, signalWaiter } = setup({
         readSignals: () => Promise.resolve(ALTERNATIVES),
       });
-      await press(LAUNCH);
-      const edited = payloadOf(calls, 'editMessageText');
+      await press(DOOR_N);
+      const edited = payloadOf(calls, 'sendMessage');
       expect(edited?.text).toBe(`${WAIT_TEXT}\n\n${TEXTS.pairWaitingAlternatives.value}`);
       expect(rowsOf(edited)).toEqual([
         [
@@ -836,12 +840,12 @@ describe('the amount screen (#476)', () => {
       expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
         assetId: PAIR_EURUSD.id,
         origin: 'door',
-        back: 'l',
+        back: 'a',
         alternatives: 'shown',
       });
     });
 
-    it('W-door2 waits without alternatives when the signals are not read or the list is missing, one warn', async () => {
+    it('W-door2 the door n waits without alternatives when the signals are not read or the list is missing, one warn', async () => {
       for (const [readSignals, line] of [
         [
           () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
@@ -857,8 +861,8 @@ describe('the amount screen (#476)', () => {
         ],
       ] as const) {
         const { press, calls, logger, signalWaiter } = setup({ readSignals });
-        await press(LAUNCH);
-        const edited = payloadOf(calls, 'editMessageText');
+        await press(DOOR_N);
+        const edited = payloadOf(calls, 'sendMessage');
         expect(edited?.text).toBe(WAIT_TEXT);
         expect(rowsOf(edited)).toEqual([[MANUAL, MENU]]);
         expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([line]);
@@ -866,19 +870,46 @@ describe('the amount screen (#476)', () => {
       }
     });
 
-    it('W-door3 a pair in the list opens the amounts in demo and the launch in real', async () => {
+    it('W-door3 a pair in the list opens the amounts in demo and the launch in real by the door n', async () => {
       const demo = setup();
-      await demo.press(demoLaunchCallbackData(PAIR_EURUSD.id, 5));
-      expect(payloadOf(demo.calls, 'editMessageText')?.text).toContain('Выбери сумму сделки 👇');
+      await demo.press(DOOR_N);
+      expect(payloadOf(demo.calls, 'sendMessage')?.text).toContain('Выбери сумму сделки 👇');
       expect(demo.signalWaiter.waitPair).not.toHaveBeenCalled();
       const real = setup({
         readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
       });
-      await real.press(LAUNCH);
-      expect(rowsOf(payloadOf(real.calls, 'editMessageText'))[0]?.[0]?.callback_data).toBe(
+      await real.press(DOOR_N);
+      expect(rowsOf(payloadOf(real.calls, 'sendMessage'))[0]?.[0]?.callback_data).toBe(
         sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true),
       );
     });
+
+    // #828: a signal lives a second; the list's and the card's doors open the next step at once
+    it.each([
+      ['the list', LAUNCH, 'editMessageText'],
+      ['the analysis card', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'), 'editMessageText'],
+    ] as const)(
+      'W-door3′ the door of %s opens the next step with the pair out of the list, reading no list',
+      async (_door, data, method) => {
+        for (const mode of [TradeMode.Demo, TradeMode.Real]) {
+          const { press, calls, readSignals, signalWaiter } = setup({
+            readSignals: () => Promise.resolve(ALTERNATIVES),
+            readTradingAccess: () => Promise.resolve(accessView({ tradingMode: mode })),
+          });
+          await press(data);
+          expect(readSignals).not.toHaveBeenCalled();
+          expect(signalWaiter.waitPair).not.toHaveBeenCalled();
+          const shown = payloadOf(calls, method);
+          if (mode === TradeMode.Demo) {
+            expect(shown?.text).toContain('Выбери сумму сделки 👇');
+          } else {
+            expect(rowsOf(shown)[0]?.[0]?.callback_data).toBe(
+              sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true),
+            );
+          }
+        }
+      },
+    );
 
     it('W-door4 a door under a trade or a session answers the wait as a new message and registers it', async () => {
       const { press, calls, signalWaiter } = setup({
@@ -932,8 +963,8 @@ describe('the amount screen (#476)', () => {
           Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
         readSignals: () => Promise.resolve(signalsOf()),
       });
-      await press(LAUNCH);
-      expect(payloadOf(calls, 'editMessageText')?.text).toBe(WAIT_TEXT);
+      await press(DOOR_N);
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(WAIT_TEXT);
     });
   });
 
@@ -2007,24 +2038,13 @@ describe('the analysis', () => {
     });
   });
 
-  // #509: candles not read offer no session, nor «➕ Ещё»
-  it('shows the broker rate-limiting the candles with no «➕ Ещё», no session row and no warning', async () => {
-    const { press, calls, logger, signalWaiter } = setup({
-      evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-    });
-    await press(DATA);
-    const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(resultOf(SIGNAL_FETCH_FAILED));
-    expect(rowsOf(result)).toEqual([[REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS]]);
-    expect(logger.warn).not.toHaveBeenCalled();
-    // W-an3: an unavailable analysis is no wait
-    expect(signalWaiter.waitPair).not.toHaveBeenCalled();
-  });
-
-  // #664: no signal is the wait for one, in place of «⏳»; its card comes from signal-wait.ts
+  // #664, #828: no H1 signal is the wait for one, in place of «⏳», whatever the candles said; its
+  // card comes from signal-wait.ts. A rate-limited candle fetch is no warning
   it.each([
     ['a rule refusal', SIGNAL_NO_SIGNAL],
     ['a data refusal', SIGNAL_DATA_REFUSAL],
+    ['a candle signal without an H1 one', SIGNAL_CANDLE_ONLY],
+    ['a rate-limited candle fetch', SIGNAL_FETCH_FAILED],
   ])(
     'W-an1 on %s draws the wait in place of «⏳», manual and menu only, registered as the analysis',
     async (_case, response) => {
@@ -2049,22 +2069,39 @@ describe('the analysis', () => {
     },
   );
 
-  it('says the candles are unavailable and warns with the code on any other broker failure', async () => {
-    const { press, calls, logger } = setup({
-      evaluateSignal: () =>
-        Promise.resolve({
-          outcome: SignalFeedOutcome.FetchFailed,
-          code: BrokerRestErrorCode.Unavailable,
-        }),
+  it('waits on any other candle failure without an H1 signal and warns with the code', async () => {
+    const response = {
+      outcome: SignalFeedOutcome.FetchFailed,
+      code: BrokerRestErrorCode.Unavailable,
+      h1: null,
+    } as const;
+    const { press, calls, logger, signalWaiter } = setup({
+      evaluateSignal: () => Promise.resolve(response),
     });
     await press(DATA);
 
     const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 5).text.value);
-    expect(rowsOf(result)).toEqual([[REPEAT, BACK_EURUSD_PAIR, BACK_GROUPS]]);
+    expect(result?.text).toBe(resultOf(response));
+    expect(rowsOf(result)).toEqual(WAIT_ROWS);
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls).toEqual([
       [{ signalCode: BrokerRestErrorCode.Unavailable }, 'signal not evaluated'],
     ]);
+  });
+
+  // #828: the card is H1's: its title, picture and «➕ Ещё» direction, over a candle refusal
+  it('W-an2 draws the H1 card down over a candle no_signal, its stake button down', async () => {
+    const { press, calls, signalWaiter } = setup({
+      evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY),
+    });
+    await press(DATA);
+    const card = calls.filter((call) => call.method === 'sendPhoto').at(-1)?.payload;
+    expect(String(card?.caption)).toContain('Сильный сигнал на падение');
+    expect(signalWaiter.waitPair).not.toHaveBeenCalled();
+    const more = rowsOf(card)
+      .flat()
+      .find((key) => key.callback_data?.startsWith('demo:more:'));
+    expect(more?.callback_data).toContain(':down');
   });
 
   it.each([
@@ -2999,21 +3036,16 @@ describe('a press under the analysis card (a photo, #761)', () => {
     );
   });
 
-  it('P-door the session row with the pair out of the list sends the wait as a new message and registers it there', async () => {
-    const { pressOnPhoto, calls, signalWaiter, logger } = setup({
+  // #828: the card was drawn on an H1 signal; its session row reads no list
+  it('P-door the session row with the pair out of the list sends the amount screen all the same, no wait', async () => {
+    const { pressOnPhoto, calls, signalWaiter, readSignals, logger } = setup({
       readSignals: () => Promise.resolve(signalsOf()),
     });
     await pressOnPhoto(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a'));
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(
-      TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value,
-    );
-    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
-    expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
-      messageId: TEXT_CARD_MESSAGE_ID,
-      back: 'a',
-      origin: 'door',
-    });
+    expect(payloadOf(calls, 'sendMessage')?.text).toContain('Выбери сумму сделки 👇');
+    expect(readSignals).not.toHaveBeenCalled();
+    expect(signalWaiter.waitPair).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
   });
 

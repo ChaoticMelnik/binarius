@@ -78,7 +78,6 @@ export const BOT_TEXT_WIDTHS = {
   starAmount: String(INT4_MAX).length + Math.floor((String(INT4_MAX).length - 1) / 3),
   // /paysupport's list (#118)
   paysupportLines: STARS_PAYSUPPORT_LIST_LIMIT,
-  retryAfterSec: 5,
   assetId: 10,
   // formatPrice: |x| < 1e9 with up to 10 digits after the point, and a sign
   price: 21,
@@ -215,7 +214,6 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
     1 +
     indicator(w.price),
   price: () => w.price,
-  seconds: () => w.retryAfterSec,
   // a cycle's number in its session: under fixed every trade is a cycle, so up to sessionCount
   cycle: () => w.sessionCount,
   // «5 циклов»: settings.cycles, at most MAX_SESSION_CYCLES
@@ -406,9 +404,8 @@ const card = (title: BotHtmlKey, direction: BotPlainKey): BotTextSegment[] => [
   '\n',
   cardLabels,
   ' ',
-  anyOf('rsiOverbought', 'rsiOversold', 'rsiNeutral'),
-  ' ',
-  x(w.rsi),
+  // RSI, the trend and the volatility say «нет данных» without the candle features (#828)
+  oneOf([anyOf('rsiOverbought', 'rsiOversold', 'rsiNeutral'), ' ', x(w.rsi)], [k('cardNoData')]),
   '\n',
   ...indicatorRow('macdCrossUp', 'macdCrossDown', 'macdAbove', 'macdBelow', 'macdEqual'),
   '\n',
@@ -418,13 +415,19 @@ const card = (title: BotHtmlKey, direction: BotPlainKey): BotTextSegment[] => [
   '\n',
   cardLabels,
   ' ',
-  anyOf('trendUp', 'trendDown', 'trendFlat'),
+  anyOf('trendUp', 'trendDown', 'trendFlat', 'cardNoData'),
   '\n',
   cardLabels,
   ' ',
-  k('volatilityNormal'),
-  ' ',
-  x(w.atrPct + '%'.length),
+  // the candle decision's word: a refusal by volatility names it on an H1 card (#828)
+  oneOf(
+    [
+      anyOf('volatilityNormal', 'volatilityLow', 'volatilityHigh', 'volatilityTickFloor'),
+      ' ',
+      x(w.atrPct + '%'.length),
+    ],
+    [k('cardNoData')],
+  ),
   '\n',
   cardLabels,
   ' ',
@@ -599,7 +602,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'analysisFailed',
     title: 'Анализ: свечи не получены',
     limit: BOT_TEXT_LIMIT,
-    body: [k('analysisHeader'), '\n', anyOf('analysisRateLimited', 'analysisUnavailable')],
+    body: [k('analysisHeader'), '\n', k('analysisUnavailable')],
   },
   {
     id: 'analysisCard',

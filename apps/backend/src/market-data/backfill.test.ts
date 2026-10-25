@@ -14,7 +14,12 @@ import {
 import { BrokerRestError } from '@binarius/broker-rest';
 import { chartWindow } from '@binarius/signal';
 import { createScanPacer, type ScanPacer, type SpareTokenSource } from '../signal/pacer';
-import { createCandleBackfill, type CandleBackfill, type CandleBackfillConfig } from './backfill';
+import {
+  createCandleBackfill,
+  eligiblePairs,
+  type CandleBackfill,
+  type CandleBackfillConfig,
+} from './backfill';
 import { createCandleRing, type CandleRing } from './ring';
 import { createPendingRequests, type PendingRequests } from './source';
 
@@ -231,6 +236,21 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 const unavailable = () => Promise.reject(new BrokerRestError(BrokerRestErrorCode.Unavailable));
+
+// the pairs the backfill fills proactively: the candle scanner's set until #828 (S2 there)
+describe('eligiblePairs', () => {
+  it('keeps only open pairs that accept the trade duration, whatever their payout', () => {
+    const pairs = [
+      pair(1, { minTimeframe: 15 }),
+      pair(2, { scheduledUntil: START + 60_000 }),
+      pair(3, { maxTimeframe: 10 }),
+      pair(4, { scheduledUntil: START - 1 }),
+      pair(5, { payout: 79 }),
+    ];
+    expect(eligiblePairs(view(pairs), START, 5).map((p) => p.id)).toEqual([3, 4, 5]);
+    expect(eligiblePairs(view(pairs), START, 15).map((p) => p.id)).toEqual([1, 4, 5]);
+  });
+});
 
 describe('the candle backfill (#590)', () => {
   it('B1 warms a cold start pair by pair by payout, on the one scanned interval, with one GET a window', async () => {

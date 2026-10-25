@@ -71,6 +71,7 @@ import {
   H1_DRIVER_LOG_MS,
   H1_DRIVER_SCAN_MS,
   H1_START_SECOND_MAX_AGE_MS,
+  H1_SCANNER_LOG_MS,
   MAX_H1_SUBMIT_BUDGET_MS,
   MIN_H1_SUBMIT_BUDGET_MS,
   BALANCE_STALLED_RETRY_MS,
@@ -298,12 +299,14 @@ describe('broker balance timing', () => {
     expect(SIGNAL_CACHE_MAX_TTL_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['1m']);
   });
 
-  it.each(SIGNAL_SCAN_INTERVALS)('starts and ends a scan inside its %s candle', (interval) => {
-    expect(CANDLE_CLOSE_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS[interval]);
-    expect(SIGNAL_FETCH_BUDGET_MS + CANDLE_CLOSE_SLACK_MS).toBeLessThan(
-      SIGNAL_CHART_INTERVAL_MS[interval],
-    );
-  });
+  it.each(SIGNAL_SCAN_INTERVALS)(
+    "ends a v3 step's on-demand GET inside its %s candle",
+    (interval) => {
+      expect(SIGNAL_FETCH_BUDGET_MS + CANDLE_CLOSE_SLACK_MS).toBeLessThan(
+        SIGNAL_CHART_INTERVAL_MS[interval],
+      );
+    },
+  );
 
   it('keeps the scanner backoff bounds in order', () => {
     expect(SIGNAL_SCAN_BACKOFF_MIN_MS).toBeLessThanOrEqual(SIGNAL_SCAN_BACKOFF_MAX_MS);
@@ -494,6 +497,11 @@ describe('broker balance timing', () => {
       H1_START_SECOND_MAX_AGE_MS,
     );
     expect(H1_START_SECOND_MAX_AGE_MS).toBeLessThan(H1_ENTRY_WINDOW_SEC.to * 1_000);
+  });
+
+  it("spans the series' clock ticks with the H1 scanner's line (#828)", () => {
+    expect(H1_SCANNER_LOG_MS).toBe(60_000);
+    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SCANNER_LOG_MS);
   });
 
   it('keeps a window inside the tick buffer at its latest capture and the sweep outside the capture horizon (#668)', () => {

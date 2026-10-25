@@ -88,6 +88,7 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
   internalApiToken: PAIRS_TEST_TOKEN,
   lastAnalysis: recordingLastAnalysis().lastAnalysis,
   ticks: undefined,
+  h1: undefined,
 });
 
 // a port of the last analysis (#484) that answers `answer` and records every call
@@ -106,13 +107,11 @@ export function recordingLastAnalysis(
 
 // for suites that never call GET /trading/signals
 export const unusedSignalsDeps = (): SignalsRoutesDeps => ({
-  scanners: [
-    {
-      snapshot: () => {
-        throw new Error('the signal scanner is not wired in this test');
-      },
+  scanner: {
+    fresh: () => {
+      throw new Error('the H1 scanner is not wired in this test');
     },
-  ],
+  },
   internalApiToken: PAIRS_TEST_TOKEN,
 });
 
@@ -121,11 +120,6 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
   db: {} as TradingSessionRoutesDeps['db'],
   catalog: fakeCatalog(undefined),
   balance: unusedBalanceDeps(),
-  signals: {
-    evaluate: () => {
-      throw new Error('the session start signal is not wired in this test');
-    },
-  },
   internalApiToken: PAIRS_TEST_TOKEN,
   demoOnly: false,
   stakeStrategy: SessionStakeStrategy.Martingale,
@@ -134,7 +128,6 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
       throw new Error('the trade log is not wired in this test');
     },
   },
-  ticks: undefined,
   h1Driver: undefined,
 });
 

@@ -29,7 +29,6 @@ import {
   NotificationLevel,
   SignalFeedOutcome,
   SIGNAL_ALGORITHM_VERSION,
-  SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   SignalKind,
   TradeAction,
@@ -42,6 +41,7 @@ import {
   TrendDirection,
   UserStatus,
   type BrokerBalanceView,
+  type H1SignalWire,
   type ConfirmLoginResponse,
   type EmailSendCodeResponse,
   type LinkedAccountView,
@@ -286,8 +286,8 @@ export const PAIR_15S_ONLY: PairView = {
   scheduledUntil: 0,
 };
 
-// GET /trading/signals (#382): a list for every interval of SIGNAL_SCAN_INTERVALS, in the route's
-// order, with the given signals (none where an interval is not named); the times are the
+// GET /trading/signals (#382, #828): a list for every interval of SIGNAL_SCAN_INTERVALS, in the
+// route's order, with the given signals (none where an interval is not named); the times are the H1
 // scanner's, which the bot ignores
 export const signalsResponse = (
   nowMs: number,
@@ -300,9 +300,9 @@ export const signalsResponse = (
     signals: (signals[interval] ?? []).map(([assetId, action]) => ({
       assetId,
       action,
-      lastCandleTimestamp: nowMs - 500 - SIGNAL_CHART_INTERVAL_MS[interval],
+      second: nowMs - 900,
       decidedAt: nowMs - 500,
-      ageMs: 500,
+      ageMs: 900,
     })),
   })),
 });
@@ -349,11 +349,24 @@ export const SIGNAL_FEATURES: SignalFeatures = {
   momentum: MomentumDirection.Up,
   atrTicks: 44.7,
 };
-export const signalDecided = (decision: SignalDecision): TradingSignalResponse =>
+// the pair's H1 signal at the answer (#828): a second just closed
+export const h1Signal = (action: TradeAction): H1SignalWire => ({
+  action,
+  second: 1_790_000_044_000,
+  decidedAt: 1_790_000_044_320,
+  ageMs: 600,
+});
+// `h1` follows the candle decision unless given: a candle signal comes with an H1 one in its
+// direction, a refusal without, so a fixture keeps the meaning it had before #828
+export const signalDecided = (
+  decision: SignalDecision,
+  h1: H1SignalWire | null = decision.kind === SignalKind.Signal ? h1Signal(decision.action) : null,
+): TradingSignalResponse =>
   tradingSignalResponseSchema.parse({
     outcome: SignalFeedOutcome.Decided,
     params: SIGNAL_PARAMS,
     decision,
+    h1,
   });
 export const SIGNAL_DECISION: SignalDecision = {
   kind: SignalKind.Signal,
@@ -389,6 +402,21 @@ export const SIGNAL_FETCH_FAILED: TradingSignalResponse = tradingSignalResponseS
   outcome: SignalFeedOutcome.FetchFailed,
   code: BrokerRestErrorCode.RateLimited,
   retryAfterSec: 7,
+  h1: null,
+});
+// #828: the two sources disagree on purpose: the direction is H1's, the rows are the candles'
+// a candle refusal by a rule (its features print the rows) with an H1 signal down
+export const SIGNAL_H1_ONLY: TradingSignalResponse = tradingSignalResponseSchema.parse({
+  ...SIGNAL_NO_SIGNAL,
+  h1: h1Signal(TradeAction.Down),
+});
+// a candle signal up without an H1 signal
+export const SIGNAL_CANDLE_ONLY = signalDecided(SIGNAL_DECISION, null);
+// the candle fetch failed, H1 has a signal up
+export const SIGNAL_FETCH_FAILED_H1: TradingSignalResponse = tradingSignalResponseSchema.parse({
+  outcome: SignalFeedOutcome.FetchFailed,
+  code: BrokerRestErrorCode.Unavailable,
+  h1: h1Signal(TradeAction.Up),
 });
 
 // A demo intent as POST /trading/intents answers it right after creation (#127): queued, the

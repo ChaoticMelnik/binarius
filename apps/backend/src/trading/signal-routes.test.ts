@@ -100,6 +100,7 @@ function appWith(
   catalog: PairsCatalogView | null = catalogOf(),
   lastAnalysis: SignalRoutesDeps['lastAnalysis'] = recordingLastAnalysis().lastAnalysis,
   ticks: SignalRoutesDeps['ticks'] = undefined,
+  h1: SignalRoutesDeps['h1'] = undefined,
 ): FastifyInstance {
   lines = [];
   app = buildApp({
@@ -124,6 +125,8 @@ function appWith(
       internalApiToken: PAIRS_TEST_TOKEN,
       lastAnalysis,
       ticks,
+      h1,
+      now: () => T,
     },
     signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
@@ -195,6 +198,7 @@ describe('POST /trading/signal', () => {
       outcome: 'decided',
       params: DEFAULT_SIGNAL_PARAMS,
       decision: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry.decision,
+      h1: null,
     });
     expect(safeParseTradingSignalResponse(body).success).toBe(true);
     expect(calls).toStrictEqual([{ assetId: 101, interval: '1m', digits: 5 }]);
@@ -221,6 +225,7 @@ describe('POST /trading/signal', () => {
         entry: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry,
         lastTick: { price: 1.15, timestamp: T - 300, receivedAtMs: T - 280 },
       },
+      h1: null,
     });
     expect(safeParseTradingSignalResponse(body).success).toBe(true);
   });
@@ -247,7 +252,11 @@ describe('POST /trading/signal', () => {
     await app?.close();
     const failed = fakeSignalFeed({ outcome: 'fetch_failed', code: 'unavailable' } as SignalEvaluation);
     const response = await post(appWith(failed.feed), request);
-    expect(response.json()).toStrictEqual({ outcome: 'fetch_failed', code: 'unavailable' });
+    expect(response.json()).toStrictEqual({
+      outcome: 'fetch_failed',
+      code: 'unavailable',
+      h1: null,
+    });
   });
 
   // #482: the card's indicators ride next to the decision; a response without them stays valid
@@ -274,11 +283,11 @@ describe('POST /trading/signal', () => {
   it.each([
     {
       evaluation: { code: 'rate_limited', status: 429, retryAfterSec: 7 },
-      body: { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: 7 },
+      body: { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: 7, h1: null },
     },
     {
       evaluation: { code: 'unavailable', status: 503 },
-      body: { outcome: 'fetch_failed', code: 'unavailable' },
+      body: { outcome: 'fetch_failed', code: 'unavailable', h1: null },
     },
   ] as const)('R4 answers fetch_failed $evaluation.code with 200', async ({ evaluation, body }) => {
     const { feed } = fakeSignalFeed({ outcome: 'fetch_failed', request: facts, ...evaluation });
@@ -343,13 +352,14 @@ describe('POST /trading/signal', () => {
       outcome: 'fetch_failed',
       code: 'rate_limited',
       retryAfterSec: 7,
+      h1: null,
     });
     expect(parsedLines().filter((line) => line.msg === 'signal fetch failed')).toHaveLength(1);
     expect(broker.rest.journal.filter((entry) => entry.endpoint === 'chart')).toHaveLength(2);
   });
 
-  // #405: the scanner's decision from the source writes no line; the route's first answer of it does
-  it('R16 a scanned decision is journalled once, when POST /trading/signal answers it', async () => {
+  // #405: a decision from the source writes no line; the route's first answer of it does
+  it('R16 a decision from the source is journalled once, when POST /trading/signal answers it', async () => {
     const I15 = SIGNAL_CHART_INTERVAL_MS['15s'];
     const boundary = Math.floor(T / I15) * I15;
     const startTime = boundary - 299 * I15;
@@ -439,6 +449,7 @@ describe('POST /trading/signal', () => {
       outcome: 'fetch_failed',
       code: 'rate_limited',
       retryAfterSec: 1,
+      h1: null,
     });
     expect(broker.rest.journal.filter((entry) => entry.endpoint === 'chart')).toHaveLength(0);
     expect(
@@ -479,7 +490,8 @@ describe('POST /trading/signal', () => {
   });
 });
 
-// #484: the analysis card's request records the user's last analysis for the reminder
+// #484: the analysis card's request records the user's last analysis for the reminder; since
+// #828 by the pair's H1 signal, the direction the card shows
 describe('POST /trading/signal with analysis', () => {
   const signalEvaluation = {
     ...decidedEvaluation,
@@ -490,35 +502,57 @@ describe('POST /trading/signal with analysis', () => {
   } as unknown as SignalEvaluation;
   const analysis = { telegramUserId: '7001', durationSec: 15 };
   const body = { assetId: 101, interval: '15s', analysis };
+  const H1_SIGNAL = {
+    action: 'down',
+    second: T - 1_000,
+    decidedAt: T - 700,
+    ageMs: 1_000,
+  } as const;
+  // an H1 scanner port that answers `answer` for pair 101 only and records its reads
+  const h1Of = (answer: typeof H1_SIGNAL | null) => {
+    const reads: [number, number][] = [];
+    const h1: NonNullable<SignalRoutesDeps['h1']> = {
+      current: (assetId, nowMs) => {
+        reads.push([assetId, nowMs]);
+        return assetId === 101 ? answer : null;
+      },
+    };
+    return { h1, reads };
+  };
 
-  it('R10 a signal records the pair and duration once, after the feed, and answers as without', async () => {
+  it('R10 an H1 signal records the pair and duration once, after the feed, though the candles say no_signal', async () => {
     const order: string[] = [];
     const { feed } = fakeSignalFeed(() => {
       order.push('feed');
-      return Promise.resolve(signalEvaluation);
+      return Promise.resolve(decidedEvaluation);
     });
     const { lastAnalysis, calls } = recordingLastAnalysis(() => {
       order.push('set');
       return Promise.resolve(true);
     });
-    const target = appWith(feed, catalogOf(), lastAnalysis);
+    const target = appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(H1_SIGNAL).h1);
     const response = await post(target, body);
     expect(response.statusCode).toBe(200);
     expect(calls).toStrictEqual([[7001n, { assetId: 101, durationSec: 15 }]]);
     expect(order).toStrictEqual(['feed', 'set']);
+    expect(response.json()).toMatchObject({ outcome: 'decided', h1: H1_SIGNAL });
     const without = await post(target, { assetId: 101, interval: '15s' });
     expect(response.json()).toStrictEqual(without.json());
   });
 
-  it('R11 no signal records none', async () => {
-    const { feed } = fakeSignalFeed(decidedEvaluation);
+  it('R11 no H1 signal records none, though the candles signal', async () => {
+    const { feed } = fakeSignalFeed(signalEvaluation);
     const { lastAnalysis, calls } = recordingLastAnalysis();
-    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    const response = await post(
+      appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(null).h1),
+      body,
+    );
     expect(response.statusCode).toBe(200);
     expect(calls).toStrictEqual([[7001n, null]]);
+    expect(response.json()).toMatchObject({ outcome: 'decided', h1: null });
   });
 
-  it('R12 fetch_failed records nothing', async () => {
+  it('R12 fetch_failed with an H1 signal records it and answers h1', async () => {
     const { feed } = fakeSignalFeed({
       outcome: 'fetch_failed',
       request: facts,
@@ -526,20 +560,50 @@ describe('POST /trading/signal with analysis', () => {
       status: 503,
     });
     const { lastAnalysis, calls } = recordingLastAnalysis();
-    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    const response = await post(
+      appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(H1_SIGNAL).h1),
+      body,
+    );
     expect(response.statusCode).toBe(200);
-    expect(calls).toHaveLength(0);
+    expect(calls).toStrictEqual([[7001n, { assetId: 101, durationSec: 15 }]]);
+    expect(response.json()).toStrictEqual({
+      outcome: 'fetch_failed',
+      code: 'unavailable',
+      h1: H1_SIGNAL,
+    });
+    expect(safeParseTradingSignalResponse(response.json()).success).toBe(true);
   });
 
   it('R13 a request without analysis records nothing', async () => {
     const { feed } = fakeSignalFeed(signalEvaluation);
     const { lastAnalysis, calls } = recordingLastAnalysis();
-    const response = await post(appWith(feed, catalogOf(), lastAnalysis), {
-      assetId: 101,
-      interval: '15s',
-    });
+    const response = await post(
+      appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(H1_SIGNAL).h1),
+      { assetId: 101, interval: '15s' },
+    );
     expect(response.statusCode).toBe(200);
     expect(calls).toHaveLength(0);
+  });
+
+  it('R22 without the data socket (no scanner) h1 is null and the analysis records none', async () => {
+    const { feed } = fakeSignalFeed(signalEvaluation);
+    const { lastAnalysis, calls } = recordingLastAnalysis();
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis), body);
+    expect(response.json()).toMatchObject({ outcome: 'decided', h1: null });
+    expect(calls).toStrictEqual([[7001n, null]]);
+  });
+
+  it('R23 h1 is read after the feed answered, of the requested pair, at the clock of the answer', async () => {
+    const order: string[] = [];
+    const { h1, reads } = h1Of(H1_SIGNAL);
+    const { feed } = fakeSignalFeed(() => {
+      order.push(`feed after ${reads.length} reads`);
+      return Promise.resolve(decidedEvaluation);
+    });
+    const response = await post(appWith(feed, catalogOf(), undefined, undefined, h1), body);
+    expect(order).toStrictEqual(['feed after 0 reads']);
+    expect(reads).toStrictEqual([[101, T]]);
+    expect(response.json()).toMatchObject({ h1: H1_SIGNAL });
   });
 
   it('R14 an unknown user is a 200 with the decision and no error line', async () => {

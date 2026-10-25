@@ -422,8 +422,22 @@ export const tradingSignalRequestSchema = z.object({
 export type TradingSignalRequest = z.infer<typeof tradingSignalRequestSchema>;
 export type TradingSignalAnalysis = NonNullable<TradingSignalRequest['analysis']>;
 
+// An H1 signal of a pair as the backend's H1 scanner holds it (#828, docs/h1.md -> The scanner and
+// the signals list): the direction R1 decided on the closed second `second` (its end label f, unix
+// ms), when the scanner decided it, and its age at the answer (now - f). Served only while the
+// second is current (H1_START_SECOND_MAX_AGE_MS) and the decision is a signal.
+export const h1SignalWireSchema = z.strictObject({
+  action: tradeActionSchema,
+  second: z.int().nonnegative(),
+  decidedAt: z.int().nonnegative(),
+  ageMs: z.int().nonnegative(),
+});
+export type H1SignalWire = z.infer<typeof h1SignalWireSchema>;
+
 // A broker failure is an answer, not an HTTP error: the bot's client keeps only `error` from a
-// non-2xx body, and retryAfterSec has to reach the user.
+// non-2xx body, and retryAfterSec has to reach the user. `h1` is the pair's H1 signal at the answer
+// (#828), on both outcomes: the direction the bot shows and trades; the candle decision is the
+// card's information rows.
 export const tradingSignalResponseSchema = z.discriminatedUnion('outcome', [
   z.strictObject({
     outcome: z.literal(SignalFeedOutcome.Decided),
@@ -433,11 +447,13 @@ export const tradingSignalResponseSchema = z.discriminatedUnion('outcome', [
     indicators: signalIndicatorsSchema.optional(),
     // present only when the request asked for it (record: true)
     record: signalRecordSchema.optional(),
+    h1: h1SignalWireSchema.nullable(),
   }),
   z.strictObject({
     outcome: z.literal(SignalFeedOutcome.FetchFailed),
     code: z.enum(BrokerRestErrorCode),
     retryAfterSec: z.int().nonnegative().optional(),
+    h1: h1SignalWireSchema.nullable(),
   }),
 ]);
 export type TradingSignalResponse = z.infer<typeof tradingSignalResponseSchema>;
@@ -451,16 +467,18 @@ export const safeParseTradingSignalResponse = (input: unknown) =>
 
 export const TRADING_SIGNALS_PATH = '/trading/signals';
 
-// The intervals the backend's scanner decides, one scanner instance each, from the data socket's
-// candles, which the ring builds for these intervals only (docs/signal.md -> The scanner, #405).
-// `5s` only since #685, when the bot's demo kept the one duration; `15s` too from #382 to #685.
+// The candle intervals the backend's ring builds from the data socket (docs/market-data.md), for
+// the analysis's indicators and a v3 session's step, and the key of the signals list: the list of
+// GET /trading/signals is keyed intervalForDuration(H1_EXPIRY_SEC), `5s`. `5s` only since #685,
+// `15s` too from #382 to #685. The candle scanner that decided them was removed by #828.
 export const SIGNAL_SCAN_INTERVALS = ['5s'] as const satisfies readonly SignalInterval[];
 export type ScanInterval = (typeof SIGNAL_SCAN_INTERVALS)[number];
 
-// One list per scanned interval; each holds only the pairs with a signal on that interval's candle
-// that closed most recently. Times are unix ms. A list's interval is any SignalInterval, wider than
-// the scanner (#685): a backend and a bot of different versions parse each other's answer, and the
-// bot reads only the list of its own duration.
+// The H1 scanner's list (#828, docs/h1.md -> The scanner and the signals list): one list, keyed by
+// the interval of the H1 trade's duration; it holds only the pairs whose newest closed second is
+// current and decided an H1 signal. `scanned` counts the pairs with a current decision. Times are
+// unix ms. A list's interval is any SignalInterval (#685): a backend and a bot of different
+// versions parse each other's answer, and the bot reads only the list of its own duration.
 export const tradingSignalsResponseSchema = z.strictObject({
   asOf: z.int().nonnegative(),
   lists: z.array(
@@ -468,13 +486,7 @@ export const tradingSignalsResponseSchema = z.strictObject({
       interval: signalIntervalSchema,
       scanned: z.int().nonnegative(),
       signals: z.array(
-        z.strictObject({
-          assetId: createTradeIntentRequestSchema.shape.assetId,
-          action: tradeActionSchema,
-          lastCandleTimestamp: z.number(),
-          decidedAt: z.int().nonnegative(),
-          ageMs: z.int().nonnegative(),
-        }),
+        h1SignalWireSchema.extend({ assetId: createTradeIntentRequestSchema.shape.assetId }),
       ),
     }),
   ),

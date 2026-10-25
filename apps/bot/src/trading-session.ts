@@ -39,11 +39,6 @@ import {
 } from './backend-client';
 import {
   demoLaunchCallbackData,
-  pairWaitingScreen,
-  pairWaitingText,
-  placeOf,
-  pressedPlace,
-  pressedUnderPhoto,
   removeLegacyKeyboard,
   stripKeyboard,
   SESSION_START_PATTERN,
@@ -51,10 +46,7 @@ import {
   sessionFits,
   sessionStartDataOf,
   stakeMenuCallbackData,
-  type CycleBack,
-  type Place,
 } from './demo';
-import type { SignalWaiter } from './signal-wait';
 import { DEMO_DURATION_SEC } from './demo-catalog';
 import {
   appendEndOfPath,
@@ -178,8 +170,6 @@ export interface TradingSessionDeps {
   setupCardPhotos: SetupCardPhotos;
   // «📤 Поделиться» under the card (#538): only with the storage channel the promo card is posted to
   shareEnabled: boolean;
-  // the wait for a signal (#664): a start refused for want of one waits for it
-  signalWaiter: Pick<SignalWaiter, 'waitPair'>;
   // the wait before the summary's photo again after a 429 (#537); setTimeout's by default
   sleep?: (ms: number) => Promise<void>;
 }
@@ -195,8 +185,6 @@ interface Refusal {
   buy?: true;
   // «💵 Сумма» under the text: a refusal of the saved stake itself (#297)
   stakeMenu?: true;
-  // the pair has no signal now (#509): the wait for it (#664), whose text replaces this one
-  wait?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
 }
@@ -225,20 +213,14 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },
   [TradingSessionErrorCode.PairUnavailable]: { text: 'sessionPairUnavailable' },
   [TradingSessionErrorCode.CatalogUnavailable]: { text: 'demoCatalogUnavailable' },
-  // an old «🔁 Ещё сессия», the offer under a single trade or a real launch screen on a pair with
-  // no signal now (#509); both answered before any row is written. The bot waits for the signal
-  // (#664): `text` is never shown.
-  [TradingSessionErrorCode.NoSignal]: { text: 'unavailable', wait: true },
-  [TradingSessionErrorCode.SignalUnavailable]: { text: 'sessionSignalUnavailable' },
   // the client returns it as { active }, so it never arrives here
   [TradingSessionErrorCode.ActiveSessionExists]: { text: 'unavailable', log: true },
   // answers of the read and stop routes, not of the start
   [TradingSessionErrorCode.NotFound]: { text: 'unavailable', log: true },
   [TradingSessionErrorCode.SessionNotActive]: { text: 'unavailable', log: true },
-  // an H1-marked account's start (#745): a duration other than H1's, which this bot never sends
-  // (DEMO_DURATION_SEC); the mark removed during the start. No payout floor since #775
+  // every start is H1's (#745, #828): a duration other than H1's, which this bot never sends
+  // (DEMO_DURATION_SEC). No payout floor since #775
   [TradingSessionErrorCode.H1DurationUnsupported]: { text: 'sessionPairUnavailable', log: true },
-  [TradingSessionErrorCode.AccountNotH1]: { text: 'sessionAccountChanged' },
   // the saved stake against the account's snapshot (#297): the texts of the stake press, but the
   // session press reads no access, so the minimum is not named — the picker shows it
   [TradingSessionErrorCode.StakePrecision]: { text: 'stakePrecision', stakeMenu: true },
@@ -259,16 +241,12 @@ const isHttpError = (error: unknown, reason: string): boolean =>
   error.reason === reason;
 
 // A 5xx, no answer, or a body that is not the contract's: the session may have been committed and
-// the answer lost. Any 4xx, and the 503s catalog_unavailable and signal_unavailable (#509), are
-// refusals of the start route, which leave no session row.
+// the answer lost. Any 4xx, and the 503 catalog_unavailable, are refusals of the start route, which
+// leave no session row.
 export const sessionOutcomeUnknown = (error: unknown): boolean =>
   error instanceof BackendError &&
   (error.code !== BackendErrorCode.HttpStatus || (error.status ?? 0) >= 500) &&
-  !(
-    error.status === 503 &&
-    (error.reason === TradingSessionErrorCode.CatalogUnavailable ||
-      error.reason === TradingSessionErrorCode.SignalUnavailable)
-  );
+  !(error.status === 503 && error.reason === TradingSessionErrorCode.CatalogUnavailable);
 
 type StartOutcome =
   { ok: true; result: StartSessionResult } | { ok: false; unknown: boolean; error: unknown };
@@ -299,10 +277,7 @@ const symbolOf = (
 export type SessionStartData = Pick<
   NonNullable<ReturnType<typeof sessionStartDataOf>>,
   'mode' | 'assetId' | 'durationSec'
-> & {
-  // the amount screen's way back (#476), kept by the wait a 409 no_signal opens (#664)
-  back?: CycleBack;
-};
+>;
 // Tracks a session again on its recorded status message after a restart (#567,
 // session-resume.ts): the same entry a press makes, with no view read yet, the deadline from the
 // session's start, and the message already recorded. The label is the catalog's, or null.
@@ -323,7 +298,6 @@ export function createTradingSessionComposer<C extends Context>({
   cashierUrl,
   setupCardPhotos,
   shareEnabled,
-  signalWaiter,
   sleep = defaultSleep,
 }: TradingSessionDeps): {
   composer: Composer<C>;
@@ -367,7 +341,7 @@ export function createTradingSessionComposer<C extends Context>({
     let started = await start(request);
     if (retryUnknown && !started.ok && started.unknown) started = await start(request);
     if (!started.ok) {
-      await replyStartFailure(ctx, started, data, catalog, removeScreen);
+      await replyStartFailure(ctx, started, data);
       return;
     }
     const { result } = started;
@@ -610,8 +584,6 @@ export function createTradingSessionComposer<C extends Context>({
     ctx: Context,
     failure: Extract<StartOutcome, { ok: false }>,
     data: SessionStartData,
-    catalog: Settled<PairsCatalogResponse>,
-    removeScreen: boolean,
   ): Promise<void> {
     const { mode, assetId, durationSec } = data;
     const reason = failure.error instanceof BackendError ? failure.error.reason : undefined;
@@ -628,10 +600,6 @@ export function createTradingSessionComposer<C extends Context>({
         { ...errorLogFields(failure.error), ...backendErrorFields(failure.error) },
         'trading session not started',
       );
-    }
-    if (refusal.wait === true) {
-      await waitForSignal(ctx, data, catalog, removeScreen);
-      return;
     }
     const reply_markup =
       refusal.text === 'blocked'
@@ -652,60 +620,6 @@ export function createTradingSessionComposer<C extends Context>({
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
     await replyHtml(ctx, textOf(text), { reply_markup });
-  }
-
-  // A start refused for want of a signal (409 no_signal, #509) waits for one (#664): the wait in
-  // place of a launch or an amount screen, as a new message elsewhere; its alternatives come with
-  // the first poll. The session itself starts only on the next press, once the signal is there.
-  // Under the analysis card (a photo, #482) the wait goes as a new message at once, its entry on
-  // it, and then the card is deleted as a launch screen after a start (#418, #761): the wait
-  // never waits for the delete, and the entry stands whatever the delete's outcome.
-  async function waitForSignal(
-    ctx: Context,
-    { assetId, back }: SessionStartData,
-    catalog: Settled<PairsCatalogResponse>,
-    removeScreen: boolean,
-  ): Promise<void> {
-    const from = ctx.from;
-    if (from === undefined) return;
-    const pair = catalog.ok
-      ? catalog.value.pairs.find((listed) => listed.id === assetId)
-      : undefined;
-    const base = pairWaitingText(pair === undefined ? null : pairLabel(pair), assetId);
-    const screen = pairWaitingScreen(base, []);
-    const card = removeScreen && pressedUnderPhoto(ctx);
-    let place: Place | undefined;
-    if (removeScreen && !card) {
-      const drawn = await drawInPlace(ctx, screen.text, screen.keyboard);
-      if (drawn.in === 'refused') {
-        logger.warn(
-          {
-            ...errorLogFields(drawn.error),
-            ...telegramErrorFields(drawn.error, 'editMessageText'),
-          },
-          'the signal wait screen not drawn',
-        );
-        return;
-      }
-      place = drawn.in === 'new' ? placeOf(drawn.sent) : pressedPlace(ctx);
-    } else {
-      place = placeOf(await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard }));
-    }
-    if (place === undefined) return;
-    signalWaiter.waitPair({
-      api: ctx.api,
-      ...place,
-      telegramUserId: from.id,
-      language: currentLanguage(),
-      drawn: screen,
-      firstName: from.first_name,
-      assetId,
-      back: back ?? 'a',
-      origin: 'start',
-      base,
-      alternatives: 'pending',
-    });
-    if (card) await removeLaunchScreen(ctx, 'the analysis card');
   }
 
   // A missing or foreign id is told as such; anything else is logged. The stop is a write and is

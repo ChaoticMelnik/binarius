@@ -86,12 +86,9 @@ import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import type { TradingSessionRoutesDeps } from './session-routes';
-import { createTickStore } from '../market-data/ticks';
 import {
   PAIRS_TEST_TOKEN,
   fakeH1Driver,
-  fakeSignalFeed,
-  sessionSignalEvaluation,
   unusedAccessTokenDeps,
   unusedBalanceDeps,
   unusedPairsDeps,
@@ -99,12 +96,7 @@ import {
   unusedSignalsDeps,
 } from './testing';
 import { unusedDepositDeps } from '../deposit/testing';
-import {
-  createCachedSignalFeed,
-  createH1Detector,
-  createSignalFeed,
-  type SignalEvaluation,
-} from '@binarius/signal';
+import { createH1Detector } from '@binarius/signal';
 import pino from 'pino';
 import { createH1Driver, type H1Reading, type H1SecondFacts } from '../h1/driver';
 import { createSecondSeries } from '../market-data/seconds';
@@ -126,7 +118,7 @@ const pair: BinaryPair = {
   digits: 5,
   payout: 85,
   maxPayout: 90,
-  minTimeframe: 60,
+  minTimeframe: 5,
   maxTimeframe: 3600,
   scheduledUntil: 0,
 };
@@ -161,7 +153,6 @@ let app: FastifyInstance | undefined;
 let lines: string[] = [];
 let refreshCalls: { accountId: string; options: Parameters<Refresh>[1] }[] = [];
 let catalogReads = 0;
-let signalCalls: Parameters<TradingSessionRoutesDeps['signals']['evaluate']>[0][] = [];
 
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
@@ -172,7 +163,6 @@ afterEach(async () => {
   lines = [];
   refreshCalls = [];
   catalogReads = 0;
-  signalCalls = [];
 });
 afterAll(() => tmp.drop());
 
@@ -185,20 +175,13 @@ function appWith(
     demoOnly?: boolean;
     // SESSION_STAKE_STRATEGY of the process (#450); its default by default
     stakeStrategy?: StakeStrategy;
-    // the pair's signal at the start (#509); a signal by default
-    signal?: SignalEvaluation | (() => Promise<SignalEvaluation>);
-    // a feed in place of the fake one
-    signalFeed?: TradingSessionRoutesDeps['signals'];
     // the trade log's writer (#666); recordSignalDecision on the suite's database by default
     decisions?: TradingSessionRoutesDeps['decisions'];
-    ticks?: TradingSessionRoutesDeps['ticks'];
     // the H1 start's reading and hand-over (#796); none by default
     h1Driver?: TradingSessionRoutesDeps['h1Driver'];
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
-  const signals = fakeSignalFeed(options.signal ?? sessionSignalEvaluation('signal'));
-  signalCalls = signals.calls;
   const refresh: Refresh = (accountId, refreshOptions) => {
     refreshCalls.push({ accountId, options: refreshOptions });
     if (options.refresh === undefined) throw new Error('unexpected balance refresh');
@@ -229,14 +212,12 @@ function appWith(
         },
       },
       balance: { refresh },
-      signals: options.signalFeed ?? signals.feed,
       internalApiToken: PAIRS_TEST_TOKEN,
       demoOnly: options.demoOnly ?? false,
       stakeStrategy: options.stakeStrategy ?? SessionStakeStrategy.Martingale,
       decisions: options.decisions ?? {
         record: (input) => recordSignalDecision(tmp.db, input),
       },
-      ticks: options.ticks,
       h1Driver: options.h1Driver,
       now: () => NOW,
     },
@@ -291,7 +272,7 @@ const bodyFor = (seed: { telegramUserId: string }, patch: object = {}) => ({
   telegramUserId: seed.telegramUserId,
   mode: TradeMode.Demo,
   assetId: ASSET,
-  durationSec: 60,
+  durationSec: H1_EXPIRY_SEC,
   ...patch,
 });
 
@@ -316,6 +297,29 @@ async function expectRefusal(
   expect(await sessionCount()).toBe(rowsBefore);
 }
 
+// The start's reading (#796): f the second before NOW, the R1 detector on `closes`
+const F = NOW - 1_000;
+const factsOf = (closes: readonly number[]): H1SecondFacts => ({
+  assetId: ASSET,
+  f: F,
+  takenAtMs: NOW - 400,
+  decision: createH1Detector(H1_R1_PARAMS).decide({ closes: Float64Array.from(closes), at: 300 }),
+  digits: 5,
+  closedBy: 'tick',
+  closedAtMs: F + 300,
+  series: [...closes],
+  lastTick: { price: closes.at(-1)!, timestamp: F - 100, receivedAtMs: F - 60 },
+});
+const RAMP = [...Array<number>(300).fill(1.1), 1.1001];
+const FALL = [...Array<number>(300).fill(1.1), 1.0999];
+// a window with movement whose last close equals the one 3 s before: the current move 0
+const QUIET = Array.from(
+  { length: 301 },
+  (_, i) => 1.1 + (((i === 300 ? 297 : i) * 7) % 11) * 0.0001,
+);
+const signalReading: H1Reading = { kind: 'decision', facts: factsOf(RAMP) };
+const quietReading: H1Reading = { kind: 'decision', facts: factsOf(QUIET) };
+
 describe('POST /trading/sessions', () => {
   it('R1 creates a demo session with the stake from the snapshot', async () => {
     const seed = await seedReady();
@@ -327,11 +331,12 @@ describe('POST /trading/sessions', () => {
       status: TradingSessionStatus.Active,
       stopReason: null,
       endedAt: null,
-      // #450: the process's default strategy, martingale, with the limits of the base stake
+      // #450: the process's default strategy, martingale, with the limits of the base stake; every
+      // start is H1's since #828
       settings: {
-        version: 3,
+        version: 5,
         assetId: ASSET,
-        durationSec: 60,
+        durationSec: H1_EXPIRY_SEC,
         cycles: 5,
         stake: {
           strategy: 'martingale',
@@ -344,6 +349,7 @@ describe('POST /trading/sessions', () => {
             maxSessionDurationMs: 3_600_000,
           },
         },
+        signal: { kind: 'h1', params: H1_R1_PARAMS, entryDelaySec: 1, expirySec: H1_EXPIRY_SEC },
       },
       trades: { settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
       cycles: { planned: 5, closed: 0 },
@@ -457,7 +463,6 @@ describe('POST /trading/sessions', () => {
     await expectRefusal(response, status, error, before);
     expect(refreshCalls).toEqual([]);
     expect(catalogReads).toBe(0);
-    expect(signalCalls).toEqual([]);
   });
 
   it('R4 a second start is 409 active_session_exists with the first session', async () => {
@@ -470,17 +475,16 @@ describe('POST /trading/sessions', () => {
     expect(second.json()).toMatchObject({ session: { id: first.id, status: 'active' } });
   });
 
-  // #552: the worst case of the process's strategy: four trades a martingale cycle, one a fixed one
+  // #552: the worst case of the process's strategy: four trades a martingale cycle, one a fixed
+  // one; a duration that fits the hour is then H1's fence (#828)
   it.each([
-    [SessionStakeStrategy.Fixed, 201],
-    [SessionStakeStrategy.Martingale, 409],
-  ])('R5b five cycles of 300 s under %s answer %i', async (stakeStrategy, status) => {
+    [SessionStakeStrategy.Fixed, 'h1_duration_unsupported'],
+    [SessionStakeStrategy.Martingale, 'session_too_long'],
+  ])('R5b five cycles of 300 s under %s answer %s', async (stakeStrategy, error) => {
     const seed = await seedReady();
     const before = await sessionCount();
     const response = await start(appWith({ stakeStrategy }), bodyFor(seed, { durationSec: 300 }));
-    expect(response.statusCode).toBe(status);
-    if (status === 409) await expectRefusal(response, 409, 'session_too_long', before);
-    else expect(sessionOf(response).settings).toMatchObject({ version: 3, cycles: 5 });
+    await expectRefusal(response, 409, error, before);
   });
 
   it('R5 a session that cannot fit the deadline is refused before the catalog and the balance', async () => {
@@ -504,10 +508,14 @@ describe('POST /trading/sessions', () => {
   });
 
   it.each([
-    ['absent', freshCatalog([{ ...pair, id: ASSET + 1 }]), 60],
-    ['closed', freshCatalog([{ ...pair, scheduledUntil: NOW + 60_000 }]), 60],
-    ['below its range', freshCatalog([{ ...pair, minTimeframe: 120 }]), 60],
-    ['above its range', freshCatalog([{ ...pair, maxTimeframe: 30 }]), 60],
+    ['absent', freshCatalog([{ ...pair, id: ASSET + 1 }]), H1_EXPIRY_SEC],
+    ['closed', freshCatalog([{ ...pair, scheduledUntil: NOW + 60_000 }]), H1_EXPIRY_SEC],
+    ['below its range', freshCatalog([{ ...pair, minTimeframe: 15 }]), H1_EXPIRY_SEC],
+    [
+      'above its range',
+      freshCatalog([{ ...pair, minTimeframe: 1, maxTimeframe: 4 }]),
+      H1_EXPIRY_SEC,
+    ],
   ] as const)('R7 a pair %s is 409 pair_unavailable', async (_label, catalog, durationSec) => {
     const seed = await seedReady();
     const before = await sessionCount();
@@ -515,127 +523,11 @@ describe('POST /trading/sessions', () => {
     await expectRefusal(response, 409, 'pair_unavailable', before);
   });
 
-  // #631: MIN_CYCLE_PAYOUT_PCT orders the bot's signals list and refuses nothing (#379 refused)
-  it("R19' a pair paying 79 % starts like any other, its signal asked", async () => {
-    const seed = await seedReady();
-    const before = await sessionCount();
-    const response = await start(
-      appWith({ catalog: freshCatalog([{ ...pair, payout: 79 }]) }),
-      bodyFor(seed),
-    );
-    expect(response.statusCode).toBe(201);
-    expect(await sessionCount()).toBe(before + 1);
-    expect(signalCalls).toHaveLength(1);
-  });
-
-  // #509: no session on a pair without a signal now, whatever door the request came from
-  it('R28 a pair with no signal is 409 no_signal and writes no session', async () => {
-    const seed = await seedReady();
-    const before = await sessionCount();
-    const response = await start(
-      appWith({ signal: sessionSignalEvaluation('no_signal') }),
-      bodyFor(seed),
-    );
-    await expectRefusal(response, 409, 'no_signal', before);
-  });
-
-  it.each(['rate_limited', 'unavailable'] as const)(
-    'R29 a signal fetch_failed %s is 503 signal_unavailable and writes no session',
-    async (code) => {
-      const seed = await seedReady();
-      const before = await sessionCount();
-      const response = await start(
-        appWith({ signal: { outcome: 'fetch_failed', code } as unknown as SignalEvaluation }),
-        bodyFor(seed),
-      );
-      await expectRefusal(response, 503, 'signal_unavailable', before);
-    },
-  );
-
-  it('R29 a signal feed that throws is 503 signal_unavailable, not a 500', async () => {
-    const seed = await seedReady();
-    const before = await sessionCount();
-    const response = await start(
-      appWith({ signal: () => Promise.reject(new TypeError('boom')) }),
-      bodyFor(seed),
-    );
-    await expectRefusal(response, 503, 'signal_unavailable', before);
-  });
-
-  it("R30/R31 a signal starts; the feed is asked for the duration's candle and the pair's digits", async () => {
-    const seed = await seedReady();
-    // fixed: five martingale cycles of 300 s cannot fit the hour (#552)
-    const response = await start(
-      appWith({ stakeStrategy: SessionStakeStrategy.Fixed }),
-      bodyFor(seed, { durationSec: 300 }),
-    );
-    expect(response.statusCode).toBe(201);
-    expect(signalCalls).toEqual([{ assetId: ASSET, interval: '5m', digits: pair.digits }]);
-  });
-
-  // #405: the start's decision, read through the real cache, writes its own journal line
-  it('R30b the start writes one signal decision line for the decision it checked', async () => {
-    const seed = await seedReady();
-    const before = await sessionCount();
-    const now = () => NOW;
-    const feed = createCachedSignalFeed(
-      createSignalFeed({
-        rest: { getChart: () => Promise.resolve([]) },
-        logger: {
-          info: (fields: object, message: string) => app?.log.info(fields, message),
-          warn: (fields: object, message: string) => app?.log.warn(fields, message),
-        },
-        now,
-      }),
-      { fetchBudgetMs: 3_000, maxTtlMs: 30_000, now },
-    );
-    const response = await start(appWith({ signalFeed: feed }), bodyFor(seed));
-    await expectRefusal(response, 409, 'no_signal', before);
-    const decisions = lines
-      .map((line) => JSON.parse(line) as { msg?: string; signal?: { assetId: number } })
-      .filter((line) => line.msg === 'signal decision');
-    expect(decisions).toHaveLength(1);
-    expect(decisions[0]?.signal?.assetId).toBe(ASSET);
-  });
-
-  // #568: the checked signal's direction is the session's first picture in the bot
-  it.each([TradeAction.Down, TradeAction.Up])(
-    'R34 a start on a %s signal writes it to the row and answers it in the view',
-    async (action) => {
-      const seed = await seedReady();
-      const response = await start(
-        appWith({ signal: sessionSignalEvaluation('signal', action) }),
-        bodyFor(seed),
-      );
-      expect(response.statusCode).toBe(201);
-      const session = sessionOf(response);
-      expect(session.signalAction).toBe(action);
-      const [row] = await tmp.db
-        .select({ startSignalAction: tradingSessions.startSignalAction })
-        .from(tradingSessions)
-        .where(eq(tradingSessions.id, session.id));
-      expect(row!.startSignalAction).toBe(action);
-    },
-  );
-
-  it('R32 a signal without a balance snapshot is 409 balance_unavailable', async () => {
+  it('R32 no balance snapshot is 409 balance_unavailable', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const before = await sessionCount();
     const response = await start(appWith({ refresh: () => Promise.resolve() }), bodyFor(seed));
     await expectRefusal(response, 409, 'balance_unavailable', before);
-  });
-
-  it('R32b no signal and no balance snapshot answers no_signal first', async () => {
-    const seed = await seedUserWithAccount(tmp.db);
-    const before = await sessionCount();
-    const response = await start(
-      appWith({
-        refresh: () => Promise.resolve(),
-        signal: sessionSignalEvaluation('no_signal'),
-      }),
-      bodyFor(seed),
-    );
-    await expectRefusal(response, 409, 'no_signal', before);
   });
 
   it('R20 a pair paying exactly 80 % starts', async () => {
@@ -693,7 +585,7 @@ describe('POST /trading/sessions', () => {
     const response = await start(appWith(), {
       telegramUserId: seed.telegramUserId,
       assetId: ASSET,
-      durationSec: 60,
+      durationSec: H1_EXPIRY_SEC,
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: 'validation' });
@@ -910,7 +802,7 @@ describe('POST /trading/sessions', () => {
     expect(response.statusCode).toBe(201);
     const session = sessionOf(response);
     expect(session.settings).toMatchObject({
-      version: 3,
+      version: 5,
       cycles: 5,
       stake: {
         strategy: 'martingale',
@@ -931,7 +823,7 @@ describe('POST /trading/sessions', () => {
     expect(row?.settings).toEqual(session.settings);
   });
 
-  it('R41 writes v3 fixed under SESSION_STAKE_STRATEGY=fixed', async () => {
+  it('R41 writes v5 fixed under SESSION_STAKE_STRATEGY=fixed', async () => {
     const seed = await seedReady();
     const response = await start(
       appWith({ stakeStrategy: SessionStakeStrategy.Fixed }),
@@ -1029,139 +921,23 @@ async function seedSession(): Promise<SeededAccount & { sessionId: string }> {
   return { ...seed, sessionId: session.id };
 }
 
-// #666: the start's signal check in the trade log (docs/trade-log.md → The writers and their
-// outcomes, S0–S8): one row per answer given after a decision was read
+// #666, #796: the start's reading in the trade log (docs/trade-log.md → The writers and their
+// outcomes): one h1 row per answer given after a reading was taken; the v2 rows of the candle start
+// (S1–S7) have no writer since #828
 describe('POST /trading/sessions: the start decision row (#666)', () => {
   const startRows = (brokerAccountId: string) =>
     tmp.db
       .select()
       .from(signalDecisions)
       .where(eq(signalDecisions.brokerAccountId, brokerAccountId));
-
-  it('R36 a start records started, linked to the session and its account, with the entry and the tick', async () => {
-    const seed = await seedReady();
-    const ticks = createTickStore();
-    ticks.push(ASSET, { price: 1.2001, timestamp: NOW - 100 }, NOW - 80);
-    const evaluation = sessionSignalEvaluation('signal');
-    const response = await start(appWith({ signal: evaluation, ticks }), bodyFor(seed));
-    expect(response.statusCode).toBe(201);
-    const rows = await startRows(seed.brokerAccountId);
-    expect(rows).toHaveLength(1);
-    const entry = evaluation.outcome === 'decided' ? evaluation.entry : undefined;
-    expect(rows[0]).toMatchObject({
-      context: 'session_start',
-      tradingSessionId: sessionOf(response).id,
-      step: null,
-      outcome: 'started',
-      detail: null,
-      kind: 'signal',
-      action: 'up',
-      decidedAtMs: entry?.nowMs,
-      takenAtMs: NOW,
-      payout: pair.payout,
-      series: entry?.series,
-      lastTick: { price: 1.2001, timestamp: NOW - 100, receivedAtMs: NOW - 80 },
-    });
-  });
-
-  it('R37 no signal records no_signal without a session', async () => {
-    const seed = await seedReady();
-    const response = await start(
-      appWith({ signal: sessionSignalEvaluation('no_signal') }),
-      bodyFor(seed),
-    );
-    expect(response.statusCode).toBe(409);
-    expect(await startRows(seed.brokerAccountId)).toEqual([
-      expect.objectContaining({
-        context: 'session_start',
-        tradingSessionId: null,
-        outcome: 'no_signal',
-        kind: 'no_signal',
-        action: null,
-        detail: null,
-        lastTick: null,
-      }),
-    ]);
-  });
-
-  it.each<[string, () => Promise<SeededAccount>, string, { demoOnly?: boolean; mode?: TradeMode }]>(
-    [
-      ['no balance snapshot', () => seedUserWithAccount(tmp.db), 'balance_unavailable', {}],
-      [
-        'a zero minimum (no session stake)',
-        async () => {
-          const seed = await seedUserWithAccount(tmp.db);
-          await upsertBalanceSnapshot(tmp.db, {
-            brokerAccountId: seed.brokerAccountId,
-            user: { ...brokerUser, minTradeAmount: decimalStringSchema.parse('0.00000000') },
-            requested: false,
-          });
-          return seed;
-        },
-        'balance_unavailable',
-        {},
-      ],
-      [
-        'a saved stake below the minimum',
-        async () => {
-          const seed = await seedReady();
-          await setStake(
-            tmp.db,
-            BigInt(seed.telegramUserId),
-            TradeMode.Demo,
-            decimalStringSchema.parse('0.5'),
-          );
-          return seed;
-        },
-        'stake_below_minimum',
-        {},
-      ],
-      [
-        'a saved stake above the available balance',
-        async () => {
-          const seed = await seedReady();
-          await setStake(
-            tmp.db,
-            BigInt(seed.telegramUserId),
-            TradeMode.Demo,
-            decimalStringSchema.parse('10000.01'),
-          );
-          return seed;
-        },
-        'insufficient_balance',
-        {},
-      ],
-      [
-        'a real session under DEMO_ONLY (createTradingSession)',
-        async () => {
-          const seed = await seedReady();
-          await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
-          return seed;
-        },
-        'demo_only',
-        { demoOnly: true, mode: TradeMode.Real },
-      ],
-    ],
-  )('R38 %s records refused with the answered code', async (_label, seedFor, code, options) => {
-    const seed = await seedFor();
-    const response = await start(
-      appWith({
-        refresh: () => Promise.resolve(),
-        ...(options.demoOnly === undefined ? {} : { demoOnly: options.demoOnly }),
-      }),
-      bodyFor(seed, options.mode === undefined ? {} : { mode: options.mode }),
-    );
-    expect(response.json()).toMatchObject({ error: code });
-    expect(await startRows(seed.brokerAccountId)).toEqual([
-      expect.objectContaining({ outcome: 'refused', detail: code, tradingSessionId: null }),
-    ]);
-  });
+  const reading = () => fakeH1Driver(signalReading).h1Driver;
 
   it('R39 a failed record is a warn by name and code, and the start answers as without', async () => {
     const seed = await seedReady();
     const response = await start(
       appWith({
         decisions: { record: () => Promise.reject(new TypeError('boom')) },
+        h1Driver: reading(),
       }),
       bodyFor(seed),
     );
@@ -1180,15 +956,16 @@ describe('POST /trading/sessions: the start decision row (#666)', () => {
   });
 
   // the second writer of payoutInColumn: the catalog's payout is unbounded (#631)
-  it('R43 a catalog payout the column cannot hold still starts; the row records it as NULL', async () => {
+  it('R43 a catalog payout the column cannot hold still starts; the h1 row records it as NULL', async () => {
     const seed = await seedReady();
     const response = await start(
-      appWith({ catalog: freshCatalog([{ ...pair, payout: -1 }]) }),
+      appWith({ catalog: freshCatalog([{ ...pair, payout: -1 }]), h1Driver: reading() }),
       bodyFor(seed),
     );
     expect(response.statusCode).toBe(201);
     expect(await startRows(seed.brokerAccountId)).toEqual([
       expect.objectContaining({
+        version: 'h1',
         outcome: 'started',
         tradingSessionId: sessionOf(response).id,
         payout: null,
@@ -1204,17 +981,17 @@ describe('POST /trading/sessions: the start decision row (#666)', () => {
     ['session_too_long', {}, { durationSec: 900 }],
     ['pair_unavailable', { catalog: freshCatalog([{ ...pair, id: ASSET + 1 }]) }, {}],
     ['catalog_unavailable', { catalog: undefined }, {}],
-    [
-      'signal_unavailable (fetch failed)',
-      { signal: { outcome: 'fetch_failed', code: 'unavailable' } as unknown as SignalEvaluation },
-      {},
-    ],
-    ['signal_unavailable (a throw)', { signal: () => Promise.reject(new TypeError('boom')) }, {}],
-  ])('R42 %s records nothing: no decision was read', async (_label, options, patch) => {
+    ['h1_duration_unsupported', {}, { durationSec: 15 }],
+  ])('R42 %s records nothing: no reading was taken', async (_label, options, patch) => {
     const seed = await seedReady();
-    const response = await start(appWith(options), bodyFor(seed, patch));
+    const driver = fakeH1Driver(signalReading);
+    const response = await start(
+      appWith({ h1Driver: driver.h1Driver, ...options }),
+      bodyFor(seed, patch),
+    );
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
     expect(await startRows(seed.brokerAccountId)).toEqual([]);
+    expect(driver.currentCalls).toEqual([]);
   });
 });
 describe('GET /trading/sessions/:id', () => {
@@ -1252,7 +1029,7 @@ describe('GET /trading/sessions/:id', () => {
 
   it("R35 the session's trade in the other direction moves the view's signalAction (#568)", async () => {
     const seed = await seedReady();
-    const target = appWith({ signal: sessionSignalEvaluation('signal', TradeAction.Up) });
+    const target = appWith({ h1Driver: fakeH1Driver(signalReading).h1Driver });
     const { id } = sessionOf(await start(target, bodyFor(seed)));
     expect(sessionOf(await read(target, id, seed.telegramUserId)).signalAction).toBe('up');
     await sessionIntent(seed, id, 1, TradeMode.Demo, TradeAction.Down);
@@ -2288,34 +2065,12 @@ describe('the recovery routes (#567)', () => {
   });
 });
 
-// #745, #775: an H1-marked account's start from the bot writes settings v5 (docs/h1.md -> From the
-// bot): a regular session with the H1 signal
-describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
+// #745, #775, #828: every start from the bot writes settings v5 (docs/h1.md -> From the bot), on
+// any account, marked or not: a regular session with the H1 signal
+describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
   // a pair H1 trades: it accepts the 5 s expiry
-  const h1Pair: BinaryPair = { ...pair, minTimeframe: 5, payout: 95 };
-  // the start's reading (#796): f the second before NOW, the R1 detector on `closes`
-  const F = NOW - 1_000;
-  const factsOf = (closes: readonly number[]): H1SecondFacts => ({
-    assetId: ASSET,
-    f: F,
-    takenAtMs: NOW - 400,
-    decision: createH1Detector(H1_R1_PARAMS).decide({ closes: Float64Array.from(closes), at: 300 }),
-    digits: 5,
-    closedBy: 'tick',
-    closedAtMs: F + 300,
-    series: [...closes],
-    lastTick: { price: closes.at(-1)!, timestamp: F - 100, receivedAtMs: F - 60 },
-  });
-  const RAMP = [...Array<number>(300).fill(1.1), 1.1001];
-  // a window with movement whose last close equals the one 3 s before: the current move 0
-  const QUIET = Array.from(
-    { length: 301 },
-    (_, i) => 1.1 + (((i === 300 ? 297 : i) * 7) % 11) * 0.0001,
-  );
-  const signalReading: H1Reading = { kind: 'decision', facts: factsOf(RAMP) };
-  const quietReading: H1Reading = { kind: 'decision', facts: factsOf(QUIET) };
+  const h1Pair: BinaryPair = { ...pair, payout: 95 };
   let driverCalls: ReturnType<typeof fakeH1Driver> = fakeH1Driver(signalReading);
-  // the v2 feed answers a signal, which an H1 start never asks (signalCalls stays empty)
   const h1App = (
     options: Parameters<typeof appWith>[0] = {},
     pairs: BinaryPair[] = [h1Pair],
@@ -2326,11 +2081,6 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   };
   const mark = (accountId: string, h1: boolean) =>
     tmp.db.transaction((tx) => setH1Mark(tx, { accountId, h1 }));
-  const markedReady = async () => {
-    const seed = await seedReady();
-    expect(await mark(seed.brokerAccountId, true)).toBe('marked');
-    return seed;
-  };
   const h1Body = (seed: { telegramUserId: string }, patch: object = {}) =>
     bodyFor(seed, { durationSec: H1_EXPIRY_SEC, ...patch });
   const startRows = (brokerAccountId: string) =>
@@ -2340,7 +2090,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
       .where(eq(signalDecisions.brokerAccountId, brokerAccountId));
 
   it("H1-R1′ writes v5: the request's cycles, the process's strategy, the saved stake, the R1 signal", async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     await setStake(
       tmp.db,
       BigInt(seed.telegramUserId),
@@ -2378,23 +2128,57 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
       outcome: 'started',
       tradingSessionId: session.id,
     });
-    expect(signalCalls).toEqual([]);
   });
 
-  it('H1-R2 the same request on an unmarked account writes v3, as before', async () => {
-    const seed = await seedReady();
-    const response = await start(h1App(), h1Body(seed));
-    expect(response.statusCode).toBe(201);
-    expect(sessionOf(response).settings).toMatchObject({
-      version: 3,
+  it('H1-R14 the same request on a marked and an unmarked account writes v5 alike (#828)', async () => {
+    const unmarked = await seedReady();
+    const marked = await seedReady();
+    expect(await mark(marked.brokerAccountId, true)).toBe('marked');
+    const target = h1App();
+    const settings = await Promise.all(
+      [unmarked, marked].map(async (seed) => sessionOf(await start(target, h1Body(seed))).settings),
+    );
+    expect(settings[0]).toMatchObject({
+      version: 5,
       durationSec: H1_EXPIRY_SEC,
-      cycles: 5,
-      stake: { strategy: 'martingale' },
+      signal: { kind: 'h1', params: H1_R1_PARAMS },
     });
+    expect(settings[1]).toEqual(settings[0]);
   });
+
+  it('H1-R15 a 15 s request on an unmarked account is 409 h1_duration_unsupported (#828)', async () => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const response = await start(h1App(), h1Body(seed, { durationSec: 15 }));
+    await expectRefusal(response, 409, 'h1_duration_unsupported', before);
+    expect(driverCalls.currentCalls).toEqual([]);
+  });
+
+  // #568: the reading's direction is the session's first picture in the bot
+  it.each([
+    [TradeAction.Up, RAMP],
+    [TradeAction.Down, FALL],
+  ])(
+    'R34′ a start on a %s H1 signal writes it to the row and answers it in the view',
+    async (action, closes) => {
+      const seed = await seedReady();
+      const response = await start(
+        h1App({}, [h1Pair], { kind: 'decision', facts: factsOf(closes) }),
+        h1Body(seed),
+      );
+      expect(response.statusCode).toBe(201);
+      const session = sessionOf(response);
+      expect(session.signalAction).toBe(action);
+      const [row] = await tmp.db
+        .select({ startSignalAction: tradingSessions.startSignalAction })
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, session.id));
+      expect(row!.startSignalAction).toBe(action);
+    },
+  );
 
   it('H1-R3′ no payout floor: a pair paying under 94 % starts (#775, В2)', async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     const response = await start(
       h1App({}, [{ ...h1Pair, payout: H1_MIN_PAYOUT_PCT - 4 }]),
       h1Body(seed),
@@ -2404,29 +2188,32 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   });
 
   it("H1-R4 a duration other than H1's is 409 h1_duration_unsupported before the signal", async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     const before = await sessionCount();
     // the file's pair accepts 60 s, so step 4 passes; it pays 95
-    const response = await start(h1App({}, [{ ...pair, payout: 95 }]), bodyFor(seed));
+    const response = await start(
+      h1App({}, [{ ...pair, payout: 95 }]),
+      bodyFor(seed, { durationSec: 60 }),
+    );
     await expectRefusal(response, 409, 'h1_duration_unsupported', before);
-    expect(signalCalls).toEqual([]);
     expect(driverCalls.currentCalls).toEqual([]);
     expect(await startRows(seed.brokerAccountId)).toEqual([]);
   });
 
   it('H1-R5′ the order: the pair, then the duration; no signal starts waiting (#796)', async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     const before = await sessionCount();
+    const from60: BinaryPair = { ...pair, minTimeframe: 60, payout: 93 };
     // the pair refuses the 5 s expiry: pair_unavailable
     await expectRefusal(
-      await start(h1App({}, [{ ...pair, payout: 93 }], quietReading), h1Body(seed)),
+      await start(h1App({}, [from60], quietReading), h1Body(seed)),
       409,
       'pair_unavailable',
       before,
     );
     // the pair takes 60 s, the request asks 60 s: the duration answers before the reading
     await expectRefusal(
-      await start(h1App({}, [{ ...pair, payout: 93 }], quietReading), bodyFor(seed)),
+      await start(h1App({}, [from60], quietReading), bodyFor(seed, { durationSec: 60 })),
       409,
       'h1_duration_unsupported',
       before,
@@ -2441,33 +2228,34 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
     expect(sessionOf(response).signalAction).toBeNull();
   });
 
-  // the mark removed between the start's check and the insert: the balance refresh the start
-  // awaits (no snapshot yet) removes it, then writes the snapshot
-  const unmarkedDuringStart = async (reading: H1Reading) => {
+  // the trading switch closed between the start's check and the insert: the balance refresh the
+  // start awaits (no snapshot yet) closes it, then writes the snapshot
+  const closedDuringStart = async (reading: H1Reading) => {
     const seed = await seedUserWithAccount(tmp.db);
-    expect(await mark(seed.brokerAccountId, true)).toBe('marked');
     const before = await sessionCount();
-    const unmarkFirst = async () => {
-      expect(await mark(seed.brokerAccountId, false)).toBe('unmarked');
+    const closeFirst = async () => {
+      await stopTrading(tmp.db, { source: 'operator', reason: 'test' });
       await snapshotFor(seed.brokerAccountId);
     };
-    const response = await start(h1App({ refresh: unmarkFirst }, [h1Pair], reading), h1Body(seed));
-    await expectRefusal(response, 409, 'account_not_h1', before);
+    try {
+      const response = await start(h1App({ refresh: closeFirst }, [h1Pair], reading), h1Body(seed));
+      await expectRefusal(response, 409, 'trading_paused', before);
+    } finally {
+      await openTrading(tmp.db);
+    }
     return { seed, rows: await startRows(seed.brokerAccountId) };
   };
 
-  it('H1-R6 the mark removed during the start is 409 account_not_h1, recorded refused', async () => {
-    const { seed, rows } = await unmarkedDuringStart(signalReading);
+  it('H1-R6′ a refusal at the insert after a signal reading is recorded refused with its code', async () => {
+    const { rows } = await closedDuringStart(signalReading);
     expect(rows.map((row) => [row.version, row.outcome, row.detail])).toEqual([
-      ['h1', 'refused', 'account_not_h1'],
+      ['h1', 'refused', 'trading_paused'],
     ]);
-    // the next press starts an ordinary session
-    const next = await start(h1App(), h1Body(seed));
-    expect(sessionOf(next).settings?.version).toBe(3);
+    expect(driverCalls.adoptCalls).toEqual([]);
   });
 
   it("H1-R7′ the request's cycles apply; too many for the hour is session_too_long", async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     const response = await start(
       h1App({ stakeStrategy: SessionStakeStrategy.Fixed }),
       h1Body(seed, { cycles: 20 }),
@@ -2478,7 +2266,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
       cycles: 20,
       stake: { strategy: 'fixed' },
     });
-    const other = await markedReady();
+    const other = await seedReady();
     const before = await sessionCount();
     await expectRefusal(
       await start(h1App(), h1Body(other, { cycles: 8 })),
@@ -2489,7 +2277,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   });
 
   it('H1-R8 DEMO_ONLY: a real H1 start is 409 demo_only, past the fence', async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
     const before = await sessionCount();
     const response = await start(h1App({ demoOnly: true }), h1Body(seed, { mode: TradeMode.Real }));
@@ -2497,12 +2285,11 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   });
 
   it('H1-R9 an H1 signal at the start: 201 with its direction, the h1 row, the session handed to the driver (#796)', async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     const response = await start(h1App(), h1Body(seed));
     expect(response.statusCode).toBe(201);
     const session = sessionOf(response);
     expect(session.signalAction).toBe('up');
-    expect(signalCalls).toEqual([]);
     const [row] = await tmp.db
       .select()
       .from(tradingSessions)
@@ -2547,7 +2334,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   });
 
   it('H1-R9b no H1 signal at the start: 201 waiting, start_signal_action NULL, a no_signal row with the session (#796)', async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     expect(quietReading.kind === 'decision' && quietReading.facts.decision).toMatchObject({
       kind: 'no_signal',
       reason: 'below_threshold',
@@ -2570,7 +2357,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   });
 
   it("H1-R10 the real driver trades the start's signal at once: Шаг 1 on the start's reading (#796)", async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     const BUDGET_MS = 5_000;
     const T = F - 300_000;
     const series = createSecondSeries({ capacitySec: 320, closeMarginMs: 500 });
@@ -2645,7 +2432,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   ] as const)(
     'H1-R11 %s: 201 waiting, no row, no hand-over of a reading, one info line (#796)',
     async (_name, reason, logged) => {
-      const seed = await markedReady();
+      const seed = await seedReady();
       const app =
         reason === undefined
           ? appWith({ catalog: freshCatalog([h1Pair]) })
@@ -2654,7 +2441,6 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
       expect(response.statusCode).toBe(201);
       const session = sessionOf(response);
       expect(session.signalAction).toBeNull();
-      expect(signalCalls).toEqual([]);
       expect(await startRows(seed.brokerAccountId)).toEqual([]);
       if (reason !== undefined) {
         expect(driverCalls.adoptCalls).toHaveLength(1);
@@ -2674,7 +2460,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   );
 
   it('H1-R12 a refusal at the insert after a no-signal reading: no_signal without a session, no hand-over (#796)', async () => {
-    const { rows } = await unmarkedDuringStart(quietReading);
+    const { rows } = await closedDuringStart(quietReading);
     expect(rows.map((row) => [row.version, row.outcome, row.detail, row.tradingSessionId])).toEqual(
       [['h1', 'no_signal', null, null]],
     );
@@ -2682,7 +2468,7 @@ describe('POST /trading/sessions on an H1-marked account (#745, #775)', () => {
   });
 
   it('H1-R13 a stake refusal of an H1 start writes no row and reads no H1 signal (#796)', async () => {
-    const seed = await markedReady();
+    const seed = await seedReady();
     await setStake(
       tmp.db,
       BigInt(seed.telegramUserId),

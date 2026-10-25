@@ -15,6 +15,7 @@ import { OutboxTopic, readTokenBalance } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { MockTradeOutcome, type MockBroker } from '@binarius/mock-broker';
 import {
+  H1_R1_PARAMS,
   pairLabel,
   SessionStakeStrategy,
   TokenLedgerKind,
@@ -189,8 +190,10 @@ it('runs /start → the email login → a demo session → its result', async ()
   await bot.press(LABELS.demoAnalysisButton);
   const analysis = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
   if (analysis === undefined || analysis === card) throw new Error('no analysis card');
-  // the signal: the card offers the broker's minimum as the amount in effect
+  // the H1 signal (#828: the card exists because the scanner holds one on the pumped series): the
+  // card offers the broker's minimum as the amount in effect; the chart GET still draws its rows
   expect(labelsOf(analysis.payload)).toContain(cycleStakeLabel(MIN_STAKE, true));
+  expect(String(analysis.payload.caption)).toContain('Сильный сигнал на рост');
   expect(lastOf(botCalls, 'deleteMessage')?.message_id).toBe(bot.telegram.messageIdOf(screen));
   expect(
     broker.rest.journal.filter((record) => record.endpoint === 'chart').map((r) => r.query),
@@ -200,7 +203,12 @@ it('runs /start → the email login → a demo session → its result', async ()
     lastAnalysisDurationSec: 5,
   });
 
-  // S5 the amount starts the session
+  // S5 the amount starts the session. The analysis's access read put the account in work: the
+  // worker's socket is up before the press, as a user's pause gives it in production, so the H1
+  // driver's first trade at the start (#796, #828) goes over the socket, not REST
+  await until("the worker's socket of the account", () =>
+    broker.socket.sockets().some((socket) => socket.userId === E2E_BROKER_USER_ID),
+  );
   await bot.press(cycleStakeLabel(MIN_STAKE, true));
   const status = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
   if (status === undefined || status === analysis) throw new Error('no status message');
@@ -212,8 +220,9 @@ it('runs /start → the email login → a demo session → its result', async ()
     status: TradingSessionStatus.Active,
     mode: TradeMode.Demo,
     startSignalAction: 'up',
+    // every start is H1's (#828): settings v5, the R1 signal
     settings: {
-      version: 3,
+      version: 5,
       assetId: E2E_PAIR.id,
       durationSec: 5,
       cycles: 5,
@@ -223,6 +232,7 @@ it('runs /start → the email login → a demo session → its result', async ()
         stakeScale: 2,
         limits: { maxSteps: 4, maxStake: '12', maxSessionLoss: '20' },
       },
+      signal: { kind: 'h1', params: H1_R1_PARAMS, entryDelaySec: 1, expirySec: 5 },
     },
   });
   expect(Number((await reads.userRow(telegramUserId))?.demoStake)).toBe(1);
@@ -231,11 +241,13 @@ it('runs /start → the email login → a demo session → its result', async ()
     async () =>
       (await reads.sessionOf(account.id))?.statusMessageId === bot.telegram.messageIdOf(status),
   );
-  // no waiting message to wait for: the mock gives a signal on every candle, and the waiting
+  // no waiting message to wait for: the pump gives an H1 signal on every second, and the waiting
   // message goes only after a no_signal decision (#722)
 
   // S6 the cycles: one loss, then wins; each trade is settled once the worker holds it - the
   // first two once the backend showed their open block (#700): step 1 a new message, step 2 its edit.
+  // The H1 driver makes them (#828): step 1 on the start's reading, step 2 the repeat at the loss's
+  // notice, then one a signal at most every 7 s (f + entry + expiry + 1 s).
   // The sender ticks every 3 s as in production: the open blocks and step 2's result come within
   // a second only because the accept and the settle wake it (#723)
   const resultShown = (call: ApiCall) =>
@@ -293,6 +305,12 @@ it('runs /start → the email login → a demo session → its result', async ()
     endedAt: expect.any(Date),
   });
   const intents = await reads.intentsOf(started.id);
+  // the H1 cadence (#828): from trade 4 on each is a fresh signal at least 7 s of seconds after the
+  // one before (f + entry + expiry + 1 s), less the jitter of when each second was decided
+  const gaps = intents
+    .slice(3)
+    .map((intent, index) => intent.createdAt.getTime() - intents[index + 2]!.createdAt.getTime());
+  for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(6_000);
   expect(
     intents.map((intent) => [intent.clientRequestId, intent.status, intent.transport]),
   ).toEqual(

@@ -965,11 +965,6 @@ describe('createTradingSession: the H1 mark under the account lock (#707, review
   };
   const mark = (accountId: string, h1: boolean) =>
     tmp.db.transaction((tx) => setH1Mark(tx, { accountId, h1 }));
-  const sessionsOfAccount = (brokerAccountId: string) =>
-    tmp.db
-      .select({ id: tradingSessions.id })
-      .from(tradingSessions)
-      .where(eq(tradingSessions.brokerAccountId, brokerAccountId));
   const input = (seed: { telegramUserId: string; brokerAccountId: string }, h1: boolean) => ({
     telegramUserId: seed.telegramUserId,
     brokerAccountId: seed.brokerAccountId,
@@ -977,36 +972,15 @@ describe('createTradingSession: the H1 mark under the account lock (#707, review
     settings: h1 ? h1Settings() : sessionSettings(),
   });
 
-  it('H1-H4 an H1 session needs the mark; another session does not', async () => {
+  it("H1-H4′ an H1 session needs no mark since #828; the account's mark is not read", async () => {
     const unmarked = await seedUserWithAccount(tmp.db);
-    await sessionFailsWith(
-      createSessionRow(input(unmarked, true)),
-      TradingSessionDbErrorCode.AccountNotH1,
-    );
-    expect(await sessionsOfAccount(unmarked.brokerAccountId)).toEqual([]);
-    const plain = await createSessionRow(input(unmarked, false));
-    expect(plain.status).toBe('active');
+    const h1 = await createSessionRow(input(unmarked, true));
+    expect((await sessionOf(h1.id))!.settings).toEqual(h1Settings());
 
     const marked = await seedUserWithAccount(tmp.db);
     expect(await mark(marked.brokerAccountId, true)).toBe('marked');
-    const h1 = await createSessionRow(input(marked, true));
-    expect((await sessionOf(h1.id))!.settings).toEqual(h1Settings());
-  });
-
-  it('H1-H5 waits on the account row an unmark holds; the unmark committed meanwhile refuses the start', async () => {
-    const seed = await seedUserWithAccount(tmp.db);
-    expect(await mark(seed.brokerAccountId, true)).toBe('marked');
-    const holder = holdLock((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: false }));
-    await holder.lockTaken;
-    const creating = thrown(createSessionRow(input(seed, true)));
-    const queued = await queuedBehindLock(creating);
-    holder.release();
-    await holder.done;
-    expect(queued).toBe(true);
-    const error = await creating;
-    expect(error).toBeInstanceOf(TradingSessionError);
-    expect((error as TradingSessionError).code).toBe(TradingSessionDbErrorCode.AccountNotH1);
-    expect(await sessionsOfAccount(seed.brokerAccountId)).toEqual([]);
+    const plain = await createSessionRow(input(marked, false));
+    expect(plain.status).toBe('active');
   });
 });
 

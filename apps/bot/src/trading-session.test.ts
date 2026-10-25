@@ -34,7 +34,6 @@ import { createBot } from './bot';
 import { runWithLanguage, type UserLanguages } from './language';
 import {
   cycleStakeCallbackData,
-  DEMO_GROUPS_CALLBACK_DATA,
   demoLaunchCallbackData,
   sessionStartCallbackData,
   stakeMenuCallbackData,
@@ -368,15 +367,9 @@ describe('the session button', () => {
   });
 
   it.each(
-    (Object.keys(START_REFUSALS) as TradingSessionErrorCode[])
-      .filter((code) => code !== TradingSessionErrorCode.NoSignal)
-      .map((code) => [code] as const),
+    (Object.keys(START_REFUSALS) as TradingSessionErrorCode[]).map((code) => [code] as const),
   )('answers the refusal %s with its text, once, untracked', async (code) => {
-    const status =
-      code === TradingSessionErrorCode.CatalogUnavailable ||
-      code === TradingSessionErrorCode.SignalUnavailable
-        ? 503
-        : 409;
+    const status = code === TradingSessionErrorCode.CatalogUnavailable ? 503 : 409;
     const { press, calls, startSession, sessionTracker, logger } = setup({
       startSession: () => Promise.reject(httpError(status, code)),
     });
@@ -415,64 +408,15 @@ describe('the session button', () => {
     expect(warnings(logger)).toEqual(refusal.log === true ? ['trading session not started'] : []);
   });
 
-  // #664: a 409 no_signal waits for the signal instead of refusing
-  describe('a start refused for want of a signal waits for it (#664)', () => {
-    const noSignal = () => Promise.reject(httpError(409, TradingSessionErrorCode.NoSignal));
-    const WAIT_TEXT = TEXTS.pairWaiting({ symbol: pairLabel(PAIR_EURUSD), label: '⏱ 5 с' }).value;
-    const WAIT_ROWS = [[button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA), ...MENU_ROW]];
-
-    it('W-start1 draws the wait in place of the launch screen and registers origin start, back a', async () => {
-      const { pressUpdate, calls, signalWaiter, sessionTracker } = setup({
-        startSession: noSignal,
-      });
-      const update = callbackUpdate(
-        sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true),
-      );
-      await pressUpdate(update);
-      expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
-      const edited = payloadOf(calls, 'editMessageText');
-      expect(edited?.text).toBe(WAIT_TEXT);
-      expect(rowsOf(edited)).toEqual(WAIT_ROWS);
-      expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
-      expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
-        chatId: USER.id,
-        messageId: update.callback_query?.message?.message_id,
-        telegramUserId: USER.id,
-        assetId: PAIR_EURUSD.id,
-        origin: 'start',
-        back: 'a',
-        alternatives: 'pending',
-      });
-      expect(sessionTracker.track).not.toHaveBeenCalled();
-    });
-
-    it('W-start2 answers a press away from a launch screen with the wait as a new message', async () => {
-      const { press, calls, signalWaiter } = setup({ startSession: noSignal });
-      await press(REAL_START);
-      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-      expect(payloadOf(calls, 'sendMessage')?.text).toBe(WAIT_TEXT);
-      expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
-        messageId: TEXT_CARD_MESSAGE_ID,
-        origin: 'start',
-      });
-    });
-
-    it('W-start3 names the pair by its id when the catalog was not read', async () => {
-      const { press, calls } = setup({
-        startSession: noSignal,
-        readPairs: () => Promise.reject(new Error('down')),
-      });
-      await press(REAL_START);
-      expect(payloadOf(calls, 'sendMessage')?.text).not.toContain(pairLabel(PAIR_EURUSD));
-      expect(payloadOf(calls, 'sendMessage')?.text).toContain(String(PAIR_EURUSD.id));
-    });
-
-    it('says no «нет сигнала» on any start refusal', () => {
-      for (const refusal of Object.values(START_REFUSALS)) {
-        expect(textOf(refusal.text).value).not.toMatch(/нет сигнала|сигнала нет/i);
-      }
-      expect(START_REFUSALS[TradingSessionErrorCode.NoSignal]).toMatchObject({ wait: true });
-    });
+  // #828: the start never answers no_signal, signal_unavailable or account_not_h1 any more
+  it('says no «нет сигнала» on any start refusal, and none waits for a signal', () => {
+    for (const refusal of Object.values(START_REFUSALS)) {
+      expect(textOf(refusal.text).value).not.toMatch(/нет сигнала|сигнала нет/i);
+      expect(refusal).not.toHaveProperty('wait');
+    }
+    for (const code of ['no_signal', 'signal_unavailable', 'account_not_h1']) {
+      expect(Object.hasOwn(START_REFUSALS, code), code).toBe(false);
+    }
   });
 
   // #27: «💳 Пополнить» under the purchase in both modes; none on an origin that is not https
@@ -558,19 +502,6 @@ describe('the session button', () => {
     await press(START);
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.demoCatalogUnavailable.value);
-  });
-
-  // #509: the start route answers it before createTradingSession, as catalog_unavailable
-  it('does not retry the 503 signal_unavailable: one POST, its own text', async () => {
-    const { press, calls, startSession } = setup({
-      startSession: () => Promise.reject(httpError(503, TradingSessionErrorCode.SignalUnavailable)),
-    });
-    await press(START);
-    expect(startSession).toHaveBeenCalledTimes(1);
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionSignalUnavailable.value);
-    expect(sessionOutcomeUnknown(httpError(503, TradingSessionErrorCode.SignalUnavailable))).toBe(
-      false,
-    );
   });
 
   it('counts any other 5xx, no answer and a broken body as unknown', () => {
@@ -2287,7 +2218,7 @@ describe('an H1 session from the bot (#745, #775): drawn as any session', () => 
     expect(replyOf(H1_COMPLETED).split('\n')[0]).toBe(line);
   });
 
-  it('H1-B8 h1_duration_unsupported is a logged bug; account_not_h1 says the account changed', async () => {
+  it('H1-B8 h1_duration_unsupported is a logged bug', async () => {
     const duration = setup({
       startSession: () =>
         Promise.reject(httpError(409, TradingSessionErrorCode.H1DurationUnsupported)),
@@ -2295,16 +2226,8 @@ describe('an H1 session from the bot (#745, #775): drawn as any session', () => 
     await duration.press(START);
     expect(payloadOf(duration.calls, 'sendMessage')?.text).toBe(TEXTS.sessionPairUnavailable.value);
     expect(warnings(duration.logger)).toEqual(['trading session not started']);
-
-    const changed = setup({
-      startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.AccountNotH1)),
-    });
-    await changed.press(START);
-    const sent = payloadOf(changed.calls, 'sendMessage');
-    expect(sent?.text).toBe(TEXTS.sessionAccountChanged.value);
-    expect(rowsOf(sent)).toEqual(BACK_ROWS);
-    expect(warnings(changed.logger)).toEqual([]);
   });
+
   it('H1-B9 a start without a signal (#796): a text message waiting for one, then the first trade turns it into the picture', async () => {
     const scene = started(H1);
     await scene.press(START);

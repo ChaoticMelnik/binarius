@@ -1146,10 +1146,12 @@ export function createDemoComposer<C extends Context>({
 
   // A pair of the list, and since #476 every demo door of a cycle: the amount screen in demo, the
   // launch screen in real (#327). The pair is checked against the catalog read at this press, never
-  // the one the list was drawn from, and its signal is the scanner's fresh list (#664): a pair not
-  // in it — a door drawn without a signal («🔁 Ещё сессия», the offer under a single trade), an old
-  // message — waits for one, with the other pairs that have a signal now (Rule 46). No session
-  // opens on a pair without a signal (#509).
+  // the one the list was drawn from. The doors of the list (`l`) and of the analysis card (`a`)
+  // were drawn on a shown H1 signal and open the next step without reading the list again (#828): a
+  // signal lives a second, a re-read would miss it three times in four, and the session starts on
+  // the start's own H1 reading or waits inside it (Rule 46). The door drawn without a signal (`n`:
+  // «🔁 Ещё сессия», the offer under a single trade) checks the H1 list (#664): a pair not in it
+  // waits for one, with the other pairs that have a signal now.
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -1163,7 +1165,7 @@ export function createDemoComposer<C extends Context>({
       Promise.all([
         readDemoTrade(backend, assetId, durationSec, now),
         readAccess(ctx.from.id),
-        readSignals(),
+        origin === 'n' ? readSignals() : undefined,
       ]),
     );
     const firstName = ctx.from.first_name;
@@ -1173,8 +1175,11 @@ export function createDemoComposer<C extends Context>({
     if (!read.ok) {
       screen = tradeFailure(read, ctx.callbackQuery.data);
     } else {
-      const list = signals === null ? undefined : signalsListOf(signals);
-      if (list?.signals.some((signal) => signal.assetId === assetId) === true) {
+      const list = signals === undefined || signals === null ? undefined : signalsListOf(signals);
+      if (
+        signals === undefined ||
+        list?.signals.some((signal) => signal.assetId === assetId) === true
+      ) {
         screen = nextStepScreen({ assetId, back, firstName }, read.pair, access, connectButtons);
       } else {
         const alternatives =

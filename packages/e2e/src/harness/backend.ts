@@ -8,12 +8,20 @@ import {
   createBrokerOAuthClient,
   createBullmqPublisher,
   createClientPush,
+  createH1Driver,
+  createH1Scanner,
   createInitDataVerifier,
   createScanPacer,
+  createSecondSeries,
   createSessionNoticeListener,
   createSessionNoticeSender,
   DEPOSIT_INIT_DATA_MAX_AGE_MS,
   ensureFreshAccessToken,
+  H1_SCANNER_LOG_MS,
+  H1_SECOND_CLOSE_MARGIN_MS,
+  H1_SERIES_CAPACITY_SEC,
+  H1_SHADOW_TICK_MS,
+  H1_START_SECOND_MAX_AGE_MS,
   INIT_DATA_MAX_AGE_MS,
   OutboxPublisher,
   SIGNAL_CACHE_MAX_TTL_MS,
@@ -25,15 +33,19 @@ import {
   unusedAdminDeps,
   unusedDepositDeps,
   unusedPaymentsDeps,
-  unusedSignalsDeps,
   type TradingRoutesDeps,
 } from '@binarius/backend/e2e';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import {
+  createSessionIntent,
   createTokenCipher,
+  listActiveH1Sessions,
+  readSessionBalance,
+  readSessionHistory,
   recordSignalDecision,
   SESSION_NOTICE_CHANNEL,
   setLastAnalysis,
+  stopTradingSession,
   type Db,
 } from '@binarius/db';
 import { SessionStakeStrategy } from '@binarius/shared';
@@ -41,12 +53,14 @@ import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import {
   BOT_TOKEN,
+  E2E_PAIR,
   E2E_POSTBACK_SECRET,
   INTERNAL_API_TOKEN,
   MOCK_OAUTH,
   PARTNER_REF,
   REDIRECT_URI,
 } from './env';
+import { startH1Pump } from './h1';
 import type { LogSink } from './logs';
 import type { createTelegram, TelegramSide } from './telegram';
 
@@ -67,6 +81,10 @@ export const E2E_BACKEND_TUNING = {
   // the reconciler is not started: the routes call refresh() themselves
   balanceIntervalMs: 60_000,
   balanceMaxPerMinute: 100,
+  // the H1 driver's submit budget (#828): the run's take of an intent is not timed, as in
+  // session-routes.db.test.ts H1-R10; its scan reads the active sessions once a second
+  h1SubmitBudgetMs: 5_000,
+  h1ScanMs: 1_000,
 } as const;
 
 export interface E2eBackend {
@@ -119,6 +137,44 @@ export async function startE2eBackend(deps: {
   const clientPush = createClientPush({ token: BOT_TOKEN });
   const push = deps.telegram.push(clientPush);
 
+  // index.ts's H1 parts (#828, docs/h1.md) on a second series the pump fills, since the run has
+  // no data socket: the scanner serves the signals list and the analysis's `h1`, the driver trades
+  // every session the bot starts
+  const seconds = createSecondSeries({
+    capacitySec: H1_SERIES_CAPACITY_SEC,
+    closeMarginMs: H1_SECOND_CLOSE_MARGIN_MS,
+  });
+  const streaming = () => true;
+  const h1Scanner = createH1Scanner({
+    series: seconds,
+    catalog: pairsCatalog,
+    streaming,
+    logger: log,
+    config: { logMs: H1_SCANNER_LOG_MS, maxAgeMs: H1_START_SECOND_MAX_AGE_MS },
+  });
+  const h1Driver = createH1Driver({
+    series: seconds,
+    catalog: pairsCatalog,
+    streaming,
+    sessions: {
+      list: () => listActiveH1Sessions(db),
+      history: (id, options) => readSessionHistory(db, id, options),
+      balance: (id, options) => readSessionBalance(db, id, options),
+      createIntent: (input) => createSessionIntent(db, input, { demoOnly: false }),
+      stop: (id, reason) => stopTradingSession(db, { id, reason }),
+      record: (input) => recordSignalDecision(db, input),
+    },
+    wake: () => publisher.wake(),
+    logger: log,
+    config: {
+      scanMs: E2E_BACKEND_TUNING.h1ScanMs,
+      tickMs: H1_SHADOW_TICK_MS,
+      logMs: 60_000,
+      submitBudgetMs: E2E_BACKEND_TUNING.h1SubmitBudgetMs,
+      startMaxAgeMs: H1_START_SECOND_MAX_AGE_MS,
+    },
+  });
+
   const accessToken: TradingRoutesDeps['accessToken'] = (accountId, options) =>
     ensureFreshAccessToken({ db, broker, cipher, logger: log }, accountId, options);
   const balance = {
@@ -144,15 +200,12 @@ export async function startE2eBackend(deps: {
       db,
       catalog: pairsCatalog,
       balance,
-      signals: signalFeed,
       internalApiToken: INTERNAL_API_TOKEN,
       demoOnly: false,
       stakeStrategy: SessionStakeStrategy.Martingale,
-      // the trade log as in production (#666); no data socket in the run, so no tick
+      // the trade log as in production (#666)
       decisions: { record: (input) => recordSignalDecision(db, input) },
-      ticks: undefined,
-      // no data socket, no H1 driver: the run marks no account H1 (#796)
-      h1Driver: undefined,
+      h1Driver,
     },
     signal: {
       feed: signalFeed,
@@ -162,9 +215,9 @@ export async function startE2eBackend(deps: {
         set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
       },
       ticks: undefined,
+      h1: h1Scanner,
     },
-    // the scanners are not built: the run takes the manual door, and a call here fails the test
-    signals: unusedSignalsDeps(),
+    signals: { scanner: h1Scanner, internalApiToken: INTERNAL_API_TOKEN },
     auth: {
       db,
       cipher,
@@ -226,7 +279,10 @@ export async function startE2eBackend(deps: {
   const sessionNoticeListener = createSessionNoticeListener({
     pool,
     channel: SESSION_NOTICE_CHANNEL,
-    onNotification: () => sessionNotices.wake(),
+    onNotification: (sessionId) => {
+      sessionNotices.wake();
+      h1Driver.notice(sessionId);
+    },
     logger: app.log,
   });
 
@@ -237,12 +293,19 @@ export async function startE2eBackend(deps: {
   publisher.start();
   sessionNotices.start();
   sessionNoticeListener.start();
+  // listening before the pump's history goes in, so its last seconds are decided at once
+  h1Scanner.start();
+  h1Driver.start();
+  const pump = startH1Pump({ series: seconds, assetId: E2E_PAIR.id, digits: E2E_PAIR.digits });
 
   return {
     url: `http://127.0.0.1:${port}`,
     push,
     async stop() {
       await app.close();
+      h1Scanner.stop();
+      await h1Driver.stop();
+      pump.stop();
       await publisher.stop();
       pairsCatalog.stop();
       await balanceReconciler.stop();

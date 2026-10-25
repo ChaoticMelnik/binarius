@@ -7,7 +7,6 @@ import {
   keyboardOf,
   InvalidTelegramTemplate,
   SignalFeedOutcome,
-  SignalKind,
   telegramHtml,
   TradeAction,
   TradeMode,
@@ -33,10 +32,14 @@ import {
   PAIR_EURUSD,
   PAIR_SHORT,
   PAIRS_RESPONSE,
+  SIGNAL_CANDLE_ONLY,
   SIGNAL_CARD,
+  SIGNAL_FETCH_FAILED_H1,
+  SIGNAL_H1_ONLY,
   SIGNAL_NO_SIGNAL,
   signalsResponse,
 } from './testing';
+import { SIGNAL_WAIT_POLL_MS, SIGNAL_WAIT_POLL_OFFSET_MS } from './timing';
 
 // The wait for a signal (#664, signal-wait.ts) on fake timers: one tick at each candle's boundary
 // plus the offset, by the bot's clock, from a start that is not on a boundary.
@@ -71,7 +74,15 @@ const NOT_MODIFIED = () =>
   refusal(400, 'Bad Request: message is not modified: specified new message content is the same');
 const TRANSPORT = () => new HttpError("Network request for 'editMessageText' failed!", new Error());
 
-function setup(options: { maxMs?: number; shutdownBudgetMs?: number; maxEntries?: number } = {}) {
+function setup(
+  options: {
+    maxMs?: number;
+    shutdownBudgetMs?: number;
+    maxEntries?: number;
+    pollMs?: number;
+    pollOffsetMs?: number;
+  } = {},
+) {
   let listed: (readonly [number, TradeAction])[] = [];
   const backend = {
     readSignals: vi.fn<BackendClient['readSignals']>(() =>
@@ -104,11 +115,11 @@ function setup(options: { maxMs?: number; shutdownBudgetMs?: number; maxEntries?
       screen(`next:${pair.id}:${access?.tradingMode ?? 'none'}:${step.back}`),
     refusal: (check) => screen(`refusal:${check.reason}`),
     card: (_pair, response) =>
-      response.outcome === SignalFeedOutcome.Decided && response.decision.kind === SignalKind.Signal
+      response.h1 !== null
         ? {
             text: telegramHtml`card`,
             keyboard: keyboardOf([callbackButton(ButtonRole.Nav, 'c', 'c')]),
-            action: response.decision.action,
+            action: response.h1.action,
           }
         : undefined,
     photos: { photo: vi.fn(() => 'file-id'), remember: vi.fn(), forget: vi.fn() },
@@ -117,8 +128,8 @@ function setup(options: { maxMs?: number; shutdownBudgetMs?: number; maxEntries?
   const waiter = createSignalWaiter({
     backend,
     logger,
-    pollMs: POLL,
-    pollOffsetMs: 1_000,
+    pollMs: options.pollMs ?? POLL,
+    pollOffsetMs: options.pollOffsetMs ?? 1_000,
     listTtlMs: TTL,
     maxMs: options.maxMs ?? 3_600_000,
     editGapMs: GAP,
@@ -212,6 +223,22 @@ describe('the wait for a signal', () => {
     expect(backend.readSignals).toHaveBeenCalledTimes(1);
     await at(FIRST_TICK + POLL);
     expect(backend.readSignals).toHaveBeenCalledTimes(2);
+  });
+
+  // #828: an H1 signal lives a second, so the production poll is once a second, 600 ms past f
+  it('W18 polls every second at the production period, 600 ms after the second', async () => {
+    const { waiter, backend, list, at } = setup({
+      pollMs: SIGNAL_WAIT_POLL_MS,
+      pollOffsetMs: SIGNAL_WAIT_POLL_OFFSET_MS,
+    });
+    waiter.waitList(list());
+    // T0 = 12 345: the first poll at 12 600, then one a second
+    await at(12_599);
+    expect(backend.readSignals).not.toHaveBeenCalled();
+    await at(12_600);
+    expect(backend.readSignals).toHaveBeenCalledTimes(1);
+    await at(17_600);
+    expect(backend.readSignals).toHaveBeenCalledTimes(6);
   });
 
   it('W2 reads the signals and the catalog once a tick for every entry', async () => {
@@ -356,9 +383,34 @@ describe('the wait for a signal', () => {
     backend.evaluateSignal.mockResolvedValue({
       outcome: SignalFeedOutcome.FetchFailed,
       code: 'unavailable' as BrokerRestErrorCode,
+      h1: null,
     });
     await at(FIRST_TICK + 3 * POLL);
     expect(waiter.has(7)).toBe(true);
+  });
+
+  // #828: the analysis resolves by the answer's H1 signal, never by the candle decision
+  it('W6f keeps the analysis waiting on a candle signal without an H1 one; an H1 signal over a candle refusal or a failed fetch draws the card', async () => {
+    const { waiter, pair, at, setListed, backend, editMessageMedia, screens } = setup();
+    backend.evaluateSignal.mockResolvedValueOnce(SIGNAL_CANDLE_ONLY);
+    waiter.waitPair(pair({ origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK);
+    expect(editMessageMedia).not.toHaveBeenCalled();
+    expect(waiter.has(7)).toBe(true);
+    backend.evaluateSignal.mockResolvedValueOnce(SIGNAL_H1_ONLY);
+    await at(FIRST_TICK + POLL);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+    expect(screens.photos.remember).toHaveBeenCalledWith(TradeAction.Down, true);
+    expect(waiter.has(7)).toBe(false);
+
+    const failed = setup();
+    failed.backend.evaluateSignal.mockResolvedValueOnce(SIGNAL_FETCH_FAILED_H1);
+    failed.waiter.waitPair(failed.pair({ origin: 'analysis' }));
+    failed.setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await failed.at(FIRST_TICK + 2 * POLL);
+    expect(failed.editMessageMedia).toHaveBeenCalledTimes(1);
+    expect(failed.waiter.has(7)).toBe(false);
   });
 
   it('W6d draws the other pairs under the analysis whose own read finds no signal, never the chosen pair', async () => {
@@ -402,7 +454,7 @@ describe('the wait for a signal', () => {
   it('W7b draws pending alternatives on the first poll with some, and takes them away 30 s later', async () => {
     const { waiter, pair, at, texts, setListed } = setup();
     setListed([[PAIR_SHORT.id, TradeAction.Up]]);
-    waiter.waitPair(pair({ origin: 'start', alternatives: 'pending' }));
+    waiter.waitPair(pair({ origin: 'door', alternatives: 'pending' }));
     await at(FIRST_TICK);
     expect(texts()).toEqual([`base|${PAIR_SHORT.id}`]);
     await at(FIRST_TICK + 25_000);

@@ -936,8 +936,8 @@ describe('readSignals', () => {
           {
             assetId: 101,
             action: 'up',
-            lastCandleTimestamp: 1_760_000_000_000,
-            decidedAt: 1_760_000_015_500,
+            second: 1_760_000_015_000,
+            decidedAt: 1_760_000_015_320,
             ageMs: 1_000,
           },
         ],
@@ -2137,6 +2137,13 @@ describe('body size', () => {
             reason: longest(RULE_REFUSAL_REASONS),
             features: FEATURES,
           },
+          // the pair's H1 signal (#828)
+          h1: {
+            action: longest(Object.values(TradeAction)),
+            second: NONNEGATIVE_INT,
+            decidedAt: NONNEGATIVE_INT,
+            ageMs: NONNEGATIVE_INT,
+          },
         },
       },
       readSignals: {
@@ -2150,7 +2157,7 @@ describe('body size', () => {
             signals: Array.from({ length: ASSUMED_LONGEST_PAIRS }, () => ({
               assetId: INT4_MAX,
               action: longest(Object.values(TradeAction)),
-              lastCandleTimestamp: NUMBER,
+              second: NONNEGATIVE_INT,
               decidedAt: NONNEGATIVE_INT,
               ageMs: NONNEGATIVE_INT,
             })),

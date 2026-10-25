@@ -248,8 +248,10 @@ describe('h1 session start (#670, #775)', () => {
   });
 });
 
-describe('h1 session start: the mark under the account lock (#707)', () => {
-  it('H1-R7 an unmark after the check and before the insert refuses the start and says so', async () => {
+// #828: createTradingSession reads no mark under the account lock any more (every bot start is
+// H1); the CLI's own mark check before the catalog read stays until #830
+describe('h1 session start: the mark is checked once, before the catalog (#707, #828)', () => {
+  it('H1-R7′ an unmark after the check and before the insert no longer refuses the start', async () => {
     const seed = await marked();
     const { deps } = catalogOf([pair()]);
     // the catalog is read after the CLI's own mark check: the unmark lands in between
@@ -262,12 +264,8 @@ describe('h1 session start: the mark under the account lock (#707)', () => {
         return deps.catalog!();
       },
     };
-    expect(await run(startArgs(seed.brokerAccountId), racing)).toEqual({
-      code: 1,
-      out: '',
-      err: ['метка H1 снята во время старта — сессия не создана'],
-    });
-    expect(await sessionsOfAccount(seed.brokerAccountId)).toEqual([]);
+    expect((await run(startArgs(seed.brokerAccountId), racing)).code).toBe(0);
+    expect(await sessionsOfAccount(seed.brokerAccountId)).toHaveLength(1);
   });
 });
 

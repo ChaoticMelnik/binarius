@@ -183,23 +183,36 @@ describe('POST /trading/signal contract', () => {
     expect(safeParseTradingSignalRequest(request).success).toBe(false);
   });
 
+  const h1 = {
+    action: 'down',
+    second: 1_760_000_015_000,
+    decidedAt: 1_760_000_015_020,
+    ageMs: 900,
+  };
+
   it.each([
-    { outcome: 'decided', params, decision: DECISIONS.signal },
-    { outcome: 'decided', params, decision: DECISIONS.stale },
-    { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: 7 },
-    { outcome: 'fetch_failed', code: 'unavailable' },
+    { outcome: 'decided', params, decision: DECISIONS.signal, h1: null },
+    { outcome: 'decided', params, decision: DECISIONS.stale, h1 },
+    { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: 7, h1: null },
+    { outcome: 'fetch_failed', code: 'unavailable', h1 },
   ])('S4 accepts the response %j', (response) => {
     expect(safeParseTradingSignalResponse(response).data).toEqual(response);
   });
 
   it.each([
-    { outcome: 'fetch_failed' },
-    { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: -1 },
-    { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: 1.5 },
-    { outcome: 'fetch_failed', code: 'teapot' },
-    { outcome: 'fetch_failed', code: 'unavailable', status: 503 },
-    { outcome: 'decided', decision: DECISIONS.signal },
-    { outcome: 'maybe', code: 'unavailable' },
+    { outcome: 'fetch_failed', h1: null },
+    { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: -1, h1: null },
+    { outcome: 'fetch_failed', code: 'rate_limited', retryAfterSec: 1.5, h1: null },
+    { outcome: 'fetch_failed', code: 'teapot', h1: null },
+    { outcome: 'fetch_failed', code: 'unavailable', status: 503, h1: null },
+    { outcome: 'decided', decision: DECISIONS.signal, h1: null },
+    { outcome: 'maybe', code: 'unavailable', h1: null },
+    // S-h1-1 (#828): `h1` is required on both outcomes and has its own shape
+    { outcome: 'decided', params, decision: DECISIONS.signal },
+    { outcome: 'fetch_failed', code: 'unavailable' },
+    { outcome: 'decided', params, decision: DECISIONS.signal, h1: { ...h1, action: 'flat' } },
+    { outcome: 'fetch_failed', code: 'unavailable', h1: { ...h1, ageMs: -1 } },
+    { outcome: 'decided', params, decision: DECISIONS.signal, h1: { ...h1, extra: 1 } },
   ])('S4 refuses the response %j', (response) => {
     expect(safeParseTradingSignalResponse(response).success).toBe(false);
   });
@@ -224,7 +237,7 @@ describe('the decision record (#666)', () => {
     decision: DECISIONS.signal,
   };
   const lastTick = { price: 1.15, timestamp: 1_760_000_006_900, receivedAtMs: 1_760_000_006_950 };
-  const decided = { outcome: 'decided', params, decision: DECISIONS.signal };
+  const decided = { outcome: 'decided', params, decision: DECISIONS.signal, h1: null };
 
   it('S-rec1 the request takes record: true and nothing else', () => {
     expect(
@@ -300,9 +313,9 @@ describe('GET /trading/signals contract', () => {
   const item = {
     assetId: 101,
     action: 'up',
-    lastCandleTimestamp: 1_760_000_000_000,
-    decidedAt: 1_760_000_015_500,
-    ageMs: 500,
+    second: 1_760_000_015_000,
+    decidedAt: 1_760_000_015_020,
+    ageMs: 1_000,
   };
   const list5 = { interval: '5s', scanned: 13, signals: [item] };
   const answer = { asOf: 1_760_000_016_000, lists: [list5] };
@@ -331,6 +344,12 @@ describe('GET /trading/signals contract', () => {
     { ...answer, lists: [{ ...list5, signals: [{ ...item, ageMs: -1 }] }] },
     { ...answer, lists: [{ ...list5, signals: [{ ...item, assetId: 0 }] }] },
     { ...answer, lists: [{ ...list5, signals: [{ ...item, reason: 'flat_trend' }] }] },
+    // the candle item's field before #828
+    {
+      ...answer,
+      lists: [{ ...list5, signals: [{ ...item, lastCandleTimestamp: item.second }] }],
+    },
+    { ...answer, lists: [{ ...list5, signals: [{ ...item, second: 1.5 }] }] },
     { ...answer, lists: [{ interval: '5s', signals: [] }] },
     { asOf: answer.asOf },
     { asOf: answer.asOf, interval: '5s', scanned: 25, signals: [item] },

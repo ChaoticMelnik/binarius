@@ -155,7 +155,6 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   subject: text,
   value: text,
   price: text,
-  seconds: text,
   line: text,
   assetId: text,
   digits: text,
