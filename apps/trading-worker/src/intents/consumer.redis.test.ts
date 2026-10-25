@@ -229,8 +229,14 @@ describe("startIntentConsumer on a process's own queue (#347)", () => {
       const opts = { attempts: 1, removeOnComplete: true, removeOnFail: true };
       await ownQueue.add('intent', { intentId: okId }, { ...opts, jobId: okId });
       await ownQueue.add('intent', { intentId: failId }, { ...opts, jobId: failId });
-      expect(await ok).toBe('completed');
-      expect(await failed).toBe('failed');
+      // bounded: a consumer on the wrong queue must not outlive the case and take the next one's jobs
+      const within = <T>(settling: Promise<T>) =>
+        Promise.race([
+          settling,
+          new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 5_000)),
+        ]);
+      expect(await within(ok)).toBe('completed');
+      expect(await within(failed)).toBe('failed');
       await consumer.worker.close();
       await consumer.drainDeadLetters();
     } finally {
