@@ -63,6 +63,8 @@ import {
   type AdminUserResponse,
   type AdminUsersQuery,
   type StaffSessionView,
+  type TradingSessionStatus,
+  type UserStatus,
 } from '@binarius/shared';
 import { html, layout, type SafeHtml } from '../html';
 import { icon, iconSprite, type IconName } from './icons';
@@ -192,26 +194,131 @@ export const linkPage = (message?: string): SafeHtml =>
 // column an operator reads to decide whether a session is theirs.
 const when = (iso: string): SafeHtml => html`<time datetime="${iso}">${iso}</time>`;
 
-const row = (session: StaffSessionView): SafeHtml =>
-  html`<tr class="${session.current ? 'current' : ''}">
-    <td>${session.login}${session.current ? html` (${TEXTS.currentSession})` : ''}</td>
-    <td>${session.displayName ?? TEXTS.noDisplayName}</td>
-    <td>${session.ip}</td>
-    <td class="agent">${session.userAgent}</td>
-    <td>${when(session.createdAt)}</td>
-    <td>${when(session.lastSeenAt)}</td>
-    <td>${when(session.expiresAt)}</td>
-    <td>
-      <form method="post" action="/admin/sessions/${session.id}/revoke">
-        <button type="submit">${TEXTS.revokeSubmit}</button>
-      </form>
-    </td>
-  </tr>`;
+const SESSION_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnLogin },
+  { label: TEXTS.columnName },
+  { label: TEXTS.columnIp },
+  { label: TEXTS.columnUserAgent, className: 'agent wrap' },
+  { label: TEXTS.columnCreatedAt },
+  { label: TEXTS.columnLastSeenAt },
+  { label: TEXTS.columnExpiresAt },
+  { label: TEXTS.columnAction },
+];
+
+const sessionCells = (session: StaffSessionView): Cell[] => [
+  html`${session.login}${session.current ? html` (${TEXTS.currentSession})` : ''}`,
+  session.displayName ?? TEXTS.noDisplayName,
+  session.ip,
+  session.userAgent,
+  when(session.createdAt),
+  when(session.lastSeenAt),
+  when(session.expiresAt),
+  html`<form method="post" action="/admin/sessions/${session.id}/revoke">
+    <button type="submit" class="btn btn-danger">${TEXTS.revokeSubmit}</button>
+  </form>`,
+];
 
 const whenOrNone = (iso: string | null): SafeHtml | string =>
   iso === null ? TEXTS.none : when(iso);
 const orNone = (value: string | null): string => value ?? TEXTS.none;
 const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
+
+// --- The list components (#656, docs/admin-design-system.md → Table and row card) ---------------
+
+type Cell = SafeHtml | string | number;
+
+/** `label` is both the `<th>` and every cell's `data-label`; an empty one gets no `data-label`. */
+interface Column {
+  label: string;
+  num?: boolean;
+  className?: string;
+}
+
+const cell = (column: Column, value: Cell): SafeHtml => {
+  const classes = [column.num === true ? 'num' : '', column.className ?? '']
+    .filter((name) => name !== '')
+    .join(' ');
+  return html`<td${column.label === '' ? '' : html` data-label="${column.label}"`}${
+    classes === '' ? '' : html` class="${classes}"`
+  }>${value}</td>`;
+};
+
+// Below 64rem the CSS reads every row as a card, each cell under its data-label; at any width a
+// table wider than the content column scrolls inside .table-wrap, never the page.
+const table = (
+  columns: readonly Column[],
+  rows: readonly (readonly Cell[])[],
+  rowClass?: (index: number) => string | undefined,
+): SafeHtml =>
+  html`<div class="table-wrap"><table class="table"><thead><tr>${columns.map(
+    (column) => html`<th>${column.label}</th>`,
+  )}</tr></thead><tbody>${rows.map((cells, index) => {
+    const className = rowClass?.(index);
+    return html`<tr${className === undefined ? '' : html` class="${className}"`}>${cells.map(
+      (value, at) => cell(columns[at] ?? { label: '' }, value),
+    )}</tr>`;
+  })}</tbody></table></div>`;
+
+type BadgeVariant = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+// The status keeps its text or its code; the badge only colours it.
+const badge = (variant: BadgeVariant, body: Cell): SafeHtml =>
+  html`<span class="badge badge-${variant}">${body}</span>`;
+
+const USER_STATUS_BADGE = {
+  active: 'success',
+  blocked: 'danger',
+} as const satisfies Record<UserStatus, BadgeVariant>;
+
+const INTENT_STATUS_BADGE = {
+  planned: 'info',
+  reserved: 'info',
+  queued: 'info',
+  submitting: 'info',
+  accepted: 'info',
+  reconciling: 'info',
+  settled: 'success',
+  rejected: 'danger',
+  unknown: 'warning',
+  manual_review: 'warning',
+} as const satisfies Record<TradeIntentStatus, BadgeVariant>;
+
+const TRADING_SESSION_STATUS_BADGE = {
+  active: 'success',
+  paused: 'warning',
+  stopped: 'neutral',
+} as const satisfies Record<TradingSessionStatus, BadgeVariant>;
+
+const ACCOUNT_STATUS_BADGE = {
+  active: 'success',
+  pending: 'warning',
+  revoked: 'danger',
+} as const satisfies Record<BrokerAccountStatus, BadgeVariant>;
+
+const DEPOSIT_STATUS_BADGE = {
+  received: 'info',
+  credited: 'success',
+  ignored: 'neutral',
+  failed: 'danger',
+} as const satisfies Record<DepositEventStatus, BadgeVariant>;
+
+const STAR_PAYMENT_STATUS_BADGE = {
+  paid: 'success',
+  held: 'warning',
+  refunded: 'neutral',
+} as const satisfies Record<StarPaymentStatus, BadgeVariant>;
+
+const empty = (text: string): SafeHtml => html`<p class="empty">${text}</p>`;
+
+// Hidden without the script (no-js) and, by the script, without navigator.clipboard: the id
+// beside it stays selectable either way.
+const copyButton = (value: string): SafeHtml =>
+  html`<button type="button" class="icon-btn copy no-js-hidden" data-copy="${value}" aria-label="${TEXTS.copy}" data-label-copy="${TEXTS.copy}" data-label-copied="${TEXTS.copied}">${icon('copy', html`data-copy-icon="copy"`)}${icon('check', html`data-copy-icon="check" hidden`)}</button>`;
+
+const idCode = (value: string): SafeHtml => html`<code>${value}</code>${copyButton(value)}`;
+
+const idCodeOrNone = (value: string | null): SafeHtml | string =>
+  value === null ? TEXTS.none : idCode(value);
 
 export const SERVICE_ACCOUNTS_PATH = '/admin/service-accounts';
 export const STAR_REFUNDS_PATH = '/admin/star-refunds';
@@ -410,24 +517,10 @@ export const sessionsPage = (sessions: readonly StaffSessionView[], login: strin
     body: html`<h1>${TEXTS.sessionsHeading}</h1>
       ${
         sessions.length === 0
-          ? html`<p>${TEXTS.sessionsEmpty}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnLogin}</th>
-                  <th>${TEXTS.columnName}</th>
-                  <th>${TEXTS.columnIp}</th>
-                  <th>${TEXTS.columnUserAgent}</th>
-                  <th>${TEXTS.columnCreatedAt}</th>
-                  <th>${TEXTS.columnLastSeenAt}</th>
-                  <th>${TEXTS.columnExpiresAt}</th>
-                  <th>${TEXTS.columnAction}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sessions.map(row)}
-              </tbody>
-            </table>`
+          ? empty(TEXTS.sessionsEmpty)
+          : table(SESSION_COLUMNS, sessions.map(sessionCells), (index) =>
+              sessions[index]?.current === true ? 'current' : undefined,
+            )
       }`,
   });
 
@@ -475,15 +568,26 @@ export const overviewPage = (overview: AdminOverview, login: string): SafeHtml =
       </section>`,
   });
 
-const userRow = (user: AdminUserListItem): SafeHtml =>
-  html`<tr>
-    <td><a href="/admin/users/${user.id}">${user.telegramUserId}</a></td>
-    <td>${orNone(user.displayName)}</td>
-    <td>${TEXTS.userStatus[user.status]}</td>
-    <td>${user.tokenBalance}</td>
-    <td>${when(user.createdAt)}</td>
-    <td>${when(user.updatedAt)}</td>
-  </tr>`;
+const USER_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnTelegramId },
+  { label: TEXTS.columnName },
+  { label: TEXTS.columnStatus },
+  { label: TEXTS.columnTokens, num: true },
+  { label: TEXTS.columnUserCreatedAt },
+  { label: TEXTS.columnUpdatedAt },
+];
+
+const userStatus = (status: UserStatus): SafeHtml =>
+  badge(USER_STATUS_BADGE[status], TEXTS.userStatus[status]);
+
+const userCells = (user: AdminUserListItem): Cell[] => [
+  html`<a href="/admin/users/${user.id}">${user.telegramUserId}</a>`,
+  orNone(user.displayName),
+  userStatus(user.status),
+  user.tokenBalance,
+  when(user.createdAt),
+  when(user.updatedAt),
+];
 
 export const usersPage = (
   users: readonly AdminUserListItem[],
@@ -509,25 +613,7 @@ export const usersPage = (
         <button type="submit">${TEXTS.usersSearchSubmit}</button>
       </form>
       <p class="hint">${TEXTS.usersSearchHint}</p>
-      ${
-        users.length === 0
-          ? html`<p>${TEXTS.usersEmpty}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnTelegramId}</th>
-                  <th>${TEXTS.columnName}</th>
-                  <th>${TEXTS.columnStatus}</th>
-                  <th>${TEXTS.columnTokens}</th>
-                  <th>${TEXTS.columnUserCreatedAt}</th>
-                  <th>${TEXTS.columnUpdatedAt}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${users.map(userRow)}
-              </tbody>
-            </table>`
-      }
+      ${users.length === 0 ? empty(TEXTS.usersEmpty) : table(USER_COLUMNS, users.map(userCells))}
       <p class="pager">
         ${
           options.cursor !== undefined || users.length === 0
@@ -552,7 +638,7 @@ const serviceMarkForm = (accountId: string, service: boolean, returnPath: string
   html`<form method="post" action="/admin/broker-accounts/${accountId}/service">
     <input type="hidden" name="service" value="${service ? 'on' : 'off'}" />
     <input type="hidden" name="return" value="${returnPath}" />
-    <button type="submit">${service ? TEXTS.serviceMark : TEXTS.serviceUnmark}</button>
+    <button type="submit" class="btn btn-secondary">${service ? TEXTS.serviceMark : TEXTS.serviceUnmark}</button>
   </form>`;
 
 // The H1 mark's form (#745): the service mark's shape, its own route
@@ -560,7 +646,7 @@ const h1MarkForm = (accountId: string, h1: boolean, returnPath: string): SafeHtm
   html`<form method="post" action="/admin/broker-accounts/${accountId}/h1">
     <input type="hidden" name="h1" value="${h1 ? 'on' : 'off'}" />
     <input type="hidden" name="return" value="${returnPath}" />
-    <button type="submit">${h1 ? TEXTS.h1Mark : TEXTS.h1Unmark}</button>
+    <button type="submit" class="btn btn-secondary">${h1 ? TEXTS.h1Mark : TEXTS.h1Unmark}</button>
   </form>`;
 
 // The accounts table of the list (#342, with the owner column) and of the user card (without it):
@@ -570,62 +656,46 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
   returnPath: string,
   owner?: (account: T) => SafeHtml,
 ): SafeHtml =>
-  html`<table>
-    <thead>
-      <tr>
-        ${owner === undefined ? '' : html`<th>${TEXTS.columnTelegramId}</th>`}
-        <th>${TEXTS.columnAccountId}</th>
-        <th>${TEXTS.columnBrokerUserId}</th>
-        <th>${TEXTS.columnEmail}</th>
-        <th>${TEXTS.columnPartner}</th>
-        <th>${TEXTS.columnStatus}</th>
-        <th>${TEXTS.columnAuthRevokedReason}</th>
-        <th>${TEXTS.columnTradingHalted}</th>
-        <th>${TEXTS.columnHaltedReason}</th>
-        <th>${TEXTS.columnTokenExpiresAt}</th>
-        <th>${TEXTS.columnTokenRotatedAt}</th>
-        <th>${TEXTS.columnService}</th>
-        <th>${TEXTS.columnH1}</th>
-        <th>${TEXTS.columnUserCreatedAt}</th>
-        <th>${TEXTS.columnUpdatedAt}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${accounts.map(
-        (account) =>
-          html`<tr>
-            ${owner === undefined ? '' : html`<td>${owner(account)}</td>`}
-            <td><code>${account.id}</code></td>
-            <td>${account.brokerUserId}</td>
-            <td>${orNone(account.email)}</td>
-            <td>${yesNo(account.isPartnerClient)}</td>
-            <td>${TEXTS.accountStatus[account.status]}</td>
-            <td>${orNone(account.authRevokedReason)}</td>
-            <td>${yesNo(account.tradingHalted)}</td>
-            <td>${orNone(account.haltedReason)}</td>
-            <td>${when(account.accessTokenExpiresAt)}</td>
-            <td>${whenOrNone(account.tokenRotatedAt)}</td>
-            <td>
-              ${
-                account.serviceSince === null
-                  ? serviceMarkForm(account.id, true, returnPath)
-                  : html`${when(account.serviceSince)}
-                    ${serviceMarkForm(account.id, false, returnPath)}`
-              }
-            </td>
-            <td>
-              ${
-                account.h1Since === null
-                  ? h1MarkForm(account.id, true, returnPath)
-                  : html`${when(account.h1Since)} ${h1MarkForm(account.id, false, returnPath)}`
-              }
-            </td>
-            <td>${when(account.createdAt)}</td>
-            <td>${when(account.updatedAt)}</td>
-          </tr>`,
-      )}
-    </tbody>
-  </table>`;
+  table(
+    [
+      ...(owner === undefined ? [] : [{ label: TEXTS.columnTelegramId }]),
+      { label: TEXTS.columnAccountId },
+      { label: TEXTS.columnBrokerUserId },
+      { label: TEXTS.columnEmail },
+      { label: TEXTS.columnPartner },
+      { label: TEXTS.columnStatus },
+      { label: TEXTS.columnAuthRevokedReason },
+      { label: TEXTS.columnTradingHalted },
+      { label: TEXTS.columnHaltedReason },
+      { label: TEXTS.columnTokenExpiresAt },
+      { label: TEXTS.columnTokenRotatedAt },
+      { label: TEXTS.columnService },
+      { label: TEXTS.columnH1 },
+      { label: TEXTS.columnUserCreatedAt },
+      { label: TEXTS.columnUpdatedAt },
+    ],
+    accounts.map((account) => [
+      ...(owner === undefined ? [] : [owner(account)]),
+      idCode(account.id),
+      account.brokerUserId,
+      orNone(account.email),
+      yesNo(account.isPartnerClient),
+      badge(ACCOUNT_STATUS_BADGE[account.status], TEXTS.accountStatus[account.status]),
+      orNone(account.authRevokedReason),
+      yesNo(account.tradingHalted),
+      orNone(account.haltedReason),
+      when(account.accessTokenExpiresAt),
+      whenOrNone(account.tokenRotatedAt),
+      account.serviceSince === null
+        ? serviceMarkForm(account.id, true, returnPath)
+        : html`${when(account.serviceSince)} ${serviceMarkForm(account.id, false, returnPath)}`,
+      account.h1Since === null
+        ? h1MarkForm(account.id, true, returnPath)
+        : html`${when(account.h1Since)} ${h1MarkForm(account.id, false, returnPath)}`,
+      when(account.createdAt),
+      when(account.updatedAt),
+    ]),
+  );
 
 // «Вернуть Stars» (#510): only on a payment that can still be refunded
 const starRefundForm = (paymentId: string, returnPath: string): SafeHtml =>
@@ -635,7 +705,7 @@ const starRefundForm = (paymentId: string, returnPath: string): SafeHtml =>
       >${TEXTS.starRefundReason}
       <input name="reason" maxlength="${STAR_REFUND_REASON_MAX}" required />
     </label>
-    <button type="submit">${TEXTS.starRefundSubmit}</button>
+    <button type="submit" class="btn btn-secondary">${TEXTS.starRefundSubmit}</button>
   </form>`;
 
 // The Stars payments of the user card and of the requests page (with the owner column): one set
@@ -645,47 +715,36 @@ const starPaymentsTable = <T extends AdminStarPaymentView>(
   returnPath: string,
   owner?: (payment: T) => SafeHtml,
 ): SafeHtml =>
-  html`<table>
-    <thead>
-      <tr>
-        ${owner === undefined ? '' : html`<th>${TEXTS.columnUser}</th>`}
-        <th>${TEXTS.columnChargeId}</th>
-        <th>${TEXTS.columnPayer}</th>
-        <th>${TEXTS.columnPackage}</th>
-        <th>${TEXTS.columnStars}</th>
-        <th>${TEXTS.columnTokens}</th>
-        <th>${TEXTS.columnStatus}</th>
-        <th>${TEXTS.columnPaidAt}</th>
-        <th>${TEXTS.columnRefundedAt}</th>
-        <th>${TEXTS.columnRequestedAt}</th>
-        <th>${TEXTS.columnRefund}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${payments.map(
-        (payment) =>
-          html`<tr>
-            ${owner === undefined ? '' : html`<td>${owner(payment)}</td>`}
-            <td><code>${payment.telegramPaymentChargeId}</code></td>
-            <td>${payment.payerTelegramUserId}</td>
-            <td>${payment.packageCode}</td>
-            <td>${payment.totalAmount}</td>
-            <td>${orNone(payment.tokens)}</td>
-            <td>${TEXTS.starPaymentStatus[payment.status]}</td>
-            <td>${when(payment.paidAt)}</td>
-            <td>${whenOrNone(payment.refundedAt)}</td>
-            <td>${whenOrNone(payment.requestedAt)}</td>
-            <td>
-              ${
-                payment.status === StarPaymentStatus.Refunded
-                  ? TEXTS.none
-                  : starRefundForm(payment.id, returnPath)
-              }
-            </td>
-          </tr>`,
-      )}
-    </tbody>
-  </table>`;
+  table(
+    [
+      ...(owner === undefined ? [] : [{ label: TEXTS.columnUser }]),
+      { label: TEXTS.columnChargeId },
+      { label: TEXTS.columnPayer },
+      { label: TEXTS.columnPackage },
+      { label: TEXTS.columnStars, num: true },
+      { label: TEXTS.columnTokens, num: true },
+      { label: TEXTS.columnStatus },
+      { label: TEXTS.columnPaidAt },
+      { label: TEXTS.columnRefundedAt },
+      { label: TEXTS.columnRequestedAt },
+      { label: TEXTS.columnRefund },
+    ],
+    payments.map((payment) => [
+      ...(owner === undefined ? [] : [owner(payment)]),
+      idCode(payment.telegramPaymentChargeId),
+      payment.payerTelegramUserId,
+      payment.packageCode,
+      payment.totalAmount,
+      orNone(payment.tokens),
+      badge(STAR_PAYMENT_STATUS_BADGE[payment.status], TEXTS.starPaymentStatus[payment.status]),
+      when(payment.paidAt),
+      whenOrNone(payment.refundedAt),
+      whenOrNone(payment.requestedAt),
+      payment.status === StarPaymentStatus.Refunded
+        ? TEXTS.none
+        : starRefundForm(payment.id, returnPath),
+    ]),
+  );
 
 /** What the staff member submitted, put back into the form after a refusal (#246). */
 export interface TokenAdjustmentForm {
@@ -758,96 +817,112 @@ export const userPage = (
     active: 'users',
     login,
     body: html`<h1>${TEXTS.userTitle} ${user.telegramUserId}</h1>
-      <h2>${TEXTS.userMain}</h2>
-      <dl>
-        <dt>${TEXTS.fieldId}</dt>
-        <dd>${user.id}</dd>
-        <dt>${TEXTS.columnTelegramId}</dt>
-        <dd>${user.telegramUserId}</dd>
-        <dt>${TEXTS.columnName}</dt>
-        <dd>${orNone(user.displayName)}</dd>
-        <dt>${TEXTS.fieldLanguage}</dt>
-        <dd>${orNone(user.languageCode)}</dd>
-        <dt>${TEXTS.fieldBotLanguage}</dt>
-        <dd>${TEXTS.botLanguage[user.language]}</dd>
-        <dt>${TEXTS.columnStatus}</dt>
-        <dd>${TEXTS.userStatus[user.status]}</dd>
-        <dt>${TEXTS.fieldAcquisitionSource}</dt>
-        <dd>${orNone(user.acquisitionSource)}</dd>
-        <dt>${TEXTS.fieldAcquiredAt}</dt>
-        <dd>${whenOrNone(user.acquiredAt)}</dd>
-        <dt>${TEXTS.fieldTelegramBlockedAt}</dt>
-        <dd>${whenOrNone(user.telegramBlockedAt)}</dd>
-        <dt>${TEXTS.fieldNotificationLevel}</dt>
-        <dd>${TEXTS.notificationLevel[user.notificationLevel]}</dd>
-        <dt>${TEXTS.fieldDemoStake}</dt>
-        <dd>${user.demoStake ?? TEXTS.demoStakeDefault}</dd>
-        <dt>${TEXTS.fieldRealStake}</dt>
-        <dd>${user.realStake ?? TEXTS.demoStakeDefault}</dd>
-        <dt>${TEXTS.columnUserCreatedAt}</dt>
-        <dd>${when(user.createdAt)}</dd>
-        <dt>${TEXTS.columnUpdatedAt}</dt>
-        <dd>${when(user.updatedAt)}</dd>
-      </dl>
-      <h2>${TEXTS.userTokens}</h2>
-      <dl>
-        <dt>${TEXTS.fieldBalance}</dt>
-        <dd>${user.tokens.balance}</dd>
-        <dt>${TEXTS.fieldReserved}</dt>
-        <dd>${user.tokens.reserved}</dd>
-        <dt>${TEXTS.fieldAvailable}</dt>
-        <dd>${user.tokens.available}</dd>
-      </dl>
-      ${tokenAdjustmentForm(user, options)}
-      <h2>${TEXTS.userBrokerAccounts}</h2>
-      ${
-        brokerAccounts.length === 0
-          ? html`<p>${TEXTS.brokerAccountsEmpty}</p>`
-          : brokerAccountsTable(brokerAccounts, `/admin/users/${user.id}`)
-      }
-      <h2>${TEXTS.userTrading}</h2>
-      <p>${TEXTS.userIntentsCounts(intents.total, intents.active)}</p>
-      ${
-        intents.recent.length === 0
-          ? html`<p>${TEXTS.intentsEmpty}</p>`
-          : html`<p class="hint">${TEXTS.userIntentsRecent(ADMIN_USER_RECENT_INTENTS)}</p>
-              ${intentsTable(intents.recent)}`
-      }
-      <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>
-      <h2>${TEXTS.userLedger}</h2>
-      ${
-        ledger.recent.length === 0
-          ? html`<p>${TEXTS.tokensEmpty}</p>`
-          : html`<p class="hint">${TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER)}</p>
-              ${ledgerTable(ledger.recent)}`
-      }
-      <p><a href="${tokensHref({ user: user.id })}">${TEXTS.userLedgerAll}</a></p>
-      <h2>${TEXTS.userDeposits}</h2>
-      ${
-        deposits.recent.length === 0
-          ? html`<p>${TEXTS.depositsEmpty}</p>`
-          : html`<p class="hint">${TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER)}</p>
-              ${depositsTable(deposits.recent)}`
-      }
-      <p><a href="${depositsHref({ user: user.id })}">${TEXTS.userDepositsAll}</a></p>
-      <h2>${TEXTS.userStarPayments}</h2>
-      ${
-        options.notice === 'refunded' || options.notice === 'refundRecorded'
-          ? html`<p class="notice">${TEXTS.starRefundNotice[options.notice]}</p>`
-          : ''
-      }
-      ${
-        starPayments.recent.length === 0
-          ? html`<p>${TEXTS.starPaymentsEmpty}</p>`
-          : html`<p class="hint">${TEXTS.userStarPaymentsRecent(ADMIN_USER_RECENT_LEDGER)}</p>
-              ${starPaymentsTable(starPayments.recent, `/admin/users/${user.id}`)}`
-      }
-      <h2>${TEXTS.userAudit}</h2>
-      <p>
-        <a href="${auditHref({ entityType: AuditEntityType.User, entityId: user.id })}"
-          >${TEXTS.userAuditAll}</a
-        >
-      </p>`,
+      <section class="section">
+        <h2>${TEXTS.userMain}</h2>
+        <dl class="props">
+          <dt>${TEXTS.fieldId}</dt>
+          <dd>${idCode(user.id)}</dd>
+          <dt>${TEXTS.columnTelegramId}</dt>
+          <dd>${user.telegramUserId}</dd>
+          <dt>${TEXTS.columnName}</dt>
+          <dd>${orNone(user.displayName)}</dd>
+          <dt>${TEXTS.fieldLanguage}</dt>
+          <dd>${orNone(user.languageCode)}</dd>
+          <dt>${TEXTS.fieldBotLanguage}</dt>
+          <dd>${TEXTS.botLanguage[user.language]}</dd>
+          <dt>${TEXTS.columnStatus}</dt>
+          <dd>${userStatus(user.status)}</dd>
+          <dt>${TEXTS.fieldAcquisitionSource}</dt>
+          <dd>${orNone(user.acquisitionSource)}</dd>
+          <dt>${TEXTS.fieldAcquiredAt}</dt>
+          <dd>${whenOrNone(user.acquiredAt)}</dd>
+          <dt>${TEXTS.fieldTelegramBlockedAt}</dt>
+          <dd>${whenOrNone(user.telegramBlockedAt)}</dd>
+          <dt>${TEXTS.fieldNotificationLevel}</dt>
+          <dd>${TEXTS.notificationLevel[user.notificationLevel]}</dd>
+          <dt>${TEXTS.fieldDemoStake}</dt>
+          <dd>${user.demoStake ?? TEXTS.demoStakeDefault}</dd>
+          <dt>${TEXTS.fieldRealStake}</dt>
+          <dd>${user.realStake ?? TEXTS.demoStakeDefault}</dd>
+          <dt>${TEXTS.columnUserCreatedAt}</dt>
+          <dd>${when(user.createdAt)}</dd>
+          <dt>${TEXTS.columnUpdatedAt}</dt>
+          <dd>${when(user.updatedAt)}</dd>
+        </dl>
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userTokens}</h2>
+        <dl class="props">
+          <dt>${TEXTS.fieldBalance}</dt>
+          <dd>${user.tokens.balance}</dd>
+          <dt>${TEXTS.fieldReserved}</dt>
+          <dd>${user.tokens.reserved}</dd>
+          <dt>${TEXTS.fieldAvailable}</dt>
+          <dd>${user.tokens.available}</dd>
+        </dl>
+        ${tokenAdjustmentForm(user, options)}
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userBrokerAccounts}</h2>
+        ${
+          brokerAccounts.length === 0
+            ? empty(TEXTS.brokerAccountsEmpty)
+            : brokerAccountsTable(brokerAccounts, `/admin/users/${user.id}`)
+        }
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userTrading}</h2>
+        <p>${TEXTS.userIntentsCounts(intents.total, intents.active)}</p>
+        ${
+          intents.recent.length === 0
+            ? empty(TEXTS.intentsEmpty)
+            : html`<p class="hint">${TEXTS.userIntentsRecent(ADMIN_USER_RECENT_INTENTS)}</p>
+                ${intentsTable(intents.recent)}`
+        }
+        <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userLedger}</h2>
+        ${
+          ledger.recent.length === 0
+            ? empty(TEXTS.tokensEmpty)
+            : html`<p class="hint">${TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER)}</p>
+                ${ledgerTable(ledger.recent)}`
+        }
+        <p><a href="${tokensHref({ user: user.id })}">${TEXTS.userLedgerAll}</a></p>
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userDeposits}</h2>
+        ${
+          deposits.recent.length === 0
+            ? empty(TEXTS.depositsEmpty)
+            : html`<p class="hint">${TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER)}</p>
+                ${depositsTable(deposits.recent)}`
+        }
+        <p><a href="${depositsHref({ user: user.id })}">${TEXTS.userDepositsAll}</a></p>
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userStarPayments}</h2>
+        ${
+          options.notice === 'refunded' || options.notice === 'refundRecorded'
+            ? html`<p class="notice">${TEXTS.starRefundNotice[options.notice]}</p>`
+            : ''
+        }
+        ${
+          starPayments.recent.length === 0
+            ? empty(TEXTS.starPaymentsEmpty)
+            : html`<p class="hint">${TEXTS.userStarPaymentsRecent(ADMIN_USER_RECENT_LEDGER)}</p>
+                ${starPaymentsTable(starPayments.recent, `/admin/users/${user.id}`)}`
+        }
+      </section>
+      <section class="section">
+        <h2>${TEXTS.userAudit}</h2>
+        <p>
+          <a href="${auditHref({ entityType: AuditEntityType.User, entityId: user.id })}"
+            >${TEXTS.userAuditAll}</a
+          >
+        </p>
+      </section>`,
   });
 
 /** The intents list URL, through the same serializer as usersHref. */
@@ -864,41 +939,37 @@ const code = (value: string | null): SafeHtml | string =>
 const option = (value: string, label: string, selected: string | undefined): SafeHtml =>
   html`<option value="${value}" ${value === selected ? html` selected` : ''}>${label}</option>`;
 
-const intentRow = (intent: AdminTradeIntentView): SafeHtml =>
-  html`<tr>
-    <td><a href="/admin/intents/${intent.id}">${intent.id}</a></td>
-    <td><a href="/admin/users/${intent.userId}">${intent.telegramUserId}</a></td>
-    <td>${code(intent.mode)}</td>
-    <td>${code(intent.status)}</td>
-    <td>${code(intent.action)}</td>
-    <td>${intent.amount}</td>
-    <td>${intent.assetId}</td>
-    <td>${intent.durationSec}</td>
-    <td>${when(intent.createdAt)}</td>
-    <td>${code(intent.lastError)}</td>
-  </tr>`;
+const intentStatus = (status: TradeIntentStatus): SafeHtml =>
+  badge(INTENT_STATUS_BADGE[status], code(status));
 
 // The intents table of the list and of the user card's trading section: one set of columns.
 const intentsTable = (intents: readonly AdminTradeIntentView[]): SafeHtml =>
-  html`<table>
-    <thead>
-      <tr>
-        <th>${TEXTS.columnIntentId}</th>
-        <th>${TEXTS.columnTelegramId}</th>
-        <th>${TEXTS.columnMode}</th>
-        <th>${TEXTS.columnStatus}</th>
-        <th>${TEXTS.columnDirection}</th>
-        <th>${TEXTS.columnAmount}</th>
-        <th>${TEXTS.columnAsset}</th>
-        <th>${TEXTS.columnDuration}</th>
-        <th>${TEXTS.columnUserCreatedAt}</th>
-        <th>${TEXTS.columnLastError}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${intents.map(intentRow)}
-    </tbody>
-  </table>`;
+  table(
+    [
+      { label: TEXTS.columnIntentId },
+      { label: TEXTS.columnTelegramId },
+      { label: TEXTS.columnMode },
+      { label: TEXTS.columnStatus },
+      { label: TEXTS.columnDirection },
+      { label: TEXTS.columnAmount, num: true },
+      { label: TEXTS.columnAsset },
+      { label: TEXTS.columnDuration, num: true },
+      { label: TEXTS.columnUserCreatedAt },
+      { label: TEXTS.columnLastError },
+    ],
+    intents.map((intent) => [
+      html`<a href="/admin/intents/${intent.id}">${intent.id}</a>`,
+      html`<a href="/admin/users/${intent.userId}">${intent.telegramUserId}</a>`,
+      code(intent.mode),
+      intentStatus(intent.status),
+      code(intent.action),
+      intent.amount,
+      intent.assetId,
+      intent.durationSec,
+      when(intent.createdAt),
+      code(intent.lastError),
+    ]),
+  );
 
 export const intentsPage = (
   intents: readonly AdminTradeIntentView[],
@@ -944,7 +1015,7 @@ export const intentsPage = (
         <button type="submit">${TEXTS.intentsFilterSubmit}</button>
       </form>
       <p class="hint">${TEXTS.intentsFilterHint}</p>
-      ${intents.length === 0 ? html`<p>${TEXTS.intentsEmpty}</p>` : intentsTable(intents)}
+      ${intents.length === 0 ? empty(TEXTS.intentsEmpty) : intentsTable(intents)}
       <p class="pager">
         ${
           options.cursor !== undefined || intents.length === 0
@@ -968,11 +1039,11 @@ export const intentPage = (intent: AdminTradeIntentView, login: string): SafeHtm
     active: 'intents',
     login,
     body: html`<h1>${TEXTS.intentTitle} ${intent.id}</h1>
-      <dl>
+      <dl class="props">
         <dt>${TEXTS.fieldId}</dt>
-        <dd>${intent.id}</dd>
+        <dd>${idCode(intent.id)}</dd>
         <dt>${TEXTS.columnStatus}</dt>
-        <dd>${code(intent.status)}</dd>
+        <dd>${intentStatus(intent.status)}</dd>
         <dt>${TEXTS.columnMode}</dt>
         <dd>${code(intent.mode)}</dd>
         <dt>${TEXTS.columnDirection}</dt>
@@ -984,24 +1055,26 @@ export const intentPage = (intent: AdminTradeIntentView, login: string): SafeHtm
         <dt>${TEXTS.columnDuration}</dt>
         <dd>${intent.durationSec}</dd>
         <dt>${TEXTS.fieldUserId}</dt>
-        <dd><a href="/admin/users/${intent.userId}">${intent.userId}</a></dd>
+        <dd>
+          <a href="/admin/users/${intent.userId}">${intent.userId}</a>${copyButton(intent.userId)}
+        </dd>
         <dt>${TEXTS.columnTelegramId}</dt>
         <dd>${intent.telegramUserId}</dd>
         <dt>${TEXTS.fieldBrokerAccountId}</dt>
-        <dd>${intent.brokerAccountId}</dd>
+        <dd>${idCode(intent.brokerAccountId)}</dd>
         <dt>${TEXTS.fieldTradingSessionId}</dt>
         <dd>
           ${
             intent.tradingSessionId === null
               ? TEXTS.none
-              : html`${intent.tradingSessionId}
+              : html`${idCode(intent.tradingSessionId)}
                   <a href="${intentsHref({ session: intent.tradingSessionId })}"
                     >${TEXTS.intentsOfSession}</a
                   >`
           }
         </dd>
         <dt>${TEXTS.fieldClientRequestId}</dt>
-        <dd>${intent.clientRequestId}</dd>
+        <dd>${idCode(intent.clientRequestId)}</dd>
         <dt>${TEXTS.fieldVersion}</dt>
         <dd>${intent.version}</dd>
         <dt>${TEXTS.fieldTokensReserved}</dt>
@@ -1027,27 +1100,41 @@ export const tradingSessionsHref = (query: AdminTradingSessionsQuery): string =>
   return params.size > 0 ? `/admin/trading-sessions?${params}` : '/admin/trading-sessions';
 };
 
+const TRADING_SESSION_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnSessionId },
+  { label: TEXTS.columnTelegramId },
+  { label: TEXTS.columnBrokerUserId },
+  { label: TEXTS.columnMode },
+  { label: TEXTS.columnStatus },
+  { label: TEXTS.columnStopReason },
+  { label: TEXTS.columnAsset },
+  { label: TEXTS.columnDuration, num: true },
+  { label: TEXTS.columnLength },
+  { label: TEXTS.columnStake, num: true },
+  { label: TEXTS.columnStartedAt },
+  { label: TEXTS.columnEndedAt },
+  { label: TEXTS.columnLastDecisionAt },
+];
+
 // settings are null when the row parses as no version: each of its cells then prints "—"
-const tradingSessionRow = (session: AdminTradingSessionView): SafeHtml => {
+const tradingSessionCells = (session: AdminTradingSessionView): Cell[] => {
   const { settings } = session;
-  return html`<tr>
-    <td>
-      ${session.id}
-      <a href="${intentsHref({ session: session.id })}">${TEXTS.tradingSessionIntents}</a>
-    </td>
-    <td><a href="/admin/users/${session.userId}">${session.telegramUserId}</a></td>
-    <td>${session.brokerUserId}</td>
-    <td>${code(session.mode)}</td>
-    <td>${code(session.status)}</td>
-    <td>${code(session.stopReason)}</td>
-    <td>${settings === null ? TEXTS.none : settings.assetId}</td>
-    <td>${settings === null ? TEXTS.none : settings.durationSec}</td>
-    <td>${settings === null ? TEXTS.none : sessionLengthLabel(settings)}</td>
-    <td>${settings === null ? TEXTS.none : settings.stake.baseStake}</td>
-    <td>${when(session.startedAt)}</td>
-    <td>${whenOrNone(session.endedAt)}</td>
-    <td>${whenOrNone(session.lastDecisionAt)}</td>
-  </tr>`;
+  return [
+    html`${session.id}
+      <a href="${intentsHref({ session: session.id })}">${TEXTS.tradingSessionIntents}</a>`,
+    html`<a href="/admin/users/${session.userId}">${session.telegramUserId}</a>`,
+    session.brokerUserId,
+    code(session.mode),
+    badge(TRADING_SESSION_STATUS_BADGE[session.status], code(session.status)),
+    code(session.stopReason),
+    settings === null ? TEXTS.none : settings.assetId,
+    settings === null ? TEXTS.none : settings.durationSec,
+    settings === null ? TEXTS.none : sessionLengthLabel(settings),
+    settings === null ? TEXTS.none : settings.stake.baseStake,
+    when(session.startedAt),
+    whenOrNone(session.endedAt),
+    whenOrNone(session.lastDecisionAt),
+  ];
 };
 
 export const tradingSessionsPage = (
@@ -1061,29 +1148,8 @@ export const tradingSessionsPage = (
     body: html`<h1>${TEXTS.tradingSessionsHeading}</h1>
       ${
         sessions.length === 0
-          ? html`<p>${TEXTS.tradingSessionsEmpty}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnSessionId}</th>
-                  <th>${TEXTS.columnTelegramId}</th>
-                  <th>${TEXTS.columnBrokerUserId}</th>
-                  <th>${TEXTS.columnMode}</th>
-                  <th>${TEXTS.columnStatus}</th>
-                  <th>${TEXTS.columnStopReason}</th>
-                  <th>${TEXTS.columnAsset}</th>
-                  <th>${TEXTS.columnDuration}</th>
-                  <th>${TEXTS.columnLength}</th>
-                  <th>${TEXTS.columnStake}</th>
-                  <th>${TEXTS.columnStartedAt}</th>
-                  <th>${TEXTS.columnEndedAt}</th>
-                  <th>${TEXTS.columnLastDecisionAt}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sessions.map(tradingSessionRow)}
-              </tbody>
-            </table>`
+          ? empty(TEXTS.tradingSessionsEmpty)
+          : table(TRADING_SESSION_COLUMNS, sessions.map(tradingSessionCells))
       }
       <p class="pager">
         ${
@@ -1129,7 +1195,7 @@ export const starRefundsPage = (
       <p class="hint">${TEXTS.starRefundsHint}</p>
       ${
         requests.length === 0
-          ? html`<p>${TEXTS.starRefundsEmpty}</p>`
+          ? empty(TEXTS.starRefundsEmpty)
           : starPaymentsTable(
               requests,
               STAR_REFUNDS_PATH,
@@ -1164,45 +1230,38 @@ const ledgerReference = (entry: AdminLedgerEntry): SafeHtml | string => {
   if (entry.intentId !== null) {
     return html`<a href="/admin/intents/${entry.intentId}">${entry.intentId}</a>`;
   }
-  if (entry.depositEventId !== null) return code(entry.depositEventId);
-  if (entry.brokerAccountId !== null) return code(entry.brokerAccountId);
-  if (entry.starPaymentId !== null) return code(entry.starPaymentId);
-  if (entry.referralId !== null) return code(entry.referralId);
+  if (entry.depositEventId !== null) return idCode(entry.depositEventId);
+  if (entry.brokerAccountId !== null) return idCode(entry.brokerAccountId);
+  if (entry.starPaymentId !== null) return idCode(entry.starPaymentId);
+  if (entry.referralId !== null) return idCode(entry.referralId);
   if (entry.refType !== null && entry.refId !== null) {
-    return code(`${entry.refType}:${entry.refId}`);
+    return idCode(`${entry.refType}:${entry.refId}`);
   }
   return TEXTS.none;
 };
 
-const ledgerRow = (entry: AdminLedgerEntry): SafeHtml =>
-  html`<tr>
-    <td>${when(entry.createdAt)}</td>
-    <td><a href="/admin/users/${entry.userId}">${entry.telegramUserId}</a></td>
-    <td>${code(entry.kind)}</td>
-    <td class="num">${entry.balanceDelta}</td>
-    <td class="num">${entry.reservedDelta}</td>
-    <td>${ledgerReference(entry)}</td>
-    <td>${orNone(entry.note)}</td>
-  </tr>`;
-
 // The ledger table of the list and of the user card's section: one set of columns.
 const ledgerTable = (entries: readonly AdminLedgerEntry[]): SafeHtml =>
-  html`<table>
-    <thead>
-      <tr>
-        <th>${TEXTS.columnLedgerAt}</th>
-        <th>${TEXTS.columnTelegramId}</th>
-        <th>${TEXTS.columnKind}</th>
-        <th>${TEXTS.columnBalanceDelta}</th>
-        <th>${TEXTS.columnReservedDelta}</th>
-        <th>${TEXTS.columnReference}</th>
-        <th>${TEXTS.columnNote}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${entries.map(ledgerRow)}
-    </tbody>
-  </table>`;
+  table(
+    [
+      { label: TEXTS.columnLedgerAt },
+      { label: TEXTS.columnTelegramId },
+      { label: TEXTS.columnKind },
+      { label: TEXTS.columnBalanceDelta, num: true },
+      { label: TEXTS.columnReservedDelta, num: true },
+      { label: TEXTS.columnReference },
+      { label: TEXTS.columnNote, className: 'wrap' },
+    ],
+    entries.map((entry) => [
+      when(entry.createdAt),
+      html`<a href="/admin/users/${entry.userId}">${entry.telegramUserId}</a>`,
+      code(entry.kind),
+      entry.balanceDelta,
+      entry.reservedDelta,
+      ledgerReference(entry),
+      orNone(entry.note),
+    ]),
+  );
 
 export const tokensPage = (
   entries: readonly AdminLedgerEntry[],
@@ -1236,7 +1295,7 @@ export const tokensPage = (
         <button type="submit">${TEXTS.tokensFilterSubmit}</button>
       </form>
       <p class="hint">${TEXTS.tokensFilterHint}</p>
-      ${entries.length === 0 ? html`<p>${TEXTS.tokensEmpty}</p>` : ledgerTable(entries)}
+      ${entries.length === 0 ? empty(TEXTS.tokensEmpty) : ledgerTable(entries)}
       <p class="pager">
         ${
           options.cursor !== undefined || entries.length === 0
@@ -1407,39 +1466,32 @@ const depositOwner = (deposit: AdminDepositView): SafeHtml | string =>
     ? TEXTS.none
     : html`<a href="/admin/users/${deposit.userId}">${deposit.telegramUserId}</a>`;
 
-const depositRow = (deposit: AdminDepositView): SafeHtml =>
-  html`<tr>
-    <td>${when(deposit.createdAt)}</td>
-    <td>${depositOwner(deposit)}</td>
-    <td>${code(deposit.brokerAccountId)}</td>
-    <td>${code(deposit.brokerUserId)}</td>
-    <td>${code(deposit.paymentId)}</td>
-    <td class="num">${deposit.amount}</td>
-    <td>${orNone(deposit.currency)}</td>
-    <td>${code(deposit.status)}</td>
-    <td>${whenOrNone(deposit.processedAt)}</td>
-  </tr>`;
-
 // The deposits table of the list and of the user card's section: one set of columns.
 const depositsTable = (deposits: readonly AdminDepositView[]): SafeHtml =>
-  html`<table>
-    <thead>
-      <tr>
-        <th>${TEXTS.columnDepositAt}</th>
-        <th>${TEXTS.columnTelegramId}</th>
-        <th>${TEXTS.columnAccountId}</th>
-        <th>${TEXTS.columnTraderId}</th>
-        <th>${TEXTS.columnPaymentId}</th>
-        <th>${TEXTS.columnAmount}</th>
-        <th>${TEXTS.columnCurrency}</th>
-        <th>${TEXTS.columnStatus}</th>
-        <th>${TEXTS.columnProcessedAt}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${deposits.map(depositRow)}
-    </tbody>
-  </table>`;
+  table(
+    [
+      { label: TEXTS.columnDepositAt },
+      { label: TEXTS.columnTelegramId },
+      { label: TEXTS.columnAccountId },
+      { label: TEXTS.columnTraderId },
+      { label: TEXTS.columnPaymentId },
+      { label: TEXTS.columnAmount, num: true },
+      { label: TEXTS.columnCurrency },
+      { label: TEXTS.columnStatus },
+      { label: TEXTS.columnProcessedAt },
+    ],
+    deposits.map((deposit) => [
+      when(deposit.createdAt),
+      depositOwner(deposit),
+      idCodeOrNone(deposit.brokerAccountId),
+      code(deposit.brokerUserId),
+      idCode(deposit.paymentId),
+      deposit.amount,
+      orNone(deposit.currency),
+      badge(DEPOSIT_STATUS_BADGE[deposit.status], code(deposit.status)),
+      whenOrNone(deposit.processedAt),
+    ]),
+  );
 
 export const depositsPage = (
   deposits: readonly AdminDepositView[],
@@ -1473,7 +1525,7 @@ export const depositsPage = (
         <button type="submit">${TEXTS.depositsFilterSubmit}</button>
       </form>
       <p class="hint">${TEXTS.depositsFilterHint}</p>
-      ${deposits.length === 0 ? html`<p>${TEXTS.depositsEmpty}</p>` : depositsTable(deposits)}
+      ${deposits.length === 0 ? empty(TEXTS.depositsEmpty) : depositsTable(deposits)}
       <p class="pager">
         ${
           options.cursor !== undefined || deposits.length === 0
@@ -1540,7 +1592,7 @@ export const brokerAccountsPage = (
       <p class="hint">${TEXTS.brokerAccountsFilterHint}</p>
       ${
         accounts.length === 0
-          ? html`<p>${TEXTS.brokerAccountsEmpty}</p>`
+          ? empty(TEXTS.brokerAccountsEmpty)
           : brokerAccountsTable(
               accounts,
               '/admin/broker-accounts',

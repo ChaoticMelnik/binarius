@@ -52,6 +52,9 @@ export const TEXTS = {
   revokeSubmit: 'Завершить',
   logoutSubmit: 'Выйти',
   noDisplayName: '—',
+  // the copy button next to an id (#656); the script swaps the label after a copy
+  copy: 'Копировать',
+  copied: 'Скопировано',
 
   navOverview: 'Сводка',
   navUsers: 'Пользователи',

@@ -26,10 +26,11 @@ const element = (attrs: Record<string, string> = {}, children: FakeElement[] = [
     addEventListener: (type, listener) => {
       listeners[type] = listener;
     },
-    querySelectorAll: (selector) =>
-      selector === '[data-theme-icon]'
-        ? children.filter((child) => child.attributes.has('data-theme-icon'))
-        : [],
+    // only the `[attribute]` selectors the script asks a button for
+    querySelectorAll: (selector) => {
+      const name = /^\[([a-z-]+)\]$/.exec(selector)?.[1];
+      return name === undefined ? [] : children.filter((child) => child.attributes.has(name));
+    },
   };
 };
 
@@ -49,9 +50,30 @@ const themeButton = (): FakeElement =>
     ],
   );
 
-type Storage = 'throws' | Record<string, string>;
+const copyButton = (value: string): FakeElement =>
+  element(
+    {
+      'data-copy': value,
+      'aria-label': 'Копировать',
+      'data-label-copy': 'Копировать',
+      'data-label-copied': 'Скопировано',
+    },
+    [element({ 'data-copy-icon': 'copy' }), element({ 'data-copy-icon': 'check', hidden: '' })],
+  );
 
-function run({ storage = {}, button = true }: { storage?: Storage; button?: boolean } = {}) {
+// what a click's target answers to `closest('[data-copy]')`: the icon inside the button
+const insideOf = (button: FakeElement) => ({
+  closest: (selector: string) => (selector === '[data-copy]' ? button : null),
+});
+
+type Storage = 'throws' | Record<string, string>;
+type Clipboard = 'none' | 'writes' | 'rejects';
+
+function run({
+  storage = {},
+  button = true,
+  clipboard = 'none',
+}: { storage?: Storage; button?: boolean; clipboard?: Clipboard } = {}) {
   const root = { ...element(), className: 'no-js' };
   const toggle = button ? themeButton() : undefined;
   const docListeners: Record<string, () => void> = {};
@@ -76,9 +98,33 @@ function run({ storage = {}, button = true }: { storage?: Storage; button?: bool
       docListeners[type] = listener;
     },
     querySelectorAll: (selector: string) =>
-      selector === '[data-theme-toggle]' && toggle !== undefined ? [toggle] : [],
+      selector === '[data-theme-toggle]' && toggle !== undefined
+        ? [toggle]
+        : selector === '[data-copy]'
+          ? [copy]
+          : [],
   };
-  runInNewContext(ADMIN_CLIENT_JS, { window: { document, localStorage } });
+  const copy = copyButton('00000000-0000-4000-8000-0000000000c1');
+  const written: string[] = [];
+  const timers: (() => void)[] = [];
+  const navigator =
+    clipboard === 'none'
+      ? {}
+      : {
+          clipboard: {
+            writeText: (value: string) => {
+              written.push(value);
+              return clipboard === 'writes'
+                ? Promise.resolve()
+                : Promise.reject(new Error('NotAllowedError'));
+            },
+          },
+        };
+  const setTimeout = (callback: () => void) => {
+    timers.push(callback);
+    return timers.length;
+  };
+  runInNewContext(ADMIN_CLIENT_JS, { window: { document, localStorage, navigator, setTimeout } });
   const visibleIcon = () =>
     toggle?.children
       .find((child) => !child.attributes.has('hidden'))
@@ -90,6 +136,18 @@ function run({ storage = {}, button = true }: { storage?: Storage; button?: bool
     visibleIcon,
     ready: () => docListeners.DOMContentLoaded?.(),
     click: () => toggle?.listeners.click?.(),
+    copy,
+    written,
+    timers,
+    visibleCopyIcon: () =>
+      copy.children
+        .find((child) => !child.attributes.has('hidden'))
+        ?.getAttribute('data-copy-icon'),
+    // the listener's promise settles on the microtask queue; one macrotask turn drains it
+    clickCopy: async () => {
+      (docListeners.click as unknown as (event: unknown) => void)({ target: insideOf(copy) });
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    },
   };
 }
 
@@ -152,5 +210,45 @@ describe('the admin pages script (#459)', () => {
     const page = run({ button: false, storage: { 'admin-theme': 'light' } });
     expect(() => page.ready()).not.toThrow();
     expect(page.root.getAttribute('data-theme')).toBe('light');
+  });
+});
+
+describe('the copy button (#656)', () => {
+  it('J7 copies the data-copy value, shows «copied», and goes back after the timer', async () => {
+    const page = run({ clipboard: 'writes' });
+    page.ready();
+    expect(page.copy.attributes.has('hidden')).toBe(false);
+
+    await page.clickCopy();
+    expect(page.written).toEqual(['00000000-0000-4000-8000-0000000000c1']);
+    expect(page.copy.getAttribute('aria-label')).toBe('Скопировано');
+    expect(page.visibleCopyIcon()).toBe('check');
+
+    expect(page.timers).toHaveLength(1);
+    page.timers[0]?.();
+    expect(page.copy.getAttribute('aria-label')).toBe('Копировать');
+    expect(page.visibleCopyIcon()).toBe('copy');
+  });
+
+  it('J8 hides every copy button without navigator.clipboard, and a click does nothing', async () => {
+    const page = run({ clipboard: 'none' });
+    page.ready();
+    expect(page.copy.attributes.has('hidden')).toBe(true);
+
+    await page.clickCopy();
+    expect(page.copy.getAttribute('aria-label')).toBe('Копировать');
+    expect(page.visibleCopyIcon()).toBe('copy');
+    expect(page.timers).toEqual([]);
+  });
+
+  it('J9 leaves the button as it was when the write is refused', async () => {
+    const page = run({ clipboard: 'rejects' });
+    page.ready();
+
+    await expect(page.clickCopy()).resolves.toBeUndefined();
+    expect(page.written).toEqual(['00000000-0000-4000-8000-0000000000c1']);
+    expect(page.copy.getAttribute('aria-label')).toBe('Копировать');
+    expect(page.visibleCopyIcon()).toBe('copy');
+    expect(page.timers).toEqual([]);
   });
 });

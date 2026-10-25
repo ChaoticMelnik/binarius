@@ -84,6 +84,19 @@ import {
   sampleAdjustmentRefusal,
 } from './admin/testing';
 import { ADMIN_CLIENT_JS } from './admin/client';
+import { EXPORTED_PAGES } from './admin/export-pages';
+import {
+  brokerAccountsPage,
+  depositsPage,
+  intentPage,
+  intentsPage,
+  sessionsPage,
+  starRefundsPage,
+  tokensPage,
+  tradingSessionsPage,
+  userPage,
+  usersPage,
+} from './admin/pages';
 import { ADMIN_CSS, ADMIN_FONTS } from './admin/static';
 import { TEXTS } from './admin/texts';
 
@@ -376,6 +389,12 @@ const get = (url: string, cookies?: Record<string, string>) =>
 
 const cookieOf = (response: Awaited<ReturnType<typeof get>>, name: string) =>
   response.cookies.find((entry) => entry.name === name);
+
+// #656: a cell of the table component that prints an id — the id, then its copy button
+const idCell = (id: string): unknown =>
+  expect.stringMatching(
+    new RegExp(`^<code>${id}</code><button type="button" [^>]*data-copy="${id}"[^>]*>[\\s\\S]*</button>$`),
+  );
 
 describe('the origin check', () => {
   // the browser sends no Origin on a plain navigation, so a GET cannot require one
@@ -1214,14 +1233,14 @@ describe('the read pages (#107)', () => {
 
     expect(calls.user).toEqual([[TOKEN, SAMPLE_USER_ID]]);
     expect(response.body).toContain(TEXTS.demoStakeDefault);
-    expect(response.body).toContain(
-      `<dt>${TEXTS.fieldRealStake}</dt>\n        <dd>${TEXTS.demoStakeDefault}</dd>`,
+    expect(response.body).toMatch(
+      new RegExp(`<dt>${TEXTS.fieldRealStake}</dt>\\s*<dd>${TEXTS.demoStakeDefault}</dd>`),
     );
     expect(response.body).toContain('broker-7');
     expect(response.body).toContain(`<dd>${SAMPLE_USER.user.tokens.available}</dd>`);
     // #508: the language of the bot's texts beside Telegram's tag
-    expect(response.body).toContain(
-      `<dt>${TEXTS.fieldBotLanguage}</dt>\n        <dd>${TEXTS.botLanguage.ru}</dd>`,
+    expect(response.body).toMatch(
+      new RegExp(`<dt>${TEXTS.fieldBotLanguage}</dt>\\s*<dd>${TEXTS.botLanguage.ru}</dd>`),
     );
     // the shared accounts table (#342): the account id first, no owner column on the card; the
     // section alone, since the deposits section prints the same account id
@@ -1229,11 +1248,11 @@ describe('the read pages (#107)', () => {
       response.body.indexOf(`<h2>${TEXTS.userBrokerAccounts}</h2>`),
       response.body.indexOf(`<h2>${TEXTS.userTrading}</h2>`),
     );
-    expect(section).toMatch(
-      new RegExp(
-        `<tr>\\s*<td><code>${SAMPLE_BROKER_ACCOUNT_ITEM.id}</code></td>\\s*<td>broker-7</td>`,
-      ),
-    );
+    const [firstCell, secondCell] = [
+      ...(section.split('<tbody>')[1] ?? '').matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g),
+    ].map((m) => m[1]);
+    expect(firstCell).toEqual(idCell(SAMPLE_BROKER_ACCOUNT_ITEM.id));
+    expect(secondCell).toBe('broker-7');
     expect(section).toMatch(new RegExp(`<tr>\\s*<th>${TEXTS.columnAccountId}</th>`));
     expect(section).not.toContain(`<th>${TEXTS.columnTelegramId}</th>`);
   });
@@ -1574,7 +1593,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     expect(response.body).toContain(`<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`);
     expect(response.body).toContain('<code>rejected_twice</code>');
     expect(response.body).toMatch(
-      /<td>101<\/td>\s*<td>60<\/td>\s*<td>5 сделок<\/td>\s*<td>1\.5<\/td>/,
+      /<td[^>]*>101<\/td>\s*<td[^>]*>60<\/td>\s*<td[^>]*>5 сделок<\/td>\s*<td[^>]*>1\.5<\/td>/,
     );
     expect(response.body).not.toContain(TEXTS.tradingSessionsNext);
     expect(response.body).not.toContain(TEXTS.tradingSessionsFirst);
@@ -1590,7 +1609,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     const response = await get('/admin/trading-sessions', withCookie);
 
     expect(response.statusCode).toBe(200);
-    expect(response.body.match(/<td>\s*—\s*<\/td>/g)).toHaveLength(7);
+    expect(response.body.match(/<td[^>]*>\s*—\s*<\/td>/g)).toHaveLength(7);
   });
 
   // #552: settings v3 count the session in cycles, v1/v2 in trades; v5 too, an H1 session (#775)
@@ -1623,13 +1642,10 @@ describe('the trading sessions page, the card section and the overview breakdown
 
     const response = await get('/admin/trading-sessions', withCookie);
 
-    expect(response.body.match(/<td>\d+ (циклов|цикл|цикла|сделки)<\/td>/g)).toEqual([
-      '<td>5 циклов</td>',
-      '<td>1 цикл</td>',
-      '<td>2 цикла</td>',
-      '<td>3 сделки</td>',
-      '<td>7 циклов</td>',
-    ]);
+    const lengths = [
+      ...response.body.matchAll(new RegExp(`<td data-label="${TEXTS.columnLength}">([^<]*)</td>`, 'g')),
+    ].map((m) => m[1]);
+    expect(lengths).toEqual(['5 циклов', '1 цикл', '2 цикла', '3 сделки', '7 циклов']);
     expect(response.body).toContain(`<th>${TEXTS.columnLength}</th>`);
   });
 
@@ -1759,7 +1775,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       response.body.indexOf(`<h2>${TEXTS.userBrokerAccounts}</h2>`),
       response.body.indexOf(`<h2>${TEXTS.userTrading}</h2>`),
     );
-    expect(accountsSection).toContain(`<p>${TEXTS.brokerAccountsEmpty}</p>`);
+    expect(accountsSection).toContain(`<p class="empty">${TEXTS.brokerAccountsEmpty}</p>`);
     expect(accountsSection).not.toContain('<table');
     expect(response.body).toContain(`<h2>${TEXTS.userTrading}</h2>`);
     expect(response.body).toContain(TEXTS.userIntentsCounts(0, 0));
@@ -1891,10 +1907,12 @@ describe('the token ledger page and the card section (#109)', () => {
     expect(reserve).toContain(
       `<a href="/admin/intents/${SAMPLE_INTENT.id}">${SAMPLE_INTENT.id}</a>`,
     );
-    expect(reserve).toMatch(/<td class="num">0<\/td>\s*<td class="num">1<\/td>/);
+    expect(reserve).toMatch(
+      /<td data-label="[^"]*" class="num">0<\/td>\s*<td data-label="[^"]*" class="num">1<\/td>/,
+    );
     expect(adjustment).toContain('<code>adjustment</code>');
     expect(adjustment).toMatch(
-      /<td class="num">-3<\/td>\s*<td class="num">0<\/td>\s*<td>\s*—\s*<\/td>/,
+      /<td data-label="[^"]*" class="num">-3<\/td>\s*<td data-label="[^"]*" class="num">0<\/td>\s*<td data-label="[^"]*">\s*—\s*<\/td>/,
     );
     expect(adjustment).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(response.body).not.toContain(SAMPLE_LEDGER_ADJUSTMENT.note);
@@ -1926,13 +1944,14 @@ describe('the token ledger page and the card section (#109)', () => {
     const response = await get('/admin/tokens', withCookie);
 
     const [purchase = '', bonus = '', manual = '', stars = '', reward = ''] = rowsOf(response.body);
-    expect(purchase).toMatch(
-      new RegExp(`<td><code>${deposit}</code></td>\\s*<td>\\s*—\\s*</td>\\s*</tr>`),
-    );
-    expect(bonus).toContain(`<td><code>${account}</code></td>`);
-    expect(manual).toContain(`<td><code>manual:${ref}</code></td>`);
-    expect(stars).toContain(`<td><code>${payment}</code></td>`);
-    expect(reward).toContain(`<td><code>${referral}</code></td>`);
+    // the reference, then the note: the last two cells of the row
+    const lastTwo = (row: string) =>
+      [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => (m[1] ?? '').trim()).slice(-2);
+    expect(lastTwo(purchase)).toEqual([idCell(deposit), TEXTS.none]);
+    expect(lastTwo(bonus)[0]).toEqual(idCell(account));
+    expect(lastTwo(manual)[0]).toEqual(idCell(`manual:${ref}`));
+    expect(lastTwo(stars)[0]).toEqual(idCell(payment));
+    expect(lastTwo(reward)[0]).toEqual(idCell(referral));
   });
 
   it('says so when there are no entries, and keeps the filter in the first-page link', async () => {
@@ -2330,24 +2349,24 @@ describe('the deposits page and the card section (#341)', () => {
     expect(cellsOf(owned)).toEqual([
       `<time datetime="${SAMPLE_DEPOSIT.createdAt}">${SAMPLE_DEPOSIT.createdAt}</time>`,
       `<a href="/admin/users/${USER}">4242</a>`,
-      `<code>${SAMPLE_DEPOSIT.brokerAccountId}</code>`,
+      idCell(SAMPLE_DEPOSIT.brokerAccountId ?? ''),
       '<code>broker-7</code>',
-      '<code>pay-1</code>',
+      idCell('pay-1'),
       '10.50000000',
       'USD',
-      '<code>credited</code>',
+      '<span class="badge badge-success"><code>credited</code></span>',
       `<time datetime="${SAMPLE_DEPOSIT.processedAt}">${SAMPLE_DEPOSIT.processedAt}</time>`,
     ]);
-    expect(owned).toContain('<td class="num">10.50000000</td>');
+    expect(owned).toContain(`<td data-label="${TEXTS.columnAmount}" class="num">10.50000000</td>`);
     expect(cellsOf(unowned)).toEqual([
       `<time datetime="${SAMPLE_DEPOSIT_UNOWNED.createdAt}">${SAMPLE_DEPOSIT_UNOWNED.createdAt}</time>`,
       TEXTS.none,
       TEXTS.none,
       '<code>trader-&lt;b&gt;</code>',
-      '<code>pay-2</code>',
+      idCell('pay-2'),
       '5.00000000',
       TEXTS.none,
-      '<code>received</code>',
+      '<span class="badge badge-info"><code>received</code></span>',
       TEXTS.none,
     ]);
     expect(response.body).not.toContain(SAMPLE_DEPOSIT_UNOWNED.brokerUserId);
@@ -2370,7 +2389,7 @@ describe('the deposits page and the card section (#341)', () => {
     const [row = ''] = rowsOf(response.body);
     const cells = cellsOf(row);
     expect(cells[1]).toBe(TEXTS.none);
-    expect(cells[2]).toBe(`<code>${SAMPLE_DEPOSIT.brokerAccountId}</code>`);
+    expect(cells[2]).toEqual(idCell(SAMPLE_DEPOSIT.brokerAccountId ?? ''));
     expect(row).not.toContain('/admin/users/');
   });
 
@@ -2421,7 +2440,7 @@ describe('the deposits page and the card section (#341)', () => {
     const section = response.body.slice(depositsAt, auditAt);
     expect(section).toContain(TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER));
     expect(section).toContain('<code>broker-7</code>');
-    expect(section).toContain('<td class="num">10.50000000</td>');
+    expect(section).toContain(`<td data-label="${TEXTS.columnAmount}" class="num">10.50000000</td>`);
     expect(hrefOf(section, TEXTS.userDepositsAll)).toBe(`/admin/deposits?user=${SAMPLE_USER_ID}`);
   });
 
@@ -2569,11 +2588,11 @@ describe('the broker accounts page (#342)', () => {
     const h = SAMPLE_BROKER_ACCOUNT_HALTED;
     expect(cellsOf(halted)).toEqual([
       `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
-      `<code>${h.id}</code>`,
+      idCell(h.id),
       'broker-&lt;b&gt;',
       TEXTS.none,
       TEXTS.no,
-      TEXTS.accountStatus.revoked,
+      `<span class="badge badge-danger">${TEXTS.accountStatus.revoked}</span>`,
       'refresh_invalid_grant',
       TEXTS.yes,
       'trade_mismatch',
@@ -2587,11 +2606,11 @@ describe('the broker accounts page (#342)', () => {
     const a = SAMPLE_BROKER_ACCOUNT_ITEM;
     expect(cellsOf(active)).toEqual([
       `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
-      `<code>${a.id}</code>`,
+      idCell(a.id),
       'broker-7',
       'ada@example.com',
       TEXTS.yes,
-      TEXTS.accountStatus.active,
+      `<span class="badge badge-success">${TEXTS.accountStatus.active}</span>`,
       TEXTS.none,
       TEXTS.no,
       TEXTS.none,
@@ -2617,7 +2636,7 @@ describe('the broker accounts page (#342)', () => {
     const response = await get('/admin/broker-accounts?halted=true', withCookie);
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain(`<p>${TEXTS.brokerAccountsEmpty}</p>`);
+    expect(response.body).toContain(`<p class="empty">${TEXTS.brokerAccountsEmpty}</p>`);
     expect(response.body).not.toContain('<table');
     expect(response.body).toMatch(CHECKBOX_CHECKED);
     expect(hrefOf(response.body, TEXTS.brokerAccountsFirst)).toBe(
@@ -4065,7 +4084,7 @@ describe('the service accounts (#391)', () => {
     expect(working).toMatch(formOf('off', '/admin/service-accounts', w?.id));
     expect(revoked).toMatch(formOf('off', '/admin/service-accounts', r?.id));
     expect(expired).toMatch(formOf('off', '/admin/service-accounts', e?.id));
-    expect(working).toContain(`<button type="submit">${TEXTS.serviceUnmark}</button>`);
+    expect(working).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.serviceUnmark}</button>`);
     expect(response.body).toContain(TEXTS.serviceAccountsHint);
   });
 
@@ -4082,7 +4101,7 @@ describe('the service accounts (#391)', () => {
   it('W3 offers «Сделать служебным» for an unmarked account and the date with «Снять» for a marked one', async () => {
     const card = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
     expect(card.body).toMatch(formOf('on', `/admin/users/${SAMPLE_USER_ID}`));
-    expect(card.body).toContain(`<button type="submit">${TEXTS.serviceMark}</button>`);
+    expect(card.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.serviceMark}</button>`);
     expect(card.body).toContain(`<th>${TEXTS.columnService}</th>`);
 
     const list = await get('/admin/broker-accounts', withCookie);
@@ -4222,7 +4241,7 @@ describe('the H1 mark (#745)', () => {
     const card = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
     expect(card.body).toContain(`<th>${TEXTS.columnH1}</th>`);
     expect(card.body).toMatch(formOf('on', `/admin/users/${SAMPLE_USER_ID}`));
-    expect(card.body).toContain(`<button type="submit">${TEXTS.h1Mark}</button>`);
+    expect(card.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.h1Mark}</button>`);
     expect(card.body).not.toMatch(formOf('off', `/admin/users/${SAMPLE_USER_ID}`));
 
     // the list's second account is marked (SAMPLE_BROKER_ACCOUNTS)
@@ -4232,7 +4251,7 @@ describe('the H1 mark (#745)', () => {
     expect(list.body).toMatch(formOf('off', '/admin/broker-accounts', ACCOUNT));
     expect(list.body).not.toMatch(formOf('on', '/admin/broker-accounts', ACCOUNT));
     expect(list.body).toContain(`<time datetime="${H1_SINCE}">${H1_SINCE}</time>`);
-    expect(list.body).toContain(`<button type="submit">${TEXTS.h1Unmark}</button>`);
+    expect(list.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.h1Unmark}</button>`);
 
     const service = await get('/admin/service-accounts', withCookie);
     expect(service.body).not.toContain(`<th>${TEXTS.columnH1}</th>`);
@@ -4327,7 +4346,7 @@ describe('the Stars refund and the requests page (#510)', () => {
     expect(card.body).toContain('<code>charge-&lt;1&gt;</code>');
     expect(card.body).toMatch(formOf(PAYMENT, CARD));
     expect(card.body).not.toMatch(formOf(SAMPLE_STAR_PAYMENT_REFUNDED.id, CARD));
-    expect(card.body).toContain(`<button type="submit">${TEXTS.starRefundSubmit}</button>`);
+    expect(card.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.starRefundSubmit}</button>`);
   });
 
   it('SR-W2 the requests page lists the requests with the user link and the form, the nav item current', async () => {
@@ -4462,5 +4481,328 @@ describe('the Stars refund and the requests page (#510)', () => {
     const response = await get('/admin/star-refunds?cursor=nope', withCookie);
     expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/star-refunds']);
     expect(calls.starRefunds).toEqual([]);
+  });
+});
+
+describe('the admin lists and cards (#656)', () => {
+  const LOGIN = SAMPLE_ME.login;
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const LIST_PAGES = [
+    'users',
+    'sessions',
+    'intents',
+    'trading-sessions',
+    'tokens',
+    'deposits',
+    'broker-accounts',
+    'star-refunds',
+  ] as const;
+  const render = (name: string): string => EXPORTED_PAGES[name]?.().value ?? '';
+  const attrOf = (tag: string, name: string): string | undefined =>
+    new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+
+  // every table of the page, as its header labels and, per body row, each cell's opening tag
+  const tablesOf = (body: string) =>
+    [...body.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/g)].map((m) => {
+      const inner = m[1] ?? '';
+      const head = /<thead>([\s\S]*?)<\/thead>/.exec(inner)?.[1] ?? '';
+      const tbody = /<tbody>([\s\S]*?)<\/tbody>/.exec(inner)?.[1] ?? '';
+      return {
+        labels: [...head.matchAll(/<th>([\s\S]*?)<\/th>/g)].map((h) => (h[1] ?? '').trim()),
+        rows: [...tbody.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map((r) =>
+          [...(r[1] ?? '').matchAll(/<td\b[^>]*>/g)].map((c) => c[0]),
+        ),
+      };
+    });
+
+  it.each([...LIST_PAGES, 'user'])(
+    'L1 %s: every table is the component, every cell labelled by its column',
+    (name) => {
+      const body = render(name);
+      const tables = tablesOf(body);
+      expect(tables.length).toBeGreaterThan(0);
+      expect(body.match(/<table\b/g)).toHaveLength(tables.length);
+      expect(body.match(/<div class="table-wrap"><table class="table">/g)).toHaveLength(
+        tables.length,
+      );
+      for (const { labels, rows } of tables) {
+        expect(rows.length).toBeGreaterThan(0);
+        for (const cells of rows) {
+          expect(cells).toHaveLength(labels.length);
+          cells.forEach((tag, index) => {
+            const label = labels[index] ?? '';
+            expect(attrOf(tag, 'data-label')).toBe(label === '' ? undefined : label);
+          });
+        }
+      }
+    },
+  );
+
+  it('L1 a session row has no label in its action cell, and the current one keeps its class', () => {
+    const body = render('sessions');
+    expect(body).toContain('<tr class="current">');
+    expect(body).toMatch(/<td>\s*<form method="post" action="\/admin\/sessions\/[^"]*\/revoke">/);
+  });
+
+  const ONE_ROW: Record<string, (status: string) => string> = {
+    user: (status) =>
+      usersPage([{ ...SAMPLE_LIST_ITEM, status: status as typeof SAMPLE_LIST_ITEM.status }], {
+        nextCursor: null,
+        login: LOGIN,
+      }).value,
+    intent: (status) =>
+      intentsPage([{ ...SAMPLE_INTENT, status: status as typeof SAMPLE_INTENT.status }], {
+        filters: {},
+        nextCursor: null,
+        login: LOGIN,
+      }).value,
+    tradingSession: (status) =>
+      tradingSessionsPage(
+        [{ ...SAMPLE_TRADING_SESSION, status: status as typeof SAMPLE_TRADING_SESSION.status }],
+        { nextCursor: null, login: LOGIN },
+      ).value,
+    account: (status) =>
+      brokerAccountsPage(
+        [
+          {
+            ...SAMPLE_BROKER_ACCOUNT_ITEM,
+            status: status as typeof SAMPLE_BROKER_ACCOUNT_ITEM.status,
+          },
+        ],
+        { filters: {}, nextCursor: null, login: LOGIN },
+      ).value,
+    deposit: (status) =>
+      depositsPage([{ ...SAMPLE_DEPOSIT, status: status as typeof SAMPLE_DEPOSIT.status }], {
+        filters: {},
+        nextCursor: null,
+        login: LOGIN,
+      }).value,
+    starPayment: (status) =>
+      starRefundsPage(
+        SAMPLE_STAR_REFUNDS.requests.map((request) => ({
+          ...request,
+          status: status as typeof request.status,
+        })),
+        { nextCursor: null, login: LOGIN },
+      ).value,
+  };
+  const codeOf = (status: string) => `<code>${status}</code>`;
+  // the expected colour of every status, written out here rather than read from pages.ts
+  const BADGES: [string, string, string, string][] = [
+    ['user', 'active', 'success', TEXTS.userStatus.active],
+    ['user', 'blocked', 'danger', TEXTS.userStatus.blocked],
+    ...(
+      [
+        ['planned', 'info'],
+        ['reserved', 'info'],
+        ['queued', 'info'],
+        ['submitting', 'info'],
+        ['accepted', 'info'],
+        ['reconciling', 'info'],
+        ['settled', 'success'],
+        ['rejected', 'danger'],
+        ['unknown', 'warning'],
+        ['manual_review', 'warning'],
+      ] as const
+    ).map(([status, variant]): [string, string, string, string] => [
+      'intent',
+      status,
+      variant,
+      codeOf(status),
+    ]),
+    ['tradingSession', 'active', 'success', codeOf('active')],
+    ['tradingSession', 'paused', 'warning', codeOf('paused')],
+    ['tradingSession', 'stopped', 'neutral', codeOf('stopped')],
+    ['account', 'active', 'success', TEXTS.accountStatus.active],
+    ['account', 'pending', 'warning', TEXTS.accountStatus.pending],
+    ['account', 'revoked', 'danger', TEXTS.accountStatus.revoked],
+    ['deposit', 'received', 'info', codeOf('received')],
+    ['deposit', 'credited', 'success', codeOf('credited')],
+    ['deposit', 'ignored', 'neutral', codeOf('ignored')],
+    ['deposit', 'failed', 'danger', codeOf('failed')],
+    ['starPayment', 'paid', 'success', TEXTS.starPaymentStatus.paid],
+    ['starPayment', 'held', 'warning', TEXTS.starPaymentStatus.held],
+    ['starPayment', 'refunded', 'neutral', TEXTS.starPaymentStatus.refunded],
+  ];
+
+  it.each(BADGES)('L2 a %s in %s is a %s badge around its old text', (set, status, variant, text) => {
+    const body = ONE_ROW[set]?.(status) ?? '';
+    expect(body).toContain(`<span class="badge badge-${variant}">${text}</span>`);
+  });
+
+  it('L2 covers every status of the six sets', () => {
+    const covered = (set: string) => BADGES.filter(([s]) => s === set).map(([, status]) => status);
+    expect(covered('user').sort()).toEqual(['active', 'blocked']);
+    expect(covered('intent').sort()).toEqual(Object.values(TradeIntentStatus).sort());
+    expect(covered('account').sort()).toEqual(Object.values(BrokerAccountStatus).sort());
+    expect(covered('deposit').sort()).toEqual(Object.values(DepositEventStatus).sort());
+  });
+
+  const EMPTY_LISTS: [string, () => string, string][] = [
+    ['users', () => usersPage([], { nextCursor: null, login: LOGIN }).value, TEXTS.usersEmpty],
+    ['sessions', () => sessionsPage([], LOGIN).value, TEXTS.sessionsEmpty],
+    [
+      'intents',
+      () => intentsPage([], { filters: {}, nextCursor: null, login: LOGIN }).value,
+      TEXTS.intentsEmpty,
+    ],
+    [
+      'trading sessions',
+      () => tradingSessionsPage([], { nextCursor: null, login: LOGIN }).value,
+      TEXTS.tradingSessionsEmpty,
+    ],
+    [
+      'tokens',
+      () => tokensPage([], { filters: {}, nextCursor: null, login: LOGIN }).value,
+      TEXTS.tokensEmpty,
+    ],
+    [
+      'deposits',
+      () => depositsPage([], { filters: {}, nextCursor: null, login: LOGIN }).value,
+      TEXTS.depositsEmpty,
+    ],
+    [
+      'broker accounts',
+      () => brokerAccountsPage([], { filters: {}, nextCursor: null, login: LOGIN }).value,
+      TEXTS.brokerAccountsEmpty,
+    ],
+    [
+      'Stars refunds',
+      () => starRefundsPage([], { nextCursor: null, login: LOGIN }).value,
+      TEXTS.starRefundsEmpty,
+    ],
+  ];
+
+  it.each(EMPTY_LISTS)('L3 an empty %s list is the empty state, no table', (_, page, text) => {
+    const body = page();
+    expect(body).toContain(`<p class="empty">${text}</p>`);
+    expect(body).not.toContain('<table');
+  });
+
+  it('L3 every empty section of the user card is the empty state', () => {
+    const body = userPage(
+      {
+        ...SAMPLE_USER,
+        brokerAccounts: [],
+        intents: { recent: [], total: 0, active: 0 },
+        ledger: { recent: [] },
+        deposits: { recent: [] },
+        starPayments: { recent: [] },
+      },
+      LOGIN,
+    ).value;
+    for (const text of [
+      TEXTS.brokerAccountsEmpty,
+      TEXTS.intentsEmpty,
+      TEXTS.tokensEmpty,
+      TEXTS.depositsEmpty,
+      TEXTS.starPaymentsEmpty,
+    ]) {
+      expect(body).toContain(`<p class="empty">${text}</p>`);
+    }
+    expect(body).not.toContain('<table');
+  });
+
+  const PAGED: [string, string, (cursor?: string, next?: string) => string][] = [
+    [
+      '/admin/users',
+      TEXTS.usersFirst,
+      (cursor, next = CURSOR) =>
+        usersPage([SAMPLE_LIST_ITEM], { cursor, nextCursor: next, login: LOGIN }).value,
+    ],
+    [
+      '/admin/intents',
+      TEXTS.intentsFirst,
+      (cursor, next = CURSOR) =>
+        intentsPage([SAMPLE_INTENT], { filters: {}, cursor, nextCursor: next, login: LOGIN }).value,
+    ],
+    [
+      '/admin/trading-sessions',
+      TEXTS.tradingSessionsFirst,
+      (cursor, next = CURSOR) =>
+        tradingSessionsPage([SAMPLE_TRADING_SESSION], { cursor, nextCursor: next, login: LOGIN })
+          .value,
+    ],
+    [
+      '/admin/tokens',
+      TEXTS.tokensFirst,
+      (cursor, next = CURSOR) =>
+        tokensPage([SAMPLE_LEDGER_ENTRY], { filters: {}, cursor, nextCursor: next, login: LOGIN })
+          .value,
+    ],
+    [
+      '/admin/deposits',
+      TEXTS.depositsFirst,
+      (cursor, next = CURSOR) =>
+        depositsPage([SAMPLE_DEPOSIT], { filters: {}, cursor, nextCursor: next, login: LOGIN })
+          .value,
+    ],
+    [
+      '/admin/broker-accounts',
+      TEXTS.brokerAccountsFirst,
+      (cursor, next = CURSOR) =>
+        brokerAccountsPage([SAMPLE_BROKER_ACCOUNT_ITEM], {
+          filters: {},
+          cursor,
+          nextCursor: next,
+          login: LOGIN,
+        }).value,
+    ],
+    [
+      '/admin/star-refunds',
+      TEXTS.starRefundsFirst,
+      (cursor, next = CURSOR) =>
+        starRefundsPage(SAMPLE_STAR_REFUNDS.requests, { cursor, nextCursor: next, login: LOGIN })
+          .value,
+    ],
+  ];
+
+  it.each(PAGED)('L4 the pager of %s is plain links, to the first and the next page', (path, first, page) => {
+    const pager = /<p class="pager">([\s\S]*?)<\/p>/.exec(page(CURSOR))?.[1] ?? '';
+    const links = [...pager.matchAll(/<a\b([^>]*)>\s*([^<]*?)\s*<\/a/g)];
+    expect(links.map((m) => m[1]?.trim())).toEqual([
+      `href="${path}"`,
+      `href="${path}?cursor=${CURSOR}"`,
+    ]);
+    expect(links[0]?.[2]).toBe(first);
+  });
+
+  it('L5 the user card offers to copy its id, a button only the script shows', () => {
+    const { id } = SAMPLE_USER.user;
+    const body = render('user');
+    expect(body).toContain(
+      `<dd><code>${id}</code><button type="button" class="icon-btn copy no-js-hidden" data-copy="${id}" aria-label="${TEXTS.copy}"`,
+    );
+  });
+
+  const copiesOf = (body: string) => [...body.matchAll(/data-copy="([^"]*)"/g)].map((m) => m[1]);
+
+  it('L5 the intent card copies its five ids, four without a trading session', () => {
+    const i = SAMPLE_INTENT;
+    expect(copiesOf(intentPage(i, LOGIN).value)).toEqual([
+      i.id,
+      i.userId,
+      i.brokerAccountId,
+      i.tradingSessionId,
+      i.clientRequestId,
+    ]);
+    expect(copiesOf(intentPage({ ...i, tradingSessionId: null }, LOGIN).value)).toEqual([
+      i.id,
+      i.userId,
+      i.brokerAccountId,
+      i.clientRequestId,
+    ]);
+  });
+
+  it('L5 the deposits list copies the account id and the payment id', () => {
+    expect(copiesOf(render('deposits'))).toEqual(
+      SAMPLE_DEPOSITS.deposits.flatMap((d) =>
+        d.brokerAccountId === null ? [d.paymentId] : [d.brokerAccountId, d.paymentId],
+      ),
+    );
+  });
+
+  it.each(Object.keys(EXPORTED_PAGES))('L5 %s has no inline event handler', (name) => {
+    expect(render(name)).not.toMatch(/\son[a-z]+=/i);
   });
 });
