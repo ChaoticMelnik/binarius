@@ -450,7 +450,9 @@ journal entry. A bare entry is accepted too. The entry is validated by
 `version` that is neither v1 nor v2 is `unsupported_version`. A shadow row of the H1 shadow
 (`version: h1`, #669) is parsed by `h1ShadowEntrySchema` into `{ kind: 'h1', entry }` (a broken one
 is `malformed_line`); `calibrate` compares candle decisions with session trades and counts it as
-`h1_shadow`. The trades file is validated by `tradeLogTradeJsonSchema` (`packages/shared/src/trade-log.ts`).
+`h1_shadow`. The H1 driver's stored shapes, `h1-repeat` (#775, the repeat step) and `h1-start`
+(#829, a start on the direction the bot showed), are not replayed: each is `unsupported_version`
+with its version (JL-h1start). The trades file is validated by `tradeLogTradeJsonSchema` (`packages/shared/src/trade-log.ts`).
 
 **Session files** (`--session-candles`) are the owner's raw `1s` rows per session:
 `{session, asset_id, interval, start_time, limit, rows}`. A file failing `candlesWireSchema` is
