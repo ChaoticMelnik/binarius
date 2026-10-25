@@ -5,7 +5,8 @@ stays as it was: routes, staff sessions, audit and the `Origin` check do not cha
 This document is what a new admin section is laid out from. The pages themselves are described in
 [admin-pages.md](admin-pages.md).
 
-Screenshots of part 1 (dark/light, desktop 1280×800 and phone 375×812): `docs/admin/screenshots/`.
+Screenshots of part 1 and of the lists and cards of #656 (dark/light, desktop 1280×800 and phone
+375×812): `docs/admin/screenshots/`.
 
 ## Files
 
@@ -15,7 +16,7 @@ Screenshots of part 1 (dark/light, desktop 1280×800 and phone 375×812): `docs/
 | `apps/web/src/admin/static/admin.css` | `@font-face` and every component, only through `var(--…)` |
 | `apps/web/src/admin/static.ts` | `ADMIN_CSS` (= `themeCss()` + `admin.css`), `ADMIN_FONTS`, the static paths, `MINI_APP_CSS` |
 | `apps/web/src/admin/icons.ts` | the Lucide icons, `iconSprite()`, `icon(name)` |
-| `apps/web/src/admin/client.ts` | `ADMIN_CLIENT_JS`, the one script: the theme switch |
+| `apps/web/src/admin/client.ts` | `ADMIN_CLIENT_JS`, the one script: the theme switch and the copy button |
 | `apps/web/src/admin/pages.ts` | `adminLayout`, `adminShell`, `authShell`, `adminNoticePage` and the pages |
 | `apps/web/src/admin/export-pages.ts` | the pages as static files, for screenshots |
 | `apps/web/src/admin/static/fonts/` | Inter 400/500/600 woff2 and `OFL.txt` |
@@ -159,18 +160,70 @@ All defined in `admin.css`; markup to use:
 | section | `<section class="section"><h2>…</h2>…</section>` |
 | metric cards | `<dl class="metrics"><div class="metric"><dt>Label</dt><dd>31</dd></div>…</dl>`; `metrics metrics-dense` for a long breakdown |
 | entity card | `<dl class="props"><dt>…</dt><dd>…</dd>…</dl>` (a plain `<dl>` is a two-column list too) |
-| table | `<div class="table-wrap"><table><thead><tr><th>…</th></tr></thead><tbody>…</tbody></table></div>`; `td.num` right-aligns a number |
-| badge | `<span class="badge badge-success">…</span>`; `-warning`, `-danger`, `-info`, `-neutral` |
+| table | `table(columns, rows)` in `pages.ts`: `<div class="table-wrap"><table class="table"><thead><tr><th>…</th></tr></thead><tbody><tr><td data-label="…">…</td>…</tr></tbody></table></div>`; `td.num` right-aligns a number (see Table and row card) |
+| badge | `badge(variant, body)`: `<span class="badge badge-success">…</span>`; `-warning`, `-danger`, `-info`, `-neutral`; a `<code>` inside drops its own background |
 | buttons | `<button type="submit">` is primary; `class="btn btn-secondary"`, `class="btn btn-danger"`; `class="icon-btn"` with an `aria-label` for an icon alone |
-| form | `<form class="stack">` with `<label>Text <input …/></label>`; `form.search` / `.toolbar` for a filter row; `label.choice` for a radio or checkbox |
+| form | `<form class="stack">` with `<label>Text <input …/></label>`; `form.search` / `.toolbar` for a filter row (a column of full-width fields up to 30rem); `label.choice` for a radio or checkbox |
 | messages | `<p class="error">`, `<ul class="error">`, `<p class="notice">`, `<p class="hint">` |
-| pager | `<p class="pager"><a href="…">…</a></p>` (as the list pages render it) |
-| empty state | `<p class="empty">…</p>` |
+| pager | `<p class="pager"><a href="…">…</a></p>`: plain links, styled as secondary buttons by `.pager > a` |
+| empty state | `empty(text)`: `<p class="empty">…</p>`, in place of the table |
+| copy an id | `idCode(value)`: `<code>…</code>` and its copy button (see Table and row card) |
 
-The section bodies other than the overview keep their markup from before #459; the element rules
-(`table`, `dl`, `form.search`, `label`, `details`, `.tg-bubble`, …) restyle it. Until #656 turns
-table rows into cards, every table in `<main>` is as wide as its content and scrolls inside itself
-when that is wider than the page, so no page scrolls sideways.
+The lists and the user and intent cards are built from these components (#656). The audit log, the
+service accounts (#817) and the bot texts (#657) keep their markup from before #459; the element
+rules (`table`, `dl`, `form.search`, `label`, `details`, `.tg-bubble`, …) restyle it, and each of
+their tables (`main table:not(.table)`) is as wide as its content and scrolls inside itself when
+that is wider than the page, so no page scrolls sideways. #657 removes that rule with the last such
+table.
+
+## Table and row card
+
+Every list is `table(columns, rows)` (`pages.ts`). A column is `{ label, num?, className? }`; its
+`label` is the `<th>` text and the `data-label` of each of its cells — one source, so a card's
+labels are the header's. A column with an empty label (the staff sessions' «Завершить») has no
+`data-label`, and its cell takes the card's full width. `num` puts `class="num"` on the cell: right-
+aligned with `tabular-nums` at full width. `rowClass` gives a row a class (`tr.current` of the
+current staff session); every other `<tr>` has no attribute. A table with an optional column (the
+owner of the broker accounts and Stars payments lists) builds the column and the cell from the same
+condition, so a label never shifts.
+
+From 64rem: a dense table, one line a row (`white-space: nowrap`; a `.wrap` cell — a note, a user
+agent — wraps up to 22rem). A table wider than the content column (broker accounts, 15 columns;
+trading sessions, 13) scrolls inside `.table-wrap` (`overflow-x: auto`); the page itself never
+scrolls sideways. **The header row is not sticky**: `.table-wrap` with `overflow-x: auto` is a
+scroll container, and a sticky `<thead>` sticks to its nearest scroll container — one that does not
+scroll vertically — so it would never move. Pinning the header to the page would need the wide
+tables to widen the page (or a second, vertical scroll area); the scroll inside the frame was
+chosen (#656, manager's decision on clarify).
+
+Below 64rem (CSS only, no script): `thead` is hidden, each `<tr>` is a framed card and each `<td>`
+a line of it — `td::before { content: attr(data-label) }` in the muted colour, floated into the
+cell's left padding (`--card-label-w`, 7rem), the value in the rest; a long id or time wraps.
+
+Statuses are badges; the colour of each status (`satisfies Record<Status, BadgeVariant>` in
+`pages.ts`, so a new status does not compile without one):
+
+| Status set | success | warning | danger | info | neutral |
+|---|---|---|---|---|---|
+| `UserStatus` | `active` | | `blocked` | | |
+| `TradeIntentStatus` | `settled` | `manual_review`, `unknown` | `rejected` | `planned`, `reserved`, `queued`, `submitting`, `accepted`, `reconciling` | |
+| `TradingSessionStatus` | `active` | `paused` | | | `stopped` |
+| `BrokerAccountStatus` | `active` | `pending` | `revoked` | | |
+| `DepositEventStatus` | `credited` | | `failed` | `received` | `ignored` |
+| `StarPaymentStatus` | `paid` | `held` | | | `refunded` |
+
+Modes, directions, stop reasons, kinds and errors stay plain `<code>`: they are codes, not states.
+
+**Copy an id.** `idCode(value)` prints `<code>value</code>` and
+`<button type="button" class="icon-btn copy no-js-hidden" data-copy="value" aria-label="Копировать" data-label-copy="Копировать" data-label-copied="Скопировано">`
+with the `copy` and `check` icons. `client.ts` listens for clicks on the document: a click inside a
+`[data-copy]` writes its value with `navigator.clipboard.writeText`; on success the label becomes
+`data-label-copied` and the `check` icon shows for 1.5 s, then both go back; a refused write
+changes nothing. Without JavaScript the button is hidden (`no-js-hidden`); without
+`navigator.clipboard` (plain http, an old browser) the script hides every `[data-copy]` on
+`DOMContentLoaded`. Either way the id beside it can be selected. In a table the button is 1.75rem —
+below the 40px of the other buttons, on purpose: it is an extra over a selectable value inside a
+row; in a card it is a full `.icon-btn`. A link to a card (an intent id in a list) has no button.
 
 Accessibility: the skip link is the first element of `<body>`; `:focus-visible` draws a 2px
 `--color-focus` ring; the current section has `aria-current="page"`; buttons and nav links are at
