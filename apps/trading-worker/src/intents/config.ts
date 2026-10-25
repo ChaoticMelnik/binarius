@@ -6,6 +6,7 @@ import {
   BROKER_SOCKET_CONNECT_TIMEOUT_MS,
 } from '@binarius/broker-socket';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
+import { WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 
 // The worker's time constants form one chain, and every link has a reason:
@@ -58,8 +59,9 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS - phase 1 waits for pass.stop(); no
 //     check starts after stop(), so it waits for the attempt or the check in flight, never both
 // The session manager (#101, broker/session-config.ts) adds these:
-//   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the manager
-//     stops after the intents consumer drained, inside the same phase-1 step
+//   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS
+//     < SHUTDOWN_PHASE1_BUDGET_MS — the manager stops after the intents consumer drained, and the
+//     fleet registry deregisters after it (#94, its own bound), inside the same phase-1 step
 //   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS and ACCESS_TOKEN_ROUTE_BUDGET_MS
 //     < SHUTDOWN_PHASE1_BUDGET_MS — a connection attempt or a token fetch that stop() could not
 //     cut still ends inside phase 1 (stop() aborts the fetches and closes the clients at once:
@@ -158,7 +160,8 @@ const TIMING_CHAIN_HOLDS =
   WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
   2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS &&
   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS <
+    SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

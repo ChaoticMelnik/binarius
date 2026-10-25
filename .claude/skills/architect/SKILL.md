@@ -287,6 +287,7 @@ Implementer picks it up only once this comment exists.
 | `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32; auth 12 |
 | `apps/trading-worker/src/circuit-breaker` | core 10; trading 22, 25, 28; signal-h1 20, 43 |
 | `apps/trading-worker/src/cli` | trading 23, 27, 28 |
+| `apps/trading-worker/src/fleet` | core 10; trading 25, 28; signal-h1 43 |
 | `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33; signal-h1 43, 48; auth 12 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 33, 36; signal-h1 42, 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |

@@ -14,6 +14,7 @@ import {
   BROKER_SOCKET_CONNECT_TIMEOUT_MS,
 } from '@binarius/broker-socket';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
+import { WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 import {
   BALANCE_CHECK_TIMEOUT_MS,
@@ -151,9 +152,10 @@ describe('Redis persistence (#92)', () => {
 // the same entry under backend is pinned in apps/backend/src/timing.test.ts
 describe('the session manager in the shutdown budget (#101)', () => {
   it('stops after the drain inside phase 1, and nothing it cannot cut outlasts phase 1', () => {
-    expect(MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS).toBeLessThan(
-      SHUTDOWN_PHASE1_BUDGET_MS,
-    );
+    // #94: the registry's deregister follows the manager's stop in the same step
+    expect(
+      MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS,
+    ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(BROKER_SOCKET_CONNECT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(ACCESS_TOKEN_ROUTE_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SESSION_TICK_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
@@ -248,6 +250,17 @@ describe('the worker environment for the token route and the trade lists', () =>
   it('keeps H1_SHADOW out of the broker anchor and the worker', () => {
     expect(brokerAnchorValue(composeYaml, 'H1_SHADOW')).toBeUndefined();
     expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SHADOW')).toBeUndefined();
+  });
+
+  // #94: forwarded valueless, so the default stays MAX_SESSIONS_PER_WORKER in session-config.ts
+  it('forwards MAX_SESSIONS_PER_WORKER valueless and runs one worker by default', () => {
+    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'MAX_SESSIONS_PER_WORKER')).toBe(
+      '',
+    );
+    expect(composeServiceValue(composeYaml, 'trading-worker', 'deploy')).toBe('');
+    expect(composeYaml).toContain(
+      '    deploy:\n      replicas: ${TRADING_WORKER_REPLICAS:-1}\n    environment:\n      <<: [*app-environment, *broker-environment]',
+    );
   });
 
   it('points the worker at the backend the bot reaches', () => {

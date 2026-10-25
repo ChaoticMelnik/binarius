@@ -1,5 +1,5 @@
 import { BALANCE_WATCH_WINDOW_MS } from '@binarius/shared/broker-balance';
-import { isTimerMs } from '@binarius/broker-socket';
+import { BROKER_SOCKET_COMMAND_TIMEOUT_MS, isTimerMs } from '@binarius/broker-socket';
 
 // The session manager's constants (docs/broker-session.md → Constants), each bounding one thing:
 //   SESSION_TICK_MS            — the candidate scan interval: one query and the bookkeeping; the
@@ -14,9 +14,15 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                key_unavailable, a user.data whose id is not the account's
 //   SESSION_START_CONCURRENCY  — token fetches in flight in the start pool
 //   SESSION_STOP_BUDGET_MS     — how long stop() waits for the writes in flight
-//   MAX_SESSIONS_PER_WORKER    — sessions (running + starting) one worker process holds; beyond
-//                                it accounts trade over REST. A safety cap, not a measured limit
-//                                (#94 replaces it with one and with sharding)
+//   MAX_SESSIONS_PER_WORKER    — the default of the env MAX_SESSIONS_PER_WORKER (#94): sessions
+//                                (running + starting) one worker process holds among the accounts
+//                                it owns; beyond it they trade over REST. A safety cap, not a
+//                                measured limit (#87); at most MAX_SESSIONS_PER_WORKER_CEILING,
+//                                the scan's assumption (broker-session.md → risk 9)
+//   SESSION_SHED_GRACE_MS      — how long a session whose account moved to another process
+//                                (#94, worker-capacity.md) keeps its socket: sessionFor refuses it
+//                                at once, and a command already on it ends within the command
+//                                timeout (BROKER_SOCKET_COMMAND_TIMEOUT_MS < SHED_GRACE, at import)
 //   SESSION_LEASE_TTL_MS       — how long an account's lease outlives its last acquire or renewal
 //                                in the database (#93, broker-session.md → The lease)
 //   SESSION_LEASE_RENEW_MS     — the renewal interval
@@ -52,6 +58,8 @@ export const SOCKET_LOSS_GRACE_MS = 45_000;
 // stop() never waits on Redis longer than on the write itself
 export const DEAD_LETTER_WRITE_TIMEOUT_MS = 1_000;
 export const MAX_SESSIONS_PER_WORKER = 500;
+export const MAX_SESSIONS_PER_WORKER_CEILING = 10_000;
+export const SESSION_SHED_GRACE_MS = 6_000;
 
 export interface SessionManagerConfig {
   tickMs: number;
@@ -67,6 +75,7 @@ export interface SessionManagerConfig {
   leaseRenewTimeoutMs: number;
   leaseFenceMs: number;
   lossGraceMs: number;
+  shedGraceMs: number;
 }
 
 export const SESSION_MANAGER_CONFIG: Readonly<SessionManagerConfig> = {
@@ -83,6 +92,7 @@ export const SESSION_MANAGER_CONFIG: Readonly<SessionManagerConfig> = {
   leaseRenewTimeoutMs: SESSION_LEASE_RENEW_TIMEOUT_MS,
   leaseFenceMs: SESSION_LEASE_FENCE_MS,
   lossGraceMs: SOCKET_LOSS_GRACE_MS,
+  shedGraceMs: SESSION_SHED_GRACE_MS,
 };
 
 const isCount = (value: number) => Number.isSafeInteger(value) && value >= 1;
@@ -100,6 +110,7 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
     isTimerMs(config.leaseRenewTimeoutMs) &&
     isTimerMs(config.leaseFenceMs) &&
     isTimerMs(config.lossGraceMs) &&
+    isTimerMs(config.shedGraceMs) &&
     isCount(config.maxSessions) &&
     isCount(config.startConcurrency) &&
     config.tickMs < config.idleGraceMs &&
@@ -117,7 +128,9 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
 // a constant edited out of order fails at import, not in production
 export const SESSION_CHAIN_HOLDS =
   sessionManagerConfigHolds(SESSION_MANAGER_CONFIG) &&
-  DEAD_LETTER_WRITE_TIMEOUT_MS < SESSION_STOP_BUDGET_MS;
+  DEAD_LETTER_WRITE_TIMEOUT_MS < SESSION_STOP_BUDGET_MS &&
+  BROKER_SOCKET_COMMAND_TIMEOUT_MS < SESSION_SHED_GRACE_MS &&
+  MAX_SESSIONS_PER_WORKER <= MAX_SESSIONS_PER_WORKER_CEILING;
 if (!SESSION_CHAIN_HOLDS) {
   throw new Error('broker session constants are out of order (see broker/session-config.ts)');
 }

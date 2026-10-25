@@ -1,8 +1,9 @@
 import { BALANCE_WATCH_WINDOW_MS } from '@binarius/shared/broker-balance';
-import { MAX_TIMER_MS } from '@binarius/broker-socket';
+import { BROKER_SOCKET_COMMAND_TIMEOUT_MS, MAX_TIMER_MS } from '@binarius/broker-socket';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_SESSIONS_PER_WORKER,
+  MAX_SESSIONS_PER_WORKER_CEILING,
   SESSION_CHAIN_HOLDS,
   SESSION_IDLE_GRACE_MS,
   SESSION_LEASE_FENCE_MS,
@@ -12,6 +13,7 @@ import {
   SESSION_MANAGER_CONFIG,
   SESSION_REFUSAL_RETRY_MS,
   SESSION_RETRY_MS,
+  SESSION_SHED_GRACE_MS,
   SESSION_START_CONCURRENCY,
   SESSION_STOP_BUDGET_MS,
   SESSION_TICK_MS,
@@ -33,6 +35,9 @@ describe('the session constants', () => {
     expect(SESSION_LEASE_FENCE_MS).toBeLessThan(SESSION_LEASE_TTL_MS);
     expect(SESSION_LEASE_RENEW_TIMEOUT_MS).toBeLessThan(SESSION_LEASE_RENEW_MS);
     expect(SESSION_LEASE_TTL_MS).toBeLessThan(SESSION_RETRY_MS);
+    // #94: a command already on a shed session answers before its socket closes
+    expect(BROKER_SOCKET_COMMAND_TIMEOUT_MS).toBeLessThan(SESSION_SHED_GRACE_MS);
+    expect(MAX_SESSIONS_PER_WORKER).toBeLessThanOrEqual(MAX_SESSIONS_PER_WORKER_CEILING);
     expect(SESSION_MANAGER_CONFIG).toEqual({
       tickMs: SESSION_TICK_MS,
       idleGraceMs: SESSION_IDLE_GRACE_MS,
@@ -47,6 +52,7 @@ describe('the session constants', () => {
       leaseRenewTimeoutMs: SESSION_LEASE_RENEW_TIMEOUT_MS,
       leaseFenceMs: SESSION_LEASE_FENCE_MS,
       lossGraceMs: SOCKET_LOSS_GRACE_MS,
+      shedGraceMs: SESSION_SHED_GRACE_MS,
     });
   });
 
@@ -74,6 +80,9 @@ describe('the session constants', () => {
     ['a loss grace no longer than a scan', { lossGraceMs: SESSION_TICK_MS }],
     // above the scan, so only the integer check refuses it
     ['a fractional loss grace', { lossGraceMs: SESSION_TICK_MS + 0.5 }],
+    // #94
+    ['a fractional shed grace', { shedGraceMs: 1.5 }],
+    ['no shed grace', { shedGraceMs: 0 }],
   ])('refuses %s', (_label, patch) => {
     expect(sessionManagerConfigHolds({ ...SESSION_MANAGER_CONFIG, ...patch })).toBe(false);
   });

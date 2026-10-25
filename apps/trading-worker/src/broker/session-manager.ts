@@ -63,10 +63,13 @@ export interface SessionWriters {
 // The account's lease (#93, docs/broker-session.md → The lease), bound to this process's owner id
 // by the caller: production is session-lease-ops.ts over the worker's database.
 export interface SessionLeases {
-  acquire(accountId: string, ttlMs: number): Promise<boolean>;
+  // undefined: another owner's live lease; acquiredAt: the CAS token of releaseOne
+  acquire(accountId: string, ttlMs: number): Promise<{ acquiredAt: string } | undefined>;
   // the ids still held; a missing id is a lease lost
   renew(accountIds: readonly string[], ttlMs: number): Promise<string[]>;
   release(): Promise<unknown>;
+  // one account's lease, only while it is still the one this acquire took (#94: a shed)
+  releaseOne(accountId: string, acquiredAt: string): Promise<unknown>;
 }
 
 // The socket signal of the circuit breaker (#96): every ready session on every check, and a session
@@ -89,6 +92,9 @@ export interface BrokerSessionManagerDeps {
   // a writer that throws leaves its event here (#92)
   deadLetters: DeadLetterSink;
   leases: SessionLeases;
+  // whether this process owns the account (#94, fleet/registry.ts): the manager holds sockets of
+  // owned accounts only and sheds one that moved to another process
+  owns: (accountId: string) => boolean;
   // the fence's clock: monotonic, so a wall-clock jump neither extends nor cuts a lease
   monotonicNow?: () => number;
   lossObserver?: SessionLossObserver;
@@ -118,6 +124,16 @@ export interface BrokerSessionManager extends TradeSessionSource {
   clientFor(accountId: string): BrokerSocketClient | undefined;
   // running + starting
   readonly size: number;
+  // the capacity line (#94): owned and cappedOut as of the last scan, shed since start
+  stats(): SessionStats;
+}
+
+export interface SessionStats {
+  running: number;
+  starting: number;
+  owned: number;
+  cappedOut: number;
+  shed: number;
 }
 
 type WriteSource = SessionDeadLetter['source'];
@@ -128,6 +144,7 @@ type WriteRef = Pick<SessionDeadLetter, 'mode' | 'brokerTradeIds'>;
 // time until which the lease is ours.
 interface Lease {
   until: number;
+  acquiredAt: string;
 }
 
 interface StartingEntry {
@@ -156,6 +173,9 @@ interface RunningEntry {
   lostSince?: number;
   lossReported: boolean;
   rearmed: boolean;
+  // #94: the account moved to another process (monotonic); no command from now on, the socket
+  // closes shedGraceMs later unless the account is owned again
+  sheddingSince?: number;
 }
 
 type Entry = StartingEntry | RunningEntry;
@@ -168,7 +188,7 @@ interface WriteQueue {
 }
 
 // one bounded wait; the late answer of a work that overran is ignored
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | 'timeout'> {
+export function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | 'timeout'> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), ms);
@@ -192,6 +212,9 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   let renewing: Promise<void> | undefined;
   let fenceTimer: ReturnType<typeof setTimeout> | undefined;
   let observeTimer: ReturnType<typeof setInterval> | undefined;
+  let lastOwned = 0;
+  let lastCappedOut = 0;
+  let shedTotal = 0;
 
   const isCurrent = (accountId: string, entry: Entry) => entries.get(accountId) === entry;
 
@@ -206,6 +229,36 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entries.delete(accountId);
     if (holdBackMs !== undefined) holdBack(accountId, holdBackMs);
     if (entry?.kind === 'running') entry.client.stop();
+  }
+
+  // A release that commits late finds acquired_at moved by our own re-acquire and deletes nothing;
+  // one that fails or overruns leaves the row to lapse
+  function releaseOne(accountId: string, lease: Lease) {
+    void withTimeout(
+      leases.releaseOne(accountId, lease.acquiredAt),
+      config.leaseRenewTimeoutMs,
+    ).then(
+      (result) => {
+        if (result === 'timeout') {
+          logger.warn({ accountId, timedOut: true }, 'broker session lease release failed');
+        }
+      },
+      (error: unknown) => {
+        logger.error(
+          { accountId, ...errorLogFields(error) },
+          'broker session lease release failed',
+        );
+      },
+    );
+  }
+
+  // the entry goes first, as in drop(): the client's own state change finds it gone
+  function shed(accountId: string, entry: RunningEntry) {
+    entries.delete(accountId);
+    entry.client.stop();
+    shedTotal += 1;
+    logger.info({ accountId, graceMs: config.shedGraceMs }, 'broker session shed');
+    releaseOne(accountId, entry.lease);
   }
 
   // A lease acquired or renewed by a statement sent at t0 holds in the database until at least
@@ -589,7 +642,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entries.set(accountId, starting);
     // the lease before the token: an account another process holds costs no token fetch
     const sentAt = now();
-    let acquired: boolean | 'timeout';
+    let acquired: { acquiredAt: string } | undefined | 'timeout';
     try {
       // bounded like a renewal: the one-failed-renewal guarantee counts on it
       acquired = await withTimeout(
@@ -608,12 +661,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       drop(accountId, config.retryMs);
       return;
     }
-    if (!acquired) {
+    if (acquired === undefined) {
       logger.debug({ accountId }, 'broker session lease busy');
       drop(accountId, config.retryMs);
       return;
     }
-    starting.lease = { until: sentAt + config.leaseFenceMs };
+    starting.lease = { until: sentAt + config.leaseFenceMs, acquiredAt: acquired.acquiredAt };
     armFence();
     const token = await tokenFor(accountId, starting);
     if (token === undefined) return;
@@ -681,9 +734,9 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   }
 
   async function runTick() {
-    const now = Date.now();
+    const wallNow = Date.now();
     for (const [accountId, until] of heldBack) {
-      if (until <= now) heldBack.delete(accountId);
+      if (until <= wallNow) heldBack.delete(accountId);
     }
     let candidates: SessionCandidate[];
     try {
@@ -698,11 +751,34 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     if (stopping.signal.aborted) return;
 
     const present = new Set(candidates.map((candidate) => candidate.id));
+    const owned = candidates.filter((candidate) => deps.owns(candidate.id));
+    const mine = new Set(owned.map((candidate) => candidate.id));
     const at = Date.now();
+    const monotonicAt = now();
     let closed = 0;
     for (const [accountId, entry] of entries) {
+      if (mine.has(accountId)) {
+        if (entry.kind === 'running') {
+          entry.idleSince = undefined;
+          entry.sheddingSince = undefined;
+        }
+        continue;
+      }
       if (present.has(accountId)) {
-        if (entry.kind === 'running') entry.idleSince = undefined;
+        // in work, owned by another process (#94)
+        if (entry.kind === 'starting') {
+          // its acquire or fetch finds the entry gone; a lease it already holds goes back now
+          entries.delete(accountId);
+          if (entry.lease !== undefined) releaseOne(accountId, entry.lease);
+          closed += 1;
+          continue;
+        }
+        entry.idleSince = undefined;
+        entry.sheddingSince ??= monotonicAt;
+        if (monotonicAt - entry.sheddingSince >= config.shedGraceMs) {
+          shed(accountId, entry);
+          closed += 1;
+        }
         continue;
       }
       if (entry.kind === 'starting') {
@@ -719,15 +795,14 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       }
     }
 
-    if (candidates.length > config.maxSessions) {
-      logger.warn(
-        { candidates: candidates.length, cap: config.maxSessions },
-        'broker sessions capped',
-      );
+    lastOwned = owned.length;
+    lastCappedOut = Math.max(0, owned.length - config.maxSessions);
+    if (owned.length > config.maxSessions) {
+      logger.warn({ candidates: owned.length, cap: config.maxSessions }, 'broker sessions capped');
     }
-    // the cap counts the starting entries too; a later tick recomputes the queue with them
+    // the cap counts the starting and the shedding entries too; a later tick recomputes the queue
     const slots = Math.max(0, config.maxSessions - entries.size);
-    startQueue = candidates.filter((candidate) => !entries.has(candidate.id)).slice(0, slots);
+    startQueue = owned.filter((candidate) => !entries.has(candidate.id)).slice(0, slots);
     startWorkers();
 
     let starting = 0;
@@ -735,6 +810,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     logger.debug(
       {
         candidates: candidates.length,
+        owned: owned.length,
         sessions: entries.size - starting,
         starting,
         queued: startQueue.length,
@@ -829,13 +905,27 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     // fence, even before its timer has run: a late timer must not let a command through (#93)
     sessionFor(accountId) {
       const entry = entries.get(accountId);
-      return entry?.kind === 'running' && entry.verified && now() < entry.lease.until
+      return entry?.kind === 'running' &&
+        entry.verified &&
+        entry.sheddingSince === undefined &&
+        now() < entry.lease.until
         ? entry.client
         : undefined;
     },
     clientFor,
     get size() {
       return entries.size;
+    },
+    stats() {
+      let starting = 0;
+      for (const entry of entries.values()) if (entry.kind === 'starting') starting += 1;
+      return {
+        running: entries.size - starting,
+        starting,
+        owned: lastOwned,
+        cappedOut: lastCappedOut,
+        shed: shedTotal,
+      };
     },
   };
 }

@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
   brokerBalanceSnapshots,
+  brokerSessionLeases,
   brokerTrades,
   createDb,
   createSessionIntent,
@@ -53,6 +54,7 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import type { Env } from './env';
+import { ownerOf } from './fleet/rendezvous';
 import { TEST_WORKER_TUNING, watchSockets } from './testing';
 import { eurUsd, signalAnswer } from './trading-session/testing';
 import { createWorker, type ShutdownResult, type TradingWorker, type WorkerTuning } from './worker';
@@ -133,6 +135,7 @@ function envOf(sockets: boolean, demoOnly = false): Env {
     intentMaxAgeMs: 60_000,
     submitAckTimeoutMs: 5_000,
     workerConcurrency: 4,
+    maxSessionsPerWorker: 50,
     backendUrl: 'http://127.0.0.1:9',
     internalApiToken: 'unused-the-sources-are-stubbed',
     brokerApiBaseUrl: broker.url,
@@ -235,7 +238,12 @@ interface Account {
   telegramUserId: string;
 }
 
-async function seedAccount({ snapshot = false, real = '0.00' } = {}): Promise<Account> {
+// requested: the bot asked a moment ago, so the account is in work without an intent
+async function seedAccount({
+  snapshot = false,
+  real = '0.00',
+  requested = false,
+} = {}): Promise<Account> {
   const brokerUserId = ++brokerUserSeq;
   const accessToken = `handoff-token-${brokerUserId}`;
   broker.users.register({
@@ -266,7 +274,7 @@ async function seedAccount({ snapshot = false, real = '0.00' } = {}): Promise<Ac
       },
       demo: balance,
     };
-    await upsertBalanceSnapshot(tmp.db, { brokerAccountId, user: brokerUser, requested: false });
+    await upsertBalanceSnapshot(tmp.db, { brokerAccountId, user: brokerUser, requested });
   }
   return { brokerUserId, brokerAccountId, telegramUserId: user.telegramUserId };
 }
@@ -542,6 +550,12 @@ describe('the readiness line', () => {
     expect(script).toContain('"msg":"trading-worker started"');
     expect(await shutdown(w)).toBe('clean');
     expect(logsOf(w, 'trading-worker started')).toHaveLength(1);
+  });
+
+  it('H6b carries the process id with the sockets off too (#94)', async () => {
+    const w = startWorker('H6b', { sockets: false });
+    expect(logsOf(w, 'trading-worker started')[0]?.ownerId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await shutdown(w)).toBe('clean');
   });
 
   it('H6 carries DEMO_ONLY from the env it was built with (#396)', async () => {
@@ -876,5 +890,71 @@ describe('the wake through the composition (#696)', () => {
     await ticked(w, 1);
     expect(wokenTicks(w)).toEqual([expect.objectContaining({ woken: 1, created: 1 })]);
     expect(await shutdown(w)).toBe('clean');
+  });
+});
+
+describe('the fleet across processes (#94)', () => {
+  it('H14 a second worker takes the sockets rendezvous names it for; one socket per account throughout', async () => {
+    const watch = watchSockets(broker);
+    const a = startWorker('A', { sockets: true });
+    const idOf = (w: Running) => logsOf(w, 'trading-worker started')[0]!.ownerId as string;
+    const leaseOwners = async (accounts: readonly Account[]) =>
+      new Map(
+        (
+          await tmp.db
+            .select({ id: brokerSessionLeases.brokerAccountId, owner: brokerSessionLeases.ownerId })
+            .from(brokerSessionLeases)
+            .where(
+              inArray(
+                brokerSessionLeases.brokerAccountId,
+                accounts.map((account) => account.brokerAccountId),
+              ),
+            )
+        ).map((row) => [row.id, row.owner]),
+      );
+    // alone, A holds every account; seeded before B exists, so B's share is A's until it moves
+    const accounts = await Promise.all(
+      [1, 2, 3, 4, 5, 6].map(() => seedAccount({ snapshot: true, requested: true })),
+    );
+    await until('A holds every account', async () => {
+      const owners = await leaseOwners(accounts);
+      return accounts.every(
+        (account) =>
+          owners.get(account.brokerAccountId) === idOf(a) &&
+          socketsOf(account.brokerUserId).length === 1,
+      );
+    });
+
+    const b = startWorker('B', { sockets: true });
+    const live = [idOf(a), idOf(b)];
+    // the ids are random: one in 64 runs gives B none of the six, and a seventh is added then
+    for (
+      let n = 0;
+      n < 10 && !accounts.some((x) => ownerOf(x.brokerAccountId, live) === live[1]);
+      n += 1
+    ) {
+      accounts.push(await seedAccount({ snapshot: true, requested: true }));
+    }
+    await until('every account on the process rendezvous names', async () => {
+      const owners = await leaseOwners(accounts);
+      return accounts.every(
+        (account) =>
+          owners.get(account.brokerAccountId) === ownerOf(account.brokerAccountId, live) &&
+          socketsOf(account.brokerUserId).length === 1,
+      );
+    });
+    const capacityOf = (w: Running) => logsOf(w, 'worker capacity').at(-1);
+    await until('both capacity lines see the two of them', () =>
+      [a, b].every((w) => capacityOf(w)?.live === 2),
+    );
+    expect(capacityOf(a)!.liveView).toBe(capacityOf(b)!.liveView);
+    expect(capacityOf(a)).toMatchObject({ ownerId: idOf(a), sockets: true, cap: 50 });
+    expect(logsOf(a, 'broker session shed').length).toBeGreaterThan(0);
+
+    expect(await shutdown(a)).toBe('clean');
+    expect(await shutdown(b)).toBe('clean');
+    const { worst, polls } = watch.stop();
+    expect(polls).toBeGreaterThan(0);
+    expect(worst).toBe(1);
   });
 });

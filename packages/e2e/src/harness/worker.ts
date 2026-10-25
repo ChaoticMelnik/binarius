@@ -27,6 +27,7 @@ export function startE2eWorker(deps: {
     intentMaxAgeMs: 60_000,
     submitAckTimeoutMs: 5_000,
     workerConcurrency: 4,
+    maxSessionsPerWorker: 50,
     backendUrl: deps.backendUrl,
     internalApiToken: INTERNAL_API_TOKEN,
     brokerApiBaseUrl: deps.brokerUrl,
